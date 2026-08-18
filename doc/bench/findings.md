@@ -452,3 +452,207 @@ yet landed in this file — the SIM sweep is `computenet-x9e.4.4`'s own task, on
 branch. This entry makes no numeric comparison to it and constructs no mixed-drive table;
 a comparison, if useful, belongs in prose in whichever entry lands second, reading both
 already-rendered tables rather than merging them.
+
+---
+
+Entry produced by `civictech.bench.micro.ThroughputReport.render` (which renders through
+`civictech.bench.Findings.entry`), pasted verbatim below. The result: **five** of the 36
+measured subject/direction combinations classified `Reportable` against `NOISE_FLOOR`
+at this config; the other 31 classify `Unreportable` and are excluded-and-named, per
+`[BEN1-25]`. All five Reportable rows are RETRACT rows — that skew, not a hand-picked
+subset, is this entry's finding.
+
+## 2026-08-18 — SIM-drive per-operator delta-application throughput over the BEN1 micro-graphs
+Harness: 49ab44e9 · JVM Eclipse Adoptium/21.0.11 · heap -Xmx2g · Apple M2 Pro, 10 cores, Mac OS X 26.6.2
+JMH: mode=Throughput forks=2 warmup=5 iters=10 · drive=SIM
+| subject | value | notes |
+| --- | --- | --- |
+| FILTER retract | 831943.320342 ± 3736.560661 ops/s | |
+| INTERSECT retract | 352771.551032 ± 1500.585422 ops/s | |
+| COUNT retract | 880998.752986 ± 4392.874452 ops/s | |
+| GROUP_BY_SUM retract | 761118.948691 ± 3066.647648 ops/s | |
+| GROUP_BY_TOP_K retract | 680756.894053 ± 2414.522723 ops/s | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+Omitted rows (drive=SIM):
+- TAGGED_SET insert (drive=SIM): relative dispersion 0.08466968712623274 exceeds NOISE_FLOOR 0.005 — value=646933.303773 ± 54775.640422 ops/s; Unreportable, excluded from the table
+- FILTER insert (drive=SIM): relative dispersion 0.031707506127122545 exceeds NOISE_FLOOR 0.005 — value=736635.519973 ± 23356.875263 ops/s; Unreportable, excluded from the table
+- UNION insert (drive=SIM): relative dispersion 0.0464378190718246 exceeds NOISE_FLOOR 0.005 — value=632514.88791 ± 29372.611925 ops/s; Unreportable, excluded from the table
+- INTERSECT insert (drive=SIM): relative dispersion 0.04379083312043933 exceeds NOISE_FLOOR 0.005 — value=267729.32444 ± 11724.090168 ops/s; Unreportable, excluded from the table
+- COUNT insert (drive=SIM): relative dispersion 0.03507748947042507 exceeds NOISE_FLOOR 0.005 — value=762923.322365 ± 26761.434807 ops/s; Unreportable, excluded from the table
+- FLAT_MAP insert (drive=SIM): relative dispersion 0.042690792815487245 exceeds NOISE_FLOOR 0.005 — value=518612.786361 ± 22139.991014 ops/s; Unreportable, excluded from the table
+- PRESENCE_COUNT insert (drive=SIM): relative dispersion 0.041194929800779385 exceeds NOISE_FLOOR 0.005 — value=341065.981662 ± 14050.189172 ops/s; Unreportable, excluded from the table
+- QUORUM insert (drive=SIM): relative dispersion 0.033394493100491945 exceeds NOISE_FLOOR 0.005 — value=301676.860304 ± 10074.34583 ops/s; Unreportable, excluded from the table
+- JOIN_SET insert (drive=SIM): relative dispersion 0.04701313947712893 exceeds NOISE_FLOOR 0.005 — value=273634.48368 ± 12864.416147 ops/s; Unreportable, excluded from the table
+- SEMI_JOIN insert (drive=SIM): relative dispersion 0.04905640577613255 exceeds NOISE_FLOOR 0.005 — value=288481.927999 ± 14151.886519 ops/s; Unreportable, excluded from the table
+- LOOKUP_JOIN insert (drive=SIM): relative dispersion 0.044160057192433246 exceeds NOISE_FLOOR 0.005 — value=359687.38577 ± 15883.815527 ops/s; Unreportable, excluded from the table
+- GROUP_BY_COUNT insert (drive=SIM): relative dispersion 0.029250313468544908 exceeds NOISE_FLOOR 0.005 — value=744844.880908 ± 21786.946252 ops/s; Unreportable, excluded from the table
+- GROUP_BY_SUM insert (drive=SIM): relative dispersion 0.03493439672880384 exceeds NOISE_FLOOR 0.005 — value=694275.642579 ± 24254.100737 ops/s; Unreportable, excluded from the table
+- GROUP_BY_MIN insert (drive=SIM): relative dispersion 0.04089249481317446 exceeds NOISE_FLOOR 0.005 — value=577537.610383 ± 23616.953737 ops/s; Unreportable, excluded from the table
+- GROUP_BY_MAX insert (drive=SIM): relative dispersion 0.034691775366600924 exceeds NOISE_FLOOR 0.005 — value=583936.158266 ± 20257.782031 ops/s; Unreportable, excluded from the table
+- GROUP_BY_TOP_K insert (drive=SIM): relative dispersion 0.027176002051186338 exceeds NOISE_FLOOR 0.005 — value=565502.221668 ± 15368.089536 ops/s; Unreportable, excluded from the table
+- COMBINE_LATEST insert (drive=SIM): relative dispersion 0.029789264506870944 exceeds NOISE_FLOOR 0.005 — value=388692.202029 ± 11578.854818 ops/s; Unreportable, excluded from the table
+- COALESCING_COMBINE insert (drive=SIM): relative dispersion 0.0053839946759323114 exceeds NOISE_FLOOR 0.005 — value=848542.092254 ± 4568.546107 ops/s; Unreportable, excluded from the table
+- TAGGED_SET retract (drive=SIM): relative dispersion 0.005347344082121458 exceeds NOISE_FLOOR 0.005 — value=790109.369271 ± 4224.98666 ops/s; Unreportable, excluded from the table
+- UNION retract (drive=SIM): relative dispersion 0.050791743164737314 exceeds NOISE_FLOOR 0.005 — value=642991.625471 ± 32658.665498 ops/s; Unreportable, excluded from the table
+- FLAT_MAP retract (drive=SIM): relative dispersion 0.02969969197106597 exceeds NOISE_FLOOR 0.005 — value=664339.531441 ± 19730.679448 ops/s; Unreportable, excluded from the table
+- PRESENCE_COUNT retract (drive=SIM): relative dispersion 0.00735890159201597 exceeds NOISE_FLOOR 0.005 — value=395864.364209 ± 2913.1269 ops/s; Unreportable, excluded from the table
+- QUORUM retract (drive=SIM): relative dispersion 0.006167811791334887 exceeds NOISE_FLOOR 0.005 — value=375040.494791 ± 2313.179186 ops/s; Unreportable, excluded from the table
+- JOIN_SET retract (drive=SIM): relative dispersion 0.009671932284995927 exceeds NOISE_FLOOR 0.005 — value=330782.387193 ± 3199.30485 ops/s; Unreportable, excluded from the table
+- SEMI_JOIN retract (drive=SIM): relative dispersion 0.006168793121223146 exceeds NOISE_FLOOR 0.005 — value=342750.95265 ± 2114.359719 ops/s; Unreportable, excluded from the table
+- LOOKUP_JOIN retract (drive=SIM): relative dispersion 0.008291601701418624 exceeds NOISE_FLOOR 0.005 — value=456790.829491 ± 3787.527619 ops/s; Unreportable, excluded from the table
+- GROUP_BY_COUNT retract (drive=SIM): relative dispersion 0.005223568271671839 exceeds NOISE_FLOOR 0.005 — value=793606.005397 ± 4145.45515 ops/s; Unreportable, excluded from the table
+- GROUP_BY_MIN retract (drive=SIM): relative dispersion 0.008171789875173946 exceeds NOISE_FLOOR 0.005 — value=713898.529467 ± 5833.828775 ops/s; Unreportable, excluded from the table
+- GROUP_BY_MAX retract (drive=SIM): relative dispersion 0.017181097779901577 exceeds NOISE_FLOOR 0.005 — value=714806.150243 ± 12281.154361 ops/s; Unreportable, excluded from the table
+- COMBINE_LATEST retract (drive=SIM): relative dispersion 0.005998695746512657 exceeds NOISE_FLOOR 0.005 — value=453577.096585 ± 2720.871 ops/s; Unreportable, excluded from the table
+- COALESCING_COMBINE retract (drive=SIM): relative dispersion 0.007663714055015782 exceeds NOISE_FLOOR 0.005 — value=857479.356592 ± 6571.476597 ops/s; Unreportable, excluded from the table
+
+### What was measured, and how
+
+`civictech.bench.micro.OperatorThroughputBenchmark.sim` — every `Subject` (18 constants,
+covering 14 of the epic's 15 operator cells; `MergeableGroupByCell` has no subject in this
+benchmark class at all, refused at link time and documented in `OperatorThroughputBenchmark`'s
+own KDoc and `Graphs.kt`, a structural omission of the benchmark itself rather than
+anything this task cut for time) x both `Direction`s (`INSERT`, `RETRACT`) = **36
+combinations, all 36 measured** — none skipped for wall-clock. `[BEN1-25]`'s omission
+list above names combinations excluded from the *table* on dispersion grounds, which is
+a different thing from a combination that was never run at all; this sweep ran the full
+cross product at the epic's annotation config, no subset selection was needed to fit the
+slot.
+
+Commands, exactly:
+
+```
+./gradlew :bench:jmhJar
+/Users/MerlijnB/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar 'OperatorThroughputBenchmark.sim' \
+     -rf csv -rff /abs/path/sim-throughput.csv
+```
+
+producing 36 rows (18 subjects x 2 directions) at `Fork(2)`, `Warmup(iterations=5,
+time=1s)`, `Measurement(iterations=10, time=1s)` — the class's own annotations,
+unraised. The Gradle toolchain's own JDK 21 (Eclipse Adoptium/Temurin 21.0.11) was
+invoked explicitly by absolute path rather than relying on the shell's default `java`
+(a JDK 26 on this host), so the run's `RunEnvironment` and the actual JVM that executed
+it agree. Then, per `ThroughputReport`'s KDoc:
+
+```
+./gradlew :bench:test -PbenchOnly=true --rerun \
+  --tests 'civictech.bench.micro.ThroughputReportRenderTest' \
+  -Dcivictech.bench.jmhResults=/abs/path/sim-throughput.csv \
+  -Dcivictech.bench.harnessSha=49ab44e9 \
+  -Dcivictech.bench.date=2026-08-18 \
+  -Dcivictech.bench.subject="SIM-drive per-operator delta-application throughput over the BEN1 micro-graphs"
+```
+
+which printed the rendered entry above to the test's captured stdout (JUnit XML
+`<system-out>`), read back and pasted verbatim rather than retyped. Host quiesced for the
+whole run — no concurrent Gradle build, test suite, or other benchmark; this was the only
+active workload on the machine. Wall-clock for the JMH sweep itself: **18m 29s** (started
+2026-08-18T18:35:37Z, results file written 2026-08-18T18:54:06Z), inside the ~25-30 minute
+estimate and close to the REAL-drive sibling's 18m 33s; the render step added under 5
+seconds on top.
+
+### `drive=SIM` is literal
+
+Every row above ran under `testkit.SimWorld` (`Graphs.kt`'s `Rig` for `Drive.SIM`:
+`SimWorld().host`, an in-process `ManagedHost` over `SimulationController`'s scheduler),
+and the measured body drives to quiescence through `SimWorld.runToIdle` — deterministic,
+single-threaded stepping, not a real scheduler and not real threads anywhere in the
+timed interval (`[BEN1-26]`). Simulated-time dispatch and the `runToIdle` drain cost are
+part of every number here, by design, exactly as `OperatorThroughputBenchmark`'s own
+KDoc states — a body that skipped the drive would measure enqueueing, not propagation.
+
+### Dispersion range, and the dominating-cost observation (`[BEN1-28]`)
+
+Across all 36 measured rows, relative dispersion (`error(99.9%) / score`) ranged from
+**0.00355** (`GROUP_BY_TOP_K retract`) to **0.08467** (`TAGGED_SET insert`) — roughly
+seventeen times `NOISE_FLOOR` (0.005) at the top end. That is tighter than REAL-drive's
+range (0.0048–0.1526) but still well above `NOISE_FLOOR` for most rows, so the same
+question REAL's entry asked applies here too.
+
+The 36 rows split cleanly by direction, and the split is itself the finding, exactly as
+in the REAL-drive entry:
+
+| direction | relative dispersion range | rows Reportable |
+| --- | --- | --- |
+| INSERT (18 rows) | 0.00538 – 0.08467 | 0 of 18 |
+| RETRACT (18 rows) | 0.00355 – 0.05079 | 5 of 18 |
+
+Every one of the five Reportable rows is a RETRACT row; not one INSERT row lands under
+`NOISE_FLOOR`. This is the same asymmetry the REAL-drive entry names, and the same
+documented benchmark mechanics explain it: under `Direction.INSERT`,
+`@Setup(Level.Invocation)` only generates a fresh batch, so every subject's `TagState`
+grows monotonically and unboundedly across every invocation within a one-second
+measurement iteration (bounded only at `@Setup(Level.Iteration)`, which rebuilds the
+graph). Under `Direction.RETRACT`, that same setup method applies the covering insert
+batch and quiesces it (untimed) before handing the timed body an equal-and-opposite
+retract, so net live state after each timed invocation returns close to its
+pre-invocation level — tag-map growth across invocations is bounded, not unbounded, for
+that direction. This holds under SIM exactly as it held under REAL, which is evidence
+the asymmetry is a property of the benchmark's own tag-map growth mechanics rather than
+an artifact of real-scheduler thread contention: SIM has none of REAL's scheduling
+jitter, and the same INSERT/RETRACT split still appears.
+
+Stated honestly: this run attached no allocator or GC profiler (no `-Xlog:gc`, no JFR),
+so tag-map growth is named here as the **best-supported suspect consistent with the
+benchmark's own documented mechanics and the measured INSERT/RETRACT asymmetry, and with
+its reappearance under a drive that removes scheduling jitter as a competing
+explanation** — not as a profiled, confirmed root cause. Nothing under `kernel/src/main`
+was touched or tuned to test this, per `[BEN1-28]`'s own instruction.
+
+### WAL/journal statement (`[BEN1-29]`)
+
+No journal or durability wiring is attached to these graphs. `testkit.SimWorld` builds
+its `ManagedHost` as `ManagedHost(scheduler = controller.scheduler(), registry =
+registry, attention = attention)` — no `journal` or `journalFor` argument — and
+`ManagedHost`'s own constructor documents `journal: Journal? = null` as "volatile host
+(default, pre-M10 behavior)" (`kernel/src/main/kotlin/civictech/cell/host/ManagedHost.kt`).
+No `civictech.cell.durability` type appears anywhere in `Graphs.kt`, `Deltas.kt`, or
+`OperatorThroughputBenchmark.kt` (confirmed by grep, as for the REAL entry). WAL/journal
+sync is **not in play** for this entry either; KBLK is not named because there is no
+durability path here to dominate.
+
+### Every combination was measured; the 31 omissions are dispersion exclusions
+
+To be explicit, since `[BEN1-25]` requires every omission named: **all 36** subject x
+direction combinations were run at the full annotation config — no subject or direction
+was cut to fit the wall-clock slot. The 31 names in the "Omitted rows" list above are
+every row that classified `Unreportable` against `NOISE_FLOOR` and was therefore excluded
+from the rendered table, not rows that went unmeasured. Per this task's own instructions,
+this outcome — most of the family landing `Unreportable` at this config — **is** the
+entry: no run was stretched, no fork/iteration count was raised toward JMH's defaults,
+and `NOISE_FLOOR` (`bench/src/main/kotlin/civictech/bench/Dispersion.kt`) was not touched.
+
+### Trigger (`[BEN1-31]`/`[BEN1-32]`)
+
+`TriggerClaim.None` — MARKED INCOMPLETE, rendered by `Findings.entry` itself in the block
+above. This entry does not cite G-21 (lease pooling, gated on footprint) or G-43
+(re-baseline cost under fan-out): neither is this task's gap to answer, and no other gap
+trigger question is answered by a per-operator throughput number at this config.
+
+### Comparison with REAL-drive, in prose only (not a shared table, `[BEN1-27]`)
+
+The REAL-drive entry above (`computenet-x9e.4.5`) measured the identical 18 subjects x 2
+directions at the same annotation config on the same machine. Read side by side, in
+prose, without constructing any mixed-drive table:
+
+- **SIM classified more rows Reportable than REAL**: 5 of 36 here versus 1 of 36 there.
+  SIM's relative dispersion range (0.00355–0.08467) sits entirely below REAL's upper
+  bound (0.1526) and its own upper bound is roughly half of REAL's.
+- **Both drives show the identical directional split**: zero INSERT rows Reportable,
+  all Reportable rows drawn from RETRACT. That the same asymmetry survives the move from
+  a real, virtual-thread scheduler (REAL) to deterministic single-threaded simulation
+  (SIM) is the strongest evidence in either entry that the dominant unintended cost is
+  the benchmark's own `TagState` tag-map growth mechanics (`[BEN1-28]`), not scheduler
+  contention or GC pressure specific to real threads — a real-scheduler-only cause would
+  be expected to weaken or disappear under SIM, and it does not.
+- **SIM being tighter than REAL is exactly the expected direction**: SIM removes
+  real-thread scheduling and OS jitter from the measured interval, so its residual
+  dispersion is closer to the tag-map-growth floor common to both drives. That REAL is
+  still noisier on top of the shared asymmetry is consistent with real-scheduler jitter
+  being an *additional*, not the *sole*, contributor to dispersion — reported as an
+  observation, not a profiled attribution.
+
+No numeric value from either drive is merged into a shared row or table; each entry's
+`FindingsTable` stands on its own, per `[BEN1-27]`.
