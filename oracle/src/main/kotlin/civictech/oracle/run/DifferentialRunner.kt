@@ -169,13 +169,14 @@ object DifferentialRunner {
         val model = CaseExecution.referenceModelFor(case.topology)
         val oracle = reference ?: Reference(model::eval)
         val marker = CaseExecution.renderSpec(case.spec, case.topology.nodes.associate { it.handle to it.catalogId })
+        lateinit var assembly: CaseExecution.CaseAssembly
         return execute(
             seed = case.seed,
             caseMarker = marker,
             script = case.script.toScript(),
             reference = oracle,
             stepBudget = stepBudget,
-            buildGraph = { world -> CaseExecution.applyCase(case, world) },
+            buildGraph = { world -> CaseExecution.assemble(case, world).also { assembly = it }.graph },
         ) { driving ->
             for (step in case.script.steps) {
                 if (driving.exhausted) break
@@ -187,7 +188,15 @@ object DifferentialRunner {
 
                     CaseStep.Barrier -> {
                         driving.drainToIdle()
-                        if (!driving.exhausted) onBarrier(driving.readTerminals())
+                        if (!driving.exhausted) {
+                            // BS-7 [ORA1-DIFF-05]: the late terminal links only here, after the
+                            // graph has quiesced — see CaseExecution.linkLateTerminals. This
+                            // mutates assembly.terminals, the SAME map instance backing
+                            // driving's CaseGraph.terminals, so both readTerminals() below and
+                            // execute()'s own final comparison see the late terminal from now on.
+                            CaseExecution.linkLateTerminals(case, driving.world, assembly)
+                            onBarrier(driving.readTerminals())
+                        }
                     }
                 }
             }
@@ -279,7 +288,12 @@ object DifferentialRunner {
      * string `[ORA1-DIFF-07]`.
      */
     class Driving internal constructor(
-        private val world: SimWorld,
+        /**
+         * The live [SimWorld] this run is driving. Exposed (not just used internally) because
+         * [CaseExecution.linkLateTerminals] needs it to spawn and connect a late terminal's
+         * fold mid-run, at the [CaseStep.Barrier] — see [run]'s driving lambda.
+         */
+        val world: SimWorld,
         private val graph: CaseGraph,
         /** The run's own random stream, derived from the seed, so a run replays exactly. */
         val rnd: Random,
