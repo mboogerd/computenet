@@ -90,10 +90,16 @@ class GraphSpecLinkSweepTest {
         const val SWEEP_SEEDS = 50L
 
         /**
-         * The set-rooted slice of the core vocabulary — every id a shape-typed walk can actually
-         * reach from a registered source. The pair-shaped entries (`joinSet`, `semiJoin`, the
-         * `groupBy*` family) consume `SetOf(Tuple(2))`, which no arity-0 entry produces, so no
-         * generated case can contain them and naming them here would test nothing.
+         * The **set-rooted** slice of the core vocabulary.
+         *
+         * The pair-shaped entries (`joinSet`, `semiJoin`, `antiJoin`, the `groupBy*` family)
+         * consume `SetOf(Tuple(2))`, which no arity-0 entry produces and no reachable operator
+         * emits, so no generated case can contain them and naming them here would test nothing.
+         *
+         * The map-rooted slice (`map` with `join`, `combineLatest`, `lookupJoin`) is a
+         * different case: it **is** generable and links cleanly — measured 2026-08-18 during
+         * review at 50/50 seeds clean — but this sweep does not cover it, so `[ORA1-GEN-02]`
+         * is evidenced here for the set-rooted slice only.
          */
         fun sweepConfig() = GeneratorConfig(
             depthRange = 3..5,

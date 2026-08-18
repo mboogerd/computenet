@@ -334,10 +334,22 @@ class GraphGeneratorTest {
         const val SYNTHETIC_ID = "syntheticSetPassThrough"
 
         /**
-         * The default sweep configuration: the set-rooted slice of the core vocabulary, which is
-         * the only slice a case can be built from end to end today — the pair-shaped entries
-         * (`joinSet`, the `groupBy*` family) consume `SetOf(Tuple(2))`, which no registered
-         * source produces, and shape-typed generation therefore never reaches them.
+         * The default sweep configuration: the **set-rooted** slice of the core vocabulary.
+         *
+         * Two different reasons keep the rest of the catalog out, and they are not
+         * interchangeable:
+         *
+         * - **Unreachable, so untestable.** The pair-shaped entries (`joinSet`, `semiJoin`,
+         *   `antiJoin` and the whole `groupBy*` family) consume `SetOf(Tuple(2))`, which no
+         *   registered arity-0 entry produces and no reachable operator emits — `joinSet`'s
+         *   own output is the only `SetOf(Tuple(2))` in the catalog and it needs one as input.
+         *   Shape-typed generation therefore can never reach them, and naming them here would
+         *   test nothing.
+         * - **Reachable, simply not swept here.** The map-rooted slice (`map` as the source,
+         *   with `join`, `combineLatest` and `lookupJoin` over `MapOf(Scalar, Scalar)`) *is*
+         *   fully generable and links cleanly — measured 2026-08-18 during review at 50/50
+         *   seeds clean on a live host. This suite is set-rooted only, so no assertion here
+         *   covers that slice.
          */
         fun defaultConfig(
             depthRange: IntRange = 3..5,
