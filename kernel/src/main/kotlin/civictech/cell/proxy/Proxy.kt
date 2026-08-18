@@ -174,13 +174,36 @@ object Proxy {
      * - **`Borrowed`/`Frozen` are not opened.** Both are explicitly non-consuming views
      *   (spec 23 §Taps); descending into one could consume an exclusive whose sole consumer
      *   is somebody else.
-     * - **Platform declarations are not opened**, because opening JDK internals would trip
-     *   module access. This is a real limit on reach, not a free one: a `kotlin.*`/`java.*`
-     *   container that is neither `Map`, `Iterable` nor `Array` — `Pair`, `Triple`,
-     *   `Result`, `java.util.Optional` — is skipped here, so an exclusive held only inside
-     *   one is **not** discharged even though the KSP scan marks the method exclusive
-     *   (measured 2026-08-16 under review of computenet-ulss). Widening to those shapes is
-     *   filed, not done.
+     * - **Platform declarations are not opened *reflectively*** — [dischargeFields] refuses
+     *   them, because opening JDK internals would trip module access. Reach into the platform
+     *   containers that can hold payload is therefore given by an explicit branch above, one
+     *   per shape, using the container's own public accessor: `Map`, `Iterable`, `Array`,
+     *   and (computenet-woto) `kotlin.Pair`, `kotlin.Triple`, `kotlin.Result` and
+     *   `java.util.Optional`. That list is not arbitrary — it is what
+     *   `ContractProcessor.carriesExclusive` reaches, because it tests `type.arguments`
+     *   *before* its own platform stop, so `Pair<Owned<T>, _>` and friends do mark their
+     *   method exclusive. Until this widening the runtime walk had no such precedence, and an
+     *   exclusive held only inside one of them stayed live while the descriptor asserted the
+     *   method was discharged (measured 2026-08-16 under review of computenet-ulss; pinned by
+     *   `ProxyDischargeReachTest`).
+     *
+     *   **A platform container outside that list is still unreached, and deliberately.**
+     *   The scan sees a type argument of *any* declaration, so a user-written platform-adjacent
+     *   generic could in principle carry one; no such shape occurs in this repository's
+     *   contracts, and each addition costs a hand-written accessor branch, so shapes are added
+     *   on evidence rather than pre-emptively. A `Result`'s **failure** is likewise not
+     *   walked: `exceptionOrNull()` yields a `Throwable`, which is a diagnostic, not payload
+     *   the SPSC handshake ever transferred.
+     * - **An `Owned`'s payload is walked; a `Leased`'s is not** (computenet-woto). `take()`
+     *   returns the moved value, and the scan recurses through `Owned`'s type argument into
+     *   that declaration's properties, so an `Owned` nested inside the value of an outer
+     *   `Owned` is within the scan's reach and is now within this walk's — previously
+     *   `take()`'s result was discarded and the inner exclusive was silently dropped.
+     *   `release()` returns `Unit` and hands the value back to its pool, which from that
+     *   instant is its owner; consuming exclusives reachable from it would be consuming the
+     *   *pool's* payload, the over-reach direction of the same invariant. So `Leased`
+     *   discharges the lease and stops. (Pooling is unbuilt — `Ownership.kt`, "G-21 phase 3" —
+     *   so the shape is reasoned from the contract, not measured against a live pool.)
      * - **Function values are not opened** (computenet-h6sf, defect 1 — over-reach). A
      *   `kotlin.Function*` type is a *platform* declaration, so `carriesExclusive` stops at it
      *   and can never mark a method exclusive on account of a captured exclusive. A lambda's
@@ -246,7 +269,7 @@ object Proxy {
     private fun discharge(value: Any?, seen: MutableSet<Any>) {
         if (value == null || !seen.add(value)) return
         when (value) {
-            is Owned<*> -> consuming { value.take() }
+            is Owned<*> -> consuming { value.take() }?.let { discharge(it, seen) }
             is Leased<*> -> consuming { value.release() }
             is Map<*, *> -> value.forEach { (key, item) ->
                 discharge(key, seen)
@@ -254,6 +277,17 @@ object Proxy {
             }
             is Iterable<*> -> value.forEach { discharge(it, seen) }
             is Array<*> -> value.forEach { discharge(it, seen) }
+            is Pair<*, *> -> {
+                discharge(value.first, seen)
+                discharge(value.second, seen)
+            }
+            is Triple<*, *, *> -> {
+                discharge(value.first, seen)
+                discharge(value.second, seen)
+                discharge(value.third, seen)
+            }
+            is Result<*> -> discharge(value.getOrNull(), seen)
+            is java.util.Optional<*> -> discharge(value.orElse(null), seen)
             is Borrowed<*>, is Frozen<*>, is Function<*> -> Unit
             else -> dischargeFields(value, seen)
         }
@@ -265,14 +299,18 @@ object Proxy {
      * deliberately narrow (`IllegalStateException`, around the consumption alone) rather than
      * a `runCatching` over the walk: any other failure is not a double-discharge and must
      * still surface.
+     *
+     * Returns what the consumption yielded, or `null` when it was already discharged, so
+     * `Owned.take()`'s moved value can be walked in turn (computenet-woto) without the caller
+     * having to distinguish the two outcomes again.
      */
-    private inline fun consuming(consume: () -> Unit) {
+    private inline fun <T> consuming(consume: () -> T): T? =
         try {
             consume()
         } catch (_: IllegalStateException) {
             doubleDischargeCount.incrementAndGet()
+            null
         }
-    }
 
     /**
      * The field walk behind [discharge]'s `else` branch.
