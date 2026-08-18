@@ -1,5 +1,7 @@
 package civictech.oracle.model
 
+import civictech.oracle.bind.CoreOperators
+import civictech.oracle.bind.OperatorCatalog
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
@@ -12,9 +14,11 @@ import org.junit.jupiter.api.Test
  * evaluations of one script produce equal results and the script is structurally unchanged
  * afterwards.
  *
- * This is the **engine-level** purity test. The full-vocabulary version — one script of ~200
- * mixed operations across every registered operator — belongs to computenet-4ru.5.3, which
- * closes the vocabulary out.
+ * This is the **engine-level** purity test, using hand-built model instances over a small
+ * pipeline. The full-vocabulary version below — one script of exactly 200 mixed operations
+ * across every operator [CoreOperators] registers, evaluated through the real
+ * [OperatorCatalog] entries rather than re-constructed model objects — is
+ * computenet-4ru.5.3's, which closes the vocabulary out.
  */
 class ReferenceModelPurityTest {
 
@@ -184,5 +188,228 @@ class ReferenceModelPurityTest {
         }
 
         failure.message!! shouldContain "at most one slice per source"
+    }
+
+    // -------------------------------------------------------------------
+    // computenet-4ru.5.3: the full-vocabulary purity test (Ex/purity).
+    //
+    // Every registered operator gets a node wired against real
+    // OperatorCatalog entries (never a hand-reconstructed model instance),
+    // over a single ~200-event script spanning every source shape the
+    // registered operators consume. `[ORA1-MODEL-11]`'s purity is checked
+    // exactly as the engine-level tests above check it: two evaluations of
+    // one script agree, and the script is structurally unchanged.
+    // -------------------------------------------------------------------
+
+    private val fvWriter = WriterId("fv")
+
+    /** Every catalog id [fullVocabularyModel] actually resolved through [OperatorCatalog], for the coverage check below. */
+    private val idsExercised = mutableSetOf<String>()
+
+    private fun catalogSource(id: String): SourceModel {
+        idsExercised += id
+        return OperatorCatalog.entry(id)!!.model as SourceModel
+    }
+
+    private fun catalogOperator(id: String): OperatorModel {
+        idsExercised += id
+        return OperatorCatalog.entry(id)!!.model as OperatorModel
+    }
+
+    /** A deterministic mix of Add/Observe/Remove over a small alphabet — repeats force retractions. */
+    private fun setChurn(source: SourceId, alphabet: Int, elementAt: (Int) -> Any?, n: Int): SourceScript {
+        val events = (0 until n).map { i ->
+            val element = elementAt(i % alphabet)
+            when (i % 4) {
+                0, 1 -> ScriptEvent.Add(fvWriter, element)
+                2 -> ScriptEvent.Observe(fvWriter)
+                else -> ScriptEvent.Remove(fvWriter, element)
+            }
+        }
+        return SourceScript(source, events)
+    }
+
+    /** A deterministic mix of Put/RemoveKey over a small key alphabet, one writer throughout. */
+    private fun keyedChurn(source: SourceId, n: Int): SourceScript {
+        val events = (0 until n).map { i ->
+            val key = "k${i % 5}"
+            if (i % 5 == 4) ScriptEvent.RemoveKey(fvWriter, key) else ScriptEvent.Put(fvWriter, key, "v$i")
+        }
+        return SourceScript(source, events)
+    }
+
+    /** A deterministic mix of Increment/Decrement. */
+    private fun counterChurn(source: SourceId, n: Int): SourceScript {
+        val events = (0 until n).map { i ->
+            val amount = (i + 1).toLong()
+            if (i % 3 == 0) ScriptEvent.Decrement(fvWriter, amount) else ScriptEvent.Increment(fvWriter, amount)
+        }
+        return SourceScript(source, events)
+    }
+
+    private val plainLeft = SourceId("fv-plain-left")
+    private val plainRight = SourceId("fv-plain-right")
+    private val keyedSrc = SourceId("fv-keyed")
+    private val pairLeft = SourceId("fv-pair-left")
+    private val pairRight = SourceId("fv-pair-right")
+    private val mapLeft = SourceId("fv-map-left")
+    private val mapRight = SourceId("fv-map-right")
+    private val counterSrc = SourceId("fv-counter")
+    private val pnCounterSrc = SourceId("fv-pncounter")
+
+    /**
+     * Exactly 200 events across nine sources — a plain-scalar pair, a keyed-set source, a
+     * pair-shaped pair (feeding the join-set/semi-join/group-by family), a map-shaped pair
+     * (feeding the map-join family, each a single-writer `MapCell` slice per `[ORA1-MODEL-08]`)
+     * and a counter pair. `30+30+20+25+25+20+20+15+15 = 200`.
+     */
+    private fun fullVocabularyScript(): Script = Script(
+        listOf(
+            setChurn(plainLeft, 7, { i -> "e$i" }, 30),
+            setChurn(plainRight, 7, { i -> "e${i + 3}" }, 30),
+            keyedChurn(keyedSrc, 20),
+            setChurn(pairLeft, 6, { i -> "pk$i" to i.toLong() }, 25),
+            setChurn(pairRight, 6, { i -> "pk$i" to (i + 100).toLong() }, 25),
+            keyedChurn(mapLeft, 20),
+            keyedChurn(mapRight, 20),
+            counterChurn(counterSrc, 15),
+            counterChurn(pnCounterSrc, 15),
+        ),
+    )
+
+    /**
+     * One [ReferenceModel] naming every id [CoreOperators] registers, resolved through
+     * [OperatorCatalog] rather than reconstructed — so this test exercises the exact models a
+     * differential run would.
+     */
+    private fun fullVocabularyModel(): ReferenceModel {
+        val plainLeftNode = ModelNode.Source(NodeId("plainLeft"), plainLeft, catalogSource(CoreOperators.Ids.SET))
+        val plainRightNode = ModelNode.Source(NodeId("plainRight"), plainRight, catalogSource(CoreOperators.Ids.SET))
+        val keyedNode = ModelNode.Source(NodeId("keyed"), keyedSrc, catalogSource(CoreOperators.Ids.KEYED_SET))
+        val pairLeftNode = ModelNode.Source(NodeId("pairLeft"), pairLeft, catalogSource(CoreOperators.Ids.SET))
+        val pairRightNode = ModelNode.Source(NodeId("pairRight"), pairRight, catalogSource(CoreOperators.Ids.SET))
+        val mapLeftNode = ModelNode.Source(NodeId("mapLeft"), mapLeft, catalogSource(CoreOperators.Ids.MAP))
+        val mapRightNode = ModelNode.Source(NodeId("mapRight"), mapRight, catalogSource(CoreOperators.Ids.MAP))
+        val counterNode = ModelNode.Source(NodeId("counter"), counterSrc, catalogSource(CoreOperators.Ids.COUNTER))
+        val pnCounterNode =
+            ModelNode.Source(NodeId("pnCounter"), pnCounterSrc, catalogSource(CoreOperators.Ids.PN_COUNTER))
+
+        val filterNode = ModelNode.Operator(NodeId("filter"), catalogOperator(CoreOperators.Ids.FILTER), plainLeftNode.id)
+        val flatMapNode =
+            ModelNode.Operator(NodeId("flatMapSet"), catalogOperator(CoreOperators.Ids.FLAT_MAP_SET), plainLeftNode.id)
+        val mapSetNode = ModelNode.Operator(NodeId("mapSet"), catalogOperator(CoreOperators.Ids.MAP_SET), plainLeftNode.id)
+        val countNode = ModelNode.Operator(NodeId("count"), catalogOperator(CoreOperators.Ids.COUNT), filterNode.id)
+        val unionNode = ModelNode.Operator(
+            NodeId("union"),
+            catalogOperator(CoreOperators.Ids.UNION),
+            listOf(plainLeftNode.id, plainRightNode.id),
+        )
+        val presenceNode = ModelNode.Operator(
+            NodeId("presenceCount"),
+            catalogOperator(CoreOperators.Ids.PRESENCE_COUNT),
+            listOf(plainLeftNode.id, plainRightNode.id),
+        )
+        val quorumNode = ModelNode.Operator(
+            NodeId("quorumSet"),
+            catalogOperator(CoreOperators.Ids.QUORUM_SET),
+            listOf(plainLeftNode.id, plainRightNode.id),
+        )
+        val intersectNode = ModelNode.Operator(
+            NodeId("intersect"),
+            catalogOperator(CoreOperators.Ids.INTERSECT),
+            listOf(plainLeftNode.id, plainRightNode.id),
+        )
+        val joinSetNode = ModelNode.Operator(
+            NodeId("joinSet"),
+            catalogOperator(CoreOperators.Ids.JOIN_SET),
+            listOf(pairLeftNode.id, pairRightNode.id),
+        )
+        val semiJoinNode = ModelNode.Operator(
+            NodeId("semiJoin"),
+            catalogOperator(CoreOperators.Ids.SEMI_JOIN),
+            listOf(pairLeftNode.id, pairRightNode.id),
+        )
+        val antiJoinNode = ModelNode.Operator(
+            NodeId("antiJoin"),
+            catalogOperator(CoreOperators.Ids.ANTI_JOIN),
+            listOf(pairLeftNode.id, pairRightNode.id),
+        )
+        val groupByNodes = CoreOperators.Ids.GROUP_BY_AGGREGATES.map { id ->
+            ModelNode.Operator(NodeId(id), catalogOperator(id), pairLeftNode.id)
+        }
+        val groupByGlobalNode = ModelNode.Operator(
+            NodeId(CoreOperators.Ids.GROUP_BY_GLOBAL),
+            catalogOperator(CoreOperators.Ids.GROUP_BY_GLOBAL),
+            pairLeftNode.id,
+        )
+        val joinNode = ModelNode.Operator(
+            NodeId("join"),
+            catalogOperator(CoreOperators.Ids.JOIN),
+            listOf(mapLeftNode.id, mapRightNode.id),
+        )
+        val combineLatestNode = ModelNode.Operator(
+            NodeId("combineLatest"),
+            catalogOperator(CoreOperators.Ids.COMBINE_LATEST),
+            listOf(mapLeftNode.id, mapRightNode.id),
+        )
+        val lookupJoinNode = ModelNode.Operator(
+            NodeId("lookupJoin"),
+            catalogOperator(CoreOperators.Ids.LOOKUP_JOIN),
+            listOf(mapLeftNode.id, mapRightNode.id),
+        )
+
+        val operatorNodes = listOf(
+            filterNode, flatMapNode, mapSetNode, countNode, unionNode, presenceNode, quorumNode,
+            intersectNode, joinSetNode, semiJoinNode, antiJoinNode, joinNode, combineLatestNode, lookupJoinNode,
+            groupByGlobalNode,
+        ) + groupByNodes
+
+        val sourceNodes = listOf(
+            plainLeftNode, plainRightNode, keyedNode, pairLeftNode, pairRightNode,
+            mapLeftNode, mapRightNode, counterNode, pnCounterNode,
+        )
+
+        val allNodes: List<ModelNode> = sourceNodes + operatorNodes
+        val terminals = allNodes.associate { it.id.id to it.id }
+
+        return ReferenceModel(allNodes, terminals)
+    }
+
+    /**
+     * `[ORA1-MODEL-11]`'s purity, at full-vocabulary scale: every operator [CoreOperators]
+     * registers gets a node, wired against the real [OperatorCatalog] entries, over one
+     * 200-event script — evaluated twice, with equal results and an unmutated script.
+     */
+    @Test
+    fun `the full registered vocabulary evaluated twice on one 200-event script yields equal results and an unmutated script`() {
+        OperatorCatalog.reset()
+        CoreOperators.registerAll()
+        idsExercised.clear()
+        try {
+            val model = fullVocabularyModel()
+            val subject = fullVocabularyScript()
+            val untouchedTwin = fullVocabularyScript()
+
+            withClue("sanity: the script really is exactly 200 events") {
+                subject.slices.sumOf { it.events.size } shouldBe 200
+            }
+            withClue(
+                "every id CoreOperators registers was resolved through OperatorCatalog while " +
+                    "building this test's graph — missing: ${CoreOperators.Ids.ALL.toSet() - idsExercised}, " +
+                    "unexpected: ${idsExercised - CoreOperators.Ids.ALL.toSet()}",
+            ) {
+                idsExercised shouldBe CoreOperators.Ids.ALL.toSet()
+            }
+
+            val first = model.eval(subject)
+            val second = model.eval(subject)
+
+            first shouldBe second
+            withClue("[ORA1-MODEL-11]: evaluation must not mutate the script") {
+                subject shouldBe untouchedTwin
+            }
+        } finally {
+            OperatorCatalog.reset()
+        }
     }
 }
