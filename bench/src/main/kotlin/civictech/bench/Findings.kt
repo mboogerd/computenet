@@ -6,11 +6,11 @@ package civictech.bench
  *
  * A single exception type covers every refusal this writer makes — an
  * [Reportability.Unreportable] result, an incomplete entry (missing date, subject,
- * results table, or per-row labels), or a cited gap whose trigger statement does not
- * state exactly one of FIRES / RETIRES / INCONCLUSIVE. [message] always names what was
- * refused and why, so a caller reading a thrown exception (rather than stepping
- * through the writer's source) still learns which fact was missing or which result
- * was rejected.
+ * results table, or per-row labels), a cited gap whose id is blank, or a cited gap
+ * whose trigger statement does not state exactly one of FIRES / RETIRES /
+ * INCONCLUSIVE. [message] always names what was refused and why, so a caller reading a
+ * thrown exception (rather than stepping through the writer's source) still learns
+ * which fact was missing or which result was rejected.
  */
 class FindingsRefusalException(message: String) : IllegalArgumentException(message)
 
@@ -41,6 +41,14 @@ sealed interface TriggerClaim {
      * have actually stated a verdict in it: it independently counts how many of the
      * three verdict words (FIRES, RETIRES, INCONCLUSIVE) occur in [statement] as whole
      * words, and refuses unless exactly one does (`[BEN1-31]`).
+     *
+     * [gapId] is likewise not trusted to be meaningful: [Findings.entry] refuses a
+     * blank (empty or all-whitespace) [gapId] rather than rendering an entry that
+     * cites nothing while presenting itself as a finding (`[BEN1-31]`). This checks
+     * only blankness, not the repository's `G-<digits>` shape convention (e.g.
+     * `"G-21 phase 3"`) — see this class's own examples above; a deliberate choice to
+     * keep this writer decoupled from a gap-id convention it does not otherwise know
+     * about, rather than a stricter shape check.
      */
     data class Cited(val gapId: String, val statement: String) : TriggerClaim
 }
@@ -155,6 +163,11 @@ object Findings {
         is TriggerClaim.None ->
             "Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding"
         is TriggerClaim.Cited -> {
+            if (trigger.gapId.isBlank()) {
+                throw FindingsRefusalException(
+                    "Findings entry refused: cited trigger's gapId is missing or blank"
+                )
+            }
             val hits = VERDICT_WORDS.count { word -> containsWholeWord(trigger.statement, word) }
             if (hits != 1) {
                 throw FindingsRefusalException(
