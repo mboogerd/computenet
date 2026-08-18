@@ -353,14 +353,16 @@ else `$PORT`, else 8080. See the README for run commands.
   `:demo:shell`'s HTTP/SSE plumbing (`BeadsMirrorAppKt --workspace <path>`).
   `:wire` is an opt-in dependency for its two-node mode only
   (`--rig`/`--listen`/`--peer`, `MirrorPeering`): the projector's two replica
-  cells then gossip their deltas over a real WebSocket transport, via the one
-  file in the module that names a `:wire` type — a solo run loads none of it.
-  CI runs its e2e suite as `TwoNodeRigTest` (`build-test-fast`) and, tagged
-  `@Tag("multi-jvm")`, `TwoJvmMirrorTest` (`build-test-serial`). Most of the
-  rest of its suite drives a real `bd`/`dolt` scratch workspace
-  (`BdScratchWorkspace`) and self-skips, visibly, if those binaries are absent
-  from PATH — CI installs both specifically so the real-workspace tests run
-  rather than skip.
+  cells then gossip their deltas over an injected transport seam
+  (`MirrorTransport`), whose only binding — `WsMirrorTransport`, in
+  `MirrorTransport.kt`, the module's one file naming a `:wire` type — carries
+  them over a real WebSocket. `MirrorPeering` itself names no socket type, and
+  a solo run loads none of the binding. CI asserts its e2e evidence ran: `TwoNodeRigTest` in
+  `build-test-fast` and, tagged `@Tag("multi-jvm")`, `TwoJvmMirrorTest` in
+  `build-test-serial`. Most of the rest of its suite drives a real `bd`/`dolt`
+  scratch workspace (`BdScratchWorkspace`) and self-skips, visibly, if those
+  binaries are absent from PATH — CI installs both specifically so the
+  real-workspace tests run rather than skip.
 
 The incremental-dataflow demos exist to showcase the operator suite and surface
 kernel gaps into `doc/demo-findings.md`.
