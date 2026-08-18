@@ -34,6 +34,18 @@ class ProxyDischargeReachTest {
 
     private class LeaseCarrier(val first: Leased<String>, val second: Leased<String>)
 
+    private class WithPair(val p: Pair<Owned<String>, Int>)
+
+    private class WithTriple(val t: Triple<Int, Owned<String>, Leased<String>>)
+
+    private class WithResult(val r: Result<Owned<String>>)
+
+    private class WithBoxedResult(val r: List<Result<Owned<String>>>)
+
+    private class WithOptional(val o: java.util.Optional<Owned<String>>)
+
+    private class Envelope(val inner: Owned<String>)
+
     private fun isLive(owned: Owned<*>): Boolean = runCatching { owned.take() }.isSuccess
 
     // ------------------------------------------------------------------
@@ -159,6 +171,123 @@ class ProxyDischargeReachTest {
         already.take()
 
         Proxy.discharge(already)
+    }
+
+    // ------------------------------------------------------------------
+    // Defect 3 — UNDER-REACH through platform containers (computenet-woto).
+    //
+    // `ContractProcessor.carriesExclusive` tests `type.arguments` *before* its
+    // platform-declaration stop, so `Pair<Owned<T>, _>`, `Triple`, `Result` and
+    // `java.util.Optional` all mark their method exclusive. The runtime walk's
+    // platform stop had no such precedence, so the descriptor asserted the
+    // method was discharged while the exclusive stayed live — the silent drop
+    // again, which is precisely the divergence [Proxy.discharge]'s KDoc calls
+    // "the bug, in whichever direction it points". Each test asserts consumed
+    // (`isLive == false`) AND exactly once (`doubleDischarges` unmoved).
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `an Owned inside a kotlin Pair is discharged exactly once`() {
+        val before = Proxy.doubleDischarges
+        val owned = Owned("pair")
+
+        Proxy.discharge(WithPair(owned to 1))
+
+        isLive(owned) shouldBe false
+        Proxy.doubleDischarges shouldBe before
+    }
+
+    @Test
+    fun `an Owned and a Leased inside a kotlin Triple are discharged exactly once`() {
+        val before = Proxy.doubleDischarges
+        val owned = Owned("triple")
+        var releases = 0
+        val leased = Leased("triple") { releases++ }
+
+        Proxy.discharge(WithTriple(Triple(1, owned, leased)))
+
+        isLive(owned) shouldBe false
+        releases shouldBe 1
+        Proxy.doubleDischarges shouldBe before
+    }
+
+    /**
+     * `Result` is a value class, so in a **field** position the compiler unboxes
+     * a success into the field itself (`WithResult.r` is `java.lang.Object`
+     * holding the `Owned`, not a `kotlin.Result`). This shape therefore already
+     * passed against the unfixed walk — no `kotlin.Result` instance exists for
+     * the platform stop to refuse. Kept as the regression pin for that erasure,
+     * with the *boxed* form below carrying the actual defect. Recorded on
+     * computenet-woto: the bead's prescribed `Result` reproduction does not
+     * discriminate for this reason, and the boxed one is its substitute.
+     */
+    @Test
+    fun `an Owned inside a kotlin Result field is discharged exactly once`() {
+        val before = Proxy.doubleDischarges
+        val owned = Owned("result")
+
+        Proxy.discharge(WithResult(Result.success(owned)))
+
+        isLive(owned) shouldBe false
+        Proxy.doubleDischarges shouldBe before
+    }
+
+    /**
+     * ...and where `Result` *is* boxed — as a generic type argument, the one
+     * position the value class survives into — the platform stop did refuse it.
+     */
+    @Test
+    fun `an Owned inside a boxed kotlin Result is discharged exactly once`() {
+        val before = Proxy.doubleDischarges
+        val owned = Owned("boxed-result")
+
+        Proxy.discharge(WithBoxedResult(listOf(Result.success(owned))))
+
+        isLive(owned) shouldBe false
+        Proxy.doubleDischarges shouldBe before
+    }
+
+    @Test
+    fun `an Owned inside a java util Optional is discharged exactly once`() {
+        val before = Proxy.doubleDischarges
+        val owned = Owned("optional")
+
+        Proxy.discharge(WithOptional(java.util.Optional.of(owned)))
+
+        isLive(owned) shouldBe false
+        Proxy.doubleDischarges shouldBe before
+    }
+
+    /**
+     * The second shape computenet-woto names: `is Owned<*> -> value.take()` used
+     * to discard the taken value, so an exclusive held by the *payload of an
+     * outer exclusive* was never reached. The KSP scan reaches it (it recurses
+     * through `Owned`'s type argument and then that declaration's properties),
+     * so this was the same descriptor-asserts-discharged divergence.
+     */
+    @Test
+    fun `an Owned nested inside the value of an outer Owned is discharged exactly once`() {
+        val before = Proxy.doubleDischarges
+        val inner = Owned("inner")
+        val outer = Owned(Envelope(inner))
+
+        Proxy.discharge(outer)
+
+        isLive(inner) shouldBe false
+        Proxy.doubleDischarges shouldBe before
+    }
+
+    /**
+     * ...and the outer's own consume-once state is unaffected: the walk takes it
+     * exactly once, so a later take is still the use-after-move error.
+     */
+    @Test
+    fun `discharging a nested outer Owned still consumes the outer exactly once`() {
+        val outer = Owned(Envelope(Owned("inner")))
+
+        Proxy.discharge(outer)
+
+        isLive(outer) shouldBe false
     }
 
     /** The exclusive-payload types themselves keep their exactly-once check. */
