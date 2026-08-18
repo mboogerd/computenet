@@ -116,6 +116,37 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     private val puts = mutableMapOf<K, MutableMap<Timestamp, V>>()
     private val dels = mutableMapOf<K, MutableSet<Timestamp>>()
 
+    /**
+     * Guards **every** access to [puts], [dels], [deadSources] and
+     * [dotCounter] — the read accessors as much as the writers.
+     *
+     * The cell's writer runs on whichever thread delivers to [inlet] or
+     * [deltaInlet], while [membership], [value], [state] and [snapshot] are
+     * *host*-facing reads a caller makes from its own thread. Unguarded, those
+     * accessors iterate the shared [LinkedHashMap]s and escape a
+     * [java.util.ConcurrentModificationException] into the caller: observed on
+     * CI out of [membership] on an `awaitUntil` thread while the beads
+     * mirror's poller wrote (computenet-yk5r).
+     *
+     * **The monitor is never held across an outbound call.** `put`/`remove`
+     * mutate under it and propagate after releasing it; [applyRemote] folds
+     * under it and originates after. So no foreign code ever runs while this
+     * cell holds the monitor, and no cross-cell lock cycle can form.
+     *
+     * **What it costs.** Reads serialize against the single writer: a host
+     * polling [membership] or [state] over a large map delays the next write
+     * by that scan (both are O(dots) and already copy). Nothing downstream is
+     * blocked, per the paragraph above.
+     *
+     * **Why not the cheaper options.** Copying the maps on read without a
+     * guard does not help — the copy is itself an iteration and throws the
+     * same CME. Concurrent maps (a weakly-consistent iteration, no lock) would
+     * replace [LinkedHashMap]'s insertion-order iteration with hash order,
+     * changing what [membership] and [state] observably return, and would
+     * still let [state] tear a `puts` read against a `dels` read.
+     */
+    private val stateLock = Any()
+
     // Dots are minted locally, not taken from the wave's MessageContext:
     // observed-remove correctness needs a dot unique per put *instance*, and a
     // wave timestamp repeats across every cell the wave touches (22).
@@ -148,14 +179,18 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     private val deadSources = mutableSetOf<UUID>()
 
     /** The dots at [key] no tombstone covers. */
-    private fun liveDots(key: K): Map<Timestamp, V> {
+    private fun liveDots(key: K): Map<Timestamp, V> = synchronized(stateLock) {
         val dots = puts[key] ?: return emptyMap()
-        val covered = dels[key] ?: return dots
-        return dots.filterKeys { it !in covered }
+        // a copy, never the live map: the uncovered branch's result is iterated
+        // by callers (`value`'s dot-order scan) outside this monitor.
+        val covered = dels[key] ?: return LinkedHashMap(dots)
+        dots.filterKeys { it !in covered }
     }
 
     /** `[24-TMAP-02]` add-wins presence: keys with at least one live dot. */
-    fun membership(): Set<K> = puts.keys.filterTo(LinkedHashSet()) { liveDots(it).isNotEmpty() }
+    fun membership(): Set<K> = synchronized(stateLock) {
+        puts.keys.filterTo(LinkedHashSet()) { liveDots(it).isNotEmpty() }
+    }
 
     /**
      * `[24-TMAP-03]` the key's exposed value: the live dot with the greatest
@@ -171,10 +206,12 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * read-view any consumer can fold. Copies out; never aliases the fold's
      * mutable maps.
      */
-    fun state(): TaggedMapDelta<K, V> = TaggedMapDelta(
-        puts = puts.mapValues { LinkedHashMap(it.value) },
-        dels = dels.mapValues { LinkedHashSet(it.value) },
-    )
+    fun state(): TaggedMapDelta<K, V> = synchronized(stateLock) {
+        TaggedMapDelta(
+            puts = puts.mapValues { LinkedHashMap(it.value) },
+            dels = dels.mapValues { LinkedHashSet(it.value) },
+        )
+    }
 
     // constructed inline: the factory runs during base-class init, before this
     // class's own fields initialize — the object only *captures* `this`; its
@@ -183,11 +220,15 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
         override fun put(key: K, value: V) {
             // reset-remove's local half: everything this writer currently sees
             // live at the key dies in the SAME delta that carries the fresh dot
-            // (KeyedSetCell's atomic retract+add, lifted to dots).
-            val observed = LinkedHashSet(liveDots(key).keys)
-            val dot = Timestamp(dotSource, ++dotCounter)
-            puts.getOrPut(key) { LinkedHashMap() }[dot] = value
-            if (observed.isNotEmpty()) dels.getOrPut(key) { LinkedHashSet() } += observed
+            // (KeyedSetCell's atomic retract+add, lifted to dots). The fold
+            // happens under `stateLock`; the propagation after it, never under.
+            val (dot, observed) = synchronized(stateLock) {
+                val seen = LinkedHashSet(liveDots(key).keys)
+                val minted = Timestamp(dotSource, ++dotCounter)
+                puts.getOrPut(key) { LinkedHashMap() }[minted] = value
+                if (seen.isNotEmpty()) dels.getOrPut(key) { LinkedHashSet() } += seen
+                minted to seen
+            }
             outlet.call.propagate(
                 TaggedMapDelta(
                     puts = mapOf(key to mapOf(dot to value)),
@@ -200,10 +241,13 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // `[24-TMAP-04]` reset-remove, tag-precise: tombstone exactly the
             // dots observed live here and now. A concurrent put's dot is not in
             // this set and therefore survives the merge.
-            val observed = LinkedHashSet(liveDots(key).keys)
-            // effective-only (21): removing a key with no live dot is a no-op
-            if (observed.isEmpty()) return
-            dels.getOrPut(key) { LinkedHashSet() } += observed
+            val observed = synchronized(stateLock) {
+                val seen = LinkedHashSet(liveDots(key).keys)
+                // effective-only (21): removing a key with no live dot is a no-op
+                if (seen.isEmpty()) return
+                dels.getOrPut(key) { LinkedHashSet() } += seen
+                seen
+            }
             outlet.call.propagate(TaggedMapDelta(dels = mapOf(key to observed)))
         }
     }
@@ -233,7 +277,7 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * [applyReBaseline] step (b)): a re-baseline legitimately re-asserts dots
      * from the very sources it supersedes.
      */
-    private fun novelty(delta: TaggedMapDelta<K, V>, fenced: Boolean = true): TaggedMapDelta<K, V>? {
+    private fun novelty(delta: TaggedMapDelta<K, V>, fenced: Boolean = true): TaggedMapDelta<K, V>? = synchronized(stateLock) {
         val freshPuts = LinkedHashMap<K, Map<Timestamp, V>>()
         delta.puts.forEach { (key, dots) ->
             val known = puts[key]
@@ -255,7 +299,7 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
             if (fresh.isNotEmpty()) freshDels[key] = fresh
         }
         if (freshPuts.isEmpty() && freshDels.isEmpty()) return null
-        return TaggedMapDelta(freshPuts, freshDels)
+        TaggedMapDelta(freshPuts, freshDels)
     }
 
     /**
@@ -268,7 +312,7 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * consumer, so an adopted map would be mutated under them by this cell's
      * next local put). The same discipline [state] observes on the way out.
      */
-    private fun absorb(novel: TaggedMapDelta<K, V>) {
+    private fun absorb(novel: TaggedMapDelta<K, V>) = synchronized(stateLock) {
         novel.puts.forEach { (key, dots) -> puts.getOrPut(key) { LinkedHashMap() }.putAll(dots) }
         novel.dels.forEach { (key, dots) -> dels.getOrPut(key) { LinkedHashSet() } += dots }
     }
@@ -296,9 +340,12 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // read before originating: `originate` clears the current context, so
         // the notice must be taken off the arriving wave first.
         val notice = CurrentContext.get()?.reBaseline
-        val effective =
+        // one atomic fold: novelty and its absorption must not straddle another
+        // writer, and no outbound call happens under the monitor.
+        val effective = synchronized(stateLock) {
             if (notice != null) applyReBaseline(delta, notice)
             else novelty(delta)?.also { absorb(it) }
+        }
         if (effective == null) return // echo terminates here
         PendingReBaseline.with(null) { outlet.originate { propagate(effective) } }
     }
@@ -350,7 +397,7 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     private fun applyReBaseline(
         delta: TaggedMapDelta<K, V>,
         notice: ReBaselineNotice,
-    ): TaggedMapDelta<K, V>? {
+    ): TaggedMapDelta<K, V>? = synchronized(stateLock) {
         if (!notice.supersede) return novelty(delta)?.also { absorb(it) }
 
         // (a) retract — tombstone, don't delete
@@ -376,7 +423,7 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
         retracted.forEach { (key, dots) ->
             delsOut.merge(key, dots) { a, b -> LinkedHashSet(a).also { it += b } }
         }
-        return TaggedMapDelta(novel?.puts ?: emptyMap(), delsOut)
+        TaggedMapDelta(novel?.puts ?: emptyMap(), delsOut)
     }
 
     /**
@@ -387,14 +434,14 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * would let an incremental requester's `since` step past a tombstone it
      * never received. `null`/[Interest.Total] scope iterates every key.
      */
-    private fun currentFrontier(scope: Interest? = null): TagFrontier {
+    private fun currentFrontier(scope: Interest? = null): TagFrontier = synchronized(stateLock) {
         val admit: (K) -> Boolean =
             if (scope == null || scope is Interest.Total) { _ -> true } else { key -> scope.admits(key) }
         val frontier = mutableMapOf<UUID, Long>()
         fun fold(dot: Timestamp) = frontier.merge(dot.sourceId, dot.counter, ::maxOf)
         puts.forEach { (key, dots) -> if (admit(key)) dots.keys.forEach(::fold) }
         dels.forEach { (key, dots) -> if (admit(key)) dots.forEach(::fold) }
-        return TagFrontier(frontier)
+        TagFrontier(frontier)
     }
 
     /**
@@ -406,18 +453,20 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
         if (scope == null || scope is Interest.Total) source else source.filterKeys { scope.admits(it) }
 
     /** Only the put-dots a [since] frontier has not observed; a copy, never an alias, when [since] is null. */
-    private fun putsSince(since: TagFrontier?): Map<K, Map<Timestamp, V>> =
+    private fun putsSince(since: TagFrontier?): Map<K, Map<Timestamp, V>> = synchronized(stateLock) {
         puts.mapValues { (_, dots) ->
             if (since == null) LinkedHashMap(dots)
             else dots.filterKeys { (since.perSource[it.sourceId] ?: -1L) < it.counter }
         }.filterValues { it.isNotEmpty() }
+    }
 
     /** Only the tombstoned dots a [since] frontier has not observed; a copy when [since] is null. */
-    private fun delsSince(since: TagFrontier?): Map<K, Set<Timestamp>> =
+    private fun delsSince(since: TagFrontier?): Map<K, Set<Timestamp>> = synchronized(stateLock) {
         dels.mapValues { (_, dots) ->
             if (since == null) LinkedHashSet(dots)
             else dots.filterTo(LinkedHashSet()) { (since.perSource[it.sourceId] ?: -1L) < it.counter }
         }.filterValues { it.isNotEmpty() }
+    }
 
     init {
         deltaInlet.serve(object : Propagate<TaggedMapDelta<K, V>> {
@@ -428,17 +477,24 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // to just the new subscriber — idempotent merge ([24-TMAP-01]) makes
         // replays harmless, and shipping the tombstones is what stops a late
         // joiner resurrecting a removed key.
-        outlet.catchUpOnLinked { if (puts.isEmpty() && dels.isEmpty()) null else state() }
+        outlet.catchUpOnLinked {
+            synchronized(stateLock) { if (puts.isEmpty() && dels.isEmpty()) null else state() }
+        }
         // on-demand pull (spec 20/21 §Pull, decided in 93 I-16/I-24): a
         // single-wave state-as-delta reply, since-filtered, stamped as a
         // catch-up baseline (MessageContext.baseline) and delivered only to the
         // requester — never broadcast, never admitted to wave completeness.
         outlet.pullServe { request ->
-            val putsOut = scopedTo(putsSince(request.since), request.scope)
-            val delsOut = scopedTo(delsSince(request.since), request.scope)
-            if (putsOut.isEmpty() && delsOut.isEmpty()) return@pullServe
-            baselineTo(request.replyTo, currentFrontier(request.scope)) {
-                propagate(TaggedMapDelta(putsOut, delsOut))
+            // the three halves of a reply are one snapshot: taken together
+            // under the monitor, shipped after it is released.
+            val reply = synchronized(stateLock) {
+                val putsOut = scopedTo(putsSince(request.since), request.scope)
+                val delsOut = scopedTo(delsSince(request.since), request.scope)
+                if (putsOut.isEmpty() && delsOut.isEmpty()) null
+                else Triple(putsOut, delsOut, currentFrontier(request.scope))
+            } ?: return@pullServe
+            baselineTo(request.replyTo, reply.third) {
+                propagate(TaggedMapDelta(reply.first, reply.second))
             }
         }
     }
@@ -454,7 +510,7 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // replica's state across a promotion swap through exactly this seam, and a
     // candidate that woke without the fence would re-admit a superseded
     // source's straggler dots the incumbent had already refused.
-    override fun snapshot(): Serializable =
+    override fun snapshot(): Serializable = synchronized(stateLock) {
         HashMap(
             mapOf(
                 "puts" to HashMap(puts.mapValues { LinkedHashMap(it.value) }),
@@ -463,9 +519,10 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
                 "dead" to LinkedHashSet(deadSources),
             )
         )
+    }
 
     @Suppress("UNCHECKED_CAST")
-    override fun restore(state: Serializable) {
+    override fun restore(state: Serializable) = synchronized(stateLock) {
         val maps = state as Map<String, Any>
         puts.clear()
         dels.clear()
@@ -476,6 +533,7 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
             .forEach { (key, dots) -> dels[key] = LinkedHashSet(dots) }
         dotCounter = maps["counter"] as? Long ?: 0L
         (maps["dead"] as? Set<UUID>)?.let { deadSources += it }
+        Unit
     }
 
     companion object {

@@ -17,10 +17,14 @@ import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.WireCodec
 import io.kotest.matchers.booleans.shouldBeTrue
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.*
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 
 /**
  * `OrMapCell` / `TaggedMapDelta` — the four normative laws of spec 20/24
@@ -589,6 +593,69 @@ class OrMapCellTest {
         }
     }
 
+    // -----------------------------------------------------------------
+    // read accessors under a concurrent writer (computenet-yk5r)
+    // -----------------------------------------------------------------
+
+    /**
+     * A host reads the cell (`membership`/`value`/`state`/`snapshot`) from its
+     * own thread while the cell's writer mutates `puts`/`dels`. Before the
+     * guard those accessors iterated the shared `LinkedHashMap`s unsynchronised
+     * and escaped a `ConcurrentModificationException` into the caller —
+     * observed on CI as `HeadlineLivenessTest > initializationError`, thrown out
+     * of `OrMapCell.membership` on an `awaitUntil` thread while the beads
+     * mirror's poller wrote (computenet-yk5r).
+     *
+     * **This reproduction is statistical, not deterministic**, and deliberately
+     * so. Forcing the interleaving deterministically needs the reader to be
+     * suspended *inside* its iteration and the writer released while it holds
+     * there — but under the monitor the fix takes, that writer would block on
+     * the reader, so such a test deadlocks against the fixed code instead of
+     * passing. Measured failure rate against the unfixed accessors: 20/20
+     * rounds threw `ConcurrentModificationException`, the first within a few
+     * milliseconds of the writer starting. A null result here therefore bounds
+     * the defect well below the rate it had, but does not prove its absence.
+     */
+    @Test
+    fun `read accessors do not throw ConcurrentModificationException under a concurrent writer`() {
+        val failures = mutableListOf<Throwable>()
+        repeat(CONCURRENT_ROUNDS) { round ->
+            val cell = OrMapCell<String, String>()
+            repeat(SEEDED_KEYS) { cell.inlet.call.put("k$it", "v$it") }
+
+            val stop = AtomicBoolean(false)
+            val writerFailure = AtomicReference<Throwable?>(null)
+            val writer = thread(name = "or-map-writer-$round") {
+                var n = SEEDED_KEYS
+                try {
+                    while (!stop.get()) {
+                        cell.inlet.call.put("k${n++}", "v")
+                        if (n % 3 == 0) cell.inlet.call.remove("k${n % SEEDED_KEYS}")
+                    }
+                } catch (t: Throwable) {
+                    writerFailure.set(t)
+                }
+            }
+            try {
+                repeat(READS_PER_ROUND) {
+                    cell.membership()
+                    cell.value("k1")
+                    cell.state()
+                    cell.snapshot()
+                }
+            } catch (t: Throwable) {
+                failures += t
+            } finally {
+                stop.set(true)
+                writer.join(10_000)
+            }
+            writerFailure.get()?.let { failures += it }
+        }
+        withMessage("read accessors threw under a concurrent writer: ${failures.map { it::class.java.name }}") {
+            failures.shouldBeEmpty()
+        }
+    }
+
     private inline fun withMessage(clue: String, block: () -> Unit) =
         io.kotest.assertions.withClue(clue, block)
 
@@ -597,5 +664,14 @@ class OrMapCellTest {
 
     private companion object {
         const val WRITERS = 3
+
+        /** Rounds of the concurrent-read regression; each round is a fresh cell. */
+        const val CONCURRENT_ROUNDS = 20
+
+        /** Keys seeded before the writer starts — enough that an iteration spans a write. */
+        const val SEEDED_KEYS = 400
+
+        /** Read passes per round, each touching all four public accessors. */
+        const val READS_PER_ROUND = 200
     }
 }
