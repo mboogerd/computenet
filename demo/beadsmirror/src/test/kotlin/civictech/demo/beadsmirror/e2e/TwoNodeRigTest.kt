@@ -57,6 +57,19 @@ import java.util.Collections
  * Guarded like every other real-`bd` test in this module: green-but-skipped
  * where `bd`/`dolt` are not on `PATH` (CI installs neither), a real gate on a
  * developer machine.
+ *
+ * The guard sits in [setUp], i.e. `@BeforeAll`, because the whole fixture —
+ * two live nodes over a real socket — is built there and cannot be built
+ * without the binaries. That placement has a consequence for CI worth knowing
+ * before moving it either way (computenet-jx3g): a failed assumption in a
+ * class-level lifecycle method aborts the *container*, and Gradle records that
+ * as a bare `<skipped/>` with **no message**, where a `@BeforeEach` guard's
+ * would carry `Assumption failed: bd is not on PATH — skipping`. Measured
+ * 2026-08-18 on darwin/arm64. So `ci.yml`'s build-test-fast lane cannot detect
+ * toolchain absence by grepping this class's report for that message; it
+ * reddens on `skipped > 0` for this class by name instead. Moving these two
+ * calls to a `@BeforeEach` would restore the message — and would also mean
+ * [setUp] runs with the binaries missing, which it cannot survive.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TwoNodeRigTest {
