@@ -55,6 +55,13 @@ for documentation maintenance.
   failures.
 - `testkit/`: shared test scaffolding (`SimWorld`, `awaitUntil`, `HttpProbe`,
   `JvmPeer`) consumed as `testImplementation` by `:kernel` and every demo.
+- `bench/` (`:bench`): the JMH benchmark harness module (BEN1). Three source
+  sets: shared fixtures in `bench/src/main/kotlin` (`civictech.bench`),
+  `@Benchmark` bodies in `bench/src/jmh/kotlin` (`civictech.bench.micro`),
+  fast unit tests in `bench/src/test/kotlin`. Depends on `:kernel` and
+  `:testkit` only, and is depended on by nothing. Benchmark *execution* is
+  deliberately outside the build lifecycle — neither `:bench:jmhJar` nor
+  `:bench:jmh` is reachable from `:bench:build`.
 - `wire/`: the concrete WebSocket transport. Keep transport dependencies out of
   `kernel`; transport-neutral semantics stay behind the kernel bridge API.
 - `concord/`: the executable specification — implementation-neutral conformance
