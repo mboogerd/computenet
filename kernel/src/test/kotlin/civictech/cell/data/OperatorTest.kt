@@ -77,11 +77,18 @@ class OperatorTest {
         assertTrue(out.isEmpty()) // only left
 
         intersect.right.call.propagate(SetDelta(adds = mapOf("x" to setOf(t2))))
-        assertEquals(mapOf("x" to setOf(t1, t2)), out.single().adds)
+        // computenet-vvre: entry advertises ONE freshly minted, cell-owned tag,
+        // never the borrowed input tags — 21 §Tag hygiene. (This assertion used
+        // to demand `setOf(t1, t2)`, which is the defect: borrowing t1 lets a
+        // reconvergent UnionSetCell mistake this cell's exit for the retraction
+        // of the direct edge's own contribution — IntersectDiamondTagTest.)
+        val minted = out.single().adds.getValue("x").single()
+        assertEquals(setOf("x"), out.single().adds.keys)
+        assertTrue(minted !in setOf(t1, t2), "output tag must not be borrowed from either input")
 
         intersect.left.call.propagate(SetDelta(dels = mapOf("x" to setOf(t1))))
-        // exit deletes every advertised tag, so downstream membership dies
-        assertEquals(mapOf("x" to setOf(t1, t2)), out[1].dels)
+        // exit deletes exactly what entry minted, so downstream membership dies
+        assertEquals(mapOf("x" to setOf(minted)), out[1].dels)
     }
 
     @Test
