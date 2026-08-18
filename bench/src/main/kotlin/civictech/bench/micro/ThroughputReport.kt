@@ -4,11 +4,14 @@ import civictech.bench.BenchResult
 import civictech.bench.Drive
 import civictech.bench.Findings
 import civictech.bench.FindingsTable
+import civictech.bench.MeasuringJvm
+import civictech.bench.MeasuringJvmUnknownException
 import civictech.bench.NOISE_FLOOR
 import civictech.bench.Reportability
 import civictech.bench.RunEnvironment
 import civictech.bench.TriggerClaim
 import civictech.bench.classify
+import java.io.File
 
 /**
  * Thrown when a JMH results file cannot be turned into [BenchResult] rows honestly.
@@ -124,8 +127,14 @@ data class Report(val perDrive: List<DriveReport>, val omissions: List<Omission>
  * ```
  * ./gradlew :bench:jmhJar
  * java -jar bench/build/libs/bench-jmh.jar OperatorThroughputBenchmark \
- *      -rf csv -rff /abs/path/throughput.csv
+ *      -rf csv -rff /abs/path/throughput.csv 2>&1 | tee /abs/path/throughput.log
  * ```
+ *
+ * The `| tee` is not decoration and the log's name is not free — see [runLogFor]. JMH's
+ * results file records no fact about the JVM that produced it; its stdout banner records
+ * all three a findings entry needs (`[BEN1-23]`). Without that log beside the results
+ * file, [renderRun] REFUSES, which is exactly the point: before `computenet-hqid` the
+ * renderer silently reported its OWN JVM instead, and two entries shipped that way.
  *
  * CSV, not JSON, and for a reason worth stating: `:bench` depends on `:kernel` and
  * `:testkit` and nothing else (`[BEN1-03]`), so there is no JSON parser on this
@@ -163,6 +172,13 @@ data class Report(val perDrive: List<DriveReport>, val omissions: List<Omission>
  *   -Dcivictech.bench.jmhResults=/abs/path/throughput.csv \
  *   -Dcivictech.bench.harnessSha=$(git rev-parse --short HEAD)
  * ```
+ *
+ * The run log is NOT a second property: it is found beside the results file, by
+ * [runLogFor]'s convention. That keeps the honest path reachable from the entry point
+ * that already exists, without a new system property that `bench/build.gradle.kts`
+ * would have to forward and that would silently arrive unset if it ever stopped doing
+ * so — an unforwarded property is exactly the kind of quiet failure this ticket is
+ * about.
  *
  * `-PbenchOnly=true` is required: `@Tag("bench")` is excluded unconditionally from the
  * default test task (`[BEN1-09]`..`[BEN1-11]`), which is what keeps `:bench:test`
@@ -408,10 +424,14 @@ object ThroughputReport {
      * benchmark or the host, and the honest response is to say which rows those were.
      *
      * @param csv the contents of a JMH CSV results file.
-     * @param env the environment every row was measured under. One [RunEnvironment] for
-     *   the whole file, because one file is one run; a caller merging two runs' files
-     *   would be constructing exactly the mixed-environment table [FindingsTable]
-     *   refuses.
+     * @param env the environment every row was measured under, STATED by the caller.
+     *   One [RunEnvironment] for the whole file, because one file is one run; a caller
+     *   merging two runs' files would be constructing exactly the mixed-environment
+     *   table [FindingsTable] refuses. This overload cannot check that [env] describes
+     *   the run — it is for callers holding an environment they can already vouch for
+     *   (a fixture, or one built by [RunEnvironment.forRun] from a [MeasuringJvm]).
+     *   [renderRun] is the entry point that derives one from the run's artifacts and
+     *   refuses when it cannot.
      * @param date the entry date, passed through to [Findings.entry], which refuses a
      *   blank one.
      * @param subject what was measured, passed through to [Findings.entry], which
@@ -428,6 +448,90 @@ object ThroughputReport {
         subject: String,
         trigger: TriggerClaim = TriggerClaim.None,
     ): Report = renderResults(toResults(parseCsv(csv), env), date, subject, trigger)
+
+    /**
+     * Where the run log of a results file must sit: beside it, same base name, `.log`.
+     *
+     * A convention rather than a second path argument, so that the pairing is a
+     * property of the artifacts on disk — a results file whose log has been lost or was
+     * never captured is *visibly* incomplete, and [renderRun] says so by name instead
+     * of rendering something plausible.
+     *
+     * The pairing is by NAME ONLY, and nothing verifies it. Neither [renderRun] nor
+     * [MeasuringJvm.fromJmhLog] cross-checks the log against the results file beside it —
+     * not the benchmarks each names, not their modification times, not the row counts. A
+     * log belonging to a different sweep, or one written by hand, is accepted as the
+     * measuring JVM's record so long as it carries a well-formed banner. That is the
+     * deliberate limit of an artifact-based check and it should be read as its scope, not
+     * as a gap: it makes the honest path the easy one and makes a LOST log visible, but
+     * it cannot make a SUBSTITUTED one detectable. What this closes is the accidental
+     * failure — a renderer answering from its own process because no artifact recorded
+     * the run — not a determined one.
+     */
+    fun runLogFor(results: File): File =
+        File(results.absoluteFile.parentFile, results.nameWithoutExtension + ".log")
+
+    /**
+     * Renders a run's findings entries from the run's own artifacts — the honest entry
+     * point, and the only one that derives a [RunEnvironment] rather than being handed
+     * one (`[BEN1-23]`, `computenet-hqid`).
+     *
+     * Reads [results] for the numbers and [runLogFor]`(results)` for the JVM that
+     * produced them, and REFUSES — [MeasuringJvmUnknownException] — when that log is
+     * absent or carries no JMH banner. It does not fall back to this process's
+     * `java.vendor`, `java.version` or heap; that fallback is what shipped a REAL-drive
+     * entry reading `Eclipse Adoptium/21.0.11 · heap -Xmx2g` for a sweep measured on
+     * Homebrew JDK 26.0.1 with no VM options, and the code that could produce it no
+     * longer exists (see [RunEnvironment.forRun]).
+     *
+     * Refusing is a first-class outcome here, not a degraded one. This epic's governing
+     * property is that a number nobody can stand behind is refused rather than
+     * published; an environment line nobody can stand behind is the same defect one
+     * level down, and is refused the same way.
+     *
+     * @param results the JMH `-rf csv` results file.
+     * @param harnessCommitSha the harness commit that produced the run. No artifact
+     *   records it, so it stays the caller's to state — [RunEnvironment] refuses to
+     *   exist without it.
+     * @throws MeasuringJvmUnknownException if the measuring JVM's vendor, version or
+     *   heap cannot be established from the run's artifacts.
+     * @throws ThroughputReportException if [results] is not a readable file, or its
+     *   contents cannot honestly become rows.
+     */
+    fun renderRun(
+        results: File,
+        harnessCommitSha: String,
+        date: String,
+        subject: String,
+        trigger: TriggerClaim = TriggerClaim.None,
+    ): Report {
+        if (!results.isFile) {
+            throw ThroughputReportException(
+                "no JMH results file at ${results.absolutePath}"
+            )
+        }
+        val log = runLogFor(results)
+        if (!log.isFile) {
+            throw MeasuringJvmUnknownException(
+                "cannot establish the measuring JVM: ${results.absolutePath} has no run " +
+                    "log beside it at ${log.absolutePath}. A JMH results file records no " +
+                    "JVM vendor, version or heap — only JMH's stdout banner does — so " +
+                    "this entry would otherwise report the JVM of the process rendering " +
+                    "it, which is not the one that measured. Re-run the sweep teeing its " +
+                    "output to that path (`... -rf csv -rff ${results.absolutePath} " +
+                    "2>&1 | tee ${log.absolutePath}`), or render a run that kept its log"
+            )
+        }
+        val env = RunEnvironment.forRun(
+            measuringJvm = MeasuringJvm.fromJmhLog(log.readText(), log.absolutePath),
+            jmhMode = JMH_MODE,
+            forkCount = FORKS,
+            warmupIterations = WARMUP_ITERATIONS,
+            measurementIterations = MEASUREMENT_ITERATIONS,
+            harnessCommitSha = harnessCommitSha,
+        )
+        return render(results.readText(), env, date, subject, trigger)
+    }
 
     /** [render]'s second half, exposed so a caller can render results it built itself. */
     fun renderResults(
