@@ -82,6 +82,20 @@ class ThroughputReportTest {
     }
 
     @Test
+    fun `refuses a row whose error is NaN because the run had too few samples`() {
+        // Observed 2026-08-18 from a real `-f 1 -wi 1 -i 1` smoke run: JMH writes the
+        // literal NaN when it has fewer than two samples to compute an error from.
+        val csv = listOf(
+            header,
+            """"civictech.bench.micro.OperatorThroughputBenchmark.sim","thrpt",1,1,469734.975841,NaN,"ops/s",INSERT,FILTER"""",
+        ).joinToString("\n")
+        val failure = assertThrows(ThroughputReportException::class.java) {
+            ThroughputReport.parseCsv(csv)
+        }
+        assertTrue(failure.message!!.contains("too few"), failure.message)
+    }
+
+    @Test
     fun `refuses a benchmark name that does not state exactly one drive`() {
         val ambiguous = quietCsv.replace(
             "OperatorThroughputBenchmark.sim",

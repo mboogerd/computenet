@@ -279,11 +279,27 @@ object ThroughputReport {
                     "JMH results row ${offset + 1} has non-numeric $what " +
                         "'${fields[index]}': $line"
                 )
+            val scoreError = number(errorIndex, "score error")
+            // Measured 2026-08-18: a run with fewer than two measurement samples
+            // (`-i 1 -f 1`, the smoke shape) reports the error as literally `NaN`. That
+            // row carries no dispersion at all, so it cannot be classified against
+            // NOISE_FLOOR — and `BenchResult` would refuse it anyway, on the weaker
+            // message "dispersion must be finite". Refusing it here says the useful
+            // thing: the RUN was too small, not the number too wide.
+            if (!scoreError.isFinite()) {
+                throw ThroughputReportException(
+                    "JMH results row ${offset + 1} reports error '${fields[errorIndex]}' " +
+                        "for '${fields[benchmarkIndex]}': the run produced too few " +
+                        "samples for a dispersion (JMH writes NaN below two), so the row " +
+                        "cannot be classified against NOISE_FLOOR $NOISE_FLOOR. Re-run " +
+                        "with at least two measurement iterations"
+                )
+            }
             JmhRow(
                 benchmark = fields[benchmarkIndex],
                 mode = fields[modeIndex],
                 score = number(scoreIndex, "score"),
-                scoreError = number(errorIndex, "score error"),
+                scoreError = scoreError,
                 unit = fields[unitIndex],
                 params = paramIndices.mapValues { (_, index) -> fields[index] },
             )
