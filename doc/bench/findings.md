@@ -13,6 +13,39 @@ a number was derived or chosen. If a later measurement contradicts an earlier
 one, **append the contradiction** — say which entry it contradicts and what
 changed — rather than correcting the earlier entry.
 
+**A corrected entry is never marked as corrected — the correction is below it.**
+That is the direct consequence of the rule above, and it is the one way this file
+can mislead a reader who does not read it end to end: an entry later found wrong
+still reads exactly as it was published, with no marker, no strikethrough and no
+link forward, and the only record of the correction is a later entry that names
+it. **Before citing any entry, scan the `##` headings that follow it for one that
+names it.** As of 2026-08-18 three entries carry a claim a later entry corrects,
+and none of the three says so on its own face:
+
+- **2026-08-18 — SmokeBenchmark.baseline noise-floor calibration.** Its
+  `Harness:` line's heap field (`maxHeapBytes=4294967296`) is a property of the
+  process that *rendered* the entry — `RunEnvironment.capture` fell back to the
+  calling process's `Runtime.maxMemory()` — not of the JMH forks, which this
+  entry's own procedure paragraph says were "launched with no VM options". Its
+  JVM vendor/version, its scores and the `NOISE_FLOOR` derivation are unaffected.
+  Same mechanism as the correction entry below, which does not name this entry.
+- **2026-08-18 — REAL-drive per-operator delta-application throughput**
+  (`computenet-x9e.4.5`). Its `Harness:` line names the *rendering* JVM and heap;
+  the sweep itself ran on Homebrew JDK 26.0.1 with `# VM options: <none>`, per its
+  own retained JMH banner. Corrected by *"Correction to the two entries above"*
+  and superseded, for environment purposes, by *"REAL-drive … re-measured on the
+  toolchain JDK"* — which, re-run on the toolchain JDK 21, reports **no** row
+  clearing `NOISE_FLOOR`, including the single `GROUP_BY_MAX retract` row this
+  entry reports.
+- **2026-08-18 — SIM-drive per-operator delta-application throughput**
+  (`computenet-x9e.4.4`). Its JVM vendor/version is right; its heap field is
+  wrong the same way (`-Xmx2g` against a banner reading `# VM options: <none>`),
+  and its "Comparison with REAL-drive" dispersion attribution is **withdrawn** by
+  the re-measurement entry, which did not reproduce it.
+
+Each entry's own scores, dispersions and omission accounting stand; what a later
+entry corrects is stated there, in the entry that corrects it.
+
 Entries are rendered through `civictech.bench.Findings.entry`
 (`bench/src/main/kotlin/civictech/bench/Findings.kt`), which refuses an entry
 that is incomplete, that carries a result too dispersed to report against
