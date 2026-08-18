@@ -340,6 +340,34 @@ class FindingsTest {
     }
 
     @Test
+    fun `entry refuses a cited G-id that is blank`() {
+        val ex = shouldThrow<FindingsRefusalException> {
+            Findings.entry(
+                date = "2026-08-18",
+                subject = "x",
+                results = validTable(),
+                trigger = TriggerClaim.Cited(gapId = "", statement = "FIRES because x."),
+            )
+        }
+        ex.message shouldContain "gapId"
+        ex.message shouldContain "blank"
+    }
+
+    @Test
+    fun `entry refuses a cited G-id that is all whitespace`() {
+        val ex = shouldThrow<FindingsRefusalException> {
+            Findings.entry(
+                date = "2026-08-18",
+                subject = "x",
+                results = validTable(),
+                trigger = TriggerClaim.Cited(gapId = "   ", statement = "FIRES because x."),
+            )
+        }
+        ex.message shouldContain "gapId"
+        ex.message shouldContain "blank"
+    }
+
+    @Test
     fun `entry refuses a cited G-id whose statement states two verdict words`() {
         shouldThrow<FindingsRefusalException> {
             Findings.entry(

@@ -126,7 +126,11 @@ class OperatorCatalogTest {
         val quads = ElementShape.SetOf(ElementShape.Tuple(4))
         val index = ElementShape.MapOf(ElementShape.Scalar, ElementShape.Scalar)
         val grouped = ElementShape.MapOf(ElementShape.Scalar, ElementShape.SetOf(ElementShape.Tuple(4)))
-        val rule = ShapeRule(inputs = listOf(quads, index, ElementShape.Scalar), output = grouped)
+        val rule = ShapeRule(
+            inputs = listOf(quads, index, ElementShape.Scalar),
+            output = grouped,
+            inputPorts = listOf("quads", "index", "scalar"),
+        )
 
         OperatorCatalog.register(
             id = "consumer-supplied-op",
