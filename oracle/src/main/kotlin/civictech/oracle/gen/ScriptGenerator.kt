@@ -61,6 +61,17 @@ import kotlin.random.Random
  * writer observation of its own adds automatically and of nothing else. Both paths are
  * exercised — a writer removing what it added itself, and a writer that observes first.
  *
+ * **Known limit — an unobserved remove may still name a *live* element (`computenet-qcm1`).**
+ * The candidate set here is "elements this writer has not added or observed", which includes an
+ * element *another* writer added and which is still live. That is a model no-op either way, so
+ * the audit and its re-derivation are unaffected — but the kernel's `SetCell` retracts
+ * `liveTags(element)` unconditionally, so at differential evaluation such a step diverges
+ * kernel-vs-model by construction. Measured on this suite's own fixture (two set sources,
+ * `writerCount = 2`, domain 64, length 200, ratio 0.3, seeds 1..25): 20 of 699 unobserved
+ * removes (2.9%) named a live element — roughly one per seed. Restricting the draw to elements
+ * not live at that position is `computenet-qcm1`, and it has to land before the runner
+ * (`computenet-4ru.8`) reads a mismatch of this signature as kernel evidence.
+ *
  * Every remove — `Remove` on a set source and `RemoveKey` on a keyed one — is recorded in a
  * [RemoveRecord]. `RemoveKey`'s "observed" reading is the one its source model supports:
  * `KeyedSetSourceModel`/`MapCellSourceModel` fold puts and removes by key with no observation
