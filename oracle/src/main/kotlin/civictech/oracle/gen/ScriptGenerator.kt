@@ -91,11 +91,9 @@ import kotlin.random.Random
  *
  * Read as **the fraction of generated element events that are adds** (`Add`, `Put`,
  * `Increment`), the rest being removes (`Remove`, `RemoveKey`, `Decrement`) — the reading the
- * task's acceptance criterion checks ("add:remove proportion within stated tolerance") and
- * the epic's own "add/remove ratio" knob name. `GeneratorConfig`'s field KDoc describes it
- * instead as the fraction of removes targeting an added element, which is what
- * [GeneratorConfig.unobservedRemoveRatio]'s complement already is; that doc is a sibling
- * task's file and is left untouched here.
+ * task's acceptance criterion checks ("add:remove proportion within stated tolerance"), the
+ * epic's own "add/remove ratio" knob name, and (since computenet-4ru.6's feature review) what
+ * [GeneratorConfig.addRemoveRatio]'s own field KDoc states.
  *
  * Emitted `Observe` steps count toward `scriptLength` like any other op but are neither an
  * add nor a remove, so the ratio is a property of the add/remove events, not of every step.

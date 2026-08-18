@@ -32,7 +32,13 @@ data class GeneratorConfig(
     val elementDomainSize: Int,
     /** How many op-script steps a generated case emits. */
     val scriptLength: Int,
-    /** Fraction of generated removes that target elements the removing writer actually added. */
+    /**
+     * Fraction of generated element events that are **adds** (`Add`, `Put`, `Increment`), the
+     * remainder being removes (`Remove`, `RemoveKey`, `Decrement`) — the epic's "add/remove
+     * ratio" knob, and the reading [ScriptGenerator] implements. Distinct from
+     * [unobservedRemoveRatio], which biases *which element* a remove names, not how many
+     * removes there are.
+     */
     val addRemoveRatio: Double,
     /** Fraction of removes deliberately left unobserved by the removing writer. */
     val unobservedRemoveRatio: Double,
