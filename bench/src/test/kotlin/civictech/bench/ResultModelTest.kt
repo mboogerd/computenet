@@ -291,4 +291,31 @@ class ResultModelTest {
         val result = validResult(value = value, dispersion = dispersion)
         classify(result) shouldBe Reportability.Reportable
     }
+
+    // ---------------------------------------------------------------------------
+    // BS-11 continued (computenet-x9e.3.6): relativeDispersion is a SIGNED ratio
+    // (dispersion / value), so a naive "relativeDispersion > NOISE_FLOOR" comparison
+    // lets a negative value or a NaN ratio walk straight around the gate. Each test
+    // constructs the exact shape measured in the bug report and fails if classify
+    // goes back to comparing the signed ratio directly instead of its magnitude.
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun `negative value with a large relative dispersion classifies Unreportable`() {
+        // The PROBE-A case from the bug report: value=-100.0, dispersion=50.0 makes
+        // relativeDispersion == -0.5, which "-0.5 > NOISE_FLOOR" never catches.
+        val result = validResult(value = -100.0, dispersion = 50.0)
+        result.relativeDispersion shouldBe -0.5
+        classify(result) shouldBe Reportability.Unreportable
+    }
+
+    @Test
+    fun `value and dispersion both zero classifies Unreportable, not NaN-passes-through`() {
+        // The PROBE-B case from the bug report: value=0.0, dispersion=0.0 makes
+        // relativeDispersion == NaN, and "NaN > NOISE_FLOOR" is false under IEEE 754,
+        // so a naive comparison falls through to Reportable.
+        val result = validResult(value = 0.0, dispersion = 0.0)
+        result.relativeDispersion.isNaN() shouldBe true
+        classify(result) shouldBe Reportability.Unreportable
+    }
 }

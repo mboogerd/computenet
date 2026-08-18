@@ -81,13 +81,27 @@ enum class Reportability {
 }
 
 /**
- * Classifies [result] by comparing [BenchResult.relativeDispersion] against
- * [NOISE_FLOOR]: strictly above is [Reportability.Unreportable], at or below is
- * [Reportability.Reportable].
+ * Classifies [result] by comparing the MAGNITUDE of [BenchResult.relativeDispersion]
+ * against [NOISE_FLOOR]: strictly above is [Reportability.Unreportable], at or below
+ * is [Reportability.Reportable].
+ *
+ * [BenchResult.relativeDispersion] is `dispersion / value` — a signed ratio, because
+ * [BenchResult.value] is not required to be positive. A direct `relativeDispersion >
+ * NOISE_FLOOR` comparison (the original, defective form) lets two shapes walk around
+ * the gate: a negative [BenchResult.value] makes the ratio negative, which is never
+ * `>` a positive threshold, and `value == 0.0` with `dispersion == 0.0` makes the
+ * ratio `NaN`, and IEEE 754 defines every direct comparison against `NaN` — including
+ * `NaN > x` — as `false`. Both would otherwise fall through to [Reportability.Reportable].
+ * Comparing the absolute value closes the sign case; explicitly refusing a
+ * non-finite magnitude (rather than relying on `NaN > x` being `false`) closes the
+ * `NaN` case instead of accidentally depending on the same IEEE 754 behavior that
+ * caused it.
  */
-fun classify(result: BenchResult): Reportability =
-    if (result.relativeDispersion > NOISE_FLOOR) {
+fun classify(result: BenchResult): Reportability {
+    val magnitude = kotlin.math.abs(result.relativeDispersion)
+    return if (!magnitude.isFinite() || magnitude > NOISE_FLOOR) {
         Reportability.Unreportable
     } else {
         Reportability.Reportable
     }
+}

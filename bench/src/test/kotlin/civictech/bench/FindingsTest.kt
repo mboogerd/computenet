@@ -117,6 +117,22 @@ class FindingsTest {
     }
 
     @Test
+    fun `entry refuses a table containing the PROBE-A negative-value result from the bug report`() {
+        // value=-100.0, dispersion=50.0: relativeDispersion is -0.5, which a naive
+        // "relativeDispersion > NOISE_FLOOR" comparison never flags because the ratio
+        // is negative. This is the exact shape computenet-x9e.3.6 was filed against.
+        val negative = validResult(value = -100.0, dispersion = 50.0)
+        val table = FindingsTable(listOf(reportableResult(), negative), labels = listOf("a", "b"))
+
+        val ex = shouldThrow<FindingsRefusalException> {
+            Findings.entry(date = "2026-08-18", subject = "x", results = table)
+        }
+        ex.message shouldContain "Unreportable"
+        ex.message shouldContain "value=${negative.value}"
+        ex.message shouldContain "dispersion=${negative.dispersion}"
+    }
+
+    @Test
     fun `entry admits a table of only Reportable results`() {
         val table = FindingsTable(
             listOf(reportableResult(), reportableResult()),
