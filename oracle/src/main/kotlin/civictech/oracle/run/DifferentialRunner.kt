@@ -6,6 +6,8 @@ import civictech.cell.host.DeadLetter
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.oracle.gen.CaseStep
+import civictech.oracle.gen.GeneratedCase
 import civictech.oracle.model.ModelState
 import civictech.oracle.model.Script
 import civictech.oracle.model.ScriptEvent
@@ -105,6 +107,105 @@ object DifferentialRunner {
         reference: Reference,
         stepBudget: Int = DEFAULT_STEP_BUDGET,
         buildGraph: (SimWorld) -> CaseGraph,
+    ): RunOutcome = execute(seed, caseMarker, script, reference, stepBudget, buildGraph) { driving ->
+        val rnd = driving.rnd
+        val cursors = script.slices.map { Cursor(it.source, it.events) }.filter { it.remaining() }.toMutableList()
+        while (cursors.isNotEmpty()) {
+            val cursor = cursors[rnd.nextInt(cursors.size)]
+            driving.inject(cursor.source, cursor.next())
+            if (!cursor.remaining()) cursors.remove(cursor)
+            driving.partialDrain()
+        }
+    }
+
+    /**
+     * The **generated** path of `[ORA1-DIFF-01]`: apply [case]'s `GraphSpec`, drive its
+     * [civictech.oracle.gen.CaseScript] in TOTAL order honoring every
+     * [civictech.oracle.gen.CaseStep.Barrier] as a quiesce point, fold every (non-late)
+     * terminal, and compare each fold to the **catalog-resolved** reference model.
+     *
+     * Everything after driving — dead-letter accounting, the step budget, the kind
+     * precedence, the `[ORA1-DIFF-02]` report — is [check]'s own code, reached through the
+     * same private core. The only difference between the two entry points is who supplies the
+     * graph, the script and the reference.
+     *
+     * ## Catalog resolution
+     *
+     * The runner is the component that resolves catalog ids: `civictech.oracle.model`
+     * deliberately does not import `civictech.oracle.bind` (a package cycle, and the
+     * independence that makes the model a check rather than a second copy). See
+     * [CaseExecution.referenceModelFor] for the mapping and for what an unresolvable or
+     * wrongly-typed id does — it fails loudly NAMING the id, never a silent skip.
+     *
+     * ## Driving
+     *
+     * Total order, because a [civictech.oracle.gen.CaseScript] *is* a total order — the model
+     * needs none (sources are independent) but a replay against a live kernel does. Per-source
+     * arrival order equals script order because injection order is submission order and a
+     * host's (priority, submission) order is inviolable (`SimulationController`'s KDoc), so no
+     * extra sequencing is needed to make a source's slice match what the model folded.
+     *
+     * Sources are driven through a **hosted proxy**, never a direct inlet call. A direct call
+     * on a co-hosted graph dispatches inline and costs ZERO scheduler steps, which makes any
+     * budget or partial-drain reasoning vacuous — confirmed on computenet-4ru.8.2, whose first
+     * BS-10 attempt returned `Success` instead of `NonQuiescence` for exactly this reason. See
+     * [CaseExecution.applyCase].
+     *
+     * @param case the case to run — hand-built or generated; this runner never invokes the
+     *   generator.
+     * @param reference the substitutable oracle. `null` (the default) resolves it from the
+     *   catalog through [CaseExecution.referenceModelFor]; the controls feature substitutes a
+     *   deliberately wrong one here, with no change to this signature.
+     * @param onBarrier called at every [civictech.oracle.gen.CaseStep.Barrier], after the
+     *   graph has quiesced, with every terminal's fold as of that point — the observation the
+     *   barrier exists to make possible. Not called if the budget ran out first.
+     */
+    fun run(
+        case: GeneratedCase,
+        reference: Reference? = null,
+        stepBudget: Int = DEFAULT_STEP_BUDGET,
+        onBarrier: (Map<String, ModelState>) -> Unit = {},
+    ): RunOutcome {
+        val model = CaseExecution.referenceModelFor(case.topology)
+        val oracle = reference ?: Reference(model::eval)
+        val marker = CaseExecution.renderSpec(case.spec, case.topology.nodes.associate { it.handle to it.catalogId })
+        return execute(
+            seed = case.seed,
+            caseMarker = marker,
+            script = case.script.toScript(),
+            reference = oracle,
+            stepBudget = stepBudget,
+            buildGraph = { world -> CaseExecution.applyCase(case, world) },
+        ) { driving ->
+            for (step in case.script.steps) {
+                if (driving.exhausted) break
+                when (step) {
+                    is CaseStep.Op -> {
+                        driving.inject(step.source, step.event)
+                        driving.partialDrain()
+                    }
+
+                    CaseStep.Barrier -> {
+                        driving.drainToIdle()
+                        if (!driving.exhausted) onBarrier(driving.readTerminals())
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * The shared core both entry points reach: build, subscribe, drive (however [drive] says),
+     * settle, then apply the kind precedence and the comparison.
+     */
+    private fun execute(
+        seed: Long,
+        caseMarker: String,
+        script: Script,
+        reference: Reference,
+        stepBudget: Int,
+        buildGraph: (SimWorld) -> CaseGraph,
+        drive: (Driving) -> Unit,
     ): RunOutcome {
         val world = SimWorld(seed = seed)
         val graph = buildGraph(world)
@@ -126,32 +227,14 @@ object DifferentialRunner {
             )
         }
 
-        val rnd = Random(seed)
-        var steps = 0
-
-        // The runner's own counted step loop. Returns false both when the simulation is
-        // quiescent and when the budget is spent; the two are told apart afterwards by the
-        // single probe step below, which is the only way to ask this controller whether work
-        // remains.
-        fun stepOnce(): Boolean {
-            if (steps >= stepBudget) return false
-            return world.controller.step().also { if (it) steps++ }
-        }
-
-        val cursors = script.slices.map { Cursor(it.source, it.events) }.filter { it.remaining() }.toMutableList()
-        while (cursors.isNotEmpty()) {
-            val cursor = cursors[rnd.nextInt(cursors.size)]
-            inject(graph, cursor.source, cursor.next())
-            if (!cursor.remaining()) cursors.remove(cursor)
-            repeat(rnd.nextInt(4)) { stepOnce() }
-        }
-
-        while (stepOnce()) { /* final drain, still on the same budget */ }
+        val driving = Driving(world, graph, Random(seed), stepBudget)
+        drive(driving)
+        driving.drainToIdle()
 
         // One probe beyond the budget: `controller.step()` is the only observation of "is
         // there work left", and spending one extra step to answer it is cheaper than
         // reporting a mismatch for a run that had simply not finished.
-        if (steps >= stepBudget && world.controller.step()) {
+        if (driving.exhausted && world.controller.step()) {
             return RunOutcome.NonQuiescence(seed, stepBudget)
         }
         if (letters.isNotEmpty()) return RunOutcome.DeadLetterFailure(seed, letters.toList())
@@ -186,26 +269,71 @@ object DifferentialRunner {
     }
 
     /**
-     * One script event onto its source cell. [ScriptEvent.Observe] injects nothing — see this
-     * object's "Writer semantics" KDoc — and is handled before the source is even resolved, so
-     * a script may carry `Observe` events for a source the graph does not bind.
+     * The live run, as a driving strategy sees it: inject an event, spend some steps, ask
+     * whether the budget is gone, read the terminals.
+     *
+     * The step budget is this runner's **own counted step loop**, never
+     * [SimWorld.runToIdle]'s `check(...)`: a budget exhaustion is a *verdict*
+     * ([RunOutcome.NonQuiescence]) that the caller matches on, and catching an
+     * `IllegalStateException` as control flow would make the taxonomy depend on a message
+     * string `[ORA1-DIFF-07]`.
      */
-    private fun inject(graph: CaseGraph, source: SourceId, event: ScriptEvent) {
-        if (event is ScriptEvent.Observe) return
-        val sink = graph.sources[source]
-            ?: error(
-                "Script drives source '${source.id}', which the case graph does not bind; " +
-                    "it binds ${graph.sources.keys.map { it.id }.sorted()}.",
-            )
-        when (event) {
-            is ScriptEvent.Add -> sink.add(event.element)
-            is ScriptEvent.Remove -> sink.remove(event.element)
-            else -> error(
-                "The bring-your-own entry point drives the SET family only " +
-                    "(Add/Remove/Observe); got ${event::class.simpleName} on source " +
-                    "'${source.id}'. Silently skipping it would surface later as a mismatch " +
-                    "blamed on the kernel.",
-            )
+    class Driving internal constructor(
+        private val world: SimWorld,
+        private val graph: CaseGraph,
+        /** The run's own random stream, derived from the seed, so a run replays exactly. */
+        val rnd: Random,
+        private val stepBudget: Int,
+    ) {
+        private var steps = 0
+
+        /** Whether the budget is spent — a driving strategy stops rather than piling on work. */
+        val exhausted: Boolean get() = steps >= stepBudget
+
+        private fun stepOnce(): Boolean {
+            if (steps >= stepBudget) return false
+            return world.controller.step().also { if (it) steps++ }
+        }
+
+        /**
+         * A partial drain — `repeat(rnd.nextInt(4)) { step() }`, the idiom from
+         * `kernel/src/test/kotlin/civictech/cell/verify/GenerativeGraphTest.kt`, so a case
+         * exercises the incremental path rather than one batch settle at the end.
+         */
+        fun partialDrain() {
+            repeat(rnd.nextInt(4)) { stepOnce() }
+        }
+
+        /** Steps until nothing is left to do, or until the budget is spent. */
+        fun drainToIdle() {
+            while (stepOnce()) { /* still on the same budget */ }
+        }
+
+        /** Every terminal's fold as of now. */
+        fun readTerminals(): Map<String, ModelState> = graph.terminals.mapValues { (_, fold) -> fold.current() }
+
+        /**
+         * One script event onto its source cell. [ScriptEvent.Observe] injects nothing — see
+         * [DifferentialRunner]'s "Writer semantics" KDoc — and is handled before the source is
+         * even resolved, so a script may carry `Observe` events for a source the graph does
+         * not bind.
+         */
+        fun inject(source: SourceId, event: ScriptEvent) {
+            if (event is ScriptEvent.Observe) return
+            val sink = graph.sources[source]
+                ?: error(
+                    "Script drives source '${source.id}', which the case graph does not bind; " +
+                        "it binds ${graph.sources.keys.map { it.id }.sorted()}.",
+                )
+            when (event) {
+                is ScriptEvent.Add -> sink.add(event.element)
+                is ScriptEvent.Remove -> sink.remove(event.element)
+                is ScriptEvent.Put -> sink.put(event.key, event.element)
+                is ScriptEvent.RemoveKey -> sink.removeKey(event.key)
+                is ScriptEvent.Increment -> sink.increment(event.amount)
+                is ScriptEvent.Decrement -> sink.decrement(event.amount)
+                is ScriptEvent.Observe -> Unit // unreachable: handled above
+            }
         }
     }
 
@@ -257,8 +385,22 @@ class CaseGraph(
  * that receives it.
  */
 interface ScriptSource {
-    fun add(element: Any?)
-    fun remove(element: Any?)
+    fun add(element: Any?): Unit = unsupported("add")
+    fun remove(element: Any?): Unit = unsupported("remove")
+    fun put(key: Any?, element: Any?): Unit = unsupported("put")
+    fun removeKey(key: Any?): Unit = unsupported("removeKey")
+    fun increment(amount: Long): Unit = unsupported("increment")
+    fun decrement(amount: Long): Unit = unsupported("decrement")
+
+    /**
+     * Every operation defaults to a loud NAMED refusal rather than a no-op: a binding that
+     * silently dropped an event it cannot carry would surface later as a value mismatch
+     * blamed on the kernel, which is the one failure mode this epic exists to avoid.
+     */
+    private fun unsupported(operation: String): Nothing = error(
+        "This script source does not implement '$operation'; a script event it cannot carry " +
+            "is a wiring bug in the case, not an oracle finding.",
+    )
 }
 
 /**
