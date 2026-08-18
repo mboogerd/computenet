@@ -615,6 +615,19 @@ class OrMapCellTest {
      * rounds threw `ConcurrentModificationException`, the first within a few
      * milliseconds of the writer starting. A null result here therefore bounds
      * the defect well below the rate it had, but does not prove its absence.
+     *
+     * **The round's work is bounded in absolute terms, not by wall clock**
+     * (computenet-jw58). The writer runs a *fixed* [WRITES_PER_ROUND] budget
+     * and the reader loops only while that budget is outstanding, so the state
+     * the accessors walk never exceeds `SEEDED_KEYS + WRITES_PER_ROUND` keys and
+     * the round costs the same number of map operations on 4 vCPUs as on 16.
+     * The earlier shape ran the writer `while (!stop)` against a fixed count of
+     * read passes: `puts` grew for the whole round, each read pass cost O(n)
+     * with n still rising, and the round's total cost was set by how fast the
+     * writer ran *relative* to the reader — a property of the machine. That
+     * version passed alone on CI at 5m22s and timed out at the 5-minute default
+     * `@Timeout` once a second test of the same shape ran in the sibling fork
+     * (PR #311).
      */
     @Test
     fun `read accessors do not throw ConcurrentModificationException under a concurrent writer`() {
@@ -623,21 +636,24 @@ class OrMapCellTest {
             val cell = OrMapCell<String, String>()
             repeat(SEEDED_KEYS) { cell.inlet.call.put("k$it", "v$it") }
 
-            val stop = AtomicBoolean(false)
+            val writing = AtomicBoolean(true)
             val writerFailure = AtomicReference<Throwable?>(null)
             val writer = thread(name = "or-map-writer-$round") {
                 var n = SEEDED_KEYS
                 try {
-                    while (!stop.get()) {
+                    repeat(WRITES_PER_ROUND) {
                         cell.inlet.call.put("k${n++}", "v")
                         if (n % 3 == 0) cell.inlet.call.remove("k${n % SEEDED_KEYS}")
                     }
                 } catch (t: Throwable) {
                     writerFailure.set(t)
+                } finally {
+                    writing.set(false)
                 }
             }
             try {
-                repeat(READS_PER_ROUND) {
+                var reads = 0
+                while (writing.get() && reads++ < MAX_READS_PER_ROUND) {
                     cell.membership()
                     cell.value("k1")
                     cell.state()
@@ -646,8 +662,7 @@ class OrMapCellTest {
             } catch (t: Throwable) {
                 failures += t
             } finally {
-                stop.set(true)
-                writer.join(10_000)
+                writer.join(60_000)
             }
             writerFailure.get()?.let { failures += it }
         }
@@ -671,7 +686,19 @@ class OrMapCellTest {
         /** Keys seeded before the writer starts — enough that an iteration spans a write. */
         const val SEEDED_KEYS = 400
 
-        /** Read passes per round, each touching all four public accessors. */
-        const val READS_PER_ROUND = 200
+        /**
+         * Writes the writer performs per round, then it stops. A *fixed* budget
+         * is what makes the round's cost machine-independent: it caps the key
+         * population the reader walks, where the previous unbounded
+         * `while (!stop)` writer let it grow for the whole round.
+         */
+        const val WRITES_PER_ROUND = 500
+
+        /**
+         * Safety cap on read passes: the reader normally stops when the writer
+         * exhausts its budget, and this only bounds the loop if the writer
+         * thread never runs at all.
+         */
+        const val MAX_READS_PER_ROUND = 5_000
     }
 }
