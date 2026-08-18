@@ -1,0 +1,357 @@
+package civictech.oracle.gen
+
+import civictech.cell.graph.ConnectStep
+import civictech.cell.graph.GraphSpec
+import civictech.cell.graph.GraphStep
+import civictech.cell.graph.SpawnStep
+import civictech.oracle.bind.OperatorCatalog
+import civictech.oracle.model.ElementShape
+import civictech.oracle.model.SourceId
+import java.io.Serializable
+import kotlin.random.Random
+
+/**
+ * One generated topology and the kernel graph it lowers to — [GraphGenerator]'s whole output.
+ *
+ * Kept apart from [GeneratedCase] on purpose: a case additionally carries a drive script and a
+ * remove audit, which the sibling `ScriptGenerator` produces. This type is the graph half, so
+ * the two generators compose without either depending on the other.
+ */
+data class GeneratedGraph(
+    /** The catalog-id-level shape the graph was rendered from. */
+    val topology: CaseTopology,
+    /** The lowered, replayable kernel graph. */
+    val spec: GraphSpec,
+) : Serializable
+
+/**
+ * Seeded, **shape-typed** topology generation over [OperatorCatalog], rendered as a
+ * `civictech.cell.graph.GraphSpec` that cannot fail to link (`[ORA1-GEN-02]`, epic decisions
+ * D3/D4).
+ *
+ * ## Shape-typed, not generate-then-validate (D4, `[ORA1-GEN-02]`)
+ *
+ * The builder keeps a frontier of nodes whose output [ElementShape] it knows, and only ever
+ * appends an operator whose `ShapeRule.inputs` it can satisfy **by shape equality** against
+ * that frontier. Nothing is generated and then discarded for being unlinkable, and nothing is
+ * validated after the fact: an edge exists only because the two shapes were equal when it was
+ * drawn.
+ *
+ * Every one of those decisions reads `OperatorCatalog.entry(id).shape` — arity, input shapes,
+ * output shape, and the port names to connect on. **There is deliberately no branch anywhere
+ * in this file over an operator's id.** That is `[ORA1-API-03]` itself: an operator a consumer
+ * registers (ORA2, QRY1, or a test's synthetic entry) is picked up by naming it in
+ * [GeneratorConfig.vocabulary], with zero edits here. A `when (id)` over the catalog's names
+ * would make every new registration a generator change, which is the outcome the requirement
+ * exists to forbid.
+ *
+ * ## Vocabulary honesty
+ *
+ * Operators come exclusively from [OperatorCatalog] registrations named in
+ * [GeneratorConfig.vocabulary]. Everything the `[ORA1-HONEST-02]` ledger excludes — `ListCell`,
+ * `OrMapCell`, `MergeableGroupByCell`, `CoalescingCombineCell`, window close/eviction
+ * (`civictech.oracle.model.MapCellModel`'s module KDoc) — is unregistered, and therefore
+ * unemittable here by construction rather than by a filter that could be forgotten.
+ *
+ * ## Static topologies only
+ *
+ * The emitted [GraphSpec] carries spawn and connect steps and nothing else: no mid-script link
+ * open or close, ever. That is what keeps a generated case inside what the reference models
+ * define — `QuorumSetModel` (`civictech.oracle.model.SetOperatorModels`) equates the kernel's
+ * live-arm count with the graph's *static* arm count, so a topology that changed mid-run would
+ * be outside the model's own statement rather than a difference worth reporting. The only
+ * dynamic element a case may carry is the late-joiner terminal, which is the sibling task's and
+ * attaches to an existing node's output port without changing the graph.
+ *
+ * ## Determinism (`[ORA1-GEN-01]`)
+ *
+ * Every choice is drawn from the passed [Random] and every iteration runs over an ordered list
+ * or a `LinkedHash*`. Handles are derived from the topology's own construction order
+ * (`source-i`, `op-level-index`), never from a UUID, an identity hash, or hash-set iteration
+ * order, so two generations from equal `(seed, config)` produce identical handle lists — and
+ * the emitted factories are the catalog's own `Entry.kernel`, which capture nothing and are
+ * `Serializable` (D3).
+ *
+ * ## `[ORA1-GEN-03]` and `[ORA1-GEN-05]`, by construction
+ *
+ * Sources are the only arity-0 nodes and are always consumed at level 1, so a terminal is
+ * always an operator node and there is at least one operator between every source and every
+ * terminal. Every node is reachable from a source (its inputs are existing nodes, rooted at
+ * sources) and co-reachable to a terminal (a node is either consumed by a later node or is
+ * itself terminal), so no island is emitted. Width steering towards
+ * [GeneratorConfig.terminalCount] draws fan-in arms from the current frontier (fan-in), while a
+ * multi-arity operator that cannot fill an arm from the frontier fills it from an *already
+ * consumed* node — which is simultaneously fan-out on that node and, whenever it is an
+ * ancestor of the frontier node, a diamond.
+ */
+class GraphGenerator(private val config: GeneratorConfig) {
+
+    init {
+        config.validateAgainstCatalog()
+    }
+
+    /** Generates the graph for [seed]. Equal `(seed, config)` pairs yield equal results. */
+    fun generate(seed: Long): GeneratedGraph = generate(Random(seed))
+
+    /**
+     * Generates a graph, drawing every choice from [rng].
+     *
+     * @throws IllegalStateException if the configured vocabulary cannot express the configured
+     *   topology — no consumable source shape, no operator, or a width that cannot converge to
+     *   [GeneratorConfig.terminalCount]. Loud at generation time; a case violating an invariant
+     *   is never emitted.
+     */
+    fun generate(rng: Random): GeneratedGraph {
+        val vocabulary = config.vocabulary.map { id ->
+            OperatorCatalog.entry(id)
+                ?: error("GeneratorConfig.vocabulary names '$id', which is not registered in OperatorCatalog")
+        }
+        val sourceEntries = vocabulary.filter { it.shape.arity == 0 }
+        val operatorEntries = vocabulary.filter { it.shape.arity > 0 }
+        check(sourceEntries.isNotEmpty()) {
+            "vocabulary ${config.vocabulary} holds no arity-0 entry; a case needs at least one source"
+        }
+        check(operatorEntries.isNotEmpty()) {
+            "vocabulary ${config.vocabulary} holds no operator entry; [ORA1-GEN-03] requires at " +
+                "least one operator between every source and every terminal"
+        }
+
+        val builder = Builder(config, operatorEntries, rng)
+        return builder.build(sourceEntries)
+    }
+
+    /** One node of the graph under construction. */
+    private class Node(
+        val handle: String,
+        val entry: OperatorCatalog.Entry,
+        val inputs: List<String>,
+        val source: SourceId?,
+    ) {
+        val shape: ElementShape get() = entry.shape.output
+    }
+
+    private class Builder(
+        private val config: GeneratorConfig,
+        private val operators: List<OperatorCatalog.Entry>,
+        private val rng: Random,
+    ) {
+        /** Every node in creation order; `LinkedHashMap` so iteration order is construction order. */
+        private val nodes = LinkedHashMap<String, Node>()
+
+        private fun shapeOf(handle: String): ElementShape = nodes.getValue(handle).shape
+
+        /** Operators that consume [shape] on at least one port — the linkability question, asked of the catalog. */
+        private fun consumersOf(shape: ElementShape): List<OperatorCatalog.Entry> =
+            operators.filter { shape in it.shape.inputs }
+
+        /** Whether anything in the vocabulary can consume [shape]; a non-extendable node can only be a terminal. */
+        private fun extendable(shape: ElementShape): Boolean = consumersOf(shape).isNotEmpty()
+
+        fun build(sourceEntries: List<OperatorCatalog.Entry>): GeneratedGraph {
+            val rootShape = chooseRootShape(sourceEntries)
+            val rootEntries = sourceEntries.filter { it.shape.output == rootShape }
+
+            repeat(config.sourceCount) { i ->
+                val entry = rootEntries[rng.nextInt(rootEntries.size)]
+                add(Node("source-$i", entry, emptyList(), SourceId("source-$i")))
+            }
+
+            val depth = config.depthRange.first + rng.nextInt(config.depthRange.last - config.depthRange.first + 1)
+            var open: List<String> = nodes.keys.toList()
+            for (level in 1..depth) {
+                open = growOneLevel(level, open, isLast = level == depth)
+            }
+
+            val terminals = chooseTerminals(open)
+            return GeneratedGraph(
+                topology = CaseTopology(
+                    nodes = nodes.values.map { TopologyNode(it.handle, it.entry.id, it.inputs, it.source) },
+                    terminals = terminals,
+                    placement = nodes.keys.associateWith { 0 },
+                ),
+                spec = lower(),
+            )
+        }
+
+        /**
+         * All sources of one case share an output shape, drawn from the arity-0 entries whose
+         * output something in the vocabulary can actually consume. A source whose shape no
+         * operator accepts would be a terminal itself, which `[ORA1-GEN-03]` forbids; a case
+         * mixing two source shapes could not be converged to a single terminal by any fan-in
+         * operator, since fan-in is shape-equal by definition. The shape is drawn per case, so
+         * a sweep still covers every consumable source shape the vocabulary offers.
+         */
+        private fun chooseRootShape(sourceEntries: List<OperatorCatalog.Entry>): ElementShape {
+            val candidates = sourceEntries.map { it.shape.output }.distinct().filter { extendable(it) }
+            check(candidates.isNotEmpty()) {
+                "no source in the vocabulary produces a shape any operator in the vocabulary consumes: " +
+                    "sources emit ${sourceEntries.map { it.shape.output }.distinct()}, operators consume " +
+                    "${operators.flatMap { it.shape.inputs }.distinct()} — [ORA1-GEN-03] cannot be satisfied"
+            }
+            return candidates[rng.nextInt(candidates.size)]
+        }
+
+        /**
+         * Appends one level of operators over [open], returning the new frontier.
+         *
+         * Every extendable frontier node is consumed here — either as the node an operator was
+         * chosen *for*, or as another operator's arm — which is what keeps sources off the
+         * terminal list and every node on a source-to-terminal path. A frontier node no
+         * operator can take stays open and becomes a terminal.
+         */
+        private fun growOneLevel(level: Int, open: List<String>, isLast: Boolean): List<String> {
+            val frozen = open.filterNot { extendable(shapeOf(it)) }.toMutableList()
+            val pending = ArrayDeque(open.filter { extendable(shapeOf(it)) })
+            val produced = mutableListOf<String>()
+
+            while (pending.isNotEmpty()) {
+                val head = pending.removeFirst()
+                // Width steering: the frontier has to converge on terminalCount, so while it is
+                // wider, arms are drawn from the frontier itself (each such draw is one fan-in
+                // that removes a node from it); once it is not, arms come from already-consumed
+                // nodes instead, which preserves width and is where fan-out and diamonds arise.
+                val width = frozen.size + produced.size + pending.size + 1
+                val merging = width > config.terminalCount
+
+                val built = attach(head, pending, merging, isLast, level, produced.size)
+                    ?: if (merging) attach(head, pending, false, isLast, level, produced.size) else null
+
+                if (built == null) frozen += head else produced += built
+            }
+            return frozen + produced
+        }
+
+        /**
+         * Tries to append one operator consuming [head], returning the new node's handle or
+         * `null` if no operator in the vocabulary can be satisfied from the current graph.
+         */
+        private fun attach(
+            head: String,
+            pending: ArrayDeque<String>,
+            merging: Boolean,
+            isLast: Boolean,
+            level: Int,
+            index: Int,
+        ): String? {
+            val headShape = shapeOf(head)
+            // Before the last level, only operators whose own output something can consume are
+            // eligible: a node the vocabulary cannot extend can only ever be a terminal, and one
+            // produced mid-graph would sit on the frontier for every remaining level and push the
+            // terminal count past what was configured.
+            val eligible = consumersOf(headShape).let { all ->
+                if (isLast) all else all.filter { extendable(it.shape.output) }.ifEmpty { all }
+            }
+            val shuffled = eligible.shuffled(rng)
+            // Stable sort, so within each arity band the shuffled order (and thus the draw) stands.
+            val candidates = if (merging) shuffled.sortedByDescending { it.shape.arity } else shuffled
+
+            candidates.forEach { entry ->
+                val inputs = fillPorts(entry, head, pending, merging)
+                if (inputs != null) {
+                    inputs.forEach { pending.remove(it) }
+                    val handle = "op-$level-$index"
+                    add(Node(handle, entry, inputs, source = null))
+                    return handle
+                }
+            }
+            return null
+        }
+
+        /**
+         * Assigns an upstream handle to every input port of [entry], with [head] on one of the
+         * ports whose declared shape it matches. Returns `null` when some port cannot be filled
+         * with a **distinct** node of the shape the catalog declares for it — distinct because
+         * two arms from one node would be the same link twice, and because a fan-in of a node
+         * with itself is not a fan-in.
+         */
+        private fun fillPorts(
+            entry: OperatorCatalog.Entry,
+            head: String,
+            pending: ArrayDeque<String>,
+            merging: Boolean,
+        ): List<String>? {
+            val wanted = entry.shape.inputs
+            val headPorts = wanted.indices.filter { wanted[it] == shapeOf(head) }
+            if (headPorts.isEmpty()) return null
+
+            val assigned = arrayOfNulls<String>(wanted.size)
+            assigned[headPorts[rng.nextInt(headPorts.size)]] = head
+            val used = mutableSetOf(head)
+
+            wanted.indices.forEach { port ->
+                if (assigned[port] == null) {
+                    val fromFrontier = pending.filter { it !in used && shapeOf(it) == wanted[port] }
+                    val fromSettled = nodes.keys.filter {
+                        it !in used && it !in pending && shapeOf(it) == wanted[port]
+                    }
+                    val pool = when {
+                        merging -> fromFrontier
+                        fromSettled.isNotEmpty() -> fromSettled
+                        else -> fromFrontier
+                    }
+                    if (pool.isEmpty()) return null
+                    val pick = pool[rng.nextInt(pool.size)]
+                    assigned[port] = pick
+                    used += pick
+                }
+            }
+            return assigned.map { it!! }
+        }
+
+        /**
+         * Every node left on the frontier must be a terminal — otherwise it is an island no
+         * script ever observes (`[ORA1-GEN-03]`). If the configuration asks for more terminals
+         * than that, the remainder observe interior operator nodes, which is sound: an interior
+         * node is on a source-to-terminal path either way.
+         */
+        private fun chooseTerminals(open: List<String>): List<TerminalSpec> {
+            val sourceHandles = nodes.values.filter { it.source != null }.map { it.handle }.toSet()
+            val stranded = open.filter { it in sourceHandles }
+            check(stranded.isEmpty()) {
+                "sources $stranded were never consumed: no operator in the vocabulary " +
+                    "${config.vocabulary} could take them, so they would be terminals — " +
+                    "[ORA1-GEN-03] requires at least one operator between every source and every terminal"
+            }
+            check(open.size <= config.terminalCount) {
+                "the generated frontier holds ${open.size} unconsumed nodes but terminalCount is " +
+                    "${config.terminalCount}: the vocabulary ${config.vocabulary} offers no fan-in " +
+                    "operator able to converge a width-${config.sourceCount} case within depth " +
+                    "${config.depthRange}"
+            }
+
+            val extraPool = nodes.keys.filter { it !in open && it !in sourceHandles }
+            check(open.size + extraPool.size >= config.terminalCount) {
+                "terminalCount ${config.terminalCount} exceeds the ${open.size + extraPool.size} " +
+                    "operator nodes this topology holds; widen depthRange or sourceCount"
+            }
+
+            val extras = extraPool.shuffled(rng).take(config.terminalCount - open.size)
+            return (open + extras).mapIndexed { i, handle -> TerminalSpec("terminal-$i", handle) }
+        }
+
+        /**
+         * Lowers the topology to kernel steps: one [SpawnStep] per node carrying the catalog's
+         * own `Entry.kernel` factory, then one [ConnectStep] per edge using the port names the
+         * catalog declares. Spawns precede connects so `GraphSpec.applyTo` has every endpoint
+         * resolved when it reaches a link.
+         */
+        private fun lower(): GraphSpec {
+            val spawns: List<GraphStep> = nodes.values.map { SpawnStep(it.handle, it.entry.kernel) }
+            val connects: List<GraphStep> = nodes.values.flatMap { node ->
+                node.inputs.mapIndexed { port, from ->
+                    ConnectStep(
+                        from = from,
+                        outlet = nodes.getValue(from).entry.shape.outputPort,
+                        to = node.handle,
+                        inlet = node.entry.shape.inputPorts[port],
+                    )
+                }
+            }
+            return GraphSpec(spawns + connects)
+        }
+
+        private fun add(node: Node) {
+            nodes[node.handle] = node
+        }
+    }
+}
