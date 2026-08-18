@@ -254,6 +254,35 @@ jobs:
       #     (RebaselineTest's read-only-dir probe skips when running as root;
       #     BeadsMirrorAppTest's refusal test skips with no `.beads` above the
       #     cwd), which are environment facts rather than lost coverage.
+      #
+      #     **In THIS lane check (2) is inert, and check (3) is the gate**
+      #     (computenet-jx3g). Two facts combine. First, the filtered `--rerun`
+      #     step above *clears* this results directory before it writes —
+      #     verified 2026-08-18 by planting a sentinel `TEST-*.xml` here and
+      #     watching that invocation delete it — so the only report check (2)
+      #     ever reads is TwoNodeRigTest's. Second, TwoNodeRigTest guards in
+      #     `@BeforeAll`, and a failed assumption in a class-level lifecycle
+      #     method aborts the *container*, which Gradle records as a bare
+      #     `<skipped/>` carrying no message. Measured 2026-08-18 on
+      #     darwin/arm64 with /opt/homebrew/bin off PATH: TwoNodeRigTest's XML
+      #     was `tests="5" skipped="5"` with five bare `<skipped/>` elements
+      #     and `grep -c 'is not on PATH'` = 0; the same invocation against
+      #     CheckpointResumeTest, which guards in `@BeforeEach`, wrote
+      #     `<skipped message="...Assumption failed: bd is not on PATH —
+      #     skipping"...>` and grep = 5. So check (2) prints nothing here
+      #     whether the toolchain is present or absent.
+      #
+      #     This is a loss of diagnostic specificity, not a gate hole: the
+      #     toolchain-absent report is exactly the report check (3) reddens on
+      #     (`FAIL: ...TwoNodeRigTest reports 5 test(s), 5 skipped`, exit 1,
+      #     measured the same way), and since bd/dolt availability is
+      #     TwoNodeRigTest's *only* assumption, "5 skipped" in this lane has
+      #     no other cause to distinguish it from. The check is kept rather
+      #     than deleted because it is not lane-specific by construction —
+      #     it re-arms the moment this directory holds any `@BeforeEach`-
+      #     guarded class again (drop the filtered rerun, add a second
+      #     `--tests` selector, move TwoNodeRigTest's guards). It stays live
+      #     unconditionally in build-test-serial, whose class guards per test.
       #  3. every class named in REQUIRED_CLASSES produced XML with tests>0 and
       #     skipped=0 — this lane's substantive e2e evidence, by name, so that
       #     a filter/tag/module-scoping change that quietly stops running it
@@ -307,6 +336,11 @@ jobs:
           # Verified 2026-08-17 against a real Gradle-emitted report produced by
           # running this module's serial-lane invocation with /opt/homebrew/bin
           # off PATH — the same shape the CI job produced on run 32004218853.
+          #
+          # Inert in THIS lane — see check (2)'s note above (computenet-jx3g):
+          # the only report present is TwoNodeRigTest's, whose `@BeforeAll`
+          # guard aborts the container and leaves message-less `<skipped/>`
+          # elements. Check (3) below is what reddens the lane on that report.
           onpath=$(grep -l 'is not on PATH' "$REPORT_DIR"/TEST-*.xml || true)
           if [ -n "$onpath" ]; then
             {
