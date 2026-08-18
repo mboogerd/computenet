@@ -2,6 +2,7 @@ package civictech.bench
 
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 
 /**
@@ -194,6 +195,72 @@ class ResultModelTest {
     @Test
     fun `FindingsTable refuses an empty collection`() {
         shouldThrow<IllegalArgumentException> { FindingsTable(emptyList()) }
+    }
+
+    // ---------------------------------------------------------------------------
+    // BEN1-23 at the reporting boundary: FindingsTable refuses a mixed-RunEnvironment
+    // collection, mirroring BS-12's single-Drive refusal. Every environment field
+    // that could plausibly differ between two runs of the same benchmark is checked
+    // individually so a removal of any one comparison in the production check is
+    // caught here rather than by "some test somewhere".
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun `FindingsTable accepts a single-environment collection`() {
+        val table = FindingsTable(listOf(validResult(), validResult()))
+        table.results.size shouldBe 2
+    }
+
+    @Test
+    fun `FindingsTable refuses a collection whose harnessCommitSha differs`() {
+        val second = validResult(
+            env = validEnvironment().copy(harnessCommitSha = "fedcba9876543210fedcba9876543210fedcba98"),
+        )
+        val ex = shouldThrow<IllegalArgumentException> { FindingsTable(listOf(validResult(), second)) }
+        ex.message shouldContain "harnessCommitSha"
+    }
+
+    @Test
+    fun `FindingsTable refuses a collection whose jvmVendor or jvmVersion differs`() {
+        val second = validResult(env = validEnvironment().copy(jvmVendor = "GraalVM", jvmVersion = "17.0.1"))
+        val ex = shouldThrow<IllegalArgumentException> { FindingsTable(listOf(validResult(), second)) }
+        ex.message shouldContain "jvmVendor"
+        ex.message shouldContain "jvmVersion"
+    }
+
+    @Test
+    fun `FindingsTable refuses a collection whose jmhMode or forkCount differs`() {
+        val second = validResult(env = validEnvironment().copy(jmhMode = "AverageTime", forkCount = 99))
+        val ex = shouldThrow<IllegalArgumentException> { FindingsTable(listOf(validResult(), second)) }
+        ex.message shouldContain "jmhMode"
+        ex.message shouldContain "forkCount"
+    }
+
+    @Test
+    fun `FindingsTable refuses a collection whose coreCount, os, heapSettings or cpuModel differs`() {
+        val second = validResult(
+            env = validEnvironment().copy(
+                coreCount = 4,
+                os = "Linux 6.9",
+                heapSettings = "-Xmx8g",
+                cpuModel = "Intel Xeon",
+            ),
+        )
+        val ex = shouldThrow<IllegalArgumentException> { FindingsTable(listOf(validResult(), second)) }
+        ex.message shouldContain "coreCount"
+        ex.message shouldContain "os"
+        ex.message shouldContain "heapSettings"
+        ex.message shouldContain "cpuModel"
+    }
+
+    @Test
+    fun `FindingsTable refuses a collection whose warmupIterations or measurementIterations differs`() {
+        val second = validResult(
+            env = validEnvironment().copy(warmupIterations = 7, measurementIterations = 11),
+        )
+        val ex = shouldThrow<IllegalArgumentException> { FindingsTable(listOf(validResult(), second)) }
+        ex.message shouldContain "warmupIterations"
+        ex.message shouldContain "measurementIterations"
     }
 
     // ---------------------------------------------------------------------------
