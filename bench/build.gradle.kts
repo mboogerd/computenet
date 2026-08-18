@@ -156,6 +156,27 @@ tasks.named<Test>("test") {
     systemProperty("computenet.repo.root", rootDir.absolutePath)
     systemProperty("civictech.bench.jmhBenchmarkList", benchmarkList.get().asFile.absolutePath)
 
+    // Forwarded to the test JVM for ThroughputReportRenderTest — the @Tag("bench") entry
+    // point that renders a JMH results file through ThroughputReport, and therefore
+    // through F3's Findings writer. A `-D` on the Gradle command line sets the property on
+    // the DAEMON, not on the forked test JVM, so without these lines the rendering entry
+    // point has no way to be told which file to read.
+    //
+    // Read through `providers` and forwarded only when actually set, so the ordinary
+    // `./gradlew :bench:test` — where none of them is set — keeps a stable task input and
+    // stays cacheable. Reading at configuration time is configuration-cache-safe, and the
+    // value becomes a declared input of the cache entry, which is what stops a different
+    // results file from replaying a previous render.
+    listOf(
+        "civictech.bench.jmhResults",
+        "civictech.bench.harnessSha",
+        "civictech.bench.date",
+        "civictech.bench.subject",
+    ).forEach { name ->
+        val forwarded = providers.systemProperty(name).getOrElse("")
+        if (forwarded.isNotBlank()) systemProperty(name, forwarded)
+    }
+
     // BOTH guard tests read files through those system properties — a path string is
     // not a task input, so without the two declarations below Gradle has no idea the
     // test's result depends on the file's CONTENT. Measured on this branch before the
