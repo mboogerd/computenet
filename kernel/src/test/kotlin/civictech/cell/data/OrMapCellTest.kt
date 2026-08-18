@@ -635,6 +635,27 @@ class OrMapCellTest {
      * exhaust a fixed budget before the reader's passes leaves rounds in which
      * no read pass ever overlaps a write, and those rounds silently detect
      * nothing.
+     *
+     * **What the numbers actually are, measured rather than inferred**
+     * (computenet-jw58 review, darwin/arm64, guarded code, one 20-round run):
+     * the writer completes **1–3 writes in 19 of the 20 rounds** and ~180 in
+     * the warm-up round. It never approaches [WRITE_BUDGET]. One
+     * `inlet.call` costs orders of magnitude more than one read pass over
+     * [SEEDED_KEYS] entries, so the reader's [READS_PER_ROUND] passes finish
+     * first in every round; [WRITE_BUDGET] is a ceiling that stops a *slow*
+     * reader from meeting an unbounded population, not the term that sets the
+     * observed cost. The round's real cost is `READS_PER_ROUND` passes over a
+     * population that stays near [SEEDED_KEYS] — a few hundred thousand element
+     * visits, absolutely bounded either way.
+     *
+     * That matters to anyone retuning these constants: the discriminating
+     * power comes from that *handful* of writes landing inside a read pass,
+     * and the reader's window is what gives them somewhere to land. Lowering
+     * [READS_PER_ROUND] shortens the window toward rounds in which the writer
+     * thread has not issued its first write before the reader is done — the
+     * same detect-nothing round as above, reached from the other side. The
+     * observed floor of one write per round is the margin here, and it has
+     * not been measured on a 4-vCPU CI runner.
      */
     @Test
     fun `read accessors do not throw ConcurrentModificationException under a concurrent writer`() {
