@@ -26,12 +26,26 @@ import java.util.UUID
  */
 
 /**
+ * What every terminal fold is, from the differential runner's side: a hosted [Cell] whose
+ * [current] reading is a [ModelState], so the runner compares a terminal to the reference
+ * model by structural [ModelState] equality without knowing which delta family produced it.
+ *
+ * The three implementations below are the three families; a case's terminal map
+ * ([civictech.oracle.run.CaseGraph.terminals]) is keyed by the terminal's name and valued by
+ * one of them.
+ */
+interface TerminalFold : Cell {
+    /** This terminal's folded state as of the last delta it received. */
+    fun current(): ModelState
+}
+
+/**
  * The set family (`SetDelta`): folds through [SetView] into a [ModelState.SetState].
  *
  * `Set<E>` is covariant, so [current] needs no unchecked cast to widen into
  * `ModelState.SetState`'s `Set<Any?>`.
  */
-class SetTerminalFold<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+class SetTerminalFold<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : TerminalFold {
     private val view = SetView<E>()
 
     val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
@@ -45,7 +59,7 @@ class SetTerminalFold<E>(override val ref: CellRef = CellRef(UUID.randomUUID()))
     }
 
     /** The terminal's current folded state, as a [ModelState.SetState]. */
-    fun current(): ModelState.SetState = ModelState.SetState(view.current())
+    override fun current(): ModelState.SetState = ModelState.SetState(view.current())
 }
 
 /**
@@ -57,7 +71,7 @@ class SetTerminalFold<E>(override val ref: CellRef = CellRef(UUID.randomUUID()))
  * `Map<Any?, Any?>` needs an unchecked cast; it is sound because the widening only relaxes the
  * static key/value types, never touches the underlying map at runtime.
  */
-class MapTerminalFold<K, V>(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+class MapTerminalFold<K, V>(override val ref: CellRef = CellRef(UUID.randomUUID())) : TerminalFold {
     private val view = MapView<K, V>()
 
     val inlet = registerPort("inlet", FanInlet.create<Propagate<MapDelta<K, V>>>())
@@ -72,7 +86,7 @@ class MapTerminalFold<K, V>(override val ref: CellRef = CellRef(UUID.randomUUID(
 
     /** The terminal's current folded state, as a [ModelState.MapState]. */
     @Suppress("UNCHECKED_CAST")
-    fun current(): ModelState.MapState = ModelState.MapState(view.current() as Map<Any?, Any?>)
+    override fun current(): ModelState.MapState = ModelState.MapState(view.current() as Map<Any?, Any?>)
 }
 
 /**
@@ -82,7 +96,7 @@ class MapTerminalFold<K, V>(override val ref: CellRef = CellRef(UUID.randomUUID(
  * [TerminalFoldTest] pins against `ModelState.ScalarState(2)` (an `Int`), which is a different
  * value under [ModelState.ScalarState]'s structural equality.
  */
-class ScalarTerminalFold(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+class ScalarTerminalFold(override val ref: CellRef = CellRef(UUID.randomUUID())) : TerminalFold {
     private var total: Long = 0L
 
     val inlet = registerPort("inlet", FanInlet.create<Propagate<CounterDelta>>())
@@ -96,5 +110,5 @@ class ScalarTerminalFold(override val ref: CellRef = CellRef(UUID.randomUUID()))
     }
 
     /** The terminal's current folded state, as a [ModelState.ScalarState] holding a `Long`. */
-    fun current(): ModelState.ScalarState = ModelState.ScalarState(total)
+    override fun current(): ModelState.ScalarState = ModelState.ScalarState(total)
 }
