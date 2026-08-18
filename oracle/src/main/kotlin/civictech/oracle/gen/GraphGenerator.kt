@@ -83,6 +83,24 @@ data class GeneratedGraph(
  * multi-arity operator that cannot fill an arm from the frontier fills it from an *already
  * consumed* node — which is simultaneously fan-out on that node and, whenever it is an
  * ancestor of the frontier node, a diamond.
+ *
+ * ## Late joiner and multi-host placement (`[ORA1-GEN-09]`/`[ORA1-GEN-10]`)
+ *
+ * WHERE [GeneratorConfig.lateJoiner] is set, one extra [TerminalSpec] with `late = true` is
+ * appended beyond the normal [GeneratorConfig.terminalCount] terminals, naming a uniformly
+ * chosen **operator** node's handle — never a source. [TerminalSpec] carries only a node handle
+ * (never a port), so "attaches to a node's outlet, never an operator input port" holds by the
+ * type's own shape, not by a check this class performs. This generator only emits the
+ * [TerminalSpec]; the mid-script [CaseStep.Barrier] it is linked behind is `ScriptGenerator`'s —
+ * this class still applies and links nothing itself ("Static topologies only" above).
+ *
+ * WHERE [GeneratorConfig.hostCount] is greater than 1, [Builder.choosePlacement] assigns every
+ * node handle a host ordinal in `0 until hostCount`, forcing one edge's endpoints onto two
+ * distinct ordinals so the emitted placement always carries a genuinely cross-host
+ * [ConnectStep] and always uses at least two ordinals — never left to the rng's luck.
+ * `[ORA1-GEN-03]` already guarantees at least one edge exists (every source is consumed by an
+ * operator), so the forced edge is always available. `hostCount == 1` places every handle at
+ * ordinal `0`.
  */
 class GraphGenerator(private val config: GeneratorConfig) {
 
@@ -163,14 +181,65 @@ class GraphGenerator(private val config: GeneratorConfig) {
             }
 
             val terminals = chooseTerminals(open)
+            val allTerminals = if (config.lateJoiner) terminals + chooseLateTerminal() else terminals
             return GeneratedGraph(
                 topology = CaseTopology(
                     nodes = nodes.values.map { TopologyNode(it.handle, it.entry.id, it.inputs, it.source) },
-                    terminals = terminals,
-                    placement = nodes.keys.associateWith { 0 },
+                    terminals = allTerminals,
+                    placement = choosePlacement(),
                 ),
                 spec = lower(),
             )
+        }
+
+        /**
+         * The `[ORA1-GEN-09]` late terminal: one extra [TerminalSpec] with `late = true`,
+         * naming a uniformly chosen **operator** node handle — a node with a null [Node.source]
+         * so a source handle can never be picked, and never one of the [chooseTerminals] result
+         * itself (though nothing forbids the two from coinciding by chance; both simply name a
+         * node's outlet). `[ORA1-GEN-03]`'s own check already proved at least one operator node
+         * exists before this is called.
+         */
+        private fun chooseLateTerminal(): TerminalSpec {
+            val operatorHandles = nodes.values.filter { it.source == null }.map { it.handle }
+            check(operatorHandles.isNotEmpty()) {
+                "lateJoiner requires at least one operator node to attach the late terminal to, " +
+                    "but this topology has none"
+            }
+            val handle = operatorHandles[rng.nextInt(operatorHandles.size)]
+            return TerminalSpec("terminal-late", handle, late = true)
+        }
+
+        /**
+         * `[ORA1-GEN-10]`: every node handle's host ordinal. `hostCount == 1` places
+         * everything at ordinal `0`. For `hostCount > 1`, one edge (an (upstream, downstream)
+         * handle pair drawn from every node's [Node.inputs]) is chosen first and its two
+         * endpoints are forced onto **different** ordinals — guaranteeing both a genuinely
+         * cross-host [ConnectStep] and at least two ordinals actually used — before every other
+         * node independently draws an ordinal from [rng]. `[ORA1-GEN-03]` guarantees at least
+         * one edge exists (every source is consumed by an operator), so the forced edge is
+         * always available; no self-loop can be drawn since an input always names an
+         * already-existing, distinct node.
+         */
+        private fun choosePlacement(): Map<String, Int> {
+            if (config.hostCount <= 1) return nodes.keys.associateWith { 0 }
+
+            val edges = nodes.values.flatMap { node -> node.inputs.map { from -> from to node.handle } }
+            check(edges.isNotEmpty()) {
+                "hostCount ${config.hostCount} > 1 needs at least one edge to place across hosts, " +
+                    "but this topology has none"
+            }
+            val (from, to) = edges[rng.nextInt(edges.size)]
+
+            val placement = LinkedHashMap<String, Int>()
+            nodes.keys.forEach { handle -> placement[handle] = rng.nextInt(config.hostCount) }
+
+            val fromOrdinal = placement.getValue(from)
+            var toOrdinal = rng.nextInt(config.hostCount - 1)
+            if (toOrdinal >= fromOrdinal) toOrdinal += 1
+            placement[to] = toOrdinal
+
+            return placement
         }
 
         /**
