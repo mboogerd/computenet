@@ -35,11 +35,16 @@ states why that beats killing the listener.
 
 ## Real-workspace tests need `bd` and `dolt` on PATH
 
-Most of this module's test suite is synthetic (in-process fixtures, no
-external process). But the tests that actually validate the module's whole
-reason for existing — that the mirror agrees with a real `bd` workspace —
-drive a real `bd --sandbox init` scratch workspace and a real `dolt` binary
-via `BdScratchWorkspace`:
+This module's test suite mixes synthetic tests (in-process fixtures, no
+external process) with real-workspace tests that need `bd`/`dolt` on PATH;
+which set is larger shifts as tests are added on either side, so don't rely
+on either being the majority (computenet-mwwr: measured 2026-08-18, 14 of the
+module's 25 test classes carry the guard below, so real-workspace tests were
+already close to half even before this note was written). What matters is
+that the tests that actually validate the module's whole reason for existing
+— that the mirror agrees with a real `bd` workspace — drive a real
+`bd --sandbox init` scratch workspace and a real `dolt` binary via
+`BdScratchWorkspace`:
 
 - `BeadsMirrorAppTest.AgainstAScratchWorkspace`
 - `RebaselineTest`
