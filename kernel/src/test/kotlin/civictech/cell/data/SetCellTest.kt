@@ -12,6 +12,10 @@ import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.*
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
+import civictech.cell.StateRead
 import civictech.cell.data.delta.SetDelta
 
 class SetCellTest {
@@ -100,5 +104,82 @@ class SetCellTest {
         @Suppress("UNCHECKED_CAST")
         val emitted = emission.args.single() as SetDelta<Int>
         assertSame(incomingTag, emitted.adds.getValue(1).single())
+    }
+
+    // -----------------------------------------------------------------
+    // read accessors under a concurrent writer (computenet-bdth)
+    // -----------------------------------------------------------------
+
+    /**
+     * A host reads the cell (`membership`/`snapshot`/`readBounded`) from its own
+     * thread while the cell's writer mutates `adds`/`dels`. Before the guard
+     * those accessors iterated the shared maps — and, in `readBounded` and
+     * `snapshot`, the per-element tag sets — unsynchronised, and escaped a
+     * `ConcurrentModificationException` into the caller. The element-shaped twin
+     * of the `OrMapCell` failure observed on CI as
+     * `HeadlineLivenessTest > initializationError`, reachable here through
+     * `MirrorProjector.edgeView`, which reads a `SetCell`'s `membership` on an
+     * `awaitUntil` thread while the beads mirror's poller writes
+     * (computenet-bdth, twin of computenet-yk5r).
+     *
+     * **This reproduction is statistical, not deterministic**, and deliberately
+     * so — the same reason `OrMapCellTest`'s twin gives. Forcing the interleaving
+     * deterministically needs the reader suspended *inside* its iteration while
+     * the writer is released, but under the monitor the fix takes that writer
+     * blocks on the reader, so such a test deadlocks against the fixed code
+     * instead of passing. Measured failure rate against the unfixed accessors:
+     * 20/20 rounds threw `ConcurrentModificationException`. A null result here
+     * therefore bounds the defect well below the rate it had, but does not prove
+     * its absence.
+     */
+    @Test
+    fun `read accessors do not throw ConcurrentModificationException under a concurrent writer`() {
+        val failures = mutableListOf<Throwable>()
+        repeat(CONCURRENT_ROUNDS) { round ->
+            val cell = SetCell<String>()
+            repeat(SEEDED_ELEMENTS) { cell.inlet.call.add("e$it") }
+
+            val stop = AtomicBoolean(false)
+            val writerFailure = AtomicReference<Throwable?>(null)
+            val writer = thread(name = "set-cell-writer-$round") {
+                var n = SEEDED_ELEMENTS
+                try {
+                    while (!stop.get()) {
+                        cell.inlet.call.add("e${n++}")
+                        if (n % 3 == 0) cell.inlet.call.remove("e${n % SEEDED_ELEMENTS}")
+                    }
+                } catch (t: Throwable) {
+                    writerFailure.set(t)
+                }
+            }
+            try {
+                repeat(READS_PER_ROUND) {
+                    cell.membership()
+                    cell.snapshot()
+                    cell.readBounded(StateRead())
+                }
+            } catch (t: Throwable) {
+                failures += t
+            } finally {
+                stop.set(true)
+                writer.join(10_000)
+            }
+            writerFailure.get()?.let { failures += it }
+        }
+        assertTrue(
+            failures.isEmpty(),
+            "read accessors threw under a concurrent writer: ${failures.map { it::class.java.name }}",
+        )
+    }
+
+    private companion object {
+        /** Rounds of the concurrent-read regression; each round is a fresh cell. */
+        const val CONCURRENT_ROUNDS = 20
+
+        /** Elements seeded before the writer starts — enough that an iteration spans a write. */
+        const val SEEDED_ELEMENTS = 400
+
+        /** Read passes per round, each touching all three host-callable accessors. */
+        const val READS_PER_ROUND = 200
     }
 }
