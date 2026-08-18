@@ -153,3 +153,127 @@ a fresh recorded measurement, a margin stated before its numbers are known, and 
 new entry appended to this file. Nobody re-derives a constant they find already
 written down, so the derivation has to survive here or it does not survive at
 all.
+
+---
+
+## 2026-08-18 — CI posture: `:bench:jmh` absent from the task graph, `:bench:test` sub-second by default, full-suite wall-clock unaffected by the `@Tag("bench")` gate
+
+Machine: Apple M2 Pro, 10 cores, macOS 26.6.1 (Darwin 25.6.0, arm64), host otherwise
+idle for the two full-suite runs below. JVM: Eclipse Adoptium (Temurin)
+21.0.11+10-LTS (the module toolchain's actual JDK, confirmed by resolving
+`~/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2`, not the shell's default `java`,
+which is an unrelated Homebrew OpenJDK 26 build). Gradle 9.6.1.
+
+This entry is **hand-written, not rendered through `civictech.bench.Findings.entry`**.
+That function's only path into a table is a `FindingsTable` of `BenchResult`s, each of
+which requires a `dispersion` (JMH's error at 99.9% confidence) and a `RunEnvironment`
+carrying a JMH mode/fork/warmup/measurement-iteration configuration
+(`bench/src/main/kotlin/civictech/bench/Result.kt`, `Env.kt`). Nothing measured here is
+a JMH score with an error bar — these are single Gradle wall-clock durations and task
+graphs, with no dispersion figure and no JMH run underneath them at all. Forcing them
+through `entry()` would mean inventing a `dispersion` and a fake JMH config for data
+that never had either, which is a shape mismatch, not a rendering convenience — the
+same conclusion this task's own description reached ("hand-writing this entry is
+correct and creates no dependency on F3"). `Findings.kt` belongs to the F3 lane and is
+out of this task's `metadata.files` claim regardless, so it was read, not changed.
+
+### 1. `:bench:jmh` / `:bench:jmhJar` absent from `build check` task graph (`[BEN1-12][BEN1-14]`, BS-5)
+
+At commit `543286ae` (`Merge computenet-x9e.2.1`, this task's base commit):
+
+```
+./gradlew build check -PexcludeMultiJvm=true --dry-run
+```
+
+completed (`BUILD SUCCESSFUL in 3s`, `9 actionable tasks: 3 executed, 6 from cache`,
+a dry-run so no task actually executes and no JMH fork could start regardless). The
+acceptance criterion's literal check, run against the captured log —
+
+```
+grep -c ':bench:jmh' <log>   # → 3
+```
+
+— is not 0, but that is a substring-match artifact, not evidence of a JMH task in the
+graph: the three matching lines are `:bench:jmhClasses`, `:bench:jmhRunBytecodeGenerator`
+and `:bench:jmhCompileGeneratedClasses` SKIPPED — the JMH source-set's own
+compile/bytecode-generation support tasks, which `:bench:test`'s dependency on
+`jmhRunBytecodeGenerator` (F1) pulls in for *compiling* JMH sources, not running them.
+The task that would actually run benchmarks or build the runnable jar never appears —
+checked with an exact task-name boundary:
+
+```
+grep -nE ':bench:jmh( |$)' <log>       # → (no output)
+grep -nE ':bench:jmhJar( |$)' <log>    # → (no output)
+```
+
+Neither `:bench:jmh` nor `:bench:jmhJar` is present at all. `.github/workflows/ci.yml`
+was also read in full: `grep -in 'jmh\|bench' .github/workflows/ci.yml` returns nothing,
+confirming no required-check lane invokes any JMH task, and this task added none.
+
+### 2. `:bench:test` sub-second under the default property set (`[BEN1-13]`, BS-3)
+
+```
+./gradlew :bench:test --rerun
+```
+
+completed in `BUILD SUCCESSFUL in 3s` (Gradle process wall-clock, dominated by daemon
+and configuration overhead), `28 actionable tasks: 8 executed, 11 from cache, 9
+up-to-date`. The JUnit XML for the task itself (4 suites, 55 tests, 0 failures) sums to
+**0.181s** of actual test execution (`ResultModelTest` 0.013s, `FindingsTest` 0.134s,
+`BenchmarkDiscoverySmokeTest` 0.022s, `ProjectGraphTest` 0.012s) — well under one
+second, and none of the 4 result files is `BenchGateSentinelTest` (the `@Tag("bench")`
+sentinel added by computenet-x9e.2.1), confirming it is excluded by default as designed.
+
+### 3. Full `./gradlew test` wall-clock, before/after the `@Tag("bench")` gate (feature design's verification clause)
+
+The bead's own text names "before = your base commit, after = the feature branch" —
+stale by the time this task ran, since this task's base commit (`543286ae`) already
+*is* the tip of `feature/computenet-x9e.2` and already includes the gate
+(computenet-x9e.2.1 merged into it before this task started). Substituted instead: the
+commit immediately before the gate landed (`3e8cc363`, the merge's non-gate parent, no
+`@Tag("bench")` anywhere in `buildSrc` and no sentinel file — confirmed by extracting
+its tree with `git archive 3e8cc363 | tar -x` into a scratch directory, not a worktree
+and not a branch switch in this task's own checkout) as "before", against this task's
+base commit `543286ae` as "after".
+
+| | before (`3e8cc363`) | after (`543286ae`) |
+| --- | --- | --- |
+| command | `./gradlew test` | `./gradlew test` |
+| wall-clock | 541s (9m 1s) | 540s (9m 0s) |
+| Gradle's own line | `BUILD SUCCESSFUL in 9m` | `BUILD SUCCESSFUL in 8m 59s` |
+| actionable tasks | 99: 48 executed, 51 from cache | 99: 38 executed, 33 from cache, 28 up-to-date |
+| JUnit totals | 401 files, 2291 tests, 0 failures, 0 errors, 9 skipped | 401 files, 2291 tests, 0 failures, 0 errors, 9 skipped |
+
+Both runs actually executed rather than replayed a cached result: the per-task grep for
+test tasks shows only `:demo:shell:test` and `:gen:test` `FROM-CACHE` on the "before"
+side (small, unrelated modules) and `:gen:test`/`:bench:test` `UP-TO-DATE` on the
+"after" side (this task's own worktree already had a same-input `:bench:test` result
+from step 2, run seconds earlier) — every other test task, including `:kernel:test`,
+carries no marker on either side, and the JUnit `newest` timestamps (13:29:04Z / 13:37:04Z
+"before"; 13:38:36Z / 13:46:30Z "after") track each run's own wall-clock window rather
+than a stale replay. The "after" run's higher up-to-date count reflects this worktree's
+own pre-existing build state, not the gate.
+
+The wall-clock delta is **-1 second** — indistinguishable from run-to-run noise on a
+9-minute suite dominated by `:kernel:test`'s 1139 tests and `:demo:beadsmirror:test`'s
+multi-JVM rig, exactly as expected: the gate excludes a test class
+(`BenchGateSentinelTest`) that did not exist before it landed either, so there is no
+prior cost for the gate to have removed, and the untagged `:bench` tests it leaves
+running cost 0.181s (step 2) against a 540s suite.
+
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding, per this
+file's own convention for an entry answering no gap trigger question (`[BEN1-32]`).
+
+### Workflow decision (`[BEN1-15]`)
+
+No `.github/workflows/bench.yml` was added — **skipped**, implementer's judgment,
+stated here and in the PR per the feature's explicit allowance. Rationale: the only
+`@Benchmark` method in the repository today is `SmokeBenchmark.baseline`, the
+discovery/noise-floor sentinel already measured and recorded in this file's first
+entry; no real kernel-operator benchmark exists yet (F4-F6, out of this task's scope).
+A `workflow_dispatch`-only job today would have nothing to run beyond re-measuring the
+same noise floor, adding CI-workflow maintenance surface for no new information. Once a
+real `@Benchmark` lands, a dispatched workflow becomes worth its upkeep; until then this
+task ships none, matching `.github/workflows/`'s current contents (`announcement-probe`,
+`auto-merge`, `cache-seed`, `ci`, `post-merge`, `wire-suite-sample` — still no benchmark
+workflow, re-verified by listing the directory at this task's base commit).
