@@ -156,14 +156,27 @@ object DifferentialRunner {
      * @param reference the substitutable oracle. `null` (the default) resolves it from the
      *   catalog through [CaseExecution.referenceModelFor]; the controls feature substitutes a
      *   deliberately wrong one here, with no change to this signature.
+     * @param onAssembled called exactly once, right after [CaseExecution.assemble] builds the
+     *   graph — before ANY script step is driven and before the first
+     *   [civictech.oracle.gen.CaseStep.Barrier], if any, is even reached — with the terminal
+     *   names linked at that instant. This is the BS-7 (`[ORA1-DIFF-05]`) coverage-gap
+     *   instrument: [CaseExecution.assemble] itself never links a [TerminalSpec.late] terminal
+     *   (it filters `!it.late`), so the correct set here is always the case's EAGER terminals
+     *   only — a late terminal's name appearing already at this callback (rather than only from
+     *   [onBarrier] onward) is exactly the regression a prior review found untested: linking
+     *   moved from the Barrier to case-build time, which the final-state comparison alone
+     *   cannot distinguish from correct catch-up (both converge to the same model state).
      * @param onBarrier called at every [civictech.oracle.gen.CaseStep.Barrier], after the
      *   graph has quiesced, with every terminal's fold as of that point — the observation the
-     *   barrier exists to make possible. Not called if the budget ran out first.
+     *   barrier exists to make possible. Not called if the budget ran out first. Kept as the
+     *   LAST parameter (not [onAssembled]) so existing trailing-lambda call sites
+     *   (`DifferentialRunner.run(case) { ... }`) keep binding to this one, unchanged.
      */
     fun run(
         case: GeneratedCase,
         reference: Reference? = null,
         stepBudget: Int = DEFAULT_STEP_BUDGET,
+        onAssembled: (Set<String>) -> Unit = {},
         onBarrier: (Map<String, ModelState>) -> Unit = {},
     ): RunOutcome {
         val model = CaseExecution.referenceModelFor(case.topology)
@@ -176,7 +189,12 @@ object DifferentialRunner {
             script = case.script.toScript(),
             reference = oracle,
             stepBudget = stepBudget,
-            buildGraph = { world -> CaseExecution.assemble(case, world).also { assembly = it }.graph },
+            buildGraph = { world ->
+                CaseExecution.assemble(case, world).also {
+                    assembly = it
+                    onAssembled(it.terminals.keys.toSet())
+                }.graph
+            },
         ) { driving ->
             for (step in case.script.steps) {
                 if (driving.exhausted) break

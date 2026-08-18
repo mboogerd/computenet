@@ -10,7 +10,10 @@ import civictech.cell.graph.ConnectStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.SpawnStep
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.ManagedHost
+import civictech.cell.host.inlet
 import civictech.cell.link.LinkResult
+import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
@@ -133,17 +136,14 @@ object CaseExecution {
         }
 
     /**
-     * Applies [case]'s spec onto [world]'s host, links a [TerminalFold] behind every eager
-     * terminal, and binds every source node to a [ScriptSource].
+     * Applies [case]'s spec across every host its [CaseTopology.placement] names, links a
+     * [TerminalFold] behind every eager terminal, and binds every source node to a
+     * [ScriptSource].
      *
      * **Late terminals are skipped here.** A `TerminalSpec(late = true)` is linked only after a
      * mid-script barrier, which is the late-joiner sibling task's; this task treats the barrier
      * as a quiesce point and nothing more, so linking a late terminal eagerly would silently
      * turn it into an early one and make the sibling's requirement untestable.
-     *
-     * Everything is placed on the single [SimWorld] host regardless of
-     * [CaseTopology.placement]: multi-host placement is the sibling task's too, and a topology
-     * that asks for a second ordinal is refused rather than silently collapsed.
      */
     fun applyCase(case: GeneratedCase, world: SimWorld): CaseGraph = assemble(case, world).graph
 
@@ -152,7 +152,10 @@ object CaseExecution {
      * terminals map backing [CaseGraph.terminals] — needed by [linkLateTerminals] (BS-7,
      * `[ORA1-DIFF-05]`) to add a late terminal's fold after the mid-script
      * [civictech.oracle.gen.CaseStep.Barrier], without re-applying the spec (which would
-     * double-spawn every cell) and without changing [CaseGraph]'s own shape.
+     * double-spawn every cell) and without changing [CaseGraph]'s own shape. [hosts] (BS-9) is
+     * every host ordinal [assemble] spawned onto — needed by [linkLateTerminals] to spawn a
+     * late terminal's fold on the SAME host as the node it reads, exactly as [assemble] does
+     * for an eager terminal.
      *
      * [CaseGraph.terminals] is typed `Map`, but the instance behind it here is exactly
      * [terminals] — the same `LinkedHashMap`, aliased, not copied — so mutating [terminals]
@@ -162,27 +165,79 @@ object CaseExecution {
         val graph: CaseGraph,
         internal val refs: Map<String, CellRef>,
         internal val terminals: MutableMap<String, TerminalFold>,
+        internal val hosts: Map<Int, ManagedHost>,
+        internal val placement: Map<String, Int>,
     )
 
     /**
-     * [applyCase]'s full build: spawns every node ([GraphSpec.applyTo]), links a fold behind
-     * every **eager** (non-late) terminal, and binds every source — same behavior as before,
-     * just also handing back the pieces [linkLateTerminals] needs.
+     * [applyCase]'s full build (BS-9, `[ORA1-GEN-10]`'s runner half): one [ManagedHost] per
+     * distinct ordinal [case]'s [CaseTopology.placement] names, all sharing [world]'s single
+     * [civictech.cell.host.LocationRegistry] — ordinal `0` is [world]'s own host (so a
+     * single-host case, every handle mapping to `0`, runs exactly as it always did), and every
+     * other ordinal gets a fresh [ManagedHost] on [world]'s shared scheduler.
+     *
+     * Every [SpawnStep] lands on its handle's own host. A [ConnectStep] whose two ends share a
+     * host connects the ordinary same-host way; one that crosses hosts routes through
+     * [civictech.cell.host.inlet] — a registry-resolved [civictech.cell.Propagate] handle to
+     * the target port, wrapped as a fixed [Use] for `ManagedHost.connect(from, outlet, to:
+     * Use<*>)` — mirroring `GenerativeGraphTest`'s cross-host wiring
+     * (`kernel/src/test/kotlin/civictech/cell/verify/GenerativeGraphTest.kt`) without a
+     * per-port typed proxy interface (`RoutedInlet.kt`'s own point). This REPLACES the former
+     * `require(placement.values.all { it == 0 })` guard: a topology naming a second ordinal now
+     * runs on a second host instead of being refused.
+     *
+     * Then links a fold behind every **eager** (non-late) terminal — on the SAME host as the
+     * node it reads, so that link is always same-host too — and binds every source.
      */
     fun assemble(case: GeneratedCase, world: SimWorld): CaseAssembly {
-        require(case.topology.placement.values.all { it == 0 }) {
-            "Topology places handles on host ordinals " +
-                "${case.topology.placement.values.distinct().sorted()}; this assembly path " +
-                "only ever ran on one host, and collapsing a second ordinal onto it would " +
-                "silently run a different case than the one asked for."
+        val ordinals = (case.topology.placement.values.toSet() + 0).sorted()
+        val hosts: Map<Int, ManagedHost> = ordinals.associateWith { ordinal ->
+            if (ordinal == 0) {
+                world.host
+            } else {
+                ManagedHost(scheduler = world.controller.scheduler(), registry = world.registry)
+            }
         }
+        fun hostFor(handle: String): ManagedHost = hosts.getValue(case.topology.placement[handle] ?: 0)
 
-        val refs = case.spec.applyTo(world.host.managementInlet)
+        val refs = mutableMapOf<String, CellRef>()
+        case.spec.lowered().forEach { step ->
+            when (step) {
+                is SpawnStep -> {
+                    val ref = step.identity.resolve()
+                    val cell = step.factory.create(ref)
+                    refs[step.handle] = hostFor(step.handle).managementInlet.call.spawn(cell)
+                }
+
+                is ConnectStep -> {
+                    val fromHost = hostFor(step.from)
+                    val toHost = hostFor(step.to)
+                    val fromRef = refs.getValue(step.from)
+                    val toRef = refs.getValue(step.to)
+                    if (fromHost === toHost) {
+                        val result = fromHost.managementInlet.call
+                            .connect(fromRef, step.outlet, toRef, step.inlet)
+                        check(result !is LinkResult.Rejected) {
+                            "connect ${step.from}.${step.outlet} -> ${step.to}.${step.inlet} " +
+                                "rejected: ${(result as LinkResult.Rejected).reason}"
+                        }
+                    } else {
+                        val sink = world.registry.inlet<Any>(toRef, step.inlet)
+                        fromHost.managementInlet.call.connect(fromRef, step.outlet, Use.fixed(sink, PortRef.generate()))
+                    }
+                }
+
+                else -> error(
+                    "GeneratedCase specs never carry an InstanceSetStep; case.spec.lowered() " +
+                        "already expands one to plain SpawnSteps if it did.",
+                )
+            }
+        }
         val nodes = case.topology.nodes.associateBy { it.handle }
 
         val terminals = LinkedHashMap<String, TerminalFold>()
         case.topology.terminals.filter { !it.late }.forEach { terminal ->
-            terminals[terminal.name] = linkTerminal(terminal, nodes, refs, world)
+            terminals[terminal.name] = linkTerminal(terminal, nodes, refs, ::hostFor)
         }
 
         val sources = LinkedHashMap<SourceId, ScriptSource>()
@@ -193,10 +248,14 @@ object CaseExecution {
             sources[source] = scriptSourceFor(node.catalogId, node.handle, ref, world)
         }
 
+        val extraHosts = hosts.filterKeys { it != 0 }.values.toList()
+
         return CaseAssembly(
-            graph = CaseGraph(terminals = terminals, sources = sources),
+            graph = CaseGraph(terminals = terminals, sources = sources, extraHosts = extraHosts),
             refs = refs,
             terminals = terminals,
+            hosts = hosts,
+            placement = case.topology.placement,
         )
     }
 
@@ -217,18 +276,23 @@ object CaseExecution {
      */
     fun linkLateTerminals(case: GeneratedCase, world: SimWorld, assembly: CaseAssembly) {
         val nodes = case.topology.nodes.associateBy { it.handle }
+        fun hostFor(handle: String): ManagedHost = assembly.hosts.getValue(assembly.placement[handle] ?: 0)
         case.topology.terminals.filter { it.late }.forEach { terminal ->
             if (assembly.terminals.containsKey(terminal.name)) return@forEach
-            assembly.terminals[terminal.name] = linkTerminal(terminal, nodes, assembly.refs, world)
+            assembly.terminals[terminal.name] = linkTerminal(terminal, nodes, assembly.refs, ::hostFor)
         }
     }
 
-    /** Spawns a [TerminalFold] matching [terminal]'s node's output shape and connects it. */
+    /**
+     * Spawns a [TerminalFold] matching [terminal]'s node's output shape ON THE SAME HOST as
+     * that node — [hostFor] is [assemble]'s placement-derived lookup — and connects it there,
+     * so the link is always same-host regardless of which ordinal the node itself landed on.
+     */
     private fun linkTerminal(
         terminal: TerminalSpec,
         nodes: Map<String, TopologyNode>,
         refs: Map<String, CellRef>,
-        world: SimWorld,
+        hostFor: (String) -> ManagedHost,
     ): TerminalFold {
         val node = nodes[terminal.handle]
             ?: error("Terminal '${terminal.name}' reads handle '${terminal.handle}', which the topology does not declare")
@@ -236,10 +300,11 @@ object CaseExecution {
             ?: error("Terminal '${terminal.name}' reads node '${node.handle}', whose catalog id '${node.catalogId}' is not registered")
         val ref = refs[terminal.handle]
             ?: error("Terminal '${terminal.name}' reads handle '${terminal.handle}', which the applied GraphSpec did not spawn")
+        val host = hostFor(terminal.handle)
 
         val fold = foldFor(entry.shape.output, node.catalogId)
-        world.host.managementInlet.call.spawn(fold)
-        val result = world.host.managementInlet.call
+        host.managementInlet.call.spawn(fold)
+        val result = host.managementInlet.call
             .connect(ref, entry.shape.outputPort, fold.ref, TERMINAL_INLET)
         check(result !is LinkResult.Rejected) {
             "Linking terminal '${terminal.name}' to ${node.handle}.${entry.shape.outputPort} " +
