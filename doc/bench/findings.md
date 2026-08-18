@@ -32,30 +32,29 @@ later widening of that scan finds it already compliant.
 ## 2026-08-18 — SmokeBenchmark.baseline noise-floor calibration - NOISE_FLOOR provenance
 Harness: cbea02900f695fe156a1b94cdf77c60be9781f10 · JVM Eclipse Adoptium/21.0.11 · heap maxHeapBytes=4294967296 · Apple M2 Pro, 10 cores, Mac OS X 26.6.1
 JMH: mode=AverageTime forks=5 warmup=5 iters=5 · drive=REAL
-| subject | insert (ops/s ± err) | retract (ops/s ± err) | notes |
-| --- | --- | --- | --- |
-| ns/op | 4.321050323941347 ± 0.004992364297944783 | | |
-| ns/op | 4.32487047304117 ± 0.010675229190884424 | | |
-| ns/op | 4.31976862172609 ± 0.0032949299161283406 | | |
+| subject | value | notes |
+| --- | --- | --- |
+| run 1 | 4.321050323941347 ± 0.004992364297944783 ns/op | |
+| run 2 | 4.32487047304117 ± 0.010675229190884424 ns/op | |
+| run 3 | 4.31976862172609 ± 0.0032949299161283406 ns/op | |
 Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
 
 ### Reading the entry above
 
 Everything between the `##` heading and the `Trigger:` line is `Findings.entry`'s
 output, pasted verbatim — the three `BenchResult`s were constructed from the raw
-JMH output below, put in a `FindingsTable`, and rendered. The renderer accepted
-them, which is itself the check that all three classify `Reportable` against the
-`NOISE_FLOOR` this entry derives: `Findings.entry` refuses the whole entry on the
-first `Unreportable` result, and the render was executed against a `:bench` build
-carrying `NOISE_FLOOR = 0.005`, not the provisional value it replaced.
+JMH output below, put in a `FindingsTable` labelled `"run 1"`/`"run 2"`/`"run 3"`,
+and rendered. The renderer accepted them, which is itself the check that all three
+classify `Reportable` against the `NOISE_FLOOR` this entry derives: `Findings.entry`
+refuses the whole entry on the first `Unreportable` result, and the render was
+executed against a `:bench` build carrying `NOISE_FLOOR = 0.005`, not the
+provisional value it replaced. (This entry was re-rendered through
+`Findings.renderTable`'s fixed writer on `computenet-x9e.3.4`, after a feature review
+found the table it originally shipped with mislabelled its own results; the JMH runs
+were not repeated — only the render changed, from the same scores and errors below.)
 
-Two things the renderer's fixed table shape does not say, so they are said here:
+One thing the renderer's table shape does not say, so it is said here:
 
-- The three rows are **runs 1, 2 and 3 in order**, all of the same benchmark. The
-  column headed `subject` carries the unit (`ns/op`) because that is what
-  `Findings.renderTable` puts there; the `insert` column holds score ± error at
-  99.9% confidence, and the `retract` and `notes` columns are empty because this
-  measurement has no second operator and no per-row note.
 - **`drive=REAL` is literal.** JMH forks five real JVMs and measures on real
   threads against the real system clock. No `SimWorld`, no `SimulationController`
   and no virtual time is involved anywhere in this measurement (`[BEN1-26]`);

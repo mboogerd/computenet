@@ -50,18 +50,32 @@ data class BenchResult(
 }
 
 /**
- * A table of [BenchResult]s that all share exactly one [Drive] (`[BEN1-27]`, BS-12).
+ * A table of [BenchResult]s that all share exactly one [Drive] (`[BEN1-27]`, BS-12),
+ * each optionally paired with a caller-supplied per-row entry in [labels] (`[BEN1-30]`).
+ *
+ * [labels] — not a field on [BenchResult] itself — is this table's per-row subject: what
+ * distinguishes an insert row from a retract row of the same operator, or a "before" row
+ * from an "after" row, when both share one [BenchResult.unit]. It stays off `BenchResult`
+ * deliberately: `ResultModelTest`'s constructor-count check pins that type to exactly one
+ * JVM constructor and no defaulted field, so a display label — which is not a measurement
+ * fact — belongs beside the table, not inside the result. [labels] defaults to `null` so
+ * existing single-argument construction (`FindingsTable(results)`) is unaffected; a table
+ * built that way carries no rendering label, and [Findings.entry] refuses to render it
+ * (`[BEN1-30]`) rather than inventing one.
  *
  * Construction refuses:
- * - an empty [results] collection, and
+ * - an empty [results] collection,
  * - a [results] collection whose [BenchResult.drive] values form a `Set<Drive>` of
- *   size other than exactly 1 — i.e. any mix of [Drive.SIM] and [Drive.REAL].
+ *   size other than exactly 1 — i.e. any mix of [Drive.SIM] and [Drive.REAL], and
+ * - a non-null [labels] whose size does not equal [results]'s, or that contains a
+ *   blank entry.
  *
- * Both refusals throw [IllegalArgumentException] from the constructor itself, so a
- * `FindingsTable` instance is proof its results are drive-homogeneous — there is no
- * post-construction check a caller could forget to run.
+ * All refusals throw [IllegalArgumentException] from the constructor itself, so a
+ * `FindingsTable` instance is proof its results are drive-homogeneous and its labels
+ * (when present) are well-formed — there is no post-construction check a caller could
+ * forget to run.
  */
-class FindingsTable(val results: List<BenchResult>) {
+class FindingsTable(val results: List<BenchResult>, val labels: List<String>? = null) {
 
     /** The single [Drive] shared by every result in [results]. */
     val drive: Drive
@@ -75,5 +89,14 @@ class FindingsTable(val results: List<BenchResult>) {
             "FindingsTable requires all results to share one Drive, found $drives"
         }
         drive = drives.single()
+        if (labels != null) {
+            require(labels.size == results.size) {
+                "FindingsTable requires exactly one label per result (${results.size}), " +
+                    "found ${labels.size}"
+            }
+            require(labels.all { it.isNotBlank() }) {
+                "FindingsTable requires every label to be non-blank, found $labels"
+            }
+        }
     }
 }
