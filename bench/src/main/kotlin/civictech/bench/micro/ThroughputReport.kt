@@ -456,6 +456,17 @@ object ThroughputReport {
      * property of the artifacts on disk — a results file whose log has been lost or was
      * never captured is *visibly* incomplete, and [renderRun] says so by name instead
      * of rendering something plausible.
+     *
+     * The pairing is by NAME ONLY, and nothing verifies it. Neither [renderRun] nor
+     * [MeasuringJvm.fromJmhLog] cross-checks the log against the results file beside it —
+     * not the benchmarks each names, not their modification times, not the row counts. A
+     * log belonging to a different sweep, or one written by hand, is accepted as the
+     * measuring JVM's record so long as it carries a well-formed banner. That is the
+     * deliberate limit of an artifact-based check and it should be read as its scope, not
+     * as a gap: it makes the honest path the easy one and makes a LOST log visible, but
+     * it cannot make a SUBSTITUTED one detectable. What this closes is the accidental
+     * failure — a renderer answering from its own process because no artifact recorded
+     * the run — not a determined one.
      */
     fun runLogFor(results: File): File =
         File(results.absoluteFile.parentFile, results.nameWithoutExtension + ".log")
