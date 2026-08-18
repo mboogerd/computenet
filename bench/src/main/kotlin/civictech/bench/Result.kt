@@ -50,8 +50,22 @@ data class BenchResult(
 }
 
 /**
- * A table of [BenchResult]s that all share exactly one [Drive] (`[BEN1-27]`, BS-12),
- * each optionally paired with a caller-supplied per-row entry in [labels] (`[BEN1-30]`).
+ * A table of [BenchResult]s that all share exactly one [Drive] (`[BEN1-27]`, BS-12) and
+ * exactly one [RunEnvironment], each optionally paired with a caller-supplied per-row
+ * entry in [labels] (`[BEN1-30]`).
+ *
+ * The single-[RunEnvironment] requirement closes the same class of dishonesty
+ * [BEN1-27]'s single-[Drive] requirement refuses, applied to environment instead of
+ * drive: [Findings.entry] renders ONE environment line per entry (harness SHA, JVM,
+ * heap, CPU, OS, JMH config), taken from `results.first().env`. Without this check, a
+ * table whose second-or-later result carried a different [RunEnvironment] would have
+ * that result silently reported under the first result's environment — the reader
+ * would see a JVM, harness commit, or JMH configuration the later result was never
+ * actually measured under. Refusing at construction (mirroring the single-drive
+ * refusal, rather than rendering each row's own environment) keeps `Findings.kt`'s
+ * `results.first().env` safe to use precisely because a constructed `FindingsTable` is
+ * now proof every result shares one environment — there is no mixed-environment table
+ * for it to be wrong about.
  *
  * [labels] — not a field on [BenchResult] itself — is this table's per-row subject: what
  * distinguishes an insert row from a retract row of the same operator, or a "before" row
@@ -66,14 +80,16 @@ data class BenchResult(
  * Construction refuses:
  * - an empty [results] collection,
  * - a [results] collection whose [BenchResult.drive] values form a `Set<Drive>` of
- *   size other than exactly 1 — i.e. any mix of [Drive.SIM] and [Drive.REAL], and
+ *   size other than exactly 1 — i.e. any mix of [Drive.SIM] and [Drive.REAL],
+ * - a [results] collection whose [BenchResult.env] values are not all `==` to one
+ *   another, naming which [RunEnvironment] field(s) differ, and
  * - a non-null [labels] whose size does not equal [results]'s, or that contains a
  *   blank entry.
  *
  * All refusals throw [IllegalArgumentException] from the constructor itself, so a
- * `FindingsTable` instance is proof its results are drive-homogeneous and its labels
- * (when present) are well-formed — there is no post-construction check a caller could
- * forget to run.
+ * `FindingsTable` instance is proof its results are drive-homogeneous,
+ * environment-homogeneous, and its labels (when present) are well-formed — there is no
+ * post-construction check a caller could forget to run.
  */
 class FindingsTable(val results: List<BenchResult>, val labels: List<String>? = null) {
 
@@ -89,6 +105,12 @@ class FindingsTable(val results: List<BenchResult>, val labels: List<String>? = 
             "FindingsTable requires all results to share one Drive, found $drives"
         }
         drive = drives.single()
+        val envs = results.map { it.env }
+        require(envs.distinct().size == 1) {
+            val differing = differingRunEnvironmentFields(envs)
+            "FindingsTable requires all results to share one RunEnvironment, differs in " +
+                differing.joinToString(", ")
+        }
         if (labels != null) {
             require(labels.size == results.size) {
                 "FindingsTable requires exactly one label per result (${results.size}), " +
@@ -99,4 +121,28 @@ class FindingsTable(val results: List<BenchResult>, val labels: List<String>? = 
             }
         }
     }
+}
+
+/**
+ * The names of every [RunEnvironment] field that is not identical across [envs] —
+ * `["harnessCommitSha", "jvmVersion"]`, for example, when two results were captured a
+ * commit and a JDK apart. Used only to make [FindingsTable]'s single-environment
+ * refusal name what actually differs, rather than merely asserting that something does.
+ */
+private fun differingRunEnvironmentFields(envs: List<RunEnvironment>): List<String> {
+    val fields: List<Pair<String, (RunEnvironment) -> Any>> = listOf(
+        "jvmVendor" to { e: RunEnvironment -> e.jvmVendor },
+        "jvmVersion" to { e: RunEnvironment -> e.jvmVersion },
+        "heapSettings" to { e: RunEnvironment -> e.heapSettings },
+        "cpuModel" to { e: RunEnvironment -> e.cpuModel },
+        "coreCount" to { e: RunEnvironment -> e.coreCount },
+        "os" to { e: RunEnvironment -> e.os },
+        "jmhMode" to { e: RunEnvironment -> e.jmhMode },
+        "forkCount" to { e: RunEnvironment -> e.forkCount },
+        "warmupIterations" to { e: RunEnvironment -> e.warmupIterations },
+        "measurementIterations" to { e: RunEnvironment -> e.measurementIterations },
+        "harnessCommitSha" to { e: RunEnvironment -> e.harnessCommitSha },
+    )
+    return fields.filter { (_, selector) -> envs.map(selector).distinct().size > 1 }
+        .map { (name, _) -> name }
 }

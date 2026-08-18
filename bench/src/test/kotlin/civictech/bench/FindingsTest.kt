@@ -152,6 +152,63 @@ class FindingsTest {
     }
 
     // ---------------------------------------------------------------------------
+    // Rule 2b (computenet-x9e.3.5, unowned seam found by feature review of PR #315):
+    // a mixed-RunEnvironment table must not silently report every row under the
+    // first result's environment. FindingsTable refuses at construction (mirroring
+    // the single-Drive refusal above), so `Findings.kt`'s
+    // `results.results.first().env` stays safe to use — this test is the one that
+    // must go red if that refusal (or the `.first().env` read it protects) is ever
+    // regressed back to trusting an unvalidated table.
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun `entry inherits FindingsTable's refusal of the two-result mixed-environment case`() {
+        // The exact shape measured in the bug report: a second result carrying a
+        // different harness SHA, JVM vendor/version, JMH mode, and fork count.
+        val first = reportableResult()
+        val second = reportableResult().copy(
+            env = validEnvironment().copy(
+                harnessCommitSha = "shatwo0000000000000000000000000000000000",
+                jvmVendor = "GraalVM",
+                jvmVersion = "17.0.1",
+                jmhMode = "AverageTime",
+                forkCount = 99,
+            ),
+        )
+
+        val ex = shouldThrow<IllegalArgumentException> {
+            FindingsTable(listOf(first, second), labels = listOf("insert", "retract"))
+        }
+        ex.message shouldContain "RunEnvironment"
+        ex.message shouldContain "harnessCommitSha"
+        ex.message shouldContain "jvmVendor"
+        ex.message shouldContain "jvmVersion"
+        ex.message shouldContain "jmhMode"
+        ex.message shouldContain "forkCount"
+
+        // No path around the FindingsTable refusal reaches Findings.entry either.
+        Findings::class.java.declaredMethods
+            .filter { it.name == "entry" }
+            .single()
+            .parameterTypes.toList() shouldContainElement FindingsTable::class.java
+    }
+
+    @Test
+    fun `entry admits a multi-row table that shares one RunEnvironment, like findings md's first entry`() {
+        // doc/bench/findings.md's first entry is a three-row table of three separate
+        // JMH runs that happened to share one environment; the fix must leave that
+        // shape renderable, not merely refuse the mixed case.
+        val table = FindingsTable(
+            listOf(reportableResult(), reportableResult(), reportableResult()),
+            labels = listOf("run 1", "run 2", "run 3"),
+        )
+        val rendered = Findings.entry(date = "2026-08-18", subject = "x", results = table)
+        rendered shouldContain "| run 1 |"
+        rendered shouldContain "| run 2 |"
+        rendered shouldContain "| run 3 |"
+    }
+
+    // ---------------------------------------------------------------------------
     // Rule 3 [BEN1-30]: an entry missing date, subject, results table, or per-row
     // labels is refused as incomplete.
     // ---------------------------------------------------------------------------

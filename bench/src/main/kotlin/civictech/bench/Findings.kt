@@ -67,9 +67,14 @@ object Findings {
      *   Blank or missing is refused (`[BEN1-30]`).
      * @param results the entry's results, as a [FindingsTable] — the ONLY way results
      *   enter an entry. There is no overload taking a raw `List<BenchResult>`: a table
-     *   that mixes [Drive.SIM] and [Drive.REAL] results cannot be constructed in the
-     *   first place (`[BEN1-27]`), so this writer inherits that refusal rather than
-     *   re-implementing it. Every result in [results] must be
+     *   that mixes [Drive.SIM] and [Drive.REAL] results, or whose results do not all
+     *   share one [RunEnvironment], cannot be constructed in the first place
+     *   (`[BEN1-27]`; the environment case mirrors it for the same reason — this
+     *   entry renders a single environment line taken from `results.first().env`, so a
+     *   table that let a later result carry a different environment would have that
+     *   result silently reported under the first result's JVM/harness/JMH config), so
+     *   this writer inherits both refusals rather than re-implementing them. Every
+     *   result in [results] must be
      *   [Reportability.Reportable] — the first [Reportability.Unreportable] one found
      *   refuses the whole entry, and the refusal message names it (`[BEN1-25]`).
      *   [FindingsTable.labels] must be non-`null` — the results table's per-row
