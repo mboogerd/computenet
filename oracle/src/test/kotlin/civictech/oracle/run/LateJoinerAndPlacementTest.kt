@@ -18,9 +18,14 @@ import civictech.oracle.model.ModelState
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SourceId
 import civictech.oracle.model.WriterId
+import civictech.cell.host.LocationRegistry
+import civictech.testkit.SimWorld
 import io.kotest.assertions.withClue
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -203,6 +208,33 @@ class LateJoinerAndPlacementTest {
      */
     @Test
     fun `BS-9 single-host and two-host placement agree with the model and each other`() {
+        // Structural guard, before anything else: "flt" really does land on a DIFFERENT
+        // ManagedHost in the two-host case, checked through the registry rather than trusting
+        // CaseAssembly's own bookkeeping. Without this, a regression that silently collapsed
+        // every ordinal's spawn onto host 0 while still creating (but never using) the second
+        // host — as the former `require(placement.values.all { it == 0 })` guard's removal
+        // could regress to — would pass the rest of this test by luck: a single-host replay of
+        // the same case trivially agrees with itself, and `CaseGraph.extraHosts` being
+        // non-empty proves only that a second `ManagedHost` object EXISTS, not that anything
+        // was placed on it. Measured: forcing `CaseExecution.assemble`'s internal `hostFor` to
+        // always return host 0 leaves `extraHosts.size` unchanged (the host is still built) but
+        // this location check catches it.
+        val singleWorld = SimWorld(seed = 5001L)
+        val singleHostAssembly = CaseExecution.assemble(placementCase(mapOf("src" to 0, "flt" to 0)), singleWorld)
+        val twoHostWorld = SimWorld(seed = 5001L)
+        val twoHostAssembly = CaseExecution.assemble(placementCase(mapOf("src" to 0, "flt" to 1)), twoHostWorld)
+
+        singleHostAssembly.graph.extraHosts shouldHaveSize 0
+        twoHostAssembly.graph.extraHosts shouldHaveSize 1
+
+        val singleHostFltLocation = singleWorld.registry.location(singleHostAssembly.refs.getValue("flt"))
+        singleHostFltLocation.shouldBeInstanceOf<LocationRegistry.Local>()
+        (singleHostFltLocation as LocationRegistry.Local).host shouldBe singleWorld.host
+
+        val twoHostFltLocation = twoHostWorld.registry.location(twoHostAssembly.refs.getValue("flt"))
+        twoHostFltLocation.shouldBeInstanceOf<LocationRegistry.Local>()
+        (twoHostFltLocation as LocationRegistry.Local).host shouldNotBe twoHostWorld.host
+
         val singleHostObservations = mutableListOf<Map<String, ModelState>>()
         val twoHostObservations = mutableListOf<Map<String, ModelState>>()
 
