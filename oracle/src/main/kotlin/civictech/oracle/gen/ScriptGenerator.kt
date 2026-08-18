@@ -13,11 +13,19 @@ import kotlin.random.Random
  *
  * ## What it emits
  *
- * A [CaseScript] of exactly `config.scriptLength` [CaseStep.Op] steps and **no**
- * [CaseStep.Barrier]: barrier placement is the late-joiner sibling's (`[ORA1-GEN-09]`). Each
- * step drives one `civictech.oracle.model.ScriptEvent` into one source's slice; the
- * interleaving across sources is this generator's choice from [rng], and the per-source
- * subsequence is what the reference model consumes ([CaseScript.toScript]).
+ * A [CaseScript] of exactly `config.scriptLength` [CaseStep.Op] steps, plus — WHERE
+ * `config.lateJoiner` is set — exactly one [CaseStep.Barrier] spliced in at an
+ * [rng]-chosen **strictly interior** position (`[ORA1-GEN-09]`): at least one `Op` precedes it
+ * and at least one follows, so it is never before the first step nor after the last. With
+ * `lateJoiner` unset, no [CaseStep.Barrier] is ever emitted. [insertBarrier] is the whole of
+ * this — it runs once, after every `Op` is generated, and shifts every affected
+ * [RemoveRecord.stepIndex] so the audit keeps naming the same `Op` once the Barrier is spliced
+ * in. The barrier is data the runner (computenet-4ru.8) interprets as a quiesce point before it
+ * links the late-joiner terminal (`GraphGenerator.chooseLateTerminal`); this class never links
+ * or applies anything itself. Each `Op` step drives one `civictech.oracle.model.ScriptEvent`
+ * into one source's slice; the interleaving across sources is this generator's choice from
+ * [rng], and the per-source subsequence is what the reference model consumes
+ * ([CaseScript.toScript]).
  *
  * The model's sealed `ScriptEvent` is reused verbatim and deliberately not extended — the
  * gen-level [CaseStep] already wraps it with the total order and the barrier.
@@ -161,9 +169,36 @@ class ScriptGenerator(
             emitOne(source, remaining = config.scriptLength - steps.size, steps = steps, audit = audit)
         }
 
-        val script = CaseScript(steps)
+        val (finalSteps, finalAudit) = if (config.lateJoiner) insertBarrier(steps, audit) else steps to audit
+        val script = CaseScript(finalSteps)
         assertOrderDependentSingleWriter(script)
-        return GeneratedScript(script, audit)
+        return GeneratedScript(script, finalAudit)
+    }
+
+    /**
+     * Splices the case's single quiesce [CaseStep.Barrier] into [steps] at an [rng]-chosen
+     * strictly interior position (`[ORA1-GEN-09]`) — never before the first `Op`, never after
+     * the last — and shifts every [RemoveRecord.stepIndex] in [audit] that lands at or past the
+     * insertion point by one, so each record keeps naming the same `Op` step after the splice.
+     *
+     * @throws IllegalArgumentException if [steps] holds fewer than two elements: a strictly
+     *   interior position needs at least one `Op` on each side, which `config.scriptLength >= 2`
+     *   is required to offer.
+     */
+    private fun insertBarrier(steps: List<CaseStep>, audit: List<RemoveRecord>): Pair<List<CaseStep>, List<RemoveRecord>> {
+        require(steps.size >= 2) {
+            "lateJoiner needs a strictly interior Barrier position, which requires scriptLength " +
+                ">= 2; got ${steps.size}"
+        }
+        // position in 1 until steps.size: at least one step before it (indices 0 until position)
+        // and at least one after (indices position until steps.size).
+        val position = 1 + rng.nextInt(steps.size - 1)
+        val spliced = ArrayList<CaseStep>(steps.size + 1)
+        spliced.addAll(steps.subList(0, position))
+        spliced += CaseStep.Barrier
+        spliced.addAll(steps.subList(position, steps.size))
+        val shiftedAudit = audit.map { if (it.stepIndex >= position) it.copy(stepIndex = it.stepIndex + 1) else it }
+        return spliced to shiftedAudit
     }
 
     /**
