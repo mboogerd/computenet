@@ -1,5 +1,6 @@
 package civictech.bench.micro
 
+import civictech.bench.Drive
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
@@ -50,25 +51,31 @@ import java.util.UUID
 // real question with two real answers — see [Drive].
 // ---------------------------------------------------------------------------------------
 
-/**
- * Which scheduler drives a built graph, and therefore what "settled" means.
- *
- * - [SIM] — testkit's [SimWorld] over `SimulationController`: single-threaded and
- *   deterministic, drained with `runToIdle` under a hard step budget. Quiescence is a
- *   fact (no scheduler has work), not an estimate.
- * - [REAL] — a [ManagedHost] on a [VirtualThreadScheduler], drained with testkit's
- *   `HostScheduler.awaitDrained` fence. Read that helper's KDoc before reaching for a
- *   poll instead: two equal samples of an observable value mean "nothing changed during
- *   this window", which a *starved* host produces exactly as readily as a converged one.
- *   The fence submits one task below every band the host uses and waits for it, so its
- *   completion is positive evidence the queue emptied.
- *
- * The two exist side by side because they measure different things: [SIM] isolates the
- * operator's own work from thread hand-off and queue contention; [REAL] is what a
- * deployed host actually costs. A number from one is not a number from the other, and a
- * result that does not say which drive produced it says nothing.
- */
-enum class Drive { SIM, REAL }
+// -----------------------------------------------------------------------------------
+// WHAT [Drive] MEANS HERE — and why it is F3's `civictech.bench.Drive` rather than a
+// second enum of the same name and the same two constants.
+//
+// - Drive.SIM  — testkit's [SimWorld] over `SimulationController`: single-threaded and
+//   deterministic, drained with `runToIdle` under a hard step budget. Quiescence is a
+//   fact (no scheduler has work), not an estimate.
+// - Drive.REAL — a [ManagedHost] on a [VirtualThreadScheduler], drained with testkit's
+//   `HostScheduler.awaitDrained` fence. Read that helper's KDoc before reaching for a
+//   poll instead: two equal samples of an observable value mean "nothing changed during
+//   this window", which a *starved* host produces exactly as readily as a converged one.
+//   The fence submits one task below every band the host uses and waits for it, so its
+//   completion is positive evidence the queue emptied.
+//
+// The two exist side by side because they measure different things: SIM isolates the
+// operator's own work from thread hand-off and queue contention; REAL is what a deployed
+// host actually costs. A number from one is not a number from the other, and a result
+// that does not say which drive produced it says nothing — which is exactly what
+// `BenchResult.drive` is for [BEN1-26], and exactly why this fixture reuses that type
+// instead of declaring its own. The regime a graph was DRIVEN under and the regime a
+// recorded result CLAIMS are one fact, so `BenchResult(drive = graph.drive, …)` is a
+// pass-through; a second enum would put a hand-written two-constant `when` on the only
+// path from fixture to findings entry, where transposing the arms compiles cleanly and
+// mislabels every row it ever writes.
+// -----------------------------------------------------------------------------------
 
 /**
  * Whether [Graphs.build] actually connects the graph it constructs.
@@ -169,7 +176,18 @@ enum class Subject(val sources: Int, val readout: Readout) {
     }
 
     companion object {
-        /** The subjects this task builds — all of them today; the extension task appends. */
+        /**
+         * The subjects this task builds — all of them today; the extension task appends.
+         *
+         * It returns `values()` rather than a hand-written list of the eight, so that a
+         * newly declared subject cannot be added without landing in `GraphsTest`'s
+         * propagation loop. The consequence for the extension task is explicit: once a
+         * join/group-by/combine subject exists, this returns it too and the *name* stops
+         * being true. Split it then (a per-subject family, or two accessors) — do not
+         * fix it by freezing an enumeration here, which would let a subject be declared
+         * and never propagation-tested, which is the failure this fixture exists to
+         * make impossible.
+         */
         fun setShaped(): List<Subject> = values().toList()
 
         /** [FILTER]'s predicate, shared with [referenceLive] so the two cannot drift. */
