@@ -163,6 +163,73 @@ jobs:
       - name: Build and check (fast lane — excludes multi-jvm-tagged tests)
         run: ./gradlew build check -PexcludeMultiJvm=true -x :kernel:test --profile
 
+      # computenet-3g6n. The assertion below is a statement about the JUnit XML
+      # sitting in `demo/beadsmirror/build/test-results/test`, and the step above
+      # will happily put a REPLAYED report there: whether `bd`/`dolt` are on PATH
+      # is not a declared input of `:demo:beadsmirror:test`, so the build cache
+      # keys the task identically with and without the toolchain and restores
+      # whichever report it holds. Both directions of that are real:
+      #
+      #  - a cached SKIPPED report replayed into a job whose install step ran —
+      #    observed on PR #294 runs 32039390827 and 32040006148, `> Task
+      #    :demo:beadsmirror:test FROM-CACHE` carrying `tests="1" skipped="1"`
+      #    and `Assumption failed: bd is not on PATH — skipping`. That one goes
+      #    red, loudly, but recovers only by touching a source file or clearing
+      #    the Actions cache;
+      #  - a cached GOOD report replayed into a job that ran nothing — measured
+      #    locally 2026-08-17: with `/opt/homebrew/bin` off PATH and no
+      #    `--rerun`, the step above's own invocation shape completed in 1s with
+      #    `FROM-CACHE`, and the step below printed `ok: ...TwoNodeRigTest
+      #    executed 5 test(s), 0 skipped`. That is the dangerous direction —
+      #    green, silent, asserting about a report the job did not produce.
+      #
+      # `--rerun` is the fix the serial lane already carries (computenet-7em.5,
+      # commit e0d8aab0). It binds to the single task preceding it and so cannot
+      # be applied inside the repo-wide `build check` above, hence a second
+      # invocation here.
+      #
+      # SCOPED TO THE ONE CLASS THE ASSERTION NAMES, deliberately. `--rerun` over
+      # the whole module was measured at 9m46s on CI (run 32051833249's fast
+      # lane, whose last 9 minutes are this one task: header at 17:47:46, BUILD
+      # SUCCESSFUL at 17:56:45) against ~28s for a fully cached `build check`
+      # (run 32041142119). Re-executing all 222 tests every PR to defend an
+      # assertion about 5 of them is a 10x wall-time regression on a required
+      # check; the filtered rerun costs ~1 test class. What it buys is exactly
+      # what the criterion asks: the report the step below reads is one THIS job
+      # produced, and TwoNodeRigTest carries the same `bd`/`dolt` assumptions as
+      # the rest of the module, so an absent toolchain still reddens the lane
+      # through check (3).
+      #
+      # Two consequences, stated because they are real losses and not oversights:
+      #  - a Test task clears its results directory on execution, so after this
+      #    step `test-results/test` holds ONLY TwoNodeRigTest. The aggregate line
+      #    below therefore reads `5 tests` rather than `222`, and the uploaded
+      #    fast-lane artifact carries only this class for this module (the serial
+      #    lane's artifact and a local run still carry the whole suite).
+      #  - check (2) below consequently ranges over this class alone, and for
+      #    this class it CANNOT FIRE. The guards are the same two assumptions,
+      #    but TwoNodeRigTest carries them in `@BeforeAll`, and a failed
+      #    assumption in a class-level lifecycle method aborts the container —
+      #    which Gradle records as a bare `<skipped/>`, without the assumption
+      #    message check (2) greps for. Measured 2026-08-18 (darwin/arm64,
+      #    /opt/homebrew/bin off PATH): this class's report holds five bare
+      #    `<skipped/>` and zero occurrences of `is not on PATH`, while
+      #    `feed.CheckpointResumeTest` — same module, same guards, but in
+      #    `@BeforeEach` — run the same way holds
+      #    `<skipped message="...Assumption failed: bd is not on PATH — skipping">`
+      #    five times. So in THIS lane the toolchain signature is carried by
+      #    check (3) alone, which does redden on that report (`5 test(s),
+      #    5 skipped`, exit 1, measured the same way); check (2) here is inert
+      #    in both directions and is kept only because the two lanes share this
+      #    script. It stays live in build-test-serial, whose class guards per
+      #    test. Follow-up: computenet-jx3g.
+      #
+      # `-PexcludeMultiJvm=true` is repeated because this is a separate Gradle
+      # invocation; without it the filter would also match nothing new but the
+      # lane's tag scoping would differ from the step above for no reason.
+      - name: ":demo:beadsmirror e2e executed, never replayed (computenet-3g6n)"
+        run: ./gradlew :demo:beadsmirror:test --tests 'civictech.demo.beadsmirror.e2e.TwoNodeRigTest' --rerun -PexcludeMultiJvm=true
+
       # computenet-dqj.14's third acceptance criterion: a skip for missing
       # `bd`/`dolt` must be visible in the gate's own run, not just locally
       # invisible-by-default the way it was before the install step above.
