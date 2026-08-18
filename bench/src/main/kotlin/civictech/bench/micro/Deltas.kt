@@ -1,6 +1,8 @@
 package civictech.bench.micro
 
 import civictech.cell.Timestamp
+import civictech.cell.data.delta.CounterDelta
+import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
 import java.util.Random
 import java.util.UUID
@@ -130,4 +132,43 @@ object Deltas {
             batch.deltas.map { SetDelta(dels = it.adds) },
         )
     }
+
+    // -------------------------------------------------------------------------------
+    // Payload adaptation [BEN1-18] — the keyed and counter shapes.
+    //
+    // The join/group-by/combine subjects do not all serve `SetDelta`: `LookupJoinCell`
+    // and `CombineLatestCell` serve `MapDelta`, `CoalescingCombineCell` serves
+    // `CounterDelta`. Rather than a second generator family per shape, one seeded
+    // `SetDelta` stream feeds every subject and its source cell re-originates the batch
+    // in the shape the operator serves (`MapSourceCell`, `CounterSourceCell`).
+    //
+    // Two reasons, both about what the numbers mean. A keyed subject's input is then
+    // provably the same stream as a set-shaped subject's — same seed, same elements,
+    // same arrival order — so the two are comparable at all. And the retract direction
+    // stays one definition: `retract` covers an insert batch's add-tags, and both
+    // adapters map that to their own shape's removal, so "insert then retract leaves
+    // nothing live" is one fact checked once rather than three.
+    //
+    // Both functions are pure and total, which is what makes them testable without a
+    // graph — `GraphsExtendedTest` asserts the round trip on each before any cell is
+    // involved.
+    // -------------------------------------------------------------------------------
+
+    /**
+     * The `MapDelta<Int, Long>` view of a set delta: every added element becomes a put of
+     * `element -> element.toLong()`, every deleted element a removal of that key.
+     *
+     * The value is derived from the key rather than random on purpose — a `MapDelta` put
+     * is last-write-wins and untagged, so a value that varied per delivery would make the
+     * combined output depend on arrival order and the oracle unstateable.
+     */
+    fun asMap(delta: SetDelta<Int>): MapDelta<Int, Long> =
+        MapDelta(delta.adds.keys.associateWith { it.toLong() }, delta.dels.keys.toSet())
+
+    /**
+     * The `CounterDelta` view of a set delta: `+1` per added element, `-1` per deleted
+     * one, so a batch and its retraction sum to zero.
+     */
+    fun asCounter(delta: SetDelta<Int>): CounterDelta =
+        CounterDelta((delta.adds.size - delta.dels.size).toLong())
 }
