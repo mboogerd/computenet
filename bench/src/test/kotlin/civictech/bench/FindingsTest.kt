@@ -7,7 +7,7 @@ import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 
 /**
- * [Findings.entry]'s five refusal rules (epic section 5 "Findings file",
+ * [Findings.entry]'s six refusal rules (epic section 5 "Findings file",
  * `[BEN1-25]`, `[BEN1-27]`, `[BEN1-30]`..`[BEN1-32]`).
  *
  * Every test here demonstrates a *refusal* — it builds the offending shape and asserts
@@ -62,7 +62,8 @@ class FindingsTest {
         return validResult(value = value, dispersion = value * (NOISE_FLOOR - 0.001), drive = drive)
     }
 
-    private fun validTable(): FindingsTable = FindingsTable(listOf(reportableResult()))
+    private fun validTable(): FindingsTable =
+        FindingsTable(listOf(reportableResult()), labels = listOf("result"))
 
     // ---------------------------------------------------------------------------
     // Control: a fully valid entry renders and carries every template piece.
@@ -70,10 +71,14 @@ class FindingsTest {
 
     @Test
     fun `a complete valid entry renders the full template`() {
+        val table = FindingsTable(
+            listOf(reportableResult(), reportableResult()),
+            labels = listOf("insert", "retract"),
+        )
         val rendered = Findings.entry(
             date = "2026-08-18",
             subject = "OrMapCell insert/retract throughput",
-            results = validTable(),
+            results = table,
             trigger = TriggerClaim.Cited(
                 gapId = "G-21 phase 3",
                 statement = "FIRES, because retract throughput regressed 40%.",
@@ -86,7 +91,9 @@ class FindingsTest {
         rendered shouldContain "heap -Xms1g -Xmx4g"
         rendered shouldContain "Apple M2 Pro, 10 cores, Mac OS X 14.5"
         rendered shouldContain "JMH: mode=Throughput forks=2 warmup=3 iters=5 · drive=SIM"
-        rendered shouldContain "| subject | insert (ops/s ± err) | retract (ops/s ± err) | notes |"
+        rendered shouldContain "| subject | value | notes |"
+        rendered shouldContain "| insert | 1.0 ± 0.004 ops/s | |"
+        rendered shouldContain "| retract | 1.0 ± 0.004 ops/s | |"
         rendered shouldContain "Trigger: G-21 phase 3 — FIRES, because retract throughput regressed 40%."
     }
 
@@ -98,7 +105,7 @@ class FindingsTest {
     @Test
     fun `entry refuses a table containing an Unreportable result`() {
         val bad = unreportableResult()
-        val table = FindingsTable(listOf(reportableResult(), bad))
+        val table = FindingsTable(listOf(reportableResult(), bad), labels = listOf("a", "b"))
 
         val ex = shouldThrow<FindingsRefusalException> {
             Findings.entry(date = "2026-08-18", subject = "x", results = table)
@@ -111,7 +118,10 @@ class FindingsTest {
 
     @Test
     fun `entry admits a table of only Reportable results`() {
-        val table = FindingsTable(listOf(reportableResult(), reportableResult()))
+        val table = FindingsTable(
+            listOf(reportableResult(), reportableResult()),
+            labels = listOf("a", "b"),
+        )
         // Must not throw.
         Findings.entry(date = "2026-08-18", subject = "x", results = table)
     }
@@ -142,8 +152,8 @@ class FindingsTest {
     }
 
     // ---------------------------------------------------------------------------
-    // Rule 3 [BEN1-30]: an entry missing date, subject, or results table is
-    // refused as incomplete.
+    // Rule 3 [BEN1-30]: an entry missing date, subject, results table, or per-row
+    // labels is refused as incomplete.
     // ---------------------------------------------------------------------------
 
     @Test
@@ -181,8 +191,61 @@ class FindingsTest {
         }.message shouldContain "results table"
     }
 
+    @Test
+    fun `entry refuses a results table with no per-row labels`() {
+        val unlabelled = FindingsTable(listOf(reportableResult()))
+        shouldThrow<FindingsRefusalException> {
+            Findings.entry(date = "2026-08-18", subject = "x", results = unlabelled)
+        }.message shouldContain "labels"
+    }
+
     // ---------------------------------------------------------------------------
-    // Rule 4 [BEN1-31]: a cited G-id must state exactly one of
+    // Rule 4 [BEN1-30] (reviewer finding on computenet-x9e.3, PR #315): the results
+    // table carries a caller-supplied per-row label distinct from the unit column,
+    // and never hard-codes a unit in its header — the unit rendered is each row's
+    // own BenchResult.unit.
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun `renderTable renders each row's own caller-supplied label, not the shared unit`() {
+        // Same unit on both rows (as an insert/retract pair of one operator would
+        // share), distinguished only by their labels.
+        val table = FindingsTable(
+            listOf(reportableResult(), reportableResult()),
+            labels = listOf("insert", "retract"),
+        )
+        val rendered = Findings.entry(date = "2026-08-18", subject = "x", results = table)
+
+        rendered shouldContain "| insert | 1.0 ± 0.004 ops/s | |"
+        rendered shouldContain "| retract | 1.0 ± 0.004 ops/s | |"
+        // The old writer put the unit in column 1; the label must be there instead.
+        (rendered.contains("| ops/s |")) shouldBe false
+    }
+
+    @Test
+    fun `renderTable renders each result's own unit, never a hard-coded ops per s`() {
+        val nsResult = validResult(value = 4.321050323941347, dispersion = 0.004992364297944783)
+            .copy(unit = "ns/op")
+        val table = FindingsTable(listOf(nsResult), labels = listOf("run 1"))
+
+        val rendered = Findings.entry(date = "2026-08-18", subject = "x", results = table)
+
+        rendered shouldContain "| run 1 | 4.321050323941347 ± 0.004992364297944783 ns/op | |"
+        rendered.contains("ops/s") shouldBe false
+        rendered.contains("insert (ops/s") shouldBe false
+        rendered.contains("retract (ops/s") shouldBe false
+    }
+
+    @Test
+    fun `renderTable's header names no unit at all`() {
+        val rendered = Findings.entry(date = "2026-08-18", subject = "x", results = validTable())
+        rendered shouldContain "| subject | value | notes |"
+        rendered.contains("insert (ops/s") shouldBe false
+        rendered.contains("retract (ops/s") shouldBe false
+    }
+
+    // ---------------------------------------------------------------------------
+    // Rule 5 [BEN1-31]: a cited G-id must state exactly one of
     // FIRES/RETIRES/INCONCLUSIVE, else the writer refuses.
     // ---------------------------------------------------------------------------
 
@@ -233,7 +296,7 @@ class FindingsTest {
     }
 
     // ---------------------------------------------------------------------------
-    // Rule 5 [BEN1-32]: an entry answering no trigger question is emitted only
+    // Rule 6 [BEN1-32]: an entry answering no trigger question is emitted only
     // explicitly marked incomplete, never presented as a finding.
     // ---------------------------------------------------------------------------
 

@@ -5,11 +5,12 @@ package civictech.bench
  * `[BEN1-30]`..`[BEN1-32]`).
  *
  * A single exception type covers every refusal this writer makes — an
- * [Reportability.Unreportable] result, an incomplete entry (missing date, subject, or
- * results table), or a cited gap whose trigger statement does not state exactly one of
- * FIRES / RETIRES / INCONCLUSIVE. [message] always names what was refused and why, so a
- * caller reading a thrown exception (rather than stepping through the writer's source)
- * still learns which fact was missing or which result was rejected.
+ * [Reportability.Unreportable] result, an incomplete entry (missing date, subject,
+ * results table, or per-row labels), or a cited gap whose trigger statement does not
+ * state exactly one of FIRES / RETIRES / INCONCLUSIVE. [message] always names what was
+ * refused and why, so a caller reading a thrown exception (rather than stepping
+ * through the writer's source) still learns which fact was missing or which result
+ * was rejected.
  */
 class FindingsRefusalException(message: String) : IllegalArgumentException(message)
 
@@ -71,7 +72,12 @@ object Findings {
      *   re-implementing it. Every result in [results] must be
      *   [Reportability.Reportable] — the first [Reportability.Unreportable] one found
      *   refuses the whole entry, and the refusal message names it (`[BEN1-25]`).
-     *   Missing (`null`) is refused as an incomplete entry (`[BEN1-30]`).
+     *   [FindingsTable.labels] must be non-`null` — the results table's per-row
+     *   subject/label, distinct from [BenchResult.unit], that makes an insert row and a
+     *   retract row of the same operator distinguishable and a before/after pair
+     *   labellable; a table missing it is refused as incomplete (`[BEN1-30]`), the same
+     *   as a missing date or subject. Missing (`null`) [results] is likewise refused as
+     *   an incomplete entry (`[BEN1-30]`).
      * @param trigger what the entry says about a cited gap's trigger question, or
      *   [TriggerClaim.None] if it answers none. Defaults to [TriggerClaim.None].
      * @throws FindingsRefusalException naming the refused result or the missing/malformed
@@ -97,6 +103,13 @@ object Findings {
         if (results == null) {
             throw FindingsRefusalException(
                 "Findings entry refused: incomplete — results table is missing"
+            )
+        }
+        if (results.labels == null) {
+            throw FindingsRefusalException(
+                "Findings entry refused: incomplete — results table has no per-row labels; " +
+                    "each row must carry a caller-supplied subject/label distinct from its " +
+                    "unit (construct FindingsTable with labels = ...)"
             )
         }
 
@@ -152,11 +165,20 @@ object Findings {
     private fun containsWholeWord(text: String, word: String): Boolean =
         Regex("\\b${Regex.escape(word)}\\b").containsMatchIn(text)
 
+    /**
+     * Renders [results] with a caller-supplied per-row subject in column 1 and each
+     * row's own [BenchResult.unit] carried alongside its value in column 2 — never a
+     * unit hard-coded in the header (`[BEN1-30]`, the reviewer finding on
+     * `computenet-x9e.3`). `entry` has already refused a `null` [FindingsTable.labels]
+     * before this is called, so the `!!` below never fires in practice; it documents
+     * that invariant rather than re-deriving it.
+     */
     private fun renderTable(results: FindingsTable): String {
-        val header = "| subject | insert (ops/s ± err) | retract (ops/s ± err) | notes |"
-        val separator = "| --- | --- | --- | --- |"
-        val rows = results.results.joinToString(separator = "\n") { result ->
-            "| ${result.unit} | ${result.value} ± ${result.dispersion} | | |"
+        val labels = results.labels!!
+        val header = "| subject | value | notes |"
+        val separator = "| --- | --- | --- |"
+        val rows = results.results.zip(labels).joinToString(separator = "\n") { (result, label) ->
+            "| $label | ${result.value} ± ${result.dispersion} ${result.unit} | |"
         }
         return listOf(header, separator, rows).joinToString(separator = "\n")
     }
