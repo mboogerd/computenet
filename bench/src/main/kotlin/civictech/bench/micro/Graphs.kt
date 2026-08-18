@@ -734,7 +734,7 @@ object Graphs {
             // its sources originate or the file does not compile. Whichever list is
             // built assigns `sourceRefs`, and those are the inlets `applyBatch` drives;
             // every shape's inlet takes the same `SetDelta<Int>` batch, which is what
-            // keeps one batch type and one apply call across all 19 subjects.
+            // keeps one batch type and one apply call across all 18 subjects.
             val shape = sourceShape(subject)
             fun <C : Cell> sources(make: (CellRef) -> C) =
                 (0 until subject.sources)
