@@ -280,19 +280,23 @@ object ThroughputReport {
                         "'${fields[index]}': $line"
                 )
             val scoreError = number(errorIndex, "score error")
-            // Measured 2026-08-18: a run with fewer than two measurement samples
-            // (`-i 1 -f 1`, the smoke shape) reports the error as literally `NaN`. That
-            // row carries no dispersion at all, so it cannot be classified against
-            // NOISE_FLOOR — and `BenchResult` would refuse it anyway, on the weaker
-            // message "dispersion must be finite". Refusing it here says the useful
-            // thing: the RUN was too small, not the number too wide.
+            // Measured 2026-08-18 (and confirmed against JMH 1.37's own
+            // AbstractStatistics.getMeanErrorAt: it returns NaN whenever getN() <= 2 and
+            // only computes a finite value via TDistribution(getN() - 1) once getN() > 2):
+            // a run with two or fewer measurement samples reports the error as literally
+            // `NaN`; three is the fewest that yields a finite one. That row carries no
+            // dispersion at all, so it cannot be classified against NOISE_FLOOR — and
+            // `BenchResult` would refuse it anyway, on the weaker message "dispersion must
+            // be finite". Refusing it here says the useful thing: the RUN was too small,
+            // not the number too wide.
             if (!scoreError.isFinite()) {
                 throw ThroughputReportException(
                     "JMH results row ${offset + 1} reports error '${fields[errorIndex]}' " +
                         "for '${fields[benchmarkIndex]}': the run produced too few " +
-                        "samples for a dispersion (JMH writes NaN below two), so the row " +
-                        "cannot be classified against NOISE_FLOOR $NOISE_FLOOR. Re-run " +
-                        "with at least two measurement iterations"
+                        "samples for a dispersion (JMH writes NaN at or below two " +
+                        "measurement samples), so the row cannot be classified against " +
+                        "NOISE_FLOOR $NOISE_FLOOR. Re-run with at least three measurement " +
+                        "iterations"
                 )
             }
             JmhRow(
