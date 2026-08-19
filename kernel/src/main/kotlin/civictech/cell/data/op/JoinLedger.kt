@@ -13,17 +13,41 @@ import java.io.Serializable
  * — injected, not unified. [enter]/[exit] only record and retrieve; they never
  * decide the tag-assignment POLICY, which stays genuinely different per
  * implementation:
- * - [MintedLedger] ([JoinSetCell], [SemiJoinCell], [IntersectSetCell]): mints a
- *   FRESH [Timestamp] per entry via [MintedTags] (tag hygiene, 21 — re-entry
- *   after the other side's removal needs a fresh tag, never borrowed from
- *   inputs). [IntersectSetCell] moved here from [AdvertisedLedger] in
- *   computenet-vvre; see its KDoc for why borrowing is unsound across a
+ * - [MintedLedger] ([JoinSetCell], [SemiJoinCell], [IntersectSetCell],
+ *   [QuorumSetCell]): mints a FRESH [Timestamp] per entry via [MintedTags] (tag
+ *   hygiene, 21 — re-entry after the other side's removal needs a fresh tag,
+ *   never borrowed from inputs). [IntersectSetCell] moved here from
+ *   [AdvertisedLedger] in computenet-vvre and [QuorumSetCell] in
+ *   computenet-s6l2; see their KDocs for why borrowing is unsound across a
  *   reconvergent path.
- * - [AdvertisedLedger] ([QuorumSetCell]): advertises the union of the
- *   contributing lanes' OBSERVED input tags, computed by the caller and passed
- *   through [tagsIfAdvertised] — no minting at all. **Sound only while no
- *   downstream can see the same tag by a second path**; a reconvergent graph
- *   over a borrowing operator is the shape that breaks it (computenet-vvre).
+ * - [AdvertisedLedger] (**no production user since computenet-s6l2**):
+ *   advertises the OBSERVED input tags its caller computes and passes through
+ *   [tagsIfAdvertised] — no minting at all.
+ *
+ * ### When borrowing is sound (the [AdvertisedLedger] precondition)
+ *
+ * Borrowing an input tag is sound only when **both** hold, and an operator
+ * that cannot state both belongs on [MintedLedger]:
+ *
+ * 1. **No downstream can see the borrowed tag by a second path.** The
+ *   consumers in this kernel fold a tagged set by `(element, tag)` — a
+ *   [UnionSetCell] deduplicates a diamond fan-in into ONE fact by design
+ *   (`[24-OP-UNION-01]`) — so a borrowed tag arriving both directly and
+ *   re-advertised is one fact, and this ledger's exit retracts the *direct*
+ *   path's still-live contribution along with its own. This is a property of
+ *   the GRAPH, not of the operator, so an operator can only satisfy it by
+ *   forbidding reconvergence, which nothing here does.
+ * 2. **Every membership flip-ON rides a fresh input add-tag on the flipping
+ *   element** (21 §Tag hygiene's own precondition for pass-through). An
+ *   operator whose membership flips ON because some *other* input moved — an
+ *   intersection, a quorum, a join — re-advertises on entry a tag its previous
+ *   exit already deleted, which 21 prohibits outright and which a
+ *   tombstone-folding consumer drops on the floor.
+ *
+ * `filter`/`map`/`flatMap`-shaped operators satisfy (2) trivially and are the
+ * only pass-through shapes 24's convergence classes endorse; both operators
+ * that once used this ledger failed (2) and were measured failing (1)
+ * (computenet-vvre, computenet-s6l2).
  */
 interface JoinLedger<X> {
     val isEmpty: Boolean
@@ -76,7 +100,11 @@ interface JoinLedger<X> {
     fun readerAttributes(): Map<String, Serializable> = emptyMap()
 }
 
-/** Mints a fresh [Timestamp] per entry via [MintedTags] — [JoinSetCell]/[SemiJoinCell]'s ledger. */
+/**
+ * Mints a fresh [Timestamp] per entry via [MintedTags] — the ledger of every
+ * operator in this family: [JoinSetCell], [SemiJoinCell], [IntersectSetCell]
+ * (since computenet-vvre) and [QuorumSetCell] (since computenet-s6l2).
+ */
 class MintedLedger<X>(ref: CellRef, name: String) : JoinLedger<X> {
     private val minted = MintedTags<X>(ref, name)
 
@@ -112,7 +140,15 @@ class MintedLedger<X>(ref: CellRef, name: String) : JoinLedger<X> {
         mapOf(OperatorPaging.MINT_COUNTER to (minted.snapshot() as List<*>)[1] as Serializable)
 }
 
-/** Advertises the caller-supplied tag set on entry, verbatim — [QuorumSetCell]'s ledger. */
+/**
+ * Advertises the caller-supplied tag set on entry, verbatim.
+ *
+ * **No production cell uses this since computenet-s6l2** — [QuorumSetCell] was
+ * the last, and moved to [MintedLedger] for the reasons the interface KDoc's
+ * "When borrowing is sound" section states. It is kept as the borrowing half of
+ * the injected-policy seam this interface exists to express; a new user must
+ * satisfy BOTH preconditions there, which no operator in this package does.
+ */
 class AdvertisedLedger<X> : JoinLedger<X> {
     private val advertised = mutableMapOf<X, Set<Timestamp>>()
 

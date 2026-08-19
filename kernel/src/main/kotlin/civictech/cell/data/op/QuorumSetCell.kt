@@ -43,14 +43,45 @@ interface QuorumSetApi<E> {
  * | k-of-n quorum        | `{ k }`       |
  * | near-miss (all-but-one) | `{ n -> n - 1 }` |
  *
- * Output tag discipline is [IntersectSetCell]'s — and, since T07 finding 3,
- * literally shared with it via [AdvertisedLedger]: on entry an element is
- * advertised downstream with its live input tags; on exit *exactly those*
- * advertised tags are deleted, so a downstream `SetView`/[UnionSetCell] tracks
+ * Output tag discipline is [IntersectSetCell]'s — and, since computenet-s6l2,
+ * shared with it via [MintedLedger]: on entry an element is advertised
+ * downstream under **one freshly minted, cell-owned output tag**; on exit
+ * exactly that tag is deleted, so a downstream `SetView`/[UnionSetCell] tracks
  * membership precisely and tag churn while membership holds is absorbed
  * (effective-only, spec 21). Because the threshold reads `n`, a link
  * opening/closing re-evaluates the quorum even for elements whose own count did
  * not move (e.g. an empty source joining tightens an intersection).
+ *
+ * ### Tag policy: minted, never borrowed (21 §Tag hygiene, computenet-s6l2)
+ *
+ * This cell used to advertise the union of the contributing lanes' *observed
+ * input tags* ([AdvertisedLedger]) — the policy T07 finding 3 unified it with
+ * [IntersectSetCell] on, and the one computenet-vvre then found unsound there.
+ * It is unsound here for the same two independent reasons, both now pinned by
+ * `QuorumDiamondTagTest`:
+ *
+ * - **A borrowed tag is not this cell's to delete.** In `union(A, quorum(A,
+ *   B))` the element's tag from `A` reaches the [UnionSetCell] twice — once on
+ *   the direct edge, once re-advertised by this cell — and the union correctly
+ *   folds the two into ONE fact keyed by `(element, tag)`
+ *   (`[24-OP-UNION-01]`'s diamond dedup). When the element then dropped below
+ *   the threshold, the exit deleted `A`'s tag and the union retracted the
+ *   *direct* edge's still-live contribution: `A ∪ quorum(A, B)` lost an element
+ *   live in `A`. Measured, not inferred — the reproduction and its
+ *   majority-threshold variant both failed against the borrowing code, while
+ *   the distinct-source control passed.
+ * - **Re-entry re-emits a deleted tag.** A quorum's membership flips ON when
+ *   *another* lane asserts the element, so a flip-ON does not ride a fresh
+ *   input add-tag on the flipping element — which is exactly the precondition
+ *   21 §Tag hygiene attaches to pass-through — and re-advertising a tag a
+ *   previous exit deleted violates 21's flat prohibition outright.
+ *
+ * Minting per entry ([MintedLedger]/`MintedTags`) removes both: the advertised
+ * tag is unconfusable with any upstream's, so a diamond sees two independent
+ * facts, and every re-entry carries a tag no consumer has tombstoned. Nothing
+ * in `[24-OP-QUORUM-01]` moves — an entry tag is advertised on entry and every
+ * advertised tag deleted on exit — only its provenance, from borrowed to
+ * minted, matching every other join operator in this family.
  *
  * A delivery flagged [civictech.cell.MessageContext.baseline] is a recovery,
  * not a live wave, and is admitted regardless of [threshold] — see [onInlet]
@@ -64,8 +95,12 @@ class QuorumSetCell<E>(
 ) : QuorumSetCellBase<E>(ref), Stateful, BoundedStateful {
     private val lanes = PresenceLanes<E>()
 
-    /** Elements currently advertised downstream, each with the exact tags advertised on entry (RS-5.3, T07 finding 3: shared with [IntersectSetCell]). */
-    private val ledger: JoinLedger<E> = AdvertisedLedger()
+    /**
+     * Elements currently advertised downstream, each under the single tag
+     * minted on entry and deleted on exit (RS-5.3; minted, not borrowed — see
+     * the tag-policy section on this class's KDoc, computenet-s6l2).
+     */
+    private val ledger: JoinLedger<E> = MintedLedger(ref, "quorum")
 
     init {
         ProtocolSupport.of(inlet).handle(Protocols.TopologyOrder) { link, event ->
@@ -128,7 +163,10 @@ class QuorumSetCell<E>(
             // threshold is non-positive (near-miss with a single source).
             val meets = count >= 1 && (element in recovered || count >= target)
             if (meets) {
-                ledger.enter(element) { lanes.tags(element) }?.let { adds[element] = it }
+                // [MintedLedger] mints its own tag and ignores the supplier —
+                // the lanes' input tags are deliberately NOT borrowed
+                // (computenet-s6l2; see the tag-policy section on this class)
+                ledger.enter(element) { emptySet() }?.let { adds[element] = it }
             } else {
                 ledger.exit(element)?.let { dels[element] = it }
             }
@@ -164,7 +202,7 @@ class QuorumSetCell<E>(
      * | ordinal | sub-state | key | entry |
      * |---|---|---|---|
      * | 0 | `"lanes"` | `(laneId: UUID, E)` | [TaggedEntry] with [TaggedEntry.lane] set — that lane's own tags for the element |
-     * | 1 | `"ledger"` | `E` | [TaggedEntry], `lane = null` — the tags advertised downstream |
+     * | 1 | `"ledger"` | `E` | [TaggedEntry], `lane = null` — the single minted tag advertised downstream |
      *
      * Same order as [snapshot]'s `arrayListOf(lanes, ledger)`.
      * `PresenceLanes.snapshot()` is `laneId -> TagState.snapshot()`, i.e. **two
@@ -178,8 +216,12 @@ class QuorumSetCell<E>(
      * therefore lands back **inside** a lane, finishes it, continues to the next
      * lane, and only then enters `"ledger"`.
      *
-     * **Decision D — the lane frontier rides every page.**
-     * [StatePage.attributes] carries [OperatorPaging.LANES], the open lane ids.
+     * **Decision D — the lane frontier and the mint counter ride every page.**
+     * [StatePage.attributes] carries [OperatorPaging.LANES], the open lane ids,
+     * and — since this ledger mints (computenet-s6l2) —
+     * [OperatorPaging.MINT_COUNTER], as it does for every other minting
+     * operator: a restored instance must not re-mint a spent tag, so a walk
+     * whose union is to equal `snapshot()`'s content has to carry it.
      * A lane that asserts no element is still in [snapshot] and still counts
      * towards the `n` a [threshold] reads, but has no entry to ride on; and the
      * lane set is cell-level state either way. It does not count against
@@ -188,9 +230,11 @@ class QuorumSetCell<E>(
      * [StatePage.frontier] is the max per-source counter over every lane's tags
      * and the ledger's, exact at both ends of a walk. Its equality is
      * **necessary but not sufficient** for "the union is a snapshot": lane tag
-     * states do not retain tombstones and `AdvertisedLedger.exit` removes rather
-     * than tombstones, so an element leaving the quorum mid-walk mints nothing.
-     * [supportsSince] stays `false` accordingly.
+     * states do not retain tombstones and the ledger's exit removes rather than
+     * tombstones, so an element leaving the quorum mid-walk lowers the stamp
+     * rather than raising it. [supportsSince] stays `false` accordingly — the
+     * mint counter riding the attributes does not change that, since the lanes
+     * can still lower the frontier.
      *
      * No `[24-OP-*]` requirement id covers this cell; the contract preserved is
      * its own KDoc — the advertise-on-entry / delete-exactly-those-tags-on-exit
@@ -207,7 +251,7 @@ class QuorumSetCell<E>(
             ledger.contributeTo(builder)
             builder.build()
         },
-        attributes = { lanes.readerAttributes() },
+        attributes = { lanes.readerAttributes() + ledger.readerAttributes() },
     )
 
     companion object {

@@ -269,7 +269,14 @@ class OperatorBoundedReadTest {
             .flatMap { (lane, laneState) -> laneState.asTagMap().map { (lane as UUID to it.key) to it.value } }
             .toMap()
         walkedLanes shouldBe snapshotLanes
-        pages.taggedMap("ledger") shouldBe snapshot.slot(1).asTagMap()
+        // computenet-s6l2: the ledger sub-state is a `MintedLedger`, whose
+        // `snapshot()` is `[advertised, counter]` rather than the bare map an
+        // `AdvertisedLedger` produced — the same shape the JoinSetCell and
+        // SemiJoinCell cases above already read. Not a weakening: the walked
+        // ledger is still compared to the whole advertised half of the
+        // snapshot, element for element and tag for tag.
+        pages.taggedMap("ledger") shouldBe
+            (snapshot.slot(1) as List<*>)[0].asMap().mapValues { setOf(it.value as Timestamp) }
 
         // "shared" is asserted by both lanes: two lane entries with the same
         // element, distinguished only by the lane (Decision F)
@@ -277,6 +284,13 @@ class OperatorBoundedReadTest {
         // Decision D: the lane frontier rides every page
         val lanes = snapshot.slot(0).asMap().keys
         pages.forEach { (it.attributes[OperatorPaging.LANES] as List<*>).toSet() shouldBe lanes }
+        // Decision D, second rider (computenet-s6l2): now that this ledger
+        // mints, its counter is state a walk must carry — a restored instance
+        // must not re-mint a spent tag — so it rides every page beside the
+        // lanes, exactly as it does for the minting operators above.
+        pages.forEach {
+            it.attributes[OperatorPaging.MINT_COUNTER] shouldBe (snapshot.slot(1) as List<*>)[1]
+        }
     }
 
     @Test
