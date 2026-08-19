@@ -56,8 +56,13 @@ import kotlin.random.Random
  * 3. [RunOutcome.ModelEvaluationFailure] — the reference itself threw, so there is no
  *    expected value to compare against at all. Reported as a broken *oracle*, never as a
  *    broken kernel (epic design D10, `[ORA1-DIFF-08]`).
- * 4. [RunOutcome.Mismatch] — the only kind that is evidence about the kernel, and therefore
- *    the only one reachable once the three above are excluded.
+ * 4. [RunOutcome.WavePrefixViolation] — an intermediate observation was no prefix of the wave
+ *    sequence, or regressed (`[ORA1-DIFF-06]`, design D5). Evidence about the kernel, and
+ *    ranked above [RunOutcome.Mismatch] because it is the *earlier* and more specific finding:
+ *    a run that glitched mid-way says something a final-state comparison cannot, whether or not
+ *    it also settled wrong.
+ * 5. [RunOutcome.Mismatch] — the only kind that is evidence about the kernel at quiescence, and
+ *    therefore the only one reachable once the four above are excluded.
  *
  * The rationale generalizes to one sentence, worth keeping: **an earlier kind invalidates the
  * comparison behind the later ones**, so reporting a later kind while an earlier one holds
@@ -107,7 +112,19 @@ object DifferentialRunner {
         reference: Reference,
         stepBudget: Int = DEFAULT_STEP_BUDGET,
         buildGraph: (SimWorld) -> CaseGraph,
-    ): RunOutcome = execute(seed, caseMarker, script, reference, stepBudget, buildGraph) { driving ->
+    ): RunOutcome = execute(
+        seed = seed,
+        caseMarker = caseMarker,
+        script = script,
+        reference = reference,
+        stepBudget = stepBudget,
+        // The BYO path is not prefix-checked: a `Script` is per-source and barrier-free by
+        // construction, so it carries no total drive order to take prefixes over. Prefix
+        // checking is a property of REPLAYING a `CaseScript` (see WavePrefixOracle's KDoc), which
+        // only the generated path has.
+        checker = null,
+        buildGraph = buildGraph,
+    ) { driving ->
         val rnd = driving.rnd
         val cursors = script.slices.map { Cursor(it.source, it.events) }.filter { it.remaining() }.toMutableList()
         while (cursors.isNotEmpty()) {
@@ -153,9 +170,40 @@ object DifferentialRunner {
      *
      * @param case the case to run — hand-built or generated; this runner never invokes the
      *   generator.
+     * ## Wave-prefix checking (`[ORA1-DIFF-06]`, design D5)
+     *
+     * WHILE the case is driven, every intermediate observation of every terminal must equal the
+     * reference's answer for some prefix of the wave sequence, non-regressing per terminal. The
+     * observation seam is [Driving]'s per-step observer: after every productive scheduler step,
+     * [Driving.readTerminals] reads each terminal through its own [TerminalFold] view — never
+     * cell internals. [WavePrefixOracle] holds the property, its two soundness limits and the
+     * measured coverage; [wavePrefix] holds the cost knob.
+     *
+     * Two conditions gate it, and both are documented where they are decided:
+     * [WavePrefixOracle.appliesTo] (the case must be single-source, single-host) and
+     * [WavePrefixOption.selects] (the seed must fall in the checked fraction).
+     *
+     * **A substituted [reference] disables prefix checking unless [wavePrefix] asks for it
+     * explicitly.** A deliberately divergent reference makes every prefix wrong, so the FIRST
+     * observation would be reported as a glitch and the controls feature's "a divergent
+     * reference yields [RunOutcome.Mismatch]" assertion would never reach quiescence. The
+     * default is therefore applied to the catalog-resolved reference — the one that is actually
+     * a statement about what the kernel should show at every wave — and a caller who wants both
+     * (as `WavePrefixTest`'s knob controls do) names [WavePrefixOption.ALWAYS] or
+     * [WavePrefixOption.OFF] and gets exactly that.
+     *
      * @param reference the substitutable oracle. `null` (the default) resolves it from the
      *   catalog through [CaseExecution.referenceModelFor]; the controls feature substitutes a
      *   deliberately wrong one here, with no change to this signature.
+     * @param wavePrefix the wave-prefix cost knob — which fraction of eligible cases are
+     *   prefix-checked. Defaults to [WavePrefixOption.DEFAULT] (a nonzero fraction; D5 forbids a
+     *   default that checks nothing) for the catalog-resolved reference, and to
+     *   [WavePrefixOption.OFF] for a substituted one, per the paragraph above.
+     * @param onWavePrefixChecker called exactly once, before driving, with the live
+     *   [WavePrefixOracle.Checker] this run will use — or `null` if the run is not prefix-checked
+     *   (ineligible case, or seed outside the fraction). The instrument a test uses to prove the
+     *   check was not vacuous: [WavePrefixOracle.Checker.observations] is how many observations
+     *   were actually taken, and a `null` here is how a test proves a knob really disabled it.
      * @param onAssembled called exactly once, right after [CaseExecution.assemble] builds the
      *   graph — before ANY script step is driven and before the first
      *   [civictech.oracle.gen.CaseStep.Barrier], if any, is even reached — with the terminal
@@ -176,12 +224,34 @@ object DifferentialRunner {
         case: GeneratedCase,
         reference: Reference? = null,
         stepBudget: Int = DEFAULT_STEP_BUDGET,
+        wavePrefix: WavePrefixOption? = null,
         onAssembled: (Set<String>) -> Unit = {},
+        onWavePrefixChecker: (WavePrefixOracle.Checker?) -> Unit = {},
         onBarrier: (Map<String, ModelState>) -> Unit = {},
     ): RunOutcome {
         val model = CaseExecution.referenceModelFor(case.topology)
         val oracle = reference ?: Reference(model::eval)
         val marker = CaseExecution.renderSpec(case.spec, case.topology.nodes.associate { it.handle to it.catalogId })
+
+        // A substituted reference defaults prefix checking OFF; the catalog-resolved one defaults
+        // it to DEFAULT_FRACTION. See this function's "Wave-prefix checking" KDoc for why.
+        val option = wavePrefix ?: if (reference == null) WavePrefixOption.DEFAULT else WavePrefixOption.OFF
+        val checker = if (option.selects(case.seed) && WavePrefixOracle.appliesTo(case)) {
+            try {
+                WavePrefixOracle.checker(case, marker, oracle)
+            } catch (cause: Throwable) {
+                // A reference that cannot evaluate a PREFIX is a broken oracle, exactly as one
+                // that cannot evaluate the whole script is (D10, [ORA1-DIFF-08]). Reported before
+                // the graph is even built: there is no expected value at any wave, so driving the
+                // case could only produce a verdict nothing justifies.
+                onWavePrefixChecker(null)
+                return RunOutcome.ModelEvaluationFailure(case.seed, cause)
+            }
+        } else {
+            null
+        }
+        onWavePrefixChecker(checker)
+
         lateinit var assembly: CaseExecution.CaseAssembly
         return execute(
             seed = case.seed,
@@ -189,6 +259,7 @@ object DifferentialRunner {
             script = case.script.toScript(),
             reference = oracle,
             stepBudget = stepBudget,
+            checker = checker,
             buildGraph = { world ->
                 CaseExecution.assemble(case, world).also {
                     assembly = it
@@ -231,6 +302,7 @@ object DifferentialRunner {
         script: Script,
         reference: Reference,
         stepBudget: Int,
+        checker: WavePrefixOracle.Checker? = null,
         buildGraph: (SimWorld) -> CaseGraph,
         drive: (Driving) -> Unit,
     ): RunOutcome {
@@ -255,6 +327,18 @@ object DifferentialRunner {
         }
 
         val driving = Driving(world, graph, Random(seed), stepBudget)
+
+        // The per-step observer seam [ORA1-DIFF-06]. Installed BEFORE driving so the very first
+        // productive step is observed, and it keeps only the FIRST violation: driving continues
+        // to completion afterwards, because NonQuiescence and DeadLetterFailure outrank a glitch
+        // and both are only decidable once the run has finished.
+        var violation: RunOutcome.WavePrefixViolation? = null
+        if (checker != null) {
+            driving.onStep = { states ->
+                if (violation == null) violation = checker.observe(states)
+            }
+        }
+
         drive(driving)
         driving.drainToIdle()
 
@@ -271,6 +355,11 @@ object DifferentialRunner {
         } catch (cause: Throwable) {
             return RunOutcome.ModelEvaluationFailure(seed, cause)
         }
+
+        // Ranked above Mismatch, below the three kinds that invalidate the comparison — see the
+        // "Kind precedence" KDoc. Deliberately AFTER the reference.evaluate above, so a reference
+        // that throws only on the full script is still reported as a broken oracle.
+        violation?.let { return it }
 
         graph.terminals.forEach { (name, fold) ->
             val expected = expectedStates[name]
@@ -322,9 +411,31 @@ object DifferentialRunner {
         /** Whether the budget is spent — a driving strategy stops rather than piling on work. */
         val exhausted: Boolean get() = steps >= stepBudget
 
+        /**
+         * The **per-step observer** `[ORA1-DIFF-06]` needs: called with [readTerminals]'s reading
+         * after every *productive* scheduler step, which is the finest instant the runner can
+         * observe at all (an unproductive step changed nothing, so re-reading it would only
+         * inflate the observation count).
+         *
+         * A plain nullable field rather than a constructor parameter so [execute] can install it
+         * after building the [Driving] but before any step is spent, and so a run with no prefix
+         * checking pays nothing at all — not even an empty lambda per step. `null` (the default)
+         * is exactly the pre-existing behavior.
+         *
+         * Observation goes through [readTerminals], i.e. through each terminal's own
+         * [TerminalFold] view; nothing here reaches into a cell's internals, which is what the
+         * bead's "through the terminals' views, never cell internals" clause requires.
+         */
+        var onStep: ((Map<String, ModelState>) -> Unit)? = null
+
         private fun stepOnce(): Boolean {
             if (steps >= stepBudget) return false
-            return world.controller.step().also { if (it) steps++ }
+            return world.controller.step().also {
+                if (it) {
+                    steps++
+                    onStep?.invoke(readTerminals())
+                }
+            }
         }
 
         /**

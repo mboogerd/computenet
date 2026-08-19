@@ -10,9 +10,11 @@ import java.io.Serializable
  * result type every runner task (computenet-4ru.8) reports through, so a caller matches on
  * **kind**, never on a message string.
  *
- * Sealed to exactly the five kinds the feature design names: a [Mismatch] is a genuine
- * disagreement between the kernel and the reference model; a [DeadLetterFailure] or
- * [NonQuiescence] is a run that never reached a comparable state at all; a
+ * Sealed to the five kinds the feature design names plus the glitch kind design D5 requires: a
+ * [Mismatch] is a genuine disagreement between the kernel and the reference model at
+ * quiescence; a [WavePrefixViolation] is a disagreement *during* the run — an intermediate
+ * observation that is no prefix of the wave sequence (`[ORA1-DIFF-06]`); a [DeadLetterFailure]
+ * or [NonQuiescence] is a run that never reached a comparable state at all; a
  * [ModelEvaluationFailure] is the reference model itself breaking, so a broken oracle is never
  * read as a broken kernel (D10). Every failure kind carries the [seed] that produced it — the
  * one fact a shrinker (a later feature) always needs to replay the case.
@@ -81,6 +83,82 @@ sealed interface RunOutcome {
         val seed: Long,
         val cause: Throwable,
     ) : RunOutcome
+
+    /**
+     * A **glitch**: while the case was driven, an intermediate observation of a terminal
+     * equalled no prefix of the wave sequence, or equalled an *earlier* prefix than one that
+     * terminal had already shown (`[ORA1-DIFF-06]`, epic design D5). Produced by
+     * [WavePrefixOracle.Checker]; see that class for the property and its soundness limits.
+     *
+     * ## Why a dedicated kind rather than a field-extended [Mismatch]
+     *
+     * The epic treats a glitch as a mismatch *in kind* — both are disagreements with the model —
+     * and the bead left the shape to this task. It is a separate kind, for three reasons worth
+     * recording so the shrinker and controls features can rely on it:
+     *
+     * 1. **The evidence has a different shape.** [Mismatch]'s fields presuppose ONE expected
+     *    value, at quiescence. A glitch's evidence is a *position in a sequence*: which
+     *    observation, which floor it had already reached, which prefixes it sits between. Those
+     *    do not fit `expected`/`actual`/`difference` without making every one of them
+     *    conditional on a kind flag.
+     * 2. **A shrinker must treat them differently.** A settled [Mismatch] shrinks by dropping
+     *    ops freely — any smaller script that still disagrees at quiescence is a valid
+     *    counterexample. A glitch only exists *while* the case is driven, so a shrinker must
+     *    preserve the intermediate driving (and the partial drains) that exposed it. Matching on
+     *    kind is how it tells which discipline applies.
+     * 3. **The controls feature asserts that a divergent reference yields [Mismatch].** A glitch
+     *    arriving as a `Mismatch` with different fields populated would pollute that assertion,
+     *    and a control that cannot distinguish "the oracle was deliberately wrong" from "the
+     *    kernel showed a torn state" is not a control.
+     *
+     * Precedence: reported **after** [NonQuiescence], [DeadLetterFailure] and
+     * [ModelEvaluationFailure] — each of those invalidates the comparison a glitch report rests
+     * on — and **before** [Mismatch], because a run that glitched mid-way is evidence about the
+     * kernel whether or not it also settled wrong. See [DifferentialRunner]'s "Kind precedence".
+     *
+     * @property terminal the offending terminal's name.
+     * @property kind which half of the property broke — matchable, so a caller need not parse a
+     *   message to tell a torn state from a regression.
+     * @property observed the state that matched no admissible prefix.
+     * @property observationIndex 1-based index of the offending observation in the run's
+     *   observation sequence, so a report says *when* it happened, not only what.
+     * @property matchedFloor the highest prefix index this terminal had already matched — the
+     *   lowest index still admissible when the offending observation arrived.
+     * @property regressedTo for [Kind.REGRESSED], the earlier prefix index [observed] equals;
+     *   `null` for [Kind.NO_MATCHING_PREFIX].
+     * @property nearestPrefixes this terminal's modelled state at [matchedFloor] and its
+     *   successor — the two prefixes a torn observation sits between.
+     */
+    data class WavePrefixViolation(
+        val seed: Long,
+        val terminal: String,
+        val kind: Kind,
+        val renderedGraphSpec: String,
+        val script: Script,
+        val observed: ModelState,
+        val observationIndex: Int,
+        val matchedFloor: Int,
+        val regressedTo: Int?,
+        val nearestPrefixes: Map<Int, ModelState>,
+    ) : RunOutcome, Serializable {
+
+        /** Which half of `[ORA1-DIFF-06]`'s property the observation broke. */
+        enum class Kind {
+            /**
+             * The observation equals the model's answer for **no** prefix of the wave sequence —
+             * a state no serial execution of the inputs could produce. The canonical shape is a
+             * torn composite: one arm of a reconvergent graph updated, the other not.
+             */
+            NO_MATCHING_PREFIX,
+
+            /**
+             * The observation equals an **earlier** prefix than one this terminal had already
+             * shown — the terminal went backwards, which is a glitch even though every state in
+             * the sequence is individually a legal prefix.
+             */
+            REGRESSED,
+        }
+    }
 }
 
 /**
