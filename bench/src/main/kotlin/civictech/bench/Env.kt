@@ -108,6 +108,15 @@ data class RunEnvironment(
          * There is no placeholder value: a capture that cannot answer a question
          * fails loudly instead of inventing `"unknown"`.
          *
+         * The four JMH knobs stay parameters for the same reason the JVM triple does:
+         * they are facts about the RUN. A JMH sweep's knobs are read off its log by
+         * [RunKnobs.fromJmhLog] and reach this function through the [RunKnobs] overload;
+         * the four-scalar form below remains for an IN-PROCESS probe, whose caller *is*
+         * the measuring process and can therefore state the loop it just ran (see
+         * `BoundedReadFixtures.probeRunEnvironment` and `Footprint.environment`). What
+         * neither form permits is a renderer answering with a benchmark class's declared
+         * annotation values — see [RunKnobs].
+         *
          * @param measuringJvm the vendor, version and heap of the JVM that produced the
          *   measurements, established from the run's own artifacts.
          * @throws IllegalStateException if a host fact cannot be determined (for
@@ -147,6 +156,26 @@ data class RunEnvironment(
                 harnessCommitSha = harnessCommitSha,
             )
         }
+
+        /**
+         * [forRun] over knobs established from a JMH run's own log rather than stated by
+         * the caller — the honest form for a JMH sweep (`[BEN1-23]`, computenet-x9e.8).
+         *
+         * @param knobs the mode, fork count and iteration counts the run actually used,
+         *   from [RunKnobs.fromJmhLog].
+         */
+        fun forRun(
+            measuringJvm: MeasuringJvm,
+            knobs: RunKnobs,
+            harnessCommitSha: String,
+        ): RunEnvironment = forRun(
+            measuringJvm = measuringJvm,
+            jmhMode = knobs.jmhMode,
+            forkCount = knobs.forkCount,
+            warmupIterations = knobs.warmupIterations,
+            measurementIterations = knobs.measurementIterations,
+            harnessCommitSha = harnessCommitSha,
+        )
 
         /**
          * `sysctl -n machdep.cpu.brand_string` on darwin, `/proc/cpuinfo`'s `model
@@ -202,6 +231,36 @@ data class RunEnvironment(
  * nobody in the render process is in a position to know.
  */
 class MeasuringJvmUnknownException(message: String) : IllegalStateException(message)
+
+/**
+ * Thrown when the JMH knobs a run actually used cannot be established from the run's own
+ * artifacts (`[BEN1-23]`, computenet-x9e.8).
+ *
+ * The sibling of [MeasuringJvmUnknownException], deliberately its own type for the same
+ * reason and with the same posture: refusing to state a run parameter nobody verified
+ * against the run, rather than answering it from something that is not the run. Where
+ * that one refuses to substitute the RENDERING PROCESS's JVM, this one refuses to
+ * substitute the BENCHMARK CLASS's declared annotation values — a different wrong source
+ * for the same field of the same entry.
+ */
+class RunKnobsUnknownException(message: String) : IllegalStateException(message)
+
+/**
+ * The single distinct value of one JMH banner line across a whole log, or the empty list
+ * when the log carries none.
+ *
+ * JMH repeats its banner per benchmark, so a well-formed sweep log holds the same value
+ * many times and `distinct()` collapses that. More than one distinct value is left for
+ * the caller to refuse — it means the log is not one run under one configuration, and
+ * the refusal message differs by which fact was being established.
+ */
+private fun bannerValues(log: String, prefix: String): List<String> = log.lineSequence()
+    .map { it.trim() }
+    .filter { it.startsWith(prefix) }
+    .map { it.removePrefix(prefix).trim() }
+    .filter { it.isNotEmpty() }
+    .distinct()
+    .toList()
 
 /**
  * The vendor, version and heap of the JVM that ran the benchmark forks — read off the
@@ -341,11 +400,10 @@ data class MeasuringJvm(
         /**
          * The single distinct value of one banner line across the whole log.
          *
-         * JMH repeats the banner per benchmark, so a well-formed sweep log holds the
-         * same value many times; `distinct()` collapses that. More than one distinct
-         * value means the log is not one run on one JVM, and there is then no measuring
-         * JVM to name — refused rather than resolved to the first one seen, which is
-         * the same shape as `FindingsTable`'s single-environment refusal.
+         * More than one distinct value means the log is not one run on one JVM, and
+         * there is then no measuring JVM to name — refused rather than resolved to the
+         * first one seen, which is the same shape as `FindingsTable`'s
+         * single-environment refusal.
          */
         private fun bannerValue(
             log: String,
@@ -353,13 +411,7 @@ data class MeasuringJvm(
             source: String,
             required: Boolean,
         ): String? {
-            val values = log.lineSequence()
-                .map { it.trim() }
-                .filter { it.startsWith(prefix) }
-                .map { it.removePrefix(prefix).trim() }
-                .filter { it.isNotEmpty() }
-                .distinct()
-                .toList()
+            val values = bannerValues(log, prefix)
             if (values.size > 1) {
                 throw MeasuringJvmUnknownException(
                     "cannot establish the measuring JVM: $source states $prefix " +
@@ -498,6 +550,238 @@ data class MeasuringJvm(
                 else -> "JVM defaults (no heap flag among VM options: " +
                     tokens.joinToString(separator = " ") + ")"
             }
+        }
+    }
+}
+
+/**
+ * The JMH configuration a run ACTUALLY used — mode, forks, warmup and measurement
+ * iteration counts — read off the run's own log, never off the benchmark class's
+ * annotations (`[BEN1-23]`, computenet-x9e.8).
+ *
+ * ## The defect this type exists to make impossible
+ *
+ * `computenet-hqid` closed this exact hole for the JVM triple: a findings entry's
+ * `Harness:` line used to describe the process doing the RENDERING. The same shape
+ * survived one field over. `ThroughputReport.renderRun` filled `RunEnvironment`'s four
+ * knob fields from `ThroughputReport.JMH_MODE`/`FORKS`/`WARMUP_ITERATIONS`/
+ * `MEASUREMENT_ITERATIONS` — `const val`s that mirror `OperatorThroughputBenchmark`'s
+ * `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` annotations — so every rendered entry
+ * stated `mode=Throughput forks=2 warmup=5 iters=10` no matter what the sweep did.
+ *
+ * That is reachable and not theoretical, because **JMH's command-line flags override the
+ * annotations**. `-f 1`, `-wi 1`, `-i 1` (the smoke invocation
+ * `OperatorThroughputBenchmark`'s own KDoc documents) genuinely measure a different
+ * configuration, and the entry would still have claimed the annotated one. No shipped
+ * entry is known wrong this way — the three sweeps run before this change each used the
+ * annotation config with no overriding flags, so their stated knobs happen to be true —
+ * which is precisely why it was worth closing before a smoke sweep at `-f 1` got
+ * published.
+ *
+ * ## The artifact this reads
+ *
+ * JMH writes its configuration to stdout, per benchmark, before running it:
+ *
+ * ```
+ * # Warmup: 5 iterations, 1 s each
+ * # Measurement: 10 iterations, 1 s each
+ * # Threads: 1 thread, will synchronize iterations
+ * # Benchmark mode: Throughput, ops/time
+ * # Benchmark: civictech.bench.micro.OperatorThroughputBenchmark.simApplyDelta
+ * # Fork: 1 of 2
+ * ```
+ *
+ * Those lines are printed from JMH's own resolved `BenchmarkParams` — after flag
+ * overrides are applied — which is what makes them a fact about the run rather than about
+ * the source. They sit in the same log, captured by the same `| tee`, that
+ * [MeasuringJvm.fromJmhLog] already reads; this adds no new artifact and no new
+ * convention. `ThroughputReport.runLogFor` names where the renderer looks.
+ *
+ * ## Refusal, not defaulting
+ *
+ * Every one of the four fields comes from the log or [fromJmhLog] throws
+ * [RunKnobsUnknownException]. There is no path back to the annotation constants: a log
+ * with no `# Fork:` line, a `-f 0` run measuring inside the harness JVM, a `-wi 0` run
+ * whose warmup JMH prints as `<none>`, or a log stating one knob two different ways are
+ * all refusals. The same posture as the JVM triple, one field over, and for the identical
+ * reason — an entry nobody can stand behind is not published.
+ *
+ * The limit is the one `ThroughputReport.runLogFor` already states: the log is paired to
+ * the results file by NAME, and nothing cross-checks that they came from the same
+ * invocation. This closes the accidental failure — a renderer answering from the source
+ * because no artifact recorded the run — not a determined substitution.
+ *
+ * @param jmhMode JMH's benchmark mode as its `# Benchmark mode:` line states it, up to
+ *   the metric clause that line appends (`Throughput, ops/time` -> `Throughput`): the
+ *   metric is the unit, and a findings table's rows already carry that.
+ * @param forkCount the total from the run's `# Fork: <n> of <total>` lines. Must be
+ *   positive.
+ * @param warmupIterations the count from the run's `# Warmup:` line. Must be positive.
+ * @param measurementIterations the count from the run's `# Measurement:` line. Must be
+ *   positive.
+ */
+data class RunKnobs(
+    val jmhMode: String,
+    val forkCount: Int,
+    val warmupIterations: Int,
+    val measurementIterations: Int,
+) {
+    init {
+        require(jmhMode.isNotBlank()) { "jmhMode must not be blank" }
+        require(forkCount > 0) { "forkCount must be positive, was $forkCount" }
+        require(warmupIterations > 0) {
+            "warmupIterations must be positive, was $warmupIterations"
+        }
+        require(measurementIterations > 0) {
+            "measurementIterations must be positive, was $measurementIterations"
+        }
+    }
+
+    companion object {
+
+        /** JMH's banner line stating the resolved benchmark mode. */
+        const val BENCHMARK_MODE_PREFIX: String = "# Benchmark mode:"
+
+        /** JMH's banner line stating the resolved warmup iteration count and time. */
+        const val WARMUP_PREFIX: String = "# Warmup:"
+
+        /** JMH's banner line stating the resolved measurement iteration count and time. */
+        const val MEASUREMENT_PREFIX: String = "# Measurement:"
+
+        /** JMH's per-fork progress line, `<n> of <total>`. */
+        const val FORK_PREFIX: String = "# Fork:"
+
+        /** What JMH prints for an iteration phase configured with zero iterations. */
+        const val NONE: String = "<none>"
+
+        /** `<n> iterations, <time> each` — the shape of a warmup/measurement line. */
+        private val ITERATION_COUNT = Regex("""^(\d+)\s+iterations?\b""")
+
+        /** `<n> of <total>` — the shape of a fork progress line. */
+        private val FORK_OF_TOTAL = Regex("""^(\d+)\s+of\s+(\d+)$""")
+
+        /**
+         * How to capture the log, quoted in every refusal so a reader learns the fix
+         * rather than only the fault.
+         */
+        private const val TEE_HINT: String =
+            "Re-run the sweep teeing its output beside the results file, e.g. `java -jar " +
+                "bench/build/libs/bench-jmh.jar ... -rf csv -rff /abs/path/throughput.csv " +
+                "2>&1 | tee /abs/path/throughput.log`"
+
+        /**
+         * Reads the knobs a run used off its JMH log, or refuses.
+         *
+         * @param log the full stdout of the JMH run that produced the results file.
+         * @param source where [log] came from, named in every refusal message so a reader
+         *   learns which file to go look at.
+         * @throws RunKnobsUnknownException if any of the four knobs cannot be established
+         *   from [log] — a missing banner line, a line in a shape that states no count
+         *   (`<none>`, `N/A`), or one knob stated more than one way.
+         */
+        fun fromJmhLog(log: String, source: String): RunKnobs = RunKnobs(
+            jmhMode = modeOf(log, source),
+            forkCount = forkCountOf(log, source),
+            warmupIterations = iterationsOf(log, WARMUP_PREFIX, source),
+            measurementIterations = iterationsOf(log, MEASUREMENT_PREFIX, source),
+        )
+
+        /**
+         * The one distinct value of a banner line, refusing on absence and on
+         * disagreement.
+         *
+         * Disagreement is refused rather than resolved for the same reason
+         * [MeasuringJvm.fromJmhLog] refuses two JVMs: a log concatenating benchmarks run
+         * at different fork or iteration counts (`:bench`'s own benchmark classes declare
+         * three different configurations) describes no single configuration, so there is
+         * nothing for one entry's `JMH:` line to state.
+         */
+        private fun singleValue(log: String, prefix: String, source: String): String {
+            val values = bannerValues(log, prefix)
+            if (values.size > 1) {
+                throw RunKnobsUnknownException(
+                    "cannot establish the run's JMH configuration: $source states " +
+                        "'$prefix' ${values.size} different ways ($values), so it is not " +
+                        "one run under one configuration"
+                )
+            }
+            return values.firstOrNull() ?: throw RunKnobsUnknownException(
+                "cannot establish the run's JMH configuration: $source carries no " +
+                    "'$prefix' line. That line is JMH's own banner, written to stdout " +
+                    "from the parameters it resolved AFTER applying any command-line " +
+                    "override, and it is the only record of what the run actually used — " +
+                    "the results file carries no such columns, and the benchmark class's " +
+                    "annotations state what was DECLARED, which `-f`/`-wi`/`-i` override. " +
+                    TEE_HINT
+            )
+        }
+
+        /** `Throughput, ops/time` -> `Throughput`; `Single shot invocation time` as-is. */
+        private fun modeOf(log: String, source: String): String {
+            val value = singleValue(log, BENCHMARK_MODE_PREFIX, source)
+            val mode = value.substringBefore(',').trim()
+            if (mode.isBlank()) {
+                throw RunKnobsUnknownException(
+                    "cannot establish the run's benchmark mode: $source states " +
+                        "'$BENCHMARK_MODE_PREFIX $value', which names no mode before its " +
+                        "first comma"
+                )
+            }
+            return mode
+        }
+
+        /** The leading count of a `# Warmup:`/`# Measurement:` line. */
+        private fun iterationsOf(log: String, prefix: String, source: String): Int {
+            val value = singleValue(log, prefix, source)
+            val count = ITERATION_COUNT.find(value)?.groupValues?.get(1)?.toIntOrNull()
+            if (count == null || count <= 0) {
+                throw RunKnobsUnknownException(
+                    "cannot establish the run's iteration count: $source states " +
+                        "'$prefix $value', which states no positive iteration count. JMH " +
+                        "writes '$prefix $NONE' for a phase configured with none (`-wi 0` " +
+                        "/ `-i 0`); such a run has no count to report, and a measurement " +
+                        "with no measurement iterations is not one this entry can state"
+                )
+            }
+            return count
+        }
+
+        /**
+         * The total from the run's fork progress lines.
+         *
+         * JMH prints one line per fork (`1 of 2`, then `2 of 2`), so the values differ by
+         * design and it is the TOTAL that must agree across them — that total is
+         * `BenchmarkParams.getForks()`, i.e. the resolved `-f`, and it is the number a
+         * findings entry means by `forks=`.
+         */
+        private fun forkCountOf(log: String, source: String): Int {
+            val values = bannerValues(log, FORK_PREFIX)
+            if (values.isEmpty()) {
+                throw RunKnobsUnknownException(
+                    "cannot establish the run's fork count: $source carries no " +
+                        "'$FORK_PREFIX' line. JMH prints one per fork from the count it " +
+                        "resolved, which `-f` overrides independently of the benchmark's " +
+                        "`@Fork` annotation. " + TEE_HINT
+                )
+            }
+            val totals = values.map { value ->
+                FORK_OF_TOTAL.find(value)?.groupValues?.get(2)?.toIntOrNull()
+                    ?: throw RunKnobsUnknownException(
+                        "cannot establish the run's fork count: $source states " +
+                            "'$FORK_PREFIX $value', which is not JMH's '<n> of <total>' " +
+                            "form. JMH writes '$FORK_PREFIX N/A, test runs in the host " +
+                            "VM' for an unforked run (`-f 0`), which measures inside the " +
+                            "harness JVM and so has no fork count to state"
+                    )
+            }.distinct()
+            if (totals.size > 1) {
+                throw RunKnobsUnknownException(
+                    "cannot establish the run's fork count: $source states fork totals " +
+                        "$totals across its '$FORK_PREFIX' lines, so it is not one run " +
+                        "under one configuration"
+                )
+            }
+            return totals.single()
         }
     }
 }
