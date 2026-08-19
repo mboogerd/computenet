@@ -1,6 +1,7 @@
 package civictech.oracle.gen
 
 import civictech.oracle.bind.CoreOperators
+import civictech.oracle.model.Membership
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SourceId
 import civictech.oracle.model.WriterId
@@ -69,16 +70,38 @@ import kotlin.random.Random
  * writer observation of its own adds automatically and of nothing else. Both paths are
  * exercised — a writer removing what it added itself, and a writer that observes first.
  *
- * **Known limit — an unobserved remove may still name a *live* element (`computenet-qcm1`).**
- * The candidate set here is "elements this writer has not added or observed", which includes an
- * element *another* writer added and which is still live. That is a model no-op either way, so
- * the audit and its re-derivation are unaffected — but the kernel's `SetCell` retracts
- * `liveTags(element)` unconditionally, so at differential evaluation such a step diverges
- * kernel-vs-model by construction. Measured on this suite's own fixture (two set sources,
- * `writerCount = 2`, domain 64, length 200, ratio 0.3, seeds 1..25): 20 of 699 unobserved
- * removes (2.9%) named a live element — roughly one per seed. Restricting the draw to elements
- * not live at that position is `computenet-qcm1`, and it has to land before the runner
- * (`computenet-4ru.8`) reads a mismatch of this signature as kernel evidence.
+ * **An unobserved remove also never names a *live* element (`computenet-qcm1`).** "Not added
+ * nor observed by this writer" alone is only half of what makes the step a no-op: it is a
+ * `Membership` no-op, but the kernel's `SetCell.inletHandler.remove` retracts
+ * `liveTags(element)` unconditionally without consulting the removing writer's causal history,
+ * so a cross-writer remove of a *live* element takes effect in the kernel while the model
+ * ignores it — a Mismatch manufactured by the generator rather than found in the kernel. The
+ * draw in [emitUnobservedRemove] therefore also excludes everything live at that position of
+ * the slice, read from [Membership.live] over the events emitted into that source so far
+ * (never added, added and already covered, or added only later are all admissible). Liveness
+ * is *called* from the reference model, not re-derived here, so the generator cannot come to
+ * hold a second and subtly different notion of it. Before the fix, on this suite's own fixture
+ * (two set sources, `writerCount = 2`, domain 64, length 200, ratio 0.3, seeds 1..25), 20 of
+ * 699 unobserved removes (2.9%) named a live element — roughly one per seed; it is 0 of 699
+ * now, and `ScriptGeneratorTest` asserts that zero.
+ *
+ * The narrowing leaves the *bias* untouched: an unobserved remove records nothing into a
+ * writer's known set, so restricting which element it names changes no later candidate set and
+ * consumes no different amount of [rng]. Measured on that same fixture, before and after are
+ * identical to every digit — aggregate unobserved fraction 699/2201 = 0.3176 over seeds 1..25,
+ * and 27/87 = 0.3103 for seed 42 — so the `unobservedRemoveRatio` tolerances
+ * `ScriptGeneratorTest` asserts stand as written and needed no re-statement. What the narrowing
+ * *can* do is exhaust the candidate pool sooner at a **small `elementDomainSize`**, where a
+ * writer's known set plus the live set may cover the whole domain; that case falls back to an
+ * add exactly as the pre-existing no-candidate path does, which biases the measured unobserved
+ * fraction downward rather than resampling.
+ *
+ * Scope note, so the next reader does not mistake this for a cure: it removes only the
+ * generator's *manufactured* divergence. A cross-writer **observed** remove path diverges
+ * independently of it — at `unobservedRemoveRatio = 0.0`, nine of sixty cases of
+ * `WavePrefixTest`'s sweep still mismatch at quiescence and six still violate the wave-prefix
+ * check (measured 2026-08-19, computenet-4ru.8.5). That residual is `computenet-eeys`, not
+ * this.
  *
  * Every remove — `Remove` on a set source and `RemoveKey` on a keyed one — is recorded in a
  * [RemoveRecord]. `RemoveKey`'s "observed" reading is the one its source model supports:
@@ -218,7 +241,18 @@ class ScriptGenerator(
         val writer = pick(source.writers)
         val element = pick(elementDomain)
         source.recordAdd(writer, element)
-        steps += CaseStep.Op(source.id, ScriptEvent.Add(writer, element))
+        append(source, ScriptEvent.Add(writer, element), steps)
+    }
+
+    /**
+     * Appends one op step AND records the event in [source]'s own slice, which is what
+     * [SourceState.liveElements] folds through [Membership.live]. Every op step goes through
+     * here: a step appended straight to [steps] would be invisible to the liveness fold and
+     * would silently reintroduce `computenet-qcm1`.
+     */
+    private fun append(source: SourceState, event: ScriptEvent, steps: MutableList<CaseStep>) {
+        source.recordEvent(event)
+        steps += CaseStep.Op(source.id, event)
     }
 
     /**
@@ -234,16 +268,36 @@ class ScriptGenerator(
         if (!emitted) emitAdd(source, steps)
     }
 
-    /** A remove naming an element its writer has neither added nor observed. */
+    /**
+     * A remove naming an element its writer has neither added nor observed **and which is not
+     * live at this position of the source's slice** (`computenet-qcm1`).
+     *
+     * Both conditions are needed for the step to be a no-op on *both* sides of the differential.
+     * "Not added nor observed" makes it a `Membership` no-op; "not live" is what makes it a
+     * kernel no-op, because `SetCell.inletHandler.remove` retracts `liveTags(element)`
+     * unconditionally and does not consult the removing writer's causal history. Without the
+     * second condition a cross-writer remove of a live element takes effect in the kernel while
+     * the model ignores it — a Mismatch manufactured by the generator rather than found in the
+     * kernel.
+     *
+     * Liveness comes from [Membership.live] over the events emitted into this source so far
+     * ([SourceState.liveElements]) — the model's own fold, called rather than re-derived, so the
+     * generator cannot hold a second and subtly different notion of "live" from the one the
+     * runner compares against.
+     */
     private fun emitUnobservedRemove(source: SourceState, steps: MutableList<CaseStep>, audit: MutableList<RemoveRecord>): Boolean {
+        val live = source.liveElements()
         val candidates = source.writers.mapNotNull { writer ->
-            elementDomain.filterNot { it in source.known(writer) }.takeIf { it.isNotEmpty() }?.let { writer to it }
+            elementDomain
+                .filterNot { it in source.known(writer) || it in live }
+                .takeIf { it.isNotEmpty() }
+                ?.let { writer to it }
         }
         if (candidates.isEmpty()) return false
         val (writer, unknown) = pick(candidates)
         val element = pick(unknown)
         audit += RemoveRecord(stepIndex = steps.size, observed = false)
-        steps += CaseStep.Op(source.id, ScriptEvent.Remove(writer, element))
+        append(source, ScriptEvent.Remove(writer, element), steps)
         return true
     }
 
@@ -277,15 +331,15 @@ class ScriptGenerator(
             // Observe states that `writer` has seen every add at an earlier position — exactly
             // Membership's condition for a cross-writer remove to cover them.
             source.recordObserve(writer)
-            steps += CaseStep.Op(source.id, ScriptEvent.Observe(writer))
+            append(source, ScriptEvent.Observe(writer), steps)
             val element = pick(unseen)
             audit += RemoveRecord(stepIndex = steps.size, observed = true)
-            steps += CaseStep.Op(source.id, ScriptEvent.Remove(writer, element))
+            append(source, ScriptEvent.Remove(writer, element), steps)
         } else {
             val (writer, known) = pick(direct)
             val element = pick(known)
             audit += RemoveRecord(stepIndex = steps.size, observed = true)
-            steps += CaseStep.Op(source.id, ScriptEvent.Remove(writer, element))
+            append(source, ScriptEvent.Remove(writer, element), steps)
         }
         return true
     }
@@ -294,7 +348,7 @@ class ScriptGenerator(
         val writer = pick(source.writers)
         val key = pick(keyDomain)
         source.recordAdd(writer, key)
-        steps += CaseStep.Op(source.id, ScriptEvent.Put(writer, key, pick(elementDomain)))
+        append(source, ScriptEvent.Put(writer, key, pick(elementDomain)), steps)
     }
 
     /**
@@ -315,15 +369,16 @@ class ScriptGenerator(
         }
         val key = pick(pool)
         audit += RemoveRecord(stepIndex = steps.size, observed = key in source.known(writer))
-        steps += CaseStep.Op(source.id, ScriptEvent.RemoveKey(writer, key))
+        append(source, ScriptEvent.RemoveKey(writer, key), steps)
     }
 
     private fun emitCounter(source: SourceState, increment: Boolean, steps: MutableList<CaseStep>) {
         val writer = pick(source.writers)
         val amount = pick(amountDomain)
-        steps += CaseStep.Op(
-            source.id,
+        append(
+            source,
             if (increment) ScriptEvent.Increment(writer, amount) else ScriptEvent.Decrement(writer, amount),
+            steps,
         )
     }
 
@@ -362,6 +417,29 @@ class ScriptGenerator(
 
         /** Every element added into this source by anyone, in emission order. */
         val addedAnywhere: LinkedHashSet<Any?> = LinkedHashSet()
+
+        /**
+         * This source's slice as emitted so far, in order — the same list
+         * `CaseScript.toScript()` will project for it. Kept so liveness can be read from the
+         * reference model's own fold instead of a second bookkeeping notion of it.
+         */
+        private val events = mutableListOf<ScriptEvent>()
+
+        fun recordEvent(event: ScriptEvent) {
+            events += event
+        }
+
+        /**
+         * The elements live at this position of the slice, per [Membership.live] — literally the
+         * model's definition, over the prior events only, which is the set a remove has to avoid
+         * to be a no-op in the kernel as well (`computenet-qcm1`).
+         *
+         * Recomputed from scratch on each call rather than maintained incrementally: `Membership`
+         * is the single definition of liveness in this system, and an incremental mirror of it
+         * here would be a second one, free to drift. Scripts are hundreds of events long, so the
+         * fold's cost is irrelevant beside that.
+         */
+        fun liveElements(): Set<Any?> = Membership.live(events)
 
         /**
          * What [writer] has added or observed so far. Monotone on purpose: a writer that has

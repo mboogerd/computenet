@@ -2,6 +2,7 @@ package civictech.oracle.gen
 
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.model.MapCellSourceModel
+import civictech.oracle.model.Membership
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SourceId
 import civictech.oracle.model.WriterId
@@ -100,6 +101,51 @@ class ScriptGeneratorTest {
         val singleFraction = single.removeAudit.count { !it.observed }.toDouble() / single.removeAudit.size
         withClue("seed 42's unobserved fraction was $singleFraction over ${single.removeAudit.size} removes") {
             abs(singleFraction - 0.3) shouldBeUnder 0.10
+        }
+    }
+
+    /**
+     * `computenet-qcm1`: **no unobserved remove names an element that is live at that point in
+     * its source's slice.** A remove of a non-live element is a no-op on both sides of the
+     * differential — the model covers no uncovered add, and the kernel's `SetCell` finds no live
+     * tag to retract — whereas a remove of a LIVE element the removing writer never observed
+     * takes effect in the kernel and is a model no-op, which is a false Mismatch by construction.
+     *
+     * Liveness is read from [Membership.live] over the **prior** events of that source's slice —
+     * the model's own definition, called rather than re-implemented, so this cannot drift from
+     * the notion the differential runner compares against. The fixture is the one the bead
+     * measured on (two set sources, `writerCount = 2`, domain 64, length 200, ratio 0.3,
+     * seeds 1..25), where the unrestricted draw produced 20 live-element removes out of 699.
+     */
+    @Test
+    fun `no unobserved remove names an element live at that point in its slice`() {
+        val topology = topologyOf("s0" to CoreOperators.Ids.SET, "s1" to CoreOperators.Ids.SET)
+        val config = config(unobservedRemoveRatio = 0.3)
+
+        var unobservedRemoves = 0
+        var namingLiveElement = 0
+        val offenders = mutableListOf<String>()
+        (1L..25L).forEach { seed ->
+            val generated = generate(topology, config, seed)
+            val steps = generated.script.steps
+            generated.removeAudit.filterNot { it.observed }.forEach { record ->
+                val op = steps[record.stepIndex] as CaseStep.Op
+                val event = op.event as? ScriptEvent.Remove ?: return@forEach
+                unobservedRemoves++
+                if (event.element in Membership.live(priorEvents(steps, record.stepIndex, op.source))) {
+                    namingLiveElement++
+                    if (offenders.size < 5) offenders += "seed $seed step ${record.stepIndex} ${event.element}"
+                }
+            }
+        }
+
+        // Not a vacuous zero: the fixture really does generate a large unobserved population.
+        unobservedRemoves shouldExceed 500
+        withClue(
+            "unobservedRemoves=$unobservedRemoves namingLiveElement=$namingLiveElement " +
+                "first offenders: $offenders",
+        ) {
+            namingLiveElement shouldBe 0
         }
     }
 
@@ -416,6 +462,10 @@ class ScriptGeneratorTest {
     // --- helpers --------------------------------------------------------------------------
 
     private fun ScriptEvent.isRemove(): Boolean = this is ScriptEvent.Remove || this is ScriptEvent.RemoveKey
+
+    /** [source]'s slice up to (not including) step [index] — the "prior slice" liveness is read on. */
+    private fun priorEvents(steps: List<CaseStep>, index: Int, source: SourceId): List<ScriptEvent> =
+        steps.take(index).filterIsInstance<CaseStep.Op>().filter { it.source == source }.map { it.event }
 
     /**
      * Whether the remove at [index] was genuinely observed, derived from the script alone.

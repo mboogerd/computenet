@@ -411,10 +411,12 @@ class WavePrefixTest {
      * `sourceCount` is the ONLY departure, and it is [WavePrefixOracle.appliesTo]'s soundness
      * domain rather than a comfort setting. The **ordinary** writer and remove knobs are kept —
      * `writerCount = 2` and `unobservedRemoveRatio = 0.25`, the same values every other sweep in
-     * this feature uses — so the known cross-writer unobserved-remove seam (computenet-qcm1,
-     * computenet-4ru.6.3: a spawned `SetCell` retracts a live element on any remove, while the
-     * model no-ops a cross-writer remove no `Observe` preceded) is **inside** this population.
-     * The sweep partitions it out by measurement, not by configuration — see the sweep test.
+     * this feature uses — so the known cross-writer remove seam (a spawned `SetCell` retracts a
+     * live element on any remove, while the model no-ops a cross-writer remove no `Observe`
+     * preceded) is **inside** this population. The sweep partitions it out by measurement, not by
+     * configuration — see the sweep test. Its *unobserved* half was computenet-qcm1 and is fixed:
+     * the generator no longer draws an unobserved remove of a live element, so what remains
+     * inside this population is the **observed** cross-writer remove, computenet-eeys.
      */
     private fun generatedSweepConfig() = GeneratorConfig(
         depthRange = 3..5,
@@ -513,8 +515,8 @@ class WavePrefixTest {
         //
         // (a) A case that already disagrees at quiescence with prefix checking OFF is not
         //     evidence about glitch-freedom at all: the comparison a glitch report rests on is
-        //     already invalid there. That is the known cross-writer unobserved-remove seam
-        //     (computenet-qcm1, computenet-4ru.6.3).
+        //     already invalid there. That is the known cross-writer remove seam — its *unobserved*
+        //     half was computenet-qcm1 and is fixed; what is left here is computenet-eeys.
         // (b) Two further SIGNATURES are separated out, so a change in one is visible without
         //     re-measuring the others:
         //       - a REGRESSED observation across a wave the model did not change at that terminal
@@ -523,13 +525,18 @@ class WavePrefixTest {
         //         cannot be a reconvergence tear because there is no second arm
         //         ([CHAIN_ARTIFACT_SEEDS]).
         //     These are signatures, NOT causal verdicts. Measured at review time (2026-08-19,
-        //     Darwin arm64, reproduced on the second read): all twelve pinned seeds — the five in
-        //     (a) included — disappear at `writerCount = 1` AND at `addRemoveRatio = 1.0` (no
-        //     remove generated at all), so the common ingredient is a cross-writer remove
-        //     (computenet-qcm1's territory), appearing at an intermediate wave and healing by
-        //     quiescence in the seven violation cases. `unobservedRemoveRatio = 0.0` does NOT
-        //     remove it, so it is not confined to the *unobserved* remove that bead describes;
-        //     which cross-writer remove path diverges is qcm1's to settle, not this file's. The
+        //     Darwin arm64, reproduced on the second read): all twelve then-pinned seeds — the
+        //     five then in (a) included — disappear at `writerCount = 1` AND at
+        //     `addRemoveRatio = 1.0` (no remove generated at all), so the common ingredient is a
+        //     cross-writer remove, appearing at an intermediate wave and healing by quiescence in
+        //     the violation cases. `unobservedRemoveRatio = 0.0` does NOT remove it, so it is not
+        //     confined to the *unobserved* remove; which cross-writer remove path diverges is
+        //     computenet-eeys's to settle, not this file's.
+        //     computenet-qcm1 has since landed (commit a3176733) and accounts for three of those
+        //     twelve: seeds 34, 46 and 36 leave the pinned population altogether and seed 8 moves
+        //     from (a) to the flicker bucket, leaving NINE pinned seeds. The nine are a subset of
+        //     the twelve, so the knob-dependence measured above carries over to them unchanged
+        //     and was not re-run. The
         //     one thing measured here is which knobs the population depends on. In particular the
         //     earlier
         //     reading of these two buckets as artifacts of THIS observation point (a raw
@@ -542,8 +549,9 @@ class WavePrefixTest {
         // Anything else — a violation on a reconvergent shape that is not a plateau regression —
         // is a glitch CANDIDATE, pinned and filed (computenet-qjtp). Keeping that bucket separate
         // is what stops the partition from becoming an escape hatch: a NEW seed in it fails.
-        // (Seed 36 also clears at `writerCount = 1`, so it is most likely the same seam; it stays
-        // in the strictest bucket until computenet-qjtp says otherwise.)
+        // (That bucket is EMPTY as of computenet-qcm1: seed 36, its only member, was the
+        // generator's manufactured divergence and is clean now — see [GLITCH_CANDIDATE_SEEDS] for
+        // why an empty exact-equality list is the strongest value here rather than a dormant one.)
         val settledMismatch = mutableListOf<Long>()
         val plateauFlicker = mutableListOf<Long>()
         val chainArtifact = mutableListOf<Long>()
@@ -591,15 +599,16 @@ class WavePrefixTest {
             totalObservations shouldBeGreaterThan 0
         }
         withClue(
-            "the cross-writer unobserved-remove seam's footprint (computenet-qcm1 / " +
-                "computenet-4ru.6.3) — a change here is a change in the seam, not in this " +
-                "oracle; measured 2026-08-19 on A0030. $summary",
+            "the cross-writer remove seam's footprint (computenet-eeys; its *unobserved* half " +
+                "was computenet-qcm1 and no longer reaches this population) — a change here is " +
+                "a change in the seam, not in this oracle; re-measured 2026-08-19 on MacBoo " +
+                "under computenet-qcm1. $summary",
         ) {
             settledMismatch shouldBe SEAM_SEEDS
         }
         withClue(
             "the raw-view plateau-flicker footprint (computenet-eeys) — pinned so it stays " +
-                "visible; measured 2026-08-19 on A0030. $summary",
+                "visible; re-measured 2026-08-19 on MacBoo under computenet-qcm1. $summary",
         ) {
             plateauFlicker shouldBe RAW_VIEW_FLICKER_SEEDS
         }
@@ -661,15 +670,29 @@ class WavePrefixTest {
     private companion object {
         /**
          * The seeds of [generatedSweepConfig] over `0..59` whose runs already disagree at
-         * quiescence with prefix checking OFF — the known cross-writer unobserved-remove seam
-         * (computenet-qcm1, computenet-4ru.6.3), NOT glitch evidence and NOT this task's to fix
-         * (epic design D10).
+         * quiescence with prefix checking OFF — the cross-writer remove seam, NOT glitch evidence
+         * and NOT this task's to fix (epic design D10).
          *
          * Pinned so the population is stated rather than dodged: a seed leaving this list means
          * the seam narrowed, a seed joining it means the seam widened, and either way the sweep
          * says so instead of silently checking fewer cases.
+         *
+         * **Re-pinned 2026-08-19 by `computenet-qcm1` (commit a3176733), from
+         * `[8, 30, 40, 50, 58]`.** That bead fixed `ScriptGenerator.emitUnobservedRemove`, whose
+         * draw could name an element another writer had added and which was still live: the
+         * kernel's `SetCell` retracts `liveTags(element)` unconditionally and the remove took
+         * effect, while `Membership` no-ops it for lack of an `Observe` by that writer, so the
+         * disagreement was manufactured by the generator rather than found in the kernel. Seed 8
+         * left this bucket for exactly that reason — it now settles correctly at quiescence and
+         * shows only an intermediate-wave regression, so it moved into [RAW_VIEW_FLICKER_SEEDS].
+         *
+         * The distinction a later reader needs: this list only ever **shrinks** under a generator
+         * fix, and every departure is accounted for below. Nothing was removed to make the suite
+         * green — the four seeds still here are the residual `computenet-qcm1` explicitly did not
+         * claim to fix (its acceptance bound says so; the residual is computenet-eeys), and one
+         * NEW seed appearing here still fails this assertion.
          */
-        val SEAM_SEEDS: List<Long> = listOf(8L, 30L, 40L, 50L, 58L)
+        val SEAM_SEEDS: List<Long> = listOf(30L, 40L, 50L, 58L)
 
         /**
          * Seeds whose terminal REGRESSES across a wave the model did not change — filed as
@@ -677,8 +700,16 @@ class WavePrefixTest {
          * hypothesis this bucket was first cut for (a raw view flickering inside a wave); that
          * hypothesis is measurably wrong — the dips reproduce at quiesced barriers — and the
          * cause is the [SEAM_SEEDS] seam. Kept as a distinct signature, not as a diagnosis.
+         *
+         * **Re-pinned 2026-08-19 by `computenet-qcm1` (commit a3176733), from
+         * `[28, 34, 44, 46, 54]`.** Two changes, both consequences of that bead's fix to
+         * `emitUnobservedRemove` and neither an adjustment to taste:
+         *  - seeds **34 and 46 left the pinned population entirely** — they no longer violate at
+         *    all, so the violation they showed was the generator's manufactured divergence;
+         *  - seed **8 arrived from [SEAM_SEEDS]** — it stops disagreeing at quiescence and what
+         *    remains of it is an intermediate-wave regression, which is this bucket's signature.
          */
-        val RAW_VIEW_FLICKER_SEEDS: List<Long> = listOf(28L, 34L, 44L, 46L, 54L)
+        val RAW_VIEW_FLICKER_SEEDS: List<Long> = listOf(8L, 28L, 44L, 54L)
 
         /**
          * Seeds whose topology is a single path source-to-terminal and which nonetheless show a
@@ -686,15 +717,40 @@ class WavePrefixTest {
          * one path, `set -> flatMapSet x5`), so the violation cannot be a reconvergence tear —
          * but it is visible at quiescence too, so it is not an artifact of the observation point
          * either (computenet-eeys).
+         *
+         * **Unchanged by `computenet-qcm1`'s re-pin (2026-08-19).** Named here because it is the
+         * control: three of these four lists moved and this one did not, so the re-pin is the
+         * measured footprint of one generator fix rather than a wholesale re-measurement that
+         * happened to land on a green population.
          */
         val CHAIN_ARTIFACT_SEEDS: List<Long> = listOf(38L)
 
         /**
          * Glitch CANDIDATES: reconvergent shapes showing a state that is no prefix, which is
-         * exactly what `[ORA1-DIFF-06]` exists to catch. Filed as computenet-qjtp with the
-         * topology; not fixed here (D10). Seed 36 is `mapSet -> {flatMapSet -> mapSet, direct} ->
-         * quorumSet -> union`, three distinct paths.
+         * exactly what `[ORA1-DIFF-06]` exists to catch. A seed here is a finding to pin and
+         * file (D10), never a list to widen.
+         *
+         * **EMPTY as of 2026-08-19, re-pinned by `computenet-qcm1` (commit a3176733), from
+         * `[36]`.** Seed 36 — `mapSet -> {flatMapSet -> mapSet, direct} -> quorumSet -> union`,
+         * three distinct paths, filed as computenet-qjtp — is clean once
+         * `emitUnobservedRemove` stops naming live elements. So that candidate was **manufactured
+         * by the generator**, not found in the kernel: this sweep's single glitch candidate was an
+         * artifact of a remove the kernel applied and the reference model ignored. (Whether
+         * computenet-qjtp is thereby resolved is that bead's owner's call, not this file's.)
+         *
+         * **The empty list is the STRONGEST value this constant can hold, not a weakened one.**
+         * The assertion is exact list equality, so any candidate at all now fails it, where
+         * before only a candidate other than 36 did. What DID change is that one particular
+         * mutation check is now a no-op: the recorded check for this line was "replace
+         * `listOf(36L)` with `emptyList()`, observe `expected:<[]> but was:<[36L]>`", and with the
+         * list legitimately empty that mutant is identical to the original and can no longer
+         * fail. The property it was demonstrating did not move to some other assertion — it is
+         * still this one — so it was re-demonstrated from the other side instead, and that
+         * substitution is the thing to repeat if this line is ever touched again: inject a
+         * synthetic candidate into the measured list (`glitchCandidate += 999L` after the sweep
+         * loop) and this assertion fails with `expected:<[]> but was:<[999]>`. Measured
+         * 2026-08-19 on Darwin arm64 (MacBoo) under `computenet-qcm1`.
          */
-        val GLITCH_CANDIDATE_SEEDS: List<Long> = listOf(36L)
+        val GLITCH_CANDIDATE_SEEDS: List<Long> = emptyList()
     }
 }
