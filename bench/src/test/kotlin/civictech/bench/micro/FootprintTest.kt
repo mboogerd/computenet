@@ -378,30 +378,94 @@ class FootprintTest {
         )
     }
 
+    /**
+     * A total inside its own error bars is a measurement of nothing, and the instrument has
+     * to say so rather than publish the figure. The fixture is `CounterCell`'s real shape at
+     * 1e5: 46.4 ± 126.2 bytes.
+     */
     @Test
-    fun belowNoiseFloorIsReportedRatherThanRounded() {
+    fun belowResolutionIsReportedRatherThanRounded() {
         val tiny = measurement(
-            total = Stat(mean = 16.0, dispersion = 4.0, samples = 5),
-            payload = Stat(mean = 16.0, dispersion = 4.0, samples = 5),
+            total = Stat(mean = 46.4, dispersion = 126.2, samples = 10),
+            payload = Stat(mean = 24.0, dispersion = 0.0, samples = 10),
+            tagMetadata = Stat(mean = 0.0, dispersion = 0.0, samples = 10),
+            multiplicity = 2,
+        )
+        assertTrue(tiny.belowResolution)
+        val large = measurement(
+            total = Stat(mean = 20_000_000.0, dispersion = 4_000.0, samples = 10),
+            payload = Stat(mean = 1_600_000.0, dispersion = 400.0, samples = 10),
+            tagMetadata = Stat(mean = 3_200_000.0, dispersion = 400.0, samples = 10),
+        )
+        assertFalse(large.belowResolution)
+        assertTrue(
+            FootprintReport.provenance(listOf(tiny)).contains("BELOW RESOLUTION"),
+            "provenance must name a below-resolution subject, not merely omit it",
+        )
+        assertTrue(FootprintReport.provenance(listOf(large)).contains("resolved: total"))
+    }
+
+    /**
+     * The baseline-drift bound still fires on a host whose empty windows do drift — the
+     * case the dispersion bound alone could be fooled by.
+     */
+    @Test
+    fun aDriftingBaselineAlsoPutsASubjectBelowResolution() {
+        val drifting = measurement(
+            total = Stat(mean = 16.0, dispersion = 0.0, samples = 5),
+            payload = Stat(mean = 16.0, dispersion = 0.0, samples = 5),
             tagMetadata = Stat(mean = 0.0, dispersion = 0.0, samples = 5),
             noiseFloorBytes = 40_000L,
             multiplicity = 2,
         )
-        assertTrue(tiny.belowNoiseFloor)
-        val large = measurement(
-            total = Stat(mean = 20_000_000.0, dispersion = 4_000.0, samples = 5),
-            payload = Stat(mean = 1_600_000.0, dispersion = 400.0, samples = 5),
-            tagMetadata = Stat(mean = 3_200_000.0, dispersion = 400.0, samples = 5),
-            noiseFloorBytes = 40_000L,
+        assertTrue(drifting.belowResolution)
+    }
+
+    /**
+     * `[BEN1-20]` asks for payload and tag/metadata separately; a family whose snapshot
+     * contains no `Timestamp` at all has zero of one of them, and the instrument states
+     * that exact zero in the provenance rather than weighing an empty selection (which
+     * measures pure noise — see `Stat.structurallyAbsent`).
+     */
+    @Test
+    fun aStructurallyAbsentBucketIsStatedExactlyAndCarriesNoRow() {
+        val noTags = FootprintMeasurement(
+            subject = Footprint.byName("ListCell"),
+            elements = 10_000,
+            multiplicity = 20,
+            total = Stat(mean = 201_547.8, dispersion = 400.0, samples = 10),
+            payload = Stat(mean = 160_537.7, dispersion = 200.0, samples = 10),
+            tagMetadata = Stat.structurallyAbsent(10),
+            noiseFloorBytes = 0L,
+            payloadCount = 10_000,
+            tagCount = 0,
+            visitedCount = 10_001,
+            opaqueCount = 0,
         )
-        assertFalse(large.belowNoiseFloor)
+        assertFalse(noTags.tagPresent)
+        assertTrue(noTags.payloadPresent)
+        assertEquals(0.0, noTags.tagMetadata.mean, 1e-9)
+        assertEquals(0.0, noTags.tagMetadata.dispersion, 1e-9)
+        // The residual is unaffected: an exact zero contributes nothing to the propagation.
+        assertEquals(201_547.8 - 160_537.7, noTags.unattributed.mean, 1e-6)
+
+        val labels = FootprintReport.toResults(noTags, env).map { it.label }
+        assertEquals(
+            listOf(
+                "ListCell n=10000 total retained",
+                "ListCell n=10000 payload",
+                "ListCell n=10000 UNATTRIBUTED",
+                "ListCell n=10000 total per element",
+            ),
+            labels,
+            "a structurally absent bucket carries no row — its exact zero is in the provenance",
+        )
+        val provenance = FootprintReport.provenance(listOf(noTags))
         assertTrue(
-            FootprintReport.provenance(listOf(tiny)).contains("BELOW the measured noise floor"),
-            "provenance must name a below-noise-floor subject, not merely omit it",
+            provenance.contains("tag/metadata is EXACTLY 0 bytes and has no table row"),
+            provenance,
         )
-        assertTrue(
-            FootprintReport.provenance(listOf(large)).contains("above the measured noise floor"),
-        )
+        assertTrue(provenance.contains("structurally absent rather than measured small"), provenance)
     }
 
     // ---------------------------------------------------------------------------------

@@ -240,14 +240,26 @@ object HeapProbe {
     }
 
     /**
-     * The instrument's own noise, MEASURED: the largest absolute heap delta over
+     * The instrument's BASELINE drift, measured: the largest absolute heap delta over
      * [samples] windows that hold nothing at all.
      *
-     * This is the resolution limit of every other number in this file. A subject whose
-     * whole retained state is under it is reported as [FootprintMeasurement.belowNoiseFloor]
-     * rather than as a byte count, because the instrument genuinely cannot tell that
-     * state apart from measurement drift — the honest answer for `CounterCell`, whose
-     * snapshot is a single boxed `Long` however many increments it absorbed.
+     * ## What this turned out to measure, and what it did not
+     *
+     * Measured 2026-08-19 across all 21 sweep combinations: **exactly 0 bytes, every
+     * time.** A settled heap reproduces its own post-collection `used` figure bit for bit,
+     * so an empty window has no drift at all. That is a true reading and it is worth
+     * having — a non-zero value here would mean something else in this JVM is allocating
+     * during a measurement, which invalidates everything downstream — but it is NOT the
+     * resolution limit of a real measurement, and reading it as one would understate the
+     * error by orders of magnitude.
+     *
+     * The operative resolution is the replicate DISPERSION of the quantity itself, because
+     * the noise that matters comes from the collector's treatment of the transient garbage
+     * a build pass produces, not from the baseline. Measured: ±520 bytes on a 26.9 MB
+     * `SetCell` total (2e-5 relative), but ±28 KB on a `PnCounterCell` selection window
+     * that builds 200 cells and keeps 200 boxed `Long`s. [FootprintMeasurement.belowResolution]
+     * is therefore defined against the dispersion, with this baseline as a second, weaker
+     * bound.
      */
     fun noiseFloorBytes(samples: Int = NOISE_SAMPLES): Long {
         require(samples >= 1) { "samples must be >= 1, was $samples" }
@@ -497,6 +509,23 @@ data class Stat(val mean: Double, val dispersion: Double, val samples: Int) {
         const val MIN_SAMPLES: Int = 2
 
         /**
+         * Exactly zero, with zero uncertainty — for a bucket that STRUCTURALLY does not
+         * exist, never for one that measured small.
+         *
+         * The distinction is the whole point. `MapCell`'s snapshot contains no
+         * `Timestamp` and no `UUID`: its tag/metadata is zero because there is nothing
+         * there, which is a fact about the graph the walk established by finding zero such
+         * objects — not a measurement outcome and not an estimate. Weighing an empty
+         * selection instead produces pure noise (measured: -178.8 bytes for `MapCell` at
+         * 1e3, -15.6 for `ListCell`), which is a *less* honest report of "there is nothing
+         * here" than the exact zero is.
+         *
+         * Only [Footprint.measure] may use this, and only on a zero object count.
+         */
+        fun structurallyAbsent(samples: Int): Stat =
+            Stat(mean = 0.0, dispersion = 0.0, samples = samples)
+
+        /**
          * `t(0.9995, df)` for `df` = 1..30, indexed by `df - 1`; [T_LARGE_DF] beyond.
          *
          * A table rather than a computed inverse-t, for the same reason `:bench` parses
@@ -613,14 +642,33 @@ data class FootprintMeasurement(
     /** [total] divided by [elements] — retained bytes per element. */
     val bytesPerElement: Stat get() = total.scaled(1.0 / elements)
 
+    /** Whether the walk found any payload object at all in this subject's snapshot. */
+    val payloadPresent: Boolean get() = payloadCount > 0
+
+    /** Whether the walk found any `Timestamp`/`UUID` at all in this subject's snapshot. */
+    val tagPresent: Boolean get() = tagCount > 0
+
     /**
-     * True when the subject's whole retained state is at or under [noiseFloorBytes]
-     * times [multiplicity] — the instrument cannot resolve it, and the honest report is
-     * that fact rather than a byte figure. Expected for `CounterCell` and
-     * `PnCounterCell`, whose state is O(1) in the number of increments.
+     * True when the subject's whole retained state is smaller than the instrument can
+     * resolve — the honest report is then that fact, not a byte figure.
+     *
+     * Two bounds, either of which suffices:
+     *
+     * - the total is within its own 99.9% error of zero (`|mean| <= dispersion`). This is
+     *   the operative one, and it is what fires for `CounterCell`: 46.4 ± 126.2 bytes at
+     *   1e5, which is a measurement of nothing.
+     * - the total across all [multiplicity] copies is at or under [noiseFloorBytes], the
+     *   measured baseline drift. Weaker in practice (that drift measured 0 on this host —
+     *   see [HeapProbe.noiseFloorBytes]) but kept because a host where the baseline DOES
+     *   drift is exactly where the first bound alone could be fooled.
+     *
+     * Expected for `CounterCell` and `PnCounterCell`, whose snapshot state is O(1) in the
+     * number of increments however many they absorb. That is the finding about those
+     * families, and `[BEN1-35]` makes it a finding rather than a patch.
      */
-    val belowNoiseFloor: Boolean
-        get() = total.mean * multiplicity <= noiseFloorBytes.toDouble()
+    val belowResolution: Boolean
+        get() = abs(total.mean) <= total.dispersion ||
+            total.mean * multiplicity <= noiseFloorBytes.toDouble()
 
     /** The row label prefix every rendered result of this measurement carries. */
     val label: String get() = "${subject.name} n=$elements"
@@ -841,12 +889,19 @@ object Footprint {
         repeat(replicates) {
             totals += HeapProbe.retainedBytes { structures(subject, elements, multiplicity) } -
                 holderControl
-            payloads += HeapProbe.retainedBytes {
-                selection(subject, elements, multiplicity) { it.payload }
-            } - payloadHolderControl
-            tags += HeapProbe.retainedBytes {
-                selection(subject, elements, multiplicity) { it.tagMetadata }
-            } - tagHolderControl
+            // A bucket the walk found ZERO objects in is not weighed at all — see
+            // Stat.structurallyAbsent for why measuring an empty selection is the less
+            // honest of the two options.
+            if (payloadPerStructure > 0) {
+                payloads += HeapProbe.retainedBytes {
+                    selection(subject, elements, multiplicity) { it.payload }
+                } - payloadHolderControl
+            }
+            if (tagPerStructure > 0) {
+                tags += HeapProbe.retainedBytes {
+                    selection(subject, elements, multiplicity) { it.tagMetadata }
+                } - tagHolderControl
+            }
         }
 
         val perStructure = 1.0 / multiplicity
@@ -855,8 +910,16 @@ object Footprint {
             elements = elements,
             multiplicity = multiplicity,
             total = Stat.of(totals).scaled(perStructure),
-            payload = Stat.of(payloads).scaled(perStructure),
-            tagMetadata = Stat.of(tags).scaled(perStructure),
+            payload = if (payloadPerStructure > 0) {
+                Stat.of(payloads).scaled(perStructure)
+            } else {
+                Stat.structurallyAbsent(replicates)
+            },
+            tagMetadata = if (tagPerStructure > 0) {
+                Stat.of(tags).scaled(perStructure)
+            } else {
+                Stat.structurallyAbsent(replicates)
+            },
             noiseFloorBytes = noise,
             payloadCount = payloadPerStructure,
             tagCount = tagPerStructure,
@@ -1051,15 +1114,35 @@ object FootprintReport {
     )
 
     /**
-     * The four rows one measurement contributes: total, payload, tag/metadata,
-     * unattributed — plus the per-element figure `[BEN1-20]` asks for by name.
+     * The rows one measurement contributes: total, payload, tag/metadata, unattributed,
+     * and the per-element figure `[BEN1-20]` asks for by name.
      *
-     * The unattributed row is emitted ALWAYS, including when it is the whole total (the
-     * counters, whose snapshot holds no tag objects at all) and including when it is
-     * negative within its own error bars. `[BEN1-21]` is a requirement about what the
-     * harness reports, not a fallback for when attribution fails: there is no code path
-     * here that omits the residual, reallocates it to payload or tag, or scales the two
-     * measured components up to meet the total.
+     * ## The UNATTRIBUTED row is unconditional
+     *
+     * It is emitted always — including when it is the whole total (`ListCell`, whose
+     * snapshot holds no tag objects at all), and including when it comes out negative
+     * inside its own error bars. `[BEN1-21]` is a requirement about what the harness
+     * reports, not a fallback for when attribution fails: there is no code path here that
+     * omits the residual, reallocates it to payload or tag, or scales the two measured
+     * components up to meet the total.
+     *
+     * ## A STRUCTURALLY ABSENT bucket gets no row, and this is why
+     *
+     * When the walk found zero objects in a bucket, that bucket's row is omitted from the
+     * table and its exact zero is stated by [provenance] instead. This is the one place
+     * this object drops a row, so the reasoning is spelled out:
+     *
+     * `Stat.structurallyAbsent` is `0.0 ± 0.0`, whose relative dispersion is `0.0/0.0` =
+     * `NaN`, and `civictech.bench.classify` correctly refuses a non-finite magnitude — so a
+     * row for it would land in the omission list reading "relative dispersion NaN exceeds
+     * NOISE_FLOOR", which tells a reader nothing about the actual situation (there are no
+     * such objects in this graph). Emitting it would therefore not be *more* honest; it
+     * would replace a precise statement with a confusing one. The zero is not hidden: it is
+     * in [provenance], on the line naming how many objects of each kind the walk found, and
+     * that block is printed beside the table by the probe that renders it.
+     *
+     * Working around `classify` — nudging the dispersion, or bypassing the gate — was the
+     * alternative, and it is not available: F3's refusals are not this object's to soften.
      */
     fun toResults(
         measurement: FootprintMeasurement,
@@ -1075,13 +1158,13 @@ object FootprintReport {
                 env = env,
             ),
         )
-        return listOf(
-            row("total retained", measurement.total, "bytes"),
-            row("payload", measurement.payload, "bytes"),
-            row("tag/metadata", measurement.tagMetadata, "bytes"),
-            row("UNATTRIBUTED", measurement.unattributed, "bytes"),
-            row("total per element", measurement.bytesPerElement, "bytes/element"),
-        )
+        return buildList {
+            add(row("total retained", measurement.total, "bytes"))
+            if (measurement.payloadPresent) add(row("payload", measurement.payload, "bytes"))
+            if (measurement.tagPresent) add(row("tag/metadata", measurement.tagMetadata, "bytes"))
+            add(row("UNATTRIBUTED", measurement.unattributed, "bytes"))
+            add(row("total per element", measurement.bytesPerElement, "bytes/element"))
+        }
     }
 
     /** [toResults] over a whole sweep, in measurement order. */
@@ -1119,16 +1202,29 @@ object FootprintReport {
      */
     fun provenance(measurements: List<FootprintMeasurement>): String =
         measurements.joinToString(separator = "\n") { m ->
-            val resolution = if (m.belowNoiseFloor) {
-                "BELOW the measured noise floor of ${m.noiseFloorBytes} bytes — this " +
-                    "subject's snapshot state is smaller than the instrument can resolve, " +
-                    "which is the finding, not a byte figure"
+            val resolution = if (m.belowResolution) {
+                "BELOW RESOLUTION: total ${m.total.mean} ± ${m.total.dispersion} bytes is " +
+                    "within its own error of zero, so this subject's snapshot state is " +
+                    "smaller than the instrument can resolve — that is the finding, not a " +
+                    "byte figure (baseline drift measured ${m.noiseFloorBytes} bytes)"
             } else {
-                "above the measured noise floor of ${m.noiseFloorBytes} bytes"
+                "resolved: total ${m.total.mean} ± ${m.total.dispersion} bytes (baseline " +
+                    "drift measured ${m.noiseFloorBytes} bytes)"
+            }
+            val absent = buildList {
+                if (!m.payloadPresent) add("payload")
+                if (!m.tagPresent) add("tag/metadata")
+            }
+            val absentNote = if (absent.isEmpty()) {
+                ""
+            } else {
+                ", ${absent.joinToString(" and ")} is EXACTLY 0 bytes and has no table row: " +
+                    "the walk found no such object in this snapshot, so it is structurally " +
+                    "absent rather than measured small"
             }
             "- ${m.label}: multiplicity=${m.multiplicity}, replicates=${m.total.samples}, " +
                 "walk found ${m.payloadCount} payload / ${m.tagCount} tag objects in " +
                 "${m.visitedCount} visited (${m.opaqueCount} opaque), " +
-                "scalesWithElements=${m.subject.scalesWithElements}, $resolution"
+                "scalesWithElements=${m.subject.scalesWithElements}, $resolution$absentNote"
         }
 }

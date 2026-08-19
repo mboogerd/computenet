@@ -40,6 +40,15 @@ import java.util.concurrent.TimeUnit
  *    `ThreadMXBean.getThreadAllocatedBytes`. `-prof gc` measures the same quantity through
  *    a different mechanism, which makes this a genuine cross-check on that document's
  *    numbers rather than a re-run of its harness.
+ *
+ *    **And it reproduces.** Measured 2026-08-19 on an Apple M2 Pro (10 cores, JDK 21.0.11
+ *    Temurin, `-Xmx2g`), one combination at reduced iteration counts
+ *    (`-p family=SET_CELL -p scale=N1E3 -f 1 -wi 1 -i 2 -r 1s -w 1s`):
+ *    `gc.alloc.rate.norm = 265_248 B/op` against E1's 270 KB — inside 2%, on a different
+ *    machine, four months later, through a different measurement mechanism. That is a
+ *    single combination at low iteration counts and therefore evidence the harness
+ *    measures the right quantity, NOT the replication itself; E1's full three-scale
+ *    reproduction with dispersion belongs to the V1C-BENCH replication task.
  * 2. **It bounds the copy cost the retained figure cannot.** A family whose retained state
  *    is modest but whose snapshot allocates ten times that is a different kind of problem
  *    from one that simply holds a lot, and G-21 phase 3's allocation-pressure trigger is
