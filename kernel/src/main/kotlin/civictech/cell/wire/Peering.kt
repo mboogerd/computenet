@@ -226,6 +226,98 @@ class RegistryMirrorCell(
 }
 
 /**
+ * Default hello-nonce retention window: ten minutes of epoch milliseconds
+ * (DSC1 epic §9.8, `[DSC1-HELLO-11]`).
+ *
+ * The number is a *policy* choice, not a derived bound, and it is stated here
+ * with its limits so the next reader does not have to reconstruct them:
+ *
+ * - **Why bounded at all.** `[DSC1-HELLO-11]` requires a side to remember the
+ *   hellos it accepted, which is unbounded state unless windowed. §9.8 decides
+ *   the window and pairs the eviction rule with `[DSC1-ANN-13]`'s bounded-state
+ *   discipline: retained state is proportional to *admitted peers*, never to
+ *   hellos received.
+ * - **Why ten minutes.** Long enough to cover any plausible reconnect storm on
+ *   one socket (a hello is a per-connection event, not a per-message one), and
+ *   short enough that a peer whose entries have all expired costs nothing.
+ * - **What it does NOT claim.** It is not a proof of replay resistance beyond
+ *   the window: a hello replayed after the window elapses is refused by the
+ *   *nonce freshness* of the peer's own challenge, not by this memory. This
+ *   constant bounds only how long a within-window duplicate stays detectable.
+ */
+const val DEFAULT_NONCE_RETENTION_MILLIS: Long = 600_000
+
+/**
+ * Whether a [Peering.Side] demands cryptographic proof of a peer's identity at
+ * hello time (DSC1, `[DSC1-HELLO-08..10]`, `[DSC1-WIRE-06]`).
+ *
+ * **Pure vocabulary.** This is a kernel type and deliberately carries no
+ * crypto: no key, no signature, no digest, no `java.security` import. The
+ * primitives live in `:identity` and their use lives in `:wire`, so `:kernel`
+ * stays free of any cryptographic dependency (`[DSC1-WIRE-03]`). What the
+ * kernel owns is the *decision surface* — a side's policy is part of its
+ * configuration, beside [Peering.Side.allow], and readable without a
+ * transport.
+ */
+sealed interface PeerAuthPolicy {
+    /**
+     * Today's behaviour, byte for byte (`[DSC1-HELLO-10]`, `[DSC1-WIRE-06]`):
+     * a peer asserts a name and the transport vouches for it
+     * (`civictech.cell.membrane.AuthLevel.TransportVouched`). The legacy
+     * `HELLO` line is unchanged and unauthenticated peers are admitted subject
+     * to [Peering.Side.allow] alone.
+     *
+     * This is the **default** for every [Peering.Side], which is what makes the
+     * epic's additive claim structural rather than tested: a caller that never
+     * mentions authentication cannot get any.
+     */
+    data object Open : PeerAuthPolicy
+
+    /**
+     * The side admits a connection only on a hello whose signature verifies
+     * under a presented public key whose fingerprint equals the claimed id
+     * (`[DSC1-HELLO-03..04]`), and refuses anything less —
+     * `civictech.cell.DenialReason.AUTH_REQUIRED` for a hello that omits key
+     * material or a proof (`[DSC1-HELLO-08..09]`).
+     *
+     * @property nonceRetentionMillis how long an accepted hello's nonce and
+     *   signature stay detectable as a replay on this side
+     *   (`[DSC1-HELLO-11]`); see [DEFAULT_NONCE_RETENTION_MILLIS] for the
+     *   window's rationale and its limits.
+     */
+    data class RequireAuthenticated(
+        val nonceRetentionMillis: Long = DEFAULT_NONCE_RETENTION_MILLIS,
+    ) : PeerAuthPolicy
+}
+
+/**
+ * The signing half of a side's identity, as the kernel sees it: an id, the
+ * public key that derives it, and the ability to sign — nothing more.
+ *
+ * **Deliberately an interface with no kernel implementation.** The kernel
+ * cannot construct one of these, because doing so needs a keypair and
+ * therefore a cryptographic provider; `:identity` holds the material and
+ * `:wire` adapts it (`civictech.wire.PeerIdentityCredentials`). That
+ * asymmetry is the enforcement of `[DSC1-WIRE-03]`: the dependency direction
+ * is `:wire -> :identity -> :kernel`, and this type is the seam it meets.
+ *
+ * [sign] rather than a private-key property is the same discipline
+ * `civictech.identity.PeerIdentity` applies (`[DSC1-KEY-09]`): no accessor,
+ * destructuring, copy or serializer can carry private material out through
+ * this interface. An implementation must keep [toString] free of it too.
+ */
+interface PeerCredentials {
+    /** This side's key-derived identity — `civictech.identity.fingerprint(publicKey)`. */
+    val peerId: PeerId
+
+    /** The public half, in its X.509/SubjectPublicKeyInfo encoding — what a hello presents. */
+    val publicKey: ByteArray
+
+    /** A signature over exactly [message]; no framing, prefixing or hashing is added here. */
+    fun sign(message: ByteArray): ByteArray
+}
+
+/**
  * The building blocks of a peer connection — a full-duplex bridge (an
  * egress/ingress pair per direction) plus registry mirroring — and their
  * in-process [loopback] composition: the deterministic P1 shape of a peer
@@ -265,7 +357,50 @@ object Peering {
          * *inside* the existing window, not a reordering of it.
          */
         val onCatchUpWindowOpen: (() -> Unit)? = null,
+        /**
+         * Whether this side demands a cryptographically proven peer identity at
+         * hello time (DSC1, `[DSC1-HELLO-08..10]`). Defaults to
+         * [PeerAuthPolicy.Open] — today's behaviour, byte for byte.
+         *
+         * A **trailing parameter with a default** on purpose: every existing
+         * caller of this constructor compiles unchanged and behaves identically
+         * (`[DSC1-HELLO-10]`, `[DSC1-WIRE-06]`), which is a structural property
+         * of the signature rather than something a test has to establish.
+         */
+        val auth: PeerAuthPolicy = PeerAuthPolicy.Open,
+        /**
+         * This side's signing identity, or null when it has none. Optional even
+         * under [PeerAuthPolicy.Open]: a side may hold a keypair and still
+         * admit unauthenticated peers, which is the configuration the sibling
+         * announcement feature needs in order to sign its own announcements
+         * over an in-process [loopback] with no socket involved
+         * (`[DSC1-WIRE-05]`).
+         *
+         * Carrying credentials here is *configuration*, not behaviour: this
+         * task adds the surface, and loopback authentication semantics are the
+         * announcement feature's scope, not this one's.
+         */
+        val credentials: PeerCredentials? = null,
     ) {
+        init {
+            // A side that demands proof from its peer must be able to answer the
+            // peer's challenge in turn — the hello exchange is symmetric
+            // (`[DSC1-HELLO-01..04]`), so RequireAuthenticated without a signing
+            // identity is a configuration that can never complete a handshake.
+            //
+            // Refusing at CONSTRUCTION rather than at hello time is the point:
+            // the failure is a misconfiguration of the process, and it should
+            // surface where the process is wired up, not as an unexplained
+            // connection refusal minutes later against a peer that did nothing
+            // wrong. Nothing about this is a runtime trust decision, so it is a
+            // `require`, not a DenialReason.
+            require(auth is PeerAuthPolicy.Open || credentials != null) {
+                "PeerAuthPolicy.RequireAuthenticated needs credentials: a side that demands a " +
+                    "proven peer identity must hold a keypair to answer the peer's challenge " +
+                    "(auth=$auth, credentials=null)"
+            }
+        }
+
         fun admits(peer: PeerId?): Boolean = allow == null || peer in allow
     }
 

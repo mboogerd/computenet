@@ -106,11 +106,75 @@ enum class DenialReason {
     /** Seam 3 integrity: the argument did not arrive in a `SignedDelta` envelope. */
     UNSIGNED,
 
-    /** Seam 3 integrity: the `SignatureVerifier` rejected the envelope. */
+    /**
+     * Seam 3 integrity: the `SignatureVerifier` rejected the envelope.
+     *
+     * **Also a seam-1 hello reason** (DSC1, `[DSC1-HELLO-07]`): a `PROOF`
+     * whose Ed25519 signature does not verify over the challenge bytes under
+     * the public key its `HELLO2` presented. The two uses are deliberately one
+     * constant — "the signature did not verify" is one fact about a crossing,
+     * and the [BoundaryDenial.seam] already says which boundary refused. What
+     * the seam-1 use must NOT be confused with is [ID_MISMATCH]: a signature
+     * that verifies under a key whose fingerprint is not the id the peer
+     * claimed is a *different* attack (impersonation) with a different reason.
+     */
     BAD_SIGNATURE,
 
-    /** Seam 3 integrity: the `SignedDelta.counter` did not strictly increase for this minting peer. */
+    /**
+     * Seam 3 integrity: the `SignedDelta.counter` did not strictly increase for
+     * this minting peer.
+     *
+     * **Also a seam-1 hello reason** (DSC1, `[DSC1-HELLO-11]`): a `HELLO2`
+     * nonce or a `PROOF` signature this side already accepted from this peer
+     * within the configured retention window
+     * (`civictech.cell.wire.PeerAuthPolicy.RequireAuthenticated.nonceRetentionMillis`).
+     * The mechanism differs — announcements are ordered by a monotonic
+     * counter, hellos are one-shot challenges remembered in a bounded window —
+     * but the refused fact is the same one: this crossing has been seen before.
+     */
     REPLAY,
+
+    /**
+     * Seam 1 hello: the side's policy is
+     * `civictech.cell.wire.PeerAuthPolicy.RequireAuthenticated` and the hello
+     * did not carry the key material or the signature that policy demands —
+     * a legacy name-only `HELLO`, or a `HELLO2` never followed by a `PROOF`
+     * (`[DSC1-HELLO-08]`, `[DSC1-HELLO-09]`).
+     *
+     * **Machine-distinguishable from [NOT_ADMITTED] on purpose.** The epic
+     * requires a downgrade attempt to be tellable apart from an allowlist
+     * refusal: `NOT_ADMITTED` means "I know who you say you are and you are
+     * not welcome", this means "you did not prove who you are at all". A peer
+     * operator reading an audit trail acts differently on each.
+     */
+    AUTH_REQUIRED,
+
+    /**
+     * Seam 1 hello: the peer id a `HELLO2` claimed is not the id derived from
+     * the public key that same `HELLO2` presented (`[DSC1-HELLO-06]`) — i.e.
+     * `civictech.identity.fingerprint(presentedKey) != claimedId`.
+     *
+     * Distinct from [BAD_SIGNATURE]: the proof may verify perfectly under the
+     * presented key. What fails is the *binding* between key and name, which
+     * is the impersonation attempt the epic's BS-09 provokes. The denial
+     * record carries both ids, and neither is secret.
+     */
+    ID_MISMATCH,
+
+    /**
+     * Seam 1 hello: a structurally invalid authenticated hello — the wrong
+     * token count on a `HELLO2` line, an undecodable base64url field, a
+     * claimed id outside the fixed key-derived form, or a protocol message
+     * arriving out of order (a `PROOF` before any `HELLO2`).
+     *
+     * This exists so a malformed hello can never be *absorbed* into a peer
+     * name. The legacy grammar's `split(" ", limit = 2)` does exactly that —
+     * any extra whitespace-separated token becomes part of the claimed name,
+     * yielding a wrong `PeerId` instead of an error — which is why
+     * `civictech.wire.parseHello2` returns a machine-readable malformation
+     * kind and this reason exists to record it.
+     */
+    MALFORMED_HELLO,
 }
 
 /**
