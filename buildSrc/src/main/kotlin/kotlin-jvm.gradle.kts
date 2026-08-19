@@ -166,8 +166,82 @@ tasks.withType<Test>().configureEach {
     // execution order, and the config has now been run 6x over the full suite
     // (960 tests, 0 failures each, from the JUnit XML) plus 10x over the
     // timing-sensitive host/observe classes, all green, on top of the CI run above.
-    if (project.path == ":kernel") {
-        maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 2)
+    //
+    // ---------------------------------------------------------------------------
+    // `:demo:beadsmirror` opts in SECOND, and on the OPPOSITE argument
+    // (computenet-9vx3). Everything above is a case about a CPU-bound suite, where
+    // half the cores is the honest ceiling because each fork's own JVM is the thing
+    // consuming a core. This module is the inverse workload: 295 tests whose wall
+    // time is almost entirely a test thread BLOCKED on a `bd`/`dolt` child process
+    // (one `bd` mutation 0.92s, one `bd ready --json` 0.39s, measured
+    // 2026-08-19 on darwin/arm64). A fork that is parked in `Process.waitFor` is not
+    // holding a core, so the JVM+child pair counts as roughly ONE runnable unit, and
+    // the half-cores rule that is right for `:kernel` would under-subscribe here.
+    //
+    // Why it is worth doing at all, from CI rather than a dev box. In
+    // `build-test-fast` run 32283729126 (head 28e29924, current `main`'s content,
+    // job 7m46s / Gradle `BUILD SUCCESSFUL in 7m 14s`), reconstructing the task
+    // timeline from the streamed `> Task :…` headers: `:demo:beadsmirror:test`
+    // spans 17:52:22.4 -> 17:56:52.7 (270.3s), and every OTHER task in the lane —
+    // `:demo:exchange:test`, `:demo:slotfinder:test`, `:demo:tiering:test`, the
+    // whole compile chain — has finished by 17:52:36.7. So the final 256.0s of the
+    // required check is this ONE test JVM, with three of the runner's four vCPUs
+    // idle and all four of Gradle's worker leases free. That is the same shape the
+    // `:kernel` paragraphs above describe, and it is now the fast lane's whole tail
+    // (`:kernel:test` moved to its own `kernel-test` job and is `-x`-ed here).
+    //
+    // The count, justified against CI's runner and not a dev machine:
+    //  * Gradle's worker-lease pool caps concurrent test forks at `--max-workers`,
+    //    which is the CPU count — 4 on `ubuntu-latest`. A value above 4 cannot be
+    //    granted on the machine that matters, so 4 is the ceiling, not a guess.
+    //  * Memory does not grow. `gradle.properties` already states the bound as
+    //    "4x2g of fork heap + 3g + 2g of daemon heap", measured from a peak of 4
+    //    concurrent test JVMs across the whole lane. During this module's solo tail
+    //    no other module's forks exist, so 4 forks HERE reach that same measured
+    //    peak rather than raising it. What the bound does not cover is the `bd`/
+    //    `dolt` children's non-Java RSS; they are short-lived and the same sampling
+    //    put total Java RSS at ~3.8 GB against a 16 GB runner, so the headroom is
+    //    there — but that is the number to re-check first if this ever OOMs.
+    //  * Isolation is what computenet-s5hx bought and this depends on: every test's
+    //    workspace is a COPY with a unique basename, a rehomed embedded Dolt
+    //    database and therefore a distinct `DotMinter` source id, under its own
+    //    `Files.createTempDirectory` path. `BdScratchWorkspace.templates` is a
+    //    per-JVM `ConcurrentHashMap`, so each fork simply builds its own pristine
+    //    template (one `bd --sandbox init`, ~5s, per fork per `bd` env) — duplicated
+    //    work, not shared state.
+    //  * PORTS ARE SAFE, audited per class rather than assumed (the acceptance
+    //    clause, and computenet-dqy.25's lesson that a find-then-close helper
+    //    presents as an unrelated assertion TIMEOUT). Nothing in this module ever
+    //    names a port it has not bound: `MirrorRoutesTest` uses `DemoShell(0)` and
+    //    reads `boundPort`; `BeadsMirrorAppTest` takes `BeadsMirrorConfig.port`'s
+    //    default of `0` and reads `app.boundPort`; `TwoNodeRig` starts its listener
+    //    with `MirrorWire.Listen(0)` and hands the DIALER `app.boundWsPort`, i.e.
+    //    the port the listener actually bound; `MirrorPeeringTest.BoundPort` binds
+    //    `Listen(0)` in-process and asserts the announced port is the bound one, and
+    //    its other cases only PARSE flags (`"--listen", "0"`, `ws://localhost:9001`)
+    //    without opening anything; `TwoJvmMirrorTest` passes `0` for every port and
+    //    reads each child's announced `computenet-port` line through `JvmPeer`.
+    //    `testkit` carries no `freePort()` any more (dqy.25 deleted it), and
+    //    `grep -rn 'ServerSocket'` over this module's tests returns nothing. Every
+    //    bind is `bind(0)` performed by the process that then KEEPS the socket, so
+    //    there is no window in which a chosen port is unowned — which is the only
+    //    thing concurrent forks could have exploited. `TwoJvmMirrorTest` is the
+    //    module's one `@Tag("multi-jvm")` class and is excluded from this lane
+    //    anyway; the serial lane runs it with `--max-workers=1`.
+    //  * Round-robin dealing: a class is never split, so the 6 class-scoped
+    //    `@BeforeAll`/`@TestInstance(PER_CLASS)` fixtures (`TwoNodeRigTest`,
+    //    `PullRebaselineTest`, `HeadlineLivenessTest`) are unaffected. The module's
+    //    only cross-class statics are `BdScratchWorkspace.templates` (above) and two
+    //    stateless `object`s, `MirrorExportEquality` and `ReadySchedule`.
+    //
+    // If this ever has to come back down, 2 is the fallback and the reason to take
+    // it would be scheduler starvation rather than memory: `TwoNodeRig`'s waits are
+    // a 30s budget over a 200ms poll interval, and `dolt` is itself multi-threaded,
+    // so 4 forks is the point where the "JVM+child is one runnable unit" model is
+    // most likely to be optimistic. Do not accept a change here on one green run.
+    when (project.path) {
+        ":kernel" -> maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 2)
+        ":demo:beadsmirror" -> maxParallelForks = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
     }
     // Hang -> failure, not a silently stuck build. 440+ unbudgeted runToIdle() call
     // sites and zero prior @Timeout meant a livelock regression could hang CI

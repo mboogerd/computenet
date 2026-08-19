@@ -37,6 +37,16 @@ dependencies {
     testImplementation(project(":testkit"))
 }
 
+// NO `tasks.test { }` BLOCK HERE, deliberately (computenet-9vx3). This module runs
+// its tests on PARALLEL forks — the only module besides `:kernel` that does — but
+// the setting lives with `:kernel`'s in
+// `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`, next to the measurements and
+// the port/statics audit that justify it, so the two fork policies can be read
+// against each other instead of drifting apart in separate files. Look there
+// before changing anything about this module's test concurrency, and in
+// particular before adding a test that binds a port by any means other than
+// `bind(0)`-and-keep-it.
+
 application {
     mainClass = "civictech.demo.beadsmirror.BeadsMirrorAppKt"
 }
