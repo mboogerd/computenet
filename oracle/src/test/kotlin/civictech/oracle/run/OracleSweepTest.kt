@@ -4,8 +4,14 @@ import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
 import civictech.oracle.gen.GeneratorConfig
 import civictech.oracle.model.ModelState
+import civictech.oracle.model.Script
+import civictech.oracle.model.ScriptEvent
+import civictech.oracle.model.SourceId
+import civictech.oracle.model.SourceScript
+import civictech.oracle.model.WriterId
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -207,6 +213,69 @@ class OracleSweepTest {
             }
         }
         OracleSweep.DEFAULT_SEED_COUNT shouldBe 200
+    }
+
+    /**
+     * The cross-task seam between this file and computenet-4ru.8.5, closed at feature review:
+     * a sweep failure of the kind computenet-4ru.8.5 added — [RunOutcome.WavePrefixViolation] —
+     * must be rendered field by field like a [RunOutcome.Mismatch] is, **never** through
+     * `toString`. It carries a `script` field too, so the `else` branch dumped every event of the
+     * case once per failing seed, which is the exact failure `OracleSweep.describe` exists to
+     * prevent.
+     *
+     * Measured before the fix (2026-08-19, Darwin arm64): driving
+     * `WavePrefixTest.generatedSweepConfig` (`sourceCount = 1`, `scriptLength = 30`) through
+     * [OracleSweep.run] over seeds `0 until 60` printed five `WavePrefixViolation` failures at
+     * ~1.9-2.0 kB each with the whole `Script(...)` inline, against ~0.57 kB and no script for the
+     * two `Mismatch` failures in the same sweep. Latent on the BS-1 config above — `sourceCount =
+     * 4` means [WavePrefixOracle.appliesTo] admits 0 of its 200 seeds — but [OracleSweep.run]
+     * passes no [WavePrefixOption], so any single-source sweep config inherits
+     * [WavePrefixOption.DEFAULT] and reaches it.
+     *
+     * Asserted on a fabricated outcome rather than on a generated seed deliberately: the rendering
+     * is what is under test, and pinning generator seeds here would make this test fail for
+     * reasons that have nothing to do with it. Every expected value below is a literal written
+     * into the fabricated value, not recomputed from production code.
+     */
+    @Test
+    fun `a sweep renders a wave-prefix violation field by field, never dumping the script`() {
+        val violation = RunOutcome.WavePrefixViolation(
+            seed = 46L,
+            terminal = "terminal-0",
+            kind = RunOutcome.WavePrefixViolation.Kind.REGRESSED,
+            renderedGraphSpec = "spawn source-0 : set",
+            script = Script(
+                listOf(
+                    SourceScript(
+                        SourceId("source-0"),
+                        List(30) { ScriptEvent.Add(WriterId("writer-0"), "buried-script-event-$it") },
+                    ),
+                ),
+            ),
+            observed = ModelState.SetState(setOf("a")),
+            observationIndex = 7,
+            matchedFloor = 4,
+            regressedTo = 2,
+            nearestPrefixes = mapOf(4 to ModelState.SetState(setOf("a", "b"))),
+        )
+
+        val rendered = OracleSweep.describe(violation)
+
+        // The load-bearing half: no script, at all. One event name is enough to prove it — if the
+        // script is rendered, every one of the thirty is.
+        rendered shouldNotContain "buried-script-event"
+        rendered shouldNotContain "script="
+        // And the evidence a reader actually needs is present.
+        rendered shouldContain "WavePrefixViolation("
+        rendered shouldContain "terminal=terminal-0"
+        rendered shouldContain "kind=REGRESSED"
+        rendered shouldContain "observationIndex=7"
+        rendered shouldContain "matchedFloor=4"
+        rendered shouldContain "regressedTo=2"
+        rendered shouldContain "spec=spawn source-0 : set"
+        // A kind that carries no script is still fine through `toString`.
+        OracleSweep.describe(RunOutcome.NonQuiescence(seed = 1L, stepBudget = 7)) shouldBe
+            "NonQuiescence(seed=1, stepBudget=7)"
     }
 
     /**

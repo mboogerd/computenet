@@ -184,17 +184,40 @@ object OracleSweep {
     /**
      * One line describing a non-success outcome.
      *
-     * [RunOutcome.Mismatch] is rendered field by field rather than by `toString`, deliberately:
-     * its `script` field holds every event of the case (200 at BS-1 size), and printing it once
-     * per failing seed buries the difference — the one field that says *what* disagreed — in
-     * kilobytes of replayable input. The script is recoverable from the seed and the config,
-     * which is exactly why the seed is what a failure carries.
+     * **Every script-carrying kind is rendered field by field rather than by `toString`**, and
+     * that is the whole point of this function: a `script` field holds every event of the case
+     * (200 at BS-1 size), and printing it once per failing seed buries the evidence — the fields
+     * that say *what* disagreed — in kilobytes of replayable input. The script is recoverable
+     * from the seed and the config, which is exactly why the seed is what a failure carries.
+     *
+     * Two kinds carry one: [RunOutcome.Mismatch] and [RunOutcome.WavePrefixViolation]. The
+     * remaining kinds ([RunOutcome.NonQuiescence], [RunOutcome.DeadLetterFailure],
+     * [RunOutcome.ModelEvaluationFailure]) hold no script, so `toString` is the honest rendering
+     * for them — a new sealed kind that *does* carry one needs a branch here, not the `else`.
+     *
+     * Measured at feature-review time (2026-08-19, Darwin arm64) on the single-source config
+     * `WavePrefixTest.generatedSweepConfig` at `scriptLength = 30`, seeds `0 until 60`: the
+     * `else` branch rendered each of the five `WavePrefixViolation` seeds at ~1.9–2.0 kB with the
+     * whole `Script(...)` inline, against ~0.57 kB and no script for the `Mismatch` seeds through
+     * the branch above. Not reachable from the BS-1 sweep — `sourceCount = 4` admits no prefix
+     * checking at all ([WavePrefixOracle.appliesTo]; measured 0 of 200 seeds) — but reachable
+     * from any single-source sweep config, because [run] passes no [WavePrefixOption] and so
+     * inherits [WavePrefixOption.DEFAULT].
+     *
+     * `internal` rather than private so `OracleSweepTest` can assert the rendering directly,
+     * without depending on which generated seeds happen to violate.
      */
-    private fun describe(outcome: RunOutcome): String = when (outcome) {
+    internal fun describe(outcome: RunOutcome): String = when (outcome) {
         is RunOutcome.Mismatch ->
             "Mismatch(terminal=${outcome.terminal}, difference=${outcome.difference}, " +
                 "expected=${outcome.expected}, actual=${outcome.actual}, " +
                 "spec=${outcome.renderedGraphSpec})"
+
+        is RunOutcome.WavePrefixViolation ->
+            "WavePrefixViolation(terminal=${outcome.terminal}, kind=${outcome.kind}, " +
+                "observationIndex=${outcome.observationIndex}, matchedFloor=${outcome.matchedFloor}, " +
+                "regressedTo=${outcome.regressedTo}, observed=${outcome.observed}, " +
+                "nearestPrefixes=${outcome.nearestPrefixes}, spec=${outcome.renderedGraphSpec})"
 
         else -> outcome.toString()
     }
