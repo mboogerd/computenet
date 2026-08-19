@@ -73,7 +73,7 @@ The two that bite hardest, inline because skipping them costs the most:
   an empty query.
 - **`bd create --parent=<shared epic>` is banned** — it mints ids from a
   per-database counter and two machines collide. Use
-  `scripts/create-ticket.sh`.
+  `.claude/skills/work/scripts/create-ticket.sh`.
 
 `$SCRATCH` throughout is a **session-unique** temp dir: create it once as
 `SCRATCH=$(mktemp -d "<harness scratchpad>/work.XXXXXX")` — concurrent sessions
@@ -516,7 +516,7 @@ Empty output with exit 0 is a real answer; **exit 3 means nothing was
 checked** — stop, do not defer. It also prints a `could not resolve the epic
 of <id>` line to **stderr** for any ready item whose parent chain is broken
 (a vanished ancestor, a cycle): that item was *not* classified, so resolve it
-by hand (`scripts/epic-of.sh <id>`) before treating the listing as complete —
+by hand (`.claude/skills/work/scripts/epic-of.sh <id>`) before treating the listing as complete —
 never defer with one outstanding.
 
 Zero workable items and nothing resumable splits into **two** cases. Separate
@@ -564,7 +564,7 @@ Nothing claimable at all → report and stop.
 claim.** `epic.md` assumes the epic it breaks down is claimed, and the rule
 below forbids claiming another — so a sub-epic child sat in a gap with no
 route (computenet-k9uh). It is covered by the claim you already have: its
-effective epic (`scripts/epic-of.sh`) is the one you hold, so **break it down
+effective epic (`.claude/skills/work/scripts/epic-of.sh`) is the one you hold, so **break it down
 in place and do not claim it** — no `--claim`, no assignee, no `owner:` label,
 leave it `open`. **You** record provenance, not the breakdown agent: a comment
 on the sub-epic naming this session and the parent claim it is working under,
@@ -1475,7 +1475,7 @@ beyond that, sequence. Stated where it bites in
 bounds the count.
 
 Red required check → red-check-attribution.md; pending → wait with
-`scripts/wait-checks.sh <pr-url>` (step 2's rules: classify on output, never
+`.claude/skills/work/scripts/wait-checks.sh <pr-url>` (step 2's rules: classify on output, never
 `$?`; computenet-luhx, computenet-15it, computenet-1zhu). A verdict
 carrying a **§6 hand-back** is yours to complete, and it is the **normal**
 path, not an exception: review-feature.md §6 assigns the merge to you
