@@ -566,18 +566,36 @@ object BoundedReadFixtures {
     // JMH knobs for E1, declared here rather than as literals in the annotations, for the
     // reason `OperatorThroughputBenchmark`'s KDoc gives for doing the same: a renderer
     // recording the `RunEnvironment` of a sweep must not be able to disagree with the
-    // configuration the benchmark actually ran under. Modest on purpose — E1's subject is
-    // one whole-state copy, the 10^5 case pre-seeds 100,000 elements per fork, and this
-    // repository's benchmark runs share a machine with concurrent agent builds.
+    // configuration the benchmark actually ran under.
+    //
+    // **Raised to the repository's forks=5 / warmup=5 / measurement=5 convention on
+    // computenet-x9e.6.4**, the full-scale sweep, from the artifact's original
+    // 1 fork / 3 warmup / 5 measurement. Two reasons, both discovered by running it:
+    //
+    // 1. A single fork reports an error bar computed over one JVM's iterations, so
+    //    fork-to-fork variation — the dominant term at 10^5, where G1 young collections
+    //    set the tail (the original document's §8) — is invisible to it rather than
+    //    absent from it. Five forks put that variation inside the reported dispersion.
+    // 2. Raising the sample at the command line (`-f`, `-wi`, `-i`) is NOT an equivalent
+    //    workaround, and an earlier revision of this comment said it was. A renderer
+    //    building a `RunEnvironment` reads these constants; a run whose real fork count
+    //    came from a flag would be published under the configuration declared here, which
+    //    is precisely the disagreement these constants exist to prevent. Raising the
+    //    sample means editing this block, which is why the block is editable.
+    //
+    // The sweep at this config costs ~7 minutes of wall clock for the six combinations
+    // (2 methods x 3 scales), measured on computenet-x9e.6.4; the 10^5 case re-seeds
+    // 100,000 elements per fork, and this repository's benchmark runs share a machine
+    // with concurrent agent builds.
 
     /** E1's JMH mode: per-call latency, which is what the original E1 reported. */
     const val E1_JMH_MODE: String = "AverageTime"
 
     /** E1 forks. */
-    const val E1_FORKS: Int = 1
+    const val E1_FORKS: Int = 5
 
     /** E1 warmup iterations. */
-    const val E1_WARMUP_ITERATIONS: Int = 3
+    const val E1_WARMUP_ITERATIONS: Int = 5
 
     /** E1 measurement iterations. */
     const val E1_MEASUREMENT_ITERATIONS: Int = 5

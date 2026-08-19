@@ -62,9 +62,22 @@ import java.util.concurrent.TimeUnit
  *
  * ```
  * ./gradlew :bench:jmhJar
- * java -jar bench/build/libs/bench-jmh.jar BoundedReadBenchmark \
+ * ~/.gradle/jdks/eclipse_adoptium-21-*/jdk-21*/Contents/Home/bin/java \
+ *      -jar bench/build/libs/bench-jmh.jar BoundedReadBenchmark \
  *      -rf csv -rff /abs/path/e1.csv 2>&1 | tee /abs/path/e1.log
  * ```
+ *
+ * **Invoke the Gradle toolchain's own JDK 21 by path, never a bare `java`.** `NOISE_FLOOR`
+ * (`civictech.bench.Dispersion`) was derived on Temurin 21 and every other entry in
+ * `doc/bench/findings.md` is measured there, so a sweep on another JVM is not comparable
+ * to the threshold it will be classified against. A bare `java` resolved to Homebrew
+ * JDK 26 on the machine this was run on — the exact substitution that produced the
+ * superseded REAL-drive throughput entry (`computenet-hqid`), where five major JDK
+ * versions separated the claimed environment from the measured one. Nothing in this build
+ * pins it for you: the JMH jar is an ordinary executable jar and Gradle is not in the
+ * loop once it is built. The run's own `# VM version:` banner line, retained in the
+ * `.log` beside the results, is the check that the right JVM took — read it, do not
+ * assume it.
  *
  * The `tee` is not optional if the results are going to become a findings entry: JMH's CSV
  * carries no JVM columns, so `civictech.bench.MeasuringJvm.fromJmhLog` reads the measuring
@@ -80,11 +93,15 @@ import java.util.concurrent.TimeUnit
  * The JMH knobs below come from `BoundedReadFixtures`' `E1_*` constants for the reason
  * `OperatorThroughputBenchmark` gives for the same indirection: a renderer recording the
  * `RunEnvironment` of a sweep must not be able to disagree with the configuration the
- * benchmark actually ran under. They are modest — 1 fork, 3 warmup + 5 measurement
- * iterations of 1 s — because the 10^5 state is re-seeded per fork and this repository's
- * benchmark runs share a machine with concurrent agent builds. A sweep that wants the
- * original's stability budget raises them at the command line (`-f`, `-wi`, `-i`), which
- * is also the only way to raise them without invalidating the constants a renderer reads.
+ * benchmark actually ran under. They are the repository's convention — 5 forks, 5 warmup +
+ * 5 measurement iterations of 1 s — raised on `computenet-x9e.6.4` from the 1 fork /
+ * 3 warmup this file shipped with; the constants' own comment gives both reasons.
+ *
+ * **A sweep must NOT raise the sample at the command line** (`-f`, `-wi`, `-i`), and an
+ * earlier revision of this paragraph wrongly recommended exactly that: the renderer builds
+ * its `RunEnvironment` from the constants, so a flag-raised run publishes under a
+ * configuration it did not run at — the disagreement the indirection exists to prevent.
+ * Raise the constants instead.
  */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
