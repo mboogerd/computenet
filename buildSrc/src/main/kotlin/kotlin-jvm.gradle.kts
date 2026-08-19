@@ -237,8 +237,8 @@ tasks.withType<Test>().configureEach {
     //
     // Hence `availableProcessors() / 2` clamped to [1, 4]: 2 on the 4-vCPU runner,
     // where 2 left the control column alone across four runs and 4 tripled it in the
-    // one run it got; 4 on a >=8-core machine, which is where the 2.39x was measured. The clamp is a
-    // floor on evidence, not on generosity — 4 is the largest count measured
+    // one run it got; 4 on a >=8-core machine, where the 2.39x was measured. The
+    // clamp is a floor on evidence, not on generosity — 4 is the largest count measured
     // anywhere, so nothing here extrapolates past its data.
     //
     // Safety, audited per class rather than assumed, since concurrent forks are the
