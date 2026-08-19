@@ -49,6 +49,33 @@ class BdScratchWorkspace private constructor(val root: Path, private val bdEnv: 
     }
 
     /**
+     * Like [run], but **never throws** on a non-zero exit — it returns the
+     * exit code alongside the combined output.
+     *
+     * Added by task computenet-98u.2.2 for one purpose:
+     * [civictech.demo.beadsmirror.e2e.ReadyDifferentialHarness]'s divergence
+     * evidence capture. When a comparison disagrees, the harness runs
+     * `bd show <id> --json` for every id in the symmetric difference — and an
+     * id can legitimately be one the schedule has just `bd delete`d, for which
+     * `bd show` exits non-zero. [run]'s fail-loud `check` would then replace
+     * the divergence report (the actual finding) with a "bd show exited 1"
+     * failure from the evidence gatherer, which is precisely backwards. The
+     * refusal text IS evidence here, so it is captured rather than thrown.
+     *
+     * Every mutation path keeps using [run]: a `bd` mutation that fails is a
+     * broken schedule and must still fail loudly.
+     */
+    fun runAllowingFailure(vararg bdArgs: String): BdInvocation {
+        val builder = ProcessBuilder(listOf("bd") + bdArgs)
+            .directory(root.toFile())
+            .redirectErrorStream(true)
+        builder.environment().putAll(bdEnv)
+        val process = builder.start()
+        val output = process.inputStream.bufferedReader().readText()
+        return BdInvocation("bd ${bdArgs.joinToString(" ")}", process.waitFor(), output)
+    }
+
+    /**
      * Squashes this workspace's Dolt history into a single commit
      * (`bd flatten --force`) — the real history-compaction operation tests
      * use to produce a checkpoint hash that genuinely falls out of
@@ -188,6 +215,15 @@ class BdScratchWorkspace private constructor(val root: Path, private val bdEnv: 
             return BdSyncedWorkspacePair(pusher, puller, remoteDir)
         }
     }
+}
+
+/**
+ * One completed `bd` invocation that was allowed to fail — see
+ * [BdScratchWorkspace.runAllowingFailure]. [command] is the rendered
+ * invocation, so a captured refusal names the question as well as the answer.
+ */
+data class BdInvocation(val command: String, val exitCode: Int, val output: String) {
+    val succeeded: Boolean get() = exitCode == 0
 }
 
 /**
