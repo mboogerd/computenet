@@ -241,7 +241,7 @@ tasks.withType<Test>().configureEach {
     // most likely to be optimistic. Do not accept a change here on one green run.
     when (project.path) {
         ":kernel" -> maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 2)
-        ":demo:beadsmirror" -> maxParallelForks = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
+        ":demo:beadsmirror" -> maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 2)
     }
     // Hang -> failure, not a silently stuck build. 440+ unbudgeted runToIdle() call
     // sites and zero prior @Timeout meant a livelock regression could hang CI
