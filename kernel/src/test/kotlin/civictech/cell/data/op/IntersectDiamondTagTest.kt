@@ -89,6 +89,17 @@ class IntersectDiamondTagTest {
         assertEquals(setOf("e"), tagFold(out), "C ∪ (A ∩ B) keeps e via C")
     }
 
+    /**
+     * **This case does NOT discriminate the fix.** Measured on the pre-fix
+     * code (`AdvertisedLedger` restored, both call sites, `:kernel:test
+     * --rerun --no-build-cache`): it PASSED, while the reproduction and the
+     * chained case FAILED. The old code did commit the 21 §Tag hygiene
+     * violation here — it re-advertised the unchanged side's tag after an exit
+     * had deleted it — but the union's own tombstone made the re-emitted tag
+     * inadmissible rather than fatal, so the violation was *masked*, not
+     * absent. Keep the case as a regression guard on the minted path; do not
+     * read a green here as evidence that borrowing was sound.
+     */
     @Test
     fun `re-entry after the intersection closed and reopened is still live`() {
         val a = SetCell<String>()
