@@ -17,10 +17,14 @@ import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.WireCodec
 import io.kotest.matchers.booleans.shouldBeTrue
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.*
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 
 /**
  * `OrMapCell` / `TaggedMapDelta` — the four normative laws of spec 20/24
@@ -589,6 +593,113 @@ class OrMapCellTest {
         }
     }
 
+    // -----------------------------------------------------------------
+    // read accessors under a concurrent writer (computenet-yk5r)
+    // -----------------------------------------------------------------
+
+    /**
+     * A host reads the cell (`membership`/`value`/`state`/`snapshot`) from its
+     * own thread while the cell's writer mutates `puts`/`dels`. Before the
+     * guard those accessors iterated the shared `LinkedHashMap`s unsynchronised
+     * and escaped a `ConcurrentModificationException` into the caller —
+     * observed on CI as `HeadlineLivenessTest > initializationError`, thrown out
+     * of `OrMapCell.membership` on an `awaitUntil` thread while the beads
+     * mirror's poller wrote (computenet-yk5r).
+     *
+     * **This reproduction is statistical, not deterministic**, and deliberately
+     * so. Forcing the interleaving deterministically needs the reader to be
+     * suspended *inside* its iteration and the writer released while it holds
+     * there — but under the monitor the fix takes, that writer would block on
+     * the reader, so such a test deadlocks against the fixed code instead of
+     * passing. Measured failure rate against the unfixed accessors: 20/20
+     * rounds threw `ConcurrentModificationException`, the first within a few
+     * milliseconds of the writer starting. A null result here therefore bounds
+     * the defect well below the rate it had, but does not prove its absence.
+     *
+     * **The round's work is bounded in absolute terms, not by wall clock**
+     * (computenet-jw58). The reader makes a fixed [READS_PER_ROUND] passes and
+     * the writer is bounded *twice over* — it stops at [WRITE_BUDGET] writes, or
+     * as soon as the reader has finished its passes, whichever comes first. So
+     * the population the accessors walk never exceeds
+     * `SEEDED_KEYS + WRITE_BUDGET`, and the round costs the same number of map
+     * operations on 4 vCPUs as on 16. The earlier shape ran the writer
+     * `while (!stop)` against a fixed count of read passes: `puts` grew for the
+     * whole round, each read pass cost O(n) with n still rising, and the round's
+     * total cost was set by how fast the writer ran *relative* to the reader — a
+     * property of the machine. That version passed alone on CI at 5m22s and
+     * timed out at the 5-minute default `@Timeout` once a second test of the
+     * same shape ran in the sibling fork (PR #311).
+     *
+     * Bounding the writer by the reader's progress (not only by the budget) is
+     * what keeps the reproduction 20/20 rather than ~19/20: a writer that can
+     * exhaust a fixed budget before the reader's passes leaves rounds in which
+     * no read pass ever overlaps a write, and those rounds silently detect
+     * nothing.
+     *
+     * **What the numbers actually are, measured rather than inferred**
+     * (computenet-jw58 review, darwin/arm64, guarded code, one 20-round run):
+     * the writer completes **1–3 writes in 19 of the 20 rounds** and ~180 in
+     * the warm-up round. It never approaches [WRITE_BUDGET]. One
+     * `inlet.call` costs orders of magnitude more than one read pass over
+     * [SEEDED_KEYS] entries, so the reader's [READS_PER_ROUND] passes finish
+     * first in every round; [WRITE_BUDGET] is a ceiling that stops a *slow*
+     * reader from meeting an unbounded population, not the term that sets the
+     * observed cost. The round's real cost is `READS_PER_ROUND` passes over a
+     * population that stays near [SEEDED_KEYS] — a few hundred thousand element
+     * visits, absolutely bounded either way.
+     *
+     * That matters to anyone retuning these constants: the discriminating
+     * power comes from that *handful* of writes landing inside a read pass,
+     * and the reader's window is what gives them somewhere to land. Lowering
+     * [READS_PER_ROUND] shortens the window toward rounds in which the writer
+     * thread has not issued its first write before the reader is done — the
+     * same detect-nothing round as above, reached from the other side. The
+     * observed floor of one write per round is the margin here, and it has
+     * not been measured on a 4-vCPU CI runner.
+     */
+    @Test
+    fun `read accessors do not throw ConcurrentModificationException under a concurrent writer`() {
+        val failures = mutableListOf<Throwable>()
+        repeat(CONCURRENT_ROUNDS) { round ->
+            val cell = OrMapCell<String, String>()
+            repeat(SEEDED_KEYS) { cell.inlet.call.put("k$it", "v$it") }
+
+            val readsDone = AtomicInteger(0)
+            val writerFailure = AtomicReference<Throwable?>(null)
+            val writer = thread(name = "or-map-writer-$round") {
+                var n = SEEDED_KEYS
+                var written = 0
+                try {
+                    while (written < WRITE_BUDGET && readsDone.get() < READS_PER_ROUND) {
+                        cell.inlet.call.put("k${n++}", "v")
+                        if (n % 3 == 0) cell.inlet.call.remove("k${n % SEEDED_KEYS}")
+                        written++
+                    }
+                } catch (t: Throwable) {
+                    writerFailure.set(t)
+                }
+            }
+            try {
+                repeat(READS_PER_ROUND) {
+                    cell.membership()
+                    cell.value("k1")
+                    cell.state()
+                    cell.snapshot()
+                    readsDone.incrementAndGet()
+                }
+            } catch (t: Throwable) {
+                failures += t
+            } finally {
+                readsDone.set(READS_PER_ROUND)
+                writer.join(60_000)
+            }
+            writerFailure.get()?.let { failures += it }
+        }
+        withMessage("read accessors threw under a concurrent writer: ${failures.map { it::class.java.name }}") {
+            failures.shouldBeEmpty()
+        }
+    }
+
     private inline fun withMessage(clue: String, block: () -> Unit) =
         io.kotest.assertions.withClue(clue, block)
 
@@ -597,5 +708,24 @@ class OrMapCellTest {
 
     private companion object {
         const val WRITERS = 3
+
+        /** Rounds of the concurrent-read regression; each round is a fresh cell. */
+        const val CONCURRENT_ROUNDS = 20
+
+        /** Keys seeded before the writer starts — enough that an iteration spans a write. */
+        const val SEEDED_KEYS = 400
+
+        /** Read passes per round, each touching all four public accessors. */
+        const val READS_PER_ROUND = 40
+
+        /**
+         * Hard cap on the writes one round may perform. It is a *cap*, not a
+         * target: the writer normally stops earlier, when the reader finishes
+         * its [READS_PER_ROUND] passes. The cap is what makes the round's cost
+         * machine-independent — it bounds the key population the reader walks,
+         * where the previous unbounded `while (!stop)` writer let that
+         * population grow for the whole round.
+         */
+        const val WRITE_BUDGET = 20_000
     }
 }

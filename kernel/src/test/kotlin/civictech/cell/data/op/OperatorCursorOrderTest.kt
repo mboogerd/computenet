@@ -82,7 +82,10 @@ class OperatorCursorOrderTest {
         val s1right = pages.tagged("right").single { it.element == "s1" }
         val s1ledger = pages.tagged("ledger").single { it.element == "s1" }
         setOf(s1.tags, s1right.tags, s1ledger.tags).size shouldBe 3
-        s1ledger.tags shouldBe (s1.tags + s1right.tags)
+        // computenet-vvre: the ledger tag is MINTED, so it is disjoint from both
+        // sides rather than their union (21 §Tag hygiene; was `s1.tags + s1right.tags`)
+        s1ledger.tags.size shouldBe 1
+        s1ledger.tags.intersect(s1.tags + s1right.tags).shouldBeEmpty()
     }
 
     @Test
@@ -296,7 +299,8 @@ class OperatorCursorOrderTest {
         // the removal really happened: `s1` is gone from the left tag state and
         // was retracted from the ledger
         cell.snapshot().slot(0).asTagMap().keys shouldNotContain "s1"
-        cell.snapshot().slot(2).asTagMap().keys shouldNotContain "s1"
+        // MintedLedger's snapshot is `[advertised, counter]` (computenet-vvre)
+        (cell.snapshot().slot(2) as List<*>)[0].asMap().keys shouldNotContain "s1"
         // ... it minted no tag, so both endpoint stamps are equal
         pages.first().frontier shouldBe pages.last().frontier
         // ... while the union still names `s1` present on the left, because page

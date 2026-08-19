@@ -38,6 +38,29 @@ tasks.withType<Test>().configureEach {
             project.hasProperty("multiJvmOnly") -> includeTags("multi-jvm")
             project.hasProperty("excludeMultiJvm") -> excludeTags("multi-jvm")
         }
+        // @Tag("bench") gate (BEN1, computenet-x9e.2.1) [BEN1-09][BEN1-10][BEN1-11].
+        // Deliberately a SEPARATE conditional from the multi-jvm `when` above, not a
+        // shared arm of it: JUnitPlatformOptions.includeTags/excludeTags each accumulate
+        // into their own Set (calling them again ADDS tags, it does not replace), so two
+        // independent conditionals compose into one filter rather than the first match
+        // in a combined `when` shadowing the second. That is what makes
+        // `-PexcludeMultiJvm=true` exclude multi-jvm AND bench together below, instead
+        // of only whichever arm happened to come first.
+        //
+        // Bench differs from multi-jvm in its DEFAULT: multi-jvm runs everything unless
+        // told otherwise; bench is excluded unless `-PbenchOnly` explicitly asks for it.
+        // That asymmetry is deliberate and is the refutation of the "permanent tax"
+        // objection to adding a benchmark module at all (V1C-BENCH) — a plain
+        // `./gradlew test`, and every module's default `test` task, NEVER executes a
+        // `@Tag("bench")` probe. `-PbenchOnly=true` flips to the opposite extreme: only
+        // bench-tagged tests run, and the unconditional exclusion above does not apply
+        // (an include and an exclude of the same tag would be contradictory, so this is
+        // an if/else, not two independent calls the way multi-jvm composes with bench).
+        if (project.hasProperty("benchOnly")) {
+            includeTags("bench")
+        } else {
+            excludeTags("bench")
+        }
     }
     // The whole kernel suite runs in one JVM fork; ProtocolSupport keys ports in a
     // JVM-global map whose handler-closure values reference their keys, so ports

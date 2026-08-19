@@ -10,6 +10,8 @@ what is specific to its role. Cited beads carry the full incidents
 - [Why `BUILD SUCCESSFUL` proves nothing](#why-build-successful-proves-nothing)
 - [The three signals to consume, per run](#the-three-signals-to-consume-per-run)
 - [`--rerun` semantics](#--rerun-semantics)
+- [A killed test task corrupts the results store](#a-killed-test-task-corrupts-the-results-store)
+- [How long the suites take](#how-long-the-suites-take)
 - [Contention from this skill's own parallelism](#contention-from-this-skills-own-parallelism)
 - [Rare-failure evidence](#rare-failure-evidence)
 
@@ -77,6 +79,22 @@ on a long-lived checkout `legacy/` and `runtime/` are stale build output
 (`inspect/ui`, `demo/agora/ui`) emit no JUnit XML and are invisible to this
 count — their absence is not a wrong glob.
 
+**Those timestamps are UTC. Your shell clock is not.** This host runs CEST
+(UTC+2), so a run you performed *seconds* ago reads two hours old against
+`date`, and the freshness check reaches its own opposite conclusion: that your
+Gradle invocation silently did nothing and you are looking at leftovers. A
+reviewer hit exactly that and had to work it out mid-report — `newest
+2026-08-18T15:07:16.653Z` against a local clock reading 17:07 (computenet-8dtq).
+The asymmetry is what makes it worth a line: misreading *fresh as stale* costs
+a wasted re-run, or an agent debugging a build that works; the reverse error
+this confusion cannot produce. Take the reference reading yourself, in UTC,
+immediately before the Gradle call, and compare against that — then no timezone
+reasoning is needed at all:
+
+```bash
+date -u +%Y-%m-%dT%H:%M:%S     # before the run; every XML timestamp must exceed it
+```
+
 Quote the numbers, the module count, and `newest` in your report. An
 unquantified "suite green" is not a verification record, and nobody re-runs
 it after you: your report *is* the evidence the next session trusts.
@@ -96,6 +114,49 @@ it after you: your report *is* the evidence the next session trusts.
   for any load-bearing run — a mutation check, a before/after comparison —
   add `--no-build-cache` alongside `--rerun`
   ([mutation-check.md](mutation-check.md) step 4, computenet-qsfu).
+
+## A killed test task corrupts the results store
+
+The 600000 ms foreground cap makes killing a Gradle run routine on this repo's
+long suites, and a killed test task leaves a **truncated binary results store**
+at `<module>/build/test-results/test/binary`. Every LATER run of that task then
+dies inside `Test.getPreviousFailedTestClasses`, and the failure does not name
+its cause — it reads as a broken build, not as leftover state:
+
+- `java.io.EOFException` / a Kryo buffer underflow from
+  `Test.getPreviousFailedTestClasses`
+- `NoSuchFileException: in-progress-results-generic.bin` — what you get if you
+  attempt the cleanup while a daemon still holds the directory, i.e. a *second*
+  misleading error on top of the first
+
+The cure is to remove `<module>/build/test-results` with no live daemon holding
+it. Cost several minutes to diagnose the first time, and was then hand-carried
+into four dispatch prompts in the same session because nothing recorded it
+(computenet-r8zj). This is the other half of the cap from
+[agent-execution.md](agent-execution.md)'s background-and-wait rule: that
+covers an agent *stalling* on a long suite, this is what it leaves behind when
+it *kills* one — and the more confusing half, because the damage surfaces on a
+later, apparently unrelated run.
+
+## How long the suites take
+
+You need this **before** you choose foreground or background, and guessing
+wrong costs a stall or a corrupted results store (both above). These are
+measurements, not guarantees — machine-specific and they will drift, so each
+carries its date and host. Treat an entry older than a few weeks as a hint
+about *order of magnitude* only, and re-measure rather than quoting it as
+current (computenet-ov2g).
+
+| Suite | Time | Fits the 600000 ms cap? |
+|---|---|---|
+| `:kernel:test` | ~3–4 min (~40s with `--rerun` on a warm tree) | yes |
+| `:demo:exchange:test` | well under the cap | yes |
+| `:demo:beadsmirror:test` | **~11m45s** | **no** — background and wait |
+| repo-wide `./gradlew test` | **~12m45s** | **no** — background and wait |
+
+*Measured 2026-08-18 on MacBoo (Darwin arm64, 16 cores), warm daemon.*
+CI, for comparison: `build-test-fast` ~8m, `kernel-test` ~3–5m,
+`concord-full` ~2.5m (Linux runners).
 
 ## Contention from this skill's own parallelism
 

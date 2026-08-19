@@ -257,7 +257,95 @@ class KeyedSetCellTest {
         }
     }
 
+    // -----------------------------------------------------------------
+    // read accessors under a concurrent writer (computenet-ndf6)
+    // -----------------------------------------------------------------
+
+    /**
+     * A host reads the cell (`snapshot`/`readBounded`) from its own thread while
+     * the cell's writer mutates `current`. Before the guard those accessors
+     * iterated the shared map — `current.mapValues { … }` in `snapshot`,
+     * `EntryOrder.freeze(current.keys) { … }` at the walk's open in
+     * `readBounded` — unsynchronised, and escaped a
+     * `ConcurrentModificationException` into the caller. The keyed-upsert member
+     * of the family whose OR-set twins were fixed as computenet-yk5r
+     * (`OrMapCell`) and computenet-bdth (`SetCell`).
+     *
+     * **This reproduction is statistical, not deterministic**, for the reason
+     * `SetCellTest`'s twin gives: forcing the interleaving deterministically
+     * needs the reader suspended *inside* its iteration while the writer is
+     * released, and under the monitor the fix takes, that writer blocks on the
+     * reader — so such a test deadlocks against the fixed code instead of
+     * passing. A null result here bounds the defect well below the rate it had
+     * but does not prove its absence.
+     *
+     * **The round's work is bounded in absolute terms, not by wall clock**
+     * (computenet-jw58, the shape this copies): the reader makes a fixed
+     * [READS_PER_ROUND] passes and the writer stops at [WRITE_BUDGET] writes *or*
+     * as soon as the reader has finished its passes, whichever comes first, so
+     * the key population never exceeds `SEEDED_KEYS + WRITE_BUDGET` and the round
+     * costs the same number of map operations on 4 vCPUs as on 16.
+     */
+    @Test
+    fun `read accessors do not throw ConcurrentModificationException under a concurrent writer`() {
+        val failures = mutableListOf<Throwable>()
+        repeat(CONCURRENT_ROUNDS) { round ->
+            val cell = KeyedSetCell<String, String>()
+            repeat(SEEDED_KEYS) { cell.inlet.call.put("k$it", "e$it") }
+
+            val readsDone = java.util.concurrent.atomic.AtomicInteger(0)
+            val writerFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+            val writer = kotlin.concurrent.thread(name = "keyed-set-cell-writer-$round") {
+                var n = SEEDED_KEYS
+                var written = 0
+                try {
+                    while (written < WRITE_BUDGET && readsDone.get() < READS_PER_ROUND) {
+                        cell.inlet.call.put("k${n++}", "e$n")
+                        if (n % 3 == 0) cell.inlet.call.remove("k${n % SEEDED_KEYS}")
+                        written++
+                    }
+                } catch (t: Throwable) {
+                    writerFailure.set(t)
+                }
+            }
+            try {
+                repeat(READS_PER_ROUND) {
+                    cell.snapshot()
+                    cell.readBounded(civictech.cell.StateRead())
+                    readsDone.incrementAndGet()
+                }
+            } catch (t: Throwable) {
+                failures += t
+            } finally {
+                readsDone.set(READS_PER_ROUND)
+                writer.join(60_000)
+            }
+            writerFailure.get()?.let { failures += it }
+        }
+        assertTrue(
+            failures.isEmpty(),
+            "read accessors threw under a concurrent writer: ${failures.map { it::class.java.name }}",
+        )
+    }
+
     companion object {
+        /** Rounds of the concurrent-read regression; each round is a fresh cell. */
+        const val CONCURRENT_ROUNDS = 20
+
+        /** Keys seeded before the writer starts — enough that an iteration spans a write. */
+        const val SEEDED_KEYS = 400
+
+        /** Read passes per round, each touching both host-callable accessors. */
+        const val READS_PER_ROUND = 40
+
+        /**
+         * Hard cap on the writes one round may perform. It is a *cap*, not a
+         * target: the writer normally stops earlier, when the reader finishes its
+         * [READS_PER_ROUND] passes. The cap is what makes the round's cost
+         * machine-independent — it bounds the key population the reader walks.
+         */
+        const val WRITE_BUDGET = 20_000
+
         fun roundTrip(state: Serializable): Serializable {
             val bytes = java.io.ByteArrayOutputStream()
             java.io.ObjectOutputStream(bytes).use { it.writeObject(state) }

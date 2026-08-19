@@ -30,30 +30,71 @@ interface MapApi<K, V> {
 class MapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) : MapCellBase<K, V>(ref), BoundedStateful {
     private val state = mutableMapOf<K, V>()
 
+    /**
+     * Guards **every** access to [state] — the read accessors as much as the
+     * writers. The last-write-wins twin of `SetCell.stateLock` (computenet-bdth)
+     * and `OrMapCell.stateLock` (computenet-yk5r), taken for the same reason and
+     * with the same discipline (computenet-ndf6).
+     *
+     * The cell's writer runs on whichever thread delivers to `inlet`, while
+     * [snapshot] and [readBounded] are *host*-facing reads a caller makes from
+     * its own thread. Unguarded, `HashMap(state)` in [snapshot] and
+     * `EntryOrder.freeze(state.keys, …)` in [readBounded]'s [openWalk] iterate
+     * the shared map and escape a [java.util.ConcurrentModificationException]
+     * into the caller — the identical escape observed on CI out of
+     * `OrMapCell.membership`. No `MapCell` caller is known to read from a host
+     * thread concurrently with a writer today, so this is latent rather than
+     * observed; it is latent in exactly the way `OrMapCell`'s was until CI
+     * found it.
+     *
+     * **The monitor is never held across an outbound call**: `put`/`remove`
+     * mutate under it and `propagate` after it is released. This cell has no
+     * delivery listeners and no remote-merge path, so those are the only
+     * outbound calls it makes. The only foreign code that can run under the
+     * monitor is a key's own `hashCode`/`equals` (unavoidable — the keys are map
+     * keys) and an [Interest] predicate, both pure by contract and neither
+     * reaching a cell, port or link.
+     *
+     * **What it costs.** Reads serialize against the single writer: a host
+     * polling [snapshot] or [readBounded] over a large map delays the next write
+     * by that scan. Nothing downstream is blocked, per the paragraph above.
+     *
+     * **Why not the cheaper options.** Copying on read without a guard does not
+     * help — the copy is itself an iteration and throws the same CME. A
+     * concurrent map would replace the map's insertion-order iteration with hash
+     * order, which [EntryOrder] deliberately re-imposes an order against, and
+     * would still let one accessor tear a page against the walk's frozen order.
+     */
+    private val stateLock = Any()
+
     // constructed inline: the factory runs during base-class init, before this
     // class's own fields initialize — the object only *captures* `this`; its
     // methods read subclass state later, at message time.
     override fun inletHandler(): MapOps<K, V> = object : MapOps<K, V> {
         override fun put(key: K, value: V) {
-            state[key] = value
+            // the mutation happens under `stateLock`, the propagation strictly
+            // after it is released (see stateLock's KDoc).
+            synchronized(stateLock) { state[key] = value }
             outlet.call.propagate(MapDelta(mapOf(key to value), emptySet()))
         }
 
         override fun remove(key: K) {
-            state.remove(key)
+            synchronized(stateLock) { state.remove(key) }
             outlet.call.propagate(MapDelta(emptyMap(), setOf(key)))
         }
     }
 
     init {
         // late-join catch-up (G-22): current entries as a delta-from-empty
-        outlet.catchUpOnLinked { if (state.isEmpty()) null else MapDelta(state.toMap(), emptySet()) }
+        outlet.catchUpOnLinked {
+            synchronized(stateLock) { if (state.isEmpty()) null else MapDelta(state.toMap(), emptySet()) }
+        }
     }
 
-    override fun snapshot(): Serializable = HashMap(state)
+    override fun snapshot(): Serializable = synchronized(stateLock) { HashMap(state) }
 
     @Suppress("UNCHECKED_CAST")
-    override fun restore(state: Serializable) {
+    override fun restore(state: Serializable) = synchronized(stateLock) {
         this.state.clear()
         this.state.putAll(state as Map<K, V>)
     }
@@ -109,7 +150,11 @@ class MapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) : MapCellBase<K, 
      * counted in [StatePage.exclusivesElided].
      */
     @Suppress("UNCHECKED_CAST")
-    override fun readBounded(request: StateRead): StatePage {
+    override fun readBounded(request: StateRead): StatePage = synchronized(stateLock) {
+        // one page is assembled under the monitor: it walks the frozen order but
+        // reads the LIVE map, so it races the fold exactly as [snapshot] does.
+        // There is no outbound call in here, so the monitor is only ever held
+        // across pure map work.
         val scope = request.scope
         @Suppress("UNCHECKED_CAST")
         val walk = (request.cursor?.token as? KeyWalk<K>) ?: openWalk(scope)
@@ -143,7 +188,7 @@ class MapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) : MapCellBase<K, 
         }
 
         val complete = index >= order.size
-        return StatePage(
+        StatePage(
             entries = entries,
             next = if (complete) null else Cursor(KeyWalk(order, index)),
             exclusivesElided = elided,
@@ -151,10 +196,10 @@ class MapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) : MapCellBase<K, 
     }
 
     /** The walk's one O(n log n) pass (V1C-CELLS): impose the key order once, never per page. */
-    private fun openWalk(scope: Interest?): KeyWalk<K> {
+    private fun openWalk(scope: Interest?): KeyWalk<K> = synchronized(stateLock) {
         val admit: (K) -> Boolean =
             if (scope == null || scope is Interest.Total) { _ -> true } else { k -> scope.admits(k) }
-        return KeyWalk(EntryOrder.freeze(state.keys, admit), 0)
+        KeyWalk(EntryOrder.freeze(state.keys, admit), 0)
     }
 
     companion object {

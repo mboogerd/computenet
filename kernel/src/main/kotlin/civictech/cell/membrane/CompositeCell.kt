@@ -19,10 +19,12 @@ import civictech.cell.link.LinkRole
 import civictech.cell.link.Linked
 import civictech.cell.link.PeerId
 import civictech.cell.port.Port
+import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
 import civictech.cell.protocol.ProtocolId
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
+import civictech.cell.port.TargetedDelivery
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.Proxy
 import java.util.UUID
@@ -287,7 +289,20 @@ abstract class CompositeCell(
             } else {
                 { args ->
                     accounted(args) ?: run {
-                        stallDeniedEdges(sequenceOf(organelleOutlet), CurrentContext.get())
+                        // computenet-oenm: scoped to the single recipient when
+                        // this suppression belongs to a TARGETED delivery
+                        // (`FanOutlet.at`) rather than a broadcast. Only that
+                        // one consumer was starved; classifying the outlet's
+                        // other Consume links would advance their watermarks
+                        // and surface a GlitchViolation for a wave nothing was
+                        // withheld from. Null — every broadcast, and any
+                        // targeted frame whose scope a nested emission already
+                        // consumed — keeps the whole-fan-out walk.
+                        stallDeniedEdges(
+                            sequenceOf(organelleOutlet),
+                            CurrentContext.get(),
+                            TargetedDelivery.take(),
+                        )
                         null
                     }
                 }
@@ -435,7 +450,7 @@ abstract class CompositeCell(
  * behind `[SEC1-28]`'s UNVERIFIED filing in `concord/corpus/DISPUTES.md`
  * (resolve-condition (b)), not something this classification closes.
  */
-private fun stallDeniedEdges(ports: Sequence<Port>, context: MessageContext?) {
+private fun stallDeniedEdges(ports: Sequence<Port>, context: MessageContext?, target: PortRef? = null) {
     if (context == null || context.baseline != null) return
     val notice = StallNotice.Stall(StallReason.DEAD_LETTERED, context.timestamp)
     ports.forEach { port ->
@@ -445,6 +460,14 @@ private fun stallDeniedEdges(ports: Sequence<Port>, context: MessageContext?) {
             // this refusal, and an Observe-role edge never gates a wave
             // (PN-10, `WaveFrontier.expectedLocalEdges`) — telling it would
             // buy nothing and surface a spurious GlitchViolation.
+            //
+            // And, when [target] names one (computenet-oenm), only THAT link:
+            // a suppressed `FanOutlet.at` delivery had exactly one recipient,
+            // so the other Consume links of the same outlet are not starved and
+            // would take the same spurious GlitchViolation an Observe edge
+            // would. A null [target] is a broadcast — every Consume link, as
+            // before.
+            if (target != null && link.to != target) return@forEach
             if (link.fromPort === linked && link.role == LinkRole.Consume) {
                 Protocols.sendDownstream(link, Protocols.Suspension, notice)
             }

@@ -12,7 +12,7 @@ trigger below.
 
 ## The reactive trigger
 
-`scripts/gate.sh` + `scripts/install-trigger.sh` make this lane
+`.claude/skills/remediate-friction/scripts/gate.sh` + `.claude/skills/remediate-friction/scripts/install-trigger.sh` make this lane
 event-driven: `bd` rewrites `.beads/issues.jsonl` on every mutation, so a
 launchd `WatchPaths` agent fires the gate the moment anything is filed —
 including the step-7 filings of a /work session finishing on this machine.
@@ -33,7 +33,7 @@ and `jq` resolve (their paths and the actor get baked into the plist):
 
 Nothing installs itself — a human runs that. First firing may need a macOS
 Files-and-Folders approval; the log is
-`~/Library/Logs/sdlc-orchestrator.log`, and `SDLC_DRY_RUN=1 scripts/gate.sh`
+`~/Library/Logs/sdlc-orchestrator.log`, and `SDLC_DRY_RUN=1 .claude/skills/remediate-friction/scripts/gate.sh`
 shows what the filter would do without launching anything.
 
 This lane is deliberately separate from /work: a work session must never
@@ -65,7 +65,22 @@ and report.
 ## 2. Pick the most-reported item
 
 ```bash
-bd list --parent=computenet-wpvy --status=open --json
+# NOT --status=open. Filing no longer claims, so most items are open — but
+# the routing below has to SEE a claimed item to judge it: `theirs, skip` and
+# `stale for 12h, steal it` are both unreachable from an open-only listing,
+# and a claim abandoned mid-drain would be invisible forever. List everything
+# non-closed and let the assignee routing decide.
+#
+# This listing was open-only until 2026-08-19, when file-friction.sh still
+# pre-claimed at filing: it returned [] against a 48-item backlog and this
+# lane reported the log drained (computenet-oxbv). Widening it was half the
+# repair; the other half was dropping that filing claim, so `in_progress`
+# here now means a session is draining the item rather than that one once
+# reported it.
+bd list --parent=computenet-wpvy --all --json \
+  | sed -n '/^[[{]/,$p' \
+  | jq '[ (if type=="array" then . else (.issues // []) end)[]
+          | select(.status != "closed") ]'
 ```
 
 **Scope is parentage, not the `skill-friction` label.** Anything under this
@@ -95,21 +110,21 @@ Order by
 priority. Skip anything labeled `human`, and anything labeled
 `needs-evidence` — those are parked awaiting a corroborating instance
 (step 3), and the un-park is the label's *removal* by the next session that
-hits the wall (`work` step 7). Then pick by assignee — filing
-machines pre-claim items (SKILL.md step 7), and the claim decides which
-orchestrator drains what:
+hits the wall (`work` step 7). Then pick by assignee. **Unassigned is the
+normal state** — filing does not claim (`file-friction.sh`'s header says
+why), so a claim means a session started draining that item:
 
-- **Assigned to `$BEADS_ACTOR`** → yours already; work it, no sync needed.
 - **Unassigned** → an acquisition: claim by id, `bd dolt push`. Push
   rejected → pull, re-check the assignee, take the next item if it's gone.
+- **Assigned to `$BEADS_ACTOR`** → yours already; work it, no sync needed.
 - **Assigned to the other machine** → theirs; skip it — *unless* the claim
   is stale (untouched for more than 12h, per `updated_at` from the step-1
   pull; deliberately far above `work`'s 15-minute liveness window, because a
-  filing machine holds its claim across whole sessions before draining).
+  single drain — triage, fix, gate, PR — can hold a claim for hours).
   Then steal it with the full bracket: `bd dolt pull` to confirm it is still
   untouched, re-claim, `bd dolt push`, and note the steal in a comment. This
-  is the liveness backstop for a machine that claimed at filing and died
-  before draining.
+  is the liveness backstop for a machine that claimed and then died
+  mid-drain, and the reason this step lists claimed items at all.
 
 ```bash
 bd update <id> --claim
@@ -162,9 +177,10 @@ verdict:
   ```
 
   All three flags matter: step 2's `--claim` set assignee *and*
-  `in_progress`, and an item left `in_progress` is invisible to every
-  `--status=open` listing in this file — parked forever, un-parkable by
-  anyone.
+  `in_progress`. Resetting `--status=open` is what makes the park visible as
+  a park rather than as work in flight: step 2 lists everything non-closed,
+  so an item left `in_progress` here would read as claimed-and-being-drained
+  and never be re-examined.
 
   The comment is addressed to the next session that hits the same wall, not
   to the human; `work` step 7's upvote branch answers it and removes the
@@ -250,5 +266,10 @@ rejected-closed (with the one-line why), items parked `needs-evidence`
 oversight view for the human:
 
 ```bash
-bd list --parent=computenet-wpvy --status=open --json
+bd list --parent=computenet-wpvy --all --json \
+  | sed -n '/^[[{]/,$p' \
+  | jq -r '[ (if type=="array" then . else (.issues // []) end)[]
+             | select(.status != "closed") ]
+           | sort_by(-.comment_count)[]
+           | "\(.id)  c=\(.comment_count)  \(.assignee // "-")  \(.title)"'
 ```

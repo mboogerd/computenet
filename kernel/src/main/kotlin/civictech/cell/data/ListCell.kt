@@ -33,43 +33,94 @@ interface ListApi<E> {
 class ListCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) : ListCellBase<E>(ref), BoundedStateful {
     private val state = mutableListOf<E>()
 
+    /**
+     * Guards **every** access to [state] — the read accessors as much as the
+     * writers. The positional twin of `SetCell.stateLock` (computenet-bdth) and
+     * `OrMapCell.stateLock` (computenet-yk5r), taken for the same reason and
+     * with the same discipline (computenet-ndf6).
+     *
+     * The cell's writer runs on whichever thread delivers to `inlet`, while
+     * [snapshot] and [readBounded] are *host*-facing reads a caller makes from
+     * its own thread. This cell's exposure has **two** shapes where the map
+     * families have one:
+     *
+     * - [snapshot] copies the list, and the catch-up supplier iterates it —
+     *   the same [java.util.ConcurrentModificationException] escape as the map
+     *   families'.
+     * - [readBounded] reads `state.size` and then indexes `state[index]`. A
+     *   [ListOps.removeAt] landing between the two shrinks the list under the
+     *   walk and escapes an [IndexOutOfBoundsException] into the caller —
+     *   a torn read that no amount of copy-on-read repairs, because the tear is
+     *   between the bound and the access.
+     *
+     * No `ListCell` caller is known to read from a host thread concurrently
+     * with a writer today, so this is latent rather than observed; it is latent
+     * in exactly the way `OrMapCell`'s was until CI found it.
+     *
+     * **The monitor is never held across an outbound call**: every `inlet`
+     * operation mutates under it and `propagate`s after it is released. This
+     * cell has no delivery listeners and no remote-merge path, so those are the
+     * only outbound calls it makes.
+     *
+     * **What it costs.** Reads serialize against the single writer: a host
+     * polling [snapshot] or [readBounded] over a long list delays the next write
+     * by that scan. Nothing downstream is blocked, per the paragraph above.
+     *
+     * **Why not the cheaper options.** Copying on read without a guard does not
+     * help — the copy is itself a traversal, and it cannot close the
+     * size-then-index tear at all. A `CopyOnWriteArrayList` would make every
+     * write O(n) on the fold path, which is the cost this primitive exists to
+     * avoid.
+     */
+    private val stateLock = Any()
+
     // constructed inline: the factory runs during base-class init, before this
     // class's own fields initialize — the object only *captures* `this`; its
     // methods read subclass state later, at message time.
     override fun inletHandler(): ListOps<E> = object : ListOps<E> {
         override fun add(element: E) {
-            val index = state.size
-            state.add(element)
+            // the mutation happens under `stateLock`, the propagation strictly
+            // after it is released (see stateLock's KDoc).
+            val index = synchronized(stateLock) {
+                val at = state.size
+                state.add(element)
+                at
+            }
             outlet.call.propagate(ListDelta(adds = listOf(IndexedValue(index, element))))
         }
 
         override fun add(index: Int, element: E) {
-            state.add(index, element)
+            synchronized(stateLock) { state.add(index, element) }
             outlet.call.propagate(ListDelta(adds = listOf(IndexedValue(index, element))))
         }
 
         override fun set(index: Int, element: E) {
-            state[index] = element
+            synchronized(stateLock) { state[index] = element }
             outlet.call.propagate(ListDelta(updates = listOf(IndexedValue(index, element))))
         }
 
         override fun removeAt(index: Int) {
-            state.removeAt(index)
+            synchronized(stateLock) { state.removeAt(index) }
             outlet.call.propagate(ListDelta(removals = listOf(index)))
         }
     }
 
     init {
         // late-join catch-up (G-22): current contents as a delta-from-empty
-        outlet.catchUpOnLinked { if (state.isEmpty()) null else ListDelta(adds = state.withIndex().toList()) }
+        outlet.catchUpOnLinked {
+            synchronized(stateLock) {
+                if (state.isEmpty()) null else ListDelta(adds = state.withIndex().toList())
+            }
+        }
     }
 
-    override fun snapshot(): Serializable = ArrayList(state)
+    override fun snapshot(): Serializable = synchronized(stateLock) { ArrayList(state) }
 
     @Suppress("UNCHECKED_CAST")
-    override fun restore(state: Serializable) {
+    override fun restore(state: Serializable) = synchronized(stateLock) {
         this.state.clear()
         this.state.addAll(state as List<E>)
+        Unit
     }
 
     // ---------------------------------------------------------------------
@@ -117,7 +168,13 @@ class ListCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) : ListCellBase<E>(r
      * page: it becomes an [ExclusiveEntry] descriptor and is counted in
      * [StatePage.exclusivesElided].
      */
-    override fun readBounded(request: StateRead): StatePage {
+    override fun readBounded(request: StateRead): StatePage = synchronized(stateLock) {
+        // one page is assembled under the monitor: it reads the LIVE list, both
+        // its size and its elements, so it races the fold exactly as [snapshot]
+        // does — and the size-then-index pair must not straddle a writer (see
+        // stateLock's KDoc). There is no outbound call in here, so the monitor is
+        // only ever held across pure list work.
+        //
         // the cursor is a bare position: there is no key to freeze, and
         // freezing the elements themselves would copy the whole state, which is
         // the cost this primitive exists to remove
@@ -144,7 +201,7 @@ class ListCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) : ListCellBase<E>(r
         // re-read `size` after the loop: the list may only be walked forward, so
         // a walk ends when the cursor reaches the current end
         val complete = index >= state.size
-        return StatePage(
+        StatePage(
             entries = entries,
             next = if (complete) null else Cursor(java.lang.Integer.valueOf(index)),
             caveats = setOf(ReadCaveat.POSITIONAL_CURSOR),

@@ -13,6 +13,15 @@ bd list --parent=<id> --all --json
 
 A previous breakdown may have died part-way. Create only what's missing.
 
+**Re-read this listing immediately before your first `bd create`, and abort
+with a report if the child set changed.** One check at the start is a
+check-then-act with a multi-minute window: two breakdown agents dispatched
+minutes apart both read "not decomposed" and both proceeded, producing 13
+features where 6 belong (computenet-f2p4, and [feature.md](feature.md) carries
+the full story). If your own dotted ids **skip numbers** while you are
+creating, another writer is creating under this parent right now — stop and
+report rather than finishing the set.
+
 ## Verify the load-bearing premises first
 
 An item can assert its own infrastructure. "Over the existing Headscale
@@ -42,6 +51,28 @@ curl -sS -o /dev/null -w '%{http_code}' <url>   # a service it assumes is up
 than producing children that inherit it. Deferring the question into a child
 task as a "discovery step" is not verification — it is the same unverified
 assumption, one level further from anyone who could notice.
+
+**Except when the premise is false only HERE. A missing toolchain is not a
+park.** If the premise that failed is a tool, daemon, credential or platform
+that varies by machine — `cargo`, a running Docker daemon, a cloud
+credential — the epic is fine and this machine is simply not the one to run
+it. Record it in the form step 3's selection can test, and stand down without
+blocking anyone:
+
+```bash
+bd update <epic> --add-label "needs:cargo"     # the tool, as `command -v` spells it
+bd comment <epic> "Skipped on <machine>: needs cargo, absent here (command -v cargo empty, no ~/.cargo). Labelled needs:cargo; selectable on a machine that has it."
+```
+
+An ask-human park is `blocked` + `assignee=human` + the `human` label, which
+removes the epic from **every** machine's queue until a person answers — so
+parking for a machine-capability reason converts a local fact into a repo-wide
+block, by the one machine that could not run it. `computenet-egl` was parked
+exactly that way by a `cargo`-less machine while its sibling had `cargo` all
+along (computenet-yv63). A comment alone is **not** enough either: selection
+reads descriptions and labels, never comments, so the next session on the same
+machine re-derives the whole probe from scratch — which is how that park
+happened after an earlier session had already recorded the same finding.
 
 **A false premise the epic itself already retired is re-scoped in place, not
 parked.** An epic that cites its own upstream spike and says "re-scope against
@@ -165,7 +196,21 @@ epic success criterion is covered by at least one feature, and every feature
 serves at least one criterion. A criterion with no feature means the
 breakdown isn't finished; a feature serving none means it's out of scope.
 
-Comment the features created on the epic. Leave the epic `in_progress` — the
+Comment the features created on the epic.
+The invocation, since it is the one command this file asks you to run and
+nothing else shows it — the body is **positional**; `--text`, `--body` and
+`bd comment add` are all wrong and have each been guessed by a different
+agent (computenet-danb, computenet-63pn):
+
+```bash
+bd comment <id> "<text>"
+bd comment <id> --file "$SCRATCH/note.md"   # any body that quotes code
+```
+
+Use the `--file` form whenever the text contains backticks: inside a
+double-quoted argument they execute as shell and the word vanishes from the
+stored comment while `bd` reports success ([bd-traps.md](bd-traps.md)).
+ Leave the epic `in_progress` — the
 orchestrator releases the claim at its Finalize (an epic binds to a session,
 never across sessions; the features carry the resume state). Report the
 feature ids.

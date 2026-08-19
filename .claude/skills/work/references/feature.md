@@ -2,13 +2,128 @@
 
 Break one feature into tasks, then stop. Plan it, don't implement it.
 
-## Reconcile first
+## Contents
+
+- [Reconcile first — and again immediately before the first create](#reconcile-first-and-again-immediately-before-the-first-create)
+- [Do not write a worktree, a branch or a base commit into a task](#do-not-write-a-worktree-a-branch-or-a-base-commit-into-a-task)
+- [A bead must not suggest a method its own acceptance forbids](#a-bead-must-not-suggest-a-method-its-own-acceptance-forbids)
+- [What a file claim must include that the bead never says](#what-a-file-claim-must-include-that-the-bead-never-says)
+- [Verify the load-bearing premises first](#verify-the-load-bearing-premises-first)
+- [Break it down](#break-it-down)
+- [Dependencies](#dependencies)
+- [Finish](#finish)
+
+## Reconcile first — and again immediately before the first create
 
 ```bash
 bd list --parent=<id> --all --json
 ```
 
 Create only what's missing.
+
+**Re-read this listing immediately before your first `bd create`, and abort
+with a report if the child set changed.** One check at the start is a
+check-then-act with a multi-minute window, and nothing revalidates inside it.
+On 2026-08-17 two breakdown agents dispatched ~3 minutes apart both ran this
+listing when epic `computenet-4ru` had exactly one child, both correctly
+concluded "not decomposed", and both proceeded. Their creates interleaved:
+**13 features where 6 belong**, in near-duplicate pairs covering identical
+scope, with the epic's blocking edges left straddling both sets
+(computenet-f2p4).
+
+That outcome is worse than clutter, and specifically so: `next-batch.py`
+batches on disjoint `metadata.files`, and a duplicate PAIR has **identical**
+claims — so it does not merely schedule both, it schedules them as *unrelated*
+work, putting two implementers into the same paths.
+
+**If your own dotted ids skip numbers while you are creating, another writer
+is creating under this parent right now.** Both agents watched their ids skip
+(one got `.3/.5/.6/.8`, the other `.2/.4/.7/.9`) and one noticed in real time,
+with no rule attached to the signal. Stop and report rather than finishing the
+set; a partial set someone can reconcile beats a complete duplicate one.
+
+## Do not write a worktree, a branch or a base commit into a task
+
+They are assigned at **dispatch** time by `next-batch.py` and
+`ensure-worktree.sh`, and they are **not knowable when the task is filed**.
+Every task in one session opened its description with a line naming the
+FEATURE's worktree and branch — for one, in as many words, *"Work in the
+feature worktree …, branch feature/…"* — which is wrong for every task:
+SKILL.md 5b gives each task its OWN worktree and branch cut from the feature
+branch, and 5c merges back. An implementer that followed its bead literally
+would work where the orchestrator merges, and violate one-worktree-one-live-agent
+by construction as soon as two tasks run concurrently, as two did. It happened
+on 4 of 4 tasks across 2 breakdowns, so it is a habit, not a slip
+(computenet-qlky).
+
+The same goes for `Base: origin/main <sha>`: by dispatch time one task's real
+base was two sibling merges later than the sha its bead named. **If a task
+must reference the feature, name the feature's ID and nothing else.** A
+breakdown that emits a worktree path, a branch name or a base sha into a task
+description is a defect the next reader can point at.
+
+## A bead must not suggest a method its own acceptance forbids
+
+When a task's acceptance rules out a class of technique — estimating,
+guessing, substituting a default — the *suggested method* you write must not
+name a member of that class. One bead offered "a reflective retained-size walk
+… classifying Timestamp instances and tag-map structure" as a sizing technique
+while its own acceptance carried `[BEN1-21]`, which forbids *estimating* the
+payload/metadata split — and any hand-rolled shallow-size model is an estimate.
+The two clauses pulled opposite ways, and resolving them decided the whole
+instrument. The implementer got it right and paid design time to notice; the
+orchestrator read the bead and dispatched it, because the contradiction was
+*inside one bead* and no file-claim check or batching rule can see that
+(computenet-qp07).
+
+**Where the distinction is subtle, state the discriminator in the bead.** For
+that case one sentence removed the whole ambiguity: *walk to classify, measure
+to size.*
+
+## What a file claim must include that the bead never says
+
+`check-files-claim.sh` greps the bead's text for path-shaped strings, so three
+kinds of required file are invisible to it by construction. Get them into the
+claim **at filing**, where you know the answer, rather than having it widened
+after a red suite:
+
+- **A task that adds a Gradle module claims `doc/ARCHITECTURE.md`.** kernel's
+  `ModuleInventoryTest` parses every `include(...)` line in
+  `settings.gradle.kts` and fails `:kernel:test` unless each module appears as
+  a literal backticked `` `:x` `` in that doc. Its KDoc forbids editing the
+  test to pass, and its `documentedExceptions` allowlist is not the sanctioned
+  route — so a claim of `<module>/,settings.gradle.kts` is **unsatisfiable by
+  construction**. Two sessions hit this the same day, independently, on
+  `:oracle` and `:identity` (computenet-d7qn, computenet-m9px).
+- **A criterion that names a TYPE claims that type's defining file.** "…
+  matchable by kind from `RunOutcome`" names the only file a kind can be added
+  to, and a type name is not slash-separated and has no extension, so nothing
+  about it looks like a path. One such task was unsatisfiable from the moment
+  it was filed and the guard passed it clean; the implementer discovered it
+  mid-work and had to choose between stalling and working outside its claim
+  (computenet-hws5). The sibling consequence counts too: **adding a kind to a
+  sealed hierarchy breaks every exhaustive `when` over it**, so the test
+  holding that `when` is required and belongs in the claim as well.
+- **"The file does not exist yet" is NOT evidence the claim is free.** A
+  breakdown checked that `doc/bench/findings.md` existed neither on
+  `origin/main` nor on the sibling feature branch — both true — and filed a
+  task to create it, while a task under a *different feature of the same epic*
+  already claimed creating it. The collision was with a task that had not run
+  yet, so it was invisible to every check that looks at the tree, and nothing
+  compares claims across features (computenet-55ro). Check the **pending
+  tasks** under the whole epic, not the tree:
+
+  ```bash
+  .claude/skills/work/scripts/epic-of.sh <feature-id>      # -> <epic-id>
+  bd list --parent=<epic-id> --all --json | sed -n '/^[[{]/,$p' \
+    | jq -r '(if type=="array" then . else (.issues // []) end)[]
+             | select(.status != "closed")
+             | "\(.id)\t\((.metadata // {}).files // "-")"'
+  ```
+
+  An overlap that is real gets a `blocks` edge and a comment saying the file
+  will already exist and must be appended to, not created — which is what was
+  done by hand the one time anybody noticed.
 
 ## Verify the load-bearing premises first
 
@@ -266,7 +381,21 @@ orchestrator's Finalize push (SKILL.md step 6) sends them to the shared
 tracker — don't sync here; only acquisitions are synced mid-session, and
 this is not one (claim-sync.md).
 
-Comment the tasks created on the feature. Leave it `in_progress` — a feature
+Comment the tasks created on the feature.
+The invocation, since it is the one command this file asks you to run and
+nothing else shows it — the body is **positional**; `--text`, `--body` and
+`bd comment add` are all wrong and have each been guessed by a different
+agent (computenet-danb, computenet-63pn):
+
+```bash
+bd comment <id> "<text>"
+bd comment <id> --file "$SCRATCH/note.md"   # any body that quotes code
+```
+
+Use the `--file` form whenever the text contains backticks: inside a
+double-quoted argument they execute as shell and the word vanishes from the
+stored comment while `bd` reports success ([bd-traps.md](bd-traps.md)).
+ Leave it `in_progress` — a feature
 closes only when its PR merges, never on task completion or a review verdict
 (review-feature.md: "Ready is not merged"). Report the task ids.
 
