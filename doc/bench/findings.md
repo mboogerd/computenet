@@ -1877,7 +1877,7 @@ readings of the same ten numbers agree:
 1. **Least-squares affine fit** `cost = a + b * degree`, per drive: REAL **a = 10.335 µs,
    b = 0.1187 µs/subscriber**, residuals −0.296 / +0.241 / −0.064 / +0.156 / −0.038 µs at
    D1..D256 — every residual inside that row's own 99.9% error bar. SIM **a = 0.948 µs,
-   b = 0.1008 µs/subscriber**, residuals +0.352 / +0.211 / −0.061 / −0.767 / +0.165 µs, of
+   b = 0.1008 µs/subscriber**, residuals +0.352 / +0.211 / −0.061 / −0.667 / +0.165 µs, of
    which D1, D4 and D64 sit outside their error bars (see the caveat below).
 2. **Segment marginals are flat where they are resolvable.** REAL's two best-resolved
    segments are 0.1233 ± 0.0202 (16→64) and 0.1177 ± 0.0149 (64→256) µs/subscriber:
