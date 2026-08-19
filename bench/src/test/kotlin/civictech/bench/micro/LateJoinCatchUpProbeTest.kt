@@ -49,6 +49,22 @@ import java.util.concurrent.CountDownLatch
  * machine-wide disturbance lands on both halves of a trial instead of on one condition.
  * For a *difference* that is a strength; for either level read on its own it is neither.
  *
+ * ## WHAT THE MECHANISM PREDICTS — a reading aid, not a verdict
+ *
+ * The joined-condition maxGap and the catch-up cost are predicted to track each other
+ * closely, and they did on every run of this artifact so far. That is the mechanism, not a
+ * coincidence and not an instrument fault: one drain thread serves the whole host, the
+ * priority-0 link install holds it for the copy *and* the delivery, and so the gap it opens
+ * in the pre-existing subscriber's arrival stream is the same interval as the catch-up
+ * itself. A reader who expected two independent numbers should read this paragraph before
+ * concluding the two columns are measuring one thing twice by accident — they are measuring
+ * one occupancy from both ends, which is what makes the paired difference against the
+ * unjoined condition the informative figure.
+ *
+ * **No verdict is drawn here.** Whether the observed cost FIRES, RETIRES or leaves G-43's
+ * trigger INCONCLUSIVE, and whether it grows linearly in state size, is the sibling
+ * reporting task's call on numbers from a run it can vouch for.
+ *
  * ## READ THIS BEFORE READING ANY NUMBER THESE PRINT
  *
  * - **The scale in a method's name is the PRE-SEED size.** Every add is a fresh element and
@@ -88,14 +104,15 @@ import java.util.concurrent.CountDownLatch
  *
  * Sizing, for a caller budgeting a slot — **measured on this branch, not estimated**
  * (2026-08-19, Apple M2 Pro, Temurin 21.0.11, all three methods in one
- * `:bench:test -PbenchOnly=true --rerun` invocation): **under 4 s of wall clock for the
- * whole class**, Gradle included. The bead's own estimate of "single-digit minutes" is an
- * order of magnitude high, and the reason is worth writing down so nobody re-derives it:
- * seeding is not the dominant cost here. An add through this rig costs ~1.5 µs, so a 10^5
- * seeding is ~150 ms — comparable to the `2 * TRIALS + WARMUP_TRIALS` drives of
- * `DRIVE_ADDS` adds that follow it, not dominant over them. What made the equivalent
- * bounded-read probe minutes at 10^5 was E2/E3's per-trial whole-state COPY and paged walk,
- * and this probe's per-trial re-baseline is a single delta rather than a walk.
+ * `:bench:test -PbenchOnly=true --rerun` invocation): **under 4 s of wall clock for all
+ * three methods**, Gradle included. That is two orders of magnitude below the "single-digit
+ * minutes" this probe was budgeted at, and the reason is worth writing down so nobody
+ * re-derives it: **seeding is not the dominant cost here.** An add through this rig costs
+ * ~2-8 µs (the printed drive durations divided by `DRIVE_ADDS`), so a 10^5 seeding is a
+ * fraction of a second — the same order as the `2 * TRIALS + WARMUP_TRIALS` drives that
+ * follow it, not dominant over them, and each trial's re-baseline is one delta rather than a
+ * per-trial whole-state copy or a paged walk. Whether the bounded-read probes' cost at 10^5
+ * is dominated by *their* per-trial copies is not measured here and is not claimed.
  *
  * The consequence is headroom, not a licence: the module's shared 5-minute per-method
  * timeout is ~2 orders of magnitude away, so no `@Timeout` override is needed here (unlike
