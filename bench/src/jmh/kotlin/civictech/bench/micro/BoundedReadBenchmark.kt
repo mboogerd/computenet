@@ -62,7 +62,7 @@ import java.util.concurrent.TimeUnit
  *
  * ```
  * ./gradlew :bench:jmhJar
- * ~/.gradle/jdks/eclipse_adoptium-21-*/jdk-21*/Contents/Home/bin/java \
+ * ~/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java \
  *      -jar bench/build/libs/bench-jmh.jar BoundedReadBenchmark \
  *      -rf csv -rff /abs/path/e1.csv 2>&1 | tee /abs/path/e1.log
  * ```
