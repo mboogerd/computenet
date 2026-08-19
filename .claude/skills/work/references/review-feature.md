@@ -514,7 +514,14 @@ of these is true:
   not fire *this* bullet however long it is. The next two still bind it;
 - for a repair that *is* code, more than **~30 changed lines** — insertions +
   deletions, not net (a reviewer self-certified at 41 by reading it as net;
-  computenet-e0i5).
+  computenet-e0i5). **This bullet bounds PRODUCTION changes. It does not bound
+  a test that meets the test-only exception below** — no mutation-demonstrated
+  test suite fits in 30 lines, so on the other reading the exception could
+  never be exercised and would be dead letter. One reviewer had to adjudicate
+  that mid-review with its certification hanging on the answer, and said so in
+  its verdict (computenet-a4h1). Meet the exception in full and the line count
+  is not the question; miss any part of it and the repair is substantive
+  whatever its size.
 
   **Count the code half, and count it mechanically.** `--stat`'s
   "X insertions(+), Y deletions(-)" is the *whole* diff, prose included, so it
@@ -573,6 +580,22 @@ of these is true:
   Meet all of it and certify normally; skip any part of it and the repair is
   substantive as before. A fully green feature should not cost a second opus
   review for tests that prove themselves (computenet-7bc9);
+
+  **If you certify READY but want your own work spot-checked, say so in the
+  verdict AND set `metadata.second_reader=<what to check>`.** A reviewer that
+  argues in its verdict about which rule governs is doing this file's job for
+  it, and the argument lands on the orchestrator exactly as it decides whether
+  to ship. The routing: a READY verdict carrying that key goes to
+  [ship-feature.md](ship-feature.md) §4's second-reader dispatch — the same
+  template, which is reusable as-is — **before** `gh pr ready`, not to the
+  plain ship sequence. The trigger is what the code IS, not how long it is: a
+  142-line mutation-demonstrated test needed a second reader not because it was
+  long but because it was the test certifying the feature's central
+  proposition, written by the agent that then certified the feature. When one
+  was dispatched, it re-ran the reviewer's mutation and three more — three of
+  four went red, and the fourth exposed a real bound on what the seam test
+  proves, which no line count could have produced. One agent, ~6 minutes
+  (computenet-a4h1);
 - any regenerated generated file (`CONCORDANCE.md`, KSP output consumers);
 - any new claim filed against the honesty ledger (`concord/corpus/DISPUTES.md`)
   or a new bead asserting an existing requirement is broken;
