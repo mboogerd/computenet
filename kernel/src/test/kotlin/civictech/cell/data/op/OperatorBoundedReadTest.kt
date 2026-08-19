@@ -174,15 +174,22 @@ class OperatorBoundedReadTest {
 
         pages.taggedMap("left") shouldBe snapshot.slot(0).asTagMap()
         pages.taggedMap("right") shouldBe snapshot.slot(1).asTagMap()
-        pages.taggedMap("ledger") shouldBe snapshot.slot(2).asTagMap()
+        // MintedLedger snapshot shape: `[advertised, counter]` (computenet-vvre)
+        pages.taggedMap("ledger") shouldBe
+            (snapshot.slot(2) as List<*>)[0].asMap().mapValues { setOf(it.value as Timestamp) }
         // "both" is live in all three, with three DIFFERENT tag sets — three
         // entries, never one collapsed one (Decision A)
         val bothEntries = pages.allEntries().filterIsInstance<TaggedEntry>().filter { it.element == "both" }
         bothEntries.map { it.subState }.toSet() shouldBe setOf("left", "right", "ledger")
         bothEntries.map { it.tags }.distinct().size shouldBe 3
-        // ... and the ledger's advertised tags are exactly the union of the sides'
-        bothEntries.single { it.subState == "ledger" }.tags shouldBe
-            (bothEntries.single { it.subState == "left" }.tags + bothEntries.single { it.subState == "right" }.tags)
+        // ... and the ledger's tag is MINTED, so it borrows from neither side
+        // (computenet-vvre; was asserted to be the union of the two sides')
+        val ledgerTags = bothEntries.single { it.subState == "ledger" }.tags
+        ledgerTags.size shouldBe 1
+        ledgerTags.intersect(
+            bothEntries.single { it.subState == "left" }.tags +
+                bothEntries.single { it.subState == "right" }.tags,
+        ).shouldBeEmpty()
     }
 
     @Test
