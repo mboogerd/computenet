@@ -14,7 +14,10 @@ import org.junit.jupiter.api.Test
  * [BdScratchWorkspace] and shell out to `bd ready --json` once per step, so
  * they are substantially slower than a unit test and are guarded on `bd`/`dolt`
  * being on PATH with `assumeTrue`, like every other live-workspace test in this
- * module (CI installs neither and runs these green-but-skipped).
+ * module. CI installs both (`.github/workflows/ci.yml`'s "Install bd and dolt"
+ * step, computenet-7em.5) and its report step FAILS the job if any
+ * `:demo:beadsmirror` test skips itself for a missing binary, so these run for
+ * real on Linux rather than green-but-skipped.
  *
  * **The seeds below are pinned.** If one of them ever goes red, the answer is
  * to read the [DivergenceRecord] it prints and triage it against
