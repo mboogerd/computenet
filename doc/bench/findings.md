@@ -1685,3 +1685,459 @@ needed in any of computenet-x9e.6.1's four files at full scale; the scratch driv
 compute the trigger's percentages was never committed.
 `doc/spec/90-roadmap/94-implementation-plan.md`, `doc/spec/90-roadmap/91-gap-analysis.md`
 and `doc/spec/CONCORDANCE.md` are unmodified; G-21 phase 3's row is cited, never edited.
+
+---
+
+## 2026-08-19 — fan-out scaling curve over `FanOutlet` at degrees {1, 4, 16, 64, 256}, and late-join `CatchUp` cost and source-context occupancy at 1e5 — G-43 FIRES
+
+`computenet-x9e.5.3`, running at full scale the two artifacts its sibling tasks built:
+`FanOutScalingBenchmark` + `FanOutFixtures` (`computenet-x9e.5.1`, BS-8) and
+`LateJoinCatchUpProbeTest` + `CatchUpFixtures` (`computenet-x9e.5.2`, BS-9). This task wrote
+no harness code and changed no fixture: every number below was produced by those artifacts
+at the constants they landed with — no `-f`/`-wi`/`-i` override, no raised fixture constant,
+and `NOISE_FLOOR` untouched. Base commit `67260393` (the merge of `computenet-x9e.5.2` into
+`feature/computenet-x9e.5`); `git diff --name-only <merge-base> HEAD` names this file only.
+
+The consumer is G-43 (`doc/spec/90-roadmap/91-gap-analysis.md:83` — cited, never edited),
+whose proposal includes *"bound the push-authoritative re-baseline (diff-against-last-acked
+/ delta-since-generation)"* against the gap's own *"re-baseline cost under wide fan-out"*.
+`CatchUp` is the path a re-baseline actually takes, which is why BS-9 exists alongside the
+degree curve.
+
+**Headline, before the numbers.** The two halves point in opposite directions and both
+answers matter: the steady-state fan-out curve is **linear in degree, not worse** — a fitted
+marginal of ~0.1–0.12 µs per additional subscriber with no resolvable superlinear term over
+1..256 — while the late-join re-baseline is **unbounded and measurably starves live
+traffic**: one join against a source holding 1.1e5–1.4e5 elements occupies the host's single
+drain thread for the whole copy, stalling a pre-existing subscriber's arrival stream for
+5.0–29.3 ms against an unjoined 0.07–0.30 ms on the same rig in the same trial. **Every row
+of both measurements classifies `Unreportable`** against `NOISE_FLOOR` 0.005, so no table in
+this entry is a rendered `Findings` table; what each measurement can still honestly support
+is stated per half below.
+
+### Commands, exactly
+
+```
+./gradlew :bench:jmhJar
+
+/Users/MerlijnB/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar FanOutScalingBenchmark \
+     -rf csv -rff /abs/path/fanout.csv 2>&1 | tee /abs/path/fanout.log
+
+./gradlew :bench:test -PbenchOnly=true --rerun \
+  --tests 'civictech.bench.micro.LateJoinCatchUpProbeTest' \
+  -Dcivictech.bench.harnessSha=67260393
+# then three further independent runs of the 1e5 method alone:
+./gradlew :bench:test -PbenchOnly=true --rerun \
+  --tests 'civictech.bench.micro.LateJoinCatchUpProbeTest.late-join catch-up and source occupancy at 1e5 elements' \
+  -Dcivictech.bench.harnessSha=67260393
+```
+
+The Gradle toolchain's own JDK 21 was invoked by absolute path, never the shell's bare
+`java` (Homebrew JDK 26.0.1 on this host — the substitution that produced the superseded
+REAL-throughput entry above, `computenet-hqid`). The JMH sweep ran **8 m 43 s** wall clock
+(started 2026-08-19T08:29:42Z, results file complete at 08:38:25Z) for all ten combinations
+— 2 methods x 5 degrees x 5 forks x (5 warmup + 5 measurement) x 1 s. The catch-up probe
+runs in **about 2 s** including Gradle, four runs in about 8 s: the bead's own estimate of
+"single-digit minutes per run" for it is two orders of magnitude high, matching what
+`computenet-x9e.5.2` measured and recorded in the probe's KDoc. The host was quiesced for
+the JMH sweep — the probe runs and this document's editing happened before it started and
+after it finished, never during — and the probe runs had no concurrent Gradle build either.
+
+### The measuring JVM and host, from the run's own retained banner
+
+Quoted from `fanout.log` rather than paraphrased:
+
+```
+# JMH version: 1.37
+# VM version: JDK 21.0.11, OpenJDK 64-Bit Server VM, 21.0.11+10-LTS
+# VM invoker: /Users/MerlijnB/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java
+# VM options: <none>
+# Warmup: 5 iterations, 1 s each
+# Measurement: 5 iterations, 1 s each
+# Benchmark mode: Average time, time/op
+# Host CPU model: Apple M2 Pro
+# Host core count: 10
+# Host OS: Mac OS X 26.6.2
+```
+
+The last three lines are `FanOutScalingBenchmark.RigState.announceHost`'s
+`@Setup(Level.Trial)` output, printed from **inside the measuring fork**
+(`computenet-yhbd`), and are what `HostFacts.fromJmhLog` reads back; the first four are
+JMH's own. `RunEnvironment.forRun`'s JMH-sweep overload resolved them to:
+
+**Environment — JVM Eclipse Adoptium (Temurin-21.0.11+10) 21.0.11 · heap JVM defaults (VM
+options: `<none>`) · Apple M2 Pro, 10 cores, Mac OS X 26.6.2 · JMH mode `Average time`,
+forks 5, warmup 5, iters 5 · harness `67260393`.** No `Harness:`/`JMH:` line appears below,
+because no row cleared `NOISE_FLOOR` into a rendered table, so this paragraph is this
+entry's explicit substitute for it — read off the run's artifacts, not off the rendering
+process (`[BEN1-23]`). Nothing in this entry states an environment fact from the renderer:
+the JVM triple came from `MeasuringJvm.fromJmhLog`, the four knobs from
+`RunKnobs.fromJmhLog`, and the CPU/cores/OS from `HostFacts.fromJmhLog`, all over
+`fanout.log`. The BS-9 probe's own environment is captured in-process by
+`CatchUpFixtures.probeRunEnvironment`, which is sound there because the probe *is* the
+measuring process; it reports the same JVM and host (`Eclipse Adoptium (Temurin-21.0.11+10)
+/21.0.11 · heap -Xmx2g` — the `:bench:test` fork's own 2 g heap, from
+`buildSrc`'s convention — `Apple M2 Pro, 10 cores, Mac OS X 26.6.2`).
+
+### How the BS-8 rows were rendered, and the one uncommitted piece
+
+The rendered blocks below are the verbatim output of `ThroughputReport.renderResults`, which
+is what calls `Findings.entry` and applies F3's refusals (`[BEN1-23]`..`[BEN1-27]`,
+`[BEN1-30]`). They were produced by an **uncommitted local driver** — a `@Tag("bench")` test
+that read `fanout.csv` and `fanout.log`, built the `RunEnvironment` through
+`RunEnvironment.forRun` as quoted above, and labelled each row by its `degree` parameter.
+The driver exists for one reason: `ThroughputReport.renderRun`, the committed entry point,
+cannot label these rows at all. Its `labelOf` requires `subject` and `direction` `@Param`
+columns and `FanOutScalingBenchmark`'s only `@Param` is `degree`, so `renderRun` throws
+`ThroughputReportException` on this results file — the open defect `computenet-x9e.10`,
+confirmed here by reading `ThroughputReport.labelOf` rather than assumed. Everything the
+driver used is committed code (`parseCsv`, `driveOf`, `RunEnvironment.forRun`,
+`renderResults`, `Findings.entry`, `classify`); what it supplied was the two labels' wording
+and the trigger sentence, which `Findings.entry` takes as a fixed string. No file under
+`bench/` was modified for this entry, and the driver was deleted rather than committed —
+the same disclosure the footprint entry above makes about its own driver.
+### BS-8 — the fan-out curve: renderer's own output, pasted verbatim
+
+`ThroughputReport.renderResults` over `fanout.csv`, printed to the driver's captured stdout
+(JUnit XML `<system-out>`) and pasted back rather than retyped. All ten rows classify
+`Unreportable`, so `Findings.entry` renders no table for either drive and `Report.text()`'s
+own fallback line is the honest rendering of that outcome — the same shape the 2026-08-18
+all-`Unreportable` REAL-throughput entry above published. SIM and REAL appear as two separate
+blocks, never one table (`[BEN1-27]`), because they are separately named `@Benchmark`
+methods:
+
+## (no entry for drive=SIM) — every row classified Unreportable against NOISE_FLOOR 0.005; see the omissions below
+
+Omitted rows (drive=SIM):
+- fan-out degree 1 (D1), per delta driven to quiescence (drive=SIM): relative dispersion 0.06521628914816087 exceeds NOISE_FLOOR 0.005 — value=1.400417 ± 0.09133 us/op; Unreportable, excluded from the table
+- fan-out degree 4 (D4), per delta driven to quiescence (drive=SIM): relative dispersion 0.03917048035873888 exceeds NOISE_FLOOR 0.005 — value=1.561916 ± 0.061181 us/op; Unreportable, excluded from the table
+- fan-out degree 16 (D16), per delta driven to quiescence (drive=SIM): relative dispersion 0.053469668253649516 exceeds NOISE_FLOOR 0.005 — value=2.499922 ± 0.13367 us/op; Unreportable, excluded from the table
+- fan-out degree 64 (D64), per delta driven to quiescence (drive=SIM): relative dispersion 0.07876220172528792 exceeds NOISE_FLOOR 0.005 — value=6.73163 ± 0.530198 us/op; Unreportable, excluded from the table
+- fan-out degree 256 (D256), per delta driven to quiescence (drive=SIM): relative dispersion 0.07488343623243464 exceeds NOISE_FLOOR 0.005 — value=26.915525 ± 2.015527 us/op; Unreportable, excluded from the table
+
+## (no entry for drive=REAL) — every row classified Unreportable against NOISE_FLOOR 0.005; see the omissions below
+
+Omitted rows (drive=REAL):
+- fan-out degree 1 (D1), per delta driven to quiescence (drive=REAL): relative dispersion 0.0657892910357945 exceeds NOISE_FLOOR 0.005 — value=10.157565 ± 0.668259 us/op; Unreportable, excluded from the table
+- fan-out degree 4 (D4), per delta driven to quiescence (drive=REAL): relative dispersion 0.05490124006095744 exceeds NOISE_FLOOR 0.005 — value=11.050989 ± 0.606713 us/op; Unreportable, excluded from the table
+- fan-out degree 16 (D16), per delta driven to quiescence (drive=REAL): relative dispersion 0.046045448509962505 exceeds NOISE_FLOOR 0.005 — value=12.170432 ± 0.560393 us/op; Unreportable, excluded from the table
+- fan-out degree 64 (D64), per delta driven to quiescence (drive=REAL): relative dispersion 0.022552642899240784 exceeds NOISE_FLOOR 0.005 — value=18.090474 ± 0.407988 us/op; Unreportable, excluded from the table
+- fan-out degree 256 (D256), per delta driven to quiescence (drive=REAL): relative dispersion 0.06014292138080649 exceeds NOISE_FLOOR 0.005 — value=40.694681 ± 2.447497 us/op; Unreportable, excluded from the table
+
+Every one of the ten combinations was run; none was skipped, and no fork or iteration count
+was raised or lowered from `FanOutFixtures`' constants (`FORKS=5`,
+`WARMUP_ITERATIONS=5`, `MEASUREMENT_ITERATIONS=5`, `ITERATION_SECONDS=1`,
+`JMH_MODE=AverageTime`), which the run's own banner confirms it resolved. Relative
+dispersion ranges **0.0226–0.0658 (REAL)** and **0.0392–0.0788 (SIM)**, i.e. 4.5x–15.8x
+`NOISE_FLOOR`; nothing was widened to admit them.
+
+**No affordable sample makes these rows `Reportable`, and the sizing says so numerically.**
+A CI half-width shrinks as `1/sqrt(n)` at best, so reaching 0.005 from a measured relative
+dispersion `d` at 25 measurement samples needs about `25 * (d/0.005)^2` samples: **510 for
+the tightest row** (REAL D64, d=0.0226) and **6,200 for the widest** (SIM D64, d=0.0788).
+At 1 s per measurement iteration plus an equal warmup, that is 17 min to 3.4 h **per
+combination**, so 3–34 h for the ten-combination sweep — and only if fork-to-fork variance
+behaved like independent sampling, which is the assumption the 5-fork convention exists
+because it does not. The constants were therefore left alone. This does not block BS-8's
+required statement: the effect the curve is about is 4.0x (REAL) and 19.2x (SIM) between its
+endpoints, 60x–240x the width of the error bars it has to be read against, so the *shape*
+survives a dispersion that keeps any single *published value* from clearing F3's gate.
+
+### BS-8's required statement: growth is LINEAR in degree, not worse
+
+Per-drive tables, never one shared table (`[BEN1-27]`). `marginal` is the per-additional-
+subscriber cost of each segment, `(y2 - y1) / (d2 - d1)`, with the two rows' 99.9% error
+bars summed conservatively; `per subscriber` is the whole per-delta cost divided by the
+degree, which is the same number only if the fixed cost were zero:
+
+**drive=REAL** (`ManagedHost` + `VirtualThreadScheduler`, `awaitDrained` fence):
+
+| degree | per-delta µs/op (± 99.9%) | per subscriber µs | segment marginal µs/subscriber |
+| --- | --- | --- | --- |
+| 1 | 10.1576 ± 0.6683 | 10.1576 | — |
+| 4 | 11.0510 ± 0.6067 | 2.7627 | 0.2978 ± 0.4250 |
+| 16 | 12.1704 ± 0.5604 | 0.7607 | 0.0933 ± 0.0972 |
+| 64 | 18.0905 ± 0.4080 | 0.2827 | 0.1233 ± 0.0202 |
+| 256 | 40.6947 ± 2.4475 | 0.1590 | 0.1177 ± 0.0149 |
+
+**drive=SIM** (`SimWorld`/`runToIdle`):
+
+| degree | per-delta µs/op (± 99.9%) | per subscriber µs | segment marginal µs/subscriber |
+| --- | --- | --- | --- |
+| 1 | 1.4004 ± 0.0913 | 1.4004 | — |
+| 4 | 1.5619 ± 0.0612 | 0.3905 | 0.0538 ± 0.0508 |
+| 16 | 2.4999 ± 0.1337 | 0.1562 | 0.0782 ± 0.0163 |
+| 64 | 6.7316 ± 0.5302 | 0.1052 | 0.0882 ± 0.0138 |
+| 256 | 26.9155 ± 2.0155 | 0.1051 | 0.1051 ± 0.0133 |
+
+**The observed growth is linear in degree — an affine cost, not a superlinear one.** Three
+readings of the same ten numbers agree:
+
+1. **Least-squares affine fit** `cost = a + b * degree`, per drive: REAL **a = 10.335 µs,
+   b = 0.1187 µs/subscriber**, residuals −0.296 / +0.241 / −0.064 / +0.156 / −0.038 µs at
+   D1..D256 — every residual inside that row's own 99.9% error bar. SIM **a = 0.948 µs,
+   b = 0.1008 µs/subscriber**, residuals +0.352 / +0.211 / −0.061 / −0.667 / +0.165 µs, of
+   which D1, D4 and D64 sit outside their error bars (see the caveat below).
+2. **Segment marginals are flat where they are resolvable.** REAL's two best-resolved
+   segments are 0.1233 ± 0.0202 (16→64) and 0.1177 ± 0.0149 (64→256) µs/subscriber:
+   indistinguishable. Its 1→4 segment carries an error bar (±0.425) larger than the value
+   and settles nothing either way.
+3. **Total cost grows *sub*linearly as a ratio, purely because of the intercept.** 256x the
+   degree buys **4.0x** the REAL per-delta cost and **19.2x** the SIM cost; a log-log slope
+   over the top segment (64→256) is 0.585 (REAL) and 1.000 (SIM). The fan-out loop's own
+   contribution is linear; the fixed per-delta cost is what makes the total sublinear in
+   ratio terms.
+
+**Where the linear reading is weakest, stated rather than smoothed:** SIM's segment
+marginals rise monotonically, 0.0538 → 0.0782 → 0.0882 → 0.1051 µs/subscriber, a 1.95x
+climb across a 64-fold range of degree. That is the one thing in this sweep that looks
+superlinear, and it is **not resolvable at this dispersion**: the gap between the two
+best-resolved SIM segments is 0.0169 ± 0.0271 µs/subscriber, and the low-degree segment that
+anchors the trend (1→4) has an error bar (±0.0508) that dwarfs its own value. So the honest
+form of BS-8's answer is: **linear in degree at this sweep's resolution, with any residual
+superlinear term bounded by roughly a doubling of the marginal cost across a 64x range of
+degree** — which is nowhere near what "worse than linear" would mean for G-43's cost model,
+and is itself consistent with cache behaviour over a `consumerOrder` map growing from 1 to
+256 entries.
+
+**Cross-drive comparison, in prose only (not a shared table, `[BEN1-27]`).** The two fitted
+marginals are close — REAL 0.1187 vs SIM 0.1008 µs per additional subscriber — while the
+intercepts differ by 9.39 µs (10.335 vs 0.948). Almost the entire REAL/SIM gap is therefore
+**fixed per-delta cost** (host dispatch, the `awaitDrained` fence, virtual-thread hand-off),
+not per-subscriber fan-out cost: at degree 1 REAL costs 7.25x SIM, at degree 256 only 1.51x.
+This is a within-sweep observation about one benchmark on one JVM, offered as such; the
+withdrawn cross-drive *dispersion*-attribution claim of the 2026-08-18 entries is not
+re-opened, and nothing here rests on it.
+
+### The confound that limits the paragraph above, and its direction
+
+`FanOutScalingBenchmark` rebuilds its rig once per **iteration** and adds one fresh element
+per **invocation**, so within a 1 s iteration the source's tag state grows from empty to
+however many invocations that iteration fit — and that count is inversely proportional to
+the very cost being measured. At the scores above: ~98,500 invocations per iteration at REAL
+D1 against ~24,600 at REAL D256, and ~714,000 at SIM D1 against ~37,200 at SIM D256. **The
+low-degree rows are therefore averaged over a source roughly 4x (REAL) to 19x (SIM) larger
+than the high-degree rows.** If per-add cost rises with source size at all, that inflates
+the low-degree rows, *understates* the growth in degree, and biases exactly the conclusion
+this section draws. It is a property of the landed fixture, reported rather than corrected
+(`FanOutFixtures`' KDoc states the per-iteration rebuild and the monotone growth
+explicitly); nothing in this sweep bounds its size, and a variant holding the element count
+fixed per invocation — `Mode.SingleShotTime`, or an `@OperationsPerInvocation` batch against
+a pre-seeded source — is what would settle it. Filed as its own item rather than asserted
+away here.
+### BS-9 — late-join catch-up cost and source-context occupancy, and why every row is `Unreportable`
+
+`LateJoinCatchUpProbeTest` reports, per trial, the catch-up cost (wall time from
+initiating the link until the joiner's collector holds the complete baseline) and the
+occupancy of the source's execution context, measured as the largest stall (`maxGap`) the
+join inflicts on a **pre-existing** subscriber's live arrival stream while an 8,000-add
+unpaced burst drives through the same source on the same host. Each trial drives twice —
+once with no join, once with one — so occupancy is read as a *paired difference*, not a
+level. Drive is `REAL` for every number here (`ManagedHost` + `VirtualThreadScheduler`,
+drained through that scheduler's `awaitDrained` fence); there is no SIM variant of this
+measurement, because the occupancy of a real execution context is the question.
+
+**Every one of the 18 statistics below classifies `Unreportable`** against `NOISE_FLOOR`
+0.005 — relative dispersion ranges from **5.96 to 30.08**, three to four orders of
+magnitude above the floor — so `Findings.entry` refuses them and **no rendered table for
+BS-9 appears in this entry**. They are named here with their values, their dispersions and
+that classification, following the landed precedent of the 2026-08-18 all-`Unreportable`
+REAL-throughput entry above: excluded from the table, never silently dropped, and
+`NOISE_FLOOR` (`bench/src/main/kotlin/civictech/bench/Dispersion.kt`, confirmed unchanged:
+`const val NOISE_FLOOR: Double = 0.005`) not widened to admit them. This is the honest
+outcome and not a limit a longer sweep lifts: `maxGap` is a worst-case order statistic, and
+`TrialStats`' own arithmetic (KDoc in `BoundedReadFixtures.kt`) puts a `Reportable`
+relative dispersion for this family at roughly 1.6e4–1.6e6 trials, which no sweep can
+afford. The trial count was therefore **not** inflated to chase a classification it cannot
+reach.
+
+Every row: `value ± dispersion` is the F3 `BenchResult` the probe constructed (mean of the
+trials, dispersion = the 99.9% CI half-width `TrialStats` computes), `relDisp` is
+`dispersion/value`, and all are **`Unreportable`, excluded from the table**:
+
+| run | pre-seed | statistic | value ± dispersion (ms) | relDisp |
+| --- | --- | --- | --- | --- |
+| 1 | 1e3 | catch-up cost | 5.2884 ± 38.1290 | 7.2099 |
+| 1 | 1e3 | maxGap, no join (occupancy baseline) | 3.0996 ± 47.9655 | 15.4747 |
+| 1 | 1e3 | maxGap during one late join (occupancy) | 5.2796 ± 38.2212 | 7.2394 |
+| 1 | 1e4 | catch-up cost | 9.7310 ± 61.7857 | 6.3494 |
+| 1 | 1e4 | maxGap, no join | 0.8428 ± 13.5356 | 16.0613 |
+| 1 | 1e4 | maxGap during one late join | 9.7865 ± 61.4801 | 6.2821 |
+| 1 | 1e5 | catch-up cost | 9.1375 ± 67.0876 | 7.3420 |
+| 1 | 1e5 | maxGap, no join | 0.1073 ± 0.6392 | 5.9552 |
+| 1 | 1e5 | maxGap during one late join | 9.4974 ± 71.0857 | 7.4847 |
+| 2 | 1e5 | catch-up cost | 22.9461 ± 142.4687 | 6.2088 |
+| 2 | 1e5 | maxGap, no join | 0.1455 ± 1.8035 | 12.3961 |
+| 2 | 1e5 | maxGap during one late join | 22.9933 ± 142.7891 | 6.2100 |
+| 3 | 1e5 | catch-up cost | 15.9840 ± 169.5327 | 10.6064 |
+| 3 | 1e5 | maxGap, no join | 3.4298 ± 103.1817 | 30.0839 |
+| 3 | 1e5 | maxGap during one late join | 16.0088 ± 171.1238 | 10.6893 |
+| 4 | 1e5 | catch-up cost | 16.9938 ± 104.3507 | 6.1405 |
+| 4 | 1e5 | maxGap, no join | 0.1774 ± 1.9981 | 11.2649 |
+| 4 | 1e5 | maxGap during one late join | 17.6345 ± 112.7114 | 6.3915 |
+
+Because a three-sample mean at this dispersion says very little, the per-trial samples and
+medians are the readable form of the same runs — and they are what the reading below rests
+on. `shipped` is the element count each trial's catch-up actually carried, which is the
+size that matters and is **not** the pre-seed label (see the drift note below):
+
+| run | pre-seed | catch-up samples (ms) | median | maxGap no join (ms) | median | maxGap joined (ms) | median | occupancy = Δ median | shipped per trial |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1e3 | 3.2656 / 5.1600 / 7.4397 | 5.1600 | 0.0744 / 4.3916 / 4.8328 | 4.3916 | 3.2563 / 5.1429 / 7.4396 | 5.1429 | **+0.7513** | 10,181 / 26,246 / 42,363 |
+| 1 | 1e4 | 7.8550 / 13.6406 / 7.6975 | 7.8550 | 1.5877 / 0.1038 / 0.8368 | 0.8368 | 7.9781 / 13.6746 / 7.7068 | 7.9781 | **+7.1413** | 19,062 / 35,150 / 51,072 |
+| 1 | 1e5 | 12.0676 / 10.3338 / 5.0110 | 10.3338 | 0.1438 / 0.0739 / 0.1043 | 0.1043 | 12.0594 / 11.4195 / 5.0134 | 11.4195 | **+11.3152** | 109,260 / 125,594 / 141,769 |
+| 2 | 1e5 | 29.2191 / 14.1997 / 25.4195 | 25.4195 | 0.2596 / 0.0896 / 0.0873 | 0.0896 | 29.3025 / 14.2348 / 25.4426 | 25.4426 | **+25.3530** | 109,584 / 125,410 / 141,642 |
+| 3 | 1e5 | 26.4247 / 8.6193 / 12.9082 | 12.9082 | 0.2630 / 9.9595 / 0.0668 | 0.2630 | 26.5483 / 8.5776 / 12.9006 | 12.9006 | **+12.6376** | 109,250 / 125,824 / 141,819 |
+| 4 | 1e5 | 21.2610 / 19.2259 / 10.4944 | 19.2259 | 0.2976 / 0.1512 / 0.0833 | 0.1512 | 21.3870 / 21.0126 / 10.5039 | 21.0126 | **+20.8614** | 109,321 / 125,479 / 141,699 |
+
+Pooling the four independent 1e5 runs (12 trials): catch-up cost spans **5.011–29.219 ms**
+with a pooled median of **13.55 ms**; the unjoined `maxGap` is **0.0668–0.2976 ms in 11 of
+12 trials** (one outlier at 9.9595 ms) with a pooled median of **0.124 ms**; the joined
+`maxGap` spans **5.013–29.303 ms**, pooled median **13.57 ms**. Per run, the joined median
+sits **49x, 109x, 139x and 284x** its own paired unjoined median. Occupancy — the paired
+median difference — is **positive in all four 1e5 runs, at +11.32, +12.64, +20.86 and
++25.35 ms**.
+
+Four separate probe runs were used rather than a raised `CatchUpFixtures.TRIALS`, and that
+choice is a measurement decision worth stating: the rig's source grows by 16,000 elements
+per trial (every add is a fresh element and an OR-set never shrinks), so raising `TRIALS`
+buys sample by pushing the shipped state further and further from the 1e5 the entry claims
+to be about — at `TRIALS=3` the last trial already ships ~1.42e5. Re-running the whole
+probe buys the same replication against a **fresh** rig each time. Both fixture files named
+in this task's file claim are therefore **unmodified**; the only in-claim edit is this
+document.
+
+**Elements added per trial, and what the 1e5 label means.** Each trial adds
+`2 * DRIVE_ADDS = 16,000` elements (two 8,000-add bursts, one per condition), on top of a
+1,000-add warmup drive, so at pre-seed 1e5 the source holds 117,000 / 133,000 / 149,000
+elements after trials 1/2/3 and each trial's catch-up ships 109,250–141,819 elements. The
+label names the **pre-seed** size, exactly as `CatchUpFixtures.kt`'s header requires it be
+read; the growth is reported, not corrected. The overlap this creates between conditions is
+also why the three scales cannot be read as a clean cost-versus-size curve: the 1e3 run's
+third trial already ships 42,363 elements, more than the 1e4 run's first (19,062).
+
+**The overlap the occupancy figure depends on did happen.** The probe records how far into
+the concurrent burst the priority-0 link install cut in: 181/246/363 adds (1e3),
+62/150/72 (1e4), 260/594/769, 584/410/642, 250/824/819 and 321/479/699 adds (the four 1e5
+runs) out of 8,000. Neither extreme (0, or the full 8,000) occurred in any trial, so no
+occupancy number here was measured against an idle host.
+
+**At 1e3 the occupancy column is not readable, and the entry says so rather than reporting
+it as small.** Its unjoined `maxGap` samples are 0.0744 / 4.3916 / 4.8328 ms — the
+baseline's own worst-case noise is the same order as the stall being measured — so the
++0.7513 ms difference there carries no weight. The probe's own KDoc records a run in which
+the same statistic came out **negative** at 1e3 (−3.2069 ms) for exactly this reason. The
+1e5 rows are where the difference is legible, and that is where the reading below is taken.
+
+### The one relationship here that is not noise-limited: the stall IS the copy
+
+The four 1e5 runs' twelve trials pair each catch-up cost with the stall it inflicted, and
+those two numbers are nearly identical **per trial** rather than merely on average: in 10 of
+12 trials they differ by ≤ 0.13 ms (≤ 1.3% of the value), and in the remaining two by 1.09
+and 1.79 ms. The same holds at 1e4 (7.9781 vs 7.8550 median) and 1e3 (5.1429 vs 5.1600).
+
+That pairing, not any absolute value, is the load-bearing observation of BS-9, and it is
+robust precisely where the levels are not: a shared-machine disturbance moves both halves
+of a trial together, so a *ratio within a trial* survives dispersion that destroys the
+levels. It is also mechanistically predicted rather than surprising — `ManagedHost`
+dispatches `connect` through `enqueueAwaiting(0)` and `SetCell` installs `catchUpOnLinked`
+(`SetCell.kt:264`), so the whole-state snapshot **and** its delivery run on the host's single
+drain thread at priority 0, ahead of every add queued at 20. The pre-existing subscriber's
+arrival stream therefore stops for the entire duration of the re-baseline.
+
+The paired unjoined half is what proves the two columns are not one thing measured twice by
+accident: on the same rig, in the same trial, the same statistic reads 0.0668–0.2976 ms
+without a join and 5.013–29.303 ms with one.
+### Trigger (`[BEN1-31]`/`[BEN1-32]`): G-43 — **FIRES**
+
+**Criterion, stated before it is applied:** G-43's proposal item under test is *"bound the
+push-authoritative re-baseline (diff-against-last-acked / delta-since-generation)"*, against
+the gap's own *"re-baseline cost under wide fan-out"*. The trigger fires if either (a)
+per-delta cost grows faster than linearly in fan-out degree, so that wide fan-out itself
+needs a cost bound, or (b) a single push-authoritative re-baseline occupies the source's
+execution context by an amount that measurably starves live traffic, so that the re-baseline
+needs a bound irrespective of the degree curve. It would be retired only if both were absent
+— a well-behaved degree curve *and* a re-baseline whose occupancy is negligible against
+ordinary live traffic.
+
+Applying it: **(a) does not hold** — growth is linear in degree, with a marginal ~0.10–0.12
+µs per additional subscriber and no resolvable superlinear term over 1..256. **(b) holds** —
+one late join against a source of 1.1e5–1.4e5 elements stalls a pre-existing subscriber's
+arrival stream for 5.0–29.3 ms, 49x–284x that subscriber's own unjoined stall measured on
+the same rig in the same trial, and in 10 of 12 trials the stall equals the catch-up interval
+to within 1.3%. The mechanism admits no bound today: `catchUpOnLinked` ships the entire tag
+state as one delta, `ManagedHost` dispatches `connect` through `enqueueAwaiting(0)`, and the
+host's single drain thread runs both the snapshot and its delivery at priority 0, ahead of
+every add queued at 20. Nothing in that path is chunked, paged, preempted, or diffed against
+what the joiner already has — which is precisely what G-43's proposed
+diff-against-last-acked / delta-since-generation bound would supply.
+
+**Verdict: `TriggerClaim.Cited("G-43", …)` — FIRES**, on (b). The exact sentence handed to
+`Findings.entry` was:
+
+> FIRES. The curve half is well behaved: per-delta cost over FanOutlet is linear in degree,
+> with a marginal cost of about 0.1 us per additional subscriber and no superlinear term over
+> 1..256 (256x the degree buys 4.0x the REAL per-delta cost). What is unbounded is the
+> push-authoritative re-baseline this trigger names: one late join against a source holding
+> 1.1e5-1.4e5 elements runs as a single priority-0 whole-state delta on the host's only drain
+> thread and stalls a pre-existing subscriber's live arrival stream for the entire copy -
+> 5.0-29.3 ms against an unjoined 0.07-0.30 ms on the same rig in the same trial, 49x-284x per
+> run - so the diff-against-last-acked / delta-since-generation bound G-43 proposes is needed
+> rather than optional. Every row behind this sentence is Unreportable against NOISE_FLOOR;
+> the sentence rests on the within-trial pairing and the order of magnitude, not on any single
+> published value.
+
+That sentence did **not** get rendered into a `Trigger:` line, and the reason is worth being
+explicit about rather than leaving as an absence: `renderResults` reached `Findings.entry`
+for neither drive, because neither had a single row clearing `NOISE_FLOOR`, and
+`Findings.entry` is where the one-verdict-word check lives. So the check that this entry's
+verdict is unambiguous is **not** machine-attested here; the sentence above carries exactly
+one of the three verdict words as a whole word, by inspection, and this section is where the
+verdict is stated for the file's purposes. Same shape as the 2026-08-18 all-`Unreportable`
+entry above, which likewise published the renderer's fallback text with no `Trigger:` line.
+
+**What the verdict does not rest on.** Not on any single value in this entry: every row of
+both measurements is `Unreportable`, and the absolute figures are quoted as ranges and
+medians throughout for that reason. It rests on two things that survive that dispersion —
+the *within-trial* pairing of stall against copy (a ratio measured on one rig in one trial,
+which a machine-wide disturbance moves as a unit), and an order-of-magnitude separation
+(49x–284x) far larger than any dispersion in either half. G-43 itself remains open and
+un-narrowed by this entry: its other four strands (supersede-vs-remove precedence, hybrid
+push/pull direction policy, poison-write escape, deadLetter→requestState recovery cell) are
+untouched by any measurement here.
+
+### What this entry does not measure
+
+- **The re-baseline cost under *wide* fan-out — the literal phrase in the gap.** BS-9 joins
+  **one** subscriber per trial, and detaches it before the next (the probe unlinks per trial
+  deliberately, so a fan-out trend cannot creep into the occupancy column). N simultaneous
+  joiners are not measured, and this entry does not multiply its way there: whether N
+  re-baselines serialize on the drain thread additively, coalesce, or interact is exactly
+  what BEN2/G-43's own study is for. The verdict above rests on N=1 already showing an
+  unbounded stall, not on an extrapolation to N.
+- **Any multi-host or replicated re-baseline.** Everything here is one `ManagedHost` in one
+  JVM; the "replicated cells re-baseline from mesh peers" strand of G-43 is out of scope
+  (`[BEN1-35]`/`[BEN1-36]`).
+- **A clean catch-up cost-versus-state-size curve.** The three pre-seed scales' shipped sizes
+  overlap (1e3's third trial ships 42,363 elements, more than 1e4's first at 19,062), so the
+  1e3/1e4/1e5 rows are three overlapping samples of the same growing rig, not three points on
+  a size curve. Per-element cost across them lands in the 0.1–0.2 µs/element band; that band,
+  not a slope, is what this entry supports.
+- **Allocation, footprint, or throughput of anything.** Per-delta latency and wall-clock
+  stalls only.
+
+### Scope confirmation
+
+`git diff --name-only <merge-base of feature/computenet-x9e.5> HEAD` names exactly one file:
+`doc/bench/findings.md` (this entry). `git diff --name-only <merge-base> HEAD -- kernel/src/main
+concord/ inspect/src wire/src demo/ doc/spec` is empty; `git diff <merge-base> HEAD --
+bench/src/main bench/src/jmh bench/src/test` is empty as well — **no fixture constant was
+raised** (the sizing above is why, for BS-8; for BS-9, replication was bought by re-running
+the whole probe rather than by raising `CatchUpFixtures.TRIALS`, which would have pushed each
+run's shipped state further from the 1e5 the entry is about). `NOISE_FLOOR` in
+`bench/src/main/kotlin/civictech/bench/Dispersion.kt` is unchanged
+(`const val NOISE_FLOOR: Double = 0.005`), `Env.kt` and `ThroughputReport.kt` are untouched
+(`computenet-x9e.8`/`computenet-yhbd` own them), `doc/spec/90-roadmap/91-gap-analysis.md`
+and `doc/spec/CONCORDANCE.md` are unmodified — G-43's row is cited, never edited — and no
+entry above this one was edited, reordered or deleted.
