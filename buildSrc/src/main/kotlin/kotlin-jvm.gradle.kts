@@ -168,77 +168,96 @@ tasks.withType<Test>().configureEach {
     // timing-sensitive host/observe classes, all green, on top of the CI run above.
     //
     // ---------------------------------------------------------------------------
-    // `:demo:beadsmirror` opts in SECOND, and on the OPPOSITE argument
-    // (computenet-9vx3). Everything above is a case about a CPU-bound suite, where
-    // half the cores is the honest ceiling because each fork's own JVM is the thing
-    // consuming a core. This module is the inverse workload: 295 tests whose wall
-    // time is almost entirely a test thread BLOCKED on a `bd`/`dolt` child process
-    // (one `bd` mutation 0.92s, one `bd ready --json` 0.39s, measured
-    // 2026-08-19 on darwin/arm64). A fork that is parked in `Process.waitFor` is not
-    // holding a core, so the JVM+child pair counts as roughly ONE runnable unit, and
-    // the half-cores rule that is right for `:kernel` would under-subscribe here.
+    // `:demo:beadsmirror` opts in SECOND (computenet-9vx3), at the same count as
+    // `:kernel` but for a different reason, and NOT for the reason the work was
+    // proposed on. The proposal was that this module is the inverse workload — 294
+    // tests whose wall time is a test thread BLOCKED on a `bd`/`dolt` child process,
+    // so a fork parked in `Process.waitFor` holds no core, the JVM+child pair counts
+    // as one runnable unit, and the half-cores rule that is right for `:kernel`
+    // under-subscribes here. That model predicted 4 forks (Gradle's worker-lease
+    // pool caps test forks at `--max-workers`, i.e. the runner's 4 vCPUs, so 4 was
+    // the ceiling rather than a guess). IT WAS MEASURED AND IT IS WRONG. `dolt` is a
+    // Go binary that uses the whole machine, so a `bd` mutation is not idle waiting;
+    // it is the CPU work, merely happening in another process.
     //
-    // Why it is worth doing at all, from CI rather than a dev box. In
-    // `build-test-fast` run 32283729126 (head 28e29924, current `main`'s content,
-    // job 7m46s / Gradle `BUILD SUCCESSFUL in 7m 14s`), reconstructing the task
-    // timeline from the streamed `> Task :…` headers: `:demo:beadsmirror:test`
-    // spans 17:52:22.4 -> 17:56:52.7 (270.3s), and every OTHER task in the lane —
-    // `:demo:exchange:test`, `:demo:slotfinder:test`, `:demo:tiering:test`, the
-    // whole compile chain — has finished by 17:52:36.7. So the final 256.0s of the
-    // required check is this ONE test JVM, with three of the runner's four vCPUs
-    // idle and all four of Gradle's worker leases free. That is the same shape the
-    // `:kernel` paragraphs above describe, and it is now the fast lane's whole tail
-    // (`:kernel:test` moved to its own `kernel-test` job and is `-x`-ed here).
+    // Why it was worth doing at all, from CI rather than a dev box. In
+    // `build-test-fast` run 32283729126 (head 28e29924, `main`'s content),
+    // reconstructing the task timeline from the streamed `> Task :…` headers:
+    // `:demo:beadsmirror:test` spans 270.3s, and every OTHER task in the lane —
+    // `:demo:exchange:test`, `:demo:slotfinder:test`, the whole compile chain — has
+    // finished 14s in. So the final 256.0s of the required check was this ONE test
+    // JVM, three of the runner's four vCPUs idle and all four worker leases free.
+    // Same shape as the `:kernel` paragraphs above, and now the fast lane's whole
+    // tail (`:kernel:test` moved to its own `kernel-test` job and is `-x`-ed here).
     //
-    // The count, justified against CI's runner and not a dev machine:
-    //  * Gradle's worker-lease pool caps concurrent test forks at `--max-workers`,
-    //    which is the CPU count — 4 on `ubuntu-latest`. A value above 4 cannot be
-    //    granted on the machine that matters, so 4 is the ceiling, not a guess.
-    //  * Memory does not grow. `gradle.properties` already states the bound as
-    //    "4x2g of fork heap + 3g + 2g of daemon heap", measured from a peak of 4
-    //    concurrent test JVMs across the whole lane. During this module's solo tail
-    //    no other module's forks exist, so 4 forks HERE reach that same measured
-    //    peak rather than raising it. What the bound does not cover is the `bd`/
-    //    `dolt` children's non-Java RSS; they are short-lived and the same sampling
-    //    put total Java RSS at ~3.8 GB against a 16 GB runner, so the headroom is
-    //    there — but that is the number to re-check first if this ever OOMs.
-    //  * Isolation is what computenet-s5hx bought and this depends on: every test's
-    //    workspace is a COPY with a unique basename, a rehomed embedded Dolt
-    //    database and therefore a distinct `DotMinter` source id, under its own
+    // THREE ARMS ON CI, one commit each on PR #355's branch, same runner type, read
+    // the same way — the `:demo:beadsmirror:test` task span from the task timeline,
+    // and per-class spans summed from the streamed per-test PASSED lines:
+    //
+    //   forks   module span   sum of class spans   Gradle build   job
+    //     1        270.2s        189.6s              7m14s        7m46s   (32283729126)
+    //     2        144.5s        200.5s              4m10s        4m44s   (32292718836)
+    //     4        273.3s        591.4s              6m46s        7m22s   (32291870198)
+    //
+    // All three: 31 classes, 294 tests, 0 skipped, 0 failed, and no
+    // `:demo:beadsmirror:test SKIPPED|NO-SOURCE|UP-TO-DATE|FROM-CACHE` marker in any
+    // log — executed, not replayed (the `bd`/`dolt` install step and computenet-3g6n's
+    // evidence gate are what keep that true).
+    //
+    // Read the SECOND column, because it is the one that explains the third. It is
+    // the total time the classes themselves occupied, so it isolates contention from
+    // overlap: 2 forks inflate it by 5.7% and convert almost all of that overlap into
+    // wall time (1.87x, against a 2.0x ideal), while 4 forks inflate it by 212% —
+    // ReadyDifferentialTest 46.2s -> 193.5s, ScriptedSequenceTest 15.2s -> 54.2s,
+    // DoltCommitFeedTest 5.7s -> 29.7s — and the extra overlap exactly cancels it,
+    // landing 3.1s SLOWER than a single fork. Four forks is not a smaller win than
+    // two; it is no win at all. Do not re-derive 4 from the worker-lease argument.
+    //
+    // So the count is 2, and the honest reason is that four `dolt` processes
+    // saturate a 4-vCPU runner while two do not — an empirical property of this
+    // runner and of `dolt`'s own threading, NOT the half-cores heuristic above
+    // arriving at the same number by coincidence. A runner with more vCPUs would
+    // move this; `availableProcessors() / 2` is written so it can, and the clamp at
+    // 2 is what stops it moving on a 10- or 16-core dev box, where nothing has been
+    // measured and the same saturation would be reached at some higher count.
+    //
+    // Safety, audited per class rather than assumed, since two forks is exactly the
+    // condition under which computenet-dqy.25's defect family bites:
+    //  * PORTS. Nothing in this module ever names a port it has not already bound.
+    //    `MirrorRoutesTest` uses `DemoShell(0)` and reads `boundPort`;
+    //    `BeadsMirrorAppTest` takes `BeadsMirrorConfig.port`'s default of `0` and
+    //    reads `app.boundPort`; `TwoNodeRig` starts its listener with
+    //    `MirrorWire.Listen(0)` and hands the DIALER `app.boundWsPort`, the port the
+    //    listener actually bound; `MirrorPeeringTest.BoundPort` binds `Listen(0)`
+    //    in-process and asserts the announced port is the bound one, while its other
+    //    cases only PARSE flags (`"--listen", "0"`, `ws://localhost:9001`) and open
+    //    nothing; `TwoJvmMirrorTest` passes `0` for every port and reads each child's
+    //    announced `computenet-port` line through `JvmPeer`. `testkit` carries no
+    //    `freePort()` any more (dqy.25 deleted it) and `grep -rn 'ServerSocket'` over
+    //    this module's tests returns nothing. Every bind is `bind(0)` performed by
+    //    the process that then KEEPS the socket, so there is no window in which a
+    //    chosen port is unowned — which is the only thing concurrent forks could have
+    //    exploited. `TwoJvmMirrorTest` is the module's one `@Tag("multi-jvm")` class,
+    //    excluded from this lane anyway and run by the serial lane at
+    //    `--max-workers=1`.
+    //  * WORKSPACE ISOLATION is computenet-s5hx's, and is what unblocked this at all:
+    //    every test's workspace is a COPY with a unique basename, a rehomed embedded
+    //    Dolt database and therefore a distinct `DotMinter` source id, under its own
     //    `Files.createTempDirectory` path. `BdScratchWorkspace.templates` is a
     //    per-JVM `ConcurrentHashMap`, so each fork simply builds its own pristine
-    //    template (one `bd --sandbox init`, ~5s, per fork per `bd` env) — duplicated
-    //    work, not shared state.
-    //  * PORTS ARE SAFE, audited per class rather than assumed (the acceptance
-    //    clause, and computenet-dqy.25's lesson that a find-then-close helper
-    //    presents as an unrelated assertion TIMEOUT). Nothing in this module ever
-    //    names a port it has not bound: `MirrorRoutesTest` uses `DemoShell(0)` and
-    //    reads `boundPort`; `BeadsMirrorAppTest` takes `BeadsMirrorConfig.port`'s
-    //    default of `0` and reads `app.boundPort`; `TwoNodeRig` starts its listener
-    //    with `MirrorWire.Listen(0)` and hands the DIALER `app.boundWsPort`, i.e.
-    //    the port the listener actually bound; `MirrorPeeringTest.BoundPort` binds
-    //    `Listen(0)` in-process and asserts the announced port is the bound one, and
-    //    its other cases only PARSE flags (`"--listen", "0"`, `ws://localhost:9001`)
-    //    without opening anything; `TwoJvmMirrorTest` passes `0` for every port and
-    //    reads each child's announced `computenet-port` line through `JvmPeer`.
-    //    `testkit` carries no `freePort()` any more (dqy.25 deleted it), and
-    //    `grep -rn 'ServerSocket'` over this module's tests returns nothing. Every
-    //    bind is `bind(0)` performed by the process that then KEEPS the socket, so
-    //    there is no window in which a chosen port is unowned — which is the only
-    //    thing concurrent forks could have exploited. `TwoJvmMirrorTest` is the
-    //    module's one `@Tag("multi-jvm")` class and is excluded from this lane
-    //    anyway; the serial lane runs it with `--max-workers=1`.
-    //  * Round-robin dealing: a class is never split, so the 6 class-scoped
+    //    template (one `bd --sandbox init` per fork per `bd` env) — duplicated work,
+    //    not shared state, and part of what the +5.7% above is paying for.
+    //  * ROUND-ROBIN DEALING. A class is never split, so the class-scoped
     //    `@BeforeAll`/`@TestInstance(PER_CLASS)` fixtures (`TwoNodeRigTest`,
     //    `PullRebaselineTest`, `HeadlineLivenessTest`) are unaffected. The module's
-    //    only cross-class statics are `BdScratchWorkspace.templates` (above) and two
-    //    stateless `object`s, `MirrorExportEquality` and `ReadySchedule`.
+    //    only cross-class statics are that template cache and two stateless
+    //    `object`s, `MirrorExportEquality` and `ReadySchedule`.
     //
-    // If this ever has to come back down, 2 is the fallback and the reason to take
-    // it would be scheduler starvation rather than memory: `TwoNodeRig`'s waits are
-    // a 30s budget over a 200ms poll interval, and `dolt` is itself multi-threaded,
-    // so 4 forks is the point where the "JVM+child is one runnable unit" model is
-    // most likely to be optimistic. Do not accept a change here on one green run.
+    // What is NOT proven: flake behaviour. This rests on ONE green CI run at 2 forks
+    // plus one at 4, and `TwoNodeRig`'s waits are a 30s budget over a 200ms poll
+    // interval, so starvation is the failure mode to watch. If this lane starts
+    // timing out in convergence awaits rather than failing assertions, drop to 1 and
+    // measure again before widening the budgets.
     when (project.path) {
         ":kernel" -> maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 2)
         ":demo:beadsmirror" -> maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 2)
