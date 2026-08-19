@@ -18,6 +18,22 @@
 # required), unsettled (all 6 present, something pending) — are one state to
 # any test on `$?`, and two of them look green.
 #
+# THE REST FALLBACK. `gh pr checks` is GraphQL-only. On 2026-08-17 GitHub's
+# GraphQL endpoint returned 503 intermittently and then persistently for an
+# hour, while githubstatus.com reported every component operational and REST
+# stayed healthy throughout. Under that outage this loop's only possible
+# outcome is to spin its full 40 rounds and report QUERY-FAILED: it cannot
+# make progress and it cannot tell "endpoint down" from "checks not created
+# yet" (computenet-fdv9). So after FALLBACK_AFTER consecutive query-failed
+# rounds it re-reads the same verdict over REST, from
+# `commits/<sha>/check-runs`, and says which transport answered.
+#
+# The REST form is better in a second, unrelated way: it keys on the COMMIT,
+# so it structurally cannot report a verdict for a head other than the one
+# asked about — the computenet-qnyn hazard (a PR head observed lagging the
+# pushed ref by ~10 minutes, with nothing in the output saying so) removed by
+# construction rather than by a sha check the caller must remember to write.
+#
 # Usage: wait-checks.sh <pr-url> [max-rounds]
 #   Polls `gh pr checks <pr-url>` every 20s, up to max-rounds (default 40).
 # Stdout: one progress line per round, then the last rows, then the verdict as
@@ -41,11 +57,44 @@ esac
 # very list until 2026-08-17 — computenet-4prd).
 req='build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel-test'
 
+# How many consecutive query-failed rounds before trying the other transport.
+FALLBACK_AFTER=${WAIT_CHECKS_FALLBACK_AFTER:-3}
+
+# Re-read the same verdict over REST. Prints rows in `gh pr checks`'s own
+# shape (name, status word, conclusion) so every classifier below is unchanged.
+# Silent failure here is not a green: it prints nothing, the caller's row count
+# stays 0, and the round remains query-failed.
+rest_rows() {
+  local sha repo
+  sha=$(gh api "repos/{owner}/{repo}/pulls/${pr##*/}" --jq .head.sha 2>/dev/null) || return 1
+  [ -n "$sha" ] || return 1
+  gh api "repos/{owner}/{repo}/commits/$sha/check-runs?per_page=100" \
+    --jq '.check_runs[] | "\(.name)\t\(if .status != "completed" then "pending"
+                              elif .conclusion == "success" then "pass"
+                              elif .conclusion == "skipped" then "skipping"
+                              else "fail" end)\t\(.conclusion // "-")"' 2>/dev/null
+}
+
 rows=""
 state=query-failed
+consecutive_failed=0
 for i in $(seq 1 "$rounds"); do
   rows=$(gh pr checks "$pr" 2>&1)     # exit status deliberately not tested
   n=$(printf '%s\n' "$rows" | grep -cE "$req")
+  # Classify on OUTPUT here too: a GraphQL 503 leaves no recognizable rows.
+  if [ "$n" -lt 6 ] && ! printf '%s\n' "$rows" | grep -qE '(pass|fail|pending|skipping)[[:space:]]'; then
+    consecutive_failed=$((consecutive_failed + 1))
+    if [ "$consecutive_failed" -ge "$FALLBACK_AFTER" ]; then
+      rest=$(rest_rows)
+      if [ -n "$rest" ]; then
+        echo "round $i/$rounds: GraphQL failed ${consecutive_failed}x — answering over REST (commits/<sha>/check-runs)"
+        rows=$rest
+        n=$(printf '%s\n' "$rows" | grep -cE "$req")
+      fi
+    fi
+  else
+    consecutive_failed=0
+  fi
   if [ "$n" -lt 6 ]; then
     if printf '%s\n' "$rows" | grep -qE '(pass|fail|pending|skipping)[[:space:]]'; then
       state=not-reporting               # normal early state (computenet-1zhu)

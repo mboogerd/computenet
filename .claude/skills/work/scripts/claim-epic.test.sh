@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for claim-epic.sh. Stubs `bd` on PATH; every case gets a fresh control
-# dir. Exits 0 if all cases pass. Expect "8 passed, 0 failed".
+# dir. Exits 0 if all cases pass. Expect "13 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claim-epic.sh"}
@@ -96,6 +96,58 @@ echo '! [rejected]' > "$CTRL/push1.out"; echo '! [rejected]' > "$CTRL/push2.out"
 out=$("$SCRIPT" computenet-e 2>&1); st=$?
 [ "$st" = 2 ] && grep -q "LOCAL-ONLY" <<<"$out" \
   && ok "double rejection escalates, exit 2" || bad "double: exit=$st out=$out"
+
+# --- metadata.holder: a SESSION-unique lock (computenet-83ay, computenet-yurq)
+# `assignee` is BEADS_ACTOR and therefore per-MACHINE, so a live sibling and a
+# crash leftover are the same row. The holder is what tells them apart.
+HOLDER_SH="$(dirname "$SCRIPT")/session-holder.sh"
+
+holder_show() { # status assignee holder
+  printf '[{"id":"computenet-e","status":"%s","assignee":"%s","updated_at":"2020-01-01T00:00:00Z","metadata":{"holder":"%s"}}]' \
+    "$1" "$2" "$3" > "$CTRL/show.json"
+}
+
+# A fresh claim stamps a holder, so the NEXT session has something exact to test.
+fixture; old_show open ""
+out=$("$SCRIPT" computenet-e 2>&1)
+grep -q -- "--set-metadata holder=" "$BD_LOG" \
+  && ok "a fresh claim stamps metadata.holder" \
+  || bad "no holder stamped — log: $(grep set-metadata "$BD_LOG" | tr '\n' '|')"
+
+# A LIVE holder is refused even though the recency test would have allowed the
+# takeover: this is the four-concurrent-sessions case, decided exactly.
+fixture
+live_pid=$$; live_start=$(ps -o lstart= -p $$ | tr -s ' ' | sed 's/^ *//;s/ *$//')
+holder_show open "testbox" "someone-else:$live_pid:$live_start"
+touch "$CTRL/refuse-claim"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "LIVE session" <<<"$out"; } \
+  && ok "a live holder is refused, not taken over" || bad "rc=$rc out=$out"
+
+# A DEAD holder is taken over — otherwise a crashed session deadlocks the epic.
+fixture
+holder_show open "testbox" "someone-else:99999:Tue Jan  1 00:00:00 2020"
+touch "$CTRL/refuse-claim"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "is dead" <<<"$out"; } \
+  && ok "a dead holder is taken over" || bad "rc=$rc out=$out"
+
+# An UNEVALUABLE holder must not become an all-clear NOR a hard block: it falls
+# back to the recency test that governed before, and says so.
+fixture
+holder_show open "testbox" "garbage"
+touch "$CTRL/refuse-claim"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "could not be evaluated" <<<"$out"; } \
+  && ok "an unevaluable holder falls back, loudly" || bad "rc=$rc out=$out"
+
+# The re-check reads bd AGAIN at the claim, so a slow step 3 cannot widen the
+# window (computenet-yurq). Two `show` calls is the observable of that.
+fixture; old_show open ""
+"$SCRIPT" computenet-e >/dev/null 2>&1
+[ "$(grep -c '^show ' "$BD_LOG")" -ge 1 ] \
+  && ok "the claim re-reads state from bd before writing" \
+  || bad "no show at claim time — log: $(tr '\n' '|' < "$BD_LOG")"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

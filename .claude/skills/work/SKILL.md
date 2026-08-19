@@ -73,7 +73,7 @@ The two that bite hardest, inline because skipping them costs the most:
   an empty query.
 - **`bd create --parent=<shared epic>` is banned** — it mints ids from a
   per-database counter and two machines collide. Use
-  `scripts/create-ticket.sh`.
+  `.claude/skills/work/scripts/create-ticket.sh`.
 
 `$SCRATCH` throughout is a **session-unique** temp dir: create it once as
 `SCRATCH=$(mktemp -d "<harness scratchpad>/work.XXXXXX")` — concurrent sessions
@@ -105,6 +105,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `wait-checks.sh` | THE settle loop on `gh pr checks` — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`QUERY-FAILED` |
 | `verify-branch-sync.sh` | 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
 | `merge-task.sh` | 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
+| `session-holder.sh` | this session's unique holder token, and `--check <token>` → MINE/LIVE/DEAD/UNKNOWN; what tells a live sibling from a crash leftover, which `assignee` cannot |
 | `junit-count.py` | JUnit XML accounting (counts + newest timestamp, both glob depths); refuses to report zero result files |
 
 (`scripts/beads-nightly-sync.sh` is the **repo-root** catch-up job; no
@@ -296,6 +297,32 @@ Three standing disciplines:
   .claude/skills/work/scripts/wait-checks.sh <pr-url>
   ```
 
+  **That rule covers `gh pr checks`. It applies to EVERY `gh` call, and the
+  others were all written bare.** During one 80-minute GraphQL degradation
+  roughly one call in three returned 503 — while REST stayed healthy and
+  githubstatus.com reported every component operational, so the outage is
+  invisible where you would look for it. `gh pr ready` took **five** attempts;
+  `gh pr list`, `gh pr view` and `gh pr comment` each failed at least once
+  (computenet-rkbp, computenet-fdv9). Retry any of them a few times, and
+  classify on output:
+
+  ```bash
+  for i in 1 2 3; do out=$(gh pr ready <n> 2>&1) && break; sleep $((i*5)); done
+  ```
+
+  Two specifics that cost real work that day:
+
+  - **Never test a `gh` pipeline's exit status.** `if gh pr comment … | tail -1;
+    then echo OK; fi` printed OK over a 503 and the comment was never posted —
+    the pipeline's status is `tail`'s. Re-read the write (`.comments|length`)
+    rather than trusting the call. This is the `${PIPESTATUS[0]}`/zsh trap the
+    skill already warns about for the sweep scripts, reaching `gh`.
+  - **`gh pr comment` has a REST fallback and draft→ready does not.**
+    `gh api -X POST repos/{owner}/{repo}/issues/<n>/comments -F body=@file`
+    worked first time while the GraphQL-backed `gh pr comment` would not.
+    Marking a PR ready is the GraphQL `markPullRequestReadyForReview` with no
+    REST equivalent, so retrying is the only option there.
+
   It requires all six required rows PRESENT and none pending, keeps the
   three non-settled states apart (query failed / not yet reporting /
   unsettled — one state to any test on `$?`, and two of them look green),
@@ -393,13 +420,45 @@ dir, a commit mixing both sessions' work). `skill-friction` items are
 excluded because their claim is routing to an orchestrator lane, not a work
 session — one is often stamped minutes ago by a session that just finished.
 
-Any row with `updated_at` within 15 minutes probably belongs to a live
-overlapping run on this machine (same `BEADS_ACTOR`, indistinguishable) —
-stop and report rather than colliding with it. Check every row. Older rows:
-an *epic* is a crash leftover — release it
-(`bd update <id> --status=open --assignee=""`); leave non-epic rows alone —
+**Read `metadata.holder` first — it decides this exactly, where the timestamp
+only guesses.** `assignee` is `BEADS_ACTOR`, which is per-MACHINE, so two
+sessions on one box are the same string and a live sibling's claim is
+indistinguishable from a crash leftover. `metadata.holder` names the SESSION,
+and its process either exists or does not:
+
+```bash
+.claude/skills/work/scripts/session-holder.sh --check "<the row's metadata.holder>"
+# MINE (0) = this session's own | LIVE (0) = a live sibling: leave it alone
+# DEAD (1) = crash leftover: releasable | UNKNOWN (3) = nothing established
+```
+
+`UNKNOWN` and an absent `holder` (rows claimed before 2026-08-19) are **not
+an all-clear** — fall back to the 15-minute rule below and say you did.
+
+Falling back: any row with `updated_at` within 15 minutes probably belongs to
+a live overlapping run on this machine — stop and report rather than colliding
+with it. Check every row. Older rows: an *epic* is a crash leftover — release
+it (`bd update <id> --status=open --assignee=""`); leave non-epic rows alone —
 stale *tasks* the sweep above already reopened, and a stale *feature* is the
 5a resume marker, not a leak.
+
+**Count the live siblings you found and carry the number to 5b.** A sibling
+is not only a reason to stop; if the operator has sanctioned concurrent
+running, it is a capacity input. `next-batch.py --siblings N` splits the
+machine's parallelism budget instead of letting each session claim all of it:
+four sessions on a 10-core box each computed a cap of 2 independently, every
+one correct by its own accounting, for 4x the measured safe parallelism
+(computenet-arow).
+
+**This check is a race, not a lock, and the holder does not change that.** It
+only ever trips on a sibling that has ALREADY claimed something — two sibling
+claims 84 seconds apart mean whichever session reaches this point first reads
+"alone" and proceeds, and a sibling still in step 1 or 2 is invisible
+entirely. What the holder buys is that once a claim exists, it is decidable.
+`claim-epic.sh` re-runs the test at the moment it writes, so an arbitrarily
+slow step 3 cannot widen the window between checking and claiming — one
+session's step 3 ran three hours on a slow host, and it claimed an epic a live
+sibling was working the whole time (computenet-83ay, computenet-yurq).
 
 **Only after the liveness check, reconcile beads against merged PRs:**
 
@@ -516,7 +575,7 @@ Empty output with exit 0 is a real answer; **exit 3 means nothing was
 checked** — stop, do not defer. It also prints a `could not resolve the epic
 of <id>` line to **stderr** for any ready item whose parent chain is broken
 (a vanished ancestor, a cycle): that item was *not* classified, so resolve it
-by hand (`scripts/epic-of.sh <id>`) before treating the listing as complete —
+by hand (`.claude/skills/work/scripts/epic-of.sh <id>`) before treating the listing as complete —
 never defer with one outstanding.
 
 Zero workable items and nothing resumable splits into **two** cases. Separate
@@ -564,7 +623,7 @@ Nothing claimable at all → report and stop.
 claim.** `epic.md` assumes the epic it breaks down is claimed, and the rule
 below forbids claiming another — so a sub-epic child sat in a gap with no
 route (computenet-k9uh). It is covered by the claim you already have: its
-effective epic (`scripts/epic-of.sh`) is the one you hold, so **break it down
+effective epic (`.claude/skills/work/scripts/epic-of.sh`) is the one you hold, so **break it down
 in place and do not claim it** — no `--claim`, no assignee, no `owner:` label,
 leave it `open`. **You** record provenance, not the breakdown agent: a comment
 on the sub-epic naming this session and the parent claim it is working under,
@@ -611,6 +670,32 @@ the type test alone would have missed the case that motivated this.
 The same shape is why step 3's workable-surface check must not commit to an
 epic whose only workable children are declared consumers of undelivered work:
 they are workable in `bd ready`'s sense and unstartable in fact.
+
+**A third shape: children exist TWICE, one set superseding the other.** A
+double breakdown — the same epic decomposed twice, by a re-dispatch or by two
+concurrent sessions reading the same epic state — leaves near-identical
+children in pairs. `computenet-4ru` carried four such pairs (`.6/.7`,
+`.8/.9`, `.10/.11`, `.12/.13`), created seconds apart, one twin of each closed.
+Neither reading above catches it, and inheriting the aftermath cost a session
+real time reading two ~1500-word bodies side by side before any work could
+start (computenet-f434). Scan the `--all` listing you already have for
+**same-titled or same-scoped children created within minutes of each other**,
+then:
+
+- **One twin closed** — very likely a clean supersede if it has
+  `comment_count` 0 and a `closed_at` within minutes of its `created_at`
+  (closed fast, before anyone worked it). Trust the survivor and say so.
+  A closed twin with **comments**, or a nonzero diff, carries state the
+  survivor may lack: read it before trusting the survivor, and if the two
+  disagree that is a human's call ([references/ask-human.md](references/ask-human.md)).
+- **Both twins open** — do **not** guess. Keep the set that maps 1:1 onto the
+  epic's own suggested decomposition, repair any dependency edges straddling
+  both sets, and let **each session close only the beads it created**: an
+  orchestrator deleting another session's beads underneath it is the
+  destructive move the runbook warns about. If the other session is a live
+  same-machine peer, `ListAgents`/`SendMessage` reaches it and two messages
+  settle who keeps what — that is what actually resolved `computenet-4ru`,
+  and it beats a 20-minute reconciliation by inference (computenet-t9d5).
 
 **A prerequisite between an epic and a non-epic is unexpressible as a bd
 blocking edge** — `bd` refuses a blocking dependency across the epic boundary.
@@ -733,6 +818,20 @@ no-feature-layer shape below, and you already have its answer. The epic
 itself is never one of the rows, but a ready **sub-epic** under it can be —
 that is a real child needing breakdown (step 4), not a feature to implement.
 
+**The MIXED shape — features AND ready non-feature children under one epic —
+takes `ready-in-epic.sh`'s order, not the feature filter.** Both branches
+above are written for a pure shape, and read literally a direct child is
+unselectable for as long as any feature remains ready: the feature filter
+skips it on every pass, and the no-feature-layer route never fires because
+features exist. `ready-in-epic.sh` has already sorted by priority, so **if the
+first row is not a feature, take it** on the direct-child route
+([references/direct-child.md](references/direct-child.md)) before the
+features. On `computenet-7em` the skipped row was a priority-1 bug that made
+CI actually execute the module's e2e suites — without it both features would
+have shipped on green-but-skipped evidence. Working it first is what made the
+following PR the first `:demo:beadsmirror` work in the repo's history whose
+tests really ran on a required lane (computenet-mv1s).
+
 A resumed feature carrying `metadata.review=passed` was certified last
 session — check its PR (`gh pr view <pr> --json state`); `MERGED` →
 `bd close` and move on, don't re-review.
@@ -779,8 +878,32 @@ as the second guard; never read it as "nobody is working here".
 A worktree already on disk that this session did not create may also belong
 to a *concurrent session* on this machine, not just a dead one — step 3's
 liveness check races a run that starts mid-slot. Before adopting one, check
-its bead: `in_progress` with `updated_at` in the last 15 minutes → occupied,
-leave it. Guessing wrong costs real work: two agents in one worktree converge
+its bead: `metadata.holder` via
+`.claude/skills/work/scripts/session-holder.sh --check` (LIVE → occupied), or
+failing that `in_progress` with `updated_at` in the last 15 minutes →
+occupied, leave it.
+
+**"One worktree, one live agent" is a WITHIN-session rule, and nothing
+extends it across two sessions on one machine.** A recovery session
+established death by every signal step 3 prescribes and then some — no bead
+written for 45 minutes against a 15-minute threshold, no `java` or `gradle`
+process running at all, a clean worktree with no mutation marker, the feature
+branch exactly equal to origin — dispatched a reviewer into that worktree,
+and *while the review ran* a concurrent session merged the task branch and
+removed the worktree underneath it. The reviewer's next `cd` failed with a
+bare "no such file or directory" and it had to reconstruct why from scratch
+(computenet-dj9h). Nothing was lost, but that is which way the race fell, not
+a property of the design. Two consequences:
+
+- **A quiet bead is not a dead session.** A session thinking, waiting on an
+  agent, or between dispatches writes nothing for far longer than 15 minutes,
+  and its child claims stay LOCAL until Finalize while its epic is open
+  (claim-sync.md), so a `bd dolt pull` shows you nothing either. The holder
+  check is the signal that survives all of that — use it before adopting or
+  removing anything another session may own.
+- **Before you remove a worktree another session might hold**, check for a
+  live holder on the item it belongs to, and prefer leaving it: an orphaned
+  worktree costs disk, a removed one costs a live agent its ground. Guessing wrong costs real work: two agents in one worktree converge
 on the same fix independently, and two concurrent Gradle builds there clobber
 each other's `build/` dirs, failing with errors that read as genuine test
 failures (computenet-sec: `NoSuchFileException` on an in-progress-results
@@ -880,8 +1003,18 @@ Then bring the branch up to date:
 ```bash
 git -C <worktree> pull --ff-only 2>/dev/null || true   # no upstream yet is fine
 git -C <worktree> merge origin/main -m "Merge main into <branch>"
-git -C <worktree> push -u origin <branch>
+git -C <worktree> push -u origin <branch>   # even with no commits yet — 5c's
+                                           # origin-state gate requires the ref
 ```
+
+**Push even when the branch has nothing on it.** On a fresh feature the
+branch is cut from `origin/main` and the merge is a no-op, so the push looks
+like pure ceremony — and the skill rewards not doing redundant work elsewhere,
+so an agent optimising for that skips it every time. The reason arrives two
+agents later: `merge-task.sh`'s origin-state gate hard-fails on the missing
+ref (`GATE origin-state: FAIL — origin has no feature/<id>`), and no task can
+merge until somebody pushes it. The push is what makes the branch *mergeable*,
+not a publication of content (computenet-5iuy).
 
 The `merge origin/main` is not optional on a resume — nothing else in this
 flow brings `main` in, and a feature carried across sessions otherwise
@@ -915,6 +1048,10 @@ Otherwise ask for the next batch:
 
 ```bash
 .claude/skills/work/scripts/next-batch.py <feature-id>
+# --siblings N if step 3 found N live sibling sessions on this box, or the
+# operator sanctioned concurrent running: the capacity cap is PER SESSION and
+# the machine is shared (computenet-arow). The verdict echoes what it used
+# under "capacity".
 ```
 
 Returns `{batch: [{id, model, files, worktree, branch, resumed}], skipped,
@@ -1001,7 +1138,23 @@ verdict. (`parked` is only meaningful on an empty batch.)
   until diagnosed`) is the deliberate shape, not a forgotten claim — treat it
   as such, and normalise the wording to the canonical opener so the next
   reader doesn't have to make the same call. Reserve "forgot" for a
-  description that says nothing about why the claim is empty. And never let a
+  description that says nothing about why the claim is empty.
+
+  **A review-filed residual is a THIRD shape, and it is neither of the two.**
+  review-feature.md §7 residuals now carry `--metadata` at filing, but one
+  that arrives without it is not a breakdown defect: nothing was forgotten and
+  there is no breakdown to blame, and cross-bead writes are not authorized to
+  a reviewer anyway. Applying the "forgot" branch literally means logging a
+  breakdown defect against a reviewer that behaved correctly
+  (computenet-419f). Recognise it by the description's `Residual from
+  <feature-id>` opener, **author the claim yourself and say so on the bead** —
+  and note that this authorship is weaker than a breakdown's, being derived
+  from the acceptance criterion by someone who has not read the code. One such
+  guess was right; the next reached a second file immediately and had to be
+  reported out and filed separately. If the residual's prose names its files —
+  several do, in a trailing `Files: …` line — use those.
+
+  And never let a
   task take a nominal claim over files it merely reads: a claim is a lock, so
   a read-only lock blocks a sibling for no benefit. A *descriptive string*
   where a path list belongs (`none (tracker mutations only)`) is that same
@@ -1183,7 +1336,9 @@ demonstrably discriminates, and report the substitution on the bead rather
 than making it quietly. ${repoAge}
 Run every verification command — Gradle above all — in ONE foreground Bash
 call with an explicit timeout, up to 600000 ms. If you already know the suite
-outruns that 10-minute cap, COMMIT FIRST (do not push — see your reference),
+outruns that 10-minute cap, COMMIT FIRST (do not `git push`, and do not
+`bd dolt push` either — the orchestrator serializes syncs; see your
+reference),
 then background it and wait
 with a BOUNDED until-loop on its log (your reference gives the form) — never
 wait first, or a stop strands uncommitted work that reads as nothing.
@@ -1474,8 +1629,22 @@ beyond that, sequence. Stated where it bites in
 [references/direct-child.md](references/direct-child.md), where nothing else
 bounds the count.
 
+**Cheaper still: prevent the collision instead of surviving it.** When two
+in-flight branches must each add an entry to the same *ordered list* — the
+`include()` block in `settings.gradle.kts`, the module table in
+`doc/ARCHITECTURE.md` — the default behaviour (both append at the end, or both
+anchor at the same neighbour) guarantees a conflict in every such file.
+Agreeing on **different insertion points** converts N guaranteed conflicts
+into zero for the cost of one message. Two sessions adding `:oracle` and
+`:identity` on 2026-08-17 did exactly that — one row between `:testkit` and
+`:wire`, the other after `:wire` — and the peer verified **zero** conflicts in
+both files after merging main, with both entries present and nothing lost
+(computenet-t9d5). A same-machine peer is reachable: `ListAgents` finds it,
+`SendMessage` reaches it. Everything else in this tier is about paying for a
+collision; this is the one move that avoids it.
+
 Red required check → red-check-attribution.md; pending → wait with
-`scripts/wait-checks.sh <pr-url>` (step 2's rules: classify on output, never
+`.claude/skills/work/scripts/wait-checks.sh <pr-url>` (step 2's rules: classify on output, never
 `$?`; computenet-luhx, computenet-15it, computenet-1zhu). A verdict
 carrying a **§6 hand-back** is yours to complete, and it is the **normal**
 path, not an exception: review-feature.md §6 assigns the merge to you
@@ -1763,7 +1932,8 @@ least one *single-word* search to have come back empty before you file.
 
 **One issue per kind of friction.** Found (and still open) → **upvote it**:
 comment this session's instance (what you were doing, what happened, what it
-cost) — comment count is the remediation priority — then claim it for this
+cost — `bd comment <id> "<text>"`, body positional, or `--file` for any body
+that quotes code) — comment count is the remediation priority — then claim it for this
 machine if unclaimed (`bd update <id> --claim`; already claimed by the other
 machine → done, its lane owns it). If the item is labeled `needs-evidence`,
 the remediation lane judged the existing reports unconvincing and its latest
@@ -1788,7 +1958,7 @@ ACCEPT=$(cat <<'EOF'
 EOF
 )
 .claude/skills/work/scripts/file-friction.sh --type <bug|feature> \
-  --title "<the friction in one line>" \
+  --title "<the friction in one line — NO 'work skill:' prefix; the script adds it>" \
   --desc "$DESC" --accept "$ACCEPT" \
   --skill-version <the epic's metadata.skill_version>
 ```

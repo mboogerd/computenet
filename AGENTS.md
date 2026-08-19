@@ -55,8 +55,29 @@ for documentation maintenance.
   failures.
 - `testkit/`: shared test scaffolding (`SimWorld`, `awaitUntil`, `HttpProbe`,
   `JvmPeer`) consumed as `testImplementation` by `:kernel` and every demo.
+- `bench/` (`:bench`): the JMH benchmark harness module (BEN1). Three source
+  sets: shared fixtures in `bench/src/main/kotlin` (`civictech.bench`),
+  `@Benchmark` bodies in `bench/src/jmh/kotlin` (`civictech.bench.micro`),
+  fast unit tests in `bench/src/test/kotlin`. Depends on `:kernel` and
+  `:testkit` only, and is depended on by nothing. Benchmark *execution* is
+  deliberately outside the build lifecycle — neither `:bench:jmhJar` nor
+  `:bench:jmh` is reachable from `:bench:build`.
+- `oracle/` (`:oracle`): batch-oracle differential tester over the operator
+  algebra (ORA1, epic `computenet-4ru`). `civictech.oracle.bind.OperatorCatalog`
+  binds a catalog id to a kernel `CellFactory` and an independent `ReferenceOp`
+  together, and `civictech.oracle.model` may reference value/key/delta types
+  but no `civictech.cell.data.op` type — that independence is what makes it a
+  check on the implementation rather than a second copy of it. Deliberately a
+  separate module rather than part of `:concord`; its own `ModuleDependencyTest`
+  bars deps on `:concord`/`:wire`/`:inspect`/`:demo:*`. Depends on `:kernel`,
+  `:testkit`.
 - `wire/`: the concrete WebSocket transport. Keep transport dependencies out of
   `kernel`; transport-neutral semantics stay behind the kernel bridge API.
+- `identity/` (`:identity`): JDK-only Ed25519 keypairs (JEP 339, no
+  third-party crypto), a fail-closed file-backed key store with
+  machine-distinguishable refusal reasons, and key-derived `PeerId`
+  fingerprints implementing the kernel's `SignatureVerifier` seam (DSC1, epic
+  `computenet-ssa`). Depends on `:kernel`; `:kernel` must not depend on it.
 - `concord/`: the executable specification — implementation-neutral conformance
   suite. YAML scenarios in `concord/corpus/` cover EARS requirement ids in
   `doc/spec/`; `concord/schema/*.md` are the authoring contracts (single-writer,
@@ -75,6 +96,13 @@ for documentation maintenance.
     semantic/invariant tests; use it to detect accidental API or behavior
     regressions. Its SolidJS/Vite frontend lives in `demo/agora/ui/` (npm, not
     Gradle).
+  - `demo/beadsmirror/` (`:demo:beadsmirror`): mirrors a bd/Dolt-backed beads
+    workspace — polls the Dolt commit feed, projects it through kernel cells
+    into a materialized OR-map fold, and serves the fold over `:demo:shell`'s
+    HTTP/SSE; an opt-in two-node mode gossips deltas over `:wire`. Its e2e
+    suite (`TwoNodeRigTest`, `TwoJvmMirrorTest`) is asserted as executed, not
+    replayed, in CI's `build-test-fast` and serial lanes (computenet-3g6n,
+    computenet-7em.5).
   - `demo/slotfinder/`, `demo/skillmatch/`, `demo/tiering/`,
     `demo/backlog-triage/`: incremental dataflow demos (quorum sets, joins,
     score fusion, ranking) that showcase the operator suite and surface kernel

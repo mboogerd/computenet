@@ -13,12 +13,17 @@ import java.io.Serializable
  * — injected, not unified. [enter]/[exit] only record and retrieve; they never
  * decide the tag-assignment POLICY, which stays genuinely different per
  * implementation:
- * - [MintedLedger] ([JoinSetCell], [SemiJoinCell]): mints a FRESH [Timestamp]
- *   per entry via [MintedTags] (tag hygiene, 21 — re-entry after the other
- *   side's removal needs a fresh tag, never borrowed from inputs).
- * - [AdvertisedLedger] ([IntersectSetCell]): advertises the union of both
- *   sides' OBSERVED input tags, computed by the caller and passed through
- *   [tagsIfAdvertised] — no minting at all.
+ * - [MintedLedger] ([JoinSetCell], [SemiJoinCell], [IntersectSetCell]): mints a
+ *   FRESH [Timestamp] per entry via [MintedTags] (tag hygiene, 21 — re-entry
+ *   after the other side's removal needs a fresh tag, never borrowed from
+ *   inputs). [IntersectSetCell] moved here from [AdvertisedLedger] in
+ *   computenet-vvre; see its KDoc for why borrowing is unsound across a
+ *   reconvergent path.
+ * - [AdvertisedLedger] ([QuorumSetCell]): advertises the union of the
+ *   contributing lanes' OBSERVED input tags, computed by the caller and passed
+ *   through [tagsIfAdvertised] — no minting at all. **Sound only while no
+ *   downstream can see the same tag by a second path**; a reconvergent graph
+ *   over a borrowing operator is the shape that breaks it (computenet-vvre).
  */
 interface JoinLedger<X> {
     val isEmpty: Boolean
@@ -107,7 +112,7 @@ class MintedLedger<X>(ref: CellRef, name: String) : JoinLedger<X> {
         mapOf(OperatorPaging.MINT_COUNTER to (minted.snapshot() as List<*>)[1] as Serializable)
 }
 
-/** Advertises the caller-supplied tag set on entry, verbatim — [IntersectSetCell]'s ledger. */
+/** Advertises the caller-supplied tag set on entry, verbatim — [QuorumSetCell]'s ledger. */
 class AdvertisedLedger<X> : JoinLedger<X> {
     private val advertised = mutableMapOf<X, Set<Timestamp>>()
 

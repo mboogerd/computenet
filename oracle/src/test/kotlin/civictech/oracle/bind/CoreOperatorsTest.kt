@@ -359,6 +359,36 @@ class CoreOperatorsTest {
         }
     }
 
+    /**
+     * The port names a [ShapeRule] carries must match the names each kernel cell's `@CellBase`
+     * interface declares — a generator writes `ConnectStep(from, outlet, to, inlet)`
+     * (`civictech.cell.graph.GraphDsl`) straight off this data, so a mismatch here is a
+     * generator that cannot link. Read directly off the cell sources:
+     *  - `FilterSetApi` (`FilterCell.kt`): `val inlet`, `val outlet`.
+     *  - `JoinSetApi` (`JoinSetCell.kt`): `val left`, `val right`, `val outlet`.
+     *  - `LookupJoinApi` (`LookupJoinCell.kt`): `val fact`, `val dimension`, `val outlet`.
+     *  - `UnionSetApi` (`UnionSetCell.kt`): `val inlet` (one dynamic fan-in port every arm
+     *    connects to — CoreOperators repeats it once per advertised arm), `val outlet`.
+     */
+    @Test
+    fun `ShapeRule port names match each kernel cell's declared CellBase ports`() {
+        val filter = OperatorCatalog.shapeOf(CoreOperators.Ids.FILTER)!!
+        filter.inputPorts shouldContainExactly listOf("inlet")
+        filter.outputPort shouldBe "outlet"
+
+        val joinSet = OperatorCatalog.shapeOf(CoreOperators.Ids.JOIN_SET)!!
+        joinSet.inputPorts shouldContainExactly listOf("left", "right")
+        joinSet.outputPort shouldBe "outlet"
+
+        val lookupJoin = OperatorCatalog.shapeOf(CoreOperators.Ids.LOOKUP_JOIN)!!
+        lookupJoin.inputPorts shouldContainExactly listOf("fact", "dimension")
+        lookupJoin.outputPort shouldBe "outlet"
+
+        val union = OperatorCatalog.shapeOf(CoreOperators.Ids.UNION)!!
+        union.inputPorts shouldContainExactly listOf("inlet", "inlet")
+        union.outputPort shouldBe "outlet"
+    }
+
     @Test
     fun `registering twice is refused rather than silently rebinding`() {
         val failure = runCatching { CoreOperators.registerAll() }.exceptionOrNull()

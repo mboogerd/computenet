@@ -52,6 +52,56 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     private val adds = mutableMapOf<E, MutableSet<Timestamp>>()
     private val dels = mutableMapOf<E, MutableSet<Timestamp>>()
 
+    /**
+     * Guards **every** access to [adds], [dels], [tagCounter], [delivered] and
+     * [deliveryListeners] — the read accessors as much as the writers. The
+     * element-shaped twin of `OrMapCell.stateLock` (computenet-yk5r), taken
+     * for the same reason and with the same discipline.
+     *
+     * The cell's writer runs on whichever thread delivers to `inlet` or
+     * [deltaInlet], while [membership], [snapshot] and [readBounded] are
+     * *host*-facing reads a caller makes from its own thread. Unguarded, those
+     * accessors iterate the shared maps (and, in [readBounded]/[snapshot], the
+     * per-element tag sets) and escape a
+     * [java.util.ConcurrentModificationException] into the caller — the same
+     * escape observed on CI out of `OrMapCell.membership`, reachable here
+     * through `MirrorProjector.edgeView`, which reads a `SetCell`'s
+     * [membership] from an `awaitUntil` thread while the beads mirror's poller
+     * writes (computenet-bdth).
+     *
+     * **The monitor is never held across an outbound call**, and this cell has
+     * two kinds where `OrMapCell` has one:
+     *
+     * - `add`/`remove` fold under it and propagate after; [applyRemote] folds
+     *   under it and originates after; the pull reply is assembled under it
+     *   and `baselineTo`-shipped after.
+     * - **Delivery listeners are foreign code and fire outside it.** A
+     *   registered listener is `WatermarkCell`'s `companion.advance(...)`
+     *   (`Replication.kt`) — a *cell call*, not a callback into pure state. So
+     *   the fold into [delivered] ([foldDelivered]) happens under the monitor
+     *   and the notification ([notifyDelivered]) strictly after it is
+     *   released. Holding the monitor across that call is exactly how a
+     *   cross-cell lock cycle would form here, and it is the one place this
+     *   cell's shape differs from `OrMapCell`'s.
+     *
+     * The only foreign code that can run under the monitor is an element's own
+     * `hashCode`/`equals` (unavoidable — the elements are map keys) and an
+     * [civictech.cell.link.Interest] predicate, both pure by contract and
+     * neither reaching a cell, port or link.
+     *
+     * **What it costs.** Reads serialize against the single writer: a host
+     * polling [membership] or [readBounded] over a large set delays the next
+     * write by that scan. Nothing downstream is blocked, per the paragraph
+     * above.
+     *
+     * **Why not the cheaper options.** Copying on read without a guard does
+     * not help — the copy is itself an iteration and throws the same CME.
+     * Concurrent maps would replace the maps' insertion-order iteration with
+     * hash order (which [SetWalk] explicitly freezes an order against) and
+     * would still let one accessor tear an `adds` read against a `dels` read.
+     */
+    private val stateLock = Any()
+
     // Tags are minted locally, not taken from the wave's MessageContext:
     // observed-remove correctness needs a tag unique per add *instance*, and a
     // wave timestamp repeats across every cell the wave touches (22).
@@ -73,60 +123,92 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     private val delivered = DeliveredFrontier()
     private val deliveryListeners = mutableListOf<(UUID, Long) -> Unit>()
 
-    override fun onDeliver(listener: (source: UUID, thru: Long) -> Unit) {
+    override fun onDeliver(listener: (source: UUID, thru: Long) -> Unit) = synchronized(stateLock) {
         deliveryListeners += listener
+        Unit
     }
 
-    /** Fold [tags] into the delivered frontier; notify listeners of each raised per-origin prefix. */
-    private fun recordDelivered(tags: Iterable<Timestamp>) {
-        if (deliveryListeners.isEmpty()) return
+    /**
+     * Fold [tags] into the delivered frontier and return each raised per-origin
+     * prefix. Call under [stateLock]; hand the result to [notifyDelivered]
+     * *after* releasing it.
+     */
+    private fun foldDelivered(tags: Iterable<Timestamp>): Map<UUID, Long> {
+        if (deliveryListeners.isEmpty()) return emptyMap()
         val advanced = HashMap<UUID, Long>()
         for (tag in tags) delivered.deliver(tag.sourceId, tag.counter)?.let { advanced[tag.sourceId] = it }
-        for ((source, thru) in advanced) deliveryListeners.forEach { it(source, thru) }
+        return advanced
     }
 
-    private fun liveTags(element: E): Set<Timestamp> =
+    /**
+     * Notify listeners of each raised per-origin prefix. **Never called under
+     * [stateLock]**: a listener is another cell's call (see [stateLock]).
+     */
+    private fun notifyDelivered(advanced: Map<UUID, Long>) {
+        if (advanced.isEmpty()) return
+        val listeners = synchronized(stateLock) { deliveryListeners.toList() }
+        for ((source, thru) in advanced) listeners.forEach { it(source, thru) }
+    }
+
+    private fun liveTags(element: E): Set<Timestamp> = synchronized(stateLock) {
         (adds[element] ?: emptySet<Timestamp>()) - (dels[element] ?: emptySet())
+    }
 
     /** Current membership: elements with at least one un-tombstoned add-tag. */
-    fun membership(): Set<E> = adds.keys.filterTo(mutableSetOf()) { liveTags(it).isNotEmpty() }
+    fun membership(): Set<E> = synchronized(stateLock) {
+        adds.keys.filterTo(mutableSetOf()) { liveTags(it).isNotEmpty() }
+    }
 
     // constructed inline: the factory runs during base-class init, before this
     // class's own fields initialize — the object only *captures* `this`; its
     // methods read subclass state later, at message time.
     override fun inletHandler(): SetOps<E> = object : SetOps<E> {
         override fun add(element: E) {
-            val tag = Timestamp(tagSource, ++tagCounter)
-            adds.getOrPut(element) { mutableSetOf() } += tag
-            recordDelivered(listOf(tag)) // a local mint is trivially contiguous
+            // the fold happens under `stateLock`; the listener notification and
+            // the propagation after it, never under (see stateLock's KDoc).
+            val (tag, advanced) = synchronized(stateLock) {
+                val minted = Timestamp(tagSource, ++tagCounter)
+                adds.getOrPut(element) { mutableSetOf() } += minted
+                minted to foldDelivered(listOf(minted)) // a local mint is trivially contiguous
+            }
+            notifyDelivered(advanced)
             outlet.call.propagate(SetDelta(adds = mapOf(element to setOf(tag))))
         }
 
         override fun remove(element: E) {
-            // effective-only (21): removing an unobserved element is a no-op
-            val observed = liveTags(element)
-            if (observed.isEmpty()) return
-            dels.getOrPut(element) { mutableSetOf() } += observed
+            val observed = synchronized(stateLock) {
+                // effective-only (21): removing an unobserved element is a no-op
+                val seen = liveTags(element)
+                if (seen.isEmpty()) return
+                dels.getOrPut(element) { mutableSetOf() } += seen
+                seen
+            }
             outlet.call.propagate(SetDelta(dels = mapOf(element to observed)))
         }
     }
 
     /** Merge a peer replica's delta; re-emit exactly the new tag information. */
     private fun applyRemote(delta: SetDelta<E>) {
-        val newAdds = delta.adds
-            .mapValues { (e, tags) -> tags - (adds[e] ?: emptySet()) }
-            .filterValues { it.isNotEmpty() }
-        val newDels = delta.dels
-            .mapValues { (e, tags) -> tags - (dels[e] ?: emptySet()) }
-            .filterValues { it.isNotEmpty() }
-        if (newAdds.isEmpty() && newDels.isEmpty()) return // echo terminates here
-        newAdds.forEach { (e, tags) -> adds.getOrPut(e) { mutableSetOf() } += tags }
-        newDels.forEach { (e, tags) -> dels.getOrPut(e) { mutableSetOf() } += tags }
-        // advance the per-origin delivered frontier before re-emitting: membership
-        // now reflects these tags, so a peer reading the watermark that this
-        // advance gossips will also see the element live here (E3.3(a)/E3.4).
-        recordDelivered(newAdds.values.flatten())
-        outlet.originate { propagate(SetDelta(newAdds, newDels)) }
+        // one atomic fold: the novelty computation and its absorption must not
+        // straddle another writer, and no outbound call happens under the
+        // monitor — neither the listener notification nor the re-emission.
+        val (effective, advanced) = synchronized(stateLock) {
+            val newAdds = delta.adds
+                .mapValues { (e, tags) -> tags - (adds[e] ?: emptySet()) }
+                .filterValues { it.isNotEmpty() }
+            val newDels = delta.dels
+                .mapValues { (e, tags) -> tags - (dels[e] ?: emptySet()) }
+                .filterValues { it.isNotEmpty() }
+            if (newAdds.isEmpty() && newDels.isEmpty()) return // echo terminates here
+            newAdds.forEach { (e, tags) -> adds.getOrPut(e) { mutableSetOf() } += tags }
+            newDels.forEach { (e, tags) -> dels.getOrPut(e) { mutableSetOf() } += tags }
+            // advance the per-origin delivered frontier before re-emitting: membership
+            // now reflects these tags, so a peer reading the watermark that this
+            // advance gossips will also see the element live here (E3.3(a)/E3.4).
+            SetDelta(newAdds, newDels) to foldDelivered(newAdds.values.flatten())
+        }
+        notifyDelivered(advanced)
+        outlet.originate { propagate(effective) }
     }
 
     /**
@@ -135,7 +217,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * scope iterates every key — byte-identical to the pre-scope frontier — so a
      * scope-absent pull's reported currency is unchanged.
      */
-    private fun currentFrontier(scope: civictech.cell.link.Interest? = null): TagFrontier {
+    private fun currentFrontier(scope: civictech.cell.link.Interest? = null): TagFrontier = synchronized(stateLock) {
         val admit: (E) -> Boolean =
             if (scope == null || scope is civictech.cell.link.Interest.Total) { _ -> true }
             else { e -> scope.admits(e) }
@@ -145,7 +227,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         (addSeq + delSeq).flatten().forEach { tag ->
             frontier.merge(tag.sourceId, tag.counter, ::maxOf)
         }
-        return TagFrontier(frontier)
+        TagFrontier(frontier)
     }
 
     /**
@@ -162,11 +244,15 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         else source.filterKeys { scope.admits(it) }
 
     /** Only the tags a [since] frontier has not yet observed; unfiltered when [since] is null. */
-    private fun sinceFilter(source: Map<E, MutableSet<Timestamp>>, since: TagFrontier?): Map<E, Set<Timestamp>> =
+    private fun sinceFilter(
+        source: Map<E, MutableSet<Timestamp>>,
+        since: TagFrontier?,
+    ): Map<E, Set<Timestamp>> = synchronized(stateLock) {
         source.mapValues { (_, tags) ->
             if (since == null) tags.toSet()
             else tags.filterTo(mutableSetOf()) { (since.perSource[it.sourceId] ?: -1L) < it.counter }
         }.filterValues { it.isNotEmpty() }
+    }
 
     init {
         deltaInlet.serve(object : Propagate<SetDelta<E>> {
@@ -176,11 +262,13 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // (M7.4): full tag state as one delta-from-empty, tombstones included,
         // to just the new subscriber; idempotence makes replays harmless
         outlet.catchUpOnLinked {
-            if (adds.isEmpty() && dels.isEmpty()) null
-            else SetDelta(
-                adds = adds.mapValues { it.value.toSet() },
-                dels = dels.mapValues { it.value.toSet() },
-            )
+            synchronized(stateLock) {
+                if (adds.isEmpty() && dels.isEmpty()) null
+                else SetDelta(
+                    adds = adds.mapValues { it.value.toSet() },
+                    dels = dels.mapValues { it.value.toSet() },
+                )
+            }
         }
         // on-demand pull (spec 20/21 §Pull, G-18 residual, decided in 93
         // I-16/I-24): a single-wave state-as-delta reply, stamped as a catch-
@@ -193,11 +281,16 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // scope filter (PN-3c): restrict the reply to the requester's
             // interest slice. scope absent/Total ⇒ the maps and the reported
             // frontier are the pre-scope values, so the reply is verbatim.
-            val addsOut = scopedTo(sinceFilter(adds, request.since), request.scope)
-            val delsOut = scopedTo(sinceFilter(dels, request.since), request.scope)
-            if (addsOut.isEmpty() && delsOut.isEmpty()) return@pullServe
-            baselineTo(request.replyTo, currentFrontier(request.scope)) {
-                propagate(SetDelta(addsOut, delsOut))
+            // the three halves of a reply are one snapshot: taken together
+            // under the monitor, shipped after it is released.
+            val reply = synchronized(stateLock) {
+                val addsOut = scopedTo(sinceFilter(adds, request.since), request.scope)
+                val delsOut = scopedTo(sinceFilter(dels, request.since), request.scope)
+                if (addsOut.isEmpty() && delsOut.isEmpty()) null
+                else Triple(addsOut, delsOut, currentFrontier(request.scope))
+            } ?: return@pullServe
+            baselineTo(request.replyTo, reply.third) {
+                propagate(SetDelta(reply.first, reply.second))
             }
         }
     }
@@ -205,7 +298,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // snapshot/restore (G-25 seam): elements must be Serializable. The tag
     // counter is state too (M10.2): a checkpoint-restored instance must not
     // re-mint tags it already used — journal-tail replay continues the count.
-    override fun snapshot(): Serializable =
+    override fun snapshot(): Serializable = synchronized(stateLock) {
         HashMap(
             mapOf(
                 "adds" to HashMap(adds.mapValues { HashSet(it.value) }),
@@ -213,15 +306,17 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
                 "counter" to tagCounter,
             )
         )
+    }
 
     @Suppress("UNCHECKED_CAST")
-    override fun restore(state: Serializable) {
+    override fun restore(state: Serializable) = synchronized(stateLock) {
         val maps = state as Map<String, Any>
         adds.clear()
         dels.clear()
         (maps.getValue("adds") as Map<E, Set<Timestamp>>).forEach { (e, tags) -> adds[e] = tags.toMutableSet() }
         (maps.getValue("dels") as Map<E, Set<Timestamp>>).forEach { (e, tags) -> dels[e] = tags.toMutableSet() }
         tagCounter = maps["counter"] as? Long ?: 0L
+        Unit
     }
 
     // ---------------------------------------------------------------------
@@ -325,7 +420,11 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * caller joining a walk mid-way still sees it. With it, the union of a
      * walk's pages is exactly [snapshot]'s content.
      */
-    override fun readBounded(request: StateRead): StatePage {
+    override fun readBounded(request: StateRead): StatePage = synchronized(stateLock) {
+        // one page is assembled under the monitor: it walks the frozen order but
+        // reads the LIVE tag maps and the live per-element tag sets, so it races
+        // the fold exactly as [membership] does. There is no outbound call in
+        // here, so the monitor is only ever held across pure map work.
         val scope = request.scope
         @Suppress("UNCHECKED_CAST")
         val walk = (request.cursor?.token as? SetWalk<E>) ?: openWalk(scope)
@@ -362,7 +461,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
 
         val complete = index >= order.size
         val opening = walk.next == 0
-        return StatePage(
+        StatePage(
             entries = entries,
             next = if (complete) null else Cursor(SetWalk(order, index, walk.opening)),
             // exact at both ends of the walk; the opening stamp was computed in
@@ -383,7 +482,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * whose add never arrived — so both maps contribute keys, deduplicated
      * against `adds` rather than through a second hash set.
      */
-    private fun openWalk(scope: civictech.cell.link.Interest?): SetWalk<E> {
+    private fun openWalk(scope: civictech.cell.link.Interest?): SetWalk<E> = synchronized(stateLock) {
         val admit: (E) -> Boolean =
             if (scope == null || scope is civictech.cell.link.Interest.Total) { _ -> true }
             else { e -> scope.admits(e) }
@@ -399,13 +498,16 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             if (!adds.containsKey(element)) order += element
             for (tag in tags) frontier.merge(tag.sourceId, tag.counter, ::maxOf)
         }
-        return SetWalk(order, 0, TagFrontier(frontier))
+        SetWalk(order, 0, TagFrontier(frontier))
     }
 
     /**
      * A page-owned copy of the tags [since] has not yet observed (V1C-KERNEL) —
      * a copy, never an alias of the fold's own mutable set, so a page can never
      * be mutated under its reader.
+     *
+     * [tags] may be the fold's live set, so this **must** be called under
+     * [stateLock]; its only call site ([readBounded]) holds it.
      */
     private fun tagsBeyond(tags: Set<Timestamp>?, since: TagFrontier?): Set<Timestamp> = when {
         tags.isNullOrEmpty() -> emptySet()

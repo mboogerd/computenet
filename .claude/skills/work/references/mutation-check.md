@@ -92,15 +92,26 @@ which a cache restore also freshens.
 Then prove it:
 
 ```bash
-git -C <your-worktree> diff -- <file>      # tracked: expect EMPTY output
-grep -n '<the mutated phrase>' <file>      # untracked: expect NO match
+git -C <your-worktree> diff HEAD -- <file>  # tracked: expect EMPTY output
+grep -n '<the mutated phrase>' <file>       # untracked: expect NO match
 rm -f <your-worktree>/.mutation-in-progress
-ls <your-worktree>/.mutation-in-progress   # expect: No such file
+ls <your-worktree>/.mutation-in-progress    # expect: No such file
 ```
 
-`git diff` proves nothing about an untracked file — it is empty whether or not
-the mutation is still there — so for a file git does not track, the re-grep is
-the only proof.
+**`HEAD` is load-bearing — a bare `git diff` cannot discriminate here.** Plain
+`git diff` compares the worktree against the **index**, so anything that
+*stages* while restoring — `git checkout <sha> -- <file>`, `git restore
+--staged --worktree`, or an earlier `git add` — leaves it empty whether or not
+the mutation is still present. Both directions then read identically and the
+agent has to decide what a blank output means with no signal in it; one
+reviewer "nearly recorded a mutation as unapplied" on exactly this
+(computenet-qc6g). `git diff HEAD` compares against the commit, so it shows
+the mutation as a real diff while applied and nothing once reverted, whatever
+touched the index.
+
+`git diff` in any form proves nothing about an untracked file — it is empty
+whether or not the mutation is still there — so for a file git does not
+track, the re-grep is the only proof.
 
 **The marker is gitignored, so a clean `git status --short` does NOT mean the
 marker is gone.** Removing it needs its own step and its own check — SKILL.md
