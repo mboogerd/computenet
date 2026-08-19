@@ -12,6 +12,7 @@ absence cost a session (the cited bead holds the story — `bd show <id>`).
 - [Commit before you wait on evidence](#commit-before-you-wait-on-evidence)
 - [The bounded until-loop, and refusals](#the-bounded-until-loop-and-refusals)
 - [Commands that fail QUIETLY in this shell and on this host](#commands-that-fail-quietly-in-this-shell-and-on-this-host)
+- [Two pushes, and neither is yours](#two-pushes-and-neither-is-yours)
 - [The job ledger](#the-job-ledger)
 - [Never end a turn waiting](#never-end-a-turn-waiting)
 
@@ -158,6 +159,27 @@ which is what makes them worth naming rather than leaving to be rediscovered.
   Reading a library's own format constants out of its bytecode is the natural
   way to check a parser against the thing it parses — it is what turns "the
   prose says the banner looks like this" into evidence.
+
+## Two pushes, and neither is yours
+
+"Do not push" in a dispatch prompt reads as covering **git**, and there is a
+second push it does not name. A task reviewer reasoned its way into
+`bd dolt push` on its own initiative — a defensible instinct, given how much
+this skill emphasises writing verdicts durably before stopping — and reported
+*"metadata.review=passed set; … Dolt pushed"* (computenet-6uqb). So, in as
+many words:
+
+- **No `git push`** — not even your own task branch. The orchestrator's
+  merge step owns that.
+- **No `bd dolt push`** either. Your bead writes stay LOCAL and ride out on
+  the orchestrator's next sync. This is not about permission: the
+  orchestrator serializes pushes, concurrent pushes from parallel agents
+  contend, and your writes are already carried by its next bracket — so a
+  subagent push is exactly the redundant kind the sync policy exists to
+  prevent (AGENTS.md, "Syncing bead state is required, not optional").
+
+Write your verdict to the bead and stop. Durability is the local write; the
+push is someone else's job.
 
 ## The job ledger
 

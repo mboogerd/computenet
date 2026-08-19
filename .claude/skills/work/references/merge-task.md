@@ -51,7 +51,9 @@ commissioned work rather than scope creep, and anything beyond it as
 unauthorized.
 Run every verification command — Gradle above all — in ONE foreground Bash
 call with an explicit timeout, up to 600000 ms. If you already know the suite
-outruns that 10-minute cap, COMMIT FIRST (do not push — see your reference),
+outruns that 10-minute cap, COMMIT FIRST (do not `git push`, and do not
+`bd dolt push` either — the orchestrator serializes syncs; see your
+reference),
 then background it and wait
 with a BOUNDED until-loop on its log (your reference gives the form) — never
 wait first, or a stop strands uncommitted work that reads as nothing.
@@ -121,6 +123,31 @@ the review has produced nothing durable. Then, in order — do not kill first:
    Route on whatever it wrote to the bead.
 3. **Then choose** between a fresh reviewer and leaving the PR draft, on
    remaining budget — not on principle.
+
+**When the `SendMessage` in step 1 is itself what fails, stop resending.** A
+resumed agent replays its whole prior transcript, and a reviewer whose first
+pass was substantial can exceed what the stream watchdog tolerates. Measured
+2026-08-19: a scoped re-check of one criterion failed twice with
+`Agent stalled: no progress for 600s (stream watchdog did not recover)` —
+the second attempt with a deliberately much shorter message, which changed
+nothing, consistent with the cost being in the REPLAY rather than in the new
+message. Both stalls wrote **nothing**: no comment, no verdict, no metadata.
+Two dead 10-minute waits, and the ladder had no rung for the resume itself
+failing (computenet-s7mq).
+
+So: **one failed resume is the signal to dispatch a FRESH reviewer**, scoped
+to the open criterion and carrying the prior verdict's findings **in the
+prompt** rather than relying on the agent's memory of them. That route is not
+free — it re-reads the diff and may re-run checks the first pass already did —
+so budget it as a fresh review, not as a continuation.
+
+**And clear the stale marker.** A task whose re-review never lands must not be
+left with `metadata.review=failed` from the superseded pass: it is stale with
+respect to the code and reads as a verdict on the *current* branch. Set it to
+a value that says so (`review=stale:<why>`) or unset it
+(`bd update <id> --unset-metadata review`), and say on the bead what the
+marker does and does not mean. A marker that contradicts the branch is worse
+than no marker.
 
 **A re-dispatched reviewer needs framing the first one didn't**, or it repeats
 the open-ended verification that stalled: tell it **it is the second

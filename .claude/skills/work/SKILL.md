@@ -946,8 +946,18 @@ Then bring the branch up to date:
 ```bash
 git -C <worktree> pull --ff-only 2>/dev/null || true   # no upstream yet is fine
 git -C <worktree> merge origin/main -m "Merge main into <branch>"
-git -C <worktree> push -u origin <branch>
+git -C <worktree> push -u origin <branch>   # even with no commits yet — 5c's
+                                           # origin-state gate requires the ref
 ```
+
+**Push even when the branch has nothing on it.** On a fresh feature the
+branch is cut from `origin/main` and the merge is a no-op, so the push looks
+like pure ceremony — and the skill rewards not doing redundant work elsewhere,
+so an agent optimising for that skips it every time. The reason arrives two
+agents later: `merge-task.sh`'s origin-state gate hard-fails on the missing
+ref (`GATE origin-state: FAIL — origin has no feature/<id>`), and no task can
+merge until somebody pushes it. The push is what makes the branch *mergeable*,
+not a publication of content (computenet-5iuy).
 
 The `merge origin/main` is not optional on a resume — nothing else in this
 flow brings `main` in, and a feature carried across sessions otherwise
@@ -1265,7 +1275,9 @@ demonstrably discriminates, and report the substitution on the bead rather
 than making it quietly. ${repoAge}
 Run every verification command — Gradle above all — in ONE foreground Bash
 call with an explicit timeout, up to 600000 ms. If you already know the suite
-outruns that 10-minute cap, COMMIT FIRST (do not push — see your reference),
+outruns that 10-minute cap, COMMIT FIRST (do not `git push`, and do not
+`bd dolt push` either — the orchestrator serializes syncs; see your
+reference),
 then background it and wait
 with a BOUNDED until-loop on its log (your reference gives the form) — never
 wait first, or a stop strands uncommitted work that reads as nothing.
