@@ -65,6 +65,64 @@ SKILL.md and the other references cite this file as "`bd` traps".
   `--type`); `bd comment` takes the body positionally or via `--file` (not
   `--body-file`); clearing a metadata key is `--unset-metadata <key>`
   (`--set-metadata key=` merges, it does not clear).
+- **The acceptance field is spelled differently for writing and for
+  reading.** The write flag is `--acceptance`; the JSON read key is
+  **`acceptance_criteria`**. They are not the same string, and `jq
+  '.[0].acceptance'` answers `null` on a bead that has criteria rather than
+  erroring — the `has("<field>")` trap above, on the one field the review
+  references treat as the standard to judge against. Measured on
+  `computenet-4ru.5.3`, which carries five criteria: `.acceptance` → `null`,
+  `.acceptance_criteria` → the text. This has already cost a real review: a
+  task reviewer opened its report with "the bead carried NO acceptance
+  criteria (`acceptance: null`)", took review-task.md's
+  empty-criteria fallback ladder, wrote nine criteria of its own and
+  **overwrote the field** with them — about 15 minutes before review could
+  begin, and the original text is unrecoverable (computenet-2rix). A
+  reviewer that reconstructs criteria writes them to a **comment**, never
+  over the field.
+- **`bd show <child> --json` inlines the parent epic's ENTIRE description**
+  (and each dependency's), so a child of a large epic is *bigger than the
+  epic*. Measured 2026-08-19: `bd show computenet-x9e.3 --json` = 57KB while
+  `bd show computenet-x9e --json` = 43KB. The agent is not reading a big
+  issue; it is reading a small one that silently carries a big one inside it,
+  and the failure looks like a truncated read whose natural recovery — re-run
+  the command — fails identically (computenet-rram). Redirect and slice:
+
+  ```bash
+  bd show <id> --json > "$SCRATCH/<id>.json"
+  jq -r '.[0] | "\(.description)\n---\n\(.acceptance_criteria)"' "$SCRATCH/<id>.json"
+  ```
+
+  **A truncated bead read is a truncated ACCEPTANCE LIST**, and nothing in
+  the output says it was truncated, so the review proceeds against criteria
+  it never saw (computenet-h0dj). The general rule, of which `bd comments`
+  and `bd ready --type=epic --json` are the already-known cases: **any `bd`
+  read whose size is not bounded by construction goes to a file first.**
+- **`bd comment` executes backticks in its free text and reports success.**
+  Backticks inside a double-quoted shell argument are command substitution,
+  so the word vanishes from the stored comment while `bd` prints "Comment
+  added" and exits 0. Measured 2026-08-18: a comment reading ``dispatch is a
+  `when` EXPRESSION over it`` stored as "dispatch is a  EXPRESSION over it",
+  with `(eval):1: command not found: when` the only sign. The comment is 95%
+  intact, which is what makes it dangerous — it reads as garbled rather than
+  corrupted, to a future agent who cannot know a word is missing. **Any bd
+  free text that quotes code goes through a quoted heredoc or `bd comment
+  <id> --file <path>`** — this applies to every bd subcommand taking free
+  text, not only to filing friction (computenet-9w9, computenet-s62u).
+- **`bd search` matches a case-insensitive literal substring of the TITLE
+  and id only.** Descriptions are invisible, and a multi-word query hits only
+  when those words appear verbatim *and adjacent* in a title. **An empty
+  result is no evidence at all**, never evidence of absence. This produced a
+  false accusation: a reviewer searched for a follow-up bead using the
+  residual's *subject* wording, found nothing, and reported that an
+  implementer "claimed to file a bead and did not" — while
+  `bd show computenet-yhbd` returns it, open and correctly parented
+  (computenet-tay3). It bites reviewers specifically because the reviewer
+  searches from the residual's subject while the bead was titled by its
+  author, so the two rarely share an adjacent word sequence. To check
+  whether a bead exists: `bd show <id>` when an id is named, otherwise
+  `bd list --parent=<epic> --all --json` or a grep of `.beads/issues.jsonl`
+  — never a phrase search alone.
 - **`bd create` has no `--set-metadata`** — that flag exists only on `bd
   update`. On create the spelling is `--metadata '<json object>'`, so
   `model` and `files` go in as

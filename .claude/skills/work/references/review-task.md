@@ -20,6 +20,21 @@ prescribed writes are commissioned work. A close or a priority change on
 another bead is not, whatever prescribed it: report it rather than repairing
 it.
 
+**A negative finding about another agent's tracker writes needs a lookup, not
+a search.** Verifying that a claimed follow-up bead was really filed is a
+natural and valuable review check, and it is precisely the query `bd search`
+is worst at: it matches a literal substring of the **title and id only** —
+descriptions are invisible, and a multi-word query hits only when those words
+appear verbatim and adjacent. You will search from the residual's *subject*
+wording while the bead was titled by its author, so the two rarely share an
+adjacent word sequence, and **an empty result is no evidence at all**. A
+reviewer that trusted one reported that an implementer "claimed to file a bead
+and did not"; `bd show computenet-yhbd` returns that bead, open and correctly
+parented (computenet-tay3). Check by **id** (`bd show <id>`) when one is
+named, otherwise `bd list --parent=<epic> --all --json` or a grep of
+`.beads/issues.jsonl`. If you cannot confirm either way, report the
+uncertainty — never the accusation.
+
 ## Contents
 
 1. The standard, then the diff — criteria from the bead, diff against the resolved base
@@ -149,7 +164,22 @@ Check:
   against the tightened version, saying so. Where it doesn't, you can't judge
   this task: say that rather than passing it on vibes.
 - **Missing entirely** — empty, or the key absent from `bd show --json`
-  altogether (both read as `null`, and neither is a `bd` failure). This is the
+  altogether (both read as `null`, and neither is a `bd` failure).
+
+  **Read the key by its real name before you believe this.** The write flag is
+  `--acceptance`, the JSON read key is **`acceptance_criteria`**, and
+  `jq '.[0].acceptance'` answers `null` on a bead that *has* criteria
+  ([bd-traps.md](bd-traps.md)). A reviewer that made exactly this misread
+  entered the ladder below for no reason and overwrote five real criteria with
+  nine of its own (computenet-2rix). Confirm with the correct key, from a file
+  so the read cannot truncate, before concluding anything is missing:
+
+  ```bash
+  bd show <id> --json > "$SCRATCH/<id>.json"
+  jq -r '.[0] | has("acceptance_criteria"), .acceptance_criteria' "$SCRATCH/<id>.json"
+  ```
+
+  Only if *that* is empty does the ladder apply. This is the
   shape a directly-filed bug or chore arrives in, with no breakdown to have
   written them, and three reviewers hit it in one session. Do not invent a
   standard silently: that is the reviewer marking its own paper, and it is
@@ -161,9 +191,15 @@ Check:
      then read the file, since `bd show` carries only `comment_count`;
   3. **nothing locatable anywhere → park it**, rather than pass.
 
-  Whichever answered, write it onto the bead (`bd update <id> --acceptance=…`)
-  *before* you judge and quote it in your verdict: written down it survives
-  the session and the orchestrator can disagree with it. This is a backstop,
+  Whichever answered, write it down *before* you judge and quote it in your
+  verdict: written down it survives the session and the orchestrator can
+  disagree with it. Write reconstructed criteria **to a comment**
+  (`bd comment <id> --file "$SCRATCH/criteria.md"`), not over the field with
+  `bd update --acceptance=…`. That write is destructive and unrecoverable —
+  the beads JSONL export is untracked, so there is no history to restore a
+  clobbered field from, and a reviewer that reached the ladder by the misread
+  above destroys the very criteria it was meant to judge against
+  (computenet-2rix). This is a backstop,
   not the normal route — SKILL.md 5f has the orchestrator write criteria
   before dispatch, so their absence is itself a finding. Name it in your
   report alongside the criteria you wrote.
