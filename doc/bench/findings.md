@@ -1355,3 +1355,274 @@ inspect/src doc/spec concord/ wire/src demo/` is empty. `MAX_CELLS = 50`,
 (`ValueEncoder.kt:53,56`) and `NOISE_FLOOR = 0.005` are byte-identical to main.
 `30-bounded-read-measurement.md` and `tickets/V1C-BENCH.md` are unmodified. Nothing above
 this entry's insertion point was edited.
+
+## 2026-08-19 — per-cell retained snapshot footprint, payload vs tag/metadata vs unattributed, 1e3/1e4/1e5 elements
+Harness: 78b97989 · JVM Eclipse Adoptium (OpenJDK 64-Bit Server VM)/21.0.11 · heap -Xmx2g · Apple M2 Pro, 10 cores, Mac OS X 26.6.2
+JMH: mode=retained-heap-delta (in-process JUnit probe; not JMH) forks=1 warmup=1 iters=10 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| SetCell n=1000 total retained | 257130.825 ± 1193.0756826651889 bytes | |
+| SetCell n=1000 total per element | 257.130825 ± 1.193075682665189 bytes/element | |
+| SetCell n=10000 total retained | 2545948.0 ± 325.10799999999995 bytes | |
+| SetCell n=10000 payload | 160034.93333333332 ± 167.01626666666667 bytes | |
+| SetCell n=10000 tag/metadata | 240032.0 ± 0.0 bytes | |
+| SetCell n=10000 UNATTRIBUTED | 2145881.0666666664 ± 365.49917235921487 bytes | |
+| SetCell n=10000 total per element | 254.59480000000002 ± 0.0325108 bytes/element | |
+| SetCell n=100000 total retained | 2.69201048E7 ± 23417.418266694247 bytes | |
+| SetCell n=100000 payload | 1600000.0 ± 0.0 bytes | |
+| SetCell n=100000 tag/metadata | 2400032.0 ± 0.0 bytes | |
+| SetCell n=100000 UNATTRIBUTED | 2.29200728E7 ± 23417.418266694247 bytes | |
+| SetCell n=100000 total per element | 269.201048 ± 0.23417418266694248 bytes/element | |
+| MapCell n=10000 payload | 320227.7090909091 ± 137.7993446882351 bytes | |
+| MapCell n=100000 total retained | 8507880.0 ± 1322.5551520759602 bytes | |
+| MapCell n=100000 payload | 3200000.0 ± 0.0 bytes | |
+| MapCell n=100000 UNATTRIBUTED | 5307880.0 ± 1322.5551520759602 bytes | |
+| MapCell n=100000 total per element | 85.0788 ± 0.013225551520759604 bytes/element | |
+| OrMapCell n=1000 total retained | 225177.90270270273 ± 685.5339828398157 bytes | |
+| OrMapCell n=1000 total per element | 225.17790270270274 ± 0.6855339828398157 bytes/element | |
+| OrMapCell n=10000 total retained | 2226973.333333333 ± 3169.0447847864407 bytes | |
+| OrMapCell n=10000 payload | 319713.3333333333 ± 337.85733333333326 bytes | |
+| OrMapCell n=10000 tag/metadata | 240024.8 ± 246.13552096938807 bytes | |
+| OrMapCell n=10000 UNATTRIBUTED | 1667235.1999999997 ± 3196.494192134896 bytes | |
+| OrMapCell n=10000 total per element | 222.69733333333332 ± 0.31690447847864406 bytes/element | |
+| OrMapCell n=100000 total retained | 2.3713836E7 ± 776.6688351056424 bytes | |
+| OrMapCell n=100000 payload | 3200000.0 ± 0.0 bytes | |
+| OrMapCell n=100000 tag/metadata | 2400032.0 ± 0.0 bytes | |
+| OrMapCell n=100000 UNATTRIBUTED | 1.8113804E7 ± 776.6688351056424 bytes | |
+| OrMapCell n=100000 total per element | 237.13836 ± 0.007766688351056425 bytes/element | |
+| KeyedSetCell n=10000 total retained | 1425924.4800000002 ± 551.6049419894214 bytes | |
+| KeyedSetCell n=10000 payload | 320210.24 ± 111.68416 bytes | |
+| KeyedSetCell n=10000 tag/metadata | 239833.44 ± 85.30018618792654 bytes | |
+| KeyedSetCell n=10000 UNATTRIBUTED | 865880.8000000003 ± 569.2253379688517 bytes | |
+| KeyedSetCell n=10000 total per element | 142.59244800000002 ± 0.05516049419894214 bytes/element | |
+| KeyedSetCell n=100000 total retained | 1.57133392E7 ± 2633.0148405157356 bytes | |
+| KeyedSetCell n=100000 payload | 3200000.0 ± 0.0 bytes | |
+| KeyedSetCell n=100000 tag/metadata | 2400032.0 ± 0.0 bytes | |
+| KeyedSetCell n=100000 UNATTRIBUTED | 1.01133072E7 ± 2633.0148405157356 bytes | |
+| KeyedSetCell n=100000 total per element | 157.13339200000001 ± 0.026330148405157357 bytes/element | |
+| ListCell n=10000 total retained | 200395.56000000003 ± 352.3248278962908 bytes | |
+| ListCell n=10000 payload | 160108.24 ± 12.621839999999997 bytes | |
+| ListCell n=10000 total per element | 20.039556000000005 ± 0.03523248278962908 bytes/element | |
+| ListCell n=100000 payload | 1601015.2 ± 1018.0077218413619 bytes | |
+| CounterCell n=10000 payload | 24.0 ± 0.0 bytes | |
+| CounterCell n=100000 payload | 24.0 ± 0.0 bytes | |
+| PnCounterCell n=10000 payload | 24.0 ± 0.0 bytes | |
+| PnCounterCell n=10000 tag/metadata | 32.0 ± 0.0 bytes | |
+| PnCounterCell n=100000 payload | 24.0 ± 0.0 bytes | |
+| PnCounterCell n=100000 tag/metadata | 32.0 ± 0.0 bytes | |
+Trigger: G-21 phase 3 (allocation-pressure trigger, doc/spec/90-roadmap/94-implementation-plan.md:312) — INCONCLUSIVE: the criterion applied is that the trigger fires only if measured tag/metadata bytes are at least as large as the UNATTRIBUTED remainder for every family whose snapshot holds a tag object, and retires only if tag/metadata is under 2% of total retained bytes for every scaling family; measured tag/metadata is 0.0-15.3% of total and 10.5-23.7% of the UNATTRIBUTED remainder at 1e5 for the families that hold any tag object at all, in neither band, while UNATTRIBUTED itself is 20.1-85.1% of total across the five scaling families — so the split cannot answer the trigger question either way.
+
+Omitted rows (drive=REAL):
+- SetCell n=1000 payload (drive=REAL): relative dispersion 0.01742953199566331 exceeds NOISE_FLOOR 0.005 — value=16089.275 ± 280.4285333995258 bytes; Unreportable, excluded from the table
+- SetCell n=1000 tag/metadata (drive=REAL): relative dispersion 0.02263452790217548 exceeds NOISE_FLOOR 0.005 — value=24311.775 ± 550.2855495889123 bytes; Unreportable, excluded from the table
+- SetCell n=1000 UNATTRIBUTED (drive=REAL): relative dispersion 0.006198777661697146 exceeds NOISE_FLOOR 0.005 — value=216729.77500000002 ± 1343.4596878946486 bytes; Unreportable, excluded from the table
+- MapCell n=1000 total retained (drive=REAL): relative dispersion 0.0059203676670058734 exceeds NOISE_FLOOR 0.005 — value=72404.42758620689 ± 428.6608320294474 bytes; Unreportable, excluded from the table
+- MapCell n=1000 payload (drive=REAL): relative dispersion 0.008144869107067751 exceeds NOISE_FLOOR 0.005 — value=32342.075862068963 ± 263.4219745474071 bytes; Unreportable, excluded from the table
+- MapCell n=1000 UNATTRIBUTED (drive=REAL): relative dispersion 0.01255870956205115 exceeds NOISE_FLOOR 0.005 — value=40062.35172413793 ± 503.13143967618737 bytes; Unreportable, excluded from the table
+- MapCell n=1000 total per element (drive=REAL): relative dispersion 0.0059203676670058734 exceeds NOISE_FLOOR 0.005 — value=72.4044275862069 ± 0.42866083202944744 bytes/element; Unreportable, excluded from the table
+- MapCell n=10000 total retained (drive=REAL): relative dispersion 0.006591481165285453 exceeds NOISE_FLOOR 0.005 — value=707636.0 ± 4664.369365877937 bytes; Unreportable, excluded from the table
+- MapCell n=10000 UNATTRIBUTED (drive=REAL): relative dispersion 0.012045184712584757 exceeds NOISE_FLOOR 0.005 — value=387408.2909090909 ± 4666.40442318677 bytes; Unreportable, excluded from the table
+- MapCell n=10000 total per element (drive=REAL): relative dispersion 0.0065914811652854535 exceeds NOISE_FLOOR 0.005 — value=70.7636 ± 0.46643693658779367 bytes/element; Unreportable, excluded from the table
+- OrMapCell n=1000 payload (drive=REAL): relative dispersion 0.026925470986553655 exceeds NOISE_FLOOR 0.005 — value=32017.448648648653 ± 862.0848846526608 bytes; Unreportable, excluded from the table
+- OrMapCell n=1000 tag/metadata (drive=REAL): relative dispersion 0.036514289321357765 exceeds NOISE_FLOOR 0.005 — value=24052.51891891892 ± 878.2606347128367 bytes; Unreportable, excluded from the table
+- OrMapCell n=1000 UNATTRIBUTED (drive=REAL): relative dispersion 0.008330294474214286 exceeds NOISE_FLOOR 0.005 — value=169107.93513513517 ± 1408.7188976020045 bytes; Unreportable, excluded from the table
+- KeyedSetCell n=1000 total retained (drive=REAL): relative dispersion 0.005686131676808964 exceeds NOISE_FLOOR 0.005 — value=144940.09655172413 ± 824.1484742425083 bytes; Unreportable, excluded from the table
+- KeyedSetCell n=1000 payload (drive=REAL): relative dispersion 0.008779716829726057 exceeds NOISE_FLOOR 0.005 — value=31994.96551724138 ± 280.906737218229 bytes; Unreportable, excluded from the table
+- KeyedSetCell n=1000 tag/metadata (drive=REAL): relative dispersion 0.01505760147433703 exceeds NOISE_FLOOR 0.005 — value=24044.56551724138 ± 362.0534851822071 bytes; Unreportable, excluded from the table
+- KeyedSetCell n=1000 UNATTRIBUTED (drive=REAL): relative dispersion 0.010607136088623854 exceeds NOISE_FLOOR 0.005 — value=88900.56551724137 ± 942.9803967970004 bytes; Unreportable, excluded from the table
+- KeyedSetCell n=1000 total per element (drive=REAL): relative dispersion 0.005686131676808964 exceeds NOISE_FLOOR 0.005 — value=144.94009655172414 ± 0.8241484742425084 bytes/element; Unreportable, excluded from the table
+- ListCell n=1000 total retained (drive=REAL): relative dispersion 0.01523647259282587 exceeds NOISE_FLOOR 0.005 — value=19998.9 ± 304.7126917366653 bytes; Unreportable, excluded from the table
+- ListCell n=1000 payload (drive=REAL): relative dispersion 0.009173768077643994 exceeds NOISE_FLOOR 0.005 — value=16186.86 ± 148.49449954529246 bytes; Unreportable, excluded from the table
+- ListCell n=1000 UNATTRIBUTED (drive=REAL): relative dispersion 0.08892080762223165 exceeds NOISE_FLOOR 0.005 — value=3812.040000000001 ± 338.969675488252 bytes; Unreportable, excluded from the table
+- ListCell n=1000 total per element (drive=REAL): relative dispersion 0.01523647259282587 exceeds NOISE_FLOOR 0.005 — value=19.998900000000003 ± 0.3047126917366653 bytes/element; Unreportable, excluded from the table
+- ListCell n=10000 UNATTRIBUTED (drive=REAL): relative dispersion 0.008750913205071069 exceeds NOISE_FLOOR 0.005 — value=40287.320000000036 ± 352.55084058492406 bytes; Unreportable, excluded from the table
+- ListCell n=100000 total retained (drive=REAL): relative dispersion 0.005120828898867059 exceeds NOISE_FLOOR 0.005 — value=2003378.8 ± 10258.96005441761 bytes; Unreportable, excluded from the table
+- ListCell n=100000 UNATTRIBUTED (drive=REAL): relative dispersion 0.02562196314317099 exceeds NOISE_FLOOR 0.005 — value=402363.6000000001 ± 10309.345329353597 bytes; Unreportable, excluded from the table
+- ListCell n=100000 total per element (drive=REAL): relative dispersion 0.005120828898867059 exceeds NOISE_FLOOR 0.005 — value=20.033788 ± 0.10258960054417611 bytes/element; Unreportable, excluded from the table
+- CounterCell n=1000 total retained (drive=REAL): relative dispersion 3.0201787879550706 exceeds NOISE_FLOOR 0.005 — value=40.036 ± 120.91587795456921 bytes; Unreportable, excluded from the table
+- CounterCell n=1000 payload (drive=REAL): relative dispersion 3.2298497788433087 exceeds NOISE_FLOOR 0.005 — value=16.068 ± 51.89722624645429 bytes; Unreportable, excluded from the table
+- CounterCell n=1000 UNATTRIBUTED (drive=REAL): relative dispersion 5.489926812505655 exceeds NOISE_FLOOR 0.005 — value=23.968 ± 131.58256584213555 bytes; Unreportable, excluded from the table
+- CounterCell n=1000 total per element (drive=REAL): relative dispersion 3.020178787955071 exceeds NOISE_FLOOR 0.005 — value=0.040036 ± 0.12091587795456922 bytes/element; Unreportable, excluded from the table
+- CounterCell n=10000 total retained (drive=REAL): relative dispersion 0.481015243902439 exceeds NOISE_FLOOR 0.005 — value=26.24 ± 12.621839999999999 bytes; Unreportable, excluded from the table
+- CounterCell n=10000 UNATTRIBUTED (drive=REAL): relative dispersion 5.634750000000003 exceeds NOISE_FLOOR 0.005 — value=2.2399999999999984 ± 12.621839999999999 bytes; Unreportable, excluded from the table
+- CounterCell n=10000 total per element (drive=REAL): relative dispersion 0.481015243902439 exceeds NOISE_FLOOR 0.005 — value=0.002624 ± 0.001262184 bytes/element; Unreportable, excluded from the table
+- CounterCell n=100000 total retained (drive=REAL): relative dispersion 2.720224137931034 exceeds NOISE_FLOOR 0.005 — value=46.4 ± 126.21839999999999 bytes; Unreportable, excluded from the table
+- CounterCell n=100000 UNATTRIBUTED (drive=REAL): relative dispersion 5.6347499999999995 exceeds NOISE_FLOOR 0.005 — value=22.4 ± 126.21839999999999 bytes; Unreportable, excluded from the table
+- CounterCell n=100000 total per element (drive=REAL): relative dispersion 2.7202241379310346 exceeds NOISE_FLOOR 0.005 — value=4.64E-4 ± 0.001262184 bytes/element; Unreportable, excluded from the table
+- PnCounterCell n=1000 total retained (drive=REAL): relative dispersion 0.2050467618639926 exceeds NOISE_FLOOR 0.005 — value=367.596 ± 75.37436947415623 bytes; Unreportable, excluded from the table
+- PnCounterCell n=1000 payload (drive=REAL): relative dispersion 2.8747001594896338 exceeds NOISE_FLOOR 0.005 — value=60.192 ± 173.03395200000003 bytes; Unreportable, excluded from the table
+- PnCounterCell n=1000 tag/metadata (drive=REAL): relative dispersion 57.84059938713333 exceeds NOISE_FLOOR 0.005 — value=2.48 ± 143.44468648009067 bytes; Unreportable, excluded from the table
+- PnCounterCell n=1000 UNATTRIBUTED (drive=REAL): relative dispersion 0.7774463932673781 exceeds NOISE_FLOOR 0.005 — value=304.924 ± 237.06206402066198 bytes; Unreportable, excluded from the table
+- PnCounterCell n=1000 total per element (drive=REAL): relative dispersion 0.2050467618639926 exceeds NOISE_FLOOR 0.005 — value=0.36759600000000003 ± 0.07537436947415622 bytes/element; Unreportable, excluded from the table
+- PnCounterCell n=10000 total retained (drive=REAL): relative dispersion 0.26703759398496235 exceeds NOISE_FLOOR 0.005 — value=372.40000000000003 ± 99.44479999999999 bytes; Unreportable, excluded from the table
+- PnCounterCell n=10000 UNATTRIBUTED (drive=REAL): relative dispersion 0.31430088495575215 exceeds NOISE_FLOOR 0.005 — value=316.40000000000003 ± 99.44479999999999 bytes; Unreportable, excluded from the table
+- PnCounterCell n=10000 total per element (drive=REAL): relative dispersion 0.26703759398496235 exceeds NOISE_FLOOR 0.005 — value=0.03724 ± 0.009944479999999999 bytes/element; Unreportable, excluded from the table
+- PnCounterCell n=100000 total retained (drive=REAL): relative dispersion 0.5104969199178643 exceeds NOISE_FLOOR 0.005 — value=389.6 ± 198.88959999999992 bytes; Unreportable, excluded from the table
+- PnCounterCell n=100000 UNATTRIBUTED (drive=REAL): relative dispersion 0.5961918465227815 exceeds NOISE_FLOOR 0.005 — value=333.6 ± 198.88959999999992 bytes; Unreportable, excluded from the table
+- PnCounterCell n=100000 total per element (drive=REAL): relative dispersion 0.5104969199178642 exceeds NOISE_FLOOR 0.005 — value=0.0038960000000000006 ± 0.001988895999999999 bytes/element; Unreportable, excluded from the table
+
+### What was measured, and how (`[BEN1-20]`/`[BEN1-21]`, BS-10, computenet-x9e.6.2)
+
+Instrument: `civictech.bench.micro.Footprint`/`FootprintReport` (computenet-x9e.6.1,
+`bench/src/main/kotlin/civictech/bench/micro/Footprint.kt`). **The method, in one
+sentence** (restated here because the entry, not only the instrument's KDoc, has to say
+it): retained size is measured by **differential live-heap accounting** — `System.gc()`
+to quiescence, then a `MemoryMXBean` heap-used delta between a baseline holding nothing
+and a state holding the structure built inside the measured window — and payload/tag
+attribution is the same measurement applied to two reachability sub-closures of that same
+graph (the payload objects the walk found, the `Timestamp`/`UUID` objects the walk found),
+with whatever neither accounts for reported as UNATTRIBUTED rather than estimated. Every
+byte here is a reading off the JVM's own heap accounting (including alignment, container
+slack, and G1's region accounting) and never a modelled `sizeof`.
+
+Command run first, unmodified, to validate the instrument against independently-known
+sanity figures before deciding a verdict:
+
+```
+./gradlew :bench:test -PbenchOnly=true --rerun \
+  --tests 'civictech.bench.micro.CellFootprintProbeTest' \
+  -Dcivictech.bench.harnessSha=$(git rev-parse --short HEAD)
+```
+
+Its printed `total per element` at 1e3-1e5 matched every previously-observed sweep total
+in this task's own dispatch note (SetCell 254-269 B/element, OrMapCell 223-237,
+KeyedSetCell 143-157, MapCell 71-85, ListCell 20.0; both counters O(1) and below
+resolution) — the instrument reproduces on this machine, not just on the one it was built
+on. `Footprint.sweep()` covers all 7 families x 3 scales = 21 combinations, **all 21
+measured**, none skipped for wall-clock, at `Footprint.DEFAULT_REPLICATES = 10` replicates
+per quantity. Wall-clock per full sweep, measured three times this session: 39s, 29s, 29s
+— comfortably inside the "minutes" estimate. Host quiesced throughout — no concurrent
+Gradle build, test suite, or other benchmark. JVM: the module's declared toolchain 21
+(Eclipse Adoptium/21.0.11), reached automatically through the `:bench:test` Gradle worker
+rather than a hand-invoked `java -jar` — no separate pinning step was needed for this
+route (contrast a JMH-jar invocation, where bare `java` on this host resolves to Homebrew
+JDK 26.0.1, as the entries above this one found the hard way).
+
+The rendered block above is **not** that first run's output. `CellFootprintProbeTest`'s
+own "full sweep" test renders with a placeholder trigger statement ("INCONCLUSIVE from
+this probe alone ... the verdict belongs to the measurement task") by its own KDoc's
+design, deliberately leaving the real verdict to this task. Producing the real verdict
+needs the sweep's own measured shares *before* the trigger statement can be written, and
+`Findings.entry` takes the statement as a fixed string — so this task ran
+`Footprint.sweep()` and `FootprintReport.render()` (the same call chain, calling
+`ThroughputReport.renderResults` which calls `Findings.entry`, exactly as
+`CellFootprintProbeTest` does) from a small local driver that computed the trigger's
+percentages programmatically from that same in-memory measurement list before rendering,
+so the entry's prose numbers and its own table are guaranteed to agree. That driver
+(`ScratchFootprintFindingsEntryTest.kt`, `bench/src/test/kotlin/civictech/bench/micro/`)
+touched none of computenet-x9e.6.1's four files, was never committed, and was deleted
+before this entry was written — it is not part of this diff. No parameter fix to the
+instrument was needed at full scale.
+
+Second attempt's refusal, for the record: a first hand-written trigger statement spelled
+out the decision criterion using the literal words "FIRES" and "RETIRES" (uppercase, to
+name the two decided-verdict bands) alongside "INCONCLUSIVE" (the actual verdict) three
+times in total. `Findings.entry` counts case-sensitive whole-word occurrences of the three
+verdict words and refuses unless exactly one appears — it refused this with `found 3`,
+correctly: that is `[BEN1-31]`'s own gate working as designed, not a bug in it. The fix
+was to describe the two undecided bands in lowercase prose and reserve the literal
+uppercase verdict word for the one true statement of it.
+
+### Environment capture: this entry is not affected by `computenet-x9e.8`
+
+That open defect is that `RunEnvironment.capture`'s heap field can describe the process
+that *rendered* an entry rather than the one that measured. This entry's `Harness:` line
+came from `FootprintReport.environment()`, which builds a `MeasuringJvm` by reading
+`System.getProperty`/`ManagementFactory.getRuntimeMXBean().inputArguments` directly off
+the running process — `RunEnvironment.forRun`, never `RunEnvironment.capture`. That is
+honest specifically because a footprint measurement has no fork: `HeapProbe` collects and
+reads this same process's `MemoryMXBean`, so the JVM asking the question is the JVM that
+measured (see `FootprintReport.inProcessMeasuringJvm`'s own KDoc for why this is the one
+place reading the calling process's properties is not the defect). `Env.kt` is not in
+this diff.
+
+### Run-to-run stability
+
+Three full sweeps were run this session with a complete rendered table: the validation run
+above, and two more from the scratch driver while its trigger statement was being
+corrected. All three agree closely at 1e5 (bytes): `SetCell total` 26,907,630 / 26,916,608
+/ 26,920,105 (spread 0.05%); `OrMapCell total` 23,714,170 / 23,713,812 / 23,713,836
+(spread <0.01%); `KeyedSetCell total` 15,713,570 / 15,713,544 / 15,713,339 (spread
+<0.01%); `MapCell total` 8,519,101 / 8,519,163 / 8,507,880 (spread 0.13%); `ListCell
+total` 2,005,387 / 2,002,173 / 2,003,379 (spread 0.16%) — all comfortably inside the
+per-row 99.9% dispersion this same table already carries, and none of it moves any family
+across the criterion boundary below. The published block above is the third run; the
+criterion was fixed in code before any of the three ran, and it landed on the same verdict
+word every time — which is why publishing the third rather than the first is not
+verdict-shopping.
+
+### Attribution shares at 1e5 — the numbers the trigger criterion runs on
+
+| family | tag/metadata as % of total | tag/metadata as % of UNATTRIBUTED | UNATTRIBUTED as % of total |
+| --- | --- | --- | --- |
+| SetCell | 8.9% | 10.5% | 85.1% |
+| OrMapCell | 10.1% | 13.2% | 76.4% |
+| KeyedSetCell | 15.3% | 23.7% | 64.4% |
+| MapCell | 0.0% (structurally absent — no `Timestamp`/`UUID` in a `MapCell` snapshot) | n/a | 62.4% |
+| ListCell | 0.0% (structurally absent) | n/a | 20.1% |
+
+`CounterCell` and `PnCounterCell` are excluded from this table on purpose: both are O(1)
+in the number of increments (`FootprintSubject.scalesWithElements = false`), and every
+scale of both classifies `belowResolution` or lands in the omission list above — their
+retained state does not grow with load at all. That settles the trigger question for those
+two families independently of the criterion below: state that does not scale with the
+graph cannot itself be a source of allocation *pressure* that grows with the graph.
+
+### Trigger (`[BEN1-31]`/`[BEN1-32]`)
+
+**Criterion, fixed in code before any sweep ran and stated here in one sentence:** the
+trigger fires only if measured tag/metadata bytes are at least as large as the
+UNATTRIBUTED remainder for every family whose snapshot holds a tag object at all, retires
+only if tag/metadata is under 2% of total retained bytes for every scaling family, and is
+inconclusive otherwise. **Attribution method:** differential live-heap accounting (above),
+applied to two reachability sub-closures of the same measured graph.
+
+Applying it to the shares above: tag/metadata is 8.9-15.3% of total and 10.5-23.7% of
+UNATTRIBUTED for the three families that hold any tag object at all (`SetCell`,
+`OrMapCell`, `KeyedSetCell`) — neither negligible (under 2%) nor dominant (at least
+UNATTRIBUTED). **Verdict: `TriggerClaim.Cited` — INCONCLUSIVE**, exactly as rendered in
+the block above.
+
+The reason is the UNATTRIBUTED remainder itself, not tag/metadata: it is 62-85% of total
+for the four families whose backing structure is a hash table (`SetCell`, `MapCell`,
+`OrMapCell`, `KeyedSetCell`) and only 20% for `ListCell` (whose backing `ArrayList` holds
+boxed elements directly, with no per-entry hashing wrapper) — a four-to-one spread that is
+a fact about each family's *container shape*, not about tag/metadata. The instrument
+cannot see inside `TagState`/`MintedTags` (both `internal` to
+`civictech.cell.data.delta`, per computenet-x9e.6.1's own scoping) to say how much of any
+family's UNATTRIBUTED mass is itself tag-serving scaffolding (a per-key tag-set structure,
+say) versus payload-serving scaffolding (the `HashMap`/`HashSet` backing table). A split
+that cannot see into its own largest bucket cannot honestly answer whether tag/metadata
+specifically constitutes allocation pressure — which is exactly what INCONCLUSIVE is for,
+and is a legitimate answer here, not a deferred one. G-21 phase 3 remains open and
+unresolved by this entry; moving past this reading needs either a kernel-side change
+opening `TagState`/`MintedTags` to measurement (out of `[BEN1-35]`'s scope for this task)
+or a different attribution method entirely.
+
+### Two measured instrument limits that bear directly on the totals above
+
+Both are documented in `Footprint.kt`'s `HeapProbe` KDoc (computenet-x9e.6.1) and are
+restated here, next to the numbers they explain, rather than left only in a bead comment:
+
+- **G1 accounts a humongous object's regions wholesale.** A 1e5 total's backing
+  `HashMap`/hash structures cross the humongous-object threshold, so that total includes
+  region-rounding that a 1e3 or 1e4 total does not. Comparing `total per element` strictly
+  across scales for the same family reads through this artifact, not around it. It is
+  deterministic and does not affect dispersion.
+- **Allocator fill waste (~3.1% measured on calibration) counts as used**, landing wherever
+  the allocation happened to be. That is a further few percent of occupancy, not object
+  size, in every figure in this entry.
+
+Every figure in this entry is therefore **occupancy**, not per-object size — stated once
+here rather than re-derived at each number.
+
+### Scope confirmation
+
+`git diff --name-only <merge-base> HEAD` names exactly one file: `doc/bench/findings.md`
+(this entry). `git diff --name-only <merge-base> HEAD -- kernel/src/main concord/
+inspect/src wire/src demo/ doc/spec` is empty. `git diff <merge-base> HEAD -- bench/src/main
+bench/src/jmh bench/src/test` is also empty — no dependency-sequenced parameter fix was
+needed in any of computenet-x9e.6.1's four files at full scale; the scratch driver used to
+compute the trigger's percentages was never committed.
+`doc/spec/90-roadmap/94-implementation-plan.md`, `doc/spec/90-roadmap/91-gap-analysis.md`
+and `doc/spec/CONCORDANCE.md` are unmodified; G-21 phase 3's row is cited, never edited.
