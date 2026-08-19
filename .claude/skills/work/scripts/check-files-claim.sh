@@ -41,6 +41,21 @@ covered() { # path (reads $claim_entries)
   return 1
 }
 
+# KNOWN COUPLINGS: a repo guardrail test that makes file A require file B.
+# The claim check greps the bead's TEXT, so an implied file appears nowhere it
+# can see — the requirement comes from a test, not from anything the bead says.
+# No text-grep can ever know that, so the couplings are listed here.
+#
+# First entry: kernel's ModuleInventoryTest parses every include(...) line in
+# settings.gradle.kts and fails :kernel:test unless each module appears as a
+# literal backticked `:x` in doc/ARCHITECTURE.md. Two sessions added a Gradle
+# module on 2026-08-17 (:oracle and :identity) and BOTH got a green
+# :<newmodule>:test followed by :kernel:test with exactly one failure naming a
+# file their bead never mentioned. Both caught it locally only because their
+# dispatch prompts happened to ask for :kernel:test — luck, not structure
+# (computenet-d7qn, computenet-m9px). Adding an entry costs one line.
+COUPLINGS='settings.gradle.kts=>doc/ARCHITECTURE.md'
+
 found=0
 for id in "$@"; do
   # No `|| continue` here: with pipefail a failing `bd` would take the whole
@@ -75,10 +90,42 @@ for id in "$@"; do
         print
       }' \
     | sort -u)
-  [ -n "$mentioned" ] || continue
 
-  while IFS= read -r path; do
-    covered "$path" || { echo "$id: names $path, not in metadata.files"; found=1; }
-  done <<<"$mentioned"
+  # Not `continue` on an empty $mentioned: the coupling check below keys on
+  # tokens the path regex deliberately never matches (settings.gradle.kts has
+  # no slash), so an early exit here would make it unreachable.
+  if [ -n "$mentioned" ]; then
+    while IFS= read -r path; do
+      covered "$path" || { echo "$id: names $path, not in metadata.files"; found=1; }
+    done <<<"$mentioned"
+  fi
+
+  # Implied by a guardrail, not named by the bead.
+  while IFS= read -r rule; do
+    [ -n "$rule" ] || continue
+    trigger=${rule%%=>*}; implied=${rule#*=>}
+    # The trigger has to be in play at all: either the bead names it, or the
+    # claim already covers it. Otherwise the coupling is irrelevant here.
+    case "$mentioned"$'\n'"$claim_entries" in
+      *"$trigger"*) ;;
+      *) continue ;;
+    esac
+    covered "$implied" || {
+      echo "$id: names $trigger, which REQUIRES $implied (guardrail), not in metadata.files"
+      found=1
+    }
+  done <<<"$COUPLINGS"
+
+  # NOT DONE HERE: resolving a TYPE named in the acceptance to its declaring
+  # file. A criterion usually talks about code by type — "matchable by kind
+  # from RunOutcome" names the one file a kind can be added to without looking
+  # like a path to any grep, so a task can be unsatisfiable from the moment it
+  # is filed and this check still passes it clean (computenet-hws5). A
+  # CamelCase-to-declaration lookup was written and REJECTED on measurement: it
+  # fires on every type a bead merely mentions, including the code under test
+  # that a non-goal explicitly forbids editing, which is the exact false
+  # positive computenet-0pd6 removed. A check whose output is reliably
+  # all-false trains the reader to skim it. The rule lives in feature.md's
+  # breakdown step instead, where the author knows which types it will EDIT.
 done
 exit $found

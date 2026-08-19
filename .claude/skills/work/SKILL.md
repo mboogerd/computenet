@@ -1041,7 +1041,23 @@ verdict. (`parked` is only meaningful on an empty batch.)
   until diagnosed`) is the deliberate shape, not a forgotten claim — treat it
   as such, and normalise the wording to the canonical opener so the next
   reader doesn't have to make the same call. Reserve "forgot" for a
-  description that says nothing about why the claim is empty. And never let a
+  description that says nothing about why the claim is empty.
+
+  **A review-filed residual is a THIRD shape, and it is neither of the two.**
+  review-feature.md §7 residuals now carry `--metadata` at filing, but one
+  that arrives without it is not a breakdown defect: nothing was forgotten and
+  there is no breakdown to blame, and cross-bead writes are not authorized to
+  a reviewer anyway. Applying the "forgot" branch literally means logging a
+  breakdown defect against a reviewer that behaved correctly
+  (computenet-419f). Recognise it by the description's `Residual from
+  <feature-id>` opener, **author the claim yourself and say so on the bead** —
+  and note that this authorship is weaker than a breakdown's, being derived
+  from the acceptance criterion by someone who has not read the code. One such
+  guess was right; the next reached a second file immediately and had to be
+  reported out and filed separately. If the residual's prose names its files —
+  several do, in a trailing `Files: …` line — use those.
+
+  And never let a
   task take a nominal claim over files it merely reads: a claim is a lock, so
   a read-only lock blocks a sibling for no benefit. A *descriptive string*
   where a path list belongs (`none (tracker mutations only)`) is that same

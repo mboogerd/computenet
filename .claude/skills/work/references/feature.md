@@ -7,6 +7,7 @@ Break one feature into tasks, then stop. Plan it, don't implement it.
 - [Reconcile first — and again immediately before the first create](#reconcile-first-and-again-immediately-before-the-first-create)
 - [Do not write a worktree, a branch or a base commit into a task](#do-not-write-a-worktree-a-branch-or-a-base-commit-into-a-task)
 - [A bead must not suggest a method its own acceptance forbids](#a-bead-must-not-suggest-a-method-its-own-acceptance-forbids)
+- [What a file claim must include that the bead never says](#what-a-file-claim-must-include-that-the-bead-never-says)
 - [Verify the load-bearing premises first](#verify-the-load-bearing-premises-first)
 - [Break it down](#break-it-down)
 - [Dependencies](#dependencies)
@@ -78,6 +79,51 @@ orchestrator read the bead and dispatched it, because the contradiction was
 **Where the distinction is subtle, state the discriminator in the bead.** For
 that case one sentence removed the whole ambiguity: *walk to classify, measure
 to size.*
+
+## What a file claim must include that the bead never says
+
+`check-files-claim.sh` greps the bead's text for path-shaped strings, so three
+kinds of required file are invisible to it by construction. Get them into the
+claim **at filing**, where you know the answer, rather than having it widened
+after a red suite:
+
+- **A task that adds a Gradle module claims `doc/ARCHITECTURE.md`.** kernel's
+  `ModuleInventoryTest` parses every `include(...)` line in
+  `settings.gradle.kts` and fails `:kernel:test` unless each module appears as
+  a literal backticked `` `:x` `` in that doc. Its KDoc forbids editing the
+  test to pass, and its `documentedExceptions` allowlist is not the sanctioned
+  route — so a claim of `<module>/,settings.gradle.kts` is **unsatisfiable by
+  construction**. Two sessions hit this the same day, independently, on
+  `:oracle` and `:identity` (computenet-d7qn, computenet-m9px).
+- **A criterion that names a TYPE claims that type's defining file.** "…
+  matchable by kind from `RunOutcome`" names the only file a kind can be added
+  to, and a type name is not slash-separated and has no extension, so nothing
+  about it looks like a path. One such task was unsatisfiable from the moment
+  it was filed and the guard passed it clean; the implementer discovered it
+  mid-work and had to choose between stalling and working outside its claim
+  (computenet-hws5). The sibling consequence counts too: **adding a kind to a
+  sealed hierarchy breaks every exhaustive `when` over it**, so the test
+  holding that `when` is required and belongs in the claim as well.
+- **"The file does not exist yet" is NOT evidence the claim is free.** A
+  breakdown checked that `doc/bench/findings.md` existed neither on
+  `origin/main` nor on the sibling feature branch — both true — and filed a
+  task to create it, while a task under a *different feature of the same epic*
+  already claimed creating it. The collision was with a task that had not run
+  yet, so it was invisible to every check that looks at the tree, and nothing
+  compares claims across features (computenet-55ro). Check the **pending
+  tasks** under the whole epic, not the tree:
+
+  ```bash
+  .claude/skills/work/scripts/epic-of.sh <feature-id>      # -> <epic-id>
+  bd list --parent=<epic-id> --all --json | sed -n '/^[[{]/,$p' \
+    | jq -r '(if type=="array" then . else (.issues // []) end)[]
+             | select(.status != "closed")
+             | "\(.id)\t\((.metadata // {}).files // "-")"'
+  ```
+
+  An overlap that is real gets a `blocks` edge and a comment saying the file
+  will already exist and must be appended to, not created — which is what was
+  done by hand the one time anybody noticed.
 
 ## Verify the load-bearing premises first
 

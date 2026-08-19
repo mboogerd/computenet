@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "15 passed, 0 failed".
+# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "19 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-files-claim.sh"}
@@ -63,6 +63,25 @@ check "a real path beside shorthand is still reported" 1 "names a/b/Real.kt"
 
 bead "see a/b/Real.kt" "" ""
 check "shorthand filter leaves ordinary paths alone" 1 "names a/b/Real.kt"
+
+# A repo guardrail couples file A to file B, and the implied file appears
+# NOWHERE in the bead's text — the requirement comes from a test. Two sessions
+# added a Gradle module the same day and both got a green :<newmodule>:test
+# followed by a red :kernel:test naming doc/ARCHITECTURE.md
+# (computenet-d7qn, computenet-m9px).
+bead "add include(\":oracle\") to settings.gradle.kts" "" "oracle/,settings.gradle.kts"
+check "settings.gradle.kts implies doc/ARCHITECTURE.md" 1 "REQUIRES doc/ARCHITECTURE.md"
+
+bead "add include(\":oracle\") to settings.gradle.kts" "" "oracle/,settings.gradle.kts,doc/ARCHITECTURE.md"
+check "coupling satisfied -> silent" 0 ""
+
+# The coupling must not fire on a bead that has nothing to do with it.
+bead "change a/b/Step.kt" "" "a/b/Step.kt"
+check "coupling is irrelevant when the trigger is absent" 0 ""
+
+# The trigger counts when it is in the CLAIM even if the prose never says it.
+bead "wire the new module in" "" "settings.gradle.kts"
+check "trigger in the claim alone still implies the coupled file" 1 "REQUIRES doc/ARCHITECTURE.md"
 
 bead "change a/b/Step.kt" "" ""
 check "empty claim -> reports" 1 "names a/b/Step.kt"
