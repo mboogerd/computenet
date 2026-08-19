@@ -259,6 +259,32 @@ class HelloProtocolTest {
     }
 
     @Test
+    fun `the challenge bytes open with the versioned domain-separation tag`() {
+        // The tag is what makes a hello challenge unable to be a valid
+        // announcement signing input under the same keypair
+        // (`civictech.identity.announce.canonicalBytes`, whose first field is a
+        // length-prefixed minting peer id — a 51-character `ed25519:`
+        // fingerprint, never this 34-byte string). Added in review: nothing else
+        // in this file notices the tag's removal, so deleting it silently
+        // reopened that cross-protocol question with a green suite. Pinned
+        // here as a *prefix*, deliberately not as a whole-message golden
+        // vector: the six fields behind it stay free to gain a field, while
+        // dropping or renaming the tag reddens a build.
+        val tag = "computenet/DSC1/hello-challenge/v1".toByteArray(Charsets.UTF_8)
+        tag.size shouldBe 34
+
+        // Inside the signed region, first, and length-prefixed like every other
+        // variable-width field — so it cannot run together with the id after it.
+        val expectedPrefix = byteArrayOf(0, 0, 0, tag.size.toByte()) + tag
+        val bytes = helloChallengeBytes(challengeSignedByA())
+        bytes.copyOfRange(0, expectedPrefix.size).contentEquals(expectedPrefix) shouldBe true
+
+        // Every challenge carries it, whichever role signs.
+        helloChallengeBytes(challengeSignedByA().mirrored())
+            .copyOfRange(0, expectedPrefix.size).contentEquals(expectedPrefix) shouldBe true
+    }
+
+    @Test
     fun `an unpaired surrogate in a peer id name is refused rather than encoded`() {
         // computenet-9qgg's discipline: String -> UTF-8 maps an unpaired
         // surrogate to '?', which would collide distinct names into one

@@ -447,6 +447,13 @@ class HelloChallenge(
  * bytes inside a per-connection hash and removes the whole question.
  *
  * Version it, do not repurpose it: a change to the layout below gets `/v2`.
+ *
+ * `HelloProtocolTest` pins these bytes as the literal opening of every
+ * challenge, because nothing else here would notice their removal — measured
+ * during review: deleting the write in [helloChallengeBytes] left the whole
+ * suite green. The pin is a prefix, not a whole-message golden vector, so the
+ * six fields behind it stay free to change while the tag cannot vanish
+ * silently.
  */
 private const val CHALLENGE_DOMAIN_TAG: String = "computenet/DSC1/hello-challenge/v1"
 
