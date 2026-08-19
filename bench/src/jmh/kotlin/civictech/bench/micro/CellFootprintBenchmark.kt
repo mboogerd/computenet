@@ -62,16 +62,37 @@ import java.util.concurrent.TimeUnit
  *
  * ```
  * ./gradlew :bench:jmhJar
- * java -jar bench/build/libs/bench-jmh.jar CellFootprintBenchmark -prof gc \
+ * ~/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java \
+ *      -jar bench/build/libs/bench-jmh.jar CellFootprintBenchmark -prof gc \
  *      -rf csv -rff /abs/path/footprint-alloc.csv 2>&1 | tee /abs/path/footprint-alloc.log
  * ```
  *
- * A single-combination smoke run:
+ * **Invoke the Gradle toolchain's own JDK 21 by path, never a bare `java`.** `NOISE_FLOOR`
+ * (`civictech.bench.Dispersion`) was derived on Temurin 21 and every other entry in
+ * `doc/bench/findings.md` is measured there, so a run on another JVM produces
+ * `gc.alloc.rate.norm` figures not comparable to NOISE_FLOOR or to any entry in that file. A
+ * bare `java` on the machine this file was corrected on resolves to Homebrew JDK 26 — the
+ * exact substitution that produced the superseded REAL-drive throughput entry
+ * (`computenet-hqid`), five major JDK versions off the claimed environment. Nothing in this
+ * build pins it for you: the JMH jar is an ordinary executable jar and Gradle is not in the
+ * loop once it is built. The run's own `# VM version:` banner line, retained in the `.log`
+ * beside the results, is the check that the right JVM took — read it, do not assume it.
+ *
+ * A single-combination smoke run, **on the same pinned JDK, for the same reason**:
  *
  * ```
- * java -jar bench/build/libs/bench-jmh.jar CellFootprintBenchmark -prof gc \
+ * ~/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java \
+ *      -jar bench/build/libs/bench-jmh.jar CellFootprintBenchmark -prof gc \
  *      -p family=SET_CELL -p scale=N1E3 -f 1 -wi 1 -i 1
  * ```
+ *
+ * `FanOutScalingBenchmark`'s smoke run warns that `-i 1` leaves a written CSV's error column
+ * `NaN`, which `ThroughputReport.parseCsv` then refuses outright. That specific hazard does
+ * not apply to the smoke run above: it passes no `-rf csv`, so there is no CSV for
+ * `parseCsv` to refuse, and — as stated below — `ThroughputReport` cannot render this
+ * benchmark's `-prof gc` secondary metric regardless of iteration count. `-i 1` here only
+ * means the single reported `gc.alloc.rate.norm` value is read by hand off stdout, same as
+ * any other run of this class.
  *
  * The `| tee` matters for the same reason it does for `OperatorThroughputBenchmark`: JMH's
  * results file records nothing about the JVM that produced it, and `MeasuringJvm.fromJmhLog`
