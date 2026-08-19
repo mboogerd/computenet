@@ -1002,8 +1002,8 @@ that ticket's diff was finalized. Until now the tree could not re-derive any of 
 
 **Headline:** E1 and E2 reproduce. **E3 does not, and neither does §6 — the comparison the
 design rests on.** On the landed surface a 200-entry paged walk of a `SetCell` removes
-7–46% of the live-traffic stall (17.9% at 10⁵), not the ~85–99% the original measured, at a
-total-work premium of ~5.5× rather than ~1.7–2.4×. The cause is checked below and is a
+6.7–46% of the live-traffic stall (17.9% at 10⁵), not the ~85–99% the original measured, at a
+total-work premium of ~5.9× rather than ~1.7–2.4×. The cause is checked below and is a
 **harness difference before it is anything else** — with a named, code-level mechanism the
 original could not have measured, because the type it measured did not exist.
 
@@ -1255,7 +1255,7 @@ introduced `BoundedRead.kt` and `ManagedHost.readState` (`git log --full-history
 says was unimplemented entered the tree together, and git can only speak about changes
 *after* that commit. Since it:
 
-- `ManagedHost.kt` — 13 commits, **none** touching the read path: `git log f5ce8969..HEAD
+- `ManagedHost.kt` — 12 commits, **none** touching the read path: `git log f5ce8969..HEAD
   -S 'snapshotOf'`, `-S 'readState'` and `-S 'priority = 0'` over that file are all empty.
 - `BoundedRead.kt` — one commit, `687fe360` (`InstanceIndex`/`DeliveryHold` delegate reads),
   which does not touch the paging contract.
@@ -1291,8 +1291,12 @@ of the subject, not of the sample size.
 **2.96 to 29.91** (E2 10⁵ baseline 2.96 at the tight end; E2 10⁴ baseline 29.91 at the
 noisy end; E3 rows 4.46–22.37). `TrialStats` states dispersion as the Student-t 99.9%
 half-width, which falls as `t/√n` with `t` flooring at 3.850, so reaching 0.005 from a
-trial-to-trial coefficient of variation of 0.20–0.81 needs on the order of **2.4×10⁴ to
-3.9×10⁵ trials**, each an 8,000-add drive that also grows the target by 8,000 elements.
+trial-to-trial coefficient of variation of **0.16–1.64** — that range inverted from the
+dispersions just quoted, `cv = relDispersion·√3/31.599` at three trials — needs on the order
+of **1.6×10⁴ to 1.6×10⁶ trials**, each an 8,000-add drive that also grows the target by
+8,000 elements. (`TrialStats`' own KDoc states 0.20–0.81 and ~2.4×10⁴–~3.9×10⁵; those are
+its **1e3 rows only**, relative dispersion 3.6–14.8, and are not the range across all
+scales measured here.)
 maxGap is a worst-case order statistic on a shared machine; it does not concentrate. No
 sweep can afford that, so this entry states the dispersion and the `Unreportable`
 classification in its own words rather than obtaining a table from `Findings.entry` — the
