@@ -162,11 +162,20 @@ class ReadyScheduleTest {
      *
      * ```
      * steps/seed   contiguous seeds to reach 40/40   total steps
-     *     60                    128                     7680
-     *    120                     64                     7680
-     *    250                     16                     4000   <- chosen
-     *    500                     16                     8000
+     *     60                    117                     7020
+     *    120                     62                     7440
+     *    250                     13                     3250
+     *    500                     13                     6500
      * ```
+     *
+     * The seed counts are the MEASURED minima (re-derived during
+     * computenet-98u.4's review; the figures first shipped here were the
+     * same minima rounded up to 128/64/16/16 without saying so). 250 steps
+     * per seed is the cheapest saturating length either way.
+     * [ReadyDifferentialTest.SWEEP_DEFAULT_SEEDS] stays at **16**, not 13:
+     * three seeds of headroom, so a generator change that makes saturation
+     * marginally harder does not silently turn the sweep into a
+     * nearly-saturating one. The test below asserts 16 x 250 saturates.
      */
     @Test
     fun `the sweep configuration saturates the reachable alphabet`() {

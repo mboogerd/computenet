@@ -56,6 +56,25 @@ data class ReadyScheduleConfig(
  * to (it does not; this generator does, per rule 4's explicit bias
  * instruction).
  *
+ * **A KNOWN, MEASURED GAP in that bias, deliberately not closed
+ * (computenet-98u.4).** [nextStep] offers blocker-targeted `Close`, `Reopen`
+ * and `Delete` choices, but **no blocker-targeted [ScheduleStep.StatusUpdate]**.
+ * A status update therefore lands on a blocker with a live dependent only by
+ * coincidence, which makes the `(StatusUpdate, DEPENDENT, ...)` family of
+ * [ReadyCoverage]'s alphabet roughly **ten times rarer** than every other
+ * family — measured over 500 seeds at 60 steps, its five elements each appear
+ * in 8-46 seeds, against 100-500 for the rest. Those are the elements the two
+ * pinned per-PR seeds miss (36 of 40, not 40 of 40).
+ *
+ * Adding the missing choice **fixes the coverage and breaks the pins**:
+ * measured, a biased generator makes a single schedule saturate for the first
+ * time (median 40/40 at 1000 steps, against 37/40 today), but it re-rolls
+ * every pinned seed's schedule and drops seed 42's own coverage from 27 to 17.
+ * Taking it here would have been exactly the trade AGENTS.md forbids — a
+ * pinned seed effectively replaced by a differently-behaved one — so it is
+ * recorded rather than made, and carried as its own work item
+ * (`computenet-lcxv`) for if the sweep lane ever becomes the primary gate.
+ *
  * **Untestable-by-schedule, per this task's decided direction — documented
  * here, not simulated:**
  * - The boolean `pinned` **column** on

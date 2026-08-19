@@ -336,10 +336,15 @@ class ReadySecondSeedDifferentialTest {
      * steps    min   p10   p50   p90   max      (of 40 reachable)
      *    20      6    10    13    15    21
      *    60     16    20    23    27    33      <- today's required check
-     *   120     21    27    28    30    33      (seed 42: 30)
+     *   120     21    27    30    33    36      (seed 42: 30)
      *   200     25    31    33    35    38      (seed 42: 32)
-     *  1000     35    36    36    37    39
+     *  1000     35    36    37    39    40
      * ```
+     *
+     * (The `120` and `1000` rows were re-derived during computenet-98u.4's
+     * review; the figures first shipped here were mis-transcribed and
+     * disagreed with the item's own recorded curve. Every other row
+     * reproduced exactly.)
      *
      * A single schedule never saturates: even at 1000 steps the median seed is
      * still short of the alphabet, because the rare events need a structural
