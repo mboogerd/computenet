@@ -394,7 +394,36 @@ for cores in (10, 16):
             print(f"FAIL: {n} sessions on {cores} cores dispatch {total_agents} > {alone}")
 sibling_sum_cases = 2
 
-total = (len(cases) + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
+# A task released by sweep-stale-claims.sh has status reset to open, so
+# `resumed` (status+assignee) read it as NEVER TOUCHED while its branch already
+# carried the finished deliverable — and the documented next step for a
+# non-resumed entry is to dispatch an implementer, a SECOND one, onto it
+# (computenet-jw9x). The branch is the durable witness the bead status is not.
+branch_cases = [
+    ("definitely/not/a/branch/xyz", False, "a branch that does not exist"),
+]
+for br, expected, what in branch_cases:
+    got = nb.branch_has_commits(br)
+    if got != expected:
+        failed += 1
+        print(f"FAIL: {what} — branch_has_commits({br!r}) = {got}, expected {expected}")
+
+# _entry must flip resumed when the branch carries work, and must surface WHY
+# so the orchestrator can route to 5c instead of to an implementer.
+entry_resume_cases = 3
+e = nb._entry({"id": "t", "metadata": {"branch": "definitely/not/a/branch/xyz"}}, False, [])
+if e["resumed"] is not False or e["branch_has_commits"] is not False:
+    failed += 1
+    print(f"FAIL: a fresh task with no branch must stay resumed=False — got {e!r}")
+e = nb._entry({"id": "t", "metadata": {"branch": "definitely/not/a/branch/xyz"}}, True, [])
+if e["resumed"] is not True:
+    failed += 1
+    print("FAIL: an explicitly resumed task stays resumed even with no branch")
+if "branch_has_commits" not in nb._entry({"id": "t"}, False, []):
+    failed += 1
+    print("FAIL: every entry must carry branch_has_commits for the 5b inspect rule")
+
+total = (len(cases) + len(branch_cases) + entry_resume_cases + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
          + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
          + len(capacity_cases) + len(cap_cases) + capacity_reason_cases
          + len(claim_shape_cases) + len(claim_error_cases))

@@ -263,10 +263,15 @@ resume reads the *previous* session's dir by that literal path.
 
 Fires at 3h15m / 4h / 4h45m of a 5h slot (the last 15m is Finalize); scale
 proportionally if the routine names a different slot. **Note the monitor's
-task id** — `TaskStop` it when you reach Finalize. **`persistent: true` is
-load-bearing; do not add `timeout_ms`**: verified by probe 2026-08-13,
-`persistent` genuinely overrides the 300000ms default, and the documented 1h
-maximum would otherwise kill the monitor mid-slot.
+task id** — `TaskStop` it when you reach Finalize. 
+> **`persistent: true` is load-bearing. Do NOT add `timeout_ms`.**
+> Verified by probe 2026-08-13: `persistent` genuinely overrides the
+> 300000ms default, and the documented 1h maximum would otherwise kill the
+> monitor mid-slot — **the clock dies at the cap and the rest of the slot
+> runs untimed**, which is the computenet-m5l/776 failure. One session armed
+> both anyway, against this instruction, and carried a live 4-hour hazard
+> without noticing until Finalize; it read as one clause mid-paragraph
+> (computenet-3gf5).
 
 | Notification | Do, at the next decision point |
 |---|---|
@@ -276,6 +281,34 @@ maximum would otherwise kill the monitor mid-slot.
 
 Notifications land at your next turn — they don't interrupt a wait, and a
 hung dispatch still wakes you at the deadline (5b).
+
+**The monitor measures WALL CLOCK, so it cannot be trusted across a host
+suspension** — `sleep` counts time the machine spent asleep. When a laptop
+suspends mid-slot every tier elapses during the suspension and all three
+notifications arrive together at resume, so the session goes from *no signal*
+straight to *EXPIRED* — precisely the state the three tiers exist to prevent.
+Measured: slot started 17:10Z with 300m allocated, host suspended, session
+resumed 07:05Z the next day with all three notifications in one batch followed
+immediately by the monitor's own "stream ended"; true elapsed 834m against a
+300m slot (computenet-3gf5).
+
+The signature is **two or more budget notifications arriving together**, or
+any budget notification arriving with "stream ended" right behind it.
+
+**On ANY budget notification — not only at budget-gated decisions — recompute
+elapsed from `$SCRATCH/slot-start` before acting on it, and act on the number
+rather than on which tier fired:**
+
+```bash
+echo $(( ($(date -u +%s) - $(cat "$SCRATCH/slot-start")) / 60 ))m elapsed \
+     of $(( $(cat "$SCRATCH/slot-seconds") / 60 ))m
+```
+
+That is one subtraction, and it is what turned a confusing batch into a
+correct diagnosis the one time this happened. A session that instead trusted
+the tiers in order would "finish the current feature", then "stop
+dispatching", then "finalize" in three consecutive turns with no time between
+them.
 
 Three standing disciplines:
 
@@ -608,6 +641,20 @@ bd list --parent=<epic> --all --json     # statuses of ALL children, closed incl
   the test, and it applies to this epic's own children exactly as it does to
   continuation candidates. Apply it before concluding a child is unworkable;
   the `human` label only catches gates somebody already formalised.
+
+**Re-run the readiness query in a SEPARATE Bash call before you defer.** Never
+defer on a reading taken in the same invocation as a mutation that could have
+unblocked something. Observed once and not reproduced: in one call,
+`bd close computenet-t6b.3.1` printed "Closed" and the very next command,
+`ready-in-epic.sh computenet-t6b`, did **not** list `computenet-t6b.3.2` — a
+bead whose sole dependency was the one just closed, and which `bd show`
+rendered as satisfied-and-unblocked in the next call. The mechanism is a
+hypothesis (a readiness answer computed against pre-close state) and is not
+asserted here; what is certain is the symptom — "epic reports no ready work" —
+and that this file's documented response to it hides the epic from **both**
+machines until a human notices. The moment this is most likely to appear is
+exactly the moment a session finishes something and asks what is next. One
+extra command closes the whole class regardless of mechanism (computenet-2mou).
 
 ```bash
 bd comment <epic> "Parking: no workable surface. <ids: human-gated / blocked on <other-epic>>"
@@ -1048,6 +1095,11 @@ Otherwise ask for the next batch:
 
 ```bash
 .claude/skills/work/scripts/next-batch.py <feature-id>
+# A `resumed: false` entry whose `branch_has_commits` is TRUE is finished work
+# wearing a fresh label — sweep-stale-claims.sh reset the status. INSPECT before
+# dispatching (git log in the worktree, bd comments on the bead) and route to 5c
+# rather than to an implementer, or you put a second implementer onto a branch
+# that already carries the deliverable (computenet-jw9x).
 # --siblings N if step 3 found N live sibling sessions on this box, or the
 # operator sanctioned concurrent running: the capacity cap is PER SESSION and
 # the machine is shared (computenet-arow). The verdict echoes what it used
