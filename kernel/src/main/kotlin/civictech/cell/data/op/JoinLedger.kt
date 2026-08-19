@@ -100,7 +100,11 @@ interface JoinLedger<X> {
     fun readerAttributes(): Map<String, Serializable> = emptyMap()
 }
 
-/** Mints a fresh [Timestamp] per entry via [MintedTags] — [JoinSetCell]/[SemiJoinCell]'s ledger. */
+/**
+ * Mints a fresh [Timestamp] per entry via [MintedTags] — the ledger of every
+ * operator in this family: [JoinSetCell], [SemiJoinCell], [IntersectSetCell]
+ * (since computenet-vvre) and [QuorumSetCell] (since computenet-s6l2).
+ */
 class MintedLedger<X>(ref: CellRef, name: String) : JoinLedger<X> {
     private val minted = MintedTags<X>(ref, name)
 
