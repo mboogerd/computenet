@@ -1,5 +1,6 @@
 package civictech.demo.beadsmirror.e2e
 
+import civictech.demo.beadsmirror.ready.ReadyPredicate
 import java.util.Random
 
 /**
@@ -313,6 +314,253 @@ object ReadySchedule {
                 }
             }
             return pairs
+        }
+    }
+}
+
+/**
+ * The role an issue plays in a step that changed, or could have changed, its
+ * ready membership. See [ReadyCoverage].
+ */
+enum class ReadySubjectRole {
+    /** The issue the verb names — the id `bd` was pointed at (for a dep verb, the BLOCKED side). */
+    SELF,
+
+    /**
+     * An issue the verb did NOT name whose readiness the step nonetheless
+     * moved — the dependent of a blocker that closed, reopened, was deleted,
+     * or changed status. This is the incremental-propagation case: the one
+     * the derived cell has to maintain across an edge it was not handed, and
+     * the one a recompute-the-world implementation gets right for free while
+     * an incremental one can get stale.
+     */
+    DEPENDENT,
+}
+
+/** How an issue's ready membership moved across one step. See [ReadyCoverage]. */
+enum class ReadyDirection { ENTER, EXIT, HOLD_READY, HOLD_UNREADY }
+
+/**
+ * Which clause of [civictech.demo.beadsmirror.ready.ReadyPredicate] decides
+ * the issue's POST-step answer. [READY] when the predicate says yes;
+ * otherwise the first clause that says no, in the predicate's own evaluation
+ * order. See [ReadyCoverage].
+ */
+enum class ReadyCause { READY, ABSENT, BLOCKED, STATUS, TYPE }
+
+/** One element of the coverage alphabet — see [ReadyCoverage]. */
+data class ReadyEvent(
+    val verb: String,
+    val role: ReadySubjectRole,
+    val direction: ReadyDirection,
+    val cause: ReadyCause,
+)
+
+/**
+ * **Readiness-transition coverage** for a rendered [ReadySchedule] schedule
+ * (task computenet-98u.4) — a pure replay, with no `bd`, no `dolt` and no
+ * live harness, so a sweep over hundreds of seeds costs milliseconds.
+ *
+ * ## What is counted, and why this unit
+ *
+ * [ReadyDifferentialHarness] exists to catch ONE thing: the derived ready set
+ * disagreeing with the oracle. It re-compares the FULL set after every step,
+ * so an issue whose membership and decisive clause were already established
+ * by an earlier step contributes nothing new when it is re-compared
+ * unchanged. What a step contributes is the set of issues it *touched* — the
+ * verb's own subject, plus every issue whose readiness moved as a
+ * consequence — together with **why** each of them is (or is not) ready
+ * afterwards.
+ *
+ * So the coverage alphabet is the [ReadyEvent] tuple
+ * `(verb, role, direction, decisive clause)`, unioned over every touched
+ * issue at every step. Each axis is a place the two sides can disagree:
+ * - **verb**: the mutation shape that reaches the mirror's feed.
+ * - **role**: whether the issue was named by the verb ([ReadySubjectRole.SELF])
+ *   or moved indirectly through an edge ([ReadySubjectRole.DEPENDENT]). The
+ *   indirect half is where an incremental cell goes stale and a recompute
+ *   cannot; a metric blind to it cannot measure the property BDS3 is about.
+ * - **direction**: whether membership entered, left, or held. Staleness shows
+ *   up as a missing [ReadyDirection.ENTER]/[ReadyDirection.EXIT]; a
+ *   spuriously-reactive cell shows up as a wrong [ReadyDirection.HOLD_READY]/
+ *   [ReadyDirection.HOLD_UNREADY].
+ * - **cause**: which predicate clause decided. `TYPE` (a `gate` create) never
+ *   moves membership at all, yet a derived side that forgot
+ *   [civictech.demo.beadsmirror.ready.ReadyPredicate.EXCLUDED_TYPES] diverges
+ *   on it immediately — which is why the metric counts touched issues rather
+ *   than only changed ones.
+ *
+ * ## Candidates rejected
+ *
+ * - **Distinct verbs (8).** Blind to state: a schedule can emit all eight
+ *   verbs without ever once closing a blocker that has a live dependent — the
+ *   single case the harness most exists to catch. (Measured: the median seed
+ *   emits all 8 verbs by ~30 steps and 7 of 8 by 22, so as a target it would
+ *   certify a schedule a third the length of one that exercises anything.)
+ * - **Distinct ordered verb pairs (64).** Measures adjacency in the
+ *   generator's draw, an artifact of the RNG rather than of the predicate.
+ *   Two consecutive `DepAdd`s on unrelated issues score as coverage while
+ *   exercising nothing new, and the pair that matters (`DepAdd`, then `Close`
+ *   of *that* blocker) scores the same as the same two verbs on unrelated
+ *   ids. It counts what is easy to count.
+ * - **Ready-predicate clause coverage (5 clauses).** Saturates in a handful of
+ *   steps and says nothing about incremental maintenance — it would certify a
+ *   schedule that never changes anything after its opening steps.
+ * - **`(verb, was-ready -> is-ready)` on the mutated issue only.** The closest
+ *   rejected candidate, and the one the item names. It drops the
+ *   [ReadySubjectRole.DEPENDENT] half entirely, so it cannot distinguish
+ *   `Close` of a leaf issue from `Close` of a blocker with three dependents.
+ *   [ReadySubjectRole] is precisely the axis added to fix that.
+ * - **Changed-membership events only (no `HOLD_*`).** Rejected because the
+ *   type- and status-exclusion clauses are checkable exactly when membership
+ *   does NOT move: a `gate` create must stay out of both sides' sets, and a
+ *   metric that only counts movement scores it as nothing.
+ *
+ * ## Reachability
+ *
+ * The tuple space is combinatorially larger than what any schedule from
+ * [ReadySchedule.derive] can reach (`ENTER` always implies cause `READY`;
+ * `TYPE` is only reachable on an issue created `gate`; `DEPENDENT` is only
+ * reachable for verbs that can change a blocker's blocking-ness). Rather than
+ * assert a hand-derived feasible set, [reachableAlphabet] MEASURES the union
+ * over a wide sweep, and coverage is reported against that measured universe
+ * — [REACHABLE_ELEMENTS], pinned and re-asserted by [ReadyScheduleTest].
+ */
+object ReadyCoverage {
+
+    /**
+     * The measured size of the reachable alphabet: the union of [elements]
+     * over seeds 1..3000 at 2000 steps each (2026-08-19). Pinned as a
+     * constant so a generator change that shrinks or grows what a schedule
+     * can reach fails [ReadyScheduleTest] loudly instead of silently
+     * rebasing every coverage claim in this file onto a new denominator.
+     */
+    const val REACHABLE_ELEMENTS: Int = 40
+
+    /** The blocking dependency types `ReadySetCell` maintains `is_blocked` from. */
+    private val BLOCKING_TYPES: Set<String> = setOf("blocks", "conditional-blocks")
+
+    /** A blocker with one of these statuses no longer blocks (READY-COVERAGE §2.2). */
+    private val OPEN_BLOCKER_EXCLUDED_STATUSES: Set<String> = setOf("closed", "pinned")
+
+    /** `bd create` with no `--type` mints this. */
+    private const val DEFAULT_TYPE: String = "task"
+
+    /** The [ReadyEvent] set one rendered schedule exercises. */
+    fun elements(schedule: List<ScheduleStep>): Set<ReadyEvent> {
+        val world = ReplayWorld()
+        val seen = LinkedHashSet<ReadyEvent>()
+        schedule.forEach { step -> seen += world.step(step) }
+        return seen
+    }
+
+    /** [elements] of the schedule `(seed, config)` renders — the common call shape. */
+    fun elementsOf(seed: Long, config: ReadyScheduleConfig): Set<ReadyEvent> =
+        elements(ReadySchedule.derive(seed, config))
+
+    /** The union of [elements] over many seeds — the measured reachable universe, and the sweep-lane figure. */
+    fun reachableAlphabet(seeds: Iterable<Long>, config: ReadyScheduleConfig): Set<ReadyEvent> =
+        seeds.flatMapTo(LinkedHashSet()) { seed -> elementsOf(seed, config) }
+
+    /**
+     * A pure replay of the workspace state a schedule produces — issue
+     * status/type and the dependency edge set — evaluated through the same
+     * clauses, in the same order, as
+     * [civictech.demo.beadsmirror.ready.ReadyPredicate.isReady], whose own
+     * constants this reads rather than copies.
+     */
+    private class ReplayWorld {
+        private val status = mutableMapOf<String, String>()
+        private val type = mutableMapOf<String, String>()
+        private val edges = mutableSetOf<Triple<String, String, String>>() // (blocked, blocker, type)
+
+        fun step(step: ScheduleStep): Set<ReadyEvent> {
+            val before = snapshot()
+            val subjects = apply(step)
+            val after = snapshot()
+
+            val verb = step::class.simpleName!!
+            val touched = LinkedHashSet<String>(subjects)
+            touched += (before.keys + after.keys).filter { before[it] != after[it] }
+
+            return touched.mapTo(LinkedHashSet()) { id ->
+                val wasReady = before[id] == ReadyCause.READY
+                val isReady = after[id] == ReadyCause.READY
+                val direction = when {
+                    !wasReady && isReady -> ReadyDirection.ENTER
+                    wasReady && !isReady -> ReadyDirection.EXIT
+                    isReady -> ReadyDirection.HOLD_READY
+                    else -> ReadyDirection.HOLD_UNREADY
+                }
+                val role = if (id in subjects) ReadySubjectRole.SELF else ReadySubjectRole.DEPENDENT
+                ReadyEvent(verb, role, direction, after[id] ?: ReadyCause.ABSENT)
+            }
+        }
+
+        /** The verb's own named subject(s) — for a dep verb, the BLOCKED side, whose readiness the edge decides. */
+        private fun apply(step: ScheduleStep): Set<String> = when (step) {
+            is ScheduleStep.Create -> {
+                status[step.id] = "open"
+                type[step.id] = DEFAULT_TYPE
+                setOf(step.id)
+            }
+
+            is ScheduleStep.TypedCreate -> {
+                status[step.id] = "open"
+                type[step.id] = step.type
+                setOf(step.id)
+            }
+
+            is ScheduleStep.StatusUpdate -> {
+                status[step.id] = step.status
+                setOf(step.id)
+            }
+
+            is ScheduleStep.Close -> {
+                status[step.id] = "closed"
+                setOf(step.id)
+            }
+
+            is ScheduleStep.Reopen -> {
+                status[step.id] = "open"
+                setOf(step.id)
+            }
+
+            is ScheduleStep.Delete -> {
+                status -= step.id
+                type -= step.id
+                edges.removeAll { (blocked, blocker, _) -> blocked == step.id || blocker == step.id }
+                setOf(step.id)
+            }
+
+            is ScheduleStep.DepAdd -> {
+                edges += Triple(step.blockedId, step.blockerId, step.type)
+                setOf(step.blockedId)
+            }
+
+            is ScheduleStep.DepRemove -> {
+                edges.removeAll { (blocked, blocker, _) -> blocked == step.blockedId && blocker == step.blockerId }
+                setOf(step.blockedId)
+            }
+
+            else -> error("verb not part of a ReadySchedule: ${step::class.simpleName}")
+        }
+
+        /** Every present issue's decisive clause, in [ReadyPredicate.isReady]'s own evaluation order. */
+        private fun snapshot(): Map<String, ReadyCause> =
+            status.keys.associateWith { id ->
+                when {
+                    isBlocked(id) -> ReadyCause.BLOCKED
+                    status.getValue(id) !in ReadyPredicate.DEFAULT_READY_STATUSES -> ReadyCause.STATUS
+                    type.getValue(id) in ReadyPredicate.EXCLUDED_TYPES -> ReadyCause.TYPE
+                    else -> ReadyCause.READY
+                }
+            }
+
+        private fun isBlocked(id: String): Boolean = edges.any { (blocked, blocker, edgeType) ->
+            blocked == id &&
+                edgeType in BLOCKING_TYPES &&
+                status[blocker]?.let { it !in OPEN_BLOCKER_EXCLUDED_STATUSES } == true
         }
     }
 }
