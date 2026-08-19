@@ -979,3 +979,375 @@ config.
 wire/src demo/` is empty; the annotation config (`Fork(2)`, `Warmup(5,1s)`,
 `Measurement(10,1s)`) was not touched or widened; `NOISE_FLOOR` was not touched; neither
 entry above this one was edited.
+
+---
+
+## 2026-08-19 — V1C-BENCH E1–E3 replicated against the landed bounded-read surface: E1 and E2 reproduce, E3 and the paging benefit do not
+
+`computenet-x9e.6.4`, running the artifacts `computenet-x9e.6.3` built
+(`bench/src/jmh/kotlin/civictech/bench/micro/BoundedReadBenchmark.kt`,
+`bench/src/main/kotlin/civictech/bench/micro/BoundedReadFixtures.kt`,
+`bench/src/test/kotlin/civictech/bench/micro/BoundedReadProbeTest.kt`) at full scale
+against the original measurement,
+`doc/spec/90-roadmap/98-inspector-v4-plan/30-bounded-read-measurement.md` (the C7 gate
+document, GO recommendation, produced by `tickets/V1C-BENCH.md`). That document and that
+ticket are **unmodified** by this work — `git diff --name-only <base> HEAD -- doc/spec` is
+empty; see "Scope confirmation" at the end.
+
+Why the replication exists: `kernel/src/main/kotlin/civictech/cell/BoundedRead.kt`'s KDoc
+cites the original's numbers — a ~28 ms live-traffic stall from one whole copy at 10⁵, an
+~85–99% stall reduction from 200-entry paging, a ~1.7–2.4× total-work premium — as
+load-bearing design justification, and the harness that produced them was deleted before
+that ticket's diff was finalized. Until now the tree could not re-derive any of them.
+
+**Headline:** E1 and E2 reproduce. **E3 does not, and neither does §6 — the comparison the
+design rests on.** On the landed surface a 200-entry paged walk of a `SetCell` removes
+7–46% of the live-traffic stall (17.9% at 10⁵), not the ~85–99% the original measured, at a
+total-work premium of ~5.5× rather than ~1.7–2.4×. The cause is checked below and is a
+**harness difference before it is anything else** — with a named, code-level mechanism the
+original could not have measured, because the type it measured did not exist.
+
+### Commands, exactly
+
+```
+./gradlew :bench:jmhJar
+/Users/MerlijnB/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar 'BoundedReadBenchmark' \
+     -rf csv -rff /abs/path/e1-v2.csv > /abs/path/e1-v2.log 2>&1
+
+./gradlew :bench:test -PbenchOnly=true --rerun \
+     --tests 'civictech.bench.micro.BoundedReadProbeTest' \
+     -Dcivictech.bench.harnessSha=429152d4
+```
+
+E1 went through the jar rather than `./gradlew :bench:jmh` for the reason this file records
+at the noise-floor entry: no Gradle daemon shares the host with the forks. Wall clock: E1
+**5m 12s** (2026-08-19T03:25:33Z → 03:30:45Z) for 2 methods × 3 scales at forks=5; the
+E2/E3 probe suite **2.155 s** for all six tests (JUnit XML `timestamp`
+`2026-08-19T03:25:28.489Z`, `tests="6" failures="0"`). Probe output is printed, never
+written, so the numbers below were read back out of that XML's `<system-out>`.
+
+**Host was NOT quiesced**, and this is disclosed rather than hidden: a sibling agent ran
+Gradle builds on this 10-core machine throughout the slot. That is the same class of
+contention the original discloses in its §2 (load ~17 on 16 cores), at a smaller
+magnitude, and it is a live candidate explanation for individual outlier trials below —
+never for the systematic E3 divergence, which is 20–150× and mechanism-backed.
+
+### The measuring JVM, pinned deliberately
+
+```
+# JMH version: 1.37
+# VM version: JDK 21.0.11, OpenJDK 64-Bit Server VM, 21.0.11+10-LTS
+# VM invoker: /Users/MerlijnB/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java
+# VM options: <none>
+```
+
+A bare `java` on this host is **Homebrew JDK 26.0.1** — verified this slot, not assumed:
+`java -version` prints `OpenJDK Runtime Environment Homebrew (build 26.0.1)`. `NOISE_FLOOR`
+was derived on Temurin 21, so a sweep on JDK 26 would be classified against a threshold it
+is not comparable to; that substitution is exactly what produced the superseded REAL-drive
+throughput entry above (`computenet-hqid`). Nothing in the build pins it once the JMH jar
+exists, so the toolchain JDK was invoked by absolute path and the banner read back as the
+check. `BoundedReadBenchmark`'s "Running it" KDoc block did not say to do this and now
+does (that is a bench-file edit in this change's diff). The E2/E3 probes need no pinning:
+they run in the Gradle `:bench:test` worker, which the `jvmToolchain(21)` declaration puts
+on the same Temurin 21.
+
+### E1 — renderer's own output, pasted verbatim
+
+Rendered through `civictech.bench.Findings.entry` by way of
+`ThroughputReport.renderResults`, from `e1-v2.csv` plus `MeasuringJvm.fromJmhLog` over
+`e1-v2.log`. `ThroughputReport.renderRun` itself could not be used unchanged: its
+`labelOf` demands the `subject`/`direction` `@Param`s `OperatorThroughputBenchmark` carries
+and `BoundedReadBenchmark` (whose only param is `scale`) does not, so the labels were built
+from `scale` and the method name in a 60-line throwaway `E1Render.java` driver run against
+`bench/build/libs/bench-jmh.jar`. Every honesty-bearing step is the shipped one:
+`ThroughputReport.parseCsv`, `MeasuringJvm.fromJmhLog`, `RunEnvironment.forRun`,
+`BenchResult`, `FindingsTable`, `Findings.entry`, and the omission accounting.
+`Drive.REAL` is stated by the driver rather than parsed out of the method name — correct
+here and checkable: `BoundedReadFixtures` builds every E1 subject on a real
+`ManagedHost`/`VirtualThreadScheduler` (the hosted case) or on no host at all (the direct
+case), and has no `SimulationController` path at all.
+
+## 2026-08-19 — V1C-BENCH E1 replication: whole-state copy cost of a SetCell at 1e3/1e4/1e5, direct Stateful.snapshot() and end-to-end ManagedHost.snapshotOf, against the landed bounded-read surface
+Harness: 429152d4 · JVM Eclipse Adoptium (Temurin-21.0.11+10)/21.0.11 · heap JVM defaults (VM options: <none>) · Apple M2 Pro, 10 cores, Mac OS X 26.6.2
+JMH: mode=AverageTime (JMH) forks=5 warmup=5 iters=5 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| E1 hostedSnapshotOf 1e4 | 0.389765 ± 0.001895 ms/op | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+Omitted rows (drive=REAL):
+- E1 direct 1e3 (drive=REAL): relative dispersion 0.00796398891966759 exceeds NOISE_FLOOR 0.005 — value=0.037544 ± 2.99E-4 ms/op; Unreportable, excluded from the table
+- E1 direct 1e4 (drive=REAL): relative dispersion 0.006776458237648449 exceeds NOISE_FLOOR 0.005 — value=0.381025 ± 0.002582 ms/op; Unreportable, excluded from the table
+- E1 direct 1e5 (drive=REAL): relative dispersion 0.03136419620708313 exceeds NOISE_FLOOR 0.005 — value=10.715658 ± 0.336088 ms/op; Unreportable, excluded from the table
+- E1 hostedSnapshotOf 1e3 (drive=REAL): relative dispersion 0.014207224568452992 exceeds NOISE_FLOOR 0.005 — value=0.048778 ± 6.93E-4 ms/op; Unreportable, excluded from the table
+- E1 hostedSnapshotOf 1e5 (drive=REAL): relative dispersion 0.04336458805610845 exceeds NOISE_FLOOR 0.005 — value=11.195748 ± 0.485499 ms/op; Unreportable, excluded from the table
+
+The nested `##` heading above is `Findings.entry`'s own output, verbatim including its
+heading level; it is one of this file's entries only in the sense that this entry contains
+it. One of six rows cleared `NOISE_FLOOR`; the other five are named with their dispersion
+rather than dropped, and `NOISE_FLOOR` was not touched (`Dispersion.kt`, confirmed:
+`const val NOISE_FLOOR: Double = 0.005`).
+
+### The comparison rule applied, stated before the comparisons
+
+The original's §2 and §8 say its own machine ran at load ~17 on 16 cores, that absolute
+small-*n* figures are order-of-magnitude only, and that "the third significant figure on
+any single trial is not" robust. Its §6 names what *is* load-bearing: E2-vs-E3 **direction
+and order of magnitude at 10⁴/10⁵**. So the rule used here, per experiment:
+
+1. **Reproduces** = the new value falls inside the original's own stated spread across its
+   runs, or within a factor of ~2 of it, *and* the qualitative claim the original draws
+   from it (its direction, its scaling with *n*) holds.
+2. **Does not reproduce** = an order-of-magnitude departure, or a reversal of the
+   qualitative claim, that the original's own disclosed noise cannot cover.
+3. Every comparison is **median against median**, except where a statistic difference is
+   named explicitly (E1, below). Dispersion, in the F3 sense, is reported for every row and
+   is *not* the yardstick here: at three trials no probe row can clear `NOISE_FLOOR` at any
+   affordable sample (see "What F3 refused"), so the original's stated spreads are the
+   comparison surface, exactly as its §2/§6 intend.
+
+### E1 — reproduces, once mean-versus-median is accounted for
+
+| n | original `snapshot()` direct median / p95 | this run, JMH mean | original `snapshotOf()` median / p95 | this run, JMH mean |
+| --- | --- | --- | --- | --- |
+| 10³ | 0.148 / 0.179 ms | **0.0375 ms** | 0.107 / 0.133 ms | **0.0488 ms** |
+| 10⁴ | 0.734 / 0.911 ms | **0.3810 ms** | 0.889 / 1.022 ms | **0.3898 ms** |
+| 10⁵ | 5.814 / 23.296 ms | **10.7157 ms** | 5.354 / 29.053 ms | **11.1957 ms** |
+
+**A statistic difference, not a discrepancy, at 10⁵.** JMH `Mode.AverageTime` reports the
+**mean** over every invocation in an iteration; the original reported the **median** of 30
+reps with p95 alongside. The original's own §8 finding is that at 10⁵ the tail is 4–5× the
+median because 5–7 G1 young collections land inside the measurement window — so a mean at
+10⁵ must sit between the original's median and its p95, and 10.7 / 11.2 ms sits squarely
+there (median 5.4–5.8, p95 23.3–29.1). At 10³/10⁴, where the original reports **no GC in
+either window**, mean and median are directly comparable and this machine is 2–4× faster —
+a machine difference (below), in the direction a quiesced M2 Pro against a loaded M3 Max
+predicts.
+
+**What the original concluded from E1 holds**: `snapshotOf`'s end-to-end cost is not
+meaningfully larger than the bare `snapshot()` it wraps. Measured here at +30% (10³),
++2% (10⁴), +4% (10⁵) — the same reading, on a tighter sample.
+
+**Not measured here**: allocation per call (the original's 270 KB / 2.61 MB / 26.9 MB
+column) and GC counts inside the window. `-prof gc` recovers both and was not run; the
+benchmark's KDoc already says a missing tail in JMH's default output is not evidence the
+tail is gone.
+
+### E2 — reproduces
+
+Medians over 3 trials per condition, against the original's two independent runs:
+
+| n | original baseline maxGap (A/B) | this run | original concurrent maxGap (A/B) | this run | original dip | this run |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10³ | 2.342 / 3.142 ms | 0.5708 ms | 9.402 / 6.908 ms | 3.1589 ms | +7.060 / +3.766 | **+2.588 ms** |
+| 10⁴ | 0.267 / 0.270 ms | 0.5755 ms | 10.493 / 8.593 ms | 5.4983 ms | +10.226 / +8.322 | **+4.923 ms** |
+| 10⁵ | 0.046 / 0.043 ms | 0.0635 ms | 27.683 / 29.184 ms | 26.0143 ms | +27.637 / +29.140 | **+25.951 ms** |
+
+**Reproduces on every clause the original draws from E2.** The dip is positive at every
+scale; it grows with *n*; at 10⁵ it is 25.95 ms against the original's 27.6–29.1 ms — a 6%
+difference on the number `BoundedRead.kt`'s KDoc cites as "~28 ms". The mechanism
+reproduces too, and by the original's own test of it: the concurrent `snapshotOf` latency
+tracks the maxGap almost exactly (10⁵: latency median 26.00 ms against maxGap median
+26.01 ms; 10⁴: 5.514 against 5.498; 10³: 3.166 against 3.159), which is what a priority-0
+submit jumping ahead of queued data traffic and then holding the single drain thread for
+the whole copy looks like. Baseline throughput at 10⁵: ~430,000 adds/s (8,000 adds in
+18.6 ms mean), against the original's ~585,000–635,000 on 16 cores.
+
+The 10³/10⁴ baselines are the noisy rows, exactly as the original's §8 predicts for
+maxGap: single trials of 22.649 ms (10⁴) and 13.666 ms (10³) sit against same-condition
+trials of 0.263/0.576 and 0.520/0.571 ms. Those are single-stall order statistics on a
+machine running a sibling agent's builds — the same artifact the original attributes to its
+own load, and the reason medians are used.
+
+### E3 — does NOT reproduce
+
+| n | original pages | this run | original total page wall (3 runs) | this run (median) | original max single page | this run | original maxGap | this run |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 10³ | 4 | 14–94 | 1.044 / 1.154 / 0.364 ms | **4.964 ms** | 0.858 / 0.911 / 0.271 ms | **1.697 ms** | 2.086 / 3.004 / 16.337 ms | **1.693 ms** |
+| 10⁴ | 49 | 58–139 | 1.768 / 1.801 / 1.862 ms | **10.127 ms** | 0.111 / 0.068 / 0.125 ms | **2.366 ms** | 1.141 / 1.167 / 3.100 ms | **5.131 ms** |
+| 10⁵ | 499 | 508–588 | 10.190 / 9.492 / 10.678 ms | **65.543 ms** | 0.113 / 0.145 / 0.095 ms | **21.351 ms** | 0.128 / 0.138 / 11.224 ms | **21.350 ms** |
+
+At 10⁵ the max single page is **150–225× the original's** and the summed page wall time
+**6.1–6.9×**, on a walk covering 101,530–117,450 entries against the original's fixed
+99,800 (+2–18% of work, nowhere near the discrepancy). The 10⁴ rows carry an additional
+confound in the same direction and it is stated rather than netted out: the target grows
+monotonically across trials (`BoundedReadFixtures` header item 4 — the original harness's
+own behaviour, reproduced deliberately), so the "10⁴" walks actually covered
+11,510–27,671 entries, a median of ~2× the nominal size. Normalizing for that still leaves
+the summed page wall ~2.8× and the max single page ~20× the original.
+
+**The mechanism, read out of the code rather than guessed.** The maxGap and the max single
+page are the same number at 10⁵ (21.350 vs 21.351 ms) — one page, not the walk, is the
+whole stall — and that page costs roughly **2× a whole `snapshot()` copy** (E1 hosted at
+10⁵: 11.196 ms). `SetCell.openWalk`
+(`kernel/src/main/kotlin/civictech/cell/data/SetCell.kt:485-502`) is why: opening a walk
+takes `stateLock` and makes a full pass over `adds` **and** `dels`, building the frozen
+enumeration order *and* merging every element's every tag into the opening `TagFrontier` —
+an O(n) pass with per-tag work that a whole-state copy (which allocates but never merges
+per tag) does not pay. That open happens **inside the first `readBounded` call**, i.e.
+inside one scheduler task; the closing frontier is recomputed in another O(n) pass on the
+final page (`SetCell.kt:469`, `currentFrontier`). The original's E3 could not pay any of
+it: its `PageCursorCell` held a plain `List<Int>` and answered each call with a
+200-element slice.
+
+**One thing this run cannot yet say, so it does not:** which page carries the stall. The
+probe reports `max single page`, not the per-page series, so "the first page, which opens
+the walk" is a mechanism-consistent reading (2× a whole copy, matching two O(n) passes'
+worth of work at open) and not a measurement. Filed as `computenet-wsz4` — report the
+per-page latency series so the open cost is attributable to a page, not inferred from a
+maximum.
+
+Every walk declared `STALE_FRONTIER` and 0/3 trials had a stable frontier, at every scale
+— expected under a concurrent add drive, and a fact the original's `List<Int>` stand-in
+could not produce at all.
+
+### §6 — E2 vs E3, the comparison the design rests on, does NOT reproduce
+
+| n | E2 maxGap (whole copy) | E3 maxGap (paged) | reduction, this run | reduction, original |
+| --- | --- | --- | --- | --- |
+| 10³ | 3.159 ms | 1.693 ms | **46%** | "small/unclear at this scale" |
+| 10⁴ | 5.498 ms | 5.131 ms | **6.7%** | ~85–90% |
+| 10⁵ | 26.014 ms | 21.350 ms | **17.9%** | typically ~99%, worst observed ~60% |
+
+Total-work premium (E3 summed page wall ÷ E1 whole copy at the same *n*): **5.9×** at 10⁵
+(65.543 / 11.196), against the original's 1.7–2.4×; at 10⁴ the ratio is 26× before the
+walk-size confound above is removed and ~13× after, against the original's ~2×.
+
+So on the landed surface, at this page limit and this drive, **paging costs several times
+more total work than the original measured and removes a small fraction of the stall
+instead of nearly all of it.** That is a departure from the evidence
+`BoundedRead.kt`'s KDoc cites, and it is stated here as a finding rather than repaired:
+`[BEN1-35]` makes a hot site a finding, and no kernel file is in this diff.
+
+### Which of {harness difference, code change since C7, machine difference} explains it
+
+**Harness difference — the dominant cause, checked, two independent counts.**
+
+1. *Real paging replaces the simulation.* The original's E3 was forbidden `BoundedStateful`,
+   `StateRead`, `StatePage`, `Cursor` and `ManagedHost.readState` (its §1 and §5 say so), so
+   it stood a `PageCursorCell` over a `List<Int>` in for the real thing. All five types have
+   since landed and `SetCell` is the reference `BoundedStateful`, so this E3 drives the real
+   `ManagedHost.readState`. `BoundedReadFixtures`' header (difference 1) and
+   `BoundedReadProbeTest`'s KDoc declared this before any number existed, and the original
+   itself predicted it in its "What could not be done" section: "tag-set filtering,
+   frontier computation … could differ from this document's numbers". The mechanism section
+   above turns that prediction into a specific, cited code path. **This is not a defect in
+   either measurement.** The original measured the cost of a *200-element slice per
+   scheduler task*; this measures the cost of *the landed `SetCell` walk*. They are
+   different subjects, and the landed one is the one the design now has to live with.
+2. *E3's drive.* §5's prose says E3 ran "the identical 8,000-add live-traffic drive from
+   E2", but the appendix code that actually ran sets `m = 8_000` for E2 (line 529) and
+   `m = 5_000` for E3 (line 583); appendix E3 also takes one untimed trial with no warmup
+   and starts its pager at t0 rather than 1 ms in. These four lines were read directly.
+   x9e.6.3's artifacts follow the **prose** (8,000 adds, one warmup drive, three trials, the
+   1 ms delay) so that E2 and E3 stay comparable to each other — which is what §6 is made
+   of. Consequence: §5's maxGap column was not measured under the drive this E3 uses, so an
+   E3-against-§5 divergence is a candidate harness difference on this count too,
+   independently of the paging one.
+
+**Code change since C7 — checked, and not the explanation.** The anchor is awkward and the
+awkwardness is stated: `git log --full-history -- doc/spec/90-roadmap/98-inspector-v4-plan/30-bounded-read-measurement.md`
+returns exactly one commit, `f5ce8969` (2026-07-31), which is also the commit that
+introduced `BoundedRead.kt` and `ManagedHost.readState` (`git log --full-history
+--diff-filter=A` and `-S 'fun readState'` both name it). So the document and the surface it
+says was unimplemented entered the tree together, and git can only speak about changes
+*after* that commit. Since it:
+
+- `ManagedHost.kt` — 13 commits, **none** touching the read path: `git log f5ce8969..HEAD
+  -S 'snapshotOf'`, `-S 'readState'` and `-S 'priority = 0'` over that file are all empty.
+- `BoundedRead.kt` — one commit, `687fe360` (`InstanceIndex`/`DeliveryHold` delegate reads),
+  which does not touch the paging contract.
+- `SetCell.kt` — one commit, `6f39e914` (2026-08-18, `computenet-bdth`): every read accessor
+  including `snapshot`, `readBounded` and `openWalk` now runs under a private `stateLock`
+  monitor. This is a real read-path change and it is the only one — but it cannot explain a
+  150× max-single-page divergence. In these probes the copy, the walk and the writer all
+  execute on the host's single drain thread (`snapshotOf`/`readState` submit; `inlet.call`
+  submits), so the monitor is uncontended, and an uncontended monitor is nanoseconds
+  against a 21 ms page.
+
+**Machine difference — checked, and the explanation for E1/E2's absolute levels only.**
+Original: Apple M3 Max, 16 cores, 48 GiB, load ~17, Corretto 21, `-Xmx2g`, macOS Darwin
+25.5.0. This run: Apple M2 Pro, 10 cores, macOS 26.6.2, Temurin 21.0.11 (JMH forks at JVM
+defaults, probes in the `:bench:test` worker at `-Xmx2g`), sibling agent builds running
+concurrently. That accounts for E1 being 2–4× faster at 10³/10⁴ and for E2's baseline
+outliers, and it is in the *wrong direction* to explain E3: a faster, less loaded machine
+producing 150× slower pages is not a machine effect.
+
+### What F3 refused, and why no affordable sample changes it
+
+**E1**: 5 of 6 rows `Unreportable`, listed above with their relative dispersions
+(0.0068–0.0434). This sweep already raised the artifact's JMH knobs from 1 fork / 3 warmup
+to the repository's **forks=5 / warmup=5 / iters=5** convention (a bench-file edit in this
+diff, so that the `RunEnvironment` a renderer reads is the configuration that ran — raising
+the sample with `-f`/`-wi` flags instead would publish under a config that did not run).
+That tightened `hostedSnapshotOf` 1e4 from 0.1025 to 0.00486 relative dispersion, which is
+how the one Reportable row exists. The 10⁵ rows stay an order above the floor because their
+variance is the G1 young-collection tail the original's §8 identified, which is a property
+of the subject, not of the sample size.
+
+**E2/E3**: every row `Unreportable`, and this is structural. Relative dispersions ranged
+**2.96 to 29.91** (E2 10⁵ baseline 2.96 at the tight end; E2 10⁴ baseline 29.91 at the
+noisy end; E3 rows 4.46–22.37). `TrialStats` states dispersion as the Student-t 99.9%
+half-width, which falls as `t/√n` with `t` flooring at 3.850, so reaching 0.005 from a
+trial-to-trial coefficient of variation of 0.20–0.81 needs on the order of **2.4×10⁴ to
+3.9×10⁵ trials**, each an 8,000-add drive that also grows the target by 8,000 elements.
+maxGap is a worst-case order statistic on a shared machine; it does not concentrate. No
+sweep can afford that, so this entry states the dispersion and the `Unreportable`
+classification in its own words rather than obtaining a table from `Findings.entry` — the
+route `BoundedReadProbeTest.report`'s KDoc sets out. **`NOISE_FLOOR` was not widened**, and
+widening it to make the writer accept these rows is the dishonesty the gate exists to
+prevent, not a workaround this entry declined for taste.
+
+### Deviations from the original method, stated
+
+- **Three trials per condition, not the original's five** (`BoundedReadFixtures.TRIALS`,
+  as x9e.6.3 landed it). Not raised here, and the honest reason is that the whole six-test
+  probe suite runs in 2.155 s, so the cost was never the obstacle — the run was already
+  under way when the sizing was reconsidered, and re-running everything at a new harness SHA
+  would have split this entry's environment across two commits. **Recommendation, since
+  recommendations belong in this file**: raise `TRIALS` to the original's 5 before the next
+  replication; it costs seconds, it makes the medians materially more robust against exactly
+  the outlier trials E2's 10³/10⁴ baselines show, and it does not change any `Unreportable`
+  classification (5 trials still needs ~10⁴ trials to reach the floor).
+- **E3 drives 8,000 adds with warmup, trials and a 1 ms delay**, per §5's prose, not the
+  appendix's 5,000/one untimed trial/t0 — see harness difference 2.
+- **The target grows monotonically across trials**, the original harness's own behaviour,
+  reproduced deliberately; a scale label names the pre-seed size, and the per-trial
+  `elementsAdded` figures are quoted above wherever they matter.
+- **E1 reports a JMH mean; the original reported a median and a p95** — accounted for
+  explicitly in E1's reading rather than compared across.
+
+### Environment capture: this entry is not affected by `computenet-x9e.8`
+
+That open defect is that `RunEnvironment.capture`'s heap field can describe the process
+that *rendered* an entry rather than the one that measured. Neither number here comes that
+way. E1's JVM triple is `MeasuringJvm.fromJmhLog` over the sweep's own retained banner
+(quoted above), which is the fix `computenet-hqid` landed. The probes' triple is
+`BoundedReadFixtures.thisProcessMeasuringJvm()`, legal there precisely because a JUnit
+probe measures in the JVM that reports it — `heap -Xmx2g` is the `:bench:test` worker's own
+flag and the worker is the measuring process. CPU/core/OS come from this host in both
+cases, which is sound because rendering and measuring happened on it. `Env.kt` is not in
+this diff.
+
+### Trigger (`[BEN1-31]`/`[BEN1-32]`)
+
+`TriggerClaim.None` — MARKED INCOMPLETE, as the rendered block above says on its own face.
+This entry answers BS-15's reporting clause, not a gap's trigger question. The E3/§6
+divergence is a fact about the landed bounded-read surface, not an answer to G-21 phase 3's
+allocation-pressure trigger or to any other gap; stretching one to fit would be the
+dishonesty `[BEN1-31]` guards.
+
+### Scope confirmation
+
+`git diff --name-only <merge-base> HEAD` names exactly two files, both bench:
+`bench/src/jmh/kotlin/civictech/bench/micro/BoundedReadBenchmark.kt` and
+`bench/src/main/kotlin/civictech/bench/micro/BoundedReadFixtures.kt` (the JMH knob raise,
+the KDoc that now pins the JVM, and a fix for a wildcard `*/` in a path that closed a KDoc
+block comment) — plus this entry. `git diff --name-only <merge-base> HEAD -- kernel/src/main
+inspect/src doc/spec concord/ wire/src demo/` is empty. `MAX_CELLS = 50`,
+`BUDGET_MS = 2_000L` (`DataSearch.kt:558,569`), `MAX_ROWS = 200`, `MAX_BYTES = 50_000`
+(`ValueEncoder.kt:53,56`) and `NOISE_FLOOR = 0.005` are byte-identical to main.
+`30-bounded-read-measurement.md` and `tickets/V1C-BENCH.md` are unmodified. Nothing above
+this entry's insertion point was edited.
