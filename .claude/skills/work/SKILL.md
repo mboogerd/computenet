@@ -1789,7 +1789,7 @@ ACCEPT=$(cat <<'EOF'
 EOF
 )
 .claude/skills/work/scripts/file-friction.sh --type <bug|feature> \
-  --title "<the friction in one line>" \
+  --title "<the friction in one line — NO 'work skill:' prefix; the script adds it>" \
   --desc "$DESC" --accept "$ACCEPT" \
   --skill-version <the epic's metadata.skill_version>
 ```

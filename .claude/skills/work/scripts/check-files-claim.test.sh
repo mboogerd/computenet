@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "12 passed, 0 failed".
+# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "15 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-files-claim.sh"}
@@ -48,6 +48,21 @@ check "prose with no extension is not path-shaped" 0 ""
 
 bead "change a/b/Step.kt and a/b/More.kt" "" "a/b/Step.kt"
 check "reports only the uncovered one" 1 "names a/b/More.kt"
+
+# Slash-joined prose shorthand is not a path. A breakdown writes
+# "Graphs.kt/Deltas.kt" meaning "Graphs.kt and Deltas.kt", and the extraction
+# read the slash as a directory separator — 0 of 4 warnings on one feature
+# were true, and a check whose output is reliably all-false trains the reader
+# to skim it (computenet-0pd6). No repo directory carries a source extension,
+# so this can never suppress a genuine gap.
+bead "extend Graphs.kt/Deltas.kt for the new op" "" ""
+check "slash-joined shorthand is not reported as a path" 0 ""
+
+bead "extend Graphs.kt/Deltas.kt and add a/b/Real.kt" "" ""
+check "a real path beside shorthand is still reported" 1 "names a/b/Real.kt"
+
+bead "see a/b/Real.kt" "" ""
+check "shorthand filter leaves ordinary paths alone" 1 "names a/b/Real.kt"
 
 bead "change a/b/Step.kt" "" ""
 check "empty claim -> reports" 1 "names a/b/Step.kt"
