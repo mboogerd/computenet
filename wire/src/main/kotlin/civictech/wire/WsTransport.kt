@@ -1,5 +1,6 @@
 package civictech.wire
 
+import civictech.cell.BoundaryDenial
 import civictech.cell.BoundaryDenialSink
 import civictech.cell.BoundaryDenials
 import civictech.cell.BoundarySeam
@@ -7,12 +8,17 @@ import civictech.cell.CellRef
 import civictech.cell.DenialReason
 import civictech.cell.Propagate
 import civictech.cell.link.PeerId
+import civictech.cell.membrane.AuthLevel
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.host.IntakeClosedException
 import civictech.cell.wire.BridgeEgressCell
+import civictech.cell.wire.PeerAuthPolicy
+import civictech.cell.wire.PeerCredentials
 import civictech.cell.wire.Peering
 import civictech.cell.wire.RegistryMirrorCell
+import civictech.identity.Ed25519
+import civictech.identity.fingerprint
 import org.java_websocket.WebSocket
 import org.java_websocket.WebSocketImpl
 import org.java_websocket.WebSocketServerFactory
@@ -35,6 +41,11 @@ import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
+import java.security.GeneralSecurityException
+import java.security.KeyFactory
+import java.security.PublicKey
+import java.security.spec.InvalidKeySpecException
+import java.security.spec.X509EncodedKeySpec
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -288,7 +299,66 @@ object WsTransport {
         }
     }
 
+    /**
+     * The legacy hello's prefix, **trailing space included** — frozen bytes
+     * (`[DSC1-HELLO-10]`).
+     *
+     * `HelloProtocol.LEGACY_HELLO_PREFIX` is a deliberate mirror of this
+     * constant, documented there as safe only because these bytes never change.
+     * The two are **not** unified here: `[DSC1-HELLO-10]`'s whole content is
+     * that the legacy line is untouched, and a constant that two files agree on
+     * by construction would be a change to the very declaration this
+     * requirement freezes. The mirror carries the argument; this stays private
+     * to the transport that owns the legacy grammar.
+     */
     private const val HELLO = "HELLO "
+
+    /**
+     * The replay memory a peering side gets: the window its own
+     * [PeerAuthPolicy.RequireAuthenticated] configured, or the default window
+     * for an [PeerAuthPolicy.Open] side that will never consult it
+     * (`[DSC1-HELLO-11]`, epic §9.8).
+     *
+     * A **listener** shares one guard across every connection it accepts —
+     * that is not an optimization but the requirement: a replayed hello arrives
+     * on a *new* socket, so per-`Session` state could never see the acceptance
+     * it is replaying (the same reason `WsListener.admissionSink` is shared).
+     * A [WsConnection] keeps one Session for its whole life, so a per-Session
+     * guard is already durable there.
+     */
+    private fun replayGuardFor(side: Peering.Side): HelloReplayGuard =
+        (side.auth as? PeerAuthPolicy.RequireAuthenticated)
+            ?.let { HelloReplayGuard(retentionMillis = it.nonceRetentionMillis) }
+            ?: HelloReplayGuard()
+
+    /**
+     * The Ed25519 public key a `HELLO2` presented, or null when those bytes are
+     * not an Ed25519 X.509/SubjectPublicKeyInfo encoding at all.
+     *
+     * Total over hostile input — every `GeneralSecurityException` and every
+     * `IllegalArgumentException` the key factory can raise becomes null — for
+     * the reason `civictech.identity.Ed25519.verify` is total: the presented key
+     * is an attacker-chosen byte string arriving at an ingress seam, so it must
+     * not be able to raise anything at the admission point.
+     *
+     * The **wide** `EdDSA` key factory parses it and [Ed25519.isEd25519] then
+     * rejects the wrong curve, so an Ed448 key is a distinguishable refusal
+     * rather than an indistinguishable parse failure (`Ed25519.KEY_FACTORY`'s
+     * own KDoc states that discipline; this follows it rather than inventing a
+     * second one).
+     */
+    private fun decodeEd25519PublicKey(spki: ByteArray): PublicKey? {
+        val key = try {
+            KeyFactory.getInstance(Ed25519.KEY_FACTORY).generatePublic(X509EncodedKeySpec(spki))
+        } catch (_: InvalidKeySpecException) {
+            return null
+        } catch (_: GeneralSecurityException) {
+            return null
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        return key.takeIf { Ed25519.isEd25519(it) }
+    }
 
     /**
      * One peer socket: bridge cells + mirroring on the local side, bytes on
@@ -331,6 +401,39 @@ object WsTransport {
          * durable for that path.
          */
         private val admissionSink: BoundaryDenialSink = BoundaryDenials().sinkFor("hello"),
+        /**
+         * How this Session writes a **text** message of its own accord —
+         * needed by exactly one message, the `PROOF` that answers a peer's
+         * `HELLO2` challenge (`[DSC1-HELLO-04]`).
+         *
+         * The hello itself does not need this: [hello] *returns* its line and
+         * the caller sends it from `onOpen`. A `PROOF`, by contrast, is produced
+         * while handling an inbound message, so the state machine has to be able
+         * to write one without its caller knowing the protocol — which is what
+         * keeps the whole trust decision inside [onText] rather than smeared
+         * across two `onMessage` overrides.
+         *
+         * The default **throws** rather than dropping the line. A Session with
+         * no text sender cannot complete an authenticated handshake, and a
+         * silent no-op would present that as a peer that never answered — the
+         * hardest possible reading of a wiring mistake. Both production paths
+         * ([WsListener.onOpen], [WsConnection]) pass a real sender; the default
+         * exists for the tests that construct a Session directly to drive the
+         * legacy path, which never reaches it.
+         */
+        private val sendText: (String) -> Unit = {
+            throw IllegalStateException(
+                "this Session was built without a text sender, so it cannot answer a HELLO2 challenge: " +
+                    "pass sendText when the side holds credentials",
+            )
+        },
+        /**
+         * The hellos this side has already accepted, as a bounded replay memory
+         * (`[DSC1-HELLO-11]`) — see [replayGuardFor] for why a listener shares
+         * one across every connection it accepts while a [WsConnection] owns its
+         * own.
+         */
+        private val replayGuard: HelloReplayGuard = replayGuardFor(side),
     ) {
         val egress = BridgeEgressCell()
 
@@ -376,6 +479,94 @@ object WsTransport {
 
         @Volatile
         private var ingress: Propagate<ByteArray>? = null
+
+        /**
+         * The nonce this side put in the `HELLO2` of the **current** connection
+         * instance; null when this side sent a legacy hello (it holds no
+         * credentials).
+         *
+         * Per *open*, exactly like [mirror] and for a second reason on top of
+         * the fence: `[DSC1-HELLO-02]` requires a distinct freshly generated
+         * nonce for every hello, *including each re-hello after a reconnect*.
+         * [hello] draws one from `generateHelloNonce` and overwrites this on
+         * every open, and there is no other writer — so the challenge a
+         * returning peer must answer is never the one it answered before, and
+         * a `PROOF` captured from the previous connection cannot verify against
+         * this one.
+         */
+        @Volatile
+        private var localNonce: ByteArray? = null
+
+        /**
+         * A peer's `HELLO2` that parsed and whose claimed id matched the key it
+         * presented, held between `HELLO2` receipt and `PROOF` receipt.
+         *
+         * Everything here is **derived, not claimed**: [derivedId] is
+         * `fingerprint(publicKey)` and [publicKey] is the key the `HELLO2`
+         * actually carried, so the `PROOF` is verified under the key whose
+         * fingerprint the peer is being held to — never under a key chosen
+         * later, and never against the id the hello merely asserted
+         * (`[DSC1-HELLO-06..07]`).
+         */
+        private class PendingHello(val hello: Hello2, val derivedId: PeerId, val publicKey: PublicKey)
+
+        /**
+         * The peer's accepted `HELLO2` for the current open, or null before one
+         * arrives. Also the **out-of-order detector**: a second `HELLO2` finds
+         * it non-null, and a `PROOF` with no preceding `HELLO2` finds it null.
+         */
+        @Volatile
+        private var pending: PendingHello? = null
+
+        /**
+         * The authentication level this connection instance actually reached, or
+         * null while no peer has been admitted on it — the wire-level
+         * observation of `[DSC1-HELLO-04]`/`[DSC1-HELLO-09]`.
+         *
+         * `AuthLevel.Authenticated` means a `PROOF` verified under the key whose
+         * fingerprint this side bound; `AuthLevel.TransportVouched` means the
+         * peer asserted a name (legacy) or presented a key this side could not
+         * challenge (it holds no credentials), and the transport vouched for it.
+         *
+         * **Read-only, and deliberately not plumbed anywhere.** Carrying an
+         * achieved level into `currentPrincipal()` — so a crossing's
+         * `Principal.Peer` reports `Authenticated` — is `[DSC1-HELLO-05]` and a
+         * sibling feature's scope. This property exists so the handshake's
+         * outcome is *observable* at the transport, not so anything downstream
+         * can branch on it yet.
+         */
+        @Volatile
+        private var achieved: AuthLevel? = null
+
+        /** @see achieved */
+        val achievedAuthLevel: AuthLevel? get() = achieved
+
+        /**
+         * The last hello refusal this connection instance recorded — its
+         * [DenialReason], the peer id it was attributed to, and its detail
+         * string (`[DSC1-OBS-01]`, `[DSC1-OBS-04]`).
+         *
+         * **Why the record is kept here at all.** [admissionSink] is
+         * deliberately reporter-less on this seam (see [admissionDenialCount]),
+         * and `BoundaryDenials.attachReporter` is `internal` to `:kernel`, so
+         * without this the *reason* a hello was refused would be observable
+         * nowhere outside the kernel — only the count would be, and a count
+         * cannot show that an `AUTH_REQUIRED` downgrade attempt is
+         * distinguishable from a `NOT_ADMITTED` allowlist refusal, which is
+         * exactly what `[DSC1-HELLO-09]` requires of it.
+         *
+         * **One record, not a log.** Every refusal calls [refuse], which closes
+         * the connection, so a connection instance has at most one refusal worth
+         * reading — and holding a list would give a hostile peer a way to grow
+         * this side's memory one reconnect at a time. The monotonic
+         * [admissionDenialCount] is what accumulates.
+         *
+         * Contains no nonce, no signature byte and no key material, because the
+         * detail strings it holds do not — see [refuseHello].
+         */
+        @Volatile
+        var lastAdmissionDenial: BoundaryDenial? = null
+            private set
 
         /**
          * T05 finding 7: binary frames arriving before an admitted hello are
@@ -537,50 +728,452 @@ object WsTransport {
         }
 
         /**
-         * Open a connection instance and return the hello that names it: the
-         * fresh [mirror]'s ref plus, since M8.2, this side's peer name.
+         * Open a connection instance and return the hello that names it.
+         *
+         * **Which of the two hellos this is depends on one thing only: whether
+         * this side holds credentials** (`Peering.Side.credentials`).
+         *
+         * - No credentials: the legacy `HELLO <mirrorRef>[ <peerName>]` line,
+         *   byte for byte as before (`[DSC1-HELLO-10]`). A side that never
+         *   mentions authentication cannot get any, and cannot emit a byte of a
+         *   new grammar.
+         * - Credentials: `HELLO2 <mirrorRef> <derivedId> <key> <nonce>` — the
+         *   id it claims is `credentials.peerId`, i.e. the fingerprint of the
+         *   very key it presents, because that is the only claim a peer can
+         *   hold it to (`[DSC1-HELLO-03]`, `[DSC1-HELLO-06]`). `Side.peer` is
+         *   deliberately *not* used here: a name nothing derives from a key
+         *   cannot be proven, so an authenticated peering names peers by
+         *   fingerprint and by nothing else.
+         *
+         * The policy — `PeerAuthPolicy.Open` vs `RequireAuthenticated` — does
+         * not enter here. It governs what this side *accepts*, not what it
+         * sends; a side may hold a keypair and still admit unauthenticated
+         * peers (`Side.credentials`' own KDoc).
+         *
+         * A fresh nonce is drawn on **every** call, hence on every re-hello
+         * after a reconnect (`[DSC1-HELLO-02]`) — see [localNonce].
          *
          * Called from `onOpen` on both paths — once for a listener session,
          * once per (re)connect for a client one. Retiring the previous mirror
          * here as well as in [onClose] is deliberate: the fence must not depend
          * on the close callback having run, and detaching an already-detached
-         * mirror is a no-op.
+         * mirror is a no-op. The per-open handshake state ([pending],
+         * [achieved], [localNonce]) is reset here for the same reason the mirror
+         * is minted here: nothing a superseded connection instance proved may
+         * carry into this one.
          *
          * The mirror is spawned before any peer name exists, because the hello
          * must carry its ref; its peer is therefore late-bound in [onText]
          * (V4-PEERID) — `RegistryMirrorCell.peer` carries the happens-before
-         * argument that makes that safe.
+         * argument that makes that safe, and [bindAndAnnounce] below re-derives
+         * it for the authenticated path, where the binding moves one message
+         * later.
          */
         fun hello(): String {
             mirror?.detach() // this open supersedes whatever instance came before it
             val fresh = Peering.spawnMirror(side, toPeer = egress)
             mirror = fresh
-            return HELLO + fresh.ref.id + (side.peer?.let { " ${it.name}" } ?: "")
+            pending = null
+            achieved = null
+            val credentials = side.credentials
+            if (credentials == null) {
+                localNonce = null
+                return HELLO + fresh.ref.id + (side.peer?.let { " ${it.name}" } ?: "")
+            }
+            val nonce = generateHelloNonce()
+            localNonce = nonce
+            return encodeHello2(Hello2(fresh.ref.id, credentials.peerId, credentials.publicKey, nonce))
         }
 
-        fun onText(message: String) {
+        /**
+         * **The single admission point.** Every trust decision this transport
+         * makes about a peer is taken here, between parsing a text message and
+         * `Peering.Side.admits` — and no ingress, no bound mirror and no
+         * announcer exists on any path that does not reach the end of one of the
+         * three handlers below (`[DSC1-HELLO-13]`).
+         *
+         * The dispatch is by prefix, and the prefixes cannot collide: the legacy
+         * one is `"HELLO "` *with* a trailing space, so `"HELLO2 …"` is never a
+         * legacy hello and can never have a token absorbed into a peer *name*
+         * (epic §9.1 — see `HelloProtocol`'s file KDoc for the whole argument).
+         *
+         * A text message that is none of the three keeps its previous
+         * behaviour exactly — the `require` in [onLegacyHello] throws
+         * "unexpected text message", reported by the listener's `onError` with
+         * the socket left open (`WsAnnouncementSilenceInventoryTest` pins it).
+         * That is deliberately *not* converted into a `MALFORMED_HELLO` denial:
+         * the decided matrix classifies out-of-order and duplicate
+         * `HELLO2`/`PROOF` messages, not junk that was never in either grammar,
+         * and rewriting the junk path would change `Open`-side behaviour that
+         * `[DSC1-HELLO-10]` freezes.
+         */
+        fun onText(message: String) = when {
+            message.startsWith(HELLO2_PREFIX) -> onAuthenticatedHello(message)
+            message.startsWith(PROOF_PREFIX) -> onProof(message)
+            else -> onLegacyHello(message)
+        }
+
+        /**
+         * A legacy name-only hello: today's path under `PeerAuthPolicy.Open`,
+         * an `AUTH_REQUIRED` refusal under `RequireAuthenticated`.
+         *
+         * The refusal is what `[DSC1-HELLO-08..09]` demands, and its *reason* is
+         * the substance: a downgrade attempt is `AUTH_REQUIRED`, machine-
+         * distinguishable from the `NOT_ADMITTED` of a peer that is simply not
+         * on the allowlist. No peer is admitted at `TransportVouched` on this
+         * path while the policy stands, which is that requirement's WHILE
+         * clause — there is no branch below the check that could.
+         */
+        private fun onLegacyHello(message: String) {
             require(message.startsWith(HELLO)) { "unexpected text message: $message" }
             val parts = message.removePrefix(HELLO).trim().split(" ", limit = 2)
             val peer = parts.getOrNull(1)?.let { PeerId(it) }
-            if (!side.admits(peer)) {
-                System.err.println("[WsTransport] refusing peer $peer: not on the allowlist (spec 43)")
-                // Seam 1 (spec 40/43, [SEC1-07]): accounted before the
-                // connection is refused. A hello is a text frame with no
-                // exclusives, so there is no deniedArgs payload to carry —
-                // unlike BridgeIngressCell's frame-half refusal
-                // (computenet-usd.4.1), which denies the raw bytes.
-                // Nothing throws — a denial is not a cell fault (BS-14) —
-                // so this never reaches supervision.
-                admissionSink.deny(
-                    seam = BoundarySeam.ADMISSION,
-                    reason = DenialReason.NOT_ADMITTED,
-                    principal = peer,
-                    subject = null,
-                    detail = "hello from $peer refused: not on the allowlist (spec 43)",
+            if (side.auth !is PeerAuthPolicy.Open) {
+                refuseHello(
+                    DenialReason.AUTH_REQUIRED,
+                    peer,
+                    "legacy name-only hello from $peer refused: this side requires an authenticated hello",
                 )
-                refuse()
                 return
             }
+            if (!admitted(peer)) return
+            bindAndAnnounce(peer, UUID.fromString(parts[0]))
+            achieved = AuthLevel.TransportVouched
+        }
+
+        /**
+         * A `HELLO2`: parse strictly, hold the peer to the key it presented,
+         * and — when this side can answer a challenge — send the `PROOF` that
+         * lets the peer hold *us* to ours. **Nothing is admitted here on a
+         * credentialed side**; admission waits for the peer's `PROOF` in
+         * [onProof].
+         *
+         * The step order is the decided one and each step's refusal reason is
+         * load-bearing:
+         *
+         * 1. **Parse** (`MALFORMED_HELLO`) — a malformed line never yields a
+         *    `PeerId`, so nothing downstream can be reached with a half-read
+         *    hello.
+         * 2. **Derive and compare** (`ID_MISMATCH`, recording *both* ids) —
+         *    `[DSC1-HELLO-06]`. From here on only the derived id is used; the
+         *    claimed string is kept for the refusal record and for nothing else.
+         * 3. **Replay** (`REPLAY`) — `[DSC1-HELLO-11]`, and it is checked
+         *    **before any signature work**, ours or the peer's. A replayed
+         *    `HELLO2` carries the nonce this side already accepted, and the
+         *    `PROOF` that follows it could only ever fail verification (our
+         *    challenge nonce is fresh per open) — so a replay reached through a
+         *    signature check would be classified `BAD_SIGNATURE`, naming the
+         *    wrong defect. Checking the nonce first is what makes a replay
+         *    *legible as* a replay.
+         * 4. **Answer** — sign the challenge with this side as signer and write
+         *    the `PROOF`. No admission, no ingress, no announcement.
+         */
+        private fun onAuthenticatedHello(message: String) {
+            val hello = when (val parse = parseHello2(message)) {
+                is HelloParse.Ok -> parse.message
+                is HelloParse.Malformed -> {
+                    refuseHello(parse.reason, null, "malformed HELLO2 refused (${parse.kind}): ${parse.detail}")
+                    return
+                }
+            }
+            if (pending != null || achieved != null) {
+                refuseHello(
+                    DenialReason.MALFORMED_HELLO,
+                    hello.claimedPeerId,
+                    "a second HELLO2 on one connection instance refused as out of order",
+                )
+                return
+            }
+            val key = decodeEd25519PublicKey(hello.publicKeySpki)
+            if (key == null) {
+                refuseHello(
+                    DenialReason.MALFORMED_HELLO,
+                    hello.claimedPeerId,
+                    "HELLO2 claiming ${hello.claimedPeerId.name} refused: the presented bytes are not an " +
+                        "Ed25519 X.509 public key",
+                )
+                return
+            }
+            val derived = fingerprint(key)
+            if (derived != hello.claimedPeerId) {
+                refuseHello(
+                    DenialReason.ID_MISMATCH,
+                    hello.claimedPeerId,
+                    "HELLO2 claims ${hello.claimedPeerId.name} but the presented key derives ${derived.name}",
+                )
+                return
+            }
+            if (replayGuard.hasSeenNonce(derived, hello.nonce)) {
+                refuseHello(
+                    DenialReason.REPLAY,
+                    derived,
+                    "HELLO2 from ${derived.name} refused: it replays a hello this side already accepted " +
+                        "inside the retention window",
+                )
+                return
+            }
+            val credentials = side.credentials
+            if (credentials == null) {
+                // The uncredentialed row. The policy is necessarily Open —
+                // `Peering.Side`'s init require makes RequireAuthenticated
+                // without credentials unconstructable — so this is a peer that
+                // authenticates itself to a side which cannot reciprocate.
+                //
+                // What it gets is the *derived* id at TransportVouched: the
+                // claim was checked against the key (step 2 above), which is
+                // strictly more than a legacy hello proves, but no challenge was
+                // answered because this side never sent one. No PROOF is
+                // possible and none is claimed.
+                //
+                // What the PEER does in return is decided by *its* policy, not
+                // by this row: the hello this side sent it was the legacy line,
+                // so a peer never waits on a PROOF from an unkeyed side — it
+                // was never offered a HELLO2 to answer. Both outcomes were
+                // measured in review (2026-08-19, darwin/arm64):
+                //
+                // - a credentialed `Open` peer reads that legacy line on its
+                //   own legacy row and admits this side at TransportVouched, so
+                //   the peering is symmetric at TransportVouched and
+                //   announcements flow BOTH ways;
+                // - a `RequireAuthenticated` peer refuses it AUTH_REQUIRED
+                //   (`[DSC1-HELLO-08]`) and closes, so nothing is peered in
+                //   either direction.
+                //
+                // Neither outcome is a half-open peering, and neither is a
+                // defect of this path: an unkeyed side cannot prove anything,
+                // which is exactly what its configuration says. The
+                // mixed-version proofs are a sibling item's.
+                if (!admitted(derived)) return
+                pending = PendingHello(hello, derived, key)
+                bindAndAnnounce(derived, hello.mirrorRef)
+                achieved = AuthLevel.TransportVouched
+                return
+            }
+            // Held BEFORE the PROOF is written: the peer's answer arrives on the
+            // same socket and is dispatched to this Session after this call
+            // returns, so `pending` is always visible to the [onProof] that
+            // answers this exchange.
+            pending = PendingHello(hello, derived, key)
+            sendText(encodeProof(Proof(credentials.sign(helloChallengeBytes(ourProofChallenge(credentials))))))
+        }
+
+        /**
+         * A `PROOF`: the peer's answer to the challenge this side sent, and the
+         * **admission point for an authenticated peering**.
+         *
+         * Order, again decided rather than chosen here:
+         *
+         * 1. **State** (`MALFORMED_HELLO`) — a `PROOF` with no preceding
+         *    `HELLO2`, a second `PROOF`, or a `PROOF` at a side that holds no
+         *    credentials (and therefore issued no challenge) is an out-of-order
+         *    protocol message.
+         * 2. **Parse** (`MALFORMED_HELLO`).
+         * 3. **Replay** (`REPLAY`) — before verification, so a signature this
+         *    side has already accepted is named a replay rather than reaching
+         *    the verifier at all.
+         * 4. **Verify** (`BAD_SIGNATURE`) — under the key the `HELLO2`
+         *    presented, over the challenge with the **peer** as signer
+         *    ([ourProofChallenge]`.mirrored()`), which is the same byte string
+         *    the peer signed and a *different* one from what this side signs.
+         *    Reflecting our own `PROOF` back therefore cannot verify
+         *    (`[DSC1-HELLO-07]`, `HelloProtocol.helloChallengeBytes`).
+         * 5. **Admit** (`NOT_ADMITTED`) — `Side.admits` evaluated on the
+         *    **derived** id, never the claimed string (`[DSC1-HELLO-12]`). The
+         *    allowlist check is unchanged code doing a strictly stronger check:
+         *    the id it tests is now one the peer had to prove.
+         * 6. **Record, bind, install, announce** — in that order, see
+         *    [bindAndAnnounce].
+         */
+        private fun onProof(message: String) {
+            val credentials = side.credentials
+            val awaiting = pending
+            if (credentials == null || awaiting == null || achieved != null) {
+                refuseHello(
+                    DenialReason.MALFORMED_HELLO,
+                    awaiting?.derivedId,
+                    "PROOF refused as out of order: " + when {
+                        credentials == null -> "this side issued no challenge (it holds no credentials)"
+                        awaiting == null -> "no HELLO2 preceded it on this connection instance"
+                        else -> "this connection instance has already admitted a peer"
+                    },
+                )
+                return
+            }
+            val proof = when (val parse = parseProof(message)) {
+                is HelloParse.Ok -> parse.message
+                is HelloParse.Malformed -> {
+                    refuseHello(
+                        parse.reason,
+                        awaiting.derivedId,
+                        "malformed PROOF from ${awaiting.derivedId.name} refused (${parse.kind}): ${parse.detail}",
+                    )
+                    return
+                }
+            }
+            if (replayGuard.hasSeenSignature(awaiting.derivedId, proof.signature)) {
+                refuseHello(
+                    DenialReason.REPLAY,
+                    awaiting.derivedId,
+                    "PROOF from ${awaiting.derivedId.name} refused: it replays a proof this side already " +
+                        "accepted inside the retention window",
+                )
+                return
+            }
+            val challenge = helloChallengeBytes(ourProofChallenge(credentials).mirrored())
+            if (!Ed25519.verify(awaiting.publicKey, challenge, proof.signature)) {
+                refuseHello(
+                    DenialReason.BAD_SIGNATURE,
+                    awaiting.derivedId,
+                    "PROOF from ${awaiting.derivedId.name} refused: the signature does not verify under the " +
+                        "key its HELLO2 presented",
+                )
+                return
+            }
+            if (!admitted(awaiting.derivedId)) return
+            replayGuard.recordAccepted(awaiting.derivedId, awaiting.hello.nonce, proof.signature)
+            bindAndAnnounce(awaiting.derivedId, awaiting.hello.mirrorRef)
+            achieved = AuthLevel.Authenticated
+        }
+
+        /**
+         * The challenge **this side signs** for its own `PROOF`: this side as
+         * signer, the peer as verifier. `mirrored()` gives the one the peer
+         * signs, which is what [onProof] verifies against — role asymmetry is
+         * the property that makes a reflected proof worthless
+         * (`HelloProtocol.helloChallengeBytes`).
+         *
+         * The two mirror refs are the session-binding value `[DSC1-HELLO-03]`
+         * asks for, and both are per connection *instance*: this side's is the
+         * mirror [hello] just minted, the peer's is the one its `HELLO2`
+         * offered. So a challenge — and any proof over it — is bound to one
+         * connection instance and is worthless on the next.
+         */
+        private fun ourProofChallenge(credentials: PeerCredentials): HelloChallenge {
+            val awaiting = checkNotNull(pending) { "no HELLO2 to build a challenge from" }
+            return HelloChallenge(
+                signerPeerId = credentials.peerId,
+                verifierPeerId = awaiting.derivedId,
+                verifierNonce = awaiting.hello.nonce,
+                signerNonce = checkNotNull(localNonce) { "a credentialed side always sends a nonce in hello()" },
+                signerMirrorRef = checkNotNull(mirror) { "onText before hello opened a connection instance" }.ref.id,
+                verifierMirrorRef = awaiting.hello.mirrorRef,
+            )
+        }
+
+        /**
+         * `Peering.Side.admits`, with the refusal accounted — unchanged
+         * behaviour on the legacy path (the stderr line and the denial detail
+         * are the ones this transport has always written) and unchanged *code*
+         * on the authenticated ones, where the only difference is that [peer]
+         * is a derived id rather than a claimed name (`[DSC1-HELLO-12]`).
+         *
+         * @return true when the peer is admitted; false after refusing it, in
+         *   which case the caller must return without binding anything.
+         */
+        private fun admitted(peer: PeerId?): Boolean {
+            if (side.admits(peer)) return true
+            System.err.println("[WsTransport] refusing peer $peer: not on the allowlist (spec 43)")
+            // Seam 1 (spec 40/43, [SEC1-07]): accounted before the
+            // connection is refused. A hello is a text frame with no
+            // exclusives, so there is no deniedArgs payload to carry —
+            // unlike BridgeIngressCell's frame-half refusal
+            // (computenet-usd.4.1), which denies the raw bytes.
+            // Nothing throws — a denial is not a cell fault (BS-14) —
+            // so this never reaches supervision.
+            lastAdmissionDenial = admissionSink.deny(
+                seam = BoundarySeam.ADMISSION,
+                reason = DenialReason.NOT_ADMITTED,
+                principal = peer,
+                subject = null,
+                detail = "hello from $peer refused: not on the allowlist (spec 43)",
+            )
+            refuse()
+            return false
+        }
+
+        /**
+         * Account a refused hello on the seam-1 sink, then close the connection
+         * — every refusal class on every hello path goes through here or through
+         * [admitted], so `admissionDenialCount` counts all of them and none can
+         * close a connection unaccounted (`[DSC1-OBS-01]`, `[DSC1-OBS-04]`).
+         *
+         * **[detail] names ids, reasons and shapes only.** No nonce, no
+         * signature byte, no key material, ever — `[DSC1-OBS-05]`. That is
+         * cheap to hold here because the pieces a refusal wants to name are
+         * already safe by construction: a `PeerId` is public, a
+         * `HelloParse.Malformed.detail` names only the shape of what arrived
+         * (see its KDoc), and the raw line is never interpolated.
+         *
+         * The `principal` is the *claimed* id where that is all this side knows
+         * and the *derived* id once one exists — which is why an `ID_MISMATCH`
+         * detail carries both: the claim identifies who was talking, the
+         * derivation identifies who they actually were.
+         */
+        private fun refuseHello(reason: DenialReason, principal: PeerId?, detail: String) {
+            System.err.println("[WsTransport] refusing hello: $detail")
+            lastAdmissionDenial = admissionSink.deny(
+                seam = BoundarySeam.ADMISSION,
+                reason = reason,
+                principal = principal,
+                subject = null,
+                detail = detail,
+            )
+            refuse()
+        }
+
+        /**
+         * Bind the mirror's peer, install the ingress, announce — in that order,
+         * and only ever from a path that has already admitted [peer].
+         *
+         * ## The ordering argument, re-derived for a trigger that moved
+         *
+         * `RegistryMirrorCell.peer` (kernel `Peering.kt`) argues the late bind
+         * safe against a specific trigger: *our* `onText` handling the peer's
+         * hello, one message into the connection. On an authenticated peering
+         * the trigger moves one message later — to the peer's `PROOF` — so that
+         * argument cannot simply be inherited. `[DSC1-HELLO-13]` is exactly this
+         * clause, and here is its re-derivation for the new trigger, for a
+         * peering where both sides hold credentials:
+         *
+         * 1. Our `HELLO2` — carrying this connection instance's mirror ref and
+         *    our fresh nonce — is written from `onOpen`, before this Session
+         *    processes anything at all.
+         * 2. The peer cannot address this mirror before it has read that
+         *    `HELLO2`, so its `Peering.announceTo`, which sends to the ref we
+         *    offered, cannot have run earlier.
+         * 3. On the peer's side, its `PROOF` is written while it handles our
+         *    `HELLO2`, and its announcing begins only while it handles our
+         *    `PROOF` — a strictly later message in the us->peer direction, hence
+         *    a strictly later handler on its socket thread. So in the peer->us
+         *    direction the peer writes its `PROOF` **before** its first
+         *    announcement frame.
+         * 4. A WebSocket preserves message order per connection direction — the
+         *    same premise the kernel's original argument rests on, unchanged —
+         *    and java-websocket dispatches one connection's messages in order.
+         *    So this Session's [onProof] runs, and returns, before [onFrame]
+         *    sees any frame from that peer. [onProof] is where all three steps
+         *    below happen, in this order.
+         * 5. Independently of every step above, [onFrame] drops (and counts on
+         *    `preHelloDrops`) every binary frame that arrives while [ingress] is
+         *    still null. So a **refused** hello — every path through
+         *    [refuseHello] or a false [admitted] — leaves no ingress at all:
+         *    nothing the peer sends can be routed anywhere, and the admission
+         *    decision cannot be raced by a frame that beats it.
+         *
+         * The invariant the feature names — hello parse -> verify -> admit ->
+         * bind mirror -> install ingress -> announce — therefore holds with the
+         * trigger moved. Only the *message* that carries the trigger changed;
+         * steps 3 and 4 pin the new one to the same position relative to the
+         * peer's own traffic that the old one held.
+         *
+         * The two other rows reduce to the original argument rather than needing
+         * a new one: a legacy hello at an `Open` side binds at hello receipt
+         * (the kernel's argument verbatim), and a `HELLO2` at an uncredentialed
+         * `Open` side binds at `HELLO2` receipt, which is the same position —
+         * the peer's `HELLO2` is written from *its* `onOpen`, exactly where a
+         * legacy hello would have been.
+         */
+        private fun bindAndAnnounce(peer: PeerId?, peerMirrorRef: UUID) {
             // V4-PEERID: bind the mirror's peer BEFORE announcing, so every
             // Remote location this connection installs — including the peer's
             // own catch-up burst, which cannot start before it has seen our
@@ -601,7 +1194,7 @@ object WsTransport {
             // catch-up, so nothing it still holds is lost by that drop.
             ingress = Peering.hostIngress(side, fromPeer = peer)
             announcement?.close() // a re-hello (reconnect) supersedes the previous announcer
-            announcement = Peering.announceTo(side, CellRef(UUID.fromString(parts[0])), via = egress)
+            announcement = Peering.announceTo(side, CellRef(peerMirrorRef), via = egress)
         }
 
         fun onFrame(buffer: ByteBuffer) {
@@ -778,6 +1371,34 @@ object WsTransport {
          */
         private val admissionDenials = BoundaryDenials()
         private val admissionSink = admissionDenials.sinkFor("hello")
+
+        /**
+         * This listener's hello replay memory (`[DSC1-HELLO-11]`), shared across
+         * every connection it accepts for the same reason [admissionSink] is:
+         * **a replay arrives on a new socket**, so per-[Session] state could
+         * never see the acceptance it is replaying. See [replayGuardFor].
+         *
+         * `by lazy` because [side] is assigned by this class's secondary
+         * constructors — a property initializer cannot read it yet — and the
+         * guard's window comes from that side's policy. Still exactly one guard
+         * per listener: `lazy` is synchronized, and the first read is the first
+         * `onOpen`.
+         */
+        private val replayGuard by lazy { replayGuardFor(side) }
+
+        /**
+         * The authentication level each live connection reached, in no
+         * particular order — `AuthLevel.Authenticated` for a peering that
+         * completed a `HELLO2`/`PROOF` exchange, `TransportVouched` for one the
+         * transport merely vouched for, null for a connection that has not
+         * admitted a peer yet (`[DSC1-HELLO-04]`, `[DSC1-HELLO-09]`).
+         *
+         * Live sessions only, like [preHelloDrops]: a closed connection's
+         * Session is removed in [onClose]. An **observation**, not a control
+         * surface — see [Session.achievedAuthLevel] for why nothing downstream
+         * branches on it yet.
+         */
+        val achievedAuthLevels: List<AuthLevel?> get() = sessions.values.map { it.achievedAuthLevel }
 
         /**
          * Monotonic count of hellos this listener refused across every
@@ -1321,7 +1942,18 @@ object WsTransport {
             // admissionSink is THIS listener's shared sink (see its KDoc) —
             // every Session this listener opens reports into it, so a
             // refusal survives this Session's own removal in onClose.
-            val session = Session(side, { conn.send(it) }, { conn.close() }, { conn.hasBufferedData() }, admissionSink)
+            val session = Session(
+                side,
+                { conn.send(it) },
+                { conn.close() },
+                { conn.hasBufferedData() },
+                admissionSink,
+                // the PROOF answering a peer's HELLO2 challenge travels as text
+                // on this same socket, written from inside onText
+                { text: String -> conn.send(text) },
+                // this listener's shared guard, not a per-Session one (see its KDoc)
+                replayGuard,
+            )
             sessions[conn] = session
             conn.send(session.hello())
         }
@@ -1413,7 +2045,13 @@ object WsTransport {
         private val backoff: (attempt: Int) -> Long = DEFAULT_RECONNECT_BACKOFF,
     ) : WebSocketClient(uri, Draft_6455(), null, DIAL_TIMEOUT_MS) {
 
-        private val session = Session(side, { send(it) }, { shutdown() }, { hasBufferedData() })
+        private val session = Session(
+            side,
+            { bytes: ByteArray -> send(bytes) },
+            { shutdown() },
+            { hasBufferedData() },
+            sendText = { text: String -> send(text) },
+        )
 
         /**
          * The two silent drops on this dialer's announcement path
@@ -1435,6 +2073,16 @@ object WsTransport {
          * life, same as [preHelloDrops].
          */
         val admissionDenialCount: Long get() = session.admissionDenialCount
+
+        /**
+         * The authentication level this dialer's **current** connection instance
+         * reached, or null before it has admitted a peer on it
+         * (`[DSC1-HELLO-04]`) — see [Session.achievedAuthLevel]. A client keeps
+         * one Session across every reconnect, and `hello()` resets this on each
+         * open, so this reports the live connection instance rather than the
+         * connection's history.
+         */
+        val achievedAuthLevel: AuthLevel? get() = session.achievedAuthLevel
 
         /**
          * The announcement channel's two ends on this dialer (computenet-dqy.68)
