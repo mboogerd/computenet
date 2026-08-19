@@ -50,8 +50,10 @@ import java.util.concurrent.CountDownLatch
  * `PageCursorCell` holding a plain `List<Int>` in for "the same underlying state" and
  * answered each `snapshot()` with the next 200-element slice. All five types have landed
  * and `SetCell` is the reference `BoundedStateful`, so [e3At] drives the real
- * `ManagedHost.readState` page by page against the real target cell under the identical
- * live-traffic drive.
+ * `ManagedHost.readState` page by page against the real target cell under E2's live-traffic
+ * drive — which is identical to E2's by construction, but NOT to the original E3's own
+ * drive: Appendix A drove `m = 5_000` there, once, with no warmup and no 1 ms delay, while
+ * §5's prose claims 8,000 (`BoundedReadFixtures`' header, difference 2).
  *
  * **That makes E3 strictly more expensive than the original's stand-in, and a divergence
  * from §5's numbers is therefore a harness difference before it is anything else.** The
@@ -340,7 +342,15 @@ class BoundedReadProbeTest {
      * (see `TrialStats`), and hiding that would be the dishonesty the gate exists to
      * prevent. `Findings.entry` is deliberately NOT called: it would refuse an
      * `Unreportable` row outright, and rendering the markdown entry is the sibling
-     * comparison task's step, on a sweep whose trial count earns it.
+     * comparison task's step.
+     *
+     * **That refusal is not a limit a longer sweep lifts, and the sibling entry must plan
+     * for it.** At the maxGap variability actually measured here a `Reportable`
+     * classification needs `1e4`-`1e5` trials (`TrialStats`' KDoc does the arithmetic from
+     * the measured numbers), which no sweep can afford — so an entry for E2/E3 has to
+     * state the dispersion and its `Unreportable` classification in its own words rather
+     * than obtain them from `Findings.entry`, and widening `NOISE_FLOOR` to make the
+     * writer accept these rows would be the dishonesty that gate exists to prevent.
      */
     private fun report(
         experiment: String,

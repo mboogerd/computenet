@@ -94,6 +94,16 @@ import java.util.concurrent.atomic.AtomicLong
 //    8,000-add burst is reproduced verbatim ([DRIVE_ADDS]), including its consequence:
 //    "dip" means the largest single stall in the target's own arrival stream (maxGap), not
 //    a degradation of a paced steady rate. [DriveOutcome.maxGapMs] is that metric.
+//    **On E3, though, the original's own drive was not 8,000 and the document contradicts
+//    itself about it.** §5's prose says "the identical 8,000-add live-traffic drive from
+//    E2", but Appendix A's `E3` body — the code that actually ran — sets `m = 5_000`, takes
+//    ONE untimed trial with no warmup drive, and starts its pager thread at t0 rather than
+//    [READ_DELAY_MS] in. This re-expression follows the prose and E2's shape (8,000 adds,
+//    one warmup drive, [TRIALS] trials, the 1 ms delay) so E2 and E3 stay comparable to
+//    each other, which is what §6's comparison is made of. Consequence for the sibling
+//    entry: §5's maxGap column was NOT measured under the drive this file's E3 uses, so an
+//    E3-against-§5 divergence is a candidate harness difference on this count too,
+//    independently of the real-paging one.
 // 3. **E1 is JMH; E2/E3 are `@Tag("bench")` JUnit probes.** See
 //    `BoundedReadProbeTest`'s KDoc for why that split, which the feature left to the
 //    implementer's judgment, went the way it did.
@@ -416,8 +426,18 @@ class ArrivalCollectorCell(override val ref: CellRef = CellRef(UUID.randomUUID()
  *   `civictech.bench.classify` would call a noisy result `Reportable`. Being conservative
  *   here is the whole reason the choice is spelled out.
  * - **A low-trial probe result is therefore expected to classify `Unreportable`**, and
- *   that is the honest outcome, not a harness fault. Raising the trial count is how a
- *   sweep earns a reportable interval; widening [NOISE_FLOOR] is not.
+ *   that is the honest outcome, not a harness fault. Widening `NOISE_FLOOR` is never the
+ *   answer — but for THIS probe's statistic neither is raising the trial count, and that
+ *   has to be said plainly rather than left for a sweep to discover. Measured here at
+ *   1e3 (2026-08-19, M2 Pro, 3 trials, harness 5bcec676): relative dispersion 3.6-14.8,
+ *   i.e. a trial-to-trial coefficient of variation of 0.20-0.81 for maxGap. [dispersion]
+ *   falls as `t/sqrt(n)` and [tCritical999] floors at 3.850, so reaching the 0.005 floor
+ *   needs `n >= (3.850 * cv / 0.005)^2` — ~2.4e4 trials at the quietest observed
+ *   variability and ~3.9e5 at the noisiest, each trial an 8,000-add drive that also grows
+ *   the target by 8,000 elements. maxGap is a worst-case order statistic on a shared
+ *   machine; it does not concentrate. So a `FindingsTable` built from these probes is
+ *   expected to be refused by `Findings.entry` at any trial count a sweep can afford —
+ *   see `BoundedReadProbeTest.report`.
  */
 class TrialStats(raw: List<Double>) {
 
