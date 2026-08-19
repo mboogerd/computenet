@@ -411,10 +411,12 @@ class WavePrefixTest {
      * `sourceCount` is the ONLY departure, and it is [WavePrefixOracle.appliesTo]'s soundness
      * domain rather than a comfort setting. The **ordinary** writer and remove knobs are kept —
      * `writerCount = 2` and `unobservedRemoveRatio = 0.25`, the same values every other sweep in
-     * this feature uses — so the known cross-writer unobserved-remove seam (computenet-qcm1,
-     * computenet-4ru.6.3: a spawned `SetCell` retracts a live element on any remove, while the
-     * model no-ops a cross-writer remove no `Observe` preceded) is **inside** this population.
-     * The sweep partitions it out by measurement, not by configuration — see the sweep test.
+     * this feature uses — so the known cross-writer remove seam (a spawned `SetCell` retracts a
+     * live element on any remove, while the model no-ops a cross-writer remove no `Observe`
+     * preceded) is **inside** this population. The sweep partitions it out by measurement, not by
+     * configuration — see the sweep test. Its *unobserved* half was computenet-qcm1 and is fixed:
+     * the generator no longer draws an unobserved remove of a live element, so what remains
+     * inside this population is the **observed** cross-writer remove, computenet-eeys.
      */
     private fun generatedSweepConfig() = GeneratorConfig(
         depthRange = 3..5,
@@ -597,15 +599,16 @@ class WavePrefixTest {
             totalObservations shouldBeGreaterThan 0
         }
         withClue(
-            "the cross-writer unobserved-remove seam's footprint (computenet-qcm1 / " +
-                "computenet-4ru.6.3) — a change here is a change in the seam, not in this " +
-                "oracle; measured 2026-08-19 on A0030. $summary",
+            "the cross-writer remove seam's footprint (computenet-eeys; its *unobserved* half " +
+                "was computenet-qcm1 and no longer reaches this population) — a change here is " +
+                "a change in the seam, not in this oracle; re-measured 2026-08-19 on MacBoo " +
+                "under computenet-qcm1. $summary",
         ) {
             settledMismatch shouldBe SEAM_SEEDS
         }
         withClue(
             "the raw-view plateau-flicker footprint (computenet-eeys) — pinned so it stays " +
-                "visible; measured 2026-08-19 on A0030. $summary",
+                "visible; re-measured 2026-08-19 on MacBoo under computenet-qcm1. $summary",
         ) {
             plateauFlicker shouldBe RAW_VIEW_FLICKER_SEEDS
         }
