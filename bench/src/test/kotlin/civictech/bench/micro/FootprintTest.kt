@@ -262,7 +262,7 @@ class FootprintTest {
             Footprint.multiplicityFor(200L * 1024, elements = 1_000),
         )
         // A structure the instrument cannot resolve asks for the most the budget allows,
-        // which is the belowNoiseFloor case's best chance of not being one.
+        // which is the belowResolution case's best chance of not being one.
         assertEquals(
             Footprint.MAX_WRITES_PER_WINDOW / 100_000,
             Footprint.multiplicityFor(0L, elements = 100_000),
@@ -381,7 +381,18 @@ class FootprintTest {
     /**
      * A total inside its own error bars is a measurement of nothing, and the instrument has
      * to say so rather than publish the figure. The fixture is `CounterCell`'s real shape at
-     * 1e5: 46.4 ± 126.2 bytes.
+     * 1e5, taken from a full-scale run of `CellFootprintProbeTest`: total 46.4 ± 126.2
+     * bytes at multiplicity 2, with the baseline drift that run measured — **0 bytes**.
+     *
+     * ## Why `noiseFloorBytes` is 0 here, and why that is the whole point
+     *
+     * `belowResolution` has two bounds, and only the DISPERSION one is the fix this test
+     * exists for; the baseline-drift bound predates it and is exercised separately by
+     * [aDriftingBaselineAlsoPutsASubjectBelowResolution]. With the helper's default
+     * `noiseFloorBytes = 4096` this fixture satisfied BOTH (46.4 x 2 = 92.8 <= 4096), so
+     * the assertion below passed identically with the dispersion clause deleted — measured
+     * by mutation, not reasoned about. Pinning the drift at the 0 bytes the real run
+     * measured leaves the dispersion clause as the only thing that can make this true.
      */
     @Test
     fun belowResolutionIsReportedRatherThanRounded() {
@@ -390,6 +401,12 @@ class FootprintTest {
             payload = Stat(mean = 24.0, dispersion = 0.0, samples = 10),
             tagMetadata = Stat(mean = 0.0, dispersion = 0.0, samples = 10),
             multiplicity = 2,
+            noiseFloorBytes = 0L,
+        )
+        assertTrue(
+            tiny.total.mean * tiny.multiplicity > tiny.noiseFloorBytes,
+            "the fixture must sit ABOVE the baseline-drift bound, or this test would pass " +
+                "without the dispersion clause it exists to pin",
         )
         assertTrue(tiny.belowResolution)
         val large = measurement(

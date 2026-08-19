@@ -107,7 +107,7 @@ class FootprintMeasurementException(message: String) : IllegalStateException(mes
  * `sizeof` gets wrong. It cannot see non-heap footprint (metaspace, code cache, direct
  * buffers), and it cannot resolve a signal below its own run-to-run noise;
  * [noiseFloorBytes] measures that noise rather than assuming it, and
- * [FootprintMeasurement.belowNoiseFloor] reports when a subject's whole state is under
+ * [FootprintMeasurement.belowResolution] reports when a subject's whole state is under
  * it instead of publishing a number the instrument cannot actually resolve.
  *
  * ## MEASURED LIMIT: G1 accounts a humongous object's regions wholesale
@@ -815,7 +815,7 @@ object Footprint {
      * [MAX_WRITES_PER_WINDOW].
      *
      * A calibration at or below zero (a signal lost in the noise) asks for the largest
-     * affordable multiplicity; that is the [FootprintMeasurement.belowNoiseFloor] case,
+     * affordable multiplicity; that is the [FootprintMeasurement.belowResolution] case,
      * and asking for the most the budget allows is what gives it its best chance of not
      * being one.
      */
