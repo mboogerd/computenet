@@ -523,10 +523,15 @@ class WavePrefixTest {
         //         cannot be a reconvergence tear because there is no second arm
         //         ([CHAIN_ARTIFACT_SEEDS]).
         //     These are signatures, NOT causal verdicts. Measured at review time (2026-08-19,
-        //     Darwin arm64): all twelve pinned seeds — the five in (a) included — disappear at
-        //     `writerCount = 1` and survive `unobservedRemoveRatio = 0.0`, so the common cause is
-        //     the cross-writer remove seam (computenet-qcm1), appearing at an intermediate wave
-        //     and healing by quiescence in the seven violation cases. In particular the earlier
+        //     Darwin arm64, reproduced on the second read): all twelve pinned seeds — the five in
+        //     (a) included — disappear at `writerCount = 1` AND at `addRemoveRatio = 1.0` (no
+        //     remove generated at all), so the common ingredient is a cross-writer remove
+        //     (computenet-qcm1's territory), appearing at an intermediate wave and healing by
+        //     quiescence in the seven violation cases. `unobservedRemoveRatio = 0.0` does NOT
+        //     remove it, so it is not confined to the *unobserved* remove that bead describes;
+        //     which cross-writer remove path diverges is qcm1's to settle, not this file's. The
+        //     one thing measured here is which knobs the population depends on. In particular the
+        //     earlier
         //     reading of these two buckets as artifacts of THIS observation point (a raw
         //     `TerminalFold` versus `InternalConsistencyTest`'s aligned sink) does not hold:
         //     re-driving each seed with a `Barrier` after every Op and inspecting only the
@@ -599,8 +604,8 @@ class WavePrefixTest {
             plateauFlicker shouldBe RAW_VIEW_FLICKER_SEEDS
         }
         withClue(
-            "the single-path (chain) artifact footprint (computenet-eeys) — a chain cannot tear, " +
-                "so a violation there is about the observation point. $summary",
+            "the single-path (chain) violation footprint (computenet-eeys) — a chain cannot tear, " +
+                "so whatever this is, it is not a reconvergence tear. $summary",
         ) {
             chainArtifact shouldBe CHAIN_ARTIFACT_SEEDS
         }
@@ -625,7 +630,9 @@ class WavePrefixTest {
      *
      * A structural signature only. It says the *model* did not move across that wave; it does NOT
      * establish that the kernel's dip and recovery both happened inside one wave — measured, they
-     * do not (see the bucket comment in the sweep test).
+     * do not (see the bucket comment in the sweep test). The NAME records the hypothesis this
+     * predicate was first cut for, like [RAW_VIEW_FLICKER_SEEDS]'s does; the predicate itself is
+     * unchanged by the correction, so it is kept rather than renamed.
      *
      * Deliberately narrow: every [RunOutcome.WavePrefixViolation.Kind.NO_MATCHING_PREFIX], and
      * every regression across a wave that really changed the terminal, is excluded and lands in a
@@ -639,7 +646,10 @@ class WavePrefixTest {
     /**
      * Whether any source reaches any terminal by two or more distinct paths. Its NEGATION is the
      * load-bearing direction: with exactly one path there is no second arm, so no observation can
-     * be a torn composite and a violation must be about the observation point instead.
+     * be a torn composite and a violation there needs a different explanation than reconvergence.
+     *
+     * What that explanation is, this predicate does not say — and measured, it is NOT this
+     * oracle's observation point either (see the bucket comment in the sweep test).
      */
     private fun hasReconvergence(topology: CaseTopology): Boolean {
         val sources = topology.nodes.filter { it.source != null }.map { it.handle }

@@ -90,33 +90,44 @@ import kotlin.random.Random
  *   REGRESSED across a wave the model did not change, one a single-path chain showing a state
  *   that is no prefix, one a reconvergent shape showing a state that is no prefix.
  *
- *   **The pinned twelve are one population, and it is the known cross-writer seam.** Measured
- *   at review time (2026-08-19, Darwin arm64, this same config and seed range): with
- *   `writerCount = 1` the sweep is **60/60 clean — no `Mismatch` and no violation at all** —
- *   while `unobservedRemoveRatio = 0.0` at `writerCount = 2` removes neither (it only
- *   re-shuffles which seeds carry them: 9 mismatches and 6 violations). So the discriminating
- *   variable is the second writer, i.e. the pre-existing cross-writer remove seam
- *   (computenet-qcm1, computenet-4ru.6.3: a spawned `SetCell` retracts a live element on any
- *   remove while the model no-ops a cross-writer remove no `Observe` preceded). The five
- *   `Mismatch` seeds are the cases where that divergence survives to quiescence; the seven
- *   violation seeds are the cases where it appears at an intermediate wave and *heals* before
- *   the end. **Catching those seven is this instrument's contribution** — the final-state
- *   comparison cannot see them at all.
+ *   **The pinned twelve are one population, and it takes a cross-writer remove to produce
+ *   them.** Measured at review time (2026-08-19, Darwin arm64, this same config and seed range,
+ *   and reproduced on an independent second read): with `writerCount = 1` the sweep is **60/60
+ *   clean — no `Mismatch` and no violation at all**, and with `addRemoveRatio = 1.0` (no remove
+ *   event generated at all) at `writerCount = 2` it is **60/60 clean** too. A second writer and
+ *   a remove are each necessary, which puts the whole population in the territory of the
+ *   pre-existing cross-writer remove seam (computenet-qcm1, computenet-4ru.6.3: a spawned
+ *   `SetCell` retracts a live element on any remove, while the model no-ops a cross-writer
+ *   remove no `Observe` preceded).
+ *
+ *   Two cautions on how far that goes. `unobservedRemoveRatio = 0.0` at `writerCount = 2`
+ *   removes *neither* mismatch nor violation (it only re-shuffles which seeds carry them: 9
+ *   mismatches and 6 violations), so the divergence is not confined to the **unobserved** remove
+ *   that bead's own description turns on — the half of it that survives the knob is the kernel
+ *   half, "retracts a live element on any remove". And what is established here is which knobs
+ *   the population depends on, **not the kernel mechanism**: attributing these seeds precisely
+ *   is computenet-qcm1's work, not this file's. What this file states is the measurement.
+ *
+ *   The five `Mismatch` seeds are the cases where the divergence survives to quiescence; the
+ *   seven violation seeds are the cases where it appears at an intermediate wave and *heals*
+ *   before the end (all seven settle `Success`). **Catching those seven is this instrument's
+ *   contribution** — the final-state comparison cannot see them at all.
  *
  *   **What the violations are NOT: an artifact of this observation point.** A [TerminalFold]
  *   applies each delta as it arrives, while `InternalConsistencyTest` reads an *aligned* sink
  *   ("the aligned sink buffers a wave's deltas and applies them together, so this particular
  *   flicker is invisible at the sink") — a real difference between the two read paths, but not
  *   the explanation here, and an earlier session's own probe had already discarded it. Two
- *   measurements, both at review time: (i) re-driving each violating seed with a `Barrier`
+ *   measurements, both at review time and both reproduced on the second read with the same
+ *   per-seed counts: (i) re-driving each violating seed with a `Barrier`
  *   after *every* Op and inspecting ONLY the `onBarrier` states — read after `drainToIdle()`,
  *   where a raw fold and an aligned sink hold the same value by construction — reproduces every
  *   violation, 1 to 13 offending states per seed, several persisting across consecutive
  *   quiesced boundaries; (ii) the granularity bullet above is why: at one productive step per
  *   wave, essentially every observation this oracle takes is already a quiesced wave boundary,
  *   so "the dip happened inside one wave" cannot be the mechanism for any of them. Treat the
- *   pinned seeds as the seam surfacing earlier, not as a limit of this instrument — and do not
- *   close the gap by weakening the check (D5).
+ *   pinned seeds as the cross-writer remove divergence surfacing earlier, not as a limit of this
+ *   instrument — and do not close the gap by weakening the check (D5).
  */
 object WavePrefixOracle {
 
