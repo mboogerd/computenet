@@ -2000,7 +2000,11 @@ median difference — is **positive in all four 1e5 runs, at +11.32, +25.35, +12
 +20.86 ms**. Both of those lists are in **run order 1..4**, matching the table above; they
 were published sorted ascending and were reordered at review, because a sorted list reads as
 run order and silently mis-attributes each figure to the wrong run (the ranges, 49x–284x and
-+11.32–+25.35 ms, are unchanged).
++11.32–+25.35 ms, are unchanged). **That positivity is a statement about the four per-run
+medians.** Read per trial, occupancy is positive in 11 of the 12 1e5 trials and negative in
+one: run 3 trial 2, at −1.3819 ms — the trial whose unjoined `maxGap` is the 9.9595 ms
+outlier named above, so the baseline it is differenced against is the disturbed one rather
+than the stall being absent.
 
 Four separate probe runs were used rather than a raised `CatchUpFixtures.TRIALS`, and that
 choice is a measurement decision worth stating: the rig's source grows by 16,000 elements
@@ -2041,10 +2045,15 @@ those two numbers are nearly identical **per trial** rather than merely on avera
 and 1.79 ms. The same holds at 1e4 (7.9781 vs 7.8550 median) and 1e3 (5.1429 vs 5.1600).
 **That difference is signed both ways, and the negative sign is not an anomaly**: the joined
 `maxGap` runs marginally *under* the catch-up interval in 3 of the 12 trials (run 1 trial 1 at
-−0.008 ms, run 3 trials 2 and 3 at −0.042 and −0.008 ms), which is what a gap bounded by the
-interval between two arrivals should do when the catch-up interval additionally contains the
-priority-0 enqueue wait that precedes the stall. The ≤ 0.13 ms above is an absolute
-difference; read the signed values off the per-trial table.
+−0.008 ms, run 3 trials 2 and 3 at −0.042 and −0.008 ms). The negative sign is the expected
+one on the fixture's own definitions: `CatchUpOutcome.Baseline.catchUpMs` is timed from just
+before `connect` returns control and therefore also spans the priority-0 enqueue wait that
+precedes the snapshot, whereas the stall it inflicts cannot begin until the snapshot does.
+**That decomposition is read off those definitions and is not separately instrumented here** —
+no column of this probe measures the enqueue wait apart from the copy — and `maxGap`, being a
+maximum over the whole drive rather than over the join window, is not bounded above by the
+catch-up interval either, which is why the other nine differences come out positive. The
+≤ 0.13 ms above is an absolute difference; read the signed values off the per-trial table.
 
 That pairing, not any absolute value, is the load-bearing observation of BS-9, and it is
 robust precisely where the levels are not: a shared-machine disturbance moves both halves
