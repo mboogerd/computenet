@@ -925,12 +925,24 @@ object WsTransport {
                 // answered because this side never sent one. No PROOF is
                 // possible and none is claimed.
                 //
-                // Known asymmetry, stated rather than hidden: a credentialed
-                // peer waits for the PROOF this side cannot produce, so IT will
-                // not admit US, and the peering carries announcements in one
-                // direction only. That is inherent to the configuration (an
-                // unkeyed side cannot prove anything), not a defect of this
-                // path; the mixed-version proofs are a sibling item's.
+                // What the PEER does in return is decided by *its* policy, not
+                // by this row: the hello this side sent it was the legacy line,
+                // so a peer never waits on a PROOF from an unkeyed side — it
+                // was never offered a HELLO2 to answer. Both outcomes were
+                // measured in review (2026-08-19, darwin/arm64):
+                //
+                // - a credentialed `Open` peer reads that legacy line on its
+                //   own legacy row and admits this side at TransportVouched, so
+                //   the peering is symmetric at TransportVouched and
+                //   announcements flow BOTH ways;
+                // - a `RequireAuthenticated` peer refuses it AUTH_REQUIRED
+                //   (`[DSC1-HELLO-08]`) and closes, so nothing is peered in
+                //   either direction.
+                //
+                // Neither outcome is a half-open peering, and neither is a
+                // defect of this path: an unkeyed side cannot prove anything,
+                // which is exactly what its configuration says. The
+                // mixed-version proofs are a sibling item's.
                 if (!admitted(derived)) return
                 pending = PendingHello(hello, derived, key)
                 bindAndAnnounce(derived, hello.mirrorRef)
