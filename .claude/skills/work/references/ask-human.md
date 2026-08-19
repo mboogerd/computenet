@@ -11,6 +11,18 @@ The bar is **ambiguous AND costly** — both halves, not either one:
 The test: *if this turns out wrong, is it a five-minute fix or a five-hour
 one?* Five minutes, decide it and record the assumption. Five hours, park it.
 
+**One thing that is NOT a park, however cheap parking looks: a missing
+toolchain.** A tool, daemon, credential or platform absent on *this* machine
+is not ambiguous — it is a fact, and the fleet is heterogeneous, so another
+machine may have it. Parking removes the item from **every** machine's queue
+until a person answers, which converts a local capability fact into a
+repo-wide block raised by the one machine that could not run it. Label it
+`needs:<tool>` and stand down instead ([epic.md](epic.md)); `computenet-egl`
+was parked this way by a `cargo`-less machine whose sibling had `cargo` all
+along (computenet-yv63). If a person genuinely is needed, still leave the item
+selectable and name "route to a machine that has `<tool>`" as the default
+resolution — the fleet can supply that without a human.
+
 One thing that is a park **without** this bar: an item (or the contract of the
 file it touches) that explicitly reserves the decision for a person — "needs a
 human answer in principle", a preference, a policy call nobody has made. That

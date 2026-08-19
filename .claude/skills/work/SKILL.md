@@ -575,6 +575,45 @@ bd show <that parent> --json | jq -r '.[0] | "\(.issue_type) \(.status) \(.assig
 bd comments <candidate>                                        # the holder's provenance comment lives here
 ```
 
+**A candidate may need a toolchain THIS machine does not have.** The fleet is
+heterogeneous (`bv` is on some machines and not others, computenet-j9ku), and
+selection reads descriptions, never comments — so a prior session's recorded
+"this machine cannot build this epic" verdict is invisible and gets re-derived
+from scratch. Check the durable form before claiming:
+
+```bash
+bd show <candidate> --json | sed -n '/^[[{]/,$p' \
+  | jq -r '.[0].labels[]? | select(startswith("needs:")) | ltrimstr("needs:")' \
+  | while read -r tool; do
+      command -v "$tool" >/dev/null || echo "SKIP: needs $tool, absent here"
+    done
+```
+
+Anything printed → **skip this candidate** and take the next, saying which
+tool. Do not park it: the epic is fine, this machine is simply not the one to
+run it.
+
+**When YOU are the session that discovers the missing toolchain, record it in
+that form** — `bd update <epic> --add-label "needs:<tool>"` — and skip.
+Do **not** ask-human it. A `human` park is `blocked` + `assignee=human` +
+the `human` label, which removes the epic from **every** machine's queue until
+a person answers, so a machine-capability fact becomes a repo-wide block by
+the one machine that could not run it. That happened to `computenet-egl`
+(DSC0, iroh transport, priority 1): a 2026-08-18 session recorded in a
+*comment* that it had no `cargo` and skipped; the next session on that machine
+could not see the comment, ranked the epic first, claimed it, pushed the
+acquisition, dispatched a breakdown, and the breakdown re-ran the identical
+toolchain probe and parked the epic for a human. The second outcome is
+strictly worse than the first — after the skip the epic stayed selectable by a
+capable machine, and after the park it was selectable by none. Measured
+2026-08-19 on `Anva@A0030`: `cargo` **is** present here, so the epic a
+`cargo`-less machine parked repo-wide was buildable on its sibling the whole
+time (computenet-yv63).
+
+If a capability question genuinely does need a person, say so in the QUESTION
+*and* leave the epic selectable — "route to a machine that has `<tool>`" is a
+resolution the fleet can supply without a human.
+
 Parent is an epic that is `in_progress`, or one carrying another machine's
 `owner:` label → **skip this candidate** and take the next: the parent's
 pushed claim fences its whole subtree, and the sub-epic's comment says who is
