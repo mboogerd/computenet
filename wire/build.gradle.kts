@@ -5,8 +5,16 @@ plugins {
 
 // ponytail: the WebSocket dependency lives here so :kernel stays dependency-free;
 // another transport = another small module behind the same bridge cells.
+// DSC1 (computenet-ssa) §2.1: the dependency direction is
+// `:wire -> :identity -> :kernel`, never the reverse. `:identity` holds the
+// JDK-only Ed25519 primitives and the key-derived `PeerId` fingerprint; `:wire`
+// is where they meet a socket (`HelloProtocol.kt`). `:kernel` MUST NOT gain a
+// dependency on either ([DSC1-WIRE-03]) — it owns the pure vocabulary
+// (`PeerAuthPolicy`, `PeerCredentials` in `civictech.cell.wire`) and nothing
+// cryptographic.
 dependencies {
     implementation(project(":kernel"))
+    implementation(project(":identity"))
     implementation(libs.java.websocket)
 }
 
