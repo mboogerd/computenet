@@ -7,9 +7,17 @@
 # --title WITHOUT it; a leading one is stripped so the call is idempotent
 # either way (21 of 235 friction beads carried it twice, computenet-rtoo) —
 # the skill_version
-# stamp (which skill revision produced the report), the skill-friction label —
-# labels are NOT inherited when created unparented — and the claim, so exactly
-# one orchestrator lane drains it.
+# stamp (which skill revision produced the report), and the skill-friction
+# label — labels are NOT inherited when created unparented.
+#
+# It does NOT claim. Filing is not picking up: a claim belongs to the session
+# that starts draining the item, not to the one that reported it. Claiming at
+# file time made every filed item `in_progress`, which is what broke
+# remediate-friction's `--status=open` drain listing (computenet-oxbv). That
+# was first patched by widening the listing to everything non-closed; this is
+# the other half, and the one that lets a listing mean what it says —
+# `in_progress` under the SDLC epic is a session draining that item, not a
+# session that once reported it.
 #
 # Dedup is the CALLER's job, first: bd search "<words>" --status all --json
 # (--status all, or an already-fixed-and-closed item is invisible and gets
@@ -63,4 +71,4 @@ done
 exec "$SCRIPT_DIR/create-ticket.sh" \
   --type "$TYPE" --title "work skill: $TITLE" --parent "$PARENT" \
   --desc "$DESC" --accept "$ACCEPT" --priority "$PRIO" \
-  --label skill-friction --metadata "{\"skill_version\":\"$SKILL_V\"}" --claim
+  --label skill-friction --metadata "{\"skill_version\":\"$SKILL_V\"}"
