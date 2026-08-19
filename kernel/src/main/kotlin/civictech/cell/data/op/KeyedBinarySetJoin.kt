@@ -17,8 +17,12 @@ import civictech.cell.data.delta.TagState
  * projection), so it holds its own [TagState] pair directly rather than
  * through this class — forcing it through key-indexed lookup would rewrite a
  * working direct-membership check into an unneeded indirection. It DOES share
- * [JoinLedger] (via [AdvertisedLedger]), the one genuinely shared abstraction
- * across all three operators.
+ * [JoinLedger] — and, since computenet-vvre, its [MintedLedger] policy too, so
+ * all three operators mint their own output tags. (This sentence used to name
+ * [AdvertisedLedger], which was already false when [JoinSetCell] and
+ * [SemiJoinCell] were minting and [IntersectSetCell] was not: [JoinLedger] is
+ * the shared abstraction, the ledger implementation is the injected policy —
+ * corrected in computenet-s6l2.)
  */
 class KeyedBinarySetJoin<A, B, K> {
     internal val leftState = TagState<A>()
