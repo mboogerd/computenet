@@ -259,6 +259,30 @@ internal class FlowCollector(
     }
 
     /**
+     * The wave position [tapReadings] would currently report for one tapped
+     * outlet, or null when [producer] is not tapped or its last observed
+     * emission carries no live wave ([liveWaveOf]).
+     *
+     * A **test seam**, beside [reBaselineAtMsOf] and for the same class of
+     * race. `FanOutlet.call` mints the emission's `MessageContext` — bumping
+     * `waveCounter`, and with it `waveState().highWater` — *before* it fans out
+     * to its Observe-role attachments, so an outlet's watermark reaches wave
+     * *W* strictly before [TapSite.lastContext] does. A test that drives a
+     * graph and then calls `tickAll()` needs a barrier on what the *evaluator*
+     * can see, not on what the outlet has counted; waiting on the watermark
+     * alone lets an evaluation observe wave *W-1* and reach a different verdict
+     * (computenet-e0zv). Reading the same field [tapReadings] reads, through the
+     * same filter and the same monitor, is that barrier.
+     *
+     * Nothing on the production path calls this, and it subscribes to nothing:
+     * like [tapReadings] it only re-reads state the tap handler has already
+     * written.
+     */
+    internal fun observedWaveOf(producer: PortRef): Timestamp? = synchronized(lock) {
+        sites[producer]?.let { liveWaveOf(it.lastContext) }
+    }
+
+    /**
      * V3-BE part 2 — when a **re-baseline beat** was last observed on any
      * tapped outlet of [cell], or null when none ever was.
      *

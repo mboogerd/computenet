@@ -17,6 +17,7 @@ import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.host.lookup
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.testkit.HttpProbe
@@ -116,11 +117,43 @@ class InspectorWaveHealthTest {
         host.lookup<SetApi<String>>(cell.ref)!!.inlet.call.add(element)
     }
 
-    /** Drive [n] adds and wait for the producing outlet's own watermark to prove they emitted. */
+    /** Drive [n] adds and wait for the emissions to be visible to the evaluator. */
     private fun drive(cell: SetCell<String>, n: Int, prefix: String) {
         val before = cell.outlet.waveState().highWater
         repeat(n) { add(cell, "$prefix-$it") }
-        awaitUntil("$n deltas emitted") { cell.outlet.waveState().highWater >= before + n }
+        awaitEmitted(cell.outlet, before + n, "$n deltas emitted")
+    }
+
+    /**
+     * The barrier every driver here waits on before it ticks: not the outlet's
+     * own watermark but the wave the inspector's tap has actually **recorded**.
+     *
+     * `FanOutlet.call` mints the emission's `MessageContext` — bumping
+     * `waveCounter`, and with it `waveState().highWater` — *before* it fans out
+     * to its Observe-role attachments, so an outlet's watermark reaches wave
+     * *W* strictly before [FlowCollector] sees it. Waiting on the watermark
+     * alone therefore admits a `tickAll()` in which [WaveHealth] still reads
+     * wave *W-1*, and for `stalledWave` that is not a smaller number but a
+     * different verdict: at `wave.counter == frontier.counter` nothing is
+     * pinned at all, the run never starts, and the row the scenario asserts
+     * never opens (computenet-e0zv — one `NoSuchElementException: List is
+     * empty` on CI, reproduced deterministically by the tap-lag test below).
+     *
+     * The `sourceId` is compared too, so this is a barrier on *this* epoch's
+     * wave [counter] and never satisfied by a stale stamp a restart has since
+     * replaced.
+     *
+     * This strengthens the wait; it weakens no assertion. Every scenario still
+     * asserts exactly the rows, waves, frontiers and lags it asserted before,
+     * and a `STALLED_WAVE` row that genuinely fails to open still fails the
+     * test that expects it.
+     */
+    private fun awaitEmitted(outlet: FanOutlet<*>, counter: Long, what: String) {
+        awaitUntil(what) { outlet.waveState().highWater >= counter }
+        awaitUntil("$what, and recorded by the flow tap") {
+            val seen = server.observedWaveOf(outlet.ref)
+            seen != null && seen.sourceId == outlet.waveState().sourceId && seen.counter >= counter
+        }
     }
 
     private fun observe(ref: CellRef) {
@@ -280,6 +313,54 @@ class InspectorWaveHealthTest {
         val cleared = events.awaitKind(Event.ERROR_WAVE_HEALTH, 2).last()
         cleared["state"]!!.jsonPrimitive.content shouldBe WaveHealthRow.CLEARED
         cleared["id"]!!.jsonPrimitive.content shouldBe row.id
+    }
+
+    /**
+     * The same driven `stalledWave` scenario, run with the emission→tap window
+     * held open on purpose — the deterministic reproduction of computenet-e0zv.
+     *
+     * [FanOutlet.call] mints the [civictech.cell.MessageContext] — bumping
+     * `waveCounter`, and with it `waveState().highWater` — *before* it fans out
+     * to its Observe-role attachments, so an outlet's watermark reaches wave
+     * *W* strictly before [FlowCollector]'s tap records it. A driver that waits
+     * on the watermark alone can therefore call [InspectorServer.tickAll] while
+     * the evaluator still reads wave *W-1*, and with `wave.counter ==
+     * frontier.counter` [WaveHealth] pins nothing at all: the run never starts,
+     * the second tick only pins, and the row this test asserts never opens.
+     *
+     * The observer below is installed *before* [connect], so it precedes the
+     * collector's own in the outlet's tap order (spec 20/23 "taps-fire-first",
+     * in emission order) and every emission reaches the collector
+     * [TAP_LAG_MS] later than it reaches the watermark. That turns a
+     * nanosecond-wide interleaving on a loaded CI runner into a certainty here.
+     * Against a `drive` that waits only on the watermark this fails exactly as
+     * CI did — `java.util.NoSuchElementException: List is empty` on
+     * `waveHealth.single()`.
+     */
+    @Test
+    fun `a driven stalled wave opens its row when the tap lags the outlet watermark`() {
+        val src = source()
+        val sink = filter { it.startsWith("keep") }
+        src.outlet.observe(PortRef.generate()) { Thread.sleep(TAP_LAG_MS) }
+        connect(src.ref, sink.ref)
+        observe(sink.ref)
+        add(src, "keep-first")
+        awaitFrontier(sink.ref, 1)
+
+        drive(src, 1, "drop")
+        server.tickAll()
+        snapshot().waveHealth.shouldBeEmpty()
+
+        drive(src, 1, "more-drop")
+        now += WaveHealth.STALL_WINDOW_MS
+        server.tickAll()
+
+        val row = snapshot().waveHealth.single()
+        row.kind shouldBe WaveHealthRow.STALLED_WAVE
+        row.state shouldBe WaveHealthRow.OPEN
+        row.wave.shouldNotBeNull().counter shouldBe 2L
+        row.frontier.shouldNotBeNull().counter shouldBe 1L
+        row.lagWaves shouldBe 1L
     }
 
     // ------------------------------------------------- false-positive guards
@@ -564,12 +645,12 @@ class InspectorWaveHealthTest {
         }
     }
 
-    /** Drive [n] emissions through [cell]'s control inlet and wait for its watermark. */
+    /** Drive [n] emissions through [cell]'s control inlet, then [awaitEmitted]. */
     private fun feed(cell: Feed, n: Int, prefix: String) {
         val api = HostedCellProxy.create(cell.ref, host, FeedProxy::class.java) as FeedProxy
         val before = cell.outlet.waveState().highWater
         repeat(n) { api.control.call.provide("$prefix-$it") }
-        awaitUntil("$n deltas emitted") { cell.outlet.waveState().highWater >= before + n }
+        awaitEmitted(cell.outlet, before + n, "$n deltas emitted")
     }
 
     // -------------------------------------------------------------- sse tap
@@ -623,5 +704,14 @@ class InspectorWaveHealthTest {
 
     private companion object {
         const val DATA = "data: "
+
+        /**
+         * How long the reproduction above holds an emission inside the outlet's
+         * tap fan-out, between `waveCounter.incrementAndGet()` and the flow
+         * collector's own observer. Large enough that the test thread's poll of
+         * `waveState().highWater` lands inside the window every time; small
+         * enough that four emissions cost well under a second.
+         */
+        const val TAP_LAG_MS = 150L
     }
 }
