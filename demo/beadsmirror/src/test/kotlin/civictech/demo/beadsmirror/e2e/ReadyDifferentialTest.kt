@@ -15,9 +15,18 @@ import org.junit.jupiter.api.Test
  * they are substantially slower than a unit test and are guarded on `bd`/`dolt`
  * being on PATH with `assumeTrue`, like every other live-workspace test in this
  * module. CI installs both (`.github/workflows/ci.yml`'s "Install bd and dolt"
- * step, computenet-7em.5) and its report step FAILS the job if any
- * `:demo:beadsmirror` test skips itself for a missing binary, so these run for
- * real on Linux rather than green-but-skipped.
+ * step, computenet-7em.5), so these run for real on Linux rather than
+ * green-but-skipped: verified on run 32281154048, whose `build-test-fast` job
+ * log carries all eleven `Ready*` test lines as PASSED and none as SKIPPED.
+ *
+ * Do not read that as an automated per-test guard, because it is narrower than
+ * it looks. The `":demo:beadsmirror e2e executed, never replayed"` step reruns
+ * and asserts over `e2e.TwoNodeRigTest` ALONE — deliberately, since a
+ * module-wide `--rerun` was measured at roughly ten times the wall time — and a
+ * `Test` task clears its results directory, so after that step
+ * `test-results/test` holds only that class. A toolchain regression is caught
+ * by TwoNodeRigTest's skipped-count, not by any module-wide skip scan covering
+ * the tests below. The evidence for THESE tests executing is the job log above.
  *
  * **The seeds below are pinned.** If one of them ever goes red, the answer is
  * to read the [DivergenceRecord] it prints and triage it against
