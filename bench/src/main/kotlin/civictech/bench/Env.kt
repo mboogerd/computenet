@@ -888,7 +888,7 @@ data class HostFacts(
         }
 
         private fun singleValue(log: String, prefix: String, source: String): String {
-            val values = hostBannerValues(log, prefix)
+            val values = hostBannerValues(log, prefix, source)
             if (values.size > 1) {
                 throw HostFactsUnknownException(
                     "cannot establish the run's host: $source states '$prefix' " +
@@ -909,6 +909,10 @@ data class HostFacts(
                     "/abs/path/throughput.csv 2>&1 | tee /abs/path/throughput.log`"
             )
         }
+
+        /** Every marker [hostBannerValues] recognizes, in the order they're printed. */
+        private val HOST_BANNER_PREFIXES: List<String> =
+            listOf(CPU_MODEL_PREFIX, CORE_COUNT_PREFIX, OS_PREFIX)
 
         /**
          * [bannerValues] for the host banner, matching the marker ANYWHERE in a line
@@ -936,12 +940,41 @@ data class HostFacts(
          *
          * [MeasuringJvm] and [RunKnobs] keep the strict `startsWith` form on purpose:
          * their lines are JMH's own, written by the HOST process, and never relayed.
+         *
+         * ANYWHERE-matching alone would also accept two markers FUSED onto one line with
+         * no separator between them — e.g. `# Host CPU model: Apple M2 Pro# Host core
+         * count: 10` — which is a different shape from a single relayed fact: here the
+         * text taken as [prefix]'s value runs past it into the NEXT marker and its value,
+         * corrupting the first fact rather than merely starting it mid-line
+         * (computenet-x9e.11). [bannerLines] is the sole emitter of these markers and
+         * always terminates each with `println`, so this shape cannot arise from two
+         * already-printed lines fusing — only from a value swallowing a marker that
+         * follows it on the same line — and is therefore always corruption, never a
+         * second legitimate relay. So the extracted value is checked for any OTHER
+         * known marker before being accepted, and the line is refused, not truncated,
+         * when one is found.
          */
-        private fun hostBannerValues(log: String, prefix: String): List<String> =
+        private fun hostBannerValues(log: String, prefix: String, source: String): List<String> =
             log.lineSequence()
                 .mapNotNull { line ->
                     val marker = line.indexOf(prefix)
-                    if (marker < 0) null else line.substring(marker + prefix.length).trim()
+                    if (marker < 0) return@mapNotNull null
+                    val value = line.substring(marker + prefix.length).trim()
+                    val fused = HOST_BANNER_PREFIXES.firstOrNull { other ->
+                        other != prefix && value.contains(other)
+                    }
+                    if (fused != null) {
+                        throw HostFactsUnknownException(
+                            "cannot establish the run's host: $source fuses two host-fact " +
+                                "markers onto one line with no separator ('$prefix' " +
+                                "immediately followed by '$fused', with no line break " +
+                                "between them): '$line'. This is not a fact relayed " +
+                                "mid-line by JMH's progress prefix — it is two facts " +
+                                "run together, and reading it would corrupt the value " +
+                                "for '$prefix'."
+                        )
+                    }
+                    value
                 }
                 .filter { it.isNotEmpty() }
                 .distinct()
