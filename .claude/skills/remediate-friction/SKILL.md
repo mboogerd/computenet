@@ -12,7 +12,7 @@ trigger below.
 
 ## The reactive trigger
 
-`scripts/gate.sh` + `scripts/install-trigger.sh` make this lane
+`.claude/skills/remediate-friction/scripts/gate.sh` + `.claude/skills/remediate-friction/scripts/install-trigger.sh` make this lane
 event-driven: `bd` rewrites `.beads/issues.jsonl` on every mutation, so a
 launchd `WatchPaths` agent fires the gate the moment anything is filed —
 including the step-7 filings of a /work session finishing on this machine.
@@ -33,7 +33,7 @@ and `jq` resolve (their paths and the actor get baked into the plist):
 
 Nothing installs itself — a human runs that. First firing may need a macOS
 Files-and-Folders approval; the log is
-`~/Library/Logs/sdlc-orchestrator.log`, and `SDLC_DRY_RUN=1 scripts/gate.sh`
+`~/Library/Logs/sdlc-orchestrator.log`, and `SDLC_DRY_RUN=1 .claude/skills/remediate-friction/scripts/gate.sh`
 shows what the filter would do without launching anything.
 
 This lane is deliberately separate from /work: a work session must never
@@ -65,7 +65,15 @@ and report.
 ## 2. Pick the most-reported item
 
 ```bash
-bd list --parent=computenet-wpvy --status=open --json
+# NOT --status=open: file-friction.sh pre-claims at filing (create-ticket.sh
+# --claim), which sets status to in_progress, so --status=open cannot show a
+# single pre-claimed item. On 2026-08-19 it returned [] against a 48-item
+# backlog and this lane reported the log drained (computenet-oxbv). List
+# everything non-closed and let the assignee routing below decide.
+bd list --parent=computenet-wpvy --all --json \
+  | sed -n '/^[[{]/,$p' \
+  | jq '[ (if type=="array" then . else (.issues // []) end)[]
+          | select(.status != "closed") ]'
 ```
 
 **Scope is parentage, not the `skill-friction` label.** Anything under this
@@ -162,9 +170,10 @@ verdict:
   ```
 
   All three flags matter: step 2's `--claim` set assignee *and*
-  `in_progress`, and an item left `in_progress` is invisible to every
-  `--status=open` listing in this file — parked forever, un-parkable by
-  anyone.
+  `in_progress`. Resetting `--status=open` is what makes the park visible as
+  a park rather than as work in flight: step 2 lists everything non-closed,
+  so an item left `in_progress` here would read as claimed-and-being-drained
+  and never be re-examined.
 
   The comment is addressed to the next session that hits the same wall, not
   to the human; `work` step 7's upvote branch answers it and removes the
@@ -250,5 +259,10 @@ rejected-closed (with the one-line why), items parked `needs-evidence`
 oversight view for the human:
 
 ```bash
-bd list --parent=computenet-wpvy --status=open --json
+bd list --parent=computenet-wpvy --all --json \
+  | sed -n '/^[[{]/,$p' \
+  | jq -r '[ (if type=="array" then . else (.issues // []) end)[]
+             | select(.status != "closed") ]
+           | sort_by(-.comment_count)[]
+           | "\(.id)  c=\(.comment_count)  \(.assignee // "-")  \(.title)"'
 ```

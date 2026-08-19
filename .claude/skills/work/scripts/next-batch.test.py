@@ -318,8 +318,85 @@ else:
     capacity_reason_cases = 1
     print("FAIL: capacity skip reason — next-batch.py has no cap_batch()")
 
-total = (len(cases) + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
+# metadata.files arrives in TWO shapes from two sanctioned writers: the
+# comma-separated string a breakdown writes, and the JSON list
+# create-ticket.sh produces for a reviewer-filed residual. Only the string
+# parsed until 2026-08-19, so a batch holding a residual aborted at 5b with
+# `AttributeError: 'list' object has no attribute 'split'` — a crash in the
+# one step that decides what may run in parallel (computenet-tbzg).
+claim_shape_cases = [
+    ({"files": "a/b.kt,c/d.kt"}, {"a/b.kt", "c/d.kt"}, "comma-separated string"),
+    ({"files": ["a/b.kt", "c/d.kt"]}, {"a/b.kt", "c/d.kt"}, "JSON list"),
+    ({"files": ["./a/b.kt/", " c/d.kt "]}, {"a/b.kt", "c/d.kt"},
+     "list entries are normalised like string entries"),
+    ({"files": ["a/b.kt,c/d.kt"]}, {"a/b.kt", "c/d.kt"},
+     "a single list entry that is itself comma-joined"),
+    ({"files": ""}, set(), "empty string is 'unknown', not a failure"),
+    ({}, set(), "absent key is 'unknown', not a failure"),
+]
+for meta, expected, what in claim_shape_cases:
+    try:
+        got = nb.claim_of({"id": "computenet-shape", "metadata": meta})
+    except Exception as exc:                       # noqa: BLE001 — that IS the bug
+        failed += 1
+        print(f"FAIL: {what} — raised {type(exc).__name__}: {exc}")
+        continue
+    if got != expected:
+        failed += 1
+        print(f"FAIL: {what} — expected {expected!r}, got {got!r}")
+
+# A claim that is present but unreadable must NAME the bead. The bare
+# AttributeError named split() on a list and not which of several candidates
+# was malformed, so the orchestrator had to bisect the batch.
+claim_error_cases = [
+    ({"files": {"a": 1}}, "a mapping"),
+    ({"files": [{"a": 1}]}, "a list holding a non-string"),
+]
+for meta, what in claim_error_cases:
+    try:
+        nb.claim_of({"id": "computenet-bad", "metadata": meta})
+    except nb.ClaimError as exc:
+        if "computenet-bad" not in str(exc):
+            failed += 1
+            print(f"FAIL: {what} — ClaimError must name the bead, got {exc!r}")
+    except Exception as exc:                       # noqa: BLE001
+        failed += 1
+        print(f"FAIL: {what} — expected ClaimError, got {type(exc).__name__}: {exc}")
+    else:
+        failed += 1
+        print(f"FAIL: {what} — expected ClaimError, nothing raised")
+
+# capacity_limit is PER SESSION but the machine is shared: four live sessions
+# on a 10-core box each computed 2 independently, each correct by its own
+# accounting, for 4x the measured safe parallelism (computenet-arow).
+sibling_cases = [
+    (10, 0, 2, "alone on 10 cores keeps the measured cap"),
+    (16, 0, 3, "alone on 16 cores keeps the measured cap"),
+    (10, 1, 1, "one sibling halves a cap of 2"),
+    (16, 1, 1, "one sibling on 16 cores"),
+    (16, 2, 1, "two siblings never drop below the floor"),
+    (10, 9, 1, "many siblings still leave one agent, not zero"),
+]
+for cores, sibs, expected, what in sibling_cases:
+    got = nb.capacity_limit(cores, sibs)
+    if got != expected:
+        failed += 1
+        print(f"FAIL: {what} — capacity_limit({cores}, {sibs}) = {got}, expected {expected}")
+
+# The sum across sessions must not exceed the alone-cap: that is the property
+# the whole change exists for.
+for cores in (10, 16):
+    alone = nb.capacity_limit(cores, 0)
+    for n in range(1, 5):
+        total_agents = n * nb.capacity_limit(cores, n - 1)
+        if total_agents > alone and nb.capacity_limit(cores, n - 1) > 1:
+            failed += 1
+            print(f"FAIL: {n} sessions on {cores} cores dispatch {total_agents} > {alone}")
+sibling_sum_cases = 2
+
+total = (len(cases) + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
          + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
-         + len(capacity_cases) + len(cap_cases) + capacity_reason_cases)
+         + len(capacity_cases) + len(cap_cases) + capacity_reason_cases
+         + len(claim_shape_cases) + len(claim_error_cases))
 print(f"{total - failed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

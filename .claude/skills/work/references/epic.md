@@ -13,6 +13,15 @@ bd list --parent=<id> --all --json
 
 A previous breakdown may have died part-way. Create only what's missing.
 
+**Re-read this listing immediately before your first `bd create`, and abort
+with a report if the child set changed.** One check at the start is a
+check-then-act with a multi-minute window: two breakdown agents dispatched
+minutes apart both read "not decomposed" and both proceeded, producing 13
+features where 6 belong (computenet-f2p4, and [feature.md](feature.md) carries
+the full story). If your own dotted ids **skip numbers** while you are
+creating, another writer is creating under this parent right now — stop and
+report rather than finishing the set.
+
 ## Verify the load-bearing premises first
 
 An item can assert its own infrastructure. "Over the existing Headscale
@@ -165,7 +174,21 @@ epic success criterion is covered by at least one feature, and every feature
 serves at least one criterion. A criterion with no feature means the
 breakdown isn't finished; a feature serving none means it's out of scope.
 
-Comment the features created on the epic. Leave the epic `in_progress` — the
+Comment the features created on the epic.
+The invocation, since it is the one command this file asks you to run and
+nothing else shows it — the body is **positional**; `--text`, `--body` and
+`bd comment add` are all wrong and have each been guessed by a different
+agent (computenet-danb, computenet-63pn):
+
+```bash
+bd comment <id> "<text>"
+bd comment <id> --file "$SCRATCH/note.md"   # any body that quotes code
+```
+
+Use the `--file` form whenever the text contains backticks: inside a
+double-quoted argument they execute as shell and the word vanishes from the
+stored comment while `bd` reports success ([bd-traps.md](bd-traps.md)).
+ Leave the epic `in_progress` — the
 orchestrator releases the claim at its Finalize (an epic binds to a session,
 never across sessions; the features carry the resume state). Report the
 feature ids.

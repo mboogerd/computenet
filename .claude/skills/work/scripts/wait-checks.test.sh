@@ -22,6 +22,17 @@ mkdir -p "$ROOT/bin"
 # doubles as the "how many polls happened" probe.
 cat > "$ROOT/bin/gh" <<'EOF'
 #!/usr/bin/env bash
+# `gh api` is the REST fallback, not a poll: it serves its own fixtures and
+# deliberately does NOT advance the round counter, so poll-count probes below
+# keep counting polls.
+if [ "${1:-}" = api ]; then
+  case "${2:-}" in
+    *pulls/*) f="$CTRL/api-sha.out" ;;
+    *)        f="$CTRL/api-rows.out" ;;
+  esac
+  [ -f "$f" ] || exit 1
+  cat "$f"; exit 0
+fi
 n=$(cat "$CTRL/round" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$CTRL/round"
 f="$CTRL/round$n.out"; [ -f "$f" ] || f="$CTRL/default.out"
 cat "$f"
@@ -165,6 +176,50 @@ out=$(run nonsense); rc=$?
 [ "$rc" -eq 2 ] && ok "non-numeric max-rounds exits 2" || bad "exits $rc, wanted 2"
 out=$(run 0); rc=$?
 [ "$rc" -eq 2 ] && ok "zero max-rounds exits 2" || bad "exits $rc, wanted 2"
+
+# --- The REST fallback (computenet-fdv9) -----------------------------------
+# `gh pr checks` is GraphQL-only. Under a GraphQL outage this loop's only
+# possible outcome was to spin every round and report QUERY-FAILED, unable to
+# tell "endpoint down" from "checks not created yet".
+REST_GREEN=$'build-test-fast\tpass\tsuccess\nbuild-test-serial\tpass\tsuccess\nconcord-full\tpass\tsuccess\nui-test\tpass\tsuccess\nagora-ui-test\tpass\tsuccess\nkernel-test\tpass\tsuccess\nauto-merge\tskipping\tskipped'
+
+echo "REST fallback"
+fixture
+printf '%s\n' "$GARBAGE" > "$CTRL/default.out"          # GraphQL 503 every round
+printf '%s\n' "deadbeefcafe" > "$CTRL/api-sha.out"
+printf '%s\n' "$REST_GREEN" > "$CTRL/api-rows.out"
+out=$(run 10); rc=$?
+[ "$rc" -eq 0 ] && ok "a GraphQL outage no longer blinds the wait (exits 0)" \
+  || bad "exits $rc, wanted 0"
+[ "$(tail -1 <<<"$out")" = "SETTLED" ] && ok "REST answer settles the wait" \
+  || bad "final line is '$(tail -1 <<<"$out")'"
+has "$out" "answering over REST" "the transport that answered is announced"
+
+# The fallback must not fire early: a transient failure or two is not an outage.
+fixture
+printf '%s\n' "$GARBAGE" > "$CTRL/round1.out"
+printf '%s\n' "$ALL_GREEN" > "$CTRL/default.out"
+printf '%s\n' "deadbeefcafe" > "$CTRL/api-sha.out"
+printf '%s\n' "$REST_GREEN" > "$CTRL/api-rows.out"
+out=$(run 10); rc=$?
+hasnt "$out" "answering over REST" "one bad round does not trigger the fallback"
+[ "$rc" -eq 0 ] && ok "recovers over GraphQL when it comes back" || bad "exits $rc"
+
+# REST unavailable too: the refusal contract is preserved — never a false green.
+fixture
+printf '%s\n' "$GARBAGE" > "$CTRL/default.out"          # and no api-*.out fixtures
+out=$(run 5); rc=$?
+[ "$rc" -eq 3 ] && ok "both transports down still reports QUERY-FAILED" || bad "exits $rc, wanted 3"
+[ "$(tail -1 <<<"$out")" = "QUERY-FAILED" ] || bad "final line is '$(tail -1 <<<"$out")'"
+
+# A red check read over REST is still red — the fallback must not launder it.
+fixture
+printf '%s\n' "$GARBAGE" > "$CTRL/default.out"
+printf '%s\n' "deadbeefcafe" > "$CTRL/api-sha.out"
+printf '%s\n' "${REST_GREEN/concord-full$'\t'pass$'\t'success/concord-full$'\t'fail$'\t'failure}" > "$CTRL/api-rows.out"
+out=$(run 10); rc=$?
+[ "$rc" -eq 0 ] && ok "SETTLED includes red, over REST as over GraphQL" || bad "exits $rc"
+has "$out" "concord-full" "the red row is printed for the caller to read"
 
 echo
 echo "$pass passed, $fail failed"

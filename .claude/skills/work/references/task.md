@@ -70,8 +70,15 @@ What the bead says, what its context says, and what has to have landed first.
 
 1. Read the task and its context:
    ```bash
-   bd show <id> --json
+   bd show <id> --json > "$SCRATCH/<id>.json"
+   jq -r '.[0] | "\(.description)\n---\n\(.acceptance_criteria)"' "$SCRATCH/<id>.json"
    ```
+
+   **Redirect it — do not read it inline.** `bd show` on a child inlines its
+   parent epic's *entire* description, so a child of a large epic is bigger
+   than the epic (measured: 57KB for a child of a 43KB epic). It overflows
+   the tool result, and the failure looks like a truncated read whose natural
+   recovery — re-running the command — fails identically (computenet-rram).
    Plus its parent feature and epic, and any spec sections or prior comments
    they cite. Follow AGENTS.md's "Start every task here" — the cited spec
    text is the authority, not this file. Note `metadata.files`: your
@@ -265,11 +272,20 @@ The smallest coherent change, and proof the tests actually executed.
    replays cached results, so a green build is not evidence a test executed.
    - **Prove the run happened per [gradle-evidence.md](gradle-evidence.md)**
      — the task-count line, the per-task state line read as an absence, and
-     the JUnit XML counts + `timestamp` via `scripts/junit-count.py` — from a
+     the JUnit XML counts + `timestamp` via `.claude/skills/work/scripts/junit-count.py` — from a
      log you redirected to your own `$SCRATCH` (never `| tail -N`, never
      `-q`). Your reviewer will demand this accounting (review-task.md §2);
      produce it yourself, from the same run, and quote the numbers and the
      newest timestamp in your report.
+   - **A change that ADDS or RENAMES a Gradle module runs `:kernel:test` as
+     well as its own module's suite.** `ModuleInventoryTest` lives in
+     `:kernel` and fails on a file your bead never mentions —
+     `doc/ARCHITECTURE.md` — so a verification scoped to "the module I just
+     created" yields a green local build, a green `:<newmodule>:test`, and a
+     RED required check in CI with the cause several steps removed from
+     anything you were asked to do. Two sessions escaped this the same day
+     only because their dispatch prompts happened to ask for `:kernel:test`;
+     nothing required it (computenet-m9px, computenet-d7qn).
    - **Run the suite under [agent-execution.md](agent-execution.md)'s rules**
      — one foreground Bash call with an explicit timeout up to 600000 ms
      (there is no `timeout` binary on this host); a suite you KNOW exceeds

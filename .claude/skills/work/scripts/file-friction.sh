@@ -3,7 +3,10 @@
 # create-ticket.sh, which owns the unparented-then-reparent idiom that avoids
 # the cross-machine id collision (see its header, and computenet-azt).
 #
-# What this adds on top: the `work skill:` title prefix, the skill_version
+# What this adds on top: the `work skill:` title prefix — added HERE, so pass
+# --title WITHOUT it; a leading one is stripped so the call is idempotent
+# either way (21 of 235 friction beads carried it twice, computenet-rtoo) —
+# the skill_version
 # stamp (which skill revision produced the report), the skill-friction label —
 # labels are NOT inherited when created unparented — and the claim, so exactly
 # one orchestrator lane drains it.
@@ -13,7 +16,7 @@
 # re-filed). Upvote an existing item with a comment instead of filing a twin.
 #
 # Usage:
-#   file-friction.sh --type bug|feature --title "<one line>" \
+#   file-friction.sh --type bug|feature --title "<one line, NO 'work skill:' prefix>" \
 #     --desc "<what the skill says / what happened / what it cost>" \
 #     --accept "<what must change in the skill for this not to recur>" \
 #     [--parent computenet-wpvy] [--priority 2] [--skill-version <sha>]
@@ -44,6 +47,18 @@ case "$TYPE" in bug|feature) ;; *) echo "--type must be bug or feature (bug = th
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 [ -n "$SKILL_V" ] || SKILL_V=$(git hash-object "$SCRIPT_DIR/../SKILL.md")
+
+# The prefix is a deliberate, useful convention, but it is invisible at the
+# call site: SKILL.md step 7's template reads as the complete title, so a
+# caller that wants `work skill: X` writes exactly that and gets it twice.
+# Strip any number of leading occurrences (and the spacing around them) before
+# prepending, so the call is idempotent whichever way it was written. The
+# doubled prefix eats title width in every listing and is dead weight in the
+# TITLE, which is the only field `bd search` reads (computenet-rtoo).
+while [[ "$TITLE" =~ ^[[:space:]]*[Ww]ork[[:space:]]skill:[[:space:]]*(.*)$ ]]; do
+  TITLE=${BASH_REMATCH[1]}
+done
+[ -n "$TITLE" ] || { echo "--title was only the 'work skill:' prefix" >&2; exit 2; }
 
 exec "$SCRIPT_DIR/create-ticket.sh" \
   --type "$TYPE" --title "work skill: $TITLE" --parent "$PARENT" \
