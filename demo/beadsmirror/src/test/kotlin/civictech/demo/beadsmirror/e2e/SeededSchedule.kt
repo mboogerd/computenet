@@ -108,6 +108,52 @@ sealed interface ScheduleStep {
             workspace.run("delete", id, "--force")
         }
     }
+
+    /**
+     * `bd update <id> --status <status>` — task computenet-98u.2.1, added
+     * alongside [MultiFieldUpdate] (which also carries a status) as the
+     * dedicated single-field verb for driving an issue between the ready
+     * predicate's status set ([civictech.demo.beadsmirror.ready.ReadyPredicate.DEFAULT_READY_STATUSES],
+     * `open`/`in_progress`) and outside it (`blocked`, `pinned`, ...).
+     *
+     * `status` is a plain string, not an enum, so any value `bd` accepts is
+     * legal here; [civictech.demo.beadsmirror.e2e.ReadySchedule] restricts
+     * itself to a verified-live subset (see that file). Verified live
+     * against `bd` 1.1.2 in a scratch sandbox 2026-08-19: `open`,
+     * `in_progress`, `blocked`, and `pinned` all succeed as `--status`
+     * values.
+     *
+     * **`pinned` the STATUS vs. `pinned` the COLUMN.** This verb can only
+     * ever set the *status* enum value `pinned` — beads' separate boolean
+     * `pinned` **column** (`ReadyPredicate`'s `isTruthyBoolean(fields,
+     * "pinned")` clause) has no `bd` CLI verb at all (probed live: no `bd
+     * update` flag toggles it), so this schedule cannot exercise that column
+     * and does not try to.
+     */
+    data class StatusUpdate(val id: String, val status: String) : ScheduleStep {
+        override fun apply(workspace: BdScratchWorkspace) {
+            workspace.run("update", id, "--status", status)
+        }
+    }
+
+    /**
+     * `bd create <title> --id <id> --force --type <type>` — task
+     * computenet-98u.2.1's type-carrying create, alongside the untyped
+     * [Create] (which mints the default `task` type, itself one of
+     * [civictech.demo.beadsmirror.ready.ReadyPredicate]'s ready-INCLUDED
+     * types). [type] lets a schedule mint both a
+     * [civictech.demo.beadsmirror.ready.ReadyPredicate.EXCLUDED_TYPES]
+     * member (e.g. `gate`) and an included one (e.g. `bug`), exercising the
+     * predicate's `issue_type` clause from creation rather than only via a
+     * later mutation. Verified live against `bd` 1.1.2 in a scratch sandbox
+     * 2026-08-19: `bd create <title> --id <id> --force --type gate` and
+     * `--type bug` both succeed.
+     */
+    data class TypedCreate(val id: String, val title: String, val type: String) : ScheduleStep {
+        override fun apply(workspace: BdScratchWorkspace) {
+            workspace.run("create", title, "--id", id, "--force", "--type", type)
+        }
+    }
 }
 
 /**
