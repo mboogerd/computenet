@@ -1,6 +1,24 @@
 # Resuming after the host process died
 
-Read this when a `task-notification` with **`status=stopped`** says it comes
+**Two different things stop a slot, and they need opposite responses. Tell
+them apart before reading further:**
+
+| | host process **DIED** | host **SUSPENDED** |
+|---|---|---|
+| Signature | `task-notification` with `status=stopped` from the previous session | two or more budget notifications arriving **together**, often with the monitor's "stream ended" right behind |
+| The monitor | gone; nothing re-arms it | survived and **fired everything at once** — the notifications are not missing, they are worthless |
+| The process | exited | alive throughout |
+| Response | re-arm from the original slot start, below | recompute elapsed and usually go **straight to Finalize** |
+
+The rest of this file is the DIED route. For the suspended one there is
+nothing to re-arm: `sleep` counts wall clock including time the machine spent
+asleep, so every tier elapsed during the suspension. Recompute from
+`$SCRATCH/slot-start` and act on the number, not on which tier fired —
+measured once at 834m true elapsed against a 300m slot (computenet-3gf5). A
+session that reads this file for that case finds it does not match, which is
+the confusion this table removes.
+
+Read on when a `task-notification` with **`status=stopped`** says it comes
 *from the previous session*: the Claude Code host process exited and this is
 a resume — not a failure (observed mid-breakdown, computenet-024s). Three
 things are true at once:
