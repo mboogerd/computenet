@@ -12,6 +12,7 @@ import java.util.Random
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -19,7 +20,7 @@ import kotlin.test.assertTrue
  * **BS-17** — the seeded property test for the canonical announcement encoding
  * ([DSC1-ANN-03]).
  *
- * Three properties, over inputs drawn from a fixed seed so a failure is
+ * Four properties, over inputs drawn from a fixed seed so a failure is
  * reproducible by re-running the test rather than by re-rolling the dice:
  *
  * 1. **Determinism** — encoding the same input twice is byte-identical.
@@ -31,7 +32,13 @@ import kotlin.test.assertTrue
  *    pairwise across the whole sample and by single-field mutation, which is
  *    the sharper of the two: random samples differ in many fields at once and
  *    so would still look injective under an encoding that ignored a field
- *    entirely.
+ *    entirely. Both are over the ACCEPTED domain — see (4).
+ * 4. **Rejection of ill-formed strings** — a generated string carrying an
+ *    unpaired surrogate is refused in either string position rather than
+ *    encoded (`computenet-9qgg`). This is what makes (3) a real claim: UTF-8
+ *    substitutes `?` for an unpaired surrogate, so without the refusal three
+ *    distinct announcements shared one encoding, invisibly to (3), whose pools
+ *    held no surrogates.
  *
  * Injectivity is the security property. Two announcements sharing an encoding
  * share a signature, so a signature honestly minted for one verifies the other
@@ -168,14 +175,75 @@ class AnnouncementCanonicalBytesPropertyTest {
         assertTrue(presentCells > 0 && absentCells > 0, "cell states: $presentCells present, $absentCells absent")
     }
 
+    /**
+     * The fourth property, from `computenet-9qgg`: **every generated string that
+     * is not well-formed UTF-16 is refused**, in both string positions.
+     *
+     * This is the pool the three properties above deliberately exclude. It is
+     * asserted as rejection rather than as injectivity because rejection is what
+     * makes the injectivity claim above true: before the decision, `"\uD800"`,
+     * `"\uDC00"` and `"?"` all encoded to one `0x3f` byte and the pairwise
+     * property could not see it, since its pools held no surrogates at all.
+     */
+    @Test
+    fun `every generated ill-formed string is refused, in both string positions`() {
+        val rnd = Random(SEED)
+        val seen = LinkedHashSet<String>()
+
+        repeat(SAMPLES) {
+            val name = illFormedName(rnd)
+            seen.add(name)
+            val base = randomInput(rnd)
+
+            for ((field, input) in listOf(
+                "portName" to base.copy(portName = name),
+                "mintingPeerId.name" to base.copy(mintingPeerId = PeerId(name), portName = "ok"),
+            )) {
+                val failure = assertFailsWith<IllegalArgumentException>("accepted $field ${name.codeUnits()}") {
+                    canonicalBytes(input)
+                }
+                assertTrue(
+                    failure.message!!.contains(field),
+                    "rejection does not name $field: ${failure.message}",
+                )
+            }
+        }
+
+        // The splice actually varied: a generator collapsed to one literal would
+        // leave this property asserting a single case SAMPLES times.
+        assertTrue(seen.size > 12, "ill-formed generator degenerated to ${seen.size} distinct strings")
+        // And the well-formed pools it splices into are themselves accepted, so
+        // the rejections above are caused by the spliced unit and nothing else.
+        for (base in spliceBases) canonicalBytes(randomInput(Random(SEED)).copy(portName = base))
+    }
+
     // --- generators -------------------------------------------------------
 
-    // Note: these pools hold only well-formed UTF-16. Strings containing an
-    // UNPAIRED surrogate do collide under this encoding (canonicalBytes KDoc,
-    // computenet-9qgg); adding one here without first settling that decision
-    // would make the injectivity property below fail rather than assert it.
+    // These pools are the ACCEPTED domain: well-formed UTF-16, surrogate pairs
+    // included (🔑 is one). Ill-formed strings are generated separately, below,
+    // and drive the rejection property rather than the injectivity ones — under
+    // computenet-9qgg's decision they are outside the domain, so injectivity
+    // over them is not a claim this encoder makes.
     private val portNames = listOf("", "orders", "orders/über", "a".repeat(64), "ports.in", "🔑")
     private val peerNames = listOf("ed25519:aaa", "ed25519:aab", "peer-1", "", "ünïcode-peer")
+
+    /**
+     * Surrogate-bearing pool (`computenet-9qgg`): the surrogate code units, and
+     * the well-formed bases one gets spliced into. A splice is used rather than a
+     * list of literals so the offending unit lands at a seed-chosen index —
+     * start, middle, end, and inside an existing surrogate pair — instead of
+     * always at 0. Inserting one code unit always breaks surrogate parity, so
+     * every string this produces is ill-formed by construction.
+     */
+    private val unpairedUnits = listOf('\uD800', '\uDBFF', '\uDC00', '\uDFFF')
+    private val spliceBases = listOf("", "orders", "orders/über", "🔑", "a🔑b", "ed25519:aaa")
+
+    private fun illFormedName(rnd: Random): String {
+        val base = spliceBases[rnd.nextInt(spliceBases.size)]
+        val unit = unpairedUnits[rnd.nextInt(unpairedUnits.size)]
+        val at = rnd.nextInt(base.length + 1)
+        return base.substring(0, at) + unit + base.substring(at)
+    }
 
     private fun randomInput(rnd: Random): AnnouncementSigningInput = AnnouncementSigningInput(
         mintingPeerId = PeerId(peerNames[rnd.nextInt(peerNames.size)]),

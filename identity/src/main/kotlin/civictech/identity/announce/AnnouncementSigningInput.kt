@@ -25,7 +25,11 @@ import java.util.UUID
  *
  * [args] holds the [civictech.cell.wire.RegistryAnnounce] arguments, whose
  * domain is exactly `CellRef`, `TopologyLink` and `UUID` — see [canonicalBytes],
- * which rejects anything else rather than encoding it.
+ * which rejects anything else rather than encoding it. [portName] and
+ * [mintingPeerId]'s name must likewise be well-formed UTF-16: [canonicalBytes]
+ * refuses an unpaired surrogate rather than signing bytes that also describe a
+ * different announcement (`computenet-9qgg`). Nothing enforces either domain at
+ * construction — this type is a plain record, and the encoder is the gate.
  *
  * `java.io.Serializable` so the whole input survives a round trip unchanged;
  * every component type ([PeerId], [CellRef], [TopologyLink], [PortRef], [UUID])
@@ -66,13 +70,14 @@ private const val PRESENT: Byte = 0x01
 /**
  * The canonical bytes an announcement is signed over ([DSC1-ANN-02..03]).
  *
- * Pure, total over its stated domain, and **injective for strings that are
- * well-formed UTF-16** — see the surrogate caveat at the end, which is the one
- * exception and is tracked as `computenet-9qgg`. Injectivity is the security
- * property, not a nicety — two
- * announcements sharing an encoding would share a signature, so a signature
- * minted for one would verify the other. It is obtained by construction rather
- * than by testing:
+ * Pure, and **injective over its accepted domain**: distinct accepted inputs
+ * never produce equal bytes. It is deliberately *not* total — an input outside
+ * the domain is **rejected**, never encoded approximately. Two things are
+ * outside it: an argument that is not `CellRef`/`TopologyLink`/`UUID` (see
+ * `@throws`), and a string that is not well-formed UTF-16 (the surrogate rule
+ * below). Injectivity is the security property, not a nicety — two announcements
+ * sharing an encoding would share a signature, so a signature minted for one
+ * would verify the other. It is obtained by construction rather than by testing:
  *
  * - **Fixed field order and fixed widths.** Fields appear in
  *   [AnnouncementSigningInput]'s constructor order; every `Long` is eight bytes
@@ -84,6 +89,9 @@ private const val PRESENT: Byte = 0x01
  *   big-endian element count. So no two distinct field sequences can
  *   concatenate to the same byte string — the classic `"ab"+"c"` vs `"a"+"bc"`
  *   confusion cannot arise.
+ * - **Strings must be well-formed UTF-16**, below: the one place where framing
+ *   cannot buy injectivity, because the loss happens *inside* the string's own
+ *   bytes rather than between fields.
  * - **A type tag per argument**, so a `CellRef` and a `UUID` sharing sixteen
  *   leading bytes are still distinguishable.
  * - **An explicit presence marker for the nullable [PortRef.cell]** rather than
@@ -95,23 +103,47 @@ private const val PRESENT: Byte = 0x01
  * Because the grammar is prefix-free and self-delimiting at every position, the
  * byte string can be parsed back to exactly one input — which is injectivity.
  *
- * **Caveat: unpaired surrogates break that, and neither pin below catches it**
- * (`computenet-9qgg`). `String.toByteArray(UTF_8)` substitutes `?` (`0x3f`) for
- * an unpaired surrogate, so `portName = "\uD800"`, `"\uDC00"` and `"?"` all
- * encode to the same byte and those three announcements collide — measured
- * against this function, not a theoretical worry. The framing above is not at
- * fault and cannot repair it: the loss is inside `String` → UTF-8, below the
- * length prefix. It is unreachable from today's callers — a `portName` is a
- * declared `@Contract` port name and a [PeerId] name is `ed25519:<base64url>`
- * — but feature .4 will feed this from a wire-supplied `WireFrame.portName`,
- * where the string is remote input. Closing it means either rejecting unpaired
- * surrogates or encoding UTF-16 code units; both change the signed grammar and
- * so are that feature's decision, not a change to make quietly here.
+ * **Unpaired surrogates are rejected, not encoded** (`computenet-9qgg`).
+ * `String.toByteArray(UTF_8)` substitutes `?` (`0x3f`) for an unpaired
+ * surrogate, so before this rule `portName = "\uD800"`, `"\uDC00"` and `"?"` all
+ * encoded to the identical byte string — measured against this function, not a
+ * theoretical worry — and the same collision reproduced through
+ * [PeerId.name]. Framing cannot repair it: the loss is inside `String` → UTF-8,
+ * below the length prefix. So a string carrying an unpaired surrogate is outside
+ * the domain and this function throws (see `@throws`) rather than signing bytes
+ * that also describe a different announcement.
+ *
+ * Why *reject* rather than encode UTF-16 code units, which would be lossless for
+ * every `String` (the decision recorded on `computenet-9qgg`):
+ *
+ * - **It leaves the bytes of every accepted input unchanged.** Rejection narrows
+ *   the domain without redefining the grammar, so no signature ever minted
+ *   under this encoding is invalidated and the golden vector stays pinned.
+ *   Switching to UTF-16 code units would change the bytes of *every* string and
+ *   so of every announcement.
+ * - **UTF-8 is the interoperable canonical form.** UTF-16 code units are a JVM
+ *   representation detail; baking them into a cross-implementation signed
+ *   grammar would oblige a non-JVM verifier to model Java's `String`.
+ * - **An ill-formed port name is not a thing to sign.** A `portName` names a
+ *   declared `@Contract` port and a [PeerId] name is `ed25519:<base64url>`;
+ *   neither can contain an unpaired surrogate. Encoding one losslessly would
+ *   make a nonsense announcement *validly signed* and push the rejection out to
+ *   every consumer, instead of refusing it once, here.
+ *
+ * "Accept and document as unreachable" was the third option and is **falsified**:
+ * `WirePortNameSurrogateReachabilityTest` measures the kernel wire codec
+ * (kotlinx JSON) decoding a JSON-escaped lone `\ud800` straight into
+ * `WireFrame.portName`, so once feature `computenet-ssa.4` feeds this encoder
+ * from a wire-supplied port name the string is remote input and the collision is
+ * reachable from the network.
  *
  * The seeded property test `AnnouncementCanonicalBytesPropertyTest` (BS-17)
- * probes that empirically; `AnnouncementCanonicalBytesGoldenVectorTest` pins the
- * exact bytes so a later refactor that changes them fails loudly instead of
- * silently invalidating every signature already in the field.
+ * probes injectivity empirically over the accepted domain and rejection over
+ * generated surrogate-bearing strings; `AnnouncementCanonicalBytesSurrogateTest`
+ * pins the three formerly-colliding values; and
+ * `AnnouncementCanonicalBytesGoldenVectorTest` pins the exact bytes so a later
+ * refactor that changes them fails loudly instead of silently invalidating every
+ * signature already in the field.
  *
  * @throws IllegalArgumentException if any element of
  *   [AnnouncementSigningInput.args] is outside the `RegistryAnnounce` argument
@@ -120,16 +152,22 @@ private const val PRESENT: Byte = 0x01
  *   forbidden here, because neither is injective — `toString` collides for
  *   distinct values of different types, and Java serialization varies with
  *   class metadata that has nothing to do with the announcement's meaning.
+ * @throws IllegalArgumentException if [AnnouncementSigningInput.portName] or
+ *   [AnnouncementSigningInput.mintingPeerId]'s name is not well-formed UTF-16 —
+ *   i.e. contains a surrogate code unit that is not part of a high/low pair. The
+ *   message names the field and the offending index. Fail closed for the same
+ *   reason as above: the alternative is signing bytes that describe more than
+ *   one announcement.
  */
 fun canonicalBytes(input: AnnouncementSigningInput): ByteArray {
     val out = ByteArrayOutputStream(256)
-    out.writeString(input.mintingPeerId.name)
+    out.writeString("mintingPeerId.name", input.mintingPeerId.name)
     out.writeLong(input.counter)
     out.writeLong(input.notAfter)
     out.writeLong(input.contractId)
     out.writeLong(input.methodId)
     out.writeCellRef(input.cellRef)
-    out.writeString(input.portName)
+    out.writeString("portName", input.portName)
     out.writeInt(input.args.size)
     input.args.forEachIndexed { index, arg -> out.writeArg(index, arg) }
     return out.toByteArray()
@@ -187,11 +225,48 @@ private fun ByteArrayOutputStream.writeUuid(value: UUID) {
     writeLong(value.leastSignificantBits)
 }
 
-private fun ByteArrayOutputStream.writeString(value: String) {
+/**
+ * A string is its UTF-8 bytes behind a four-byte big-endian byte count — after
+ * [requireWellFormedUtf16] has refused anything UTF-8 cannot represent
+ * faithfully. [field] names the offending field in that refusal; it is not
+ * encoded, so naming it costs nothing on the wire.
+ */
+private fun ByteArrayOutputStream.writeString(field: String, value: String) {
+    requireWellFormedUtf16(field, value)
     val bytes = value.toByteArray(Charsets.UTF_8)
     writeInt(bytes.size)
     write(bytes, 0, bytes.size)
 }
+
+/**
+ * Refuse a [String] holding a surrogate code unit that is not part of a
+ * high-then-low pair (see [canonicalBytes], `computenet-9qgg`).
+ *
+ * This is a scan over code *units*, deliberately — not `String.codePoints()` or
+ * a re-encode/compare, both of which silently substitute `U+FFFD`/`?` for the
+ * very code unit being looked for and so would report every string well-formed.
+ */
+private fun requireWellFormedUtf16(field: String, value: String) {
+    var index = 0
+    while (index < value.length) {
+        val unit = value[index]
+        if (unit.isHighSurrogate()) {
+            require(index + 1 < value.length && value[index + 1].isLowSurrogate()) {
+                unpairedSurrogate(field, value, index, "high")
+            }
+            index += 2
+        } else {
+            require(!unit.isLowSurrogate()) { unpairedSurrogate(field, value, index, "low") }
+            index++
+        }
+    }
+}
+
+private fun unpairedSurrogate(field: String, value: String, index: Int, half: String): String =
+    "$field is not well-formed UTF-16: unpaired $half surrogate " +
+        "U+%04X at index %d (length %d)".format(value[index].code, index, value.length) +
+        " — the canonical announcement encoding refuses it rather than substituting '?' " +
+        "(that substitution collides distinct announcements; computenet-9qgg)"
 
 private fun ByteArrayOutputStream.writeLong(value: Long) {
     for (shift in 56 downTo 0 step 8) write(((value ushr shift) and 0xFF).toInt())
