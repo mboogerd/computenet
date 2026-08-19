@@ -258,6 +258,21 @@ const val DEFAULT_NONCE_RETENTION_MILLIS: Long = 600_000
  * kernel owns is the *decision surface* — a side's policy is part of its
  * configuration, beside [Peering.Side.allow], and readable without a
  * transport.
+ *
+ * **Where it is enforced, and where it is not.** This policy is read at *hello*
+ * time, and the only peering in this repository that exchanges a hello is the
+ * socket transport (`civictech.wire.WsTransport.Session.onText` — the single
+ * admission point). [Peering.loopback] has **no hello at all**: it wires each
+ * side's ingress directly and takes both peer names from [Peering.Side.peer],
+ * i.e. from configuration, so there is nothing for a challenge/response to
+ * verify and this policy is neither consulted nor enforceable there. A loopback
+ * side configured [RequireAuthenticated] is therefore not authenticated — its
+ * peer names are as vouched-for as they were before this type existed. That is
+ * not a hole in the socket path's guarantee; it is the absence of a wire to
+ * make a claim over. What [Peering.Side.credentials] *is* for on a loopback
+ * side is signing — announcements carry their own signature over the frame,
+ * which is the sibling feature's scope (DSC1 §4.3, `[DSC1-WIRE-05]`) and the
+ * reason the credentials field is independent of this policy.
  */
 sealed interface PeerAuthPolicy {
     /**
