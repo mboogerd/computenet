@@ -19,9 +19,13 @@ import kotlin.test.assertTrue
  * `portName = "?"` both produced
  *
  * ```
- * 0000000c656432353531393a746573740000000000000001000000000000000200
- * 0000000000000300000000000000040000000000004000800000000000000100000
- * 000000000000000000013f00000000
+ * 0000000c656432353531393a74657374  peer name "ed25519:test", 12 bytes
+ * 0000000000000001 0000000000000002  counter, notAfter
+ * 0000000000000003 0000000000000004  contractId, methodId
+ * 0000000000004000 8000000000000001  cellRef.id
+ * 0000000000000000                   cellRef.instanceId
+ * 00000001 3f                        portName: one byte, and it is '?'
+ * 00000000                           args: empty
  * ```
  *
  * — note the single `3f` where the port name is — and `"\uDC00"` produced the

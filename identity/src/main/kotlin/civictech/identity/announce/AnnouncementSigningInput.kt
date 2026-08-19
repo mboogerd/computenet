@@ -242,9 +242,18 @@ private fun ByteArrayOutputStream.writeString(field: String, value: String) {
  * Refuse a [String] holding a surrogate code unit that is not part of a
  * high-then-low pair (see [canonicalBytes], `computenet-9qgg`).
  *
- * This is a scan over code *units*, deliberately — not `String.codePoints()` or
- * a re-encode/compare, both of which silently substitute `U+FFFD`/`?` for the
- * very code unit being looked for and so would report every string well-formed.
+ * A scan over code *units*, because the refusal message names the offending
+ * **index** and the half that is unpaired, and only a positional scan has either
+ * to name — `AnnouncementCanonicalBytesSurrogateTest` asserts on both.
+ *
+ * The two obvious alternatives do *detect* ill-formedness, contrary to an
+ * earlier note here: measured on Adoptium 21.0.11 (the Gradle toolchain) and on
+ * JDK 26, `"\uD800".codePoints()` yields the surrogate's own value `55296`
+ * rather than substituting `U+FFFD`, and a UTF-8 re-encode/compare differs from
+ * the original for every ill-formed string and for no well-formed one (`"?"`
+ * included). So either would work as a predicate; neither yields an index or a
+ * half, and both allocate. Replacing this scan with one of them means giving up
+ * the message those tests pin.
  */
 private fun requireWellFormedUtf16(field: String, value: String) {
     var index = 0
