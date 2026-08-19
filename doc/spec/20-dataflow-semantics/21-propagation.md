@@ -42,12 +42,26 @@ Normative requirements on a delta type:
 4. **Tag hygiene** (M11.2): an emitter of tagged deltas never re-emits a tag
    it previously deleted — that is what keeps a stream safe for
    tombstone-folding consumers (24). Operators may pass input tags through
-   only if every membership flip-ON rides a fresh input add-tag on the
-   flipping element (filter, map/flatMap, union, intersect). Non-monotone
-   operators (difference, semijoin/antijoin — re-entry rides the *other*
-   side's removal) must mint fresh cell-owned output tags per entry and
-   delete exactly what they minted (`MintedTags`, replay-stable derived
-   source per the SetCell M10.1 pattern).
+   only where **both** preconditions hold: (i) every membership flip-ON rides
+   a fresh input add-tag on the flipping element, and (ii) no downstream
+   consumer can observe the same tag by a second, reconvergent path —
+   consumers fold a tagged set by `(element, tag)` and deduplicate a diamond
+   fan-in into ONE fact by design (`[24-OP-UNION-01]`), so an operator
+   retracting a borrowed tag also retracts the direct path's still-live
+   contribution. (ii) is a property of the *graph*, not of the operator, so
+   only operators whose output membership is exactly the borrowed tag's own
+   liveness — filter, map/flatMap, union — can satisfy it in an arbitrary
+   graph; an operator whose membership flips on some *other* input's move
+   cannot, whatever the graph looks like. Everything outside that shape
+   (intersect, quorum, difference, semijoin/antijoin — re-entry rides the
+   *other* side's removal) must mint fresh cell-owned output tags per entry
+   and delete exactly what they minted (`MintedTags`, replay-stable derived
+   source per the SetCell M10.1 pattern), which is also where 24's
+   convergence classes put them (**convergent duplicates**: agree on
+   membership, mint distinct tags). Intersect and quorum moved from borrowing
+   to minting once borrowing was measured unsound across a diamond
+   (computenet-vvre, computenet-s6l2); `JoinLedger`'s KDoc states the same two
+   preconditions in code.
 
 ## Pull
 
