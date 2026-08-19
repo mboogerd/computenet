@@ -4,6 +4,8 @@ import civictech.bench.BenchResult
 import civictech.bench.Drive
 import civictech.bench.Findings
 import civictech.bench.FindingsTable
+import civictech.bench.HostFacts
+import civictech.bench.HostFactsUnknownException
 import civictech.bench.MeasuringJvm
 import civictech.bench.MeasuringJvmUnknownException
 import civictech.bench.NOISE_FLOOR
@@ -498,13 +500,15 @@ object ThroughputReport {
      * point, and the only one that derives a [RunEnvironment] rather than being handed
      * one (`[BEN1-23]`, `computenet-hqid`).
      *
-     * Reads [results] for the numbers and [runLogFor]`(results)` for the JVM that
-     * produced them, and REFUSES — [MeasuringJvmUnknownException] — when that log is
-     * absent or carries no JMH banner. It does not fall back to this process's
-     * `java.vendor`, `java.version` or heap; that fallback is what shipped a REAL-drive
-     * entry reading `Eclipse Adoptium/21.0.11 · heap -Xmx2g` for a sweep measured on
-     * Homebrew JDK 26.0.1 with no VM options, and the code that could produce it no
-     * longer exists (see [RunEnvironment.forRun]).
+     * Reads [results] for the numbers and [runLogFor]`(results)` for the JVM, the JMH
+     * knobs, and the host that produced them, and REFUSES — [MeasuringJvmUnknownException],
+     * [RunKnobsUnknownException], [HostFactsUnknownException] respectively — when that log
+     * is absent or carries no matching banner. It does not fall back to this process's
+     * `java.vendor`, `java.version`, heap, declared annotations, or `Runtime
+     * .getRuntime()`/`sysctl` reads; that fallback is what shipped a REAL-drive entry
+     * reading `Eclipse Adoptium/21.0.11 · heap -Xmx2g` for a sweep measured on Homebrew
+     * JDK 26.0.1 with no VM options, and the code that could produce it no longer exists
+     * (see [RunEnvironment.forRun]).
      *
      * Refusing is a first-class outcome here, not a degraded one. This epic's governing
      * property is that a number nobody can stand behind is refused rather than
@@ -521,6 +525,11 @@ object ThroughputReport {
      *   run actually used cannot be established from its log (computenet-x9e.8). The
      *   benchmark class's `@Fork`/`@Warmup`/`@Measurement` values are NOT a fallback —
      *   `-f`/`-wi`/`-i` override them, so they state the declaration, not the run.
+     * @throws HostFactsUnknownException if the CPU model, core count or OS of the
+     *   measuring host cannot be established from its log (computenet-yhbd). No JMH
+     *   artifact records host facts on its own; this process's own `Runtime
+     *   .getRuntime()`/`sysctl` reads are NOT a fallback — they answer for the
+     *   renderer, which may not be the machine that measured.
      * @throws ThroughputReportException if [results] is not a readable file, or its
      *   contents cannot honestly become rows.
      */
@@ -555,6 +564,11 @@ object ThroughputReport {
             // are what the benchmark class DECLARES, and `-f`/`-wi`/`-i` override them
             // (computenet-x9e.8). The run's own banner states what it resolved.
             knobs = RunKnobs.fromJmhLog(logText, log.absolutePath),
+            // NOT [HostFacts.captureCurrent]: that answers for THIS process, the
+            // renderer, which may be running long after the forks exited on a different
+            // machine entirely. The measuring fork prints its own host facts onto this
+            // same log (computenet-yhbd) and this reads them back.
+            hostFacts = HostFacts.fromJmhLog(logText, log.absolutePath),
             harnessCommitSha = harnessCommitSha,
         )
         return render(results.readText(), env, date, subject, trigger)
