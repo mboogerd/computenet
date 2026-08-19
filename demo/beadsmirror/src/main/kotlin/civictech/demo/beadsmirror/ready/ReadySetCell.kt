@@ -58,6 +58,19 @@ import java.util.UUID
  * therefore *not* implemented here either; every other edge `type` is
  * non-blocking.
  *
+ * ## Why this is hand-written rather than composed
+ *
+ * The join is `SemiJoinCell` twice over (`edges ⋉ openIssues`, then
+ * `candidates ▷ blocked`), and it is still written out here because neither
+ * input can reach that operator: nothing in `civictech.cell.data.op` consumes
+ * a [TaggedMapDelta] at all, and even untagged there is no operator that
+ * regroups a composite-keyed map stream into the per-issue field record
+ * [ReadyPredicate] needs. Both gaps are recorded in `doc/demo-findings.md`
+ * (F-9), with the adapter/regroup shapes that would close them; the private
+ * re-fold of `OrMapCell`'s dot algebra below ([putDots]/[deadDots]) is the
+ * cost of the first one. F-10 records the second workaround, the attach-order
+ * precondition at the bottom of this doc.
+ *
  * ## Incrementality
  *
  * One delta re-evaluates the issues it can possibly have moved, never the

@@ -378,7 +378,11 @@ class ReadySetCellTest {
      *    worker JVM: such a child is in both snapshots and cancels. Its blind
      *    spot is the converse — a subprocess that both starts and exits
      *    between the two snapshots leaves no live handle to observe. That is
-     *    what half 2 is for.
+     *    what half 2 is for, and it is a *measured* blind spot, not a
+     *    theoretical one: a mutation adding
+     *    `ProcessBuilder(listOf("bd", "version")).start().waitFor()` to
+     *    `ReadySetCell.evaluate` left this half green and was caught only by
+     *    half 2 (computenet-98u.1.2's mutation check).
      * 2. [assertDerivationPackagesNameNoProcessApi] reads the compiled classes
      *    of the packages the derivation is made of and requires that none of
      *    them names a process-spawning JDK API. This is exact for *direct*

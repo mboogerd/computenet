@@ -144,3 +144,72 @@ inlets.
 **Proposed shape**: none proposed — recorded as a known ceiling of
 declaration-only KSP scanning (`doc/ksp-dx-catalog.md`'s "KSP is
 declaration-only" constraint), not a defect to fix.
+
+## F-9 — No operator consumes a `TaggedMapDelta`, so an `OrMapCell` cannot feed the operator suite
+
+**Observation**: `:demo:beadsmirror`'s ready-set derivation (computenet-98u.1.2,
+`civictech.demo.beadsmirror.ready.ReadySetCell`) joins the mirror's issue-field
+OR-map (`OrMapCell<MirrorKey, String>`, one key per `(issue, field)`) against
+its dependency-edge set (`SetCell<MirrorEdge>`) and must maintain the result
+incrementally. The join it needs is expressible in operator terms —
+`edges ⋉ openIssues` on the edge's target id gives the blocked set, and
+`candidates ▷ blocked` gives the ready set, which is exactly `SemiJoinCell`
+twice (once matched, once `negated`). It is nevertheless hand-written as an
+app-level cell, because neither input can reach `SemiJoinCell`:
+
+- **The OR-map side has no consumer at all.** Every operator in
+  `civictech.cell.data.op` takes `SetDelta` or `MapDelta`;
+  `grep -rn 'Serve<Propagate<TaggedMapDelta'` over `kernel/src/main` returns
+  nothing. `OrMapCell` emits `TaggedMapDelta` and the `TaggedMapView`/`UntagCell`
+  adapters its own KDoc names (96 §E1.5) are not implemented, so a tagged map
+  is a terminal in the graph: something can materialize it, nothing can derive
+  from it.
+- **Even untagged, the per-issue record is not reachable.** The predicate
+  (`ReadyPredicate.isReady`) is a function of *all* of one issue's fields at
+  once, so the composite-keyed stream must first be regrouped
+  `(issue, field) -> issue -> Map<field, value>`. `GroupByCell` does exactly
+  that shape of fold but consumes a `SetDelta<E>`, not a keyed map stream, so
+  the regroup has no operator either.
+
+**Why it's a gap**: the demo's most operator-shaped requirement — a two-input
+incremental join with a reverse index, which `SemiJoinCell` and
+`LookupJoinCell` both already implement internally — has to be rebuilt by
+hand, including a private re-fold of `OrMapCell`'s own dot algebra
+(`putDots`/`deadDots`, `[24-TMAP-03]` value resolution) purely to read a value
+out of the delta stream the cell publishes. That re-fold is a copy of kernel
+logic living in a demo, and it is the *second* consumer to need it after the
+mirror's own HTTP fold.
+**Proposed shape**: two pieces, either of which unblocks composition —
+(a) the deferred `TaggedMapView`/`UntagCell` adapter (96 §E1.5): a cell taking
+`TaggedMapDelta<K, V>` and emitting the untagged `MapDelta<K, V>` of resolved
+per-key values, effective-only, so the whole existing operator suite becomes
+reachable from an `OrMapCell`; and (b) a keyed *regroup* operator over a map
+stream (`MapDelta<K, V>` with `keyFn: K -> G` emitting
+`MapDelta<G, Map<K, V>>`), the `MapDelta`-shaped sibling of `GroupByCell`,
+which is what turns a composite-keyed entity-attribute map into per-entity
+records.
+
+## F-10 — A hand-wired `SetCell` consumer has no way to catch up on attach
+
+**Observation**: `ReadySetCell.derivedFrom` (same task) subscribes to
+`MirrorProjector`'s two cell outlets with `outlet.subscribe(inlet)`, which
+installs a consumer without firing the outlet's on-link multicast — only
+`streamTo`/a negotiated handshake does — so late-join catch-up (G-22) never
+runs. Replaying the baseline by hand is possible for the OR-map half
+(`OrMapCell.state()` returns the accumulated `TaggedMapDelta`, real dots
+included) and **impossible for the set half**: `SetCell` exposes `membership()`
+but no `state()`, and a `SetDelta` synthesized from `membership()` would carry
+invented tags that a later real removal could not cover, leaving the element
+live forever. The demo's workaround is a documented precondition — attach the
+derived cell before the projector's first record.
+**Why it's a gap**: outside a `ManagedHost`, wiring two cells directly is the
+ordinary in-process idiom (`outlet.subscribe(other.inlet)` appears throughout
+the kernel's own tests), and in that idiom one of the two replicated data cells
+can be caught up by hand and the other cannot. The asymmetry is incidental —
+`SetCell` holds exactly the state a baseline read would need and serves it over
+`pullServe` to a *remote* requester — not a semantic difference between the two
+cells.
+**Proposed shape**: a public `SetCell.state(): SetDelta<E>` mirroring
+`OrMapCell.state()` (its `pullServe` reply already computes this shape for the
+`since`-unfiltered case), or a documented local catch-up seam that fires the
+on-link hook for a direct `subscribe` the way `streamTo` does for a routed one.
