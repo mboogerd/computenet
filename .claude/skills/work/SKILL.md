@@ -105,6 +105,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `wait-checks.sh` | THE settle loop on `gh pr checks` — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`QUERY-FAILED` |
 | `verify-branch-sync.sh` | 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
 | `merge-task.sh` | 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
+| `session-holder.sh` | this session's unique holder token, and `--check <token>` → MINE/LIVE/DEAD/UNKNOWN; what tells a live sibling from a crash leftover, which `assignee` cannot |
 | `junit-count.py` | JUnit XML accounting (counts + newest timestamp, both glob depths); refuses to report zero result files |
 
 (`scripts/beads-nightly-sync.sh` is the **repo-root** catch-up job; no
@@ -419,13 +420,45 @@ dir, a commit mixing both sessions' work). `skill-friction` items are
 excluded because their claim is routing to an orchestrator lane, not a work
 session — one is often stamped minutes ago by a session that just finished.
 
-Any row with `updated_at` within 15 minutes probably belongs to a live
-overlapping run on this machine (same `BEADS_ACTOR`, indistinguishable) —
-stop and report rather than colliding with it. Check every row. Older rows:
-an *epic* is a crash leftover — release it
-(`bd update <id> --status=open --assignee=""`); leave non-epic rows alone —
+**Read `metadata.holder` first — it decides this exactly, where the timestamp
+only guesses.** `assignee` is `BEADS_ACTOR`, which is per-MACHINE, so two
+sessions on one box are the same string and a live sibling's claim is
+indistinguishable from a crash leftover. `metadata.holder` names the SESSION,
+and its process either exists or does not:
+
+```bash
+.claude/skills/work/scripts/session-holder.sh --check "<the row's metadata.holder>"
+# MINE (0) = this session's own | LIVE (0) = a live sibling: leave it alone
+# DEAD (1) = crash leftover: releasable | UNKNOWN (3) = nothing established
+```
+
+`UNKNOWN` and an absent `holder` (rows claimed before 2026-08-19) are **not
+an all-clear** — fall back to the 15-minute rule below and say you did.
+
+Falling back: any row with `updated_at` within 15 minutes probably belongs to
+a live overlapping run on this machine — stop and report rather than colliding
+with it. Check every row. Older rows: an *epic* is a crash leftover — release
+it (`bd update <id> --status=open --assignee=""`); leave non-epic rows alone —
 stale *tasks* the sweep above already reopened, and a stale *feature* is the
 5a resume marker, not a leak.
+
+**Count the live siblings you found and carry the number to 5b.** A sibling
+is not only a reason to stop; if the operator has sanctioned concurrent
+running, it is a capacity input. `next-batch.py --siblings N` splits the
+machine's parallelism budget instead of letting each session claim all of it:
+four sessions on a 10-core box each computed a cap of 2 independently, every
+one correct by its own accounting, for 4x the measured safe parallelism
+(computenet-arow).
+
+**This check is a race, not a lock, and the holder does not change that.** It
+only ever trips on a sibling that has ALREADY claimed something — two sibling
+claims 84 seconds apart mean whichever session reaches this point first reads
+"alone" and proceeds, and a sibling still in step 1 or 2 is invisible
+entirely. What the holder buys is that once a claim exists, it is decidable.
+`claim-epic.sh` re-runs the test at the moment it writes, so an arbitrarily
+slow step 3 cannot widen the window between checking and claiming — one
+session's step 3 ran three hours on a slow host, and it claimed an epic a live
+sibling was working the whole time (computenet-83ay, computenet-yurq).
 
 **Only after the liveness check, reconcile beads against merged PRs:**
 
@@ -845,8 +878,32 @@ as the second guard; never read it as "nobody is working here".
 A worktree already on disk that this session did not create may also belong
 to a *concurrent session* on this machine, not just a dead one — step 3's
 liveness check races a run that starts mid-slot. Before adopting one, check
-its bead: `in_progress` with `updated_at` in the last 15 minutes → occupied,
-leave it. Guessing wrong costs real work: two agents in one worktree converge
+its bead: `metadata.holder` via
+`.claude/skills/work/scripts/session-holder.sh --check` (LIVE → occupied), or
+failing that `in_progress` with `updated_at` in the last 15 minutes →
+occupied, leave it.
+
+**"One worktree, one live agent" is a WITHIN-session rule, and nothing
+extends it across two sessions on one machine.** A recovery session
+established death by every signal step 3 prescribes and then some — no bead
+written for 45 minutes against a 15-minute threshold, no `java` or `gradle`
+process running at all, a clean worktree with no mutation marker, the feature
+branch exactly equal to origin — dispatched a reviewer into that worktree,
+and *while the review ran* a concurrent session merged the task branch and
+removed the worktree underneath it. The reviewer's next `cd` failed with a
+bare "no such file or directory" and it had to reconstruct why from scratch
+(computenet-dj9h). Nothing was lost, but that is which way the race fell, not
+a property of the design. Two consequences:
+
+- **A quiet bead is not a dead session.** A session thinking, waiting on an
+  agent, or between dispatches writes nothing for far longer than 15 minutes,
+  and its child claims stay LOCAL until Finalize while its epic is open
+  (claim-sync.md), so a `bd dolt pull` shows you nothing either. The holder
+  check is the signal that survives all of that — use it before adopting or
+  removing anything another session may own.
+- **Before you remove a worktree another session might hold**, check for a
+  live holder on the item it belongs to, and prefer leaving it: an orphaned
+  worktree costs disk, a removed one costs a live agent its ground. Guessing wrong costs real work: two agents in one worktree converge
 on the same fix independently, and two concurrent Gradle builds there clobber
 each other's `build/` dirs, failing with errors that read as genuine test
 failures (computenet-sec: `NoSuchFileException` on an in-progress-results
@@ -991,6 +1048,10 @@ Otherwise ask for the next batch:
 
 ```bash
 .claude/skills/work/scripts/next-batch.py <feature-id>
+# --siblings N if step 3 found N live sibling sessions on this box, or the
+# operator sanctioned concurrent running: the capacity cap is PER SESSION and
+# the machine is shared (computenet-arow). The verdict echoes what it used
+# under "capacity".
 ```
 
 Returns `{batch: [{id, model, files, worktree, branch, resumed}], skipped,
