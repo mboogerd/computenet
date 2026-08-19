@@ -257,6 +257,33 @@ unquantified "suite green", yours or the implementer's, is not a
 verification record, and the orchestrator never re-runs it: your report *is*
 the evidence the next session trusts.
 
+**Carry `--no-build-cache`, here, at the point of use.** A bare `--rerun` can
+still restore a CACHED result: the console prints its task-count line, the
+`> Task :<module>:test` line carries no marker, and only the JUnit `timestamp`
+betrays it — so two of the three signals agree and an agent closing its
+evidence gathering stops. Measured twice on two different modules
+(`:concord`, then `:oracle` with a `newest` ~4 minutes stale — computenet-qsfu,
+computenet-qdj6), both caught by suspicion rather than by procedure. The flag
+belongs in the command you actually run:
+
+```bash
+./gradlew :<module>:test --rerun --no-build-cache
+```
+
+**Where a prior task's measurement artifacts live**, when the deliverable is a
+measurement and re-rendering it from the raw artifact is your strongest check:
+**read the implementer's `bd comment` on the task first** — the acceptance
+criteria for measurement tasks require it to record the results-file and log
+paths, so it is authoritative and costs one command. Failing that, the session
+scratchpad (`/private/tmp/claude-501/<session>/scratchpad/…`) is the usual
+home, and a gitignored path inside the task worktree (e.g.
+`bench/build/bench-results/`) the other. **Do not `find` over the home
+directory** — on this machine it consumes the entire 5-minute tool cap and
+takes the rest of that call's output with it (computenet-ewyo). This matters
+because re-rendering from the retained artifact and diffing byte-for-byte
+against the committed text is what proves a table was tool-produced rather
+than hand-typed — and it is unavailable if the artifact cannot be located.
+
 Beyond that standard, a reviewer owes the stronger signal:
 
 - **The strongest signal is cache-proof: break it and watch it fail.** For a

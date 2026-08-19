@@ -49,8 +49,23 @@ from the prose:
 
 ```bash
 uname -sm
-/usr/libexec/java_home -V        # what JDKs actually exist here
 echo "${JAVA_HOME:-<unset>}"
+```
+
+**A JVM claim must come from the RUN'S OWN banner, not from the environment.**
+`/usr/libexec/java_home -V` used to be listed here and answers nothing on this
+host — it returns *"Unable to locate a Java Runtime"*, because every JDK here
+is either Gradle-provisioned under `~/.gradle/jdks` or Homebrew-installed, and
+neither registers where `java_home` looks. Worse, the environment and the run
+can disagree: bare `java` on this host is Homebrew JDK 26, **not** the Gradle
+toolchain's Adoptium 21 that a Gradle-driven measurement actually uses. Two
+BEN1 findings entries shipped with the wrong recorded JVM by exactly that
+route (computenet-u90r). So take the identity from the artifact the run itself
+produced — the JMH/Gradle banner in the teed log, or `java -version` from the
+same launcher the run used — and check the diff's claim against *that*:
+
+```bash
+grep -m1 -iE 'jdk|vm version|java version' "<the run's own log>"
 ```
 
 On computenet-dqy.46 every measured number reproduced exactly and the only
@@ -294,7 +309,34 @@ feature touched anything cross-cutting — then prove the run happened.
 **[gradle-evidence.md](gradle-evidence.md) is that proof standard**: the
 task-count line, the per-task state line read as an absence, and the JUnit
 XML counts + timestamp via `.claude/skills/work/scripts/junit-count.py`, plus the `--rerun` and
-`--no-build-cache` semantics. Per suite you run, consume those signals and
+`--no-build-cache` semantics.
+**Carry `--no-build-cache`, here, at the point of use.** A bare `--rerun` can
+still restore a CACHED result: the console prints its task-count line, the
+`> Task :<module>:test` line carries no marker, and only the JUnit `timestamp`
+betrays it — so two of the three signals agree and an agent closing its
+evidence gathering stops. Measured twice on two different modules
+(`:concord`, then `:oracle` with a `newest` ~4 minutes stale — computenet-qsfu,
+computenet-qdj6), both caught by suspicion rather than by procedure. The flag
+belongs in the command you actually run:
+
+```bash
+./gradlew :<module>:test --rerun --no-build-cache
+```
+
+**Where a prior task's measurement artifacts live**, when the deliverable is a
+measurement and re-rendering it from the raw artifact is your strongest check:
+**read the implementer's `bd comment` on the task first** — the acceptance
+criteria for measurement tasks require it to record the results-file and log
+paths, so it is authoritative and costs one command. Failing that, the session
+scratchpad (`/private/tmp/claude-501/<session>/scratchpad/…`) is the usual
+home, and a gitignored path inside the task worktree (e.g.
+`bench/build/bench-results/`) the other. **Do not `find` over the home
+directory** — on this machine it consumes the entire 5-minute tool cap and
+takes the rest of that call's output with it (computenet-ewyo). This matters
+because re-rendering from the retained artifact and diffing byte-for-byte
+against the committed text is what proves a table was tool-produced rather
+than hand-typed — and it is unavailable if the artifact cannot be located.
+ Per suite you run, consume those signals and
 **quote them in your verdict** — an unquantified "suites green", yours or
 the implementers', is not a verification record, and nobody re-runs it after
 you: your verdict *is* the evidence the merge rests on. The mutation-check
