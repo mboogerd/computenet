@@ -184,7 +184,123 @@ class ReadyDifferentialTest {
         }
     }
 
-    private companion object {
+
+    /**
+     * **The second pinned per-PR seed (computenet-98u.4).** Same sizing as the
+     * Ex/agree run above, a different seed, and the reason it exists is
+     * measured rather than assumed: seed 42 at 60 steps exercises 27 of the 40
+     * reachable [ReadyEvent]s ([ReadyCoverage]); seed 42 **and** seed 21
+     * together exercise 36, and 10 of the 13 `DEPENDENT`-role events — the
+     * indirect-propagation half where an incremental derived cell goes stale
+     * and a recompute-the-world implementation cannot.
+     *
+     * **Why a second seed and not a longer schedule.** Measured over 500 seeds
+     * (pure schedule replay, no `bd`), coverage against steps for ONE seed:
+     *
+     * ```
+     * steps    min   p10   p50   p90   max      (of 40 reachable)
+     *    20      6    10    13    15    21
+     *    60     16    20    23    27    33      <- today's required check
+     *   120     21    27    28    30    33      (seed 42: 30)
+     *   200     25    31    33    35    38      (seed 42: 32)
+     *  1000     35    36    36    37    39
+     * ```
+     *
+     * A single schedule never saturates: even at 1000 steps the median seed is
+     * still short of the alphabet, because the rare events need a structural
+     * coincidence (a status update landing on an issue that is *already* a
+     * blocker of a live dependent) that one 15-issue workspace reaches only
+     * occasionally. Two seeds at 60 steps reach 36; one seed at 120 steps —
+     * the same 120 total steps, the same wall time, since the harness pays per
+     * STEP — reaches 30. Seeds dominate steps at equal cost, so the per-PR
+     * budget buys a second seed.
+     *
+     * **Nothing was narrowed to pay for it.** Seed 42 above is untouched and
+     * still runs at 60 steps; this is added alongside. The four events neither
+     * seed reaches are covered by the off-critical-path sweep below, which
+     * saturates the alphabet — total coverage strictly increases here
+     * (AGENTS.md's pinned-seed rule; doc/demo-findings.md F-11).
+     *
+     * The seeds are pinned exactly as seed 42 is: a red run here is triaged
+     * against [ReadyDifferentialHarness]'s "What a divergence MEANS", never
+     * traded for a friendlier seed.
+     */
+    @Test
+    fun `derived ready set agrees with bd ready after every mutation of seed 21`() {
+        val schedule = ReadySchedule.derive(SECOND_AGREE_SEED, ReadyScheduleConfig(steps = 60, maxIssues = 15))
+
+        BdScratchWorkspace.create().use { workspace ->
+            val harness = ReadyDifferentialHarness(workspace, SECOND_AGREE_SEED)
+
+            val report = harness.run(schedule)
+
+            report.comparisons shouldBe schedule.size
+
+            // The pure replay [ReadyCoverage] computes its metric from, checked
+            // against what the LIVE run actually observed, step for step. This
+            // is what stops computenet-98u.4's coverage numbers from measuring
+            // a model of the workspace instead of the workspace: if the replay
+            // and the real mirror ever disagree about who is ready after some
+            // step, every coverage figure derived from the replay is wrong and
+            // this fails here rather than in a spreadsheet.
+            report.outcomes.map { it.readyIds.toSet() } shouldBe ReadyCoverage.readySets(schedule)
+        }
+    }
+
+    /**
+     * **The off-critical-path sweep (computenet-98u.4).** [SWEEP_DEFAULT_SEEDS]
+     * contiguous seeds at [SWEEP_STEPS] steps each — the cheapest
+     * configuration measured that SATURATES the reachable coverage alphabet
+     * (40/40; see [ReadyScheduleTest]'s sweep test for the comparison table).
+     *
+     * **Gated OFF by default, and deliberately not by a JUnit tag.** A
+     * `@Tag` gate would have to be declared in
+     * `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts` alongside the existing
+     * `multi-jvm` and `bench` gates — a file this task does not own. An
+     * environment variable needs no build change and no new module wiring:
+     * Gradle's test JVMs inherit the daemon's environment, so a plain
+     * `./gradlew test`, and every one of the six required checks, skips this
+     * with no configuration at all, while an operator opts in with
+     *
+     * ```
+     * BEADSMIRROR_READY_SWEEP_SEEDS=16 ./gradlew :demo:beadsmirror:test \
+     *     --tests '*ReadyDifferentialTest.ready sweep*' --rerun
+     * ```
+     *
+     * **Cost, stated rather than hidden.** The harness pays roughly one `bd`
+     * mutation (~0.92s) plus one `bd ready` (~0.39s) per step, so the default
+     * 16 x 250 = 4000 steps is hours, not minutes. That is why it is off the
+     * critical path — not because the coverage is optional. Coverage is
+     * monotone in the seed count, so an operator with less time runs fewer
+     * seeds and gets a stated fraction of the alphabet rather than a silently
+     * narrowed sweep; `BEADSMIRROR_READY_SWEEP_SEEDS` is the whole knob, and
+     * the seed range stays contiguous from 1 so no seed is ever skipped over.
+     *
+     * Every divergence surfaces the same way the per-PR seeds do — as a thrown
+     * [ReadyDivergenceError] naming the seed and the step — so a sweep failure
+     * is reproducible from its seed alone by running that seed here.
+     */
+    @Test
+    fun `ready sweep over contiguous seeds saturates the coverage alphabet`() {
+        val requested = System.getenv(SWEEP_ENV)
+        assumeTrue(requested != null, "$SWEEP_ENV unset — off-critical-path sweep not requested")
+        assumeTrue(commandAvailable("bd", "--version"), "bd is not on PATH — skipping")
+        assumeTrue(commandAvailable("dolt", "version"), "dolt is not on PATH — skipping")
+
+        val seeds = requested!!.trim().toIntOrNull() ?: SWEEP_DEFAULT_SEEDS
+        require(seeds > 0) { "$SWEEP_ENV must be a positive seed count, was '$requested'" }
+        val config = ReadyScheduleConfig(steps = SWEEP_STEPS, maxIssues = 15)
+
+        (1L..seeds.toLong()).forEach { seed ->
+            val schedule = ReadySchedule.derive(seed, config)
+            BdScratchWorkspace.create().use { workspace ->
+                val report = ReadyDifferentialHarness(workspace, seed).run(schedule)
+                report.comparisons shouldBe schedule.size
+            }
+        }
+    }
+
+    companion object {
         /** The feature's Ex/agree seed. Pinned — see the class KDoc. */
         const val AGREE_SEED: Long = 42L
 
@@ -193,6 +309,23 @@ class ReadyDifferentialTest {
 
         /** Pinned for computenet-98u.2.4's in_progress-membership test. */
         const val IN_PROGRESS_SEED: Long = 2026081902L
+
+        /**
+         * computenet-98u.4's second pinned per-PR seed — measured as the
+         * strongest complement to [AGREE_SEED] under the current generator
+         * (27 -> 36 of 40 reachable coverage elements). Pinned; asserted by
+         * [ReadyScheduleTest].
+         */
+        const val SECOND_AGREE_SEED: Long = 21L
+
+        /** Opt-in switch for the off-critical-path sweep below; also carries the seed count. */
+        const val SWEEP_ENV: String = "BEADSMIRROR_READY_SWEEP_SEEDS"
+
+        /** Steps per seed in the sweep — the cheapest saturating length measured (computenet-98u.4). */
+        const val SWEEP_STEPS: Int = 250
+
+        /** Contiguous seeds 1..N the sweep needs at [SWEEP_STEPS] to reach 40/40. */
+        const val SWEEP_DEFAULT_SEEDS: Int = 16
 
         const val BLOCKER: String = "R-1"
         const val DEPENDENT: String = "R-2"

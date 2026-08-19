@@ -454,6 +454,22 @@ object ReadyCoverage {
         return seen
     }
 
+    /**
+     * The ready-id set after each step of [schedule], as the pure replay sees
+     * it — one entry per step, in order. Exposed so a LIVE differential run
+     * can assert that the replay this metric is computed from matches what the
+     * real harness observes step for step; without that check the coverage
+     * numbers would measure a model of the workspace rather than the
+     * workspace. See [ReadyDifferentialTest]'s seed-21 run.
+     */
+    fun readySets(schedule: List<ScheduleStep>): List<Set<String>> {
+        val world = ReplayWorld()
+        return schedule.map { step ->
+            world.step(step)
+            world.readyIds()
+        }
+    }
+
     /** [elements] of the schedule `(seed, config)` renders — the common call shape. */
     fun elementsOf(seed: Long, config: ReadyScheduleConfig): Set<ReadyEvent> =
         elements(ReadySchedule.derive(seed, config))
@@ -545,6 +561,10 @@ object ReadyCoverage {
 
             else -> error("verb not part of a ReadySchedule: ${step::class.simpleName}")
         }
+
+        /** The replay's own ready set — the ids whose decisive clause is [ReadyCause.READY]. */
+        fun readyIds(): Set<String> =
+            snapshot().filterValues { it == ReadyCause.READY }.keys
 
         /** Every present issue's decisive clause, in [ReadyPredicate.isReady]'s own evaluation order. */
         private fun snapshot(): Map<String, ReadyCause> =
