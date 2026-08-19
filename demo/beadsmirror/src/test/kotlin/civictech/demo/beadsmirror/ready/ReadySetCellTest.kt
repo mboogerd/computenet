@@ -17,6 +17,10 @@ import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.io.path.extension
 import kotlin.io.path.readBytes
 
@@ -366,6 +370,122 @@ class ReadySetCellTest {
         ready.readySet() shouldBe setOf("A")
     }
 
+    // ------------------------------------------------------------------
+    // computenet-vsbx: the read side, while the writer thread is folding
+    // ------------------------------------------------------------------
+
+    /**
+     * [ReadySetCell.readySet] answers a **whole** value while another thread
+     * drives `MirrorProjector.apply` — no `ConcurrentModificationException`,
+     * and no observation of a half-applied reconciliation pass.
+     *
+     * ## The fixture is what makes a torn read nameable
+     *
+     * One blocker (`root`) and [DEPENDENTS] issues each holding a `blocks`
+     * edge onto it. That is the one shape where a *single* field delta moves
+     * many memberships in **one** [ReadySetCell.reconcile] pass, via the
+     * reverse index: closing `root` takes `root` out and admits all
+     * [DEPENDENTS] dependents; reopening it does the reverse. So the derived
+     * value alternates between exactly two legal states —
+     * `{root}` and `{d-0 .. d-N}` — and **every intermediate is illegal by
+     * construction**: any set that is neither is a mid-pass observation, i.e.
+     * a torn read. The reader asserts set *equality* against those two, so a
+     * torn read is caught whether it shows a wrong size or a wrong membership
+     * of the right size.
+     *
+     * ## Why it is not flaky
+     *
+     * The assertion is a safety property, not a timing one: with the fix, a
+     * published snapshot is a complete post-pass state under *every*
+     * interleaving, so no schedule can redden this. Nothing here waits on a
+     * sleep or on a race being won — the reader spins until the writer is
+     * done and the join is bounded, so a stuck thread fails as a timeout
+     * rather than hanging CI.
+     *
+     * Against the unsynchronized version it fails immediately and for the same
+     * reason on any schedule: [ROUNDS] passes each restructure ~[DEPENDENTS]
+     * entries of the backing `LinkedHashMap`, while the reader copies its key
+     * set thousands of times per pass. See the class KDoc's Threading section
+     * for what now holds.
+     */
+    @Test
+    fun `readySet answers a whole value while the projector is fed from another thread`() {
+        val (projector, ready) = rig()
+
+        projector.apply(openTask(1, ROOT))
+        (0 until DEPENDENTS).forEach { i ->
+            projector.apply(openTask(2 + i.toLong(), dependent(i), edges = listOf(blocks(dependent(i), ROOT))))
+        }
+
+        // The only two legal values, and the two the writer alternates between.
+        val rootOpen = setOf(ROOT)
+        val rootClosed = (0 until DEPENDENTS).mapTo(LinkedHashSet<String>(), ::dependent)
+        ready.readySet() shouldBe rootOpen
+
+        val start = CountDownLatch(1)
+        val writerDone = AtomicBoolean(false)
+        val observations = AtomicLong(0)
+        val failures = ConcurrentLinkedQueue<String>()
+
+        fun report(message: String) {
+            if (failures.size < MAX_REPORTED_FAILURES) failures += message
+        }
+
+        val writer = Thread({
+            try {
+                start.await()
+                var height = 1_000L
+                repeat(ROUNDS) { round ->
+                    val status = if (round % 2 == 0) "closed" else "open"
+                    projector.apply(
+                        record(height++, ROOT, DiffType.MODIFIED, "status" to JsonPrimitive(status))
+                    )
+                }
+            } catch (t: Throwable) {
+                report("writer threw ${t::class.qualifiedName}: ${t.message}")
+            } finally {
+                writerDone.set(true)
+            }
+        }, "vsbx-writer")
+
+        val reader = Thread({
+            try {
+                start.await()
+                while (!writerDone.get()) {
+                    val seen = try {
+                        ready.readySet()
+                    } catch (t: Throwable) {
+                        // The unsynchronized read's own failure mode: iterating
+                        // the writer's LinkedHashMap while it is being restructured.
+                        report("readySet() threw ${t::class.qualifiedName}: ${t.message}")
+                        break
+                    }
+                    observations.incrementAndGet()
+                    if (seen != rootOpen && seen != rootClosed) {
+                        report("torn read: size ${seen.size}, neither {$ROOT} (1) nor the $DEPENDENTS dependents")
+                    }
+                }
+            } catch (t: Throwable) {
+                report("reader threw ${t::class.qualifiedName}: ${t.message}")
+            }
+        }, "vsbx-reader")
+
+        writer.start()
+        reader.start()
+        start.countDown()
+        writer.join(JOIN_TIMEOUT_MS)
+        reader.join(JOIN_TIMEOUT_MS)
+
+        writer.isAlive shouldBe false
+        reader.isAlive shouldBe false
+        failures.toList() shouldBe emptyList<String>()
+        // The reader really ran against a moving writer rather than finishing
+        // before it started: at least one read per round, by a wide margin.
+        (observations.get() > ROUNDS) shouldBe true
+        // And the writer really applied every flip.
+        ready.readySet() shouldBe rootOpen
+    }
+
     /**
      * The "no `bd` on the derivation path" instrument (this task's acceptance
      * clause), in two independent halves — and honest about what each one can
@@ -443,5 +563,32 @@ class ReadySetCellTest {
             private fun classesRoot(): Path =
                 Path.of(ReadySetCell::class.java.protectionDomain.codeSource.location.toURI())
         }
+    }
+
+    /** Fixture constants for the concurrent-read test above. */
+    companion object {
+
+        /** The one blocker whose status flip moves every membership in a single pass. */
+        private const val ROOT = "root"
+
+        /**
+         * How many issues depend on [ROOT] — i.e. how many entries one
+         * reconciliation pass restructures. Large enough that a mid-pass
+         * observation is unmistakable and that the unsynchronized read
+         * reliably trips over a rehash; small enough that the whole test is a
+         * fraction of a second.
+         */
+        private const val DEPENDENTS = 200
+
+        /** Status flips applied. Even, so the run ends with [ROOT] open again. */
+        private const val ROUNDS = 400
+
+        /** Enough evidence to diagnose a failure without drowning the report. */
+        private const val MAX_REPORTED_FAILURES = 8
+
+        /** Bounded so a wedged thread fails the test instead of hanging CI. */
+        private const val JOIN_TIMEOUT_MS = 60_000L
+
+        private fun dependent(i: Int) = "d-$i"
     }
 }

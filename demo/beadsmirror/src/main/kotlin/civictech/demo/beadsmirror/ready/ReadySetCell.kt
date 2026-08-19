@@ -14,6 +14,7 @@ import civictech.cell.port.registerPort
 import civictech.demo.beadsmirror.projector.MirrorEdge
 import civictech.demo.beadsmirror.projector.MirrorKey
 import civictech.demo.beadsmirror.projector.MirrorProjector
+import java.util.Collections
 import java.util.UUID
 
 /**
@@ -114,21 +115,41 @@ import java.util.UUID
  * real emission, not something swallowed) rather than papering over it here,
  * which is what a wave-gated wrapper would do.
  *
- * ## Threading: one writer, no lock — and unlike its inputs, no lock on the read
+ * ## Threading: one writer, no lock; the read side is a published snapshot
  *
  * The whole fold below ([putDots], [edgeAdds], the indices over them, and
  * [advertised]) is plain unsynchronized state, mutated on whatever thread
  * drives `MirrorProjector.apply` — in `BeadsMirrorApp` that is
  * `DoltFeedPoller`'s single daemon thread, the module's documented
- * "one writer, no lock" convention (`MirrorState`'s KDoc). The difference
- * from the two cells this derives from is on the *read* side: `OrMapCell` and
- * `SetCell` fold and answer under `stateLock`, so the existing off-thread
- * reader (the HTTP route, reading `MirrorProjector.view()`) sees a consistent
- * snapshot, whereas [readySet] takes no lock at all and would race the writer
- * rather than merely trail it. Nothing reads this value off the writer thread
- * today — every call site and every test is single-threaded — so serving it
- * (the obvious next consumer) needs a lock or a published immutable snapshot
- * added first; that is a change to this file, not something a caller can fix.
+ * "one writer, no lock" convention (`MirrorState`'s KDoc). That is unchanged.
+ *
+ * **[readySet] is safe from any thread** (computenet-vsbx). It does not read
+ * the fold at all: [reconcile] builds an immutable copy of [advertised]'s key
+ * set at the end of every effective pass and hands it over through the
+ * `@Volatile` [published] field, which [readySet] simply returns. The volatile
+ * write of a reference to a never-again-mutated set is the happens-before edge
+ * — a reader either sees the previous complete value or the next one, never a
+ * half-applied pass and never a `LinkedHashMap` mid-rehash. So a concurrent
+ * fold can make the answer *stale* (by at most the pass in flight), which is
+ * what an incremental derived value means anyway; it cannot make it
+ * inconsistent. `ReadySetCellTest`'s
+ * `readySet answers a whole value while the projector is fed from another
+ * thread` is the standing proof, and it fails against the version without
+ * [published] with both signatures — a torn read and a
+ * `ConcurrentModificationException`.
+ *
+ * A snapshot rather than a lock, deliberately: [reconcile] ends by propagating
+ * into arbitrary downstream cells, so any lock wide enough to cover the fold
+ * would be held across that call and could invert against the input cells' own
+ * `stateLock`. The snapshot costs one O(|ready set|) copy per *effective*
+ * change (nothing at all for a delta that moves no membership), in exchange
+ * for wait-free reads.
+ *
+ * **What this does not extend to.** Everything else here is still writer-thread
+ * only: [evaluationCount], the on-link catch-up ([advertisedDelta], which needs
+ * the tags the snapshot does not carry), and linking itself. A future accessor
+ * that wants to answer off-thread publishes its own immutable snapshot the same
+ * way — reading the fold directly is what this section exists to rule out.
  *
  * ## Attach before you feed
  *
@@ -392,15 +413,44 @@ class ReadySetCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cel
                 }
             }
         }
-        if (adds.isNotEmpty() || dels.isNotEmpty()) outlet.call.propagate(SetDelta(adds, dels))
+        if (adds.isNotEmpty() || dels.isNotEmpty()) {
+            // Publish BEFORE propagating, and only once the whole pass has been
+            // folded, so a downstream handler that reads back sees the state its
+            // own delta describes, and no reader ever sees half of a pass.
+            published = Collections.unmodifiableSet(LinkedHashSet(advertised.keys))
+            outlet.call.propagate(SetDelta(adds, dels))
+        }
     }
 
     // ------------------------------------------------------------------
     // reads
     // ------------------------------------------------------------------
 
-    /** The derived value: the ids currently in the ready set. A set — ordering is out of scope. */
-    fun readySet(): Set<String> = LinkedHashSet(advertised.keys)
+    /**
+     * The derived value's off-thread face: an immutable set, rebuilt by the
+     * writer at the end of every effective [reconcile] pass and handed over
+     * through this volatile field.
+     *
+     * The volatile write is the whole point and not an incidental modifier —
+     * it is the happens-before edge that makes the freshly-built set's
+     * contents visible to a reader that volatile-reads the reference. The set
+     * itself is never mutated after publication, so the reader is free to hold
+     * it for as long as it likes; a later pass publishes a *new* set rather
+     * than editing this one.
+     */
+    @Volatile
+    private var published: Set<String> = emptySet()
+
+    /**
+     * The derived value: the ids currently in the ready set. A set — ordering
+     * is out of scope.
+     *
+     * Safe to call from any thread, wait-free, and never torn: it returns the
+     * immutable set [reconcile] published at the end of its most recent
+     * effective pass, so a concurrent fold can only make the answer *stale*,
+     * never inconsistent. See the class KDoc's Threading section.
+     */
+    fun readySet(): Set<String> = published
 
     companion object {
 
