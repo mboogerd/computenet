@@ -213,3 +213,35 @@ cells.
 `OrMapCell.state()` (its `pullServe` reply already computes this shape for the
 `since`-unfiltered case), or a documented local catch-up seam that fires the
 on-link hook for a direct `subscribe` the way `streamTo` does for a routed one.
+
+## F-11 — `IntersectSetCell` advertised borrowed input tags, so a diamond back into a union dropped live elements — **CLOSED**
+
+**Closed**: fixed in the kernel as `computenet-vvre` (PR #324); `IntersectSetCell` no
+longer republishes its inputs' tags. Recorded here rather than deleted so the *finding*
+survives its fix: this is the first kernel defect the batch oracle (`:oracle`, epic
+`computenet-4ru`) found on its own, and how it was found is the reusable part.
+
+**Numbering note**: the kernel regression test for this defect
+(`kernel/src/test/kotlin/civictech/cell/data/op/IntersectDiamondTagTest.kt`) cites this
+finding as "F-9", the number it carried on the unmerged branch it was drafted on. F-9 here is
+an unrelated `TaggedMapDelta` finding that landed first, so this entry is **F-11** — the
+test's reference is stale by one entry, not a pointer at a different finding.
+
+**Observation**: not a demo finding — `OracleSweepTest`'s BS-1 sweep
+(`oracle/src/test/kotlin/civictech/oracle/run/OracleSweepTest.kt`) disagreed with the batch
+reference model on 4 of 200 default-range seeds (27, 88, 154, 156) under a **single** writer.
+Every failing case was a diamond: a source reconverging on one terminal through two distinct
+paths, one of them an `intersect` feeding back into a `union`. Every failure had the same
+shape — `StateDifference.SetDifference(onlyInExpected=[...], onlyInActual=[])`, i.e. the model
+kept an element live that the kernel had already dropped. A hand-built three-event minimal
+reproduction plus a passing control isolated it to the reconvergent path.
+**Why it was a gap**: an operator that re-advertises a tag it merely *observed* on an input
+makes that tag look like its own downstream, so a later retraction of the borrowed tag on the
+other arm of a diamond covers an element the operator never actually minted — and the element
+disappears while it is still live. It is invisible to any single-path topology, which is why
+the operator suite's own tests did not have it: it needs reconvergence to manifest at all.
+**Proposed shape** (as implemented): every fan-in operator mints its own tags rather than
+borrowing its inputs'. `QuorumSetCell` got the same treatment in `978098c6`, and the general
+rule is now stated as spec 21 tag hygiene (`d40e66f8`). The oracle-side consequence is the
+sweep itself: full-range seed sweeps over diamond-capable topologies are what surfaces this
+class of defect, so BS-1's range and config must not be narrowed to keep it green.
