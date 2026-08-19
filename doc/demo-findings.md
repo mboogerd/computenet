@@ -214,7 +214,7 @@ cells.
 `since`-unfiltered case), or a documented local catch-up seam that fires the
 on-link hook for a direct `subscribe` the way `streamTo` does for a routed one.
 
-## F-11 — `bd`'s denormalized `is_blocked` goes stale against the live edge set
+## F-12 — `bd`'s denormalized `is_blocked` goes stale against the live edge set
 
 **Not a kernel gap.** This entry records an **upstream `bd` defect**, not a
 missing ComputeNet mechanism. It lives here because epic `computenet-98u`

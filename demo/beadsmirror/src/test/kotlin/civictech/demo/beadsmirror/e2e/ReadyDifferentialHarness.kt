@@ -176,7 +176,7 @@ import kotlinx.serialization.json.jsonPrimitive
  * is filed, never weakened into a passing scenario), applied to a
  * derived-vs-oracle disagreement instead of a spec-vs-code one.
  *
- * `doc/demo-findings.md`'s **F-11** is the worked example: two live
+ * `doc/demo-findings.md`'s **F-12** is the worked example: two live
  * observations on *this repository's own tracker* (2026-08-19), of exactly the
  * shape step 1 classifies, recorded there before this harness ever produced
  * one of its own.
