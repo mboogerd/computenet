@@ -100,6 +100,78 @@ class ReadyDifferentialTest {
         }
     }
 
+    /**
+     * **Task computenet-98u.2.4's resolution (a) test.** Drives one issue
+     * `open -> in_progress -> blocked -> in_progress` and checks its ready
+     * membership at every step, exercising [ReadyDifferentialHarness]'s
+     * widened oracle ([ReadyDifferentialHarness.oracleIds] /
+     * [ReadyDifferentialHarness.COMPARISON_STATUSES]) on the half of
+     * READY-COVERAGE row 3 (`status IN ('open', 'in_progress')`) that used to
+     * be aligned away rather than differentially tested — see the harness
+     * type KDoc's "comparison domain" section.
+     *
+     * **Why this discriminates the widening, not just re-states it.** Before
+     * computenet-98u.2.4, both [ReadyDifferentialHarness.derivedIds] and
+     * [ReadyDifferentialHarness.oracleIds] restricted the comparison domain to
+     * `status == "open"`. Under that code, step 1 below (the transition to
+     * `in_progress`) would have dropped [PROBE] out of the comparison domain
+     * on **both** sides — `bd ready --json` already omits `in_progress`
+     * issues (the harness KDoc's probe), and the old `derivedIds()` filtered
+     * it out too — so the two sides would still have agreed (silently, on an
+     * empty intersection for that id) and the run would have stayed green.
+     * The only way to see the old code was wrong was to look at what
+     * [ComparisonOutcome.readyIds] actually contained: with the domain
+     * restricted to `open`, [PROBE] would be **absent** from
+     * `report.outcomes[1].readyIds`, so `membership[1]` would read `false`
+     * against the pre-widening code and this test's `membership shouldBe`
+     * assertion below would fail. Against the widened harness it reads
+     * `true`, because [ReadyDifferentialHarness.inProgressOracleIds] gives
+     * the oracle side an answer for `in_progress` that `bd ready --json`
+     * cannot, and [ReadyDifferentialHarness.derivedIds] now keeps
+     * `in_progress` ids in the comparison domain instead of filtering them
+     * away. So this test fails under the pre-widening harness and passes
+     * under the post-widening one — it discriminates the change, it does not
+     * merely restate it.
+     *
+     * The `blocked` step (status outside
+     * [civictech.demo.beadsmirror.ready.ReadyPredicate.DEFAULT_READY_STATUSES]
+     * entirely) and the final flip back to `in_progress` guard against a
+     * sloppier widening that made every status ready, or made the transition
+     * one-directional/sticky: [PROBE] must fall OUT of both `readyIds` sets
+     * while `blocked` and come back when it returns to `in_progress`.
+     */
+    @Test
+    fun `an issue transitioned into in_progress is ready on both sides, and leaves readiness when blocked`() {
+        val schedule = listOf(
+            ScheduleStep.Create(PROBE, "in_progress membership probe $PROBE"),
+            ScheduleStep.StatusUpdate(PROBE, "in_progress"),
+            ScheduleStep.StatusUpdate(PROBE, "blocked"),
+            ScheduleStep.StatusUpdate(PROBE, "in_progress"),
+        )
+
+        BdScratchWorkspace.create().use { workspace ->
+            val harness = ReadyDifferentialHarness(workspace, IN_PROGRESS_SEED)
+
+            val report = harness.run(schedule)
+
+            // Every step compared without a skipped or errored comparison — the
+            // ReadyDivergenceError the widened oracleIds() would throw if only
+            // one side of the in_progress widening had landed (e.g. derivedIds()
+            // widened but inProgressOracleIds() forgotten) surfaces here as a
+            // thrown exception, failing this call before the membership
+            // assertion below is even reached.
+            report.comparisons shouldBe schedule.size
+
+            val membership = report.outcomes.map { PROBE in it.readyIds }
+            membership shouldBe listOf(
+                true, //  step 0: created open -> ready
+                true, //  step 1: in_progress -> still ready (the widened half)
+                false, // step 2: blocked -> outside the ready status set entirely
+                true, //  step 3: back to in_progress -> ready again, not sticky
+            )
+        }
+    }
+
     private companion object {
         /** The feature's Ex/agree seed. Pinned — see the class KDoc. */
         const val AGREE_SEED: Long = 42L
@@ -107,8 +179,12 @@ class ReadyDifferentialTest {
         /** Pinned for the scripted case too, so a divergence record names a stable run. */
         const val BLOCKER_CYCLE_SEED: Long = 20260819L
 
+        /** Pinned for computenet-98u.2.4's in_progress-membership test. */
+        const val IN_PROGRESS_SEED: Long = 2026081902L
+
         const val BLOCKER: String = "R-1"
         const val DEPENDENT: String = "R-2"
+        const val PROBE: String = "R-3"
     }
 
     private fun commandAvailable(vararg command: String): Boolean = try {

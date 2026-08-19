@@ -8,6 +8,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.demo.beadsmirror.BdInvocation
 import civictech.demo.beadsmirror.BdScratchWorkspace
+import civictech.demo.beadsmirror.dolt.DoltSql
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
 import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.MirrorEdge
@@ -79,17 +80,19 @@ import java.util.UUID
  *
  * ## The comparison domain, applied identically to both sides
  *
- * The domain is `READY-COVERAGE.md`'s **modelled** clause set. Two mechanical
- * alignments, both at the one readable site ([compare]), both applied to BOTH
- * sides — never by pruning mismatches after the fact:
+ * The domain is `READY-COVERAGE.md`'s **modelled** clause set — both status
+ * halves of row 3 (`status IN ('open', 'in_progress')`), not just `open`. Two
+ * mechanical alignments, both at the one readable site ([compare])/[oracleIds],
+ * both applied to BOTH sides — never by pruning mismatches after the fact:
  *
- * 1. **`--include-deferred`** on the oracle invocation. This removes
- *    READY-COVERAGE rows 10a/10b (the `defer_until` clauses, which the derived
- *    side deliberately does not model) from `bd ready`'s own `WHERE`. It is a
- *    flag, not a filter: the oracle simply stops asking the excluded question.
- * 2. **`status == "open"` post-filter, on both sides.** This one is an
- *    alignment away from a genuine **bd-CLI-vs-`ready.go` discrepancy**, and
- *    it costs real coverage, so it is stated here rather than buried:
+ * 1. **`--include-deferred`** on the `open`-half oracle invocation. This
+ *    removes READY-COVERAGE rows 10a/10b (the `defer_until` clauses, which the
+ *    derived side deliberately does not model) from `bd ready`'s own `WHERE`.
+ *    It is a flag, not a filter: the oracle simply stops asking the excluded
+ *    question.
+ * 2. **A two-source oracle, split by status.** This is a resolution to a
+ *    genuine **bd-CLI-vs-`ready.go` discrepancy** (computenet-98u.2.4), stated
+ *    here rather than buried:
  *
  *    > Probed live 2026-08-19, `bd` 1.1.2, scratch sandbox workspace:
  *    > `bd ready --json` **excludes `in_progress` issues** — its own
@@ -98,17 +101,30 @@ import java.util.UUID
  *    > `status IN (...)` clause, which
  *    > [civictech.demo.beadsmirror.ready.ReadyPredicate.DEFAULT_READY_STATUSES]
  *    > models, includes them. No CLI flag widens the oracle back:
- *    > `bd list --ready --status in_progress` still omits them (probed).
+ *    > `bd list --ready --status in_progress` still omits them (probed). This
+ *    > is a property of the `bd ready` **subcommand**, not of `ready.go`'s
+ *    > `BuildReadyWorkWhere` itself — the SQL `WHERE` that function builds has
+ *    > no CLI-level status narrowing baked into it.
  *
- *    So the harness restricts both sides to `status == "open"`. The
- *    consequence, stated plainly: **the `in_progress` half of the modelled
- *    status clause is aligned away, not differentially tested.** It is
- *    covered by [civictech.demo.beadsmirror.ready.ReadySetCellTest] /
- *    `ReadyClauseCoverageTest` at the unit level and by nothing here. On the
- *    oracle side the filter is empirically a no-op (the CLI already omits
- *    them); it is applied anyway, symmetrically, so the code at the
- *    comparison site says what the domain is without the reader having to
- *    know which side it binds on.
+ *    So rather than aligning the domain down to `open` (dropping the
+ *    `in_progress` half of row 3 from differential coverage), the harness
+ *    widens the oracle for exactly that half: [oracleIds] unions the
+ *    `bd ready --json` result (restricted to `status == "open"`, as before)
+ *    with [inProgressOracleIds] — a **second, independent** oracle that
+ *    evaluates the same `BuildReadyWorkWhere` clauses ([ReadyPredicate]'s
+ *    default status/pinned/`is_blocked`/ephemeral/type-exclusion set,
+ *    restricted to `status = 'in_progress'`) as a raw SQL `WHERE` against the
+ *    workspace's live `issues` table via [DoltSql] — the same reader
+ *    [DoltCommitFeed] already uses, main source, unmodified by this task.
+ *    Probed live 2026-08-19 against the same scratch workspace that
+ *    `bd ready --json --include-deferred` returned `[]` for: the equivalent
+ *    `dolt sql` query against `issues` returned the `in_progress` issue,
+ *    confirming this route reaches what the CLI structurally cannot. It is
+ *    independent of `bd ready` (a different binary, a different code path —
+ *    `dolt sql` against the table `ready.go` itself queries) and independent
+ *    of the derived side (no import of, or logic shared with,
+ *    [ReadySetCell]/[MirrorProjector]), which is what makes it a real second
+ *    implementation rather than a restatement of either.
  *
  * Every other exclusion is exactly READY-COVERAGE's excluded-clause list and
  * needs no per-issue code here: the excluded caller-filter clauses (label,
@@ -312,15 +328,20 @@ class ReadyDifferentialHarness private constructor(
                     "ready id $id is in ReadySetCell.readySet() but absent from " +
                         "MirrorProjector.view() — cannot restrict it to the comparison domain",
                 )
-            plainField(record["status"]) == COMPARISON_STATUS
+            plainField(record["status"]) in COMPARISON_STATUSES
         }
     }
 
-    /** The oracle's ready set, restricted to the same domain by the same test. */
+    /**
+     * The oracle's ready set, restricted to the same domain by the same test
+     * — two sources, one per status half of the domain. See the type KDoc's
+     * "comparison domain" section for why a single `bd ready --json` call
+     * cannot cover both.
+     */
     private fun oracleIds(): Set<String> =
         oracleIssues().filterTo(LinkedHashSet()) { issue ->
-            issue["status"]?.jsonPrimitive?.content == COMPARISON_STATUS
-        }.mapTo(LinkedHashSet()) { it.getValue("id").jsonPrimitive.content }
+            issue["status"]?.jsonPrimitive?.content == OPEN_STATUS
+        }.mapTo(LinkedHashSet()) { it.getValue("id").jsonPrimitive.content } + inProgressOracleIds()
 
     private fun oracleIssues(): List<JsonObject> {
         val raw = workspace.run("ready", "--json", "--include-deferred", "--limit", "0")
@@ -328,6 +349,33 @@ class ReadyDifferentialHarness private constructor(
         if (start < 0) return emptyList()
         val parsed = Json.parseToJsonElement(raw.substring(start)) as JsonArray
         return parsed.map { it as JsonObject }
+    }
+
+    /**
+     * The `in_progress` half of the oracle domain — evaluated directly
+     * against the workspace's live `issues` table via [DoltSql], never
+     * through `bd ready`, which structurally omits `in_progress` issues (see
+     * the type KDoc). This is the same clause set [ReadyPredicate] models
+     * (default status restricted here to `in_progress`, pinned/ephemeral
+     * falsy-or-absent, `is_blocked = 0`, `issue_type` not in the excluded
+     * set) rendered as a literal SQL `WHERE`, so it is a structurally
+     * independent second implementation of `ready.go`'s
+     * `BuildReadyWorkWhere` — not a restatement of [ReadyPredicate]'s own
+     * Kotlin logic, and not routed through the CLI whose own behavior is
+     * what is being worked around.
+     */
+    private fun inProgressOracleIds(): Set<String> {
+        val excludedTypes = ReadyPredicate.EXCLUDED_TYPES.joinToString(",") { "'$it'" }
+        val sql = """
+            select id from issues
+            where status = 'in_progress'
+              and (pinned = 0 or pinned is null)
+              and is_blocked = 0
+              and (ephemeral = 0 or ephemeral is null)
+              and issue_type not in ($excludedTypes)
+        """.trimIndent()
+        return DoltSql(workspace.doltRoot).query(sql)
+            .mapTo(LinkedHashSet()) { row -> row.getValue("id").jsonPrimitive.content }
     }
 
     /**
@@ -426,7 +474,7 @@ class ReadyDifferentialHarness private constructor(
          */
         private fun injectPhantomReadyId(cell: ReadySetCell, id: String) {
             val source = UUID.randomUUID()
-            val openStatus = Json.encodeToString(String.serializer(), COMPARISON_STATUS)
+            val openStatus = Json.encodeToString(String.serializer(), OPEN_STATUS)
             val taskType = Json.encodeToString(String.serializer(), "task")
             val delta = TaggedMapDelta<MirrorKey, String>(
                 puts = mapOf(
@@ -439,11 +487,20 @@ class ReadyDifferentialHarness private constructor(
         }
 
         /**
-         * The one status both sides are restricted to — see the type KDoc's
-         * bd-CLI-vs-`ready.go` discrepancy paragraph for why it is not
-         * [civictech.demo.beadsmirror.ready.ReadyPredicate.DEFAULT_READY_STATUSES].
+         * The status [injectPhantomReadyId] gives its synthetic issue, and
+         * the status the `bd ready --json`-sourced half of [oracleIds] is
+         * restricted to.
          */
-        const val COMPARISON_STATUS: String = "open"
+        const val OPEN_STATUS: String = "open"
+
+        /**
+         * Both statuses the comparison domain covers — exactly
+         * [civictech.demo.beadsmirror.ready.ReadyPredicate.DEFAULT_READY_STATUSES].
+         * See the type KDoc's bd-CLI-vs-`ready.go` discrepancy paragraph for
+         * why [oracleIds] needs two sources, one per status, to cover this
+         * set — a single `bd ready --json` call cannot.
+         */
+        val COMPARISON_STATUSES: Set<String> = setOf(OPEN_STATUS, "in_progress")
 
         /**
          * Runaway guard on [drainToHead], not a timeout: the head is already
