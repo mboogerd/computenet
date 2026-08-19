@@ -215,6 +215,52 @@ class ReadyDivergenceControlTest {
     }
 
     // -----------------------------------------------------------------
+    // absent-from-view mutation check — computenet-98u.2.5
+    // -----------------------------------------------------------------
+
+    /**
+     * **Task computenet-98u.2.5.** `ReadyDifferentialHarness.derivedIds()`
+     * used to restrict [civictech.demo.beadsmirror.ready.ReadySetCell]'s
+     * ready ids to the comparison domain with
+     * `plainField(view[id]?.get("status")) == COMPARISON_STATUS`: when `id`
+     * was absent from `MirrorProjector.view()` the `?.get` chain evaluated to
+     * `null`, `null == "open"` was `false`, and the id was silently dropped
+     * from the derived side — never reported, never compared. Feature rule 2
+     * says a derived-side over-approximation must never be masked instead of
+     * reported; that expression was exactly such a mask, unreachable only
+     * because every shipped wiring backs both arms with the same projector.
+     *
+     * [ReadyHarnessDefects.phantomReadyId] manufactures the situation on
+     * purpose: it puts an id directly onto `ReadySetCell`'s field arm — open,
+     * unblocked, so it is a genuine ready id — **without** routing it through
+     * `MirrorProjector.apply`, so `ready.readySet()` contains it while
+     * `projector.view()` never does. That is precisely the state the old
+     * expression filtered away in silence. The fixed `derivedIds()` instead
+     * fails loudly, naming the id, the moment it tries to look the phantom up
+     * in the view.
+     *
+     * Against the pre-fix filter-it-away implementation this test is **red**:
+     * no such id-naming failure is thrown (the id is dropped, not reported),
+     * so `shouldThrow` fails with "Expected exception IllegalStateException
+     * but no exception was thrown."
+     */
+    @Test
+    fun `a ready id absent from the projector view fails loudly instead of being dropped`() {
+        BdScratchWorkspace.create().use { workspace ->
+            val harness = ReadyDifferentialHarness.withDefects(
+                workspace,
+                PHANTOM_SEED,
+                ReadyHarnessDefects(phantomReadyId = PHANTOM_ID),
+            )
+
+            val error = shouldThrow<IllegalStateException> { harness.run(phantomSchedule()) }
+
+            error.message shouldContain PHANTOM_ID
+            error.message shouldContain "absent from"
+        }
+    }
+
+    // -----------------------------------------------------------------
 
     /**
      * `A` blocks `B`, then the edge is removed. Step [DEP_REMOVE_STEP] is the
@@ -241,6 +287,16 @@ class ReadyDivergenceControlTest {
         ScheduleStep.DepRemove(blockedId = DEPENDENT, blockerId = BLOCKER),
     )
 
+    /**
+     * One ordinary real mutation, so the harness has a step to drain and
+     * compare on — [PHANTOM_ID] itself never comes from `bd` at all; it is
+     * injected straight onto the derived side by
+     * [ReadyHarnessDefects.phantomReadyId].
+     */
+    private fun phantomSchedule(): List<ScheduleStep> = listOf(
+        ScheduleStep.Create(BLOCKER, "blocker $BLOCKER"),
+    )
+
     /** `bd ready --json` with **no** alignment flags — the unaligned oracle. */
     private fun defaultOracleIds(workspace: BdScratchWorkspace): Set<String> {
         val raw = workspace.run("ready", "--json", "--limit", "0")
@@ -257,9 +313,18 @@ class ReadyDivergenceControlTest {
         /** Pinned, and deliberately distinct from [CONTROL_SEED] so a record names its run. */
         const val MASKING_SEED: Long = 2026081902L
 
+        /** Pinned, distinct from the other two seeds for the same reason. */
+        const val PHANTOM_SEED: Long = 2026081903L
+
         const val BLOCKER: String = "R-1"
         const val DEPENDENT: String = "R-2"
         const val DEFERRED: String = "R-3"
+
+        /**
+         * Never created by `bd` at all — [ReadyHarnessDefects.phantomReadyId]
+         * injects it directly onto the derived side's field arm.
+         */
+        const val PHANTOM_ID: String = "R-PHANTOM"
 
         /** Index of the `dep remove` in [depRemoveSchedule]. */
         const val DEP_REMOVE_STEP: Int = 3
