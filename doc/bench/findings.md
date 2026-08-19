@@ -1564,9 +1564,12 @@ verdict-shopping.
 `CounterCell` and `PnCounterCell` are excluded from this table on purpose: both are O(1)
 in the number of increments (`FootprintSubject.scalesWithElements = false`), and every
 scale of both classifies `belowResolution` or lands in the omission list above — their
-retained state does not grow with load at all. That settles the trigger question for those
-two families independently of the criterion below: state that does not scale with the
-graph cannot itself be a source of allocation *pressure* that grows with the graph.
+retained state does not grow with load at all. That is a statement about what those two
+families *hold*, and it does not by itself settle the trigger question for them: G-21
+phase 3 asks about allocation pressure, and a cell whose retained state is O(1) can still
+allocate — and immediately discard — a tag or timestamp object per increment, which a
+retained-size instrument cannot see. See *The quantity measured is not the quantity the
+trigger names* below.
 
 ### Trigger (`[BEN1-31]`/`[BEN1-32]`)
 
@@ -1615,6 +1618,62 @@ restated here, next to the numbers they explain, rather than left only in a bead
 
 Every figure in this entry is therefore **occupancy**, not per-object size — stated once
 here rather than re-derived at each number.
+
+### The quantity measured is not the quantity the trigger names
+
+G-21 phase 3's trigger is *"profiling shows allocation pressure"*. Every figure above is
+**retained occupancy** — what a cell's snapshotted state costs to hold — and allocation is a
+different quantity: a workload allocates every intermediate it passes through and retains
+only what survives. `CellFootprintBenchmark`'s own KDoc
+(`bench/src/jmh/kotlin/civictech/bench/micro/CellFootprintBenchmark.kt`, computenet-x9e.6.1)
+draws the distinction in exactly these terms — *"allocation is not retention"*, and G-21
+phase 3's trigger *"is about pressure, not occupancy"* — and forbids presenting a number
+from it as a footprint or citing one in a footprint entry as such. This entry cites none.
+
+That is a second and more basic reason the verdict is INCONCLUSIVE, independent of the
+attribution coarseness argued above: even a perfect payload/tag split of a *retained*
+measurement would still not be a measurement of allocation rate. It also gives the reading a
+cheaper route forward than the kernel change named above. The tree already carries the
+instrument for the trigger's own quantity — `CellFootprintBenchmark` under `-prof gc`, whose
+`gc.alloc.rate.norm` is bytes allocated per `snapshot()` call — and **this task did not run
+it**. Running it across the same seven families and three scales measures what the trigger
+asks for; nothing in this entry does.
+
+### Re-derivation from the committed tree (independent review re-run)
+
+The rendered block above came from an uncommitted local driver, disclosed under *What was
+measured, and how*. That driver supplied one thing: the trigger **sentence**, whose
+percentages it computed from the sweep before `Findings.entry` was called, because
+`Findings.entry` takes the statement as a fixed string. Everything else in the block is
+produced by committed code — and this was checked rather than asserted.
+`CellFootprintProbeTest`'s `full sweep renders through the findings writer` was re-run on a
+quiesced host at commit `2f375387` (whose `bench/` tree is byte-identical to the `78b97989`
+the `Harness:` line names), by exactly the command this entry documents. It emitted the same
+heading, the same `Harness:`/`JMH:` line shapes, a 49-row table and a 47-row omission list
+with the same membership, and a `Trigger:` line whose verdict word is again **INCONCLUSIVE**
+(there from the probe's own placeholder statement). At 1e5 the re-run gave `SetCell` total
+26,910,587 (published 26,920,105), `OrMapCell` 23,713,917 (23,713,836), `KeyedSetCell`
+15,713,514 (15,713,339), `MapCell` 8,519,138 (8,507,880), `ListCell` 2,002,312 (2,003,379);
+the 1e5 `payload` and `tag/metadata` figures are identical across runs (1,600,000 /
+2,400,032 for `SetCell`; 3,200,000 / 2,400,032 for `OrMapCell` and `KeyedSetCell`). Applying
+this entry's criterion to the **re-run's** numbers gives tag/metadata at 8.9% / 10.1% /
+15.3% of total and 10.5% / 13.3% / 23.7% of UNATTRIBUTED — the same bands and the same
+verdict. **Every number this entry publishes, and its verdict, are re-derivable from the
+committed tree by the documented command; only the trigger sentence's wording is not.**
+
+Two figures above are weaker than the block they sit in, and are flagged here rather than
+left to be noticed:
+
+- The `ListCell` row of the shares table (`UNATTRIBUTED` 20.1% of total) divides two values
+  this entry's own omission list classifies `Unreportable` — `ListCell n=100000 total
+  retained` and `ListCell n=100000 UNATTRIBUTED`. It describes container shape and carries
+  no weight in the criterion, whose retire band turns on tag/metadata, structurally 0 for
+  `ListCell`. Read it as an order of magnitude, not as a measurement.
+- The rendered `Trigger:` line's *"0.0-15.3% of total … for the families that hold any tag
+  object at all"* is loose in its lower bound: 0.0% is the value for the families that hold
+  **no** tag object. Those that do hold one measure 8.9-15.3%, which is what the shares
+  table and the trigger section state. The rendered block is `Findings.entry`'s verbatim
+  output and is not edited; the correction is recorded here instead.
 
 ### Scope confirmation
 
