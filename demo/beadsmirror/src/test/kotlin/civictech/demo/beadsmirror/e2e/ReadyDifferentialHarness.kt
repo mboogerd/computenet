@@ -1,9 +1,14 @@
 package civictech.demo.beadsmirror.e2e
 
+import civictech.cell.Propagate
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.port.PortRef
+import civictech.cell.port.Use
 import civictech.demo.beadsmirror.BdInvocation
 import civictech.demo.beadsmirror.BdScratchWorkspace
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
 import civictech.demo.beadsmirror.projector.DotMinter
+import civictech.demo.beadsmirror.projector.MirrorEdge
 import civictech.demo.beadsmirror.projector.MirrorProjector
 import civictech.demo.beadsmirror.ready.ReadySetCell
 import kotlinx.serialization.json.Json
@@ -132,24 +137,103 @@ import kotlinx.serialization.json.jsonPrimitive
  * `bd show <id> --json` (its real status, type and edge list) plus one
  * `bd ready --explain` for the whole workspace. If `bd`'s own reported edge
  * list, evaluated under READY-COVERAGE §2, agrees with the derived side and
- * disagrees with `bd ready`'s answer, it is **(c)**. Handling of case (c) —
- * recording it rather than weakening the harness — belongs to the sibling
- * divergence-controls task, not to this file.
+ * disagrees with `bd ready`'s answer, it is **(c)**.
+ *
+ * ## Classifying and recording case (c) — the `is_blocked`-staleness procedure
+ *
+ * Feature rule 6 (task computenet-98u.2.3). This is the **whole** procedure;
+ * no step in it makes the run go green.
+ *
+ * 1. **Classify.** Read the [DivergenceRecord]'s per-issue evidence for every
+ *    id in [DivergenceRecord.symmetricDifference], and evaluate `bd`'s **own**
+ *    reported edge list for that id by hand under `READY-COVERAGE.md` §2 — a
+ *    blocking edge is `dep_type IN ('blocks', 'conditional-blocks')` whose
+ *    target's status is neither `closed` nor `pinned`; a dangling or foreign
+ *    target does not block (§2.3). If that hand evaluation agrees with the
+ *    **derived** side and disagrees with `bd ready`'s answer, the divergence
+ *    is **case (c): beads' denormalized `is_blocked` column stale against the
+ *    live edge set** — not a ComputeNet bug and not a harness defect.
+ * 2. **Record it in `doc/demo-findings.md`**, with the **reproducing seed**
+ *    ([DivergenceRecord.seed]) and the **step index and mutation text**
+ *    ([DivergenceRecord.stepIndex], [DivergenceRecord.mutation]), following
+ *    that file's existing entry format. The finding is the deliverable; the
+ *    red run is the evidence for it.
+ * 3. **Pin the failing seed verbatim.** It stays in the test that discovered
+ *    it, unchanged ([SeededSchedule]'s pinned-seed slots are the precedent).
+ * 4. **Do not weaken the harness to pass over it.** Specifically forbidden:
+ *    adding the affected id or its clause to the exclusion set; adding a
+ *    retry, a re-read or a tolerance around the comparison; swapping the seed
+ *    for a friendlier one; downgrading the failure to a warning. A case-(c)
+ *    divergence is a true statement about `bd` that this harness exists to
+ *    make, and a green suite that has stopped making it is worth less than a
+ *    red one that still does.
+ * 5. **Do not fix `bd` from here.** Upstream repair is outside this epic's
+ *    scope (epic computenet-98u §2); recording is the contribution.
+ *
+ * A case-(c) finding is therefore expected to leave a **red, pinned** test
+ * behind it until `bd` is repaired upstream — the dispute-style honesty of
+ * `concord/corpus/DISPUTES.md` (a requirement that cannot be checked honestly
+ * is filed, never weakened into a passing scenario), applied to a
+ * derived-vs-oracle disagreement instead of a spec-vs-code one.
+ *
+ * `doc/demo-findings.md`'s **F-11** is the worked example: two live
+ * observations on *this repository's own tracker* (2026-08-19), of exactly the
+ * shape step 1 classifies, recorded there before this harness ever produced
+ * one of its own.
+ *
+ * ## The seeded defect ([ReadyHarnessDefects])
+ *
+ * A harness whose equality check is never *seen* to fail cannot be
+ * distinguished from one whose equality check is decorative.
+ * [ReadyHarnessDefects] is this file's copy of the module's
+ * [civictech.demo.beadsmirror.projector.SeededDefects] pattern: a test-only
+ * switch, unreachable from the public constructor (the primary constructor is
+ * `private` and only [withDefects] passes a non-[ReadyHarnessDefects.NONE]
+ * value), which seeds a **known** defect into the derived side so
+ * [ReadyDivergenceControlTest] can watch the comparison go red — and green
+ * again on the identical run with the switch off.
+ *
+ * It is seeded at the **subscription seam**, never in main source: with a
+ * defect on, [ReadySetCell.derivedFrom] is bypassed and the two subscriptions
+ * are made by hand with a test-only adapter interposed on the edge arm (see
+ * [ReadyHarnessDefects.dropEdgeDeletions]). `ReadySetCell.kt` and
+ * `MirrorProjector.kt` are untouched by task computenet-98u.2.3, deliberately:
+ * sibling epic items own those files.
  *
  * **A discovered failing seed is pinned verbatim, never swapped for a
  * friendlier one** (AGENTS.md's "do not replace a discovered failing seed";
  * [SeededSchedule]'s pinned-seed slots are the module's precedent).
  */
-class ReadyDifferentialHarness(
+class ReadyDifferentialHarness private constructor(
     private val workspace: BdScratchWorkspace,
     private val seed: Long,
-    identity: String = "ready-differential-$seed",
+    identity: String,
+    private val defects: ReadyHarnessDefects,
 ) {
+
+    /**
+     * The ordinary, defect-free harness — the only constructor callable
+     * without naming [ReadyHarnessDefects], and the one every non-control test
+     * uses.
+     */
+    constructor(
+        workspace: BdScratchWorkspace,
+        seed: Long,
+        identity: String = "ready-differential-$seed",
+    ) : this(workspace, seed, identity, ReadyHarnessDefects.NONE)
 
     private val projector = MirrorProjector(DotMinter(identity))
 
-    /** Attached before the projector's first record — see the type KDoc. */
-    private val ready: ReadySetCell = ReadySetCell.derivedFrom(projector)
+    /**
+     * Attached before the projector's first record — see the type KDoc.
+     *
+     * With no defect seeded this is exactly [ReadySetCell.derivedFrom], the
+     * shipped wiring. With one seeded it is the same two subscriptions made by
+     * hand, plus the test-only adapter — see [wireWithSeededDefect].
+     */
+    private val ready: ReadySetCell =
+        if (defects == ReadyHarnessDefects.NONE) ReadySetCell.derivedFrom(projector)
+        else wireWithSeededDefect(projector, defects)
 
     private val feed = DoltCommitFeed(workspace.doltRoot)
 
@@ -162,7 +246,7 @@ class ReadyDifferentialHarness(
      *
      * @return the per-step outcomes, one entry per step — [Report.comparisons]
      *   is what a caller asserts equals the step count.
-     * @throws AssertionError on the first divergence, carrying the full
+     * @throws ReadyDivergenceError on the first divergence, carrying the full
      *   [DivergenceRecord].
      */
     fun run(schedule: List<ScheduleStep>): Report {
@@ -228,8 +312,7 @@ class ReadyDifferentialHarness(
         val derived = derivedIds()
         val oracle = oracleIds()
         if (derived != oracle) {
-            val divergence = record(index, step, derived, oracle)
-            throw AssertionError(divergence.render())
+            throw ReadyDivergenceError(record(index, step, derived, oracle))
         }
         return ComparisonOutcome(index, step, derived, exactHead)
     }
@@ -263,6 +346,48 @@ class ReadyDifferentialHarness(
 
     companion object {
         /**
+         * The divergence-control entry point: a harness with [defects] seeded
+         * into its derived side. `internal`, and the only way to reach a
+         * non-[ReadyHarnessDefects.NONE] harness — the shipped path (the public
+         * constructor above) cannot express one, which is the whole point of
+         * the [civictech.demo.beadsmirror.projector.SeededDefects] pattern this
+         * copies.
+         */
+        internal fun withDefects(
+            workspace: BdScratchWorkspace,
+            seed: Long,
+            defects: ReadyHarnessDefects,
+            identity: String = "ready-differential-$seed",
+        ): ReadyDifferentialHarness = ReadyDifferentialHarness(workspace, seed, identity, defects)
+
+        /**
+         * [ReadySetCell.derivedFrom]'s two subscriptions, made by hand so a
+         * test-only adapter can sit between [MirrorProjector.edges]'s outlet
+         * and [ReadySetCell.edgeInlet]. Nothing in main source is modified or
+         * even parameterised: the defect lives entirely in the wire between two
+         * unmodified cells, so `ReadySetCell.kt` — owned by sibling epic items
+         * computenet-vsbx and computenet-98u.3 — stays untouched.
+         *
+         * The field arm is subscribed unchanged either way: the seeded defect
+         * is deliberately narrow, so a control run isolates the edge path
+         * rather than breaking the derivation wholesale.
+         */
+        private fun wireWithSeededDefect(
+            projector: MirrorProjector,
+            defects: ReadyHarnessDefects,
+        ): ReadySetCell = ReadySetCell().also { cell ->
+            projector.cell.outlet.subscribe(cell.fieldInlet)
+            if (!defects.dropEdgeDeletions) {
+                projector.edges.outlet.subscribe(cell.edgeInlet)
+                return@also
+            }
+            val dropsDeletions = Propagate<SetDelta<MirrorEdge>> { delta ->
+                cell.edgeInlet.call.propagate(SetDelta(adds = delta.adds))
+            }
+            projector.edges.outlet.subscribe(Use.fixed(dropsDeletions, PortRef.generate()))
+        }
+
+        /**
          * The one status both sides are restricted to — see the type KDoc's
          * bd-CLI-vs-`ready.go` discrepancy paragraph for why it is not
          * [civictech.demo.beadsmirror.ready.ReadyPredicate.DEFAULT_READY_STATUSES].
@@ -276,6 +401,48 @@ class ReadyDifferentialHarness(
         const val MAX_FEED_PASSES: Int = 8
     }
 }
+
+/**
+ * Which structural guards of the derived path are **seeded away** for a
+ * divergence control (task computenet-98u.2.3). Always
+ * [NONE] outside [ReadyDivergenceControlTest]: only
+ * [ReadyDifferentialHarness.withDefects] can set anything else, and it is
+ * `internal`, so no shipped or ordinary-test path can reach a defective
+ * harness. Modelled on the module's own
+ * [civictech.demo.beadsmirror.projector.SeededDefects] ("test-only switches,
+ * not shipped configuration").
+ */
+internal data class ReadyHarnessDefects(
+    /**
+     * Drop the `dels` half of every [SetDelta] arriving on the edge arm, so
+     * **edge removals never reach the derived side** while adds still do.
+     *
+     * The defect is interposed at the subscription seam
+     * ([ReadyDifferentialHarness.wireWithSeededDefect]) rather than inside
+     * [ReadySetCell], which this task does not own. Its observable
+     * consequence: after a `bd dep remove` of a live blocking edge, the
+     * derived side still believes the edge exists and keeps the dependent
+     * blocked, while `bd ready` — the oracle — reports it ready. That is a
+     * modelled-clause divergence (READY-COVERAGE §2.1, the blocking `dep_type`
+     * clause), which is exactly what the equality check is supposed to catch.
+     */
+    val dropEdgeDeletions: Boolean = false,
+) {
+    companion object {
+        /** The shipped shape: every guard intact. */
+        val NONE: ReadyHarnessDefects = ReadyHarnessDefects()
+    }
+}
+
+/**
+ * The failure [ReadyDifferentialHarness.run] throws on a divergence, carrying
+ * the [divergence] itself rather than only its rendering — so a control test
+ * can assert on the recorded fields (seed, step index, mutation text, both id
+ * sets) instead of pattern-matching a message.
+ *
+ * It is an [AssertionError] so an ordinary run still fails as a test assertion.
+ */
+class ReadyDivergenceError(val divergence: DivergenceRecord) : AssertionError(divergence.render())
 
 /** One passing comparison. [exactHead] is [ReadyDifferentialHarness.drainToHead]'s answer. */
 data class ComparisonOutcome(
