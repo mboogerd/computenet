@@ -461,6 +461,27 @@ class FanOutlet<Api : Any>(
         // attempt when it suppresses — arguments ride to sanitization exactly
         // once, the repeat hook never fires. Catch-up is unregressed by
         // computenet-usd.2.2 in both count and accounting.
+        //
+        // What the missing gate is NOT is the reason [TargetedDelivery] exists
+        // (computenet-oenm). A suppressing filter installed by
+        // `CompositeCell.mediateOutlet` also *classifies* the refusal — the
+        // landed I-18 `StallNotice.Stall(DEAD_LETTERED, ts)` walk over the
+        // outlet's `Consume` links — and that walk is right for a broadcast and
+        // over-broad here: a suppressed targeted delivery starves exactly one
+        // consumer, the target, while the walk told every consumer of this
+        // outlet that its edge would not deliver. Downstream that is a spurious
+        // watermark advance plus a `GlitchViolation` on links nothing was
+        // withheld from. The corner is reachable through supported API and not
+        // merely in principle — [at] is `Use`'s targeted-delivery method,
+        // public on the very outlet object `mediateOutlet` exposes — but it is
+        // NOT reachable through any of today's in-kernel [at] callers, which is
+        // why it went unnoticed: [baselineTo] stamps a
+        // [MessageContext.baseline] and `catchUpOnLinked` /
+        // `LookupJoinCell` / `PresenceCountCell` deliver context-less, and the
+        // walk's own guard (`context == null || context.baseline != null`,
+        // `computenet-usd.3.1`) returns without classifying for both. The
+        // corner is exactly a NON-baseline targeted suppression, and
+        // `FanOutletTest` pins it.
         return Proxy.fromClass(clazz) { _, method, args ->
             val key = keyOf(portRef)
             // Only a contract-typed attachment can take a targeted delivery: a
@@ -482,7 +503,12 @@ class FanOutlet<Api : Any>(
                 }
                 Proxy.noop(clazz)
             }
-            val filtered = disclosureFilter(args ?: emptyArray()) ?: return@fromClass null
+            // Only the filter evaluation is scoped, never the delivery below:
+            // whatever the target's handler synchronously causes is its own
+            // traffic and must not inherit this frame's single-recipient scope.
+            val filtered = TargetedDelivery.to(portRef) {
+                disclosureFilter(args ?: emptyArray())
+            } ?: return@fromClass null
             Proxy.unwrapInvocationTarget {
                 method.invoke(target, *filtered)
             }
@@ -664,6 +690,53 @@ class FanOutlet<Api : Any>(
      */
     @Suppress("SENSELESS_COMPARISON", "USELESS_ELVIS")
     private fun keyOf(candidate: PortRef): PortRef = candidate ?: NULL_PORT_REF
+}
+
+/**
+ * The single recipient of the targeted delivery ([FanOutlet.at]) whose
+ * disclosure filter is evaluating right now on this thread, or null when the
+ * evaluating filter belongs to a broadcast ([FanOutlet.call]) — computenet-oenm.
+ *
+ * This exists for one consumer: the I-18 "edge that will not deliver"
+ * classification a suppressing `BoundaryPolicy.disclosure` filter emits
+ * (`CompositeCell.stallDeniedEdges`). That walk sends
+ * `StallNotice.Stall(DEAD_LETTERED, ts)` over the refusing outlet's `Consume`
+ * links, which is exactly right for a broadcast — every consumer really was
+ * starved — and over-broad for a targeted delivery, where only the target was.
+ * A thread-scoped hint rather than a filter parameter because the filter's type
+ * is deliberately arguments-only (`FanOutlet.disclosureFilter`,
+ * `BoundaryDenials`): widening it would put a hot-path cost and a public
+ * signature change on every filter author to serve one accounting seam.
+ *
+ * [take] reads **and clears**, and the clearing is the point rather than an
+ * optimization: the walk it feeds delivers protocol frames to downstream
+ * handlers, and anything one of those synchronously emits is a fresh emission
+ * that must not inherit this frame's recipient. Reading a stale target there
+ * would scope a *later* classification to a link that emission never had, and
+ * silently drop it. Falling back to null instead re-widens the walk to today's
+ * whole-fan-out behavior, which is over-broad but never silently lossy.
+ *
+ * `internal`, and a `ThreadLocal` rather than a `CoroutineContext` element, for
+ * the same reason `civictech.cell.link.CurrentPeer` is: an emission is one
+ * dispatch step on one thread, and nothing here may park.
+ */
+internal object TargetedDelivery {
+
+    private val current = ThreadLocal<PortRef?>()
+
+    /** Runs [block] with [portRef] as this thread's targeted-delivery recipient, restoring the prior scope after. */
+    fun <T> to(portRef: PortRef, block: () -> T): T {
+        val prior = current.get()
+        current.set(portRef)
+        try {
+            return block()
+        } finally {
+            if (prior == null) current.remove() else current.set(prior)
+        }
+    }
+
+    /** This thread's targeted-delivery recipient, cleared by the read (see the class KDoc). */
+    fun take(): PortRef? = current.get()?.also { current.remove() }
 }
 
 /**
