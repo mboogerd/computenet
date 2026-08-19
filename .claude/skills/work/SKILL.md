@@ -551,9 +551,10 @@ not exist here: under zsh `${PIPESTATUS[0]}` expands to the empty string,
 which reads at a glance like a successful zero (computenet-8d88). Never
 write `${PIPESTATUS[n]}` in this skill.
 
-**Select and claim one epic** — **continuations first, then highest
-priority**, skipping the SDLC epic (see "The SDLC exclusion" below; the
-filters are in the commands because a filter applied by eye gets forgotten):
+**Select and claim one epic** — **continuations first**, then `bv`'s graph
+ranking where available, then priority, skipping the SDLC epic (see "The
+SDLC exclusion" below; the filters are in the commands because a filter
+applied by eye gets forgotten):
 
 ```bash
 bd ready --type=epic --json > "$SCRATCH/ready-epics.json"   # ~43KB inline — overflow
@@ -566,10 +567,12 @@ jq --slurpfile r "$SCRATCH/resumable.json" \
 #   parens matter: | binds looser than , so `.resumable | not, .priority`
 #   indexes the boolean and dies
 # full descriptions stay in the file — read the chosen epic's from there
+bv --robot-triage 2>/dev/null \
+  | jq -r '.triage.recommendations[].id' > "$SCRATCH/bv-rank.txt" || true
 .claude/skills/work/scripts/claim-epic.sh <the id you selected>
 ```
 
-**`resumable: true` outranks priority — take the top row.** A resumable epic
+**`resumable: true` outranks everything below — take the top row.** A resumable epic
 holds a feature some session left `in_progress`: a branch, a worktree, usually
 a green draft PR, and merged tasks beneath it. That is the most expensive work
 in the queue and the only work in it that *decays* — a draft PR rots into
@@ -586,6 +589,22 @@ be selected at all. Finishing beats starting; this is the rule that says so.
 A **stale** resumable is not an exception here — 5a's resume route reads the
 feature's state and may find it dead rather than paused. That is 5a's call,
 not a reason to skip the epic at selection.
+
+**Among the non-resumable remainder: candidates that appear in
+`$SCRATCH/bv-rank.txt` first, in that file's order; the rest by priority.**
+`bd ready` stays the candidate set —
+`bv`'s recommendation list is capped (3 of 22 ready epics appeared on
+2026-08-19) and includes blocked and claimed items, so it *reorders* the
+ready set and never replaces it or admits a candidate. The epic layer is the
+dependency-richest one, which is exactly where `bv`'s unblocks-count /
+PageRank / betweenness ranking beats a flat priority sort. Preconditions,
+both from AGENTS.md "Choosing work: bv": run it from the **main checkout**
+(worktrees have no export — selection runs there anyway), and only after the
+**export freshness check**. `bv` absent or export stale → an empty/missing
+rank file, and the order is priority alone, exactly as before — do not stop
+to install or repair mid-session. Every guard below (parent ownership,
+`needs:` labels, staleness) runs unchanged on whatever candidate ranks
+first.
 
 **A candidate that is a CHILD of another epic may be someone's owned
 territory.** The sub-epic rule below has a session break one down under the
