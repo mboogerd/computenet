@@ -227,7 +227,9 @@ class ReadyDifferentialTest {
 
         val seeds = requested!!.trim().toIntOrNull() ?: SWEEP_DEFAULT_SEEDS
         require(seeds > 0) { "$SWEEP_ENV must be a positive seed count, was '$requested'" }
-        val config = ReadyScheduleConfig(steps = SWEEP_STEPS, maxIssues = 15)
+        val steps = System.getenv(SWEEP_STEPS_ENV)?.trim()?.toIntOrNull() ?: SWEEP_STEPS
+        require(steps > 0) { "$SWEEP_STEPS_ENV must be a positive step count" }
+        val config = ReadyScheduleConfig(steps = steps, maxIssues = 15)
 
         (1L..seeds.toLong()).forEach { seed ->
             val schedule = ReadySchedule.derive(seed, config)
@@ -258,6 +260,17 @@ class ReadyDifferentialTest {
 
         /** Opt-in switch for the off-critical-path sweep below; also carries the seed count. */
         const val SWEEP_ENV: String = "BEADSMIRROR_READY_SWEEP_SEEDS"
+
+        /**
+         * Optional second knob on the sweep, overriding [SWEEP_STEPS]. Its
+         * first purpose is that the gate itself is testable: a `1` x `20`
+         * invocation proves the environment reaches the test JVM and the
+         * sweep body runs, in half a minute rather than the hours the real
+         * configuration costs. Its second is that an operator with a
+         * different time budget scales BOTH axes explicitly, rather than
+         * quietly reinterpreting the seed count.
+         */
+        const val SWEEP_STEPS_ENV: String = "BEADSMIRROR_READY_SWEEP_STEPS"
 
         /** Steps per seed in the sweep — the cheapest saturating length measured (computenet-98u.4). */
         const val SWEEP_STEPS: Int = 250
