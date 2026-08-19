@@ -24,3 +24,15 @@ dependencies {
     api(project(":kernel"))
     api(project(":testkit"))
 }
+
+// [ORA1-PERF-02]: `-Poracle.seeds=N` widens (or narrows) a seed sweep with no source change.
+// Forwarded to the test JVM as a system property, following the idiom the concord build file
+// uses, and forwarded ONLY when present so the default count stays in Kotlin —
+// `civictech.oracle.run.OracleSweep.DEFAULT_SEED_COUNT` is where it lives, next to the
+// measurement that sized it, and a default duplicated here would silently outrank that KDoc.
+//
+// N is a seed COUNT, not a range: OracleSweep.defaultSeeds() sweeps `0 until N`, so a widened
+// run is a superset of the default one and a failing seed keeps its identity.
+tasks.withType<Test>().configureEach {
+    (project.findProperty("oracle.seeds") as String?)?.let { systemProperty("oracle.seeds", it) }
+}
