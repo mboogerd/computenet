@@ -2,13 +2,82 @@
 
 Break one feature into tasks, then stop. Plan it, don't implement it.
 
-## Reconcile first
+## Contents
+
+- [Reconcile first — and again immediately before the first create](#reconcile-first-and-again-immediately-before-the-first-create)
+- [Do not write a worktree, a branch or a base commit into a task](#do-not-write-a-worktree-a-branch-or-a-base-commit-into-a-task)
+- [A bead must not suggest a method its own acceptance forbids](#a-bead-must-not-suggest-a-method-its-own-acceptance-forbids)
+- [Verify the load-bearing premises first](#verify-the-load-bearing-premises-first)
+- [Break it down](#break-it-down)
+- [Dependencies](#dependencies)
+- [Finish](#finish)
+
+## Reconcile first — and again immediately before the first create
 
 ```bash
 bd list --parent=<id> --all --json
 ```
 
 Create only what's missing.
+
+**Re-read this listing immediately before your first `bd create`, and abort
+with a report if the child set changed.** One check at the start is a
+check-then-act with a multi-minute window, and nothing revalidates inside it.
+On 2026-08-17 two breakdown agents dispatched ~3 minutes apart both ran this
+listing when epic `computenet-4ru` had exactly one child, both correctly
+concluded "not decomposed", and both proceeded. Their creates interleaved:
+**13 features where 6 belong**, in near-duplicate pairs covering identical
+scope, with the epic's blocking edges left straddling both sets
+(computenet-f2p4).
+
+That outcome is worse than clutter, and specifically so: `next-batch.py`
+batches on disjoint `metadata.files`, and a duplicate PAIR has **identical**
+claims — so it does not merely schedule both, it schedules them as *unrelated*
+work, putting two implementers into the same paths.
+
+**If your own dotted ids skip numbers while you are creating, another writer
+is creating under this parent right now.** Both agents watched their ids skip
+(one got `.3/.5/.6/.8`, the other `.2/.4/.7/.9`) and one noticed in real time,
+with no rule attached to the signal. Stop and report rather than finishing the
+set; a partial set someone can reconcile beats a complete duplicate one.
+
+## Do not write a worktree, a branch or a base commit into a task
+
+They are assigned at **dispatch** time by `next-batch.py` and
+`ensure-worktree.sh`, and they are **not knowable when the task is filed**.
+Every task in one session opened its description with a line naming the
+FEATURE's worktree and branch — for one, in as many words, *"Work in the
+feature worktree …, branch feature/…"* — which is wrong for every task:
+SKILL.md 5b gives each task its OWN worktree and branch cut from the feature
+branch, and 5c merges back. An implementer that followed its bead literally
+would work where the orchestrator merges, and violate one-worktree-one-live-agent
+by construction as soon as two tasks run concurrently, as two did. It happened
+on 4 of 4 tasks across 2 breakdowns, so it is a habit, not a slip
+(computenet-qlky).
+
+The same goes for `Base: origin/main <sha>`: by dispatch time one task's real
+base was two sibling merges later than the sha its bead named. **If a task
+must reference the feature, name the feature's ID and nothing else.** A
+breakdown that emits a worktree path, a branch name or a base sha into a task
+description is a defect the next reader can point at.
+
+## A bead must not suggest a method its own acceptance forbids
+
+When a task's acceptance rules out a class of technique — estimating,
+guessing, substituting a default — the *suggested method* you write must not
+name a member of that class. One bead offered "a reflective retained-size walk
+… classifying Timestamp instances and tag-map structure" as a sizing technique
+while its own acceptance carried `[BEN1-21]`, which forbids *estimating* the
+payload/metadata split — and any hand-rolled shallow-size model is an estimate.
+The two clauses pulled opposite ways, and resolving them decided the whole
+instrument. The implementer got it right and paid design time to notice; the
+orchestrator read the bead and dispatched it, because the contradiction was
+*inside one bead* and no file-claim check or batching rule can see that
+(computenet-qp07).
+
+**Where the distinction is subtle, state the discriminator in the bead.** For
+that case one sentence removed the whole ambiguity: *walk to classify, measure
+to size.*
 
 ## Verify the load-bearing premises first
 

@@ -13,6 +13,15 @@ bd list --parent=<id> --all --json
 
 A previous breakdown may have died part-way. Create only what's missing.
 
+**Re-read this listing immediately before your first `bd create`, and abort
+with a report if the child set changed.** One check at the start is a
+check-then-act with a multi-minute window: two breakdown agents dispatched
+minutes apart both read "not decomposed" and both proceeded, producing 13
+features where 6 belong (computenet-f2p4, and [feature.md](feature.md) carries
+the full story). If your own dotted ids **skip numbers** while you are
+creating, another writer is creating under this parent right now — stop and
+report rather than finishing the set.
+
 ## Verify the load-bearing premises first
 
 An item can assert its own infrastructure. "Over the existing Headscale
