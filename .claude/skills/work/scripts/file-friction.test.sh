@@ -37,13 +37,15 @@ fixture() { CASE=$((CASE+1)); export CTRL="$ROOT/c$CASE" BD_LOG="$ROOT/c$CASE/bd
             mkdir -p "$CTRL"; : > "$BD_LOG"; }
 run() { "$SCRIPT" --type bug --title "t" --desc "d" --accept "a" --skill-version abc123 2>&1; }
 
-# 1. happy path: unparented create, then re-parent, then claim
+# 1. happy path: unparented create, then re-parent. No claim: filing is not
+# picking up, and a filing-time claim is what broke the friction lane's drain
+# listing (computenet-oxbv).
 fixture
 out=$(run); st=$?
 [ "$st" = 0 ] && [ "$(tail -1 <<<"$out")" = computenet-h4sh ] \
   && grep -q "^create" "$BD_LOG" && grep -q -- "--parent=computenet-wpvy" "$BD_LOG" \
-  && grep -q -- "--claim" "$BD_LOG" && grep -q "skill_version.*abc123" "$BD_LOG" \
-  && ok "create -> parent -> claim, id printed" || bad "happy: exit=$st out=$out log=$(cat "$BD_LOG")"
+  && ! grep -q -- "--claim" "$BD_LOG" && grep -q "skill_version.*abc123" "$BD_LOG" \
+  && ok "create -> parent, unclaimed, id printed" || bad "happy: exit=$st out=$out log=$(cat "$BD_LOG")"
 
 # 2. create returns non-JSON: exit 1, nothing parented
 fixture; touch "$CTRL/create-garbage"
@@ -57,11 +59,12 @@ out=$(run); st=$?
 [ "$st" = 1 ] && grep -q "bd update computenet-h4sh --parent=" <<<"$out" \
   && ok "failed re-parent names the recovery" || bad "parent: exit=$st out=$out"
 
-# 4. claim fails: filed anyway, exit 0 with a note
-fixture; touch "$CTRL/claim-fail"
+# 4. the filed item is left open and unassigned, so it routes as an
+# acquisition rather than as work already in flight
+fixture
 out=$(run); st=$?
-[ "$st" = 0 ] && grep -q "unclaimed" <<<"$out" \
-  && ok "failed claim is a note, not a failure" || bad "claim: exit=$st out=$out"
+[ "$st" = 0 ] && ! grep -q -- "--claim" "$BD_LOG" && ! grep -q -- "--assignee" "$BD_LOG" \
+  && ok "filed item stays open and unassigned" || bad "unclaimed: exit=$st log=$(cat "$BD_LOG")"
 
 # 5. missing required arg
 fixture

@@ -65,11 +65,18 @@ and report.
 ## 2. Pick the most-reported item
 
 ```bash
-# NOT --status=open: file-friction.sh pre-claims at filing (create-ticket.sh
-# --claim), which sets status to in_progress, so --status=open cannot show a
-# single pre-claimed item. On 2026-08-19 it returned [] against a 48-item
-# backlog and this lane reported the log drained (computenet-oxbv). List
-# everything non-closed and let the assignee routing below decide.
+# NOT --status=open. Filing no longer claims, so most items are open — but
+# the routing below has to SEE a claimed item to judge it: `theirs, skip` and
+# `stale for 12h, steal it` are both unreachable from an open-only listing,
+# and a claim abandoned mid-drain would be invisible forever. List everything
+# non-closed and let the assignee routing decide.
+#
+# This listing was open-only until 2026-08-19, when file-friction.sh still
+# pre-claimed at filing: it returned [] against a 48-item backlog and this
+# lane reported the log drained (computenet-oxbv). Widening it was half the
+# repair; the other half was dropping that filing claim, so `in_progress`
+# here now means a session is draining the item rather than that one once
+# reported it.
 bd list --parent=computenet-wpvy --all --json \
   | sed -n '/^[[{]/,$p' \
   | jq '[ (if type=="array" then . else (.issues // []) end)[]
@@ -103,21 +110,21 @@ Order by
 priority. Skip anything labeled `human`, and anything labeled
 `needs-evidence` — those are parked awaiting a corroborating instance
 (step 3), and the un-park is the label's *removal* by the next session that
-hits the wall (`work` step 7). Then pick by assignee — filing
-machines pre-claim items (SKILL.md step 7), and the claim decides which
-orchestrator drains what:
+hits the wall (`work` step 7). Then pick by assignee. **Unassigned is the
+normal state** — filing does not claim (`file-friction.sh`'s header says
+why), so a claim means a session started draining that item:
 
-- **Assigned to `$BEADS_ACTOR`** → yours already; work it, no sync needed.
 - **Unassigned** → an acquisition: claim by id, `bd dolt push`. Push
   rejected → pull, re-check the assignee, take the next item if it's gone.
+- **Assigned to `$BEADS_ACTOR`** → yours already; work it, no sync needed.
 - **Assigned to the other machine** → theirs; skip it — *unless* the claim
   is stale (untouched for more than 12h, per `updated_at` from the step-1
   pull; deliberately far above `work`'s 15-minute liveness window, because a
-  filing machine holds its claim across whole sessions before draining).
+  single drain — triage, fix, gate, PR — can hold a claim for hours).
   Then steal it with the full bracket: `bd dolt pull` to confirm it is still
   untouched, re-claim, `bd dolt push`, and note the steal in a comment. This
-  is the liveness backstop for a machine that claimed at filing and died
-  before draining.
+  is the liveness backstop for a machine that claimed and then died
+  mid-drain, and the reason this step lists claimed items at all.
 
 ```bash
 bd update <id> --claim

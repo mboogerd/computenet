@@ -101,7 +101,8 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `feature-branch.sh` | Resolves a feature's branch + worktree, minting `-rN` when the old PR squash-merged |
 | `publish-beads.sh` | Publication push with rejection recovery; fails on a nonzero exit **or** a rejection in the output |
 | `create-ticket.sh` | THE create path for a ticket under a shared epic — unparented, then re-parented |
-| `file-friction.sh` | Files a friction item collision-free under the SDLC epic and claims it |
+| `file-friction.sh` | Files a friction item collision-free under the SDLC epic, open and unclaimed |
+| `resumable-epics.sh` | Epics holding a feature left `in_progress` — step 3 ranks these above priority |
 | `wait-checks.sh` | THE settle loop on `gh pr checks` — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`QUERY-FAILED` |
 | `verify-branch-sync.sh` | 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
 | `merge-task.sh` | 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
@@ -458,17 +459,41 @@ not exist here: under zsh `${PIPESTATUS[0]}` expands to the empty string,
 which reads at a glance like a successful zero (computenet-8d88). Never
 write `${PIPESTATUS[n]}` in this skill.
 
-**Select and claim one epic** — highest priority, skipping the SDLC epic
-(see "The SDLC exclusion" below; the filter is in the command because a
-filter applied by eye gets forgotten):
+**Select and claim one epic** — **continuations first, then highest
+priority**, skipping the SDLC epic (see "The SDLC exclusion" below; the
+filters are in the commands because a filter applied by eye gets forgotten):
 
 ```bash
 bd ready --type=epic --json > "$SCRATCH/ready-epics.json"   # ~43KB inline — overflow
-jq '[.[] | select(.id != "computenet-wpvy")
-        | {id, title, priority, assignee, updated_at}]' "$SCRATCH/ready-epics.json"
+.claude/skills/work/scripts/resumable-epics.sh > "$SCRATCH/resumable.json"
+jq --slurpfile r "$SCRATCH/resumable.json" \
+   '[.[] | select(.id != "computenet-wpvy")
+         | . + {resumable: (.id | IN($r[0][]))}
+         | {id, title, priority, resumable, assignee, updated_at}]
+    | sort_by((.resumable | not), .priority)' "$SCRATCH/ready-epics.json"
+#   parens matter: | binds looser than , so `.resumable | not, .priority`
+#   indexes the boolean and dies
 # full descriptions stay in the file — read the chosen epic's from there
 .claude/skills/work/scripts/claim-epic.sh <the id you selected>
 ```
+
+**`resumable: true` outranks priority — take the top row.** A resumable epic
+holds a feature some session left `in_progress`: a branch, a worktree, usually
+a green draft PR, and merged tasks beneath it. That is the most expensive work
+in the queue and the only work in it that *decays* — a draft PR rots into
+conflicts against a moving `main` — and it is invisible to `bd ready`, which
+lists ready work, not work already in flight. Nothing else will ever surface
+it.
+
+Without this rule priority alone decides, and a half-finished epic is one draw
+among every other epic at its level. Measured 2026-08-19: `98u.1` (PR #313,
+green, CLEAN) and `t6b.3.2` (PR #306, green, CLEAN) had sat 24h and 36h, each
+two of *twelve* P2 candidates, and both needed a hand-applied priority bump to
+be selected at all. Finishing beats starting; this is the rule that says so.
+
+A **stale** resumable is not an exception here — 5a's resume route reads the
+feature's state and may find it dead rather than paused. That is 5a's call,
+not a reason to skip the epic at selection.
 
 **A candidate that is a CHILD of another epic may be someone's owned
 territory.** The sub-epic rule below has a session break one down under the
@@ -1849,7 +1874,9 @@ EOF
 ```
 
 `bug` = the skill misbehaved; `feature` = it worked as written but lacks a
-capability. The script labels, stamps the version and claims, then delegates
+capability. It files the item **open and unassigned** — filing is not picking
+up, and a filing-time claim is what broke the friction lane's drain listing
+(computenet-oxbv). The script labels, stamps the version, then delegates
 the create itself to `create-ticket.sh` — the sanctioned path for any ticket
 under a shared parent, which creates **unparented** (a `--parent` create
 allocates the child id from a per-database counter, and two machines filing
