@@ -804,9 +804,26 @@ Create it the same way in all three cases:
 bd create "<the unmet criterion, verbatim>" --type=bug \
   --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet — and, on the closed-epic row: filed UNPARENTED deliberately, epic <epic-id> closed at review time>" \
   --acceptance="<the original criterion, unchanged>" \
+  --metadata '{"model":"<sonnet|opus>","files":"<the files a fix touches>"}' \
   --json | sed -n '/^[[{]/,$p' | jq -r '.id' > "$SCRATCH/residual-id"
 cat "$SCRATCH/residual-id"      # must print the new id, not an empty line
 ```
+
+**`--metadata` is not optional, and it is the flag reviewers keep omitting.**
+A residual is a dispatchable work item by construction — it is filed precisely
+so a later session picks it up — so it needs the same routing fields any
+dispatchable item needs. Filed without them: `next-batch.py` returns it with
+`files=[]` and batches it alone (correct scheduling for a claimless task, so
+nothing errors and nothing warns), SKILL.md 5b's empty-claim rule then reads it
+as a *forgotten* claim, and the dispatched implementer gets **no boundary at
+all** — "stay inside your `metadata.files` claim" degenerates to naming
+nothing. Three of five units in one session arrived this way, and one residual
+even ended its description with a literal `Files: …` line: the author knew the
+file set and wrote it into prose instead of into the field (computenet-se7r,
+computenet-419f). You have just read the code — you are the best-placed author
+of that claim, and the orchestrator otherwise guesses it without having read
+anything. Note the flag is `--metadata` with a JSON object on `bd create`;
+`--set-metadata` exists only on `bd update` ([bd-traps.md](bd-traps.md)).
 
 A shell variable cannot cross a Bash call, so the id goes to a file and
 every later call re-reads it (`RES=$(cat "$SCRATCH/residual-id")` first).

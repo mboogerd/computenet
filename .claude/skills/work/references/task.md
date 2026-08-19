@@ -277,6 +277,15 @@ The smallest coherent change, and proof the tests actually executed.
      `-q`). Your reviewer will demand this accounting (review-task.md §2);
      produce it yourself, from the same run, and quote the numbers and the
      newest timestamp in your report.
+   - **A change that ADDS or RENAMES a Gradle module runs `:kernel:test` as
+     well as its own module's suite.** `ModuleInventoryTest` lives in
+     `:kernel` and fails on a file your bead never mentions —
+     `doc/ARCHITECTURE.md` — so a verification scoped to "the module I just
+     created" yields a green local build, a green `:<newmodule>:test`, and a
+     RED required check in CI with the cause several steps removed from
+     anything you were asked to do. Two sessions escaped this the same day
+     only because their dispatch prompts happened to ask for `:kernel:test`;
+     nothing required it (computenet-m9px, computenet-d7qn).
    - **Run the suite under [agent-execution.md](agent-execution.md)'s rules**
      — one foreground Bash call with an explicit timeout up to 600000 ms
      (there is no `timeout` binary on this host); a suite you KNOW exceeds
