@@ -67,21 +67,12 @@ interface IntersectSetApi<E> {
  * provenance moves from borrowed to minted, matching what every other join
  * operator in this family already does.
  *
- * **Spec residual, stated rather than papered over.** 24 §"Required next steps
- * in the family" already classes `intersect` under *convergent duplicates* —
- * "agree on membership but mint distinct tags (intersect, semijoin/antijoin,
- * equi-join)" — so this change moves the code TOWARDS 24, which the borrowing
- * implementation contradicted. 21's tag-hygiene rule likewise excludes this
- * operator, since an intersection's flip-ON does not ride a fresh input
- * add-tag on the flipping element. But 21's *parenthetical* still enumerates
- * `intersect` among the operators permitted to pass input tags through
- * ("filter, map/flatMap, union, intersect"), which is inconsistent with both
- * 21's own rule and 24's classification, and after this change it is also
- * inconsistent with the code. That enumeration is stale and needs a spec edit
- * (`doc/spec/20-dataflow-semantics/21-propagation.md`, requirement list item
- * 4); it is out of this bug's file claim and is filed separately. Read 24's
- * convergence classes, not 21's parenthetical, as the authority for what this
- * cell does.
+ * Both spec chapters say the same thing: 21 §Tag hygiene (requirement list
+ * item 4) names `intersect` among the operators that must mint, and 24
+ * §"Required next steps in the family" classes it under *convergent
+ * duplicates* — "agree on membership but mint distinct tags (intersect,
+ * semijoin/antijoin, equi-join)". 21's stale parenthetical that once listed
+ * `intersect` as pass-through-permitted was corrected in computenet-88hv.
  *
  * RS-5.3 note: unlike [JoinSetCell]/[SemiJoinCell], this is an identity join
  * (both sides share element type `E`, matching is direct membership — no key
