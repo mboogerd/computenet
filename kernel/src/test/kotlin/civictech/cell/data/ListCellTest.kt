@@ -108,11 +108,16 @@ class ListCellTest {
      * (computenet-jw58, the shape this copies): the reader makes a fixed
      * [READS_PER_ROUND] passes and the writer stops at [WRITE_BUDGET] writes *or*
      * as soon as the reader has finished, whichever comes first, so the round
-     * costs the same number of list operations on 4 vCPUs as on 16. The writer
-     * adds two elements for every one it removes, so the list nets upward and its
-     * own `removeAt` can never run off the front — but it removes *first* in each
-     * iteration, which is what makes the size dip the tear needs (see the writer
-     * loop; the other order measured 1/20 rounds where this one gives 20/20).
+     * costs the same number of list operations on 4 vCPUs as on 16 — its absolute
+     * ceiling is `READS_PER_ROUND × (SEEDED_ELEMENTS + DIP_DEPTH × WRITE_BUDGET)`
+     * element visits per round, and the observed cost is far below it (the whole
+     * class runs in ~0.2s here, guarded or not).
+     *
+     * The writer adds two elements for every one it removes, so the list nets
+     * upward and its own `removeAt` can never run off the front — but it removes
+     * *first* in each iteration, and that ordering is the whole reproduction: a
+     * walk's bound is the size it read at walk start, so only a *dip* below that
+     * size can tear it. See [DIP_DEPTH] for the measured rates.
      */
     @Test
     fun `read accessors do not throw ConcurrentModificationException under a concurrent writer`() {
@@ -128,15 +133,11 @@ class ListCellTest {
                 var written = 0
                 try {
                     while (written < WRITE_BUDGET && readsDone.get() < READS_PER_ROUND) {
-                        // REMOVE FIRST, then grow back. The order is the whole
-                        // reproduction: a walk's bound is the size it read when it
-                        // started, so only a *dip* below that size tears it. An
-                        // add-then-remove writer nets upward and the list is never
-                        // shorter than at walk start — measured 1/20 rounds where
-                        // this order gives 20/20.
-                        cell.inlet.call.removeAt(0)
-                        cell.inlet.call.add("e${n++}")
-                        cell.inlet.call.add("e${n++}")
+                        // REMOVE FIRST, then grow back — see the KDoc and DIP_DEPTH.
+                        // An add-then-remove writer nets upward and the list is
+                        // never shorter than at walk start, which detects nothing.
+                        repeat(DIP_DEPTH) { cell.inlet.call.removeAt(0) }
+                        repeat(2 * DIP_DEPTH) { cell.inlet.call.add("e${n++}") }
                         written++
                     }
                 } catch (t: Throwable) {
@@ -171,7 +172,20 @@ class ListCellTest {
         const val SEEDED_ELEMENTS = 400
 
         /** Read passes per round, each touching both host-callable accessors. */
-        const val READS_PER_ROUND = 40
+        const val READS_PER_ROUND = 200
+
+        /**
+         * How far each writer iteration lets the list dip before growing it back.
+         * Both the depth and the duration of the dip matter: the walk's tail
+         * indices are invalid while the list is short, and a deeper dip invalidates
+         * more of them. Measured red-round rates against the unguarded accessor
+         * on darwin/arm64, one 20-round run each: **1/20** with the writer
+         * growing before it removed, **9/20** at a one-element dip and 40 read
+         * passes, **12/20** at a four-element dip, **20/20** at these values
+         * (19/20 at `WRITE_BUDGET = 100`, which is within run-to-run noise of it).
+         * None of this has been measured on a 4-vCPU CI runner.
+         */
+        const val DIP_DEPTH = 32
 
         /**
          * One page wide enough to hold the whole list, so the walk's bound is the
@@ -186,11 +200,12 @@ class ListCellTest {
          * Hard cap on the writer's iterations in one round. It is a *cap*, not a
          * target: the writer normally stops earlier, when the reader finishes its
          * [READS_PER_ROUND] passes. The cap is what makes the round's cost
-         * machine-independent — the list nets one element per iteration, so it
-         * bounds the length the reader walks at `SEEDED_ELEMENTS + WRITE_BUDGET`.
-         * It is smaller than the OR-set family's because this cell's page
-         * materializes one entry per element with no early byte cut-off above.
+         * machine-independent — the list nets [DIP_DEPTH] elements per iteration,
+         * so it bounds the length the reader walks at
+         * `SEEDED_ELEMENTS + DIP_DEPTH × WRITE_BUDGET`. It is smaller than the
+         * OR-set family's because this cell's page materializes one entry per
+         * element with no early byte cut-off above.
          */
-        const val WRITE_BUDGET = 2_000
+        const val WRITE_BUDGET = 300
     }
 }
