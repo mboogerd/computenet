@@ -1,7 +1,9 @@
 package civictech.demo.beadsmirror.e2e
 
 import civictech.cell.Propagate
+import civictech.cell.Timestamp
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.TaggedMapDelta
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.demo.beadsmirror.BdInvocation
@@ -9,12 +11,16 @@ import civictech.demo.beadsmirror.BdScratchWorkspace
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
 import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.MirrorEdge
+import civictech.demo.beadsmirror.projector.MirrorKey
 import civictech.demo.beadsmirror.projector.MirrorProjector
+import civictech.demo.beadsmirror.ready.ReadyPredicate
 import civictech.demo.beadsmirror.ready.ReadySetCell
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.UUID
 
 /**
  * Task computenet-98u.2.2 — the **differential ready harness** (feature
@@ -282,11 +288,31 @@ class ReadyDifferentialHarness private constructor(
         return true
     }
 
-    /** The derived ready set, restricted to the comparison domain. See the type KDoc. */
+    /**
+     * The derived ready set, restricted to the comparison domain. See the
+     * type KDoc.
+     *
+     * @throws IllegalStateException naming the id when [ReadySetCell.readySet]
+     *   holds an id [MirrorProjector.view] does not — computenet-98u.2.5. That
+     *   combination means [ready] and [projector] have fallen out of
+     *   agreement about which issues exist at all, which is a stronger
+     *   disagreement than the status-domain filter below is entitled to
+     *   settle by silently excluding the id. The two arms are meant to be
+     *   views of the same state; treating "absent from the view" as "not
+     *   `open`" would launder that disagreement into the filtered-out half of
+     *   the domain instead of surfacing it — masking exactly the
+     *   derived-side over-approximation this comparison exists to catch (see
+     *   the earlier bug this line replaces, computenet-98u.2.5).
+     */
     private fun derivedIds(): Set<String> {
         val view = projector.view()
         return ready.readySet().filterTo(LinkedHashSet()) { id ->
-            plainField(view[id]?.get("status")) == COMPARISON_STATUS
+            val record = view[id]
+                ?: error(
+                    "ready id $id is in ReadySetCell.readySet() but absent from " +
+                        "MirrorProjector.view() — cannot restrict it to the comparison domain",
+                )
+            plainField(record["status"]) == COMPARISON_STATUS
         }
     }
 
@@ -377,14 +403,39 @@ class ReadyDifferentialHarness private constructor(
             defects: ReadyHarnessDefects,
         ): ReadySetCell = ReadySetCell().also { cell ->
             projector.cell.outlet.subscribe(cell.fieldInlet)
-            if (!defects.dropEdgeDeletions) {
+            if (defects.dropEdgeDeletions) {
+                val dropsDeletions = Propagate<SetDelta<MirrorEdge>> { delta ->
+                    cell.edgeInlet.call.propagate(SetDelta(adds = delta.adds))
+                }
+                projector.edges.outlet.subscribe(Use.fixed(dropsDeletions, PortRef.generate()))
+            } else {
                 projector.edges.outlet.subscribe(cell.edgeInlet)
-                return@also
             }
-            val dropsDeletions = Propagate<SetDelta<MirrorEdge>> { delta ->
-                cell.edgeInlet.call.propagate(SetDelta(adds = delta.adds))
-            }
-            projector.edges.outlet.subscribe(Use.fixed(dropsDeletions, PortRef.generate()))
+            defects.phantomReadyId?.let { id -> injectPhantomReadyId(cell, id) }
+        }
+
+        /**
+         * Puts [id] straight onto [cell]'s field arm — presence, plus
+         * `status: "open"` and a non-excluded `issue_type` (both of
+         * [ReadyPredicate.REQUIRED_FIELDS], required or the predicate fails
+         * closed) — with no blocking edges, so it is ready by
+         * [ReadyPredicate]. Delivered directly to [ReadySetCell.fieldInlet],
+         * never through [MirrorProjector.apply], which is what leaves the id
+         * absent from [MirrorProjector.view] on purpose. See
+         * [ReadyHarnessDefects.phantomReadyId].
+         */
+        private fun injectPhantomReadyId(cell: ReadySetCell, id: String) {
+            val source = UUID.randomUUID()
+            val openStatus = Json.encodeToString(String.serializer(), COMPARISON_STATUS)
+            val taskType = Json.encodeToString(String.serializer(), "task")
+            val delta = TaggedMapDelta<MirrorKey, String>(
+                puts = mapOf(
+                    MirrorKey.presence(id) to mapOf(Timestamp(source, 0L) to MirrorKey.PRESENT_VALUE),
+                    MirrorKey(id, "status") to mapOf(Timestamp(source, 1L) to openStatus),
+                    MirrorKey(id, "issue_type") to mapOf(Timestamp(source, 2L) to taskType),
+                ),
+            )
+            cell.fieldInlet.call.propagate(delta)
         }
 
         /**
@@ -427,6 +478,23 @@ internal data class ReadyHarnessDefects(
      * clause), which is exactly what the equality check is supposed to catch.
      */
     val dropEdgeDeletions: Boolean = false,
+
+    /**
+     * Inject a field-arm delta straight into [ReadySetCell.fieldInlet] for
+     * this id — presence plus `status: "open"`, no blocking edges — **without
+     * ever routing it through [MirrorProjector.cell]**.
+     *
+     * This is the one situation the type KDoc's "Not reachable today" note
+     * names: [ready] and [MirrorProjector.view] are two independent folds of
+     * the same field stream, and every shipped wiring feeds them from the
+     * same source, so they cannot disagree about which ids exist. Bypassing
+     * [MirrorProjector.apply] for exactly this one synthetic put is what
+     * manufactures that disagreement on purpose — [ready.readySet] gains the
+     * id, [projector.view] never learns of it — so
+     * [ReadyDifferentialHarness.derivedIds] has something to reject
+     * (computenet-98u.2.5).
+     */
+    val phantomReadyId: String? = null,
 ) {
     companion object {
         /** The shipped shape: every guard intact. */
