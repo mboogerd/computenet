@@ -86,12 +86,22 @@ import java.util.concurrent.TimeUnit
  * `civictech.bench.HostFacts.fromJmhLog` reads [GraphState.announceHost]'s CPU/core/OS
  * banner off the very same log (computenet-yhbd).
  *
- * A single-combination smoke run, to prove the harness measures at all:
+ * A single-combination smoke run, to prove the harness measures at all — **on the same
+ * pinned JDK, for the same reason**; a bare `java` here measured 11.127 us/op at REAL D1 on
+ * Homebrew JDK 26.0.1 (checked 2026-08-19), which is a number from the wrong runtime even
+ * though nothing in the output complains:
  *
  * ```
- * java -jar bench/build/libs/bench-jmh.jar 'FanOutScalingBenchmark.real' \
+ * ~/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java \
+ *      -jar bench/build/libs/bench-jmh.jar 'FanOutScalingBenchmark.real' \
  *      -p degree=D1 -f 1 -wi 1 -i 1 -rf csv -rff /tmp/fanout-smoke.csv
  * ```
+ *
+ * `-i 1` leaves the CSV's error column literally `NaN` (JMH writes no dispersion at or below
+ * two measurement samples), and `ThroughputReport.parseCsv` **refuses** such a row outright —
+ * "the run produced too few samples for a dispersion … Re-run with at least three measurement
+ * iterations". So a smoke run can prove the harness measures and can never become a findings
+ * row, which is the intended asymmetry rather than a limitation to work around.
  *
  * The JMH knobs below come from [FanOutFixtures]'s constants for the reason
  * `OperatorThroughputBenchmark` and `BoundedReadBenchmark` give for the same indirection:

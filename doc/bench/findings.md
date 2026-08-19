@@ -1995,9 +1995,12 @@ Pooling the four independent 1e5 runs (12 trials): catch-up cost spans **5.011�
 with a pooled median of **13.55 ms**; the unjoined `maxGap` is **0.0668–0.2976 ms in 11 of
 12 trials** (one outlier at 9.9595 ms) with a pooled median of **0.124 ms**; the joined
 `maxGap` spans **5.013–29.303 ms**, pooled median **13.57 ms**. Per run, the joined median
-sits **49x, 109x, 139x and 284x** its own paired unjoined median. Occupancy — the paired
-median difference — is **positive in all four 1e5 runs, at +11.32, +12.64, +20.86 and
-+25.35 ms**.
+sits **109x, 284x, 49x and 139x** its own paired unjoined median. Occupancy — the paired
+median difference — is **positive in all four 1e5 runs, at +11.32, +25.35, +12.64 and
++20.86 ms**. Both of those lists are in **run order 1..4**, matching the table above; they
+were published sorted ascending and were reordered at review, because a sorted list reads as
+run order and silently mis-attributes each figure to the wrong run (the ranges, 49x–284x and
++11.32–+25.35 ms, are unchanged).
 
 Four separate probe runs were used rather than a raised `CatchUpFixtures.TRIALS`, and that
 choice is a measurement decision worth stating: the rig's source grows by 16,000 elements
@@ -2036,6 +2039,12 @@ The four 1e5 runs' twelve trials pair each catch-up cost with the stall it infli
 those two numbers are nearly identical **per trial** rather than merely on average: in 10 of
 12 trials they differ by ≤ 0.13 ms (≤ 1.3% of the value), and in the remaining two by 1.09
 and 1.79 ms. The same holds at 1e4 (7.9781 vs 7.8550 median) and 1e3 (5.1429 vs 5.1600).
+**That difference is signed both ways, and the negative sign is not an anomaly**: the joined
+`maxGap` runs marginally *under* the catch-up interval in 3 of the 12 trials (run 1 trial 1 at
+−0.008 ms, run 3 trials 2 and 3 at −0.042 and −0.008 ms), which is what a gap bounded by the
+interval between two arrivals should do when the catch-up interval additionally contains the
+priority-0 enqueue wait that precedes the stall. The ≤ 0.13 ms above is an absolute
+difference; read the signed values off the per-trial table.
 
 That pairing, not any absolute value, is the load-bearing observation of BS-9, and it is
 robust precisely where the levels are not: a shared-machine disturbance moves both halves
@@ -2122,8 +2131,16 @@ untouched by any measurement here.
 - **A clean catch-up cost-versus-state-size curve.** The three pre-seed scales' shipped sizes
   overlap (1e3's third trial ships 42,363 elements, more than 1e4's first at 19,062), so the
   1e3/1e4/1e5 rows are three overlapping samples of the same growing rig, not three points on
-  a size curve. Per-element cost across them lands in the 0.1–0.2 µs/element band; that band,
-  not a slope, is what this entry supports.
+  a size curve. **Nor does a per-element cost band survive the per-trial data**, and the
+  earlier form of this sentence — "lands in the 0.1–0.2 µs/element band" — was corrected at
+  review: dividing each trial's catch-up cost by the elements that trial actually shipped
+  gives **0.035–0.412 µs/element across the eighteen trials** (median 0.164), with only 8 of
+  the 18 inside 0.1–0.2. Restricted to the twelve 1e5 trials it is 0.035–0.267 µs/element,
+  median 0.112. So 0.1–0.2 describes roughly where the middle of the distribution sits and is
+  **not** a bound; what this entry supports about per-element cost is an order of magnitude —
+  ~0.1 µs per element — and neither a band nor a slope. Every input to those figures is in
+  the per-trial table above (`catch-up samples` over `shipped per trial`), so the arithmetic
+  is re-checkable without the raw artifacts.
 - **Allocation, footprint, or throughput of anything.** Per-delta latency and wall-clock
   stalls only.
 
