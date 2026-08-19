@@ -1763,7 +1763,8 @@ least one *single-word* search to have come back empty before you file.
 
 **One issue per kind of friction.** Found (and still open) → **upvote it**:
 comment this session's instance (what you were doing, what happened, what it
-cost) — comment count is the remediation priority — then claim it for this
+cost — `bd comment <id> "<text>"`, body positional, or `--file` for any body
+that quotes code) — comment count is the remediation priority — then claim it for this
 machine if unclaimed (`bd update <id> --claim`; already claimed by the other
 machine → done, its lane owns it). If the item is labeled `needs-evidence`,
 the remediation lane judged the existing reports unconvincing and its latest

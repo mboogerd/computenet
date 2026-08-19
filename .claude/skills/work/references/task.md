@@ -70,8 +70,15 @@ What the bead says, what its context says, and what has to have landed first.
 
 1. Read the task and its context:
    ```bash
-   bd show <id> --json
+   bd show <id> --json > "$SCRATCH/<id>.json"
+   jq -r '.[0] | "\(.description)\n---\n\(.acceptance_criteria)"' "$SCRATCH/<id>.json"
    ```
+
+   **Redirect it — do not read it inline.** `bd show` on a child inlines its
+   parent epic's *entire* description, so a child of a large epic is bigger
+   than the epic (measured: 57KB for a child of a 43KB epic). It overflows
+   the tool result, and the failure looks like a truncated read whose natural
+   recovery — re-running the command — fails identically (computenet-rram).
    Plus its parent feature and epic, and any spec sections or prior comments
    they cite. Follow AGENTS.md's "Start every task here" — the cited spec
    text is the authority, not this file. Note `metadata.files`: your

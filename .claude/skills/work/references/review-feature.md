@@ -97,7 +97,7 @@ files under exactly the names you would pick (~40 stale logs including
 one quotes the implementer's build as its own independent evidence.
 
 ```bash
-bd show <feature-id> --json          # acceptance criteria, description
+bd show <feature-id> --json > "$SCRATCH/<id>.json"   # acceptance criteria, description
 bd list --parent=<feature-id> --all --json  # the tasks (--all: they are closed by now)
 bd comments <feature-id> --json > "$SCRATCH/comments.json"   # then read the file
 ```
@@ -150,6 +150,30 @@ walk, which follows `.parent` when set and the dotted-id prefix otherwise:
 breakdown and 5f's route-4 items are legitimately parentless, and the file
 already tells you how to review one. Only a non-zero exit (`(no such id: …)`
 or `(cycle? …)`) means unresolved.
+
+**A negative finding about another agent's tracker writes needs a lookup, not
+a search.** Verifying that a claimed follow-up bead was really filed is a
+natural and valuable review check, and it is precisely the query `bd search`
+is worst at: it matches a literal substring of the **title and id only** —
+descriptions are invisible, and a multi-word query hits only when those words
+appear verbatim and adjacent. You will search from the residual's *subject*
+wording while the bead was titled by its author, so the two rarely share an
+adjacent word sequence, and **an empty result is no evidence at all**. A
+reviewer that trusted one reported that an implementer "claimed to file a bead
+and did not"; `bd show computenet-yhbd` returns that bead, open and correctly
+parented (computenet-tay3). Check by **id** (`bd show <id>`) when one is
+named, otherwise `bd list --parent=<epic> --all --json` or a grep of
+`.beads/issues.jsonl`. If you cannot confirm either way, report the
+uncertainty — never the accusation.
+
+**Read the key by its real name first.** The write flag is `--acceptance`;
+the JSON read key is **`acceptance_criteria`**. `jq '.[0].acceptance'`
+answers `null` on a bead that *has* criteria, which sends a reviewer down the
+ladder below for no reason (computenet-2rix, [bd-traps.md](bd-traps.md)). And
+read it from a file — `bd show` on a feature inlines its parent epic's whole
+description and has overrun the tool-result limit at 55KB, and **a truncated
+bead read is a truncated acceptance list** with nothing in the output saying
+so (computenet-h0dj, computenet-rram).
 
 **`acceptance_criteria` may be empty or absent altogether** — on a bead filed
 mid-session by another agent it usually is, because nothing broke it down, and

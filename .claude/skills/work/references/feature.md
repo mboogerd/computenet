@@ -266,7 +266,21 @@ orchestrator's Finalize push (SKILL.md step 6) sends them to the shared
 tracker — don't sync here; only acquisitions are synced mid-session, and
 this is not one (claim-sync.md).
 
-Comment the tasks created on the feature. Leave it `in_progress` — a feature
+Comment the tasks created on the feature.
+The invocation, since it is the one command this file asks you to run and
+nothing else shows it — the body is **positional**; `--text`, `--body` and
+`bd comment add` are all wrong and have each been guessed by a different
+agent (computenet-danb, computenet-63pn):
+
+```bash
+bd comment <id> "<text>"
+bd comment <id> --file "$SCRATCH/note.md"   # any body that quotes code
+```
+
+Use the `--file` form whenever the text contains backticks: inside a
+double-quoted argument they execute as shell and the word vanishes from the
+stored comment while `bd` reports success ([bd-traps.md](bd-traps.md)).
+ Leave it `in_progress` — a feature
 closes only when its PR merges, never on task completion or a review verdict
 (review-feature.md: "Ready is not merged"). Report the task ids.
 
