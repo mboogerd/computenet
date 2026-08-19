@@ -213,3 +213,60 @@ cells.
 `OrMapCell.state()` (its `pullServe` reply already computes this shape for the
 `since`-unfiltered case), or a documented local catch-up seam that fires the
 on-link hook for a direct `subscribe` the way `streamTo` does for a routed one.
+
+## F-11 — `bd`'s denormalized `is_blocked` goes stale against the live edge set
+
+**Not a kernel gap.** This entry records an **upstream `bd` defect**, not a
+missing ComputeNet mechanism. It lives here because epic `computenet-98u`
+(BDS3) rule 6 designates this file as the record for exactly this class of
+finding: when the ready-set differential harness
+(`demo/beadsmirror/.../e2e/ReadyDifferentialHarness.kt`) disagrees with its
+oracle *because the oracle is wrong*, the finding is written down and the
+harness is **not** weakened to pass over it. The classification procedure — and
+the list of weakenings that are forbidden — is that file's "Classifying and
+recording case (c)" section.
+
+**Observation**: two instances on **this repository's own live tracker**, both
+2026-08-19, both **observed on the live tracker rather than produced by the
+harness** (the harness had not yet been run against a case-(c) divergence, so
+neither carries a reproducing harness seed or step index — the fields rule 6
+requires of a harness-produced instance):
+
+1. `computenet-98u.1.3` stayed out of `bd ready` (and inside `bd blocked`)
+   after `computenet-98u.1.2` closed, although its only blocking edge targeted
+   that now-closed bead. Its full edge set at the time:
+   `computenet-98u.1[parent-child/in_progress]`,
+   `computenet-98u.1.2[blocks/closed]`. Neither `bd dolt pull` nor `bd dolt
+   push` cleared it. `computenet-vsbx`, which has no blocking edge at all, was
+   likewise absent from `bd ready`. Primary record: the 2026-08-19 10:25Z
+   comment on epic `computenet-98u` ("Scheduling finding, and it is on this
+   epic's own subject").
+2. `computenet-98u.2.3` — the bead this entry was written under — was omitted
+   from `bd ready` at ~14:15Z while `bd dep list computenet-98u.2.3` showed
+   exactly one `blocks` edge, to `computenet-98u.2.2`, whose status was
+   `closed`. A `bd dolt pull` at session start did not clear it, nor did a
+   no-op `bd update computenet-98u.2.3 --status=open`. The consequence was
+   operational: `.claude/skills/work/scripts/next-batch.py computenet-98u.2`
+   returned verdict `blocked` and the task had to be dispatched by hand.
+
+**Why it matters**: beads persists blockedness as a denormalized `is_blocked`
+column maintained across many write paths and recomputed wholesale after a
+merge (`cmd/bd/sync.go` step 3 / `RecomputeBlockedAfterMerge`). Evaluating the
+*live* edge set under `READY-COVERAGE.md` §2 — a blocking edge is `dep_type IN
+('blocks', 'conditional-blocks')` whose target's status is neither `closed` nor
+`pinned` — gives the right answer in both instances above, and the stored
+column gives the wrong one. That is precisely the staleness BDS3's derived
+ready set exists to eliminate: `ReadySetCell` never consumes the column,
+deriving blockedness from the edge set and the blocker's mirrored status
+instead. So in a divergence of this shape the **oracle** is wrong and the
+derived side is right.
+
+**Proposed shape**: nothing to build in the kernel. The handling, per epic
+`computenet-98u` §2, is (a) record the instance here with its reproducing seed
+and step when the harness produces one, (b) keep the failing seed pinned, (c)
+leave the harness red rather than excluding the clause, retrying the comparison
+or swapping the seed, and (d) leave the repair upstream — fixing `bd` is
+outside this epic's scope. Consumers of `bd` inside this repository should read
+readiness from the edge set (`bd dep list` plus the targets' statuses), not from
+`bd ready`, whenever the distinction matters; instance 2 above is what happens
+when a tool does not.
