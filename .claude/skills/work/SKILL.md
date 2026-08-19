@@ -612,6 +612,32 @@ The same shape is why step 3's workable-surface check must not commit to an
 epic whose only workable children are declared consumers of undelivered work:
 they are workable in `bd ready`'s sense and unstartable in fact.
 
+**A third shape: children exist TWICE, one set superseding the other.** A
+double breakdown — the same epic decomposed twice, by a re-dispatch or by two
+concurrent sessions reading the same epic state — leaves near-identical
+children in pairs. `computenet-4ru` carried four such pairs (`.6/.7`,
+`.8/.9`, `.10/.11`, `.12/.13`), created seconds apart, one twin of each closed.
+Neither reading above catches it, and inheriting the aftermath cost a session
+real time reading two ~1500-word bodies side by side before any work could
+start (computenet-f434). Scan the `--all` listing you already have for
+**same-titled or same-scoped children created within minutes of each other**,
+then:
+
+- **One twin closed** — very likely a clean supersede if it has
+  `comment_count` 0 and a `closed_at` within minutes of its `created_at`
+  (closed fast, before anyone worked it). Trust the survivor and say so.
+  A closed twin with **comments**, or a nonzero diff, carries state the
+  survivor may lack: read it before trusting the survivor, and if the two
+  disagree that is a human's call ([references/ask-human.md](references/ask-human.md)).
+- **Both twins open** — do **not** guess. Keep the set that maps 1:1 onto the
+  epic's own suggested decomposition, repair any dependency edges straddling
+  both sets, and let **each session close only the beads it created**: an
+  orchestrator deleting another session's beads underneath it is the
+  destructive move the runbook warns about. If the other session is a live
+  same-machine peer, `ListAgents`/`SendMessage` reaches it and two messages
+  settle who keeps what — that is what actually resolved `computenet-4ru`,
+  and it beats a 20-minute reconciliation by inference (computenet-t9d5).
+
 **A prerequisite between an epic and a non-epic is unexpressible as a bd
 blocking edge** — `bd` refuses a blocking dependency across the epic boundary.
 So the breakdown cannot wire "these tasks wait on the epic"; it has to give
@@ -732,6 +758,20 @@ type is `feature`; if there is none but there are other rows, that is the
 no-feature-layer shape below, and you already have its answer. The epic
 itself is never one of the rows, but a ready **sub-epic** under it can be —
 that is a real child needing breakdown (step 4), not a feature to implement.
+
+**The MIXED shape — features AND ready non-feature children under one epic —
+takes `ready-in-epic.sh`'s order, not the feature filter.** Both branches
+above are written for a pure shape, and read literally a direct child is
+unselectable for as long as any feature remains ready: the feature filter
+skips it on every pass, and the no-feature-layer route never fires because
+features exist. `ready-in-epic.sh` has already sorted by priority, so **if the
+first row is not a feature, take it** on the direct-child route
+([references/direct-child.md](references/direct-child.md)) before the
+features. On `computenet-7em` the skipped row was a priority-1 bug that made
+CI actually execute the module's e2e suites — without it both features would
+have shipped on green-but-skipped evidence. Working it first is what made the
+following PR the first `:demo:beadsmirror` work in the repo's history whose
+tests really ran on a required lane (computenet-mv1s).
 
 A resumed feature carrying `metadata.review=passed` was certified last
 session — check its PR (`gh pr view <pr> --json state`); `MERGED` →
@@ -1473,6 +1513,20 @@ half of the answer: **keep at most ~2 PRs open against any one file** —
 beyond that, sequence. Stated where it bites in
 [references/direct-child.md](references/direct-child.md), where nothing else
 bounds the count.
+
+**Cheaper still: prevent the collision instead of surviving it.** When two
+in-flight branches must each add an entry to the same *ordered list* — the
+`include()` block in `settings.gradle.kts`, the module table in
+`doc/ARCHITECTURE.md` — the default behaviour (both append at the end, or both
+anchor at the same neighbour) guarantees a conflict in every such file.
+Agreeing on **different insertion points** converts N guaranteed conflicts
+into zero for the cost of one message. Two sessions adding `:oracle` and
+`:identity` on 2026-08-17 did exactly that — one row between `:testkit` and
+`:wire`, the other after `:wire` — and the peer verified **zero** conflicts in
+both files after merging main, with both entries present and nothing lost
+(computenet-t9d5). A same-machine peer is reachable: `ListAgents` finds it,
+`SendMessage` reaches it. Everything else in this tier is about paying for a
+collision; this is the one move that avoids it.
 
 Red required check → red-check-attribution.md; pending → wait with
 `.claude/skills/work/scripts/wait-checks.sh <pr-url>` (step 2's rules: classify on output, never
