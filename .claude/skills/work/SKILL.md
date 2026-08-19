@@ -296,6 +296,32 @@ Three standing disciplines:
   .claude/skills/work/scripts/wait-checks.sh <pr-url>
   ```
 
+  **That rule covers `gh pr checks`. It applies to EVERY `gh` call, and the
+  others were all written bare.** During one 80-minute GraphQL degradation
+  roughly one call in three returned 503 — while REST stayed healthy and
+  githubstatus.com reported every component operational, so the outage is
+  invisible where you would look for it. `gh pr ready` took **five** attempts;
+  `gh pr list`, `gh pr view` and `gh pr comment` each failed at least once
+  (computenet-rkbp, computenet-fdv9). Retry any of them a few times, and
+  classify on output:
+
+  ```bash
+  for i in 1 2 3; do out=$(gh pr ready <n> 2>&1) && break; sleep $((i*5)); done
+  ```
+
+  Two specifics that cost real work that day:
+
+  - **Never test a `gh` pipeline's exit status.** `if gh pr comment … | tail -1;
+    then echo OK; fi` printed OK over a 503 and the comment was never posted —
+    the pipeline's status is `tail`'s. Re-read the write (`.comments|length`)
+    rather than trusting the call. This is the `${PIPESTATUS[0]}`/zsh trap the
+    skill already warns about for the sweep scripts, reaching `gh`.
+  - **`gh pr comment` has a REST fallback and draft→ready does not.**
+    `gh api -X POST repos/{owner}/{repo}/issues/<n>/comments -F body=@file`
+    worked first time while the GraphQL-backed `gh pr comment` would not.
+    Marking a PR ready is the GraphQL `markPullRequestReadyForReview` with no
+    REST equivalent, so retrying is the only option there.
+
   It requires all six required rows PRESENT and none pending, keeps the
   three non-settled states apart (query failed / not yet reporting /
   unsettled — one state to any test on `$?`, and two of them look green),
