@@ -186,68 +186,6 @@ class ReadyDifferentialTest {
 
 
     /**
-     * **The second pinned per-PR seed (computenet-98u.4).** Same sizing as the
-     * Ex/agree run above, a different seed, and the reason it exists is
-     * measured rather than assumed: seed 42 at 60 steps exercises 27 of the 40
-     * reachable [ReadyEvent]s ([ReadyCoverage]); seed 42 **and** seed 21
-     * together exercise 36, and 10 of the 13 `DEPENDENT`-role events — the
-     * indirect-propagation half where an incremental derived cell goes stale
-     * and a recompute-the-world implementation cannot.
-     *
-     * **Why a second seed and not a longer schedule.** Measured over 500 seeds
-     * (pure schedule replay, no `bd`), coverage against steps for ONE seed:
-     *
-     * ```
-     * steps    min   p10   p50   p90   max      (of 40 reachable)
-     *    20      6    10    13    15    21
-     *    60     16    20    23    27    33      <- today's required check
-     *   120     21    27    28    30    33      (seed 42: 30)
-     *   200     25    31    33    35    38      (seed 42: 32)
-     *  1000     35    36    36    37    39
-     * ```
-     *
-     * A single schedule never saturates: even at 1000 steps the median seed is
-     * still short of the alphabet, because the rare events need a structural
-     * coincidence (a status update landing on an issue that is *already* a
-     * blocker of a live dependent) that one 15-issue workspace reaches only
-     * occasionally. Two seeds at 60 steps reach 36; one seed at 120 steps —
-     * the same 120 total steps, the same wall time, since the harness pays per
-     * STEP — reaches 30. Seeds dominate steps at equal cost, so the per-PR
-     * budget buys a second seed.
-     *
-     * **Nothing was narrowed to pay for it.** Seed 42 above is untouched and
-     * still runs at 60 steps; this is added alongside. The four events neither
-     * seed reaches are covered by the off-critical-path sweep below, which
-     * saturates the alphabet — total coverage strictly increases here
-     * (AGENTS.md's pinned-seed rule; doc/demo-findings.md F-11).
-     *
-     * The seeds are pinned exactly as seed 42 is: a red run here is triaged
-     * against [ReadyDifferentialHarness]'s "What a divergence MEANS", never
-     * traded for a friendlier seed.
-     */
-    @Test
-    fun `derived ready set agrees with bd ready after every mutation of seed 21`() {
-        val schedule = ReadySchedule.derive(SECOND_AGREE_SEED, ReadyScheduleConfig(steps = 60, maxIssues = 15))
-
-        BdScratchWorkspace.create().use { workspace ->
-            val harness = ReadyDifferentialHarness(workspace, SECOND_AGREE_SEED)
-
-            val report = harness.run(schedule)
-
-            report.comparisons shouldBe schedule.size
-
-            // The pure replay [ReadyCoverage] computes its metric from, checked
-            // against what the LIVE run actually observed, step for step. This
-            // is what stops computenet-98u.4's coverage numbers from measuring
-            // a model of the workspace instead of the workspace: if the replay
-            // and the real mirror ever disagree about who is ready after some
-            // step, every coverage figure derived from the replay is wrong and
-            // this fails here rather than in a spreadsheet.
-            report.outcomes.map { it.readyIds.toSet() } shouldBe ReadyCoverage.readySets(schedule)
-        }
-    }
-
-    /**
      * **The off-critical-path sweep (computenet-98u.4).** [SWEEP_DEFAULT_SEEDS]
      * contiguous seeds at [SWEEP_STEPS] steps each — the cheapest
      * configuration measured that SATURATES the reachable coverage alphabet
@@ -331,6 +269,106 @@ class ReadyDifferentialTest {
         const val DEPENDENT: String = "R-2"
         const val PROBE: String = "R-3"
     }
+
+    private fun commandAvailable(vararg command: String): Boolean = try {
+        ProcessBuilder(*command)
+            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+            .waitFor() == 0
+    } catch (e: Exception) {
+        false
+    }
+}
+
+
+/**
+ * computenet-98u.4's **second pinned per-PR seed**, deliberately its own
+ * top-level class rather than a fifth method on [ReadyDifferentialTest].
+ *
+ * Gradle distributes test work across `maxParallelForks` by TEST CLASS
+ * (`:demo:beadsmirror` runs on up to four forks — computenet-9vx3,
+ * `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`), and the methods of one
+ * class run serially inside one fork. Measured on a 16-core box, `--rerun`,
+ * this module: with both 60-step seeds in one class that class costs 404s and
+ * becomes the module's critical path on its own, roughly +90s of module wall
+ * time; split across two classes each costs ~160-190s, both fit under the
+ * module's existing tail, and the coverage gain is free.
+ *
+ * A second class in the SAME FILE is what buys that — nothing about the split
+ * is a package or file-layout decision, it is purely the unit Gradle
+ * schedules on. Keep the two together here so the reason stays legible.
+ */
+class ReadySecondSeedDifferentialTest {
+
+    @BeforeEach
+    fun checkPrerequisites() {
+        assumeTrue(commandAvailable("bd", "--version"), "bd is not on PATH — skipping")
+        assumeTrue(commandAvailable("dolt", "version"), "dolt is not on PATH — skipping")
+    }
+
+    /**
+     * **The second pinned per-PR seed (computenet-98u.4).** Same sizing as the
+     * Ex/agree run above, a different seed, and the reason it exists is
+     * measured rather than assumed: seed 42 at 60 steps exercises 27 of the 40
+     * reachable [ReadyEvent]s ([ReadyCoverage]); seed 42 **and** seed 21
+     * together exercise 36, and 10 of the 13 `DEPENDENT`-role events — the
+     * indirect-propagation half where an incremental derived cell goes stale
+     * and a recompute-the-world implementation cannot.
+     *
+     * **Why a second seed and not a longer schedule.** Measured over 500 seeds
+     * (pure schedule replay, no `bd`), coverage against steps for ONE seed:
+     *
+     * ```
+     * steps    min   p10   p50   p90   max      (of 40 reachable)
+     *    20      6    10    13    15    21
+     *    60     16    20    23    27    33      <- today's required check
+     *   120     21    27    28    30    33      (seed 42: 30)
+     *   200     25    31    33    35    38      (seed 42: 32)
+     *  1000     35    36    36    37    39
+     * ```
+     *
+     * A single schedule never saturates: even at 1000 steps the median seed is
+     * still short of the alphabet, because the rare events need a structural
+     * coincidence (a status update landing on an issue that is *already* a
+     * blocker of a live dependent) that one 15-issue workspace reaches only
+     * occasionally. Two seeds at 60 steps reach 36; one seed at 120 steps —
+     * the same 120 total steps, the same wall time, since the harness pays per
+     * STEP — reaches 30. Seeds dominate steps at equal cost, so the per-PR
+     * budget buys a second seed.
+     *
+     * **Nothing was narrowed to pay for it.** Seed 42 above is untouched and
+     * still runs at 60 steps; this is added alongside. The four events neither
+     * seed reaches are covered by the off-critical-path sweep below, which
+     * saturates the alphabet — total coverage strictly increases here
+     * (AGENTS.md's pinned-seed rule; doc/demo-findings.md F-11).
+     *
+     * The seeds are pinned exactly as seed 42 is: a red run here is triaged
+     * against [ReadyDifferentialHarness]'s "What a divergence MEANS", never
+     * traded for a friendlier seed.
+     */
+    @Test
+    fun `derived ready set agrees with bd ready after every mutation of seed 21`() {
+        val schedule = ReadySchedule.derive(ReadyDifferentialTest.SECOND_AGREE_SEED, ReadyScheduleConfig(steps = 60, maxIssues = 15))
+
+        BdScratchWorkspace.create().use { workspace ->
+            val harness = ReadyDifferentialHarness(workspace, ReadyDifferentialTest.SECOND_AGREE_SEED)
+
+            val report = harness.run(schedule)
+
+            report.comparisons shouldBe schedule.size
+
+            // The pure replay [ReadyCoverage] computes its metric from, checked
+            // against what the LIVE run actually observed, step for step. This
+            // is what stops computenet-98u.4's coverage numbers from measuring
+            // a model of the workspace instead of the workspace: if the replay
+            // and the real mirror ever disagree about who is ready after some
+            // step, every coverage figure derived from the replay is wrong and
+            // this fails here rather than in a spreadsheet.
+            report.outcomes.map { it.readyIds.toSet() } shouldBe ReadyCoverage.readySets(schedule)
+        }
+    }
+
 
     private fun commandAvailable(vararg command: String): Boolean = try {
         ProcessBuilder(*command)
