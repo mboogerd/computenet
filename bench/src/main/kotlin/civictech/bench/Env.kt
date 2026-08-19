@@ -888,7 +888,7 @@ data class HostFacts(
         }
 
         private fun singleValue(log: String, prefix: String, source: String): String {
-            val values = bannerValues(log, prefix)
+            val values = hostBannerValues(log, prefix)
             if (values.size > 1) {
                 throw HostFactsUnknownException(
                     "cannot establish the run's host: $source states '$prefix' " +
@@ -909,6 +909,43 @@ data class HostFacts(
                     "/abs/path/throughput.csv 2>&1 | tee /abs/path/throughput.log`"
             )
         }
+
+        /**
+         * [bannerValues] for the host banner, matching the marker ANYWHERE in a line
+         * rather than only at its start — which the shared helper cannot do, and which
+         * this banner needs because it is the only one printed from inside the fork.
+         *
+         * JMH writes its progress prefix (`# Warmup Iteration   1: `) WITHOUT a trailing
+         * newline and then relays the fork's stdout onto that same line, so the FIRST
+         * line [bannerLines] prints does not begin at column 0. Measured on a 2-fork
+         * sweep of `OperatorThroughputBenchmark` (2026-08-19, review of computenet-yhbd),
+         * the run log read:
+         *
+         * ```
+         * # Warmup Iteration   1: # Host CPU model: Apple M2 Pro
+         * # Host core count: 10
+         * # Host OS: Mac OS X 26.6.2
+         * ```
+         *
+         * A `startsWith` match therefore lost exactly one fact — the CPU model — and
+         * [fromJmhLog] refused every real sweep, telling the operator to re-run a sweep
+         * that had in fact printed the banner correctly. `GraphState.announceHost`
+         * additionally terminates JMH's pending line before printing, so a freshly
+         * captured log is clean for a human reader; this parser is what keeps a log
+         * captured before that (or by any other host-relaying harness) readable.
+         *
+         * [MeasuringJvm] and [RunKnobs] keep the strict `startsWith` form on purpose:
+         * their lines are JMH's own, written by the HOST process, and never relayed.
+         */
+        private fun hostBannerValues(log: String, prefix: String): List<String> =
+            log.lineSequence()
+                .mapNotNull { line ->
+                    val marker = line.indexOf(prefix)
+                    if (marker < 0) null else line.substring(marker + prefix.length).trim()
+                }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .toList()
 
         /**
          * `sysctl -n machdep.cpu.brand_string` on darwin, `/proc/cpuinfo`'s `model

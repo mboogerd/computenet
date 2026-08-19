@@ -355,10 +355,13 @@ class ThroughputReportTest {
      * `OperatorThroughputBenchmark.GraphState.announceHost`'s `@Setup(Level.Trial)` hook
      * from inside the measuring fork (`[BEN1-23]`, computenet-yhbd).
      *
-     * Defaults describe a host that is NOT this test-running machine's own (see the
-     * `env` fixture above, which shares these values so JVM/knob-focused tests above stay
-     * unaffected by this addition). The computenet-yhbd tests below vary [cpuModel] to
-     * exercise the refusal and the recorded-vs-running distinction.
+     * Defaults mirror the `env` fixture above, so the JVM/knob-focused tests stay
+     * unaffected by this addition. They are NOT a host that differs from the machine
+     * running the suite — on the development host they are exactly it (`Apple M2 Pro`,
+     * 10 cores, measured 2026-08-19) — so do not build a recorded-vs-running test on the
+     * defaults. The computenet-yhbd tests below state their own hosts: the refusals vary
+     * [cpuModel], and the positive test names a deliberately unlike host and asserts that
+     * it still differs from the running one.
      */
     private fun hostBanner(
         cpuModel: String? = "Apple M2 Pro",

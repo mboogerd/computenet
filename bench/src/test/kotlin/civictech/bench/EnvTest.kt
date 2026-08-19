@@ -112,6 +112,26 @@ class EnvTest {
     }
 
     @Test
+    fun `reads a fact JMH relayed into its own progress line`() {
+        // Verbatim from a 2-fork sweep of OperatorThroughputBenchmark on this branch
+        // (2026-08-19): JMH prints `# Warmup Iteration   1: ` without a newline and
+        // relays the fork's stdout onto that line, so the first fact the trial hook
+        // prints does not begin at column 0. Expected values are literals read off that
+        // log, not recomputed by the parser under test.
+        val log = """
+            # Warmup Iteration   1: ${HostFacts.CPU_MODEL_PREFIX} Apple M2 Pro
+            ${HostFacts.CORE_COUNT_PREFIX} 10
+            ${HostFacts.OS_PREFIX} Mac OS X 26.6.2
+        """.trimIndent()
+
+        HostFacts.fromJmhLog(log, source = "<fixture>") shouldBe HostFacts(
+            cpuModel = "Apple M2 Pro",
+            coreCount = 10,
+            os = "Mac OS X 26.6.2",
+        )
+    }
+
+    @Test
     fun `refuses a log stating the CPU model two different ways`() {
         val failure = shouldThrow<HostFactsUnknownException> {
             HostFacts.fromJmhLog(

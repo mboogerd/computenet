@@ -181,6 +181,15 @@ open class OperatorThroughputBenchmark {
          */
         @Setup(Level.Trial)
         fun announceHost() {
+            // The leading newline is load-bearing. JMH writes its progress prefix
+            // (`# Warmup Iteration   1: `) with no trailing newline and then relays this
+            // fork's stdout onto that same line, so without it the first fact printed
+            // below lands mid-line rather than at column 0 — measured on a 2-fork sweep,
+            // which is how the CPU model went missing from every real run log (review of
+            // computenet-yhbd). `HostFacts.fromJmhLog` matches the marker mid-line too,
+            // so the two halves are independently sufficient; this one is what keeps the
+            // artifact readable for a human.
+            println()
             HostFacts.captureCurrent().bannerLines().forEach(::println)
         }
 
