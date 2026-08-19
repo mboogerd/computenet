@@ -109,8 +109,10 @@ class ListCellTest {
      * [READS_PER_ROUND] passes and the writer stops at [WRITE_BUDGET] writes *or*
      * as soon as the reader has finished, whichever comes first, so the round
      * costs the same number of list operations on 4 vCPUs as on 16. The writer
-     * adds two elements for every one it removes, so the list only grows and its
-     * own `removeAt` can never run off the front.
+     * adds two elements for every one it removes, so the list nets upward and its
+     * own `removeAt` can never run off the front — but it removes *first* in each
+     * iteration, which is what makes the size dip the tear needs (see the writer
+     * loop; the other order measured 1/20 rounds where this one gives 20/20).
      */
     @Test
     fun `read accessors do not throw ConcurrentModificationException under a concurrent writer`() {
@@ -126,9 +128,15 @@ class ListCellTest {
                 var written = 0
                 try {
                     while (written < WRITE_BUDGET && readsDone.get() < READS_PER_ROUND) {
+                        // REMOVE FIRST, then grow back. The order is the whole
+                        // reproduction: a walk's bound is the size it read when it
+                        // started, so only a *dip* below that size tears it. An
+                        // add-then-remove writer nets upward and the list is never
+                        // shorter than at walk start — measured 1/20 rounds where
+                        // this order gives 20/20.
+                        cell.inlet.call.removeAt(0)
                         cell.inlet.call.add("e${n++}")
                         cell.inlet.call.add("e${n++}")
-                        cell.inlet.call.removeAt(0) // net growth: the list never shrinks past the seed
                         written++
                     }
                 } catch (t: Throwable) {
