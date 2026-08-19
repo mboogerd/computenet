@@ -1,6 +1,7 @@
 package civictech.inspect
 
 import civictech.cell.CellRef
+import civictech.cell.Timestamp
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.PortRef
@@ -951,6 +952,19 @@ class InspectorServer internal constructor(
      * re-baselines, so waiting on the generation alone can outrun the beat.
      */
     internal fun reBaselineAtMsOf(ref: CellRef): Long? = flow.reBaselineAtMsOf(ref)
+
+    /**
+     * The wave the flow feed has actually *recorded* for the tapped outlet
+     * [producer] — what [WaveHealth] will read on the next [tickAll] — or null
+     * when it is untapped or its last observed emission carries no live wave.
+     *
+     * A test seam beside [reBaselineAtMsOf], for the same shape of race:
+     * `FanOutlet.call` bumps `waveState().highWater` before it fans out to its
+     * taps, so a driver that waits on an outlet's own watermark can tick while
+     * the evaluator still sees the previous wave (computenet-e0zv). See
+     * [FlowCollector.observedWaveOf].
+     */
+    internal fun observedWaveOf(producer: PortRef): Timestamp? = flow.observedWaveOf(producer)
 
     /** `GET /api/inspect/errors`'s body, decoded — tests. */
     internal fun errorSnapshot(): ErrorSnapshot = errors.snapshot()

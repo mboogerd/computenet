@@ -56,14 +56,50 @@ def bd(*args):
         return []
 
 
+class ClaimError(Exception):
+    """A metadata.files claim that is present but unreadable.
+
+    Named rather than raised as a bare AttributeError: the traceback for
+    `'list' object has no attribute 'split'` names split() on a list, not
+    WHICH bead is malformed, so an orchestrator with several candidates in
+    the batch cannot tell which one to fix without bisecting
+    (computenet-tbzg).
+    """
+
+
 def claim_of(task):
     """Files a task expects to touch. Empty set means 'unknown', not 'none'.
+
+    BOTH shapes are accepted, because both are in circulation from sanctioned
+    paths: breakdowns write the comma-separated string
+    ("a/b.kt,c/d.kt") and reviewers filing residuals through
+    create-ticket.sh write a JSON list (["a/b.kt", "c/d.kt"]). Only the
+    string form parsed until 2026-08-19, so a batch containing a
+    reviewer-filed residual aborted with a traceback at the one step that
+    decides what may run in parallel (computenet-tbzg).
 
     Paths are normalised (no leading "./", no trailing "/") so that containment
     below compares like with like.
     """
     raw = (task.get("metadata") or {}).get("files") or ""
-    return {_norm(p) for p in raw.split(",") if p.strip()}
+    if isinstance(raw, str):
+        parts = raw.split(",")
+    elif isinstance(raw, (list, tuple)):
+        parts = []
+        for p in raw:
+            if not isinstance(p, str):
+                raise ClaimError(
+                    "%s: metadata.files list holds a %s, expected strings"
+                    % (task.get("id", "<unknown bead>"), type(p).__name__)
+                )
+            parts.extend(p.split(","))
+    else:
+        raise ClaimError(
+            "%s: metadata.files is a %s, expected a comma-separated string "
+            "or a list of strings" % (task.get("id", "<unknown bead>"),
+                                      type(raw).__name__)
+        )
+    return {_norm(p) for p in parts if p.strip()}
 
 
 def _norm(path):
@@ -99,8 +135,9 @@ def overlaps(files, taken):
 LANE_CORES = 5
 
 
-def capacity_limit(cores):
-    """How many agents may be dispatched at once on a machine with `cores` cores.
+def capacity_limit(cores, siblings=0):
+    """How many agents THIS session may dispatch at once, given `siblings` other
+    live /work sessions sharing the same `cores`.
 
     Disjoint `files` claims prove a batch will not merge into a conflict. They
     say nothing about whether the machine can *run* it: every task in this repo
@@ -172,8 +209,24 @@ def capacity_limit(cores):
 
     Floor of 1: a batch is never emptied by the cap, which would turn "ok" into
     a verdict the caller routes on. One agent always runs.
+
+    THE CAP IS PER SESSION, AND THE MACHINE IS SHARED. `siblings` is how many
+    OTHER /work sessions are live on this box; the budget is split between
+    them, because the contention above is a property of the MACHINE and this
+    function has no other way to know. Measured on Anva@A0030 2026-08-17:
+    hw.ncpu = 10 so the cap is 2, and at that moment `ps` showed FOUR live
+    Claude Code CLI processes with four sibling session worktrees beside them
+    — each computing 2 independently, each of the four looking correct by its
+    own accounting, for 4x the measured safe parallelism on one box
+    (computenet-arow). The 8-agent figure there is arithmetic from the observed
+    session count, not an observed run; what was observed is the session count,
+    the core count and the formula.
+
+    Floor of 1 again on the division: a session that knows it has siblings
+    still gets one agent, so concurrency degrades to serial rather than to
+    deadlock.
     """
-    return max(1, cores // LANE_CORES)
+    return max(1, (cores // LANE_CORES) // max(1, 1 + siblings))
 
 
 def cap_batch(batch, skipped, cap):
@@ -243,7 +296,7 @@ def plan_batch(candidates):
 
 def main():
     if len(sys.argv) < 2:
-        sys.exit("usage: next-batch.py <feature-id> [--actor NAME]")
+        sys.exit("usage: next-batch.py <feature-id> [--actor NAME] [--siblings N]")
     feature = sys.argv[1]
     actor = os.environ.get("BEADS_ACTOR", "")
     if "--actor" in sys.argv:
@@ -267,16 +320,40 @@ def main():
         seen.add(tid)
         candidates.append((task, resumed))
 
-    batch, skipped = plan_batch(candidates)
+    try:
+        batch, skipped = plan_batch(candidates)
+    except ClaimError as exc:
+        # Named and actionable: the bead id, what its claim looked like, and
+        # the one fix. A bare traceback here names split() on a list and not
+        # WHICH of several candidates is malformed (computenet-tbzg).
+        sys.exit("next-batch: unreadable file claim\n  %s\n"
+                 "Fix that bead's metadata.files -- a comma-separated string "
+                 "(\"a/b.kt,c/d.kt\") or a JSON list of strings -- then re-run:\n"
+                 "  bd update <id> --set-metadata files=a/b.kt,c/d.kt" % exc)
 
     cores = os.cpu_count() or 1
-    cap = capacity_limit(cores)
+    # Siblings are discovered by the orchestrator (step 3's liveness check) and
+    # passed in; this script cannot see them. Default 0 = "I am alone", which
+    # is the pre-2026-08-19 behaviour.
+    siblings = 0
+    if "--siblings" in sys.argv:
+        try:
+            siblings = max(0, int(sys.argv[sys.argv.index("--siblings") + 1]))
+        except (IndexError, ValueError):
+            sys.exit("next-batch: --siblings takes a non-negative integer")
+    elif os.environ.get("WORK_SIBLINGS"):
+        try:
+            siblings = max(0, int(os.environ["WORK_SIBLINGS"]))
+        except ValueError:
+            sys.exit("next-batch: WORK_SIBLINGS must be a non-negative integer")
+    cap = capacity_limit(cores, siblings)
     batch, skipped = cap_batch(batch, skipped, cap)
 
     verdict, parked = _assess(feature, batch)
     print(json.dumps({"batch": batch, "skipped": skipped,
                       "verdict": verdict, "parked": parked,
-                      "capacity": {"cores": cores, "max_parallel": cap}},
+                      "capacity": {"cores": cores, "siblings": siblings,
+                                   "max_parallel": cap}},
                      indent=2))
 
 
@@ -367,9 +444,45 @@ def parked_ids(children):
                   and is_human_park(t))
 
 
+def branch_has_commits(branch):
+    """Does a local ref `branch` exist and carry commits of its own?
+
+    `resumed` was derived purely from status == in_progress AND assignee ==
+    actor, so a task released by sweep-stale-claims.sh reads as NEVER TOUCHED
+    — status reset to open, indistinguishable in the JSON from fresh work.
+    Measured on computenet-4ru.5.1: a previous session had implemented it
+    fully (two commits, 11 files, +1871 lines) and written a completion
+    comment, then died before review; the sweep correctly released the claim
+    (nothing had reviewed it), and this script then reported
+    `"resumed": false` while handing back a worktree and branch that already
+    held the deliverable. The documented next step for a non-resumed entry is
+    to dispatch an implementer — a second one, onto a finished branch
+    (computenet-jw9x).
+
+    The branch is the durable witness the bead status is not. Answers False on
+    any error: git absent, not a repo, no such ref. A wrong False is the old
+    behaviour, so this can only improve the reading, never degrade it.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+            capture_output=True, text=True, timeout=10)
+        if out.returncode != 0:
+            return False
+        merge_base = subprocess.run(
+            ["git", "rev-list", "--count", f"origin/main..refs/heads/{branch}"],
+            capture_output=True, text=True, timeout=10)
+        return merge_base.returncode == 0 and merge_base.stdout.strip() not in ("", "0")
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _entry(task, resumed, files):
     meta = task.get("metadata") or {}
     tid = task["id"]
+    branch = meta.get("branch") or f"task/{tid}"
+    # A branch carrying commits means resumed, whatever the bead status says.
+    has_work = branch_has_commits(branch)
     return {
         "id": tid,
         "model": meta.get("model") or "",     # empty => breakdown omitted it
@@ -379,8 +492,13 @@ def _entry(task, resumed, files):
         # so it is surfaced here rather than hand-grepped out of the prose.
         "cross_bead": meta.get("cross_bead") or "",
         "worktree": meta.get("worktree") or f"../computenet-worktrees/{tid}",
-        "branch": meta.get("branch") or f"task/{tid}",
-        "resumed": resumed,
+        "branch": branch,
+        "resumed": bool(resumed) or has_work,
+        # Set when the BRANCH says resumed and the bead status did not. The
+        # orchestrator must inspect before dispatching: `git log` in the
+        # worktree and `bd comments` on the bead, then route to 5c (review and
+        # merge) rather than to an implementer, if the work is already done.
+        "branch_has_commits": has_work,
     }
 
 

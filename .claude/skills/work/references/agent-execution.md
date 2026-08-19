@@ -11,6 +11,8 @@ absence cost a session (the cited bead holds the story — `bd show <id>`).
 - [Foreground timeouts, and why there is no `timeout` binary](#foreground-timeouts-and-why-there-is-no-timeout-binary)
 - [Commit before you wait on evidence](#commit-before-you-wait-on-evidence)
 - [The bounded until-loop, and refusals](#the-bounded-until-loop-and-refusals)
+- [Commands that fail QUIETLY in this shell and on this host](#commands-that-fail-quietly-in-this-shell-and-on-this-host)
+- [Two pushes, and neither is yours](#two-pushes-and-neither-is-yours)
 - [The job ledger](#the-job-ledger)
 - [Never end a turn waiting](#never-end-a-turn-waiting)
 
@@ -69,14 +71,41 @@ and only then start the long evidence run.
 Background the long run (`run_in_background: true`, writing to
 `"$SCRATCH/run.log"`), then wait with a **bounded** until-loop on the log:
 
+**The wait must live INSIDE a foreground Bash call.** Not a `Monitor`, not a
+backgrounded loop, not any other watcher — a notification is delivered to a
+*turn*, and yours has ended, so the one thing the wait exists to do (keep you
+alive) is exactly what those cannot do. This is not hypothetical and it is not
+carelessness: an agent given the strongest available version of this warning
+still armed a Monitor and reported *"running with a bounded polling monitor…
+I'll resume automatically when that monitor task notifies me — ending this turn
+now"*. It had complied with "wait with a bounded until-loop" — a Monitor **is**
+a bounded watcher — and stalled anyway, because the instruction specified the
+wait's SHAPE and not its LOCATION (computenet-oh3h, the third recurrence of
+computenet-hob2/computenet-ng9o). The orchestrator's own long jobs are the
+opposite case and use Monitor deliberately ([long-jobs.md](long-jobs.md)); that
+file is not for you.
+
+**The waiter is itself a foreground Bash call, so it is bounded by the same
+10-minute cap as anything else.** Size the loop to expire *inside* one call —
+25 rounds of 20s is ~8m20s, comfortably under 600000 ms:
+
 ```bash
 i=0
 until grep -qE 'BUILD (SUCCESSFUL|FAILED)' "$SCRATCH/run.log" 2>/dev/null; do
-  i=$((i + 1)); [ "$i" -gt 60 ] && { echo "GAVE UP at 20m"; break; }
+  i=$((i + 1)); [ "$i" -gt 25 ] && { echo "WAITER EXPIRED at ~8m — job may still be running"; break; }
   sleep 20
 done
 tail -5 "$SCRATCH/run.log"
 ```
+
+**A waiter that expires is not a failed job — reissue it.** A suite longer than
+the cap needs SEVERAL sequential wait calls, and that is the normal path, not
+a fallback: `:demo:beadsmirror:test` runs ~11m45s, so it takes two. The old
+example bound here was 60 rounds (~20m), which cannot fit in one call at all —
+it died at the 10-minute wall on exactly the suites the pattern exists for, and
+two agents in one session hit that (computenet-qk5f). Reading the expiry as
+"the job failed", or ending your turn on the first waiter, is how the run gets
+lost.
 
 **The bound is the part you cannot drop.** A job that dies without ever
 writing a `BUILD` line — an OOM, a killed daemon, a redirect that went
@@ -99,6 +128,58 @@ measured 2026-08-17), which is where the until form comes from. A
 `for i in $(seq 1 N)` waiter was refused once (computenet-ng9o) but is not
 reliably refused — treat that refusal as contextual. If one form is refused,
 switch to the other rather than reaching for a bare sleep.
+
+## Commands that fail QUIETLY in this shell and on this host
+
+Each of these fails in a way indistinguishable from a clean negative result,
+which is what makes them worth naming rather than leaving to be rediscovered.
+
+- **`grep --include` must be QUOTED under zsh** — this repo's session shell.
+  Bare `grep -rn --include=*.kt Foo .` dies with `zsh: no matches found:
+  --include=*.kt` before grep ever runs, and piped, the pipeline's exit status
+  is the last stage's, so it looks like a clean zero-hit search. Two agents hit
+  it in one session; one was using it to establish that *nothing* declares
+  `project(":bench")` — a no-dependents claim it then leaned on to justify
+  skipping a repo-wide test run (computenet-l5rc). Write
+  `--include='*.kt'`. This is the same family as AGENTS.md's zsh
+  history-modifier trap.
+- **`strings` cannot be trusted on `.class` files on darwin.** Java's class
+  magic `0xCAFEBABE` is *also* the Mach-O universal-binary magic, so Apple's
+  `strings` reads the next words as `cputype`/`cpusubtype` and fails with
+  `fat file: … truncated or malformed`. Whether it fails depends on those
+  bytes, so it is **intermittent** — measured 2026-08-19 on this repo, it
+  failed on **57 of 64** class files and quietly succeeded on the other 7,
+  which is worse than failing always: one success invites the conclusion that
+  the tool is fine. Read a dependency's string constants with `javap` instead:
+
+  ```bash
+  javap -v <class> | grep -oE '// String .*'
+  ```
+
+  Reading a library's own format constants out of its bytecode is the natural
+  way to check a parser against the thing it parses — it is what turns "the
+  prose says the banner looks like this" into evidence.
+
+## Two pushes, and neither is yours
+
+"Do not push" in a dispatch prompt reads as covering **git**, and there is a
+second push it does not name. A task reviewer reasoned its way into
+`bd dolt push` on its own initiative — a defensible instinct, given how much
+this skill emphasises writing verdicts durably before stopping — and reported
+*"metadata.review=passed set; … Dolt pushed"* (computenet-6uqb). So, in as
+many words:
+
+- **No `git push`** — not even your own task branch. The orchestrator's
+  merge step owns that.
+- **No `bd dolt push`** either. Your bead writes stay LOCAL and ride out on
+  the orchestrator's next sync. This is not about permission: the
+  orchestrator serializes pushes, concurrent pushes from parallel agents
+  contend, and your writes are already carried by its next bracket — so a
+  subagent push is exactly the redundant kind the sync policy exists to
+  prevent (AGENTS.md, "Syncing bead state is required, not optional").
+
+Write your verdict to the bead and stop. Durability is the local write; the
+push is someone else's job.
 
 ## The job ledger
 

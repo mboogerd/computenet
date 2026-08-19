@@ -172,11 +172,13 @@ semantics only — neither is a convergent merge under concurrent writers
     emit a `CounterDelta` only when membership size changes, counting
     distinct elements (Ubiquitous).
   - `IntersectSetCell` — binary (`left`/`right` inlets; n-ary by chaining);
-    advertises entry tags, deletes all advertised tags on exit, absorbs tag
-    churn that doesn't flip membership. `[24-OP-INTERSECT-01]`
-    `IntersectSetCell` SHALL advertise an element's entry tags on entry and
-    delete all advertised tags on exit, absorbing tag churn that does not
-    flip membership (Ubiquitous).
+    advertises one cell-minted tag per entry — never the inputs' own, per its
+    *convergent duplicates* class above and 21 §Tag hygiene — deletes all
+    advertised tags on exit, absorbs tag churn that doesn't flip membership.
+    `[24-OP-INTERSECT-01]` `IntersectSetCell` SHALL advertise a freshly
+    minted, cell-owned tag for an element on entry and delete all advertised
+    tags on exit, absorbing tag churn that does not flip membership
+    (Ubiquitous).
   - `JoinCell` — the **LWW dictionary join**: keyed inner join over two
     single-writer map streams where either side's put *refreshes* the pair —
     value-replacement semantics, inherently arrival-order (`MapDelta`'s

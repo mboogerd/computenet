@@ -61,8 +61,31 @@ slug=$(printf '%s' "$origin" \
 [[ $slug =~ ^[^/]+/[^/]+$ ]] \
   || die "origin is not a github owner/repo url, so no PR can be matched: $origin"
 
-# The one network call.  number+headRefName covers both joins below.
-merged=$(gh pr list --state merged --limit "$LIMIT" --json number,headRefName) \
+# The one network call. number+headRefName covers both joins below.
+#
+# RETRIED, because a single un-retried call made this script's correct refusal
+# fire on a transient fault: on 2026-08-17 GitHub's GraphQL endpoint returned
+# 503 intermittently for an hour while REST stayed healthy and githubstatus.com
+# reported everything operational. `gh pr list` is GraphQL-only, so step 3
+# could not complete twice, and the same call succeeded on the first attempt
+# when retried later (computenet-fdv9). The refusal contract is UNCHANGED — a
+# genuine failure still dies rather than reporting a clean sweep; this only
+# stops a blip from counting as one. Falls back to the REST pulls endpoint,
+# which was verified working throughout that outage.
+merged=""
+for attempt in 1 2 3; do
+  merged=$(gh pr list --state merged --limit "$LIMIT" --json number,headRefName) && break
+  merged=""
+  [ "$attempt" -lt 3 ] && sleep $((attempt * 5))
+done
+if [ -z "$merged" ]; then
+  echo "sweep-merged-prs: gh pr list failed 3x — trying the REST pulls endpoint" >&2
+  merged=$(gh api --paginate "repos/$slug/pulls?state=closed&per_page=100" \
+             --jq '[.[] | select(.merged_at != null)
+                        | {number, headRefName: .head.ref}]' 2>/dev/null \
+           | jq -s 'add // []') || merged=""
+fi
+[ -n "$merged" ] \
   || die "gh pr list failed — cannot tell which PRs merged; refusing to report a clean sweep"
 
 # --limit 0 = unlimited; bd's default of 50 would silently strand the rest.

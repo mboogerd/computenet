@@ -126,9 +126,21 @@ nothing.
 
 ## 4. The substantive-repair draft: a finished feature with no second reader
 
-The reviewer repaired past the §5 authorship bound, so the code is done and
-the only thing missing is that its last author also holds the
-certification. Do not send it to 5b — there is no implementation work — and
+Two verdicts route here, not one:
+
+- a **DRAFT** hand-back, where the reviewer repaired past §5's authorship
+  bound and said so; and
+- a **READY** verdict carrying `metadata.second_reader` — the reviewer
+  certified but flagged its own work (review-feature.md §5). That one is
+  ready in every other respect, so it is easy to walk straight into `gh pr
+  ready`; don't. Dispatch the reader below **first**, using the flag's value
+  as the scope, and ship on its answer. Until this row existed a reviewer
+  that certified while asking for a spot-check had its request land nowhere,
+  and the orchestrator adjudicated it while deciding whether to ship
+  (computenet-a4h1).
+
+In both cases the code is done and the only thing missing is that its last
+author also holds the certification. Do not send it to 5b — there is no implementation work — and
 do not park it. Dispatch a reader for the reviewer's own commits — into the
 same feature worktree, so only once the first reviewer's completion
 notification has arrived, not merely once its verdict comment is readable

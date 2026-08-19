@@ -3,17 +3,28 @@
 # create-ticket.sh, which owns the unparented-then-reparent idiom that avoids
 # the cross-machine id collision (see its header, and computenet-azt).
 #
-# What this adds on top: the `work skill:` title prefix, the skill_version
-# stamp (which skill revision produced the report), the skill-friction label —
-# labels are NOT inherited when created unparented — and the claim, so exactly
-# one orchestrator lane drains it.
+# What this adds on top: the `work skill:` title prefix — added HERE, so pass
+# --title WITHOUT it; a leading one is stripped so the call is idempotent
+# either way (21 of 235 friction beads carried it twice, computenet-rtoo) —
+# the skill_version
+# stamp (which skill revision produced the report), and the skill-friction
+# label — labels are NOT inherited when created unparented.
+#
+# It does NOT claim. Filing is not picking up: a claim belongs to the session
+# that starts draining the item, not to the one that reported it. Claiming at
+# file time made every filed item `in_progress`, which is what broke
+# remediate-friction's `--status=open` drain listing (computenet-oxbv). That
+# was first patched by widening the listing to everything non-closed; this is
+# the other half, and the one that lets a listing mean what it says —
+# `in_progress` under the SDLC epic is a session draining that item, not a
+# session that once reported it.
 #
 # Dedup is the CALLER's job, first: bd search "<words>" --status all --json
 # (--status all, or an already-fixed-and-closed item is invisible and gets
 # re-filed). Upvote an existing item with a comment instead of filing a twin.
 #
 # Usage:
-#   file-friction.sh --type bug|feature --title "<one line>" \
+#   file-friction.sh --type bug|feature --title "<one line, NO 'work skill:' prefix>" \
 #     --desc "<what the skill says / what happened / what it cost>" \
 #     --accept "<what must change in the skill for this not to recur>" \
 #     [--parent computenet-wpvy] [--priority 2] [--skill-version <sha>]
@@ -45,7 +56,19 @@ case "$TYPE" in bug|feature) ;; *) echo "--type must be bug or feature (bug = th
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 [ -n "$SKILL_V" ] || SKILL_V=$(git hash-object "$SCRIPT_DIR/../SKILL.md")
 
+# The prefix is a deliberate, useful convention, but it is invisible at the
+# call site: SKILL.md step 7's template reads as the complete title, so a
+# caller that wants `work skill: X` writes exactly that and gets it twice.
+# Strip any number of leading occurrences (and the spacing around them) before
+# prepending, so the call is idempotent whichever way it was written. The
+# doubled prefix eats title width in every listing and is dead weight in the
+# TITLE, which is the only field `bd search` reads (computenet-rtoo).
+while [[ "$TITLE" =~ ^[[:space:]]*[Ww]ork[[:space:]]skill:[[:space:]]*(.*)$ ]]; do
+  TITLE=${BASH_REMATCH[1]}
+done
+[ -n "$TITLE" ] || { echo "--title was only the 'work skill:' prefix" >&2; exit 2; }
+
 exec "$SCRIPT_DIR/create-ticket.sh" \
   --type "$TYPE" --title "work skill: $TITLE" --parent "$PARENT" \
   --desc "$DESC" --accept "$ACCEPT" --priority "$PRIO" \
-  --label skill-friction --metadata "{\"skill_version\":\"$SKILL_V\"}" --claim
+  --label skill-friction --metadata "{\"skill_version\":\"$SKILL_V\"}"

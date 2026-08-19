@@ -174,15 +174,22 @@ class OperatorBoundedReadTest {
 
         pages.taggedMap("left") shouldBe snapshot.slot(0).asTagMap()
         pages.taggedMap("right") shouldBe snapshot.slot(1).asTagMap()
-        pages.taggedMap("ledger") shouldBe snapshot.slot(2).asTagMap()
+        // MintedLedger snapshot shape: `[advertised, counter]` (computenet-vvre)
+        pages.taggedMap("ledger") shouldBe
+            (snapshot.slot(2) as List<*>)[0].asMap().mapValues { setOf(it.value as Timestamp) }
         // "both" is live in all three, with three DIFFERENT tag sets — three
         // entries, never one collapsed one (Decision A)
         val bothEntries = pages.allEntries().filterIsInstance<TaggedEntry>().filter { it.element == "both" }
         bothEntries.map { it.subState }.toSet() shouldBe setOf("left", "right", "ledger")
         bothEntries.map { it.tags }.distinct().size shouldBe 3
-        // ... and the ledger's advertised tags are exactly the union of the sides'
-        bothEntries.single { it.subState == "ledger" }.tags shouldBe
-            (bothEntries.single { it.subState == "left" }.tags + bothEntries.single { it.subState == "right" }.tags)
+        // ... and the ledger's tag is MINTED, so it borrows from neither side
+        // (computenet-vvre; was asserted to be the union of the two sides')
+        val ledgerTags = bothEntries.single { it.subState == "ledger" }.tags
+        ledgerTags.size shouldBe 1
+        ledgerTags.intersect(
+            bothEntries.single { it.subState == "left" }.tags +
+                bothEntries.single { it.subState == "right" }.tags,
+        ).shouldBeEmpty()
     }
 
     @Test
@@ -262,7 +269,14 @@ class OperatorBoundedReadTest {
             .flatMap { (lane, laneState) -> laneState.asTagMap().map { (lane as UUID to it.key) to it.value } }
             .toMap()
         walkedLanes shouldBe snapshotLanes
-        pages.taggedMap("ledger") shouldBe snapshot.slot(1).asTagMap()
+        // computenet-s6l2: the ledger sub-state is a `MintedLedger`, whose
+        // `snapshot()` is `[advertised, counter]` rather than the bare map an
+        // `AdvertisedLedger` produced — the same shape the JoinSetCell and
+        // SemiJoinCell cases above already read. Not a weakening: the walked
+        // ledger is still compared to the whole advertised half of the
+        // snapshot, element for element and tag for tag.
+        pages.taggedMap("ledger") shouldBe
+            (snapshot.slot(1) as List<*>)[0].asMap().mapValues { setOf(it.value as Timestamp) }
 
         // "shared" is asserted by both lanes: two lane entries with the same
         // element, distinguished only by the lane (Decision F)
@@ -270,6 +284,13 @@ class OperatorBoundedReadTest {
         // Decision D: the lane frontier rides every page
         val lanes = snapshot.slot(0).asMap().keys
         pages.forEach { (it.attributes[OperatorPaging.LANES] as List<*>).toSet() shouldBe lanes }
+        // Decision D, second rider (computenet-s6l2): now that this ledger
+        // mints, its counter is state a walk must carry — a restored instance
+        // must not re-mint a spent tag — so it rides every page beside the
+        // lanes, exactly as it does for the minting operators above.
+        pages.forEach {
+            it.attributes[OperatorPaging.MINT_COUNTER] shouldBe (snapshot.slot(1) as List<*>)[1]
+        }
     }
 
     @Test

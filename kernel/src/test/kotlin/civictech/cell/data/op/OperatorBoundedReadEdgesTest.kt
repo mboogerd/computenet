@@ -5,12 +5,12 @@ import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.StateRead
 import civictech.cell.StateReadResult
+import civictech.cell.Timestamp
 import civictech.cell.data.Aggregators
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import io.kotest.matchers.booleans.shouldBeTrue
-import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.ints.shouldBeLessThanOrEqual
@@ -170,13 +170,26 @@ class OperatorBoundedReadEdgesTest {
         // each lane reports its OWN tags for `shared`, not the cross-lane union
         val sharedPerLane = pages.tagged("lanes").filter { it.element == "shared" }
         sharedPerLane.map { it.tags }.distinct().size shouldBe 2
-        // ... while the ledger holds the tags observed when the element first met
-        // the threshold (advertise-once-then-idempotent, RS-5.3): a subset of the
-        // per-lane union, which is exactly the divergence a walk must show rather
-        // than paper over by recomputing
+        // ... while the ledger holds the ONE tag minted when the element first
+        // met the threshold (advertise-once-then-idempotent, RS-5.3), which is
+        // exactly the divergence a walk must show rather than paper over by
+        // recomputing.
+        //
+        // computenet-s6l2 inverted this assertion. It used to require the
+        // ledger's tags to be a SUBSET of the per-lane union
+        // (`sharedPerLane.flatMap { it.tags }.toSet() shouldContainAll
+        // ledgerTags`) — i.e. it encoded the very borrowing this bead removed,
+        // where `AdvertisedLedger` re-advertised the lanes' own input tags. A
+        // borrowed tag is not this cell's to delete, and deleting it on exit
+        // retracted a reconvergent `UnionSetCell`'s still-live direct
+        // contribution (QuorumDiamondTagTest). The flip to disjointness is
+        // therefore a STRENGTHENING, not a weakening: subset-of-the-lanes was
+        // satisfiable only by the defective policy, while disjointness is
+        // falsifiable — restore `AdvertisedLedger` in `QuorumSetCell` and this
+        // line fails.
         val ledgerTags = pages.tagged("ledger").single { it.element == "shared" }.tags
-        ledgerTags.isNotEmpty().shouldBeTrue()
-        sharedPerLane.flatMap { it.tags }.toSet() shouldContainAll ledgerTags
+        ledgerTags.size shouldBe 1
+        (sharedPerLane.flatMap { it.tags }.toSet() intersect ledgerTags) shouldBe emptySet<Timestamp>()
     }
 
     @Test

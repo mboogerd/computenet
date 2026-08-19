@@ -49,8 +49,23 @@ from the prose:
 
 ```bash
 uname -sm
-/usr/libexec/java_home -V        # what JDKs actually exist here
 echo "${JAVA_HOME:-<unset>}"
+```
+
+**A JVM claim must come from the RUN'S OWN banner, not from the environment.**
+`/usr/libexec/java_home -V` used to be listed here and answers nothing on this
+host — it returns *"Unable to locate a Java Runtime"*, because every JDK here
+is either Gradle-provisioned under `~/.gradle/jdks` or Homebrew-installed, and
+neither registers where `java_home` looks. Worse, the environment and the run
+can disagree: bare `java` on this host is Homebrew JDK 26, **not** the Gradle
+toolchain's Adoptium 21 that a Gradle-driven measurement actually uses. Two
+BEN1 findings entries shipped with the wrong recorded JVM by exactly that
+route (computenet-u90r). So take the identity from the artifact the run itself
+produced — the JMH/Gradle banner in the teed log, or `java -version` from the
+same launcher the run used — and check the diff's claim against *that*:
+
+```bash
+grep -m1 -iE 'jdk|vm version|java version' "<the run's own log>"
 ```
 
 On computenet-dqy.46 every measured number reproduced exactly and the only
@@ -97,7 +112,7 @@ files under exactly the names you would pick (~40 stale logs including
 one quotes the implementer's build as its own independent evidence.
 
 ```bash
-bd show <feature-id> --json          # acceptance criteria, description
+bd show <feature-id> --json > "$SCRATCH/<id>.json"   # acceptance criteria, description
 bd list --parent=<feature-id> --all --json  # the tasks (--all: they are closed by now)
 bd comments <feature-id> --json > "$SCRATCH/comments.json"   # then read the file
 ```
@@ -150,6 +165,30 @@ walk, which follows `.parent` when set and the dotted-id prefix otherwise:
 breakdown and 5f's route-4 items are legitimately parentless, and the file
 already tells you how to review one. Only a non-zero exit (`(no such id: …)`
 or `(cycle? …)`) means unresolved.
+
+**A negative finding about another agent's tracker writes needs a lookup, not
+a search.** Verifying that a claimed follow-up bead was really filed is a
+natural and valuable review check, and it is precisely the query `bd search`
+is worst at: it matches a literal substring of the **title and id only** —
+descriptions are invisible, and a multi-word query hits only when those words
+appear verbatim and adjacent. You will search from the residual's *subject*
+wording while the bead was titled by its author, so the two rarely share an
+adjacent word sequence, and **an empty result is no evidence at all**. A
+reviewer that trusted one reported that an implementer "claimed to file a bead
+and did not"; `bd show computenet-yhbd` returns that bead, open and correctly
+parented (computenet-tay3). Check by **id** (`bd show <id>`) when one is
+named, otherwise `bd list --parent=<epic> --all --json` or a grep of
+`.beads/issues.jsonl`. If you cannot confirm either way, report the
+uncertainty — never the accusation.
+
+**Read the key by its real name first.** The write flag is `--acceptance`;
+the JSON read key is **`acceptance_criteria`**. `jq '.[0].acceptance'`
+answers `null` on a bead that *has* criteria, which sends a reviewer down the
+ladder below for no reason (computenet-2rix, [bd-traps.md](bd-traps.md)). And
+read it from a file — `bd show` on a feature inlines its parent epic's whole
+description and has overrun the tool-result limit at 55KB, and **a truncated
+bead read is a truncated acceptance list** with nothing in the output saying
+so (computenet-h0dj, computenet-rram).
 
 **`acceptance_criteria` may be empty or absent altogether** — on a bead filed
 mid-session by another agent it usually is, because nothing broke it down, and
@@ -269,8 +308,35 @@ interaction. Run the affected module tests, and the repo-wide gate if the
 feature touched anything cross-cutting — then prove the run happened.
 **[gradle-evidence.md](gradle-evidence.md) is that proof standard**: the
 task-count line, the per-task state line read as an absence, and the JUnit
-XML counts + timestamp via `scripts/junit-count.py`, plus the `--rerun` and
-`--no-build-cache` semantics. Per suite you run, consume those signals and
+XML counts + timestamp via `.claude/skills/work/scripts/junit-count.py`, plus the `--rerun` and
+`--no-build-cache` semantics.
+**Carry `--no-build-cache`, here, at the point of use.** A bare `--rerun` can
+still restore a CACHED result: the console prints its task-count line, the
+`> Task :<module>:test` line carries no marker, and only the JUnit `timestamp`
+betrays it — so two of the three signals agree and an agent closing its
+evidence gathering stops. Measured twice on two different modules
+(`:concord`, then `:oracle` with a `newest` ~4 minutes stale — computenet-qsfu,
+computenet-qdj6), both caught by suspicion rather than by procedure. The flag
+belongs in the command you actually run:
+
+```bash
+./gradlew :<module>:test --rerun --no-build-cache
+```
+
+**Where a prior task's measurement artifacts live**, when the deliverable is a
+measurement and re-rendering it from the raw artifact is your strongest check:
+**read the implementer's `bd comment` on the task first** — the acceptance
+criteria for measurement tasks require it to record the results-file and log
+paths, so it is authoritative and costs one command. Failing that, the session
+scratchpad (`/private/tmp/claude-501/<session>/scratchpad/…`) is the usual
+home, and a gitignored path inside the task worktree (e.g.
+`bench/build/bench-results/`) the other. **Do not `find` over the home
+directory** — on this machine it consumes the entire 5-minute tool cap and
+takes the rest of that call's output with it (computenet-ewyo). This matters
+because re-rendering from the retained artifact and diffing byte-for-byte
+against the committed text is what proves a table was tool-produced rather
+than hand-typed — and it is unavailable if the artifact cannot be located.
+ Per suite you run, consume those signals and
 **quote them in your verdict** — an unquantified "suites green", yours or
 the implementers', is not a verification record, and nobody re-runs it after
 you: your verdict *is* the evidence the merge rests on. The mutation-check
@@ -448,7 +514,14 @@ of these is true:
   not fire *this* bullet however long it is. The next two still bind it;
 - for a repair that *is* code, more than **~30 changed lines** — insertions +
   deletions, not net (a reviewer self-certified at 41 by reading it as net;
-  computenet-e0i5).
+  computenet-e0i5). **This bullet bounds PRODUCTION changes. It does not bound
+  a test that meets the test-only exception below** — no mutation-demonstrated
+  test suite fits in 30 lines, so on the other reading the exception could
+  never be exercised and would be dead letter. One reviewer had to adjudicate
+  that mid-review with its certification hanging on the answer, and said so in
+  its verdict (computenet-a4h1). Meet the exception in full and the line count
+  is not the question; miss any part of it and the repair is substantive
+  whatever its size.
 
   **Count the code half, and count it mechanically.** `--stat`'s
   "X insertions(+), Y deletions(-)" is the *whole* diff, prose included, so it
@@ -507,6 +580,22 @@ of these is true:
   Meet all of it and certify normally; skip any part of it and the repair is
   substantive as before. A fully green feature should not cost a second opus
   review for tests that prove themselves (computenet-7bc9);
+
+  **If you certify READY but want your own work spot-checked, say so in the
+  verdict AND set `metadata.second_reader=<what to check>`.** A reviewer that
+  argues in its verdict about which rule governs is doing this file's job for
+  it, and the argument lands on the orchestrator exactly as it decides whether
+  to ship. The routing: a READY verdict carrying that key goes to
+  [ship-feature.md](ship-feature.md) §4's second-reader dispatch — the same
+  template, which is reusable as-is — **before** `gh pr ready`, not to the
+  plain ship sequence. The trigger is what the code IS, not how long it is: a
+  142-line mutation-demonstrated test needed a second reader not because it was
+  long but because it was the test certifying the feature's central
+  proposition, written by the agent that then certified the feature. When one
+  was dispatched, it re-ran the reviewer's mutation and three more — three of
+  four went red, and the fourth exposed a real bound on what the seam test
+  proves, which no line count could have produced. One agent, ~6 minutes
+  (computenet-a4h1);
 - any regenerated generated file (`CONCORDANCE.md`, KSP output consumers);
 - any new claim filed against the honesty ledger (`concord/corpus/DISPUTES.md`)
   or a new bead asserting an existing requirement is broken;
@@ -738,9 +827,26 @@ Create it the same way in all three cases:
 bd create "<the unmet criterion, verbatim>" --type=bug \
   --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet — and, on the closed-epic row: filed UNPARENTED deliberately, epic <epic-id> closed at review time>" \
   --acceptance="<the original criterion, unchanged>" \
+  --metadata '{"model":"<sonnet|opus>","files":"<the files a fix touches>"}' \
   --json | sed -n '/^[[{]/,$p' | jq -r '.id' > "$SCRATCH/residual-id"
 cat "$SCRATCH/residual-id"      # must print the new id, not an empty line
 ```
+
+**`--metadata` is not optional, and it is the flag reviewers keep omitting.**
+A residual is a dispatchable work item by construction — it is filed precisely
+so a later session picks it up — so it needs the same routing fields any
+dispatchable item needs. Filed without them: `next-batch.py` returns it with
+`files=[]` and batches it alone (correct scheduling for a claimless task, so
+nothing errors and nothing warns), SKILL.md 5b's empty-claim rule then reads it
+as a *forgotten* claim, and the dispatched implementer gets **no boundary at
+all** — "stay inside your `metadata.files` claim" degenerates to naming
+nothing. Three of five units in one session arrived this way, and one residual
+even ended its description with a literal `Files: …` line: the author knew the
+file set and wrote it into prose instead of into the field (computenet-se7r,
+computenet-419f). You have just read the code — you are the best-placed author
+of that claim, and the orchestrator otherwise guesses it without having read
+anything. Note the flag is `--metadata` with a JSON object on `bd create`;
+`--set-metadata` exists only on `bd update` ([bd-traps.md](bd-traps.md)).
 
 A shell variable cannot cross a Bash call, so the id goes to a file and
 every later call re-reads it (`RES=$(cat "$SCRATCH/residual-id")` first).

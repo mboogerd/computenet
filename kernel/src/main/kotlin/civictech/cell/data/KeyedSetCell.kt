@@ -64,6 +64,47 @@ class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // asks the framework to own.
     private val current = mutableMapOf<K, Entry<E>>()
 
+    /**
+     * Guards **every** access to [current] and [tagCounter] — the read accessors
+     * as much as the writers. The keyed-upsert twin of `SetCell.stateLock`
+     * (computenet-bdth) and `OrMapCell.stateLock` (computenet-yk5r), taken for
+     * the same reason and with the same discipline (computenet-ndf6).
+     *
+     * The cell's writer runs on whichever thread delivers to `inlet`, while
+     * [snapshot] and [readBounded] are *host*-facing reads a caller makes from
+     * its own thread. Unguarded, `current.mapValues { … }` in [snapshot] and
+     * `EntryOrder.freeze(current.keys) { … }` in [readBounded] iterate the shared
+     * map and escape a [java.util.ConcurrentModificationException] into the
+     * caller — the identical escape observed on CI out of `OrMapCell.membership`.
+     * No `KeyedSetCell` caller is known to read from a host thread concurrently
+     * with a writer today, so this is latent rather than observed; it is latent
+     * in exactly the way `OrMapCell`'s was until CI found it.
+     *
+     * **The monitor is never held across an outbound call**: [KeyedSetOps.put]
+     * and [KeyedSetOps.remove] mint the tag and mutate [current] under it, and
+     * `propagate` after it is released. Minting must happen inside, not outside:
+     * `++tagCounter` and the `current[key] =` it stamps are one fold, and
+     * [readBounded] reports that counter on every page. This cell has no
+     * delivery listeners and no remote-merge path, so `propagate` is the only
+     * outbound call it makes. The only foreign code that can run under the
+     * monitor is a key's own `hashCode`/`equals` and an element's `equals` (the
+     * re-put no-op check), both pure by contract and neither reaching a cell,
+     * port or link.
+     *
+     * **What it costs.** Reads serialize against the single writer: a host
+     * polling [snapshot] or [readBounded] over a large key set delays the next
+     * write by that scan. Nothing downstream is blocked, per the paragraph above.
+     *
+     * **Why not the cheaper options.** Copying on read without a guard does not
+     * help — the copy is itself an iteration and throws the same CME. A
+     * concurrent map would leave `++tagCounter` and the `current[key]` it stamps
+     * as two separate atomic steps, so two writers could interleave a mint
+     * against the binding it belongs to; it would also replace the map's
+     * insertion-order iteration with hash order, which [EntryOrder] deliberately
+     * re-imposes an order against.
+     */
+    private val stateLock = Any()
+
     // Replay-stable identity (M10.1), same construction as SetCell: the tag
     // source is DERIVED from ref + instanceId, so a recovered instance replaying
     // its journal re-mints the exact tags the network already observed —
@@ -77,12 +118,17 @@ class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // methods read subclass state later, at message time.
     override fun inletHandler(): KeyedSetOps<K, E> = object : KeyedSetOps<K, E> {
         override fun put(key: K, element: E) {
-            val prev = current[key]
-            // effective-only (21): re-putting the identical element is a no-op,
-            // no spurious retract/add churn downstream.
-            if (prev != null && prev.element == element) return
-            val tag = Timestamp(tagSource, ++tagCounter)
-            current[key] = Entry(element, tag)
+            // the mint and the fold happen under `stateLock`, the propagation
+            // strictly after it is released (see stateLock's KDoc).
+            val (prev, tag) = synchronized(stateLock) {
+                val previous = current[key]
+                // effective-only (21): re-putting the identical element is a no-op,
+                // no spurious retract/add churn downstream.
+                if (previous != null && previous.element == element) return
+                val minted = Timestamp(tagSource, ++tagCounter)
+                current[key] = Entry(element, minted)
+                previous to minted
+            }
             // retract-then-add atomically: the previous element's tag dies in
             // the SAME delta that carries the new element's fresh add-tag, so a
             // downstream fold never observes two live elements (or none) for key.
@@ -96,7 +142,7 @@ class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :
 
         override fun remove(key: K) {
             // removing a key the cell never held is a no-op.
-            val prev = current.remove(key) ?: return
+            val prev = synchronized(stateLock) { current.remove(key) } ?: return
             outlet.call.propagate(SetDelta(dels = mapOf(prev.element to setOf(prev.tag))))
         }
     }
@@ -106,11 +152,13 @@ class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // empty. Two keys holding the same element union their add-tags, so the
         // late subscriber's fold agrees with the live one on membership.
         outlet.catchUpOnLinked {
-            if (current.isEmpty()) null
-            else {
-                val adds = mutableMapOf<E, MutableSet<Timestamp>>()
-                current.values.forEach { adds.getOrPut(it.element) { mutableSetOf() } += it.tag }
-                SetDelta(adds = adds)
+            synchronized(stateLock) {
+                if (current.isEmpty()) null
+                else {
+                    val adds = mutableMapOf<E, MutableSet<Timestamp>>()
+                    current.values.forEach { adds.getOrPut(it.element) { mutableSetOf() } += it.tag }
+                    SetDelta(adds = adds)
+                }
             }
         }
     }
@@ -119,16 +167,17 @@ class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // tag counter is state too (M10.2) — a checkpoint-restored instance must not
     // re-mint tags it already used, or a post-restore put could collide with a
     // tag the network still remembers.
-    override fun snapshot(): Serializable =
+    override fun snapshot(): Serializable = synchronized(stateLock) {
         HashMap(
             mapOf(
                 "current" to HashMap(current.mapValues { arrayListOf<Serializable>(it.value.element as Serializable, it.value.tag) }),
                 "counter" to tagCounter,
             )
         )
+    }
 
     @Suppress("UNCHECKED_CAST")
-    override fun restore(state: Serializable) {
+    override fun restore(state: Serializable) = synchronized(stateLock) {
         val maps = state as Map<String, Any>
         current.clear()
         (maps.getValue("current") as Map<K, List<Any>>).forEach { (k, entry) ->
@@ -201,7 +250,11 @@ class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * page: it becomes an [ExclusiveEntry] descriptor keyed by its `K` and is
      * counted in [StatePage.exclusivesElided].
      */
-    override fun readBounded(request: StateRead): StatePage {
+    override fun readBounded(request: StateRead): StatePage = synchronized(stateLock) {
+        // one page is assembled under the monitor: it walks the frozen order but
+        // reads the LIVE map and the live [tagCounter], so it races the fold
+        // exactly as [snapshot] does. There is no outbound call in here, so the
+        // monitor is only ever held across pure map work.
         @Suppress("UNCHECKED_CAST")
         val walk = (request.cursor?.token as? KeyWalk<K>) ?: KeyWalk(EntryOrder.freeze(current.keys) { true }, 0)
         val order = walk.order
@@ -228,7 +281,7 @@ class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         }
 
         val complete = index >= order.size
-        return StatePage(
+        StatePage(
             entries = entries,
             next = if (complete) null else Cursor(KeyWalk(order, index)),
             frontier = currentFrontier(),
@@ -243,8 +296,9 @@ class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * `tagSource -> 0` — before the first mint, so "no tag observed" is not
      * reported as "counter 0 observed".
      */
-    private fun currentFrontier(): TagFrontier =
+    private fun currentFrontier(): TagFrontier = synchronized(stateLock) {
         if (tagCounter == 0L) TagFrontier(emptyMap()) else TagFrontier(mapOf(tagSource to tagCounter))
+    }
 
     companion object {
         fun <K, E> create(): KeyedSetApi<K, E> = KeyedSetCell()
