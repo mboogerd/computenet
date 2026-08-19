@@ -65,7 +65,15 @@ and report.
 ## 2. Pick the most-reported item
 
 ```bash
-bd list --parent=computenet-wpvy --status=open --json
+# NOT --status=open: file-friction.sh pre-claims at filing (create-ticket.sh
+# --claim), which sets status to in_progress, so --status=open cannot show a
+# single pre-claimed item. On 2026-08-19 it returned [] against a 48-item
+# backlog and this lane reported the log drained (computenet-oxbv). List
+# everything non-closed and let the assignee routing below decide.
+bd list --parent=computenet-wpvy --all --json \
+  | sed -n '/^[[{]/,$p' \
+  | jq '[ (if type=="array" then . else (.issues // []) end)[]
+          | select(.status != "closed") ]'
 ```
 
 **Scope is parentage, not the `skill-friction` label.** Anything under this
@@ -162,9 +170,10 @@ verdict:
   ```
 
   All three flags matter: step 2's `--claim` set assignee *and*
-  `in_progress`, and an item left `in_progress` is invisible to every
-  `--status=open` listing in this file — parked forever, un-parkable by
-  anyone.
+  `in_progress`. Resetting `--status=open` is what makes the park visible as
+  a park rather than as work in flight: step 2 lists everything non-closed,
+  so an item left `in_progress` here would read as claimed-and-being-drained
+  and never be re-examined.
 
   The comment is addressed to the next session that hits the same wall, not
   to the human; `work` step 7's upvote branch answers it and removes the
@@ -250,5 +259,10 @@ rejected-closed (with the one-line why), items parked `needs-evidence`
 oversight view for the human:
 
 ```bash
-bd list --parent=computenet-wpvy --status=open --json
+bd list --parent=computenet-wpvy --all --json \
+  | sed -n '/^[[{]/,$p' \
+  | jq -r '[ (if type=="array" then . else (.issues // []) end)[]
+             | select(.status != "closed") ]
+           | sort_by(-.comment_count)[]
+           | "\(.id)  c=\(.comment_count)  \(.assignee // "-")  \(.title)"'
 ```

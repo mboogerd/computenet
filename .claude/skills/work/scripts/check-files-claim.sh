@@ -58,8 +58,22 @@ for id in "$@"; do
   # Path-shaped: a slash-bearing token ending in a known source/doc extension.
   # Anchored on the extension so prose like "kernel/src" or a bare module name
   # does not flood the output.
+  #
+  # A token whose DIRECTORY component carries a source-file extension is prose
+  # shorthand, not a path: `Graphs.kt/Deltas.kt` is how a breakdown writes
+  # "Graphs.kt and Deltas.kt", and no directory in this repo is named
+  # `Graphs.kt`. Dropping those cannot suppress a genuine claim gap, because a
+  # real path's parent directories do not carry source-file extensions — and
+  # it removed half the false positives on the feature that prompted this
+  # (0 of 4 warnings were true; a check whose output is reliably all-false
+  # trains the reader to skim it — computenet-0pd6).
   mentioned=$(printf '%s' "$text" \
     | grep -oE '[A-Za-z0-9_./-]+/[A-Za-z0-9_.-]+\.(kt|kts|java|py|rb|sh|md|yaml|yml|json|gradle)' \
+    | awk -F/ '{
+        for (i = 1; i < NF; i++)
+          if ($i ~ /\.(kt|kts|java|py|rb|sh|md|yaml|yml|json|gradle)$/) next
+        print
+      }' \
     | sort -u)
   [ -n "$mentioned" ] || continue
 

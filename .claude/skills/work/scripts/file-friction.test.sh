@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for file-friction.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "6 passed, 0 failed".
+# Expect "10 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/file-friction.sh"}
@@ -72,6 +72,30 @@ out=$("$SCRIPT" --type bug --title t --desc d 2>&1); st=$?
 fixture
 out=$("$SCRIPT" --type chore --title t --desc d --accept a 2>&1); st=$?
 [ "$st" = 2 ] && ok "type other than bug|feature exits 2" || bad "type: exit=$st out=$out"
+
+# 7-9. the title prefix is added here and is idempotent. SKILL.md step 7's
+# template reads as the complete title, so a caller that writes the prefix
+# itself got it twice — 21 of 235 friction beads carry the doubled form, and
+# the TITLE is the only field bd search reads (computenet-rtoo).
+title_case() { # given-title expected-stored-title label
+  fixture
+  "$SCRIPT" --type bug --title "$1" --desc d --accept a --skill-version abc >/dev/null 2>&1
+  # create-ticket.sh passes the title POSITIONALLY, so the stored title is
+  # everything between `create ` and the first flag.
+  if grep -q -- "^create work skill: $2 --" "$BD_LOG"; then
+    ok "$3"
+  else
+    bad "$3 — bd log: $(grep create "$BD_LOG" | head -1)"
+  fi
+}
+title_case "the thing"                    "the thing" "bare title gets one prefix"
+title_case "work skill: the thing"        "the thing" "caller-written prefix is not doubled"
+title_case "work skill: work skill: x"    "x"         "a doubled prefix collapses to one"
+
+# A title that is nothing but the prefix is a caller error, not an empty bead.
+fixture
+out=$("$SCRIPT" --type bug --title "work skill: " --desc d --accept a 2>&1); st=$?
+[ "$st" = 2 ] && ok "a title that is only the prefix exits 2" || bad "prefix-only: exit=$st out=$out"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

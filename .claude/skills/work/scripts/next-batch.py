@@ -56,14 +56,50 @@ def bd(*args):
         return []
 
 
+class ClaimError(Exception):
+    """A metadata.files claim that is present but unreadable.
+
+    Named rather than raised as a bare AttributeError: the traceback for
+    `'list' object has no attribute 'split'` names split() on a list, not
+    WHICH bead is malformed, so an orchestrator with several candidates in
+    the batch cannot tell which one to fix without bisecting
+    (computenet-tbzg).
+    """
+
+
 def claim_of(task):
     """Files a task expects to touch. Empty set means 'unknown', not 'none'.
+
+    BOTH shapes are accepted, because both are in circulation from sanctioned
+    paths: breakdowns write the comma-separated string
+    ("a/b.kt,c/d.kt") and reviewers filing residuals through
+    create-ticket.sh write a JSON list (["a/b.kt", "c/d.kt"]). Only the
+    string form parsed until 2026-08-19, so a batch containing a
+    reviewer-filed residual aborted with a traceback at the one step that
+    decides what may run in parallel (computenet-tbzg).
 
     Paths are normalised (no leading "./", no trailing "/") so that containment
     below compares like with like.
     """
     raw = (task.get("metadata") or {}).get("files") or ""
-    return {_norm(p) for p in raw.split(",") if p.strip()}
+    if isinstance(raw, str):
+        parts = raw.split(",")
+    elif isinstance(raw, (list, tuple)):
+        parts = []
+        for p in raw:
+            if not isinstance(p, str):
+                raise ClaimError(
+                    "%s: metadata.files list holds a %s, expected strings"
+                    % (task.get("id", "<unknown bead>"), type(p).__name__)
+                )
+            parts.extend(p.split(","))
+    else:
+        raise ClaimError(
+            "%s: metadata.files is a %s, expected a comma-separated string "
+            "or a list of strings" % (task.get("id", "<unknown bead>"),
+                                      type(raw).__name__)
+        )
+    return {_norm(p) for p in parts if p.strip()}
 
 
 def _norm(path):
@@ -267,7 +303,16 @@ def main():
         seen.add(tid)
         candidates.append((task, resumed))
 
-    batch, skipped = plan_batch(candidates)
+    try:
+        batch, skipped = plan_batch(candidates)
+    except ClaimError as exc:
+        # Named and actionable: the bead id, what its claim looked like, and
+        # the one fix. A bare traceback here names split() on a list and not
+        # WHICH of several candidates is malformed (computenet-tbzg).
+        sys.exit("next-batch: unreadable file claim\n  %s\n"
+                 "Fix that bead's metadata.files -- a comma-separated string "
+                 "(\"a/b.kt,c/d.kt\") or a JSON list of strings -- then re-run:\n"
+                 "  bd update <id> --set-metadata files=a/b.kt,c/d.kt" % exc)
 
     cores = os.cpu_count() or 1
     cap = capacity_limit(cores)
