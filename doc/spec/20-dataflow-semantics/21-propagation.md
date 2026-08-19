@@ -43,16 +43,20 @@ Normative requirements on a delta type:
    it previously deleted — that is what keeps a stream safe for
    tombstone-folding consumers (24). Operators may pass input tags through
    only where **both** preconditions hold: (i) every membership flip-ON rides
-   a fresh input add-tag on the flipping element, and (ii) no downstream
-   consumer can observe the same tag by a second, reconvergent path —
-   consumers fold a tagged set by `(element, tag)` and deduplicate a diamond
-   fan-in into ONE fact by design (`[24-OP-UNION-01]`), so an operator
-   retracting a borrowed tag also retracts the direct path's still-live
-   contribution. (ii) is a property of the *graph*, not of the operator, so
-   only operators whose output membership is exactly the borrowed tag's own
-   liveness — filter, map/flatMap, union — can satisfy it in an arbitrary
-   graph; an operator whose membership flips on some *other* input's move
-   cannot, whatever the graph looks like. Everything outside that shape
+   a fresh input add-tag on the flipping element, and (ii) the operator
+   retracts a borrowed tag only when that tag's own liveness at the input
+   ends — never because some *other* input moved. (ii) is what keeps a
+   reconvergent (diamond) path safe: consumers fold a tagged set by
+   `(element, tag)` and deduplicate a diamond fan-in into ONE fact by design
+   (`[24-OP-UNION-01]`), so an operator that retracts a borrowed tag while a
+   second path still asserts it retracts that path's still-live contribution
+   too. Reconvergence itself is a property of the *graph* and no operator can
+   forbid it; what an operator can guarantee is that every reconvergent copy
+   of a tag dies together, and only operators whose output membership is
+   exactly the borrowed tag's own liveness — filter, map/flatMap, union — do
+   so in an arbitrary graph. An operator whose membership flips on some
+   *other* input's move cannot, whatever the graph looks like. Everything
+   outside that shape
    (intersect, quorum, difference, semijoin/antijoin — re-entry rides the
    *other* side's removal) must mint fresh cell-owned output tags per entry
    and delete exactly what they minted (`MintedTags`, replay-stable derived
