@@ -1,6 +1,7 @@
 package civictech.bench.micro
 
 import civictech.bench.Drive
+import civictech.bench.HostFacts
 import org.openjdk.jmh.annotations.Benchmark
 import org.openjdk.jmh.annotations.BenchmarkMode
 import org.openjdk.jmh.annotations.Fork
@@ -101,8 +102,13 @@ import java.util.concurrent.TimeUnit
  *
  * [ThroughputReport] turns the resulting CSV into findings entries; see its KDoc for the
  * rendering invocation. The JMH knobs below are declared through `ThroughputReport`'s
- * constants precisely so the `RunEnvironment` that renderer records cannot disagree with
- * the configuration this class actually ran under.
+ * constants so this class's own configuration lives in one place; they are NOT what the
+ * renderer records. JMH's `-f`/`-wi`/`-i` flags override these annotations, so the
+ * `RunEnvironment` a sweep produces could disagree with them, and the render path does
+ * not read these constants at all — it reads what the run actually resolved off the
+ * run's own log (`RunKnobs.fromJmhLog`, computenet-x9e.8). [GraphState.announceHost]
+ * below is the same pattern one field over, for the CPU/core/OS facts no JMH artifact
+ * states on its own (computenet-yhbd).
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
@@ -151,6 +157,32 @@ open class OperatorThroughputBenchmark {
 
         /** The batch the next timed invocation applies; prepared by [prepareBatch]. */
         private lateinit var pending: DeltaBatch
+
+        /**
+         * Prints this fork's host facts to stdout once per trial — the CPU model, core
+         * count and OS the render path has no other way to learn (`[BEN1-23]`,
+         * computenet-yhbd).
+         *
+         * `Level.Trial` runs INSIDE the measuring fork, before its warmup and
+         * measurement iterations, which is exactly what makes this line trustworthy
+         * where a renderer's own `Runtime.getRuntime()` read is not: the renderer runs
+         * in a different, later process, possibly on a different machine, and no JMH
+         * artifact otherwise records which host measured. The line lands on the same
+         * stdout that `ThroughputReport`'s command block already tees beside the results
+         * file for [MeasuringJvm][civictech.bench.MeasuringJvm]'s and
+         * [RunKnobs][civictech.bench.RunKnobs]'s banners, so
+         * [HostFacts.fromJmhLog][civictech.bench.HostFacts.Companion.fromJmhLog] reads it
+         * from the exact same artifact — no new file, no new convention.
+         *
+         * Fires once per fork per parameter combination, so a full sweep prints it many
+         * times; every occurrence states the same host, and
+         * `civictech.bench.HostFacts.Companion.fromJmhLog`'s `distinct()` collapses that
+         * the same way it already collapses JMH's own repeated banner.
+         */
+        @Setup(Level.Trial)
+        fun announceHost() {
+            HostFacts.captureCurrent().bannerLines().forEach(::println)
+        }
 
         /**
          * Builds the graph and a fresh delta stream once per iteration.

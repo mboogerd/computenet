@@ -5,6 +5,8 @@ import civictech.bench.Drive
 import civictech.bench.Findings
 import civictech.bench.FindingsRefusalException
 import civictech.bench.FindingsTable
+import civictech.bench.HostFacts
+import civictech.bench.HostFactsUnknownException
 import civictech.bench.MeasuringJvm
 import civictech.bench.MeasuringJvmUnknownException
 import civictech.bench.NOISE_FLOOR
@@ -338,12 +340,34 @@ class ThroughputReportTest {
         invoker: String? = null,
         options: String = "<none>",
         knobs: String = knobBanner(),
+        host: String = hostBanner(),
     ): String = buildString {
         appendLine("# JMH version: 1.37")
         appendLine("# VM version: JDK $version, $vmName, $version")
         if (invoker != null) appendLine("# VM invoker: $invoker")
         appendLine("# VM options: $options")
         append(knobs)
+        append(host)
+    }
+
+    /**
+     * The host-facts half of a run log — printed by
+     * `OperatorThroughputBenchmark.GraphState.announceHost`'s `@Setup(Level.Trial)` hook
+     * from inside the measuring fork (`[BEN1-23]`, computenet-yhbd).
+     *
+     * Defaults describe a host that is NOT this test-running machine's own (see the
+     * `env` fixture above, which shares these values so JVM/knob-focused tests above stay
+     * unaffected by this addition). The computenet-yhbd tests below vary [cpuModel] to
+     * exercise the refusal and the recorded-vs-running distinction.
+     */
+    private fun hostBanner(
+        cpuModel: String? = "Apple M2 Pro",
+        coreCount: Int? = 10,
+        os: String? = "Mac OS X 26.6.1",
+    ): String = buildString {
+        if (cpuModel != null) appendLine("${HostFacts.CPU_MODEL_PREFIX} $cpuModel")
+        if (coreCount != null) appendLine("${HostFacts.CORE_COUNT_PREFIX} $coreCount")
+        if (os != null) appendLine("${HostFacts.OS_PREFIX} $os")
     }
 
     /**
@@ -731,6 +755,91 @@ class ThroughputReportTest {
         assertFalse(entry.contains("iters=${ThroughputReport.MEASUREMENT_ITERATIONS}"), entry)
     }
 
+    // ---------------------------------------------------------------------------------
+    // computenet-yhbd: the rendered CPU model, core count and OS must be the measuring
+    // HOST's, not the rendering process's.
+    //
+    // The same defect shape as computenet-hqid (JVM triple) and computenet-x9e.8 (JMH
+    // knobs), one field group over. Unlike those two, no JMH artifact records the host at
+    // all, so `renderRun` could not simply parse harder — `OperatorThroughputBenchmark`'s
+    // `GraphState.announceHost` (`@Setup(Level.Trial)`) now prints the host facts from
+    // INSIDE the measuring fork, onto the same log `MeasuringJvm`/`RunKnobs` already read,
+    // and `HostFacts.fromJmhLog` reads them back.
+    //
+    // The refusal test FAILS if the substitution is restored: a log missing the host
+    // banner would render successfully again, using this process's own `HostFacts
+    // .captureCurrent()`. The positive test FAILS the same way: the entry would carry
+    // THIS machine's CPU/core/OS instead of the fixture's deliberately different ones.
+    // ---------------------------------------------------------------------------------
+
+    @Test
+    fun `refuses a run log that does not state the host that measured`(@TempDir dir: File) {
+        val results = runArtifacts(dir, quietCsv, log = bannerWithout(HostFacts.CPU_MODEL_PREFIX))
+
+        val failure = assertThrows(HostFactsUnknownException::class.java) {
+            ThroughputReport.renderRun(results, "b861114d", "2026-08-19", "operator throughput")
+        }
+        assertTrue(failure.message!!.contains(HostFacts.CPU_MODEL_PREFIX), failure.message)
+        assertTrue(failure.message!!.contains("host"), failure.message)
+    }
+
+    @Test
+    fun `refuses a run log whose host lines disagree`(@TempDir dir: File) {
+        // Two benchmarks measured on different hosts concatenated into one log describe
+        // no single measuring host, the same shape RunKnobs and MeasuringJvm refuse for
+        // their own facts.
+        val results = runArtifacts(
+            dir,
+            quietCsv,
+            log = banner("21.0.11", host = hostBanner(cpuModel = "Apple M2 Pro") +
+                hostBanner(cpuModel = "AMD EPYC 7763")),
+        )
+
+        val failure = assertThrows(HostFactsUnknownException::class.java) {
+            ThroughputReport.renderRun(results, "b861114d", "2026-08-19", "operator throughput")
+        }
+        assertTrue(failure.message!!.contains("not one run on one host"), failure.message)
+    }
+
+    @Test
+    fun `renders the host the run recorded, never the one doing the rendering`(
+        @TempDir dir: File,
+    ) {
+        // The recorded host is deliberately nothing like the machine running this test
+        // (a Mac, per `HostFacts.captureCurrent()` below): a rack CPU model, a core count
+        // no laptop has, and a Linux OS string.
+        val results = runArtifacts(
+            dir,
+            quietCsv,
+            log = banner(
+                "21.0.11",
+                host = hostBanner(
+                    cpuModel = "Genuine Intel Xeon Platinum 8375C",
+                    coreCount = 64,
+                    os = "Linux 6.2.0-1019-aws",
+                ),
+            ),
+        )
+
+        val entry = ThroughputReport
+            .renderRun(results, "b861114d", "2026-08-19", "operator throughput")
+            .perDrive.first { it.drive == Drive.SIM }.entry!!
+
+        // The RECORDED host reaches the entry...
+        assertTrue(entry.contains("Genuine Intel Xeon Platinum 8375C, 64 cores"), entry)
+        assertTrue(entry.contains("Linux 6.2.0-1019-aws"), entry)
+
+        // ...and the RUNNING one does not. The fixture must actually differ from the
+        // machine running this test for this half to mean anything — assert that too,
+        // so a future retarget to a Xeon/Linux CI runner fails loudly instead of quietly
+        // stopping to discriminate.
+        val runningHost = HostFacts.captureCurrent()
+        assertFalse(runningHost.cpuModel == "Genuine Intel Xeon Platinum 8375C", "fixture no longer differs from the running host's CPU")
+        assertFalse(runningHost.os == "Linux 6.2.0-1019-aws", "fixture no longer differs from the running host's OS")
+        assertFalse(entry.contains(runningHost.cpuModel), entry)
+        assertFalse(entry.contains(runningHost.os), entry)
+    }
+
     @Test
     fun `results built by hand render through the same path`() {
         val result = BenchResult(1.0, "ops/s", 0.001, Drive.SIM, env)
@@ -757,17 +866,19 @@ class ThroughputReportTest {
  *   -Dcivictech.bench.harnessSha=$(git rev-parse --short HEAD)
  * ```
  *
- * The measuring JVM AND the JMH knobs the run resolved both come from the run log that
- * the sweep teed beside that results file (`throughput.csv` -> `throughput.log`, see
- * [ThroughputReport.runLogFor]); the CPU/core/OS half is this host's, which is sound
- * because this render runs on the machine that ran the sweep. Only the harness SHA is
- * passed in, because no artifact records it.
+ * The measuring JVM, the JMH knobs the run resolved, AND the CPU/core/OS of the host that
+ * measured all come from the run log that the sweep teed beside that results file
+ * (`throughput.csv` -> `throughput.log`, see [ThroughputReport.runLogFor]) — the last of
+ * those three because `OperatorThroughputBenchmark`'s `@Setup(Level.Trial)` hook prints
+ * it from inside the measuring fork onto that same log. Only the harness SHA is passed
+ * in, because no artifact records it.
  *
  * If the log is missing — or carries no `# Fork:`/`# Warmup:`/`# Measurement:`/
- * `# Benchmark mode:` line — this test FAILS rather than rendering an entry describing
- * the Gradle test JVM or the benchmark class's declared annotation values. See
- * `computenet-hqid` and the two entries in `doc/bench/findings.md` that shipped before
- * it, and `computenet-x9e.8` for the knobs.
+ * `# Benchmark mode:`/host-facts line — this test FAILS rather than rendering an entry
+ * describing the Gradle test JVM, the benchmark class's declared annotation values, or
+ * this process's own CPU/core/OS. See `computenet-hqid` and the two entries in
+ * `doc/bench/findings.md` that shipped before it, `computenet-x9e.8` for the knobs, and
+ * `computenet-yhbd` for the host.
  */
 @Tag("bench")
 class ThroughputReportRenderTest {

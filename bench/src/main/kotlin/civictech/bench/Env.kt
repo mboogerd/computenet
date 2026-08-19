@@ -16,6 +16,8 @@ import java.io.File
  * The first three fields describe the JVM that PRODUCED the measurements, and are
  * therefore not this process's to answer — see [MeasuringJvm] and [forRun], and the
  * defect ledger in [MeasuringJvm]'s own documentation for what happens when they are.
+ * [cpuModel], [coreCount] and [os] carry the same requirement one level down — see
+ * [HostFacts] for the host-facts half of the same defect (computenet-yhbd).
  *
  * @param jvmVendor the vendor/build identification of the JVM the measurements ran on.
  * @param jvmVersion the version of the JVM the measurements ran on.
@@ -91,17 +93,22 @@ data class RunEnvironment(
          * "the one asking". [MeasuringJvm.fromJmhLog] is the answer's only source, and
          * it refuses when the run's artifacts do not carry one.
          *
-         * ## What is still captured here, and the residual that leaves
+         * ## Host facts: captured here for an IN-PROCESS caller, never for a JMH sweep
          *
-         * [cpuModel], [coreCount] and [os] are read from THIS host, because no JMH
-         * artifact records them — the banner states the JVM and its options and nothing
-         * about the machine. That is sound only because rendering is documented to
-         * happen on the machine that ran the sweep (`ThroughputReport`'s command block
-         * runs the sweep and the render back to back). It is a weaker guarantee than
-         * the JVM triple now has, and it is stated rather than hidden: a results file
-         * carried to another machine and rendered there would carry that machine's CPU
-         * and OS. The JVM triple is the one that provably differed in practice, and it
-         * is the one this change closes.
+         * [cpuModel], [coreCount] and [os] come from [HostFacts.captureCurrent] — a read
+         * of THIS process's own host. That is sound only when the caller IS the
+         * measuring process, exactly the same condition under which the four-scalar
+         * knobs below are sound: an in-process probe (`BoundedReadFixtures
+         * .probeRunEnvironment`, `Footprint.environment`) performs its measurement in
+         * the very JVM that calls this function, so "the host asking" and "the host that
+         * measured" coincide. A JMH sweep does NOT satisfy that condition — the renderer
+         * runs long after the forks have exited, possibly on another machine entirely —
+         * and the [RunKnobs] overload below therefore takes [HostFacts] as a parameter
+         * instead of capturing it, for the identical reason it takes [RunKnobs] instead
+         * of reading annotation constants. See [HostFacts] for the defect this closes
+         * (computenet-yhbd) and why capturing harder here could not have closed it: no
+         * JMH artifact records host facts at all, so the only honest fix is having the
+         * measuring fork state its own.
          *
          * Every captured value either comes back non-blank/positive or this function
          * throws [IllegalStateException] naming which fact it could not determine.
@@ -131,24 +138,14 @@ data class RunEnvironment(
             measurementIterations: Int,
             harnessCommitSha: String,
         ): RunEnvironment {
-            val osName = System.getProperty("os.name")
-                ?: error("system property os.name is not set")
-            val osVersion = System.getProperty("os.version")
-                ?: error("system property os.version is not set")
-
-            val runtime = Runtime.getRuntime()
-            val coreCount = runtime.availableProcessors()
-            check(coreCount > 0) { "Runtime.availableProcessors() returned $coreCount" }
-
-            val cpuModel = captureCpuModel(osName)
-
+            val hostFacts = HostFacts.captureCurrent()
             return RunEnvironment(
                 jvmVendor = measuringJvm.vendor,
                 jvmVersion = measuringJvm.version,
                 heapSettings = measuringJvm.heapSettings,
-                cpuModel = cpuModel,
-                coreCount = coreCount,
-                os = "$osName $osVersion",
+                cpuModel = hostFacts.cpuModel,
+                coreCount = hostFacts.coreCount,
+                os = hostFacts.os,
                 jmhMode = jmhMode,
                 forkCount = forkCount,
                 warmupIterations = warmupIterations,
@@ -158,66 +155,36 @@ data class RunEnvironment(
         }
 
         /**
-         * [forRun] over knobs established from a JMH run's own log rather than stated by
-         * the caller — the honest form for a JMH sweep (`[BEN1-23]`, computenet-x9e.8).
+         * [forRun] over knobs AND host facts established from a JMH run's own log
+         * rather than captured from the calling process — the honest form for a JMH
+         * sweep (`[BEN1-23]`, computenet-x9e.8 for [knobs], computenet-yhbd for
+         * [hostFacts]).
          *
          * @param knobs the mode, fork count and iteration counts the run actually used,
          *   from [RunKnobs.fromJmhLog].
+         * @param hostFacts the CPU model, core count and OS of the host that ran the
+         *   measuring fork, from [HostFacts.fromJmhLog]. NOT [HostFacts.captureCurrent]
+         *   — that call answers for the process invoking it, which for a JMH sweep is
+         *   the renderer, not the fork that measured.
          */
         fun forRun(
             measuringJvm: MeasuringJvm,
             knobs: RunKnobs,
+            hostFacts: HostFacts,
             harnessCommitSha: String,
-        ): RunEnvironment = forRun(
-            measuringJvm = measuringJvm,
+        ): RunEnvironment = RunEnvironment(
+            jvmVendor = measuringJvm.vendor,
+            jvmVersion = measuringJvm.version,
+            heapSettings = measuringJvm.heapSettings,
+            cpuModel = hostFacts.cpuModel,
+            coreCount = hostFacts.coreCount,
+            os = hostFacts.os,
             jmhMode = knobs.jmhMode,
             forkCount = knobs.forkCount,
             warmupIterations = knobs.warmupIterations,
             measurementIterations = knobs.measurementIterations,
             harnessCommitSha = harnessCommitSha,
         )
-
-        /**
-         * `sysctl -n machdep.cpu.brand_string` on darwin, `/proc/cpuinfo`'s `model
-         * name` field on linux. Neither source is queried on any other OS, and either
-         * source failing (missing command, non-zero exit, blank output, missing
-         * file, missing field) throws rather than returning a placeholder.
-         */
-        private fun captureCpuModel(osName: String): String {
-            val normalized = osName.lowercase()
-            return when {
-                normalized.contains("mac") || normalized.contains("darwin") ->
-                    captureCpuModelDarwin()
-                normalized.contains("linux") -> captureCpuModelLinux()
-                else -> error(
-                    "cannot determine CPU model on unsupported OS '$osName' " +
-                        "(only darwin and linux are supported)"
-                )
-            }
-        }
-
-        private fun captureCpuModelDarwin(): String {
-            val process = ProcessBuilder("sysctl", "-n", "machdep.cpu.brand_string")
-                .redirectErrorStream(true)
-                .start()
-            val output = process.inputStream.bufferedReader().readText().trim()
-            val exitCode = process.waitFor()
-            check(exitCode == 0 && output.isNotBlank()) {
-                "sysctl -n machdep.cpu.brand_string failed: exitCode=$exitCode output='$output'"
-            }
-            return output
-        }
-
-        private fun captureCpuModelLinux(): String {
-            val cpuinfo = File("/proc/cpuinfo")
-            check(cpuinfo.isFile) { "/proc/cpuinfo is not present" }
-            val modelLine = cpuinfo.readLines()
-                .firstOrNull { it.startsWith("model name") }
-                ?: error("/proc/cpuinfo has no 'model name' field")
-            val model = modelLine.substringAfter(":").trim()
-            check(model.isNotBlank()) { "/proc/cpuinfo's 'model name' field is blank" }
-            return model
-        }
     }
 }
 
@@ -784,4 +751,215 @@ data class RunKnobs(
             return totals.single()
         }
     }
+}
+
+/**
+ * Thrown when the host that PRODUCED a measurement cannot be established from the run's
+ * own artifacts (`[BEN1-23]`, computenet-yhbd).
+ *
+ * The sibling of [MeasuringJvmUnknownException] and [RunKnobsUnknownException], with the
+ * same posture: refusing to state a fact about the run from something that is not the
+ * run, rather than falling back to whatever answers fastest. Where those two refuse to
+ * substitute the RENDERING PROCESS's JVM and the BENCHMARK CLASS's declared knobs, this
+ * one refuses to substitute the RENDERING PROCESS's CPU, core count and OS — the last of
+ * the three fact-groups `[BEN1-23]` names, and the one no JMH artifact records at all.
+ */
+class HostFactsUnknownException(message: String) : IllegalStateException(message)
+
+/**
+ * The host CPU model, core count and OS the run's own artifacts recorded — read from
+ * INSIDE the measuring fork, never from the process doing the reading (`[BEN1-23]`,
+ * computenet-yhbd).
+ *
+ * ## The defect this closes, and why it could not be closed by parsing harder
+ *
+ * [MeasuringJvm] and [RunKnobs] both close their half of `[BEN1-23]` by reading a line
+ * JMH already prints about the fork — `# VM version`/`# VM invoker`/`# VM options` for
+ * the JVM, `# Benchmark mode`/`# Warmup`/`# Measurement`/`# Fork` for the knobs. No such
+ * line exists for the host: JMH's banner states the JVM and the arguments it was
+ * launched with, and nothing about the CPU, the core count or the OS. `RunEnvironment
+ * .forRun`'s JMH-sweep overload used to fill exactly those three fields by calling
+ * `System.getProperty`/`Runtime.getRuntime()`/`sysctl`/`/proc/cpuinfo` on ITS OWN
+ * process — sound only under the undocumented-until-now assumption that rendering
+ * happens on the machine that ran the sweep. A results file carried to another machine
+ * and rendered there would carry that machine's CPU, core count and OS, silently and
+ * plausibly, because the wrong value is a real machine's real facts.
+ *
+ * The fix is not a sharper parse of an existing artifact — none exists — but recording
+ * the fact where it is true: [OperatorThroughputBenchmark]'s `GraphState` carries a
+ * `@Setup(Level.Trial)` hook that calls [captureCurrent] and prints [bannerLines] to
+ * stdout **from inside the measuring fork**, onto the exact same stream that is already
+ * teed beside the results file for [MeasuringJvm.fromJmhLog] and [RunKnobs.fromJmhLog]
+ * to read (`ThroughputReport.runLogFor`). No new artifact, no new file convention, and no
+ * new place a caller has to remember to look — the run log already carries the JVM and
+ * the knobs, and now carries the host too.
+ *
+ * ## Refusal is the only fallback
+ *
+ * [fromJmhLog] is the sole source `RunEnvironment.forRun`'s JMH-sweep overload accepts.
+ * A log with no host-facts banner — a run captured before this change, a benchmark class
+ * without the trial-level hook, or a results file whose log was lost — throws
+ * [HostFactsUnknownException] rather than falling back to [captureCurrent]. That fallback
+ * is the exact substitution this type exists to make unreachable: there is no code path
+ * left in the JMH-sweep overload that can answer "which host measured this?" with "the
+ * one asking".
+ *
+ * @param cpuModel the measuring host's CPU model/brand string.
+ * @param coreCount the measuring host's available processor/core count. Must be
+ *   positive.
+ * @param os the measuring host's operating system name and version.
+ */
+data class HostFacts(
+    val cpuModel: String,
+    val coreCount: Int,
+    val os: String,
+) {
+    init {
+        require(cpuModel.isNotBlank()) { "cpuModel must not be blank" }
+        require(coreCount > 0) { "coreCount must be positive, was $coreCount" }
+        require(os.isNotBlank()) { "os must not be blank" }
+    }
+
+    companion object {
+
+        /** The banner line this prints/reads for [cpuModel]. */
+        const val CPU_MODEL_PREFIX: String = "# Host CPU model:"
+
+        /** The banner line this prints/reads for [coreCount]. */
+        const val CORE_COUNT_PREFIX: String = "# Host core count:"
+
+        /** The banner line this prints/reads for [os]. */
+        const val OS_PREFIX: String = "# Host OS:"
+
+        /**
+         * Captures THIS process's own host facts.
+         *
+         * Legal only when the caller IS the measuring host: [OperatorThroughputBenchmark]
+         * calling it from inside a `@Setup(Level.Trial)` hook (where this process is the
+         * measuring fork), or an in-process `@Tag("bench")` probe answering for itself
+         * through `RunEnvironment.forRun`'s four-scalar overload. NOT legal for a JMH
+         * sweep's renderer, which is why that path goes through [fromJmhLog] instead —
+         * see [HostFacts]'s own KDoc for the defect this distinction exists to prevent.
+         *
+         * `sysctl -n machdep.cpu.brand_string` on darwin, `/proc/cpuinfo`'s `model name`
+         * field on linux, for [cpuModel]. Neither source is queried on any other OS, and
+         * either source failing (missing command, non-zero exit, blank output, missing
+         * file, missing field) throws rather than returning a placeholder.
+         *
+         * @throws IllegalStateException if a host fact cannot be determined.
+         */
+        fun captureCurrent(): HostFacts {
+            val osName = System.getProperty("os.name")
+                ?: error("system property os.name is not set")
+            val osVersion = System.getProperty("os.version")
+                ?: error("system property os.version is not set")
+
+            val coreCount = Runtime.getRuntime().availableProcessors()
+            check(coreCount > 0) { "Runtime.availableProcessors() returned $coreCount" }
+
+            return HostFacts(
+                cpuModel = captureCpuModel(osName),
+                coreCount = coreCount,
+                os = "$osName $osVersion",
+            )
+        }
+
+        /**
+         * [bannerLines] parsed back — reads the host facts a run's own artifacts
+         * recorded, or refuses.
+         *
+         * @param log the full stdout of the JMH run that produced the results file.
+         * @param source where [log] came from, named in every refusal message so a
+         *   reader learns which file to go look at.
+         * @throws HostFactsUnknownException if the log carries no host-facts banner
+         *   line, more than one distinct value for one, or a non-integer core count.
+         */
+        fun fromJmhLog(log: String, source: String): HostFacts {
+            val cpuModel = singleValue(log, CPU_MODEL_PREFIX, source)
+            val coreCountText = singleValue(log, CORE_COUNT_PREFIX, source)
+            val os = singleValue(log, OS_PREFIX, source)
+            val coreCount = coreCountText.toIntOrNull()
+                ?: throw HostFactsUnknownException(
+                    "cannot establish the run's host: $source states " +
+                        "'$CORE_COUNT_PREFIX $coreCountText', which is not an integer " +
+                        "core count"
+                )
+            return HostFacts(cpuModel = cpuModel, coreCount = coreCount, os = os)
+        }
+
+        private fun singleValue(log: String, prefix: String, source: String): String {
+            val values = bannerValues(log, prefix)
+            if (values.size > 1) {
+                throw HostFactsUnknownException(
+                    "cannot establish the run's host: $source states '$prefix' " +
+                        "${values.size} different ways ($values), so it is not one run " +
+                        "on one host"
+                )
+            }
+            return values.firstOrNull() ?: throw HostFactsUnknownException(
+                "cannot establish the run's host: $source carries no '$prefix' line. No " +
+                    "JMH artifact records host facts on its own — this line is printed " +
+                    "by the measuring benchmark's own `@Setup(Level.Trial)` hook, from " +
+                    "inside the fork, onto the same stdout that is already teed beside " +
+                    "the results file for the JVM triple and the JMH knobs. Re-run the " +
+                    "sweep on a benchmark class that prints " +
+                    "'${HostFacts::class.simpleName}' banner lines, teeing its output " +
+                    "beside the results file, e.g. `java -jar " +
+                    "bench/build/libs/bench-jmh.jar ... -rf csv -rff " +
+                    "/abs/path/throughput.csv 2>&1 | tee /abs/path/throughput.log`"
+            )
+        }
+
+        /**
+         * `sysctl -n machdep.cpu.brand_string` on darwin, `/proc/cpuinfo`'s `model
+         * name` field on linux. Neither source is queried on any other OS, and either
+         * source failing (missing command, non-zero exit, blank output, missing
+         * file, missing field) throws rather than returning a placeholder.
+         */
+        private fun captureCpuModel(osName: String): String {
+            val normalized = osName.lowercase()
+            return when {
+                normalized.contains("mac") || normalized.contains("darwin") ->
+                    captureCpuModelDarwin()
+                normalized.contains("linux") -> captureCpuModelLinux()
+                else -> error(
+                    "cannot determine CPU model on unsupported OS '$osName' " +
+                        "(only darwin and linux are supported)"
+                )
+            }
+        }
+
+        private fun captureCpuModelDarwin(): String {
+            val process = ProcessBuilder("sysctl", "-n", "machdep.cpu.brand_string")
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().readText().trim()
+            val exitCode = process.waitFor()
+            check(exitCode == 0 && output.isNotBlank()) {
+                "sysctl -n machdep.cpu.brand_string failed: exitCode=$exitCode output='$output'"
+            }
+            return output
+        }
+
+        private fun captureCpuModelLinux(): String {
+            val cpuinfo = File("/proc/cpuinfo")
+            check(cpuinfo.isFile) { "/proc/cpuinfo is not present" }
+            val modelLine = cpuinfo.readLines()
+                .firstOrNull { it.startsWith("model name") }
+                ?: error("/proc/cpuinfo has no 'model name' field")
+            val model = modelLine.substringAfter(":").trim()
+            check(model.isNotBlank()) { "/proc/cpuinfo's 'model name' field is blank" }
+            return model
+        }
+    }
+
+    /**
+     * The lines [captureCurrent]'s caller should print to stdout — one per fact, in the
+     * shape [fromJmhLog] reads back.
+     */
+    fun bannerLines(): List<String> = listOf(
+        "$CPU_MODEL_PREFIX $cpuModel",
+        "$CORE_COUNT_PREFIX $coreCount",
+        "$OS_PREFIX $os",
+    )
 }
