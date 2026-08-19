@@ -444,9 +444,45 @@ def parked_ids(children):
                   and is_human_park(t))
 
 
+def branch_has_commits(branch):
+    """Does a local ref `branch` exist and carry commits of its own?
+
+    `resumed` was derived purely from status == in_progress AND assignee ==
+    actor, so a task released by sweep-stale-claims.sh reads as NEVER TOUCHED
+    — status reset to open, indistinguishable in the JSON from fresh work.
+    Measured on computenet-4ru.5.1: a previous session had implemented it
+    fully (two commits, 11 files, +1871 lines) and written a completion
+    comment, then died before review; the sweep correctly released the claim
+    (nothing had reviewed it), and this script then reported
+    `"resumed": false` while handing back a worktree and branch that already
+    held the deliverable. The documented next step for a non-resumed entry is
+    to dispatch an implementer — a second one, onto a finished branch
+    (computenet-jw9x).
+
+    The branch is the durable witness the bead status is not. Answers False on
+    any error: git absent, not a repo, no such ref. A wrong False is the old
+    behaviour, so this can only improve the reading, never degrade it.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+            capture_output=True, text=True, timeout=10)
+        if out.returncode != 0:
+            return False
+        merge_base = subprocess.run(
+            ["git", "rev-list", "--count", f"origin/main..refs/heads/{branch}"],
+            capture_output=True, text=True, timeout=10)
+        return merge_base.returncode == 0 and merge_base.stdout.strip() not in ("", "0")
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _entry(task, resumed, files):
     meta = task.get("metadata") or {}
     tid = task["id"]
+    branch = meta.get("branch") or f"task/{tid}"
+    # A branch carrying commits means resumed, whatever the bead status says.
+    has_work = branch_has_commits(branch)
     return {
         "id": tid,
         "model": meta.get("model") or "",     # empty => breakdown omitted it
@@ -456,8 +492,13 @@ def _entry(task, resumed, files):
         # so it is surfaced here rather than hand-grepped out of the prose.
         "cross_bead": meta.get("cross_bead") or "",
         "worktree": meta.get("worktree") or f"../computenet-worktrees/{tid}",
-        "branch": meta.get("branch") or f"task/{tid}",
-        "resumed": resumed,
+        "branch": branch,
+        "resumed": bool(resumed) or has_work,
+        # Set when the BRANCH says resumed and the bead status did not. The
+        # orchestrator must inspect before dispatching: `git log` in the
+        # worktree and `bd comments` on the bead, then route to 5c (review and
+        # merge) rather than to an implementer, if the work is already done.
+        "branch_has_commits": has_work,
     }
 
 

@@ -161,6 +161,39 @@ SKILL.md and the other references cite this file as "`bd` traps".
   unparented (hash id, counter untouched) and then re-parents. Breakdown
   children under an epic or feature YOU claimed are exclusive by that claim
   and keep their dotted ids — `--parent` is correct there.
+- **An EMPTY database answers every read successfully.** The database `bd`
+  opens is chosen by cwd (or `-C`) — *not* by "only the main checkout has
+  one", which is false in both directions now measured. A worktree **without**
+  its own database walks up and reaches the real one: measured 2026-08-19
+  from a clean sibling worktree, bare `bd stats` returned 852/129/700,
+  identical to `bd -C <main-checkout> bd stats`. And a worktree that has
+  somehow **acquired** one answers from *that*: `bd list --limit 3 --json` →
+  `[]` (exit 0), `bd stats` → `Total Issues: 0`, `bd show <known-id>` → "no
+  issue found", against 702 issues in the main checkout (computenet-8mb3).
+
+  The failure mode is therefore not the missing-database error the old
+  wording implied — it is a **well-formed, successful, empty answer**, with no
+  warning, no nonzero exit and nothing in the JSON to notice. That matters
+  because emptiness ROUTES control flow in this skill: an empty readiness
+  answer sends step 3 to `bd defer`, which hides an epic from BOTH machines,
+  and an empty liveness listing is a false all-clear on siblings — the exact
+  check whose failure produced a four-way collision, reached by a second
+  independent route. So **where emptiness decides something, prove the
+  database is the right one first**, and treat a failure as "nothing was
+  checked" (the `ready-in-epic.sh` exit-3 class), never as "nothing there":
+
+  ```bash
+  bd -C <main-checkout> stats | grep -qE 'Total Issues: *[1-9]' \
+    || echo "NOT CHECKED: bd opened an empty database — do not route on this"
+  ```
+
+  What *creates* a per-worktree database is **not established**. `bd init`
+  from inside a worktree is the standing hypothesis and nobody has reproduced
+  it; the one instance found was nine days old with mtimes spread across three
+  dates, so several sessions wrote to it without noticing. It is recorded here
+  as an unexplained observation, not a mechanism — and none of the 15
+  worktrees on this machine has one today. Do not write guidance that assumes
+  the cause.
 - `bd` calls are slow and `bd dolt pull`/`push` can run past 120s — give
   sync commands a ≥300s timeout, and never chain `bd` *writes* in one Bash
   block: one write per call, each with the long timeout, or the chain dies
