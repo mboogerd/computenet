@@ -262,13 +262,27 @@ class LateJoinCatchUpProbeTest {
                 // occupancy column would be measuring an idle host.
                 "burst adds already applied when the catch-up snapshot was taken, per " +
                     "trial: $burstAlreadyApplied (of ${CatchUpFixtures.DRIVE_ADDS})",
-                // Deltas the joiner had received at the instant its baseline completed. 1 is
-                // the ordinary answer and does NOT mean the overlap failed — it means no live
-                // delta overtook the baseline, which is what a priority-0 install ahead of
-                // priority-20 traffic should produce. The overlap witness is the line above.
+                // Deltas the joiner had received when the joining thread read the count.
+                // Read AFTER `baselineReached.await()` returns, so anything above 1 is
+                // mostly that thread's wake-up latency — the host's drain thread keeps
+                // handing the joiner live adds between the countdown and the read — and NOT
+                // a live delta overtaking the baseline. Measured 1-54 across the nine trials
+                // of one run, with 2-5 typical. This line is a diagnostic, not a signal
+                // about the overlap in either direction; the overlap witness is the line
+                // above.
                 "joiner arrivals when the baseline completed, per trial: $joinerArrivals",
                 // The occupancy figure, stated as the difference of the paired medians and
                 // reported alongside both so a reader can see which side moved.
+                //
+                // **It can come out NEGATIVE, and that is the Unreportable regime showing
+                // rather than an inverted mechanism.** The unjoined half's maxGap is itself a
+                // worst-case order statistic over three trials, so at a small pre-seed its
+                // own noise can exceed the stall a join inflicts. Measured in one run
+                // (2026-08-19, M2 Pro): at 1e5 the unjoined median was 0.0491 ms against a
+                // joined 8.2989 ms, difference +8.2498 ms; at 1e3 the unjoined median was
+                // 5.1978 ms (samples 0.2571/5.1978/5.2633) against a joined 1.9909 ms,
+                // difference -3.2069 ms. Read this number against the per-trial samples
+                // printed below, never on its own.
                 "occupancy (median maxGap during join - median maxGap with no join): " +
                     "%.4f ms".format(joined.median - alone.median),
             ),
