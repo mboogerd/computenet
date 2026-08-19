@@ -30,6 +30,15 @@ import kotlin.test.assertEquals
  * literal.** Either the change to the encoding was unintended, or it is
  * intended and needs an explicit format version and a migration story for
  * signatures minted under the old one.
+ *
+ * The unpaired-surrogate decision (`computenet-9qgg`) deliberately left this
+ * literal untouched, and that is an argument that carried weight in the
+ * decision rather than an oversight: rejecting ill-formed strings narrows the
+ * accepted domain without redefining the bytes of anything already accepted,
+ * whereas the rejected alternative — encoding UTF-16 code units — would have
+ * changed the bytes of every string and so every announcement here. The port
+ * name below is well-formed UTF-16 (`über`, and no surrogate at all), so it
+ * encodes exactly as it did before.
  */
 class AnnouncementCanonicalBytesGoldenVectorTest {
 
