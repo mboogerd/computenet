@@ -23,6 +23,28 @@ sealed interface Principal {
  * name; phase-2 (deferred, 95 §R7) is [Authenticated] — a key/DID plus a
  * signed-nonce hello challenge. The policy vocabulary below is stable across
  * the upgrade; only the strength this enum certifies changes.
+ *
+ * **Declaration order IS the authority ordering, weakest first** (epic
+ * `computenet-ssa` §9.7). This is a semantic contract, not a listing
+ * convention: [ProtocolAuthority.minAuth] is a *floor*, and the sites that
+ * enforce it compare two `AuthLevel`s with the ordering operators Kotlin
+ * derives from `Enum.compareTo` — i.e. from `ordinal`. `TransportVouched <
+ * Authenticated` therefore has to hold for a `minAuth = Authenticated` floor
+ * to refuse a merely transport-vouched principal.
+ *
+ * Consequences for anyone editing this declaration:
+ * - **Reordering the constants, or inserting one out of strength order, is a
+ *   security change**, not a refactor — it silently flips which crossings a
+ *   floor admits. A new level goes at the position its *strength* dictates.
+ * - `AuthLevelOrderingTest` pins both the comparison and the exact entries
+ *   list, so a reorder or an insertion fails loudly rather than quietly
+ *   re-grading live crossings.
+ * - Nothing persists or transmits an `AuthLevel`: it is not `@Serializable`,
+ *   no wire frame or journal record carries one, and no `when` matches on it
+ *   (audited at `40c13c97`; recorded on `computenet-ssa.3`). Declaration order
+ *   is thus a *local* semantic convention today, with no cross-version
+ *   compatibility constraint on the ordinals — keep it that way, or the
+ *   reorder rule above hardens into a wire-compatibility rule.
  */
 enum class AuthLevel { TransportVouched, Authenticated }
 
