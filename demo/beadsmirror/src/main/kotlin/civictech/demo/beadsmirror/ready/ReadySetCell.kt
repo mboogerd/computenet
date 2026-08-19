@@ -114,6 +114,22 @@ import java.util.UUID
  * real emission, not something swallowed) rather than papering over it here,
  * which is what a wave-gated wrapper would do.
  *
+ * ## Threading: one writer, no lock — and unlike its inputs, no lock on the read
+ *
+ * The whole fold below ([putDots], [edgeAdds], the indices over them, and
+ * [advertised]) is plain unsynchronized state, mutated on whatever thread
+ * drives `MirrorProjector.apply` — in `BeadsMirrorApp` that is
+ * `DoltFeedPoller`'s single daemon thread, the module's documented
+ * "one writer, no lock" convention (`MirrorState`'s KDoc). The difference
+ * from the two cells this derives from is on the *read* side: `OrMapCell` and
+ * `SetCell` fold and answer under `stateLock`, so the existing off-thread
+ * reader (the HTTP route, reading `MirrorProjector.view()`) sees a consistent
+ * snapshot, whereas [readySet] takes no lock at all and would race the writer
+ * rather than merely trail it. Nothing reads this value off the writer thread
+ * today — every call site and every test is single-threaded — so serving it
+ * (the obvious next consumer) needs a lock or a published immutable snapshot
+ * added first; that is a change to this file, not something a caller can fix.
+ *
  * ## Attach before you feed
  *
  * [derivedFrom] installs plain subscriptions, and `subscribe` does not fire
