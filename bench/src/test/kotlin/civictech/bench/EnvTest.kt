@@ -132,6 +132,27 @@ class EnvTest {
     }
 
     @Test
+    fun `refuses two host-fact markers fused onto one line rather than accepting a corrupted value`() {
+        // computenet-x9e.11's exact fixture: JMH's per-line relay (computenet-yhbd,
+        // 3e23b915) can put ONE marker mid-line, but never fuses TWO markers onto one
+        // line with no separator between them — that shape means the parser matched a
+        // marker whose "value" runs into the next marker's text rather than stopping at
+        // the fact it names. Before the fix this was ACCEPTED: cpuModel absorbed the
+        // trailing marker and value ("Apple M2 Pro# Host core count: 10") while core
+        // count still parsed off the same line. It must refuse instead.
+        val log = """
+            ${HostFacts.CPU_MODEL_PREFIX} Apple M2 Pro${HostFacts.CORE_COUNT_PREFIX} 10
+            ${HostFacts.OS_PREFIX} Mac OS X 14.5
+        """.trimIndent()
+
+        val failure = shouldThrow<HostFactsUnknownException> {
+            HostFacts.fromJmhLog(log, source = "<fixture>")
+        }
+        failure.message shouldContain HostFacts.CPU_MODEL_PREFIX
+        failure.message shouldContain HostFacts.CORE_COUNT_PREFIX
+    }
+
+    @Test
     fun `refuses a log stating the CPU model two different ways`() {
         val failure = shouldThrow<HostFactsUnknownException> {
             HostFacts.fromJmhLog(
