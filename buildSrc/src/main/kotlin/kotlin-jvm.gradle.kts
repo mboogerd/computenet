@@ -168,17 +168,18 @@ tasks.withType<Test>().configureEach {
     // timing-sensitive host/observe classes, all green, on top of the CI run above.
     //
     // ---------------------------------------------------------------------------
-    // `:demo:beadsmirror` opts in SECOND (computenet-9vx3), at the same count as
-    // `:kernel` but for a different reason, and NOT for the reason the work was
-    // proposed on. The proposal was that this module is the inverse workload — 294
-    // tests whose wall time is a test thread BLOCKED on a `bd`/`dolt` child process,
-    // so a fork parked in `Process.waitFor` holds no core, the JVM+child pair counts
-    // as one runnable unit, and the half-cores rule that is right for `:kernel`
-    // under-subscribes here. That model predicted 4 forks (Gradle's worker-lease
-    // pool caps test forks at `--max-workers`, i.e. the runner's 4 vCPUs, so 4 was
-    // the ceiling rather than a guess). IT WAS MEASURED AND IT IS WRONG. `dolt` is a
-    // Go binary that uses the whole machine, so a `bd` mutation is not idle waiting;
-    // it is the CPU work, merely happening in another process.
+    // `:demo:beadsmirror` opts in SECOND (computenet-9vx3), and the count is
+    // machine-dependent on purpose: 2 on CI's 4-vCPU runner, 4 on a >=8-core dev box.
+    // The proposal was that this module is `:kernel`'s inverse workload — 295 tests
+    // whose wall time is a test thread BLOCKED on a `bd`/`dolt` child process, so a
+    // fork parked in `Process.waitFor` holds no core, the JVM+child pair counts as
+    // one runnable unit, and the half-cores rule that is right for `:kernel`
+    // under-subscribes here. That model predicted 4 forks everywhere (Gradle's
+    // worker-lease pool caps test forks at `--max-workers`, i.e. the runner's 4
+    // vCPUs, so 4 looked like a ceiling rather than a guess). IT IS ONLY TRUE WITH
+    // CORES TO SPARE. `dolt` is a Go binary that uses the whole machine and commits
+    // through fsync, so a `bd` mutation is not idle waiting — it is the work, merely
+    // happening in another process and against the disk.
     //
     // Why it was worth doing at all, from CI rather than a dev box. In
     // `build-test-fast` run 32283729126 (head 28e29924, `main`'s content),
@@ -190,38 +191,57 @@ tasks.withType<Test>().configureEach {
     // Same shape as the `:kernel` paragraphs above, and now the fast lane's whole
     // tail (`:kernel:test` moved to its own `kernel-test` job and is `-x`-ed here).
     //
-    // THREE ARMS ON CI, one commit each on PR #355's branch, same runner type, read
-    // the same way — the `:demo:beadsmirror:test` task span from the task timeline,
-    // and per-class spans summed from the streamed per-test PASSED lines:
+    // MEASURED ON A QUIET 16-CORE DEV MACHINE, `:demo:beadsmirror:test --rerun
+    // -PexcludeMultiJvm=true`, fork count injected by init script so the tree is
+    // byte-identical across arms, two trials each, interleaved 1/2/4/1/2/4 so drift
+    // cannot masquerade as an effect:
     //
-    //   forks   module span   sum of class spans   Gradle build   job
-    //     1        270.2s        189.6s              7m14s        7m46s   (32283729126)
-    //     2        144.5s        200.5s              4m10s        4m44s   (32292718836)
-    //     4        273.3s        591.4s              6m46s        7m22s   (32291870198)
+    //   forks    trial 1   trial 2     mean    speedup
+    //     1       780.0s    760.1s    770.1s     1.00x
+    //     2       497.8s    480.5s    489.2s     1.57x
+    //     4       316.4s    329.0s    322.7s     2.39x
     //
-    // All three: 31 classes, 294 tests, 0 skipped, 0 failed, and no
-    // `:demo:beadsmirror:test SKIPPED|NO-SOURCE|UP-TO-DATE|FROM-CACHE` marker in any
-    // log — executed, not replayed (the `bd`/`dolt` install step and computenet-3g6n's
-    // evidence gate are what keep that true).
+    // Every one of the six runs: 45 JUnit XML files, 295 tests, 0 failures, 0 errors,
+    // 0 skipped. The totals are what make the wall-clock numbers mean anything — a
+    // fork change is exactly where a class can silently stop running.
     //
-    // Read the SECOND column, because it is the one that explains the third. It is
-    // the total time the classes themselves occupied, so it isolates contention from
-    // overlap: 2 forks inflate it by 5.7% and convert almost all of that overlap into
-    // wall time (1.87x, against a 2.0x ideal), while 4 forks inflate it by 212% —
-    // ReadyDifferentialTest 46.2s -> 193.5s, ScriptedSequenceTest 15.2s -> 54.2s,
-    // DoltCommitFeedTest 5.7s -> 29.7s — and the extra overlap exactly cancels it,
-    // landing 3.1s SLOWER than a single fork. Four forks is not a smaller win than
-    // two; it is no win at all. Do not re-derive 4 from the worker-lease argument.
+    // ON CI THE ANSWER IS DIFFERENT, AND CI IS TOO NOISY TO READ FROM WALL TIME.
+    // `:demo:beadsmirror:test` spans from the task timeline of five `build-test-fast`
+    // runs, alongside the sum of the classes' own occupied time (from the streamed
+    // per-test lines — it isolates contention from overlap) and the span of the rest
+    // of the lane's test events, which is the control for how fast that runner was:
     //
-    // So the count is 2, and the honest reason is that four `dolt` processes
-    // saturate a 4-vCPU runner while two do not — an empirical property of this
-    // runner and of `dolt`'s own threading, NOT the half-cores heuristic above
-    // arriving at the same number by coincidence. A runner with more vCPUs would
-    // move this; `availableProcessors() / 2` is written so it can, and the clamp at
-    // 2 is what stops it moving on a 10- or 16-core dev box, where nothing has been
-    // measured and the same saturation would be reached at some higher count.
+    //   forks   module span   sum of class spans   rest of lane   run
+    //     1        270.2s        189.6s               98.5s       32283729126
+    //     2        144.5s        200.5s               67.8s       32292718836
+    //     2        219.3s        283.2s               99.6s       32293886125
+    //     2        445.6s        517.0s               67.0s       32294701932 att.1
+    //     2        226.7s        294.8s              104.5s       32294701932 att.2
+    //     4        273.3s        591.4s              258.3s       32291870198
     //
-    // Safety, audited per class rather than assumed, since two forks is exactly the
+    // The last two 2-fork rows are THE SAME COMMIT rerun, and they differ by 2.0x.
+    // That is the noise floor of a GitHub runner for this module — `dolt`'s fsync
+    // traffic makes it disk-bound in a way the rest of the lane is not, which is why
+    // the control column barely moves while the module column doubles. So do NOT
+    // conclude anything here from one run's job duration, in either direction; a
+    // single 10m28s `build-test-fast` on this branch was chased down to exactly this
+    // and is row 4 above.
+    //
+    // What IS readable on CI is the last row's control column. At 4 forks the REST
+    // OF THE LANE inflated to 258.3s against 67-105s in every other run: four test
+    // JVMs plus their `bd`/`dolt` children starve the other modules' suites on a
+    // 4-vCPU runner, and the module's own sum-of-class-spans triples (591.4s, with
+    // ReadyDifferentialTest going 47.9s -> 193.5s). That signature appears in no
+    // other run and is not a wall-clock claim, so it survives the noise. Four forks
+    // on this runner is not a smaller win than two; it is a tax on everyone else.
+    //
+    // Hence `availableProcessors() / 2` clamped to [1, 4]: 2 on the 4-vCPU runner,
+    // where 2 left the control column alone across four runs and 4 tripled it in the
+    // one run it got; 4 on a >=8-core machine, which is where the 2.39x was measured. The clamp is a
+    // floor on evidence, not on generosity — 4 is the largest count measured
+    // anywhere, so nothing here extrapolates past its data.
+    //
+    // Safety, audited per class rather than assumed, since concurrent forks are the
     // condition under which computenet-dqy.25's defect family bites:
     //  * PORTS. Nothing in this module ever names a port it has not already bound.
     //    `MirrorRoutesTest` uses `DemoShell(0)` and reads `boundPort`;
@@ -253,14 +273,16 @@ tasks.withType<Test>().configureEach {
     //    only cross-class statics are that template cache and two stateless
     //    `object`s, `MirrorExportEquality` and `ReadySchedule`.
     //
-    // What is NOT proven: flake behaviour. This rests on ONE green CI run at 2 forks
-    // plus one at 4, and `TwoNodeRig`'s waits are a 30s budget over a 200ms poll
-    // interval, so starvation is the failure mode to watch. If this lane starts
-    // timing out in convergence awaits rather than failing assertions, drop to 1 and
-    // measure again before widening the budgets.
+    // What is NOT proven: flake behaviour over many runs. This rests on 6 local runs
+    // and 5 CI runs, all green, all with identical totals — enough to say the setting
+    // does not break the suite, not enough to characterise a rare race.
+    // `TwoNodeRig`'s waits are a 30s budget over a 200ms poll interval, so starvation
+    // is the failure mode to watch. If this lane starts timing out in convergence
+    // awaits rather than failing assertions, drop the clamp to 1 and measure again
+    // before widening any budget.
     when (project.path) {
         ":kernel" -> maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 2)
-        ":demo:beadsmirror" -> maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 2)
+        ":demo:beadsmirror" -> maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
     }
     // Hang -> failure, not a silently stuck build. 440+ unbudgeted runToIdle() call
     // sites and zero prior @Timeout meant a livelock regression could hang CI
