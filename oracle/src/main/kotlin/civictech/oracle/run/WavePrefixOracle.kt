@@ -85,22 +85,38 @@ import kotlin.random.Random
  * - **What that sweep found** (`WavePrefixTest.generatedSweepConfig`, seeds 0..59, ordinary
  *   `writerCount = 2` / `unobservedRemoveRatio = 0.25` knobs, Darwin arm64, 2026-08-19): 60/60
  *   admitted, 47/60 carrying a source-to-terminal pair joined by two paths with *different*
- *   operator sequences, and **49/60 prefix-clean**. The other eleven are pinned seed lists in
- *   that file, not silence: five are the pre-existing cross-writer unobserved-remove seam
- *   (already `Mismatch` at quiescence with checking OFF — computenet-qcm1), five dip and
- *   recover inside one wave, one is a single-path chain showing a part-applied wave (both
- *   filed as **computenet-eeys**), and one is a reconvergent shape showing a state that is no
- *   prefix at all (**computenet-qjtp**).
+ *   operator sequences, and **48/60 prefix-clean**. The other twelve are pinned seed lists in
+ *   that file, not silence: five already `Mismatch` at quiescence with checking OFF, five
+ *   REGRESSED across a wave the model did not change, one a single-path chain showing a state
+ *   that is no prefix, one a reconvergent shape showing a state that is no prefix.
  *
- *   **Read the last three together with the observation point.** A [TerminalFold] applies each
- *   delta as it arrives, while `InternalConsistencyTest` reads an *aligned* sink — its own
- *   ungated-outer-join control is measured at an operator outlet precisely because "the aligned
- *   sink buffers a wave's deltas and applies them together, so this particular flicker is
- *   invisible at the sink". So this oracle observes at a **strictly stronger point than the
- *   kernel's own consistency suite does**, and whether prefix-cleanliness is owed there is
- *   open (computenet-eeys). Until it is settled, treat those seeds as a measured limit of this
- *   instrument, not as established kernel defects — and do not close the gap by weakening the
- *   check (D5).
+ *   **The pinned twelve are one population, and it is the known cross-writer seam.** Measured
+ *   at review time (2026-08-19, Darwin arm64, this same config and seed range): with
+ *   `writerCount = 1` the sweep is **60/60 clean — no `Mismatch` and no violation at all** —
+ *   while `unobservedRemoveRatio = 0.0` at `writerCount = 2` removes neither (it only
+ *   re-shuffles which seeds carry them: 9 mismatches and 6 violations). So the discriminating
+ *   variable is the second writer, i.e. the pre-existing cross-writer remove seam
+ *   (computenet-qcm1, computenet-4ru.6.3: a spawned `SetCell` retracts a live element on any
+ *   remove while the model no-ops a cross-writer remove no `Observe` preceded). The five
+ *   `Mismatch` seeds are the cases where that divergence survives to quiescence; the seven
+ *   violation seeds are the cases where it appears at an intermediate wave and *heals* before
+ *   the end. **Catching those seven is this instrument's contribution** — the final-state
+ *   comparison cannot see them at all.
+ *
+ *   **What the violations are NOT: an artifact of this observation point.** A [TerminalFold]
+ *   applies each delta as it arrives, while `InternalConsistencyTest` reads an *aligned* sink
+ *   ("the aligned sink buffers a wave's deltas and applies them together, so this particular
+ *   flicker is invisible at the sink") — a real difference between the two read paths, but not
+ *   the explanation here, and an earlier session's own probe had already discarded it. Two
+ *   measurements, both at review time: (i) re-driving each violating seed with a `Barrier`
+ *   after *every* Op and inspecting ONLY the `onBarrier` states — read after `drainToIdle()`,
+ *   where a raw fold and an aligned sink hold the same value by construction — reproduces every
+ *   violation, 1 to 13 offending states per seed, several persisting across consecutive
+ *   quiesced boundaries; (ii) the granularity bullet above is why: at one productive step per
+ *   wave, essentially every observation this oracle takes is already a quiesced wave boundary,
+ *   so "the dip happened inside one wave" cannot be the mechanism for any of them. Treat the
+ *   pinned seeds as the seam surfacing earlier, not as a limit of this instrument — and do not
+ *   close the gap by weakening the check (D5).
  */
 object WavePrefixOracle {
 

@@ -515,22 +515,30 @@ class WavePrefixTest {
         //     evidence about glitch-freedom at all: the comparison a glitch report rests on is
         //     already invalid there. That is the known cross-writer unobserved-remove seam
         //     (computenet-qcm1, computenet-4ru.6.3).
-        // (b) Two violation signatures are provably NOT reconvergence tears, and are therefore
-        //     evidence about the OBSERVATION POINT rather than about the kernel's arms:
-        //       - a REGRESSED observation whose wave was a PLATEAU at that terminal (the model's
-        //         answer is the same before and after, so the dip and its recovery both happened
-        //         inside one wave), and
-        //       - any violation on a topology with exactly ONE path from source to terminal: a
-        //         chain has no second arm, so nothing can be half-published relative to anything.
-        //     `InternalConsistencyTest` states the mechanism in its own controls: it reads an
-        //     ALIGNED sink, which "buffers a wave's deltas and applies them together, so this
-        //     particular flicker is invisible at the sink", while a `TerminalFold` applies each
-        //     delta as it arrives. Whether the kernel owes prefix-cleanliness at a raw view is
-        //     filed as computenet-eeys and is NOT decided here (epic design D10).
+        // (b) Two further SIGNATURES are separated out, so a change in one is visible without
+        //     re-measuring the others:
+        //       - a REGRESSED observation across a wave the model did not change at that terminal
+        //         ([RAW_VIEW_FLICKER_SEEDS]), and
+        //       - a violation on a topology with exactly ONE path from source to terminal, which
+        //         cannot be a reconvergence tear because there is no second arm
+        //         ([CHAIN_ARTIFACT_SEEDS]).
+        //     These are signatures, NOT causal verdicts. Measured at review time (2026-08-19,
+        //     Darwin arm64): all twelve pinned seeds — the five in (a) included — disappear at
+        //     `writerCount = 1` and survive `unobservedRemoveRatio = 0.0`, so the common cause is
+        //     the cross-writer remove seam (computenet-qcm1), appearing at an intermediate wave
+        //     and healing by quiescence in the seven violation cases. In particular the earlier
+        //     reading of these two buckets as artifacts of THIS observation point (a raw
+        //     `TerminalFold` versus `InternalConsistencyTest`'s aligned sink) does not hold:
+        //     re-driving each seed with a `Barrier` after every Op and inspecting only the
+        //     post-`drainToIdle` `onBarrier` states — where a raw fold and an aligned sink agree
+        //     by construction — reproduces every violation, several across consecutive quiesced
+        //     boundaries. Filed as computenet-eeys; not decided here (epic design D10).
         //
         // Anything else — a violation on a reconvergent shape that is not a plateau regression —
         // is a glitch CANDIDATE, pinned and filed (computenet-qjtp). Keeping that bucket separate
         // is what stops the partition from becoming an escape hatch: a NEW seed in it fails.
+        // (Seed 36 also clears at `writerCount = 1`, so it is most likely the same seam; it stays
+        // in the strictest bucket until computenet-qjtp says otherwise.)
         val settledMismatch = mutableListOf<Long>()
         val plateauFlicker = mutableListOf<Long>()
         val chainArtifact = mutableListOf<Long>()
@@ -611,9 +619,13 @@ class WavePrefixTest {
     }
 
     /**
-     * Whether this violation is a **within-wave transient**: a regression whose wave was a plateau
-     * at that terminal — the model's answer is the same at the floor and at the floor's successor,
-     * so the wave changed nothing there and both the dip and its recovery happened inside one wave.
+     * Whether this violation is a **plateau regression**: a regression across a wave the model did
+     * not change at that terminal — its answer is the same at the floor and at the floor's
+     * successor.
+     *
+     * A structural signature only. It says the *model* did not move across that wave; it does NOT
+     * establish that the kernel's dip and recovery both happened inside one wave — measured, they
+     * do not (see the bucket comment in the sweep test).
      *
      * Deliberately narrow: every [RunOutcome.WavePrefixViolation.Kind.NO_MATCHING_PREFIX], and
      * every regression across a wave that really changed the terminal, is excluded and lands in a
@@ -650,15 +662,20 @@ class WavePrefixTest {
         val SEAM_SEEDS: List<Long> = listOf(8L, 30L, 40L, 50L, 58L)
 
         /**
-         * Seeds whose terminal dips and recovers inside one wave at a raw view — filed as
-         * computenet-eeys. Pinned for the same reason [SEAM_SEEDS] is.
+         * Seeds whose terminal REGRESSES across a wave the model did not change — filed as
+         * computenet-eeys. Pinned for the same reason [SEAM_SEEDS] is. The name records the
+         * hypothesis this bucket was first cut for (a raw view flickering inside a wave); that
+         * hypothesis is measurably wrong — the dips reproduce at quiesced barriers — and the
+         * cause is the [SEAM_SEEDS] seam. Kept as a distinct signature, not as a diagnosis.
          */
         val RAW_VIEW_FLICKER_SEEDS: List<Long> = listOf(28L, 34L, 44L, 46L, 54L)
 
         /**
          * Seeds whose topology is a single path source-to-terminal and which nonetheless show a
-         * `NO_MATCHING_PREFIX` observation — a chain cannot tear, so this is the observation point
-         * (computenet-eeys). Seed 38 is a five-deep `flatMapSet` chain.
+         * `NO_MATCHING_PREFIX` observation. Seed 38 is a five-deep `flatMapSet` chain (verified:
+         * one path, `set -> flatMapSet x5`), so the violation cannot be a reconvergence tear —
+         * but it is visible at quiescence too, so it is not an artifact of the observation point
+         * either (computenet-eeys).
          */
         val CHAIN_ARTIFACT_SEEDS: List<Long> = listOf(38L)
 
