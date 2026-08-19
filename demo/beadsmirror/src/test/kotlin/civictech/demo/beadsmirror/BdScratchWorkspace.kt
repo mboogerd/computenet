@@ -14,6 +14,30 @@ import kotlin.io.path.writeText
  * §4: every test in this module reads/writes a fresh scratch workspace, NEVER
  * the live `.beads` of this repository.
  *
+ * **The workspace is COPIED from a per-JVM template, not initialised per test**
+ * (computenet-s5hx). `bd --sandbox init` costs 5.17s on this machine (bd 1.1.2 /
+ * dolt 2.2.3, darwin/arm64, 2026-08-19) and 83 tests in this module built one
+ * each in an `@BeforeEach` — ~430s, 38% of the module's 18m40s runtime, spent
+ * before any assertion ran. Copying the 2.4MB (77-file) pristine workspace costs
+ * ~0.1-0.2s instead. Nothing is mocked and no fidelity is lost: the copy is a
+ * real bd workspace over a real embedded Dolt database, and every test that
+ * spawned `bd`/`dolt` subprocesses still spawns them. Only the *creation* of the
+ * database is amortised — one `bd --sandbox init` per JVM per [bdEnv], in
+ * [templateFor].
+ *
+ * **The copy is REHOMED, which is not optional** — see [copyTemplateInto]. The
+ * embedded Dolt database directory keeps the name it was created under, while
+ * [doltRootFor] derives the expected name from the *workspace directory's own
+ * basename*, so a plain copy to a fresh temp directory resolves [doltRoot] to a
+ * path that does not exist. Landing every copy at one constant basename would
+ * make that agree, but it would also make [sanitizedDoltDatabaseName] — and
+ * therefore [civictech.demo.beadsmirror.projector.DotMinter.sourceId], the dot
+ * provenance the two-node tests depend on — identical for every workspace in the
+ * JVM, silently merging two nodes' dot sources into one. So each copy keeps a
+ * unique basename and the database directory is renamed (and
+ * `.beads/metadata.json`'s `dolt_database` rewritten) to match it.
+ * `BdScratchWorkspaceTest` covers exactly that interaction.
+ *
  * The workspace's Dolt database root — where `dolt` (and [civictech.demo.beadsmirror.dolt.DoltSql])
  * must run — lives at `<ws>/.beads/embeddeddolt/<name>/`, where `<name>` is the
  * scratch directory's basename with every character that is not a letter,
@@ -77,9 +101,13 @@ class BdScratchWorkspace private constructor(val root: Path, private val bdEnv: 
 
     /** Rewrites `.beads/metadata.json`'s "project_id" field to [projectId], preserving every other key. */
     internal fun rewriteProjectId(projectId: String) {
+        rewriteMetadata(root, "project_id", projectId)
+    }
+
+    /** This workspace's `.beads/metadata.json` "dolt_database" field — the embedded database's directory name. */
+    internal fun doltDatabaseName(): String {
         val metadata = Json.parseToJsonElement(metadataFile.readText()) as JsonObject
-        val patched = JsonObject(metadata.toMutableMap().apply { put("project_id", JsonPrimitive(projectId)) })
-        metadataFile.writeText(Json.encodeToString(JsonObject.serializer(), patched))
+        return metadata.getValue("dolt_database").jsonPrimitive.content
     }
 
     private val metadataFile: Path get() = root.resolve(".beads").resolve("metadata.json")
@@ -109,7 +137,73 @@ class BdScratchWorkspace private constructor(val root: Path, private val bdEnv: 
             "GIT_CONFIG_SYSTEM" to "/dev/null",
         )
 
-        /** Creates a fresh scratch directory and runs `bd --sandbox init` in it. */
+        /**
+         * The template's directory basename. Short and alphanumeric on purpose:
+         * `bd` derives the workspace's *issue prefix* from it at `init` time and
+         * that prefix is baked into the database, so every copy mints ids like
+         * `beadsmirror-a1b`. Ids stay workspace-locally unique (the suffix is
+         * random, not content-derived — probed 2026-08-19: the same title in
+         * three copies minted `ws-jqn`, `ws-bu8`, `ws-17u`), and no test asserts
+         * on the prefix's value; the tests that need two workspaces to mint
+         * ids under one identity pass `--id ... --force` explicitly
+         * ([civictech.demo.beadsmirror.e2e.ScheduleStep.Create]).
+         */
+        private const val TEMPLATE_NAME = "beadsmirror"
+
+        /**
+         * One pristine `bd --sandbox init` workspace per JVM per `bd`
+         * environment, created on first use and deleted at JVM exit.
+         *
+         * Keyed by the environment rather than shared, because `bd` resolves an
+         * issue's `owner` from git config and [OWNERLESS_ENV] exists precisely
+         * to change what `init` and the workspace see: an ownerless workspace
+         * grown from a template initialised under this machine's git identity
+         * would be a subtly different artifact from what the CI-shaped tests
+         * mean to exercise. Two inits per JVM is 10s at worst, against the ~430s
+         * the per-test inits cost.
+         */
+        private val templates = java.util.concurrent.ConcurrentHashMap<Map<String, String>, Path>()
+
+        private fun templateFor(bdEnv: Map<String, String>): Path = templates.computeIfAbsent(bdEnv) { env ->
+            val parent = Files.createTempDirectory("beadsmirror-bd-template-")
+            Runtime.getRuntime().addShutdownHook(Thread { parent.toFile().deleteRecursively() })
+            val dir = Files.createDirectory(parent.resolve(TEMPLATE_NAME))
+            BdScratchWorkspace(dir, env).run("--sandbox", "init")
+            dir
+        }
+
+        /**
+         * Copies [template] into [target] and rehomes the embedded Dolt database
+         * onto [target]'s own basename, so [doltRootFor] resolves.
+         *
+         * Both halves are load-bearing and neither is convention: the database
+         * directory is physically renamed (`dolt`'s database name *is* its
+         * directory name — verified live: a renamed copy answers `bd create`,
+         * `bd ready --json` and `dolt sql` normally), and
+         * `.beads/metadata.json`'s `dolt_database` is rewritten to agree, which
+         * is where `bd` itself reads the name from.
+         */
+        private fun copyTemplateInto(template: Path, target: Path) {
+            template.toFile().copyRecursively(target.toFile(), overwrite = true)
+
+            val embedded = target.resolve(".beads").resolve("embeddeddolt")
+            val templateName = sanitizedDoltDatabaseName(template)
+            val targetName = sanitizedDoltDatabaseName(target)
+            if (templateName != targetName) {
+                Files.move(embedded.resolve(templateName), embedded.resolve(targetName))
+                rewriteMetadata(target, "dolt_database", targetName)
+            }
+        }
+
+        /** Rewrites one string [field] of `<workspace>/.beads/metadata.json`, preserving every other key. */
+        private fun rewriteMetadata(workspace: Path, field: String, value: String) {
+            val file = workspace.resolve(".beads").resolve("metadata.json")
+            val metadata = Json.parseToJsonElement(file.readText()) as JsonObject
+            val patched = JsonObject(metadata.toMutableMap().apply { put(field, JsonPrimitive(value)) })
+            file.writeText(Json.encodeToString(JsonObject.serializer(), patched))
+        }
+
+        /** Creates a fresh scratch directory holding a copy of the pristine `bd --sandbox init` template. */
         fun create(): BdScratchWorkspace = create(emptyMap())
 
         /**
@@ -121,9 +215,8 @@ class BdScratchWorkspace private constructor(val root: Path, private val bdEnv: 
 
         private fun create(bdEnv: Map<String, String>): BdScratchWorkspace {
             val dir = Files.createTempDirectory("beadsmirror-bd-scratch-")
-            val workspace = BdScratchWorkspace(dir, bdEnv)
-            workspace.run("--sandbox", "init")
-            return workspace
+            copyTemplateInto(templateFor(bdEnv), dir)
+            return BdScratchWorkspace(dir, bdEnv)
         }
 
         /**
