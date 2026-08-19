@@ -46,8 +46,14 @@ private class DenyingOutletFixture {
     val stallsA = mutableListOf<StallNotice>()
     val stallsB = mutableListOf<StallNotice>()
 
+    /** Run synchronously inside `a`'s `Suspension` handler — i.e. inside the classification walk itself. */
+    var onStallA: (() -> Unit)? = null
+
     init {
-        ProtocolSupport.of(a).handle(Protocols.Suspension) { _, m -> stallsA += m as StallNotice }
+        ProtocolSupport.of(a).handle(Protocols.Suspension) { _, m ->
+            stallsA += m as StallNotice
+            onStallA?.invoke()
+        }
         ProtocolSupport.of(b).handle(Protocols.Suspension) { _, m -> stallsB += m as StallNotice }
         link(a)
         link(b)
@@ -218,6 +224,45 @@ class FanOutletTest {
         assertEquals(1, fixture.stallsA.size, "a broadcast starves every consumer, including A")
         assertEquals(1, fixture.stallsB.size, "a broadcast starves every consumer, including B")
         assertEquals(fixture.stallsA, fixture.stallsB, "one emission, one wave — both edges carry the same notice")
+    }
+
+    /**
+     * computenet-oenm: `TargetedDelivery.take()` reads **and clears**, and this
+     * is what that clearing buys. The classification walk of a suppressed
+     * targeted delivery hands `Suspension` frames to downstream handlers while
+     * the targeted frame's scope is still on the stack, so anything one of
+     * those handlers synchronously emits is a *fresh* emission that must not
+     * inherit the recipient. Here `a`'s handler answers with a **broadcast**,
+     * itself suppressed: its own classification must reach every `Consume`
+     * link, `b` included. Without the clearing read, the nested broadcast would
+     * be scoped to `a` and `b`'s notice would be silently dropped.
+     */
+    @Test
+    fun `computenet-oenm - a nested emission does not inherit the targeted frame's recipient`() {
+        val fixture = DenyingOutletFixture()
+        var handlerCalls = 0
+        var emitted = 0
+        fixture.onStallA = {
+            // Emit once only: the nested broadcast classifies `a` again, which
+            // re-enters this handler (hence handlerCalls == 2 below).
+            if (handlerCalls++ == 0) {
+                emitted++
+                fixture.membrane.exposedOutlet.call.propagate("nested")
+            }
+        }
+
+        val ctx = MessageContext(Timestamp(UUID.randomUUID(), 11), PortRef.generate())
+        CurrentContext.with(ctx) {
+            fixture.membrane.exposedOutlet.at(fixture.a.ref).propagate("targeted")
+        }
+
+        assertEquals(1, emitted, "the nested broadcast must have been emitted exactly once")
+        assertEquals(2, handlerCalls, "a is classified by the targeted frame and again by the nested broadcast")
+        assertEquals(
+            1,
+            fixture.stallsB.size,
+            "the nested broadcast is its own emission: it must classify b's link too, not inherit the targeted frame's single recipient",
+        )
     }
 
     private fun expectedStall(ctx: MessageContext) =
