@@ -10,6 +10,8 @@ import civictech.bench.MeasuringJvmUnknownException
 import civictech.bench.NOISE_FLOOR
 import civictech.bench.Reportability
 import civictech.bench.RunEnvironment
+import civictech.bench.RunKnobs
+import civictech.bench.RunKnobsUnknownException
 import civictech.bench.TriggerClaim
 import civictech.bench.classify
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -335,13 +337,52 @@ class ThroughputReportTest {
         vmName: String = "OpenJDK 64-Bit Server VM",
         invoker: String? = null,
         options: String = "<none>",
+        knobs: String = knobBanner(),
     ): String = buildString {
         appendLine("# JMH version: 1.37")
         appendLine("# VM version: JDK $version, $vmName, $version")
         if (invoker != null) appendLine("# VM invoker: $invoker")
         appendLine("# VM options: $options")
-        appendLine("# Warmup: 5 iterations, 1 s each")
-        appendLine("# Benchmark mode: Throughput, ops/time")
+        append(knobs)
+    }
+
+    /**
+     * The configuration half of JMH 1.37's banner — the lines it prints from the
+     * parameters it RESOLVED, after any `-f`/`-wi`/`-i` override.
+     *
+     * The defaults deliberately state the values `OperatorThroughputBenchmark`'s
+     * annotations declare, so that a test which changes nothing describes a sweep run at
+     * the annotation config; the computenet-x9e.8 tests below change them, which is the
+     * whole point of the fixture being parameterised.
+     *
+     * `# Fork:` is one line per fork, as JMH prints it, so the fixture states the run's
+     * fork total the way a real log does rather than the way the parser finds convenient.
+     */
+    private fun knobBanner(
+        mode: String = "${ThroughputReport.JMH_MODE}, ops/time",
+        warmupIterations: Int? = ThroughputReport.WARMUP_ITERATIONS,
+        measurementIterations: Int? = ThroughputReport.MEASUREMENT_ITERATIONS,
+        forks: Int? = ThroughputReport.FORKS,
+        forkLine: String? = null,
+    ): String = buildString {
+        val seconds = ThroughputReport.ITERATION_SECONDS
+        appendLine(
+            "# Warmup: " + (warmupIterations?.let { "$it iterations, $seconds s each" }
+                ?: RunKnobs.NONE)
+        )
+        appendLine(
+            "# Measurement: " + (measurementIterations?.let { "$it iterations, $seconds s each" }
+                ?: RunKnobs.NONE)
+        )
+        appendLine("# Timeout: 10 min per iteration")
+        appendLine("# Threads: 1 thread, will synchronize iterations")
+        appendLine("# Benchmark mode: $mode")
+        appendLine("# Benchmark: civictech.bench.micro.OperatorThroughputBenchmark.simApplyDelta")
+        appendLine("# Parameters: (direction = INSERT, subject = fold)")
+        when {
+            forkLine != null -> appendLine("# Fork: $forkLine")
+            forks != null -> (1..forks).forEach { appendLine("# Fork: $it of $forks") }
+        }
     }
 
     /** A directory shaped like a JDK installation: `bin/java` plus a `release` file. */
@@ -505,6 +546,191 @@ class ThroughputReportTest {
         assertTrue(failure.message!!.contains("26.0.1"), failure.message)
     }
 
+    // ---------------------------------------------------------------------------------
+    // computenet-x9e.8: the rendered JMH knobs must be the ones the RUN used, not the ones
+    // the benchmark class declares.
+    //
+    // The same defect shape as computenet-hqid above, one field over. `renderRun` filled
+    // `RunEnvironment`'s mode/forks/warmup/iters from `ThroughputReport`'s constants —
+    // which mirror `OperatorThroughputBenchmark`'s `@BenchmarkMode`/`@Fork`/`@Warmup`/
+    // `@Measurement` — so every entry stated `mode=Throughput forks=2 warmup=5 iters=10`
+    // whatever the sweep did. JMH's `-f`/`-wi`/`-i` override those annotations, and
+    // `OperatorThroughputBenchmark`'s own KDoc documents a `-f 1 -wi 1 -i 1` smoke
+    // invocation, so this is reachable rather than theoretical: no shipped entry is known
+    // wrong (all three sweeps ran the annotation config) and the next smoke sweep would
+    // have been.
+    //
+    // The tests below FAIL if the substitution returns: the refusals because a log missing
+    // a knob line would render successfully again, and the positive one because the entry
+    // would carry the constants instead of the recorded values.
+    // ---------------------------------------------------------------------------------
+
+    /** A log identical to a well-formed one except that [prefix]'s lines are gone. */
+    private fun bannerWithout(prefix: String, invoker: String? = null): String =
+        banner("21.0.11", invoker = invoker).lineSequence()
+            .filterNot { it.startsWith(prefix) }
+            .joinToString("\n")
+
+    @Test
+    fun `refuses a run log that does not state the fork count the run used`(
+        @TempDir dir: File,
+    ) {
+        val results = runArtifacts(dir, quietCsv, log = bannerWithout(RunKnobs.FORK_PREFIX))
+
+        val failure = assertThrows(RunKnobsUnknownException::class.java) {
+            ThroughputReport.renderRun(results, "b861114d", "2026-08-19", "operator throughput")
+        }
+        assertTrue(failure.message!!.contains(RunKnobs.FORK_PREFIX), failure.message)
+        assertTrue(failure.message!!.contains("fork count"), failure.message)
+    }
+
+    @Test
+    fun `refuses a run log that does not state the warmup iterations the run used`(
+        @TempDir dir: File,
+    ) {
+        val results = runArtifacts(dir, quietCsv, log = bannerWithout(RunKnobs.WARMUP_PREFIX))
+
+        val failure = assertThrows(RunKnobsUnknownException::class.java) {
+            ThroughputReport.renderRun(results, "b861114d", "2026-08-19", "operator throughput")
+        }
+        assertTrue(failure.message!!.contains(RunKnobs.WARMUP_PREFIX), failure.message)
+    }
+
+    @Test
+    fun `refuses a run log that does not state the measurement iterations the run used`(
+        @TempDir dir: File,
+    ) {
+        val results = runArtifacts(
+            dir,
+            quietCsv,
+            log = bannerWithout(RunKnobs.MEASUREMENT_PREFIX),
+        )
+
+        val failure = assertThrows(RunKnobsUnknownException::class.java) {
+            ThroughputReport.renderRun(results, "b861114d", "2026-08-19", "operator throughput")
+        }
+        assertTrue(failure.message!!.contains(RunKnobs.MEASUREMENT_PREFIX), failure.message)
+    }
+
+    @Test
+    fun `refuses a run log that does not state the mode the run used`(@TempDir dir: File) {
+        val results = runArtifacts(
+            dir,
+            quietCsv,
+            log = bannerWithout(RunKnobs.BENCHMARK_MODE_PREFIX),
+        )
+
+        val failure = assertThrows(RunKnobsUnknownException::class.java) {
+            ThroughputReport.renderRun(results, "b861114d", "2026-08-19", "operator throughput")
+        }
+        assertTrue(failure.message!!.contains(RunKnobs.BENCHMARK_MODE_PREFIX), failure.message)
+    }
+
+    @Test
+    fun `refuses a run log recording an unforked run, which has no fork count`(
+        @TempDir dir: File,
+    ) {
+        // `-f 0`: JMH measures inside the harness JVM and prints this instead of a total.
+        // There is no fork count to state, and `@Fork(2)` is not the answer.
+        val results = runArtifacts(
+            dir,
+            quietCsv,
+            log = banner(
+                "21.0.11",
+                knobs = knobBanner(forks = null, forkLine = "N/A, test runs in the host VM"),
+            ),
+        )
+
+        val failure = assertThrows(RunKnobsUnknownException::class.java) {
+            ThroughputReport.renderRun(results, "b861114d", "2026-08-19", "operator throughput")
+        }
+        assertTrue(failure.message!!.contains("N/A"), failure.message)
+    }
+
+    @Test
+    fun `refuses a run log recording a run that did no warmup`(@TempDir dir: File) {
+        // `-wi 0`: JMH prints `# Warmup: <none>`, and `@Warmup(iterations = 5)` is not the
+        // answer for a run that warmed up zero times.
+        val results = runArtifacts(
+            dir,
+            quietCsv,
+            log = banner("21.0.11", knobs = knobBanner(warmupIterations = null)),
+        )
+
+        val failure = assertThrows(RunKnobsUnknownException::class.java) {
+            ThroughputReport.renderRun(results, "b861114d", "2026-08-19", "operator throughput")
+        }
+        assertTrue(failure.message!!.contains(RunKnobs.NONE), failure.message)
+    }
+
+    @Test
+    fun `refuses a run log whose fork lines disagree about the total`(@TempDir dir: File) {
+        // Two benchmarks run at different `@Fork` counts into one log: `:bench` declares
+        // three different configurations, so this is a real way to produce such a file.
+        val results = runArtifacts(
+            dir,
+            quietCsv,
+            log = banner("21.0.11", knobs = knobBanner(forks = 2) + knobBanner(forks = 5)),
+        )
+
+        val failure = assertThrows(RunKnobsUnknownException::class.java) {
+            ThroughputReport.renderRun(results, "b861114d", "2026-08-19", "operator throughput")
+        }
+        assertTrue(
+            failure.message!!.contains("not one run under one configuration"),
+            failure.message,
+        )
+    }
+
+    @Test
+    fun `reads the four knobs off a banner, trimming the mode's metric clause`() {
+        val knobs = RunKnobs.fromJmhLog(
+            """
+            # Warmup: 1 iterations, 1 s each
+            # Measurement: 1 iterations, 1 s each
+            # Benchmark mode: Throughput, ops/time
+            # Fork: 1 of 1
+            """.trimIndent(),
+            source = "<fixture>",
+        )
+        assertEquals(RunKnobs("Throughput", 1, 1, 1), knobs)
+    }
+
+    @Test
+    fun `renders the knobs the run recorded, never the ones the benchmark declares`(
+        @TempDir dir: File,
+    ) {
+        // The bead's named fixture: a log recording `-f 1` against an `@Fork(2)`
+        // benchmark, with `-wi`/`-i`/mode overridden too so all four fields discriminate.
+        val results = runArtifacts(
+            dir,
+            quietCsv,
+            log = banner(
+                "21.0.11",
+                knobs = knobBanner(
+                    mode = "Average time, time/op",
+                    warmupIterations = 3,
+                    measurementIterations = 4,
+                    forks = 1,
+                ),
+            ),
+        )
+
+        val entry = ThroughputReport
+            .renderRun(results, "b861114d", "2026-08-19", "operator throughput")
+            .perDrive.first { it.drive == Drive.SIM }.entry!!
+
+        // The RECORDED knobs reach the entry, as one line...
+        assertTrue(entry.contains("mode=Average time forks=1 warmup=3 iters=4"), entry)
+
+        // ...and the DECLARED ones do not. These four assertions are the defect, inverted:
+        // before the fix the entry carried exactly these values instead.
+        assertFalse(entry.contains("mode=${ThroughputReport.JMH_MODE}"), entry)
+        assertFalse(entry.contains("forks=${ThroughputReport.FORKS}"), entry)
+        assertFalse(entry.contains("warmup=${ThroughputReport.WARMUP_ITERATIONS}"), entry)
+        assertFalse(entry.contains("iters=${ThroughputReport.MEASUREMENT_ITERATIONS}"), entry)
+    }
+
     @Test
     fun `results built by hand render through the same path`() {
         val result = BenchResult(1.0, "ops/s", 0.001, Drive.SIM, env)
@@ -531,16 +757,17 @@ class ThroughputReportTest {
  *   -Dcivictech.bench.harnessSha=$(git rev-parse --short HEAD)
  * ```
  *
- * The measuring JVM comes from the run log that the sweep teed beside that results file
- * (`throughput.csv` -> `throughput.log`, see [ThroughputReport.runLogFor]); the JMH knobs
- * come from the constants `OperatorThroughputBenchmark` declares, which are the same
- * constants its annotations reference; the CPU/core/OS half is this host's, which is
- * sound because this render runs on the machine that ran the sweep. Only the harness SHA
- * is passed in, because no artifact records it.
+ * The measuring JVM AND the JMH knobs the run resolved both come from the run log that
+ * the sweep teed beside that results file (`throughput.csv` -> `throughput.log`, see
+ * [ThroughputReport.runLogFor]); the CPU/core/OS half is this host's, which is sound
+ * because this render runs on the machine that ran the sweep. Only the harness SHA is
+ * passed in, because no artifact records it.
  *
- * If the log is missing, this test FAILS rather than rendering an entry describing the
- * Gradle test JVM — see `computenet-hqid`, and the two entries in `doc/bench/findings.md`
- * that shipped before it.
+ * If the log is missing — or carries no `# Fork:`/`# Warmup:`/`# Measurement:`/
+ * `# Benchmark mode:` line — this test FAILS rather than rendering an entry describing
+ * the Gradle test JVM or the benchmark class's declared annotation values. See
+ * `computenet-hqid` and the two entries in `doc/bench/findings.md` that shipped before
+ * it, and `computenet-x9e.8` for the knobs.
  */
 @Tag("bench")
 class ThroughputReportRenderTest {

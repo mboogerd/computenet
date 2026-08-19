@@ -9,6 +9,8 @@ import civictech.bench.MeasuringJvmUnknownException
 import civictech.bench.NOISE_FLOOR
 import civictech.bench.Reportability
 import civictech.bench.RunEnvironment
+import civictech.bench.RunKnobs
+import civictech.bench.RunKnobsUnknownException
 import civictech.bench.TriggerClaim
 import civictech.bench.classify
 import java.io.File
@@ -136,6 +138,12 @@ data class Report(val perDrive: List<DriveReport>, val omissions: List<Omission>
  * file, [renderRun] REFUSES, which is exactly the point: before `computenet-hqid` the
  * renderer silently reported its OWN JVM instead, and two entries shipped that way.
  *
+ * The same banner is also the only record of the knobs the run RESOLVED — mode, forks,
+ * warmup and measurement iterations — because `-f`/`-wi`/`-i` override the benchmark
+ * class's annotations and the results file carries no such columns. `RunKnobs.fromJmhLog`
+ * reads them and [renderRun] refuses without them, for the same reason and by the same
+ * posture (computenet-x9e.8).
+ *
  * CSV, not JSON, and for a reason worth stating: `:bench` depends on `:kernel` and
  * `:testkit` and nothing else (`[BEN1-03]`), so there is no JSON parser on this
  * module's classpath and adding one to read a results file would be a dependency
@@ -196,29 +204,43 @@ object ThroughputReport {
     const val DIRECTION_PARAM: String = "direction"
 
     // ---------------------------------------------------------------------------------
-    // The JMH configuration `OperatorThroughputBenchmark` runs under, held HERE rather
+    // The JMH configuration `OperatorThroughputBenchmark` DECLARES, held HERE rather
     // than only on that class.
     //
     // The benchmark lives in the `jmh` source set, which `test` cannot see (both compile
-    // against `main`, neither against the other). `RunEnvironment` requires the mode,
-    // fork count and iteration counts as required fields, so the rendering entry point in
-    // `bench/src/test` has to be able to name them. Declaring them here as `const val`,
-    // and having the benchmark's own annotations reference these constants, keeps one
-    // definition instead of two that could silently disagree — a recorded
-    // `RunEnvironment` claiming `forks=2` for a run that used a different number is
-    // exactly the unre-derivable mislabelling `[BEN1-23]` exists to prevent.
+    // against `main`, neither against the other), so a constant its annotations reference
+    // has to live in `main` for anything else to name it.
+    //
+    // READ THESE AS THE DECLARATION, NEVER AS THE RUN (computenet-x9e.8). They were once
+    // also what [renderRun] recorded into a `RunEnvironment`, on the reasoning that one
+    // definition cannot disagree with itself. That reasoning is wrong, because the two
+    // things were never one: JMH's `-f`/`-wi`/`-i` flags OVERRIDE the annotations, so a
+    // sweep run at `-f 1` — the smoke invocation `OperatorThroughputBenchmark`'s own KDoc
+    // documents — genuinely measures a configuration these constants do not describe,
+    // while the entry went on claiming `forks=2 warmup=5 iters=10`. The knobs a
+    // `RunEnvironment` records now come from [RunKnobs.fromJmhLog], off the run's own
+    // banner, and `renderRun` REFUSES when that banner is absent. Nothing in the render
+    // path reads the four constants below; `ThroughputReportTest` asserts their values
+    // are absent from an entry whose run used different ones.
     // ---------------------------------------------------------------------------------
 
-    /** `Mode.Throughput`'s name, as `RunEnvironment.jmhMode` records it. */
+    /**
+     * `Mode.Throughput`'s name — the mode `@BenchmarkMode(Mode.Throughput)` declares.
+     *
+     * Not referenced by that annotation (an annotation argument must be the `Mode`
+     * constant itself) and deliberately not referenced by the renderer either: it exists
+     * so a reader and a test can name the declared mode, and a run's own
+     * `# Benchmark mode:` line is what an entry states.
+     */
     const val JMH_MODE: String = "Throughput"
 
-    /** `@Fork` count. */
+    /** The `@Fork` count the benchmark declares. `-f` overrides it. */
     const val FORKS: Int = 2
 
-    /** `@Warmup` iteration count. */
+    /** The `@Warmup` iteration count the benchmark declares. `-wi` overrides it. */
     const val WARMUP_ITERATIONS: Int = 5
 
-    /** `@Measurement` iteration count. */
+    /** The `@Measurement` iteration count the benchmark declares. `-i` overrides it. */
     const val MEASUREMENT_ITERATIONS: Int = 10
 
     /** `@Warmup`/`@Measurement` per-iteration time, in seconds. */
@@ -495,6 +517,10 @@ object ThroughputReport {
      *   exist without it.
      * @throws MeasuringJvmUnknownException if the measuring JVM's vendor, version or
      *   heap cannot be established from the run's artifacts.
+     * @throws RunKnobsUnknownException if the mode, fork count or iteration counts the
+     *   run actually used cannot be established from its log (computenet-x9e.8). The
+     *   benchmark class's `@Fork`/`@Warmup`/`@Measurement` values are NOT a fallback —
+     *   `-f`/`-wi`/`-i` override them, so they state the declaration, not the run.
      * @throws ThroughputReportException if [results] is not a readable file, or its
      *   contents cannot honestly become rows.
      */
@@ -522,12 +548,13 @@ object ThroughputReport {
                     "2>&1 | tee ${log.absolutePath}`), or render a run that kept its log"
             )
         }
+        val logText = log.readText()
         val env = RunEnvironment.forRun(
-            measuringJvm = MeasuringJvm.fromJmhLog(log.readText(), log.absolutePath),
-            jmhMode = JMH_MODE,
-            forkCount = FORKS,
-            warmupIterations = WARMUP_ITERATIONS,
-            measurementIterations = MEASUREMENT_ITERATIONS,
+            measuringJvm = MeasuringJvm.fromJmhLog(logText, log.absolutePath),
+            // NOT [JMH_MODE]/[FORKS]/[WARMUP_ITERATIONS]/[MEASUREMENT_ITERATIONS]: those
+            // are what the benchmark class DECLARES, and `-f`/`-wi`/`-i` override them
+            // (computenet-x9e.8). The run's own banner states what it resolved.
+            knobs = RunKnobs.fromJmhLog(logText, log.absolutePath),
             harnessCommitSha = harnessCommitSha,
         )
         return render(results.readText(), env, date, subject, trigger)
