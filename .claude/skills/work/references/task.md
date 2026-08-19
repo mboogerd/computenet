@@ -265,7 +265,7 @@ The smallest coherent change, and proof the tests actually executed.
    replays cached results, so a green build is not evidence a test executed.
    - **Prove the run happened per [gradle-evidence.md](gradle-evidence.md)**
      — the task-count line, the per-task state line read as an absence, and
-     the JUnit XML counts + `timestamp` via `scripts/junit-count.py` — from a
+     the JUnit XML counts + `timestamp` via `.claude/skills/work/scripts/junit-count.py` — from a
      log you redirected to your own `$SCRATCH` (never `| tail -N`, never
      `-q`). Your reviewer will demand this accounting (review-task.md §2);
      produce it yourself, from the same run, and quote the numbers and the

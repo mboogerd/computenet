@@ -29,6 +29,18 @@
 # no `##` sections at all cannot have a meaningful ToC either, so that warns
 # too and names the real problem instead of demanding an index of nothing.
 #
+# THE THIRD TIER, added 2026-08-19. A skill that cites a helper script by a
+# path that does not resolve sends every agent that reads it on the same dead
+# lookup. It was filed three times over for one instance -- computenet-ahd4,
+# computenet-22j2 and computenet-fyhn all describe `scripts/junit-count.py`,
+# which lives at .claude/skills/work/scripts/junit-count.py -- and agents did
+# not conclude "wrong path", they concluded the script was UNLANDED and
+# hand-rolled a weaker substitute. Bare `scripts/...` is the trap: the repo
+# really does have a root scripts/ directory, so the wrong reading is
+# plausible rather than obviously wrong. This tier resolves every cited
+# script path from the repo root and FAILS on any that does not exist, so the
+# next drift is caught here instead of mid-review.
+#
 # Usage: ruby .claude/skills/remediate-friction/scripts/validate-skills.rb [dir]
 # Exit:  0 all pass, 1 any failure.
 require 'yaml'
@@ -42,6 +54,9 @@ ALLOWED = %w[name description license allowed-tools metadata compatibility].free
 TOLERATED = %w[disable-model-invocation].freeze
 
 root = ARGV[0] || '.claude/skills'
+# Cited paths are written repo-root-relative, which is two levels above the
+# skills directory (.claude/skills -> .claude -> repo root).
+repo_root = File.dirname(File.dirname(root))
 files = Dir.glob(File.join(root, '*', 'SKILL.md')).sort
 abort "no SKILL.md found under #{root}" if files.empty?
 
@@ -57,6 +72,11 @@ BODY_LINE_IDEAL = 500
 # skill-creator: "For large reference files (>300 lines), include a table of
 # contents."
 REFERENCE_TOC_THRESHOLD = 300
+
+# Any backtick-free run of path characters ending in a script extension and
+# containing a scripts/ segment. Deliberately broad: a citation is a citation
+# whether or not it is fenced, and the check is only ever "does this resolve".
+CITED_SCRIPT = %r{[A-Za-z0-9_./-]*scripts/[A-Za-z0-9_./-]+\.(?:py|sh|rb)}.freeze
 
 # A ToC is any heading that reads as one. Matching the heading rather than a
 # list shape keeps this from mistaking the first ordered list in the body for
@@ -131,6 +151,20 @@ files.each do |f|
       warns << "#{rel} is #{text.lines.length} lines with no sections to index"
     elsif !toc?(text)
       errs << "#{rel} is #{text.lines.length} lines (>#{REFERENCE_TOC_THRESHOLD}) with no Contents"
+    end
+  end
+
+  # Cited script paths must resolve from the repo root, which is where an
+  # agent's shell sits. A path is reported once per file that cites it, with
+  # the line number, so the fix is a single edit rather than a hunt.
+  ([f] + Dir.glob(File.join(File.dirname(f), 'references', '*.md')).sort).each do |src|
+    rel = src.sub(%r{\A#{Regexp.escape(File.dirname(File.dirname(f)))}/}, '')
+    File.readlines(src, encoding: 'UTF-8').each_with_index do |line, i|
+      line.scan(CITED_SCRIPT).uniq.each do |path|
+        next if File.exist?(File.join(repo_root, path))
+
+        errs << "#{rel}:#{i + 1} cites #{path}, which does not exist"
+      end
     end
   end
 

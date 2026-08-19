@@ -215,7 +215,7 @@ build is indistinguishable from a real one in the output you normally read.
 task-count line, the per-task state line read as an absence (four states,
 only two marked), the `| tail -N` and `-q` traps that destroy it, `--rerun`
 binding and the build-cache restore it does not show, and the JUnit XML
-counts + `timestamp` via `scripts/junit-count.py`. Consume all three signals
+counts + `timestamp` via `.claude/skills/work/scripts/junit-count.py`. Consume all three signals
 per run and quote them — counts, module list, `newest` — in your report. An
 unquantified "suite green", yours or the implementer's, is not a
 verification record, and the orchestrator never re-runs it: your report *is*

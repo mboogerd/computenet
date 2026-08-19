@@ -269,7 +269,7 @@ interaction. Run the affected module tests, and the repo-wide gate if the
 feature touched anything cross-cutting — then prove the run happened.
 **[gradle-evidence.md](gradle-evidence.md) is that proof standard**: the
 task-count line, the per-task state line read as an absence, and the JUnit
-XML counts + timestamp via `scripts/junit-count.py`, plus the `--rerun` and
+XML counts + timestamp via `.claude/skills/work/scripts/junit-count.py`, plus the `--rerun` and
 `--no-build-cache` semantics. Per suite you run, consume those signals and
 **quote them in your verdict** — an unquantified "suites green", yours or
 the implementers', is not a verification record, and nobody re-runs it after
