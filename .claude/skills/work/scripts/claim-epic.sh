@@ -15,7 +15,18 @@
 #     live: refuse. On an in_progress epic the refusal is correct (this
 #     machine's crash leftover — released earlier in step 3 — or the other
 #     machine's live run): refuse;
-#   - stamps the owner label and skill_version metadata;
+#   - stamps the owner label, skill_version, and metadata.holder — a
+#     SESSION-unique identity (session-holder.sh), because `assignee` is
+#     BEADS_ACTOR and therefore per-MACHINE: two sessions on one box are
+#     indistinguishable in the tracker, so a live sibling's claim and a crash
+#     leftover are the same row (computenet-83ay). With a holder the liveness
+#     test is exact ("this row's holder is not me, and its process is alive")
+#     instead of a 15-minute recency guess;
+#   - RE-RUNS the liveness test immediately before it writes, so the window is
+#     anchored to the CLAIM rather than to the top of step 3. On a slow host
+#     those are not the same moment: one session's step 3 ran from 04:05 to
+#     07:13 UTC — a single `bd update` exceeded 400s — and it claimed an epic
+#     a live same-actor session was working the whole time (computenet-yurq);
 #   - pushes, reading the OUTPUT rather than exit codes (bd dolt push can
 #     exit 0 while printing a rejection). A rejected push pulls, re-verifies
 #     the epic is still ours, and pushes once more.
@@ -66,8 +77,28 @@ if [ $st -ne 0 ] || grep -qi "already claimed" <<<"$out"; then
   echo "took over $id from stale assignee '$assignee' (open, idle > ${STALE_MIN}m)"
 fi
 
+# yurq: re-verify AT THE CLAIM, not at the top of step 3. An arbitrarily slow
+# step 3 cannot widen the window if the window is re-measured here. Re-read
+# from bd rather than trusting anything computed above.
+recheck=$(bd show "$id" --json | sed -n '/^[[{]/,$p')
+held=$(jq -r '.[0].metadata.holder // ""' <<<"$recheck")
+if [ -n "$held" ]; then
+  verdict=$("$SCRIPT_DIR/session-holder.sh" --check "$held"); hrc=$?
+  case "$verdict" in
+    MINE) : ;;                      # already ours, this session — idempotent
+    LIVE)
+      echo "REFUSED: $id is held by a LIVE session ($held) — not a crash leftover" >&2
+      exit 1 ;;
+    DEAD) echo "note: $id's previous holder ($held) is dead — taking it over" ;;
+    *)    echo "note: $id's holder ($held) could not be evaluated (rc=$hrc) — proceeding on the recency test above" ;;
+  esac
+fi
+
 bd update "$id" --add-label="owner:$BEADS_ACTOR" >/dev/null
 bd update "$id" --set-metadata "skill_version=$(git hash-object "$SCRIPT_DIR/../SKILL.md")" >/dev/null
+holder=$("$SCRIPT_DIR/session-holder.sh" 2>/dev/null) \
+  && bd update "$id" --set-metadata "holder=$holder" >/dev/null \
+  || echo "note: could not stamp metadata.holder — liveness falls back to the recency test" >&2
 
 push_out=$(bd dolt push 2>&1)
 if grep -qiE "rejected|error" <<<"$push_out"; then

@@ -366,7 +366,35 @@ for meta, what in claim_error_cases:
         failed += 1
         print(f"FAIL: {what} — expected ClaimError, nothing raised")
 
-total = (len(cases) + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
+# capacity_limit is PER SESSION but the machine is shared: four live sessions
+# on a 10-core box each computed 2 independently, each correct by its own
+# accounting, for 4x the measured safe parallelism (computenet-arow).
+sibling_cases = [
+    (10, 0, 2, "alone on 10 cores keeps the measured cap"),
+    (16, 0, 3, "alone on 16 cores keeps the measured cap"),
+    (10, 1, 1, "one sibling halves a cap of 2"),
+    (16, 1, 1, "one sibling on 16 cores"),
+    (16, 2, 1, "two siblings never drop below the floor"),
+    (10, 9, 1, "many siblings still leave one agent, not zero"),
+]
+for cores, sibs, expected, what in sibling_cases:
+    got = nb.capacity_limit(cores, sibs)
+    if got != expected:
+        failed += 1
+        print(f"FAIL: {what} — capacity_limit({cores}, {sibs}) = {got}, expected {expected}")
+
+# The sum across sessions must not exceed the alone-cap: that is the property
+# the whole change exists for.
+for cores in (10, 16):
+    alone = nb.capacity_limit(cores, 0)
+    for n in range(1, 5):
+        total_agents = n * nb.capacity_limit(cores, n - 1)
+        if total_agents > alone and nb.capacity_limit(cores, n - 1) > 1:
+            failed += 1
+            print(f"FAIL: {n} sessions on {cores} cores dispatch {total_agents} > {alone}")
+sibling_sum_cases = 2
+
+total = (len(cases) + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
          + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
          + len(capacity_cases) + len(cap_cases) + capacity_reason_cases
          + len(claim_shape_cases) + len(claim_error_cases))

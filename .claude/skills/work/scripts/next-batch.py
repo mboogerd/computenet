@@ -135,8 +135,9 @@ def overlaps(files, taken):
 LANE_CORES = 5
 
 
-def capacity_limit(cores):
-    """How many agents may be dispatched at once on a machine with `cores` cores.
+def capacity_limit(cores, siblings=0):
+    """How many agents THIS session may dispatch at once, given `siblings` other
+    live /work sessions sharing the same `cores`.
 
     Disjoint `files` claims prove a batch will not merge into a conflict. They
     say nothing about whether the machine can *run* it: every task in this repo
@@ -208,8 +209,24 @@ def capacity_limit(cores):
 
     Floor of 1: a batch is never emptied by the cap, which would turn "ok" into
     a verdict the caller routes on. One agent always runs.
+
+    THE CAP IS PER SESSION, AND THE MACHINE IS SHARED. `siblings` is how many
+    OTHER /work sessions are live on this box; the budget is split between
+    them, because the contention above is a property of the MACHINE and this
+    function has no other way to know. Measured on Anva@A0030 2026-08-17:
+    hw.ncpu = 10 so the cap is 2, and at that moment `ps` showed FOUR live
+    Claude Code CLI processes with four sibling session worktrees beside them
+    — each computing 2 independently, each of the four looking correct by its
+    own accounting, for 4x the measured safe parallelism on one box
+    (computenet-arow). The 8-agent figure there is arithmetic from the observed
+    session count, not an observed run; what was observed is the session count,
+    the core count and the formula.
+
+    Floor of 1 again on the division: a session that knows it has siblings
+    still gets one agent, so concurrency degrades to serial rather than to
+    deadlock.
     """
-    return max(1, cores // LANE_CORES)
+    return max(1, (cores // LANE_CORES) // max(1, 1 + siblings))
 
 
 def cap_batch(batch, skipped, cap):
@@ -279,7 +296,7 @@ def plan_batch(candidates):
 
 def main():
     if len(sys.argv) < 2:
-        sys.exit("usage: next-batch.py <feature-id> [--actor NAME]")
+        sys.exit("usage: next-batch.py <feature-id> [--actor NAME] [--siblings N]")
     feature = sys.argv[1]
     actor = os.environ.get("BEADS_ACTOR", "")
     if "--actor" in sys.argv:
@@ -315,13 +332,28 @@ def main():
                  "  bd update <id> --set-metadata files=a/b.kt,c/d.kt" % exc)
 
     cores = os.cpu_count() or 1
-    cap = capacity_limit(cores)
+    # Siblings are discovered by the orchestrator (step 3's liveness check) and
+    # passed in; this script cannot see them. Default 0 = "I am alone", which
+    # is the pre-2026-08-19 behaviour.
+    siblings = 0
+    if "--siblings" in sys.argv:
+        try:
+            siblings = max(0, int(sys.argv[sys.argv.index("--siblings") + 1]))
+        except (IndexError, ValueError):
+            sys.exit("next-batch: --siblings takes a non-negative integer")
+    elif os.environ.get("WORK_SIBLINGS"):
+        try:
+            siblings = max(0, int(os.environ["WORK_SIBLINGS"]))
+        except ValueError:
+            sys.exit("next-batch: WORK_SIBLINGS must be a non-negative integer")
+    cap = capacity_limit(cores, siblings)
     batch, skipped = cap_batch(batch, skipped, cap)
 
     verdict, parked = _assess(feature, batch)
     print(json.dumps({"batch": batch, "skipped": skipped,
                       "verdict": verdict, "parked": parked,
-                      "capacity": {"cores": cores, "max_parallel": cap}},
+                      "capacity": {"cores": cores, "siblings": siblings,
+                                   "max_parallel": cap}},
                      indent=2))
 
 
