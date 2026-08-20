@@ -1,29 +1,46 @@
-# civictech.cell.data.op operator inventory (computenet-4ru.3.2, epic computenet-4ru §9 risk 2).
+# civictech.cell.data.op operator inventory (computenet-4ru.3.2, epic computenet-4ru §9 risk 2;
+# facade-filtering rule added by computenet-4ru.15).
 #
-# Sorted, one name per line: every top-level (non-nested — no '$' in the class file name)
-# class civictech.cell.data.op puts on :oracle's test classpath at this task's base commit
-# 9a94a80a. That includes hand-written operator cells, their *Api companion interfaces,
-# KSP-generated *Base/*Ports classes, and any top-level-function file facade (e.g. EmitKt) —
-# all of it is real classpath surface for that package, so all of it is what this gate
-# protects. civictech.oracle.bind.OperatorInventoryTest (oracle/src/test/kotlin/civictech/
-# oracle/bind/OperatorInventoryTest.kt) diffs the package's ACTUAL classes against this list
-# on every :oracle:test run and fails naming what was added and what was removed.
+# Sorted, one name per line: every top-level (non-nested — no '$' in the class file name) class
+# civictech.cell.data.op puts on :oracle's test classpath, MINUS Kotlin compiler-generated
+# file-facade classes. A `*Kt` classpath name is a file facade, never a hand-written class, iff
+# its bare name (the name with the trailing "Kt" stripped) matches an existing `<bare>.kt` source
+# file in the package — see civictech.oracle.bind.OperatorInventoryTest.isKotlinFileFacade's KDoc
+# for why that test is sound rather than merely quieter. What remains below is hand-written
+# operator cells, their *Api companion interfaces, and KSP-generated *Base/*Ports classes — all
+# real classpath surface this gate protects. civictech.oracle.bind.OperatorInventoryTest (oracle/
+# src/test/kotlin/civictech/oracle/bind/OperatorInventoryTest.kt) diffs the package's ACTUAL,
+# facade-filtered classes against this list on every :oracle:test run and fails naming what was
+# added and what was removed.
+#
+# WHY THE FILTER IS SOUND (computenet-4ru.15): Kotlin derives a file facade's JVM name directly
+# from its own file's base name (`<Bare>.kt` -> `<Bare>Kt`), and the compiler rejects two
+# top-level declarations sharing one qualified name in a package — so a hand-written class
+# literally named `<Bare>Kt` can never coexist with a `<Bare>.kt` file that itself carries
+# top-level declarations. Finding a `<Bare>.kt` file therefore proves the matching `<Bare>Kt`
+# classpath entry is the compiler's facade, never a hand-written class, regardless of whether
+# that file's top-level declaration count is zero, one, or many at a given commit. That is what
+# fixes the false positive this file used to warn about below: adding or removing a file's ONLY
+# top-level declaration no longer changes this inventory at all, because the filter keys off the
+# file's EXISTENCE, not its declaration count. A genuinely new operator lives in a file that did
+# not previously exist, so it is never named `<PreexistingFile>Kt` and is unaffected by this
+# filter; a rename of a hand-written class drags its generated `*Base`/`*Ports`/`*Api` names
+# (which never end in `Kt`) along with it, so renames are equally unaffected and still redden
+# the gate, as they must.
+#
+# 75 lines below (was 80 before this filter dropped 5 pre-existing `*Kt` facade lines — EmitKt,
+# FlatMapSetCellKt, JoinSetCellKt, OperatorPagingKt, SemiJoinCellKt — each confirmed to match a
+# same-named kernel source file: kernel/src/main/kotlin/civictech/cell/data/op/{Emit,
+# FlatMapSetCell,JoinSetCell,OperatorPaging,SemiJoinCell}.kt).
 #
 # UPDATING THIS FILE IS THE MOMENT to also update civictech.oracle.bind.OperatorCatalog's
 # registration and the reference model for the changed operator, IN THE SAME CHANGE — that
 # pairing is the whole point of this gate (epic computenet-4ru §9 risk 2, decided at breakdown
 # on computenet-4ru.3): otherwise a kernel operator can drift out of sync with the oracle's
-# registry/reference model with nothing failing to say so.
-#
-# CAUTION, before you touch OperatorCatalog or the reference model because this file went
-# stale: because the diff is against the classpath rather than hand-authored declarations,
-# some additions/removals here carry no operator-vocabulary information at all — e.g. adding
-# or removing the LAST top-level function/property in an operator file flips its Kotlin file
-# facade (a "*Kt" name, like the five already below) in or out with no operator added, removed,
-# or renamed (verified 2026-08-17: an unrelated top-level helper added to CountCell.kt alone
-# reddens this gate as "Added: [CountCellKt]", computenet-4ru.3.2 review). If the diff names
-# only a *Kt facade, or only a *Base/*Ports/*Api name whose corresponding hand-written cell or
-# interface did not itself rename, update this file and stop — there is no operator to register.
+# registry/reference model with nothing failing to say so. Because the facade filter above
+# already removes the false-positive case, a name reported here is never a `*Kt` facade
+# artifact — treat every "Added"/"Removed" entry as real operator-vocabulary churn requiring
+# that follow-through; no further caution about facade churn is needed before acting on it.
 #
 # Lines starting with '#' and blank lines are ignored by the diff.
 AdvertisedLedger
@@ -39,7 +56,6 @@ CountCell
 CountCellPorts
 CountSetApi
 CountSetCellBase
-EmitKt
 FilterCell
 FilterCellPorts
 FilterSetApi
@@ -47,7 +63,6 @@ FilterSetCellBase
 FlatMapSetApi
 FlatMapSetCell
 FlatMapSetCellBase
-FlatMapSetCellKt
 FlatMapSetCellPorts
 FrontierBuilder
 GatedFold
@@ -68,7 +83,6 @@ JoinLedger
 JoinSetApi
 JoinSetCell
 JoinSetCellBase
-JoinSetCellKt
 JoinSetCellPorts
 KeyedBinarySetJoin
 KeyedEntry
@@ -82,7 +96,6 @@ MintedLedger
 ObservedRemoveOps
 OperatorEntry
 OperatorPaging
-OperatorPagingKt
 OperatorWalk
 PagedEntry
 PresenceCountApi
@@ -96,7 +109,6 @@ QuorumSetCellPorts
 SemiJoinApi
 SemiJoinCell
 SemiJoinCellBase
-SemiJoinCellKt
 SemiJoinCellPorts
 SubState
 TaggedEntry
