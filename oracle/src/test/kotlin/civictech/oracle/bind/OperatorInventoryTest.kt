@@ -1,10 +1,15 @@
 package civictech.oracle.bind
 
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.net.URLClassLoader
+import java.nio.file.Files
 import java.util.jar.JarFile
+import javax.tools.ToolProvider
 
 /**
  * Epic computenet-4ru §9 risk 2, decided at breakdown on computenet-4ru.3 (see that bead's
@@ -114,6 +119,40 @@ class OperatorInventoryTest {
     private val fileFacadeMetadataKind = 2
 
     /**
+     * `kotlin.Metadata.kind` values this gate deliberately does NOT special-case, and why
+     * (computenet-0mcl, settling the "undecided" item computenet-4ru.19's reviewer left open).
+     *
+     * `SYNTHETIC_CLASS` (3), `MULTI_FILE_CLASS_FACADE` (4), and `MULTI_FILE_CLASS_PART` (5) do
+     * not occur anywhere in `civictech.cell.data.op` or `civictech.cell.data` today, and treating
+     * that as accidental rather than structural would be wrong for each of the three:
+     * - `MULTI_FILE_CLASS_FACADE`/`PART` are emitted only for a file group under
+     *   `@file:JvmMultifileClass` — a source-level opt-in nothing in this codebase uses. There is
+     *   no code path by which either kind could appear on this classpath without a new file also
+     *   adding that annotation, which is itself a reviewable, greppable change.
+     * - `SYNTHETIC_CLASS` marks compiler-generated helpers with no user-facing declaration
+     *   (lambdas compiled to classes, callable references, `$DefaultImpls`, …). Every such class
+     *   the Kotlin compiler emits is nested — its class file name contains `$` — and
+     *   [actualTopLevelClassNames] already excludes any name containing `$` before this filter
+     *   ever runs (`.filterNot { it.contains('$') }`, both branches above). A `SYNTHETIC_CLASS`
+     *   reaching [isKotlinFileFacade] at all would mean the compiler started emitting one as a
+     *   top-level (`$`-free) class file, which would be a change in the compiler's own contract,
+     *   not something this gate should silently absorb by guessing at how to classify it.
+     *
+     * So kinds 3..5 are left to fall through to `kind == fileFacadeMetadataKind` returning
+     * `false` (not a facade, stays in the diffed set) — the same as any kind this filter has no
+     * specific reason to treat as a facade. If one of these kinds is ever observed here, that is
+     * itself the finding: it means one of the two premises above stopped holding, and the right
+     * response is to re-open this decision with the concrete class in hand, not to have
+     * pre-guessed a classification for a case nobody has seen.
+     */
+    private fun isKotlinFileFacade(className: String): Boolean =
+        isKotlinFileFacade(packagePath, className)
+
+    /**
+     * Same check as [isKotlinFileFacade] above, generalized to any [packagePath] so this file's
+     * second gate ([civictech.cell.data]'s source cells, computenet-y9p4) can reuse it without
+     * duplicating the reasoning in that function's KDoc.
+     *
      * True iff [className] is a Kotlin compiler-generated file-facade class rather than a
      * hand-written or KSP-generated one, determined by loading the class and reading its own
      * `kotlin.Metadata` annotation — positive evidence stamped by the compiler on the class file
@@ -144,21 +183,45 @@ class OperatorInventoryTest {
      * A class outside `civictech.cell.data.op`'s Kotlin-compiled surface (there is none on this
      * classpath, but defensively) has no `kotlin.Metadata` at all and is treated as not a facade.
      */
-    private fun isKotlinFileFacade(className: String): Boolean =
-        isKotlinFileFacade(packagePath, className)
-
-    /**
-     * Same check as [isKotlinFileFacade] above, generalized to any [packagePath] so this file's
-     * second gate ([civictech.cell.data]'s source cells, computenet-y9p4) can reuse it without
-     * duplicating the reasoning in that function's KDoc.
-     */
     private fun isKotlinFileFacade(packagePath: String, className: String): Boolean {
         val classLoader = OperatorInventoryTest::class.java.classLoader
         val fqcn = packagePath.replace('/', '.') + "." + className
-        val clazz = Class.forName(fqcn, false, classLoader)
+        val clazz = loadInventoryClass(fqcn, classLoader, packagePath)
         val metadata = clazz.getAnnotation(Metadata::class.java) ?: return false
         return metadata.kind == fileFacadeMetadataKind
     }
+
+    /**
+     * Loads [fqcn] for the file-facade check above, turning a link failure into a named,
+     * actionable test failure instead of letting a bare `ClassNotFoundException` /
+     * `NoClassDefFoundError` propagate out of the gate (computenet-0mcl).
+     *
+     * [actualTopLevelClassNames] only lists `.class` *file names* found by walking a directory
+     * or a jar — it never loads them. Before computenet-4ru.19, [isKotlinFileFacade] didn't
+     * either, so a class file that is present but cannot link (a stale compiled output, a
+     * classpath missing one of its dependencies, a bytecode-version mismatch) was never touched
+     * by this test at all. Reading `kotlin.Metadata` off the loaded class requires loading it,
+     * which is a genuinely new failure surface: unguarded, that link failure would surface as a
+     * raw `ClassNotFoundException`/`NoClassDefFoundError` with a JUnit stack trace pointing at
+     * this file, instead of the gate's own drift diagnostic — the one piece of information this
+     * test exists to produce. Latent today: every class this test loads currently links fine (see
+     * `OperatorInventoryTest`'s own `link failure` test for a constructed counterexample).
+     */
+    private fun loadInventoryClass(fqcn: String, classLoader: ClassLoader, packagePath: String): Class<*> =
+        try {
+            Class.forName(fqcn, false, classLoader)
+        } catch (e: ClassNotFoundException) {
+            throw AssertionError(linkFailureMessage(fqcn, packagePath, e), e)
+        } catch (e: NoClassDefFoundError) {
+            throw AssertionError(linkFailureMessage(fqcn, packagePath, e), e)
+        }
+
+    private fun linkFailureMessage(fqcn: String, packagePath: String, cause: Throwable): String =
+        "Inventory gate for '$packagePath' found class file '$fqcn' on the classpath but could " +
+            "not load it while checking whether it is a Kotlin file facade: " +
+            "${cause::class.simpleName}: ${cause.message}. This is a link failure (a missing " +
+            "runtime dependency, a stale compiled output, or a bytecode-version mismatch), not " +
+            "classpath drift — the drift diff below cannot run until this class loads cleanly."
 
     private fun declaredInventory(resourceName: String): Set<String> {
         val stream = OperatorInventoryTest::class.java.classLoader
@@ -261,5 +324,59 @@ class OperatorInventoryTest {
         ) {
             (added + removed).shouldBeEmpty()
         }
+    }
+
+    /**
+     * computenet-0mcl: demonstrates the failure mode [loadInventoryClass] guards against, and
+     * that the guard actually fires.
+     *
+     * Builds a class file that is present on a classpath but cannot link — `Derived.class`
+     * compiled against a `Base.class` that is then deleted, so loading `Derived` requires
+     * resolving a superclass that is no longer there. That is exactly the shape
+     * [actualTopLevelClassNames]'s directory/jar walk cannot see: it only lists `.class` file
+     * names, never loads them, so a link-broken class file looks identical to a healthy one
+     * until something tries to load it.
+     */
+    @Test
+    fun `a class present on the classpath but unable to link surfaces a named failure, not a bare link error`() {
+        val tempDir = Files.createTempDirectory("computenet-0mcl-link-failure").toFile()
+        tempDir.deleteOnExit()
+        val compiler = ToolProvider.getSystemJavaCompiler()
+            ?: error("No system Java compiler available to build the demonstration classes.")
+
+        val baseSource = File(tempDir, "Base.java").apply { writeText("public class Base {}") }
+        val derivedSource = File(tempDir, "Derived.java").apply {
+            writeText("public class Derived extends Base {}")
+        }
+        val compileResult = compiler.run(null, null, null, baseSource.path, derivedSource.path)
+        check(compileResult == 0) { "Failed to compile the demonstration classes." }
+
+        // Derived.class now references a Base that is about to stop existing: present as a
+        // .class file (a directory listing would find it), unable to link.
+        check(File(tempDir, "Base.class").delete()) {
+            "Could not delete Base.class to induce the link failure this test demonstrates."
+        }
+
+        // First, the CURRENT unguarded shape this bead is about: loading the class the way
+        // isKotlinFileFacade did before this change (a bare Class.forName) raises the raw link
+        // error with nothing naming the inventory gate or what to do about it.
+        val bareFailure = shouldThrow<NoClassDefFoundError> {
+            Class.forName("Derived", false, URLClassLoader(arrayOf(tempDir.toURI().toURL()), null))
+        }
+        bareFailure.message shouldContain "Base"
+
+        // Then, the guarded path this change adds: the same underlying failure, surfaced as a
+        // named, actionable AssertionError instead.
+        val guardedFailure = shouldThrow<AssertionError> {
+            loadInventoryClass(
+                "Derived",
+                URLClassLoader(arrayOf(tempDir.toURI().toURL()), null),
+                "demonstration/package",
+            )
+        }
+        guardedFailure.message shouldContain "Derived"
+        guardedFailure.message shouldContain "demonstration/package"
+        guardedFailure.message shouldContain "link failure"
+        (guardedFailure.cause?.message ?: "") shouldContain "Base" // NoClassDefFoundError: Base
     }
 }
