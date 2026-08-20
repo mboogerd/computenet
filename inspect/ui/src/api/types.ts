@@ -402,8 +402,16 @@ export interface HeartbeatEvent {
 // --- M2: errors (20-api-contract.md "ErrorSnapshot (M2)", "error.* events") ----
 
 /** `civictech.cell.BoundarySeam.name` — which `BoundaryPolicy` seam refused
- *  a crossing (spec 40/43 "three seams, one per dispatch class"). */
-export type BoundarySeam = 'ADMISSION' | 'LINK_AUTHORITY' | 'PROTOCOL_AUTHORITY' | 'DISCLOSURE' | 'INTEGRITY';
+ *  a crossing (spec 40/43 "three seams, one per dispatch class").
+ *
+ *  Mirrors `civictech.cell.BoundarySeam`
+ *  (`kernel/src/main/kotlin/civictech/cell/BoundaryDenials.kt`) constant for
+ *  constant — see `BOUNDARY_SEAMS` below, which
+ *  `test/boundary-denials-sync.test.ts` (computenet-nu49) checks against
+ *  that file in both directions so the two cannot drift apart unnoticed. */
+export const BOUNDARY_SEAMS = ['ADMISSION', 'LINK_AUTHORITY', 'PROTOCOL_AUTHORITY', 'DISCLOSURE', 'INTEGRITY'] as const;
+
+export type BoundarySeam = (typeof BOUNDARY_SEAMS)[number];
 
 /** `civictech.cell.DenialReason.name` — why a crossing was refused. Deliberately
  *  closed and named per seam, not free text: a denial record is meant to be
@@ -413,7 +421,7 @@ export type BoundarySeam = 'ADMISSION' | 'LINK_AUTHORITY' | 'PROTOCOL_AUTHORITY'
  *  Mirrors `civictech.cell.DenialReason`
  *  (`kernel/src/main/kotlin/civictech/cell/BoundaryDenials.kt`) constant for
  *  constant — see `DENIAL_REASONS` below, which
- *  `test/denial-reason-sync.test.ts` (computenet-ssa.7) checks against that
+ *  `test/boundary-denials-sync.test.ts` (computenet-ssa.7) checks against that
  *  file in both directions so the two cannot drift apart unnoticed again. */
 export const DENIAL_REASONS = [
   'NOT_ADMITTED',
