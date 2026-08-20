@@ -411,8 +411,10 @@ object FanOutFixtures {
      * With [BATCH_FORKS] x ([BATCH_WARMUP_ITERATIONS] + [BATCH_MEASUREMENT_ITERATIONS])
      * iterations across ten degree/drive combinations, one second per iteration bounds the
      * sweep's measured wall clock at roughly 4.5 minutes plus fork startup — sized to fit a
-     * dispatch slot alongside the render step, the same budget the `Mode.SingleShotTime`
-     * sweep spent.
+     * dispatch slot alongside the render step. It is NOT the budget the
+     * `Mode.SingleShotTime` sweep spent: that sweep ran in 47 s wall clock, so this shape
+     * spends roughly 6x more, and any precision comparison between the two shapes has to
+     * say so rather than read the improvement as the batch shape's alone.
      */
     const val BATCH_ITERATION_SECONDS: Int = 1
 }

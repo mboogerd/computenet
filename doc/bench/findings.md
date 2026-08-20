@@ -3001,8 +3001,15 @@ reproduces that entry.
 ```
 
 The whole ten-combination sweep (2 methods x 5 degrees x 3 forks x (3 warmup + 6
-measurement) 1 s iterations) ran in **4 min 50 s** wall clock — comparable to the 47 s the
-`SingleShotTime` sweep spent, and well inside a dispatch slot.
+measurement) 1 s iterations) ran in **4 min 50 s** wall clock. That is **6.2x the 47 s the
+`SingleShotTime` sweep spent**, not the equal budget `computenet-2scd`'s description
+assumed ("the same wall-clock budget"); an earlier cut of this sentence called the two
+"comparable", which they are not. Both fit a dispatch slot, but the precision comparison
+below is **not budget-neutral**: more measured wall clock buys more samples per combination
+(18 here against the `SingleShotTime` sweep's 30 single shots — fewer samples, but each an
+entire cold iteration), so an unknown share of the dispersion reduction is attributable to
+the larger budget rather than to the batch shape itself. Separating the two would need the
+batch shape re-run at a 47 s budget, which this entry did not do.
 
 ### Host and JVM, from the run's own retained banner — read, not assumed
 
@@ -3115,7 +3122,7 @@ precision=RECOVERED — every drive resolves more than the 1 segment(s) computen
 reading=SURVIVES — every drive's RESOLVABLE segment-marginal ratio is at or under 3.0 (worst: SIM at 2.254380307514153)
 ```
 
-### Did the batch shape recover the precision? — YES, decisively, with one row that got worse
+### Did the batch shape recover the precision? — YES, decisively, with one row that got worse — but not at an equal wall-clock budget
 
 **Relative dispersion, batch shape against the `SingleShotTime` shape on the same host and
 JVM:**
