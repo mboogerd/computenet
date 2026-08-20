@@ -76,6 +76,19 @@ import civictech.oracle.run.RunOutcome
  * other outcome renders the plain `DifferentialRunner.run(case)`, unchanged, so as not to force
  * prefix-checking onto a replay that never needed it.
  *
+ * **The mirror case is NOT fixed here — computenet-kgsd.** That bare `DifferentialRunner.run(case)`
+ * resolves to `civictech.oracle.run.WavePrefixOption.DEFAULT`, not to `OFF`, so a counterexample
+ * shrunk with prefix checking *off* — or under an option whose `selects(seed)` was `false` — can
+ * be replayed with it *on*, and a prefix-dirty case then reports a
+ * [RunOutcome.WavePrefixViolation] where the counterexample names a [RunOutcome.Mismatch]: the
+ * emitted `check()` fails, naming a different kind than the counterexample it was rendered from.
+ * Measured at review time over the same four `WavePrefixTest` `SEAM_SEEDS`, each shrunk with
+ * `WavePrefixOption.OFF` (a `Mismatch` counterexample for all four) and replayed exactly as
+ * rendered: seeds 50 and 58 (`DEFAULT.selects(seed) == true`) replay as `WavePrefixViolation`,
+ * seeds 30 and 40 replay faithfully. Its two candidate fixes — render `WavePrefixOption.OFF` for a
+ * non-violation outcome, or carry the option the shrink was given on [Counterexample] — are a
+ * design choice, which is why it is a filed residual rather than a line of this file.
+ *
  * ## `check`, not a test-framework assertion
  *
  * The emitted replay uses the Kotlin standard library's `check(...)`, so the snippet depends on
