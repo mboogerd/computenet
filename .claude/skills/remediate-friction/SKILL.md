@@ -62,6 +62,24 @@ plus a publication push at the end, with an extra push whenever step 2
 acquires an item this machine doesn't already hold. If the pull fails, stop
 and report.
 
+## 1b. Read the lane's own scoreboard first
+
+```bash
+.claude/skills/remediate-friction/scripts/recurrence-audit.py
+```
+
+Every `FAILED-FIX` line is one of this lane's own landed fixes that did **not**
+stop the friction — a later bead names it and says so. **Take one of those
+before any fresh single-instance report**: a recurrence is corroborated by
+construction, being the first report plus the failure of the fix.
+
+This lane ran for weeks with no feedback loop — it filed, fixed and closed, and
+nothing asked whether an edit changed what agents do. The one measurement ever
+taken from outside (computenet-olrv) found ~80% of fixes were uncorroborated
+anecdotes; the remedy shipped for that was more instruction text, and the fix
+rate then went **79% → 94%**. Read the scoreboard, not the intention. The
+script's header carries the full measurement.
+
 ## 2. Pick the most-reported item
 
 ```bash
@@ -165,8 +183,33 @@ verdict:
     instance comment from a different session. Two is the floor; four is
     the drop-everything signal (`work` step 7).
 
-  Stamp `bd update <id> --set-metadata skill_version=<current-hash>` and go
-  to step 4.
+  Then, before designing anything, **ask whether the fix can be MECHANICAL
+  rather than prose** — a script, a changed default, normalised data, a flag
+  that did not exist. The test is whether it works when nobody reads it:
+
+  | `fix_kind` | takes effect |
+  |---|---|
+  | `mechanical` | whether or not any agent reads a word |
+  | `prose` | only if read, at the moment it matters |
+
+  **Every recorded recurrence in this log is a prose fix** (the audit in step
+  1b lists them). Prose is sometimes the only honest option — a judgment call
+  cannot be scripted — but reach for it second. The 2026-08-20 drain landed 5
+  mechanical fixes to 21 prose, which is the ratio this question exists to
+  shift.
+
+  Stamp both and go to step 4:
+
+  ```bash
+  bd update <id> --set-metadata skill_version=<current-hash>
+  bd update <id> --set-metadata fix_kind=<mechanical|prose>
+  ```
+
+  (Two calls, not one chained block — `bd` writes chained in a single Bash
+  invocation die mid-sequence and leave half-recorded state, per
+  `work/references/bd-traps.md`.) The field is what makes the scoreboard in
+  step 1b able to compare the two classes; until enough fixes carry it the
+  audit prints them as `?` and says so.
 - **Needs evidence** — a single instance you cannot cheaply verify, or a
   judgment call ("confusing", "wasteful", "should have X"). Do **not** fix.
   Comment exactly what a future session must capture to make the case — the
@@ -224,6 +267,25 @@ It deliberately does **not** run skill-creator's behavioural eval
 (`run_eval.py` and the grader agents): that spawns with-skill and baseline
 runs over authored test cases and takes hours, so it belongs on a cadence or
 on demand, never as a per-change gate.
+
+It also enforces the **line-budget ratchet** (`.claude/skills/line-budget.txt`).
+Budgets sit at each skill's current size, so nothing needs restructuring — what
+it prices is growth. Over budget: remove as much as you added, or raise the
+number in the diff and say what it bought. **Lower a number whenever a drain
+removes text.** (The old `ideal <=500` warning was computed and read past on
+every run while `work/SKILL.md` went 668 → 2236 lines.)
+
+**And check the fix is in a file the reporting role reads.** The bead names the
+role that hit the wall; pass that role and the files you touched:
+
+```bash
+.claude/skills/remediate-friction/scripts/reachability.py --for <role> <edited-file>...
+```
+
+`NOT-READ` means the fix is correct and invisible — computenet-l5rc's glob-trap
+remedy landed in a file the orchestrator never opens, so it recurred twice in a
+day while a closed bead claimed it fixed. Advisory on placement, not a verdict
+on the fix; it catches the zero case, which is the one that recurs.
 
 Make the smallest change to the skill files that stops the friction
 recurring — the item's `--acceptance` says what that is. Quote the item id
