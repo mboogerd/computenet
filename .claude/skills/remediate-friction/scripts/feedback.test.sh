@@ -32,6 +32,19 @@ $S/reachability.py --for implementer .claude/skills/remediate-friction/SKILL.md 
 [ "${rc:-0}" = 1 ] && ok "exit 1 for a file no work role reads" \
                    || bad "a work implementer appears to read this lane's SKILL.md"
 
+echo "twin-scan.py (work skill)"
+T=.claude/skills/work/scripts/twin-scan.py
+n=$($T computenet-4ru 2>/dev/null | grep -c '^TWIN?' || true)
+[ "$n" = 6 ] && ok "finds all 6 known computenet-4ru double-breakdown twins" \
+             || bad "found $n of the 6 known 4ru twins"
+$T computenet-ssa >/dev/null 2>&1 && ok "exit 0 on an epic with no twins" \
+                                  || bad "flagged twins in computenet-ssa, which has none"
+$T computenet-4ru >/dev/null 2>&1 && bad "exit 0 on an epic that HAS twins" \
+                                  || ok "exit 1 on an epic that has twins"
+$T computenet-4ru --jsonl /nonexistent.jsonl >/dev/null 2>&1 && rc=0 || rc=$?
+[ "${rc:-0}" = 3 ] && ok "exit 3 on a missing export (NOTHING checked)" \
+                   || bad "missing export gave exit ${rc:-0}, expected 3"
+
 echo "validate-skills.rb line-budget ratchet"
 if ruby $S/validate-skills.rb >/dev/null 2>&1; then ok "the tree is inside budget"
   else bad "tree is over budget"; fi
