@@ -4,7 +4,6 @@ import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import java.io.File
 
@@ -52,7 +51,7 @@ import java.io.File
  * implied). The last test below pins that entry's own fingerprint, so the filing cannot be
  * dropped while the disagreement stands.
  *
- * Every phrase assertion runs against **whitespace-flattened** text ([flat]), so re-wrapping a
+ * Every phrase assertion runs against **whitespace-flattened** text, so re-wrapping a
  * KDoc paragraph or a Markdown bullet never reddens this test — only deleting or rewriting the
  * claim does. A ledger test that fails on a line break trains its readers to edit the test.
  *
@@ -98,6 +97,19 @@ class HonestyLedgerTest {
      */
     private fun String.flat(): String = replace(Regex("\\s+"), " ").trim()
 
+    /**
+     * Assert this text still carries [phrase], reporting the **phrase** rather than the haystack.
+     *
+     * `shouldContain` prints the whole subject on failure, and these subjects are multi-kilobyte
+     * KDoc blocks — the one fact a reader needs (which claim went missing) ends up buried under
+     * the entire ledger. Failing on a boolean with the phrase in the clue inverts that.
+     */
+    private fun String.mustState(phrase: String) {
+        withClue("The text no longer states: \"$phrase\"") {
+            contains(phrase) shouldBe true
+        }
+    }
+
     /** A file's first KDoc block with the `*` comment markers stripped, whitespace-flattened. */
     private fun firstKdoc(source: String, what: String): String {
         val start = source.indexOf("/**")
@@ -142,15 +154,15 @@ class HonestyLedgerTest {
         val sweep = sweepKdoc().flat()
 
         withClue("[ORA1-HONEST-01] must be claimed by marker at the entry point, so a reader can find it") {
-            sweep shouldContain "[ORA1-HONEST-01]"
+            sweep.mustState("[ORA1-HONEST-01]")
         }
         withClue(
             "The statement itself must be present in as many words. A green sweep says the two " +
                 "sides AGREED; it does not say the reference is right, and that is the whole point " +
                 "of this requirement.",
         ) {
-            sweep shouldContain "DEFENDED, not PROVEN"
-            sweep shouldContain "It does **not** say the reference model is correct"
+            sweep.mustState("DEFENDED, not PROVEN")
+            sweep.mustState("It does **not** say the reference model is correct")
         }
     }
 
@@ -182,17 +194,17 @@ class HonestyLedgerTest {
                 "filed in DISPUTES.md, not built). A ledger that lists it flat alongside the other " +
                 "three overstates what the sweep's green is worth.",
         ) {
-            sweep shouldContain "blocked on computenet-eeys"
-            sweep shouldContain "weakest of the four"
+            sweep.mustState("blocked on computenet-eeys")
+            sweep.mustState("weakest of the four")
         }
     }
 
     @Test
     fun `the two halves of the ledger cross-reference each other`() {
         withClue("A reader arriving at either half must be able to find the other (the bead's own clause)") {
-            sweepKdoc().flat() shouldContain "civictech.oracle.model.MapCellModel"
-            exclusionLedger().flat() shouldContain "[ORA1-HONEST-01]"
-            exclusionLedger().flat() shouldContain "civictech.oracle.run.OracleSweep"
+            sweepKdoc().flat().mustState("civictech.oracle.model.MapCellModel")
+            exclusionLedger().flat().mustState("[ORA1-HONEST-01]")
+            exclusionLedger().flat().mustState("civictech.oracle.run.OracleSweep")
         }
     }
 
@@ -271,12 +283,12 @@ class HonestyLedgerTest {
                 "Without the distinction stated, recording computenet-4ru.16's eventual outcome is " +
                 "a re-design rather than one entry.",
         ) {
-            ledger shouldContain "Uncheckable by a batch reference"
-            ledger shouldContain "unreachable by shape-typed generation"
+            ledger.mustState("Uncheckable by a batch reference")
+            ledger.mustState("unreachable by shape-typed generation")
         }
         withClue("computenet-4ru.16 is parked for a human; this ledger must name it as UNDECIDED, not answer it") {
-            ledger shouldContain "computenet-4ru.16"
-            ledger shouldContain "undecided"
+            ledger.mustState("computenet-4ru.16")
+            ledger.mustState("undecided")
         }
     }
 
@@ -291,8 +303,8 @@ class HonestyLedgerTest {
                 "verdict: when fx5b registers or excludes the cell, this test's expectation moves " +
                 "with it.",
         ) {
-            ledger shouldContain "WatermarkCell"
-            ledger shouldContain "computenet-fx5b"
+            ledger.mustState("WatermarkCell")
+            ledger.mustState("computenet-fx5b")
         }
     }
 
@@ -314,27 +326,27 @@ class HonestyLedgerTest {
         val entry = disputes.substring(entryStart).flat()
 
         withClue("It must name the requirement in dispute, and both artifacts that read it differently") {
-            entry shouldContain "[24-SET-03]"
-            entry shouldContain "SetCell.inletHandler.remove"
-            entry shouldContain "civictech.oracle.model.Membership"
+            entry.mustState("[24-SET-03]")
+            entry.mustState("SetCell.inletHandler.remove")
+            entry.mustState("civictech.oracle.model.Membership")
         }
         withClue(
             "It must state which side is wrong — settled by computenet-eeys — so no reader takes " +
                 "the entry for an open question or for a kernel defect.",
         ) {
-            entry shouldContain "computenet-eeys"
-            entry shouldContain "the reference model is the wrong side"
-            entry shouldContain "no kernel defect is implied"
+            entry.mustState("computenet-eeys")
+            entry.mustState("the reference model is the wrong side")
+            entry.mustState("no kernel defect is implied")
         }
         withClue("It must carry the measurement, not only the argument") {
-            entry shouldContain "22 of 60"
+            entry.mustState("22 of 60")
         }
         withClue(
             "And it must name what is not lost: DivergenceControlTest pins the measurement, and " +
                 "its second test is the tripwire that reddens when BS-12 becomes implementable.",
         ) {
-            entry shouldContain "DivergenceControlTest"
-            entry shouldContain "tripwire"
+            entry.mustState("DivergenceControlTest")
+            entry.mustState("tripwire")
         }
     }
 }
