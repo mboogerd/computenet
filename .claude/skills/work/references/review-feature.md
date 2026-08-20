@@ -513,11 +513,18 @@ against the review base you recorded in §2 — **your own commits only** — an
 # refresh the exclusion base FIRST: --not origin/main is only as good as this
 # worktree's last fetch, and §6's fetch happens after this measurement
 git -C <feature-worktree> fetch origin main
-git -C <feature-worktree> rev-parse origin/main    # quote this next to the list below
+# CAPTURE THE SHA ONCE and use that literal below. refs/remotes/origin/main is
+# SHARED ACROSS WORKTREES of one repository, so it moves when ANOTHER agent
+# fetches in a sibling worktree — with no fetch of your own. One reviewer
+# watched it move between two of its own commands, which briefly made its own
+# re-fetch line look self-contradictory (computenet-0rmu). Re-resolving the ref
+# between commands measures against two different bases.
+BASE=$(git -C <feature-worktree> rev-parse origin/main)
+echo "$BASE"    # quote this next to the list below
 
 # your own commits: after the review base, and not already on main
-git -C <feature-worktree> log --oneline --no-merges <review-base-sha>..HEAD --not origin/main
-for c in $(git -C <feature-worktree> log --format=%H --no-merges <review-base-sha>..HEAD --not origin/main); do
+git -C <feature-worktree> log --oneline --no-merges <review-base-sha>..HEAD --not "$BASE"
+for c in $(git -C <feature-worktree> log --format=%H --no-merges <review-base-sha>..HEAD --not "$BASE"); do
   git -C <feature-worktree> show --stat --format='%h %s' "$c"
 done
 ```
@@ -831,7 +838,17 @@ that cannot be checked honestly is filed, never weakened into a passing
 scenario. Failing sound work for it, or passing it and letting the criterion
 disappear, are both wrong.
 
-Merge it, and keep the residual alive. **Where the residual attaches depends
+Merge it, and keep the residual alive. **A residual is executed literally by
+whoever picks it up, so [issue-quality.md](issue-quality.md)'s two authorship
+rules bind hardest here**: a claim that something has *landed*, *merged* or
+*shipped* names the branch and the sha (a feature-branch merge is not a `main`
+merge, and a constraint like append-only rests entirely on which one it was),
+and a prescribed remedy is checked against the data the bead cites or labelled
+a suggestion to verify. Both were violated in one residual, and a reader
+obeying it would have published a document contradicting itself in a single
+commit (computenet-7z3t).
+
+**Where the residual attaches depends
 on one query**, run before you file — the answer has changed under a live
 session, since a concurrent session can close the epic mid-review:
 

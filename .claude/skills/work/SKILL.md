@@ -219,14 +219,32 @@ merging. Worktrees attached to the same `.git` are unaffected either way —
 each has its own HEAD, index, and files — so only the main checkout's own
 occupants are at risk.
 
-This is a **one-shot pin, not a live guarantee**: it fixes the revision your
-scripts come from at session start, and `origin/main` will move under a long
-run. That is the intended trade — one consistent revision for the whole run
-beats a moving one, and re-fast-forwarding mid-run would shift scripts under
-your own in-flight steps. What it buys is that no *drifted* script ever runs
-unnoticed, and it buys it before step 3 reads anything. If a script behaves
-unlike its description later in the run, re-run this check before believing
-the description is wrong (15 minutes went that way once).
+This is a **one-shot pin, not a live guarantee**: it bounds which revision the
+session STARTS from, and nothing more. `origin/main` will move under a long
+run — and so, more surprisingly, will the local checkout's own HEAD.
+
+**The main checkout is SHARED, and another session on this machine can pull it
+forward mid-run.** Measured: step 1 passed cleanly at 07:20Z with the checkout
+on `main` at `c1dd1fa5`; at 10:03Z the same checkout was at `87230510`, moved
+by a concurrent session. Every `scripts/*.sh` and `next-batch.py` call after
+that point ran from a different revision than the ones before it, and the
+`STALE` check above could not fire, because the checkout was never stale — it
+was AHEAD. Forward drift is benign in effect (newer scripts carry fixes), but
+for about four hours the session could not have said which revision produced
+any given result, and only noticed by accident, on finding a script present
+that its pinned base predated (computenet-0rmu).
+
+So **record the HEAD here and re-read it before Finalize**, and report the pair
+when they differ:
+
+```bash
+git -C "$M" rev-parse HEAD | tee "$SCRATCH/step1-head"   # re-read at Finalize
+```
+
+Re-fast-forwarding mid-run is still the wrong move — it shifts scripts under
+your own in-flight steps — so this is a *notice*, not a fix. If a script
+behaves unlike its description later in the run, re-run this check before
+believing the description is wrong (15 minutes went that way once).
 
 Note the asymmetry with the dispatch rule below: **agents** read
 `.claude/skills/work/**` from their own worktree, cut fresh from
@@ -1274,6 +1292,24 @@ verdict. (`parked` is only meaningful on an empty batch.)
 
 **Before claiming each task:**
 
+- **A PRESCRIPTIVE handoff comment is a hypothesis, not an instruction.**
+  Ordinary prose ages harmlessly — a record of what was measured stays true as
+  a record. A *prescription* does not: it is a claim about what the next agent
+  should do, written in the imperative against a tree, a branch and a `main`
+  that all move afterwards, and nothing marks it stale. Measured on one bead
+  (computenet-lc3o): "update doc/demo-findings.md F-9 to CLOSED naming the
+  fix", repeated across two handoff comments hours apart — on the branch the
+  next session actually had, F-9 was an unrelated finding and F-10 was taken,
+  because the previous session's F-9 existed only on its own unpushed branch.
+  Following it literally would have corrupted an existing entry. The same bead
+  also said "resume this branch, do NOT re-implement" for work that did not
+  exist on that machine (computenet-2qen). Both were the most
+  authoritative-looking things on the bead. **Test it against the artifact it
+  names in one command before relaying it into a dispatch prompt**, and when
+  it is stale, correct it ON THE BEAD — a correction that lives only in your
+  dispatch prompt leaves the false instruction sitting there for the next
+  reader. This is the same rule the bullet below already applies to a stated
+  blocker; a free-text handoff comment was not covered by it.
 - **Re-validate a stated blocker or precondition against the ARTIFACT it
   names, before you write it into a dispatch prompt.** A bead's "blocked until
   X lands" was true when it was written; by dispatch time X may have landed
@@ -1532,6 +1568,9 @@ background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
 If you won't finish within ~45-60 minutes, stop at a clean point and leave
 the task in_progress with a bd comment saying what's done and what's left.
+State any NEXT STEP with the state it depends on — the branch and sha, or the
+file as it exists at that sha — never as a bare imperative, because the tree
+you are describing will have moved by the time it is read.
 Your worktree and branch are preserved, so a later batch resumes you here.
 Report back: the task id, the outcome, and the files you actually touched.`
 })
@@ -1927,6 +1966,18 @@ Two things that decide most sessions, inline so they are not missed:
 
 
 ## 6. Finalize
+
+**Re-read the main checkout's HEAD and compare it with step 1's.** They differ
+whenever a concurrent session on this machine pulled the shared checkout
+forward mid-run, which is routine and benign — but it means the session ran
+scripts from more than one revision, and the summary must say so rather than
+report a revision it did not hold throughout (computenet-0rmu):
+
+```bash
+was=$(cat "$SCRATCH/step1-head"); now=$(git -C "$M" rev-parse HEAD)
+[ "$was" = "$now" ] && echo "scripts: one revision, $now" \
+  || echo "scripts: checkout MOVED mid-run, $was -> $now (report both)"
+```
 
 **Ending abnormally — budget exhausted, unrecoverable error, interrupt — run
 the publication push FIRST and skip the rest:**
