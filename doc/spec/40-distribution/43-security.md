@@ -1,8 +1,8 @@
 # 43 — Security, Privacy, and Trust
 
-> **Status**: Partial (posture fixed; boundary-policy design decided in [93 I-28](../90-roadmap/93-feature-interactions.md) and landed for in-process membranes (W4.1); authentication strength and at-rest encryption open)
+> **Status**: Partial (posture fixed; boundary-policy design decided in [93 I-28](../90-roadmap/93-feature-interactions.md) and landed for in-process membranes (W4.1); authenticated hello landed (DSC1, `computenet-ssa`) — `AuthLevel.Authenticated` is reachable; wiring that strength into `BoundaryPolicy`'s `minAuth`/`integrity` predicates at the bridge, and at-rest encryption, remain open)
 > **Sources**: ADR 0 (§6), ADR 1 (§13), ADR — Anatomy of Cellular Programs (membranes as authority), ADR — Cellular Software Development Process (security model)
-> **Implementation**: G-29 phase 1 — `PeerId` stamping (`LinkRequest.identity`), `allowPeers(...)` link policy, ingress admission gate (`Peering.Side.allow` / `WsTransport`); verified by `TrustBoundaryTest`. W4.1 (G-54 core): `civictech.cell.membrane.BoundaryPolicy` (`Principal`/`AuthLevel`, four predicates) bound to a `CompositeCell` `Exposure`; the three seams — `mediate()`'s `linkAuthority` (seam 2), `mediateOutlet()`'s `disclosureFilter`/`ProtocolSupport.inboundFilter` (seam 3 outbound/protocol), and `MediateProxy`'s `RequireSigned` verify-at-ingress (seam 3 inbound) — with `AuthLevel.TransportVouched` the only identity strength available (phase-2 keys/DIDs remain research, 95 §R7); verified by `BoundaryPolicyTest`/`MediateProxyIntegrityTest`. The wire-crossing bridge does not yet consult a `BoundaryPolicy` (still G-29 phase 1's `allowPeers`); disclosure-projection composition across hops, capability revocation, cross-membrane management authority, and encryption at rest remain open (93 I-28 §8).
+> **Implementation**: G-29 phase 1 — `PeerId` stamping (`LinkRequest.identity`), `allowPeers(...)` link policy, ingress admission gate (`Peering.Side.allow` / `WsTransport`); verified by `TrustBoundaryTest`. W4.1 (G-54 core): `civictech.cell.membrane.BoundaryPolicy` (`Principal`/`AuthLevel`, four predicates) bound to a `CompositeCell` `Exposure`; the three seams — `mediate()`'s `linkAuthority` (seam 2), `mediateOutlet()`'s `disclosureFilter`/`ProtocolSupport.inboundFilter` (seam 3 outbound/protocol), and `MediateProxy`'s `RequireSigned` verify-at-ingress (seam 3 inbound) — with `AuthLevel.Authenticated` now reachable (DSC1, `computenet-ssa`: a socket hello that verifies, or a `Peering.loopback` direction with credentials on both sides, promotes past `AuthLevel.TransportVouched`), though `MediateProxy`'s default `SignatureVerifier` still only certifies transport vouching (a real key-backed `civictech.identity.Ed25519SignatureVerifier` exists but is not yet the default); verified by `BoundaryPolicyTest`/`MediateProxyIntegrityTest`. The wire-crossing bridge does not yet consult a `BoundaryPolicy` (still G-29 phase 1's `allowPeers`); disclosure-projection composition across hops, capability revocation, cross-membrane management authority, and encryption at rest remain open (93 I-28 §8).
 
 ## Posture
 
@@ -41,9 +41,9 @@ untrusting contributors participate safely.
    `recoverFrom`; the selective minus-malicious-inputs filter remains
    future security work.)*
 
-## G-29: threat model and identity (phase 1 landed, M8.2–M8.3)
+## G-29: threat model and identity (phase 1 + phase 2 landed, M8.2–M8.3, DSC1)
 
-Landed: `PeerId` as transport identity — the WebSocket hello carries the peer
+Landed (phase 1): `PeerId` as transport identity — the WebSocket hello carries the peer
 name, the bridge ingress stamps every delivery, and handshakes running during
 a bridged delivery see it on `LinkRequest.identity` (`CurrentPeer`); local
 links carry null. Deny-by-default is a boundary control in both layers:
@@ -52,9 +52,22 @@ links carry null. Deny-by-default is a boundary control in both layers:
 — refusals surface as ordinary dead letters. Verified: `TrustBoundaryTest`
 (100 seeds + open-mode control).
 
-⚠ Still undefined: authentication *strength* — the phase-2 key/DID +
-signed-nonce upgrade that promotes a peer past `TransportVouched` — and
-encryption at rest. The rest of the former open list is design-decided below
+Landed (phase 2, DSC1 — `computenet-ssa`): per-peer Ed25519 keypairs
+(`:identity`), a `PeerId` derived as the key's fingerprint, and a signed-nonce
+challenge/response added to the hello. A hello whose signature verifies under
+the presented key — or, for an in-process `Peering.loopback` direction, both
+sides holding credentials — promotes the crossing from `AuthLevel.TransportVouched`
+to `AuthLevel.Authenticated`; `currentPrincipal()` reflects the achieved level.
+Every refusal (name/key mismatch, forged signature, downgrade under a
+`RequireAuthenticated` policy, replayed hello) is observable, never a silent
+drop. `PeerAuthPolicy.Open` keeps today's behaviour byte-for-byte; only
+`PeerAuthPolicy.RequireAuthenticated` demands a verified hello.
+
+⚠ Still undefined: signed, replay-defended `RegistryAnnounce` frames that let
+an ingress reject a forged management frame using this identity (`computenet-ssa.4`,
+in progress), wiring `AuthLevel.Authenticated` into `BoundaryPolicy`'s
+`minAuth`/`integrity` predicates at the wire-crossing bridge (SEC1), key
+rotation/revocation, and encryption at rest. The rest of the former open list is design-decided below
 (93 I-28): integrity of replicated deltas is `RequireSigned` verification at
 ingress, and Sybil resistance for interest signals is structural (attention
 clamping + per-`Principal` quotas). Encryption in transit is transport
@@ -73,8 +86,9 @@ Nothing new lives at the boundary.
 in-host/same-registry crossings (today's null identity), or `Peer(id, auth)`
 for bridge crossings — `id` the stamped `PeerId`, `auth` an `AuthLevel` of
 `TransportVouched` (phase 1, landed: the transport connection vouches for
-the name) or `Authenticated` (phase 2: `PeerId` carries or resolves to a
-public key / DID and the hello adds a signed-nonce challenge). Predicates
+the name) or `Authenticated` (phase 2, landed — DSC1: `PeerId` is derived
+from an Ed25519 public key and the hello adds a signed-nonce challenge whose
+verification promotes the crossing). Predicates
 read `Principal`; only the strength that `AuthLevel` certifies changes
 across the upgrade — no CA, no global identity registry (P4, P10).
 
@@ -154,19 +168,23 @@ concrete cost to mint an identity (93 I-3/I-9/I-19/I-8/I-28).
 **Phasing.** Absent a `BoundaryPolicy` every predicate is its default and
 the exposure Flattens — today's behavior, byte-for-byte; security cost
 exists only where a boundary declares it, and only on the bridge crossing
-(P2). Authentication strength is phased behind the stable vocabulary: today
-all bridge peers are `TransportVouched` and default `minAuth` admits them;
-phase-2 self-sovereign keys promote peers to `Authenticated` and unlock the
-predicates (`integrity`, high-`minAuth` protocol authority) that
-transport-vouched identity cannot safely satisfy. Encryption in transit
+(P2). Authentication strength is phased behind the stable vocabulary: by
+default (`PeerAuthPolicy.Open`) bridge peers remain `TransportVouched` and
+default `minAuth` admits them, byte-for-byte unchanged; under
+`PeerAuthPolicy.RequireAuthenticated` (phase 2, landed — DSC1) a peer's
+verified hello promotes it to `Authenticated`, unlocking the predicates
+(`integrity`, high-`minAuth` protocol authority) that transport-vouched
+identity cannot safely satisfy. Encryption in transit
 stays transport configuration (wss://); encryption at rest remains open.
 
 G-54 core is landed (W4.1): the `BoundaryPolicy` vocabulary (linkAuthority,
 protocolAuthority, disclosure, integrity) attached to a
 `CompositeCell` `Exposure`, evaluated at the three seams, with a registered
 `ProjectionId → Projection` transform for `disclosure` and `RequireSigned`
-verify-at-ingress for `integrity` (`AuthLevel.TransportVouched` only — real
-key/DID strength stays research, 95 §R7). Residual, still open: capability
+verify-at-ingress for `integrity` (`SignatureVerifier.TransportVouched`-strength
+by default; a real key-backed `civictech.identity.Ed25519SignatureVerifier`
+now exists, DSC1, but `MediateProxy` is not yet wired to default to it — 95
+§R7's phase-2 direction is landed, only this default is not). Residual, still open: capability
 hand-out/revocation for exposed ports and taps (tearing down *live* links,
 not just refusing new ones); management-plane authority for remote graph
 mutation across a bridge (who may drive `PORT_MANAGEMENT`); composition of

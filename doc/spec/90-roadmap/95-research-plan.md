@@ -115,20 +115,31 @@ folded from gossip (decentralized, but new convergence obligations).
 what real workloads need; survey mechanism-design literature for decentralized
 rate-allocation only if (1) proves insufficient.
 
-## R7 — Identity strength, phase 2 (G-29 residual)
+## R7 — Identity strength, phase 2 (G-29 residual) — DIRECTIONS (1)+(3) LANDED (DSC1, `computenet-ssa`)
 
 **Question**: what backs a `Principal` beyond transport vouching — keys, DIDs,
 certificate chains — and how do keys rotate against the instanceId lifecycle? What
 signs deltas (`RequireSigned`), and is at-rest encryption in scope?
-**Blocks**: 94 W4.1 ships with `TransportVouched` only; federated/open deployments.
+**Blocks**: ~~94 W4.1 ships with `TransportVouched` only~~ — resolved: `AuthLevel.Authenticated`
+is reachable via a verified hello (DSC1); federated/open deployments still want key
+rotation and delta-signature verification at ingress (below).
 **Directions**: (1) per-peer static keypairs, identity = fingerprint, exchanged in
-the existing `Peering` handshake — smallest step, no infrastructure. (2) DIDs for
-portable identity across transports (matches the civic-tech niche, P10). (3) delta
+the existing `Peering` handshake — smallest step, no infrastructure. **Landed**:
+Ed25519 keypairs (`:identity`), `PeerId` = key fingerprint, a signed-nonce
+challenge/response added to the hello (`computenet-ssa.1`, `.2`, `.3`). (2) DIDs for
+portable identity across transports (matches the civic-tech niche, P10) — not
+pursued; direction (1) was smaller and sufficient. (3) delta
 signatures per emitting peer (already the decided granularity in 40/42) using (1)'s
-keys; at-rest encryption stays out of the kernel (host concern).
+keys — **landed for the wire hello's identity**; signing the `RegistryAnnounce`
+management frames themselves is `computenet-ssa.4`, in progress. At-rest encryption
+stays out of the kernel (host concern) and remains open. Key rotation against the
+`instanceId` lifecycle also remains open (DSC1 §7 risk 2; rotation renames the peer,
+invalidating allowlists and mirrored `Remote` locations — no decided position yet).
 **Actions**: threat-model pass over the three seams of 40/43 §BoundaryPolicy
 (spoofed announcements, replayed deltas, attention floods) to determine the minimum
-that defeats each; prototype (1) inside `WsTransport`.
+that defeats each — done for the hello seam (DSC1's adversarial suite: impersonation,
+forged signature, downgrade, replayed hello); `RegistryAnnounce` signing verification
+is `computenet-ssa.4`'s.
 
 ## R8 — Keyed-structure convergence (G-23 deferrals) — PROMOTED (96 §E1, §R17)
 
