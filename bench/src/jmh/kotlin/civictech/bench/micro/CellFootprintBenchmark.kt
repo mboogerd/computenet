@@ -90,10 +90,10 @@ import java.util.concurrent.TimeUnit
  * `FanOutScalingBenchmark`'s smoke run warns that `-i 1` leaves a written CSV's error column
  * `NaN`, which `ThroughputReport.parseCsv` then refuses outright. That specific hazard does
  * not apply to the smoke run above: it passes no `-rf csv`, so there is no CSV for
- * `parseCsv` to refuse, and — as stated below — `ThroughputReport` cannot render this
- * benchmark's `-prof gc` secondary metric regardless of iteration count. `-i 1` here only
- * means the single reported `gc.alloc.rate.norm` value is read by hand off stdout, same as
- * any other run of this class.
+ * `parseCsv` to refuse — and, unlike a `-rf csv` run, there is no file for
+ * [CellFootprintAllocRenderTest] to render either. `-i 1` here only means the single
+ * reported `gc.alloc.rate.norm` value is read by hand off stdout, same as any smoke run
+ * that skips `-rf csv`; a full sweep written to CSV renders through that test instead.
  *
  * The `| tee` matters for the same reason it does for `OperatorThroughputBenchmark`: JMH's
  * results file records nothing about the JVM that produced it, and `MeasuringJvm.fromJmhLog`
@@ -101,13 +101,17 @@ import java.util.concurrent.TimeUnit
  * [CellState.announceHost]'s CPU/core/OS lines on that same log (computenet-yhbd, wired
  * into this class by computenet-7w4e).
  *
- * **`ThroughputReport` still cannot render this class's `-prof gc` answer** — it parses the
- * primary `Score` column, and `gc.alloc.rate.norm` is a secondary metric. Reading the
- * allocation numbers is a hand step, deliberately; wiring a renderer for a secondary metric
- * is `computenet-6zqz`, not this class's business. The banner is not a workaround for that:
- * it closes a *different* refusal (host facts unknown) that also blocked the plain,
- * no-`-prof gc` time-per-`snapshot()` sweep of this same class, whose rows
- * `ThroughputReport.RowLabel.REGISTERED` already labels by `family`/`scale`.
+ * **A `-prof gc` run of this class renders through the shipped path.**
+ * [ThroughputReport.parseCsv] takes a [ThroughputReport.Metric] selector — [Metric.Primary]
+ * by default, or [Metric.GC_ALLOC_RATE_NORM] to read the secondary `gc.alloc.rate.norm`
+ * column instead of the primary `Score` column — and [CellFootprintAllocRenderTest] is the
+ * `@Tag("bench")` entry point that reads this class's `-prof gc` CSV with that selector,
+ * states a FIRES/RETIRES/INCONCLUSIVE verdict on G-21 phase 3's trigger, and renders a
+ * `doc/bench/findings.md` entry with no hand-written driver. The banner closes a
+ * *different* refusal (host facts unknown) that also blocked the plain, no-`-prof gc`
+ * time-per-`snapshot()` sweep of this same class, whose rows
+ * `ThroughputReport.RowLabel.REGISTERED` already labels by `family`/`scale`; both sweeps
+ * need it, for the same reason.
  */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
@@ -161,14 +165,13 @@ open class CellFootprintBenchmark {
          * possibly on a different machine, and no JMH artifact otherwise records which
          * host measured.
          *
-         * **This does not make a `-prof gc` run of this class renderable**, and must not
-         * be read as claiming it does. `gc.alloc.rate.norm` is a JMH *secondary* metric
-         * and `ThroughputReport` parses the primary `Score` column, so the allocation
-         * numbers this class exists for are still a hand read off stdout — a renderer gap
-         * tracked as `computenet-6zqz`, not closed here. What the banner closes is the
-         * host-facts refusal, which also blocked the plain (no `-prof gc`) time-per-
-         * `snapshot()` sweep of this same class, whose rows `RowLabel.REGISTERED` already
-         * labels by `family`/`scale`.
+         * **This is not what makes a `-prof gc` run of this class renderable** — that is
+         * [CellFootprintAllocRenderTest], reading `gc.alloc.rate.norm` (a JMH *secondary*
+         * metric) via `Metric.GC_ALLOC_RATE_NORM` rather than the primary `Score` column
+         * `ThroughputReport` reads by default. What this hook closes is a narrower,
+         * shared problem both sweeps of this class hit: the host-facts refusal, which
+         * also blocked the plain (no `-prof gc`) time-per-`snapshot()` sweep, whose rows
+         * `RowLabel.REGISTERED` already labels by `family`/`scale`.
          */
         @Setup(Level.Trial)
         fun announceHost() {
