@@ -24,6 +24,20 @@ data class HostedPortInvocation(
      */
     val peer: civictech.cell.link.PeerId? = null,
     /**
+     * How strongly [peer] is vouched for (DSC1 `[DSC1-HELLO-05]`): the level
+     * the *connection* this delivery arrived on was admitted at, stamped by
+     * the same bridge ingress that stamped [peer] and, like it, **never
+     * serialized into a frame** — a peer cannot assert its own level, because
+     * no encoding carries one. Meaningless when [peer] is null (a local
+     * origin is [civictech.cell.membrane.Principal.LocalTrusted], not a peer
+     * at any level).
+     *
+     * Defaults to [civictech.cell.link.AuthLevel.TransportVouched], which is
+     * what every pre-DSC1 construction of this type means and keeps meaning
+     * (`[DSC1-WIRE-06]`).
+     */
+    val peerAuth: civictech.cell.link.AuthLevel = civictech.cell.link.AuthLevel.TransportVouched,
+    /**
      * T04 finding 7 (extended, T06 §C1a): [civictech.cell.ReplayScope]
      * captured at STAGE time by [civictech.cell.host.HostDurability.recoverFrom]
      * for a replayed frame that carries no [Invocation.context] (a root

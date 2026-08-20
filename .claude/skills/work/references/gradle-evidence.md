@@ -9,6 +9,9 @@ what is specific to its role. Cited beads carry the full incidents
 
 - [Why `BUILD SUCCESSFUL` proves nothing](#why-build-successful-proves-nothing)
 - [The three signals to consume, per run](#the-three-signals-to-consume-per-run)
+- [Aggregate tasks lie about their members](#aggregate-tasks-lie-about-their-members)
+- [Clearing results is denied to dispatched agents](#clearing-results-is-denied-to-dispatched-agents)
+- [Measurements whose failure mode is a PASS](#measurements-whose-failure-mode-is-a-pass)
 - [`--rerun` semantics](#--rerun-semantics)
 - [A killed test task corrupts the results store](#a-killed-test-task-corrupts-the-results-store)
 - [How long the suites take](#how-long-the-suites-take)
@@ -98,6 +101,67 @@ date -u +%Y-%m-%dT%H:%M:%S     # before the run; every XML timestamp must exceed
 Quote the numbers, the module count, and `newest` in your report. An
 unquantified "suite green" is not a verification record, and nobody re-runs
 it after you: your report *is* the evidence the next session trusts.
+
+## Aggregate tasks lie about their members
+
+`> Task :<module>:testClasses UP-TO-DATE` can print on a run where
+`:<module>:compileTestKotlin` genuinely **executed**. `testClasses` is a
+LIFECYCLE AGGREGATE: its own up-to-date state says nothing about the tasks it
+depends on. At a glance it reads as "test sources were not recompiled", which
+is exactly the wrong conclusion — here in the false-negative direction, making
+a real mutation look like it never compiled. A reviewer had to grep the
+per-task compile lines to disprove it (computenet-ymv4).
+
+**Judge execution from the per-task `compile*`/`test` lines, never from an
+aggregate.** Same for `:build`, `:check`, `:classes`, `:assemble`.
+
+```bash
+grep -E '^> Task :[^ ]*:(compileTestKotlin|compileKotlin|test)( |$)' "$SCRATCH/run.log"
+```
+
+This also means a repo-wide `./gradlew testClasses` reporting `79 up-to-date`
+and `BUILD SUCCESSFUL` verifies **nothing** — measured twice in one session on
+a task whose headline criterion was "every existing caller compiles unchanged"
+(computenet-ukft). Force execution, or read the per-task lines and say which
+ones carried no marker.
+
+## Clearing results is denied to dispatched agents
+
+`rm -rf <module>/build/test-results` — the obvious way to force a provably
+clean `junit-count.py` — is refused by the permission classifier for a
+dispatched agent. **The sanctioned substitute is the newest `timestamp`
+`junit-count.py` already prints**: a cache replay leaves the previous run's
+timestamp unchanged while `--rerun` advances it, which is the same
+discrimination a clean directory would buy (computenet-ymv4).
+
+## Measurements whose failure mode is a PASS
+
+The cache traps above are one instance of a general shape, and the others are
+not about Gradle at all. **A check whose failure mode is SILENCE must be shown
+to print something on the branch where it should fail, before its silence is
+read as an answer.** Two measured instances, both reported independently by
+reviewers on 2026-08-19 (computenet-rf0a):
+
+- **A per-line read of a multi-line dump under-reports it.** A Kotlin
+  data-class `toString` spans newlines, so measuring a diagnostic dump PER LINE
+  reads only its first line. A reviewer measuring whether `OracleSweep.describe()`
+  spills a 200-event script concluded the violation dumps were *shorter* than
+  the ordinary ones (145 vs 259 characters) — i.e. no problem. Re-measured per
+  BLOCK: ~1.9–2.0 kB with the entire `Script(...)` inline, against ~0.57 kB and
+  no script. An order of magnitude the other way. It caught this only because
+  the number was implausible to it. **Treat an implausibly reassuring number as
+  a measurement bug, not a result.**
+
+- **A grep that never runs prints exactly what "no matches" prints.** Under
+  zsh, `grep -rn 'foo' --include=*.kt .` dies with `no matches found:
+  --include=*.kt` — the glob is expanded by the shell before grep sees it — so
+  the grep NEVER RUNS and produces no hits. That is how the false premise
+  ":oracle is a leaf that nothing depends on" survived two implementer reports
+  and would have survived a review. **Quote the glob**: `--include='*.kt'`.
+  This is a recurrence of computenet-l5rc, whose fix landed only in
+  agent-execution.md, which orchestrators never read (computenet-u0b0) — it is
+  now in AGENTS.md's zsh subsection as well, and here, so every reading chain
+  reaches it.
 
 ## `--rerun` semantics
 
