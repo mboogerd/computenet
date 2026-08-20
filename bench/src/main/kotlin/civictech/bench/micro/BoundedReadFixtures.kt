@@ -116,14 +116,15 @@ import java.util.concurrent.atomic.AtomicLong
 // measure the absorb path instead of the merge path — and an OR-set's `remove` tombstones
 // rather than deletes, so nothing ever shrinks. After the warmup drive and k timed drives
 // the target holds `scale.elements + WARMUP_ADDS + k * DRIVE_ADDS` elements. At 1e3 with
-// three trials that is 1,000 rising to 26,000: the last trial's cell is 26x the first's,
+// [TRIALS] (five) that is 1,000 rising to 42,000: the last trial's cell is 42x the first's,
 // and E3's page count rises with it.
 //
 // This is **the original harness's own behaviour**, reproduced deliberately rather than
 // corrected: `30-bounded-read-measurement.md` Appendix A's `Rig` holds ONE monotone
 // `seedCounter` shared by `seed()` and `driveTimed()`, and its E2 ran five 8,000-add trials
 // per condition on one rig — so its "10^3" condition finished against a ~42,000-element
-// cell. Silently fixing it here would produce numbers that are not comparable to §4/§5,
+// cell, the same figure this file now reaches at the same trial count. Silently fixing the
+// drift here would produce numbers that are not comparable to §4/§5,
 // which is the one thing a replication may not do. It is very likely part of why §4's own
 // 10^3 rows look anomalous (a *slower* baseline drain at 10^3 than at 10^5) and why §6 calls
 // 10^3 "small/unclear at this scale".
@@ -536,13 +537,19 @@ object BoundedReadFixtures {
     const val DRIVE_ADDS: Int = 8_000
 
     /**
-     * Trials per condition. Three, not the original's five, and stated as a deliberate
-     * reduction rather than an oversight: this constant sizes the artifact's own smoke
-     * run, and three is the smallest sample [TrialStats] can state a dispersion over. A
-     * full-scale sweep is a sibling task's job and will want the original's five or more
-     * — which is a change to this one line, in this one file.
+     * Trials per condition: the original's five, raised here from an earlier three.
+     *
+     * The 2026-08-19 replication entry (`computenet-x9e.6.4`) ran this file at three
+     * trials — the smallest sample [TrialStats] can state a dispersion over — and
+     * recommended raising it to five in the same breath it disclosed why: the whole
+     * six-test E2/E3 probe suite runs in ~2 s, so cost was never the obstacle, and a
+     * fifth trial "makes the medians materially more robust against exactly the outlier
+     * trials E2's 10³/10⁴ baselines show" without changing any `Unreportable`
+     * classification (five trials still needs on the order of 10⁴ trials to reach
+     * `NOISE_FLOOR`; see that entry's "What F3 refused" section for the arithmetic).
+     * `computenet-xlst` raises it on that recommendation.
      */
-    const val TRIALS: Int = 3
+    const val TRIALS: Int = 5
 
     /**
      * Discarded warmup drives per condition, before any trial is timed. One, against the
