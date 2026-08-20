@@ -4,6 +4,7 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.net.URLClassLoader
@@ -35,10 +36,13 @@ import javax.tools.ToolProvider
  * still catch a rename of a hand-written class whose generated `*Base`/`*Ports`/`*Api` follows
  * it, both of which real operator-vocabulary churn and neither of which this filter touches).
  *
- * The jar branch of [actualTopLevelClassNames] (below) is exercised by this task's own
- * `:oracle:test` run only if Gradle resolves `:kernel`'s project dependency as a jar rather than
- * a directory classpath entry; on this build it resolves as a directory, so the jar branch is
- * implemented per the bead's instruction but not exercised by this test suite.
+ * Which branch of [actualTopLevelClassNames] (below) runs depends on how Gradle resolves
+ * `:kernel`'s project dependency on the *test runtime* classpath. Measured from inside this test
+ * JVM during computenet-0mcl's review (`classLoader.getResources("civictech/cell/data/op")`
+ * printed one entry with protocol `jar`, `.../kernel/build/libs/kernel.jar`): it is the **jar**
+ * branch that runs here, and the `file` branch that is currently unexercised — the reverse of
+ * what this KDoc claimed from computenet-4ru.15 until that measurement was taken. Both branches
+ * stay implemented so the test does not depend on which one Gradle produces.
  *
  * **Bytecode-metadata facade detection (computenet-4ru.19).** [isKotlinFileFacade] originally
  * decided facade-ness from the **source tree** — a `<Bare>Kt` classpath name was treated as a
@@ -119,39 +123,17 @@ class OperatorInventoryTest {
     private val fileFacadeMetadataKind = 2
 
     /**
-     * `kotlin.Metadata.kind` values this gate deliberately does NOT special-case, and why
-     * (computenet-0mcl, settling the "undecided" item computenet-4ru.19's reviewer left open).
-     *
-     * `SYNTHETIC_CLASS` (3), `MULTI_FILE_CLASS_FACADE` (4), and `MULTI_FILE_CLASS_PART` (5) do
-     * not occur anywhere in `civictech.cell.data.op` or `civictech.cell.data` today, and treating
-     * that as accidental rather than structural would be wrong for each of the three:
-     * - `MULTI_FILE_CLASS_FACADE`/`PART` are emitted only for a file group under
-     *   `@file:JvmMultifileClass` — a source-level opt-in nothing in this codebase uses. There is
-     *   no code path by which either kind could appear on this classpath without a new file also
-     *   adding that annotation, which is itself a reviewable, greppable change.
-     * - `SYNTHETIC_CLASS` marks compiler-generated helpers with no user-facing declaration
-     *   (lambdas compiled to classes, callable references, `$DefaultImpls`, …). Every such class
-     *   the Kotlin compiler emits is nested — its class file name contains `$` — and
-     *   [actualTopLevelClassNames] already excludes any name containing `$` before this filter
-     *   ever runs (`.filterNot { it.contains('$') }`, both branches above). A `SYNTHETIC_CLASS`
-     *   reaching [isKotlinFileFacade] at all would mean the compiler started emitting one as a
-     *   top-level (`$`-free) class file, which would be a change in the compiler's own contract,
-     *   not something this gate should silently absorb by guessing at how to classify it.
-     *
-     * So kinds 3..5 are left to fall through to `kind == fileFacadeMetadataKind` returning
-     * `false` (not a facade, stays in the diffed set) — the same as any kind this filter has no
-     * specific reason to treat as a facade. If one of these kinds is ever observed here, that is
-     * itself the finding: it means one of the two premises above stopped holding, and the right
-     * response is to re-open this decision with the concrete class in hand, not to have
-     * pre-guessed a classification for a case nobody has seen.
+     * The `civictech.cell.data.op`-fixed overload of the facade filter. See the generalized
+     * overload below for what this decides, why it is exact, and which `kotlin.Metadata.kind`
+     * values it deliberately leaves unhandled.
      */
     private fun isKotlinFileFacade(className: String): Boolean =
         isKotlinFileFacade(packagePath, className)
 
     /**
      * Same check as [isKotlinFileFacade] above, generalized to any [packagePath] so this file's
-     * second gate ([civictech.cell.data]'s source cells, computenet-y9p4) can reuse it without
-     * duplicating the reasoning in that function's KDoc.
+     * second gate ([civictech.cell.data]'s source cells, computenet-y9p4) can reuse it. This is
+     * the decision site: both overloads' behaviour, and the reasoning below, live here.
      *
      * True iff [className] is a Kotlin compiler-generated file-facade class rather than a
      * hand-written or KSP-generated one, determined by loading the class and reading its own
@@ -182,6 +164,34 @@ class OperatorInventoryTest {
      *
      * A class outside `civictech.cell.data.op`'s Kotlin-compiled surface (there is none on this
      * classpath, but defensively) has no `kotlin.Metadata` at all and is treated as not a facade.
+     *
+     * **`kotlin.Metadata.kind` values this gate deliberately does NOT special-case, and why**
+     * (computenet-0mcl, settling the "undecided" item computenet-4ru.19's reviewer left open).
+     * Measured on this classpath during computenet-0mcl's review, by loading every `.class`
+     * entry in both packages out of `kernel.jar` and reading its own `kotlin.Metadata.kind`:
+     * - `MULTI_FILE_CLASS_FACADE` (4) and `MULTI_FILE_CLASS_PART` (5): **zero occurrences**,
+     *   nested or top-level, in either package. They are emitted only for a file group under
+     *   `@file:JvmMultifileClass` — a source-level opt-in nothing in this repository uses
+     *   (`grep -rn 'JvmMultifileClass' --include='*.kt' .` matches only this KDoc). There is no
+     *   code path by which either kind could appear on this classpath without a new file also
+     *   adding that annotation, which is itself a reviewable, greppable change.
+     * - `SYNTHETIC_CLASS` (3): **common, and every occurrence is nested** — 28 of the 123 class
+     *   files under `civictech.cell.data.op` and 8 of the 87 under `civictech.cell.data`, all
+     *   `$`-bearing (`CountSetCellBase$1`, `JoinLedger$DefaultImpls`,
+     *   `WatermarkCell$WhenMappings`, …). Both packages' *top-level* (`$`-free) names carry only
+     *   kinds 1 and 2. That is what makes leaving kind 3 unhandled safe rather than lucky:
+     *   [actualTopLevelClassNames] excludes any name containing `$` before this filter ever runs
+     *   (`.filterNot { it.contains('$') }`, both branches above), so a `SYNTHETIC_CLASS` never
+     *   reaches here. One arriving would mean the compiler started emitting one as a top-level
+     *   (`$`-free) class file — a change in the compiler's own contract, not something this gate
+     *   should silently absorb by guessing at how to classify it.
+     *
+     * So kinds 3..5 fall through to `kind == fileFacadeMetadataKind` returning `false` (not a
+     * facade, stays in the diffed set) — the same as any kind this filter has no specific reason
+     * to treat as a facade. If one is ever *observed here*, that is itself the finding: it means
+     * one of the two premises above stopped holding, and the right response is to re-open this
+     * decision with the concrete class in hand, not to have pre-guessed a classification for a
+     * case nobody has seen.
      */
     private fun isKotlinFileFacade(packagePath: String, className: String): Boolean {
         val classLoader = OperatorInventoryTest::class.java.classLoader
@@ -378,5 +388,37 @@ class OperatorInventoryTest {
         guardedFailure.message shouldContain "demonstration/package"
         guardedFailure.message shouldContain "link failure"
         (guardedFailure.cause?.message ?: "") shouldContain "Base" // NoClassDefFoundError: Base
+    }
+
+    /**
+     * computenet-0mcl review: the test above exercises [loadInventoryClass] directly, which
+     * proves the guard works but *not* that either [isKotlinFileFacade] overload reaches it —
+     * measured: reverting [isKotlinFileFacade]'s body to a bare `Class.forName` leaves that test
+     * green. This one closes that gap by going in through the gate's own entry points, and is
+     * also the only coverage of [loadInventoryClass]'s `ClassNotFoundException` arm (the test
+     * above covers only `NoClassDefFoundError`).
+     *
+     * A name that is on neither package's classpath is the cheapest way to make a real gate call
+     * fail to load: [actualTopLevelClassNames] would never yield it, but the filter is a pure
+     * function of the name it is handed, so calling it with one reproduces exactly the failure a
+     * stale or unlinkable class file would cause.
+     */
+    @Test
+    fun `both isKotlinFileFacade overloads route a failed load through the named guard`() {
+        val absent = "ZzNoSuchClassOnThisClasspath"
+
+        val viaOpOverload = shouldThrow<AssertionError> { isKotlinFileFacade(absent) }
+        viaOpOverload.message shouldContain "Inventory gate for 'civictech/cell/data/op'"
+        viaOpOverload.message shouldContain "civictech.cell.data.op.$absent"
+        viaOpOverload.message shouldContain "link failure"
+        viaOpOverload.cause.shouldBeInstanceOf<ClassNotFoundException>()
+
+        val viaGeneralOverload = shouldThrow<AssertionError> {
+            isKotlinFileFacade(sourceCellPackagePath, absent)
+        }
+        viaGeneralOverload.message shouldContain "Inventory gate for 'civictech/cell/data'"
+        viaGeneralOverload.message shouldContain "civictech.cell.data.$absent"
+        viaGeneralOverload.message shouldContain "link failure"
+        viaGeneralOverload.cause.shouldBeInstanceOf<ClassNotFoundException>()
     }
 }
