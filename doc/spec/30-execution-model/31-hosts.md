@@ -15,8 +15,11 @@ A host:
 - **manages lifecycle**: `spawn(cell)` → register → `onActivate` on the
   host's execution context;
 - **owns the queue**: exactly one consumer processes all invocations for its
-  cells → cells are effectively single-threaded (serializable transitions,
-  10/11) with no per-cell synchronization;
+  cells → cells are effectively single-threaded for *invocations* (serializable
+  transitions, 10/11) with no per-cell synchronization on the invocation path.
+  Off-host **synchronous reads** are a separate plane and are served from
+  published immutable snapshots, never by routing the read through the queue —
+  see §The read plane below;
 - **orchestrates links** among its cells and to remote cells;
 - **is itself a cell**: its management surface is ordinary ports
   (`managementInlet: Use<HostManagementApi>`, `routerInlet: Use<HostRoutingApi>`),
@@ -121,7 +124,10 @@ checkpoint for tightly-coupled subgraphs (never global, per P4) (93 I-7).
 ## Normative rules
 
 1. **Single consumer**: all cell logic of a host executes on its one context;
-   cells never share threads with other hosts.
+   cells never share threads with other hosts. "Cell logic" is every
+   *invocation* — mutation and computation alike. A synchronous read taken by
+   an off-host observer is not an invocation and does not execute on the host's
+   context; it reads a value the host's context already published (rule 6).
 2. **Fast path**: cross-host send = volatile read + enqueue; intra-host send =
    direct call. Nothing else on the steady-state path (P2). (The closable
    intake, M3.2, costs the sender one volatile read — a closed intake throws
@@ -230,6 +236,97 @@ checkpoint for tightly-coupled subgraphs (never global, per P4) (93 I-7).
    capture, `Leased` → released, with a redaction rule for non-serializable
    payloads — mergeable parked traffic is already covered end-to-end by the
    M10 journal + anti-entropy pair (93 I-7/I-22/I-12).
+6. **Read plane**: the host queue serves *invocations* only. A synchronous
+   read issued from a thread that is not the host's — a test's `awaitUntil`
+   thread, an HTTP handler, a poller — MUST be answered from an immutable
+   snapshot the writer published, and MUST NOT be routed through the queue.
+   The publication convention is a `@Volatile` field written at the end of
+   each effective pass; see §The read plane. Asynchronous, caller-bounded
+   state reads (`ManagedHost.snapshotOf` / the paged `readBounded` sibling)
+   are *not* covered by this rule: they are ordinary queued tasks that hand
+   back a future, so they never block the caller on host liveness and never
+   re-enter from the host thread.
+
+## The read plane
+
+An observer outside the host asks a cell a question and wants the answer now:
+`awaitUntil` polling a data cell's `membership()`, the beads mirror's poller
+thread reaching `MirrorProjector.edgeView()` (which is a `SetCell.membership()`
+underneath), the Inspector's `ManagedHost.outletAt`. These calls run on the
+*caller's* thread while the host's consumer folds deltas into the same state,
+which is how `ConcurrentModificationException` escaped `OrMapCell.membership`
+(computenet-yk5r) and `SetCell.membership` (computenet-bdth), and is latent in
+`MapCell`/`ListCell`/`KeyedSetCell`/`PnCounterCell` (computenet-ndf6).
+
+**The rule** (decided 2026-08-19). There are two planes, and they do not mix:
+
+- **The invocation plane** is the host queue. It carries all mutation and all
+  computation. It keeps the properties rule 1 states: one consumer, serializable
+  transitions, no per-cell synchronization on that path.
+- **The read plane** is publication. A cell that exposes a synchronous
+  off-host read computes an **immutable** value at the end of each *effective*
+  pass and hands it over through a `@Volatile` field; the accessor returns that
+  field and touches no live fold state. A reader therefore sees the previous
+  complete value or the next one — never a half-applied pass, never a map
+  mid-rehash. Concurrency can make the answer *stale* by at most the pass in
+  flight, which is what an incremental derived value means anyway; it cannot
+  make it inconsistent.
+
+**Why this is not a hole in "no per-cell synchronization".** The volatile write
+is a *data publication* edge, not synchronization machinery. Nothing waits,
+nothing is excluded, no lock is acquired or ordered against another, and the
+published value is never mutated again — so no reader can be blocked by a
+writer, no writer by a reader, and no lock cycle can form. The rule the
+invocation plane keeps is that a cell's transitions need no mutual exclusion;
+a one-word store of a reference to a frozen value does not reintroduce any.
+Reads are wait-free; the cost is one O(|published value|) copy per effective
+change, and nothing at all for a delta that changes nothing.
+
+**The convention has a worked implementation**: `ReadySetCell.readySet()` in
+`demo/beadsmirror` (commit `0dbab5d5`, computenet-vsbx) — `reconcile` builds an
+immutable copy of the advertised key set at the end of every effective pass and
+stores it in the `@Volatile published` field, and the accessor returns it.
+`ReadySetCellTest`'s "`readySet` answers a whole value while the projector is
+fed from another thread" is the standing proof; it fails against the version
+without `published` with both signatures — a torn read and a CME. Note what the
+snapshot deliberately does *not* extend to: everything the accessor does not
+serve (catch-up deltas that need tags, evaluation counters, linking) stays
+writer-thread only. A new off-thread accessor publishes its own snapshot rather
+than widening someone else's.
+
+**Rejected: routing synchronous reads through the host queue.** This was the
+original "everything is an invocation" instinct, and it is rejected for three
+reasons:
+
+1. **Observation would perturb the schedule.** A read becomes a queued task —
+   a simulation event, a priority-0 jump ahead of live data — so measuring the
+   graph changes the graph, and "viz never blocks the graph" (90/97) becomes
+   untrue by construction.
+2. **Read availability would be coupled to host liveness.** The state would be
+   unreadable exactly when it is most worth reading: while the host is wedged,
+   draining (33), or terminated. A diagnostic that dies with its subject is
+   not a diagnostic.
+3. **It would self-deadlock from the host thread.** A read issued by cell logic
+   already running on the consumer would enqueue behind itself and wait forever,
+   unless re-entrancy machinery were added — machinery that exists to repair a
+   problem publication does not have.
+
+The asynchronous accessors are the surviving, legitimate use of the queue for
+observation, and they are legitimate *because* they are asynchronous:
+`snapshotOf` returns a `CompletableFuture` the caller bounds and may cancel, so
+none of the three costs above applies to it.
+
+**Transitional: the per-cell `stateLock`s.** The data cells in
+`civictech.cell.data` — `SetCell`, `OrMapCell`, `MapCell`, `ListCell`,
+`KeyedSetCell`, `PnCounterCell` — today guard their state with a
+`synchronized(stateLock)` covering both the fold and the read accessors,
+with the discipline that the monitor is never held across an outbound call.
+That was the containment fix for the CMEs above, **not** a ratification of
+per-cell locking: it is explicitly transitional, and **computenet-z530**
+("data cells: migrate off-host reads from `stateLock` to published immutable
+snapshots") is the migration that removes it. Until then the locks are the
+implementation's temporary answer to this section's rule; new cells implement
+the rule directly and do not copy the lock.
 
 ## Effects on instance sets
 
