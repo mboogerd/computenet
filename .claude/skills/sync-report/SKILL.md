@@ -1,6 +1,6 @@
 ---
 name: sync-report
-description: Reports what the unattended `work` runs did since you last looked, and what they now need from you. Reads the checkpoint, diffs PRs, beads and main against it, and returns one ranked list — per pending PR, the exact question you have to answer — then stops and waits. Use when the user says "what happened since last time", "sync me up", "give me a report", "catch me up", "where are we", or asks what the overnight/concurrent runs left behind.
+description: Reports what the unattended `work` runs did since you last looked, and what they now need from you. Reads the checkpoint, diffs PRs, beads and main against it, and returns a ranked decision list (per pending PR, the exact question you have to answer, completeness-checked), a functional account of what shipped and what is now possible, the same for work in flight, and the likely next pickups — then stops and waits. Use when the user says "what happened since last time", "sync me up", "give me a report", "catch me up", "where are we", or asks what the overnight/concurrent runs left behind.
 ---
 
 # /sync-report
@@ -11,7 +11,10 @@ Beads or written into a PR body and the run moves on. So the queue of things
 needing you doesn't announce itself — it accumulates, silently, in four
 different places.
 
-This skill collects it, ranks it, and hands it back as questions. **It reports.
+This skill collects it, ranks it, and hands it back as questions — and it
+tells the story of the window in functional terms: what shipped and what that
+makes possible, what is being built right now, and what is likely next. The
+reader wrote the epics; id lists tell them nothing. **It reports.
 It does not fix.** The one exception is bookkeeping drift (§5), and even that
 is proposed, not applied.
 
@@ -48,6 +51,27 @@ bd list --status=in_progress --json
 
 Linear is no longer in use (decided 2026-08-13) — do not query it, and do not
 report on it.
+
+Two more, for the completeness check and the up-next section:
+
+```bash
+# The human list, keyed BOTH ways. bd human list keys on the assignee, so a
+# stale assignee keeps an already-answered item on it, and a park that only
+# carries the label would be missing from it. Diff this against bd human list
+# and report any discrepancy instead of silently trusting either.
+bd list --all --json | sed -n '/^[[{]/,$p' \
+  | jq '[ (if type=="array" then . else .issues end)[]
+          | select(.status != "closed")
+          | select((.assignee == "human") or ((.labels // []) | index("human")))
+          | .id ]'
+bv --robot-triage        # up-next ranking; check the export is FRESH first (AGENTS.md), else bd ready
+```
+
+Before listing an item as a pending question, read its last comment: an item
+whose thread already records the maintainer's answer is not a question, it is
+bookkeeping drift — a stale park to propose clearing (computenet-em9i sat on
+the human list for a day after its recorded approval, 2026-08-20, because the
+`assignee=human` field outlived the decision).
 
 Everything is joined on the branch name: `work` names branches
 `feature/<bead-id>` and `task/<bead-id>`, so a PR's `headRefName` *is* its
@@ -107,7 +131,13 @@ PR number, date, or epic.
 
 ## 5. The report
 
-One message. Ranked. Per item at most four lines:
+One message, four parts, in this order: **decisions**, **shipped**,
+**in flight**, **up next**. Decisions stay first — they are why the user is
+reading — and everything after them is narrative, not tables.
+
+### Decisions
+
+Ranked per §4. Per item at most four lines:
 
 ```
 1. PR #26 — conservative-profile carve-out for the ready call     [decision]
@@ -122,14 +152,44 @@ Rules that keep it tight:
 - **Every pending PR states the information required from the user**, in one
   question, answerable without opening the PR. If nothing is required from
   the user, say what the agent will do instead — one line, no question.
-- Merged-since-checkpoint work is **one line total** with counts, not a list.
-  Name a merged PR only if it broke something or contradicts a doc.
+- **State the completeness check in one line**: the human list cross-checked
+  both ways (§2), open-PR bodies scanned for park phrases, and any
+  discrepancy named. An item whose thread already records the answer is a
+  stale park to propose clearing, not a question to re-ask.
 - Bookkeeping drift is **one line**: "N beads still open behind merged PRs
   (ids) — close on your say-so."
-- No status tables, no per-item summaries of what the PR does. The user wrote
-  the epics; they need the delta and the question, not a recap.
 - Anything you could not check (a PR whose checks are still running, an
   unreachable service) gets one honest line. Do not silently omit it.
+
+### Shipped
+
+What merged since the checkpoint, described **functionally**: what changed,
+what is possible now that was not possible before, in the project's domain
+language. Group by capability, never by epic code or PR number — "ORA1:
+4ru.12 landed" is not information; "a failing oracle case now shrinks to a
+minimal reproduction automatically" is. Cite PR numbers in parentheses as
+references, not as content.
+
+A window's whole merge list should compress to roughly three to eight
+capability groups of one to three sentences each. PR titles usually carry
+enough to write these; open a PR body (`gh pr view <n> --json body`) only
+where a title is too opaque to translate. Name a merged PR individually only
+if it broke something or contradicts a doc still on main.
+
+### In flight
+
+Open PRs and claimed beads, same functional style: one or two lines each —
+the capability being built, then its state (draft/green/red, fresh or
+stalled, which machine). A stalled item that needs the user still ranks in
+the Decisions section; here it just gets its narrative line.
+
+### Up next
+
+The top ~3 items likely to be picked up next, one functional line each.
+Derive the order the way the runs themselves do: continuations first
+(claimed epics/features with remaining children), then `bv --robot-triage`
+rank over the fresh export (§2), falling back to `bd ready` where `bv` is
+absent. Label it a prediction — the next run decides, not this report.
 
 Close the report with the questions restated as a numbered list in the same
 order — so the user can answer "1: yes, 2: skip, 3: …".
