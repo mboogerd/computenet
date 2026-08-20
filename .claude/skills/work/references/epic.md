@@ -39,6 +39,27 @@ platform behaviour — and verify each with a concrete command.** Put the
 command and its output in the item's comment thread, so the next reader does
 not re-derive it.
 
+**Semantic premises need the same treatment, and get less of it.** The
+environmental case above is the one people remember (computenet-r2x, fixed in
+PR #113). The uncovered case is a claim about code that is present and
+readable: *"test X proves property P"*, *"mutation M is expressible"*,
+*"this suite already covers that branch"*. Both cost a session in one epic —
+a bead asserted a reproducibility test pinned an extraction's byte-stability
+when that test compares two JVMs of the SAME build and is blind to exactly the
+refactor at issue, and it reached both the implementer and the reviewer as
+established fact (computenet-v005). Either state what the cited test actually
+compares, or mark the claim `unverified:` so the implementer probes before
+building on it. The `unverified:` convention is already in use here and
+already works.
+
+**Mark every cost or duration figure MEASURED (naming the run it came from) or
+ESTIMATED (in that word), and run any command you prescribe verbatim** — or
+label it unverified. An estimate two orders of magnitude wrong, and a
+prescribed invocation missing a mandatory flag, both reached implementers in
+one epic (computenet-bm7j). Same rules as
+[feature.md](feature.md#what-you-may-assert-and-what-a-verification-section-must-reach),
+because an epic breakdown writes the same kind of sentence.
+
 ```bash
 command -v <tool>            # a tool the item assumes is installed
 ifconfig | grep 100.64       # a network: grep an ADDRESS PREFIX, not a CIDR —

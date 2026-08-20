@@ -20,6 +20,27 @@ prescribed writes are commissioned work. A close or a priority change on
 another bead is not, whatever prescribed it: report it rather than repairing
 it.
 
+**When a criterion-prescribed cross-bead write is itself a DELIVERABLE and you
+find it WRONG, say so under the literal heading REQUIRED ORCHESTRATOR
+CORRECTION.** Your writes do not reach the other bead, so you cannot fix it —
+and the defect sits in the exact artifact you were asked to verify. Measured:
+a task's `cross_bead` commissioned posting an audit result as a comment on its
+parent feature, where it is a feature-level deliverable the feature cannot
+close without. The reviewer verified it and found its stated completeness bound
+wrong (it said 14 files; 15, and 16 counting `minAuth`), confirmed this was a
+reporting defect rather than a coverage one, and reported plainly "I could not
+correct it — the audit lives on <feature> and a reviewer's writes don't reach
+another bead". That was correct behaviour, and the only thing between a wrong
+number sitting permanently in a feature-level deliverable and its correction
+was how prominently that reviewer chose to mention it (computenet-59f5).
+
+That literal framing is the point: it makes the finding something the
+orchestrator cannot read past, and merge-task.md requires acting on it before
+the merge. Distinct from computenet-szdd (making the write VISIBLE to the
+policy check) and computenet-eetn (restating it in the dispatch prompt) — both
+concern the write being authorized and seen; this is who may CORRECT it once
+found wrong.
+
 **A negative finding about another agent's tracker writes needs a lookup, not
 a search.** Verifying that a claimed follow-up bead was really filed is a
 natural and valuable review check, and it is precisely the query `bd search`

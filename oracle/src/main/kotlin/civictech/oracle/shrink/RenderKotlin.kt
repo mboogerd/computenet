@@ -72,22 +72,32 @@ import civictech.oracle.run.RunOutcome
  * (fraction `1.0`) selects every seed unconditionally, so re-running with `ALWAYS` reproduces
  * whatever violation any option that selected this case's seed found. So a
  * [RunOutcome.WavePrefixViolation] counterexample always renders
- * `DifferentialRunner.run(case, wavePrefix = civictech.oracle.run.WavePrefixOption.ALWAYS)`; every
- * other outcome renders the plain `DifferentialRunner.run(case)`, unchanged, so as not to force
- * prefix-checking onto a replay that never needed it.
+ * `DifferentialRunner.run(case, wavePrefix = civictech.oracle.run.WavePrefixOption.ALWAYS)`.
  *
- * **The mirror case is NOT fixed here — computenet-kgsd.** That bare `DifferentialRunner.run(case)`
- * resolves to `civictech.oracle.run.WavePrefixOption.DEFAULT`, not to `OFF`, so a counterexample
- * shrunk with prefix checking *off* — or under an option whose `selects(seed)` was `false` — can
- * be replayed with it *on*, and a prefix-dirty case then reports a
- * [RunOutcome.WavePrefixViolation] where the counterexample names a [RunOutcome.Mismatch]: the
- * emitted `check()` fails, naming a different kind than the counterexample it was rendered from.
- * Measured at review time over the same four `WavePrefixTest` `SEAM_SEEDS`, each shrunk with
- * `WavePrefixOption.OFF` (a `Mismatch` counterexample for all four) and replayed exactly as
- * rendered: seeds 50 and 58 (`DEFAULT.selects(seed) == true`) replay as `WavePrefixViolation`,
- * seeds 30 and 40 replay faithfully. Its two candidate fixes — render `WavePrefixOption.OFF` for a
- * non-violation outcome, or carry the option the shrink was given on [Counterexample] — are a
- * design choice, which is why it is a filed residual rather than a line of this file.
+ * ## Every other outcome renders `wavePrefix = OFF` (computenet-kgsd, mirror of defect 2)
+ *
+ * The bare `DifferentialRunner.run(case)` resolves to `civictech.oracle.run.WavePrefixOption.DEFAULT`
+ * — a nonzero selection fraction, D5's floor against a default that checks nothing — not to
+ * `OFF`. So a counterexample shrunk with prefix checking *off* (or under an option whose
+ * `selects(seed)` was `false`) could be replayed with it *on*, and a prefix-dirty case would then
+ * report a [RunOutcome.WavePrefixViolation] where the counterexample names, say, a
+ * [RunOutcome.Mismatch]: the emitted `check()` would fail, naming a different kind than the
+ * counterexample it was rendered from. Measured over the same four `WavePrefixTest` `SEAM_SEEDS`,
+ * each shrunk with `WavePrefixOption.OFF` (a `Mismatch` counterexample for all four) and replayed
+ * with no `wavePrefix` argument: seeds 50 and 58 (`DEFAULT.selects(seed) == true`) replayed as
+ * `WavePrefixViolation`, seeds 30 and 40 replayed faithfully.
+ *
+ * The fix renders `wavePrefix = civictech.oracle.run.WavePrefixOption.OFF` explicitly for every
+ * non-[RunOutcome.WavePrefixViolation] outcome, rather than carrying the [WavePrefixOption] the
+ * shrink was actually given: sound, because prefix checking can only *pre-empt* a run with a
+ * violation, so a run that produced a non-violation outcome with checking on produces the same
+ * outcome with it off, and `civictech.oracle.run.WavePrefixOracle`'s own KDoc names `OFF` at an
+ * explicit call site — never a silent default — as exactly what D5 permits. Carrying the actual
+ * option would also be sound and would remove the `ALWAYS` approximation the violation branch
+ * above relies on, but it requires threading the option [Shrinker.run] was given through onto
+ * [Counterexample] and changing `Shrinker.run`'s result construction — `Shrinker.kt` is not this
+ * item's file claim, so that alternative is left as a possible future refinement rather than
+ * implemented here.
  *
  * ## `check`, not a test-framework assertion
  *
@@ -147,7 +157,7 @@ internal fun renderCounterexample(counterexample: Counterexample): String {
         val wavePrefixArg = if (counterexample.outcome is RunOutcome.WavePrefixViolation) {
             ", wavePrefix = civictech.oracle.run.WavePrefixOption.ALWAYS"
         } else {
-            ""
+            ", wavePrefix = civictech.oracle.run.WavePrefixOption.OFF"
         }
         appendLine("val outcome = civictech.oracle.run.DifferentialRunner.run(case$wavePrefixArg)")
         val terminalCheck = if (terminal == null) "" else " && outcome.terminal == ${literal(terminal)}"

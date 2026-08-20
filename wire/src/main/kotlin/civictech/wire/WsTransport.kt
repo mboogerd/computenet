@@ -528,12 +528,17 @@ object WsTransport {
          * peer asserted a name (legacy) or presented a key this side could not
          * challenge (it holds no credentials), and the transport vouched for it.
          *
-         * **Read-only, and deliberately not plumbed anywhere.** Carrying an
-         * achieved level into `currentPrincipal()` — so a crossing's
-         * `Principal.Peer` reports `Authenticated` — is `[DSC1-HELLO-05]` and a
-         * sibling feature's scope. This property exists so the handshake's
-         * outcome is *observable* at the transport, not so anything downstream
-         * can branch on it yet.
+         * **Read-only here, and carried elsewhere by value, not by reading
+         * this field.** Since `computenet-ssa.3.2` the achieved level *is*
+         * plumbed into `currentPrincipal()` — a crossing's `Principal.Peer`
+         * reports `Authenticated` (`[DSC1-HELLO-05]`) — but the carrier is
+         * [bindAndAnnounce]'s `achieved` parameter, decided at the admission
+         * row and handed to `Peering.hostIngress` as an immutable stamp. This
+         * property is written from the same value, in the same call, purely so
+         * the handshake's outcome stays *observable* at the transport. Nothing
+         * downstream reads it, and nothing should: a mutable field read after
+         * installation could report a level a delivery never saw, which is
+         * exactly the happens-before `[DSC1-HELLO-13]` rules out.
          */
         @Volatile
         private var achieved: AuthLevel? = null
@@ -837,8 +842,7 @@ object WsTransport {
                 return
             }
             if (!admitted(peer)) return
-            bindAndAnnounce(peer, UUID.fromString(parts[0]))
-            achieved = AuthLevel.TransportVouched
+            bindAndAnnounce(peer, UUID.fromString(parts[0]), AuthLevel.TransportVouched)
         }
 
         /**
@@ -945,8 +949,7 @@ object WsTransport {
                 // mixed-version proofs are a sibling item's.
                 if (!admitted(derived)) return
                 pending = PendingHello(hello, derived, key)
-                bindAndAnnounce(derived, hello.mirrorRef)
-                achieved = AuthLevel.TransportVouched
+                bindAndAnnounce(derived, hello.mirrorRef, AuthLevel.TransportVouched)
                 return
             }
             // Held BEFORE the PROOF is written: the peer's answer arrives on the
@@ -1031,8 +1034,7 @@ object WsTransport {
             }
             if (!admitted(awaiting.derivedId)) return
             replayGuard.recordAccepted(awaiting.derivedId, awaiting.hello.nonce, proof.signature)
-            bindAndAnnounce(awaiting.derivedId, awaiting.hello.mirrorRef)
-            achieved = AuthLevel.Authenticated
+            bindAndAnnounce(awaiting.derivedId, awaiting.hello.mirrorRef, AuthLevel.Authenticated)
         }
 
         /**
@@ -1173,7 +1175,16 @@ object WsTransport {
          * the peer's `HELLO2` is written from *its* `onOpen`, exactly where a
          * legacy hello would have been.
          */
-        private fun bindAndAnnounce(peer: PeerId?, peerMirrorRef: UUID) {
+        private fun bindAndAnnounce(peer: PeerId?, peerMirrorRef: UUID, achieved: AuthLevel) {
+            // The level is a PARAMETER, fixed by the admission row that called
+            // us, and it is applied before the ingress exists — so it is bound
+            // by the same happens-before that binds the mirror's peer
+            // (`[DSC1-HELLO-13]`, and `RegistryMirrorCell.peer`'s own
+            // argument). Publishing it on the observable field first keeps the
+            // two readings — what a delivery is stamped with, and what
+            // `achievedAuthLevel` reports — the same value by construction
+            // rather than by two assignments agreeing.
+            this.achieved = achieved
             // V4-PEERID: bind the mirror's peer BEFORE announcing, so every
             // Remote location this connection installs — including the peer's
             // own catch-up burst, which cannot start before it has seen our
@@ -1192,7 +1203,7 @@ object WsTransport {
             // the gate instead of re-installing a Remote for a ref the peer may
             // since have dropped. The peer's re-announcement below is a full
             // catch-up, so nothing it still holds is lost by that drop.
-            ingress = Peering.hostIngress(side, fromPeer = peer)
+            ingress = Peering.hostIngress(side, fromPeer = peer, fromPeerAuth = achieved)
             announcement?.close() // a re-hello (reconnect) supersedes the previous announcer
             announcement = Peering.announceTo(side, CellRef(peerMirrorRef), via = egress)
         }

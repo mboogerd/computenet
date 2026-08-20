@@ -718,6 +718,15 @@ private fun BoundaryDenialSink.denyDisclosure(
  * counter for, another's (BS-11). The `ceiling` branch never becomes a denial
  * site — a clamp is not a refusal (30/34 decision 6, BS-10): it returns a
  * clamped message with no call into [denials] and no counter movement.
+ *
+ * The `minAuth` branch is the repo's **only** ordered [AuthLevel] comparison
+ * (audited repo-wide for epic `computenet-ssa` §9.7; every other site is an
+ * assignment or an `==`). It reads `minAuth` as a floor and relies on
+ * [AuthLevel]'s declaration order being weakest-first — see that enum's KDoc,
+ * which makes the ordering a contract, and `AuthLevelOrderingTest`, which pins
+ * it. Verified correct as written: `TransportVouched < Authenticated`, so a
+ * transport-vouched principal is refused by a `minAuth = Authenticated` floor
+ * and admitted by the default `minAuth = TransportVouched` one.
  */
 private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
     denials: BoundaryDenialSink,

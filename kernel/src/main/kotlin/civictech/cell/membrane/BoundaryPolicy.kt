@@ -18,23 +18,38 @@ sealed interface Principal {
 }
 
 /**
- * How strongly a [Principal.Peer.id] is vouched for (spec 40/43): phase-1
- * (landed) is [TransportVouched] — the transport connection vouches for the
- * name; phase-2 (deferred, 95 §R7) is [Authenticated] — a key/DID plus a
- * signed-nonce hello challenge. The policy vocabulary below is stable across
- * the upgrade; only the strength this enum certifies changes.
+ * How strongly a [Principal.Peer.id] is vouched for (spec 40/43).
+ *
+ * **The declaration moved, the name did not** (`computenet-ssa.3.2`): the enum
+ * itself now lives at [civictech.cell.link.AuthLevel], beside the [PeerId] it
+ * is stamped alongside, because the level is *carried* through
+ * `civictech.cell.link`, `civictech.cell.proxy` and `civictech.cell.wire` —
+ * none of which depends on this package. This alias keeps
+ * `civictech.cell.membrane.AuthLevel` the name every policy site already uses,
+ * and it is the same class: the ordering contract, the `AuthLevelOrderingTest`
+ * pin and the serialization finding all read from the moved declaration's
+ * KDoc, which is where the §9.7 audit's conclusions now live.
  */
-enum class AuthLevel { TransportVouched, Authenticated }
+typealias AuthLevel = civictech.cell.link.AuthLevel
 
 /**
  * The ambient [Principal] for the delivery in flight (spec 40/43 §4.1):
  * mirrors the existing [CurrentPeer] ambient (G-29 phase 1) — a stamped
- * [PeerId] becomes a [Principal.Peer] at [AuthLevel.TransportVouched] (no
- * stronger claim is possible until phase-2 exists); no stamped peer is
+ * [PeerId] becomes a [Principal.Peer] at **the level that stamp's connection
+ * was admitted at** ([DSC1-HELLO-05]); no stamped peer is
  * [Principal.LocalTrusted].
+ *
+ * The level is read off the stamp, never asserted by the delivery: a bridge
+ * ingress binds it once from its connection's admission outcome
+ * ([civictech.cell.link.PeerStamp]), and no wire frame encodes one. So
+ * [AuthLevel.Authenticated] here means the *crossing* was authenticated —
+ * a hello whose signature verified under a key whose fingerprint is the
+ * claimed id (socket), or a peering both of whose sides hold the credentials
+ * that exchange would have used (`Peering.loopback`, [DSC1-WIRE-05]) — and a
+ * crossing that was not cannot reach it.
  */
 fun currentPrincipal(): Principal =
-    CurrentPeer.get()?.let { Principal.Peer(it, AuthLevel.TransportVouched) } ?: Principal.LocalTrusted
+    CurrentPeer.stamp()?.let { Principal.Peer(it.id, it.auth) } ?: Principal.LocalTrusted
 
 /**
  * Per-[ProtocolId] flow-time authority (spec 40/43 seam 3): a floor on
