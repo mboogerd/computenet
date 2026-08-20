@@ -29,13 +29,24 @@ import kotlin.math.abs
  * accordingly; this is a methodological correction to BS-8's OWN curve-shape reading, not
  * a new trigger evaluation.
  *
- * ## Why the criterion was fixed before the numbers were known
+ * ## Which half of the criterion was fixed before the numbers were known, and which was not
  *
- * Same discipline [CellFootprintAllocRenderTest]'s KDoc states for its own criterion, and
- * for the same reason: [MARGINAL_GROWTH_FACTOR] is a constant fixed against the ORIGINAL
- * (confounded) sweep's own SIM segment marginals — which climbed 1.95x across a 64-fold
- * range of degree and were themselves called "linear... at this sweep's resolution" — not
- * against this run's numbers.
+ * [MARGINAL_GROWTH_FACTOR] follows the discipline [CellFootprintAllocRenderTest]'s KDoc
+ * states for its own criterion, and for the same reason: it is a constant fixed against
+ * the ORIGINAL (confounded) sweep's own SIM segment marginals — which climbed 1.95x
+ * across a 64-fold range of degree and were themselves called "linear... at this sweep's
+ * resolution" — not against this run's numbers.
+ *
+ * **The resolvability gate ([Segment.resolvable]) was not**, and pretending otherwise
+ * would be the exact dishonesty this driver exists to prevent. It was added in `7eda317c`,
+ * after the sweep had run and its numbers were visible, replacing a first cut that ranked
+ * raw point-estimate marginals; the entry it rendered says so, in its own text, together
+ * with the verdict word the first cut produced. What limits the damage is that the
+ * replacement carries **no fitted or tunable threshold** — a segment counts when
+ * `|marginal| >` its own two-endpoint 99.9% error bar, a quantity the data supplies rather
+ * than the author — and that it moved the entry to a WEAKER claim, withdrawing a verdict
+ * rather than manufacturing one. Anyone re-running this driver against the retained
+ * results file gets the same table and can apply either criterion.
  *
  * ## Running it
  *

@@ -2682,7 +2682,8 @@ the identical source size rather than whatever size an iteration happened to gro
 to do the pre-seeding (off any timer — `@Setup` is excluded from JMH's timed region in
 every mode); both default to the prior unseeded behaviour, so the original `sim`/`real`
 benchmarks and every existing `FanOutFixturesTest` case are unchanged (confirmed:
-`./gradlew :bench:test --rerun` — 63 tests, 0 failures, see below). No file outside this
+`./gradlew :bench:test --rerun` — 204 tests, 0 failures, see below; an earlier draft of
+this line said 63, which was never that command's count). No file outside this
 task's `metadata.files` claim was touched, and no fixture constant outside the two new
 files (`FanOutFixtures.kt`, `FanOutScalingBenchmark.kt`) was edited — `NOISE_FLOOR`
 (`bench/src/main/kotlin/civictech/bench/Dispersion.kt`) is unchanged at `0.005`.
@@ -2720,6 +2721,22 @@ driver's `verdictOf` was tightened to require error-bar resolvability, not raw p
 estimates, between the sweep running and this entry being rendered — see that commit's
 own message. The JMH results file is unaffected; only how this entry's `reading=` line
 was computed changed.)
+
+**That tightening was written after these numbers were visible, and it changed the
+verdict word — stated here rather than left in a commit message, because a reader
+weighing this entry's `INCONCLUSIVE` is entitled to know when the criterion behind it was
+authored.** Against the FIRST cut of `verdictOf` (`eb4a00fe`, which ranked raw
+point-estimate segment marginals with no reference to their error bars) this same results
+file read **`DOES NOT SURVIVE AS STATED`**, a reading driven entirely by REAL's D4->D16
+segment — whose point estimate is `-0.095` inside a `±2.50` error bar, i.e. noise read as
+signal. Two things bound how much that ordering can have biased the outcome, and both are
+re-checkable from the table below rather than taken on trust: the replacement criterion
+introduces **no fitted or tunable threshold** — a segment counts when `|marginal| >` its
+own two-endpoint 99.9% error bar, and `MARGINAL_GROWTH_FACTOR` was left at the `3.0` fixed
+against the 2026-08-19 sweep and is never even reached on this data — and the change moved
+the entry from a stronger claim to a **weaker** one, withdrawing a verdict rather than
+manufacturing one. A reader who rejects that reasoning has the raw per-segment table below
+and can apply either criterion themselves.
 
 The whole ten-combination sweep (2 methods x 5 degrees x 3 forks x (5 warmup + 10
 measurement) single shots) ran in **47 s** wall clock — the 10,000-element re-seed per

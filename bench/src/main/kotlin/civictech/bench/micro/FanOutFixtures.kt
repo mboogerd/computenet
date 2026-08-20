@@ -308,7 +308,7 @@ object FanOutFixtures {
     // one 1s iteration fits — inversely proportional to the per-delta cost being measured,
     // so low-degree rows average over a source 4x-19x larger than high-degree rows (see the
     // 2026-08-19 fan-out entry's "confound" section in doc/bench/findings.md, and this
-    // file's own header). `FanOutFixedStateBenchmark` (bench/src/jmh/kotlin) holds the
+    // file's own header). `FanOutScalingBenchmark.simFixedState`/`.realFixedState` (bench/src/jmh/kotlin) holds the
     // state size FIXED by rebuilding and re-seeding to [FIXED_STATE_ELEMENTS] once per
     // INVOCATION under `Mode.SingleShotTime` — the bead's first candidate shape — so every
     // degree's single measured delta is applied against the SAME source size.
@@ -329,7 +329,7 @@ object FanOutFixtures {
 
     /**
      * The fixed source size every [FanDegree] is measured at, in
-     * `FanOutFixedStateBenchmark` — one order of magnitude below `Footprint.kt`'s
+     * `FanOutScalingBenchmark`'s `simFixedState`/`realFixedState` — one order of magnitude below `Footprint.kt`'s
      * `Scale.N1E4`, chosen for the identical reason: large enough that the confound's own
      * arithmetic (a 4x-19x swing between D1 and D256 under the ORIGINAL unseeded sweep)
      * cannot recur — the size is IDENTICAL at every degree by construction, not merely
