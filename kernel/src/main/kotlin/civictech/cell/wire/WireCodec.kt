@@ -104,9 +104,12 @@ data class WireFrame(
      * additive fields, absent (`null`) whenever signing is disabled, following
      * exactly the [routingEpoch]/[protocolId] precedent — no version bump,
      * encoding stays backward-compatible with peers that predate these fields.
-     * This task (computenet-ssa.4.1) adds the wire surface only; nothing in
-     * this module populates, signs, or verifies them yet — that is the
-     * emit-side and ingress-verification successors' work.
+     * Populated by [WireCodec.encode] when it is handed an
+     * [AnnouncementSigner] and the invocation is a [RegistryAnnounce] call
+     * (computenet-ssa.4.2), and by nothing else. Nothing in this module
+     * *verifies* them: the single ingress admission gate is the successor
+     * task's, so today a receiver reads them only through
+     * [WireCodec.decodeFrame].
      *
      * [signature] is the base64url encoding (no padding) of the raw signature
      * bytes over the canonical announcement encoding, chosen over a raw
