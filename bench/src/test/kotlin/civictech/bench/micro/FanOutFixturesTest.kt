@@ -111,7 +111,58 @@ class FanOutFixturesTest {
         FanOutFixtures.rig(FanDegree.D1, Drive.REAL).use { rig -> rig.drive shouldBe Drive.REAL }
     }
 
+    // ===================================================================================
+    // computenet-252t: preSeed / FanOutRig.seed — the mechanism the fixed-state sweep
+    // uses to hold the source's size constant across FanDegree instead of letting it
+    // drift with whatever one JMH iteration happens to fit.
+    // ===================================================================================
+
+    @Test
+    fun `preSeed brings a fresh rig to the requested element count before any measured delta`() {
+        FanOutFixtures.rig(FanDegree.D4, Drive.SIM, preSeed = SEED_COUNT).use { rig ->
+            // The pre-seed happened OFF the counted "measured deltas" — elementsAdded
+            // already reflects it before applyOneAndQuiesce is ever called.
+            rig.elementsAdded shouldBe SEED_COUNT
+            rig.collectors.forEach { it.total.get() shouldBe SEED_COUNT.toLong() }
+
+            rig.applyOneAndQuiesce()
+            rig.elementsAdded shouldBe SEED_COUNT + 1
+            rig.collectors.forEach { it.total.get() shouldBe (SEED_COUNT + 1).toLong() }
+        }
+    }
+
+    @Test
+    fun `preSeed=0, the default, leaves a rig exactly as unseeded as before`() {
+        FanOutFixtures.rig(FanDegree.D4, Drive.SIM).use { rig ->
+            rig.elementsAdded shouldBe 0
+            rig.collectors.forEach { it.total.get() shouldBe 0L }
+        }
+    }
+
+    @Test
+    fun `seed brings an already-built rig to the requested count under REAL too`() {
+        FanOutFixtures.rig(FanDegree.D1, Drive.REAL).use { rig ->
+            rig.seed(SEED_COUNT)
+            rig.elementsAdded shouldBe SEED_COUNT
+            rig.collectors.single().total.get() shouldBe SEED_COUNT.toLong()
+        }
+    }
+
+    @Test
+    fun `two rigs pre-seeded at different degrees carry the SAME state size`() {
+        // The property the fixed-state benchmark depends on, pinned directly: preSeed is
+        // not merely "a count applied somewhere" but the SAME count regardless of degree
+        // — the confound computenet-252t exists to close.
+        FanOutFixtures.rig(FanDegree.D1, Drive.SIM, preSeed = SEED_COUNT).use { small ->
+            FanOutFixtures.rig(FanDegree.D64, Drive.SIM, preSeed = SEED_COUNT).use { large ->
+                small.elementsAdded shouldBe large.elementsAdded
+            }
+        }
+    }
+
     private companion object {
+        /** Element count these preSeed guards check — small, since they check the mechanism, not a curve. */
+        const val SEED_COUNT: Int = 5
         /** Deltas applied per condition in these guards — small, since they check the instrument, not a curve. */
         const val TRIALS: Int = 3
     }
