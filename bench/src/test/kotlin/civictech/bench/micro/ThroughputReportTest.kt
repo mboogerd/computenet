@@ -953,6 +953,125 @@ class ThroughputReportTest {
     }
 
     /**
+     * `CellFootprintBenchmark` under `-prof gc`, in JMH 1.37's own shape (computenet-6zqz).
+     *
+     * Every field here was copied off a real run on this host, not invented: the primary
+     * row in `us/op`, the four secondary rows JMH contributes under `-prof gc`, the
+     * `:<metric key>` suffix that names each of them, and — the fixture's whole reason for
+     * existing — the literal `NaN` in the `Score Error` column of `gc.count` and `gc.time`,
+     * which are sums rather than means. Before [Metric], that NaN refused the ENTIRE file
+     * at [ThroughputReport.parseCsv], so no `-prof gc` sweep could be rendered at all,
+     * whatever metric the caller wanted.
+     *
+     * The `MAP_CELL N1E5` allocation row is deliberately far too dispersed
+     * (40000/500000 = 0.08 against `NOISE_FLOOR` 0.005), so the dispersion gate and the
+     * omission accounting are exercised on the secondary-metric path too and not only on
+     * the primary one.
+     */
+    private val profGcCsv = listOf(
+        """"Benchmark","Mode","Threads","Samples","Score","Score Error (99.9%)","Unit",""" +
+            """"Param: family","Param: scale"""",
+        """"civictech.bench.micro.CellFootprintBenchmark.realSnapshot","avgt",1,20,33.8,0.05,"us/op","SET_CELL","N1E3"""",
+        """"civictech.bench.micro.CellFootprintBenchmark.realSnapshot:gc.alloc.rate","avgt",1,20,7465.9,12.0,"MB/sec","SET_CELL","N1E3"""",
+        """"civictech.bench.micro.CellFootprintBenchmark.realSnapshot:gc.alloc.rate.norm","avgt",1,20,265247.39,4.15,"B/op","SET_CELL","N1E3"""",
+        """"civictech.bench.micro.CellFootprintBenchmark.realSnapshot:gc.count","avgt",1,20,35.0,NaN,"counts","SET_CELL","N1E3"""",
+        """"civictech.bench.micro.CellFootprintBenchmark.realSnapshot:gc.time","avgt",1,20,25.0,NaN,"ms","SET_CELL","N1E3"""",
+        """"civictech.bench.micro.CellFootprintBenchmark.realSnapshot","avgt",1,20,4100.0,9.0,"us/op","MAP_CELL","N1E5"""",
+        """"civictech.bench.micro.CellFootprintBenchmark.realSnapshot:gc.alloc.rate.norm","avgt",1,20,500000.0,40000.0,"B/op","MAP_CELL","N1E5"""",
+    ).joinToString("\n")
+
+    @Test
+    fun `the gc alloc metric selects its own rows and is not refused by gc count's NaN`() {
+        val rows = ThroughputReport.parseCsv(profGcCsv, Metric.GC_ALLOC_RATE_NORM)
+
+        assertEquals(2, rows.size, rows.toString())
+        assertEquals(listOf("B/op", "B/op"), rows.map { it.unit })
+        assertEquals(listOf(265247.39, 500000.0), rows.map { it.score })
+
+        // The `:gc.alloc.rate.norm` suffix is stripped, so every downstream reader — the
+        // registered label columns, the drive rule, the class name — sees the benchmark
+        // it always saw.
+        assertEquals(listOf("realSnapshot", "realSnapshot"), rows.map { it.method })
+        assertEquals("CellFootprintBenchmark", rows.first().benchmarkClass)
+        assertEquals(Drive.REAL, ThroughputReport.driveOf(rows.first()))
+        assertEquals("SET_CELL N1E3", ThroughputReport.labelOf(rows.first()))
+    }
+
+    @Test
+    fun `the default metric is still the primary score, on a prof gc file too`() {
+        // Also the regression pin for the refusal [Metric] removed: before selection
+        // existed this call threw, because gc.count's NaN error was reached while
+        // parsing rows nobody had asked for.
+        val rows = ThroughputReport.parseCsv(profGcCsv)
+
+        assertEquals(2, rows.size, rows.toString())
+        assertEquals(listOf("us/op", "us/op"), rows.map { it.unit })
+        assertEquals(listOf(33.8, 4100.0), rows.map { it.score })
+    }
+
+    @Test
+    fun `a metric the file does not hold is refused, naming the metrics it does`() {
+        // The failure this closes is the one that looks successful: a sweep run WITHOUT
+        // `-prof gc` writes a complete, parseable results file whose only metric is wall
+        // clock. Falling back to it would report us/op under a subject line promising
+        // B/op.
+        val refusal = assertThrows(ThroughputReportException::class.java) {
+            ThroughputReport.parseCsv(footprintCsv, Metric.GC_ALLOC_RATE_NORM)
+        }
+        assertTrue(refusal.message!!.contains("gc.alloc.rate.norm"), refusal.message)
+        assertTrue(refusal.message!!.contains("<primary>"), refusal.message)
+        assertTrue(refusal.message!!.contains("-prof gc"), refusal.message)
+    }
+
+    @Test
+    fun `a NaN dispersion in the SELECTED metric still refuses`() {
+        // Selection narrows WHICH rows the honesty rules apply to; it does not relax them.
+        val refusal = assertThrows(ThroughputReportException::class.java) {
+            ThroughputReport.parseCsv(profGcCsv, Metric.Secondary("gc.time"))
+        }
+        assertTrue(refusal.message!!.contains("too few"), refusal.message)
+        assertTrue(refusal.message!!.contains("gc.time"), refusal.message)
+    }
+
+    @Test
+    fun `a secondary metric key must be stated`() {
+        assertThrows(IllegalArgumentException::class.java) { Metric.Secondary("") }
+        assertThrows(IllegalArgumentException::class.java) { Metric.Secondary("  ") }
+    }
+
+    @Test
+    fun `a prof gc sweep renders its allocation entry through renderRun`(@TempDir dir: File) {
+        val results = runArtifacts(
+            dir,
+            profGcCsv,
+            log = banner("21.0.11", knobs = knobBanner(mode = "AverageTime, time/op")),
+        )
+
+        val report = ThroughputReport.renderRun(
+            results = results,
+            harnessCommitSha = "b861114d",
+            date = "2026-08-20",
+            subject = "bytes allocated per snapshot() call",
+            trigger = TriggerClaim.Cited(
+                gapId = "G-21 phase 3",
+                statement = "INCONCLUSIVE, for the fixture's sake.",
+            ),
+            metric = Metric.GC_ALLOC_RATE_NORM,
+        )
+
+        val entry = report.perDrive.single().entry!!
+        // B/op, not us/op: the entry reports the metric that was asked for, and the unit
+        // is carried per row rather than restated by the caller.
+        assertTrue(entry.contains("| SET_CELL N1E3 | 265247.39 ± 4.15 B/op |"), entry)
+        assertFalse(entry.contains("us/op"), entry)
+        assertTrue(entry.contains("Trigger: G-21 phase 3 — INCONCLUSIVE"), entry)
+
+        // The dispersion gate is on the secondary-metric path too.
+        assertEquals(listOf("MAP_CELL N1E5"), report.omissions.map { it.label })
+        assertTrue(report.text().contains("MAP_CELL N1E5 (drive=REAL)"), report.text())
+    }
+
+    /**
      * `BoundedReadBenchmark`'s shape — two `@Benchmark` methods over one `scale` — which is
      * why [RowLabel.includeMethod] exists.
      *
