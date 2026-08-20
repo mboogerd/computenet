@@ -435,7 +435,19 @@ object WsTransport {
          */
         private val replayGuard: HelloReplayGuard = replayGuardFor(side),
     ) {
-        val egress = BridgeEgressCell()
+        init {
+            // The :wire enforcement point for "RequireAuthenticated implies
+            // signed AND verified announcements" — see requireAnnouncementIdentity.
+            requireAnnouncementIdentity(side)
+        }
+
+        /**
+         * This side's announcement signer, borrowed from the `Peering.Side` so
+         * the per-peer-identity counter survives the fresh egress a reconnect
+         * mints ([DSC1-ANN-04], epic §9.3). Null on a side with no signing
+         * configuration, which encodes byte-identically to before the feature.
+         */
+        val egress = BridgeEgressCell(signer = side.announcementSigner)
 
         /**
          * The registry mirror of the *current connection instance* — minted by
@@ -1203,7 +1215,23 @@ object WsTransport {
             // the gate instead of re-installing a Remote for a ref the peer may
             // since have dropped. The peer's re-announcement below is a full
             // catch-up, so nothing it still holds is lost by that drop.
-            ingress = Peering.hostIngress(side, fromPeer = peer, fromPeerAuth = achieved)
+            // The hello-bound key, from THIS connection's PendingHello, is what
+            // the announcement gate verifies under ([DSC1-ANN-05]) — the socket
+            // half of the binding. `withVerifier` keeps the side-scoped replay
+            // ledger, so the catch-up burst after a reconnect is judged against
+            // the same per-identity high-water mark the previous connection
+            // advanced ([DSC1-ANN-12..13]).
+            val boundKey = pending?.takeIf { it.derivedId == peer }?.publicKey
+            val admission = side.announcementAdmission?.let { ledger ->
+                if (boundKey != null && peer != null) ledger.withVerifier(connectionBoundVerifier(peer, boundKey))
+                else ledger
+            }
+            ingress = Peering.hostIngress(
+                side,
+                fromPeer = peer,
+                fromPeerAuth = achieved,
+                announcementAdmission = admission,
+            )
             announcement?.close() // a re-hello (reconnect) supersedes the previous announcer
             announcement = Peering.announceTo(side, CellRef(peerMirrorRef), via = egress)
         }
