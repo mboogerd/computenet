@@ -417,7 +417,41 @@ object Peering {
          * it there ([loopbackAuthLevel], `[DSC1-WIRE-05]` principal half).
          */
         val credentials: PeerCredentials? = null,
+        /**
+         * How this side signs its outgoing announcements, or null when it does
+         * not sign at all ([DSC1-ANN-01], epic `computenet-ssa.4`). The kernel
+         * cannot manufacture one — it holds the canonical encoder, which lives
+         * in `:identity` ([DSC1-WIRE-04]) — so this is the injection point both
+         * [loopback] and (task 4) `WsTransport` supply.
+         *
+         * **Signing is active exactly when this and [credentials] are both
+         * present**, independent of [auth]. Three things settle it that way:
+         *
+         * - a side with no identity configuration has neither, so it emits
+         *   frames byte-identical to today with nothing to test around
+         *   ([DSC1-WIRE-06]);
+         * - a `PeerAuthPolicy.Open` side that *does* hold both signs. That is
+         *   the configuration `[DSC1-WIRE-05]` names — a loopback with keypairs
+         *   and no hello — and the successor's BS-02 needs both sides of such a
+         *   loopback signing;
+         * - [auth] alone cannot imply signing, because the encoder is not
+         *   something the kernel can default. Making `RequireAuthenticated`
+         *   *require* an encoder would refuse every `RequireAuthenticated` side
+         *   that predates the `:wire` wiring of task 4 — a construction-time
+         *   break in landed code, to enforce a rule that task 4 will instead
+         *   make true by construction by always supplying the encoder where it
+         *   builds an authenticating side.
+         */
+        val announcementSigning: AnnouncementSigningConfig? = null,
     ) {
+        /**
+         * This side's signer, and therefore this side's announcement counter —
+         * one per `Side`, so it survives every egress cell and every mirror
+         * this side goes through (epic §9.3). See [AnnouncementSigner].
+         */
+        val announcementSigner: AnnouncementSigner? =
+            credentials?.let { keys -> announcementSigning?.let { AnnouncementSigner(keys, it) } }
+
         init {
             // A side that demands proof from its peer must be able to answer the
             // peer's challenge in turn — the hello exchange is symmetric
@@ -662,7 +696,10 @@ object Peering {
         // changes, because a `Side`'s configuration is read once, now.
         val aToBLevel = loopbackAuthLevel(sender = a, receiver = b)
         val bToALevel = loopbackAuthLevel(sender = b, receiver = a)
-        val aToB = BridgeEgressCell().also {
+        // Each direction's egress borrows its *sending* side's signer, so a
+        // loopback with keypairs signs its announcements with no socket
+        // involved ([DSC1-WIRE-05]); a side without one is unchanged.
+        val aToB = BridgeEgressCell(signer = a.announcementSigner).also {
             it.outlet.subscribe(
                 Use.fixed(
                     hostIngress(b, fromPeer = a.peer, fromPeerAuth = aToBLevel, onSpawn = { ingressOnB = it }),
@@ -670,7 +707,7 @@ object Peering {
                 ),
             )
         }
-        val bToA = BridgeEgressCell().also {
+        val bToA = BridgeEgressCell(signer = b.announcementSigner).also {
             it.outlet.subscribe(
                 Use.fixed(
                     hostIngress(a, fromPeer = b.peer, fromPeerAuth = bToALevel, onSpawn = { ingressOnA = it }),

@@ -242,8 +242,40 @@ object WireCodec {
         useArrayPolymorphism = true // ["SerialName", value] — works for primitive args too
     }
 
+    /**
+     * The [RegistryAnnounce] contract's generated id — the one contract whose
+     * frames [encode] signs ([DSC1-ANN-01]: announcements only; data-plane
+     * deltas are explicitly out of scope, SEC1/G-54). Resolved once, lazily,
+     * because `ContractRegistry` is ServiceLoader-populated and this object
+     * initializes early. Null only if the generated descriptor is missing, in
+     * which case nothing is ever recognized as an announcement and nothing is
+     * signed — fail *closed* on the emit side, since an unsigned announcement
+     * is refused by a receiver that requires signing rather than trusted.
+     */
+    private val announceContractId: Long? by lazy {
+        ContractRegistry.descriptor(RegistryAnnounce::class.java)?.contractId
+    }
+
     /** @throws IllegalStateException when the invocation's contract has no `@Contract` ids (not wire-capable). */
-    fun encode(invocation: HostedPortInvocation): ByteArray {
+    fun encode(invocation: HostedPortInvocation): ByteArray = encode(invocation, signer = null)
+
+    /**
+     * [encode], with announcement signing ([DSC1-ANN-01, 04],
+     * [DSC1-WIRE-01..02]).
+     *
+     * When [signer] is non-null **and** the invocation is a [RegistryAnnounce]
+     * call, the four optional signing fields are populated: a fresh counter
+     * strictly greater than every counter that signer has assigned, an expiry
+     * from its injected clock, the signer's key id, and the signature over the
+     * injected canonical encoding of the announcement.
+     *
+     * Every other frame — a data-plane invocation, a `PORT_PROTOCOL` crossing,
+     * anything at all from a `signer == null` side — takes exactly the path it
+     * took before this feature and encodes to the same bytes: the four fields
+     * default to `null` and `encodeDefaults` is off, so they contribute zero
+     * bytes ([DSC1-WIRE-06]).
+     */
+    fun encode(invocation: HostedPortInvocation, signer: AnnouncementSigner?): ByteArray {
         val frame = if (invocation.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
             val id = checkNotNull(invocation.protocolId) { "PORT_PROTOCOL requires protocolId" }
             val link = invocation.protocolLink as? WireEdgeLink
@@ -270,14 +302,27 @@ object WireCodec {
             val contractId = checkNotNull(inv.contractId) {
                 "not wire-capable: '${inv.methodName}' was not captured from a @Contract interface"
             }
+            val methodId = checkNotNull(inv.methodId)
+            // Announcements only, and only from a signing side. `sign` assigns
+            // the counter, so it must be called exactly once per outgoing
+            // announcement — sign-at-send, never a cached or re-sent frame.
+            val signed = if (signer != null && contractId == announceContractId) {
+                signer.sign(contractId, methodId, invocation.cellRef, invocation.portName, inv.args)
+            } else {
+                null
+            }
             WireFrame(
                 contractId = contractId,
-                methodId = checkNotNull(inv.methodId),
+                methodId = methodId,
                 cellRef = invocation.cellRef,
                 portName = invocation.portName,
                 type = invocation.type,
                 context = inv.context,
                 args = inv.args,
+                signature = signed?.signature,
+                signerKeyId = signed?.signerKeyId,
+                sigCounter = signed?.counter,
+                notAfter = signed?.notAfter,
                 // PN-6: no longer sniff a routed command's epoch onto the frame.
                 // The epoch was decorative at the point of use — admission checks
                 // the shard's CURRENT interest, never the payload epoch (which the

@@ -27,7 +27,21 @@ import java.util.UUID
  * casing. P1: fully meaningful on the SimulationController — the generative
  * harness exercises the whole wire format without a network.
  */
-class BridgeEgressCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell, InvocationSink {
+class BridgeEgressCell(
+    override val ref: CellRef = CellRef(UUID.randomUUID()),
+    /**
+     * This side's announcement signer, or null when the side has no identity
+     * configuration ([DSC1-ANN-01], epic `computenet-ssa.4`). Borrowed, never
+     * owned: it belongs to the [Peering.Side] and outlives this cell, which is
+     * what keeps the counter strictly increasing across the egress replacement
+     * a reconnect performs (see [AnnouncementSigner]).
+     *
+     * A **trailing parameter with a default**, so every existing construction
+     * site compiles unchanged and, with no signer, encodes byte-identical
+     * frames ([DSC1-WIRE-06]).
+     */
+    private val signer: AnnouncementSigner? = null,
+) : Cell, InvocationSink {
     val outlet = registerPort("outlet", FanOutlet.create<Propagate<ByteArray>>())
 
     /** Proxies use this cell as their [InvocationSink]; every send becomes a frame. */
@@ -37,7 +51,7 @@ class BridgeEgressCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         require(args.none { it is Leased<*> }) {
             "Leased payloads must not cross machine boundaries (spec 23) — freeze or copy first"
         }
-        val frame = WireCodec.encode(invocation)
+        val frame = WireCodec.encode(invocation, signer)
         // move-by-serialize: the sender's reference dies with the encode (spec 23)
         args.forEach { (it as? Owned<*>)?.consume() }
         outlet.call.propagate(frame)
