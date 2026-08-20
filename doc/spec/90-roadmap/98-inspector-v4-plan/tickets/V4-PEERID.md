@@ -88,6 +88,10 @@ Consumers of the stamp today are the ambient `CurrentPeer`
 `PORT_MANAGEMENT -> CurrentPeer.with(hostedInvocation.peer) { … }`), and read by
 `Handshake.kt:146`, `Handshake.kt:225` and `BoundaryPolicy.kt:36-37`
 (`currentPrincipal()` → `Principal.Peer(it, AuthLevel.TransportVouched)`).
+**Historical quote** — this ticket predates DSC1 (`computenet-ssa`); the level was
+hardcoded then. `currentPrincipal()` now reads the achieved `AuthLevel` off the
+stamp (`CurrentPeer.stamp()?.let { Principal.Peer(it.id, it.auth) }`), so a
+verified hello yields `Principal.Peer(id, AuthLevel.Authenticated)`.
 
 The `PORT_API` branch (`ManagedHost.kt:770` onwards) does **not** install the
 ambient. And `PeerId` never reaches `LocationRegistry` at all:
