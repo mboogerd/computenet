@@ -2323,3 +2323,125 @@ no other file: no change under `kernel/src/main`, `concord/`, `inspect/src`,
 `bench/src/main/kotlin/civictech/bench/Dispersion.kt` is untouched (confirmed:
 `const val NOISE_FLOOR: Double = 0.005`). No entry above this one was edited,
 reordered or deleted.
+
+---
+
+## 2026-08-20 — computenet-x9e.7: the remaining three Reportable rows also fail to reproduce their classification — six of six now flip
+
+Closes out `computenet-x9e.7` ("Reportable classification is not reproducible near
+NOISE_FLOOR"). That item recorded that reviewers of `computenet-x9e.4.5` (REAL sweep)
+and `computenet-x9e.4.4` (SIM sweep) had already spot-checked three of the six rows
+either entry classified `Reportable` against `NOISE_FLOOR`, at the identical annotation
+config (`Fork(2)`, `Warmup(iterations=5, time=1s)`, `Measurement(iterations=10, time=1s)`)
+on a quiesced host, and all three flipped to `Unreportable` (the same three numbers are
+already quoted in the "REAL-drive … re-measured on the toolchain JDK" entry above):
+
+| drive | row | recorded disp. | re-measured disp. | factor |
+| --- | --- | --- | --- | --- |
+| REAL | GROUP_BY_MAX retract | 0.00480 | 0.0154 | 3.2x |
+| SIM | GROUP_BY_TOP_K retract | 0.00355 | 0.00973 | 2.7x |
+| SIM | COUNT retract | 0.00499 | 0.0404 | 8.1x |
+
+This entry re-measures the three that were not yet spot-checked, closing the count
+named in `computenet-x9e.7`'s acceptance criteria. All three are from the SIM-drive
+entry above (`computenet-x9e.4.4`): `FILTER retract`, `INTERSECT retract`,
+`GROUP_BY_SUM retract` — the two Reportable rows there not already covered plus one
+more, completing the set of five.
+
+### What was re-measured, and how
+
+Same benchmark class and drive as the entry being spot-checked
+(`civictech.bench.micro.OperatorThroughputBenchmark.sim`), one subject/direction
+combination per invocation, no `-f`/`-wi`/`-i` override — the class's own
+`@Fork(ThroughputReport.FORKS)`, `@Warmup(iterations = ThroughputReport.WARMUP_ITERATIONS,
+time = ThroughputReport.ITERATION_SECONDS)`, `@Measurement(...)` annotations resolve to
+`Fork(2)`, `Warmup(iterations=5, time=1s)`, `Measurement(iterations=10, time=1s)`,
+identical to the original sweep and to the three earlier spot-checks. Commands, exactly:
+
+```
+./gradlew :bench:jmhJar
+/Users/MerlijnB/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar 'OperatorThroughputBenchmark.sim' \
+     -p subject=FILTER -p direction=RETRACT -rf csv -rff /abs/path/spot-FILTER.csv
+/Users/MerlijnB/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar 'OperatorThroughputBenchmark.sim' \
+     -p subject=INTERSECT -p direction=RETRACT -rf csv -rff /abs/path/spot-INTERSECT.csv
+/Users/MerlijnB/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar 'OperatorThroughputBenchmark.sim' \
+     -p subject=GROUP_BY_SUM -p direction=RETRACT -rf csv -rff /abs/path/spot-GROUP_BY_SUM.csv
+```
+
+The Gradle toolchain JDK 21 (Eclipse Adoptium/Temurin 21.0.11) was invoked by absolute
+path, as every sweep in this file does. Host quiesced — no concurrent Gradle build, test
+suite, or other benchmark; these three runs were the only active workload on the machine,
+run back to back 2026-08-20T10:20:16Z–2026-08-20T10:21:49Z (91s total, ~30s per row: 2
+forks x (5+10) x 1s of iteration time plus per-fork JVM/JMH startup — far cheaper than a
+full 36-row sweep because only one subject/direction combination runs per invocation).
+JMH's own summary lines, quoted verbatim:
+
+```
+OperatorThroughputBenchmark.sim  RETRACT  FILTER        thrpt  20  882413.204 ± 47815.046  ops/s
+OperatorThroughputBenchmark.sim  RETRACT  INTERSECT     thrpt  20  352408.438 ±  2455.016  ops/s
+OperatorThroughputBenchmark.sim  RETRACT  GROUP_BY_SUM  thrpt  20  761122.007 ± 15338.452  ops/s
+```
+
+### Result: all three flipped too
+
+| drive | row | recorded disp. | re-measured disp. | factor | recorded score | re-measured score | score delta |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| SIM | FILTER retract | 0.00449 | 0.05419 | 12.1x | 831943.320342 | 882413.204 | +6.07% |
+| SIM | INTERSECT retract | 0.00425 | 0.00697 | 1.6x | 352771.551032 | 352408.438 | -0.10% |
+| SIM | GROUP_BY_SUM retract | 0.00403 | 0.02015 | 5.0x | 761118.948691 | 761122.007 | +0.00% |
+
+All three re-measured above `NOISE_FLOOR` (0.005): each would have classified
+`Unreportable` and been excluded, had this spot check been the recorded run — the same
+outcome as the three checked earlier. Combined, **all six of the six Reportable rows
+recorded across both merged entries (one REAL, five SIM) have now been spot-checked at
+the identical annotation config, and all six flipped to Unreportable on re-measurement.**
+Zero of six reproduced their original classification.
+
+The absolute scores again reproduce well — within 6.07% at worst (`FILTER retract`) and
+within 0.10% at best (`GROUP_BY_SUM retract`), the same pattern as every re-measurement
+already in this file (REAL within ~1%, SIM within ~6%). This is, exactly as
+`computenet-x9e.7` itself frames it, a dispersion-stability finding and **not** a
+wrong-number, fabrication, or transcription finding: the SCORES are stable across
+re-measurement; the DISPERSIONS, for rows near the floor, are not.
+
+### Consequence, stated at the strength this supports and no further
+
+At the annotation config, Reportable/Unreportable classification is not reproducible for
+rows near `NOISE_FLOOR`. Read together with all six spot-checks now on record, and with
+the independent REAL-drive re-measurement on the toolchain JDK above (`computenet-am2h`,
+which separately found 0 of 36 REAL rows Reportable, including the one row the original
+REAL entry reported), the "1 of 36" (REAL) and "5 of 36" (SIM) counts in the two original
+2026-08-18 entries should be read as **upper bounds** on how many rows would survive
+re-measurement, not as a set of rows that would. This entry does not claim the true count
+is exactly zero: six flips out of six checked is consistent with zero, not proof of it —
+no row at this boundary has yet been re-measured and found to hold its classification.
+
+### What was NOT done, and why
+
+- **The annotation config was not widened.** `[BEN1-25]` forbids raising forks or
+  iterations to manufacture reportability, and this entry's point is that the config
+  classifies unreliably at this boundary at its documented setting — not that a wider
+  config would classify better. Every re-measurement above used the unmodified
+  `Fork(2)`/`Warmup(5,1s)`/`Measurement(10,1s)` annotations.
+- **`NOISE_FLOOR` was not touched or re-derived.** Confirmed unchanged in
+  `bench/src/main/kotlin/civictech/bench/Dispersion.kt`: `const val NOISE_FLOOR: Double =
+  0.005`.
+- **No re-measurement of the remaining 66 (of 72) originally-Unreportable rows was
+  attempted.** Only the six rows either original entry classified `Reportable` are in
+  scope for this finding; the Unreportable rows are not this item's question.
+- **No allocator or GC profiler was attached** (no `-Xlog:gc`, no JFR) to any of the three
+  runs above, consistent with every other entry in this file — the cause of the
+  dispersion instability itself remains unprofiled, only its existence and extent are
+  established here.
+
+### Scope confirmation
+
+The diff for this entry is exactly `doc/bench/findings.md`. `git diff --name-only
+<merge-base of feature/computenet-x9e.7> HEAD` names no other file: no change under
+`kernel/src/main`, `concord/`, `inspect/src`, `wire/src`, `demo/`, or `bench/src/main`,
+`bench/src/jmh`, `bench/src/test`. The annotation config was not widened; `NOISE_FLOOR`
+in `bench/src/main/kotlin/civictech/bench/Dispersion.kt` is untouched (confirmed above).
+No entry above this one was edited, reordered, or deleted.
