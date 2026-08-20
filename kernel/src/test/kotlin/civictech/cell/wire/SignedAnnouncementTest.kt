@@ -64,12 +64,24 @@ import java.util.concurrent.CopyOnWriteArrayList
  * Each rejection asserts the distinguishing [DenialReason] on a `DeadLetter`,
  * **zero `LocationRegistry` change** (see [Rig.registrySnapshot] — a snapshot of
  * locations *and* topology, not merely "no dead letter was absent"), and the
- * monotonic rejected-announcement counter moving by exactly one. The registry
- * clause is the one most easily satisfied vacuously; it is mutation-checked —
- * deleting the `return` after `announcementSink.deny(...)` in
- * [BridgeIngressCell] (so a refused announcement is denied *and then*
- * delivered) leaves every dead-letter and counter assertion green and turns
- * every registry assertion in this file red.
+ * monotonic rejected-announcement counter moving by exactly one.
+ *
+ * The registry clause is the one most easily satisfied vacuously, so it is
+ * **mutation-checked, and here is what was measured** rather than what would be
+ * convenient. Deleting the `return` after `announcementSink.deny(...)` in
+ * [BridgeIngressCell] — so a refused announcement is denied *and then delivered
+ * anyway* — compiles, and turns BS-04, BS-05, BS-07 and BS-08 red at exactly
+ * the `registrySnapshot() shouldBe before` line while every dead-letter,
+ * reason and counter assertion in the file stays green. So the registry clause
+ * is not implied by the dead-letter clause; it is carrying its own weight.
+ *
+ * BS-06 stays **green** under that mutation, and the reason is worth knowing
+ * rather than papering over: re-applying a byte-identical `published(ref)` is
+ * idempotent in [LocationRegistry], so a delivered replay leaves the snapshot
+ * where it already was. BS-06's registry assertion therefore pins "no
+ * double-apply and no regression", which is what its clause actually says — it
+ * is not, and cannot be, a check that the delivery was suppressed. The
+ * suppression is pinned by the other four.
  */
 class SignedAnnouncementTest {
 
@@ -489,10 +501,12 @@ class SignedAnnouncementTest {
      * accepted on a connection bound to B. So the refusal is about the
      * connection, not about the frame.
      *
-     * Mutation-checked: deleting the `mintingPeer != boundPeer` branch in
-     * [AnnouncementAdmission] compiles and leaves the frame *accepted* here —
-     * the registry gains the ref and no denial is recorded — so this test is
-     * the thing that fails, and the reason assertion is what fails first.
+     * Mutation-checked, measured: deleting the `mintingPeer != boundPeer`
+     * branch in [AnnouncementAdmission] compiles, and the frame is then
+     * *accepted* here — B's signature verifies under B's key, which the
+     * receiver knows — so no denial is recorded at all. Two tests go red and no
+     * others: this one, and the secrecy test below, which uses an ID_MISMATCH
+     * refusal as the dead letter it inspects.
      */
     @Test
     fun `BS-08 a validly signed announcement minted by B on A's connection is ID_MISMATCH`() {
@@ -526,10 +540,18 @@ class SignedAnnouncementTest {
      * `WsTransport.Session` does per socket open and `Peering.Loopback.heal`
      * per heal), and the replay is still caught.
      *
-     * Mutation-checked: turning `Peering.Side.announcementAdmission` into a
-     * computed `get()` — one ledger per read, i.e. per ingress — compiles, and
-     * turns exactly this test red while every other case in this file stays
-     * green.
+     * Mutation-checked, measured: turning `Peering.Side.announcementAdmission`
+     * into a computed `get()` — a fresh ledger per read, i.e. per ingress —
+     * compiles and turns this test red, along with 7 of the other 8 cases. The
+     * kill is deliberately reported as blunt rather than dressed up as
+     * surgical: every assertion in this file that reads
+     * `side.announcementAdmission` for a counter also gets a fresh object under
+     * that mutation, so the breadth is an artifact of the read, not extra
+     * evidence. What *this* case contributes over the rest is the only thing
+     * that survives a narrower mutation: the ingress cell is genuinely replaced
+     * between the two feeds ([Rig.ingressCells] asserts a new cell exists), so
+     * a ledger that lived on the ingress would lose the high-water mark exactly
+     * where a reconnect does.
      */
     @Test
     fun `replay state survives ingress replacement on reconnect`() {
@@ -549,6 +571,47 @@ class SignedAnnouncementTest {
         // and the fresh ingress accounts on its own boundary sink, which is why
         // the side-scoped counter above is the one that spans a reconnect
         rig.ingressCells.single().boundaryDenials["announcement-admission"]!!.denialCount shouldBe 1L
+    }
+
+    // ============================ computenet-l8y5's boundary, pinned not solved
+
+    /**
+     * **Not this task's fix — this task's measurement.** `computenet-l8y5` asks
+     * for an ill-formed announcement *encoding* to be distinguishable from a
+     * forged signature. Today it is not, and this pins exactly how it is not, so
+     * that item starts from measured behaviour and so its fix shows up here as a
+     * failing assertion rather than as silence.
+     *
+     * The mechanism: `civictech.identity.announce.canonicalBytes` **refuses** a
+     * `portName` carrying an unpaired surrogate (`computenet-9qgg`) rather than
+     * letting UTF-8 substitute `?` and collide two announcements;
+     * `Ed25519SignatureVerifier` is total and maps that throw to `verify=false`;
+     * and this gate reads `false` as [DenialReason.BAD_SIGNATURE]. So an
+     * announcement that is *unencodable* and one that is *forged* arrive at an
+     * operator as the same word.
+     *
+     * The port name is injected by rewriting the encoded frame's JSON, which is
+     * how it reaches a receiver in the first place: the kernel wire codec decodes
+     * a JSON-escaped lone `\ud800` straight into [WireFrame.portName]
+     * (`:identity`'s `WirePortNameSurrogateReachabilityTest` measures that), so
+     * this is remote input, not a synthetic value.
+     */
+    @Test
+    fun `an unencodable announcement is BAD_SIGNATURE today — computenet-l8y5's residue, measured`() {
+        val rig = Rig(boundPeer = peerB)
+        val frame = Sender(Keys(identityB)).publish(rig.mirror.ref)
+        val illFormed = frame.decodeToString()
+            .replace("\"portName\":\"inlet\"", "\"portName\":\"\\ud800\"")
+        illFormed shouldNotBe frame.decodeToString()
+        WireCodec.decodeFrame(illFormed.toByteArray()).frame.portName shouldBe "\uD800"
+
+        val before = rig.registrySnapshot()
+        rig.feed(illFormed.toByteArray())
+
+        // the residue, in one line: unencodable reads as forged
+        rig.lastDenial().reason shouldBe DenialReason.BAD_SIGNATURE
+        rig.registrySnapshot() shouldBe before
+        rig.rejected shouldBe 1L
     }
 
     // ================================================================ secrecy
