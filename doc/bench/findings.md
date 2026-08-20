@@ -2345,8 +2345,8 @@ already quoted in the "REAL-drive … re-measured on the toolchain JDK" entry ab
 This entry re-measures the three that were not yet spot-checked, closing the count
 named in `computenet-x9e.7`'s acceptance criteria. All three are from the SIM-drive
 entry above (`computenet-x9e.4.4`): `FILTER retract`, `INTERSECT retract`,
-`GROUP_BY_SUM retract` — the two Reportable rows there not already covered plus one
-more, completing the set of five.
+`GROUP_BY_SUM retract` — the three Reportable rows there not already covered,
+completing that entry's set of five.
 
 ### What was re-measured, and how
 
@@ -2418,6 +2418,16 @@ REAL entry reported), the "1 of 36" (REAL) and "5 of 36" (SIM) counts in the two
 re-measurement, not as a set of rows that would. This entry does not claim the true count
 is exactly zero: six flips out of six checked is consistent with zero, not proof of it —
 no row at this boundary has yet been re-measured and found to hold its classification.
+
+Two limits on how far the `factor` column can be read. First, each factor is a single
+sample of the very quantity this entry shows to be unstable, so it characterises one pair
+of runs and not the row: within this entry's own data `FILTER retract` moves 12.1x while
+`INTERSECT retract` moves 1.6x, and a third measurement of either would land somewhere
+else again. Only the *direction* of the move — from at-or-under the floor to above it — is
+the finding; the magnitudes are not properties of the rows. Second, `INTERSECT retract` is
+the marginal case of the six: at 0.00697 it sits 1.4x `NOISE_FLOOR`, close enough that it
+would be the first of the six to fall back under the floor on another run, and it should
+not be read as carrying the weight of the 12.1x and 8.1x rows.
 
 ### What was NOT done, and why
 
