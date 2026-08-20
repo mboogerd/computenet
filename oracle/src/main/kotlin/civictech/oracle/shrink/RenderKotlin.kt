@@ -1,0 +1,168 @@
+package civictech.oracle.shrink
+
+import civictech.oracle.gen.CaseScript
+import civictech.oracle.gen.CaseStep
+import civictech.oracle.gen.CaseTopology
+import civictech.oracle.gen.GeneratedCase
+import civictech.oracle.gen.TerminalSpec
+import civictech.oracle.gen.TopologyNode
+import civictech.oracle.model.ScriptEvent
+import civictech.oracle.model.SourceId
+import civictech.oracle.model.WriterId
+import civictech.oracle.run.RunOutcome
+
+/**
+ * The rendering [Counterexample.renderKotlin] delegates to — `[ORA1-SHRINK-04]`.
+ *
+ * ## Render from [CaseTopology] + [CaseScript], never [GeneratedCase.spec]
+ *
+ * A [GeneratedCase.spec] is a `civictech.cell.graph.GraphSpec`, and its `SpawnStep`s carry
+ * `CellFactory` lambdas — opaque at runtime, not printable as source. [CaseTopology] names
+ * every node by its `civictech.oracle.bind.OperatorCatalog` id instead, which a lookup turns
+ * back into a factory, so this file walks [CaseTopology] and [CaseScript] only and re-lowers
+ * with `civictech.oracle.gen.GraphGenerator.lower` — the identical call every [Shrinker]
+ * candidate re-lowers through, so a pasted-and-run snippet builds the same spec the shrink
+ * itself last executed.
+ *
+ * ## No runtime state
+ *
+ * Every value emitted below — the seed, every [TopologyNode]/[TerminalSpec] field, every
+ * [CaseStep] — is a literal already held by the counterexample's [GeneratedCase]. Nothing is
+ * captured from the failing sweep: no live `civictech.testkit.SimWorld`, no reference closure,
+ * no catalog snapshot. A caller-substituted `civictech.oracle.run.Reference` (the seam a test
+ * uses to manufacture a failure without touching the kernel) is exactly such runtime state — it
+ * is arbitrary Kotlin the shrink was merely handed, not data [GeneratedCase] carries — so the
+ * rendered replay always asserts against the catalog-resolved reference
+ * (`DifferentialRunner.run(case)`, no `reference` argument), which is also the shape a *real*
+ * kernel-vs-model disagreement takes.
+ *
+ * ## `check`, not a test-framework assertion
+ *
+ * The emitted replay uses the Kotlin standard library's `check(...)`, so the snippet depends on
+ * nothing beyond Kotlin itself and the `civictech.oracle` types it names — no JUnit, no kotest.
+ */
+internal fun renderCounterexample(counterexample: Counterexample): String {
+    val case = counterexample.case
+    val kind = counterexample.outcome::class.simpleName
+        ?: error("Counterexample.outcome's runtime class has no simpleName: ${counterexample.outcome}")
+    check(counterexample.outcome != RunOutcome.Success) {
+        "renderKotlin() was called on a Counterexample whose outcome is Success; Shrinker.run " +
+            "never returns one, so there is nothing to render a replay assertion for."
+    }
+    val terminal = failureTerminal(counterexample.outcome)
+
+    return buildString {
+        appendLine("// Rendered by Counterexample.renderKotlin() (ORA1-SHRINK-04).")
+        appendLine("// Rebuilt from CaseTopology + CaseScript via catalog ids; the lowered GraphSpec is")
+        appendLine("// re-derived by GraphGenerator.lower, never printed — see RenderKotlin.kt's KDoc.")
+        appendLine("val seed = ${case.seed}L")
+        appendLine()
+        appendLine("val topology = civictech.oracle.gen.CaseTopology(")
+        appendLine("    nodes = listOf(")
+        case.topology.nodes.forEach { node -> appendLine("        ${renderNode(node)},") }
+        appendLine("    ),")
+        appendLine("    terminals = listOf(")
+        case.topology.terminals.forEach { terminalSpec -> appendLine("        ${renderTerminal(terminalSpec)},") }
+        appendLine("    ),")
+        appendLine("    placement = mapOf(")
+        case.topology.placement.forEach { (handle, host) -> appendLine("        ${literal(handle)} to $host,") }
+        appendLine("    ),")
+        appendLine(")")
+        appendLine()
+        appendLine("val script = civictech.oracle.gen.CaseScript(")
+        appendLine("    steps = listOf(")
+        case.script.steps.forEach { step -> appendLine("        ${renderStep(step)},") }
+        appendLine("    ),")
+        appendLine(")")
+        appendLine()
+        appendLine("val case = civictech.oracle.gen.GeneratedCase(")
+        appendLine("    seed = seed,")
+        appendLine("    topology = topology,")
+        appendLine("    spec = civictech.oracle.gen.GraphGenerator.lower(topology),")
+        appendLine("    script = script,")
+        appendLine("    removeAudit = civictech.oracle.shrink.Shrinker.auditFor(script),")
+        appendLine(")")
+        appendLine()
+        appendLine("val outcome = civictech.oracle.run.DifferentialRunner.run(case)")
+        val terminalCheck = if (terminal == null) "" else " && outcome.terminal == ${literal(terminal)}"
+        appendLine("check(outcome is civictech.oracle.run.RunOutcome.$kind$terminalCheck) {")
+        val terminalDescription = if (terminal == null) "" else " on '$terminal'"
+        appendLine("    \"expected $kind$terminalDescription, got \$outcome\"")
+        append("}")
+    }
+}
+
+/** The terminal [outcome] was reported on, or `null` for a variant that names none. */
+private fun failureTerminal(outcome: RunOutcome): String? = when (outcome) {
+    is RunOutcome.Mismatch -> outcome.terminal
+    is RunOutcome.WavePrefixViolation -> outcome.terminal
+    else -> null
+}
+
+private fun renderNode(node: TopologyNode): String {
+    val source = node.source?.let { "civictech.oracle.model.SourceId(${literal(it.id)})" } ?: "null"
+    val inputs = node.inputs.joinToString(", ") { literal(it) }
+    return "civictech.oracle.gen.TopologyNode(" +
+        "handle = ${literal(node.handle)}, " +
+        "catalogId = ${literal(node.catalogId)}, " +
+        "inputs = listOf($inputs), " +
+        "source = $source)"
+}
+
+private fun renderTerminal(terminal: TerminalSpec): String =
+    "civictech.oracle.gen.TerminalSpec(" +
+        "name = ${literal(terminal.name)}, " +
+        "handle = ${literal(terminal.handle)}, " +
+        "late = ${terminal.late})"
+
+private fun renderStep(step: CaseStep): String = when (step) {
+    is CaseStep.Op -> "civictech.oracle.gen.CaseStep.Op(${renderSourceId(step.source)}, ${renderEvent(step.event)})"
+    CaseStep.Barrier -> "civictech.oracle.gen.CaseStep.Barrier"
+}
+
+private fun renderSourceId(id: SourceId): String = "civictech.oracle.model.SourceId(${literal(id.id)})"
+
+private fun renderWriterId(id: WriterId): String = "civictech.oracle.model.WriterId(${literal(id.id)})"
+
+private fun renderEvent(event: ScriptEvent): String = when (event) {
+    is ScriptEvent.Add ->
+        "civictech.oracle.model.ScriptEvent.Add(${renderWriterId(event.writer)}, ${literal(event.element)})"
+
+    is ScriptEvent.Remove ->
+        "civictech.oracle.model.ScriptEvent.Remove(${renderWriterId(event.writer)}, ${literal(event.element)})"
+
+    is ScriptEvent.Observe ->
+        "civictech.oracle.model.ScriptEvent.Observe(${renderWriterId(event.writer)})"
+
+    is ScriptEvent.Put ->
+        "civictech.oracle.model.ScriptEvent.Put(${renderWriterId(event.writer)}, ${literal(event.key)}, " +
+            "${literal(event.element)})"
+
+    is ScriptEvent.RemoveKey ->
+        "civictech.oracle.model.ScriptEvent.RemoveKey(${renderWriterId(event.writer)}, ${literal(event.key)})"
+
+    is ScriptEvent.Increment ->
+        "civictech.oracle.model.ScriptEvent.Increment(${renderWriterId(event.writer)}, ${event.amount}L)"
+
+    is ScriptEvent.Decrement ->
+        "civictech.oracle.model.ScriptEvent.Decrement(${renderWriterId(event.writer)}, ${event.amount}L)"
+}
+
+/**
+ * A Kotlin literal for [value]. [civictech.oracle.gen.ElementDomains] only ever produces
+ * `String` elements/keys and `Long` amounts, so those two plus `Int`/`Boolean`/`null` — the
+ * shapes a hand-built [GeneratedCase] might reasonably use too — cover every payload this
+ * renderer is expected to see. An unrecognized payload type fails loudly, naming the type,
+ * rather than silently emitting something that does not compile.
+ */
+internal fun literal(value: Any?): String = when (value) {
+    null -> "null"
+    is String -> "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+    is Long -> "${value}L"
+    is Int -> value.toString()
+    is Boolean -> value.toString()
+    else -> error(
+        "renderKotlin cannot render a literal of type ${value::class}: $value — extend " +
+            "RenderKotlin.kt's literal() when a new element/key domain type is introduced.",
+    )
+}

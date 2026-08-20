@@ -125,6 +125,20 @@ data class Counterexample(
 ) {
     /** [case]'s own size, for comparison against [originalSize]. */
     val size: CaseSize get() = CaseSize.of(case)
+
+    /**
+     * Renders this counterexample as pasteable, standalone Kotlin (`[ORA1-SHRINK-04]`) — the
+     * seed as a literal, [case]'s topology and script rebuilt through catalog ids, and a replay
+     * through `civictech.oracle.run.DifferentialRunner.run` that asserts the same [outcome]
+     * kind on the same terminal. See [renderCounterexample] (`RenderKotlin.kt`) for the
+     * rendering itself and the reasoning behind it — why [case]'s `spec` is never printed, and
+     * why the emitted snippet carries no state from the run that produced this counterexample.
+     *
+     * @throws IllegalStateException if [outcome] is [RunOutcome.Success] — [Shrinker.run] never
+     *   returns a passing case as a counterexample, so this is a guard against a value nothing
+     *   here can construct through the intended path, not an expected caller error.
+     */
+    fun renderKotlin(): String = renderCounterexample(this)
 }
 
 /**
