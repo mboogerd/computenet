@@ -109,8 +109,10 @@ private fun simpleClassOf(benchmark: String): String =
  *   constants, so those entries stay re-derivable only while this stays expressible.
  * @param includeMethod whether the `@Benchmark` method's own name prefixes the label.
  *   Needed when one class's methods share a parameter set — `BoundedReadBenchmark` measures
- *   `direct` and `hostedSnapshotOf` over the same three `scale`s, so `scale` alone names
- *   six rows with three names.
+ *   `realDirect` and `realHostedSnapshotOf` over the same three `scale`s, so `scale` alone
+ *   names six rows with three names. (Those two were called `direct` and
+ *   `hostedSnapshotOf` until computenet-7w4e, which is the name the already-published E1
+ *   entries in `doc/bench/findings.md` carry.)
  */
 data class RowLabel(
     val params: List<String>,
@@ -179,13 +181,46 @@ data class RowLabel(
          * which is the documented route for a sweep whose rows are not a parameter cross
          * product.
          *
-         * Registration is not on its own sufficient to render a sweep: `BoundedReadBenchmark`'s
-         * `direct`/`hostedSnapshotOf` name no [Drive], so [ThroughputReport.driveOf] still
-         * refuses its rows (`[BEN1-26]`) until those methods say which regime they measure,
-         * and `BoundedReadBenchmark`/`CellFootprintBenchmark` print no host-facts banner, so
-         * [HostFacts.fromJmhLog] still refuses their logs (computenet-yhbd). Both are
-         * benchmark-side gaps in `bench/src/jmh/kotlin`, and both are refusals rather than
-         * wrong entries.
+         * Registration is not on its own sufficient to render a sweep, and this is where
+         * the rest is named. THREE things have to hold, of which a registration here is
+         * only the first:
+         *
+         * 1. **The label columns are declared** — registered here, or passed as an
+         *    explicit [RowLabel] at the call site. [forBenchmark] REFUSES an unregistered
+         *    class rather than guessing which columns name a row (`[BEN1-30]`).
+         * 2. **The benchmark prints a host-facts banner** from inside the measuring fork,
+         *    from a `@Setup(Level.Trial)` hook. [HostFacts.fromJmhLog] is the only source
+         *    `RunEnvironment.forRun`'s JMH-sweep overload accepts, and it refuses a log
+         *    that carries no such line rather than answering with the RENDERING host
+         *    (computenet-yhbd).
+         * 3. **Each `@Benchmark` method names its regime.** [ThroughputReport.driveOf]
+         *    tokenizes the method name and requires exactly one `sim`/`real` token,
+         *    because a result must never lose the drive that produced it (`[BEN1-26]`,
+         *    `[BEN1-27]`); stating the drive at the render site instead is the exact
+         *    substitution those requirements exist to prevent.
+         *
+         * As of computenet-7w4e all four classes registered below satisfy all three: it
+         * added the `@Setup(Level.Trial)` banner hook to `CellFootprintBenchmark` and to
+         * both of `BoundedReadBenchmark`'s state classes, and renamed the latter's methods
+         * to `realDirect`/`realHostedSnapshotOf` (from `direct`/`hostedSnapshotOf`, which
+         * is the name the already-published E1 entries in `doc/bench/findings.md` carry).
+         * That is a fact about those four classes and NOT a property of this type — a
+         * benchmark added tomorrow that is registered here and does neither of (2) nor (3)
+         * still renders nothing, and should. `ThroughputReportTest` pins (2) and (3)
+         * against the sources under `bench/src/jmh/kotlin` for every benchmark, present
+         * and future, so that failure lands at `:bench:test` speed rather than after a JMH
+         * sweep has been paid for.
+         *
+         * A FOURTH obstacle is still open, and none of the three closes it: this renderer
+         * parses the primary `Score` column, so a benchmark whose answer is a JMH
+         * SECONDARY metric cannot be rendered at all. `CellFootprintBenchmark` under
+         * `-prof gc` is the live case — its `gc.alloc.rate.norm` figures are read by hand
+         * off stdout, deliberately. That is a renderer gap, tracked as `computenet-6zqz`
+         * and not closed here; the same class's plain time-per-`snapshot()` sweep, run
+         * without `-prof gc`, renders normally.
+         *
+         * Every failure named above is a REFUSAL rather than a wrong entry, which is what
+         * makes it safe to leave each standing until it is closed.
          */
         val REGISTERED: Map<String, RowLabel> = mapOf(
             "OperatorThroughputBenchmark" to SUBJECT_DIRECTION,

@@ -298,6 +298,18 @@ class ReferenceModelPurityTest {
         val flatMapNode =
             ModelNode.Operator(NodeId("flatMapSet"), catalogOperator(CoreOperators.Ids.FLAT_MAP_SET), plainLeftNode.id)
         val mapSetNode = ModelNode.Operator(NodeId("mapSet"), catalogOperator(CoreOperators.Ids.MAP_SET), plainLeftNode.id)
+
+        /*
+         * `keyBy` — the pair-shaped bootstrap (computenet-4ru.16). Wired over a plain-scalar
+         * source rather than over `pairLeft`, because that is the edge it exists to create: it
+         * is what takes a `SetOf(Scalar)` stream into the pair domain the join-set and
+         * `groupBy*` family consume. The pair sources above stay as they are — this test's
+         * subject is model purity across the whole vocabulary, not topology realism, and
+         * rerouting the eleven pair-shaped nodes through `keyBy` would change what they are
+         * evaluated on for no gain here. `PairShapeBootstrapTest` is where the real generated
+         * wiring is checked.
+         */
+        val keyByNode = ModelNode.Operator(NodeId("keyBy"), catalogOperator(CoreOperators.Ids.KEY_BY), plainLeftNode.id)
         val countNode = ModelNode.Operator(NodeId("count"), catalogOperator(CoreOperators.Ids.COUNT), filterNode.id)
         val unionNode = ModelNode.Operator(
             NodeId("union"),
@@ -359,7 +371,7 @@ class ReferenceModelPurityTest {
         )
 
         val operatorNodes = listOf(
-            filterNode, flatMapNode, mapSetNode, countNode, unionNode, presenceNode, quorumNode,
+            filterNode, flatMapNode, mapSetNode, keyByNode, countNode, unionNode, presenceNode, quorumNode,
             intersectNode, joinSetNode, semiJoinNode, antiJoinNode, joinNode, combineLatestNode, lookupJoinNode,
             groupByGlobalNode,
         ) + groupByNodes

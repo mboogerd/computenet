@@ -1,5 +1,6 @@
 package civictech.bench.micro
 
+import civictech.bench.HostFacts
 import org.openjdk.jmh.annotations.Benchmark
 import org.openjdk.jmh.annotations.BenchmarkMode
 import org.openjdk.jmh.annotations.Fork
@@ -23,8 +24,12 @@ import java.util.concurrent.TimeUnit
  * The original E1 (`doc/spec/90-roadmap/98-inspector-v4-plan/30-bounded-read-measurement.md`
  * §3) timed two things: `Stateful.snapshot()` called directly on an unhosted cell, and
  * `ManagedHost.snapshotOf(ref).get()` end to end (submit + dequeue + copy + future
- * completion) on a real threaded host. [direct] and [hostedSnapshotOf] are those two, and
- * the split is the load-bearing part — §3's reading is that "`snapshotOf()`'s end-to-end
+ * completion) on a real threaded host. [realDirect] and [realHostedSnapshotOf] are those
+ * two — named `direct` and `hostedSnapshotOf` until computenet-7w4e, which is the name the
+ * already-published E1 entries in `doc/bench/findings.md` carry, so a reader arriving from
+ * one of those entries knows which method it means. See [realDirect] for why the drive has
+ * to be in the name at all. The
+ * split is the load-bearing part — §3's reading is that "`snapshotOf()`'s end-to-end
  * cost is not meaningfully larger than the bare `snapshot()` call it wraps", which is a
  * claim about the *difference* between these two numbers and cannot be re-derived from
  * either alone.
@@ -81,14 +86,24 @@ import java.util.concurrent.TimeUnit
  *
  * The `tee` is not optional if the results are going to become a findings entry: JMH's CSV
  * carries no JVM columns, so `civictech.bench.MeasuringJvm.fromJmhLog` reads the measuring
- * JVM off the banner in that log and refuses without it (computenet-hqid).
+ * JVM off the banner in that log and refuses without it (computenet-hqid) — and
+ * `civictech.bench.HostFacts.fromJmhLog` reads [DirectState.announceHost]/
+ * [HostedState.announceHost]'s CPU/core/OS banner off that very same log, refusing
+ * likewise (computenet-yhbd, wired into this class by computenet-7w4e).
  *
- * A single-combination smoke run, to prove the harness measures at all:
+ * A single-combination smoke run, to prove the harness measures at all — **on the same
+ * pinned JDK, for the reason the paragraph above gives**:
  *
  * ```
- * java -jar bench/build/libs/bench-jmh.jar 'BoundedReadBenchmark.direct' \
+ * ~/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java \
+ *      -jar bench/build/libs/bench-jmh.jar 'BoundedReadBenchmark.realDirect' \
  *      -p scale=N1E3 -f 1 -wi 1 -i 1 -rf csv -rff /tmp/e1-smoke.csv
  * ```
+ *
+ * `-i 1` leaves the written CSV's error column literally `NaN`, which
+ * `ThroughputReport.parseCsv` refuses outright — so a smoke run can prove the harness
+ * measures and can never become a findings row, the same asymmetry
+ * `FanOutScalingBenchmark` documents.
  *
  * The JMH knobs below come from `BoundedReadFixtures`' `E1_*` constants for the reason
  * `OperatorThroughputBenchmark` gives for the same indirection: a renderer recording the
@@ -135,6 +150,39 @@ open class BoundedReadBenchmark {
     @State(Scope.Thread)
     open class DirectState {
 
+        /**
+         * Prints this fork's host facts to stdout once per trial — the same mechanism
+         * `OperatorThroughputBenchmark.GraphState.announceHost` and
+         * `FanOutScalingBenchmark.RigState.announceHost` use, for the identical reason
+         * (computenet-yhbd, closed here for this class by computenet-7w4e):
+         * `civictech.bench.HostFacts.fromJmhLog` is the ONLY source
+         * `RunEnvironment.forRun`'s JMH-sweep overload accepts, it reads these lines off
+         * the tee'd run log, and it refuses — `HostFactsUnknownException` — rather than
+         * falling back to the rendering process's own host. Without this hook every log
+         * this class produced was refused, which is why the E1 entry in
+         * `doc/bench/findings.md` was rendered through a throwaway driver.
+         *
+         * `Level.Trial` runs INSIDE the measuring fork, before warmup, which is what
+         * makes the line trustworthy: the renderer runs in a different, later process,
+         * possibly on a different machine, and no JMH artifact otherwise records which
+         * host measured.
+         *
+         * **[HostedState] carries its own copy of this hook, deliberately.** The two
+         * subjects are unrelated `@State` classes, and JMH runs `Level.Trial` setup only
+         * for the states a given `@Benchmark` method actually takes — so a sweep narrowed
+         * to `BoundedReadBenchmark.realHostedSnapshotOf` would produce a log with no
+         * banner at all if only this class announced. The duplication is what makes
+         * either method independently renderable.
+         */
+        @Setup(Level.Trial)
+        fun announceHost() {
+            // The leading newline is load-bearing — see OperatorThroughputBenchmark's
+            // identical comment for the measured reason (JMH writes its progress prefix
+            // with no trailing newline and relays this fork's stdout onto that line).
+            println()
+            HostFacts.captureCurrent().bannerLines().forEach(::println)
+        }
+
         @Param
         @JvmField
         var scale: SetScale = SetScale.N1E3
@@ -165,6 +213,17 @@ open class BoundedReadBenchmark {
     @State(Scope.Thread)
     open class HostedState {
 
+        /**
+         * This fork's host facts — see [DirectState.announceHost] for the mechanism, the
+         * refusal it unblocks, and why each of the two `@State` classes in this file
+         * carries its own copy rather than sharing one.
+         */
+        @Setup(Level.Trial)
+        fun announceHost() {
+            println()
+            HostFacts.captureCurrent().bannerLines().forEach(::println)
+        }
+
         @Param
         @JvmField
         var scale: SetScale = SetScale.N1E3
@@ -188,19 +247,46 @@ open class BoundedReadBenchmark {
     /**
      * E1's direct column: `Stateful.snapshot()` on an unhosted `SetCell`.
      *
+     * **Renamed from `direct` by computenet-7w4e** — entries already in
+     * `doc/bench/findings.md` labelled `E1 direct <scale>` were measured under the old
+     * name and are left standing as the history they are; this is the method they name.
+     *
+     * The `real` prefix is not decoration: `ThroughputReport.driveOf` tokenizes a method
+     * name and requires exactly one `sim`/`real` token, so `direct` was REFUSED outright
+     * (`[BEN1-26]`/`[BEN1-27]` — a result must never lose the regime that produced it) and
+     * the E1 entry had to be rendered through a throwaway driver that STATED the drive
+     * instead, which is the substitution those requirements exist to prevent in shipped
+     * code.
+     *
+     * `real` is the honest answer even though this subject is UNHOSTED. There is no drive
+     * here at all — no scheduler, no host queue, no `SimulationController` and no
+     * `SimWorld` anywhere in `BoundedReadFixtures`, whose own header records "Real host,
+     * never a simulation … There is deliberately no SIM variant". [Drive][civictech.bench.Drive]
+     * distinguishes a measurement taken under simulated time from one taken on real
+     * hardware, and an unhosted direct call is the latter; `CellFootprintBenchmark`'s
+     * `realSnapshot` names its likewise-unhosted subject `real` for exactly this reason.
+     *
      * The returned state is consumed through the blackhole so the copy cannot be
      * eliminated — a `snapshot()` whose result is dropped is exactly the shape a JIT is
      * entitled to remove, and the number that would produce is not a measurement of
      * anything.
      */
     @Benchmark
-    fun direct(state: DirectState, blackhole: Blackhole) {
+    fun realDirect(state: DirectState, blackhole: Blackhole) {
         blackhole.consume(state.copy())
     }
 
-    /** E1's end-to-end column: `ManagedHost.snapshotOf(ref).get()` on a real threaded host. */
+    /**
+     * E1's end-to-end column: `ManagedHost.snapshotOf(ref).get()` on a real threaded host.
+     *
+     * **Renamed from `hostedSnapshotOf` by computenet-7w4e**, for the reason
+     * [realDirect]'s KDoc gives — entries already in `doc/bench/findings.md` labelled
+     * `E1 hostedSnapshotOf <scale>` were measured under the old name and stay as
+     * history; this is the method they name. Here the `real` token is literal as well as
+     * required: the subject runs on a `ManagedHost`/`VirtualThreadScheduler`.
+     */
     @Benchmark
-    fun hostedSnapshotOf(state: HostedState, blackhole: Blackhole) {
+    fun realHostedSnapshotOf(state: HostedState, blackhole: Blackhole) {
         blackhole.consume(state.copy())
     }
 }

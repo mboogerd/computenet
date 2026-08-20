@@ -247,6 +247,131 @@ class BoundedReadFixturesTest {
     }
 
     // ---------------------------------------------------------------------------------
+    // PagedWalkOutcome's per-page series accessors [computenet-wsz4].
+    //
+    // These four are pure arithmetic over `pageLatenciesMs`, and E3's attribution of a
+    // live-traffic stall to a page POSITION is built entirely on them — so a silent
+    // off-by-one here would not fail anything, it would publish a finding naming the wrong
+    // end of the walk. `BoundedReadProbeTest` self-checks them per trial, but it is
+    // @Tag("bench") and never runs by default; these cases are the default-suite guard.
+    //
+    // Hand-built outcomes rather than real walks, deliberately: the question is the
+    // arithmetic, and a real walk cannot produce a chosen tie or a two-page series on
+    // demand. Exact Double equality throughout, because every expectation below is a
+    // literal the accessors SELECT rather than compute — an epsilon here would hide
+    // exactly the substitutions these cases exist to catch.
+    // ---------------------------------------------------------------------------------
+
+    @Test
+    fun `the per-page series names which page was the worst, 1-based, including the close`() {
+        // A walk whose LAST page is the worst — the closing frontier's O(n) pass, which
+        // three probe runs on 2026-08-20 showed is as often the maximum as the open is.
+        // Telling those two apart is the whole point of the position, so a case whose
+        // answer is not 1 is the load-bearing one.
+        val walk = walkOf(1.0, 5.0, 20.0)
+
+        walk.maxSinglePageMs shouldBe 20.0
+        walk.maxSinglePagePosition shouldBe 3
+        walk.firstPageMs shouldBe 1.0
+        walk.lastPageMs shouldBe 20.0
+        // Interior = every page but the first and the last, so one page here — and NOT
+        // the 20.0 a series-wide median or a missing `dropLast` would report.
+        walk.interiorMedianPageMs shouldBe 5.0
+
+        // The position must INDEX the series, which is the invariant a 0-based slip
+        // breaks while every magnitude asserted above still agrees.
+        positionIndexesTheMax(walk)
+    }
+
+    @Test
+    fun `a walk of fewer than three pages has no interior, and says so rather than inventing one`() {
+        // One page: the open and the close are the same page, and there is no interior to
+        // read the endpoints against. `0.0` would be a claim that the interior is free.
+        val single = walkOf(7.5)
+        single.maxSinglePagePosition shouldBe 1
+        single.firstPageMs shouldBe 7.5
+        single.lastPageMs shouldBe 7.5
+        single.interiorMedianPageMs shouldBe null
+        positionIndexesTheMax(single)
+
+        // Two pages: both are endpoints, still no interior. Asymmetric values, so a first
+        // reported as last (or the reverse) cannot pass.
+        val pair = walkOf(1.0, 9.0)
+        pair.maxSinglePagePosition shouldBe 2
+        pair.firstPageMs shouldBe 1.0
+        pair.lastPageMs shouldBe 9.0
+        pair.interiorMedianPageMs shouldBe null
+        positionIndexesTheMax(pair)
+
+        // No pages at all is not reachable through `pagedWalk` (it appends a latency
+        // before it can break), but PagedWalkOutcome is a public data class and a caller
+        // can construct one. Position 0 says "no page", which is not page 1.
+        val empty = walkOf()
+        empty.maxSinglePagePosition shouldBe 0
+        empty.firstPageMs shouldBe null
+        empty.lastPageMs shouldBe null
+        empty.interiorMedianPageMs shouldBe null
+    }
+
+    @Test
+    fun `a tie for the worst page resolves to the earliest position`() {
+        // Two pages of identical cost: reporting the later one would attribute an open's
+        // cost to a mid-walk page. Documented as earliest-wins, so it is asserted.
+        val tied = walkOf(4.0, 4.0, 1.0)
+        tied.maxSinglePageMs shouldBe 4.0
+        tied.maxSinglePagePosition shouldBe 1
+        tied.interiorMedianPageMs shouldBe 4.0
+        positionIndexesTheMax(tied)
+    }
+
+    @Test
+    fun `the interior median takes the upper median of an even interior, as TrialStats does`() {
+        // Interior [1.0, 2.0]: the upper median is 2.0. Averaging the two middles (1.5) is
+        // the other defensible convention and is NOT the one PagedWalkOutcome documents —
+        // it matches TrialStats.median so the two medians one probe line prints agree.
+        val walk = walkOf(0.5, 1.0, 2.0, 0.25)
+        walk.interiorMedianPageMs shouldBe 2.0
+        walk.maxSinglePagePosition shouldBe 3
+        walk.firstPageMs shouldBe 0.5
+        walk.lastPageMs shouldBe 0.25
+        positionIndexesTheMax(walk)
+
+        // The convention this pins, stated as the equality it rests on.
+        TrialStats(listOf(1.0, 2.0)).median shouldBe 2.0
+    }
+
+    // ---------------------------------------------------------------------------------
+
+    /**
+     * A `PagedWalkOutcome` carrying exactly [latencies] — the fields the series accessors
+     * never read are set consistently rather than arbitrarily, so no case here depends on
+     * an inconsistent fixture.
+     */
+    private fun walkOf(vararg latencies: Double) = PagedWalkOutcome(
+        pages = latencies.size,
+        entries = latencies.size * BoundedReadFixtures.PAGE_LIMIT,
+        pageLatenciesMs = latencies.toList(),
+        frontierStable = false,
+        caveats = setOf(ReadCaveat.STALE_FRONTIER),
+    )
+
+    /**
+     * The invariant that makes a position an attribution: it is 1-based, and it indexes the
+     * page whose latency is the reported maximum. A 0-based position satisfies every
+     * magnitude assertion in these tests and fails this one.
+     */
+    private fun positionIndexesTheMax(walk: PagedWalkOutcome) {
+        val position = walk.maxSinglePagePosition
+        assertTrue(
+            position in 1..walk.pages,
+            "position $position is not a 1-based page of a ${walk.pages}-page walk",
+        )
+        assertEquals(
+            walk.maxSinglePageMs,
+            walk.pageLatenciesMs[position - 1],
+            "position $position must index the reported max page (${walk.maxSinglePageMs} ms)",
+        )
+    }
 
     /** `SetCell.snapshot()` returns a map of `adds`/`dels`/`counter`; this is its add side. */
     private fun addsOf(snapshot: Any): Map<*, *> {

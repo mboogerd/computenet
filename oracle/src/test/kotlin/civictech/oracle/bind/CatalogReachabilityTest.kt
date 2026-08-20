@@ -46,19 +46,27 @@ import org.junit.jupiter.api.Test
  * family — but a future registration could separate them, in which case the global closure is
  * the looser of the two and still an upper bound.
  *
- * ## Why the unreachable set is non-empty, and what changes it
+ * ## Why the unreachable set is empty, and what would refill it
  *
- * Every entry in [blockedOnPairSet] wants `SetOf(Tuple(2))` on at least one port, and **no
- * registered entry produces that shape without already consuming it** — the set family is
- * `SetOf(Scalar)`, the map family is `MapOf(Scalar, Scalar)`, and the three pair-set joins
- * that do emit pairs are the same three that need them. Nothing bootstraps a pair-shaped
- * stream from an arity-0 source, so the whole pair family is cut off from the roots. That is
- * computenet-4ru.16's finding, and closing it (by registering a pair-producing entry) is
- * computenet-4ru.16's work, deliberately not this test's.
+ * It was not always. Every entry in [pairShapedConsumers] wants `SetOf(Tuple(2))` on at least
+ * one port, and until computenet-4ru.16 **no registered entry produced that shape without
+ * already consuming it** — the set family is `SetOf(Scalar)`, the map family is
+ * `MapOf(Scalar, Scalar)`, and the three pair-set joins that do emit pairs are the same three
+ * that need them. Nothing bootstrapped a pair-shaped stream from an arity-0 source, so the
+ * whole pair family — eleven of the twenty-eight registrations — was cut off from the roots.
+ * That was computenet-4ru.16's finding; `keyBy`, the `SetOf(Scalar)` -> `SetOf(Tuple(2))`
+ * relabelling registered in [CoreOperators], is the bootstrap that closed it.
  *
- * **When computenet-4ru.16 lands, this test goes red — that is the design.** Update the two
- * pinned sets in the same change, deliberately, having read what moved. A silent widening or
- * narrowing of what the sweep can emit is exactly what this test exists to make impossible.
+ * So the pin today is that **every** registered entry is reachable. The eleven are kept named
+ * in [pairShapedConsumers] rather than deleted, and
+ * `unregistering the pair-shaped bootstrap re-blocks exactly the eleven entries it unblocked`
+ * below removes `keyBy` from the catalog and checks that precisely those eleven fall back out
+ * of the closure — which is what keeps this file a computation over the registrations rather
+ * than a list of names that happens to match one.
+ *
+ * A reachable set that shrinks is the regression this file exists to catch: it means an entry
+ * has silently left the emittable vocabulary. Update the pins deliberately, having read what
+ * moved.
  */
 class CatalogReachabilityTest {
 
@@ -76,34 +84,21 @@ class CatalogReachabilityTest {
     // --- the pins ---------------------------------------------------------
 
     /**
-     * Every entry a shape-typed generation can emit today: the five sources, plus the eleven
-     * operators whose ports the set/scalar/map closure fills.
+     * Every entry a shape-typed generation can emit today: all twenty-eight of them. The
+     * pair-shaped eleven joined the set when `keyBy` bootstrapped `SetOf(Tuple(2))` from the
+     * set family (computenet-4ru.16); before that they were the pinned unreachable set this
+     * file was written to record.
      */
-    private val reachablePin: Set<String> = setOf(
-        CoreOperators.Ids.SET,
-        CoreOperators.Ids.KEYED_SET,
-        CoreOperators.Ids.MAP,
-        CoreOperators.Ids.COUNTER,
-        CoreOperators.Ids.PN_COUNTER,
-        CoreOperators.Ids.FILTER,
-        CoreOperators.Ids.FLAT_MAP_SET,
-        CoreOperators.Ids.MAP_SET,
-        CoreOperators.Ids.COUNT,
-        CoreOperators.Ids.UNION,
-        CoreOperators.Ids.PRESENCE_COUNT,
-        CoreOperators.Ids.QUORUM_SET,
-        CoreOperators.Ids.INTERSECT,
-        CoreOperators.Ids.JOIN,
-        CoreOperators.Ids.COMBINE_LATEST,
-        CoreOperators.Ids.LOOKUP_JOIN,
-    )
+    private val reachablePin: Set<String> = CoreOperators.Ids.ALL.toSet()
 
     /**
-     * The eleven entries no generated case can reach: the three pair-set joins, the seven
-     * `GroupByCell` aggregates, and `groupByGlobal`. All eleven consume `SetOf(Tuple(2))`,
-     * which nothing produces (computenet-4ru.16).
+     * The eleven entries that consume `SetOf(Tuple(2))`: the three pair-set joins, the seven
+     * `GroupByCell` aggregates, and `groupByGlobal`. All eleven are reachable now; they are
+     * named here because they are exactly the set `keyBy` unblocked, and
+     * `unregistering the pair-shaped bootstrap re-blocks exactly the eleven entries it unblocked`
+     * below re-derives that fact from the catalog rather than trusting this list.
      */
-    private val blockedOnPairSet: Set<String> = setOf(
+    private val pairShapedConsumers: Set<String> = setOf(
         CoreOperators.Ids.JOIN_SET,
         CoreOperators.Ids.SEMI_JOIN,
         CoreOperators.Ids.ANTI_JOIN,
@@ -118,19 +113,20 @@ class CatalogReachabilityTest {
      *
      * They are nonetheless in [reachablePin]: an arity-0 entry has no ports to fill, so the
      * closure rule calls it reachable unconditionally. The two facts are different questions
-     * and are pinned separately rather than folded together.
+     * and are pinned separately rather than folded together. This one is computenet-gff7's,
+     * still open — pinned here, not fixed.
      */
     private val sourcesNoOperatorConsumes: Set<String> = setOf(
         CoreOperators.Ids.COUNTER,
         CoreOperators.Ids.PN_COUNTER,
     )
 
-    private val whyBlocked =
-        "The unreachable set is non-empty because nothing registered bootstraps SetOf(Tuple(2)) from an arity-0 source; " +
-            "see computenet-4ru.16. If that bead's pair-producing bootstrap entry has just " +
-            "landed, this failure is expected — update both pinned sets in that same change, " +
-            "deliberately. Otherwise a catalog or shape change has silently moved what the " +
-            "sweep can emit, which is what this test exists to catch."
+    private val whyPinned =
+        "The reachable set is the whole catalog because `keyBy` bootstraps SetOf(Tuple(2)) from " +
+            "the set family (computenet-4ru.16). An entry appearing in the unreachable set means " +
+            "something has silently left the emittable vocabulary — most likely a shape change, " +
+            "or `keyBy` being unregistered or reshaped. A new id in neither pin is simply a new " +
+            "registration: add it to the pin deliberately, having read which side it lands on."
 
     @Test
     fun `the reachable and unreachable entry sets are exactly the pinned ones`() {
@@ -138,41 +134,40 @@ class CatalogReachabilityTest {
         val reachable = reachableIds(entries)
         val unreachable = entries.map { it.id }.toSet() - reachable
 
-        withClue(whyBlocked) {
+        withClue(whyPinned) {
             reachable shouldBe reachablePin
-            unreachable shouldBe blockedOnPairSet
+            unreachable.shouldBeEmpty()
         }
         withClue("the two sets partition the catalog") {
             (reachable + unreachable) shouldBe entries.map { it.id }.toSet()
             (reachable intersect unreachable).shouldBeEmpty()
-            unreachable.size shouldBe 11
+            reachable.size shouldBe entries.size
         }
     }
 
     @Test
-    fun `every unreachable entry is blocked on SetOf(Tuple(2)), which nothing bootstraps`() {
+    fun `exactly one registered entry produces SetOf(Tuple(2)) without consuming it`() {
         val entries = OperatorCatalog.all()
         val pairSet = ElementShape.SetOf(ElementShape.Tuple(2))
 
-        withClue("each unreachable entry wants $pairSet on at least one port") {
-            blockedOnPairSet.filterNot { id ->
+        withClue("each pair-shaped consumer wants $pairSet on at least one port") {
+            pairShapedConsumers.filterNot { id ->
                 pairSet in OperatorCatalog.entry(id)!!.shape.inputs
             }.shouldBeEmpty()
         }
-        // The mechanism is a bootstrap failure, not an absence: `joinSet`, `semiJoin` and
-        // `antiJoin` DO emit SetOf(Tuple(2)) — they each consume it as well, so the shape can
-        // only ever be produced by something that already has it. What is missing is an entry
-        // that produces it WITHOUT consuming it; computenet-4ru.16 option (a) is exactly that
-        // entry. Asserting "nothing emits the shape" instead would be false today (it failed
-        // on `joinSet` when this test was written) and would keep passing after a pair-shaped
-        // operator that still could not bootstrap was registered.
-        withClue("no registered entry produces $pairSet without already consuming it") {
+        // The hole computenet-4ru.16 closed was a bootstrap failure, not an absence: `joinSet`,
+        // `semiJoin` and `antiJoin` always DID emit SetOf(Tuple(2)) — they each consume it as
+        // well, so the shape could only ever be produced by something that already had it. What
+        // was missing was an entry producing it WITHOUT consuming it, and `keyBy` is exactly
+        // that entry. Asserting "something emits the shape" instead would have been true before
+        // the fix too, and would stay true if `keyBy` were reshaped back into a pair-consumer.
+        withClue("the bootstrap: entries producing $pairSet without already consuming it") {
             entries.filter { it.shape.output == pairSet && pairSet !in it.shape.inputs }
-                .map { it.id }
-                .shouldBeEmpty()
+                .map { it.id } shouldBe listOf(CoreOperators.Ids.KEY_BY)
         }
-        withClue("the entries that do emit $pairSet are exactly the three pair-set joins") {
+        withClue("the entries that emit $pairSet are the bootstrap plus the three pair-set joins") {
             entries.filter { it.shape.output == pairSet }.map { it.id }.toSet() shouldBe setOf(
+                CoreOperators.Ids.KEY_BY,
                 CoreOperators.Ids.JOIN_SET,
                 CoreOperators.Ids.SEMI_JOIN,
                 CoreOperators.Ids.ANTI_JOIN,
@@ -181,11 +176,28 @@ class CatalogReachabilityTest {
     }
 
     @Test
-    fun `a pair-producing source would make exactly the blocked entries reachable`() {
-        // The instrument's own check: the closure is not a constant dressed up as a
-        // computation. Registering one synthetic SetOf(Tuple(2)) source must move all eleven —
-        // and nothing else — across the line. This is the shape computenet-4ru.16 option (a)
-        // will take, rehearsed here without touching the real catalog.
+    fun `unregistering the pair-shaped bootstrap re-blocks exactly the eleven entries it unblocked`() {
+        // The instrument's own check, and the historical record in executable form: the closure
+        // is not a constant dressed up as a computation. Dropping the one entry that produces
+        // SetOf(Tuple(2)) without consuming it must move all eleven pair-shaped consumers — and
+        // nothing else — back across the line, reproducing the catalog computenet-4ru.16 found.
+        OperatorCatalog.unregister(CoreOperators.Ids.KEY_BY) shouldBe true
+        val entries = OperatorCatalog.all()
+        val reachable = reachableIds(entries)
+        val unreachable = entries.map { it.id }.toSet() - reachable
+
+        withClue("without `keyBy`, the pair family is cut off from every root again") {
+            unreachable shouldBe pairShapedConsumers
+            unreachable.size shouldBe 11
+            reachable shouldBe reachablePin - pairShapedConsumers - CoreOperators.Ids.KEY_BY
+        }
+    }
+
+    @Test
+    fun `a pair-producing source would keep every entry reachable`() {
+        // The other direction: `keyBy` is not privileged as a *unary* entry. Any registration
+        // emitting SetOf(Tuple(2)) from nothing keeps the same closure, which is the sense in
+        // which [ORA1-API-03]'s seam is about shapes and not about ids.
         val fakeId = "syntheticPairSetSource"
         OperatorCatalog.register(
             id = fakeId,
@@ -195,7 +207,7 @@ class CatalogReachabilityTest {
         )
         try {
             val reachable = reachableIds(OperatorCatalog.all())
-            reachable shouldBe reachablePin + blockedOnPairSet + fakeId
+            reachable shouldBe reachablePin + fakeId
         } finally {
             OperatorCatalog.unregister(fakeId)
         }
@@ -213,8 +225,8 @@ class CatalogReachabilityTest {
         withClue(
             "counter/pnCounter emit bare Scalar, which no registered operator consumes, so " +
                 "Builder.chooseRootShape can never root a case at them. This is a second, " +
-                "independent coverage hole from the SetOf(Tuple(2)) one; it is pinned, not " +
-                "fixed, here — a catalog change is out of computenet-6xhh's scope.",
+                "independent coverage hole from the SetOf(Tuple(2)) one computenet-4ru.16 " +
+                "closed; it is computenet-gff7's, and is pinned here, not fixed.",
         ) {
             unconsumableSources shouldBe sourcesNoOperatorConsumes
         }

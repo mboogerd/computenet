@@ -175,6 +175,30 @@ enum class DenialReason {
      * kind and this reason exists to record it.
      */
     MALFORMED_HELLO,
+
+    /**
+     * Seam 1 announcement: the announcement's `notAfter` is in the past
+     * relative to the *receiver's* clock, less that receiver's configured skew
+     * allowance (DSC1, `[DSC1-ANN-07]`;
+     * `civictech.cell.wire.AnnouncementVerification`).
+     *
+     * **The record names the clock that refused** (epic §9.6), in
+     * [BoundaryDenial.detail]: expiry is the one reason in this taxonomy whose
+     * verdict depends on state the *peer cannot see*, so "expired" without
+     * whose-now is unactionable — a clock this side is running slow produces
+     * exactly the same refusal as a genuinely stale frame, and only the named
+     * clock separates them. Nothing here detects skew
+     * (`civictech.cell.wire.DEFAULT_ANNOUNCEMENT_SKEW_MILLIS` states that
+     * limit); the allowance is a configured constant (`[DSC1-NV-03]`).
+     *
+     * Distinct from [REPLAY], which they are easily confused with because both
+     * refuse an announcement that "arrived too late": [REPLAY] means this side
+     * has already accepted an announcement at least as new from that identity,
+     * and is a *statement about this receiver's history*. This one means the
+     * signer itself declared the announcement stale, and holds even for a
+     * counter this side has never seen.
+     */
+    EXPIRED,
 }
 
 /**
