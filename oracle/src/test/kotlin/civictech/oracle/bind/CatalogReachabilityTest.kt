@@ -126,7 +126,7 @@ class CatalogReachabilityTest {
     )
 
     private val whyBlocked =
-        "The unreachable set is non-empty because nothing registered produces SetOf(Tuple(2)); " +
+        "The unreachable set is non-empty because nothing registered bootstraps SetOf(Tuple(2)) from an arity-0 source; " +
             "see computenet-4ru.16. If that bead's pair-producing bootstrap entry has just " +
             "landed, this failure is expected — update both pinned sets in that same change, " +
             "deliberately. Otherwise a catalog or shape change has silently moved what the " +
