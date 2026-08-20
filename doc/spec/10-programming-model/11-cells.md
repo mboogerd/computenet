@@ -12,7 +12,12 @@ A **Cell** is the unit of state, computation, and identity:
 - a locus of logic and incremental computation;
 - a participant in the graph via explicit, named ports;
 - conceptually single-threaded: state transitions are serializable (in the
-  ordering sense) and, per P9, serializable (in the encoding sense).
+  ordering sense) and, per P9, serializable (in the encoding sense). This is a
+  statement about *invocations* — mutation and computation, which its host's
+  single consumer serializes (30/31). A synchronous read taken by an off-host
+  observer is not an invocation: it is answered from an immutable snapshot the
+  cell published at the end of its last effective pass, so it neither joins the
+  transition order nor perturbs it (30/31 §The read plane).
 
 External mutation of a cell's state is **impossible except via its ports**.
 
