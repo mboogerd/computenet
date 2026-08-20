@@ -477,9 +477,11 @@ class ArrivalCollectorCell(override val ref: CellRef = CellRef(UUID.randomUUID()
  *   earlier value — the t factor is 31.599 against the normal's 3.291, nearly 10x, so a
  *   normal approximation would report an interval an order of magnitude too tight and
  *   `civictech.bench.classify` would call a noisy result `Reportable`. At the five trials
- *   `TRIALS` now defaults to the factor is 6.869, roughly 2x — smaller, and still the
- *   difference between a stated interval and an understated one. Being conservative here
- *   is the whole reason the choice is spelled out.
+ *   `TRIALS` now defaults to, the factor is 8.610 — the table is indexed by df and df is
+ *   `n-1`, so five samples read `T_999[4]` and not `T_999[5]`'s 6.869 — roughly 2.6x the
+ *   normal quantile: smaller than the three-trial factor, and still the difference
+ *   between a stated interval and an understated one. Being conservative here is the
+ *   whole reason the choice is spelled out.
  * - **A low-trial probe result is therefore expected to classify `Unreportable`**, and
  *   that is the honest outcome, not a harness fault. Widening `NOISE_FLOOR` is never the
  *   answer — but for THIS probe's statistic neither is raising the trial count, and that
