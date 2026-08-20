@@ -1780,8 +1780,13 @@ BS-12 buildable is the **Resolves** bullet at the end of this entry.
     (`SetCell.deltaInlet`/`applyRemote`, spec 40/42), and a generated case builds one. The full
     reasoning is recorded in `civictech.oracle.run.WavePrefixOracle`'s KDoc, next to the numbers.
 
-- **What was measured** (Darwin arm64, 2026-08-20). The first two bullets are **pinned as
-  tests** in `WavePrefixTest`, not quoted from a session. The third — the `Membership.observes`
+- **What was measured** (Darwin arm64, 2026-08-20). The first two bullets rest on **tests** in
+  `WavePrefixTest`, not on a session transcript — with one qualification: those tests assert the
+  *shape* (the three-event case diverges with a single-writer control that does not; some
+  two-writer seed carries a kernel-effective, model-inert remove and no single-writer seed
+  does), while the exact counts below are recorded in KDoc rather than asserted, deliberately,
+  so that a generator change moves the numbers without reddening a test. The third — the
+  `Membership.observes`
   mutation — is a **one-off run recorded in `civictech.oracle.run.WavePrefixOracle`'s KDoc**
   next to the numbers, reverted and never committed, as an exhaustiveness mutation necessarily
   is: it is evidence a reader has to take from that record, not a test that re-runs.
