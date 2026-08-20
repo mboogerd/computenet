@@ -10,6 +10,7 @@ import civictech.cell.Leased
 import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.port.FanInlet
+import civictech.cell.link.AuthLevel
 import civictech.cell.link.PeerId
 import civictech.cell.port.FanOutlet
 import civictech.cell.protocol.ProtocolId
@@ -63,6 +64,27 @@ class BridgeIngressCell(
     override val ref: CellRef = CellRef(UUID.randomUUID()),
     /** Transport identity of the peer this ingress receives from (M8.2); stamps every delivery. */
     private val peer: PeerId? = null,
+    /**
+     * How strongly [peer] is vouched for on *this connection* (DSC1
+     * `[DSC1-HELLO-05]`): stamped onto every delivery beside [peer], so a cell
+     * reading `civictech.cell.membrane.currentPrincipal()` observes
+     * `Principal.Peer(peer, peerAuth)`.
+     *
+     * **Bound once, by the caller, at the admission decision** — never derived
+     * from a frame. `Peering.hostIngress` is the only production constructor
+     * of this cell, and both of its callers fix the value before the ingress
+     * exists: `WsTransport.Session.bindAndAnnounce` passes the level its
+     * admission row decided, and `Peering.loopback` passes the level its two
+     * `Side` configurations imply. That is what makes the happens-before on
+     * `RegistryMirrorCell.peer` hold for the level too (`[DSC1-HELLO-13]`): no
+     * delivery can observe a level that later changes, because this field is a
+     * `val` fixed before the first frame can arrive.
+     *
+     * Defaults to [AuthLevel.TransportVouched] — today's behaviour, byte for
+     * byte, for every caller that does not mention authentication
+     * (`[DSC1-WIRE-06]`).
+     */
+    private val peerAuth: AuthLevel = AuthLevel.TransportVouched,
     /**
      * Boundary admission (M8.3, spec 43 mechanism 2): allowlists are bridge
      * configuration, not a protocol fork. A refused frame is refused before
@@ -118,9 +140,9 @@ class BridgeIngressCell(
                 val decoded = WireCodec.decode(value)
                 val withPeer = if (decoded.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
                     val edge = decoded.protocolLink as WireEdgeLink
-                    decoded.copy(protocolLink = edge.withBridge(replySink, protocolCapabilities), peer = peer)
+                    decoded.copy(protocolLink = edge.withBridge(replySink, protocolCapabilities), peer = peer, peerAuth = peerAuth)
                 } else {
-                    decoded.copy(peer = peer)
+                    decoded.copy(peer = peer, peerAuth = peerAuth)
                 }
                 deliverTo.deliver(withPeer)
             }
