@@ -8,14 +8,18 @@ import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.DenialReason
 import civictech.cell.Frozen
+import civictech.cell.Leased
 import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.link.PeerId
+import civictech.cell.port.Port
+import civictech.cell.port.PortDelegateProvider
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.input
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
+import civictech.cell.proxy.Proxy
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -47,6 +51,28 @@ class LifecycleAndDeadLetterTest {
             deactivations++
         }
     }
+
+    /**
+     * computenet-weo8: a port that is registered but is not a [Use], so
+     * `HostRoutingApi.route`'s `as? Use<*>` cast fails on it — the third
+     * route-failure kind. No kernel port type is Port-but-not-Use today (every
+     * one of them implements [Use]), so the only way to reach that branch is a
+     * bare [Port] like this one; it exists to cover a defensive branch, not to
+     * model anything a graph builds.
+     */
+    class NotUsablePort(override val ref: PortRef = PortRef.generate()) : Port
+
+    class NotUsablePortCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        @Suppress("unused")
+        val plain by PortDelegateProvider { NotUsablePort() }
+    }
+
+    /** An exclusive-carrying api, so a route's [Invocation] holds real `Owned`/`Leased` args. */
+    interface ExclusiveConsumer {
+        fun accept(owned: Owned<String>, leased: Leased<String>)
+    }
+
+    private val accept = ExclusiveConsumer::class.java.methods.find { it.name == "accept" }
 
     private fun collectDeadLetters(host: ManagedHost): MutableList<DeadLetter> {
         val letters = mutableListOf<DeadLetter>()
@@ -182,10 +208,14 @@ class LifecycleAndDeadLetterTest {
      * than folklore; if `route` is ever changed to carry an invocation, the
      * first half goes red and points the changer here.
      *
-     * The second half also records the exclusive consequence: the `Owned`
-     * handed to `route` is dropped **undischarged** (still takeable), while
-     * the one that reaches the capture path is frozen. That asymmetry is
-     * reported, not blessed — see the bead.
+     * The second half records the exclusive consequence, and computenet-weo8
+     * flipped it: the `Owned` handed to a *failing* `route` is now
+     * **discharged** (consumed — no longer takeable) at the route fault site
+     * itself, while the one that reaches the capture path is frozen by
+     * `sanitizeForDeadLetter`. Two different mechanisms, both satisfying
+     * AGENTS.md's no-silent-drop invariant; only the second one leaves a
+     * per-argument record on the dead letter, which is exactly what the first
+     * half of this test still pins.
      */
     @Test
     fun `a route-driven dead letter carries no invocation, so per-argument capture is unreachable through it`() {
@@ -204,8 +234,10 @@ class LifecycleAndDeadLetterTest {
         // the pin: no invocation reached the dead letter, so there is no
         // per-argument capture on this record to assert anything about
         letters[0].invocation shouldBe null
-        // and consequently nothing sanitized the argument — it is still live
-        viaRoute.take() shouldBe "via-route"
+        // ...and consequently nothing SANITIZED the argument. computenet-weo8:
+        // it is nonetheless discharged — consumed explicitly at the route fault
+        // site, not frozen into a capture — so it is no longer takeable.
+        assertThrows<IllegalStateException> { viaRoute.take() }
 
         // the instrument that does exercise the capture path
         val viaIntake = Owned("via-intake")
@@ -222,6 +254,85 @@ class LifecycleAndDeadLetterTest {
         letters.size shouldBe 2
         val captured = letters[1].invocation.shouldNotBeNull()
         captured.invocation.args.single().shouldBeInstanceOf<Frozen<*>>()
+    }
+
+    /**
+     * computenet-weo8 — the three route-failure kinds, each with an exclusive
+     * argument. `HostRoutingApi.route` can fail in exactly three ways before
+     * the target inlet is ever reached: the cell is unknown, the named port is
+     * unknown, or the named port exists but is not a [Use]. All three throw out
+     * of the routing handler into [ManagedHost]'s private `enqueue` fault
+     * catch, whose `deadLetter(e, …)` carries no `HostedPortInvocation` — so
+     * `DeadLetters.sanitizeForDeadLetter` never runs and cannot be what
+     * discharges the caller's `Owned`/`Leased`. AGENTS.md's core invariant
+     * ("no failure, suppression, shadow, park, or dead-letter path may silently
+     * drop an exclusive payload") therefore has to be satisfied at the route
+     * fault site itself, by explicit consume/release — which is what these
+     * assert, one per kind.
+     */
+    private fun assertRouteFailureDischarges(
+        spawn: (ManagedHost) -> Unit = {},
+        target: (ManagedHost) -> CellRef,
+        portName: String,
+        expectedMessage: String,
+    ) {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+        spawn(host)
+
+        val owned = Owned("exclusive")
+        var releasedTo: String? = null
+        val leased = Leased("leased") { releasedTo = it }
+        val doubleDischargesBefore = Proxy.doubleDischarges
+
+        host.routerInlet.call.route(
+            target(host),
+            portName,
+            Invocation.of(accept, arrayOf(owned, leased)),
+        )
+        controller.runToIdle()
+
+        letters.size shouldBe 1
+        letters[0].cause!!.message shouldContain expectedMessage
+
+        // the invariant: the caller's exclusives are discharged, not dropped live
+        assertThrows<IllegalStateException> { owned.take() }
+        releasedTo shouldBe "leased"
+        // discharged exactly once — the route fault site must not double-discharge
+        Proxy.doubleDischarges shouldBe doubleDischargesBefore
+    }
+
+    @Test
+    fun `a route to an unknown cell discharges the exclusive arguments`() {
+        assertRouteFailureDischarges(
+            target = { CellRef(UUID.randomUUID()) },
+            portName = "inlet",
+            expectedMessage = "Target cell not found",
+        )
+    }
+
+    @Test
+    fun `a route to an unknown port discharges the exclusive arguments`() {
+        val cell = TrackingCell()
+        assertRouteFailureDischarges(
+            spawn = { it.managementInlet.call.spawn(cell) },
+            target = { cell.ref },
+            portName = "nope",
+            expectedMessage = "Inlet not found",
+        )
+    }
+
+    @Test
+    fun `a route to a port that is not usable discharges the exclusive arguments`() {
+        val cell = NotUsablePortCell()
+        assertRouteFailureDischarges(
+            spawn = { it.managementInlet.call.spawn(cell) },
+            // a registered port that is not a `Use`, so the cast in `route` fails
+            target = { cell.ref },
+            portName = "plain",
+            expectedMessage = "not usable",
+        )
     }
 
     @Test
