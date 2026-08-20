@@ -257,8 +257,30 @@ class WsReconnectSmokeTest {
      * The listener is restarted on the **same** `Peering.Side`, which is what
      * makes the second bullet checkable at all: a rebuilt side would hand the
      * burst a virgin ledger that accepts anything, and the test would pass
-     * without the property holding. See the file's closing note on what a
-     * rebuilt *signer* would do.
+     * without the property holding.
+     *
+     * **Measured discrimination** (`computenet-ssa.4.4`; both mutations compile
+     * and leave every other `:wire` test green, `WsAnnouncementIdentityTest`
+     * included):
+     *
+     * - `Peering.Side.announcementAdmission` from a `val` to a `get()`, so each
+     *   read mints a fresh ledger — the per-connection mistake in its purest
+     *   form. This case fails: *timed out awaiting: the server verified the
+     *   client's announcements*.
+     * - `AnnouncementAdmission.withVerifier` allocating a fresh `highWater` and
+     *   counter instead of sharing the side's. Same failure — which is the
+     *   point: the socket path's per-connection rebinding must not fork the
+     *   ledger.
+     *
+     * **What this test does NOT cover, deliberately.** The server is restarted
+     * as a *listener*, keeping its `Peering.Side` and therefore its signer. A
+     * restarted **process** re-minting the same identity would start its
+     * counter at 1 again while the surviving peer's high-water mark is already
+     * past it, and its whole catch-up burst would classify as `REPLAY`. Counter
+     * durability across a process restart is nowhere in DSC1 — the counter is
+     * an in-memory `AtomicLong` by design (epic §9.3) — so that is a gap in the
+     * feature, not something this test should hide by giving the rebuilt side a
+     * fresh identity. Recorded on the task bead.
      */
     @Test
     fun `BS-13 an authenticated signing peering's reconnect catch-up burst is accepted, not replayed`() {
