@@ -99,6 +99,30 @@ data class WireFrame(
      * handshake can reconcile the real cross-host natures instead of DEFAULT.
      */
     val natures: List<Int> = emptyList(),
+    /**
+     * Announcement signing (DSC1-ANN, epic computenet-ssa.4, [DSC1-WIRE-01]):
+     * additive fields, absent (`null`) whenever signing is disabled, following
+     * exactly the [routingEpoch]/[protocolId] precedent — no version bump,
+     * encoding stays backward-compatible with peers that predate these fields.
+     * This task (computenet-ssa.4.1) adds the wire surface only; nothing in
+     * this module populates, signs, or verifies them yet — that is the
+     * emit-side and ingress-verification successors' work.
+     *
+     * [signature] is the base64url encoding (no padding) of the raw signature
+     * bytes over the canonical announcement encoding, chosen over a raw
+     * `ByteArray` field so [WireFrame]'s generated `equals`/`hashCode` compare
+     * by content rather than by array reference (`ByteArray` breaks
+     * structural equality in a data class) — a populated frame still
+     * round-trips byte-exact, since the caller decodes the string back to the
+     * same bytes it encoded.
+     */
+    val signature: String? = null,
+    /** Identifies the signing key among the signer's published keys ([DSC1-WIRE-01]). */
+    val signerKeyId: String? = null,
+    /** Per-minting-peer strictly-increasing replay counter ([DSC1-WIRE-01]). */
+    val sigCounter: Long? = null,
+    /** Expiry, epoch millis, checked against the receiver's clock plus skew ([DSC1-WIRE-01]). */
+    val notAfter: Long? = null,
 )
 
 /** See [WireFrame.edge]. */
@@ -113,6 +137,14 @@ data class WireEdge(
     val toCell: CellRef,
     val toPortName: String,
 )
+
+/**
+ * [WireCodec.decodeFrame]'s result: the [HostedPortInvocation] that
+ * [WireCodec.decode] alone would have returned, alongside the [WireFrame] it
+ * was parsed from — the only way to reach frame-only fields like
+ * [WireFrame.signature] once decoding has happened.
+ */
+data class DecodedWireFrame(val invocation: HostedPortInvocation, val frame: WireFrame)
 
 object WireCodec {
     const val VERSION = 2 // v2 (M7.1): CellRef carries instanceId (G-8)
@@ -259,9 +291,26 @@ object WireCodec {
     }
 
     /** @throws IllegalStateException on unknown version or ids (caller dead-letters). */
-    fun decode(bytes: ByteArray): HostedPortInvocation {
+    fun decode(bytes: ByteArray): HostedPortInvocation = decodeFrame(bytes).invocation
+
+    /**
+     * Same decode as [decode], but also returns the parsed [WireFrame] —
+     * the entry point the announcement-verification ingress gate
+     * (computenet-ssa.4's successor task) needs to reach [WireFrame.signature]
+     * and friends, which [decode] alone discards. [decode] is defined in
+     * terms of this function precisely so its behavior (exceptions, the
+     * resulting [HostedPortInvocation]) is unchanged for every existing
+     * caller — this is purely an additional entry point, not a replacement.
+     *
+     * @throws IllegalStateException on unknown version or ids (caller dead-letters).
+     */
+    fun decodeFrame(bytes: ByteArray): DecodedWireFrame {
         val frame = json.decodeFromString(WireFrame.serializer(), bytes.decodeToString())
         check(frame.version == VERSION) { "unsupported wire version ${frame.version}" }
+        return DecodedWireFrame(invocation(frame), frame)
+    }
+
+    private fun invocation(frame: WireFrame): HostedPortInvocation {
         if (frame.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
             val id = checkNotNull(frame.protocolId) { "PORT_PROTOCOL frame missing protocolId" }
             val edge = checkNotNull(frame.edge) { "PORT_PROTOCOL frame missing edge" }
