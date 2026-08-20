@@ -23,12 +23,18 @@ import java.io.File
  * This is NOT one of F3's refusals and deliberately does not overlap them: everything
  * about drive homogeneity, environment homogeneity, per-row labels and dispersion is
  * decided by [FindingsTable] and [Findings.entry], which this renderer *calls* rather
- * than reimplements. What this exception covers is strictly upstream of them — a
+ * than reimplements. What this exception covers is mostly upstream of them — a
  * results file whose columns are missing, whose confidence level is not the 99.9% that
  * [BenchResult.dispersion] is defined as, whose benchmark name does not say which
- * [Drive] produced it, or which carries no `subject`/`direction` parameter to label a
- * row with. Those rows cannot become a `BenchResult` at all, so there is nothing for
- * F3 to refuse.
+ * [Drive] produced it, or which carries no value for the `@Param` columns that label its
+ * rows ([RowLabel]). Those rows cannot become a `BenchResult` at all, so there is nothing
+ * for F3 to refuse.
+ *
+ * One case is NOT upstream of F3 but beside it: two rows of one drive that carry the same
+ * label ([ThroughputReport.renderResults]). A duplicated label is perfectly well-formed to
+ * [FindingsTable] — non-blank, one per result — so F3 cannot see it, and yet the table it
+ * renders is one whose reader cannot tell two measurements apart. The refusal has to live
+ * here because the label COLUMNS are chosen here.
  */
 class ThroughputReportException(message: String) : IllegalArgumentException(message)
 
@@ -57,6 +63,159 @@ data class JmhRow(
 
     /** The benchmark's simple method name — the last dot-separated segment. */
     val method: String get() = benchmark.substringAfterLast('.')
+
+    /**
+     * The benchmark's simple CLASS name — the segment before [method].
+     *
+     * This is the key [RowLabel.forBenchmark] resolves a row's label columns under, so a
+     * results file states which `@Param`s label its rows by naming its own benchmark, and
+     * a caller does not have to.
+     */
+    val benchmarkClass: String get() = simpleClassOf(benchmark)
+}
+
+/** The `Class` half of JMH's `pkg.Class.method` benchmark name, without its package. */
+private fun simpleClassOf(benchmark: String): String =
+    benchmark.substringBeforeLast('.').substringAfterLast('.')
+
+/**
+ * Which `@Param` columns of a sweep label its rows, and how their values compose.
+ *
+ * The renderer used to hard-code `subject`/`direction` — `OperatorThroughputBenchmark`'s
+ * two parameters — into [ThroughputReport.labelOf], which made [ThroughputReport.renderRun]
+ * unusable for every other sweep in this module: `BoundedReadBenchmark` (`scale`),
+ * `CellFootprintBenchmark` (`family`, `scale`), `FanOutScalingBenchmark` (`degree`). The
+ * consequence was measured rather than predicted: `computenet-x9e.6.4` rendered the
+ * V1C-BENCH E1 entry through a ~60-line throwaway `E1Render.java` driver against the JMH
+ * fat jar, because the shipped entry point could not label its rows. Every honesty-bearing
+ * STEP of that render was shipped code — the reviewer re-ran it and got a byte-identical
+ * block — but the invocation was hand-written and uncommitted, which is a hand-written
+ * step in the honesty path and an entry harder to re-derive than it needs to be
+ * (computenet-x9e.10).
+ *
+ * This type is DATA, deliberately, and not a `(JmhRow) -> String` seam. A caller that
+ * could supply the label TEXT could supply `"unknown"`, and [Findings.entry] accepts any
+ * non-blank label perfectly happily — so the refusal of an unlabellable row has to stay
+ * inside [ThroughputReport.labelOf], the only thing that reads a row's parameters. What a
+ * caller chooses here is which COLUMNS name a row, never what the name says.
+ *
+ * @param params the `@Param` names whose values name a row, in the order they render.
+ *   Every parameter a sweep varied belongs here: one left out is a dimension the table
+ *   cannot show, which is how two distinct measurements end up under one label —
+ *   [ThroughputReport.renderResults] refuses exactly that rather than rendering it.
+ * @param lowercased the subset of [params] whose values render lowercased. Case is a
+ *   display choice, not a measurement fact, and this is not cosmetic: the landed rows in
+ *   `doc/bench/findings.md` read `FILTER insert`, from JMH's `INSERT`/`RETRACT` enum
+ *   constants, so those entries stay re-derivable only while this stays expressible.
+ * @param includeMethod whether the `@Benchmark` method's own name prefixes the label.
+ *   Needed when one class's methods share a parameter set — `BoundedReadBenchmark` measures
+ *   `direct` and `hostedSnapshotOf` over the same three `scale`s, so `scale` alone names
+ *   six rows with three names.
+ */
+data class RowLabel(
+    val params: List<String>,
+    val lowercased: Set<String> = emptySet(),
+    val includeMethod: Boolean = false,
+) {
+
+    init {
+        require(params.isNotEmpty()) {
+            "RowLabel requires at least one @Param column: a row labelled by nothing " +
+                "cannot say what it measured"
+        }
+        require(params.none { it.isBlank() }) {
+            "RowLabel params must all be non-blank, found $params"
+        }
+        require(params.distinct().size == params.size) {
+            "RowLabel params must be distinct, found $params"
+        }
+        require(params.containsAll(lowercased)) {
+            "RowLabel lowercased names ${lowercased - params.toSet()}, which is not in " +
+                "params $params"
+        }
+    }
+
+    companion object {
+
+        /**
+         * `OperatorThroughputBenchmark`'s columns, and the renderer's historical
+         * behaviour: `subject` verbatim, `direction` lowercased, rendering `FILTER insert`.
+         *
+         * Held as a named value rather than as a default buried in a signature because
+         * three landed entries in `doc/bench/findings.md` are labelled this way, and this
+         * is the thing that has to keep producing those labels.
+         */
+        val SUBJECT_DIRECTION: RowLabel = RowLabel(
+            params = listOf(ThroughputReport.SUBJECT_PARAM, ThroughputReport.DIRECTION_PARAM),
+            lowercased = setOf(ThroughputReport.DIRECTION_PARAM),
+        )
+
+        /**
+         * The label columns of every `@Param`-bearing benchmark in `bench/src/jmh/kotlin`,
+         * by [JmhRow.benchmarkClass].
+         *
+         * This is what makes the shipped entry point usable for a sweep nobody has
+         * rendered before WITHOUT a new invocation surface: `ThroughputReportRenderTest`
+         * names a results file, the results file names its benchmark, and the benchmark
+         * names its columns here. No hand-written driver, and no per-sweep system property
+         * that `bench/build.gradle.kts` would have to forward and that would silently
+         * arrive unset if it ever stopped — the same reasoning [ThroughputReport.runLogFor]
+         * gives for finding the run log beside the results file instead.
+         *
+         * Held HERE rather than on the benchmark classes for the reason the constants
+         * further down this file are: the `jmh` source set is invisible to `main` and
+         * `test` (all three compile against `main`, none against each other), so a fact
+         * anything else needs to name has to live in `main`.
+         *
+         * A class absent from this map is REFUSED by [forBenchmark], not guessed at.
+         * `ThroughputReportTest` pins the map against the benchmark sources themselves —
+         * every `@Param`-bearing benchmark file present, and its entry naming exactly the
+         * parameters that file declares — so a sweep that gains a dimension cannot render
+         * under a label that silently omits it.
+         *
+         * `SmokeBenchmark` is absent because it declares no `@Param` at all: its rows
+         * cannot be labelled from parameters, and the noise-floor entry it produced was
+         * built by hand through [ThroughputReport.renderResults] (`run 1`/`run 2`/`run 3`),
+         * which is the documented route for a sweep whose rows are not a parameter cross
+         * product.
+         *
+         * Registration is not on its own sufficient to render a sweep: `BoundedReadBenchmark`'s
+         * `direct`/`hostedSnapshotOf` name no [Drive], so [ThroughputReport.driveOf] still
+         * refuses its rows (`[BEN1-26]`) until those methods say which regime they measure,
+         * and `BoundedReadBenchmark`/`CellFootprintBenchmark` print no host-facts banner, so
+         * [HostFacts.fromJmhLog] still refuses their logs (computenet-yhbd). Both are
+         * benchmark-side gaps in `bench/src/jmh/kotlin`, and both are refusals rather than
+         * wrong entries.
+         */
+        val REGISTERED: Map<String, RowLabel> = mapOf(
+            "OperatorThroughputBenchmark" to SUBJECT_DIRECTION,
+            "CellFootprintBenchmark" to RowLabel(params = listOf("family", "scale")),
+            // Two @Benchmark methods over one `scale`: without the method name, three
+            // labels for six rows.
+            "BoundedReadBenchmark" to RowLabel(params = listOf("scale"), includeMethod = true),
+            "FanOutScalingBenchmark" to RowLabel(params = listOf("degree")),
+        )
+
+        /**
+         * The label columns [REGISTERED] for the class of a JMH benchmark name, or a
+         * refusal naming the class.
+         *
+         * Refusing is the point: a renderer that fell back to "label by whatever params
+         * are present, in map order" would render a plausible table for a sweep nobody
+         * decided the labels of, and the order would come from a `LinkedHashMap` of CSV
+         * columns rather than from a reviewed choice.
+         */
+        fun forBenchmark(benchmark: String): RowLabel {
+            val simple = simpleClassOf(benchmark)
+            return REGISTERED[simple] ?: throw ThroughputReportException(
+                "no label columns are registered for benchmark class '$simple' (from " +
+                    "'$benchmark'); RowLabel.REGISTERED names ${REGISTERED.keys.sorted()}. " +
+                    "Add an entry naming every @Param that benchmark declares, or pass a " +
+                    "RowLabel explicitly — which columns name a row is a reviewed choice " +
+                    "and the renderer will not guess it [BEN1-30]"
+            )
+        }
+    }
 }
 
 /** A [BenchResult] together with the per-row label [FindingsTable] will carry it under. */
@@ -151,8 +310,13 @@ data class Report(val perDrive: List<DriveReport>, val omissions: List<Omission>
  * module's classpath and adding one to read a results file would be a dependency
  * bought for a formatting choice. JMH's CSV format carries everything a
  * [BenchResult] needs — score, error at 99.9% confidence, unit — plus one
- * `Param: <name>` column per `@Param`, which is where the subject and direction of a
- * row come from.
+ * `Param: <name>` column per `@Param`, which is where a row's label comes from.
+ *
+ * WHICH of those columns label a row is [RowLabel]'s, not this object's. It was once
+ * `subject`/`direction` hard-coded — `OperatorThroughputBenchmark`'s two parameters — which
+ * made [renderRun] unusable for every other sweep in the module and cost one entry a
+ * hand-written driver (computenet-x9e.10). A results file now says which columns label it
+ * by naming its own benchmark: [RowLabel.REGISTERED].
  *
  * ## What this object does NOT do
  *
@@ -189,6 +353,12 @@ data class Report(val perDrive: List<DriveReport>, val omissions: List<Omission>
  * would have to forward and that would silently arrive unset if it ever stopped doing
  * so — an unforwarded property is exactly the kind of quiet failure this ticket is
  * about.
+ *
+ * The label columns are found the same way, and for the same reason: not by a property,
+ * but by the benchmark the results file itself names ([RowLabel.REGISTERED]). So that one
+ * command renders any registered sweep — `CellFootprintBenchmark`'s `family`/`scale` as
+ * readily as `OperatorThroughputBenchmark`'s `subject`/`direction` — and refuses, naming
+ * the class, for one nobody has chosen the columns of.
  *
  * `-PbenchOnly=true` is required: `@Tag("bench")` is excluded unconditionally from the
  * default test task (`[BEN1-09]`..`[BEN1-11]`), which is what keeps `:bench:test`
@@ -387,26 +557,33 @@ object ThroughputReport {
             .map { it.lowercase() }
 
     /**
-     * The per-row label: the row's `subject` and `direction` parameters, which is what
-     * distinguishes an insert row from a retract row of the same operator when both
-     * carry the same unit.
+     * The per-row label: the values of the `@Param` columns [label] names, which is what
+     * distinguishes an insert row from a retract row of the same operator, or a `1e3` row
+     * from a `1e5` row of the same method, when both carry the same unit.
      *
-     * A row missing either parameter cannot be labelled, and is refused here rather
+     * A row missing any of those parameters cannot be labelled, and is refused here rather
      * than labelled `"unknown"` — [Findings.entry] would accept a non-blank invented
      * label perfectly happily, so the honesty has to be upstream of it.
+     *
+     * @param label which columns name the row. Defaults to the columns
+     *   [RowLabel.forBenchmark] has registered for the row's own benchmark class, so a
+     *   caller rendering a whole results file does not have to know — and cannot
+     *   misdeclare — which sweep it holds.
      */
-    fun labelOf(row: JmhRow): String {
-        val subject = row.params[SUBJECT_PARAM]
-        val direction = row.params[DIRECTION_PARAM]
-        if (subject.isNullOrBlank() || direction.isNullOrBlank()) {
-            throw ThroughputReportException(
-                "benchmark '${row.benchmark}' carries no usable '$SUBJECT_PARAM'/" +
-                    "'$DIRECTION_PARAM' parameters (found ${row.params}); a row that " +
-                    "cannot say which operator and direction it measured cannot be " +
-                    "labelled [BEN1-30]"
-            )
+    fun labelOf(row: JmhRow, label: RowLabel = RowLabel.forBenchmark(row.benchmark)): String {
+        val values = label.params.map { name ->
+            val value = row.params[name]
+            if (value.isNullOrBlank()) {
+                throw ThroughputReportException(
+                    "benchmark '${row.benchmark}' carries no usable '$name' parameter " +
+                        "(found ${row.params}, label columns ${label.params}); a row that " +
+                        "cannot say what it measured cannot be labelled [BEN1-30]"
+                )
+            }
+            if (name in label.lowercased) value.lowercase() else value
         }
-        return "$subject ${direction.lowercase()}"
+        val parts = if (label.includeMethod) listOf(row.method) + values else values
+        return parts.joinToString(separator = " ")
     }
 
     /**
@@ -417,11 +594,18 @@ object ThroughputReport {
      * a results file does record in part, but the harness commit SHA it does not record
      * at all, so [RunEnvironment] stays the caller's to state (and [RunEnvironment]
      * itself refuses to exist with a field missing).
+     *
+     * @param label which `@Param` columns label every row, or `null` — the default — to
+     *   resolve each row's columns from [RowLabel.forBenchmark].
      */
-    fun toResults(rows: List<JmhRow>, env: RunEnvironment): List<LabelledResult> =
+    fun toResults(
+        rows: List<JmhRow>,
+        env: RunEnvironment,
+        label: RowLabel? = null,
+    ): List<LabelledResult> =
         rows.map { row ->
             LabelledResult(
-                label = labelOf(row),
+                label = labelOf(row, label ?: RowLabel.forBenchmark(row.benchmark)),
                 result = BenchResult(
                     value = row.score,
                     unit = row.unit,
@@ -464,6 +648,8 @@ object ThroughputReport {
      * @param trigger what the entry claims about a cited gap's trigger question.
      *   Defaults to [TriggerClaim.None], which [Findings.entry] renders as an explicit
      *   MARKED INCOMPLETE line rather than as a finding.
+     * @param label which `@Param` columns label every row, or `null` — the default — to
+     *   resolve each row's columns from [RowLabel.forBenchmark].
      */
     fun render(
         csv: String,
@@ -471,7 +657,8 @@ object ThroughputReport {
         date: String,
         subject: String,
         trigger: TriggerClaim = TriggerClaim.None,
-    ): Report = renderResults(toResults(parseCsv(csv), env), date, subject, trigger)
+        label: RowLabel? = null,
+    ): Report = renderResults(toResults(parseCsv(csv), env, label), date, subject, trigger)
 
     /**
      * Where the run log of a results file must sit: beside it, same base name, `.log`.
@@ -530,8 +717,13 @@ object ThroughputReport {
      *   artifact records host facts on its own; this process's own `Runtime
      *   .getRuntime()`/`sysctl` reads are NOT a fallback — they answer for the
      *   renderer, which may not be the machine that measured.
-     * @throws ThroughputReportException if [results] is not a readable file, or its
-     *   contents cannot honestly become rows.
+     * @param label which `@Param` columns label every row, or `null` — the default — to
+     *   resolve each row's columns from [RowLabel.forBenchmark]. This is what makes the
+     *   entry point usable for a sweep whose parameters are not `subject`/`direction`
+     *   (computenet-x9e.10): pass a [RowLabel] for a results file whose benchmark is not
+     *   registered, and leave it `null` for one that is.
+     * @throws ThroughputReportException if [results] is not a readable file, its contents
+     *   cannot honestly become rows, or one drive's rows do not carry distinct labels.
      */
     fun renderRun(
         results: File,
@@ -539,6 +731,7 @@ object ThroughputReport {
         date: String,
         subject: String,
         trigger: TriggerClaim = TriggerClaim.None,
+        label: RowLabel? = null,
     ): Report {
         if (!results.isFile) {
             throw ThroughputReportException(
@@ -571,10 +764,22 @@ object ThroughputReport {
             hostFacts = HostFacts.fromJmhLog(logText, log.absolutePath),
             harnessCommitSha = harnessCommitSha,
         )
-        return render(results.readText(), env, date, subject, trigger)
+        return render(results.readText(), env, date, subject, trigger, label)
     }
 
-    /** [render]'s second half, exposed so a caller can render results it built itself. */
+    /**
+     * [render]'s second half, exposed so a caller can render results it built itself.
+     *
+     * Refuses a drive whose rows do not carry DISTINCT labels. [FindingsTable] cannot make
+     * that refusal — a duplicated label is non-blank and there is still one per result, so
+     * it is well-formed by every rule F3 has — and yet the table it renders shows two
+     * measurements the reader cannot tell apart, and the omission list beside it names a
+     * row ambiguously. The check belongs here because this is where the label columns are
+     * chosen: it is what turns "I picked too few columns" from a plausible-looking table
+     * into a refusal that names the collision (`RowLabel.includeMethod` is usually the
+     * answer). It runs BEFORE the dispersion partition on purpose, so whether it fires
+     * does not depend on which rows happened to clear [NOISE_FLOOR].
+     */
     fun renderResults(
         results: List<LabelledResult>,
         date: String,
@@ -590,6 +795,19 @@ object ThroughputReport {
         val byDrive = results.groupBy { it.result.drive }
         val perDrive = Drive.values().filter { byDrive.containsKey(it) }.map { drive ->
             val rows = byDrive.getValue(drive)
+            val duplicated = rows.groupingBy { it.label }.eachCount().filterValues { it > 1 }
+            if (duplicated.isNotEmpty()) {
+                throw ThroughputReportException(
+                    "drive=$drive carries rows that share a label: " +
+                        duplicated.entries.sortedBy { it.key }
+                            .joinToString { "'${it.key}' x ${it.value}" } +
+                        ". Two measurements under one label is a table whose reader cannot " +
+                        "tell them apart, and an omission list that names an ambiguous " +
+                        "row. Label by every @Param the sweep varied, and set " +
+                        "RowLabel.includeMethod when one benchmark class's @Benchmark " +
+                        "methods share a parameter set"
+                )
+            }
             val (reportable, unreportable) = rows.partition {
                 classify(it.result) == Reportability.Reportable
             }

@@ -73,6 +73,13 @@ BODY_LINE_IDEAL = 500
 # contents."
 REFERENCE_TOC_THRESHOLD = 300
 
+# The ratchet's numbers. Absent file or absent entry is a FAILURE, not a pass:
+# a skill with no budget is exactly the unpriced growth this exists to stop.
+BUDGET_FILE = File.join(root, 'line-budget.txt')
+BUDGETS = File.exist?(BUDGET_FILE) ? File.readlines(BUDGET_FILE, encoding: 'UTF-8')
+  .reject { |l| l.strip.empty? || l.lstrip.start_with?('#') }
+  .to_h { |l| n, v = l.split; [n, v.to_i] } : {}
+
 # Any backtick-free run of path characters ending in a script extension and
 # containing a scripts/ segment. Deliberately broad: a citation is a citation
 # whether or not it is fenced, and the check is only ever "does this resolve".
@@ -140,6 +147,25 @@ files.each do |f|
   if body_lines > BODY_LINE_IDEAL
     warns << "SKILL.md body is #{body_lines} lines (ideal <=#{BODY_LINE_IDEAL}); " \
              'add a layer of hierarchy and point into it'
+  end
+
+  # The RATCHET (line-budget.txt). The ideal above has warned for weeks and
+  # been read past every time; this is the same number with teeth, set at each
+  # skill's current size so nothing has to be restructured today. Growth is
+  # what it prices: over budget, remove as much as you added or raise the
+  # number in the diff, where it can be questioned.
+  ref_lines = Dir.glob(File.join(File.dirname(f), 'references', '*.md'))
+                 .sum { |r| File.readlines(r, encoding: 'UTF-8').length }
+  total = body_lines + ref_lines
+  budget = BUDGETS[skill]
+  if budget.nil?
+    errs << "no line budget for '#{skill}' — add one to .claude/skills/line-budget.txt " \
+            "(set it at the current #{total} so the skill starts even)"
+  elsif total > budget
+    errs << "is #{total} lines (SKILL.md body #{body_lines} + references " \
+            "#{ref_lines}), over its #{budget} budget by #{total - budget}. " \
+            'Remove as much as you added, or raise the number in ' \
+            '.claude/skills/line-budget.txt and say what it bought.'
   end
 
   Dir.glob(File.join(File.dirname(f), 'references', '*.md')).sort.each do |r|
