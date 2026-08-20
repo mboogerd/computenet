@@ -147,6 +147,15 @@ import kotlin.random.Random
  *   60 seeds carry such a step and 9 surface as a failure; the other 13 are masked downstream by
  *   a `filter`, `quorumSet` or `count` that keeps the element's presence off the terminal.
  *
+ *   **How exhaustively it was checked.** Mutating `Membership.observes` to `return true` — the
+ *   one edit that makes the model retract every add a remove can reach, i.e. adopt `SetCell`'s
+ *   rule — turns the whole sweep clean in one step: `settledMismatch=[]`, `plateauFlicker=[]`,
+ *   `chainArtifact=[]`, `glitchCandidate=[]` over the same seeds 0..59, and the three-event case
+ *   above reports `Success` instead of `Mismatch` (Darwin arm64, 2026-08-20; mutation reverted,
+ *   never committed). So the nine pinned seeds are not merely *consistent with* this mechanism —
+ *   there is no residual population left once it is removed, which is what rules out a second,
+ *   independent cause hiding inside them.
+ *
  *   The five `Mismatch` seeds are the cases where the divergence survives to quiescence; the
  *   seven violation seeds are the cases where it appears at an intermediate wave and *heals*
  *   before the end (all seven settle `Success`). **Catching those seven is this instrument's
