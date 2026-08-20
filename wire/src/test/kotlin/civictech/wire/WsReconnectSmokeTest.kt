@@ -385,14 +385,17 @@ class WsReconnectSmokeTest {
      * apart rather than taken from the wall clock so that the property is
      * asserted rather than raced (see [KeyedStack]).
      *
-     * **Measured discrimination** (`computenet-ssa.6`): against the pre-fix
-     * signer — `AtomicLong(0)`, no incarnation floor — this case fails at
-     * *timed out awaiting: the restarted process's announcements were accepted*,
-     * with the server's replay dead letters carrying
-     * `counter=1 does not exceed the highest already accepted`. The kernel-level
-     * twin, `SignedAnnouncementTest`'s
-     * `a signing process that restarts re-minting the same identity is accepted,
-     * not REPLAY`, fails deterministically under the same mutation.
+     * **Measured discrimination** (`computenet-ssa.6`): with `AnnouncementSigner`
+     * mutated back to `AtomicLong(0)` — `counterFloor` still computed, simply not
+     * used as the seed — this case fails at *timed out awaiting: the restarted
+     * process's announcements were accepted*. It is the await that fails, so what
+     * is measured is the absence of the advance, not the dead letters' text; the
+     * REPLAY detail is quoted where it was actually read, on the kernel twin
+     * below. That twin — `SignedAnnouncementTest`'s `a signing process that
+     * restarts re-minting the same identity is accepted, not REPLAY` — fails
+     * deterministically under the same mutation, and BS-13 above stays **green**
+     * under it, so this case covers the process-restart clause rather than
+     * re-covering the reconnect one.
      *
      * The complementary clause — that recovery was not bought with replay
      * tolerance — is pinned in `:kernel`, by

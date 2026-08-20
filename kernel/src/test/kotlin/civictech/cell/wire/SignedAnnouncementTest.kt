@@ -491,11 +491,23 @@ class SignedAnnouncementTest {
      * a floor and this test would flake on a fast machine. The production default
      * is pinned separately, in `SignedAnnouncementEmitTest`.
      *
-     * **Measured discrimination** (`computenet-ssa.6`): against the pre-fix
-     * signer — `AtomicLong(0)`, no incarnation seam — this case fails at the
-     * `deadLetters.shouldBeEmpty()` line with
-     * `reason=REPLAY ... counter=1 does not exceed the highest already accepted
-     * from '<peerB>' (3)`, while every other case in this file stays green.
+     * **Measured discrimination** (`computenet-ssa.6`), twice, because the two
+     * runs fail in different places and both are worth knowing:
+     *
+     * - Against the genuinely pre-fix signer — `AtomicLong(0)`, no incarnation
+     *   seam at all, so this test could not yet name its two incarnations — the
+     *   failure is the defect itself, at `deadLetters.shouldBeEmpty()`:
+     *   `reason=REPLAY ... counter=1 does not exceed the highest already
+     *   accepted from '<peerB>' (3)`.
+     * - Against the fix with only its last line mutated back
+     *   (`AtomicLong(0)` while [AnnouncementSigner.counterFloor] is still
+     *   computed), the `lastCounter shouldBe announcementCounterFloor(...)`
+     *   line trips first: `expected:<1782579262914560000L> but was:<0L>`. Same
+     *   cause, caught one assertion earlier.
+     *
+     * Under both, every *other* case in this file stays green — including BS-06
+     * and the ingress-replacement case, which is the point: the fix is not
+     * load-bearing for any replay clause.
      */
     @Test
     fun `a signing process that restarts re-minting the same identity is accepted, not REPLAY`() {
