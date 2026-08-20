@@ -419,12 +419,13 @@ class GraphGeneratorTest {
          * Two different reasons keep the rest of the catalog out, and they are not
          * interchangeable:
          *
-         * - **Unreachable, so untestable.** The pair-shaped entries (`joinSet`, `semiJoin`,
-         *   `antiJoin` and the whole `groupBy*` family) consume `SetOf(Tuple(2))`, which no
-         *   registered arity-0 entry produces and no reachable operator emits — `joinSet`'s
-         *   own output is the only `SetOf(Tuple(2))` in the catalog and it needs one as input.
-         *   Shape-typed generation therefore can never reach them, and naming them here would
-         *   test nothing.
+         * - **Reachable only through the pair bootstrap.** The pair-shaped entries (`joinSet`,
+         *   `semiJoin`, `antiJoin` and the whole `groupBy*` family) consume `SetOf(Tuple(2))`.
+         *   Until computenet-4ru.16 nothing produced that shape without already consuming it,
+         *   so shape-typed generation could never reach them and naming them here would have
+         *   tested nothing; `keyBy` now bridges `SetOf(Scalar)` to it, and the sweep over the
+         *   whole of `Ids.ALL` below does emit the family. This default slice still leaves
+         *   `keyBy` and its consumers out, so it stays a single-shape-family configuration.
          * - **Reachable, simply not swept here.** The map-rooted slice (`map` as the source,
          *   with `join`, `combineLatest` and `lookupJoin` over `MapOf(Scalar, Scalar)`) *is*
          *   fully generable and links cleanly. This suite is set-rooted only; the assertion
