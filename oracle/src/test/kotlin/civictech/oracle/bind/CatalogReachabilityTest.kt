@@ -1,9 +1,11 @@
 package civictech.oracle.bind
 
 import civictech.cell.graph.CellFactory
+import civictech.oracle.gen.GeneratorConfig
 import civictech.oracle.gen.GraphGenerator
 import civictech.oracle.model.ElementShape
 import civictech.oracle.model.ModelState
+import civictech.oracle.model.OperatorModel
 import civictech.oracle.model.SourceModel
 import civictech.oracle.model.SourceScript
 import io.kotest.assertions.withClue
@@ -113,8 +115,28 @@ class CatalogReachabilityTest {
      *
      * They are nonetheless in [reachablePin]: an arity-0 entry has no ports to fill, so the
      * closure rule calls it reachable unconditionally. The two facts are different questions
-     * and are pinned separately rather than folded together. This one is computenet-gff7's,
-     * still open — pinned here, not fixed.
+     * and are pinned separately rather than folded together.
+     *
+     * ## computenet-gff7's verdict: DECIDED, and this set is expected to stay non-empty
+     *
+     * computenet-gff7 offered the fork "register a `Scalar`-consuming operator, or record the
+     * decision not to". The decision is **not to**, and the reason is structural rather than
+     * one of effort. A scalar edge in this catalog carries `Propagate<CounterDelta>`, and
+     * exactly one cell in the whole kernel serves that type on an inlet:
+     * `CoalescingCombineCell` (`kernel/src/main/kotlin/civictech/cell/data/op/`,
+     * `inlet: Serve<Propagate<CounterDelta>>`) — every other operator inlet under
+     * `civictech.cell.data.op` serves `SetDelta` or `MapDelta`. That one cell is excluded by
+     * name from the vocabulary by the `[ORA1-HONEST-02]` ledger in
+     * `civictech.oracle.model.MapCellModel`'s file KDoc: its observable is a wave-completion
+     * fold the script vocabulary cannot name, so a batch model of it would assume the very
+     * completeness condition it cannot check.
+     *
+     * Unlike the pair-shaped hole — repairable inside the catalog, because `keyBy` reuses an
+     * already-registered cell and model and adds only a function — this one has no in-catalog
+     * repair: it would take a NEW kernel cell existing only to give the oracle something to
+     * link a counter into. So [sourcesNoOperatorConsumes] is a **standing, documented** limit,
+     * and the two tests below pin both halves of it: that the set is exactly these two today,
+     * and that a scalar consumer is precisely and solely what is missing.
      */
     private val sourcesNoOperatorConsumes: Set<String> = setOf(
         CoreOperators.Ids.COUNTER,
@@ -226,9 +248,105 @@ class CatalogReachabilityTest {
             "counter/pnCounter emit bare Scalar, which no registered operator consumes, so " +
                 "Builder.chooseRootShape can never root a case at them. This is a second, " +
                 "independent coverage hole from the SetOf(Tuple(2)) one computenet-4ru.16 " +
-                "closed; it is computenet-gff7's, and is pinned here, not fixed.",
+                "closed. computenet-gff7 DECIDED not to close it: the only kernel cell that " +
+                "serves Propagate<CounterDelta> on an inlet is CoalescingCombineCell, which " +
+                "the [ORA1-HONEST-02] ledger excludes by name. A change here is a change to " +
+                "that decision — read this file's KDoc before moving the pin.",
         ) {
             unconsumableSources shouldBe sourcesNoOperatorConsumes
+        }
+    }
+
+    @Test
+    fun `a scalar-consuming operator is precisely and solely what would make the two spawnable`() {
+        // The counterfactual, computed rather than argued — the same instrument
+        // `a pair-producing source would keep every entry reachable` uses for the other hole.
+        // It is what makes the recorded decision checkable: the diagnosis "nothing consumes
+        // bare Scalar" is only worth writing down if adding a bare-Scalar consumer, and
+        // nothing else, removes the symptom.
+        OperatorCatalog.register(
+            id = SYNTHETIC_SCALAR_FAN_IN,
+            shape = COALESCING_COMBINE_SHAPE,
+            kernel = CellFactory { _ -> error("never spawned: this entry exists only to test the counterfactual") },
+            model = NeverRunOperator,
+        )
+        try {
+            val entries = OperatorCatalog.all()
+            val consumed = entries.flatMap { it.shape.inputs }.toSet()
+            val unconsumableSources = entries
+                .filter { it.shape.arity == 0 && it.shape.output !in consumed }
+                .map { it.id }
+                .toSet()
+
+            withClue(
+                "with a bare-Scalar consumer registered, NO source is left emitting a shape " +
+                    "nothing consumes — so the scalar hole is exactly the absence of such an " +
+                    "operator, not a second defect elsewhere in the catalog or the generator",
+            ) {
+                unconsumableSources.shouldBeEmpty()
+            }
+        } finally {
+            OperatorCatalog.unregister(SYNTHETIC_SCALAR_FAN_IN)
+        }
+    }
+
+    @Test
+    fun `with a scalar consumer the generator really does root cases at counter and pnCounter`() {
+        // The closure is only an upper bound (this file's KDoc), so the counterfactual above
+        // does not by itself establish that a sweep WOULD emit counter-rooted cases. This test
+        // draws real topologies from the real `GraphGenerator` and reads their source nodes —
+        // the same instrument `PairShapeBootstrapTest` uses for the pair-shaped family, and the
+        // evidence for the "if registered" half of computenet-gff7's fork.
+        //
+        // The synthetic entry's shape is `CoalescingCombineCell`'s own: a two-arm fan-in over
+        // Scalar producing Scalar, on one dynamic `inlet`, exactly as the registered fan-in
+        // family advertises. So what this measures is what registering THAT cell would buy —
+        // which is what makes the decision not to register it a decision about honesty rather
+        // than about reachability.
+        OperatorCatalog.register(
+            id = SYNTHETIC_SCALAR_FAN_IN,
+            shape = COALESCING_COMBINE_SHAPE,
+            kernel = CellFactory { _ -> error("never spawned: only the topology is read here") },
+            model = NeverRunOperator,
+        )
+        try {
+            val config = GeneratorConfig(
+                depthRange = 2..4,
+                sourceCount = 3,
+                // Only the scalar slice: with the whole catalog in scope `chooseRootShape` would
+                // draw a root shape at random and most seeds would be set-rooted, which measures
+                // the draw rather than the reachability.
+                vocabulary = listOf(
+                    CoreOperators.Ids.COUNTER,
+                    CoreOperators.Ids.PN_COUNTER,
+                    SYNTHETIC_SCALAR_FAN_IN,
+                ),
+                elementDomainSize = 6,
+                scriptLength = 40,
+                addRemoveRatio = 0.6,
+                unobservedRemoveRatio = 0.25,
+                terminalCount = 1,
+            ).validated()
+
+            val generator = GraphGenerator(config)
+            val sourceIds = (0L until SWEEP_SEEDS).flatMap { seed ->
+                generator.generate(seed).topology.nodes.filter { it.inputs.isEmpty() }.map { it.catalogId }
+            }
+
+            // Printed, not merely asserted, for the reason `PairShapeBootstrapTest` prints its
+            // own counts: a margin a reviewer can read beats a bare green tick, and a future
+            // change that leaves the slice technically reachable but vanishingly rare shows up
+            // as a collapsing number rather than a still-passing test.
+            println("scalar-rooted sources over $SWEEP_SEEDS seeds: ${sourceIds.groupingBy { it }.eachCount()}")
+
+            withClue(
+                "source catalog ids over $SWEEP_SEEDS generated topologies: " +
+                    "${sourceIds.groupingBy { it }.eachCount()}",
+            ) {
+                sourceIds.toSet() shouldBe setOf(CoreOperators.Ids.COUNTER, CoreOperators.Ids.PN_COUNTER)
+            }
+        } finally {
+            OperatorCatalog.unregister(SYNTHETIC_SCALAR_FAN_IN)
         }
     }
 
@@ -265,5 +383,35 @@ class CatalogReachabilityTest {
     private object NeverRun : SourceModel {
         override fun evaluate(slice: SourceScript): ModelState =
             error("never evaluated: this model exists only so a synthetic shape can be registered")
+    }
+
+    /** An [OperatorModel] that exists only to satisfy paired registration; never evaluated. */
+    private object NeverRunOperator : OperatorModel {
+        override fun evaluate(inputs: List<ModelState>): ModelState =
+            error("never evaluated: this model exists only so a synthetic shape can be registered")
+    }
+
+    private companion object {
+        /**
+         * 200 seeds, the population size `PairShapeBootstrapTest` and `GraphGeneratorTest`'s
+         * convergence sweep both draw, so the scalar slice is measured on the same scale the
+         * generator's other structural claims are.
+         */
+        const val SWEEP_SEEDS = 200L
+
+        const val SYNTHETIC_SCALAR_FAN_IN = "syntheticScalarFanIn"
+
+        /**
+         * `CoalescingCombineCell`'s advertised shape: a two-arm fan-in over bare `Scalar`
+         * producing `Scalar`, on the one dynamic `inlet` the kernel's fan-in cells expose —
+         * the same construction `CoreOperators` uses for `union`/`presenceCount`/`quorumSet`.
+         * Written here rather than imported because the point is what registering that cell
+         * WOULD do; the cell itself stays excluded.
+         */
+        val COALESCING_COMBINE_SHAPE = ShapeRule(
+            inputs = List(2) { ElementShape.Scalar },
+            output = ElementShape.Scalar,
+            inputPorts = List(2) { "inlet" },
+        )
     }
 }
