@@ -421,7 +421,7 @@ export type BoundarySeam = (typeof BOUNDARY_SEAMS)[number];
  *  Mirrors `civictech.cell.DenialReason`
  *  (`kernel/src/main/kotlin/civictech/cell/BoundaryDenials.kt`) constant for
  *  constant — see `DENIAL_REASONS` below, which
- *  `test/denial-reason-sync.test.ts` (computenet-ssa.7) checks against that
+ *  `test/boundary-denials-sync.test.ts` (computenet-ssa.7) checks against that
  *  file in both directions so the two cannot drift apart unnoticed again. */
 export const DENIAL_REASONS = [
   'NOT_ADMITTED',
