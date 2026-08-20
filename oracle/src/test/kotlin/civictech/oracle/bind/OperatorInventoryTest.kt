@@ -34,6 +34,19 @@ import java.util.jar.JarFile
  * `:oracle:test` run only if Gradle resolves `:kernel`'s project dependency as a jar rather than
  * a directory classpath entry; on this build it resolves as a directory, so the jar branch is
  * implemented per the bead's instruction but not exercised by this test suite.
+ *
+ * **Bytecode-metadata facade detection (computenet-4ru.19).** [isKotlinFileFacade] originally
+ * decided facade-ness from the **source tree** — a `<Bare>Kt` classpath name was treated as a
+ * facade iff a same-named `<Bare>.kt` source file existed. That had two edges, both measured by
+ * computenet-4ru.15's own reviewer and, until this item, accepted as residual: a `<Bare>.kt` file
+ * with no top-level declaration emits no facade, so a hand-written class literally named
+ * `<Bare>Kt` beside it was silently dropped from the diffed set (a false negative — a genuinely
+ * new operator invisible to the gate); and `@file:JvmName(...)` renames a facade off its file's
+ * base name, so that facade's churn still reddened the gate (a residual false positive of the
+ * original kind). [isKotlinFileFacade] now asks the **class file itself**: the Kotlin compiler
+ * stamps every class it emits with a runtime-retained `kotlin.Metadata` annotation whose `kind`
+ * distinguishes a file facade (`FILE_FACADE_KIND`, 2) from an ordinary class (`CLASS_KIND`, 1) —
+ * see its KDoc for why that is exact rather than merely quieter.
  */
 class OperatorInventoryTest {
 
@@ -91,60 +104,45 @@ class OperatorInventoryTest {
         return names
     }
 
-    /**
-     * The `civictech.cell.data.op` **source** directory, read the same way
-     * [civictech.oracle.ModuleDependencyTest] reads `oracle/build.gradle.kts`: a Gradle `Test`
-     * task's working directory is the project directory (`oracle/`), so `..` reaches the sibling
-     * `:kernel` module's checkout.
-     */
-    private val kernelOpSourceDir = File("../kernel/src/main/kotlin/civictech/cell/data/op")
+    /** `kotlin.Metadata.kind` for a Kotlin file facade — see [kotlin.Metadata]'s own KDoc. */
+    private val fileFacadeMetadataKind = 2
 
     /**
      * True iff [className] is a Kotlin compiler-generated file-facade class rather than a
-     * hand-written or KSP-generated one, determined by whether the package's **source
-     * directory** — not the classpath, not a declaration count — contains a file named after
-     * `className` with its trailing `Kt` stripped.
+     * hand-written or KSP-generated one, determined by loading the class and reading its own
+     * `kotlin.Metadata` annotation — positive evidence stamped by the compiler on the class file
+     * itself, rather than an inference from the source tree.
      *
-     * **Why this is sound, not merely quieter (computenet-4ru.15).** Kotlin derives a file
-     * facade's default JVM class name directly from its containing file's own base name
-     * (`<Bare>.kt` -> `<Bare>Kt`), and two top-level declarations cannot share one qualified name
-     * in a package — so a *hand-written* class literally named `<Bare>Kt` can never coexist with
-     * a `<Bare>.kt` file that itself carries top-level declarations (that would be the same JVM
-     * name twice, a compile error). Finding a `<Bare>.kt` file that itself carries at least one
-     * top-level declaration therefore proves the matching `<Bare>Kt` classpath entry is the
-     * compiler's facade for *that* file, never a hand-written class — and that is exactly the
-     * population this gate used to redden on.
-     *
-     * **The two edges this filter does NOT cover**, measured by the computenet-4ru.15 feature
-     * review (2026-08-20) and accepted; neither occurs in `civictech.cell.data.op` today:
+     * **Why this is exact, not merely quieter (computenet-4ru.19, replacing computenet-4ru.15's
+     * source-existence heuristic).** `kotlin.Metadata` carries `RUNTIME` retention (it is how
+     * the Kotlin reflection and compiler tooling read a class's shape at all), and every class
+     * the Kotlin compiler emits — file facade, regular class, KSP-generated class alike — carries
+     * one. Its `kind` property distinguishes `FILE_FACADE_KIND` (2, what a file's top-level
+     * declarations compile to) from `CLASS_KIND` (1, an ordinary named class) unconditionally:
+     * unlike the old filter, this does not depend on the class's name matching any source file,
+     * so it is immune to both edges the old heuristic missed:
      * 1. A `<Bare>.kt` carrying *no* top-level declaration emits no facade at all, so a
-     *    hand-written class literally named `<Bare>Kt` is legal alongside it and is silently
-     *    dropped from the diffed set — this function keys on the file's **existence**, not on its
-     *    declaration count, and cannot tell those two cases apart. Measured: a probe file
-     *    `ReviewProbeFacade4ru15.kt` declaring only `class ReviewProbeFacade4ru15Kt` reached the
-     *    classpath and this gate stayed green. So a new operator whose class name ends in `Kt`
-     *    next to a declaration-free same-named file is invisible here.
-     * 2. `@file:JvmName("…")` renames a facade away from its file's base name, so that facade is
-     *    *not* filtered and its churn still reddens the gate — a residual false positive of the
-     *    original kind, not a false negative. Measured: a facade renamed to
-     *    `ReviewProbeUnrelated4ru15Kt` reported `Added: [ReviewProbeUnrelated4ru15Kt]`.
+     *    hand-written class literally named `<Bare>Kt` beside it has `CLASS_KIND`, not
+     *    `FILE_FACADE_KIND` — it is correctly left in the diffed set and reddens the gate as any
+     *    new operator must (the old filter, keying on the source file's mere existence, dropped
+     *    it silently instead).
+     * 2. `@file:JvmName("…")` renames a facade off its file's base name, but the renamed class
+     *    still carries `FILE_FACADE_KIND` regardless of what it is named — it is correctly
+     *    filtered out (the old filter, keying on a name match against the source tree, missed the
+     *    rename and left the facade reddening the gate as a false positive).
      *
-     * Both edges cost a name ending in `Kt`, which no operator in this package is named, so the
-     * filter is sound for the vocabulary it actually guards.
+     * A hand-written class's own generated `*Base`/`*Ports`/`*Api` companions never carry
+     * `FILE_FACADE_KIND` either (they are ordinary KSP-emitted classes), so a rename of a
+     * hand-written class still reddens the gate on all of its renamed companions, as it must.
      *
-     * Keying off existence rather than declaration count is what fixes the measured false
-     * positive: the file `<Bare>.kt` already existed before and after the
-     * edit that added or removed its only top-level declaration, so this filter drops
-     * `<Bare>Kt` from the diffed set in both cases and the gate never reddens on it. A genuinely
-     * new operator lives in a *new* file, so its class names are never `<Bare>Kt` for a
-     * `<Bare>.kt` that predates it — new vocabulary is unaffected. A rename of a hand-written
-     * class doesn't touch this function at all: its generated `*Base`/`*Ports`/`*Api` names
-     * don't end in `Kt`, so they are never filtered and still redden the gate, as they must.
+     * A class outside `civictech.cell.data.op`'s Kotlin-compiled surface (there is none on this
+     * classpath, but defensively) has no `kotlin.Metadata` at all and is treated as not a facade.
      */
     private fun isKotlinFileFacade(className: String): Boolean {
-        if (!className.endsWith("Kt")) return false
-        val bare = className.removeSuffix("Kt")
-        return File(kernelOpSourceDir, "$bare.kt").isFile
+        val classLoader = OperatorInventoryTest::class.java.classLoader
+        val clazz = Class.forName("civictech.cell.data.op.$className", false, classLoader)
+        val metadata = clazz.getAnnotation(Metadata::class.java) ?: return false
+        return metadata.kind == fileFacadeMetadataKind
     }
 
     private fun declaredInventory(): Set<String> {
@@ -168,13 +166,6 @@ class OperatorInventoryTest {
 
     @Test
     fun `civictech-cell-data-op's top-level classes match the checked-in inventory`() {
-        check(kernelOpSourceDir.isDirectory) {
-            "Expected kernel source directory not found at " +
-                "${kernelOpSourceDir.path} (resolved from :oracle's project directory) — " +
-                "isKotlinFileFacade cannot tell a compiler file-facade class from a " +
-                "hand-written one without it."
-        }
-
         val actual = actualTopLevelClassNames().filterNot(::isKotlinFileFacade).toSet()
         val declared = declaredInventory()
 
@@ -184,10 +175,10 @@ class OperatorInventoryTest {
         withClue(
             "civictech.cell.data.op has drifted from " +
                 "oracle/src/test/resources/operator-inventory.txt (epic computenet-4ru §9 " +
-                "risk 2). Added: $added. Removed: $removed. (Kotlin file-facade `*Kt` classes " +
-                "are filtered out by isKotlinFileFacade, so a name here is real " +
-                "operator-vocabulary churn unless it is a facade renamed away from its own " +
-                "file name by @file:JvmName — see that function's KDoc.) " +
+                "risk 2). Added: $added. Removed: $removed. (Kotlin file-facade classes are " +
+                "filtered out by isKotlinFileFacade using each class's own kotlin.Metadata " +
+                "kind, so every name here is real operator-vocabulary churn — see that " +
+                "function's KDoc.) " +
                 "Update the inventory AND OperatorCatalog's " +
                 "registration AND the reference model for the changed operator(s) in the same " +
                 "change, per the inventory file's own header.",
