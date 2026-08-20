@@ -3,12 +3,15 @@ package civictech.oracle.run
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
 import civictech.oracle.gen.GeneratorConfig
+import civictech.oracle.gen.GraphGenerator
 import civictech.oracle.model.ModelState
 import civictech.oracle.model.Script
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SourceId
 import civictech.oracle.model.SourceScript
 import civictech.oracle.model.WriterId
+import io.kotest.assertions.withClue
+import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
@@ -113,6 +116,118 @@ class OracleSweepTest {
         println(
             "[oracle-sweep] BS-1: $count seeds ($seeds) in $elapsedMs ms " +
                 "(${"%.1f".format(elapsedMs.toDouble() / count)} ms/seed) [ORA1-PERF-01]",
+        )
+    }
+
+    /**
+     * The **pair-shaped** sweep config: the whole registered vocabulary
+     * ([CoreOperators.Ids.ALL]), so `keyBy` and the eleven entries it bootstraps —
+     * `joinSet`/`semiJoin`/`antiJoin` and the eight `groupBy*` — are drawable, at the wide
+     * knobs `PairShapeBootstrapTest` and `GraphGeneratorTest` use (depth 3..5, three sources,
+     * element domain 6, 40 script ops).
+     *
+     * Two knobs differ from `PairShapeBootstrapTest.wideConfig`, and both are deliberate
+     * because this config is *executed* rather than only generated:
+     *
+     * - **`writerCount = 1`**, against `GeneratorConfig`'s default of 2. At two writers this
+     *   config mismatches for a reason that has nothing to do with the pair family: the
+     *   computenet-qcm1 / computenet-4ru.6.3 cross-writer remove asymmetry (`SetCell`'s inlet
+     *   retracts unconditionally, while the batch `Membership` model no-ops a cross-writer
+     *   remove that lacks a preceding `Observe`) — the same seam `baselineConfig` excludes for
+     *   the same reason. So this test says **nothing** about multi-writer pair-shaped scripts;
+     *   that is qcm1's item, not this one.
+     * - **`unobservedRemoveRatio = 0.0`**, against 0.25. Unobserved removes are the same
+     *   qcm1 seam approached from the other side, so biasing towards them here would measure
+     *   that seam rather than kernel-vs-model agreement over the pair family.
+     */
+    private fun pairShapedConfig() = GeneratorConfig(
+        depthRange = 3..5,
+        sourceCount = 3,
+        vocabulary = CoreOperators.Ids.ALL,
+        elementDomainSize = 6,
+        scriptLength = 40,
+        addRemoveRatio = 0.6,
+        unobservedRemoveRatio = 0.0,
+        terminalCount = 2,
+        writerCount = 1,
+    ).validated()
+
+    /**
+     * `[ORA1-DIFF-01]` `[ORA1-DIFF-04]` for the **pair-shaped half of the vocabulary**
+     * (computenet-q21w).
+     *
+     * ## The hole this closes
+     *
+     * computenet-4ru.16 registered `keyBy` and thereby made the eleven pair-shaped entries
+     * *generable*; `PairShapeBootstrapTest` pins that they are generated. What no committed
+     * test did was **run** one: every differential-execution suite in this module —
+     * [OracleSweepTest]'s own BS-1 above, [DivergenceControlTest], [WavePrefixTest],
+     * `PinnedSeedsTest`, [GeneratedCaseExecutionTest], [FailureTaxonomyTest], the shrinker
+     * suites — names an explicit set-algebra vocabulary and none names `keyBy` or any
+     * pair-shaped id, so ~40% of the operator algebra was reachable and unexecuted. This test
+     * executes it, kernel against batch reference, and asserts agreement — no Mismatch, no
+     * dead letter, no non-quiescence, which is what [OracleSweep.run] fails a seed on.
+     *
+     * ## Why the population is counted before it is swept
+     *
+     * The sweep alone would pass **vacuously** on a population that happens to contain no
+     * pair-shaped node — which is exactly the state the module was in before 4ru.16, and
+     * exactly the state it returns to if `keyBy` is unregistered or reshaped, or a generator
+     * change steers the frontier away from `SetOf(Tuple(2))`. So the seeds whose topology
+     * holds one of the twelve ids are counted first and the count is asserted, over the
+     * *same* `(seed, config)` pairs the sweep then executes: [civictech.oracle.gen.CaseGenerator]
+     * derives its graph as `GraphGenerator(config).generate(Random(seed))`, which is exactly
+     * what [GraphGenerator.generate]`(seed)` is defined as, so the two enumerate the same
+     * topologies rather than two similar ones.
+     *
+     * [PAIR_SHAPED_MINIMUM] is a floor well under what is observed, not the observed figure:
+     * the assertion exists to catch the family *collapsing*, and pinning the exact count would
+     * make this test fail on any innocuous generator retune. Observed 2026-08-20 on this
+     * config (macOS/arm64): **53 of 200** seeds carry a pair-shaped node, a superset of — and
+     * consistent with — the 23 join/groupBy-bearing seeds computenet-q21w measured on the
+     * closely related `unobservedRemoveRatio = 0.25` variant. The list is printed on every run
+     * so the margin is visible rather than inferred from a bare green tick.
+     *
+     * ## What a failure here means
+     *
+     * A dropped count is a **generation/registration** regression — read
+     * `PairShapeBootstrapTest` next. A sweep failure is a **disagreement** between the kernel
+     * and the reference over an operator this config draws, and per the epic's D10 it is fixed
+     * where it lives, never narrowed away here. And read [OracleSweep]'s "what a green sweep
+     * MEANS" KDoc before quoting this test: agreement defends the reference model, it does not
+     * prove it.
+     */
+    @Test
+    fun `the pair-shaped vocabulary executes differentially and agrees with the batch reference`() {
+        val config = pairShapedConfig()
+        val seeds = 0L until PAIR_SHAPED_SWEEP_SEEDS
+
+        val generator = GraphGenerator(config)
+        val pairShapedSeeds = seeds.filter { seed ->
+            generator.generate(seed).topology.nodes.any { it.catalogId in PAIR_SHAPED_FAMILY }
+        }
+        println(
+            "[oracle-sweep] pair-shaped: ${pairShapedSeeds.size} of $PAIR_SHAPED_SWEEP_SEEDS " +
+                "seeds carry a keyBy/join/groupBy node: $pairShapedSeeds",
+        )
+        withClue(
+            "No seed of this sweep draws a pair-shaped node, so executing it would assert " +
+                "nothing about keyBy, joinSet/semiJoin/antiJoin or the groupBy* family — the " +
+                "vacuity this test exists to exclude. Either `keyBy` (the SetOf(Scalar) -> " +
+                "SetOf(Tuple(2)) bootstrap computenet-4ru.16 added) is no longer registered or " +
+                "no longer has that shape, or a generator change has steered the frontier away " +
+                "from pair-shaped nodes. See PairShapeBootstrapTest for the generation-side " +
+                "measurement.",
+        ) {
+            pairShapedSeeds.size shouldBeGreaterThanOrEqual PAIR_SHAPED_MINIMUM
+        }
+
+        val startedAt = System.nanoTime()
+        OracleSweep.run(config, seeds, onProgress = {})
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+        println(
+            "[oracle-sweep] pair-shaped: $PAIR_SHAPED_SWEEP_SEEDS seeds in $elapsedMs ms " +
+                "(${"%.1f".format(elapsedMs.toDouble() / PAIR_SHAPED_SWEEP_SEEDS)} ms/seed)",
         )
     }
 
@@ -300,5 +415,34 @@ class OracleSweepTest {
                 System.setProperty(OracleSweep.SEED_COUNT_PROPERTY, previous)
             }
         }
+    }
+
+    private companion object {
+        /**
+         * The eleven entries computenet-4ru.16 unblocked, plus `keyBy` itself — the bootstrap
+         * that produces the `SetOf(Tuple(2))` the other eleven consume. A topology holding any
+         * one of them is a pair-shaped case.
+         */
+        val PAIR_SHAPED_FAMILY: Set<String> = setOf(
+            CoreOperators.Ids.KEY_BY,
+            CoreOperators.Ids.JOIN_SET,
+            CoreOperators.Ids.SEMI_JOIN,
+            CoreOperators.Ids.ANTI_JOIN,
+            CoreOperators.Ids.GROUP_BY_GLOBAL,
+        ) + CoreOperators.Ids.GROUP_BY_AGGREGATES
+
+        /**
+         * The same 200-seed population size `PairShapeBootstrapTest` and `GraphGeneratorTest`
+         * draw, so the count printed here is on the same scale as theirs rather than a
+         * different one.
+         */
+        const val PAIR_SHAPED_SWEEP_SEEDS: Long = 200L
+
+        /**
+         * A deliberately loose floor on how many of [PAIR_SHAPED_SWEEP_SEEDS] must carry a
+         * pair-shaped node — the guard against a vacuous sweep, not a pin on the generator's
+         * exact draws. See the test's KDoc for the observed figure.
+         */
+        const val PAIR_SHAPED_MINIMUM: Int = 10
     }
 }
