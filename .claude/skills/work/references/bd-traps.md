@@ -199,3 +199,50 @@ SKILL.md and the other references cite this file as "`bd` traps".
   block: one write per call, each with the long timeout, or the chain dies
   mid-sequence and leaves half-recorded state (computenet-9oq,
   computenet-9r8).
+- **`bd comments` is PLURAL for reading; `bd comment` is singular for
+  writing.** Measured on bd 1.1.2 (Homebrew, 2026-08-20): `bd comments <id>`
+  and `bd comments <id> --json` both work; `bd comment <id>` with no body
+  fails with `Error: no comment text provided`, and `--list` is not a flag on
+  either. A report claiming the reverse was rejected on this measurement
+  (computenet-878y) — if a future bd inverts it, record the version here
+  rather than swapping the forms on one session's error text.
+- **`bd comments`' DEFAULT (non-JSON) view truncates long bodies mid-word.**
+  Content past the cut is effectively unwritten for anyone reading it that
+  way. An implementer's landing comment held eight numbered interpretations;
+  6, 7 and 8 fell in the truncated region, and interpretation 8 was where its
+  reviewer found the task's one real error — visible only because that
+  reviewer re-read through `--json` (computenet-wq14). So every read goes
+  `--json` into a file, the same rule computenet-h0dj established for the
+  other five call sites:
+
+  ```bash
+  bd comments <id> --json > "$SCRATCH/c-<id>.json"
+  ```
+
+  The `--json` shape for comments is a **bare array** of comment objects — not
+  an object with a `.comments` key — matching `bd list --json` (computenet-kr18)
+  and unlike `bd show --json`, which is a list of one issue.
+- **`metadata.files` is a STRING on almost every bead and a JSON ARRAY on a
+  few.** Measured 2026-08-19: 2 of ~700 export records array-typed. So the
+  natural claim-collision query over the export
+
+  ```bash
+  jq -r 'select(.status!="closed") | select(.metadata.files | test("Foo")) | .id' .beads/issues.jsonl
+  ```
+
+  dies at the first array record with `array ([...]) cannot be matched, as it
+  is not a string`. **The failure mode is a PARTIAL result, not an empty one**
+  — jq prints every match it found before the abort and puts the error on
+  stderr, so the output reads as a complete answer. A competing claim recorded
+  below the abort point is invisible, and missing one is two branches editing
+  one file. Normalise both shapes:
+
+  ```bash
+  jq -r 'select(.status!="closed")
+         | select(((.metadata.files // "") | if type=="array" then join(",") else tostring end) | test("Foo"))
+         | .id' .beads/issues.jsonl
+  ```
+
+  (`next-batch.py` already handles both; this is for the ad-hoc queries
+  orchestrators and breakdown agents write, which are the ones that break —
+  computenet-hkgz.)

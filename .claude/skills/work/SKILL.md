@@ -616,7 +616,8 @@ assignee). Read the candidate's parent before claiming:
 ```bash
 bd show <candidate> --json | jq -r '.[0].parent // "(none)"'   # key OMITTED when unset; a dotted id's prefix is its parent
 bd show <that parent> --json | jq -r '.[0] | "\(.issue_type) \(.status) \(.assignee)"'
-bd comments <candidate>                                        # the holder's provenance comment lives here
+bd comments <candidate> --json > "$SCRATCH/prov-<candidate>.json"   # holder's provenance comment; --json + file because
+                                                                    # the default view TRUNCATES bodies mid-word (computenet-wq14)
 ```
 
 **A candidate may need a toolchain THIS machine does not have.** The fleet is
