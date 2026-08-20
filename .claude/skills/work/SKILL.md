@@ -273,6 +273,18 @@ task id** — `TaskStop` it when you reach Finalize.
 > both anyway, against this instruction, and carried a live 4-hour hazard
 > without noticing until Finalize; it read as one clause mid-paragraph
 > (computenet-3gf5).
+>
+> **The tool schema contradicts this, and the schema loses.** Monitor's JSON
+> schema lists `timeout_ms` in its `required` array alongside `description`
+> and `persistent`, so the literal reading of the line above looks like a call
+> the schema rejects — and a session that resolves the conflict in the
+> schema's favour ends up with exactly the capped monitor this instruction
+> exists to prevent, with nothing about it looking wrong at arming time.
+> **Omitting `timeout_ms` succeeds** (measured 2026-08-19; `required` is not
+> enforced for it, or the harness fills it). Omit it, and if some harness
+> version does reject the call, pass it and record here what evidence showed
+> `persistent: true` overriding it there — do not silently accept the cap
+> (computenet-bz0n).
 
 | Notification | Do, at the next decision point |
 |---|---|
