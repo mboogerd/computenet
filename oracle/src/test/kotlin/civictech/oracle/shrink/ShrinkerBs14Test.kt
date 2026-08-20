@@ -207,6 +207,69 @@ class ShrinkerBs14Test {
         }
     }
 
+    /**
+     * computenet-kgsd: the mirror of Ex-BS-14b above, with the two outcome kinds swapped. A
+     * counterexample shrunk with prefix checking OFF is a [RunOutcome.Mismatch] — the check
+     * never ran — but the pre-fix renderer emitted the bare `DifferentialRunner.run(case)` for
+     * every non-[RunOutcome.WavePrefixViolation] outcome, which resolves to
+     * [WavePrefixOption.DEFAULT] (a nonzero selection fraction), not [WavePrefixOption.OFF]. So
+     * a case whose seed [WavePrefixOption.DEFAULT] happens to select replays with checking
+     * turned back on, and a prefix-dirty case then reports [RunOutcome.WavePrefixViolation]
+     * instead of the [RunOutcome.Mismatch] the counterexample names.
+     *
+     * `WavePrefixTest`'s four `SEAM_SEEDS` are again the exact population: shrunk here under
+     * `wavePrefix = WavePrefixOption.OFF` they are `Mismatch` for all four (the check never ran),
+     * and `WavePrefixOption.DEFAULT.selects(seed)` is `false` for 30 and 40, `true` for 50 and 58
+     * — so the pre-fix bare replay reports the WRONG kind for exactly the seeds it got right in
+     * Ex-BS-14b's mirror direction.
+     */
+    @Test
+    fun `Ex-BS-14c a Mismatch counterexample shrunk with wave-prefix checking off replays as Mismatch, not WavePrefixViolation`() {
+        val config = wavePrefixSweepConfig()
+        SEAM_SEEDS.forEach { seed ->
+            val case = CaseGenerator(config).generate(seed)
+
+            val result = Shrinker.run(case, wavePrefix = WavePrefixOption.OFF)
+            withClue("seed=$seed must shrink to a Mismatch under wavePrefix = OFF") {
+                result.outcome.shouldBeInstanceOf<RunOutcome.Mismatch>()
+            }
+            val mismatch = result.outcome as RunOutcome.Mismatch
+
+            // The pre-fix rendering emitted `DifferentialRunner.run(case)` with no `wavePrefix`
+            // argument at all — reproduced directly (not through a compiled snippet, which no
+            // test here can invoke) to show it does NOT reliably reproduce the Mismatch.
+            val unfixedReplay = DifferentialRunner.run(result.case)
+            withClue(
+                "seed=$seed, DEFAULT.selects=${WavePrefixOption.DEFAULT.selects(seed)}: the pre-fix " +
+                    "replay (no wavePrefix argument) got $unfixedReplay",
+            ) {
+                if (WavePrefixOption.DEFAULT.selects(seed)) {
+                    // The bug this defect fixes: half the population replays as the WRONG kind.
+                    unfixedReplay.shouldBeInstanceOf<RunOutcome.WavePrefixViolation>()
+                } else {
+                    unfixedReplay.shouldBeInstanceOf<RunOutcome.Mismatch>()
+                }
+            }
+
+            // The FIXED rendering: DifferentialRunner.run(case, wavePrefix =
+            // civictech.oracle.run.WavePrefixOption.OFF), the call renderCounterexample must
+            // emit for a non-WavePrefixViolation outcome.
+            val fixedReplay = DifferentialRunner.run(result.case, wavePrefix = WavePrefixOption.OFF)
+            withClue("seed=$seed: the fixed replay must reproduce the same kind and terminal") {
+                fixedReplay.shouldBeInstanceOf<RunOutcome.Mismatch>().terminal shouldBe mismatch.terminal
+            }
+
+            val rendered = result.renderKotlin()
+            withClue(rendered) {
+                rendered shouldContain "civictech.oracle.run.DifferentialRunner.run(case, " +
+                    "wavePrefix = civictech.oracle.run.WavePrefixOption.OFF)"
+                rendered shouldContain "RunOutcome.Mismatch"
+                rendered shouldContain "\"${mismatch.terminal}\""
+                rendered shouldNotContain "Shrinker"
+            }
+        }
+    }
+
     private fun adds(script: Script): List<ScriptEvent.Add> =
         script.slices.flatMap { it.events }.filterIsInstance<ScriptEvent.Add>()
 
