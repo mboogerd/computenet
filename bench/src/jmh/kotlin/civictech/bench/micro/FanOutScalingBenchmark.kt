@@ -8,6 +8,7 @@ import org.openjdk.jmh.annotations.Fork
 import org.openjdk.jmh.annotations.Level
 import org.openjdk.jmh.annotations.Measurement
 import org.openjdk.jmh.annotations.Mode
+import org.openjdk.jmh.annotations.OperationsPerInvocation
 import org.openjdk.jmh.annotations.OutputTimeUnit
 import org.openjdk.jmh.annotations.Param
 import org.openjdk.jmh.annotations.Scope
@@ -306,5 +307,124 @@ open class FanOutScalingBenchmark {
     @Measurement(iterations = FanOutFixtures.FIXED_STATE_MEASUREMENT_ITERATIONS)
     fun realFixedState(state: RealFixedState, blackhole: Blackhole) {
         blackhole.consume(state.applyOneAndQuiesce())
+    }
+
+    // =====================================================================================
+    // computenet-2scd — the BATCH fixed-state variant.
+    //
+    // [FixedStateRigState] above holds the state size fixed and reports one COLD delta per
+    // sample; `doc/bench/findings.md`'s 2026-08-20 entry records what that cost — relative
+    // dispersion 0.0941-0.2411, only one of four segments per drive resolvable against its
+    // own 99.9% error bar, reading INCONCLUSIVE. That entry's own "what would settle it"
+    // paragraph names this shape: an `@OperationsPerInvocation` batch of fixed size against
+    // a pre-seeded source, with the rig rebuilt per invocation-BATCH rather than per
+    // invocation, which keeps JIT warmup across a batch's operations at the SAME fixed
+    // state size and the same wall-clock budget.
+    //
+    // The state size is still fixed across degree by construction: every degree pre-seeds
+    // the same `FanOutFixtures.FIXED_STATE_ELEMENTS` and applies the same
+    // `FanOutFixtures.BATCH_OPS` deltas, so the within-batch drift (2% of the source) is
+    // IDENTICAL at every degree — unlike the original per-iteration rebuild, whose drift
+    // was inversely proportional to the very cost being measured. See `FanOutFixtures`'
+    // own "computenet-2scd" block for the sizing arithmetic.
+    // =====================================================================================
+
+    /**
+     * Batch fixed-state variant: rebuilds AND re-seeds to
+     * `FanOutFixtures.FIXED_STATE_ELEMENTS` once per invocation-BATCH, then [runBatch]
+     * applies `FanOutFixtures.BATCH_OPS` deltas inside the ONE timed region.
+     *
+     * `Mode.AverageTime` with `@OperationsPerInvocation(FanOutFixtures.BATCH_OPS)` means
+     * the reported score is per DELTA, directly comparable in unit — though not in
+     * measurement design — with [RigState]'s and [FixedStateRigState]'s scores.
+     *
+     * **The `Level.Invocation` `@Setup` trap [FixedStateRigState]'s KDoc names is entered
+     * here deliberately, not overlooked.** Under `Mode.AverageTime` JMH's iteration loop
+     * terminates on wall clock, and the rebuild+re-seed counts against that clock while
+     * being excluded from the timed region, so an iteration fits fewer invocations than its
+     * measured time alone implies. That costs sample count, never correctness of the number:
+     * what JMH times is exactly [runBatch]'s loop. The batch is what makes the trade pay —
+     * amortising one rebuild across `BATCH_OPS` measured deltas instead of one.
+     */
+    @State(Scope.Thread)
+    open class BatchFixedStateRigState(private val drive: Drive) {
+
+        /** Same [FanDegree] parameterisation as [RigState.degree]; see there. */
+        @Param
+        @JvmField
+        var degree: FanDegree = FanDegree.D1
+
+        private lateinit var rig: FanOutRig
+
+        /** Identical hook to [RigState.announceHost], for the identical reason. */
+        @Setup(Level.Trial)
+        fun announceHost() {
+            println()
+            HostFacts.captureCurrent().bannerLines().forEach(::println)
+        }
+
+        /** Rebuilds AND pre-seeds a fresh rig before every measured BATCH. */
+        @Setup(Level.Invocation)
+        fun openRig() {
+            rig = FanOutFixtures.rig(degree, drive, preSeed = FanOutFixtures.FIXED_STATE_ELEMENTS)
+        }
+
+        @TearDown(Level.Invocation)
+        fun closeRig() {
+            rig.close()
+        }
+
+        /**
+         * The measured work: `FanOutFixtures.BATCH_OPS` fresh deltas, each driven to
+         * quiescence exactly as [RigState.applyOneAndQuiesce] drives its single one, summed
+         * so no iteration of the loop is eliminable.
+         */
+        fun runBatch(): Long {
+            var acc = 0L
+            repeat(FanOutFixtures.BATCH_OPS) { acc += rig.applyOneAndQuiesce() }
+            return acc
+        }
+    }
+
+    /** [Drive.SIM] batch fixed-state. */
+    @State(Scope.Thread)
+    open class SimBatchFixedState : BatchFixedStateRigState(Drive.SIM)
+
+    /** [Drive.REAL] batch fixed-state. */
+    @State(Scope.Thread)
+    open class RealBatchFixedState : BatchFixedStateRigState(Drive.REAL)
+
+    @Benchmark
+    @OperationsPerInvocation(FanOutFixtures.BATCH_OPS)
+    @Fork(FanOutFixtures.BATCH_FORKS)
+    @Warmup(
+        iterations = FanOutFixtures.BATCH_WARMUP_ITERATIONS,
+        time = FanOutFixtures.BATCH_ITERATION_SECONDS,
+        timeUnit = TimeUnit.SECONDS,
+    )
+    @Measurement(
+        iterations = FanOutFixtures.BATCH_MEASUREMENT_ITERATIONS,
+        time = FanOutFixtures.BATCH_ITERATION_SECONDS,
+        timeUnit = TimeUnit.SECONDS,
+    )
+    fun simBatchFixedState(state: SimBatchFixedState, blackhole: Blackhole) {
+        blackhole.consume(state.runBatch())
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(FanOutFixtures.BATCH_OPS)
+    @Fork(FanOutFixtures.BATCH_FORKS)
+    @Warmup(
+        iterations = FanOutFixtures.BATCH_WARMUP_ITERATIONS,
+        time = FanOutFixtures.BATCH_ITERATION_SECONDS,
+        timeUnit = TimeUnit.SECONDS,
+    )
+    @Measurement(
+        iterations = FanOutFixtures.BATCH_MEASUREMENT_ITERATIONS,
+        time = FanOutFixtures.BATCH_ITERATION_SECONDS,
+        timeUnit = TimeUnit.SECONDS,
+    )
+    fun realBatchFixedState(state: RealBatchFixedState, blackhole: Blackhole) {
+        blackhole.consume(state.runBatch())
     }
 }
