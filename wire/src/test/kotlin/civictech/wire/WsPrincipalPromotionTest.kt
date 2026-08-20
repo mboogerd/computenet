@@ -92,6 +92,8 @@ class WsPrincipalPromotionTest {
             peer = peerId,
             auth = if (keyed) PeerAuthPolicy.RequireAuthenticated() else PeerAuthPolicy.Open,
             credentials = identity?.asPeerCredentials(),
+            announcementSigning = if (keyed) socketAnnouncementSigning() else null,
+            announcementVerification = if (keyed) socketAnnouncementVerification() else null,
         )
     }
 

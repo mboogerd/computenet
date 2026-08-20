@@ -786,6 +786,14 @@ object Peering {
         side: Side,
         fromPeer: PeerId? = null,
         fromPeerAuth: AuthLevel = AuthLevel.TransportVouched,
+        /**
+         * The admission gate this ingress judges announcements with. Defaults
+         * to the side's own ([Side.announcementAdmission]) — the loopback and
+         * pre-feature shape. A socket transport overrides it with
+         * `side.announcementAdmission?.withVerifier(...)`, which is the *same*
+         * replay ledger rebound to the key this connection's hello proved.
+         */
+        announcementAdmission: AnnouncementAdmission? = side.announcementAdmission,
         onSpawn: (BridgeIngressCell) -> Unit = {},
     ): Propagate<ByteArray> {
         val ingress = BridgeIngressCell(
@@ -797,7 +805,7 @@ object Peering {
             // including the fresh one a reconnect mints — shares one replay
             // ledger ([DSC1-ANN-13]). Null on a side that verifies nothing,
             // which is the pre-feature path.
-            announcementAdmission = side.announcementAdmission,
+            announcementAdmission = announcementAdmission,
         )
         onSpawn(ingress)
         side.bridgeHost.managementInlet.call.spawn(ingress)

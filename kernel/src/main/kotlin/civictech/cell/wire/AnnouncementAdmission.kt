@@ -191,12 +191,39 @@ data class AnnouncementRejection(val reason: DenialReason, val detail: String)
  * — it is a deliberate choice, not a test-constrained invariant, and a change to
  * it will not redden this suite.
  */
-class AnnouncementAdmission internal constructor(
+class AnnouncementAdmission private constructor(
     private val config: AnnouncementVerification,
-) {
     /** Highest counter accepted per minting identity — `MediateProxy`'s discipline (spec 40/43 seam 3). */
-    private val highWater = ConcurrentHashMap<PeerId, Long>()
-    private val rejected = AtomicLong()
+    private val highWater: ConcurrentHashMap<PeerId, Long>,
+    private val rejected: AtomicLong,
+) {
+    internal constructor(config: AnnouncementVerification) :
+        this(config, ConcurrentHashMap(), AtomicLong())
+
+    /**
+     * The same ledger, judged with a different [AnnouncementVerifier] — the
+     * seam a **connection-keyed** receiver needs, and the only kernel surface
+     * `computenet-ssa.4.4` had to add.
+     *
+     * A `Peering.Side` holds one [AnnouncementVerification], but a socket side
+     * accepts many connections and each one is bound to a *different* peer key,
+     * learned from that connection's hello and known only to `:wire`. The
+     * replay ledger, by contrast, must be side-scoped and must survive the
+     * ingress replacement a reconnect performs ([DSC1-ANN-13]) — so the two
+     * cannot both live on the same object unless one of them can be rebound.
+     * This rebinds the cheap half: the returned admission **shares** [highWater]
+     * and [rejectedAnnouncements] with the receiver, and differs only in which
+     * key the signature is checked against.
+     *
+     * Verifying under only the connection's key is what makes the
+     * `ID_MISMATCH`-before-verify ordering observable — with a directory-shaped
+     * verifier a frame minted by B verifies `true` on A's connection and the
+     * ordering is invisible; with this shape it verifies `false`, so an
+     * ordering that checked the signature first would report `BAD_SIGNATURE`
+     * and lose the impersonation. `WsAnnouncementIdentityTest` pins it.
+     */
+    fun withVerifier(verifier: AnnouncementVerifier): AnnouncementAdmission =
+        AnnouncementAdmission(config.copy(verifier = verifier), highWater, rejected)
 
     /**
      * Monotonic count of announcements this side refused, all reasons summed

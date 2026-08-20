@@ -40,6 +40,10 @@ class WsHelloAllowlistDerivedIdTest {
             allow = allow,
             auth = PeerAuthPolicy.RequireAuthenticated(),
             credentials = identity.asPeerCredentials(),
+            // requireAnnouncementIdentity: a RequireAuthenticated socket side
+            // must sign AND verify its announcements (computenet-ssa.4.4).
+            announcementSigning = socketAnnouncementSigning(),
+            announcementVerification = socketAnnouncementVerification(),
         )
     }
 
