@@ -863,9 +863,13 @@ children in pairs. `computenet-4ru` carried four such pairs (`.6/.7`,
 `.8/.9`, `.10/.11`, `.12/.13`), created seconds apart, one twin of each closed.
 Neither reading above catches it, and inheriting the aftermath cost a session
 real time reading two ~1500-word bodies side by side before any work could
-start (computenet-f434). Scan the `--all` listing you already have for
-**same-titled or same-scoped children created within minutes of each other**,
-then:
+start (computenet-f434). Don't eyeball the listing for it — scan, and read a
+flag as a **question** (deliberately parallel beads look identical to it):
+
+```bash
+.claude/skills/work/scripts/twin-scan.py <epic>   # finds all six 4ru twins; bv finds none
+```
+Then:
 
 - **One twin closed** — very likely a clean supersede if it has
   `comment_count` 0 and a `closed_at` within minutes of its `created_at`
