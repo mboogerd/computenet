@@ -4,6 +4,7 @@ import civictech.oracle.gen.CaseScript
 import civictech.oracle.gen.CaseStep
 import civictech.oracle.gen.CaseTopology
 import civictech.oracle.gen.GeneratedCase
+import civictech.oracle.gen.RemoveRecord
 import civictech.oracle.gen.TerminalSpec
 import civictech.oracle.gen.TopologyNode
 import civictech.oracle.model.ScriptEvent
@@ -27,14 +28,66 @@ import civictech.oracle.run.RunOutcome
  * ## No runtime state
  *
  * Every value emitted below — the seed, every [TopologyNode]/[TerminalSpec] field, every
- * [CaseStep] — is a literal already held by the counterexample's [GeneratedCase]. Nothing is
- * captured from the failing sweep: no live `civictech.testkit.SimWorld`, no reference closure,
- * no catalog snapshot. A caller-substituted `civictech.oracle.run.Reference` (the seam a test
- * uses to manufacture a failure without touching the kernel) is exactly such runtime state — it
- * is arbitrary Kotlin the shrink was merely handed, not data [GeneratedCase] carries — so the
- * rendered replay always asserts against the catalog-resolved reference
- * (`DifferentialRunner.run(case)`, no `reference` argument), which is also the shape a *real*
- * kernel-vs-model disagreement takes.
+ * [CaseStep], every [RemoveRecord] — is a literal already held by the counterexample's
+ * [GeneratedCase]. Nothing is captured from the failing sweep: no live
+ * `civictech.testkit.SimWorld`, no reference closure, no catalog snapshot. A caller-substituted
+ * `civictech.oracle.run.Reference` (the seam a test uses to manufacture a failure without
+ * touching the kernel) is exactly such runtime state — it is arbitrary Kotlin the shrink was
+ * merely handed, not data [GeneratedCase] carries — so the rendered replay always asserts
+ * against the catalog-resolved reference (`DifferentialRunner.run(case, ...)`, no `reference`
+ * argument), which is also the shape a *real* kernel-vs-model disagreement takes.
+ *
+ * ## `removeAudit` is rendered as literals, never re-derived (computenet-p5qy defect 1)
+ *
+ * An earlier version of this renderer emitted
+ * `removeAudit = civictech.oracle.shrink.Shrinker.auditFor(script)` — a call back into an
+ * `internal` member of an `internal`-adjacent object. That compiles inside `:oracle`'s own test
+ * source set, where the snippet's containment test lives, but fails everywhere else a module can
+ * consume `:oracle` (measured: `:kernel:compileTestKotlin` refuses it with "it is internal in
+ * 'civictech/oracle/shrink/Shrinker'" when the identical snippet is pasted into
+ * `kernel/src/test/kotlin/civictech/cell/oracle/`). [GeneratedCase.removeAudit] is already the
+ * exact data a re-derivation would recompute — [Shrinker] keeps it current through every
+ * reduction pass (see `Shrinker.withScript`/`withElements`/`without`) — so the snippet renders
+ * [Counterexample.case]'s own `removeAudit` as a literal [RemoveRecord] list instead of calling
+ * anything. This was chosen over widening `Shrinker.auditFor` to `public`: it keeps `:oracle`'s
+ * API surface unchanged, and a snippet with no call back into the shrinker at all is closer to
+ * "pasteable standalone test" than one that depends on a shrinker-internal helper, even a public
+ * one.
+ *
+ * ## The wave-prefix option is rendered for a [RunOutcome.WavePrefixViolation] (defect 2)
+ *
+ * A [RunOutcome.WavePrefixViolation] is only detectable while `civictech.oracle.run.WavePrefixOracle`
+ * is actively checking, and whether it checks a given case is a `civictech.oracle.run.WavePrefixOption`
+ * decision the caller makes per run — it is not carried by [GeneratedCase] or by the outcome
+ * itself. Rendering the replay with no `wavePrefix` argument leaves it at
+ * `civictech.oracle.run.WavePrefixOption.DEFAULT` (a 0.25 selection fraction), so whether the
+ * violation reproduces depends on whether `DEFAULT.selects(case.seed)` happens to be `true` —
+ * measured over `WavePrefixTest`'s four `SEAM_SEEDS`, exactly half do and half report a plain
+ * `Mismatch` instead.
+ *
+ * The fix does not require knowing which [civictech.oracle.run.WavePrefixOption] the shrink was
+ * actually given — `civictech.oracle.run.WavePrefixOption.selects` is a pure predicate over the
+ * seed that decides only *whether* the check runs; the violation it finds once running is
+ * unaffected by which fraction triggered it. `civictech.oracle.run.WavePrefixOption.ALWAYS`
+ * (fraction `1.0`) selects every seed unconditionally, so re-running with `ALWAYS` reproduces
+ * whatever violation any option that selected this case's seed found. So a
+ * [RunOutcome.WavePrefixViolation] counterexample always renders
+ * `DifferentialRunner.run(case, wavePrefix = civictech.oracle.run.WavePrefixOption.ALWAYS)`; every
+ * other outcome renders the plain `DifferentialRunner.run(case)`, unchanged, so as not to force
+ * prefix-checking onto a replay that never needed it.
+ *
+ * **The mirror case is NOT fixed here — computenet-kgsd.** That bare `DifferentialRunner.run(case)`
+ * resolves to `civictech.oracle.run.WavePrefixOption.DEFAULT`, not to `OFF`, so a counterexample
+ * shrunk with prefix checking *off* — or under an option whose `selects(seed)` was `false` — can
+ * be replayed with it *on*, and a prefix-dirty case then reports a
+ * [RunOutcome.WavePrefixViolation] where the counterexample names a [RunOutcome.Mismatch]: the
+ * emitted `check()` fails, naming a different kind than the counterexample it was rendered from.
+ * Measured at review time over the same four `WavePrefixTest` `SEAM_SEEDS`, each shrunk with
+ * `WavePrefixOption.OFF` (a `Mismatch` counterexample for all four) and replayed exactly as
+ * rendered: seeds 50 and 58 (`DEFAULT.selects(seed) == true`) replay as `WavePrefixViolation`,
+ * seeds 30 and 40 replay faithfully. Its two candidate fixes — render `WavePrefixOption.OFF` for a
+ * non-violation outcome, or carry the option the shrink was given on [Counterexample] — are a
+ * design choice, which is why it is a filed residual rather than a line of this file.
  *
  * ## `check`, not a test-framework assertion
  *
@@ -56,7 +109,7 @@ internal fun renderCounterexample(counterexample: Counterexample): String {
         appendLine("// Rebuilt from CaseTopology + CaseScript via catalog ids; the lowered GraphSpec is")
         appendLine("// re-derived by GraphGenerator.lower, never printed — see RenderKotlin.kt's KDoc.")
         appendLine("// NOTE: the check() below asserts against the catalog-resolved reference")
-        appendLine("// (DifferentialRunner.run(case), no `reference` argument). If the counterexample")
+        appendLine("// (DifferentialRunner.run(case, ...), no `reference` argument). If the counterexample")
         appendLine("// this was rendered from was found under a CALLER-SUBSTITUTED reference (e.g. a")
         appendLine("// test injecting a mutant model via DifferentialRunner.run's `reference` seam,")
         appendLine("// rather than an actual kernel bug), this replay will NOT reproduce that failure —")
@@ -86,10 +139,17 @@ internal fun renderCounterexample(counterexample: Counterexample): String {
         appendLine("    topology = topology,")
         appendLine("    spec = civictech.oracle.gen.GraphGenerator.lower(topology),")
         appendLine("    script = script,")
-        appendLine("    removeAudit = civictech.oracle.shrink.Shrinker.auditFor(script),")
+        appendLine("    removeAudit = listOf(")
+        case.removeAudit.forEach { record -> appendLine("        ${renderRemoveRecord(record)},") }
+        appendLine("    ),")
         appendLine(")")
         appendLine()
-        appendLine("val outcome = civictech.oracle.run.DifferentialRunner.run(case)")
+        val wavePrefixArg = if (counterexample.outcome is RunOutcome.WavePrefixViolation) {
+            ", wavePrefix = civictech.oracle.run.WavePrefixOption.ALWAYS"
+        } else {
+            ""
+        }
+        appendLine("val outcome = civictech.oracle.run.DifferentialRunner.run(case$wavePrefixArg)")
         val terminalCheck = if (terminal == null) "" else " && outcome.terminal == ${literal(terminal)}"
         appendLine("check(outcome is civictech.oracle.run.RunOutcome.$kind$terminalCheck) {")
         val terminalDescription = if (terminal == null) "" else " on '$terminal'"
@@ -114,6 +174,14 @@ private fun renderNode(node: TopologyNode): String {
         "inputs = listOf($inputs), " +
         "source = $source)"
 }
+
+/**
+ * A literal [RemoveRecord] — `stepIndex` and `observed` are an `Int` and a `Boolean`, so both
+ * render directly. Rendered rather than re-derived through `Shrinker.auditFor(script)`: see this
+ * file's "removeAudit is rendered as literals" KDoc.
+ */
+private fun renderRemoveRecord(record: RemoveRecord): String =
+    "civictech.oracle.gen.RemoveRecord(stepIndex = ${record.stepIndex}, observed = ${record.observed})"
 
 private fun renderTerminal(terminal: TerminalSpec): String =
     "civictech.oracle.gen.TerminalSpec(" +

@@ -105,6 +105,81 @@ class CounterexampleRenderTest {
     }
 
     @Test
+    fun `renderKotlin renders removeAudit as literal RemoveRecord values, never calling back into Shrinker`() {
+        val counterexample = shrunkCounterexample(seed = 104L)
+        val rendered = counterexample.renderKotlin()
+
+        withClue(rendered) {
+            // computenet-p5qy defect 1: the emitted snippet must not name Shrinker.auditFor (or
+            // anything else on Shrinker) — that is the internal symbol that failed to compile
+            // outside :oracle. Asserting the whole class name is absent is a stronger pin than
+            // asserting the method name is absent: it also catches a future call to some OTHER
+            // Shrinker member from this renderer.
+            rendered shouldNotContain "Shrinker"
+            rendered shouldNotContain "auditFor"
+            rendered shouldContain "removeAudit = listOf("
+            counterexample.case.removeAudit.forEach { record ->
+                rendered shouldContain "civictech.oracle.gen.RemoveRecord(stepIndex = ${record.stepIndex}, " +
+                    "observed = ${record.observed})"
+            }
+        }
+    }
+
+    @Test
+    fun `renderKotlin renders no reference to any internal oracle symbol`() {
+        // The compile-outside-the-module half of computenet-p5qy's acceptance criterion cannot be
+        // checked by invoking the Kotlin compiler from a unit test (no such call is available
+        // here), so this pins what CAN be checked honestly: every fully-qualified
+        // civictech.oracle name the renderer is known to emit is a public declaration, confirmed
+        // by hand against the source at the paths named below (recorded so a future rename is
+        // caught by a reviewer, not silently untested):
+        //   civictech.oracle.gen.CaseTopology / TopologyNode / TerminalSpec / CaseScript /
+        //     CaseStep / GeneratedCase / RemoveRecord / GraphGenerator.lower  (all public,
+        //     oracle/src/main/kotlin/civictech/oracle/gen/*.kt)
+        //   civictech.oracle.model.SourceId / WriterId / ScriptEvent           (all public,
+        //     oracle/src/main/kotlin/civictech/oracle/model/*.kt)
+        //   civictech.oracle.run.DifferentialRunner.run / RunOutcome / WavePrefixOption (all
+        //     public, oracle/src/main/kotlin/civictech/oracle/run/*.kt)
+        // What this test actually asserts, mechanically: the one symbol the bead measured as
+        // failing to compile outside :oracle (Shrinker.auditFor) is gone from the output, for
+        // both a Mismatch and a WavePrefixViolation counterexample.
+        val mismatch = shrunkCounterexample(seed = 105L)
+        mismatch.renderKotlin() shouldNotContain "civictech.oracle.shrink.Shrinker"
+
+        val violation = Counterexample(
+            case = mismatch.case,
+            outcome = wavePrefixViolation(mismatch.case.topology.terminals.single().name),
+            originalSize = mismatch.originalSize,
+            truncated = false,
+        )
+        violation.renderKotlin() shouldNotContain "civictech.oracle.shrink.Shrinker"
+    }
+
+    @Test
+    fun `renderKotlin renders wavePrefix = ALWAYS only for a WavePrefixViolation outcome`() {
+        val mismatch = shrunkCounterexample(seed = 106L)
+        withClue(mismatch.renderKotlin()) {
+            mismatch.renderKotlin() shouldContain "civictech.oracle.run.DifferentialRunner.run(case)"
+            mismatch.renderKotlin() shouldNotContain "wavePrefix"
+        }
+
+        val terminal = mismatch.case.topology.terminals.single().name
+        val violation = Counterexample(
+            case = mismatch.case,
+            outcome = wavePrefixViolation(terminal),
+            originalSize = mismatch.originalSize,
+            truncated = false,
+        )
+        val rendered = violation.renderKotlin()
+        withClue(rendered) {
+            rendered shouldContain "civictech.oracle.run.DifferentialRunner.run(case, " +
+                "wavePrefix = civictech.oracle.run.WavePrefixOption.ALWAYS)"
+            rendered shouldContain "RunOutcome.WavePrefixViolation"
+            rendered shouldContain "\"$terminal\""
+        }
+    }
+
+    @Test
     fun `literal renders String, Long, Boolean and null, and escapes quotes and backslashes`() {
         literal("e00") shouldBe "\"e00\""
         literal(7L) shouldBe "7L"
@@ -155,6 +230,25 @@ class CounterexampleRenderTest {
         }
         return Shrinker.run(case, reference = reference)
     }
+
+    /**
+     * A minimal, syntactically valid [RunOutcome.WavePrefixViolation] naming [terminal] — for
+     * the rendering-shape tests above, which check what `renderKotlin` emits for this OUTCOME
+     * KIND, not the wave-prefix oracle's own behavior (that is `WavePrefixTest`'s and
+     * `ShrinkerBs14Test`'s, the latter exercising a real glitch end to end).
+     */
+    private fun wavePrefixViolation(terminal: String) = RunOutcome.WavePrefixViolation(
+        seed = 1L,
+        terminal = terminal,
+        kind = RunOutcome.WavePrefixViolation.Kind.NO_MATCHING_PREFIX,
+        renderedGraphSpec = "render-test-marker",
+        script = Script(emptyList()),
+        observed = SENTINEL,
+        observationIndex = 1,
+        matchedFloor = 0,
+        regressedTo = null,
+        nearestPrefixes = emptyMap(),
+    )
 
     private fun adds(script: Script): List<ScriptEvent.Add> =
         script.slices.flatMap { it.events }.filterIsInstance<ScriptEvent.Add>()
