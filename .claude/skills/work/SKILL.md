@@ -740,6 +740,30 @@ machines until a human notices. The moment this is most likely to appear is
 exactly the moment a session finishes something and asks what is next. One
 extra command closes the whole class regardless of mechanism (computenet-2mou).
 
+**And check the EDGES before you defer — an empty readiness answer is
+routinely wrong.** `bd ready`, `bd blocked` and `ready-in-epic.sh` all derive
+blockedness from bd's denormalized `is_blocked` column, which goes stale
+against the live edge set the moment a blocker closes — the event a work
+session generates constantly. Measured seven times across two sessions on
+2026-08-19: beads whose sole blocking edge pointed at a *closed* bead, and
+beads created minutes earlier with *no* blocking edge at all, were all
+reported blocked. `bd dolt pull` did not clear it, and the separate-invocation
+guard above does not help, because re-running returns the same wrong answer
+(computenet-r79z, computenet-38ze). This is
+`doc/demo-findings.md` F-12 reaching the skill's own selection path.
+
+```bash
+.claude/skills/work/scripts/verify-ready.sh <the epic's open children...>
+```
+
+It reads each id's real edges with `bd dep list` and applies
+READY-COVERAGE.md section 2's test — an edge blocks only if its type is
+`blocks`/`conditional-blocks` AND its target is neither closed nor pinned.
+**Any `READY` line means there is a workable surface: do NOT defer.**
+Dispatching by hand on a bead this proves ready is correct, not a deviation.
+Exit 3 means a `bd dep list` failed and nothing was checked — that is not an
+answer either.
+
 ```bash
 bd comment <epic> "Parking: no workable surface. <ids: human-gated / blocked on <other-epic>>"
 bd defer <epic>
@@ -1213,8 +1237,21 @@ friction. **Empty batch** → read `verdict`, don't infer:
 |---|---|---|
 | `all-closed` | every task closed | **5e** |
 | `parked-residue` | all non-closed children are ask-human parks; the feature's own work is done | **5e** |
-| `blocked` | work remains this session can't start | set `parked_at`, go to **5f** |
+| `blocked` | work remains this session can't start | **confirm against the edges first** (below), then set `parked_at`, go to **5f** |
 | `no-tasks` | no tasks at all | breakdown died — treat as empty above |
+
+**A `blocked` verdict is a claim about bd's `is_blocked` column, not about
+the edges.** That column is stale the moment a blocker closes, so the verdict
+arrives wrong exactly when a session is productive — measured three times in
+one session, including on a task created minutes earlier with no blocking edge
+at all (computenet-38ze). Confirm before parking:
+
+```bash
+.claude/skills/work/scripts/verify-ready.sh <the feature's non-closed tasks...>
+```
+
+Any `READY` line and the batch was not empty: dispatch that task by hand and
+do not park. Only an all-`BLOCKED` result earns the `parked_at` route.
 
 `parked-residue` exists because parking a finished feature over follow-up
 questions *its own implementation filed* strands CI-green work with no path
