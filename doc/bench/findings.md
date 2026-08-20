@@ -2404,7 +2404,9 @@ the trial's own worst page by more than **3.7%** (largest shortfall: `maxGap` 12
 page 12.6782 ms @1/547, `walkWall` 70.5274 against `drive` 78.5169 — still contained on both
 tests, and nothing like run 3 t3's factor of 2.7). At 1e4 and 1e3 the drive dominates by
 construction (maximum `walkWall`/`drive` 0.726 and 0.706), so the race is a 1e5 phenomenon, as
-the mechanism itself says.
+the mechanism itself says — though that reading of those two scales rests on the duration
+comparison and the mechanism, and the duration comparison is by the test above necessary and
+**not** sufficient, so no per-trial containment label is claimed for 1e4 or 1e3 here.
 
 A contained trial from this sweep, with all four figures, at the **close** — the branch run 3
 t3 lost:
