@@ -61,7 +61,13 @@ class OperatorInventoryTest {
      * classpath for a project dependency — both are handled so the test does not depend on
      * which one :kernel happens to produce.
      */
-    private fun actualTopLevelClassNames(): Set<String> {
+    private fun actualTopLevelClassNames(): Set<String> = actualTopLevelClassNames(packagePath)
+
+    /**
+     * Same walk as [actualTopLevelClassNames] above, generalized to any [packagePath] so this
+     * file's second gate (`civictech.cell.data`, computenet-y9p4) can reuse it.
+     */
+    private fun actualTopLevelClassNames(packagePath: String): Set<String> {
         val classLoader = OperatorInventoryTest::class.java.classLoader
         val resources = classLoader.getResources(packagePath).toList()
         check(resources.isNotEmpty()) {
@@ -138,19 +144,27 @@ class OperatorInventoryTest {
      * A class outside `civictech.cell.data.op`'s Kotlin-compiled surface (there is none on this
      * classpath, but defensively) has no `kotlin.Metadata` at all and is treated as not a facade.
      */
-    private fun isKotlinFileFacade(className: String): Boolean {
+    private fun isKotlinFileFacade(className: String): Boolean =
+        isKotlinFileFacade(packagePath, className)
+
+    /**
+     * Same check as [isKotlinFileFacade] above, generalized to any [packagePath] so this file's
+     * second gate ([civictech.cell.data]'s source cells, computenet-y9p4) can reuse it without
+     * duplicating the reasoning in that function's KDoc.
+     */
+    private fun isKotlinFileFacade(packagePath: String, className: String): Boolean {
         val classLoader = OperatorInventoryTest::class.java.classLoader
-        val clazz = Class.forName("civictech.cell.data.op.$className", false, classLoader)
+        val fqcn = packagePath.replace('/', '.') + "." + className
+        val clazz = Class.forName(fqcn, false, classLoader)
         val metadata = clazz.getAnnotation(Metadata::class.java) ?: return false
         return metadata.kind == fileFacadeMetadataKind
     }
 
-    private fun declaredInventory(): Set<String> {
+    private fun declaredInventory(resourceName: String): Set<String> {
         val stream = OperatorInventoryTest::class.java.classLoader
-            .getResourceAsStream("operator-inventory.txt")
+            .getResourceAsStream(resourceName)
             ?: error(
-                "oracle/src/test/resources/operator-inventory.txt is missing from the test " +
-                    "classpath.",
+                "oracle/src/test/resources/$resourceName is missing from the test classpath.",
             )
         val declared = stream.bufferedReader().useLines { lines ->
             lines.map { it.trim() }
@@ -158,8 +172,8 @@ class OperatorInventoryTest {
                 .toSet()
         }
         check(declared.isNotEmpty()) {
-            "operator-inventory.txt parsed to zero declared names — cannot diff the real " +
-                "package against an empty inventory."
+            "$resourceName parsed to zero declared names — cannot diff the real package " +
+                "against an empty inventory."
         }
         return declared
     }
@@ -167,7 +181,7 @@ class OperatorInventoryTest {
     @Test
     fun `civictech-cell-data-op's top-level classes match the checked-in inventory`() {
         val actual = actualTopLevelClassNames().filterNot(::isKotlinFileFacade).toSet()
-        val declared = declaredInventory()
+        val declared = declaredInventory("operator-inventory.txt")
 
         val added = (actual - declared).sorted()
         val removed = (declared - actual).sorted()
@@ -182,6 +196,68 @@ class OperatorInventoryTest {
                 "Update the inventory AND OperatorCatalog's " +
                 "registration AND the reference model for the changed operator(s) in the same " +
                 "change, per the inventory file's own header.",
+        ) {
+            (added + removed).shouldBeEmpty()
+        }
+    }
+
+    /**
+     * computenet-y9p4: the same drift guard as above, over `civictech.cell.data`'s SOURCE
+     * cells rather than `civictech.cell.data.op`'s OPERATOR cells. Before this test,
+     * `civictech.cell.data` had no such guard at all: `VocabularyCompletenessTest` enumerates
+     * a hand-written list of requirement ids and cannot notice a new cell, and the
+     * `[ORA1-HONEST-02]` exclusion ledger in `MapCellModel.kt` is prose — so a new source cell
+     * could land absent from both the vocabulary and the ledger with nothing red (epic
+     * computenet-4ru §9 risk 2, the exact failure mode this guard family exists to prevent).
+     *
+     * `civictech.cell.data` (unlike `.op`, which is one directory of cells and nothing else)
+     * also holds non-cell top-level types the two directories' listing already shows are
+     * genuinely present: `Aggregator`/`Aggregators` (the merge-function vocabulary `MapCell`
+     * and the window operators share), `Replicable` (the replication marker interface),
+     * `Windows` (window-boundary helpers), and `BoundedWalk.kt`'s internal `KeyWalk`/
+     * `EntryOrder`/`PageBudget`. Those are exactly as real as `civictech.cell.data.op`'s own
+     * non-cell helper names already in `operator-inventory.txt` (`FrontierBuilder`,
+     * `GatedFold`, `OperatorEntry`, `OperatorWalk`, `PagedEntry`, `SubState`, `TaggedEntry`,
+     * `KeyedEntry`, `GroupEntry`, `AdvertisedLedger`, `MintedLedger`, `JoinLedger`,
+     * `PresenceLanes`) — this gate diffs the package's whole compiled surface the same way
+     * [OperatorInventoryTest]'s does, not a hand-picked subset of "the cells", so a human still
+     * has to read what actually changed before deciding whether it is vocabulary churn.
+     *
+     * Also present here and *not* named in the bead that requested this test: `WatermarkCell`
+     * / `WatermarkCellPorts` (`kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`) — a
+     * cell in this package that is neither registered in [OperatorCatalog] nor listed in the
+     * `[ORA1-HONEST-02]` exclusion ledger. The bead's own description names five registered
+     * source cells (`SetCell`, `KeyedSetCell`, `MapCell`, `CounterCell`, `PnCounterCell`) and
+     * two ledger exclusions (`ListCell`, `OrMapCell`) — seven cell types — but the compiled
+     * package has 41 top-level classpath names across those seven cells' own `*Api`/`*Base`/
+     * `*Ports` companions plus the non-cell helpers above plus `WatermarkCell`'s pair, none of
+     * which is a discrepancy this test resolves: it is a mechanical classpath diff, the same
+     * contract [OperatorInventoryTest] already has for `.op`, and closing `WatermarkCell`'s
+     * gap (registering it, or adding it to the exclusion ledger) is vocabulary work outside
+     * this task's claim.
+     */
+    private val sourceCellPackagePath = "civictech/cell/data"
+
+    @Test
+    fun `civictech-cell-data's top-level classes match the checked-in inventory`() {
+        val actual = actualTopLevelClassNames(sourceCellPackagePath)
+            .filterNot { isKotlinFileFacade(sourceCellPackagePath, it) }
+            .toSet()
+        val declared = declaredInventory("source-cell-inventory.txt")
+
+        val added = (actual - declared).sorted()
+        val removed = (declared - actual).sorted()
+
+        withClue(
+            "civictech.cell.data has drifted from " +
+                "oracle/src/test/resources/source-cell-inventory.txt (epic computenet-4ru §9 " +
+                "risk 2, computenet-y9p4). Added: $added. Removed: $removed. (Kotlin " +
+                "file-facade classes are filtered out by isKotlinFileFacade using each class's " +
+                "own kotlin.Metadata kind, so every name here is real classpath churn — see " +
+                "that function's KDoc.) " +
+                "Update the inventory AND OperatorCatalog's registration (or the " +
+                "[ORA1-HONEST-02] exclusion ledger in MapCellModel.kt) for the changed source " +
+                "cell(s) in the same change, per the inventory file's own header.",
         ) {
             (added + removed).shouldBeEmpty()
         }
