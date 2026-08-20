@@ -2238,3 +2238,88 @@ run's shipped state further from the 1e5 the entry is about). `NOISE_FLOOR` in
 (`computenet-x9e.8`/`computenet-yhbd` own them), `doc/spec/90-roadmap/91-gap-analysis.md`
 and `doc/spec/CONCORDANCE.md` are unmodified — G-43's row is cited, never edited — and no
 entry above this one was edited, reordered or deleted.
+
+---
+
+## 2026-08-20 — Correction to the NOISE_FLOOR provenance entry above: the recorded environment describes the *rendering* JVM, not the measuring one
+
+Filed as `computenet-x9e.9`, from the second feature review of `computenet-x9e.4`
+(session Anva@A0030, 2026-08-18 ~20:50 UTC), which read `Env.kt`'s fallback and
+went looking beyond the two entries the correction above already named. Same
+mechanism as that correction, applied to the entry it did not cover: the
+**"2026-08-18 — SmokeBenchmark.baseline noise-floor calibration - NOISE_FLOOR
+provenance"** entry's `Harness:` line —
+
+```
+Harness: cbea02900f695fe156a1b94cdf77c60be9781f10 · JVM Eclipse Adoptium/21.0.11 · heap maxHeapBytes=4294967296 · Apple M2 Pro, 10 cores, Mac OS X 26.6.1
+```
+
+— reports `heap maxHeapBytes=4294967296` (4 GiB). That figure is a property of the
+process that *rendered* the entry, not of the JMH forks that measured it. It
+contradicts the entry's own procedure paragraph, which states the runs were
+"launched with no VM options" — i.e. JVM defaults, not an explicit 4 GiB heap.
+
+**The mechanism.** At the time this entry was produced, `RunEnvironment`'s
+`capture` function (`bench/src/main/kotlin/civictech/bench/Env.kt`, since removed
+by `computenet-hqid`) read the heap of the CALLING process: it looked for
+`-Xms`/`-Xmx` in `ManagementFactory.getRuntimeMXBean().inputArguments`, and when
+none were present — exactly the "no VM options" case this entry's own procedure
+describes — fell back to `runtime.maxMemory()`, formatted as
+`"maxHeapBytes=$maxMemory"`. The three JMH forks that produced the scores above
+had exited long before anything rendered this entry; the 4 GiB figure is
+`Runtime.maxMemory()` of whatever JVM ran the rendering step, not a heap setting
+any measuring fork received.
+
+Which JVM that was is **not** the `:bench:test` Gradle JVM, and the heap field
+itself is what rules that out. `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`
+sets `maxHeapSize = "2g"` on every `Test` task, so a render inside `:bench:test`
+is launched with an explicit `-Xmx2g` and takes `captureHeapSettings`' *first*
+branch, rendering `heap -Xmx2g` — which is how `computenet-hqid`'s own commit
+message describes the renderer ("running in the Gradle `:bench:test` JVM
+(toolchain 21, `-Xmx2g`)"), and what the `-Xmx2g` heap fields on other `Harness:`
+lines in this file read. This entry took the **fallback** branch instead, reached
+only when neither `-Xms` nor `-Xmx` was passed. So the rendering JVM carried no
+heap flag at all, and `4294967296` is simply that JVM's ergonomic default heap:
+measured on this host (Apple M2 Pro, 10 cores, 16 GiB) with the entry's own
+declared toolchain, `java -XX:+PrintFlagsFinal -version` reports
+`MaxHeapSize = 4294967296 {ergonomic}` when launched with no VM options, against
+`2147483648 {command line}` under `-Xmx2g`. Which launcher it actually was is not
+recoverable from anything still on disk, and this correction does not guess at it.
+
+**Whether the calibration run's own retained JMH banner is still on disk**: it is
+not. This entry's own procedure states the runs were captured as JSON
+(`-rf json -rff runN.json`), not as a saved stdout log carrying JMH's `# VM
+options:` banner line the way the REAL/SIM throughput sweeps were; no `runN.json`,
+no `.log`, and no other run artifact for this entry is present in the working tree
+or tracked in git (`git ls-files` and a tree search for `run1`/`run2`/`run3`/
+`SmokeBenchmark` artifacts under `bench/` and `doc/bench/` both come back empty).
+So this correction does not quote a banner line as evidence — there is none to
+quote — and rests instead on the entry's own procedure text ("launched with no VM
+options") together with the `Env.kt` fallback mechanism above, which is sufficient
+to identify the 4 GiB figure as the render host's default heap rather than any
+value the measuring forks were given.
+
+**Not affected**: the entry's JVM vendor and version (`Eclipse Adoptium/21.0.11`),
+its three scores and their dispersions, and the `NOISE_FLOOR` derivation itself
+(`bench/src/main/kotlin/civictech/bench/Dispersion.kt`, confirmed unchanged:
+`const val NOISE_FLOOR: Double = 0.005`). Only the `Harness:` line's heap field is
+wrong. `NOISE_FLOOR` is not re-derived by this correction and its value does not
+change.
+
+**Not repaired here**: correcting the `Harness:` line by hand would break the
+property the entry rests on — that its rendered block is verbatim tool output —
+and this file is append-only by its own header rule (nothing above the insertion
+point is edited, reordered or deleted). `computenet-hqid` (closed) already fixed
+the renderer so a `RunEnvironment` can no longer answer with the calling
+process's own facts; nothing about that fix reaches back to re-render this
+already-published entry, which is why this correction exists.
+
+### Scope confirmation
+
+The diff for this correction is exactly `doc/bench/findings.md` — this appended
+entry. `git diff --name-only <merge-base of feature/computenet-x9e.9> HEAD` names
+no other file: no change under `kernel/src/main`, `concord/`, `inspect/src`,
+`wire/src`, `demo/` or `bench/`. `NOISE_FLOOR` in
+`bench/src/main/kotlin/civictech/bench/Dispersion.kt` is untouched (confirmed:
+`const val NOISE_FLOOR: Double = 0.005`). No entry above this one was edited,
+reordered or deleted.
