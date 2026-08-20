@@ -82,12 +82,25 @@ class SignedAnnouncementEmitTest {
 
     private val clock = TestClock()
 
-    private fun signingConfig(ttlMillis: Long = 60_000L) = AnnouncementSigningConfig(
-        encode = ::recordingEncoder,
-        clock = clock,
-        ttlMillis = ttlMillis,
-        signerKeyId = "key-1",
-    )
+    /**
+     * [AnnouncementSigningConfig.incarnation] is pinned to `{ 0L }` — counter
+     * floor zero, the sequence `1, 2, 3, ...` — because what every assertion in
+     * this file reads is the *increment*: which frame burned a counter, whether
+     * a replacement egress continued the sequence, whether a data frame consumed
+     * one. A wall-clock floor (the production default, `computenet-ssa.6`) shifts
+     * every one of those literals by ~1.8e18 without changing a single thing
+     * they check. The default itself is pinned by `the production default seeds
+     * the counter from the wall clock, not from zero` at the foot of this file,
+     * and the property it buys is pinned in `SignedAnnouncementTest`.
+     */
+    private fun signingConfig(ttlMillis: Long = 60_000L, incarnation: () -> Long = { 0L }) =
+        AnnouncementSigningConfig(
+            encode = ::recordingEncoder,
+            clock = clock,
+            ttlMillis = ttlMillis,
+            signerKeyId = "key-1",
+            incarnation = incarnation,
+        )
 
     /** Captures the frames one [BridgeEgressCell] emits, decoded back to [WireFrame]s. */
     private class Capture(signer: AnnouncementSigner?) {
@@ -391,5 +404,46 @@ class SignedAnnouncementEmitTest {
         a.announcementSigner!!.lastCounter shouldBeGreaterThan 0L
         b.announcementSigner!!.lastCounter shouldBeGreaterThan 0L
         encoded.map { it.mintingPeerId }.toSet() shouldBe setOf(PeerId("a"), PeerId("b"))
+    }
+
+    // ------------------------------------------ the incarnation floor, ssa.6
+
+    /**
+     * `computenet-ssa.6`: the **default** [AnnouncementSigningConfig.incarnation]
+     * is the signer's wall clock, so a signer built later starts above one built
+     * earlier even though neither persisted anything.
+     *
+     * Every other test in this file pins the floor to zero on purpose (see
+     * [signingConfig]), so without this one the production default would be
+     * asserted nowhere. It is written as two inequalities against a wall-clock
+     * reading taken here, rather than against a literal, so it cannot go stale;
+     * and it takes the two readings from two *named* incarnations rather than
+     * from two real constructions a millisecond apart, so it cannot flake.
+     */
+    @Test
+    fun `the production default seeds the counter from the wall clock, not from zero`() {
+        val nowish = System.currentTimeMillis()
+        val a = side(LocationRegistry(), signing = AnnouncementSigningConfig(encode = ::recordingEncoder))
+        val signer = a.announcementSigner.shouldNotBeNull()
+
+        // the floor is the wall clock's, shifted -- not zero, and not the raw millis
+        signer.counterFloor shouldBeGreaterThan announcementCounterFloor(nowish - 60_000L)
+        signer.counterFloor shouldBe signer.lastCounter // nothing signed yet
+        signer.counterFloor shouldBeGreaterThan 0L
+
+        // and the sequence still increments by one from there
+        val capture = Capture(signer)
+        capture.announcer().published(CellRef(UUID.randomUUID()))
+        capture.frames.single().sigCounter shouldBe signer.counterFloor + 1L
+
+        // a LATER incarnation of the same identity starts above where this one
+        // left off -- the whole point, expressed on the floor rather than
+        // end-to-end (that is `SignedAnnouncementTest`'s restart case). The
+        // later incarnation is named relative to the floor this signer actually
+        // got, not to `nowish`: the clock may have ticked between the two reads,
+        // and `nowish + 1` is then not after the construction at all.
+        val thisIncarnation = signer.counterFloor ushr ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT
+        thisIncarnation shouldBeGreaterThan (nowish - 60_000L) // the floor really is a millis reading
+        announcementCounterFloor(thisIncarnation + 1L) shouldBeGreaterThan signer.lastCounter
     }
 }

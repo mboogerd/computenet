@@ -100,15 +100,25 @@ class WsAnnouncementIdentityTest {
     /**
      * The positive control. Without it the mismatch case below could pass
      * against a verifier that refuses everything.
+     *
+     * The ledger assertion reads back **this frame's** counter rather than the
+     * literal `1L` it used to. Since `computenet-ssa.6` a production signer seeds
+     * its counter from its incarnation
+     * (`AnnouncementSigner.counterFloor`) instead of from zero, so
+     * `socketAnnouncementSigning()` — the production wiring, which this file
+     * deliberately uses unmodified — no longer starts at 1. Nothing this case
+     * checks was ever about the magnitude: what it wants is that the admitted
+     * frame's counter is what the ledger recorded, which is now stated directly.
      */
     @Test
     fun `an announcement signed by the connection's own peer is admitted under the hello-bound key`() {
         val gate = receivingSide().announcementAdmission!!
             .withVerifier(connectionBoundVerifier(identityB.peerId, identityB.publicKey))
 
-        gate.check(boundPeer = identityB.peerId, frame = signedFrame(identityB)).shouldBeNull()
+        val frame = signedFrame(identityB)
+        gate.check(boundPeer = identityB.peerId, frame = frame).shouldBeNull()
         gate.rejectedAnnouncements shouldBe 0L
-        gate.highWaterFor(identityB.peerId) shouldBe 1L
+        gate.highWaterFor(identityB.peerId) shouldBe frame.sigCounter
     }
 
     /**
