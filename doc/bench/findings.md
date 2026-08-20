@@ -2654,3 +2654,270 @@ change to `doc/bench/findings.md` is an append. `doc/spec` is byte-identical to 
 `-prof gc` render is "a renderer gap, tracked as `computenet-6zqz`", which this entry's
 work closes; correcting that KDoc is filed separately rather than done here, because
 that file is outside this item's claim.
+
+---
+
+## 2026-08-20 — fan-out degree curve re-measured with the source held at a FIXED element count across degree: whether the 2026-08-19 entry's "linear in degree, not worse" reading survives once the per-iteration state-size confound is closed — INCONCLUSIVE
+
+`computenet-252t`, filed against `computenet-x9e.5.3`'s own "confound that limits the
+paragraph above" section (this file, 2026-08-19 fan-out entry). That entry's degree curve
+rebuilds `FanOutScalingBenchmark`'s rig once per JMH **iteration** and adds one element per
+**invocation**, so the number of invocations a 1 s iteration fits — and therefore the
+source size each invocation's delta is measured against — is inversely proportional to the
+per-delta cost itself: roughly 4x (REAL) to 19x (SIM) larger a source at D1 than at D256.
+If per-add cost rises with source size at all, that inflates the low-degree rows and
+**understates** growth in degree, biasing the "linear in degree, not worse" reading toward
+the very conclusion it draws. This entry closes that confound by construction and asks
+whether the reading survives.
+
+### What was built and run
+
+Two new `@Benchmark` methods on the SAME `FanOutScalingBenchmark` class the original
+entry used — `simFixedState`/`realFixedState` — under `Mode.SingleShotTime` with a new
+`FixedStateRigState` that rebuilds AND re-seeds the rig to a FIXED
+`FanOutFixtures.FIXED_STATE_ELEMENTS` = 10,000 elements once per **invocation**
+(`@Setup(Level.Invocation)`), so every one of the five `FanDegree`s is measured against
+the identical source size rather than whatever size an iteration happened to grow to.
+`FanOutFixtures.rig` gained an optional `preSeed` parameter and `FanOutRig.seed(count)`
+to do the pre-seeding (off any timer — `@Setup` is excluded from JMH's timed region in
+every mode); both default to the prior unseeded behaviour, so the original `sim`/`real`
+benchmarks and every existing `FanOutFixturesTest` case are unchanged (confirmed:
+`./gradlew :bench:test --rerun` — 204 tests, 0 failures, see below; an earlier draft of
+this line said 63, which was never that command's count). No file outside this
+task's `metadata.files` claim was touched, and no fixture constant outside the two new
+files (`FanOutFixtures.kt`, `FanOutScalingBenchmark.kt`) was edited — `NOISE_FLOOR`
+(`bench/src/main/kotlin/civictech/bench/Dispersion.kt`) is unchanged at `0.005`.
+
+`FanOutFixedStateRenderTest` (`bench/src/test/kotlin/civictech/bench/micro/`, new,
+`@Tag("bench")`) is the render driver, following `CellFootprintAllocRenderTest`'s pattern:
+it fits a least-squares affine curve per drive, computes each consecutive degree pair's
+segment marginal together with the TWO endpoints' 99.9% error bars summed conservatively
+(the same convention the 2026-08-19 entry's own segment-marginal arithmetic uses), calls a
+segment **resolvable** only when its own point estimate exceeds that combined error, and
+states a reading — `SURVIVES` / `DOES NOT SURVIVE AS STATED` / `INCONCLUSIVE` — from a
+criterion (`MARGINAL_GROWTH_FACTOR = 3.0`) fixed in committed source before this run. No
+G-id trigger is attached: `computenet-252t`'s own non-goals bar re-litigating G-43's
+verdict, which rests on BS-9's occupancy pairing, not the degree curve, and
+`TriggerClaim.None` is what was passed to `Findings.entry`.
+
+### Commands, exactly
+
+```
+./gradlew :bench:jmhJar
+
+/Users/merlijn/Library/Java/JavaVirtualMachines/corretto-21.0.5/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar 'FanOutScalingBenchmark\.(sim|real)FixedState' \
+     -rf csv -rff /abs/path/fanout-fixed-state.csv \
+     2>&1 | tee /abs/path/fanout-fixed-state.log
+
+./gradlew :bench:test -PbenchOnly=true --rerun \
+  --tests 'civictech.bench.micro.FanOutFixedStateRenderTest' \
+  -Dcivictech.bench.jmhResults=/abs/path/fanout-fixed-state.csv \
+  -Dcivictech.bench.harnessSha=7eda317c
+```
+
+(`7eda317c`, not the `eb4a00fe` the JMH sweep itself was measured against: the render
+driver's `verdictOf` was tightened to require error-bar resolvability, not raw point
+estimates, between the sweep running and this entry being rendered — see that commit's
+own message. The JMH results file is unaffected; only how this entry's `reading=` line
+was computed changed.)
+
+**That tightening was written after these numbers were visible, and it changed the
+verdict word — stated here rather than left in a commit message, because a reader
+weighing this entry's `INCONCLUSIVE` is entitled to know when the criterion behind it was
+authored.** Against the FIRST cut of `verdictOf` (`eb4a00fe`, which ranked raw
+point-estimate segment marginals with no reference to their error bars) this same results
+file read **`DOES NOT SURVIVE AS STATED`**, a reading driven entirely by REAL's D4->D16
+segment — whose point estimate is `-0.095` inside a `±2.50` error bar, i.e. noise read as
+signal. Two things bound how much that ordering can have biased the outcome, and both are
+re-checkable from the table below rather than taken on trust: the replacement criterion
+introduces **no fitted or tunable threshold** — a segment counts when `|marginal| >` its
+own two-endpoint 99.9% error bar, and `MARGINAL_GROWTH_FACTOR` was left at the `3.0` fixed
+against the 2026-08-19 sweep and is never even reached on this data — and the change moved
+the entry from a stronger claim to a **weaker** one, withdrawing a verdict rather than
+manufacturing one. A reader who rejects that reasoning has the raw per-segment table below
+and can apply either criterion themselves.
+
+The whole ten-combination sweep (2 methods x 5 degrees x 3 forks x (5 warmup + 10
+measurement) single shots) ran in **47 s** wall clock — the 10,000-element re-seed per
+invocation is cheap even at `FanDegree.D256`'s 256-way fan-out, well inside this task's
+dispatch slot.
+
+### Host and JVM, from the run's own retained banner — read, not assumed
+
+Quoted from `fanout-fixed-state.log`:
+
+```
+# JMH version: 1.37
+# VM version: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS
+# VM invoker: /Users/merlijn/Library/Java/JavaVirtualMachines/corretto-21.0.5/Contents/Home/bin/java
+# VM options: <none>
+# Warmup: 5 iterations, 1 s each
+# Measurement: 10 iterations, 1 s each
+# Benchmark mode: Single shot invocation time
+# Host CPU model: Apple M3 Max
+# Host core count: 16
+# Host OS: Mac OS X 26.6.2
+```
+
+**This host (`NL-MGD6FQJW91`, Apple M3 Max, 16 cores) has no Temurin 21**;
+`jvmToolchain(21)` resolves to **Amazon Corretto 21.0.5**, invoked here by the absolute
+path above rather than the bare `java` on `PATH` (JetBrains Runtime 25.0.2, confirmed via
+`java -version` outside the sweep — the exact substitution `computenet-hqid` warns about).
+**Both the JVM (Corretto 21.0.5 vs the 2026-08-19 entry's Temurin 21.0.11) and the machine
+(Apple M3 Max vs that entry's Apple M2 Pro) differ from the sweep this entry re-reads.**
+The most recent landed entry above (`computenet-x9e.7`, 2026-08-20, G-21 allocation sweep)
+was measured on this same host and JVM, so this run's magnitudes are directly comparable
+to that one and to nothing measured on the M2 Pro/Temurin combination. Absolute
+`us/op` values below should not be compared across entries; only the SHAPE — how cost
+grows across degree, at one fixed source size — is this entry's subject.
+
+**The host was NOT exclusively quiesced for this run.** A second Claude Code session was
+live on this machine during measurement (per this task's own dispatch instructions), and
+`ps` immediately after the sweep showed Gradle/Kotlin compile daemons with start times
+before this run began (11:28 and 12:10, against a run that started later), which this
+sweep cannot attribute to itself or rule out as contending load. This matters more here
+than it did for `computenet-x9e.7`'s allocation counts, because this entry's quantity is
+wall-clock latency, which shared-CPU contention inflates directly. It is named as a
+plausible contributor to the dispersion below, not confirmed as the cause — no isolation
+experiment (pinning the host idle and re-running) was performed in this slot.
+
+### The numbers
+
+`ThroughputReport.renderRun`'s own output, pasted verbatim (a `@Tag("bench")` driver's
+captured stdout, JUnit XML `<system-out>`), each drive separately (`[BEN1-27]`):
+
+## (no entry for drive=SIM) — every row classified Unreportable against NOISE_FLOOR 0.005; see the omissions below
+
+Omitted rows (drive=SIM):
+- D1 (drive=SIM): relative dispersion 0.1860882974781569 exceeds NOISE_FLOOR 0.005 — value=41.721033 ± 7.763796 us/op; Unreportable, excluded from the table
+- D4 (drive=SIM): relative dispersion 0.22671123634250595 exceeds NOISE_FLOOR 0.005 — value=46.373533 ± 10.513401 us/op; Unreportable, excluded from the table
+- D16 (drive=SIM): relative dispersion 0.24110074214683516 exceeds NOISE_FLOOR 0.005 — value=56.5791 ± 13.641263 us/op; Unreportable, excluded from the table
+- D64 (drive=SIM): relative dispersion 0.1742080179657052 exceeds NOISE_FLOOR 0.005 — value=59.7583 ± 10.410375 us/op; Unreportable, excluded from the table
+- D256 (drive=SIM): relative dispersion 0.0941462531968599 exceeds NOISE_FLOOR 0.005 — value=93.779133 ± 8.828954 us/op; Unreportable, excluded from the table
+
+## (no entry for drive=REAL) — every row classified Unreportable against NOISE_FLOOR 0.005; see the omissions below
+
+Omitted rows (drive=REAL):
+- D1 (drive=REAL): relative dispersion 0.14624944302287532 exceeds NOISE_FLOOR 0.005 — value=86.765233 ± 12.689367 us/op; Unreportable, excluded from the table
+- D4 (drive=REAL): relative dispersion 0.16263028597843046 exceeds NOISE_FLOOR 0.005 — value=92.808433 ± 15.093462 us/op; Unreportable, excluded from the table
+- D16 (drive=REAL): relative dispersion 0.1624170878226029 exceeds NOISE_FLOOR 0.005 — value=91.6723 ± 14.889148 us/op; Unreportable, excluded from the table
+- D64 (drive=REAL): relative dispersion 0.13423469474391386 exceeds NOISE_FLOOR 0.005 — value=101.468067 ± 13.620535 us/op; Unreportable, excluded from the table
+- D256 (drive=REAL): relative dispersion 0.18050616345467999 exceeds NOISE_FLOOR 0.005 — value=156.534533 ± 28.255448 us/op; Unreportable, excluded from the table
+
+Every one of the ten combinations was run; none was skipped, and no fork or iteration
+count was raised or lowered from `FanOutFixtures`' fixed-state constants
+(`FIXED_STATE_FORKS=3`, `FIXED_STATE_WARMUP_ITERATIONS=5`,
+`FIXED_STATE_MEASUREMENT_ITERATIONS=10`, `FIXED_STATE_ELEMENTS=10_000`), which the run's
+own banner confirms it resolved. **Relative dispersion ranges 0.0941–0.2411 here, against
+0.0226–0.0788 in the ORIGINAL (confounded) 2026-08-19 sweep — roughly 2x-4x higher.** This
+is expected rather than surprising: `Mode.SingleShotTime` gives each measured op none of
+the JIT warmup `Mode.AverageTime`'s reused-state iterations provide, and a fresh
+10,000-element rig is rebuilt (host, graph, subscriber cells, tag-map growth) immediately
+before every single timed op. The fixed-state SHAPE this entry buys costs measurement
+precision relative to the original sweep; neither sweep clears `NOISE_FLOOR` (`[BEN1-25]`),
+and this one clears it by a wider margin.
+
+### Fit and per-segment resolvability — the driver's own printed inputs, pasted verbatim
+
+```
+Fixed-state fit inputs (degree, per-delta score in each row's own unit):
+| drive | a (intercept) | b (least-squares marginal/degree) | max |residual|/score |
+| --- | --- | --- | --- |
+| REAL | 87.72573615350876 | 0.2657474640247982 | 0.04331187221307829 |
+| SIM | 47.030417078947366 | 0.1849237935638216 | 0.1316915588478163 |
+
+Per-segment marginals (± combined 99.9% error, conservative sum), resolvable = |marginal| > combined error:
+| drive | segment | marginal | combined error | resolvable |
+| --- | --- | --- | --- | --- |
+| REAL | D1->D4 | 2.0143999999999997 | 9.260943 | false |
+| REAL | D4->D16 | -0.0946777499999989 | 2.4985508333333333 | false |
+| REAL | D16->D64 | 0.20407847916666663 | 0.5939517291666667 | false |
+| REAL | D64->D256 | 0.2868045104166667 | 0.21810407812500002 | true |
+| SIM | D1->D4 | 1.5508333333333344 | 6.092399 | false |
+| SIM | D4->D16 | 0.8504639166666662 | 2.0128886666666665 | false |
+| SIM | D16->D64 | 0.06623333333333337 | 0.5010757916666667 | false |
+| SIM | D64->D256 | 0.17719183854166667 | 0.10020483854166666 | true |
+
+MARGINAL_GROWTH_FACTOR=3.0
+reading=INCONCLUSIVE — REAL has only 1 segment(s) resolvable against its own error bar (of 4 total), which is fewer than the two a shape comparison needs, SIM has only 1 segment(s) resolvable against its own error bar (of 4 total), which is fewer than the two a shape comparison needs
+```
+
+### Does the "linear in degree, not worse" reading survive at fixed state size? — INCONCLUSIVE, and why that is the honest answer rather than a non-answer
+
+**Only the TOP segment (D64->D256) resolves against its own noise, for either drive.**
+Every lower segment's combined error bar is several times larger than its own point
+estimate — most strikingly REAL's D4->D16 segment, whose point estimate is actually
+NEGATIVE (-0.095 us/subscriber) with a combined error of ±2.50, meaning this run cannot
+even establish the SIGN of that segment, let alone its magnitude. A shape comparison
+("is the marginal cost flat, or does it grow, across the sweep") needs at least two
+resolvable points to compare, and this run supplies exactly one per drive. The criterion
+therefore returns `INCONCLUSIVE` rather than either verdict word, and that is a property
+of THIS run's own numbers — re-readable from the table above — not a discretionary call.
+
+**What the one resolvable segment says, without extrapolating past it.** The D64->D256
+marginal is 0.287 ± 0.218 us/subscriber (REAL) and 0.177 ± 0.100 us/subscriber (SIM) —
+both are POSITIVE and both are the SAME ORDER OF MAGNITUDE as the 2026-08-19 entry's own
+best-resolved marginals at the identical degree pair under the CONFOUNDED sweep (REAL
+0.1177 ± 0.0149, SIM 0.1051 ± 0.0133 us/subscriber) — roughly 1.7x-2.4x higher here, not
+an order of magnitude off, and consistent with the wider dispersion this sweep carries
+overall. Nothing in this run contradicts "roughly linear, order 0.1-0.3 us per additional
+subscriber at the top of the range" — it simply cannot confirm or refute the SHAPE across
+the rest of the curve, which is the actual question the confound raised.
+
+**What would settle it.** The lower-degree segments need either a much larger sample (this
+sweep already spent its whole slot on 3 forks x 15 single shots per combination; the
+2026-08-19 entry's own sizing arithmetic showed the AverageTime sweep would need
+510-6,200 samples per combination to clear `NOISE_FLOOR` outright, and `Mode
+.SingleShotTime`'s higher per-op variance makes that worse, not better, for the same wall
+clock budget) or a design that keeps JIT warmup while still fixing the state size — an
+`@OperationsPerInvocation` batch against a pre-seeded source, rebuilt per invocation-BATCH
+rather than per invocation, which is this bead's second candidate shape and was not
+attempted here. That is the concrete next instrument, filed separately rather than
+attempted in this slot (see "What this entry does not measure" below).
+
+**So the confound's own claim — "the low-degree rows are averaged over a source roughly
+4x-19x larger... if per-add cost rises with source size at all, that inflates the
+low-degree rows and understates growth in degree" — is neither confirmed nor refuted by
+this entry.** What this entry establishes is narrower and still real: at ONE fixed source
+size (10,000 elements), the top-of-range marginal cost is positive, the same order of
+magnitude as the confounded sweep's own top-of-range reading, and every lower segment is
+too noisy under this design to say anything about the curve's shape at all.
+
+### What this entry does not measure
+
+- **The low-degree segments' true shape.** D1->D4, D4->D16 and D16->D64 are all
+  unresolved for both drives; this entry cannot say whether the CONFOUND'S predicted
+  direction (understated low-degree growth) is present, absent, or reversed.
+- **A batch-based fixed-state variant** (this bead's second candidate shape,
+  `@OperationsPerInvocation` against a pre-seeded source rebuilt per invocation-batch),
+  which would very likely resolve more of the curve for the same wall-clock budget by
+  keeping JIT warmup across a batch's operations. Not built in this slot; a natural
+  follow-up.
+- **Any state size other than 10,000 elements.** Whether the confound's size matters MORE
+  at a larger fixed size (closer to the low-degree rows' actual ~98,500/714,000-element
+  average under the original sweep) is untested.
+- **G-43 itself.** This entry carries `TriggerClaim.None` and answers no gap trigger;
+  G-43's FIRES verdict from the 2026-08-19 entry rests on BS-9's occupancy pairing and is
+  untouched here, per this task's own non-goals.
+
+### Verification
+
+`./gradlew :bench:test --rerun` (the whole untagged `:bench:test` suite, including the
+four new `FanOutFixturesTest` preSeed/seed cases and every existing test unchanged):
+**204 tests, 0 failures**, run fresh (not `UP-TO-DATE`/`FROM-CACHE` — confirmed via the
+per-task state line and the JUnit XML `timestamp`, newest `2026-08-20T15:33:03.126Z`).
+`./gradlew :bench:test -PbenchOnly=true --rerun --tests
+'civictech.bench.micro.FanOutFixedStateRenderTest'` (the render driver above): 1 test, 0
+failures. `git diff --name-only <merge-base of feature/computenet-252t> HEAD` names
+`bench/src/jmh/kotlin/civictech/bench/micro/FanOutScalingBenchmark.kt`,
+`bench/src/main/kotlin/civictech/bench/micro/FanOutFixtures.kt`,
+`bench/src/test/kotlin/civictech/bench/micro/FanOutFixturesTest.kt`,
+`bench/src/test/kotlin/civictech/bench/micro/FanOutFixedStateRenderTest.kt`, and this
+file. Nothing under `kernel/src/main`, `concord/`, `inspect/src`, `wire/src`, `demo/` was
+touched; `NOISE_FLOOR`/`Dispersion.kt` is unchanged.
+
+### Scope confirmation
+
+Nothing above the insertion point was edited, reordered, or deleted. This entry's change
+to `doc/bench/findings.md` is an append.

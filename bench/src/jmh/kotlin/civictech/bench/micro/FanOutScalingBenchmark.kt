@@ -202,4 +202,109 @@ open class FanOutScalingBenchmark {
     fun real(state: RealState, blackhole: Blackhole) {
         blackhole.consume(state.applyOneAndQuiesce())
     }
+
+    // =====================================================================================
+    // computenet-252t — the FIXED-STATE variant.
+    //
+    // [RigState] above rebuilds once per JMH ITERATION and lets the source grow by one
+    // element per invocation, so a 1s iteration's invocation count — and therefore the
+    // source size each invocation's delta is measured against — is inversely proportional
+    // to the very cost being measured. `doc/bench/findings.md`'s 2026-08-19 fan-out entry
+    // names this directly: roughly 98,500 invocations/iteration at REAL D1 against 24,600
+    // at REAL D256, i.e. the low-degree rows average over a source 4x larger (19x for SIM).
+    // If per-add cost rises with source size at all, that inflates the low-degree rows and
+    // UNDERSTATES growth in degree — biasing exactly the "linear in degree, not worse"
+    // reading that entry draws.
+    //
+    // [FixedStateRigState] below closes that confound by construction rather than by
+    // argument: it rebuilds AND re-seeds to `FanOutFixtures.FIXED_STATE_ELEMENTS` once per
+    // INVOCATION (`@Setup(Level.Invocation)`), under `Mode.SingleShotTime` so JMH times
+    // exactly one delta against a source whose size never depends on how many invocations
+    // fit in a time budget — the bead's first candidate shape ("`Mode.SingleShotTime` over
+    // a rig pre-seeded to a fixed element count"). Every [FanDegree] is therefore measured
+    // at the SAME state size, which is the one variable the original sweep could not hold
+    // still.
+    // =====================================================================================
+
+    /**
+     * Fixed-state variant of [RigState]: rebuilds AND re-seeds to
+     * `FanOutFixtures.FIXED_STATE_ELEMENTS` elements once per INVOCATION, so every
+     * measured delta — at every [degree] — is applied against the same source size. See
+     * this class's "computenet-252t" section above for why per invocation, not per
+     * iteration, and `FanOutFixtures`' own "computenet-252t" section for the constants.
+     *
+     * `Mode.SingleShotTime` (declared on [simFixedState]/[realFixedState] below, not at
+     * class level, since it applies to these two `@Benchmark` methods only) is what makes
+     * a per-invocation `@Setup` cheap to reason about: JMH excludes `@Setup`/`@TearDown`
+     * from the timed region in every mode, but `Level.Invocation` setup under
+     * `Mode.AverageTime`/`Throughput` is a well-known trap because the SAME state object
+     * is reused across a whole iteration's worth of invocations while JMH's own iteration
+     * loop still pays the setup's wall-clock cost between each timed call, silently
+     * stretching the iteration far past its nominal budget. `SingleShotTime` has no such
+     * loop — "one iteration" already means "one invocation" — so a `Level.Invocation`
+     * `@Setup` here changes only how long one iteration takes, not what a `time`-based
+     * iteration budget can fit.
+     */
+    @State(Scope.Thread)
+    open class FixedStateRigState(private val drive: Drive) {
+
+        /** Same [FanDegree] parameterisation as [RigState.degree]; see there. */
+        @Param
+        @JvmField
+        var degree: FanDegree = FanDegree.D1
+
+        private lateinit var rig: FanOutRig
+
+        /** Identical hook to [RigState.announceHost], for the identical reason. */
+        @Setup(Level.Trial)
+        fun announceHost() {
+            println()
+            HostFacts.captureCurrent().bannerLines().forEach(::println)
+        }
+
+        /**
+         * Rebuilds AND pre-seeds a fresh rig before every measured invocation — the
+         * mechanism that holds the source's size fixed across [FanDegree]. Excluded from
+         * the timed region by JMH regardless of mode; see this class's KDoc for why that
+         * exclusion is trustworthy specifically under `Mode.SingleShotTime`.
+         */
+        @Setup(Level.Invocation)
+        fun openRig() {
+            rig = FanOutFixtures.rig(degree, drive, preSeed = FanOutFixtures.FIXED_STATE_ELEMENTS)
+        }
+
+        @TearDown(Level.Invocation)
+        fun closeRig() {
+            rig.close()
+        }
+
+        /** Identical measured work to [RigState.applyOneAndQuiesce]. */
+        fun applyOneAndQuiesce(): Long = rig.applyOneAndQuiesce()
+    }
+
+    /** [Drive.SIM] fixed-state — deterministic single-threaded simulation. */
+    @State(Scope.Thread)
+    open class SimFixedState : FixedStateRigState(Drive.SIM)
+
+    /** [Drive.REAL] fixed-state — a `ManagedHost` on virtual threads. */
+    @State(Scope.Thread)
+    open class RealFixedState : FixedStateRigState(Drive.REAL)
+
+    @Benchmark
+    @BenchmarkMode(Mode.SingleShotTime)
+    @Fork(FanOutFixtures.FIXED_STATE_FORKS)
+    @Warmup(iterations = FanOutFixtures.FIXED_STATE_WARMUP_ITERATIONS)
+    @Measurement(iterations = FanOutFixtures.FIXED_STATE_MEASUREMENT_ITERATIONS)
+    fun simFixedState(state: SimFixedState, blackhole: Blackhole) {
+        blackhole.consume(state.applyOneAndQuiesce())
+    }
+
+    @Benchmark
+    @BenchmarkMode(Mode.SingleShotTime)
+    @Fork(FanOutFixtures.FIXED_STATE_FORKS)
+    @Warmup(iterations = FanOutFixtures.FIXED_STATE_WARMUP_ITERATIONS)
+    @Measurement(iterations = FanOutFixtures.FIXED_STATE_MEASUREMENT_ITERATIONS)
+    fun realFixedState(state: RealFixedState, blackhole: Blackhole) {
+        blackhole.consume(state.applyOneAndQuiesce())
+    }
 }
