@@ -23,17 +23,28 @@
 set -uo pipefail
 
 DRY_RUN=0
+# --keep-open: merge and push the task branch WITHOUT closing the bead. The
+# one case that needs it is an ask-human PARK that carries a commit worth
+# keeping: the task's honest outcome is "parked", closing it would destroy the
+# parked question, and leaving the branch unmerged means the commit dies with
+# this machine (merge-task.md §3). Before this flag the only routes were "lose
+# the work" or "close the park", and a session with 402 lines of CI-green
+# evidence pinning a structural proof chose to lose them (computenet-wdhu).
+# Not for a task that merely failed review — that stays in_progress with its
+# branch unmerged, which is a different state and already covered.
+KEEP_OPEN=0
 args=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
+    --keep-open) KEEP_OPEN=1 ;;
     -*) echo "merge-task: unknown flag: $1" >&2; exit 2 ;;
     *) args+=("$1") ;;
   esac
   shift
 done
 [ "${#args[@]}" -eq 2 ] \
-  || { echo "usage: merge-task.sh [--dry-run] <task-id> <feature-branch>" >&2; exit 2; }
+  || { echo "usage: merge-task.sh [--dry-run] [--keep-open] <task-id> <feature-branch>" >&2; exit 2; }
 task=${args[0]}
 fbr=${args[1]}
 
@@ -149,6 +160,11 @@ fi
 
 # Only now the close — the merge is durable, so a crash after this line
 # leaves at worst a closed task whose work IS on origin.
+if [ "$KEEP_OPEN" -eq 1 ]; then
+  echo "kept open: $task — merge is durable on origin/$fbr; status and assignee untouched"
+  echo "  (--keep-open: the bead's own state is the record; nothing here closes it)"
+  exit 0
+fi
 bd close "$task" \
   || { echo "merge-task: bd close $task FAILED — the merge IS durable but the task still reads open; close it by hand and say so" >&2; exit 1; }
 echo "closed: $task"

@@ -223,10 +223,11 @@ Mediate proxy is the sole flow-time enforcement point. Absent a
 `BoundaryPolicy`, every predicate defaults open and the exposure Flattens —
 today's behavior, byte-for-byte. Realized as `civictech.cell.membrane.
 BoundaryPolicy`/`CompositeCell.mediate`/`mediateOutlet`/`MediateProxy`
-(`kernel`); only `AuthLevel.TransportVouched` identity strength exists
-(phase-2 keys/DIDs remain research, 95 §R7), and the hand-written proxy
-(not yet KSP-generated, G-52) is the outlet-direction Mediate realization —
-see `BoundaryPolicyTest`.
+(`kernel`); `AuthLevel.Authenticated` is reachable (DSC1, `computenet-ssa.3`) —
+a socket crossing whose hello verifies, or a `Peering.loopback` direction
+with credentials on both sides, promotes past `AuthLevel.TransportVouched` —
+and the hand-written proxy (not yet KSP-generated, G-52) is the
+outlet-direction Mediate realization — see `BoundaryPolicyTest`.
 
 **Frontier queries at the boundary (decided in 93 I-23)**: a membrane answers
 an upstream frontier traversal per its surface mode — Flatten is transparent

@@ -1,0 +1,84 @@
+# civictech.cell.data source-cell inventory (computenet-y9p4, epic computenet-4ru §9 risk 2;
+# same shape as oracle/src/test/resources/operator-inventory.txt, which this file's own gate
+# in OperatorInventoryTest mirrors for civictech.cell.data instead of civictech.cell.data.op).
+#
+# Sorted, one name per line: every top-level (non-nested — no '$' in the class file name) class
+# civictech.cell.data puts on :oracle's test classpath, MINUS Kotlin compiler-generated
+# file-facade classes (same `kotlin.Metadata.kind == FILE_FACADE_KIND` (2) check as the operator
+# inventory — see civictech.oracle.bind.OperatorInventoryTest.isKotlinFileFacade's KDoc). What
+# remains below is hand-written source cells, their *Api/*Ops companion interfaces, KSP-generated
+# *Base/*Ports classes, and non-cell helper types this package also happens to hold (the merge-
+# function vocabulary in Aggregator.kt, the replication marker interface Replicable, window
+# helpers in Windows.kt, and BoundedWalk.kt's internal KeyWalk/EntryOrder/PageBudget) — the same
+# mix of "cell" and "not a cell but genuinely on this classpath" the operator inventory already
+# has (FrontierBuilder, GatedFold, OperatorEntry, and friends there are not operators either).
+# civictech.oracle.bind.OperatorInventoryTest (oracle/src/test/kotlin/civictech/oracle/bind/
+# OperatorInventoryTest.kt) diffs the package's ACTUAL, facade-filtered classes against this list
+# on every :oracle:test run and fails naming what was added and what was removed.
+#
+# Of the names below, five are registered source cells in OperatorCatalog (via
+# oracle/src/main/kotlin/civictech/oracle/bind/CoreOperators.kt): CounterCell, KeyedSetCell,
+# MapCell, PnCounterCell, SetCell. Two more are named in the [ORA1-HONEST-02] exclusion ledger in
+# oracle/src/main/kotlin/civictech/oracle/model/MapCellModel.kt: ListCell, OrMapCell. A further
+# one — WatermarkCell — is a source cell in this package that is in NEITHER the catalog NOR the
+# ledger as of this file's creation (computenet-y9p4); that gap is real and pre-existing, and
+# closing it (registering WatermarkCell or adding it to the exclusion ledger) is vocabulary work
+# this gate does not itself perform — it only keeps this list, and therefore the fact of the gap,
+# from drifting silently. The remaining names are *Api/*Ops/*Base/*Ports companions of the above,
+# or the non-cell helper types described above.
+#
+# 41 lines below, each confirmed to have `kind == CLASS_KIND` (not a file facade) via
+# isKotlinFileFacade, from a :kernel:compileKotlin build against commit 7b917c3b
+# (computenet-4ru.19, #364).
+#
+# UPDATING THIS FILE IS THE MOMENT to also update civictech.oracle.bind.OperatorCatalog's
+# registration (via CoreOperators.kt), OR the [ORA1-HONEST-02] exclusion ledger in
+# MapCellModel.kt, for the changed source cell(s), IN THE SAME CHANGE — that pairing is the whole
+# point of this gate (epic computenet-4ru §9 risk 2), mirroring operator-inventory.txt's own
+# header for civictech.cell.data.op. Not every added/removed name is a cell (some are the
+# non-cell helper types named above), so — exactly as that file's header says — treat every
+# "Added"/"Removed" entry as needing a human read before it becomes a registration or a ledger
+# entry, not an automatic one.
+#
+# Lines starting with '#' and blank lines are ignored by the diff.
+Aggregator
+Aggregators
+CounterApi
+CounterCell
+CounterCellBase
+CounterCellPorts
+CounterOps
+EntryOrder
+KeyWalk
+KeyedSetApi
+KeyedSetCell
+KeyedSetCellBase
+KeyedSetCellPorts
+KeyedSetOps
+ListApi
+ListCell
+ListCellBase
+ListCellPorts
+ListOps
+MapApi
+MapCell
+MapCellBase
+MapCellPorts
+MapOps
+OrMapApi
+OrMapCell
+OrMapCellBase
+OrMapCellPorts
+PageBudget
+PnCounterCell
+PnCounterCellPorts
+PnCounterOps
+Replicable
+SetApi
+SetCell
+SetCellBase
+SetCellPorts
+SetOps
+WatermarkCell
+WatermarkCellPorts
+Windows

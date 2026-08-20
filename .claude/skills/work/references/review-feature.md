@@ -111,6 +111,20 @@ files under exactly the names you would pick (~40 stale logs including
 `exchange.log` and `wire.log`, computenet-84z6), and a reviewer that reads
 one quotes the implementer's build as its own independent evidence.
 
+**First: is there a PR?** Sections 4 and 6 assume one throughout — §4 reads
+`gh pr checks`, §6 re-fetches and reasons about the PR head — and on the
+direct-child route the orchestrator can dispatch you before opening it
+(direct-child.md opens it on the implementer's first commit, and that step has
+been skipped). If `metadata.pr` is empty and `gh pr list --head <branch>`
+returns nothing:
+
+**Say so in your first line, then proceed with an explicit NOT VERIFIED on
+every CI-dependent clause** — do not silently substitute your local macOS run
+for the six required checks, and do not invent a verdict for evidence that does
+not exist yet. Your report hands the gate back to the orchestrator, which must
+open the PR and close it before shipping. Recording the gap prominently is the
+requirement, not a courtesy (computenet-a4cj).
+
 ```bash
 bd show <feature-id> --json > "$SCRATCH/<id>.json"   # acceptance criteria, description
 bd list --parent=<feature-id> --all --json  # the tasks (--all: they are closed by now)
@@ -260,6 +274,17 @@ Look for what task-level review structurally cannot see:
   nobody who needs it will look.
 
 ## 3. Prove the feature's tests actually ran
+
+**Before any of it: a check whose failure mode is SILENCE is not evidence
+until you have shown it prints something on the branch where it should fail.**
+Two measured instances, both from reviewers on 2026-08-19 — a per-line read of
+a multi-line Kotlin `toString` that under-reported a dump by an order of
+magnitude in the reassuring direction, and an unquoted `--include=*.kt` glob
+that zsh ate so the grep never ran and its silence read as "no dependents".
+Both in
+[references/gradle-evidence.md](gradle-evidence.md#measurements-whose-failure-mode-is-a-pass)
+(computenet-rf0a). Quote your globs; measure dumps per block, not per line;
+treat an implausibly reassuring number as a measurement bug.
 
 **First, settle whether any suite applies — by proving it, not asserting it.**
 A markdown-only feature has no suite to run, but "docs-only" is a claim about
@@ -431,8 +456,13 @@ can rather than sending it back.
 
 **Budget the repair, because it obliges a CI cycle.** A repair moves the head,
 so §6's re-read is no longer optional for you: you owe one full required-check
-cycle — **2–4 minutes on this repo** — plus the poll to watch it, on top of
-the repair itself. **Repair anyway**; this note exists so the cost is
+cycle — **9–12 minutes on this repo**, governed by `build-test-fast`, which is
+the long pole; the other five settle in 15s–5m26s — plus the poll to watch it,
+on top of the repair itself. (Measured 2026-08-19 across four runs: 8m58s,
+12m1s, 8m52s, ~9m. The figure here read "2–4 minutes" until computenet-678u
+measured it; a reviewer budgeting a merge-and-re-check cycle against its own
+deadline was working from a number 2–4x too small, which is what turns "I can
+still certify inside my window" into a review that runs out of time mid-cycle.) **Repair anyway**; this note exists so the cost is
 *expected*, not so it is avoided (computenet-elm3). Plan it against the
 ~45–60 minute bound you were dispatched with, and if the repair plus its cycle
 will not fit, that is the moment to hand back rather than after you have spent
@@ -483,11 +513,18 @@ against the review base you recorded in §2 — **your own commits only** — an
 # refresh the exclusion base FIRST: --not origin/main is only as good as this
 # worktree's last fetch, and §6's fetch happens after this measurement
 git -C <feature-worktree> fetch origin main
-git -C <feature-worktree> rev-parse origin/main    # quote this next to the list below
+# CAPTURE THE SHA ONCE and use that literal below. refs/remotes/origin/main is
+# SHARED ACROSS WORKTREES of one repository, so it moves when ANOTHER agent
+# fetches in a sibling worktree — with no fetch of your own. One reviewer
+# watched it move between two of its own commands, which briefly made its own
+# re-fetch line look self-contradictory (computenet-0rmu). Re-resolving the ref
+# between commands measures against two different bases.
+BASE=$(git -C <feature-worktree> rev-parse origin/main)
+echo "$BASE"    # quote this next to the list below
 
 # your own commits: after the review base, and not already on main
-git -C <feature-worktree> log --oneline --no-merges <review-base-sha>..HEAD --not origin/main
-for c in $(git -C <feature-worktree> log --format=%H --no-merges <review-base-sha>..HEAD --not origin/main); do
+git -C <feature-worktree> log --oneline --no-merges <review-base-sha>..HEAD --not "$BASE"
+for c in $(git -C <feature-worktree> log --format=%H --no-merges <review-base-sha>..HEAD --not "$BASE"); do
   git -C <feature-worktree> show --stat --format='%h %s' "$c"
 done
 ```
@@ -801,7 +838,17 @@ that cannot be checked honestly is filed, never weakened into a passing
 scenario. Failing sound work for it, or passing it and letting the criterion
 disappear, are both wrong.
 
-Merge it, and keep the residual alive. **Where the residual attaches depends
+Merge it, and keep the residual alive. **A residual is executed literally by
+whoever picks it up, so [issue-quality.md](issue-quality.md)'s two authorship
+rules bind hardest here**: a claim that something has *landed*, *merged* or
+*shipped* names the branch and the sha (a feature-branch merge is not a `main`
+merge, and a constraint like append-only rests entirely on which one it was),
+and a prescribed remedy is checked against the data the bead cites or labelled
+a suggestion to verify. Both were violated in one residual, and a reader
+obeying it would have published a document contradicting itself in a single
+commit (computenet-7z3t).
+
+**Where the residual attaches depends
 on one query**, run before you file — the answer has changed under a live
 session, since a concurrent session can close the epic mid-review:
 
