@@ -14,6 +14,20 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.JoinSetCell
 import civictech.cell.data.op.joinSet
 import civictech.cell.data.op.crossProduct
+import civictech.cell.oracle.forEachBatchFoldSeed
+import civictech.oracle.model.Membership
+import civictech.oracle.model.ModelState
+import civictech.oracle.model.Script
+import civictech.oracle.model.ScriptEvent
+import civictech.oracle.model.SourceId
+import civictech.oracle.model.SourceScript
+import civictech.oracle.model.WriterId
+import civictech.oracle.run.CaseGraph
+import civictech.oracle.run.DifferentialRunner
+import civictech.oracle.run.Reference
+import civictech.oracle.run.SetTerminalFold
+import civictech.oracle.run.asScriptSource
+import civictech.testkit.SimWorld
 
 class JoinSetCellTest {
 
@@ -141,42 +155,88 @@ class JoinSetCellTest {
 
     @Test
     fun `join - incremental result equals batch recompute on every seed`() {
-        for (seed in 0L until 100L) {
-            val rnd = Random(seed)
+        // [ORA1-DIFF-11] migration (computenet-4ru.12.5): this test fills GenerativeGraphTest's
+        // migration slot in the feature's three-fold subsumption clause. GenerativeGraphTest was
+        // found unsuitable — its mid-run host migration
+        // (currentL.managementInlet.call.migrate(hostL2.managementInlet)) has no expression as a
+        // CaseStep, which is sealed to exactly Op | Barrier by design (CaseScript.kt) — so it stays
+        // in place unmigrated (see the recorded comment on computenet-4ru.12) and this equi-join
+        // fold substitutes: two SetCell writers, a set-family join, no mid-run structural events,
+        // exactly the shape DifferentialRunner.check subsumes. Old private nested-loop batch fold
+        // deleted in the same commit.
+        val sourceL = SourceId("left")
+        val sourceR = SourceId("right")
+        val writerL = WriterId("left")
+        val writerR = WriterId("right")
+
+        fun buildGraph(world: SimWorld): CaseGraph {
             val leftWriter = SetCell<String>()
             val rightWriter = SetCell<String>()
             val join = joinSet<String, String, String>(leftKey = ::key, rightKey = ::key)
-            leftWriter.outlet.linkTo(join.left as LinkFrom<Propagate<SetDelta<String>>>)
-            rightWriter.outlet.linkTo(join.right as LinkFrom<Propagate<SetDelta<String>>>)
-            val out = collect(join.outlet)
+            val joinedFold = SetTerminalFold<Pair<String, String>>()
 
+            val mgmt = world.host.managementInlet.call
+            mgmt.spawn(leftWriter)
+            mgmt.spawn(rightWriter)
+            mgmt.spawn(join)
+            mgmt.spawn(joinedFold)
+            mgmt.connect(leftWriter.ref, "outlet", join.ref, "left")
+            mgmt.connect(rightWriter.ref, "outlet", join.ref, "right")
+            mgmt.connect(join.ref, "outlet", joinedFold.ref, "inlet")
+
+            return CaseGraph(
+                terminals = mapOf("joined" to joinedFold),
+                sources = mapOf(
+                    sourceL to leftWriter.inlet.call.asScriptSource(),
+                    sourceR to rightWriter.inlet.call.asScriptSource(),
+                ),
+            )
+        }
+
+        forEachBatchFoldSeed { seed ->
+            val rnd = Random(seed)
             val leftDomain = listOf("ax", "ay", "bx", "by", "cx")
             val rightDomain = listOf("a1", "a2", "b1", "c1", "c2")
             val heldLeft = mutableSetOf<String>()
             val heldRight = mutableSetOf<String>()
+            val leftEvents = mutableListOf<ScriptEvent>()
+            val rightEvents = mutableListOf<ScriptEvent>()
             repeat(80) {
                 if (rnd.nextBoolean()) {
                     val element = leftDomain[rnd.nextInt(leftDomain.size)]
                     if (rnd.nextInt(10) < 6 || element !in heldLeft) {
-                        leftWriter.inlet.call.add(element); heldLeft += element
+                        leftEvents += ScriptEvent.Add(writerL, element); heldLeft += element
                     } else {
-                        leftWriter.inlet.call.remove(element); heldLeft -= element
+                        leftEvents += ScriptEvent.Remove(writerL, element); heldLeft -= element
                     }
                 } else {
                     val element = rightDomain[rnd.nextInt(rightDomain.size)]
                     if (rnd.nextInt(10) < 6 || element !in heldRight) {
-                        rightWriter.inlet.call.add(element); heldRight += element
+                        rightEvents += ScriptEvent.Add(writerR, element); heldRight += element
                     } else {
-                        rightWriter.inlet.call.remove(element); heldRight -= element
+                        rightEvents += ScriptEvent.Remove(writerR, element); heldRight -= element
                     }
                 }
             }
+            val script = Script(listOf(SourceScript(sourceL, leftEvents), SourceScript(sourceR, rightEvents)))
 
-            // batch nested loop over final memberships
-            val batch = heldLeft.flatMap { a ->
-                heldRight.filter { key(it) == key(a) }.map { b -> a to b }
-            }.toSet()
-            assertEquals(batch, tagFold(out), "join diverged from batch on seed $seed")
+            // batch nested loop over the writers' final observed-remove memberships
+            val reference = Reference { s ->
+                val liveLeft = Membership.live(s.slice(sourceL)).map { it as String }.toSet()
+                val liveRight = Membership.live(s.slice(sourceR)).map { it as String }.toSet()
+                val batch = liveLeft.flatMap { a ->
+                    liveRight.filter { key(it) == key(a) }.map { b -> a to b }
+                }.toSet()
+                mapOf("joined" to ModelState.SetState(batch))
+            }
+
+            DifferentialRunner.check(
+                seed = seed,
+                caseMarker = "join: left,right -> joinSet(key=first char) -> joined",
+                script = script,
+                reference = reference,
+                buildGraph = ::buildGraph,
+            )
         }
     }
 }
