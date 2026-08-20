@@ -348,8 +348,15 @@ class GraphGenerator(private val config: GeneratorConfig) {
                 val width = frozen.size + produced.size + pending.size + 1
                 val merging = width > config.terminalCount
 
-                val built = attach(head, pending, merging, isLast, level, produced.size)
-                    ?: if (merging) attach(head, pending, false, isLast, level, produced.size) else null
+                // `merging` is the port-filling steering and is dropped on the retry below;
+                // `mustConverge` is the *accounting* question — is the frontier still wider than
+                // terminalCount — and therefore holds across both attempts. See [attach].
+                val built = attach(head, pending, merging, mustConverge = merging, isLast, level, produced.size)
+                    ?: if (merging) {
+                        attach(head, pending, merging = false, mustConverge = true, isLast, level, produced.size)
+                    } else {
+                        null
+                    }
 
                 if (built == null) frozen += head else produced += built
             }
@@ -359,11 +366,18 @@ class GraphGenerator(private val config: GeneratorConfig) {
         /**
          * Tries to append one operator consuming [head], returning the new node's handle or
          * `null` if no operator in the vocabulary can be satisfied from the current graph.
+         *
+         * [mustConverge] is the frontier-accounting flag: `true` while the frontier is still
+         * wider than [GeneratorConfig.terminalCount], so shape divergence is forbidden (below).
+         * It is deliberately separate from [merging], which is the *port-filling* steering and
+         * is dropped on `growOneLevel`'s retry — the accounting question does not change just
+         * because the first attempt could not fill a fan-in from the frontier.
          */
         private fun attach(
             head: String,
             pending: ArrayDeque<String>,
             merging: Boolean,
+            mustConverge: Boolean,
             isLast: Boolean,
             level: Int,
             index: Int,
@@ -373,8 +387,41 @@ class GraphGenerator(private val config: GeneratorConfig) {
             // eligible: a node the vocabulary cannot extend can only ever be a terminal, and one
             // produced mid-graph would sit on the frontier for every remaining level and push the
             // terminal count past what was configured.
+            //
+            // `extendable` is a question about the VOCABULARY, not about this graph, and that is
+            // not enough on its own: `presenceCount` emits `MapOf`, which `join` consumes, so it
+            // passes the filter — but a set-rooted graph holds no *second* `MapOf` node to fill
+            // `join`'s other port, so the node is unextendable in fact and sits on the frontier
+            // for every remaining level. That is why a wide vocabulary failed to converge on ~14%
+            // of seeds (computenet-b9x7): one such node plus the real frontier node is two
+            // unconsumed nodes against `terminalCount = 1`.
+            //
+            // So while the frontier still has to converge, an operator must also keep the
+            // frontier's shape: `output == headShape`. The frontier starts homogeneous (all
+            // sources share `chooseRootShape`'s shape), so this keeps it homogeneous until width
+            // reaches terminalCount, which is exactly the condition under which the vocabulary's
+            // fan-in over that shape can merge any two of its members. Once the frontier is no
+            // longer over budget, shape-changing operators (`count`, `presenceCount`, `join`) are
+            // eligible again — width cannot grow, so a dead end planted there is affordable.
+            //
+            // Yielding no candidate here is not a failure: `head` is extendable by vocabulary, so
+            // it returns to the frontier and is retried at the next level, and the last level
+            // admits every consumer unconditionally.
+            //
+            // This is a steering rule, not a proof of convergence — `chooseTerminals`' check
+            // still stands, and a vocabulary with no fan-in over its own root shape still throws
+            // there, correctly. What was measured (2026-08-20, macOS/arm64) is that the rule
+            // clears the failures this generator actually had: over `Ids.ALL` at the wide sweep's
+            // knobs the rate went 43/50 -> 50/50, and six configurations x 500 seeds — `Ids.ALL`
+            // at terminalCount 1/2/3, sourceCount 3/5/6, depth 2..8, with and without
+            // lateJoiner/hostCount 3, plus the map-rooted slice — generated 3000/3000. Nothing
+            // here bounds the rate for a vocabulary outside that sample.
             val eligible = consumersOf(headShape).let { all ->
-                if (isLast) all else all.filter { extendable(it.shape.output) }.ifEmpty { all }
+                when {
+                    isLast -> all
+                    mustConverge -> all.filter { it.shape.output == headShape }
+                    else -> all.filter { extendable(it.shape.output) }.ifEmpty { all }
+                }
             }
             val shuffled = eligible.shuffled(rng)
             // Stable sort, so within each arity band the shuffled order (and thus the draw) stands.
