@@ -110,13 +110,30 @@ class OperatorInventoryTest {
      * (`<Bare>.kt` -> `<Bare>Kt`), and two top-level declarations cannot share one qualified name
      * in a package — so a *hand-written* class literally named `<Bare>Kt` can never coexist with
      * a `<Bare>.kt` file that itself carries top-level declarations (that would be the same JVM
-     * name twice, a compile error). Finding a `<Bare>.kt` file therefore proves the matching
-     * `<Bare>Kt` classpath entry is the compiler's facade for *that* file, never a hand-written
-     * class — independent of how many top-level declarations `<Bare>.kt` currently has (zero,
-     * one, or many).
+     * name twice, a compile error). Finding a `<Bare>.kt` file that itself carries at least one
+     * top-level declaration therefore proves the matching `<Bare>Kt` classpath entry is the
+     * compiler's facade for *that* file, never a hand-written class — and that is exactly the
+     * population this gate used to redden on.
      *
-     * That independence is what fixes the measured false positive without opening the false
-     * negative the bead calls out: the file `<Bare>.kt` already existed before and after the
+     * **The two edges this filter does NOT cover**, measured by the computenet-4ru.15 feature
+     * review (2026-08-20) and accepted; neither occurs in `civictech.cell.data.op` today:
+     * 1. A `<Bare>.kt` carrying *no* top-level declaration emits no facade at all, so a
+     *    hand-written class literally named `<Bare>Kt` is legal alongside it and is silently
+     *    dropped from the diffed set — this function keys on the file's **existence**, not on its
+     *    declaration count, and cannot tell those two cases apart. Measured: a probe file
+     *    `ReviewProbeFacade4ru15.kt` declaring only `class ReviewProbeFacade4ru15Kt` reached the
+     *    classpath and this gate stayed green. So a new operator whose class name ends in `Kt`
+     *    next to a declaration-free same-named file is invisible here.
+     * 2. `@file:JvmName("…")` renames a facade away from its file's base name, so that facade is
+     *    *not* filtered and its churn still reddens the gate — a residual false positive of the
+     *    original kind, not a false negative. Measured: a facade renamed to
+     *    `ReviewProbeUnrelated4ru15Kt` reported `Added: [ReviewProbeUnrelated4ru15Kt]`.
+     *
+     * Both edges cost a name ending in `Kt`, which no operator in this package is named, so the
+     * filter is sound for the vocabulary it actually guards.
+     *
+     * Keying off existence rather than declaration count is what fixes the measured false
+     * positive: the file `<Bare>.kt` already existed before and after the
      * edit that added or removed its only top-level declaration, so this filter drops
      * `<Bare>Kt` from the diffed set in both cases and the gate never reddens on it. A genuinely
      * new operator lives in a *new* file, so its class names are never `<Bare>Kt` for a
@@ -168,8 +185,10 @@ class OperatorInventoryTest {
             "civictech.cell.data.op has drifted from " +
                 "oracle/src/test/resources/operator-inventory.txt (epic computenet-4ru §9 " +
                 "risk 2). Added: $added. Removed: $removed. (Kotlin file-facade `*Kt` classes " +
-                "are already filtered out by isKotlinFileFacade, so every name here is real " +
-                "operator-vocabulary churn.) Update the inventory AND OperatorCatalog's " +
+                "are filtered out by isKotlinFileFacade, so a name here is real " +
+                "operator-vocabulary churn unless it is a facade renamed away from its own " +
+                "file name by @file:JvmName — see that function's KDoc.) " +
+                "Update the inventory AND OperatorCatalog's " +
                 "registration AND the reference model for the changed operator(s) in the same " +
                 "change, per the inventory file's own header.",
         ) {
