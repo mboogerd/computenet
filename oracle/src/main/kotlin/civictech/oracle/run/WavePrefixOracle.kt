@@ -114,7 +114,9 @@ import kotlin.random.Random
  *   the adds the *removing writer* had observed — so a remove of an element some other writer
  *   also added, and whose add the remover never observed, takes effect in the kernel and is a
  *   no-op in the model. Three events reproduce it with no generator and no seed: `w0` adds `ab`,
- *   `w1` adds `ab`, `w0` removes `ab`; the model answers `{ab}` and the kernel `{}`
+ *   `w1` adds `ab`, `w0` removes `ab`; at the diamond's terminal the model answers
+ *   `{ab, a, b}` (the `filter` arm's `ab` plus the `flatMapSet` arm's `a`, `b`) and the kernel
+ *   the empty set
  *   (`WavePrefixTest`, "a remove of an element another writer added is applied by the kernel and
  *   ignored by the model", with a single-writer control that succeeds).
  *
