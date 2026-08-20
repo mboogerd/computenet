@@ -145,12 +145,15 @@ class GraphSpecLinkSweepTest {
         const val SWEEP_SEEDS = 50L
 
         /**
-         * The **set-rooted** slice of the core vocabulary.
+         * The **set-rooted** slice of the core vocabulary: the entries reachable from a
+         * `SetOf(Scalar)` root without leaving that shape family.
          *
          * The pair-shaped entries (`joinSet`, `semiJoin`, `antiJoin`, the `groupBy*` family)
-         * consume `SetOf(Tuple(2))`, which no arity-0 entry produces and no reachable operator
-         * emits, so no generated case can contain them — in this sweep or in [wideConfig]'s,
-         * which names them and still never emits one.
+         * are deliberately out of this slice, not out of reach: since computenet-4ru.16 the
+         * `keyBy` bootstrap takes `SetOf(Scalar)` into `SetOf(Tuple(2))`, so [wideConfig] —
+         * which names the whole catalog — really does emit them (measured in
+         * `civictech.oracle.bind.PairShapeBootstrapTest`). They are omitted here to keep this
+         * sweep a single-family one; [wideConfig] below is the slice that covers them.
          */
         fun sweepConfig() = GeneratorConfig(
             depthRange = 3..5,

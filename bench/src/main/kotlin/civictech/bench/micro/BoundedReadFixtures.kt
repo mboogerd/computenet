@@ -249,6 +249,57 @@ data class PagedWalkOutcome(
 
     /** The largest single page's wall time — the original E3's "max single page" column. */
     val maxSinglePageMs: Double get() = pageLatenciesMs.maxOrNull() ?: 0.0
+
+    /**
+     * **Where** the [maxSinglePageMs] page fell, 1-based in walk order; `0` for a walk
+     * that took no pages at all. Ties resolve to the earliest such page.
+     *
+     * This is the accessor that turns E3's "max single page" column from an inference into
+     * an attribution. The magnitude alone says how long the worst page took; only its
+     * position says *which* part of the walk paid for it, and the three positions mean
+     * three different things:
+     *
+     * - **`1` — the open.** `SetCell.openWalk` takes `stateLock` and makes a full O(n)
+     *   pass over both `adds` and `dels`, freezing the enumeration order and merging every
+     *   tag into the opening `TagFrontier`; that open happens inside the FIRST
+     *   `readBounded` call, i.e. inside one scheduler task.
+     * - **[pages] — the close.** The closing frontier is recomputed in another O(n) pass on
+     *   the final page.
+     * - **anything between** — per-page work, which is the only one of the three that a
+     *   smaller page limit would reduce.
+     *
+     * What it does NOT establish: that the page it names is what a concurrent drive's
+     * `DriveOutcome.maxGapMs` measured. Those two figures are timed on different threads
+     * against no common clock, so their agreement is evidence and not an identity — which
+     * is why `BoundedReadProbeTest`'s E3 prints them side by side per trial rather than
+     * only as trial means.
+     */
+    val maxSinglePagePosition: Int
+        get() = if (pageLatenciesMs.isEmpty()) 0 else pageLatenciesMs.indexOf(maxSinglePageMs) + 1
+
+    /** The FIRST page's wall time — the open's page — or `null` if the walk took none. */
+    val firstPageMs: Double? get() = pageLatenciesMs.firstOrNull()
+
+    /** The LAST page's wall time — the closing frontier's page — or `null` if none. */
+    val lastPageMs: Double? get() = pageLatenciesMs.lastOrNull()
+
+    /**
+     * The median of the **interior** pages — every page but the first and the last — or
+     * `null` when the walk took fewer than three pages and so has no interior.
+     *
+     * The reference the two endpoint pages are read against: an endpoint that costs many
+     * interior pages is a fixed per-walk cost, while an endpoint indistinguishable from
+     * the interior is not. The median rather than the mean, because one page delayed by
+     * an unrelated scheduler or GC event would move a mean and is exactly the noise this
+     * comparison must survive. Upper median for an even count, matching [TrialStats.median].
+     */
+    val interiorMedianPageMs: Double?
+        get() {
+            val interior = pageLatenciesMs.drop(1).dropLast(1)
+            if (interior.isEmpty()) return null
+            val sorted = interior.sorted()
+            return sorted[sorted.size / 2]
+        }
 }
 
 /**
@@ -421,11 +472,16 @@ class ArrivalCollectorCell(override val ref: CellRef = CellRef(UUID.randomUUID()
  * - **It needs at least two trials.** With one sample there is no dispersion to state and
  *   construction refuses, rather than reporting `0.0` — a zero dispersion is a claim of a
  *   perfectly repeatable measurement, which one trial is not evidence for.
- * - **Student-t, not the normal quantile (3.291), and that is not a detail.** At the
- *   3-trial default the t factor is 31.599 against the normal's 3.291 — nearly 10x — so
- *   a normal approximation would report an interval an order of magnitude too tight and
- *   `civictech.bench.classify` would call a noisy result `Reportable`. Being conservative
- *   here is the whole reason the choice is spelled out.
+ * - **Student-t, not the normal quantile (3.291), and that is not a detail.** At three
+ *   trials — the smallest sample this class accepts, and [BoundedReadFixtures.TRIALS]'
+ *   earlier value — the t factor is 31.599 against the normal's 3.291, nearly 10x, so a
+ *   normal approximation would report an interval an order of magnitude too tight and
+ *   `civictech.bench.classify` would call a noisy result `Reportable`. At the five trials
+ *   `TRIALS` now defaults to, the factor is 8.610 — the table is indexed by df and df is
+ *   `n-1`, so five samples read `T_999[4]` and not `T_999[5]`'s 6.869 — roughly 2.6x the
+ *   normal quantile: smaller than the three-trial factor, and still the difference
+ *   between a stated interval and an understated one. Being conservative here is the
+ *   whole reason the choice is spelled out.
  * - **A low-trial probe result is therefore expected to classify `Unreportable`**, and
  *   that is the honest outcome, not a harness fault. Widening `NOISE_FLOOR` is never the
  *   answer — but for THIS probe's statistic neither is raising the trial count, and that
