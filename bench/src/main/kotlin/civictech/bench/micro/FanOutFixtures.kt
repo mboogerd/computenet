@@ -346,4 +346,75 @@ object FanOutFixtures {
 
     /** Measurement single shots per fork. */
     const val FIXED_STATE_MEASUREMENT_ITERATIONS: Int = 10
+
+    // =====================================================================================
+    // computenet-2scd — the BATCH fixed-state variant's own constants.
+    //
+    // The `Mode.SingleShotTime` shape above closed the state-size confound by construction
+    // and paid for it in precision: `doc/bench/findings.md`'s 2026-08-20 fan-out entry
+    // records relative dispersion 0.0941-0.2411 against 0.0226-0.0788 in the ORIGINAL
+    // AverageTime sweep, so only ONE of four segments per drive resolved against its own
+    // 99.9% error bar and the reading came out INCONCLUSIVE. Its own "what would settle it"
+    // paragraph names the second candidate shape, which these constants configure: an
+    // `@OperationsPerInvocation` batch of FIXED size against a pre-seeded source, with the
+    // rig rebuilt per invocation-BATCH rather than per invocation.
+    //
+    // Why that should recover precision without reopening the confound:
+    //
+    // - **Precision.** `Mode.SingleShotTime` reports one op per sample; each measurement
+    //   iteration IS one cold delta. The batch shape reports the MEAN of [BATCH_OPS] ops
+    //   per invocation and many invocations per timed iteration, so a JMH iteration mean
+    //   here averages thousands of ops rather than one, and JIT state built up over a
+    //   fork's earlier batches is still hot when the next batch runs.
+    // - **The confound stays closed.** Every degree runs the SAME [BATCH_OPS] against the
+    //   SAME [FIXED_STATE_ELEMENTS] pre-seed. The source does grow WITHIN a batch — from
+    //   [FIXED_STATE_ELEMENTS] to [FIXED_STATE_ELEMENTS] + [BATCH_OPS] — but that drift is
+    //   identical at every degree BY CONSTRUCTION, which is exactly what the original
+    //   per-iteration rebuild could not promise (there the drift was inversely proportional
+    //   to the cost being measured, 4x-19x between D1 and D256). [BATCH_OPS] is deliberately
+    //   two orders of magnitude below [FIXED_STATE_ELEMENTS] so the intra-batch drift is a
+    //   couple of percent of the source, not a factor.
+    //
+    // `Level.Invocation` `@Setup` under `Mode.AverageTime` is the trap
+    // `FixedStateRigState`'s KDoc names, and it is entered DELIBERATELY here with its cost
+    // understood rather than assumed away: JMH's iteration loop terminates on WALL CLOCK,
+    // and the per-invocation rebuild+re-seed counts against that clock while being excluded
+    // from the timed region. So a [BATCH_ITERATION_SECONDS]-second iteration fits fewer
+    // invocations than its measured time alone would suggest, and the sweep's wall clock is
+    // bounded by the iteration budget regardless — which is what makes it sizeable at all.
+    // The measured number is unaffected; only the sample count per iteration is.
+    // =====================================================================================
+
+    /**
+     * Measured deltas per invocation in the batch shape — the value
+     * `FanOutScalingBenchmark.simBatchFixedState`/`.realBatchFixedState` declare as
+     * `@OperationsPerInvocation`, so a reported `us/op` is per DELTA and not per batch.
+     *
+     * 200 against [FIXED_STATE_ELEMENTS] = 10,000 is a 2% intra-batch source drift,
+     * identical at every [FanDegree] — see this block's header for why that bound matters
+     * and why it is not the confound returning.
+     */
+    const val BATCH_OPS: Int = 200
+
+    /** Forks, batch shape. */
+    const val BATCH_FORKS: Int = 3
+
+    /** Warmup iterations per fork, batch shape. */
+    const val BATCH_WARMUP_ITERATIONS: Int = 3
+
+    /** Measurement iterations per fork, batch shape. */
+    const val BATCH_MEASUREMENT_ITERATIONS: Int = 6
+
+    /**
+     * Seconds per iteration, batch shape.
+     *
+     * With [BATCH_FORKS] x ([BATCH_WARMUP_ITERATIONS] + [BATCH_MEASUREMENT_ITERATIONS])
+     * iterations across ten degree/drive combinations, one second per iteration bounds the
+     * sweep's measured wall clock at roughly 4.5 minutes plus fork startup — sized to fit a
+     * dispatch slot alongside the render step. It is NOT the budget the
+     * `Mode.SingleShotTime` sweep spent: that sweep ran in 47 s wall clock, so this shape
+     * spends roughly 6x more, and any precision comparison between the two shapes has to
+     * say so rather than read the improvement as the batch shape's alone.
+     */
+    const val BATCH_ITERATION_SECONDS: Int = 1
 }
