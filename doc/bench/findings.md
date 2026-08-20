@@ -2323,3 +2323,217 @@ no other file: no change under `kernel/src/main`, `concord/`, `inspect/src`,
 `bench/src/main/kotlin/civictech/bench/Dispersion.kt` is untouched (confirmed:
 `const val NOISE_FLOOR: Double = 0.005`). No entry above this one was edited,
 reordered or deleted.
+
+---
+
+## 2026-08-20 — A *candidate* mechanism for the sign-unstable "reduction, this run" column, and which page carries the E3 stall
+
+Filed as `computenet-juid`, out of the `computenet-wsz4` per-page reporting change (#377) and
+its feature review. This entry bears on **"§6 — E2 vs E3, the comparison the design rests on,
+does NOT reproduce"** above and on the `computenet-xlst` caveat printed under it. That caveat
+records that four re-runs of §6's own command disagree about the **sign** as well as the size
+of the "reduction, this run" column, and offers no mechanism. This entry supplies a
+**candidate** mechanism, measures how much of the instability that mechanism can actually
+account for, and states a second finding — about *which* page carries the E3 stall — that no
+entry above states.
+
+**Nothing above is corrected by this entry.** §6's tables, the caveat's four disagreeing
+patterns and the caveat's own conclusion ("maxGap is a worst-case order statistic on a shared
+machine and does not concentrate") all stand exactly as published; this entry adds a mechanism
+underneath that conclusion, not a replacement for it.
+
+### Why this entry is prose and not a rendered `Findings.entry` table
+
+`civictech.bench.Findings.entry` refuses any entry containing a result that classifies
+`Reportability.Unreportable` against `NOISE_FLOOR` (`[BEN1-25]`;
+`bench/src/main/kotlin/civictech/bench/Findings.kt`, the `firstOrNull { classify(it) ==
+Unreportable }` guard). **Every quantity this entry rests on is Unreportable, and the probe
+says so on its own output lines.** In the four full-probe runs below, `E3 1e5 paged maxGap`
+printed `relDispersion=` 2.5270, 2.5302, 2.8906 and 3.2321, and `E2 1e5 concurrent maxGap`
+printed 1.2000, 1.2923, 1.5656 and 1.7735 — against `NOISE_FLOOR = 0.005`, i.e. two to three
+orders above the floor. A rendered table is therefore not available for this measurement and
+this entry does not manufacture one: the figures below are quoted per trial, with the run and
+harness sha each came from, exactly as the caveat above quotes its four runs.
+
+### The candidate mechanism: whether the closing page lands inside the collector's window is a race
+
+E3's `maxGap` is measured over the **drive's** window only. At 1e5 the paged walk and the
+8000-add drive are the same length, so whether the walk's closing O(n) page falls inside that
+window is decided by scheduling — and `maxGap` therefore captures a **different fraction of
+the walk on each run**. A quantity that measures a varying fraction of the same underlying
+cost can move, and can change sign against E2's whole-copy `maxGap`, with no change in the
+underlying cost at all. Recorded in `e3At`'s KDoc
+(`bench/src/test/kotlin/civictech/bench/micro/BoundedReadProbeTest.kt`); this entry is where it
+is published.
+
+Two trials from the `computenet-wsz4` implementer's run 3 (2026-08-20, M2 Pro, 5 trials per
+scale) show both branches on one line of one run's output at 1e5:
+
+| trial | `maxGap` | worst page | position | `walkWall` | `drive` | reading |
+| --- | --- | --- | --- | --- | --- | --- |
+| t1 | 57.8596 ms | 58.9258 ms | 1/508 (the open) | 169.98 ms | 177.49 ms | **contained** — the two figures agree |
+| t3 | 10.2273 ms | 27.5722 ms | 587/587 (the close) | 154.97 ms | 99.37 ms | **not contained** — the close's 27.57 ms never reached the collector |
+
+In t3 the walk outlasted its drive and `maxGap` reports a number **2.7× smaller** than the
+worst page that trial actually paid. `e3At`'s KDoc records `harness e4c04bb2` for run 1 of that
+three-run series; the run-3 line carries no sha of its own, so none is attached to it here.
+
+### How a trial is labelled contained — and why `walkWall < drive` alone will not do it
+
+This is the `computenet-wsz4` reviewer's precision note, and it is load-bearing for every
+label in this entry: **`walkWall` is the SUM of page latencies, not a wall-clock span**, so the
+walk's elapsed time is at least `walkWall` and `walkWall < drive` is *necessary but not
+sufficient* for containment. A trial is called contained here only on `walkWall < drive`
+**and** agreement between `maxGap` and that trial's own worst page. A trial is never labelled
+contained on the duration comparison alone.
+
+### What 24 runs on this host say: the non-contained branch did not recur, and the magnitude moved anyway
+
+24 probe runs, 2026-08-20, harness `527940c0`, one machine (Apple M2 Pro, 10 cores,
+Mac OS X 26.6.2, Temurin-21.0.11+10, `-Xmx2g`), 5 trials × 3 scales per run = 360 trials.
+Twenty were E3-only (JUnit XML timestamps `2026-08-20T09:38:50.039Z` … `09:42:14.887Z`, 3 tests
+/ 0 failures each) and four were full-probe runs carrying E2 as well (`09:42:39.446Z`,
+`09:42:43.260Z`, `09:42:46.988Z`, `09:42:50.697Z`, 6 tests / 0 failures each). Host load
+average during the sweep was 4.1–4.8 (a sibling agent was driving Gradle in `:bench`
+concurrently) — which matters, because a loaded host is exactly where a walk should be able to
+outlast its drive.
+
+**The non-contained branch did not occur once.** Across all 120 trials at 1e5, `walkWall < drive`
+held in 120/120, with a maximum `walkWall`/`drive` of **0.9249**; `maxGap` never fell short of
+the trial's own worst page by more than **3.7%** (largest shortfall: `maxGap` 12.2245 ms against
+page 12.6782 ms @1/547, `walkWall` 70.5274 against `drive` 78.5169 — still contained on both
+tests, and nothing like run 3 t3's factor of 2.7). At 1e4 and 1e3 the drive dominates by
+construction (maximum `walkWall`/`drive` 0.726 and 0.706), so the race is a 1e5 phenomenon, as
+the mechanism itself says.
+
+A contained trial from this sweep, with all four figures, at the **close** — the branch run 3
+t3 lost:
+
+```
+1e5 t1  maxGap=39.7227  page=39.7185 @508/508  walkWall=113.7096  drive=129.0578
+```
+
+(full-probe run at `09:42:46.988Z`; `maxGap` and the worst page agree to 0.0042 ms, and the walk
+finished 15.3 ms inside its drive.) The `computenet-wsz4` reviewer's fourth run, at harness
+`4090adca`, recorded the same shape: `t1 maxGap=46.7700 page=46.7605 @508/508 walkWall=144.8024
+drive=161.4610`.
+
+**And the reduction moved anyway.** The four full-probe runs give four "reduction, this run"
+columns of the kind §6 publishes, computed the same way (median E2 concurrent `maxGap` versus
+median E3 paged `maxGap`):
+
+| run (JUnit XML timestamp) | 10³ | 10⁴ | 10⁵ |
+| --- | --- | --- | --- |
+| `09:42:39.446Z` | +58.6% (5.2444 → 2.1694 ms) | +44.0% (5.8082 → 3.2520 ms) | +49.3% (28.2313 → 14.3233 ms) |
+| `09:42:43.260Z` | +54.0% (4.9095 → 2.2573 ms) | +67.3% (7.5346 → 2.4607 ms) | +41.2% (25.4299 → 14.9498 ms) |
+| `09:42:46.988Z` | +60.5% (6.5508 → 2.5868 ms) | +56.5% (6.4840 → 2.8215 ms) | +63.8% (22.6528 → 8.2046 ms) |
+| `09:42:50.697Z` | +47.7% (5.5442 → 2.9006 ms) | +62.2% (7.2495 → 2.7409 ms) | +62.7% (31.5281 → 11.7500 ms) |
+
+At 1e5 that is a **22.6-point spread across four runs of one command on one machine within
+twelve seconds, with not a single non-contained trial in any of them** (20 trials at 1e5, all
+contained on both tests). So:
+
+- **The containment race is NOT NECESSARY for the instability.** Most of the magnitude
+  movement in this column survives with containment holding throughout, which the caveat above
+  already attributes to `maxGap` being a non-concentrating order statistic.
+- **It is not excluded either, and this sweep cannot exclude it.** These four runs are positive
+  at every scale; they do **not** reproduce the negative 1e4/1e5 reduction the PR #325 review
+  measured. The one recorded non-contained trial is exactly the shape that would produce a
+  spuriously small E3 `maxGap` and hence a spuriously large positive reduction — or, when it
+  hits E2's side of a comparison rather than E3's, the opposite — so a sweep in which the branch
+  never fires says nothing about what it does when it fires.
+
+**This entry therefore states the drive-window containment race as a CANDIDATE mechanism and
+not a confirmed one.** Confirming it needs a run that discriminates: forcing non-containment
+(a walk deliberately outliving its drive, e.g. by pacing the drive or shortening it) and
+showing the reduction column move with it, against a matched contained run. No such run is
+included here, and no figure in this entry should be read as one.
+
+### A second, separate discrepancy: a `maxGap` that belongs to no page at all
+
+The same 360 trials show the *opposite* disagreement, which the containment race does not
+explain and which is a second candidate source of variance in the same column: in **38 of 360
+trials** `maxGap` exceeded the trial's own worst page by more than 5% — up to **16.7×** at 1e3
+(`maxGap` 7.8118 ms against a worst page of 0.4675 ms), 5.8× at 1e4, and 1.375× at 1e5
+(`maxGap` 11.7500 ms against a worst page of 8.5434 ms; 3 of the 120 trials there). A gap
+larger than any page is a stall the walk does not account for; on a shared machine it is not
+attributable to the paged read at all. Stated here as an observation,
+not a mechanism.
+
+### The endpoint finding: an endpoint page carries it — **not** "the first page"
+
+§6's own entry says of `max single page` that "the first page, which opens the walk" is "a
+mechanism-consistent reading … and not a measurement", and filed `computenet-wsz4` to settle
+it. **It is settled, and the answer is no.** The per-page series falsifies "the first page" as a
+stable claim:
+
+- **Stable — the interior is flat and cheap; both endpoints are two orders of magnitude
+  above it.** At 1e5 across this sweep the interior median page ran **0.0403–0.1095 ms**
+  (0.0213–0.1765 ms across all three scales), while the open and the close each ran hundreds of
+  times that. In the four full-probe runs the two endpoint pages together were **45.4–45.9% of
+  mean total page wall** over ~500–670 pages. Two O(n) passes, not one: `SetCell.openWalk`
+  freezes the enumeration order and builds the opening `TagFrontier`, and the closing frontier
+  is recomputed on the final page.
+- **Stable — the maximum is an endpoint page.** At 1e5, **115 of 120 trials** put the maximum at
+  position 1 or at the page count (5 landed on an interior page). A smaller page limit therefore
+  cannot reduce it.
+- **NOT stable — which endpoint.** At 1e5 this sweep's 120 trials split **72 open / 43 close / 5
+  interior**, and the split *per run* ranged from 0 open / 4 close / 1 interior to 5 open / 0
+  close. The four runs on record before this one disagree the same way: `computenet-wsz4`'s run 1
+  put it at position 1 in 5/5 trials, its run 2 at the close in 4/5, its run 3 at
+  `[1, 546, 587, 412, 1]`, and its reviewer's run at the close in 5/5. The open and the close are
+  the same order of magnitude, so which is larger is decided by machine noise.
+
+**So the finding is "an endpoint page carries the E3 stall", and "the first page carries it" is
+not a finding in either direction.** Any later reader taking §6's "the first page, which opens
+the walk" as established should read it as the hedge it was written as; it is wrong more often
+than it is right.
+
+**The endpoint/interior ratio is a per-run figure, not a band.** Three runs, three bands, all at
+1e5: `computenet-wsz4` run 1 at harness `e4c04bb2` gave 392×–1129× (first) / 128×–454× (last);
+its reviewer's run at harness `4090adca` gave 121×–423× / 230×–548×; this sweep at harness
+`527940c0` gave 90.6×–981.1× / 119.3×–588.1×. Quote one of these only with its run and sha
+attached — none of them is reproducible as a band, and the endpoint share of total page wall
+moves with it (~60% for run 1 against 45.4–45.9% here).
+
+### What this entry does not claim
+
+- **That the mechanism is confirmed.** See above: candidate only, and the discriminating run is
+  not included.
+- **That the mechanism explains the sign flips.** This sweep produced no negative reduction at
+  any scale, so it cannot connect the race to the PR #325 review's negative 1e4/1e5 rows.
+- **That any figure here is a stable measured quantity.** Every `maxGap` row in the sweep printed
+  `Unreportable`; the reductions in the table above are four disagreeing draws, listed to show
+  the disagreement, and are not a benefit measurement. The caveat above applies to them
+  verbatim.
+- **That paging's total-work premium or §6's ~85–99% non-reproduction is affected.** Neither is
+  touched by this entry.
+- **Anything about a second machine, a paced drive, another page limit, or `SetCell.openWalk`
+  being repaired.** One host, one page limit (200), one drive shape (`8000` unpaced adds), no
+  kernel change.
+
+### Command and provenance
+
+```
+./gradlew :bench:test -PbenchOnly=true --rerun --no-build-cache \
+     --tests '*BoundedReadProbeTest.E3*' \
+     -Dcivictech.bench.harnessSha=$(git rev-parse --short HEAD)
+```
+
+(and the same command with `--tests 'civictech.bench.micro.BoundedReadProbeTest'` for the four
+full-probe runs that carry E2). `-Dcivictech.bench.harnessSha` is **required**: without it the
+probe's `requiredHarnessSha` guard fails every test, with a message naming the fix. `TRIALS` is
+5 as of `b5d10bdb`, so these runs are five trials per condition, like the caveat's fourth run
+and unlike §6's own three-trial tables.
+
+### Scope confirmation
+
+The diff for this entry is exactly `doc/bench/findings.md` — this appended entry.
+`git diff --name-only <merge-base of feature/computenet-juid> HEAD` names no other file: no
+change under `kernel/src/main`, `concord/`, `inspect/src`, `wire/src`, `demo/`, `doc/spec`, or
+`bench/` — no fixture constant, page limit, drive size or `TRIALS` value was altered to produce
+the figures above, and the sweep is 24 repetitions of one unmodified command. `NOISE_FLOOR` in
+`bench/src/main/kotlin/civictech/bench/Dispersion.kt` is untouched and **not re-derived**
+(confirmed: `const val NOISE_FLOOR: Double = 0.005`). No entry above this one was edited,
+reordered or deleted — in particular the `computenet-xlst` caveat under §6 keeps its text and
+its conclusion, and §6's own tables keep theirs.
