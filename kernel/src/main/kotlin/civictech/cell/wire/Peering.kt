@@ -435,12 +435,34 @@ object Peering {
          *   and no hello — and the successor's BS-02 needs both sides of such a
          *   loopback signing;
          * - [auth] alone cannot imply signing, because the encoder is not
-         *   something the kernel can default. Making `RequireAuthenticated`
-         *   *require* an encoder would refuse every `RequireAuthenticated` side
-         *   that predates the `:wire` wiring of task 4 — a construction-time
-         *   break in landed code, to enforce a rule that task 4 will instead
-         *   make true by construction by always supplying the encoder where it
-         *   builds an authenticating side.
+         *   something the kernel can default ([DSC1-WIRE-04]). A
+         *   `require(announcementSigning != null)` here would be a
+         *   construction-time break in landed code — at review time, six
+         *   `RequireAuthenticated` construction sites across five files, *all
+         *   of them `:wire` test fixtures*; there is no production
+         *   `RequireAuthenticated` side yet. That count is the smaller half of
+         *   the argument. The larger half is that the kernel cannot state the
+         *   invariant it actually wants: it could only demand that *some*
+         *   config object was supplied, not that signing works, and enforcing
+         *   even that would oblige every kernel-side test to inject an encoder
+         *   the kernel is forbidden to own — the [DSC1-WIRE-04] inversion. So
+         *   the rule is enforced one layer out, in `:wire`, where the canonical
+         *   encoder is in scope and where "authenticating side" is actually
+         *   constructed.
+         *
+         * **Residual, and it is deliberate.** Until that `:wire` wiring lands
+         * (task 4), a `RequireAuthenticated` side that does *not* sign is
+         * representable, and every one in the tree today is exactly that —
+         * `WsTransport` builds its egress with no signer at all, so the socket
+         * path is unsigned regardless of how a `Side` is configured. The
+         * ingress gate (task 3) therefore lands *before* the emit path it
+         * judges is wired up; a `RequireAuthenticated` peering over `:wire`
+         * dead-lettering its own peer's announcements in that window is
+         * expected, not a defect in this task. Task 4 discharges it: pass
+         * [announcementSigner] into `WsTransport`'s `BridgeEgressCell`, supply
+         * an [AnnouncementSigningConfig] wherever `:wire` builds an
+         * authenticating side, and add the `require` there so the implication
+         * is checked rather than merely intended.
          */
         val announcementSigning: AnnouncementSigningConfig? = null,
     ) {
