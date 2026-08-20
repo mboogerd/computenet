@@ -16,6 +16,48 @@ import java.io.Serializable
  * honestly, is listed here with a reason verified against its own kernel source — never an
  * approximation offered so a scenario passes.
  *
+ * **This is one half of the honesty ledger; the other half is
+ * [civictech.oracle.run.OracleSweep]'s `[ORA1-HONEST-01]` KDoc section**, which states at the
+ * module's entry point that the reference model's own correctness is *defended, not proven*,
+ * and names the four defenses (independence, the divergence control, the mutation check, the
+ * corpus cross-check) with their landed test classes and their weaknesses. Read that section
+ * before reading a green sweep as a statement about the kernel; read this one before reading
+ * the vocabulary as complete. Both are pinned by `civictech.oracle.HonestyLedgerTest`.
+ *
+ * ### Two kinds of absence, and only one of them is this ledger's subject
+ *
+ * An operator can be missing from what the sweep actually exercises for two structurally
+ * different reasons, and conflating them would let a cheap defect hide behind an expensive
+ * one:
+ *
+ * - **Uncheckable by a batch reference** — *this ledger's subject*. The operator's semantics
+ *   cannot be honestly expressed as a pure fold over one local [Script], so no reference model
+ *   written under `[ORA1-MODEL-03]`'s constraints could certify it at all. Every entry below is
+ *   of this kind, and each says which faculty the script vocabulary lacks (a position-
+ *   renumbering rule, a replication event, an edge/wave completion signal).
+ * - **Checkable by a batch reference but unreachable by shape-typed generation** — *not this
+ *   ledger's subject, and deliberately not recorded here*. The model could certify the
+ *   operator; the case generator simply never builds a graph that reaches it. That is a
+ *   generator-coverage defect, not a modelling-honesty one, and it is repaired by changing the
+ *   generator rather than by writing a reason down. The known instance — the pair-shaped
+ *   `joinSet`/`semiJoin`/`antiJoin`/`groupBy*` family — is **computenet-4ru.16, parked for a
+ *   human and undecided**, including the question of whether `[ORA1-HONEST-02]` is even the
+ *   right home for it. Nothing here decides that; the distinction exists so that recording
+ *   4ru.16's eventual outcome is one entry in whichever home is chosen, not a re-design of this
+ *   ledger.
+ *
+ * ### The `DISPUTES.md` audit (`concord/corpus/DISPUTES.md`)
+ *
+ * `DISPUTES.md` files a requirement that cannot be checked honestly **anywhere**, not one this
+ * oracle merely does not cover. Each entry below was audited against that reading, and the
+ * per-entry conclusion is stated in the entry itself: every exclusion remains honestly checked
+ * by some other instrument, so **no exclusion below produced a `DISPUTES.md` filing.**
+ *
+ * The feature *did* produce one filing, and it is not an exclusion: `[ORA1-DIFF-09]`/BS-12, the
+ * divergence control that cannot be built against today's kernel because the reference model
+ * and the kernel disagree about `[24-SET-03]`'s observer. See the `ORA1 (divergence control)`
+ * section of `concord/corpus/DISPUTES.md` and [civictech.oracle.run.DivergenceControlTest].
+ *
  * - **`ListCell` / `ListDelta`.** Outside `[ORA1-MODEL-02]`'s minimum list entirely (unlike
  *   `MapCell`, `ListCell` is not named in the requirement), and excluded rather than
  *   partially modelled for a stronger reason than `MapCell`'s: `ListCell`'s operations
@@ -30,10 +72,16 @@ import java.io.Serializable
  *   `ListDelta`'s index-addressed edits as single-stream semantics only, same as `MapCell`'s
  *   `MapDelta` — the difference is that `MapCell`'s single remaining ambiguity is exactly what
  *   `[ORA1-MODEL-08]`'s single-writer restriction resolves, and `ListCell`'s is not.
+ *   *DISPUTES audit: no filing.* `[24-OP-LIST-01]` is honestly checked by the hand-authored
+ *   scenario `concord/corpus/24-data-cells/24-OP-LIST-01.yaml`, which states the index-addressed
+ *   sequence explicitly instead of generating one — the faculty this reference lacks.
  *
  * - **`OrMapCell` / `TaggedMapDelta`.** The tagged/keyed convergence family is ORA2's scope
  *   (computenet-4ru.1 depends on ORA1; epic computenet-4ru §6: "It does not model `OrMapCell`
  *   / `TaggedMapDelta` semantics… its KE1-era semantics are ORA2's"). Not modelled here.
+ *   *DISPUTES audit: no filing.* This is a scope boundary between two epics, not a requirement
+ *   nothing can check: ORA2 (computenet-4ru.1) takes it with the same machinery, and until then
+ *   the corpus carries it.
  *
  * - **`MergeableGroupByCell`.** Verified against its own KDoc
  *   (`kernel/src/main/kotlin/civictech/cell/data/op/MergeableGroupByCell.kt`): *"unlike
@@ -50,6 +98,9 @@ import java.io.Serializable
  *   no expression in what this reference is allowed to read." Modelling it as grow-only would
  *   be a silent approximation of exactly the retraction property `[ORA1-MODEL-06]` exists to
  *   check; excluded instead. (It is also not named in `[ORA1-MODEL-02]`'s minimum list.)
+ *   *DISPUTES audit: no filing.* The removal path is a replication mechanism, and replication
+ *   is `CHA1`/`CHA3`'s decided scope (epic §6) — a scope assignment, not an absence of any
+ *   honest check.
  *
  * - **Window close / eviction.** `Windows` (`kernel/src/main/kotlin/civictech/cell/data/
  *   Windows.kt`) is not a cell — it is two pure key-assignment functions, `tumbling`/`sliding`,
@@ -59,6 +110,10 @@ import java.io.Serializable
  *   *behaviour in the kernel itself* to model or to exclude — windowing-as-key-derivation is
  *   already fully expressible with the registered `flatMapSet`/`groupBy*` entries, and eviction
  *   is `KE4` (epic §5/§9 risk 7), unbuilt on the kernel side, out of scope here.
+ *   *DISPUTES audit: no filing* — and this one could not produce a filing even in principle:
+ *   there is no landed behaviour to check, so there is no requirement going unchecked.
+ *   `24-OP-WINDOW-01`/`24-OP-WINDOW-02` cover windowing-as-key-derivation, the part that does
+ *   exist.
  *
  * - **`CoalescingCombineCell`.** Named in epic §3.1's inventory but not in `[ORA1-MODEL-02]`'s
  *   minimum list; **excluded**, per the bead's default direction. Verified against its own
@@ -78,6 +133,22 @@ import java.io.Serializable
  *   whether a given contribution's wave ever completes, so it cannot honestly certify what
  *   this cell's quiescent total is — approximating it as a plain sum-of-contributions would be
  *   silently assuming the very completeness condition the model cannot check.
+ *   *DISPUTES audit: no filing.* The cell's wave-completion behaviour is checked where waves
+ *   exist — `concord/corpus`'s `24-OP-COMBINE-02` asserts scalar glitch-freedom positively over
+ *   the real `CoalescingCombineCell` (see the `24-OP-COMBINE-01`/`CTL-GF-01` entry in
+ *   `DISPUTES.md`, resolved). What is absent here is a *batch* check of it, which is this
+ *   ledger's subject and not a gap in the requirement's coverage.
+ *
+ * - **`WatermarkCell` — NOT CLASSIFIED HERE; the question is open and owned elsewhere.**
+ *   `civictech.cell.data.WatermarkCell` (`kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`)
+ *   is in neither `OperatorCatalog` nor this ledger. That gap is real and pre-existing; it is
+ *   recorded by the source-cell drift guard (`oracle/src/test/resources/source-cell-inventory.txt`,
+ *   computenet-y9p4) and filed as **computenet-fx5b**, which owns the decision of whether the
+ *   cell is registered into the vocabulary or excluded with a written reason. It is named here
+ *   so the omission is visible rather than silent — this bullet is a pointer, **not** a verdict,
+ *   and does not close fx5b. Note also that `WatermarkCell` is not named in epic
+ *   computenet-4ru §3.1's operator inventory, so whether it is even in this ledger's stated
+ *   population is part of what fx5b has to settle.
  */
 
 /**

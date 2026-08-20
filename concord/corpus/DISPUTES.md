@@ -1729,3 +1729,112 @@ genuinely checkable and leaves the rest here.
   combination. With both, restore the check as: stage the diamond over a
   combining join, and assert the emitted per-wave value for a denied wave is
   either refused as regime-crossed or carries no pre-denial contribution.
+
+## ORA1 (the divergence control): `[ORA1-DIFF-09]`/BS-12 is filed, not built — the reference model and the kernel disagree about `[24-SET-03]`'s observer
+
+Filed by `computenet-4ru.10.4` (feature `computenet-4ru.10`, epic `computenet-4ru`) as the
+honesty-ledger deliverable of that feature, on the human decision of 2026-08-20 (option (a) on
+`computenet-4ru.10.1`'s comment thread). This is not a corpus scenario gap: it is a
+**disagreement between two landed artifacts about what a normative requirement means**, recorded
+here because the epic's rule is that a requirement which cannot be checked honestly is filed,
+never weakened into a passing scenario.
+
+### `[ORA1-DIFF-09]` / BS-12 (the divergence control) — **`oracle-gap`** (reference-model semantics), blocked on `computenet-eeys`
+
+- **Category**: `oracle-gap`. The obstacle is neither the corpus schema nor a missing id: it is
+  that the instrument BS-12 specifies cannot exist while the reference model and the kernel read
+  `[24-SET-03]` differently. Nothing in the corpus is weakened by this entry, and no scenario is
+  authored, renamed or softened on account of it.
+
+- **The normative requirement in dispute**: `[24-SET-03]`
+  (`doc/spec/20-dataflow-semantics/24-data-cells.md`) — *"A remove SHALL only retract the tags it
+  observed, such that a concurrent add's tag — never observed by that remove — survives the merge
+  (add-wins as a consequence of tag-set union, Ubiquitous)."* The dispute is over the word
+  **observed**: whose observation the requirement means.
+
+- **Which side each artifact takes.**
+  - **The kernel — the observer is the CELL.** `SetCell.inletHandler.remove`
+    (`kernel/src/main/kotlin/civictech/cell/data/SetCell.kt`) retracts `liveTags(element)`:
+    *every* un-tombstoned tag the cell holds for that element. It never consults the removing
+    writer's causal history, because `SetOps.remove(element)` carries no writer at all. A single
+    `SetCell` driven through its own `inlet` is one serialization point and has observed every
+    add that reached it.
+  - **The oracle's reference model — the observer is the WRITER.**
+    `civictech.oracle.model.Membership` (`oracle/src/main/kotlin/civictech/oracle/model/Membership.kt`,
+    `[ORA1-MODEL-04]`/`[ORA1-MODEL-05]`) counts an add as *covered* only if the removing writer
+    had observed it — it issued the add itself, or a `ScriptEvent.Observe` by that writer sits
+    between the add and the remove. A remove of an element another writer added, whose add the
+    remover never observed, is a no-op in this model.
+  - **Settled verdict (`computenet-eeys`, closed 2026-08-20, PR #365): the reference model is the
+    wrong side, and no kernel defect is implied.** Writer identity has no counterpart on the
+    generated drive path — `CaseExecution` funnels every writer's op through one inlet and
+    `ScriptEvent.Observe` injects nothing — so a generated script's "concurrent writers" are in
+    fact sequential against one replica. Real concurrency in this kernel is across *replicas*
+    (`SetCell.deltaInlet`/`applyRemote`, spec 40/42), and a generated case builds one. The full
+    reasoning is recorded in `civictech.oracle.run.WavePrefixOracle`'s KDoc, next to the numbers.
+
+- **What was measured** (Darwin arm64, 2026-08-20; the runs are pinned as tests, not quoted from
+  a session).
+  - The disagreement reproduces in **three events, with no generator and no seed**: `w0` adds
+    `ab`, `w1` adds `ab`, `w0` removes `ab`. At the probe diamond's terminal the model answers
+    `{ab, a, b}` and the kernel the empty set (`WavePrefixTest`, "a remove of an element another
+    writer added is applied by the kernel and ignored by the model", with a single-writer control
+    that succeeds).
+  - Over `WavePrefixTest.generatedSweepConfig`, seeds `0..59`: **22 of 60** two-writer scripts
+    carry such a step and 9 surface as a failure (the other 13 are masked downstream by a
+    `filter`, `quorumSet` or `count`); **0 of 60** single-writer scripts carry one.
+  - Mutating `Membership.observes` to `return true` — i.e. adopting `SetCell`'s reading — clears
+    the entire population in one step (`settledMismatch`, `plateauFlicker`, `chainArtifact`,
+    `glitchCandidate` all empty). There is no residual, which is what rules out a second
+    independent cause.
+
+- **Why BS-12 cannot be built on top of that.** `[ORA1-DIFF-09]`/BS-12 asks for a *divergence
+  control*: a deliberately wrong reference — a naive arrival-order fold, membership by last
+  add/remove event per element, tag coverage ignored — that **reddens on at least one seed** of
+  the fixed range `0..59` while the catalog-resolved real reference stays green on all sixty. The
+  two halves are mutually exclusive against today's kernel, because the naive fold is not a wrong
+  description of `SetCell` — it is a **more faithful** one than the spec-faithful `Membership`
+  fold is:
+  - naive red on >= 1 seed requires `naive != kernel` on that seed;
+  - real green on all 60 requires `real == kernel` on every seed;
+  - but `naive == kernel` identically, so `naive != kernel` never happens.
+
+  Measured over eight probed generator configurations x the fixed range `0..59`: at one writer
+  (P1/P2/P5/P7) zero seeds differ between the two references and both columns are green; at two
+  or more writers (P3/P4/P6/P8) the naive fold is `Success` on all sixty while the real reference
+  mismatches on 42/34/43/32 of them — and the mismatching seed set **equals** the differing seed
+  set. So the only divergence a control could fire on is `computenet-eeys` itself, which BS-12's
+  third acceptance bullet explicitly excludes.
+
+- **What was NOT done instead.** No naive fold was registered into `OperatorCatalog`; no seed
+  range was rotated to a friendlier one; no `>= 1 seed diverges` assertion was written against a
+  constant-wrong reference that would redden for a reason unrelated to arrival-order semantics.
+  Any of those would have produced a green "divergence control" in `:oracle:test` that
+  demonstrates nothing about the sweep's discriminating power — precisely the weakening this file
+  exists to refuse.
+
+- **What is not lost.** `oracle/src/test/kotlin/civictech/oracle/run/DivergenceControlTest.kt`
+  (`computenet-4ru.10.1`) pins the **measurement** in place of the control, in two tests: that a
+  single writer makes the naive fold indistinguishable from the real reference, and that the
+  naive fold agrees with the kernel on **exactly** the seeds the real reference fails on (an
+  order-exact set equality, not a containment). The second is a **tripwire**: it goes red the
+  moment a `SetCell` remove becomes writer-scoped — i.e. the moment the naive fold becomes
+  genuinely wrong and BS-12 becomes implementable. Do not repair the assertion when that happens;
+  implement BS-12 proper. The sweep's remaining discriminating-power evidence is
+  `MutationCheckTest` (`[ORA1-DIFF-10]`/BS-13), which covers the derived-operator half of the
+  vocabulary; `civictech.oracle.run.OracleSweep`'s `[ORA1-HONEST-01]` KDoc says at the module's
+  entry point that this defense is currently the weakest of the four.
+
+- **Recorded, not resolved.** This entry does not settle what `[24-SET-03]` should say, and does
+  not ask the kernel to change: the verdict is that the requirement's observer is the cell and
+  the kernel already implements it. What is unresolved is the reference model's reading of it,
+  and the consequence for BS-12.
+
+- **Resolves**: (a) `computenet-i3vo` — the `ScriptGenerator` post-condition that no generated
+  remove may leave its element live in `Membership`, which removes the disagreement from the
+  generated population (it does **not** make BS-12 satisfiable: with it, naive and `Membership`
+  coincide on generated scripts too). And, for BS-12 itself, (b) a wrongness instrument whose
+  wrongness is not the arrival-order/causal distinction — a source model wrong in a way this
+  kernel genuinely does not share — **or** a kernel in which a `SetCell` remove is writer-scoped,
+  which is the tripwire above. With either, build the control BS-12 specifies and delete this
+  entry.
