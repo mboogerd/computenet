@@ -190,5 +190,6 @@ class IntersectSetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             ledger.contributeTo(builder)
             builder.build()
         },
+        attributes = { ledger.readerAttributes() },
     )
 }
