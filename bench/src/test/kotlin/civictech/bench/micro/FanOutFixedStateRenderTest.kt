@@ -101,33 +101,71 @@ class FanOutFixedStateRenderTest {
         // CellFootprintAllocRenderTest's "Criterion inputs" block follows.
         println()
         println("Fixed-state fit inputs (degree, per-delta score in each row's own unit):")
-        println("| drive | a (intercept) | b (marginal/degree) | max |residual|/score | segment marginals | ratio max/min |")
-        println("| --- | --- | --- | --- | --- | --- |")
+        println("| drive | a (intercept) | b (least-squares marginal/degree) | max |residual|/score |")
+        println("| --- | --- | --- | --- |")
         fits.sortedBy { it.drive }.forEach { fit ->
-            println(
-                "| ${fit.drive} | ${fit.a} | ${fit.b} | ${fit.maxRelResidual} | " +
-                    "${fit.marginals} | ${fit.marginalRatio} |"
-            )
+            println("| ${fit.drive} | ${fit.a} | ${fit.b} | ${fit.maxRelResidual} |")
+        }
+        println()
+        println(
+            "Per-segment marginals (± combined 99.9% error, conservative sum), " +
+                "resolvable = |marginal| > combined error:"
+        )
+        println("| drive | segment | marginal | combined error | resolvable |")
+        println("| --- | --- | --- | --- | --- |")
+        fits.sortedBy { it.drive }.forEach { fit ->
+            fit.segments.forEach { seg ->
+                println(
+                    "| ${fit.drive} | D${seg.d1}->D${seg.d2} | ${seg.marginal} | " +
+                        "${seg.combinedError} | ${seg.resolvable} |"
+                )
+            }
         }
         println()
         println("MARGINAL_GROWTH_FACTOR=$MARGINAL_GROWTH_FACTOR")
         println("reading=$verdict")
     }
 
-    /** One drive's degree->score points and the affine fit over them. */
+    /** One degree's measured point: the score and its 99.9% confidence half-width. */
+    data class Point(val degree: Int, val score: Double, val error: Double)
+
+    /** One segment between two consecutive degrees — the per-additional-subscriber marginal. */
+    data class Segment(val d1: Int, val d2: Int, val marginal: Double, val combinedError: Double) {
+        /**
+         * Whether this segment's sign AND rough magnitude are established against its own
+         * noise — [combinedError] is the two endpoints' 99.9% half-widths summed
+         * conservatively (`(y2-y1)/(d2-d1)` against `(e1+e2)/(d2-d1)`), the same
+         * conservative-sum convention the 2026-08-19 fan-out entry's "segment marginal"
+         * arithmetic uses. A segment whose error bar is wider than its own value could be
+         * zero, negative, or many times its point estimate — nothing about its SHAPE is
+         * readable, only that it exists.
+         */
+        val resolvable: Boolean get() = abs(marginal) > combinedError
+    }
+
+    /** One drive's degree->score points, the affine fit over them, and the segments between them. */
     data class DriveFit(
         val drive: String,
-        val points: List<Pair<Int, Double>>,
+        val points: List<Point>,
         val a: Double,
         val b: Double,
         val maxRelResidual: Double,
-        val marginals: List<Double>,
+        val segments: List<Segment>,
     ) {
-        /** Ratio of the largest to the smallest resolvable segment marginal — the shape signal. */
+        /** Segments whose sign and magnitude are established against their own error bar. */
+        val resolvableSegments: List<Segment> get() = segments.filter { it.resolvable }
+
+        /**
+         * Ratio of the largest to the smallest RESOLVABLE segment marginal — the shape
+         * signal, once noise-dominated segments are excluded rather than averaged in.
+         * `NaN` when fewer than two segments are resolvable: a ratio needs two points, and
+         * the honest reading at that point is "not enough resolved to compare", not a
+         * number computed from whichever unresolved segments happened to be positive.
+         */
         val marginalRatio: Double
             get() {
-                val finite = marginals.filter { it.isFinite() && it > 0.0 }
-                return if (finite.size < 2) Double.NaN else finite.max() / finite.min()
+                val r = resolvableSegments
+                return if (r.size < 2) Double.NaN else r.maxOf { it.marginal } / r.minOf { it.marginal }
             }
     }
 
@@ -139,61 +177,73 @@ class FanOutFixedStateRenderTest {
                         "(found ${row.params}); the fit is stated per degree and cannot " +
                         "be computed over a row that does not say which degree it measured"
                 )
-                FanDegree.valueOf(degreeName).subscribers to row.score
-            }.sortedBy { it.first }
+                Point(FanDegree.valueOf(degreeName).subscribers, row.score, row.scoreError)
+            }.sortedBy { it.degree }
             require(points.size >= 2) {
                 "drive=$drive carries only ${points.size} degree(s); an affine fit needs " +
                     "at least two"
             }
 
             val n = points.size.toDouble()
-            val sumX = points.sumOf { it.first.toDouble() }
-            val sumY = points.sumOf { it.second }
-            val sumXY = points.sumOf { it.first * it.second }
-            val sumXX = points.sumOf { it.first.toDouble() * it.first }
+            val sumX = points.sumOf { it.degree.toDouble() }
+            val sumY = points.sumOf { it.score }
+            val sumXY = points.sumOf { it.degree * it.score }
+            val sumXX = points.sumOf { it.degree.toDouble() * it.degree }
             val denom = n * sumXX - sumX * sumX
             val b = if (denom == 0.0) 0.0 else (n * sumXY - sumX * sumY) / denom
             val a = (sumY - b * sumX) / n
 
-            val maxRelResidual = points.maxOf { (degree, score) ->
+            val maxRelResidual = points.maxOf { (degree, score, _) ->
                 val predicted = a + b * degree
                 if (score == 0.0) Double.NaN else abs(score - predicted) / abs(score)
             }
 
-            val marginals = (1 until points.size).map { i ->
-                val (d1, y1) = points[i - 1]
-                val (d2, y2) = points[i]
-                (y2 - y1) / (d2 - d1)
+            val segments = (1 until points.size).map { i ->
+                val p1 = points[i - 1]
+                val p2 = points[i]
+                val span = (p2.degree - p1.degree).toDouble()
+                Segment(
+                    d1 = p1.degree,
+                    d2 = p2.degree,
+                    marginal = (p2.score - p1.score) / span,
+                    combinedError = (p1.error + p2.error) / span,
+                )
             }
 
-            DriveFit(drive, points, a, b, maxRelResidual, marginals)
+            DriveFit(drive, points, a, b, maxRelResidual, segments)
         }
 
     /**
      * The reading [MARGINAL_GROWTH_FACTOR] yields for [fits] — the whole of the decision,
-     * in code, deliberately total over three mutually exclusive branches.
+     * in code, deliberately total over three mutually exclusive branches, and computed
+     * ONLY from segments whose own error bar establishes their sign
+     * ([DriveFit.resolvableSegments]).
      *
-     * "SURVIVES" only when every drive's segment marginals stay within the pre-declared
-     * growth factor of one another (the shape a linear-in-degree cost has); "DOES NOT
-     * SURVIVE" when some drive's marginals clearly exceed it; "INCONCLUSIVE" when a drive
-     * has too few resolvable segments to say either way (fewer than two finite positive
-     * marginals — e.g. every consecutive pair happened to tie or invert at this sweep's
-     * resolution).
+     * "INCONCLUSIVE" when some drive has fewer than two resolvable segments — the sweep
+     * cannot compare a shape it cannot resolve, and reporting a ratio computed from
+     * unresolved (possibly negative, possibly near-zero) point estimates would be exactly
+     * the "smoothed over" dishonesty this task's dispatch warns against. "SURVIVES" only
+     * when every drive that DOES have two or more resolvable segments keeps their ratio at
+     * or under [MARGINAL_GROWTH_FACTOR]; "DOES NOT SURVIVE AS STATED" when one clearly
+     * does not.
      */
     private fun verdictOf(fits: List<DriveFit>): String {
         if (fits.isEmpty()) return "INCONCLUSIVE — no drives in the sweep"
-        val resolvable = fits.filter { it.marginalRatio.isFinite() }
-        if (resolvable.size < fits.size) {
-            return "INCONCLUSIVE — " + fits.filter { !it.marginalRatio.isFinite() }
-                .joinToString { "${it.drive} has too few resolvable segments" }
+        val underResolved = fits.filter { it.resolvableSegments.size < 2 }
+        if (underResolved.isNotEmpty()) {
+            return "INCONCLUSIVE — " + underResolved.joinToString {
+                "${it.drive} has only ${it.resolvableSegments.size} segment(s) resolvable " +
+                    "against its own error bar (of ${it.segments.size} total), which is " +
+                    "fewer than the two a shape comparison needs"
+            }
         }
-        val worst = resolvable.maxByOrNull { it.marginalRatio }!!
+        val worst = fits.maxByOrNull { it.marginalRatio }!!
         return if (worst.marginalRatio <= MARGINAL_GROWTH_FACTOR) {
-            "SURVIVES — every drive's segment-marginal ratio is at or under " +
+            "SURVIVES — every drive's RESOLVABLE segment-marginal ratio is at or under " +
                 "$MARGINAL_GROWTH_FACTOR (worst: ${worst.drive} at ${worst.marginalRatio})"
         } else {
-            "DOES NOT SURVIVE AS STATED — ${worst.drive}'s segment-marginal ratio " +
-                "${worst.marginalRatio} exceeds $MARGINAL_GROWTH_FACTOR"
+            "DOES NOT SURVIVE AS STATED — ${worst.drive}'s resolvable segment-marginal " +
+                "ratio ${worst.marginalRatio} exceeds $MARGINAL_GROWTH_FACTOR"
         }
     }
 
