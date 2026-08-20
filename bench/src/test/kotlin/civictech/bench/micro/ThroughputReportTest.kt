@@ -1141,6 +1141,15 @@ class ThroughputReportTest {
             declared.getValue("OperatorThroughputBenchmark"),
         )
         assertEquals(emptySet<String>(), declared.getValue("SmokeBenchmark"))
+
+        // And the key these entries are read under is the one a parsed row resolves to,
+        // so agreeing with the sources here means agreeing at render time.
+        val rowClass = ThroughputReport.parseCsv(footprintCsv).first().benchmarkClass
+        assertEquals("CellFootprintBenchmark", rowClass)
+        assertEquals(
+            RowLabel.REGISTERED.getValue(rowClass),
+            RowLabel.forBenchmark("civictech.bench.micro.CellFootprintBenchmark.realSnapshot"),
+        )
     }
 
     /**
