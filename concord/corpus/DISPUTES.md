@@ -1739,7 +1739,14 @@ honesty-ledger deliverable of that feature, on the human decision of 2026-08-20 
 here because the epic's rule is that a requirement which cannot be checked honestly is filed,
 never weakened into a passing scenario.
 
-### `[ORA1-DIFF-09]` / BS-12 (the divergence control) — **`oracle-gap`** (reference-model semantics), blocked on `computenet-eeys`
+### `[ORA1-DIFF-09]` / BS-12 (the divergence control) — **`oracle-gap`** (reference-model semantics), blocked on the `[24-SET-03]` observer disagreement that `computenet-eeys` settled
+
+**Read the blocker as the disagreement, not as the bead.** The human decision of 2026-08-20
+worded this "blocked on `computenet-eeys`" while that bead was still in review; it has since
+**closed** (2026-08-20, PR #365), and its closure does *not* unblock BS-12 — it is what
+established that the reference model, rather than the kernel, is the wrong side, which is
+precisely why the control cannot fire. Nothing is waiting on eeys to report. What would make
+BS-12 buildable is the **Resolves** bullet at the end of this entry.
 
 - **Category**: `oracle-gap`. The obstacle is neither the corpus schema nor a missing id: it is
   that the instrument BS-12 specifies cannot exist while the reference model and the kernel read
@@ -1773,8 +1780,11 @@ never weakened into a passing scenario.
     (`SetCell.deltaInlet`/`applyRemote`, spec 40/42), and a generated case builds one. The full
     reasoning is recorded in `civictech.oracle.run.WavePrefixOracle`'s KDoc, next to the numbers.
 
-- **What was measured** (Darwin arm64, 2026-08-20; the runs are pinned as tests, not quoted from
-  a session).
+- **What was measured** (Darwin arm64, 2026-08-20). The first two bullets are **pinned as
+  tests** in `WavePrefixTest`, not quoted from a session. The third — the `Membership.observes`
+  mutation — is a **one-off run recorded in `civictech.oracle.run.WavePrefixOracle`'s KDoc**
+  next to the numbers, reverted and never committed, as an exhaustiveness mutation necessarily
+  is: it is evidence a reader has to take from that record, not a test that re-runs.
   - The disagreement reproduces in **three events, with no generator and no seed**: `w0` adds
     `ab`, `w1` adds `ab`, `w0` removes `ab`. At the probe diamond's terminal the model answers
     `{ab, a, b}` and the kernel the empty set (`WavePrefixTest`, "a remove of an element another

@@ -109,7 +109,14 @@ import civictech.testkit.forEachSeed
  *    arrival-order fold — the deliberately wrong reference BS-12 asked for — is indistinguishable
  *    from the real reference under a single writer, and under multiple writers agrees with the
  *    *kernel* on exactly the seeds the real reference fails. BS-12 is **blocked on
- *    computenet-eeys** and filed in `concord/corpus/DISPUTES.md` rather than weakened into a
+ *    computenet-eeys** — on the `[24-SET-03]` observer disagreement that bead *settled*, not on
+ *    the bead itself, which is **closed** (2026-08-20, PR #365) having found the reference
+ *    model, not the kernel, to be the wrong side. So no answer from eeys is still pending, and
+ *    its closure does not unblock this: what would actually make BS-12 buildable is the
+ *    `Resolves` bullet of the `concord/corpus/DISPUTES.md` entry — a wrongness this kernel does
+ *    not genuinely share, or a `SetCell` remove that becomes writer-scoped (the tripwire
+ *    [DivergenceControlTest]'s second test carries). It is filed in
+ *    `concord/corpus/DISPUTES.md` rather than weakened into a
  *    passing control. So this defense is today the **weakest of the four**, and saying so is
  *    the point of this section: the sweep currently has no live demonstration that a wrong
  *    *source* model reddens it.
@@ -120,8 +127,14 @@ import civictech.testkit.forEachSeed
  * 4. **A corpus cross-check** — [civictech.oracle.corpus.CorpusCrossCheckTest] (epic §8). The
  *    reference model reproduces the hand-authored `concord/corpus/24-data-cells` scenarios it
  *    covers, with a completeness guard so the covered set cannot shrink silently. This ties the
- *    model to human-authored expectations rather than to the kernel — but only over the
- *    scenarios that exist, which is a small, fixed set beside a 200-seed sweep.
+ *    model to human-authored expectations rather than to the kernel — bounded two ways. It runs
+ *    only over the scenarios that exist, a small, fixed set beside a 200-seed sweep (22 of the
+ *    29 files; the other 7 are listed there with written out-of-vocabulary reasons). And each
+ *    case is **transcribed by hand** into Kotlin rather than parsed from its yaml — `:oracle`
+ *    carries no YAML dependency and its `ModuleDependencyTest` bars one on `:concord` — so the
+ *    completeness guard sees a yaml file appearing or disappearing, but **not** a yaml whose
+ *    content drifts away from the transcription that cites it. That limit is stated at the
+ *    test's own KDoc too.
  *
  * The vocabulary the reference deliberately does **not** cover, each exclusion with a written
  * reason verified against kernel source, is the other half of this ledger `[ORA1-HONEST-02]`:
