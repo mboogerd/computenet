@@ -32,6 +32,15 @@ apply.
   starts and the PR exists to attach the review to. Everything else in 5d —
   the `metadata.pr` guard, the `bd update --set-metadata pr=`, draft until
   5e — is unchanged.
+
+  **The PR is a PRECONDITION of dispatching the reviewer, not a step that
+  merely comes earlier.** Check `metadata.pr` before you write the review
+  dispatch prompt; if it is empty, open the PR first. Skipped once in three
+  items this way, the reviewer reached review-feature.md §4 and §6 with no PR
+  and correctly recorded "no Linux/CI evidence exists at all" — the six
+  required checks were entirely ahead of its verdict, and the only thing
+  between that and a certified item shipped with zero Linux evidence was how
+  prominently it chose to report the gap (computenet-a4cj).
 - **It may grow a task layer under it.** If the item turns out to want
   parallel children, break it down and cut those task branches from **this
   item's** branch, merging them back into it — exactly 5b/5c's flow with

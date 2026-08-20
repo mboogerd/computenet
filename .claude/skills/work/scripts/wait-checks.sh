@@ -35,7 +35,17 @@
 # construction rather than by a sha check the caller must remember to write.
 #
 # Usage: wait-checks.sh <pr-url> [max-rounds]
-#   Polls `gh pr checks <pr-url>` every 20s, up to max-rounds (default 40).
+#   Polls `gh pr checks <pr-url>` every 20s, up to max-rounds (default 28).
+#
+# WHY 28 AND NOT 40. Every dispatch prompt in this skill runs verification in
+# ONE foreground Bash call with an explicit timeout of at most 600000 ms. The
+# old default of 40 rounds is ~13m20s, so a dispatched agent invoking this the
+# documented way was CUT OFF BY THE CAP before the loop could reach a verdict —
+# and a cut-off call looks like nothing at all, not like TIMEOUT-PENDING
+# (computenet-ymv4). 28 rounds is ~9m20s, inside the cap and above the measured
+# 9-12 minute settle time governed by build-test-fast (computenet-678u).
+# A caller with a longer budget passes max-rounds explicitly; one that needs
+# more than ~28 rounds needs a second call, not a bigger number.
 # Stdout: one progress line per round, then the last rows, then the verdict as
 #   the FINAL line — exactly one of SETTLED / TIMEOUT-PENDING / QUERY-FAILED —
 #   so `tail -1` is the reading. SETTLED means present-and-not-pending, which
@@ -46,7 +56,7 @@
 set -uo pipefail
 
 pr=${1:?usage: wait-checks.sh <pr-url> [max-rounds]}
-rounds=${2:-40}
+rounds=${2:-28}
 case "$rounds" in
   ''|*[!0-9]*) echo "wait-checks: max-rounds must be a positive integer, got '$rounds'" >&2; exit 2 ;;
 esac

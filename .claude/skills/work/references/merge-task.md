@@ -189,6 +189,16 @@ thing under review.
 
 Re-verify the feature branch first; the merge is yours, never the reviewer's.
 
+**Before any merge: search the reviewer's report for `REQUIRED ORCHESTRATOR
+CORRECTION` and act on it.** A reviewer verifying a `cross_bead` deliverable —
+a result its task was commissioned to write onto ANOTHER bead — can find that
+deliverable defective and has no route to fix it, because a reviewer's writes
+do not reach another bead (review-task.md). It reports under that literal
+heading; you run the correction. Left undone, a wrong number sits permanently
+in a feature-level deliverable the feature cannot close without, and the only
+thing that ever caught one was how prominently a reviewer happened to mention
+it (computenet-59f5). Correct it, then merge.
+
 **Merge the passes yourself, one at a time** — reviewers must not merge
 (concurrent merges into one feature branch race).
 
@@ -202,7 +212,61 @@ commits, which is why merging the *local* ref and not `origin/task/<id>` is
 mandatory, not merely convenient (a fetched merge would have silently dropped a
 certified repair; observed 2026-08-17 on computenet-7em.2.3).
 
+**That is true within ONE MACHINE and false across two.** Worktrees of one
+repository share refs; two machines do not, and no task branch is ever pushed.
+So a feature RESUMED on the other machine has **no access to prior
+task-branch commits** — the work is reachable only from the machine that wrote
+it. Measured on a resumed feature (computenet-2qen): one task was `in_progress`
+with five comments describing a complete implementation and an explicit "do NOT
+re-implement — resume this branch", and neither the branch nor the commits
+existed on the machine that read it; another was plain `open` with no recorded
+branch while its comments described three commits, all invalid here. Both were
+re-implemented, ~40 and ~25 minutes, plus the orchestrator's own time
+establishing the state twice.
+
+**Three things conspire to hide it**, which is why it needs stating rather than
+noticing: `next-batch.py` reports `resumed: false` / `branch_has_commits: false`,
+literally correct and reading as "never started"; `metadata.branch` survives the
+handoff pointing at a ref that does not exist here (`feature-branch.sh`
+recomputes the *worktree*, so that half is handled and the branch half is not);
+and the bead comments were written by an agent that HAD the commits, so they
+describe them in the present tense.
+
+**Discriminate before dispatching, in one command.** A task that is
+`in_progress`, or whose comments describe commits, while
+
+```bash
+git -C <worktree> rev-parse --verify task/<id>
+```
+
+fails locally, can only be "started on another machine" — never "never
+started". Then say so in the dispatch prompt: name the machine the branch lives
+on, or state plainly that the prior work is unreachable and this is a
+re-implementation. A session that inherits this state should not have to
+discover it by running `ls-remote` on a hunch.
+
 Two consequences you own, because nothing else can:
+
+- **A PARK that carries a commit worth keeping is a third state, and it has a
+  route now.** The two states this file models are pass-and-merge-and-close and
+  fail-and-keep-`in_progress`. A task whose honest outcome is an ask-human park
+  — exactly as its own acceptance specified — may still leave durable,
+  CI-green evidence: one left 402 lines pinning the measurement its park rests
+  on, including a tripwire that reddens the moment the parked question becomes
+  answerable. `merge-task.sh` closed the bead unconditionally, so the only
+  routes were lose the work or destroy the park, and the session lost the work
+  (computenet-wdhu). Hand-merging is not the answer either: a parked task's
+  code is uncertified by construction, so that is landing unreviewed code under
+  your own authorship. Use the flag:
+
+  ```bash
+  .claude/skills/work/scripts/merge-task.sh --keep-open <task-id> <feature-branch>
+  ```
+
+  It runs every gate and the durability check, merges and pushes, and leaves
+  `status` and `assignee` untouched — the park survives and the commit does
+  not die with this machine. Not for a task that merely failed review: that
+  stays `in_progress` with its branch unmerged, which is the case above.
 
 - **The durability check.** After the push, confirm the merge is actually on
   origin **before** you close the task — a close is what tells every later
@@ -300,8 +364,27 @@ run, every job — measured on #254's run 32008091003: 7553 lines, 828 KB, 3s.
 Column 1 of each line is the job name, so the output also says *which lane*
 skipped. Save it, then read it with two greps:
 
+**Get `<run-id>` from a REQUIRED check's row, never from `.[0]`.** The
+auto-merge workflow appears in `gh pr checks` as an ordinary row (conclusion
+`skipping`) and on PR #347 it sorted FIRST, so
+`gh pr checks <n> --json link -q '.[0].link'` returned the auto-merge run.
+`gh run view <that-id> --log` then SUCCEEDS and returns ZERO lines, and both
+greps below match nothing — which reads exactly like "nothing skipped, all
+good". The anti-cache-replay check silently becomes a no-op (computenet-7ust).
+Same false-negative shape this file already warns about for `bd search`: an
+empty result is never evidence of an empty query.
+
 ```bash
-gh run view <run-id> --log > "$SCRATCH/ci.log"
+RUN=$(gh pr checks <pr-url> 2>&1 | grep concord-full | grep -oE 'runs/[0-9]+' | cut -d/ -f2)
+[ -n "$RUN" ] || { echo "NOT CHECKED: no concord-full row; do not read the greps below"; }
+gh run view "$RUN" --log > "$SCRATCH/ci.log"
+# A non-empty log is the precondition for reading EITHER grep as evidence.
+wc -l "$SCRATCH/ci.log"   # zero lines = wrong run id, not a clean run
+```
+
+Read the two greps only after `wc -l` shows a non-empty log:
+
+```bash
 grep -E 'SKIPPED|NO-SOURCE' "$SCRATCH/ci.log" | grep -v '> Task '          # tests that skipped
 grep -E '> Task [^ ]*:test (SKIPPED|NO-SOURCE|UP-TO-DATE|FROM-CACHE)' "$SCRATCH/ci.log"   # suites never run
 ```

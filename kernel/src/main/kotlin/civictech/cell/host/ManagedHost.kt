@@ -905,7 +905,7 @@ open class ManagedHost(
                     // resume on a worker whose thread-local was never set (the
                     // hazard `Invocation.invokeSuspending` carries context
                     // elements for).
-                    CurrentPeer.with(hostedInvocation.peer) {
+                    CurrentPeer.with(hostedInvocation.peer, hostedInvocation.peerAuth) {
                         ProtocolSupport.of(port).deliver(id, directed, hostedInvocation.protocolMessage as Any)
                     }
                 }
@@ -913,7 +913,7 @@ open class ManagedHost(
                 HostedPortInvocation.Type.PORT_MANAGEMENT -> {
                     // the transport identity of the delivery is ambient for the
                     // handshake running inside (G-29 phase 1, M8.2)
-                    val result = CurrentPeer.with(hostedInvocation.peer) {
+                    val result = CurrentPeer.with(hostedInvocation.peer, hostedInvocation.peerAuth) {
                         hostedInvocation.invocation.invoke(port)
                     }
                     if (result is LinkResult.Rejected) {

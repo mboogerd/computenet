@@ -10973,13 +10973,13 @@ enum class AuthLevel { TransportVouched, Authenticated }   // phase-1 = Transpor
 
 `PeerId` is the value the G-29 hello already carries and ingress already stamps on every
 delivery. **Phase-1 (landed)**: the transport connection *vouches* for the name
-(`TransportVouched`). **Phase-2 (this resolution's authentication interface, deferred
-strength)**: `PeerId` carries (or resolves to) a **public key / DID**; the hello adds a
-signed-nonce challenge; a verified peer is `Authenticated`. The *policy vocabulary is
+(`TransportVouched`). **Phase-2 (landed — DSC1, `computenet-ssa`)**: `PeerId` is
+derived from an Ed25519 **public key**; the hello adds a signed-nonce
+challenge; a verified peer is `Authenticated`. The *policy vocabulary is
 stable across the upgrade* — predicates read `Principal`; only the strength that
 `AuthLevel` certifies changes. This is the P7-compatible phasing: open-by-default and
-transport-vouched today, self-sovereign-key-authenticated when a boundary demands it —
-**no CA, no global identity registry** (P4, P10). Sybil resistance = the *cost* of
+transport-vouched under `PeerAuthPolicy.Open` (still the default), self-sovereign-key-authenticated under
+`PeerAuthPolicy.RequireAuthenticated` — **no CA, no global identity registry** (P4, P10). Sybil resistance = the *cost* of
 minting an `Authenticated` identity plus per-`Principal` quotas (§4.4).
 
 ##### 4.2 The policy vocabulary — attached to an I-10 `Exposure`
@@ -11101,9 +11101,11 @@ class*:
    stays "reuses dataflow + gossip; no second sync protocol."
 
 7. **Authentication strength is phased behind a stable vocabulary.** Predicates read
-   `Principal`/`AuthLevel`; today all bridge peers are `TransportVouched` and `minAuth`
-   defaults let them through; phase-2 self-sovereign keys promote peers to `Authenticated`
-   and unlock the predicates (`integrity`, high-`minAuth` protocol authority) that
+   `Principal`/`AuthLevel`; by default (`PeerAuthPolicy.Open`) bridge peers stay
+   `TransportVouched` and `minAuth` defaults let them through; under
+   `PeerAuthPolicy.RequireAuthenticated` (phase 2, landed — DSC1) a verified hello
+   promotes peers to `Authenticated`, unlocking the predicates (`integrity`,
+   high-`minAuth` protocol authority) that
    transport-vouched identity cannot safely satisfy. Encryption-in-transit stays transport
    config (`wss://`, `40/43`); encryption-at-rest remains a follow-on (§8).
 
@@ -11206,14 +11208,18 @@ No CONFLICT flag required. Phase-2 cryptographic authentication is a *new design
 - **40/41 §Wire / §Transport** — Note the ingress stamps `Principal`; frames may carry a
   signature/counter envelope field under `RequireSigned`; identity strength phased.
 - **90/91 §G-29** — Update: boundary-policy vocabulary + three seams + attention
-  attenuation + disclosure + delta-integrity *specified*; cryptographic authentication and
-  encryption-at-rest remain (§8).
+  attenuation + disclosure + delta-integrity *specified*; cryptographic peer authentication
+  (phase-2) landed (DSC1); key rotation, signed announcements, and encryption-at-rest
+  remain (§8).
 
 #### 8. Follow-on gaps
 
-- **Cryptographic peer authentication (phase-2).** Key/DID format, the hello
-  challenge-response, key distribution and rotation, and how `Authenticated` is certified
-  without a CA — the load-bearing deferred piece that upgrades `TransportVouched`.
+- **Cryptographic peer authentication (phase-2) — landed (DSC1, `computenet-ssa`).**
+  Ed25519 keypairs (`:identity`), key-derived `PeerId`, and a signed-nonce hello
+  challenge-response that promotes a verified crossing to `Authenticated` — no CA, no
+  global identity registry. Still open: key distribution and rotation (DSC1 §7 risk 2),
+  and wiring `AuthLevel.Authenticated` into `BoundaryPolicy`'s `minAuth`/`integrity`
+  predicates at the wire-crossing bridge (SEC1).
 - **Delta signature scheme.** Exact signed tuple, per-source replay counter semantics,
   verification cost/batching on the bridge path, and interaction with move-by-serialize
   `Owned` deltas.
@@ -11516,7 +11522,7 @@ M6–M11 — see 91 for the canonical list).
 - *(from I-27)* **Fallback-tier soundness marker** — R6's rule that the catch-up fallback is sound only for idempotent-across-source cells is by-convention; a KSP marker refusing the fallback for non-idempotent-merge cells (forcing transform mode) would make it correct-by-construction; ties to I-3 Replicable gate and I-7 determinism marker.
 - *(from I-27)* **Coordinating a partitioned rolling promotion** — Per-organelle promotion needs an orchestration policy for ordering, monitoring, and aborting a multi-partition rollout, and its interaction with the composite's routing-proxy and merging-outlet promotion.
 - *(from I-27)* **Hidden-state cells and the transform** — A cell whose recoverable state is not fully expressible in its invariant delta contract cannot be bridged by the delta interchange nor re-baselined by catch-up; such a cell needs a private snapshot channel or an explicit non-promotable declaration.
-- *(from I-28)* **Cryptographic peer authentication (phase-2)** — Key/DID format, hello challenge-response, key distribution/rotation, and how Authenticated is certified without a CA — the load-bearing deferred piece upgrading TransportVouched.
+- *(from I-28)* **Cryptographic peer authentication (phase-2) — landed (DSC1, `computenet-ssa`)**: Ed25519 keys, key-derived PeerId, signed-nonce hello challenge-response, promotion to Authenticated without a CA. Still open: key distribution/rotation, and wiring Authenticated into BoundaryPolicy's minAuth/integrity predicates at the wire-crossing bridge (SEC1).
 - *(from I-28)* **Delta signature scheme** — Exact signed tuple, per-source replay counter semantics, verify cost/batching on the bridge path, and interaction with move-by-serialize Owned deltas.
 - *(from I-28)* **Disclosure projection language** — How a ProjectionId transform is declared, registered, and kept serialization-friendly (named, not a lambda), and whether projections compose across nested/transitive membranes.
 - *(from I-28)* **Attention/interest Sybil economics** — The per-Principal resource budget bounding authenticated interest claims (ties to the deferred G-6 economic layer and the G-28 quota walk); what the cost to mint an identity concretely is.

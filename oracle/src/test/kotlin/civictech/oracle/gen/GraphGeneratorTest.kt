@@ -7,11 +7,13 @@ import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
 import civictech.oracle.bind.ShapeRule
 import civictech.oracle.model.ElementShape
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -330,6 +332,84 @@ class GraphGeneratorTest {
         }
     }
 
+    // -- computenet-b9x7: a wide vocabulary converges on terminalCount ------
+
+    /**
+     * Generation over the **whole** core vocabulary converges on [GeneratorConfig.terminalCount]
+     * for every seed, at every shape of the topology knobs this sweep varies.
+     *
+     * The regression this pins: `attach` used to be free to plant a shape-diverging node before
+     * the last level (`presenceCount` emits `MapOf` in a set-rooted graph, `join` emits
+     * `MapOf(Scalar, Tuple(2))` in a map-rooted one), and such a node is unconsumable in fact —
+     * no second node of its shape exists to fill the other port of anything that consumes it —
+     * so it sat on the frontier for every remaining level. `chooseTerminals` then threw
+     * `the generated frontier holds 2 unconsumed nodes but terminalCount is 1` on 7 of 50 seeds
+     * (measured 2026-08-18 and re-measured 2026-08-20, both 43/50).
+     *
+     * `GraphSpecLinkSweepTest` is the live-host half of the same criterion; this one is cheap
+     * enough to sweep 200 seeds across five configurations, which is what makes it a guard on
+     * the *rule* rather than on one set of knobs. It states nothing about a vocabulary outside
+     * `CoreOperators`: a vocabulary offering no fan-in over its own root shape genuinely cannot
+     * converge, and `chooseTerminals` still throws for it — see
+     * `a vocabulary that cannot converge to terminalCount fails loudly` below, which is the
+     * assertion that the throw survived this fix.
+     */
+    @Test
+    fun `every seed over the whole core vocabulary converges on terminalCount`() {
+        val configs = listOf(
+            defaultConfig().copy(vocabulary = CoreOperators.Ids.ALL).validated(),
+            defaultConfig(sourceCount = 6, depthRange = 4..8)
+                .copy(vocabulary = CoreOperators.Ids.ALL).validated(),
+            defaultConfig(sourceCount = 5, depthRange = 2..6, terminalCount = 2)
+                .copy(vocabulary = CoreOperators.Ids.ALL).validated(),
+            defaultConfig(terminalCount = 3).copy(vocabulary = CoreOperators.Ids.ALL).validated(),
+            defaultConfig().copy(
+                vocabulary = listOf(
+                    CoreOperators.Ids.MAP,
+                    CoreOperators.Ids.JOIN,
+                    CoreOperators.Ids.COMBINE_LATEST,
+                    CoreOperators.Ids.LOOKUP_JOIN,
+                ),
+            ).validated(),
+        )
+
+        configs.forEach { config ->
+            val generator = GraphGenerator(config)
+            (0L until 200L).forEach { seed ->
+                val graph = withClue("seed $seed, vocabulary ${config.vocabulary}") {
+                    generator.generate(seed)
+                }
+                // The terminal list is the frontier the throw was counting, so asserting its
+                // size is asserting convergence itself, not a proxy for it.
+                withClue("seed $seed: terminals ${graph.topology.terminals.map { it.handle }}") {
+                    graph.topology.terminals.count { !it.late } shouldBe config.terminalCount
+                }
+            }
+        }
+    }
+
+    /**
+     * The other half of computenet-b9x7: the fix above is a *steering* rule, and the loud
+     * failure it made unreachable for `CoreOperators` is still reachable — and still loud — for
+     * a vocabulary that genuinely cannot converge.
+     *
+     * `set` + `filter` offers no fan-in over `SetOf(Scalar)` at all, so three sources can only
+     * ever remain three frontier nodes. `chooseTerminals` names the count, the configured
+     * `terminalCount` and the vocabulary, so a caller reading the message can tell a
+     * misconfiguration from a generator defect without a debugger.
+     */
+    @Test
+    fun `a vocabulary that cannot converge to terminalCount fails loudly`() {
+        val config = defaultConfig()
+            .copy(vocabulary = listOf(CoreOperators.Ids.SET, CoreOperators.Ids.FILTER))
+            .validated()
+
+        val thrown = shouldThrow<IllegalStateException> { GraphGenerator(config).generate(0L) }
+
+        thrown.message!! shouldContain "the generated frontier holds 3 unconsumed nodes but terminalCount is 1"
+        thrown.message!! shouldContain "offers no fan-in operator able to converge"
+    }
+
     private companion object {
         const val SYNTHETIC_ID = "syntheticSetPassThrough"
 
@@ -347,9 +427,9 @@ class GraphGeneratorTest {
          *   test nothing.
          * - **Reachable, simply not swept here.** The map-rooted slice (`map` as the source,
          *   with `join`, `combineLatest` and `lookupJoin` over `MapOf(Scalar, Scalar)`) *is*
-         *   fully generable and links cleanly — measured 2026-08-18 during review at 50/50
-         *   seeds clean on a live host. This suite is set-rooted only, so no assertion here
-         *   covers that slice.
+         *   fully generable and links cleanly. This suite is set-rooted only; the assertion
+         *   that covers that slice — and the one that covers the whole of `Ids.ALL` — is
+         *   `GraphSpecLinkSweepTest` (computenet-b9x7).
          */
         fun defaultConfig(
             depthRange: IntRange = 3..5,

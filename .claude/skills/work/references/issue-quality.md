@@ -26,6 +26,25 @@ side.
   "handles errors properly" are not criteria — they are the absence of one.
 - **Say what's out of scope.** An unstated exclusion gets built anyway by
   whoever reads the issue most generously.
+- **"Landed", "merged" and "shipped" NAME THE BRANCH and the sha.** Each is
+  ambiguous between a merge into a feature branch and a merge into `main`, and
+  an orchestrator writing a residual mid-feature is at exactly the moment the
+  two are easiest to conflate — it has just run a merge and seen it succeed.
+  Measured: a residual asserted a findings entry had *landed* and imposed
+  "STRICTLY APPEND-ONLY. Do not edit the landed entry", derived from a merge
+  into a FEATURE branch. The entry had never been on `main` and was still in an
+  open draft PR, so a reader obeying the constraint would have appended a
+  correction to an entry shipping in the SAME pull request — publishing a
+  document that contradicts itself in one commit, in an evidence file whose
+  whole value is that readers can trust it (computenet-7z3t). **Any constraint
+  whose truth depends on that distinction — append-only, do-not-edit,
+  already-published — states which merge it rests on.**
+- **A prescribed remedy is checked against the data the bead cites, or
+  labelled a suggestion to verify.** In the same bead, a remedy told the
+  implementer to attribute a "0.1–0.2 µs/element band" to the per-run medians;
+  those medians are 0.082–0.223, both ends outside the band. Asserting a fix
+  without running it against the bead's own evidence is the same failure as
+  asserting an untested mechanism, one step downstream.
 - **Backticks in a double-quoted `bd` argument execute as shell.** Bead
   bodies quote code, and Markdown's backticks are command substitution
   inside `--description="..."`: the shell runs each backticked phrase and

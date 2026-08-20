@@ -6,6 +6,7 @@ import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
+import civictech.cell.link.AuthLevel
 import civictech.cell.link.Link
 import civictech.cell.link.Linked
 import civictech.cell.link.PeerId
@@ -265,13 +266,32 @@ const val DEFAULT_NONCE_RETENTION_MILLIS: Long = 600_000
  * admission point). [Peering.loopback] has **no hello at all**: it wires each
  * side's ingress directly and takes both peer names from [Peering.Side.peer],
  * i.e. from configuration, so there is nothing for a challenge/response to
- * verify and this policy is neither consulted nor enforceable there. A loopback
- * side configured [RequireAuthenticated] is therefore not authenticated — its
- * peer names are as vouched-for as they were before this type existed. That is
- * not a hole in the socket path's guarantee; it is the absence of a wire to
- * make a claim over. What [Peering.Side.credentials] *is* for on a loopback
- * side is signing — announcements carry their own signature over the frame,
- * which is the sibling feature's scope (DSC1 §4.3, `[DSC1-WIRE-05]`) and the
+ * verify and this policy is neither consulted nor enforceable there.
+ *
+ * **What a loopback crossing's principal is instead** (`computenet-ssa.3.2`,
+ * `[DSC1-WIRE-05]` principal half; this paragraph replaces the pre-DSC1 claim
+ * that a loopback side is simply "not authenticated"). Because no hello can
+ * decide the level, [Peering.loopback] *computes* it from the two sides'
+ * configuration, mirroring the socket's admission matrix row for row —
+ * [Peering.loopbackAuthLevel] is the single place that decision lives, and its
+ * KDoc is the rule. In-process, the composition is the trust: both `Side`s
+ * were constructed by this process, so the material a hello would have
+ * exchanged is already known to be genuine and the only question left is
+ * whether it is *present*. A direction whose sender and receiver both hold
+ * [Peering.Side.credentials], and whose sender's [Peering.Side.peer] is the
+ * fingerprint its own key derives, therefore stamps
+ * `civictech.cell.link.AuthLevel.Authenticated` — the same principal a socket
+ * peering with the same configuration yields. Every other loopback direction
+ * stamps `TransportVouched`, exactly as before this feature.
+ *
+ * This policy is still not consulted there, and a loopback side configured
+ * [RequireAuthenticated] is neither promoted nor refused *by its policy*: a
+ * policy is a demand on the peer, and demands are enforced at hello time.
+ * What decides a loopback crossing's principal is whether both sides carry
+ * credentials — a separate question, which an [Open] side holding a keypair
+ * answers the same way. What [Peering.Side.credentials] is *additionally* for
+ * on a loopback side is signing: announcements carry their own signature over
+ * the frame, which is the sibling feature's scope (DSC1 §4.3) and the
  * reason the credentials field is independent of this policy.
  */
 sealed interface PeerAuthPolicy {
@@ -391,9 +411,10 @@ object Peering {
          * over an in-process [loopback] with no socket involved
          * (`[DSC1-WIRE-05]`).
          *
-         * Carrying credentials here is *configuration*, not behaviour: this
-         * task adds the surface, and loopback authentication semantics are the
-         * announcement feature's scope, not this one's.
+         * Carrying credentials here is *configuration*, not behaviour on its
+         * own — but it is the configuration [loopback] reads to decide a
+         * loopback crossing's achieved `AuthLevel`, since no hello can decide
+         * it there ([loopbackAuthLevel], `[DSC1-WIRE-05]` principal half).
          */
         val credentials: PeerCredentials? = null,
     ) {
@@ -585,17 +606,76 @@ object Peering {
         }
     }
 
+    /**
+     * The [AuthLevel] a loopback direction achieves — [sender]'s frames
+     * arriving at [receiver] — computed from the two sides' *configuration*
+     * ([DSC1-WIRE-05], principal half).
+     *
+     * **Why configuration and not a handshake.** [loopback] exchanges no hello
+     * and the kernel can verify no signature ([DSC1-WIRE-04]), so there is
+     * nothing here to *check*; what there is instead is knowledge no socket
+     * has — both `Side`s were constructed by this process, so the composition
+     * itself is the trust. This function therefore mirrors the socket's
+     * admission matrix by configuration, one row at a time:
+     *
+     * - the receiver holds [Side.credentials] — on a socket this is what lets
+     *   it issue a challenge at all; an uncredentialed side admits its peer at
+     *   [AuthLevel.TransportVouched] however well-keyed that peer is
+     *   (`WsTransport.onAuthenticatedHello`'s uncredentialed row), and so does
+     *   this;
+     * - the sender holds [Side.credentials] — on a socket this is what lets it
+     *   answer with a `PROOF`; without a keypair there is no `PROOF` row to
+     *   reach;
+     * - the sender's [Side.peer] **is** its own key fingerprint
+     *   (`credentials.peerId`) — the socket's `[DSC1-HELLO-06]` derive-and-
+     *   compare, as data. A side announcing itself under a name its key does
+     *   not derive is exactly the `ID_MISMATCH` the socket refuses, and the
+     *   name is what gets stamped on every delivery, so promoting it would
+     *   authenticate a claim no key backs. A [Side.peer] of null cannot be
+     *   authenticated for the same reason: an unnamed sender stamps no peer,
+     *   and an unstamped delivery is `Principal.LocalTrusted`, not a peer at
+     *   any level.
+     *
+     * Anything short of all three is [AuthLevel.TransportVouched] — today's
+     * behaviour, byte for byte, for every peering that mentions no
+     * credentials (`[DSC1-WIRE-06]`).
+     *
+     * [Side.auth] is deliberately **not** consulted: it is a *demand* on the
+     * peer, enforced at hello time, and there is no hello here (see
+     * [PeerAuthPolicy]'s KDoc). A `RequireAuthenticated` loopback side is
+     * neither promoted nor refused by this function; what decides is whether
+     * the material a hello would have used is present on both sides.
+     */
+    internal fun loopbackAuthLevel(sender: Side, receiver: Side): AuthLevel {
+        val senderKeys = sender.credentials ?: return AuthLevel.TransportVouched
+        if (receiver.credentials == null) return AuthLevel.TransportVouched
+        return if (sender.peer != null && sender.peer == senderKeys.peerId) AuthLevel.Authenticated
+        else AuthLevel.TransportVouched
+    }
+
     fun loopback(a: Side, b: Side): Loopback {
         lateinit var ingressOnB: BridgeIngressCell
         lateinit var ingressOnA: BridgeIngressCell
+        // Fixed here, before either ingress exists — the same happens-before
+        // the socket path gets from binding the level at its admission row
+        // ([DSC1-HELLO-13]): no delivery can observe a level that later
+        // changes, because a `Side`'s configuration is read once, now.
+        val aToBLevel = loopbackAuthLevel(sender = a, receiver = b)
+        val bToALevel = loopbackAuthLevel(sender = b, receiver = a)
         val aToB = BridgeEgressCell().also {
             it.outlet.subscribe(
-                Use.fixed(hostIngress(b, fromPeer = a.peer, onSpawn = { ingressOnB = it }), PortRef.generate()),
+                Use.fixed(
+                    hostIngress(b, fromPeer = a.peer, fromPeerAuth = aToBLevel, onSpawn = { ingressOnB = it }),
+                    PortRef.generate(),
+                ),
             )
         }
         val bToA = BridgeEgressCell().also {
             it.outlet.subscribe(
-                Use.fixed(hostIngress(a, fromPeer = b.peer, onSpawn = { ingressOnA = it }), PortRef.generate()),
+                Use.fixed(
+                    hostIngress(a, fromPeer = b.peer, fromPeerAuth = bToALevel, onSpawn = { ingressOnA = it }),
+                    PortRef.generate(),
+                ),
             )
         }
         // the mirrors and announcers are the *connection instance*, minted by
@@ -610,9 +690,25 @@ object Peering {
      * so [loopback] can expose its ingress cells' `boundaryDenials` (seam 1
      * accounting) without changing this function's return type for its
      * production callers (`WsTransport`).
+     *
+     * [fromPeerAuth] is the level the *connection* was admitted at, decided by
+     * the caller before this call and immutable thereafter — see
+     * [BridgeIngressCell.peerAuth]. It defaults to
+     * [AuthLevel.TransportVouched], so a caller that never mentions
+     * authentication gets exactly today's principals (`[DSC1-WIRE-06]`).
      */
-    fun hostIngress(side: Side, fromPeer: PeerId? = null, onSpawn: (BridgeIngressCell) -> Unit = {}): Propagate<ByteArray> {
-        val ingress = BridgeIngressCell(InvocationSink(side.registry::deliver), peer = fromPeer, admit = side::admits)
+    fun hostIngress(
+        side: Side,
+        fromPeer: PeerId? = null,
+        fromPeerAuth: AuthLevel = AuthLevel.TransportVouched,
+        onSpawn: (BridgeIngressCell) -> Unit = {},
+    ): Propagate<ByteArray> {
+        val ingress = BridgeIngressCell(
+            InvocationSink(side.registry::deliver),
+            peer = fromPeer,
+            peerAuth = fromPeerAuth,
+            admit = side::admits,
+        )
         onSpawn(ingress)
         side.bridgeHost.managementInlet.call.spawn(ingress)
         return (HostedCellProxy.create(ingress.ref, side.registry, FrameInletProxy::class.java)
