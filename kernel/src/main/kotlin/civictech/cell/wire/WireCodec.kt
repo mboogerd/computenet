@@ -119,11 +119,16 @@ object WireCodec {
 
     private val polyAny = PolymorphicSerializer(Any::class)
 
-    // ponytail: JSON as the M5 codec — kotlinx-serialization-json is already the
-    // dependency and perf is out of scope; swap the format (CBOR) behind encode/decode
-    // if profiling demands.
-    private val json = Json {
-        serializersModule = SerializersModule {
+    /**
+     * The kernel's own polymorphic registrations plus the process-start
+     * `ServiceLoader` contributions — computed exactly once, at class init,
+     * and the baseline every rebuild ([contribute]/[withdraw]) starts from.
+     * With no dynamic contributions the resulting [Json] is configured
+     * identically to the once-built codec it replaces, so wire framing for
+     * every existing payload is byte-identical ([JAR1-REG-08] arm 1).
+     */
+    private val baselineModule: SerializersModule = run {
+        SerializersModule {
             polymorphic(Any::class) {
                 subclass(String::class, String.serializer())
                 subclass(Long::class, Long.serializer())
@@ -206,8 +211,77 @@ object WireCodec {
             java.util.ServiceLoader.load(WireSerializers::class.java, WireSerializers::class.java.classLoader)
                 .fold(kernelModule) { acc, contribution -> acc + contribution.module }
         }
+    }
+
+    /** Serializes [contribute]/[withdraw]; readers never take it (see [json]). */
+    private val registrationLock = Any()
+
+    /**
+     * Live contributions, in contribution order, guarded by [registrationLock].
+     * Held by *identity* — a module withdraws exactly the instance it
+     * contributed, even if two contributions compare equal.
+     */
+    private var contributions: List<WireSerializers> = emptyList()
+
+    // ponytail: JSON as the M5 codec — kotlinx-serialization-json is already the
+    // dependency and perf is out of scope; swap the format (CBOR) behind encode/decode
+    // if profiling demands.
+    //
+    // @Volatile so encode/decode always read the *current* build: a rebuild
+    // publishes a complete, immutable Json in one reference write, so a
+    // concurrent encode sees either the whole old module or the whole new one,
+    // never a partial one ([JAR1-REG-09] registration safety).
+    @Volatile
+    private var json: Json = build(emptyList())
+
+    private fun build(live: List<WireSerializers>): Json = Json {
+        // `plus` fails fast if a contribution collides with a kernel type (or
+        // with an earlier contribution) — unchanged from the once-built codec.
+        serializersModule = live.fold(baselineModule) { acc, contribution -> acc + contribution.module }
         allowStructuredMapKeys = true // polymorphic delta keys encode as [k, v] arrays
         useArrayPolymorphism = true // ["SerialName", value] — works for primitive args too
+    }
+
+    /**
+     * Fold a late [WireSerializers] contribution into the codec — the
+     * registration seam for a module loaded after `WireCodec` was first
+     * touched (JAR1 [JAR1-REG-08], arm 1). The codec's module is rebuilt from
+     * the [baselineModule] plus every live contribution, so the delta types
+     * this contribution registers encode and decode from the next
+     * [encode]/[decode] onwards.
+     *
+     * Collisions fail fast: if [serializers] re-registers a type the kernel
+     * (or an earlier contribution) already registered, the rebuild throws and
+     * the codec is left on its previous module, unchanged.
+     *
+     * @throws IllegalArgumentException when the contribution collides.
+     */
+    fun contribute(serializers: WireSerializers) {
+        synchronized(registrationLock) {
+            val next = contributions + serializers
+            // build BEFORE publishing: a colliding contribution throws here,
+            // leaving both `json` and `contributions` on the previous build.
+            val rebuilt = build(next)
+            json = rebuilt
+            contributions = next
+        }
+    }
+
+    /**
+     * Remove a contribution previously passed to [contribute], by identity,
+     * and rebuild the codec without it. Its delta types stop being encodable —
+     * loudly, exactly as before the contribution. Withdrawing something that
+     * was never contributed is a no-op (module unload, feature .4, consumes
+     * this).
+     */
+    fun withdraw(serializers: WireSerializers) {
+        synchronized(registrationLock) {
+            val index = contributions.indexOfFirst { it === serializers }
+            if (index < 0) return
+            val next = contributions.filterIndexed { i, _ -> i != index }
+            json = build(next)
+            contributions = next
+        }
     }
 
     /** @throws IllegalStateException when the invocation's contract has no `@Contract` ids (not wire-capable). */
