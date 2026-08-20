@@ -304,6 +304,15 @@ class MutationCheckTest {
      * `run`'s own KDoc applies when a reference is substituted through its `reference`
      * parameter; substituting through the catalog instead bypasses that default, so it is
      * restored by hand.
+     *
+     * **The paragraph above is a hazard this argument forecloses, not one that was observed —
+     * the argument is inert on today's config.** Measured at review (2026-08-20, Darwin arm64):
+     * [sweepConfig] draws `sourceCount = 4`, every seed of [MUTATION_SEEDS] generates a
+     * four-source case, and `WavePrefixOracle.appliesTo` admits only a SINGLE-source case — so
+     * `onWavePrefixChecker` reports `null` on all thirty seeds and the per-seed outcomes are
+     * identical with this argument and with the default. Nothing is being silenced here today;
+     * the `OFF` is what keeps the hazard foreclosed if this config's source count, or that
+     * eligibility rule, later changes. Do not read it as evidence a violation was seen.
      */
     @Test
     fun `a mutant model on a generator-reachable operator fails the generated sweep`() {
