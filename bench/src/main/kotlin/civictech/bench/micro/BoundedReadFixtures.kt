@@ -116,14 +116,15 @@ import java.util.concurrent.atomic.AtomicLong
 // measure the absorb path instead of the merge path — and an OR-set's `remove` tombstones
 // rather than deletes, so nothing ever shrinks. After the warmup drive and k timed drives
 // the target holds `scale.elements + WARMUP_ADDS + k * DRIVE_ADDS` elements. At 1e3 with
-// three trials that is 1,000 rising to 26,000: the last trial's cell is 26x the first's,
+// [TRIALS] (five) that is 1,000 rising to 42,000: the last trial's cell is 42x the first's,
 // and E3's page count rises with it.
 //
 // This is **the original harness's own behaviour**, reproduced deliberately rather than
 // corrected: `30-bounded-read-measurement.md` Appendix A's `Rig` holds ONE monotone
 // `seedCounter` shared by `seed()` and `driveTimed()`, and its E2 ran five 8,000-add trials
 // per condition on one rig — so its "10^3" condition finished against a ~42,000-element
-// cell. Silently fixing it here would produce numbers that are not comparable to §4/§5,
+// cell, the same figure this file now reaches at the same trial count. Silently fixing the
+// drift here would produce numbers that are not comparable to §4/§5,
 // which is the one thing a replication may not do. It is very likely part of why §4's own
 // 10^3 rows look anomalous (a *slower* baseline drain at 10^3 than at 10^5) and why §6 calls
 // 10^3 "small/unclear at this scale".
@@ -248,6 +249,57 @@ data class PagedWalkOutcome(
 
     /** The largest single page's wall time — the original E3's "max single page" column. */
     val maxSinglePageMs: Double get() = pageLatenciesMs.maxOrNull() ?: 0.0
+
+    /**
+     * **Where** the [maxSinglePageMs] page fell, 1-based in walk order; `0` for a walk
+     * that took no pages at all. Ties resolve to the earliest such page.
+     *
+     * This is the accessor that turns E3's "max single page" column from an inference into
+     * an attribution. The magnitude alone says how long the worst page took; only its
+     * position says *which* part of the walk paid for it, and the three positions mean
+     * three different things:
+     *
+     * - **`1` — the open.** `SetCell.openWalk` takes `stateLock` and makes a full O(n)
+     *   pass over both `adds` and `dels`, freezing the enumeration order and merging every
+     *   tag into the opening `TagFrontier`; that open happens inside the FIRST
+     *   `readBounded` call, i.e. inside one scheduler task.
+     * - **[pages] — the close.** The closing frontier is recomputed in another O(n) pass on
+     *   the final page.
+     * - **anything between** — per-page work, which is the only one of the three that a
+     *   smaller page limit would reduce.
+     *
+     * What it does NOT establish: that the page it names is what a concurrent drive's
+     * `DriveOutcome.maxGapMs` measured. Those two figures are timed on different threads
+     * against no common clock, so their agreement is evidence and not an identity — which
+     * is why `BoundedReadProbeTest`'s E3 prints them side by side per trial rather than
+     * only as trial means.
+     */
+    val maxSinglePagePosition: Int
+        get() = if (pageLatenciesMs.isEmpty()) 0 else pageLatenciesMs.indexOf(maxSinglePageMs) + 1
+
+    /** The FIRST page's wall time — the open's page — or `null` if the walk took none. */
+    val firstPageMs: Double? get() = pageLatenciesMs.firstOrNull()
+
+    /** The LAST page's wall time — the closing frontier's page — or `null` if none. */
+    val lastPageMs: Double? get() = pageLatenciesMs.lastOrNull()
+
+    /**
+     * The median of the **interior** pages — every page but the first and the last — or
+     * `null` when the walk took fewer than three pages and so has no interior.
+     *
+     * The reference the two endpoint pages are read against: an endpoint that costs many
+     * interior pages is a fixed per-walk cost, while an endpoint indistinguishable from
+     * the interior is not. The median rather than the mean, because one page delayed by
+     * an unrelated scheduler or GC event would move a mean and is exactly the noise this
+     * comparison must survive. Upper median for an even count, matching [TrialStats.median].
+     */
+    val interiorMedianPageMs: Double?
+        get() {
+            val interior = pageLatenciesMs.drop(1).dropLast(1)
+            if (interior.isEmpty()) return null
+            val sorted = interior.sorted()
+            return sorted[sorted.size / 2]
+        }
 }
 
 /**
@@ -420,11 +472,16 @@ class ArrivalCollectorCell(override val ref: CellRef = CellRef(UUID.randomUUID()
  * - **It needs at least two trials.** With one sample there is no dispersion to state and
  *   construction refuses, rather than reporting `0.0` — a zero dispersion is a claim of a
  *   perfectly repeatable measurement, which one trial is not evidence for.
- * - **Student-t, not the normal quantile (3.291), and that is not a detail.** At the
- *   3-trial default the t factor is 31.599 against the normal's 3.291 — nearly 10x — so
- *   a normal approximation would report an interval an order of magnitude too tight and
- *   `civictech.bench.classify` would call a noisy result `Reportable`. Being conservative
- *   here is the whole reason the choice is spelled out.
+ * - **Student-t, not the normal quantile (3.291), and that is not a detail.** At three
+ *   trials — the smallest sample this class accepts, and [BoundedReadFixtures.TRIALS]'
+ *   earlier value — the t factor is 31.599 against the normal's 3.291, nearly 10x, so a
+ *   normal approximation would report an interval an order of magnitude too tight and
+ *   `civictech.bench.classify` would call a noisy result `Reportable`. At the five trials
+ *   `TRIALS` now defaults to, the factor is 8.610 — the table is indexed by df and df is
+ *   `n-1`, so five samples read `T_999[4]` and not `T_999[5]`'s 6.869 — roughly 2.6x the
+ *   normal quantile: smaller than the three-trial factor, and still the difference
+ *   between a stated interval and an understated one. Being conservative here is the
+ *   whole reason the choice is spelled out.
  * - **A low-trial probe result is therefore expected to classify `Unreportable`**, and
  *   that is the honest outcome, not a harness fault. Widening `NOISE_FLOOR` is never the
  *   answer — but for THIS probe's statistic neither is raising the trial count, and that
@@ -536,13 +593,19 @@ object BoundedReadFixtures {
     const val DRIVE_ADDS: Int = 8_000
 
     /**
-     * Trials per condition. Three, not the original's five, and stated as a deliberate
-     * reduction rather than an oversight: this constant sizes the artifact's own smoke
-     * run, and three is the smallest sample [TrialStats] can state a dispersion over. A
-     * full-scale sweep is a sibling task's job and will want the original's five or more
-     * — which is a change to this one line, in this one file.
+     * Trials per condition: the original's five, raised here from an earlier three.
+     *
+     * The 2026-08-19 replication entry (`computenet-x9e.6.4`) ran this file at three
+     * trials — the smallest sample [TrialStats] can state a dispersion over — and
+     * recommended raising it to five in the same breath it disclosed why: the whole
+     * six-test E2/E3 probe suite runs in ~2 s, so cost was never the obstacle, and a
+     * fifth trial "makes the medians materially more robust against exactly the outlier
+     * trials E2's 10³/10⁴ baselines show" without changing any `Unreportable`
+     * classification (five trials still needs on the order of 10⁴ trials to reach
+     * `NOISE_FLOOR`; see that entry's "What F3 refused" section for the arithmetic).
+     * `computenet-xlst` raises it on that recommendation.
      */
-    const val TRIALS: Int = 3
+    const val TRIALS: Int = 5
 
     /**
      * Discarded warmup drives per condition, before any trial is timed. One, against the
