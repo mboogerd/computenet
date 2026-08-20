@@ -5,6 +5,7 @@ import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.GraphStep
 import civictech.cell.graph.SpawnStep
 import civictech.oracle.bind.OperatorCatalog
+import civictech.oracle.bind.ShapeRule
 import civictech.oracle.model.ElementShape
 import civictech.oracle.model.SourceId
 import java.io.Serializable
@@ -139,6 +140,28 @@ class GraphGenerator(private val config: GeneratorConfig) {
     }
 
     companion object {
+
+        /**
+         * The generator's shape-satisfiability rule, as one named predicate: whether every
+         * input port of [rule] could be filled from a graph whose nodes carry the shapes in
+         * [available].
+         *
+         * This is the shape half of D4/`[ORA1-GEN-02]` — the rule [Builder.fillPorts] enforces
+         * port by port, hoisted so it can be *asked* rather than only obeyed. `fillPorts` calls
+         * it as its own precondition (a pure fast path: a port whose shape no node carries has
+         * an empty pool and returns `null` anyway), so there is exactly one statement of the
+         * rule and a consumer of it cannot drift from the generator.
+         *
+         * It is a necessary condition, not a sufficient one: `fillPorts` additionally requires
+         * a **distinct** node per port, so a binary operator over one shape needs two nodes of
+         * that shape, not one. Reachability answers computed from this predicate are therefore
+         * upper bounds — an entry it calls unsatisfiable is genuinely unemittable, while one it
+         * calls satisfiable may still be blocked by distinctness or by the convergence steering
+         * in [Builder.attach]. `CatalogReachabilityTest` pins the closure it induces over
+         * `OperatorCatalog`, and reads it with exactly that asymmetry.
+         */
+        fun satisfiedBy(rule: ShapeRule, available: Set<ElementShape>): Boolean =
+            rule.inputs.all { it in available }
 
         /**
          * Lowers a [CaseTopology] to kernel steps: one [SpawnStep] per node carrying the
@@ -445,6 +468,13 @@ class GraphGenerator(private val config: GeneratorConfig) {
          * with a **distinct** node of the shape the catalog declares for it — distinct because
          * two arms from one node would be the same link twice, and because a fan-in of a node
          * with itself is not a fan-in.
+         *
+         * The [satisfiedBy] precondition is the shape half of that question, asked once instead
+         * of port by port; it changes no outcome (a port whose shape no node in the graph
+         * carries has an empty pool below and returns `null` there) and draws no [rng], so both
+         * paths out of a rejection are identical. It is here so the rule
+         * `CatalogReachabilityTest` computes its closure from is the rule this generator runs,
+         * not a copy of it.
          */
         private fun fillPorts(
             entry: OperatorCatalog.Entry,
@@ -453,6 +483,7 @@ class GraphGenerator(private val config: GeneratorConfig) {
             merging: Boolean,
         ): List<String>? {
             val wanted = entry.shape.inputs
+            if (!satisfiedBy(entry.shape, nodes.values.mapTo(mutableSetOf()) { it.shape })) return null
             val headPorts = wanted.indices.filter { wanted[it] == shapeOf(head) }
             if (headPorts.isEmpty()) return null
 
