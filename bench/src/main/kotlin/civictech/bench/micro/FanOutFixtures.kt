@@ -150,6 +150,27 @@ class FanOutRig internal constructor(
         return totalArrivals
     }
 
+    /**
+     * Pre-seed [count] elements off any timer, in one batch drained ONCE at the end
+     * rather than once per add — computenet-252t's fixed-state variant calls this from a
+     * `@Setup` hook, which JMH excludes from the measured region regardless of cost, so
+     * the batching only shortens wall-clock setup time and changes nothing the benchmark
+     * observes.
+     *
+     * Exists so a caller can bring a freshly built rig to a known element count BEFORE
+     * the first [applyOneAndQuiesce] it intends to measure — the mechanism
+     * computenet-252t's fixed-state sweep uses to hold the source's size constant across
+     * [FanDegree], rather than letting it drift with however many invocations one JMH
+     * iteration happens to fit (the confound `FanOutFixtures`' header and
+     * `doc/bench/findings.md`'s 2026-08-19 fan-out entry both name).
+     */
+    fun seed(count: Int) {
+        require(count > 0) { "seed count must be positive, was $count" }
+        val api = sourceApi.inlet.call
+        repeat(count) { api.add(nextElement++) }
+        drain()
+    }
+
     /** Stops the [Drive.REAL] scheduler thread; a no-op under [Drive.SIM]. */
     override fun close() = stop()
 }
@@ -231,8 +252,19 @@ object FanOutFixtures {
      *   still returns cleanly and [FanOutRig.totalArrivals] must stay zero — the same
      *   property `BoundedReadFixtures.rig`'s `RigWiring.UNLINKED` and `Graphs.build`'s own
      *   `Wiring.UNLINKED` each exist to make assertable rather than assumed.
+     * @param preSeed when positive, [FanOutRig.seed] is called with this count before the
+     *   rig is returned, off any timer — a caller measuring per-delta cost at a FIXED
+     *   source size (computenet-252t) passes the same [preSeed] at every [degree] so the
+     *   one thing that varies across a sweep is the fan-out width, not the state size the
+     *   original per-iteration rebuild left uncontrolled. Zero (the default) preserves
+     *   every existing caller's behaviour: an unseeded rig, exactly as before.
      */
-    fun rig(degree: FanDegree, drive: Drive, wiring: Wiring = Wiring.LINKED): FanOutRig {
+    fun rig(
+        degree: FanDegree,
+        drive: Drive,
+        wiring: Wiring = Wiring.LINKED,
+        preSeed: Int = 0,
+    ): FanOutRig {
         val built = rigHost(degree, drive)
         val host = built.host
 
@@ -256,7 +288,7 @@ object FanOutFixtures {
         val sourceApi = host.lookup<SetApi<Int>>(sourceRef)
             ?: error("fan-out source $sourceRef not hosted after spawn — the build never completed")
 
-        return FanOutRig(
+        val rig = FanOutRig(
             degree = degree,
             drive = drive,
             collectors = collectors,
@@ -264,5 +296,54 @@ object FanOutFixtures {
             drain = built.drain,
             stop = built.stop,
         )
+        if (preSeed > 0) rig.seed(preSeed)
+        return rig
     }
+
+    // =====================================================================================
+    // computenet-252t — the fixed-state variant's own constants.
+    //
+    // BS-8's landed sweep (`FanOutFixtures.rig` above, unseeded, rebuilt once per JMH
+    // ITERATION) leaves the source's element count to drift with however many invocations
+    // one 1s iteration fits — inversely proportional to the per-delta cost being measured,
+    // so low-degree rows average over a source 4x-19x larger than high-degree rows (see the
+    // 2026-08-19 fan-out entry's "confound" section in doc/bench/findings.md, and this
+    // file's own header). `FanOutFixedStateBenchmark` (bench/src/jmh/kotlin) holds the
+    // state size FIXED by rebuilding and re-seeding to [FIXED_STATE_ELEMENTS] once per
+    // INVOCATION under `Mode.SingleShotTime` — the bead's first candidate shape — so every
+    // degree's single measured delta is applied against the SAME source size.
+    //
+    // Separate JMH knobs from [FORKS]/[WARMUP_ITERATIONS]/[MEASUREMENT_ITERATIONS] above:
+    // those describe `Mode.AverageTime` iterations of 1s wall-clock each, which has no
+    // meaning for `Mode.SingleShotTime` (each "iteration" IS one invocation, and the cost
+    // per invocation here is dominated by rebuilding a fresh rig and re-seeding it, not by
+    // the one measured delta). Sized so the sweep fits a single dispatch slot: at
+    // `FIXED_STATE_ELEMENTS=10_000` and the widest fan-out (`FanDegree.D256`), one rebuild
+    // + seed is on the order of a few hundred milliseconds (10,000 adds, each fanning to
+    // 256 collectors); `FIXED_STATE_FORKS` x
+    // (`FIXED_STATE_WARMUP_ITERATIONS` + `FIXED_STATE_MEASUREMENT_ITERATIONS`) single shots
+    // per degree/drive combination keeps the ten-combination sweep to low minutes rather
+    // than the 3-34h a `Reportable` classification of the ORIGINAL AverageTime sweep would
+    // have needed (that sizing arithmetic is in the 2026-08-19 entry).
+    // =====================================================================================
+
+    /**
+     * The fixed source size every [FanDegree] is measured at, in
+     * `FanOutFixedStateBenchmark` — one order of magnitude below `Footprint.kt`'s
+     * `Scale.N1E4`, chosen for the identical reason: large enough that the confound's own
+     * arithmetic (a 4x-19x swing between D1 and D256 under the ORIGINAL unseeded sweep)
+     * cannot recur — the size is IDENTICAL at every degree by construction, not merely
+     * large — while small enough that re-seeding it once per invocation, at the widest
+     * fan-out, still fits a dispatch slot.
+     */
+    const val FIXED_STATE_ELEMENTS: Int = 10_000
+
+    /** Forks, `Mode.SingleShotTime`. */
+    const val FIXED_STATE_FORKS: Int = 3
+
+    /** Warmup single shots per fork. */
+    const val FIXED_STATE_WARMUP_ITERATIONS: Int = 5
+
+    /** Measurement single shots per fork. */
+    const val FIXED_STATE_MEASUREMENT_ITERATIONS: Int = 10
 }
