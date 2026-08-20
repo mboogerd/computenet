@@ -58,14 +58,14 @@ import java.io.Serializable
  * lives in `concord/corpus/DISPUTES.md` (computenet-4ru.10.4). The two tests below are that
  * measurement, and neither is a weakened BS-12:
  *
- * 1. [`a single writer makes the naive fold indistinguishable from the real reference`] —
+ * 1. `a single writer makes the naive fold indistinguishable from the real reference` —
  *    across the single-writer configs, zero seeds differ between the two references and both
  *    columns are green. This is why the feature design's "raise the unobserved-remove ratio"
  *    escalation is spent: at one writer, `Membership`'s coverage condition (`add.writer == by`)
  *    holds for every prior add, so the causal fold provably collapses to the value fold and
  *    no knob can create a difference. (computenet-qcm1 makes it doubly spent — a generated
  *    unobserved remove never names a live element.)
- * 2. [`the naive fold agrees with the kernel on exactly the seeds the real reference fails`] —
+ * 2. `the naive fold agrees with the kernel on exactly the seeds the real reference fails` —
  *    across the multi-writer configs, the naive fold is `Success` on all sixty seeds while the
  *    real reference mismatches on some, and the **mismatching seed set equals the differing
  *    seed set**. That is BS-12's equation from the other side: the naive fold agrees with the
@@ -150,9 +150,13 @@ class DivergenceControlTest {
      * (two writers over the counting vocabulary) and P8 (four writers, tight domain, half the
      * removes unobserved).
      *
-     * Their measured differing-seed counts on 2026-08-20 (Darwin arm64) were 42, 34, 43 and 32
-     * of 60 respectively, each equal to that config's real-reference `Mismatch` count. Those
-     * figures are recorded here and **not asserted**: they are a property of this generator's
+     * Measured on 2026-08-20 (Darwin arm64), differing seeds / real-reference `Success` seeds
+     * of 60: P3 42/18, P4 34/26, P6 43/17, P8 32/28 — in each row the differing count and the
+     * real reference's `Mismatch` count are the same number, which is the finding. (The probe
+     * comment on computenet-4ru.10.1 reports P8 as "Mismatch 32, Success 32"; 32 + 32 exceeds
+     * 60, and the re-measurement here reads 32 Mismatch / 28 Success. The differing count, the
+     * only figure the argument rests on, is 32 either way.) Those figures are recorded here and
+     * **not asserted**: they are a property of this generator's
      * draw, and pinning them would make an unrelated generator change look like a kernel
      * regression. What is asserted is the shape that carries the finding — nonzero, and equal
      * to the real reference's mismatch set.
