@@ -111,6 +111,15 @@ object CoreOperators {
         const val FILTER = "filter"
         const val FLAT_MAP_SET = "flatMapSet"
         const val MAP_SET = "mapSet"
+
+        /**
+         * The pair-shaped bootstrap (computenet-4ru.16). Not an `[ORA1-MODEL-02]` operator —
+         * see the registration below for why it is in the catalog anyway, and
+         * `VocabularyCompletenessTest`, whose spelled-out requirement list deliberately does
+         * not name it.
+         */
+        const val KEY_BY = "keyBy"
+
         const val UNION = "union"
         const val COUNT = "count"
         const val PRESENCE_COUNT = "presenceCount"
@@ -147,7 +156,7 @@ object CoreOperators {
         /** Every id this file registers, in registration order. */
         val ALL: List<String> = listOf(
             SET, KEYED_SET, COUNTER, PN_COUNTER, MAP,
-            FILTER, FLAT_MAP_SET, MAP_SET, COUNT,
+            FILTER, FLAT_MAP_SET, MAP_SET, KEY_BY, COUNT,
             UNION, PRESENCE_COUNT, QUORUM_SET,
             INTERSECT, JOIN_SET, SEMI_JOIN, ANTI_JOIN,
             JOIN, COMBINE_LATEST, LOOKUP_JOIN,
@@ -296,6 +305,47 @@ object CoreOperators {
             shape = ShapeRule.unary(SCALAR_SET, SCALAR_SET),
             kernel = CellFactory { ref -> FlatMapSetCell<Any?, Any?>(ref) { element -> Expansions.TO_TEXT.expand(element) } },
             model = FlatMapSetModel(Expansions.TO_TEXT),
+        )
+
+        /*
+         * `keyBy` — the **pair-shaped bootstrap** (computenet-4ru.16), and the one entry here
+         * that `[ORA1-MODEL-02]` does not name.
+         *
+         * Every pair-shaped entry in this file — the three `PAIR_SET` joins and the whole
+         * `groupBy*` family, eleven of the twenty-eight registrations — consumes
+         * `SetOf(Tuple(2))`, and until this entry existed the only registrations *producing*
+         * that shape were the three joins that also consume it. Shape-typed generation
+         * (`[ORA1-GEN-02]`, D4) starts from arity-0 sources and can only append an operator
+         * whose inputs the frontier already carries, so the pair family was cut off from every
+         * root: naming those eleven ids in a `GeneratorConfig.vocabulary` was accepted and then
+         * emitted nothing. Measured before this entry landed, 600 topologies over
+         * `Ids.ALL` at the standard knobs (three terminal counts x 200 seeds) contained zero
+         * join and zero `groupBy` node — a sweep structurally blind to ~40% of the vocabulary
+         * while reporting green. `CatalogReachabilityTest` (computenet-6xhh) pins that closure
+         * so it cannot silently return.
+         *
+         * The fix is deliberately the smallest one that closes it, and it adds **no kernel
+         * surface**: `keyBy` is `FlatMapSetCell` — the cell `mapSet` already binds — with a
+         * singleton-image function into the pair domain, modelled by the `FlatMapSetModel`
+         * `mapSet` already uses. No new operator cell, no new reference model, no new
+         * `ShapeRule` arity: only a function, a shape declaration, and an id. The
+         * `civictech.cell.data.op` inventory gate is untouched because nothing in that package
+         * changed.
+         *
+         * **It is not a claim about a kernel operator, and that is why it is absent from
+         * `VocabularyCompletenessTest`'s spelled-out `[ORA1-MODEL-02]` list.** That list is the
+         * requirement's, checked entry by entry against the requirement text; this entry is
+         * generator scaffolding that happens to be expressible as a catalog registration, which
+         * is exactly the extension seam `[ORA1-API-03]` promises — the generator picked it up
+         * with no edit to `GraphGenerator` at all.
+         *
+         * [Expansions.TO_KEYED_PAIR]'s key is many-to-one on purpose; see its KDoc.
+         */
+        OperatorCatalog.register(
+            id = Ids.KEY_BY,
+            shape = ShapeRule.unary(SCALAR_SET, PAIR_SET),
+            kernel = CellFactory { ref -> FlatMapSetCell<Any?, Any?>(ref) { element -> Expansions.TO_KEYED_PAIR.expand(element) } },
+            model = FlatMapSetModel(Expansions.TO_KEYED_PAIR),
         )
 
         /* `CountCell` — distinct live elements as a scalar ([24-OP-COUNT-01]). */
@@ -639,6 +689,45 @@ object CoreOperators {
         val TO_TEXT: ElementExpansion = object : ElementExpansion {
             override fun expand(element: Any?): Iterable<Any?> = listOf(element.toString())
             override fun toString(): String = "toText"
+        }
+
+        /**
+         * One-to-one into the **pair** domain: `element` becomes `(bucket, element)` — the
+         * `keyBy` bootstrap's function, and the only thing in this file that turns a
+         * `SetOf(Scalar)` stream into a `SetOf(Tuple(2))` one.
+         *
+         * **Singleton image, so the pairing itself is injective**: distinct elements produce
+         * distinct pairs, and no two preimages collide on one output. That keeps `keyBy` a
+         * plain relabelling rather than a second `flatMapSet` — the many-to-one preimage
+         * bookkeeping `[24-OP-FLATMAP-02]` governs is already exercised by
+         * [TEXT_CHARACTERS], and duplicating it here would blur what a divergence at a `keyBy`
+         * node means.
+         *
+         * **The key is many-to-one, and that is where the interest is.** Everything downstream
+         * of this entry keys on the pair's first component ([Keys.FIRST]), so a key that were
+         * injective would make every `groupBy*` group a singleton and every `joinSet` match a
+         * single row — registering the family without exercising the clauses that make it worth
+         * checking (`[24-OP-JOINSET-02]`'s per-pair tag collapse, `groupByTopK`'s cap at
+         * [CANONICAL_TOP_K]). The bucket is the parity of the element text's last character
+         * code, which splits any generated element domain (`ElementDomains` emits `e00`, `e01`,
+         * …, and upstream operators may reduce those to single characters) into two groups of
+         * comparable size. Parity of a `Char.code` is fixed by the source encoding, so the
+         * projection is deterministic across JVMs, as `[ORA1-GEN-01]` requires of anything a
+         * case's value depends on.
+         *
+         * Total over `Any?` like [Keys] and [Selectors], and for the same reason: the element
+         * domain is the generator's choice, so a projection that threw on an unexpected one
+         * would make the *registration* the thing that fails a sweep. An empty text buckets as
+         * if its last character code were 0.
+         */
+        val TO_KEYED_PAIR: ElementExpansion = object : ElementExpansion {
+            override fun expand(element: Any?): Iterable<Any?> {
+                val text = element.toString()
+                val bucket = "g" + ((text.lastOrNull()?.code ?: 0) % 2)
+                return listOf(bucket to element)
+            }
+
+            override fun toString(): String = "toKeyedPair"
         }
     }
 
