@@ -73,6 +73,74 @@ import civictech.testkit.forEachSeed
  * edge is not reachable from the default sweep — but a caller who lowers [run]'s `stepBudget`
  * moves into it.
  *
+ * ## What a green sweep MEANS: the reference model is DEFENDED, not PROVEN `[ORA1-HONEST-01]`
+ *
+ * This object is the module's entry point (epic computenet-4ru §2.3), so the load-bearing
+ * caveat belongs here rather than buried beside one model file.
+ *
+ * A green sweep says: **on every seed in the range, the kernel and the reference model agreed.**
+ * It does **not** say the reference model is correct. Nothing in this module proves that, and
+ * no test in it could — the reference (`civictech.oracle.model`) is a second implementation of
+ * the same semantics, read off the same specification, and a second implementation can be
+ * wrong in its own way or wrong in the *same* way as the first. Agreement is evidence, not
+ * proof, and "the oracle says so" is never by itself a statement about the kernel.
+ *
+ * That is not a theoretical caveat here: **computenet-eeys is a measured instance of the
+ * reference model being the wrong side of a disagreement** (`civictech.oracle.model.Membership`
+ * scopes observed-remove coverage to the removing *writer*, while `[24-SET-03]`'s observer is
+ * the *cell* — see [WavePrefixOracle]'s verdict KDoc and the `[ORA1-DIFF-09]` entry in
+ * `concord/corpus/DISPUTES.md`). The reference was reviewed, tested and green on the sweep, and
+ * still had it wrong.
+ *
+ * What the reference's correctness actually rests on is **four defenses**. Each is a landed,
+ * named, falsifiable test; none is a proof; and they are listed here with their weaknesses so
+ * a reader can price a green sweep rather than trust it:
+ *
+ * 1. **Independence** — `[ORA1-MODEL-10]`, pinned by
+ *    [civictech.oracle.model.ModelImportBoundaryTest]. `civictech.oracle.model` may name value,
+ *    key and delta types but no `civictech.cell.data.op.*` type and no concrete data-cell
+ *    class, enforced by a source-text import scan over the package. This rules out the
+ *    strongest form of shared-bug agreement — a model that *calls* or transliterates the
+ *    implementation it checks. It does not rule out two independent readings converging on the
+ *    same misreading of the spec, which is exactly what eeys was.
+ * 2. **A divergence control** — [DivergenceControlTest], and read its KDoc before quoting this
+ *    line: **`[ORA1-DIFF-09]`/BS-12 as specified is NOT satisfiable against today's kernel**,
+ *    and that file pins the measurement instead of a control that cannot fire. A naive
+ *    arrival-order fold — the deliberately wrong reference BS-12 asked for — is indistinguishable
+ *    from the real reference under a single writer, and under multiple writers agrees with the
+ *    *kernel* on exactly the seeds the real reference fails. BS-12 is **blocked on
+ *    computenet-eeys** — on the `[24-SET-03]` observer disagreement that bead *settled*, not on
+ *    the bead itself, which is **closed** (2026-08-20, PR #365) having found the reference
+ *    model, not the kernel, to be the wrong side. So no answer from eeys is still pending, and
+ *    its closure does not unblock this: what would actually make BS-12 buildable is the
+ *    `Resolves` bullet of the `concord/corpus/DISPUTES.md` entry — a wrongness this kernel does
+ *    not genuinely share, or a `SetCell` remove that becomes writer-scoped (the tripwire
+ *    [DivergenceControlTest]'s second test carries). It is filed in
+ *    `concord/corpus/DISPUTES.md` rather than weakened into a
+ *    passing control. So this defense is today the **weakest of the four**, and saying so is
+ *    the point of this section: the sweep currently has no live demonstration that a wrong
+ *    *source* model reddens it.
+ * 3. **A mutation check** — [MutationCheckTest] (`[ORA1-DIFF-10]`/BS-13). A deliberately wrong
+ *    operator model is caught by the differential machinery and attributed to the right
+ *    terminal. This is the surviving demonstration of discriminating power, and it covers the
+ *    derived-operator half of the vocabulary that (2) cannot currently reach.
+ * 4. **A corpus cross-check** — [civictech.oracle.corpus.CorpusCrossCheckTest] (epic §8). The
+ *    reference model reproduces the hand-authored `concord/corpus/24-data-cells` scenarios it
+ *    covers, with a completeness guard so the covered set cannot shrink silently. This ties the
+ *    model to human-authored expectations rather than to the kernel — bounded two ways. It runs
+ *    only over the scenarios that exist, a small, fixed set beside a 200-seed sweep (22 of the
+ *    29 files; the other 7 are listed there with written out-of-vocabulary reasons). And each
+ *    case is **transcribed by hand** into Kotlin rather than parsed from its yaml — `:oracle`
+ *    carries no YAML dependency and its `ModuleDependencyTest` bars one on `:concord` — so the
+ *    completeness guard sees a yaml file appearing or disappearing, but **not** a yaml whose
+ *    content drifts away from the transcription that cites it. That limit is stated at the
+ *    test's own KDoc too.
+ *
+ * The vocabulary the reference deliberately does **not** cover, each exclusion with a written
+ * reason verified against kernel source, is the other half of this ledger `[ORA1-HONEST-02]`:
+ * see the file KDoc of `civictech.oracle.model.MapCellModel`. Both halves are pinned by
+ * [civictech.oracle.HonestyLedgerTest], so this is build-checked prose, not decoration.
+ *
  * ## Non-goals
  *
  * The wave-prefix subset and its own knob, late-joiner and multi-host sweep configurations,

@@ -27,6 +27,14 @@ weak list is where a missed recurrence hides.
 Deliberately retrospective and free. It spawns nothing, runs in about a second,
 and answers the only question that matters about a landed fix.
 
+MEASURED BEYOND THIS LANE (2026-08-20). Pointed at every parent in the export:
+775 landed items, and exactly ONE recurrence outside computenet-wpvy. The
+failure this detects -- a fix that did not take -- is a documentation-lane
+pathology, not a code-lane one, because code fixes ship with a test that fails
+without them and prose ships with nothing. That is the mechanical-vs-prose
+finding arriving from the other direction, and it is why `--epic` defaults
+here rather than scanning everything.
+
 Usage: recurrence-audit.py [--epic computenet-wpvy] [--jsonl .beads/issues.jsonl]
 Prints FAILED-FIX lines (strong), CITED lines (weak), then a summary that
 breaks the rate down by metadata.fix_kind -- `mechanical` fixes (a script, a
@@ -72,6 +80,21 @@ def load(path):
             except json.JSONDecodeError:
                 continue
     return out
+
+
+def landed(r):
+    """Closed as DONE — not superseded, rejected or deduplicated.
+
+    NOT `"fixed in" in close_reason`, which this used until 2026-08-20 and
+    which is a friction-lane CONVENTION: work epics close their children with
+    bd's default "Closed" or a free-text verdict, so the audit silently
+    reported `0 landed fixes` for every product epic — an empty answer reading
+    as a clean bill of health, which is the exact shape this lane exists to
+    catch.
+    """
+    cr = (r.get("close_reason") or "").strip().lower()
+    return (r.get("status") == "closed"
+            and not cr.startswith(("superseded", "rejected", "duplicate")))
 
 
 def children_of(records, epic):
@@ -124,9 +147,7 @@ def main(argv):
         return 3
 
     kids = children_of(records, a.epic)
-    fixes = [r for r in kids
-             if r.get("status") == "closed"
-             and "fixed in" in (r.get("close_reason") or "")]
+    fixes = [r for r in kids if landed(r)]
 
     # id -> the fix record, for the citation scan below.
     by_id = {r["id"]: r for r in fixes}
