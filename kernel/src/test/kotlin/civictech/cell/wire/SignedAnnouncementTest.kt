@@ -494,8 +494,17 @@ class SignedAnnouncementTest {
      * The frame is *validly signed* by B, and the receiver *knows B's public
      * key*, so a gate that merely asked "does this signature verify?" would
      * admit it. It arrives on the connection bound to A, and is refused
-     * [DenialReason.ID_MISMATCH] — not [DenialReason.BAD_SIGNATURE], which is
-     * what a gate that verified before checking the binding would report.
+     * [DenialReason.ID_MISMATCH].
+     *
+     * **This case does not pin the check ORDER, and does not claim to.** The
+     * verifier injected here resolves keys from a directory holding both A and
+     * B, so B's signature verifies `true` and the binding check reports
+     * ID_MISMATCH whether it runs before or after the verify — measured at
+     * review by moving the ID_MISMATCH blocks below the verify call, which
+     * compiles and leaves all ten cases in this file green. What this case does
+     * pin is that the binding is checked *at all* (see the mutation note
+     * below). The ordering argument in [AnnouncementAdmission]'s KDoc is about a
+     * connection-keyed verifier, which is task 4's shape and not this file's.
      *
      * The discriminating half is the second feed: **the very same bytes** are
      * accepted on a connection bound to B. So the refusal is about the
@@ -621,7 +630,17 @@ class SignedAnnouncementTest {
      * raw signature bytes. Checked against the *actual* base64url signature of
      * the refused frame and against the sender's public key encoding, over the
      * whole rendered dead letter — description, detail and the record's own
-     * fields — for every reason in the taxonomy.
+     * fields.
+     *
+     * **Bound: one refusal, ID_MISMATCH.** This case does not sweep the
+     * taxonomy. That the other four reasons are equally safe is a *structural*
+     * property of [AnnouncementAdmission.check]'s detail strings — they
+     * interpolate booleans, peer names, counters and epoch millis and nothing
+     * else, and the BAD_SIGNATURE branch says in so many words that it withholds
+     * the signature — together with the `deniedArgs = emptyList()` at the
+     * `BridgeIngressCell` call site, which is what keeps the raw frame out of
+     * the record. Neither is asserted here, so a future detail string that
+     * interpolated `signature` under, say, REPLAY would not redden this file.
      */
     @Test
     fun `no dead letter carries key material or raw signature bytes`() {

@@ -166,14 +166,30 @@ data class AnnouncementRejection(val reason: DenialReason, val detail: String)
  *
  * ## Order of checks, which is a semantic decision and not an optimization
  *
- * [DenialReason.ID_MISMATCH] is decided **before** the signature is verified.
- * The two are otherwise indistinguishable from the outside: a validly signed
- * announcement minted by B, injected on a connection bound to A, would verify
- * `false` under A's key and report [DenialReason.BAD_SIGNATURE] — collapsing
- * impersonation into "bad crypto" and losing precisely the fact that this gate
- * binds an announcement to *its connection* rather than merely checking that
- * some signature is well-formed. Deciding the binding first makes the two
- * reasons name two different attacks, which is what an operator acts on.
+ * [DenialReason.ID_MISMATCH] is decided **before** the signature is verified,
+ * so that which reason a frame gets does not depend on where the verifier
+ * happens to look up keys. [AnnouncementVerifier.verify] is handed the frame's
+ * *minting* peer, never [boundPeer] — the binding is this class's job, not the
+ * verifier's — and that is what makes the ordering matter differently for the
+ * two verifier shapes DSC1 admits:
+ *
+ * - A verifier that resolves only **the connection's** key (task 4's
+ *   hello-bound shape) answers `false` for a validly signed announcement
+ *   minted by B and injected on a connection bound to A. Verified first, that
+ *   frame reports [DenialReason.BAD_SIGNATURE] — collapsing impersonation into
+ *   "bad crypto" and losing precisely the fact that this gate binds an
+ *   announcement to *its connection*.
+ * - A verifier over a **directory** of known peers (what `SignedAnnouncementTest`
+ *   injects, and what a multi-peer receiver naturally holds) answers `true` for
+ *   that same frame, and the binding check reports [DenialReason.ID_MISMATCH]
+ *   on either side of the verify call.
+ *
+ * **Caveat, measured at review and stated here rather than only in the review:**
+ * because this file's suite injects the directory-shaped verifier, no test here
+ * pins the order. Moving both ID_MISMATCH blocks below the verify call compiles
+ * and leaves all ten cases green. The order is kept for the first bullet's sake
+ * — it is a deliberate choice, not a test-constrained invariant, and a change to
+ * it will not redden this suite.
  */
 class AnnouncementAdmission internal constructor(
     private val config: AnnouncementVerification,
