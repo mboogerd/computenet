@@ -12,7 +12,12 @@ import civictech.cell.proxy.Invocation
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotContain
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import org.junit.jupiter.api.Test
+import java.util.Base64
 import java.util.UUID
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
@@ -130,5 +135,55 @@ class WireCodecTest {
             .replace(Regex("\"methodId\":-?\\d+"), "\"methodId\":1")
             .toByteArray()
         shouldThrow<IllegalStateException> { WireCodec.decode(corrupted) }
+    }
+
+    /**
+     * BS-18 ([DSC1-WIRE-01..03], computenet-ssa.4.1): a frame encoded with
+     * the announcement-signing fields populated is decoded by the
+     * pre-existing decode path — decode succeeds, the resulting invocation
+     * equals the unsigned equivalent, and VERSION stays 2. WireCodec.encode
+     * has no signing caller yet (that's the emit-side successor), so this
+     * builds the signed wire bytes by injecting the fields into an
+     * otherwise-ordinary encoded frame's JSON, the same technique
+     * `unknown ids are rejected at decode` above uses to corrupt a frame.
+     */
+    @Test
+    fun `BS-18 - additive signing fields decode without changing the invocation, VERSION unchanged`() {
+        val add = SetOps::class.java.getMethod("add", Any::class.java)
+        val original = frame(add, "milk")
+        val unsignedBytes = WireCodec.encode(original)
+        val unsignedDecoded = WireCodec.decode(unsignedBytes)
+
+        val rawSignature = "signature-bytes-not-a-real-signature".toByteArray()
+        val signatureB64 = Base64.getUrlEncoder().withoutPadding().encodeToString(rawSignature)
+        val obj = Json.parseToJsonElement(unsignedBytes.decodeToString()).jsonObject
+        val signedObj = JsonObject(
+            obj + mapOf(
+                "signature" to JsonPrimitive(signatureB64),
+                "signerKeyId" to JsonPrimitive("key-1"),
+                "sigCounter" to JsonPrimitive(7L),
+                "notAfter" to JsonPrimitive(1_700_000_000_000L),
+            ),
+        )
+        val signedBytes = Json.encodeToString(JsonObject.serializer(), signedObj).toByteArray()
+
+        // decode: succeeds, and the resulting invocation equals the unsigned equivalent
+        val signedDecoded = WireCodec.decode(signedBytes)
+        signedDecoded shouldBe unsignedDecoded
+
+        // decodeFrame: the frame the successor ingress gate needs is reachable,
+        // and the four fields round-trip byte-exact (base64 string equality
+        // implies the decoded bytes are identical; verified explicitly below too)
+        val decodedFrame = WireCodec.decodeFrame(signedBytes)
+        decodedFrame.invocation shouldBe unsignedDecoded
+        decodedFrame.frame.signature shouldBe signatureB64
+        Base64.getUrlDecoder().decode(decodedFrame.frame.signature) shouldBe rawSignature
+        decodedFrame.frame.signerKeyId shouldBe "key-1"
+        decodedFrame.frame.sigCounter shouldBe 7L
+        decodedFrame.frame.notAfter shouldBe 1_700_000_000_000L
+
+        // VERSION unchanged — the additive-field non-goal, checked directly
+        WireCodec.VERSION shouldBe 2
+        decodedFrame.frame.version shouldBe 2
     }
 }

@@ -27,7 +27,21 @@ import java.util.UUID
  * casing. P1: fully meaningful on the SimulationController — the generative
  * harness exercises the whole wire format without a network.
  */
-class BridgeEgressCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell, InvocationSink {
+class BridgeEgressCell(
+    override val ref: CellRef = CellRef(UUID.randomUUID()),
+    /**
+     * This side's announcement signer, or null when the side has no identity
+     * configuration ([DSC1-ANN-01], epic `computenet-ssa.4`). Borrowed, never
+     * owned: it belongs to the [Peering.Side] and outlives this cell, which is
+     * what keeps the counter strictly increasing across the egress replacement
+     * a reconnect performs (see [AnnouncementSigner]).
+     *
+     * A **trailing parameter with a default**, so every existing construction
+     * site compiles unchanged and, with no signer, encodes byte-identical
+     * frames ([DSC1-WIRE-06]).
+     */
+    private val signer: AnnouncementSigner? = null,
+) : Cell, InvocationSink {
     val outlet = registerPort("outlet", FanOutlet.create<Propagate<ByteArray>>())
 
     /** Proxies use this cell as their [InvocationSink]; every send becomes a frame. */
@@ -37,7 +51,7 @@ class BridgeEgressCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         require(args.none { it is Leased<*> }) {
             "Leased payloads must not cross machine boundaries (spec 23) — freeze or copy first"
         }
-        val frame = WireCodec.encode(invocation)
+        val frame = WireCodec.encode(invocation, signer)
         // move-by-serialize: the sender's reference dies with the encode (spec 23)
         args.forEach { (it as? Owned<*>)?.consume() }
         outlet.call.propagate(frame)
@@ -56,6 +70,15 @@ class BridgeEgressCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
  * classified as a cell fault — see [admit]. Only a genuine decode failure
  * (a frame that passed admission but is not a well-formed [WireCodec] frame)
  * is a fault on this cell.
+ *
+ * An **announcement** refusal ([announcementAdmission]) is the same kind of
+ * thing as the allowlist refusal and takes the same route — accounted, never
+ * thrown — but at a different point and on its own sink: it needs the decoded
+ * frame's signing fields, so it runs after [WireCodec.decodeFrame] and before
+ * the invocation is handed to [deliverTo]. That placement is the whole
+ * guarantee behind "zero registry change on rejection": a refused announcement
+ * never reaches `LocationRegistry::deliver`, so there is no window in which it
+ * is applied and retracted.
  *
  * Eager cell (C-7): serves in `init` so it composes host-free.
  */
@@ -107,6 +130,20 @@ class BridgeIngressCell(
     private val replySink: InvocationSink = deliverTo,
     /** This side's negotiated protocol-id set (G-35 phase B); see [defaultProtocolCapabilities]. */
     private val protocolCapabilities: Set<ProtocolId> = defaultProtocolCapabilities(),
+    /**
+     * The receiving side's announcement admission gate, or null when this side
+     * verifies no announcements ([DSC1-ANN-05..13], epic `computenet-ssa.4`).
+     *
+     * **Borrowed from the [Peering.Side], never owned** — the same discipline
+     * [BridgeEgressCell.signer] follows, and for the mirrored reason: the
+     * replay high-water mark is per minting *identity*, so it must outlive the
+     * ingress replacement a reconnect performs (see [AnnouncementAdmission]).
+     *
+     * **A trailing parameter with a default**, so every existing construction
+     * site compiles unchanged and, with no gate, takes the pre-feature path
+     * frame for frame ([DSC1-WIRE-06]).
+     */
+    private val announcementAdmission: AnnouncementAdmission? = null,
 ) : Cell, BoundaryDenialAccounting {
     val inlet = registerPort("inlet", FanInlet.create<Propagate<ByteArray>>())
 
@@ -118,6 +155,19 @@ class BridgeIngressCell(
      */
     override val boundaryDenials: BoundaryDenials = BoundaryDenials()
     private val admissionSink = boundaryDenials.sinkFor("bridge-ingress")
+
+    /**
+     * Announcement-verification refusals, accounted **separately** from the
+     * allowlist's `"bridge-ingress"` sink ([DSC1-OBS-02..04]).
+     *
+     * Two boundaries, two counters: an allowlist refusal says "this peer is not
+     * welcome here at all" and an announcement refusal says "this peer is
+     * welcome and this particular claim is not", and summing them would make
+     * neither rate readable. Allocated at construction like its sibling, so
+     * `boundaryDenials["announcement-admission"]` is non-null on every ingress
+     * whether or not one ever fires.
+     */
+    private val announcementSink = boundaryDenials.sinkFor("announcement-admission")
 
     init {
         inlet.serve(object : Propagate<ByteArray> {
@@ -137,7 +187,36 @@ class BridgeIngressCell(
                     )
                     return
                 }
-                val decoded = WireCodec.decode(value)
+                val decodedFrame = WireCodec.decodeFrame(value)
+                val gate = announcementAdmission
+                if (gate != null && WireCodec.isAnnouncement(decodedFrame.frame)) {
+                    // Seam 1, announcement half (DSC1 [DSC1-ANN-05..13]): the ONE
+                    // place the trust decision for an arriving announcement is
+                    // taken, before it can reach RegistryMirrorCell and therefore
+                    // before any LocationRegistry state moves. Like the allowlist
+                    // above, nothing throws — a refusal is not a cell fault
+                    // (BS-14) — so this never reaches supervision.
+                    //
+                    // deniedArgs is deliberately EMPTY. The refused announcement's
+                    // arguments are refs, link records and ids: no Owned/Leased can
+                    // reach this cell (RegistryAnnounce's whole signature), so there
+                    // is nothing to discharge, and handing the raw frame bytes over
+                    // as the allowlist path does would put the base64 signature into
+                    // a dead letter ([DSC1-OBS-05]).
+                    val rejection = gate.check(peer, decodedFrame.frame)
+                    if (rejection != null) {
+                        announcementSink.deny(
+                            seam = BoundarySeam.ADMISSION,
+                            reason = rejection.reason,
+                            principal = peer,
+                            subject = "RegistryAnnounce",
+                            detail = rejection.detail,
+                            deniedArgs = emptyList(),
+                        )
+                        return
+                    }
+                }
+                val decoded = decodedFrame.invocation
                 val withPeer = if (decoded.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
                     val edge = decoded.protocolLink as WireEdgeLink
                     decoded.copy(protocolLink = edge.withBridge(replySink, protocolCapabilities), peer = peer, peerAuth = peerAuth)

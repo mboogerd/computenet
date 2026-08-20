@@ -99,6 +99,33 @@ data class WireFrame(
      * handshake can reconcile the real cross-host natures instead of DEFAULT.
      */
     val natures: List<Int> = emptyList(),
+    /**
+     * Announcement signing (DSC1-ANN, epic computenet-ssa.4, [DSC1-WIRE-01]):
+     * additive fields, absent (`null`) whenever signing is disabled, following
+     * exactly the [routingEpoch]/[protocolId] precedent — no version bump,
+     * encoding stays backward-compatible with peers that predate these fields.
+     * Populated by [WireCodec.encode] when it is handed an
+     * [AnnouncementSigner] and the invocation is a [RegistryAnnounce] call
+     * (computenet-ssa.4.2), and by nothing else. Nothing in this module
+     * *verifies* them: the single ingress admission gate is the successor
+     * task's, so today a receiver reads them only through
+     * [WireCodec.decodeFrame].
+     *
+     * [signature] is the base64url encoding (no padding) of the raw signature
+     * bytes over the canonical announcement encoding, chosen over a raw
+     * `ByteArray` field so [WireFrame]'s generated `equals`/`hashCode` compare
+     * by content rather than by array reference (`ByteArray` breaks
+     * structural equality in a data class) — a populated frame still
+     * round-trips byte-exact, since the caller decodes the string back to the
+     * same bytes it encoded.
+     */
+    val signature: String? = null,
+    /** Identifies the signing key among the signer's published keys ([DSC1-WIRE-01]). */
+    val signerKeyId: String? = null,
+    /** Per-minting-peer strictly-increasing replay counter ([DSC1-WIRE-01]). */
+    val sigCounter: Long? = null,
+    /** Expiry, epoch millis, checked against the receiver's clock plus skew ([DSC1-WIRE-01]). */
+    val notAfter: Long? = null,
 )
 
 /** See [WireFrame.edge]. */
@@ -113,6 +140,14 @@ data class WireEdge(
     val toCell: CellRef,
     val toPortName: String,
 )
+
+/**
+ * [WireCodec.decodeFrame]'s result: the [HostedPortInvocation] that
+ * [WireCodec.decode] alone would have returned, alongside the [WireFrame] it
+ * was parsed from — the only way to reach frame-only fields like
+ * [WireFrame.signature] once decoding has happened.
+ */
+data class DecodedWireFrame(val invocation: HostedPortInvocation, val frame: WireFrame)
 
 object WireCodec {
     const val VERSION = 2 // v2 (M7.1): CellRef carries instanceId (G-8)
@@ -210,8 +245,60 @@ object WireCodec {
         useArrayPolymorphism = true // ["SerialName", value] — works for primitive args too
     }
 
+    /**
+     * The [RegistryAnnounce] contract's generated id — the one contract whose
+     * frames [encode] signs ([DSC1-ANN-01]: announcements only; data-plane
+     * deltas are explicitly out of scope, SEC1/G-54). Resolved once, lazily,
+     * because `ContractRegistry` is ServiceLoader-populated and this object
+     * initializes early. Null only if the generated descriptor is missing, in
+     * which case nothing is ever recognized as an announcement and nothing is
+     * signed — fail *closed* on the emit side, since an unsigned announcement
+     * is refused by a receiver that requires signing rather than trusted.
+     */
+    private val announceContractId: Long? by lazy {
+        ContractRegistry.descriptor(RegistryAnnounce::class.java)?.contractId
+    }
+
+    /**
+     * Whether [frame] is a [RegistryAnnounce] call — the one contract [encode]
+     * signs and therefore the only one the ingress admission gate
+     * ([AnnouncementAdmission]) judges ([DSC1-ANN-01]). Recognized by the same
+     * [announceContractId] the emit side uses, so the two halves cannot drift
+     * into disagreeing about what an announcement is.
+     *
+     * Fails **closed on the receive side too**: if the generated descriptor is
+     * missing, [announceContractId] is null and nothing is recognized as an
+     * announcement — which on this side means nothing is *verified*, so a side
+     * that configured verification would silently stop verifying. That is the
+     * same failure the emit side has (nothing gets signed), it is not
+     * reachable in a build whose KSP output exists, and `ManifestDriftTest`
+     * is what would notice a missing descriptor.
+     */
+    internal fun isAnnouncement(frame: WireFrame): Boolean {
+        val id = announceContractId ?: return false
+        return frame.type != HostedPortInvocation.Type.PORT_PROTOCOL && frame.contractId == id
+    }
+
     /** @throws IllegalStateException when the invocation's contract has no `@Contract` ids (not wire-capable). */
-    fun encode(invocation: HostedPortInvocation): ByteArray {
+    fun encode(invocation: HostedPortInvocation): ByteArray = encode(invocation, signer = null)
+
+    /**
+     * [encode], with announcement signing ([DSC1-ANN-01, 04],
+     * [DSC1-WIRE-01..02]).
+     *
+     * When [signer] is non-null **and** the invocation is a [RegistryAnnounce]
+     * call, the four optional signing fields are populated: a fresh counter
+     * strictly greater than every counter that signer has assigned, an expiry
+     * from its injected clock, the signer's key id, and the signature over the
+     * injected canonical encoding of the announcement.
+     *
+     * Every other frame — a data-plane invocation, a `PORT_PROTOCOL` crossing,
+     * anything at all from a `signer == null` side — takes exactly the path it
+     * took before this feature and encodes to the same bytes: the four fields
+     * default to `null` and `encodeDefaults` is off, so they contribute zero
+     * bytes ([DSC1-WIRE-06]).
+     */
+    fun encode(invocation: HostedPortInvocation, signer: AnnouncementSigner?): ByteArray {
         val frame = if (invocation.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
             val id = checkNotNull(invocation.protocolId) { "PORT_PROTOCOL requires protocolId" }
             val link = invocation.protocolLink as? WireEdgeLink
@@ -238,14 +325,27 @@ object WireCodec {
             val contractId = checkNotNull(inv.contractId) {
                 "not wire-capable: '${inv.methodName}' was not captured from a @Contract interface"
             }
+            val methodId = checkNotNull(inv.methodId)
+            // Announcements only, and only from a signing side. `sign` assigns
+            // the counter, so it must be called exactly once per outgoing
+            // announcement — sign-at-send, never a cached or re-sent frame.
+            val signed = if (signer != null && contractId == announceContractId) {
+                signer.sign(contractId, methodId, invocation.cellRef, invocation.portName, inv.args)
+            } else {
+                null
+            }
             WireFrame(
                 contractId = contractId,
-                methodId = checkNotNull(inv.methodId),
+                methodId = methodId,
                 cellRef = invocation.cellRef,
                 portName = invocation.portName,
                 type = invocation.type,
                 context = inv.context,
                 args = inv.args,
+                signature = signed?.signature,
+                signerKeyId = signed?.signerKeyId,
+                sigCounter = signed?.counter,
+                notAfter = signed?.notAfter,
                 // PN-6: no longer sniff a routed command's epoch onto the frame.
                 // The epoch was decorative at the point of use — admission checks
                 // the shard's CURRENT interest, never the payload epoch (which the
@@ -259,9 +359,26 @@ object WireCodec {
     }
 
     /** @throws IllegalStateException on unknown version or ids (caller dead-letters). */
-    fun decode(bytes: ByteArray): HostedPortInvocation {
+    fun decode(bytes: ByteArray): HostedPortInvocation = decodeFrame(bytes).invocation
+
+    /**
+     * Same decode as [decode], but also returns the parsed [WireFrame] —
+     * the entry point the announcement-verification ingress gate
+     * (computenet-ssa.4's successor task) needs to reach [WireFrame.signature]
+     * and friends, which [decode] alone discards. [decode] is defined in
+     * terms of this function precisely so its behavior (exceptions, the
+     * resulting [HostedPortInvocation]) is unchanged for every existing
+     * caller — this is purely an additional entry point, not a replacement.
+     *
+     * @throws IllegalStateException on unknown version or ids (caller dead-letters).
+     */
+    fun decodeFrame(bytes: ByteArray): DecodedWireFrame {
         val frame = json.decodeFromString(WireFrame.serializer(), bytes.decodeToString())
         check(frame.version == VERSION) { "unsupported wire version ${frame.version}" }
+        return DecodedWireFrame(invocation(frame), frame)
+    }
+
+    private fun invocation(frame: WireFrame): HostedPortInvocation {
         if (frame.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
             val id = checkNotNull(frame.protocolId) { "PORT_PROTOCOL frame missing protocolId" }
             val edge = checkNotNull(frame.edge) { "PORT_PROTOCOL frame missing edge" }
