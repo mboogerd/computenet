@@ -14,6 +14,7 @@ import civictech.oracle.gen.GeneratedCase
 import civictech.oracle.gen.GeneratorConfig
 import civictech.oracle.gen.TerminalSpec
 import civictech.oracle.gen.TopologyNode
+import civictech.oracle.model.Membership
 import civictech.oracle.model.ModelState
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SourceId
@@ -416,7 +417,9 @@ class WavePrefixTest {
      * preceded) is **inside** this population. The sweep partitions it out by measurement, not by
      * configuration — see the sweep test. Its *unobserved* half was computenet-qcm1 and is fixed:
      * the generator no longer draws an unobserved remove of a live element, so what remains
-     * inside this population is the **observed** cross-writer remove, computenet-eeys.
+     * inside this population is the **observed** cross-writer remove, computenet-eeys — settled
+     * as a *generator* residual of the same asymmetry, not a second one: see
+     * [kernelEffectiveModelInertRemoves].
      */
     private fun generatedSweepConfig() = GeneratorConfig(
         depthRange = 3..5,
@@ -520,31 +523,35 @@ class WavePrefixTest {
         // (b) Two further SIGNATURES are separated out, so a change in one is visible without
         //     re-measuring the others:
         //       - a REGRESSED observation across a wave the model did not change at that terminal
-        //         ([RAW_VIEW_FLICKER_SEEDS]), and
+        //         ([HEALED_DIVERGENCE_SEEDS]), and
         //       - a violation on a topology with exactly ONE path from source to terminal, which
         //         cannot be a reconvergence tear because there is no second arm
-        //         ([CHAIN_ARTIFACT_SEEDS]).
+        //         ([SINGLE_PATH_DIVERGENCE_SEEDS]).
         //     These are signatures, NOT causal verdicts. Measured at review time (2026-08-19,
         //     Darwin arm64, reproduced on the second read): all twelve then-pinned seeds — the
         //     five then in (a) included — disappear at `writerCount = 1` AND at
         //     `addRemoveRatio = 1.0` (no remove generated at all), so the common ingredient is a
         //     cross-writer remove, appearing at an intermediate wave and healing by quiescence in
         //     the violation cases. `unobservedRemoveRatio = 0.0` does NOT remove it, so it is not
-        //     confined to the *unobserved* remove; which cross-writer remove path diverges is
-        //     computenet-eeys's to settle, not this file's.
+        //     confined to the *unobserved* remove. **Settled by computenet-eeys**: the path is any
+        //     remove whose element stays live in `Membership` — an add by a writer the remover
+        //     never observed — while `SetCell.remove` retracts every live tag of it. That is
+        //     `emitObservedRemove`'s territory, both its direct and its cross branch, and it
+        //     audits `observed = true`, which is why the unobserved knob cannot reach it. See
+        //     [kernelEffectiveModelInertRemoves] and its two tests below for the distinguishing
+        //     run and the per-seed attribution.
         //     computenet-qcm1 has since landed (commit a3176733) and accounts for three of those
         //     twelve: seeds 34, 46 and 36 leave the pinned population altogether and seed 8 moves
         //     from (a) to the flicker bucket, leaving NINE pinned seeds. The nine are a subset of
         //     the twelve, so the knob-dependence measured above carries over to them unchanged
-        //     and was not re-run. The
-        //     one thing measured here is which knobs the population depends on. In particular the
-        //     earlier
+        //     and was not re-run. The earlier
         //     reading of these two buckets as artifacts of THIS observation point (a raw
         //     `TerminalFold` versus `InternalConsistencyTest`'s aligned sink) does not hold:
         //     re-driving each seed with a `Barrier` after every Op and inspecting only the
         //     post-`drainToIdle` `onBarrier` states — where a raw fold and an aligned sink agree
         //     by construction — reproduces every violation, several across consecutive quiesced
-        //     boundaries. Filed as computenet-eeys; not decided here (epic design D10).
+        //     boundaries. All three buckets are ONE mechanism (computenet-eeys); they are kept
+        //     apart only so a change in one is visible without re-measuring the others.
         //
         // Anything else — a violation on a reconvergent shape that is not a plateau regression —
         // is a glitch CANDIDATE, pinned and filed (computenet-qjtp). Keeping that bucket separate
@@ -574,7 +581,7 @@ class WavePrefixTest {
                     when {
                         checked == RunOutcome.Success -> Unit
                         checked !is RunOutcome.WavePrefixViolation -> unexpected += "seed ${case.seed}: $checked"
-                        checked.isWithinWaveTransient() -> plateauFlicker += case.seed
+                        checked.isPlateauRegression() -> plateauFlicker += case.seed
                         !hasReconvergence(case.topology) -> chainArtifact += case.seed
                         else -> glitchCandidate += case.seed
                     }
@@ -610,13 +617,13 @@ class WavePrefixTest {
             "the raw-view plateau-flicker footprint (computenet-eeys) — pinned so it stays " +
                 "visible; re-measured 2026-08-19 on MacBoo under computenet-qcm1. $summary",
         ) {
-            plateauFlicker shouldBe RAW_VIEW_FLICKER_SEEDS
+            plateauFlicker shouldBe HEALED_DIVERGENCE_SEEDS
         }
         withClue(
             "the single-path (chain) violation footprint (computenet-eeys) — a chain cannot tear, " +
                 "so whatever this is, it is not a reconvergence tear. $summary",
         ) {
-            chainArtifact shouldBe CHAIN_ARTIFACT_SEEDS
+            chainArtifact shouldBe SINGLE_PATH_DIVERGENCE_SEEDS
         }
         withClue(
             "glitch CANDIDATES: a violation on a reconvergent shape that is not a plateau " +
@@ -639,15 +646,17 @@ class WavePrefixTest {
      *
      * A structural signature only. It says the *model* did not move across that wave; it does NOT
      * establish that the kernel's dip and recovery both happened inside one wave — measured, they
-     * do not (see the bucket comment in the sweep test). The NAME records the hypothesis this
-     * predicate was first cut for, like [RAW_VIEW_FLICKER_SEEDS]'s does; the predicate itself is
-     * unchanged by the correction, so it is kept rather than renamed.
+     * do not.
+     *
+     * **Renamed from `isWithinWaveTransient` by computenet-eeys**, whose name asserted exactly the
+     * within-wave reading that measurement refuted. The predicate's body is unchanged; only the
+     * claim its name made is gone.
      *
      * Deliberately narrow: every [RunOutcome.WavePrefixViolation.Kind.NO_MATCHING_PREFIX], and
      * every regression across a wave that really changed the terminal, is excluded and lands in a
      * stricter bucket.
      */
-    private fun RunOutcome.WavePrefixViolation.isWithinWaveTransient(): Boolean =
+    private fun RunOutcome.WavePrefixViolation.isPlateauRegression(): Boolean =
         kind == RunOutcome.WavePrefixViolation.Kind.REGRESSED &&
             nearestPrefixes.size == 2 &&
             nearestPrefixes.values.distinct().size == 1
@@ -657,13 +666,197 @@ class WavePrefixTest {
      * load-bearing direction: with exactly one path there is no second arm, so no observation can
      * be a torn composite and a violation there needs a different explanation than reconvergence.
      *
-     * What that explanation is, this predicate does not say — and measured, it is NOT this
-     * oracle's observation point either (see the bucket comment in the sweep test).
+     * That explanation is settled (computenet-eeys): a writer-concurrent remove the kernel applies
+     * and the model ignores, which diverges at the *source* and therefore needs no second arm.
+     * See [kernelEffectiveModelInertRemoves] and [SINGLE_PATH_DIVERGENCE_SEEDS].
      */
     private fun hasReconvergence(topology: CaseTopology): Boolean {
         val sources = topology.nodes.filter { it.source != null }.map { it.handle }
         return topology.terminals.any { terminal ->
             sources.any { src -> paths(topology, src, terminal.handle).size >= 2 }
+        }
+    }
+
+
+    // ------------------------------------- computenet-eeys: what the pinned seeds actually are
+
+    /**
+     * The removes of [script] that the **kernel applies and the reference model ignores** —
+     * the settled mechanism behind every pinned seed below (computenet-eeys).
+     *
+     * A `Remove(w, x)` qualifies iff `x` is live before it *and still live after it* under
+     * [Membership]. Both halves are read from the model's own fold rather than re-derived, so
+     * this predicate cannot come to hold a second notion of liveness (the same discipline
+     * `ScriptGenerator.emitUnobservedRemove` adopted under computenet-qcm1).
+     *
+     * Live-before is what makes the step take effect in the kernel: `SetCell.inletHandler.remove`
+     * retracts `liveTags(element)` — every un-tombstoned tag the cell holds — and returns early
+     * only when that set is empty. Still-live-after is what makes it a model no-op: `Membership`
+     * covers only the adds the removing writer had *observed*, so an add by another writer that
+     * `w` never observed survives. The two together are exactly a kernel-visible, model-invisible
+     * state change, which is a Mismatch by construction wherever a terminal can see the element.
+     *
+     * Note this says nothing about the audit's observed/unobserved flavour, and deliberately so —
+     * see [`a remove of an element another writer added is applied by the kernel and ignored by the model`].
+     */
+    private fun kernelEffectiveModelInertRemoves(script: CaseScript): List<String> {
+        val found = mutableListOf<String>()
+        script.toScript().slices.forEach { slice ->
+            slice.events.forEachIndexed { position, event ->
+                if (event is ScriptEvent.Remove) {
+                    val before = Membership.live(slice.events.take(position))
+                    val after = Membership.live(slice.events.take(position + 1))
+                    if (event.element in before && event.element in after) {
+                        found += "${slice.source.id}[$position] ${event.writer.id} removes ${event.element}"
+                    }
+                }
+            }
+        }
+        return found
+    }
+
+    /**
+     * **The distinguishing run this bead's first acceptance criterion asks for.**
+     *
+     * Three events, one writer-concurrent add, no seeds, no generator: `w0` adds `ab`, `w1` adds
+     * `ab`, `w0` removes `ab`.
+     *
+     * - The **model** ([Membership], `[ORA1-MODEL-04]`/`[ORA1-MODEL-05]`) covers only the adds
+     *   the removing writer observed. `w0` observed its own add and never observed `w1`'s, so
+     *   `w1`'s add is uncovered and `ab` stays live.
+     * - The **kernel** (`SetCell.inletHandler.remove`) retracts `liveTags("ab")` — *both* tags,
+     *   because both are un-tombstoned in the one cell — and `ab` is gone.
+     *
+     * That is the whole divergence, and it is why `unobservedRemoveRatio = 0.0` does not clear
+     * the pinned seeds: nothing here is an unobserved remove. `w0` is removing an element it
+     * added itself, which is `ScriptGenerator.emitObservedRemove`'s *direct* branch and audits as
+     * `observed = true`.
+     *
+     * The two controls below fix which side moves:
+     *
+     * - **One writer, same shape** — `Add(w0)`, `Add(w0)`, `Remove(w0)` — is `Success`. So it is
+     *   writer *concurrency* and not repetition, which is why `writerCount = 1` is 60/60 clean.
+     * - **A stale observation** — `Add(w0)`, `Observe(w1)`, `Add(w0)`, `Remove(w1)` — diverges
+     *   too, through `emitObservedRemove`'s *cross* branch: `Observe` grants `w1` the adds at
+     *   *earlier* positions only, while the generator's `SourceState.known` is monotone, so `w1`
+     *   is offered an element whose newest add it never observed. Same mechanism, second branch.
+     *
+     * ## The verdict, since a mismatch alone does not say which side is wrong
+     *
+     * **The reference model is the wrong side on this drive path, and the kernel is right.**
+     * `[24-SET-03]` requires a remove to retract "the tags it observed"; the observer is the
+     * *cell*, and a `SetCell` driven through its own `inlet` has by construction observed every
+     * add that reached it, because it is a single serialization point. Writer identity has no
+     * kernel counterpart at all here: `CaseExecution` drives every writer's op through one inlet,
+     * and `ScriptEvent.Observe` injects nothing (see [WavePrefixOracle]). Genuine concurrency in
+     * this kernel lives across *replicas* — `SetCell.deltaInlet`/`applyRemote`, spec 40/42 — and
+     * this harness builds one replica. So the model's per-writer rule is sound only for a script
+     * whose writers really are separate replicas, and the generated cases' writers are not.
+     */
+    @Test
+    fun `a remove of an element another writer added is applied by the kernel and ignored by the model`() {
+        val w0 = WriterId("w0")
+        val w1 = WriterId("w1")
+
+        fun outcomeOf(vararg events: ScriptEvent) = DifferentialRunner.run(
+            case = diamondCase(CaseScript(events.map { CaseStep.Op(source, it) })),
+            wavePrefix = WavePrefixOption.OFF,
+        )
+
+        // --- the divergence, at its minimum.
+        val diverging = outcomeOf(
+            ScriptEvent.Add(w0, "ab"),
+            ScriptEvent.Add(w1, "ab"),
+            ScriptEvent.Remove(w0, "ab"),
+        ).shouldBeInstanceOf<RunOutcome.Mismatch>()
+
+        withClue("the model keeps 'ab' live: w0's remove covers only w0's own add") {
+            diverging.expected shouldBe ModelState.SetState(setOf("ab", "a", "b"))
+        }
+        withClue("the kernel retracted every live tag of 'ab', w1's included") {
+            diverging.actual shouldBe ModelState.SetState(emptySet())
+        }
+        withClue("and this predicate is what names that step, on the model's own fold") {
+            kernelEffectiveModelInertRemoves(
+                CaseScript(
+                    listOf(
+                        CaseStep.Op(source, ScriptEvent.Add(w0, "ab")),
+                        CaseStep.Op(source, ScriptEvent.Add(w1, "ab")),
+                        CaseStep.Op(source, ScriptEvent.Remove(w0, "ab")),
+                    ),
+                ),
+            ).size shouldBe 1
+        }
+
+        // --- control 1: the same shape under ONE writer settles. It is concurrency, not repetition.
+        withClue("one writer: its remove covers both of its own adds, so both sides drop 'ab'") {
+            outcomeOf(
+                ScriptEvent.Add(w0, "ab"),
+                ScriptEvent.Add(w0, "ab"),
+                ScriptEvent.Remove(w0, "ab"),
+            ) shouldBe RunOutcome.Success
+        }
+
+        // --- control 2: the cross-branch variant, where an Observe exists but is STALE.
+        val stale = outcomeOf(
+            ScriptEvent.Add(w0, "ab"),
+            ScriptEvent.Observe(w1),
+            ScriptEvent.Add(w0, "ab"),
+            ScriptEvent.Remove(w1, "ab"),
+        ).shouldBeInstanceOf<RunOutcome.Mismatch>()
+        withClue("Observe grants w1 the EARLIER add only; the later one is uncovered in the model") {
+            stale.expected shouldBe ModelState.SetState(setOf("ab", "a", "b"))
+        }
+        withClue("the kernel retracts both tags regardless of when they were minted") {
+            stale.actual shouldBe ModelState.SetState(emptySet())
+        }
+    }
+
+    /**
+     * The attribution the bead's first criterion demands of the *pinned population*: every one of
+     * the nine pinned seeds' scripts contains at least one
+     * [kernelEffectiveModelInertRemoves] step, and no seed at `writerCount = 1` contains one at
+     * all — which is why that knob is 60/60 clean and why `unobservedRemoveRatio` is not.
+     *
+     * The condition is **necessary, not sufficient**, and this test asserts it in exactly that
+     * direction. Measured on Darwin arm64, 2026-08-20, over [generatedSweepConfig] seeds 0..59:
+     * 22 of 60 seeds carry such a step and only 9 of those 22 surface as a Mismatch or a prefix
+     * violation — the other 13 are masked downstream, where the sweep's `filter`, `quorumSet` or
+     * `count` operators do not let the element's presence reach the terminal. That gap is the
+     * honest limit of this attribution: it explains why the nine fail, and does not predict which
+     * of the twenty-two will.
+     */
+    @Test
+    fun `every pinned seed carries a kernel-effective, model-inert remove, and no single-writer seed does`() {
+        val seeds = (0L until 60L).toList()
+        val pinned = SEAM_SEEDS + HEALED_DIVERGENCE_SEEDS + SINGLE_PATH_DIVERGENCE_SEEDS
+
+        val twoWriter = CaseGenerator(generatedSweepConfig())
+        val carriers = seeds.filter { kernelEffectiveModelInertRemoves(twoWriter.generate(it).script).isNotEmpty() }
+
+        withClue("the mechanism must be present in every seed the sweep pins, or it is not the mechanism") {
+            (pinned - carriers.toSet()).shouldBeEmpty()
+        }
+        withClue("necessary, not sufficient: it is present in strictly more seeds than fail") {
+            carriers.size shouldBeGreaterThan pinned.size
+        }
+
+        val oneWriter = CaseGenerator(generatedSweepConfig().copy(writerCount = 1).validated())
+        val singleWriterCarriers =
+            seeds.filter { kernelEffectiveModelInertRemoves(oneWriter.generate(it).script).isNotEmpty() }
+        withClue(
+            "a writer observes its own adds, so under one writer no remove can leave its element " +
+                "live in the model — which is the whole of why writerCount = 1 is 60/60 clean",
+        ) {
+            singleWriterCarriers.shouldBeEmpty()
+        }
+
+        val zeroUnobserved = CaseGenerator(generatedSweepConfig().copy(unobservedRemoveRatio = 0.0).validated())
+        withClue(
+            "and unobservedRemoveRatio = 0.0 does NOT clear it — the fact the bead requires any " +
+                "answer to account for; these are emitObservedRemove's steps, audited observed = true",
+        ) {
+            seeds.count { kernelEffectiveModelInertRemoves(zeroUnobserved.generate(it).script).isNotEmpty() } shouldBeGreaterThan 0
         }
     }
 
@@ -684,7 +877,7 @@ class WavePrefixTest {
          * effect, while `Membership` no-ops it for lack of an `Observe` by that writer, so the
          * disagreement was manufactured by the generator rather than found in the kernel. Seed 8
          * left this bucket for exactly that reason — it now settles correctly at quiescence and
-         * shows only an intermediate-wave regression, so it moved into [RAW_VIEW_FLICKER_SEEDS].
+         * shows only an intermediate-wave regression, so it moved into [HEALED_DIVERGENCE_SEEDS].
          *
          * The distinction a later reader needs: this list only ever **shrinks** under a generator
          * fix, and every departure is accounted for below. Nothing was removed to make the suite
@@ -695,11 +888,18 @@ class WavePrefixTest {
         val SEAM_SEEDS: List<Long> = listOf(30L, 40L, 50L, 58L)
 
         /**
-         * Seeds whose terminal REGRESSES across a wave the model did not change — filed as
-         * computenet-eeys. Pinned for the same reason [SEAM_SEEDS] is. The name records the
-         * hypothesis this bucket was first cut for (a raw view flickering inside a wave); that
-         * hypothesis is measurably wrong — the dips reproduce at quiesced barriers — and the
-         * cause is the [SEAM_SEEDS] seam. Kept as a distinct signature, not as a diagnosis.
+         * Seeds whose terminal REGRESSES across a wave the model did not change, and which
+         * nonetheless settle correctly at quiescence — the writer-concurrent remove divergence
+         * appearing at an intermediate wave and **healing** before the end. Pinned for the same
+         * reason [SEAM_SEEDS] is; the difference between the two lists is only whether the
+         * divergence survives to quiescence, not what it is.
+         *
+         * **Renamed from `RAW_VIEW_FLICKER_SEEDS` by computenet-eeys.** The old name recorded a
+         * refuted hypothesis (a raw `TerminalFold` flickering inside a wave); the dips reproduce
+         * at quiesced barriers, and the settled mechanism is the one
+         * [kernelEffectiveModelInertRemoves] names — a remove the kernel applies and
+         * [civictech.oracle.model.Membership] ignores. Catching these seven-then, four-now is
+         * this instrument's whole contribution: the final-state comparison cannot see them.
          *
          * **Re-pinned 2026-08-19 by `computenet-qcm1` (commit a3176733), from
          * `[28, 34, 44, 46, 54]`.** Two changes, both consequences of that bead's fix to
@@ -709,21 +909,26 @@ class WavePrefixTest {
          *  - seed **8 arrived from [SEAM_SEEDS]** — it stops disagreeing at quiescence and what
          *    remains of it is an intermediate-wave regression, which is this bucket's signature.
          */
-        val RAW_VIEW_FLICKER_SEEDS: List<Long> = listOf(8L, 28L, 44L, 54L)
+        val HEALED_DIVERGENCE_SEEDS: List<Long> = listOf(8L, 28L, 44L, 54L)
 
         /**
          * Seeds whose topology is a single path source-to-terminal and which nonetheless show a
          * `NO_MATCHING_PREFIX` observation. Seed 38 is a five-deep `flatMapSet` chain (verified:
          * one path, `set -> flatMapSet x5`), so the violation cannot be a reconvergence tear —
-         * but it is visible at quiescence too, so it is not an artifact of the observation point
-         * either (computenet-eeys).
+         * and it is visible at quiescence too, so it is not an artifact of the observation point
+         * either. Settled by computenet-eeys as the same writer-concurrent remove divergence as
+         * the other two lists: a chain needs no second arm to show a state that is no prefix once
+         * the source itself holds a membership the model does not
+         * ([kernelEffectiveModelInertRemoves] finds one in seed 38's script, at `s[23]`).
+         *
+         * **Renamed from `CHAIN_ARTIFACT_SEEDS` by computenet-eeys** — it is not an artifact.
          *
          * **Unchanged by `computenet-qcm1`'s re-pin (2026-08-19).** Named here because it is the
          * control: three of these four lists moved and this one did not, so the re-pin is the
          * measured footprint of one generator fix rather than a wholesale re-measurement that
          * happened to land on a green population.
          */
-        val CHAIN_ARTIFACT_SEEDS: List<Long> = listOf(38L)
+        val SINGLE_PATH_DIVERGENCE_SEEDS: List<Long> = listOf(38L)
 
         /**
          * Glitch CANDIDATES: reconvergent shapes showing a state that is no prefix, which is

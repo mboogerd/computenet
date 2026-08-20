@@ -100,13 +100,63 @@ import kotlin.random.Random
  *   `SetCell` retracts a live element on any remove, while the model no-ops a cross-writer
  *   remove no `Observe` preceded).
  *
- *   Two cautions on how far that goes. `unobservedRemoveRatio = 0.0` at `writerCount = 2`
- *   removes *neither* mismatch nor violation (it only re-shuffles which seeds carry them: 9
- *   mismatches and 6 violations), so the divergence is not confined to the **unobserved** remove
- *   that bead's own description turns on — the half of it that survives the knob is the kernel
- *   half, "retracts a live element on any remove". And what is established here is which knobs
- *   the population depends on, **not the kernel mechanism**: attributing these seeds precisely
- *   is computenet-qcm1's work, not this file's. What this file states is the measurement.
+ *   `unobservedRemoveRatio = 0.0` at `writerCount = 2` removes *neither* mismatch nor violation
+ *   (it only re-shuffles which seeds carry them: 9 mismatches and 6 violations), so the
+ *   divergence is not confined to the **unobserved** remove that bead's own description turns on.
+ *
+ *   ### The verdict (computenet-eeys, settled 2026-08-20)
+ *
+ *   **The diverging step is any remove whose element stays live in the reference model — and the
+ *   reference model is the wrong side of it, not the kernel.**
+ *
+ *   The mechanism, in one sentence each: `SetCell.inletHandler.remove` retracts `liveTags(e)`,
+ *   every un-tombstoned tag the cell holds, while `civictech.oracle.model.Membership` covers only
+ *   the adds the *removing writer* had observed — so a remove of an element some other writer
+ *   also added, and whose add the remover never observed, takes effect in the kernel and is a
+ *   no-op in the model. Three events reproduce it with no generator and no seed: `w0` adds `ab`,
+ *   `w1` adds `ab`, `w0` removes `ab`; at the diamond's terminal the model answers
+ *   `{ab, a, b}` (the `filter` arm's `ab` plus the `flatMapSet` arm's `a`, `b`) and the kernel
+ *   the empty set
+ *   (`WavePrefixTest`, "a remove of an element another writer added is applied by the kernel and
+ *   ignored by the model", with a single-writer control that succeeds).
+ *
+ *   That accounts for every knob measured above. The remove is `ScriptGenerator`'s
+ *   `emitObservedRemove` — its *direct* branch when the remover added the element itself, its
+ *   *cross* branch when a monotone `known` set offers it an element whose newest add its
+ *   `Observe` predates — and both audit `observed = true`, which is why `unobservedRemoveRatio`
+ *   cannot reach them. At `writerCount = 1` no such step is constructible at all (a writer
+ *   observes its own adds), which is why that knob is 60/60 clean; measured, 0 of 60
+ *   single-writer scripts carry one against 22 of 60 two-writer scripts.
+ *
+ *   **Which side is wrong.** `[24-SET-03]` requires a remove to retract "the tags it observed",
+ *   and the observer is the *cell*: a `SetCell` driven through its own `inlet` has observed every
+ *   add that reached it, because it is a single serialization point. Writer identity has no
+ *   kernel counterpart on this drive path — `CaseExecution` funnels every writer's op through one
+ *   inlet and `ScriptEvent.Observe` injects nothing — so the script's "concurrent writers" are in
+ *   fact sequential. Real concurrency in this kernel is across *replicas*
+ *   (`SetCell.deltaInlet`/`applyRemote`, spec 40/42), and a generated case builds one replica.
+ *   `[ORA1-MODEL-04]`/`[ORA1-MODEL-05]` are therefore sound only for a script whose writers are
+ *   separate replicas; these are not. **No kernel defect is implied by any pinned seed.**
+ *
+ *   **Relation to computenet-qcm1: same kernel asymmetry, distinct generator path — not a
+ *   duplicate.** qcm1 constrained `emitUnobservedRemove` to never name a live element; the
+ *   residual is the identical constraint missing from `emitObservedRemove`, which qcm1's own
+ *   acceptance bound explicitly excluded. The repair is a generator post-condition — no remove
+ *   may leave its element live in `Membership` — not a change to `SetCell`, and it belongs to a
+ *   file this bead does not claim (`civictech.oracle.gen.ScriptGenerator`).
+ *
+ *   The attribution is **necessary, not sufficient**, and is stated that way in the test: 22 of
+ *   60 seeds carry such a step and 9 surface as a failure; the other 13 are masked downstream by
+ *   a `filter`, `quorumSet` or `count` that keeps the element's presence off the terminal.
+ *
+ *   **How exhaustively it was checked.** Mutating `Membership.observes` to `return true` — the
+ *   one edit that makes the model retract every add a remove can reach, i.e. adopt `SetCell`'s
+ *   rule — turns the whole sweep clean in one step: `settledMismatch=[]`, `plateauFlicker=[]`,
+ *   `chainArtifact=[]`, `glitchCandidate=[]` over the same seeds 0..59, and the three-event case
+ *   above reports `Success` instead of `Mismatch` (Darwin arm64, 2026-08-20; mutation reverted,
+ *   never committed). So the nine pinned seeds are not merely *consistent with* this mechanism —
+ *   there is no residual population left once it is removed, which is what rules out a second,
+ *   independent cause hiding inside them.
  *
  *   The five `Mismatch` seeds are the cases where the divergence survives to quiescence; the
  *   seven violation seeds are the cases where it appears at an intermediate wave and *heals*
@@ -117,7 +167,8 @@ import kotlin.random.Random
  *   applies each delta as it arrives, while `InternalConsistencyTest` reads an *aligned* sink
  *   ("the aligned sink buffers a wave's deltas and applies them together, so this particular
  *   flicker is invisible at the sink") — a real difference between the two read paths, but not
- *   the explanation here, and an earlier session's own probe had already discarded it. Two
+ *   the explanation here (the explanation is the verdict above), and an earlier session's own
+ *   probe had already discarded it. Two
  *   measurements, both at review time and both reproduced on the second read with the same
  *   per-seed counts: (i) re-driving each violating seed with a `Barrier`
  *   after *every* Op and inspecting ONLY the `onBarrier` states — read after `drainToIdle()`,
@@ -126,8 +177,8 @@ import kotlin.random.Random
  *   quiesced boundaries; (ii) the granularity bullet above is why: at one productive step per
  *   wave, essentially every observation this oracle takes is already a quiesced wave boundary,
  *   so "the dip happened inside one wave" cannot be the mechanism for any of them. Treat the
- *   pinned seeds as the cross-writer remove divergence surfacing earlier, not as a limit of this
- *   instrument — and do not close the gap by weakening the check (D5).
+ *   pinned seeds as the writer-concurrent remove divergence surfacing earlier, not as a limit of
+ *   this instrument — and do not close the gap by weakening the check (D5).
  */
 object WavePrefixOracle {
 
