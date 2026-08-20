@@ -106,6 +106,8 @@ class WsAuthenticatedHelloTest {
             allow = allow,
             auth = PeerAuthPolicy.RequireAuthenticated(),
             credentials = identity.asPeerCredentials(),
+            announcementSigning = socketAnnouncementSigning(),
+            announcementVerification = socketAnnouncementVerification(),
         )
     }
 
