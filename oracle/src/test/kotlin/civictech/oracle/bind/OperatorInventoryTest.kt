@@ -229,7 +229,7 @@ class OperatorInventoryTest {
      * `[ORA1-HONEST-02]` exclusion ledger. The bead's own description names five registered
      * source cells (`SetCell`, `KeyedSetCell`, `MapCell`, `CounterCell`, `PnCounterCell`) and
      * two ledger exclusions (`ListCell`, `OrMapCell`) — seven cell types — but the compiled
-     * package has 39 top-level classpath names across those seven cells' own `*Api`/`*Base`/
+     * package has 41 top-level classpath names across those seven cells' own `*Api`/`*Base`/
      * `*Ports` companions plus the non-cell helpers above plus `WatermarkCell`'s pair, none of
      * which is a discrepancy this test resolves: it is a mechanical classpath diff, the same
      * contract [OperatorInventoryTest] already has for `.op`, and closing `WatermarkCell`'s
