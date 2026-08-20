@@ -11,10 +11,12 @@ import civictech.oracle.run.CaseExecution
 import civictech.oracle.run.DifferentialRunner
 import civictech.oracle.run.Reference
 import civictech.oracle.run.RunOutcome
+import civictech.oracle.run.WavePrefixOption
 import io.kotest.assertions.withClue
 import io.kotest.matchers.comparables.shouldBeLessThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -72,6 +74,35 @@ class ShrinkerBs14Test {
         writerCount = 1,
     ).validated()
 
+    /**
+     * `WavePrefixTest`'s `generatedSweepConfig()` shape, reproduced here rather than imported
+     * because that file is `private` and not this item's to change — same pattern as
+     * [baselineShapedConfig] above. Its `SEAM_SEEDS` (`[30L, 40L, 50L, 58L]`) each shrink under
+     * `wavePrefix = WavePrefixOption.ALWAYS` to a genuine [RunOutcome.WavePrefixViolation]
+     * counterexample — the population computenet-p5qy's defect 2 was measured against.
+     */
+    private fun wavePrefixSweepConfig() = GeneratorConfig(
+        depthRange = 3..5,
+        sourceCount = 1,
+        vocabulary = listOf(
+            CoreOperators.Ids.SET,
+            CoreOperators.Ids.KEYED_SET,
+            CoreOperators.Ids.FILTER,
+            CoreOperators.Ids.FLAT_MAP_SET,
+            CoreOperators.Ids.MAP_SET,
+            CoreOperators.Ids.COUNT,
+            CoreOperators.Ids.UNION,
+            CoreOperators.Ids.INTERSECT,
+            CoreOperators.Ids.PRESENCE_COUNT,
+            CoreOperators.Ids.QUORUM_SET,
+        ),
+        elementDomainSize = 6,
+        scriptLength = 30,
+        addRemoveRatio = 0.6,
+        unobservedRemoveRatio = 0.25,
+        terminalCount = 1,
+    ).validated()
+
     @Test
     fun `Ex-BS-14 a mutant reference over a 200-op script shrinks, replays, and renders`() {
         val seed = 4200L
@@ -116,11 +147,79 @@ class ShrinkerBs14Test {
         }
     }
 
+    /**
+     * computenet-p5qy defect 2: a shrunk [RunOutcome.WavePrefixViolation] counterexample must
+     * replay as the SAME outcome kind and terminal it was shrunk to — not as [RunOutcome.Mismatch]
+     * because the emitted replay dropped the `wavePrefix` option the shrink was given.
+     *
+     * `WavePrefixTest`'s four `SEAM_SEEDS` (`[30L, 40L, 50L, 58L]`) under [wavePrefixSweepConfig]
+     * are the exact population the defect was measured against: each shrinks under
+     * `wavePrefix = WavePrefixOption.ALWAYS` to a [RunOutcome.WavePrefixViolation], and
+     * `WavePrefixOption.DEFAULT.selects(seed)` is `false` for 30 and 40, `true` for 50 and 58 — so
+     * rendering the replay with no `wavePrefix` argument (the pre-fix behavior, reproduced
+     * directly below rather than through a compiled snippet) reports `Mismatch` for 30/40 and
+     * only coincidentally gets 50/58 right.
+     */
+    @Test
+    fun `Ex-BS-14b a WavePrefixViolation counterexample replays as WavePrefixViolation, not Mismatch`() {
+        val config = wavePrefixSweepConfig()
+        SEAM_SEEDS.forEach { seed ->
+            val case = CaseGenerator(config).generate(seed)
+
+            val result = Shrinker.run(case, wavePrefix = WavePrefixOption.ALWAYS)
+            withClue("seed=$seed must shrink to a WavePrefixViolation — the population this defect was measured on") {
+                result.outcome.shouldBeInstanceOf<RunOutcome.WavePrefixViolation>()
+            }
+            val violation = result.outcome as RunOutcome.WavePrefixViolation
+
+            // The pre-fix rendering emitted `DifferentialRunner.run(case)` with no `wavePrefix`
+            // argument at all — reproduced directly (not through a compiled snippet, which no
+            // test here can invoke) to show it does NOT reliably reproduce the violation.
+            val unfixedReplay = DifferentialRunner.run(result.case)
+            withClue(
+                "seed=$seed, DEFAULT.selects=${WavePrefixOption.DEFAULT.selects(seed)}: the pre-fix " +
+                    "replay (no wavePrefix argument) got $unfixedReplay",
+            ) {
+                if (WavePrefixOption.DEFAULT.selects(seed)) {
+                    unfixedReplay.shouldBeInstanceOf<RunOutcome.WavePrefixViolation>()
+                } else {
+                    // The bug this defect fixes: half the population replays as the WRONG kind.
+                    unfixedReplay.shouldBeInstanceOf<RunOutcome.Mismatch>()
+                }
+            }
+
+            // The FIXED rendering: exactly the call renderCounterexample emits for a
+            // WavePrefixViolation outcome (RenderKotlin.kt), executed here inline since no test
+            // in this module can invoke the Kotlin compiler on the rendered string itself.
+            val fixedReplay = DifferentialRunner.run(result.case, wavePrefix = WavePrefixOption.ALWAYS)
+            withClue("seed=$seed: the fixed replay must reproduce the same kind and terminal") {
+                fixedReplay.shouldBeInstanceOf<RunOutcome.WavePrefixViolation>().terminal shouldBe violation.terminal
+            }
+
+            val rendered = result.renderKotlin()
+            withClue(rendered) {
+                rendered shouldContain "civictech.oracle.run.DifferentialRunner.run(case, " +
+                    "wavePrefix = civictech.oracle.run.WavePrefixOption.ALWAYS)"
+                rendered shouldContain "RunOutcome.WavePrefixViolation"
+                rendered shouldContain "\"${violation.terminal}\""
+                rendered shouldNotContain "Shrinker"
+            }
+        }
+    }
+
     private fun adds(script: Script): List<ScriptEvent.Add> =
         script.slices.flatMap { it.events }.filterIsInstance<ScriptEvent.Add>()
 
     private companion object {
         /** A state no kernel fold can produce: outside `ElementDomains`' alphabet. */
         val SENTINEL: ModelState = ModelState.SetState(setOf("bs14-sentinel"))
+
+        /**
+         * `WavePrefixTest`'s pinned seam seeds under [wavePrefixSweepConfig] — see that file's own
+         * `SEAM_SEEDS` KDoc for provenance. Reproduced as a literal list here (not imported: the
+         * constant is `private` there) because this file needs the exact population defect 2 was
+         * measured against, not merely A population that produces `WavePrefixViolation`.
+         */
+        val SEAM_SEEDS: List<Long> = listOf(30L, 40L, 50L, 58L)
     }
 }

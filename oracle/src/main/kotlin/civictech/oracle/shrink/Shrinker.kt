@@ -424,6 +424,18 @@ object Shrinker {
      * `RemoveKey`'s reading is `ScriptGenerator`'s: observed iff the same writer had `Put` that key
      * earlier in the slice, there being no observation relation on a keyed source. Counter events
      * produce no records — no elements, no observation.
+     *
+     * ## Stays `internal` (computenet-p5qy defect 1)
+     *
+     * `RenderKotlin.kt`'s emitted snippet once called this function directly, which does not
+     * compile outside `:oracle` — `auditFor` is `internal`, and a module consuming `:oracle` via
+     * `testImplementation` (e.g. `:kernel`) cannot reach it. The fix was to render
+     * [GeneratedCase.removeAudit] as literal [RemoveRecord] values instead: [run] keeps that field
+     * current through every reduction pass (see [withScript]/[withElements]/[without], all of
+     * which call this function), so a [Counterexample]'s `case.removeAudit` already holds exactly
+     * what a re-derivation would recompute. That means this function no longer needs to be
+     * `public` for the renderer's sake, and it stays `internal` — widening `:oracle`'s API surface
+     * was the weaker of the two candidate fixes precisely because it was avoidable.
      */
     internal fun auditFor(script: CaseScript): List<RemoveRecord> {
         val slices = LinkedHashMap<SourceId, MutableList<ScriptEvent>>()
