@@ -1211,6 +1211,51 @@ could not produce at all.
 | 10⁴ | 5.498 ms | 5.131 ms | **6.7%** | ~85–90% |
 | 10⁵ | 26.014 ms | 21.350 ms | **17.9%** | typically ~99%, worst observed ~60% |
 
+**Caveat (`computenet-xlst`) — "reduction, this run" is not a stable measured quantity; its
+sign moves between re-runs of this exact command, not just its size.** The feature review of
+this entry (PR #325) re-ran the command below verbatim at merged head `88629abf` (6 tests, 0
+failures, JUnit XML timestamp `2026-08-19T04:36:00.150Z`) and got a reduction that is
+**negative** at 1e4 and 1e5 — paging made the stall worse, not smaller:
+
+```
+./gradlew :bench:test -PbenchOnly=true --rerun \
+     --tests 'civictech.bench.micro.BoundedReadProbeTest' \
+     -Dcivictech.bench.harnessSha=429152d4
+```
+
+| n | E2 concurrent maxGap (median) | E3 paged maxGap (median) | reduction |
+| --- | --- | --- | --- |
+| 10³ | 4.0060 ms | 1.6965 ms | **+57.7%** |
+| 10⁴ | 4.2825 ms | 6.5500 ms | **−53.0%** |
+| 10⁵ | 28.6342 ms | 35.4835 ms | **−23.9%** |
+
+A second independent re-run (the `computenet-x9e.6.4` task reviewer's) reportedly also found
+paging removing nothing at 1e4/1e5. `computenet-xlst`'s own re-run of the identical command
+(base `9adfadbf`, same harness SHA, JUnit XML timestamp `2026-08-20T07:42:34.304Z`, 6 tests, 0
+failures) landed on a **third** pattern — positive at all three scales again, but at
+magnitudes that agree with neither this table nor the row above:
+
+| n | E2 concurrent maxGap (median) | E3 paged maxGap (median) | reduction |
+| --- | --- | --- | --- |
+| 10³ | 2.6723 ms | 1.5082 ms | **+43.6%** |
+| 10⁴ | 4.6915 ms | 3.0582 ms | **+34.8%** |
+| 10⁵ | 32.6462 ms | 27.0332 ms | **+17.2%** |
+
+None of this is a code difference: `git log` shows neither `BoundedReadFixtures.kt` nor
+`BoundedReadBenchmark.kt` has changed since this entry landed (`61593208`), across both
+re-runs above. Three runs of the identical command against identical code have now produced
+three disagreeing patterns — this table's own (positive at every scale), the PR #325 review's
+(negative at 1e4/1e5), and `computenet-xlst`'s (positive at every scale again, at yet other
+magnitudes). Every row in both re-run tables classifies `Unreportable` against `NOISE_FLOOR`
+(relDispersion 4.46–22.37, same as this table's own rows below) for exactly this reason:
+**maxGap is a worst-case order statistic on a shared machine and does not concentrate,** so a
+reader meeting the "reduction, this run" column must not take 6.7%/17.9%/46% as a stable
+measured benefit — it is one noisy draw among several that disagree in sign as well as size.
+This does **not** weaken this entry's finding that E3 and §6 do not reproduce the original's
+~85–99% reduction: every one of the nine reductions measured across all three runs, including
+the positive ones, stays far below that range, and the negative runs are more damning of the
+original's claim, not less.
+
 Total-work premium (E3 summed page wall ÷ E1 whole copy at the same *n*): **5.9×** at 10⁵
 (65.543 / 11.196), against the original's 1.7–2.4×; at 10⁴ the ratio is 26× before the
 walk-size confound above is removed and ~13× after, against the original's ~2×.
