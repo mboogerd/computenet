@@ -23,6 +23,16 @@ dependencies {
     // :oracle never reaches kernel's main classpath.
     testImplementation(project(":oracle"))
 
+    // [DSC1-WIRE-04] is a constraint on the MAIN classpath: `:kernel` main depends on
+    // neither `:identity` nor any cryptographic provider, and no `civictech.identity`
+    // import appears in kernel main. This is test scope only, on exactly the `:oracle`
+    // precedent above (`:identity` itself depends on `:kernel`), and it exists so
+    // `SignedAnnouncementTest` can drive the ingress admission gate with REAL Ed25519
+    // keypairs and the real canonical announcement encoder rather than a stand-in —
+    // the gate's whole subject is whether a signature verifies, and a fake verifier
+    // would be testing the fake.
+    testImplementation(project(":identity"))
+
     // CHA2's @ExpectedFailure self-test drives fixture classes through a nested JUnit
     // Platform execution and asserts over the resulting events — the only way to prove a
     // verdict-inverting extension without the proof itself reddening the build. The BOM

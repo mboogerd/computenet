@@ -1,0 +1,581 @@
+package civictech.cell.wire
+
+import civictech.cell.CellRef
+import civictech.cell.DenialReason
+import civictech.cell.Propagate
+import civictech.cell.host.DeadLetter
+import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.LocationRegistry
+import civictech.cell.host.ManagedHost
+import civictech.cell.host.SimulationController
+import civictech.cell.link.PeerId
+import civictech.cell.port.PortRef
+import civictech.cell.port.Use
+import civictech.cell.proxy.InvocationSink
+import civictech.identity.DeterministicKeySource
+import civictech.identity.Ed25519SignatureVerifier
+import civictech.identity.PeerIdentity
+import civictech.identity.announce.AnnouncementSigningInput
+import civictech.identity.announce.canonicalBytes
+import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContain
+import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.collections.shouldHaveSize
+import io.kotest.matchers.ints.shouldBeGreaterThan
+import io.kotest.matchers.nulls.shouldNotBeNull
+import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
+import org.junit.jupiter.api.Test
+import java.security.PublicKey
+import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
+
+/**
+ * `computenet-ssa.4.3` — the **ingress admission gate**: BS-02 and BS-04..08 of
+ * epic `computenet-ssa`, over `Peering`'s own composition, with **real Ed25519
+ * keypairs and the real canonical announcement encoder** from `:identity`
+ * (`testImplementation(project(":identity"))`, `:oracle`'s precedent;
+ * `:kernel`'s main classpath is untouched, [DSC1-WIRE-04]).
+ *
+ * ## Why real crypto here, when the emit half deliberately faked it
+ *
+ * `SignedAnnouncementEmitTest` fakes signing on purpose — what it asserts is
+ * *which fields entered the signed region*, and a readable transcript shows
+ * that where an opaque 64-byte signature could not. This file asserts the
+ * opposite half: whether a signature **verifies**, and against **which key**.
+ * A fake verifier there would be a test of the fake. So every signature below
+ * is a genuine Ed25519 signature over
+ * `civictech.identity.announce.canonicalBytes`, and every rejection is a real
+ * verification failure.
+ *
+ * ## What "this side requires signed announcements" means
+ *
+ * The presence of an injected [AnnouncementVerification] on the receiving
+ * [Peering.Side], and nothing else — not `PeerAuthPolicy.RequireAuthenticated`.
+ * The argument is on [AnnouncementVerification]'s KDoc; the consequence for
+ * this file is that a side with no verification config is on the pre-feature
+ * path and is covered by `TrustBoundaryTest`, `PeerIdentityTest` and
+ * `RemoteAddressingTest` staying green unmodified.
+ *
+ * ## The three observables, on every negative case
+ *
+ * Each rejection asserts the distinguishing [DenialReason] on a `DeadLetter`,
+ * **zero `LocationRegistry` change** (see [Rig.registrySnapshot] — a snapshot of
+ * locations *and* topology, not merely "no dead letter was absent"), and the
+ * monotonic rejected-announcement counter moving by exactly one. The registry
+ * clause is the one most easily satisfied vacuously; it is mutation-checked —
+ * deleting the `return` after `announcementSink.deny(...)` in
+ * [BridgeIngressCell] (so a refused announcement is denied *and then*
+ * delivered) leaves every dead-letter and counter assertion green and turns
+ * every registry assertion in this file red.
+ */
+class SignedAnnouncementTest {
+
+    // ---------------------------------------------------------------- keys
+
+    /** Deterministic keypairs — seeded, so a failure here is reproducible. */
+    private fun identity(seed: String) = PeerIdentity(DeterministicKeySource.keyPairFromSeed(seed.toByteArray()))
+
+    private val identityA = identity("ssa-4-3-peer-a")
+    private val identityB = identity("ssa-4-3-peer-b")
+
+    /** A second keypair claiming to be B — the "different key" half of BS-05. */
+    private val impostorOfB = identity("ssa-4-3-impostor-of-b")
+
+    private val peerA: PeerId get() = identityA.peerId
+    private val peerB: PeerId get() = identityB.peerId
+
+    /** What each receiver knows: the public half of every peer it has heard of. */
+    private val directory: Map<PeerId, PublicKey>
+        get() = mapOf(peerA to identityA.publicKey, peerB to identityB.publicKey)
+
+    /**
+     * A [PeerCredentials] over a real keypair. [peerId] is a *separate*
+     * parameter rather than `identity.peerId` so BS-05 can build the one
+     * configuration that is otherwise unreachable: a signer claiming B's name
+     * while holding a key that does not derive it.
+     */
+    private class Keys(override val peerId: PeerId, private val identity: PeerIdentity) : PeerCredentials {
+        constructor(identity: PeerIdentity) : this(identity.peerId, identity)
+
+        override val publicKey: ByteArray = identity.publicKey.encoded
+        override fun sign(message: ByteArray): ByteArray = identity.sign(message)
+    }
+
+    /** A clock a test moves by hand — nothing in this file sleeps ([DSC1-ANN-07]). */
+    private class TestClock(var now: Long = 1_700_000_000_000L) : () -> Long {
+        override fun invoke(): Long = now
+    }
+
+    private val senderClock = TestClock()
+    private val receiverClock = TestClock()
+
+    // ------------------------------------------------- the two injected halves
+
+    private fun input(a: SignableAnnouncement) = AnnouncementSigningInput(
+        mintingPeerId = a.mintingPeerId,
+        counter = a.counter,
+        notAfter = a.notAfter,
+        contractId = a.contractId,
+        methodId = a.methodId,
+        cellRef = a.cellRef,
+        portName = a.portName,
+        args = a.args,
+    )
+
+    /** The honest emit-side encoder: `:identity`'s canonical bytes, unmodified. */
+    private fun signingConfig(
+        ttlMillis: Long = 60_000L,
+        encode: (SignableAnnouncement) -> ByteArray = { canonicalBytes(input(it)) },
+    ) = AnnouncementSigningConfig(encode = encode, clock = senderClock, ttlMillis = ttlMillis)
+
+    /**
+     * The receive-side half, built on the kernel's own verifier seam: this is
+     * `civictech.cell.membrane.SignatureVerifier`'s implementation
+     * [Ed25519SignatureVerifier], handed to [AnnouncementVerifier] with the
+     * payload narrowed to the announcement it always was. Task 4 wires the same
+     * object in `:wire`.
+     */
+    private fun verification(
+        keys: Map<PeerId, PublicKey> = directory,
+        skewMillis: Long = 0L,
+    ): AnnouncementVerification {
+        val seam = Ed25519SignatureVerifier(
+            publicKeys = { peer -> keys[peer] },
+            canonicalBytes = { _, _, payload -> canonicalBytes(input(payload as SignableAnnouncement)) },
+        )
+        return AnnouncementVerification(
+            verifier = { peer, counter, announcement, signature -> seam.verify(peer, counter, announcement, signature) },
+            clock = receiverClock,
+            skewMillis = skewMillis,
+            clockName = "the receiver's injected test clock",
+        )
+    }
+
+    // ------------------------------------------------------------------- rigs
+
+    /** Everything the receiving side is, plus the raw frame sink an attacker would have. */
+    private inner class Rig(
+        boundPeer: PeerId?,
+        verification: AnnouncementVerification? = verification(),
+    ) {
+        val controller = SimulationController(0)
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val side = Peering.Side(
+            registry,
+            host,
+            peer = PeerId("receiver"),
+            credentials = Keys(identity("ssa-4-3-receiver")),
+            announcementVerification = verification,
+        )
+        val deadLetters = CopyOnWriteArrayList<DeadLetter>()
+
+        /** Where an announcement addressed to this side lands. */
+        val mirror = Peering.spawnMirror(side, toPeer = InvocationSink { }, peer = boundPeer)
+
+        /**
+         * The connection's byte sink, bound to [boundPeer] — the same
+         * `Peering.hostIngress` a loopback and `WsTransport` both use, so a
+         * frame pushed here travels the production path.
+         */
+        var ingress: Propagate<ByteArray> = Peering.hostIngress(side, fromPeer = boundPeer)
+            private set
+
+        val ingressCells = CopyOnWriteArrayList<BridgeIngressCell>()
+
+        init {
+            host.deadLetterOutlet.subscribe(
+                Use.fixed(
+                    object : Propagate<DeadLetter> {
+                        override fun propagate(value: DeadLetter) {
+                            deadLetters += value
+                        }
+                    },
+                    PortRef.generate(),
+                ),
+            )
+        }
+
+        /** What a reconnect does: a brand-new ingress cell on the same [Peering.Side]. */
+        fun replaceIngress(boundPeer: PeerId?) {
+            ingress = Peering.hostIngress(side, fromPeer = boundPeer, onSpawn = { ingressCells += it })
+        }
+
+        fun feed(bytes: ByteArray) {
+            ingress.propagate(bytes)
+            controller.runToIdle()
+        }
+
+        val rejected: Long get() = side.announcementAdmission!!.rejectedAnnouncements
+
+        /**
+         * Everything an announcement could possibly have moved: which refs the
+         * registry knows and how, plus the mirrored topology. Compared whole,
+         * so "zero registry change" is a statement about the registry rather
+         * than about the one field a test remembered to look at.
+         */
+        fun registrySnapshot(): List<Any?> = listOf(
+            registry.localRefs(),
+            registry.remoteRefs(),
+            registry.remoteRefs().map { it to registry.location(it) }.toSet(),
+            registry.all(),
+        )
+
+        fun lastDenial() = deadLetters.mapNotNull { it.denial }.last()
+    }
+
+    /** A peer that signs real announcements at a receiver's mirror, and hands you the bytes. */
+    private inner class Sender(
+        credentials: PeerCredentials,
+        config: AnnouncementSigningConfig = signingConfig(),
+    ) {
+        val side = Peering.Side(
+            LocationRegistry(),
+            ManagedHost(scheduler = SimulationController(0).scheduler(), registry = LocationRegistry()),
+            peer = credentials.peerId,
+            credentials = credentials,
+            announcementSigning = config,
+        )
+        val bytes = CopyOnWriteArrayList<ByteArray>()
+        private val egress = BridgeEgressCell(signer = side.announcementSigner).also { cell ->
+            cell.outlet.subscribe(
+                Use.fixed(
+                    object : Propagate<ByteArray> {
+                        override fun propagate(value: ByteArray) {
+                            bytes += value
+                        }
+                    },
+                    PortRef.generate(),
+                ),
+            )
+        }
+
+        /** One signed `published(ref)` addressed at [mirror]; returns the frame bytes. */
+        fun publish(mirror: CellRef, ref: CellRef = CellRef(UUID.randomUUID())): ByteArray {
+            (HostedCellProxy.create(mirror, egress, Peering.AnnounceInletProxy::class.java)
+                as Peering.AnnounceInletProxy).inlet.call.published(ref)
+            return bytes.last()
+        }
+    }
+
+    // =========================================================== BS-02, accept
+
+    /**
+     * BS-02, end-to-end over the real composition: two keyed sides on a
+     * `Peering.loopback` — no socket, no hello ([DSC1-WIRE-05]) — both signing
+     * and both verifying. A's published ref lands on B as a `Remote` location
+     * **attributed to A's key-derived `PeerId`**, and nothing is dead-lettered.
+     */
+    @Test
+    fun `BS-02 a signed announcement lands as a Remote attributed to the signer's derived PeerId`() {
+        val controller = SimulationController(0)
+        val registryA = LocationRegistry()
+        val registryB = LocationRegistry()
+        val hostA = ManagedHost(scheduler = controller.scheduler(), registry = registryA)
+        val hostB = ManagedHost(scheduler = controller.scheduler(), registry = registryB)
+        val deadLetters = CopyOnWriteArrayList<DeadLetter>()
+        listOf(hostA, hostB).forEach { host ->
+            host.deadLetterOutlet.subscribe(
+                Use.fixed(
+                    object : Propagate<DeadLetter> {
+                        override fun propagate(value: DeadLetter) {
+                            deadLetters += value
+                        }
+                    },
+                    PortRef.generate(),
+                ),
+            )
+        }
+
+        val a = Peering.Side(
+            registryA, hostA, peer = peerA, credentials = Keys(identityA),
+            announcementSigning = signingConfig(), announcementVerification = verification(),
+        )
+        val b = Peering.Side(
+            registryB, hostB, peer = peerB, credentials = Keys(identityB),
+            announcementSigning = signingConfig(), announcementVerification = verification(),
+        )
+
+        val onA = CellRef(UUID.randomUUID())
+        registryA.publish(onA, hostA)
+        Peering.loopback(a, b)
+        controller.runToIdle()
+
+        // it arrived, and it is attributed to the identity that signed it.
+        // Not `shouldContainExactly`: the catch-up sweep announces every LOCAL
+        // ref A has, which on a hosted side includes A's own bridge cells.
+        registryB.remoteRefs() shouldContain onA
+        (registryB.location(onA) as LocationRegistry.Remote).peer shouldBe peerA
+        deadLetters.shouldBeEmpty()
+        // both directions verified; neither side refused anything
+        a.announcementAdmission!!.rejectedAnnouncements shouldBe 0L
+        b.announcementAdmission!!.rejectedAnnouncements shouldBe 0L
+        b.announcementAdmission!!.highWaterFor(peerA).shouldNotBeNull()
+    }
+
+    // ========================================================= BS-04, unsigned
+
+    /**
+     * BS-04: an announcement from a peer that does not sign, arriving at a side
+     * that requires signing. The sending side has credentials and **no**
+     * [AnnouncementSigningConfig], so it emits exactly the frames it emitted
+     * before this feature — which is the realistic shape of the refusal, not a
+     * hand-stripped frame.
+     */
+    @Test
+    fun `BS-04 an unsigned announcement is UNSIGNED with zero registry change`() {
+        val rig = Rig(boundPeer = peerB)
+        val unsigned = Peering.Side(
+            LocationRegistry(),
+            ManagedHost(scheduler = SimulationController(0).scheduler(), registry = LocationRegistry()),
+            peer = peerB, credentials = Keys(identityB),
+        )
+        unsigned.announcementSigner shouldBe null
+        val egress = BridgeEgressCell(signer = unsigned.announcementSigner)
+        val bytes = CopyOnWriteArrayList<ByteArray>()
+        egress.outlet.subscribe(
+            Use.fixed(
+                object : Propagate<ByteArray> {
+                    override fun propagate(value: ByteArray) {
+                        bytes += value
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
+        (HostedCellProxy.create(rig.mirror.ref, egress, Peering.AnnounceInletProxy::class.java)
+            as Peering.AnnounceInletProxy).inlet.call.published(CellRef(UUID.randomUUID()))
+
+        val before = rig.registrySnapshot()
+        rig.feed(bytes.single())
+
+        rig.lastDenial().reason shouldBe DenialReason.UNSIGNED
+        rig.registrySnapshot() shouldBe before
+        rig.rejected shouldBe 1L
+    }
+
+    // ==================================================== BS-05, bad signature
+
+    /**
+     * BS-05, both halves the epic names, because they fail for different
+     * reasons and a gate could catch one and miss the other:
+     *
+     * - **over different bytes**: a signer whose canonical encoder commits to a
+     *   *different* announcement than the frame declares (here: the next
+     *   counter). The signature is a perfectly valid Ed25519 signature by the
+     *   right key over the wrong region.
+     * - **by a different key**: a signer claiming B's name — so the id binding
+     *   passes and the gate cannot short-circuit on [DenialReason.ID_MISMATCH]
+     *   — while holding a keypair that does not derive it.
+     */
+    @Test
+    fun `BS-05 a signature over different bytes, and one by a different key, are both BAD_SIGNATURE`() {
+        val overDifferentBytes = Sender(
+            Keys(identityB),
+            signingConfig(encode = { a -> canonicalBytes(input(a.copy(counter = a.counter + 1))) }),
+        )
+        val byADifferentKey = Sender(Keys(peerB, impostorOfB))
+
+        listOf(overDifferentBytes, byADifferentKey).forEach { sender ->
+            val rig = Rig(boundPeer = peerB)
+            val frame = sender.publish(rig.mirror.ref)
+            val before = rig.registrySnapshot()
+            rig.feed(frame)
+
+            rig.lastDenial().reason shouldBe DenialReason.BAD_SIGNATURE
+            rig.registrySnapshot() shouldBe before
+            rig.rejected shouldBe 1L
+        }
+    }
+
+    // ========================================================== BS-06, replay
+
+    /**
+     * BS-06: the *byte-identical* redelivery, which is the shape a network
+     * replay actually has. The clause worth protecting is the second one — the
+     * registry equals its post-first-acceptance state, so the replay is neither
+     * double-applied nor allowed to *regress* what the first announcement
+     * installed.
+     */
+    @Test
+    fun `BS-06 a byte-identical redelivery is REPLAY and leaves the accepted state exactly as it was`() {
+        val rig = Rig(boundPeer = peerB)
+        val sender = Sender(Keys(identityB))
+        val ref = CellRef(UUID.randomUUID())
+        val frame = sender.publish(rig.mirror.ref, ref)
+
+        rig.feed(frame)
+        rig.registry.remoteRefs() shouldContainExactly setOf(ref)
+        val afterAcceptance = rig.registrySnapshot()
+        rig.rejected shouldBe 0L
+
+        rig.feed(frame)
+
+        rig.lastDenial().reason shouldBe DenialReason.REPLAY
+        rig.registrySnapshot() shouldBe afterAcceptance
+        rig.rejected shouldBe 1L
+        // and the high-water mark did not move backwards or forwards
+        rig.side.announcementAdmission!!.highWaterFor(peerB) shouldBe 1L
+    }
+
+    /**
+     * The bounded-state clause, read rather than claimed ([DSC1-ANN-13]): many
+     * announcements from two identities leave exactly two entries. State is
+     * `O(admitted peers)`, not `O(announcements)`.
+     */
+    @Test
+    fun `replay state is one entry per minting identity, not per announcement`() {
+        val rig = Rig(boundPeer = peerB)
+        val sender = Sender(Keys(identityB))
+        repeat(25) { rig.feed(sender.publish(rig.mirror.ref)) }
+
+        rig.side.announcementAdmission!!.trackedPeers shouldBe 1
+        rig.side.announcementAdmission!!.highWaterFor(peerB) shouldBe 25L
+        rig.registry.remoteRefs() shouldHaveSize 25
+        rig.rejected shouldBe 0L
+    }
+
+    // ========================================================= BS-07, expired
+
+    /**
+     * BS-07: expiry against the receiver's **injected** clock — this test never
+     * sleeps — and the refusal names the clock that made the call (epic §9.6),
+     * because an operator cannot otherwise tell a stale frame from a receiver
+     * whose own clock is wrong.
+     */
+    @Test
+    fun `BS-07 an announcement past notAfter is EXPIRED against the injected clock, which the reason names`() {
+        val rig = Rig(boundPeer = peerB, verification = verification(skewMillis = 5_000L))
+        val sender = Sender(Keys(identityB), signingConfig(ttlMillis = 60_000L))
+        val frame = sender.publish(rig.mirror.ref)
+
+        // inside notAfter + skew: still fine, so the boundary is a boundary
+        receiverClock.now = senderClock.now + 60_000L + 5_000L
+        val before = rig.registrySnapshot()
+        rig.feed(frame)
+        rig.rejected shouldBe 0L
+        rig.registrySnapshot() shouldNotBe before
+
+        // one millisecond past it
+        val rig2 = Rig(boundPeer = peerB, verification = verification(skewMillis = 5_000L))
+        val frame2 = Sender(Keys(identityB), signingConfig(ttlMillis = 60_000L)).publish(rig2.mirror.ref)
+        receiverClock.now = senderClock.now + 60_000L + 5_001L
+        val before2 = rig2.registrySnapshot()
+        rig2.feed(frame2)
+
+        val denial = rig2.lastDenial()
+        denial.reason shouldBe DenialReason.EXPIRED
+        denial.detail!! shouldContain "the receiver's injected test clock"
+        rig2.registrySnapshot() shouldBe before2
+        rig2.rejected shouldBe 1L
+    }
+
+    // ==================================================== BS-08, id mismatch
+
+    /**
+     * BS-08 — **the case that distinguishes per-connection key binding from
+     * bare signature checking**, and the one the bead forbids omitting.
+     *
+     * The frame is *validly signed* by B, and the receiver *knows B's public
+     * key*, so a gate that merely asked "does this signature verify?" would
+     * admit it. It arrives on the connection bound to A, and is refused
+     * [DenialReason.ID_MISMATCH] — not [DenialReason.BAD_SIGNATURE], which is
+     * what a gate that verified before checking the binding would report.
+     *
+     * The discriminating half is the second feed: **the very same bytes** are
+     * accepted on a connection bound to B. So the refusal is about the
+     * connection, not about the frame.
+     *
+     * Mutation-checked: deleting the `mintingPeer != boundPeer` branch in
+     * [AnnouncementAdmission] compiles and leaves the frame *accepted* here —
+     * the registry gains the ref and no denial is recorded — so this test is
+     * the thing that fails, and the reason assertion is what fails first.
+     */
+    @Test
+    fun `BS-08 a validly signed announcement minted by B on A's connection is ID_MISMATCH`() {
+        val onAsConnection = Rig(boundPeer = peerA)
+        val sender = Sender(Keys(identityB))
+        val ref = CellRef(UUID.randomUUID())
+        val frame = sender.publish(onAsConnection.mirror.ref, ref)
+
+        val before = onAsConnection.registrySnapshot()
+        onAsConnection.feed(frame)
+
+        val denial = onAsConnection.lastDenial()
+        denial.reason shouldBe DenialReason.ID_MISMATCH
+        onAsConnection.registrySnapshot() shouldBe before
+        onAsConnection.rejected shouldBe 1L
+
+        // the same bytes, on the connection they were minted for: admitted.
+        // Without this, "ID_MISMATCH" could just as well mean "unverifiable".
+        val onBsConnection = Rig(boundPeer = peerB)
+        onBsConnection.feed(Sender(Keys(identityB)).publish(onBsConnection.mirror.ref, ref))
+        onBsConnection.rejected shouldBe 0L
+        onBsConnection.registry.remoteRefs() shouldContainExactly setOf(ref)
+    }
+
+    // ======================================== replay state across a reconnect
+
+    /**
+     * [DSC1-ANN-13]'s survival clause, and the one that passes trivially if a
+     * test never actually replaces the ingress: the frame is accepted by one
+     * ingress cell, that cell is **replaced** by a fresh one (what
+     * `WsTransport.Session` does per socket open and `Peering.Loopback.heal`
+     * per heal), and the replay is still caught.
+     *
+     * Mutation-checked: turning `Peering.Side.announcementAdmission` into a
+     * computed `get()` — one ledger per read, i.e. per ingress — compiles, and
+     * turns exactly this test red while every other case in this file stays
+     * green.
+     */
+    @Test
+    fun `replay state survives ingress replacement on reconnect`() {
+        val rig = Rig(boundPeer = peerB)
+        val sender = Sender(Keys(identityB))
+        val frame = sender.publish(rig.mirror.ref)
+
+        rig.feed(frame)
+        rig.rejected shouldBe 0L
+
+        rig.replaceIngress(peerB)
+        rig.ingressCells shouldHaveSize 1 // the replacement really is a different cell
+        rig.feed(frame)
+
+        rig.lastDenial().reason shouldBe DenialReason.REPLAY
+        rig.rejected shouldBe 1L
+        // and the fresh ingress accounts on its own boundary sink, which is why
+        // the side-scoped counter above is the one that spans a reconnect
+        rig.ingressCells.single().boundaryDenials["announcement-admission"]!!.denialCount shouldBe 1L
+    }
+
+    // ================================================================ secrecy
+
+    /**
+     * [DSC1-OBS-05]: no dead letter carries private key material, a nonce, or
+     * raw signature bytes. Checked against the *actual* base64url signature of
+     * the refused frame and against the sender's public key encoding, over the
+     * whole rendered dead letter — description, detail and the record's own
+     * fields — for every reason in the taxonomy.
+     */
+    @Test
+    fun `no dead letter carries key material or raw signature bytes`() {
+        val ref = CellRef(UUID.randomUUID())
+        val rig = Rig(boundPeer = peerA) // bound to A, so B's frame is refused
+        val frame = Sender(Keys(identityB)).publish(rig.mirror.ref, ref)
+        val signature = WireCodec.decodeFrame(frame).frame.signature!!
+        rig.feed(frame)
+
+        rig.deadLetters shouldHaveSize 1
+        val letter = rig.deadLetters.single()
+        val rendered = letter.description + "|" + letter.denial!!.detail + "|" + letter.denial
+        rendered shouldNotContain signature
+        rendered shouldNotContain java.util.Base64.getEncoder().encodeToString(identityB.publicKey.encoded)
+        // the sender's *name* is public by construction (it is a key fingerprint)
+        // and naming it is the point of the record
+        rendered shouldContain peerB.name
+        signature.length shouldBeGreaterThan 40 // the string we searched for was a real one
+    }
+}
