@@ -173,6 +173,19 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   path — fails in a way that looks like an unrelated bug. Brace it:
   `-v "${REPO}:${REPO}:ro"`. See `scripts/flake-loop/run-linux-loop.sh` for a
   worked case (computenet-yj6/computenet-m3iy).
+- Same zsh family, different operator: **an unquoted glob in a `--flag=*.ext`
+  argument is expanded by the shell before the command sees it**, so
+  `grep -rln 'Foo' --include=*.kt .` dies with
+  `(eval):1: no matches found: --include=*.kt` and **the grep never runs**.
+  Quote it: `--include='*.kt'`. The danger is not the error text — it is that
+  an agent scanning for a symbol reads a grep that never ran as "this symbol
+  does not exist anywhere". That produced a `metadata.files` claim omitting a
+  file the task had to edit, and separately let the false premise ":oracle is
+  a leaf that nothing depends on" survive two reports and a review
+  (computenet-l5rc, recurred as computenet-u0b0 and computenet-rf0a). It is
+  recorded HERE, not only in `.claude/skills/work/references/agent-execution.md`,
+  because that file is handed to dispatched agents and the orchestrator never
+  reads it — which is why the first fix did not stop the recurrence.
 
 ## Verification
 

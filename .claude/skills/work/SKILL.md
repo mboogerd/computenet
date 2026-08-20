@@ -219,14 +219,32 @@ merging. Worktrees attached to the same `.git` are unaffected either way —
 each has its own HEAD, index, and files — so only the main checkout's own
 occupants are at risk.
 
-This is a **one-shot pin, not a live guarantee**: it fixes the revision your
-scripts come from at session start, and `origin/main` will move under a long
-run. That is the intended trade — one consistent revision for the whole run
-beats a moving one, and re-fast-forwarding mid-run would shift scripts under
-your own in-flight steps. What it buys is that no *drifted* script ever runs
-unnoticed, and it buys it before step 3 reads anything. If a script behaves
-unlike its description later in the run, re-run this check before believing
-the description is wrong (15 minutes went that way once).
+This is a **one-shot pin, not a live guarantee**: it bounds which revision the
+session STARTS from, and nothing more. `origin/main` will move under a long
+run — and so, more surprisingly, will the local checkout's own HEAD.
+
+**The main checkout is SHARED, and another session on this machine can pull it
+forward mid-run.** Measured: step 1 passed cleanly at 07:20Z with the checkout
+on `main` at `c1dd1fa5`; at 10:03Z the same checkout was at `87230510`, moved
+by a concurrent session. Every `scripts/*.sh` and `next-batch.py` call after
+that point ran from a different revision than the ones before it, and the
+`STALE` check above could not fire, because the checkout was never stale — it
+was AHEAD. Forward drift is benign in effect (newer scripts carry fixes), but
+for about four hours the session could not have said which revision produced
+any given result, and only noticed by accident, on finding a script present
+that its pinned base predated (computenet-0rmu).
+
+So **record the HEAD here and re-read it before Finalize**, and report the pair
+when they differ:
+
+```bash
+git -C "$M" rev-parse HEAD | tee "$SCRATCH/step1-head"   # re-read at Finalize
+```
+
+Re-fast-forwarding mid-run is still the wrong move — it shifts scripts under
+your own in-flight steps — so this is a *notice*, not a fix. If a script
+behaves unlike its description later in the run, re-run this check before
+believing the description is wrong (15 minutes went that way once).
 
 Note the asymmetry with the dispatch rule below: **agents** read
 `.claude/skills/work/**` from their own worktree, cut fresh from
@@ -273,6 +291,18 @@ task id** — `TaskStop` it when you reach Finalize.
 > both anyway, against this instruction, and carried a live 4-hour hazard
 > without noticing until Finalize; it read as one clause mid-paragraph
 > (computenet-3gf5).
+>
+> **The tool schema contradicts this, and the schema loses.** Monitor's JSON
+> schema lists `timeout_ms` in its `required` array alongside `description`
+> and `persistent`, so the literal reading of the line above looks like a call
+> the schema rejects — and a session that resolves the conflict in the
+> schema's favour ends up with exactly the capped monitor this instruction
+> exists to prevent, with nothing about it looking wrong at arming time.
+> **Omitting `timeout_ms` succeeds** (measured 2026-08-19; `required` is not
+> enforced for it, or the harness fills it). Omit it, and if some harness
+> version does reject the call, pass it and record here what evidence showed
+> `persistent: true` overriding it there — do not silently accept the cap
+> (computenet-bz0n).
 
 | Notification | Do, at the next decision point |
 |---|---|
@@ -616,7 +646,8 @@ assignee). Read the candidate's parent before claiming:
 ```bash
 bd show <candidate> --json | jq -r '.[0].parent // "(none)"'   # key OMITTED when unset; a dotted id's prefix is its parent
 bd show <that parent> --json | jq -r '.[0] | "\(.issue_type) \(.status) \(.assignee)"'
-bd comments <candidate>                                        # the holder's provenance comment lives here
+bd comments <candidate> --json > "$SCRATCH/prov-<candidate>.json"   # holder's provenance comment; --json + file because
+                                                                    # the default view TRUNCATES bodies mid-word (computenet-wq14)
 ```
 
 **A candidate may need a toolchain THIS machine does not have.** The fleet is
@@ -738,6 +769,30 @@ and that this file's documented response to it hides the epic from **both**
 machines until a human notices. The moment this is most likely to appear is
 exactly the moment a session finishes something and asks what is next. One
 extra command closes the whole class regardless of mechanism (computenet-2mou).
+
+**And check the EDGES before you defer — an empty readiness answer is
+routinely wrong.** `bd ready`, `bd blocked` and `ready-in-epic.sh` all derive
+blockedness from bd's denormalized `is_blocked` column, which goes stale
+against the live edge set the moment a blocker closes — the event a work
+session generates constantly. Measured seven times across two sessions on
+2026-08-19: beads whose sole blocking edge pointed at a *closed* bead, and
+beads created minutes earlier with *no* blocking edge at all, were all
+reported blocked. `bd dolt pull` did not clear it, and the separate-invocation
+guard above does not help, because re-running returns the same wrong answer
+(computenet-r79z, computenet-38ze). This is
+`doc/demo-findings.md` F-12 reaching the skill's own selection path.
+
+```bash
+.claude/skills/work/scripts/verify-ready.sh <the epic's open children...>
+```
+
+It reads each id's real edges with `bd dep list` and applies
+READY-COVERAGE.md section 2's test — an edge blocks only if its type is
+`blocks`/`conditional-blocks` AND its target is neither closed nor pinned.
+**Any `READY` line means there is a workable surface: do NOT defer.**
+Dispatching by hand on a bead this proves ready is correct, not a deviation.
+Exit 3 means a `bd dep list` failed and nothing was checked — that is not an
+answer either.
 
 ```bash
 bd comment <epic> "Parking: no workable surface. <ids: human-gated / blocked on <other-epic>>"
@@ -1212,8 +1267,21 @@ friction. **Empty batch** → read `verdict`, don't infer:
 |---|---|---|
 | `all-closed` | every task closed | **5e** |
 | `parked-residue` | all non-closed children are ask-human parks; the feature's own work is done | **5e** |
-| `blocked` | work remains this session can't start | set `parked_at`, go to **5f** |
+| `blocked` | work remains this session can't start | **confirm against the edges first** (below), then set `parked_at`, go to **5f** |
 | `no-tasks` | no tasks at all | breakdown died — treat as empty above |
+
+**A `blocked` verdict is a claim about bd's `is_blocked` column, not about
+the edges.** That column is stale the moment a blocker closes, so the verdict
+arrives wrong exactly when a session is productive — measured three times in
+one session, including on a task created minutes earlier with no blocking edge
+at all (computenet-38ze). Confirm before parking:
+
+```bash
+.claude/skills/work/scripts/verify-ready.sh <the feature's non-closed tasks...>
+```
+
+Any `READY` line and the batch was not empty: dispatch that task by hand and
+do not park. Only an all-`BLOCKED` result earns the `parked_at` route.
 
 `parked-residue` exists because parking a finished feature over follow-up
 questions *its own implementation filed* strands CI-green work with no path
@@ -1224,6 +1292,24 @@ verdict. (`parked` is only meaningful on an empty batch.)
 
 **Before claiming each task:**
 
+- **A PRESCRIPTIVE handoff comment is a hypothesis, not an instruction.**
+  Ordinary prose ages harmlessly — a record of what was measured stays true as
+  a record. A *prescription* does not: it is a claim about what the next agent
+  should do, written in the imperative against a tree, a branch and a `main`
+  that all move afterwards, and nothing marks it stale. Measured on one bead
+  (computenet-lc3o): "update doc/demo-findings.md F-9 to CLOSED naming the
+  fix", repeated across two handoff comments hours apart — on the branch the
+  next session actually had, F-9 was an unrelated finding and F-10 was taken,
+  because the previous session's F-9 existed only on its own unpushed branch.
+  Following it literally would have corrupted an existing entry. The same bead
+  also said "resume this branch, do NOT re-implement" for work that did not
+  exist on that machine (computenet-2qen). Both were the most
+  authoritative-looking things on the bead. **Test it against the artifact it
+  names in one command before relaying it into a dispatch prompt**, and when
+  it is stale, correct it ON THE BEAD — a correction that lives only in your
+  dispatch prompt leaves the false instruction sitting there for the next
+  reader. This is the same rule the bullet below already applies to a stated
+  blocker; a free-text handoff comment was not covered by it.
 - **Re-validate a stated blocker or precondition against the ARTIFACT it
   names, before you write it into a dispatch prompt.** A bead's "blocked until
   X lands" was true when it was written; by dispatch time X may have landed
@@ -1482,6 +1568,9 @@ background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
 If you won't finish within ~45-60 minutes, stop at a clean point and leave
 the task in_progress with a bd comment saying what's done and what's left.
+State any NEXT STEP with the state it depends on — the branch and sha, or the
+file as it exists at that sha — never as a bare imperative, because the tree
+you are describing will have moved by the time it is read.
 Your worktree and branch are preserved, so a later batch resumes you here.
 Report back: the task id, the outcome, and the files you actually touched.`
 })
@@ -1756,8 +1845,9 @@ executes. Any of them, or any doubt → second tier.
 
 **The cost this tier exists to avoid is real and compounds.** Every merge of
 `origin/main` pushes a new head, and every new head restarts all six required
-checks — **~4 minutes** — which a sibling merge can invalidate before it
-finishes, so the churn is superlinear in the number of concurrent same-file
+checks — **9–12 minutes**, governed by `build-test-fast` (measured across four
+runs, computenet-678u; this said ~4 minutes until then) — which a sibling merge
+can invalidate before it finishes, so the churn is superlinear in the number of concurrent same-file
 PRs (computenet-nxac: one PR paid the cycle three times). Which is the other
 half of the answer: **keep at most ~2 PRs open against any one file** —
 beyond that, sequence. Stated where it bites in
@@ -1876,6 +1966,18 @@ Two things that decide most sessions, inline so they are not missed:
 
 
 ## 6. Finalize
+
+**Re-read the main checkout's HEAD and compare it with step 1's.** They differ
+whenever a concurrent session on this machine pulled the shared checkout
+forward mid-run, which is routine and benign — but it means the session ran
+scripts from more than one revision, and the summary must say so rather than
+report a revision it did not hold throughout (computenet-0rmu):
+
+```bash
+was=$(cat "$SCRATCH/step1-head"); now=$(git -C "$M" rev-parse HEAD)
+[ "$was" = "$now" ] && echo "scripts: one revision, $now" \
+  || echo "scripts: checkout MOVED mid-run, $was -> $now (report both)"
+```
 
 **Ending abnormally — budget exhausted, unrecoverable error, interrupt — run
 the publication push FIRST and skip the rest:**

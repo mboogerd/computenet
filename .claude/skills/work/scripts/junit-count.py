@@ -38,14 +38,29 @@ class Unparseable(Exception):
     pass
 
 
+def _patterns(d):
+    """Every glob tried for one argument, in the order reported on NO-RESULTS.
+
+    Callers pass a MODULE directory as often as a results directory — SKILL.md's
+    surrounding prose talks about modules — and results sit three levels below
+    one. `junit-count.py <worktree>/demo/beadsmirror` printed NO-RESULTS against
+    a tree holding 46 TEST-*.xml files with 296 results, which reads as "the
+    tests did not run": the wrong direction of error, manufacturing doubt about
+    a run that really happened (computenet-lpp6).
+    """
+    return [os.path.join(d, "*.xml"),
+            os.path.join(d, "*", "*.xml"),
+            os.path.join(d, "build", "test-results", "*", "*.xml"),
+            os.path.join(d, "build", "test-results", "*.xml")]
+
+
 def count_dir(d):
     """(files, tests, failures, errors, skipped, newest-timestamp) for one dir.
 
     Both depths, deliberately — see the module docstring. sorted(set(...)) so
     a file cannot be counted twice and the order is stable.
     """
-    paths = sorted(set(glob.glob(os.path.join(d, "*.xml"))
-                       + glob.glob(os.path.join(d, "*", "*.xml"))))
+    paths = sorted(set(p for pat in _patterns(d) for p in glob.glob(pat)))
     t = f = e = s = 0
     newest = ""
     for p in paths:
@@ -89,7 +104,13 @@ def main(argv):
         print(line(d, files, t, f, e, s, newest))
     if total[0] == 0:
         # Zero is not a pass (computenet-wpvy.41): wrong glob, wrong module
-        # path, or a green build that genuinely ran nothing.
+        # path, or a green build that genuinely ran nothing. NAME the globs
+        # tried, so a caller who pointed at the wrong level can see that
+        # rather than read NO-RESULTS as "the tests did not run"
+        # (computenet-lpp6).
+        for d in dirs:
+            for pat in _patterns(d):
+                print(f"  tried: {pat}", file=sys.stderr)
         print("NO-RESULTS")
         return 4
     print(line("TOTAL", *total, newest_all))
