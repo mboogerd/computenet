@@ -237,22 +237,24 @@ checkpoint for tightly-coupled subgraphs (never global, per P4) (93 I-7).
    payloads — mergeable parked traffic is already covered end-to-end by the
    M10 journal + anti-entropy pair (93 I-7/I-22/I-12).
 6. **Read plane**: the host queue serves *invocations* only. A synchronous
-   read issued from a thread that is not the host's — a test's `awaitUntil`
-   thread, an HTTP handler, a poller — MUST be answered from an immutable
-   snapshot the writer published, and MUST NOT be routed through the queue.
-   The publication convention is a `@Volatile` field written at the end of
-   each effective pass; see §The read plane. Asynchronous, caller-bounded
-   state reads (`ManagedHost.snapshotOf` / the paged `readBounded` sibling)
-   are *not* covered by this rule: they are ordinary queued tasks that hand
-   back a future, so they never block the caller on host liveness and never
-   re-enter from the host thread.
+   read **of a cell's state** issued from a thread that is not the host's — a
+   test's `awaitUntil` thread, an HTTP handler, a poller — MUST be answered
+   from an immutable snapshot the writer published, and MUST NOT be routed
+   through the queue. The publication convention is a `@Volatile` field
+   written at the end of each effective pass; see §The read plane.
+   Asynchronous, caller-bounded state reads (`ManagedHost.snapshotOf` and its
+   paged sibling `ManagedHost.readState`, which submits one page per queued
+   task and calls the cell's own `BoundedStateful.readBounded` on the host's
+   context) are *not* covered by this rule: they are ordinary queued tasks
+   that hand back a future, so they never block the caller on host liveness
+   and never re-enter from the host thread.
 
 ## The read plane
 
 An observer outside the host asks a cell a question and wants the answer now:
 `awaitUntil` polling a data cell's `membership()`, the beads mirror's poller
 thread reaching `MirrorProjector.edgeView()` (which is a `SetCell.membership()`
-underneath), the Inspector's `ManagedHost.outletAt`. These calls run on the
+underneath). These calls run on the
 *caller's* thread while the host's consumer folds deltas into the same state,
 which is how `ConcurrentModificationException` escaped `OrMapCell.membership`
 (computenet-yk5r) and `SetCell.membership` (computenet-bdth), and is latent in
@@ -314,7 +316,11 @@ reasons:
 The asynchronous accessors are the surviving, legitimate use of the queue for
 observation, and they are legitimate *because* they are asynchronous:
 `snapshotOf` returns a `CompletableFuture` the caller bounds and may cancel, so
-none of the three costs above applies to it.
+none of the three costs above applies to it. They are also the *only* way the
+Inspector reads cell state: its one synchronous host call,
+`ManagedHost.outletAt`, resolves a port handle out of the host's concurrent
+cell map and the target's `PortRegistry` and touches no fold state at all, so
+it is not a state read and this rule does not reach it.
 
 **Transitional: the per-cell `stateLock`s.** The data cells in
 `civictech.cell.data` — `SetCell`, `OrMapCell`, `MapCell`, `ListCell`,

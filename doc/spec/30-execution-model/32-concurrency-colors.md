@@ -156,7 +156,7 @@ saturation frame vs transport flow control (93 I-12/I-15/I-9/I-19/I-26).
   🔵 thread on a 🟣 host's suspension or vice versa, and needs no bridge. This
   is also why the read is a snapshot rather than a lock: a monitor held across
   a color crossing would be exactly the blocked single-consumer host thread
-  rejected below.
+  rejected above (§Bridges, "Block-the-sender … rejected as the default").
 - Delivery is suspend-aware: `Invocation.invokeSuspending` calls a target
   suspend fun with a real continuation (falling back to plain invocation for
   non-suspend targets), and the wave context (G-4) rides a coroutine context
