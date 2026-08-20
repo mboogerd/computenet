@@ -59,7 +59,7 @@ Two more, for the completeness check and the up-next section:
 # stale assignee keeps an already-answered item on it, and a park that only
 # carries the label would be missing from it. Diff this against bd human list
 # and report any discrepancy instead of silently trusting either.
-bd list --all --json | sed -n '/^[[{]/,$p' \
+bd list --all --limit 0 --json | sed -n '/^[[{]/,$p' \
   | jq '[ (if type=="array" then . else .issues end)[]
           | select(.status != "closed")
           | select((.assignee == "human") or ((.labels // []) | index("human")))
