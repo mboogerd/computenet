@@ -470,11 +470,25 @@ class GraphGenerator(private val config: GeneratorConfig) {
          * with itself is not a fan-in.
          *
          * The [satisfiedBy] precondition is the shape half of that question, asked once instead
-         * of port by port; it changes no outcome (a port whose shape no node in the graph
-         * carries has an empty pool below and returns `null` there) and draws no [rng], so both
-         * paths out of a rejection are identical. It is here so the rule
-         * `CatalogReachabilityTest` computes its closure from is the rule this generator runs,
-         * not a copy of it.
+         * of port by port. It is here so the rule `CatalogReachabilityTest` computes its closure
+         * from is the rule this generator runs, not a copy of it.
+         *
+         * It never changes this function's **answer**: a port whose shape no node in the graph
+         * carries has an empty pool below and returns `null` there, so the precondition rejects
+         * exactly the entries the port-by-port path would have rejected. What it can change is
+         * **when** the rejection happens, and therefore the [rng] stream: it returns before the
+         * head-port draw, so a rejection it takes early skips draws the port-by-port path would
+         * have made. That only arises for a rule whose input shapes are *not* all present —
+         * which, under every registration in `CoreOperators` today, cannot happen for a
+         * candidate: every registered `ShapeRule` wants one shape on all its ports, and
+         * candidates come from [consumersOf] of the head's shape, so the head itself already
+         * witnesses every wanted shape and the predicate is always true here. Measured
+         * 2026-08-20 (macOS/arm64): 1500 topologies over five core-vocabulary configurations
+         * are byte-identical with and without the precondition, while a synthetic *heterogeneous*
+         * binary rule (`SetOf(Scalar)` x `MapOf(Scalar, Scalar)`) does generate differently.
+         * A consumer registering such a rule (`[ORA1-API-03]` allows it) gets deterministic
+         * output for its own `(seed, config)`, but not the same output this generator would have
+         * produced before the precondition existed.
          */
         private fun fillPorts(
             entry: OperatorCatalog.Entry,
