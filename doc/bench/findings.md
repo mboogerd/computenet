@@ -2455,3 +2455,202 @@ The diff for this entry is exactly `doc/bench/findings.md`. `git diff --name-onl
 `bench/src/jmh`, `bench/src/test`. The annotation config was not widened; `NOISE_FLOOR`
 in `bench/src/main/kotlin/civictech/bench/Dispersion.kt` is untouched (confirmed above).
 No entry above this one was edited, reordered, or deleted.
+
+---
+
+## 2026-08-20 — allocation per Stateful.snapshot() call (gc.alloc.rate.norm, -prof gc) for every data-cell family at 1e3/1e4/1e5 — G-21 phase 3's own quantity, allocation pressure, not the retained occupancy computenet-x9e.6.2 measured
+Harness: 06e829ff · JVM Amazon.com Inc. (Corretto-21.0.5.11.1)/21.0.5 · heap JVM defaults (VM options: <none>) · Apple M3 Max, 16 cores, Mac OS X 26.6.2
+JMH: mode=Average time forks=1 warmup=3 iters=5 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| SET_CELL N1E3 | 265246.546863 ± 1.038458 B/op | |
+| SET_CELL N1E4 | 2613672.402447 ± 71.702805 B/op | |
+| SET_CELL N1E5 | 2.7123106009174E7 ± 70100.479081 B/op | |
+| MAP_CELL N1E3 | 40258.784809 ± 0.442415 B/op | |
+| MAP_CELL N1E4 | 385729.816949 ± 6.794099 B/op | |
+| MAP_CELL N1E5 | 4262216.536086 ± 823.359966 B/op | |
+| OR_MAP_CELL N1E3 | 217473.606082 ± 8.901627 B/op | |
+| OR_MAP_CELL N1E4 | 2133284.180887 ± 107.701476 B/op | |
+| OR_MAP_CELL N1E5 | 2.2253527270692E7 ± 17264.266231 B/op | |
+| KEYED_SET_CELL N1E3 | 136999.758858 ± 2.456586 B/op | |
+| KEYED_SET_CELL N1E4 | 1331975.464662 ± 15.616109 B/op | |
+| KEYED_SET_CELL N1E5 | 1.4150457376181E7 ± 16050.136085 B/op | |
+| LIST_CELL N1E3 | 4040.030562 ± 0.001071 B/op | |
+| LIST_CELL N1E4 | 40040.828019 ± 0.027479 B/op | |
+| LIST_CELL N1E5 | 400119.296592 ± 11.497288 B/op | |
+| COUNTER_CELL N1E3 | 24.000294 ± 1.1E-5 B/op | |
+| COUNTER_CELL N1E4 | 24.000742 ± 4.4E-5 B/op | |
+| COUNTER_CELL N1E5 | 24.007011 ± 6.82E-4 B/op | |
+| PN_COUNTER_CELL N1E3 | 568.026332 ± 0.011614 B/op | |
+| PN_COUNTER_CELL N1E4 | 568.130802 ± 0.004329 B/op | |
+| PN_COUNTER_CELL N1E5 | 569.296384 ± 0.03591 B/op | |
+Trigger: G-21 phase 3 — INCONCLUSIVE: the criterion applied is that the trigger fires only if some family allocates at least 1 MiB per snapshot() call AND that family's allocation is flat in element count (at most 2x from 1e3 to 1e5) — the fixed-size per-call shape a lease pool could actually retire — and retires only if every family allocates under one 4 KiB page per call, with anything else undecided; measured, the loudest family is SET_CELL at 2.7123106009174E7 B/op, growth from 1e3 to 1e5 ranges 1.0002798715715733x-105.87047165748444x across 7 families, and the families flat in element count are COUNTER_CELL, PN_COUNTER_CELL — whose largest per-call allocation is 569.296384 B/op
+
+Omitted rows (drive=REAL):
+- none
+
+### What was measured, and what it is NOT (`computenet-6zqz`, G-21 phase 3)
+
+**The quantity.** Every number in the table above is `gc.alloc.rate.norm` — JMH's
+`-prof gc` secondary metric, **bytes allocated per measured operation**, where the
+operation is one `civictech.cell.Stateful.snapshot()` call on a populated, unhosted
+data cell. It is **not** retained size, and it does not supersede the entry of
+2026-08-19 above (*"per-cell retained snapshot footprint…"*, `computenet-x9e.6.2`),
+which measured a different thing by a different instrument. Allocation is what a call
+*produces as garbage*; retention is what the state *costs to hold*, and a snapshot
+allocates its copy plus every intermediate the copy passes through. The two entries do
+not contradict each other and neither corrects the other; this one exists because G-21
+phase 3's trigger names allocation pressure, and the retained measurement therefore
+could not answer it in its own terms.
+
+**Instrument.** `bench/src/jmh/kotlin/civictech/bench/micro/CellFootprintBenchmark.kt`,
+which has been committed and unrun at sweep scale since `computenet-x9e.6.1`; its
+`@Param`s are the `CellFamily` and `Scale` enums declared beside the catalog in
+`Footprint.kt`, so the 7 x 3 coverage above is derived from that catalog and not
+restated. Cells are unhosted — no scheduler, no host queue — which is what makes this a
+REAL-drive measurement in `[BEN1-26]`'s sense.
+
+**Commands, both shipped paths, in order.** The sweep, on the toolchain JDK 21 invoked
+by absolute path (a bare `java` on this host is JBR 25.0.2 — the exact substitution
+`computenet-dbqt` was filed about, one that completes successfully while producing
+figures incomparable to `NOISE_FLOOR`):
+
+```
+./gradlew :bench:jmhJar
+/Users/merlijn/Library/Java/JavaVirtualMachines/corretto-21.0.5/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar CellFootprintBenchmark -prof gc \
+     -rf csv -rff <abs>/footprint-alloc.csv 2>&1 | tee <abs>/footprint-alloc.log
+
+./gradlew :bench:test -PbenchOnly=true --rerun \
+  --tests 'civictech.bench.micro.CellFootprintAllocRenderTest' \
+  -Dcivictech.bench.jmhResults=<abs>/footprint-alloc.csv \
+  -Dcivictech.bench.harnessSha=$(git rev-parse --short HEAD) \
+  -Dcivictech.bench.date=2026-08-20
+```
+
+Everything between the `##` heading and the `Trigger:` line is
+`civictech.bench.Findings.entry`'s output, pasted verbatim, reached through
+`ThroughputReport.renderRun` — the same shipped path every other rendered entry in this
+file uses. **No hand-written driver was involved**, which was not previously possible:
+until `computenet-6zqz` the renderer read the primary `Score` column only and refused
+any results file carrying a `NaN` dispersion, and a `-prof gc` file always carries two
+(`gc.count` and `gc.time` are sums, so JMH writes their error as literally `NaN`). The
+whole file was therefore refused before the allocation rows were reached, and this
+class's figures were read by hand off stdout. `ThroughputReport.Metric` is what closed
+that: the caller states which metric the entry reports, selection happens before the
+NaN refusal, and a file holding no row for the requested metric is refused naming the
+metrics it does hold rather than falling back to wall clock.
+
+### The environment differs from every earlier entry in this file — read the numbers accordingly
+
+Stated here because it is the one thing about this entry a reader could otherwise get
+wrong, and it is a limitation this entry does not resolve:
+
+- **JVM: Amazon Corretto 21.0.5**, per the run's own `# VM version: JDK 21.0.5,
+  OpenJDK 64-Bit Server VM, 21.0.5+11-LTS` banner and its `# VM invoker:` line. Not
+  Temurin 21.0.11, on which `NOISE_FLOOR` was derived and on which every earlier entry
+  here was measured — **no Temurin 21 exists on this host at all**, and the Gradle
+  `jvmToolchain(21)` this run was pinned to resolves to Corretto here. Same language
+  version, same LTS line, different vendor build.
+- **Host: Apple M3 Max, 16 cores, macOS 26.6.2**, from the benchmark's own
+  `@Setup(Level.Trial)` host-facts banner (`computenet-yhbd`, wired into this class by
+  `computenet-7w4e`) — not the Apple M2 Pro / 10 cores of the earlier entries.
+- **The host was NOT quiesced.** Two other agent sessions were live on this machine and
+  may have run Gradle concurrently during the sweep. That is recorded rather than
+  smoothed. It is also much less consequential for this metric than it would be for a
+  wall-clock one: bytes allocated per operation is a property of the code path, not of
+  how much CPU it got, which is part of why this measurement — and not a timing one —
+  is the right instrument for the trigger. The dispersions bear that out: the widest
+  relative dispersion in the whole sweep is `SET_CELL N1E5` at 70100/27123106 =
+  **0.0026**, half of `NOISE_FLOOR` 0.005, and **all 21 rows classified Reportable —
+  no row was omitted**, which is why the omission list above reads `none`.
+- **JMH knobs, from the run's own banner**: `mode=Average time forks=1 warmup=3
+  iters=5`, the class's declared annotations, unmodified. `[BEN1-25]` forbids widening
+  them to manufacture reportability and none were widened.
+
+Because the JVM vendor build and the host both differ, **the absolute numbers above are
+not directly comparable to the retained-footprint entry of 2026-08-19**, and a
+byte-for-byte comparison between the two entries' magnitudes should not be made. What
+survives the difference is the *shape* — which families scale with element count and
+which do not — and the E1 cross-check below, whose reference figures come from a third
+machine again.
+
+### Cross-check against V1C-BENCH E1's independently measured `alloc/call`
+
+E1 (`doc/spec/90-roadmap/98-inspector-v4-plan/30-bounded-read-measurement.md` section 3)
+reports `SetCell` allocation per `snapshot()` call as **270 KB / 2.61 MB / 26.9 MB** at
+1e3/1e4/1e5, measured four months earlier, on a different machine, through
+`ThreadMXBean.getThreadAllocatedBytes` — a different mechanism from `-prof gc`. This
+sweep reports **265.2 KB / 2.61 MB / 27.1 MB**. Agreement is within ~2%, 0%, and ~0.8%.
+
+That is a genuine cross-check on that document's numbers rather than a re-run of its
+harness. It is **not** the V1C-BENCH replication itself: that task owns E1's full
+claim, this is one column of it, and nothing here should be read as closing it.
+
+### Why the verdict is INCONCLUSIVE, and what would decide it
+
+The criterion was fixed in committed source **before the sweep ran** — `CRITERION`,
+`PRESSURE_BAR_BYTES`, `FLAT_GROWTH_FACTOR` and `FLOOR_BYTES` in
+`bench/src/test/kotlin/civictech/bench/micro/CellFootprintAllocRenderTest.kt` — and the
+verdict word in the `Trigger:` line above is computed from the parsed rows by
+`verdictOf` in that same file, not typed. Re-running the sweep and re-reading that
+function is a complete audit of how the word was reached. Its inputs, every family
+including those the table already shows:
+
+```
+Criterion inputs (bytes allocated per snapshot() call, gc.alloc.rate.norm):
+| family | at smallest scale | at largest scale | largest/smallest | max B/op |
+| --- | --- | --- | --- | --- |
+| COUNTER_CELL | 24.000294 | 24.007011 | 1.0002798715715733 | 24.007011 |
+| KEYED_SET_CELL | 136999.758858 | 1.4150457376181E7 | 103.28819184892089 | 1.4150457376181E7 |
+| LIST_CELL | 4040.030562 | 400119.296592 | 99.03868063659465 | 400119.296592 |
+| MAP_CELL | 40258.784809 | 4262216.536086 | 105.87047165748444 | 4262216.536086 |
+| OR_MAP_CELL | 217473.606082 | 2.2253527270692E7 | 102.32748548943978 | 2.2253527270692E7 |
+| PN_COUNTER_CELL | 568.026332 | 569.296384 | 1.002235903387662 | 569.296384 |
+| SET_CELL | 265246.546863 | 2.7123106009174E7 | 102.25620778084284 | 2.7123106009174E7 |
+
+PRESSURE_BAR_BYTES=1048576.0 FLAT_GROWTH_FACTOR=2.0 FLOOR_BYTES=4096.0
+verdict=INCONCLUSIVE
+```
+
+Both branches failed, and they failed for different reasons:
+
+- **It does not fire.** Five of seven families allocate far more than the 1 MiB bar at
+  1e5 — `SET_CELL` 27.1 MB, `OR_MAP_CELL` 22.3 MB, `KEYED_SET_CELL` 14.2 MB,
+  `MAP_CELL` 4.3 MB — but every one of them grows ~100x for a 100x increase in
+  elements, i.e. allocation is **linear in the state**, which is whole-state copy cost.
+  A lease pool reuses fixed-size buffers; it does not remove a copy whose size is the
+  data. The two families that ARE flat in element count — `COUNTER_CELL` at a constant
+  **24 B/op** and `PN_COUNTER_CELL` at a constant **~568 B/op** — are flat precisely
+  because they are O(1) state, and 24 bytes per call is not pressure by any reading.
+- **It does not retire.** `LIST_CELL` at 1e3 already allocates 4040 B/op and reaches
+  400 KB/op at 1e5, so the "every family under one page per call" branch is nowhere
+  near true.
+
+**A limitation of this instrument, stated because it bounds the verdict rather than
+merely qualifying it**: G-21 phase 3 is about pooling `Leased` payloads with
+host-integrated release-on-drain (`doc/spec/20-dataflow-semantics/23-ownership.md`
+§Implementation). None of the seven families here emits a `Leased` payload at all —
+data-cell deltas are plain values carrying no ownership marker, which is what makes
+fan-out and late-join catch-up legal for them by construction
+(`93-feature-interactions.md` N14 x N15). So this sweep measures allocation pressure in
+the path the trigger's *quantity* names, on cells whose payloads the proposed *remedy*
+would not touch. **A measurement that could fire this trigger has to be taken on a
+graph that actually moves `Leased` payloads**, and no such benchmark exists in `:bench`
+today. That is the concrete next instrument, and it is a larger piece of work than
+appending a row here.
+
+The confirmed O(1) allocation of both counter families is worth recording on its own:
+`computenet-x9e.6.2` noted that an O(1)-retained counter still allocates a delta per
+increment, and left open whether the *snapshot* path did the same. It does not — 24 B
+per `snapshot()` call, flat to within 0.03% across two decades of element count.
+
+### Scope confirmation
+
+Nothing above the insertion point was edited, reordered, or deleted. This entry's
+change to `doc/bench/findings.md` is an append. `doc/spec` is byte-identical to `main`;
+`94-implementation-plan.md` and `23-ownership.md` are cited above and were not touched.
+`CellFootprintBenchmark.kt` was likewise cited and not edited — its KDoc still says a
+`-prof gc` render is "a renderer gap, tracked as `computenet-6zqz`", which this entry's
+work closes; correcting that KDoc is filed separately rather than done here, because
+that file is outside this item's claim.
