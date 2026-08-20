@@ -956,11 +956,14 @@ class ThroughputReportTest {
      * `BoundedReadBenchmark`'s shape — two `@Benchmark` methods over one `scale` — which is
      * why [RowLabel.includeMethod] exists.
      *
-     * The method names here are NOT the benchmark's own (`direct`, `hostedSnapshotOf`):
-     * those name no [Drive], so `driveOf` refuses them outright (`[BEN1-26]`) and no label
-     * choice reaches a table at all. That is a benchmark-side gap in
-     * `bench/src/jmh/kotlin`, tracked separately; the fixture names the drive-bearing form
-     * the benchmark needs so that what this test decides is the LABEL rule.
+     * The method names here ARE the benchmark's own, as of computenet-7w4e. When this
+     * fixture was written they were not: the benchmark's two methods were `direct` and
+     * `hostedSnapshotOf`, which name no [Drive], so `driveOf` refused them outright
+     * (`[BEN1-26]`) and no label choice reached a table at all — the fixture therefore
+     * named the drive-bearing form the benchmark needed, so that what this test decides
+     * is the LABEL rule. computenet-7w4e renamed them to `realDirect` and
+     * `realHostedSnapshotOf`, so fixture and source now agree, and the drive-rule pin
+     * further down this file is what keeps them agreeing.
      */
     private val twoMethodCsv = listOf(
         """"Benchmark","Mode","Threads","Samples","Score","Score Error (99.9%)","Unit",""" +
@@ -1104,20 +1107,7 @@ class ThroughputReportTest {
 
     @Test
     fun `every param-bearing benchmark's registered columns name exactly its own params`() {
-        val root = System.getProperty("computenet.repo.root")
-            ?: error(
-                "System property 'computenet.repo.root' is not set. It must be wired in " +
-                    "bench/build.gradle.kts on the :bench `test` task so this test can " +
-                    "locate bench/src/jmh/kotlin."
-            )
-        val dir = File(root, "bench/src/jmh/kotlin/civictech/bench/micro")
-        check(dir.isDirectory) { "no JMH benchmark sources at ${dir.absolutePath}" }
-        val sources = dir.listFiles { file -> file.name.endsWith("Benchmark.kt") }
-            ?.sortedBy { it.name }
-            ?: emptyList()
-        // Guard against a vacuous pass if the tree moves: this suite knows of five.
-        assertTrue(sources.size >= 5, "only ${sources.size} benchmark sources under $dir")
-
+        val sources = jmhBenchmarkSources()
         val declared = sources.associate { it.nameWithoutExtension to paramsDeclaredIn(it) }
         val withParams = declared.filterValues { it.isNotEmpty() }
         assertEquals(
@@ -1171,6 +1161,457 @@ class ThroughputReportTest {
                 }
             }
             .toSet()
+    }
+
+    /**
+     * Every `@Benchmark`-bearing Kotlin source under `bench/src/jmh/kotlin`.
+     *
+     * Walks the whole `jmh` source set, not one package: the earlier revision of this
+     * helper listed only the `Benchmark.kt`-suffixed files of the single package
+     * `civictech.bench.micro`, so a
+     * benchmark in another package — or in a file not named `...Benchmark.kt` — escaped
+     * every pin below (noted in review of computenet-x9e.10, widened by computenet-7w4e).
+     * Selection is by CONTENT (`@Benchmark` on a line of its own) rather than by filename
+     * for the same reason.
+     */
+    private fun jmhBenchmarkSources(): List<File> {
+        val root = System.getProperty("computenet.repo.root")
+            ?: error(
+                "System property 'computenet.repo.root' is not set. It must be wired in " +
+                    "bench/build.gradle.kts on the :bench `test` task so this test can " +
+                    "locate bench/src/jmh/kotlin."
+            )
+        val dir = File(root, "bench/src/jmh/kotlin")
+        check(dir.isDirectory) { "no JMH source set at ${dir.absolutePath}" }
+        val sources = dir.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .filter { file -> file.readLines().any { it.trim() == "@Benchmark" } }
+            .sortedBy { it.path }
+            .toList()
+        // Guard against a vacuous pass if the tree moves: this suite knows of five.
+        assertTrue(sources.size >= 5, "only ${sources.size} benchmark sources under $dir")
+        return sources
+    }
+
+    // ---------------------------------------------------------------------------------
+    // computenet-7w4e: the two BENCHMARK-side preconditions of `renderRun`, pinned
+    // against the sources in bench/src/jmh/kotlin rather than asserted in a comment.
+    //
+    // computenet-x9e.10 (above) made the LABEL columns parameterisable, which was the
+    // renderer half. Two halves live on the benchmarks themselves, and neither is visible
+    // to the type system — the `jmh` source set is invisible to `main` and `test` alike:
+    //
+    // 1. HOST FACTS. `RunEnvironment.forRun`'s JMH-sweep overload accepts host facts ONLY
+    //    from `HostFacts.fromJmhLog`, which reads a banner that the measuring benchmark
+    //    prints from inside its own fork (`@Setup(Level.Trial)`, computenet-yhbd). A
+    //    benchmark without that hook produces logs `renderRun` REFUSES, however well its
+    //    rows are labelled — which is what happened to `CellFootprintBenchmark` and
+    //    `BoundedReadBenchmark` until this item.
+    // 2. DRIVE. `ThroughputReport.driveOf` tokenizes a `@Benchmark` method's name and
+    //    requires exactly one `sim`/`real` token, because `[BEN1-26]`/`[BEN1-27]` say a
+    //    result must never lose the regime that produced it. `BoundedReadBenchmark`'s
+    //    `direct`/`hostedSnapshotOf` named none, and the V1C-BENCH E1 entry was rendered
+    //    by a throwaway driver that STATED `Drive.REAL` instead — the substitution those
+    //    requirements exist to prevent in shipped code.
+    //
+    // Both failures are refusals, not wrong numbers, and both are paid for AFTER a JMH
+    // sweep has been run. These tests say so at `:bench:test` speed instead — and, more
+    // to the point, they say it about a benchmark that does not exist yet.
+    // ---------------------------------------------------------------------------------
+
+    @Test
+    fun `every benchmark-bearing state class prints the host-facts banner`() {
+        val sources = jmhBenchmarkSources()
+        val offenders = mutableListOf<String>()
+        val checked = mutableListOf<String>()
+
+        sources.forEach { source ->
+            if (source.name in NON_MEASURING_SOURCES) return@forEach
+            val lines = source.readLines()
+            val classes = stateClassesIn(lines)
+            val reachable = requiredStateNames(lines, classes)
+            val required = classes.filter { it.name in reachable }
+            assertTrue(
+                required.isNotEmpty(),
+                "${source.name} declares a @Benchmark but no @State class reachable from " +
+                    "one — the parser below no longer understands this file's shape",
+            )
+            required.forEach { state ->
+                checked += "${source.name}:${state.name}"
+                if (!announcesHost(state, classes)) offenders += "${source.name}:${state.name}"
+            }
+        }
+
+        assertEquals(
+            emptyList<String>(),
+            offenders,
+            "these @State classes are reachable from a @Benchmark method and print no " +
+                "host-facts banner, so HostFacts.fromJmhLog refuses every log they " +
+                "produce and ThroughputReport.renderRun cannot render them. Add a " +
+                "`@Setup(Level.Trial)` hook calling " +
+                "`HostFacts.captureCurrent().bannerLines().forEach(::println)`, as " +
+                "OperatorThroughputBenchmark.GraphState.announceHost does",
+        )
+
+        // The scan is doing real work, not passing on an empty set. These are the state
+        // classes reachable from a @Benchmark method today; a NEW one is caught by the
+        // assertion above, and this one only guards against the parser going blind.
+        assertTrue(
+            checked.containsAll(
+                listOf(
+                    "BoundedReadBenchmark.kt:DirectState",
+                    "BoundedReadBenchmark.kt:HostedState",
+                    "CellFootprintBenchmark.kt:CellState",
+                    "FanOutScalingBenchmark.kt:SimState",
+                    "FanOutScalingBenchmark.kt:RealState",
+                    "OperatorThroughputBenchmark.kt:SimState",
+                    "OperatorThroughputBenchmark.kt:RealState",
+                )
+            ),
+            "the state-class scan found only $checked",
+        )
+    }
+
+    @Test
+    fun `every benchmark method name names exactly one drive`() {
+        val sources = jmhBenchmarkSources()
+        val checked = mutableMapOf<String, Drive>()
+        val offenders = mutableListOf<String>()
+
+        sources.forEach { source ->
+            if (source.name in NON_MEASURING_SOURCES) return@forEach
+            val methods = benchmarkMethodsIn(source.readLines())
+            assertTrue(
+                methods.isNotEmpty(),
+                "${source.name} contains an `@Benchmark` line but no method was parsed " +
+                    "from it — the parser no longer understands this file's shape",
+            )
+            methods.forEach { method ->
+                // Through the SHIPPED tokenizer, not a copy of its rule: what has to hold
+                // is that `driveOf` accepts these names, and only `driveOf` decides that.
+                val row = JmhRow(
+                    benchmark = "civictech.bench.micro.${source.nameWithoutExtension}.$method",
+                    mode = "avgt",
+                    score = 1.0,
+                    scoreError = 0.001,
+                    unit = "ms/op",
+                    params = emptyMap(),
+                )
+                val drive = runCatching { ThroughputReport.driveOf(row) }.getOrNull()
+                if (drive == null) offenders += "${source.name}:$method"
+                else checked["${source.name}:$method"] = drive
+            }
+        }
+
+        assertEquals(
+            emptyList<String>(),
+            offenders,
+            "these @Benchmark methods do not name exactly one drive, so " +
+                "ThroughputReport.driveOf refuses their rows [BEN1-26]/[BEN1-27]. Put " +
+                "`sim` or `real` in the method name — do not state the drive at the " +
+                "render site instead, which is the substitution those requirements exist " +
+                "to prevent",
+        )
+
+        // Again: real work, and the drive each name resolves to is the one intended.
+        assertEquals(Drive.REAL, checked["BoundedReadBenchmark.kt:realDirect"], "$checked")
+        assertEquals(
+            Drive.REAL,
+            checked["BoundedReadBenchmark.kt:realHostedSnapshotOf"],
+            "$checked",
+        )
+        assertEquals(Drive.REAL, checked["CellFootprintBenchmark.kt:realSnapshot"], "$checked")
+        assertEquals(Drive.SIM, checked["FanOutScalingBenchmark.kt:sim"], "$checked")
+        assertEquals(Drive.REAL, checked["OperatorThroughputBenchmark.kt:real"], "$checked")
+    }
+
+    /**
+     * The exemption above is not a free pass — it is bounded by a structural fact, and
+     * this is the test that keeps it bounded.
+     *
+     * [NON_MEASURING_SOURCES] holds benchmarks that are not measurements: today only
+     * `SmokeBenchmark`, the permanent `@Benchmark`-discovery sentinel `[BEN1-06]`, whose
+     * own KDoc says it "is not a measurement and is not meant to become one". Exempting it
+     * is safe for one checkable reason: it declares no `@Param`, so
+     * [RowLabel.forBenchmark] has nothing to register and REFUSES its rows outright —
+     * `renderRun` therefore cannot produce a findings entry from it at all, and a missing
+     * banner or an unnamed drive can only ever cost a refusal, never a wrong number.
+     *
+     * The moment that stops being true — a `@Param` added, or the class registered in
+     * [RowLabel.REGISTERED] — this test fails and the exemption has to be earned again by
+     * adding the hook and naming the drive.
+     */
+    @Test
+    fun `each exempt benchmark is structurally unrenderable, which is what earns the exemption`() {
+        val sources = jmhBenchmarkSources()
+        val exempt = sources.filter { it.name in NON_MEASURING_SOURCES }
+        assertEquals(
+            NON_MEASURING_SOURCES,
+            exempt.map { it.name }.toSet(),
+            "an exempt source is named that no longer exists under bench/src/jmh/kotlin",
+        )
+        exempt.forEach { source ->
+            assertEquals(
+                emptySet<String>(),
+                paramsDeclaredIn(source),
+                "${source.name} is exempt from the banner and drive rules because it " +
+                    "declares no @Param and so cannot be rendered; it now declares one",
+            )
+            assertFalse(
+                RowLabel.REGISTERED.containsKey(source.nameWithoutExtension),
+                "${source.name} is exempt from the banner and drive rules because " +
+                    "RowLabel.REGISTERED refuses it; it is now registered",
+            )
+        }
+    }
+
+    /**
+     * The two scans above, run against synthetic sources whose answers are known.
+     *
+     * Without this, a parser that silently stopped recognising `@Setup(Level.Trial)` or
+     * `@Benchmark` would make both pins vacuous while staying green — the failure mode
+     * they exist to prevent, one level up. So each scan is exercised on a source it must
+     * ACCEPT and a source it must REJECT.
+     */
+    @Test
+    fun `the source scans discriminate, on inputs whose answers are known`() {
+        val withHook = """
+            |@State(Scope.Thread)
+            |open class Announcing {
+            |    @Setup(Level.Trial)
+            |    fun announceHost() {
+            |        println()
+            |        HostFacts.captureCurrent().bannerLines().forEach(::println)
+            |    }
+            |}
+        """.trimMargin().lines()
+        val withoutHook = """
+            |@State(Scope.Thread)
+            |open class Silent {
+            |    @Setup(Level.Trial)
+            |    fun populate() {
+            |        cell = build()
+            |    }
+            |}
+        """.trimMargin().lines()
+        val inherited = """
+            |@State(Scope.Thread)
+            |open class Base(private val drive: Drive) {
+            |    @Setup(Level.Trial)
+            |    fun announceHost() {
+            |        HostFacts.captureCurrent().bannerLines().forEach(::println)
+            |    }
+            |}
+            |
+            |@State(Scope.Thread)
+            |open class Leaf : Base(Drive.SIM)
+        """.trimMargin().lines()
+
+        fun announces(lines: List<String>, name: String): Boolean {
+            val classes = stateClassesIn(lines)
+            val cls = classes.single { it.name == name }
+            return announcesHost(cls, classes)
+        }
+
+        assertTrue(announces(withHook, "Announcing"))
+        assertFalse(announces(withoutHook, "Silent"))
+        // A hook the subclass inherits counts — FanOutScalingBenchmark's SimState/RealState
+        // have empty bodies and get theirs from RigState.
+        assertTrue(announces(inherited, "Leaf"))
+        // ...and a supertype's ctor parameter is not mistaken for a supertype: `Base` has
+        // no supertype at all, despite the `:` in `(private val drive: Drive)`.
+        assertEquals(emptyList<String>(), stateClassesIn(inherited).single { it.name == "Base" }.supertypes)
+
+        // The @Benchmark method scan: a real declaration, and a KDoc mention that must not
+        // count (a doc line trims to `*` first — the same reasoning paramsDeclaredIn uses).
+        val methods = """
+            |/**
+            | * @Benchmark
+            | * fun documented(state: S)
+            | */
+            |@Benchmark
+            |fun realThing(state: S, blackhole: Blackhole) {
+            |}
+        """.trimMargin().lines()
+        assertEquals(listOf("realThing"), benchmarkMethodsIn(methods))
+
+        // And the required-state scan resolves a @Benchmark's parameter type, plus a
+        // @State class that declares the @Benchmark itself (SmokeBenchmark's shape).
+        val reachable = """
+            |@State(Scope.Thread)
+            |open class Used {
+            |}
+            |
+            |@State(Scope.Thread)
+            |open class Unused {
+            |}
+            |
+            |@Benchmark
+            |fun realThing(state: Used, blackhole: Blackhole) {
+            |}
+        """.trimMargin().lines()
+        assertEquals(setOf("Used"), requiredStateNames(reachable, stateClassesIn(reachable)))
+        val selfHosting = """
+            |@State(Scope.Benchmark)
+            |open class Sentinel {
+            |    @Benchmark
+            |    fun baseline(blackhole: Blackhole) {
+            |    }
+            |}
+        """.trimMargin().lines()
+        assertEquals(
+            setOf("Sentinel"),
+            requiredStateNames(selfHosting, stateClassesIn(selfHosting)),
+        )
+    }
+
+    /**
+     * A `@State`-annotated class as the source scans see it: its name, the supertypes its
+     * header names, and the lines of its declaration.
+     */
+    private data class StateClass(
+        val name: String,
+        val supertypes: List<String>,
+        val lines: List<String>,
+    )
+
+    /**
+     * The `@State` classes a JMH benchmark source declares.
+     *
+     * Deliberately crude, in the same spirit as [paramsDeclaredIn] and for the same
+     * reason — the `jmh` source set is not on this module's test classpath, so there is
+     * nothing to reflect over and the sources have to be read as text. It assumes the
+     * shape every benchmark in this module uses: `@State(...)` on its own line, the class
+     * declaration on the next, and — when the class has a body — its closing brace alone
+     * on a line at the declaration's own indentation. A class with no body (
+     * `open class SimState : RigState(Drive.SIM)`) is one line.
+     *
+     * `the source scans discriminate` exercises this on inputs whose answers are known,
+     * so a shape it stops understanding fails loudly instead of quietly agreeing.
+     */
+    private fun stateClassesIn(lines: List<String>): List<StateClass> {
+        val declaration = Regex("""^\s*(?:open\s+|abstract\s+|sealed\s+|final\s+|public\s+)*class\s+(\w+)""")
+        return lines.indices
+            .filter { lines[it].trim().startsWith("@State") }
+            .mapNotNull { at ->
+                val declAt = (at + 1..minOf(at + 3, lines.lastIndex))
+                    .firstOrNull { declaration.containsMatchIn(lines[it]) }
+                    ?: return@mapNotNull null
+                val header = lines[declAt]
+                val name = declaration.find(header)!!.groupValues[1]
+                val indent = header.takeWhile { it == ' ' }.length
+                val closing = " ".repeat(indent) + "}"
+                val end = if (header.trimEnd().endsWith("{")) {
+                    (declAt + 1..lines.lastIndex).firstOrNull { lines[it] == closing }
+                        ?: lines.lastIndex
+                } else {
+                    declAt
+                }
+                StateClass(name, supertypesOf(header), lines.subList(declAt, end + 1))
+            }
+    }
+
+    /**
+     * The supertype names a one-line class header states, or empty.
+     *
+     * The `:` that starts a supertype list is the first one at paren depth ZERO — a
+     * constructor parameter's own `: Type` sits inside the parentheses, so
+     * `open class RigState(private val drive: Drive) {` declares no supertype and a naive
+     * `substringAfter(":")` would report `Drive`.
+     */
+    private fun supertypesOf(header: String): List<String> {
+        var depth = 0
+        var colon = -1
+        for ((index, char) in header.withIndex()) {
+            when (char) {
+                '(', '<' -> depth++
+                ')', '>' -> depth--
+                ':' -> if (depth == 0) { colon = index; break }
+            }
+        }
+        if (colon < 0) return emptyList()
+        return header.substring(colon + 1)
+            .removeSuffix("{")
+            .trim()
+            .split(',')
+            .mapNotNull { Regex("""^\s*(\w+)""").find(it)?.groupValues?.get(1) }
+    }
+
+    /** Whether [state] prints the host-facts banner, itself or through a supertype. */
+    private fun announcesHost(
+        state: StateClass,
+        all: List<StateClass>,
+        seen: MutableSet<String> = mutableSetOf(),
+    ): Boolean {
+        if (!seen.add(state.name)) return false
+        val hookAt = state.lines.indices.filter { state.lines[it].trim() == "@Setup(Level.Trial)" }
+        val own = hookAt.any { at ->
+            // The hook's own body: up to the next annotated member, so a `@Setup` that
+            // populates a fixture cannot borrow a banner printed by a different member.
+            val end = (at + 1..state.lines.lastIndex)
+                .firstOrNull { state.lines[it].trim().startsWith("@") }
+                ?: state.lines.size
+            state.lines.subList(at, end)
+                .any { it.contains("HostFacts.captureCurrent().bannerLines()") }
+        }
+        if (own) return true
+        return state.supertypes.any { name ->
+            all.firstOrNull { it.name == name }?.let { announcesHost(it, all, seen) } ?: false
+        }
+    }
+
+    /** The `@Benchmark` method names a JMH benchmark source declares. */
+    private fun benchmarkMethodsIn(lines: List<String>): List<String> {
+        val signature = Regex("""\bfun\s+(\w+)\s*\(""")
+        return lines.indices
+            .filter { lines[it].trim() == "@Benchmark" }
+            .mapNotNull { at ->
+                (at + 1..minOf(at + 3, lines.lastIndex)).firstNotNullOfOrNull { ahead ->
+                    signature.find(lines[ahead])?.groupValues?.get(1)
+                }
+            }
+    }
+
+    /**
+     * The `@State` classes a `@Benchmark` method in this source can actually reach: the
+     * ones named as a `@Benchmark` parameter type, plus any that declares a `@Benchmark`
+     * itself (`SmokeBenchmark`'s shape — the state class IS the benchmark class).
+     *
+     * A `@State` class reachable from no `@Benchmark` — `FanOutScalingBenchmark`'s
+     * `RigState`, an abstract base — is not required to announce on its own account; its
+     * subclasses are, and they inherit the hook from it.
+     */
+    private fun requiredStateNames(lines: List<String>, classes: List<StateClass>): Set<String> {
+        val names = classes.map { it.name }.toSet()
+        val signature = Regex("""\bfun\s+\w+\s*\(([^)]*)\)""")
+        val parameterTypes = lines.indices
+            .filter { lines[it].trim() == "@Benchmark" }
+            .flatMap { at ->
+                (at + 1..minOf(at + 3, lines.lastIndex))
+                    .mapNotNull { signature.find(lines[it])?.groupValues?.get(1) }
+                    .flatMap { params ->
+                        params.split(',').mapNotNull {
+                            Regex(""":\s*(\w+)""").find(it)?.groupValues?.get(1)
+                        }
+                    }
+            }
+            .toSet()
+        val selfHosting = classes.filter { cls ->
+            cls.lines.any { it.trim() == "@Benchmark" }
+        }.map { it.name }
+        return (parameterTypes intersect names) + selfHosting
+    }
+
+    private companion object {
+
+        /**
+         * Benchmark sources exempt from the banner and drive rules because they are not
+         * measurements — see
+         * `each exempt benchmark is structurally unrenderable, which is what earns the
+         * exemption` for the fact that bounds the exemption and fails when it stops
+         * holding.
+         */
+        val NON_MEASURING_SOURCES: Set<String> = setOf("SmokeBenchmark.kt")
     }
 }
 
