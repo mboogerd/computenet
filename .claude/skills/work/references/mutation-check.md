@@ -120,6 +120,39 @@ marker is gone.** Removing it needs its own step and its own check — SKILL.md
 **6. Only now run the confirming test.** A green run against content you have
 not verified is restored is meaningless.
 
+## When the task is TEST-ONLY, and the mutation is out of scope
+
+The procedure above requires mutating the production code the tests constrain.
+For a **test-only** task that code is outside `metadata.files` by construction —
+the bead says so ("no production code changes; if a test exposes a production
+defect, report it, do not widen the diff") — so the reference demands an action
+the task's own scope forbids. Neither this file nor task.md named the case until
+now, and an implementer that hit it had two worse options available with no
+guidance against either: skip the proof silently (a reviewer cannot tell a
+skipped proof from an unnecessary one), or violate the claim to get it.
+computenet-pi3h's fallback does not help — that one is about the *tool* refusing
+the edit, and here the permission classifier refused even a `grep` of the
+production file and the marker write at the worktree root (computenet-9c0r).
+
+Take the first route that applies, and **say which one you took**:
+
+**1. Cite a SIBLING's mutation evidence** where one exists covering the same
+production branches. Name the bead, the mutations, and their results, and label
+it **corroborating, not self-generated**. Measured: a test-only task cited its
+sibling's review, which had mutated the identical `Session` branches its own
+tests exercise — `ID_MISMATCH` forced false, `hasSeenNonce` forced false,
+`.mirrored()` dropped, the `AUTH_REQUIRED` guard removed — all RED. Its reviewer
+independently checked the citation against the sibling's comments and confirmed
+the coverage before accepting it.
+
+**2. Otherwise, trace each test to the specific production conditional it
+asserts on**, and say that is what you did.
+
+**Neither is equivalent to a self-run mutation**, and a reader must be able to
+tell which strength of evidence it is looking at — which is the whole reason to
+name the route rather than quietly substitute one. A reviewer's job here is to
+check the substitution was adequate, not to accept it because it was offered.
+
 ## What to report
 
 The mutation you made (file and call site), the test name that went red, and

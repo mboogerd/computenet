@@ -10,6 +10,7 @@ Break one feature into tasks, then stop. Plan it, don't implement it.
 - [What a file claim must include that the bead never says](#what-a-file-claim-must-include-that-the-bead-never-says)
 - [Verify the load-bearing premises first](#verify-the-load-bearing-premises-first)
 - [Break it down](#break-it-down)
+- [What you may assert, and what a Verification section must reach](#what-you-may-assert-and-what-a-verification-section-must-reach)
 - [Dependencies](#dependencies)
 - [Finish](#finish)
 
@@ -113,12 +114,27 @@ after a red suite:
   compares claims across features (computenet-55ro). Check the **pending
   tasks** under the whole epic, not the tree:
 
+  **`bd list --parent` reaches ONE level, and the claims are two down.** Under
+  an epic with a feature layer the epic's children are FEATURES and the tasks
+  carrying file claims are GRANDCHILDREN, so a `--parent=<epic-id>` listing
+  returns *no data* rather than "no collisions" — the same depth trap that made
+  `ready-in-epic.sh` necessary (computenet-28vn), reaching the collision check
+  (computenet-rvmu). Two breakdowns of one epic ran 20 minutes apart and the
+  second had to check its four claims against the first's five; the documented
+  snippet would have seen none of them. **And `metadata.files` is a string on
+  most beads and an array on a few**, so normalise both shapes or the beads you
+  cannot parse silently report no collision. Walk the feature layer:
+
   ```bash
-  .claude/skills/work/scripts/epic-of.sh <feature-id>      # -> <epic-id>
-  bd list --parent=<epic-id> --all --json | sed -n '/^[[{]/,$p' \
-    | jq -r '(if type=="array" then . else (.issues // []) end)[]
-             | select(.status != "closed")
-             | "\(.id)\t\((.metadata // {}).files // "-")"'
+  EPIC=$(.claude/skills/work/scripts/epic-of.sh <feature-id>)
+  for parent in "$EPIC" $(bd list --parent="$EPIC" --all --json | sed -n '/^[[{]/,$p' \
+        | jq -r '(if type=="array" then . else (.issues // []) end)[].id'); do
+    bd list --parent="$parent" --all --json | sed -n '/^[[{]/,$p' \
+      | jq -r '(if type=="array" then . else (.issues // []) end)[]
+               | select(.status != "closed")
+               | "\(.id)\t\(((.metadata // {}).files // "-")
+                   | if type=="array" then join(",") else tostring end)"'
+  done
   ```
 
   An overlap that is real gets a `blocks` edge and a comment saying the file
@@ -169,7 +185,20 @@ design work now or park the question — don't pass the fork downstream.
 
 If the feature's own rules and examples don't meet
 [issue-quality.md](issue-quality.md), fix them first
-(`bd update <feature-id> --acceptance=… --design=…`). A rule with no example
+(`bd update <feature-id> --acceptance=… --design=…`).
+
+**If that `bd update` is DENIED, it does not become optional.** The permission
+classifier refused `bd update <feature-id> --set-metadata files=…` to a
+dispatched breakdown that had correctly discovered the feature's
+`metadata.files` omitted a file its own requirement forces a task to edit
+(computenet-dhwe). Nothing downstream catches that: `check-files-claim.sh`
+reads the bead's prose against its own claim and the feature's prose did not
+name the file, and 5e's feature review inherits the same wrong boundary as its
+scope. So when the write is refused, put the **exact command** in your FINAL
+MESSAGE under the literal heading **REQUIRED ORCHESTRATOR ACTION**, not only in
+a bead comment — the orchestrator reads the final message for a re-scope and
+can read past a comment. Claim the file at task level as well, so the claim
+exists somewhere while the feature's is wrong. A rule with no example
 is ambiguity you are about to multiply across every task you cut from it.
 Task criteria **partition** the feature's rules; each rule should end up owned
 by exactly one task, and none left unowned.
@@ -195,6 +224,20 @@ experiment (fresh-JVM, baseline 0.83%); the implementer spent 993s on the
 affordable one and correctly reported that 0/260 bounds the rate at 1.15% —
 which does not exclude even the unrepaired rate. The failure mode to close is
 **an affordable measurement silently standing in for an unaffordable one**.
+
+**Namespace your draft files by the bead id.** The natural name for a task
+draft is derived from the task INDEX (`t1-desc.md`, `t2-desc.md`), and two
+breakdowns of two sibling features under one epic collide on those by
+construction — measured, ~20 minutes apart in one session, alongside a
+reviewer's `mut.py`/`MUT*.log` landing in the same directory. The cost was not
+a wrong quote but a FALSE ALARM about a concurrent writer on the feature, which
+is a signal a breakdown must take seriously (this repo has had a real double
+breakdown, computenet-f434/t9d5). An agent that learns to shrug that signal off
+because of avoidable filename noise is worse off than one that never saw it
+(computenet-fjqp, the same family as computenet-84z6 by a mechanism its fix
+does not cover). Prefix with the feature or bead id — `4ru10-t1-desc.md`, not
+`t1-desc.md` — and then a file under the name you just chose means "another
+agent of my own session", not "someone is decomposing my feature".
 
 ```bash
 # Bodies quoting code: heredoc-build them first (issue-quality.md
@@ -351,6 +394,73 @@ costs nothing and is the honest record of what each will touch
 (computenet-bx4y). This is the one case where an edge follows file overlap,
 and it is legal because the edge is an output dependency in its own right:
 the second task amends what the first creates.
+
+## What you may assert, and what a Verification section must reach
+
+Three things a breakdown writes get executed literally by two later agents,
+and none of them is checked by anything today.
+
+**1. A claim that an existing test, gate or mechanism PROVES a property.**
+State what that test actually compares, or mark it `unverified:` so the
+implementer probes before building on it. Measured twice in one session
+(computenet-v005): a bead asserted `Bs16ReproducibilityTest` pins the
+byte-stability of an extraction, when that test compares two JVMs of the SAME
+build and is blind by construction to exactly the refactor at issue — the
+sentence reached both the implementer and the reviewer as established fact, and
+only an independent measurement saved it. Separately a bead prescribed a mutant
+that "ignores retractions", which is inexpressible for any derived operator
+here, costing an implementer a design dead end. **The `unverified:` convention
+already exists and demonstrably works** — two beads in that same epic used it
+on a count and on a measurable outcome, and one saved a whole task slot by
+making an unsatisfiable control cheap to discover. It just was never applied to
+claims of the form "test X proves property P" or "mutation M is expressible".
+This is the same standard SKILL.md's orchestrator-authorship section already
+imposes on the orchestrator's own causal claims.
+
+**2. Every cost or duration figure is marked MEASURED (naming the run) or
+ESTIMATED (in that word).** A bead estimated a probe at "single-digit minutes"
+per run; the implementer measured all three scales in under 4 seconds and the
+reviewer measured the whole probe at 3.02s — two orders of magnitude, inherited
+unchallenged into a sibling bead's budget. A wrong estimate misdirects effort in
+whichever direction it is wrong: this one framed trial constants as a budget
+risk they never were, and then created the reverse temptation to raise trials
+until the statistic became reportable, which the orchestrator had to forbid
+explicitly (computenet-bm7j).
+
+**3. A command you prescribe verbatim has either been RUN, or is labelled
+unverified.** A numbered procedure invites being executed literally, which is
+what makes a missing mandatory argument expensive — a prescribed
+`./gradlew :bench:test -PbenchOnly=true --tests '…' --rerun` failed in about a
+second because `-Dcivictech.bench.harnessSha=<sha>` is required and was not
+listed, in a procedure otherwise detailed to the point of naming which line of
+which file to copy from. The gap is not diligence: that breakdown had verified
+its structural premises carefully. Nothing asked it to check that its own
+instructions run.
+
+**A Verification section must be able to FAIL if the acceptance clause is
+false.** An acceptance clause of the form "every existing caller compiles
+unchanged" is a statement about the whole repository; a Verification section
+listing only the touched modules' test tasks is a statement about two modules,
+and it compiles no callers at all. Measured on a task that widened
+`Peering.Side`, a widely constructed kernel type, while prescribing only
+`:wire:test` and `:kernel:test` — neither of which compiles the demos or
+`:inspect`, where most call sites live. Its headline criterion was not checkable
+by its own commands, and was verified only because the implementer and reviewer
+each did more than the bead asked (computenet-ukft). **So: any task changing the
+signature or shape of a type constructed outside its own module names a
+repo-wide compile** — `./gradlew testClasses`, or the specific consumers'
+`compileTestKotlin` — **and requires the cache-accounting line to be reported
+with it**, because `testClasses` legitimately prints "N up-to-date" and a
+BUILD SUCCESSFUL on an up-to-date run verifies nothing. That happened twice on
+this very task ([gradle-evidence.md](gradle-evidence.md#aggregate-tasks-lie-about-their-members)).
+
+**A test-only task says which non-vacuousness route its implementer takes.**
+The bead is what declares a task test-only, and
+[mutation-check.md](mutation-check.md)'s default route — mutate the production
+code the tests constrain — is forbidden by that declaration. Name the route
+(sibling mutation evidence, or per-test tracing) when you write the task, so its
+implementer does not have to choose between violating `metadata.files` and
+quietly skipping the proof (computenet-9c0r).
 
 ## Dependencies
 
