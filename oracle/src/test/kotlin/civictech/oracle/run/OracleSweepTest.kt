@@ -173,20 +173,26 @@ class OracleSweepTest {
      * The sweep alone would pass **vacuously** on a population that happens to contain no
      * pair-shaped node — which is exactly the state the module was in before 4ru.16, and
      * exactly the state it returns to if `keyBy` is unregistered or reshaped, or a generator
-     * change steers the frontier away from `SetOf(Tuple(2))`. So the seeds whose topology
-     * holds one of the twelve ids are counted first and the count is asserted, over the
-     * *same* `(seed, config)` pairs the sweep then executes: [civictech.oracle.gen.CaseGenerator]
-     * derives its graph as `GraphGenerator(config).generate(Random(seed))`, which is exactly
-     * what [GraphGenerator.generate]`(seed)` is defined as, so the two enumerate the same
+     * change steers the frontier away from `SetOf(Tuple(2))`. So the population is counted
+     * first, over the *same* `(seed, config)` pairs the sweep then executes:
+     * [civictech.oracle.gen.CaseGenerator] derives its graph as
+     * `GraphGenerator(config).generate(Random(seed))`, which is exactly what
+     * [GraphGenerator.generate]`(seed)` is defined as, so the two enumerate the same
      * topologies rather than two similar ones.
      *
-     * [PAIR_SHAPED_MINIMUM] is a floor well under what is observed, not the observed figure:
+     * The count is asserted **twice, on the producer and the consumers separately**, because a
+     * single count over the union of the twelve is not enough: `keyBy` alone is drawn often,
+     * so its count can stay healthy while the eleven it exists to unblock disappear. See
+     * [PAIR_CONSUMERS] for the mutation that measured exactly that.
+     *
+     * [PAIR_CONSUMER_MINIMUM] is a floor well under what is observed, not the observed figure:
      * the assertion exists to catch the family *collapsing*, and pinning the exact count would
      * make this test fail on any innocuous generator retune. Observed 2026-08-20 on this
-     * config (macOS/arm64): **53 of 200** seeds carry a pair-shaped node, a superset of — and
-     * consistent with — the 23 join/groupBy-bearing seeds computenet-q21w measured on the
-     * closely related `unobservedRemoveRatio = 0.25` variant. The list is printed on every run
-     * so the margin is visible rather than inferred from a bare green tick.
+     * config (macOS/arm64): **53 of 200** seeds carry `keyBy` and **47 of 200** carry one of
+     * the eleven — a superset of, and consistent with, the 23 join/groupBy-bearing seeds
+     * computenet-q21w measured on the closely related `unobservedRemoveRatio = 0.25` variant.
+     * The seed list is printed on every run so the margin is visible rather than inferred
+     * from a bare green tick.
      *
      * ## What a failure here means
      *
@@ -203,23 +209,35 @@ class OracleSweepTest {
         val seeds = 0L until PAIR_SHAPED_SWEEP_SEEDS
 
         val generator = GraphGenerator(config)
-        val pairShapedSeeds = seeds.filter { seed ->
-            generator.generate(seed).topology.nodes.any { it.catalogId in PAIR_SHAPED_FAMILY }
-        }
+        val topologies = seeds.associateWith { generator.generate(it).topology.nodes.map { n -> n.catalogId } }
+        val keyBySeeds = topologies.filterValues { CoreOperators.Ids.KEY_BY in it }.keys
+        val consumerSeeds = topologies.filterValues { ids -> ids.any { it in PAIR_CONSUMERS } }.keys
         println(
-            "[oracle-sweep] pair-shaped: ${pairShapedSeeds.size} of $PAIR_SHAPED_SWEEP_SEEDS " +
-                "seeds carry a keyBy/join/groupBy node: $pairShapedSeeds",
+            "[oracle-sweep] pair-shaped: of $PAIR_SHAPED_SWEEP_SEEDS seeds, " +
+                "${keyBySeeds.size} carry keyBy and ${consumerSeeds.size} carry one of the " +
+                "eleven pair-consuming ids: $consumerSeeds",
         )
         withClue(
-            "No seed of this sweep draws a pair-shaped node, so executing it would assert " +
-                "nothing about keyBy, joinSet/semiJoin/antiJoin or the groupBy* family — the " +
-                "vacuity this test exists to exclude. Either `keyBy` (the SetOf(Scalar) -> " +
-                "SetOf(Tuple(2)) bootstrap computenet-4ru.16 added) is no longer registered or " +
-                "no longer has that shape, or a generator change has steered the frontier away " +
-                "from pair-shaped nodes. See PairShapeBootstrapTest for the generation-side " +
-                "measurement.",
+            "No seed of this sweep draws a node that CONSUMES a SetOf(Tuple(2)) — no " +
+                "joinSet/semiJoin/antiJoin and no groupBy* — so executing it would assert " +
+                "nothing about the eleven entries computenet-4ru.16 unblocked. That is the " +
+                "vacuity this test exists to exclude, and it is the pre-4ru.16 state of the " +
+                "module. Either `keyBy` (the SetOf(Scalar) -> SetOf(Tuple(2)) bootstrap) is no " +
+                "longer registered or no longer has that shape, or a generator change has " +
+                "steered the frontier away from pair-shaped nodes. See PairShapeBootstrapTest " +
+                "for the generation-side measurement. keyBy-bearing seeds: ${keyBySeeds.size} " +
+                "— note a healthy keyBy count alone does NOT rescue this: keyBy emitting " +
+                "while nothing consumes its output is exactly the shape mutation this " +
+                "assertion was written to catch.",
         ) {
-            pairShapedSeeds.size shouldBeGreaterThanOrEqual PAIR_SHAPED_MINIMUM
+            consumerSeeds.size shouldBeGreaterThanOrEqual PAIR_CONSUMER_MINIMUM
+        }
+        withClue(
+            "No seed draws `keyBy` itself. Nothing else in the catalog produces " +
+                "SetOf(Tuple(2)) from SetOf(Scalar), so the eleven above cannot be reached " +
+                "except through it; a zero here means the bootstrap is gone.",
+        ) {
+            keyBySeeds.size shouldBeGreaterThanOrEqual PAIR_CONSUMER_MINIMUM
         }
 
         val startedAt = System.nanoTime()
@@ -419,12 +437,17 @@ class OracleSweepTest {
 
     private companion object {
         /**
-         * The eleven entries computenet-4ru.16 unblocked, plus `keyBy` itself — the bootstrap
-         * that produces the `SetOf(Tuple(2))` the other eleven consume. A topology holding any
-         * one of them is a pair-shaped case.
+         * The eleven entries computenet-4ru.16 unblocked: everything that **consumes** a
+         * `SetOf(Tuple(2))`. `keyBy` is deliberately NOT a member — it is the *producer*, and
+         * counting it here would let a healthy keyBy count mask the eleven vanishing.
+         *
+         * That is not hypothetical. Measured by mutation (2026-08-20, macOS/arm64): retyping
+         * `keyBy`'s shape rule to `unary(SCALAR_SET, SCALAR_SET)` — registered, still drawn,
+         * but no longer producing pairs — leaves 55 of 200 seeds carrying `keyBy` and **zero**
+         * carrying any of the eleven. A guard over the union of the twelve passes that
+         * mutation green; this split is what fails it.
          */
-        val PAIR_SHAPED_FAMILY: Set<String> = setOf(
-            CoreOperators.Ids.KEY_BY,
+        val PAIR_CONSUMERS: Set<String> = setOf(
             CoreOperators.Ids.JOIN_SET,
             CoreOperators.Ids.SEMI_JOIN,
             CoreOperators.Ids.ANTI_JOIN,
@@ -440,9 +463,10 @@ class OracleSweepTest {
 
         /**
          * A deliberately loose floor on how many of [PAIR_SHAPED_SWEEP_SEEDS] must carry a
-         * pair-shaped node — the guard against a vacuous sweep, not a pin on the generator's
-         * exact draws. See the test's KDoc for the observed figure.
+         * [PAIR_CONSUMERS] node, and separately a `keyBy` node — the guard against a vacuous
+         * sweep, not a pin on the generator's exact draws. See the test's KDoc for the
+         * observed figures.
          */
-        const val PAIR_SHAPED_MINIMUM: Int = 10
+        const val PAIR_CONSUMER_MINIMUM: Int = 10
     }
 }
