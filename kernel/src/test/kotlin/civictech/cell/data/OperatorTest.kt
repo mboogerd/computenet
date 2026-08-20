@@ -22,6 +22,21 @@ import civictech.cell.data.op.CountCell
 import civictech.cell.data.op.mapSet
 import civictech.cell.data.op.IntersectSetCell
 import civictech.cell.data.op.JoinCell
+import civictech.cell.oracle.forEachBatchFoldSeed
+import civictech.oracle.model.Membership
+import civictech.oracle.model.ModelState
+import civictech.oracle.model.Script
+import civictech.oracle.model.ScriptEvent
+import civictech.oracle.model.SourceId
+import civictech.oracle.model.SourceScript
+import civictech.oracle.model.WriterId
+import civictech.oracle.run.CaseGraph
+import civictech.oracle.run.DifferentialRunner
+import civictech.oracle.run.Reference
+import civictech.oracle.run.ScalarTerminalFold
+import civictech.oracle.run.SetTerminalFold
+import civictech.oracle.run.asScriptSource
+import civictech.testkit.SimWorld
 
 class OperatorTest {
 
@@ -135,35 +150,85 @@ class OperatorTest {
 
     @Test
     fun `pipeline - incremental result equals batch recompute on every seed`() {
-        for (seed in 0L until 100L) {
-            val rnd = Random(seed)
+        // [ORA1-DIFF-11] migration (computenet-4ru.12.4): the same two-writer union-filter-count
+        // pipeline and the same batch-fold property, now run through DifferentialRunner.check
+        // instead of a hand-rolled held-set recompute. Both the filter-set terminal and the
+        // count scalar terminal survive as separate CaseGraph terminals, matching the original's
+        // two assertions.
+        val sourceA = SourceId("w0")
+        val sourceB = SourceId("w1")
+        val writerA = WriterId("w0")
+        val writerB = WriterId("w1")
+        val predicate: (String) -> Boolean = { it.hashCode() % 2 == 0 }
+
+        fun buildGraph(world: SimWorld): CaseGraph {
             val writers = listOf(SetCell<String>(), SetCell<String>())
             val union = UnionSetCell<String>()
-            val filter = FilterCell<String> { it.hashCode() % 2 == 0 }
+            val filter = FilterCell<String>(predicate = predicate)
             val count = CountCell<String>()
+            val filteredFold = SetTerminalFold<String>()
+            val countFold = ScalarTerminalFold()
 
-            writers.forEach { it.outlet.linkTo(union.inlet as LinkFrom<Propagate<SetDelta<String>>>) }
-            union.outlet.linkTo(filter.inlet as LinkFrom<Propagate<SetDelta<String>>>)
-            filter.outlet.linkTo(count.inlet as LinkFrom<Propagate<SetDelta<String>>>)
-            val filtered = collect(filter.outlet)
-            val counts = collect(count.outlet)
+            val mgmt = world.host.managementInlet.call
+            writers.forEach { mgmt.spawn(it) }
+            mgmt.spawn(union)
+            mgmt.spawn(filter)
+            mgmt.spawn(count)
+            mgmt.spawn(filteredFold)
+            mgmt.spawn(countFold)
+            writers.forEach { mgmt.connect(it.ref, "outlet", union.ref, "inlet") }
+            mgmt.connect(union.ref, "outlet", filter.ref, "inlet")
+            mgmt.connect(filter.ref, "outlet", count.ref, "inlet")
+            mgmt.connect(filter.ref, "outlet", filteredFold.ref, "inlet")
+            mgmt.connect(count.ref, "outlet", countFold.ref, "inlet")
 
+            return CaseGraph(
+                terminals = mapOf("filtered" to filteredFold, "count" to countFold),
+                sources = mapOf(
+                    sourceA to writers[0].inlet.call.asScriptSource(),
+                    sourceB to writers[1].inlet.call.asScriptSource(),
+                ),
+            )
+        }
+
+        forEachBatchFoldSeed { seed ->
+            val rnd = Random(seed)
             val domain = ('a'..'f').map { it.toString() }
-            val held = writers.map { mutableSetOf<String>() }
+            val writerIds = listOf(writerA, writerB)
+            val held = listOf(mutableSetOf<String>(), mutableSetOf<String>())
+            val events = listOf(mutableListOf<ScriptEvent>(), mutableListOf<ScriptEvent>())
             repeat(60) {
-                val w = rnd.nextInt(writers.size)
+                val w = rnd.nextInt(2)
                 val element = domain[rnd.nextInt(domain.size)]
                 if (rnd.nextInt(10) < 6 || element !in held[w]) {
-                    writers[w].inlet.call.add(element); held[w] += element
+                    events[w] += ScriptEvent.Add(writerIds[w], element)
+                    held[w] += element
                 } else {
-                    writers[w].inlet.call.remove(element); held[w] -= element
+                    events[w] += ScriptEvent.Remove(writerIds[w], element)
+                    held[w] -= element
                 }
             }
+            val script = Script(listOf(SourceScript(sourceA, events[0]), SourceScript(sourceB, events[1])))
 
-            // batch recompute over the writers' final states
-            val batch = held.flatten().toSet().filter { it.hashCode() % 2 == 0 }.toSet()
-            assertEquals(batch, tagFold(filtered), "filter diverged from batch on seed $seed")
-            assertEquals(batch.size.toLong(), counts.sumOf { it.amount }, "count diverged from batch on seed $seed")
+            // batch recompute over the writers' final observed-remove membership
+            val reference = Reference { s ->
+                val batch = (Membership.live(s.slice(sourceA)) + Membership.live(s.slice(sourceB)))
+                    .map { it as String }
+                    .filter(predicate)
+                    .toSet()
+                mapOf(
+                    "filtered" to ModelState.SetState(batch),
+                    "count" to ModelState.ScalarState(batch.size.toLong()),
+                )
+            }
+
+            DifferentialRunner.check(
+                seed = seed,
+                caseMarker = "pipeline: writer0,writer1 -> union -> filter(even hash) -> {filtered, count}",
+                script = script,
+                reference = reference,
+                buildGraph = ::buildGraph,
+            )
         }
     }
 
@@ -220,31 +285,72 @@ class OperatorTest {
 
     @Test
     fun `flatMap pipeline - incremental result equals batch recompute on every seed`() {
-        for (seed in 0L until 100L) {
-            val rnd = Random(seed)
+        // [ORA1-DIFF-11] migration (computenet-4ru.12.4): same two-writer union-flatMap
+        // pipeline and the same batch-fold property, now a DifferentialRunner.check caller.
+        val sourceA = SourceId("w0")
+        val sourceB = SourceId("w1")
+        val writerA = WriterId("w0")
+        val writerB = WriterId("w1")
+        val expand = { s: String -> listOf(s, s.first().toString()) } // expansion + heavy collision
+
+        fun buildGraph(world: SimWorld): CaseGraph {
             val writers = listOf(SetCell<String>(), SetCell<String>())
             val union = UnionSetCell<String>()
-            val expand = { s: String -> listOf(s, s.first().toString()) } // expansion + heavy collision
             val flat = FlatMapSetCell(f = expand)
+            val mappedFold = SetTerminalFold<String>()
 
-            writers.forEach { it.outlet.linkTo(union.inlet as LinkFrom<Propagate<SetDelta<String>>>) }
-            union.outlet.linkTo(flat.inlet as LinkFrom<Propagate<SetDelta<String>>>)
-            val mapped = collect(flat.outlet)
+            val mgmt = world.host.managementInlet.call
+            writers.forEach { mgmt.spawn(it) }
+            mgmt.spawn(union)
+            mgmt.spawn(flat)
+            mgmt.spawn(mappedFold)
+            writers.forEach { mgmt.connect(it.ref, "outlet", union.ref, "inlet") }
+            mgmt.connect(union.ref, "outlet", flat.ref, "inlet")
+            mgmt.connect(flat.ref, "outlet", mappedFold.ref, "inlet")
 
+            return CaseGraph(
+                terminals = mapOf("mapped" to mappedFold),
+                sources = mapOf(
+                    sourceA to writers[0].inlet.call.asScriptSource(),
+                    sourceB to writers[1].inlet.call.asScriptSource(),
+                ),
+            )
+        }
+
+        forEachBatchFoldSeed { seed ->
+            val rnd = Random(seed)
             val domain = listOf("ax", "ay", "bx", "by", "cx", "cy")
-            val held = writers.map { mutableSetOf<String>() }
+            val writerIds = listOf(writerA, writerB)
+            val held = listOf(mutableSetOf<String>(), mutableSetOf<String>())
+            val events = listOf(mutableListOf<ScriptEvent>(), mutableListOf<ScriptEvent>())
             repeat(60) {
-                val w = rnd.nextInt(writers.size)
+                val w = rnd.nextInt(2)
                 val element = domain[rnd.nextInt(domain.size)]
                 if (rnd.nextInt(10) < 6 || element !in held[w]) {
-                    writers[w].inlet.call.add(element); held[w] += element
+                    events[w] += ScriptEvent.Add(writerIds[w], element)
+                    held[w] += element
                 } else {
-                    writers[w].inlet.call.remove(element); held[w] -= element
+                    events[w] += ScriptEvent.Remove(writerIds[w], element)
+                    held[w] -= element
                 }
             }
+            val script = Script(listOf(SourceScript(sourceA, events[0]), SourceScript(sourceB, events[1])))
 
-            val batch = held.flatten().toSet().flatMap(expand).toSet()
-            assertEquals(batch, tagFold(mapped), "flatMap diverged from batch on seed $seed")
+            val reference = Reference { s ->
+                val batch = (Membership.live(s.slice(sourceA)) + Membership.live(s.slice(sourceB)))
+                    .map { it as String }
+                    .flatMap(expand)
+                    .toSet()
+                mapOf("mapped" to ModelState.SetState(batch))
+            }
+
+            DifferentialRunner.check(
+                seed = seed,
+                caseMarker = "flatMap pipeline: writer0,writer1 -> union -> flatMap(expand) -> mapped",
+                script = script,
+                reference = reference,
+                buildGraph = ::buildGraph,
+            )
         }
     }
 }
