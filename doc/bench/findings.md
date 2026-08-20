@@ -2712,8 +2712,14 @@ verdict, which rests on BS-9's occupancy pairing, not the degree curve, and
 ./gradlew :bench:test -PbenchOnly=true --rerun \
   --tests 'civictech.bench.micro.FanOutFixedStateRenderTest' \
   -Dcivictech.bench.jmhResults=/abs/path/fanout-fixed-state.csv \
-  -Dcivictech.bench.harnessSha=eb4a00fe
+  -Dcivictech.bench.harnessSha=7eda317c
 ```
+
+(`7eda317c`, not the `eb4a00fe` the JMH sweep itself was measured against: the render
+driver's `verdictOf` was tightened to require error-bar resolvability, not raw point
+estimates, between the sweep running and this entry being rendered — see that commit's
+own message. The JMH results file is unaffected; only how this entry's `reading=` line
+was computed changed.)
 
 The whole ten-combination sweep (2 methods x 5 degrees x 3 forks x (5 warmup + 10
 measurement) single shots) ran in **47 s** wall clock — the 10,000-element re-seed per
