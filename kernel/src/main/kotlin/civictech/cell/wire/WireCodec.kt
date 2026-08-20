@@ -259,6 +259,26 @@ object WireCodec {
         ContractRegistry.descriptor(RegistryAnnounce::class.java)?.contractId
     }
 
+    /**
+     * Whether [frame] is a [RegistryAnnounce] call — the one contract [encode]
+     * signs and therefore the only one the ingress admission gate
+     * ([AnnouncementAdmission]) judges ([DSC1-ANN-01]). Recognized by the same
+     * [announceContractId] the emit side uses, so the two halves cannot drift
+     * into disagreeing about what an announcement is.
+     *
+     * Fails **closed on the receive side too**: if the generated descriptor is
+     * missing, [announceContractId] is null and nothing is recognized as an
+     * announcement — which on this side means nothing is *verified*, so a side
+     * that configured verification would silently stop verifying. That is the
+     * same failure the emit side has (nothing gets signed), it is not
+     * reachable in a build whose KSP output exists, and `ManifestDriftTest`
+     * is what would notice a missing descriptor.
+     */
+    internal fun isAnnouncement(frame: WireFrame): Boolean {
+        val id = announceContractId ?: return false
+        return frame.type != HostedPortInvocation.Type.PORT_PROTOCOL && frame.contractId == id
+    }
+
     /** @throws IllegalStateException when the invocation's contract has no `@Contract` ids (not wire-capable). */
     fun encode(invocation: HostedPortInvocation): ByteArray = encode(invocation, signer = null)
 

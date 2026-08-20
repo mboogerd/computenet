@@ -465,6 +465,21 @@ object Peering {
          * is checked rather than merely intended.
          */
         val announcementSigning: AnnouncementSigningConfig? = null,
+        /**
+         * How this side *verifies* the announcements it receives, or null when
+         * it verifies none ([DSC1-ANN-05..13], epic `computenet-ssa.4`). The
+         * receive-side mirror of [announcementSigning], and injected for the
+         * identical reason: the kernel holds no cryptographic provider and no
+         * canonical encoder ([DSC1-WIRE-04]).
+         *
+         * **Verification is active exactly when this is present**, independent
+         * of [auth] — the same rule [announcementSigning] settles on, argued in
+         * full on [AnnouncementVerification]. A side that does not mention it
+         * behaves exactly as it did before this feature, which is what leaves
+         * every landed `Side` (kernel, `:wire`, every demo) on its current path
+         * ([DSC1-WIRE-06]).
+         */
+        val announcementVerification: AnnouncementVerification? = null,
     ) {
         /**
          * This side's signer, and therefore this side's announcement counter —
@@ -473,6 +488,17 @@ object Peering {
          */
         val announcementSigner: AnnouncementSigner? =
             credentials?.let { keys -> announcementSigning?.let { AnnouncementSigner(keys, it) } }
+
+        /**
+         * This side's ingress admission gate, and therefore this side's replay
+         * high-water marks — one per `Side`, for the reason symmetric to
+         * [announcementSigner]'s: the ledger must survive the *ingress*
+         * replacement a reconnect performs, or a captured announcement becomes
+         * replayable by first provoking a reconnect. A `val`, computed once, is
+         * what makes that true; see [AnnouncementAdmission].
+         */
+        val announcementAdmission: AnnouncementAdmission? =
+            announcementVerification?.let { AnnouncementAdmission(it) }
 
         init {
             // A side that demands proof from its peer must be able to answer the
@@ -767,6 +793,11 @@ object Peering {
             peer = fromPeer,
             peerAuth = fromPeerAuth,
             admit = side::admits,
+            // Borrowed from the Side, so every ingress this side ever hosts —
+            // including the fresh one a reconnect mints — shares one replay
+            // ledger ([DSC1-ANN-13]). Null on a side that verifies nothing,
+            // which is the pre-feature path.
+            announcementAdmission = side.announcementAdmission,
         )
         onSpawn(ingress)
         side.bridgeHost.managementInlet.call.spawn(ingress)
