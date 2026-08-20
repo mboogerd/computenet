@@ -17,16 +17,36 @@ import java.util.jar.JarFile
  * This works while the catalog is still nearly empty because it diffs the *kernel package's
  * actual classes* against the inventory, not the catalog's registrations against it.
  *
- * Caveat (see operator-inventory.txt's header for the full caution): diffing the classpath
- * rather than hand-authored source means some reddened diffs — a Kotlin file-facade `*Kt`
- * class appearing/disappearing, or a generated `*Base`/`*Ports`/`*Api` name changing — carry no
- * operator-vocabulary information on their own; verify an operator was actually added, removed,
- * or renamed before updating [OperatorCatalog] or the reference model.
+ * **Kotlin file-facade filtering (computenet-4ru.15).** Diffing the classpath rather than
+ * hand-authored declarations originally meant some reddened diffs carried no operator-vocabulary
+ * information at all: Kotlin emits a compiler-generated file-facade class `<File>Kt` for any
+ * source file with top-level declarations, so adding or removing the *only* top-level
+ * declaration in an existing file flipped its facade in or out of the classpath with nothing
+ * about the operator vocabulary having changed (measured: an unrelated top-level private helper
+ * added to `CountCell.kt` alone reddened this gate as `Added: [CountCellKt]`,
+ * computenet-4ru.3.2 review). [isKotlinFileFacade] now filters those classes out of the diffed
+ * set entirely, so that case no longer reddens the gate — see its KDoc for why the filter is
+ * sound rather than merely quieter (it must still catch a genuinely new operator class, and
+ * still catch a rename of a hand-written class whose generated `*Base`/`*Ports`/`*Api` follows
+ * it, both of which real operator-vocabulary churn and neither of which this filter touches).
  *
  * The jar branch of [actualTopLevelClassNames] (below) is exercised by this task's own
  * `:oracle:test` run only if Gradle resolves `:kernel`'s project dependency as a jar rather than
  * a directory classpath entry; on this build it resolves as a directory, so the jar branch is
  * implemented per the bead's instruction but not exercised by this test suite.
+ *
+ * **Bytecode-metadata facade detection (computenet-4ru.19).** [isKotlinFileFacade] originally
+ * decided facade-ness from the **source tree** — a `<Bare>Kt` classpath name was treated as a
+ * facade iff a same-named `<Bare>.kt` source file existed. That had two edges, both measured by
+ * computenet-4ru.15's own reviewer and, until this item, accepted as residual: a `<Bare>.kt` file
+ * with no top-level declaration emits no facade, so a hand-written class literally named
+ * `<Bare>Kt` beside it was silently dropped from the diffed set (a false negative — a genuinely
+ * new operator invisible to the gate); and `@file:JvmName(...)` renames a facade off its file's
+ * base name, so that facade's churn still reddened the gate (a residual false positive of the
+ * original kind). [isKotlinFileFacade] now asks the **class file itself**: the Kotlin compiler
+ * stamps every class it emits with a runtime-retained `kotlin.Metadata` annotation whose `kind`
+ * distinguishes a file facade (`FILE_FACADE_KIND`, 2) from an ordinary class (`CLASS_KIND`, 1) —
+ * see its KDoc for why that is exact rather than merely quieter.
  */
 class OperatorInventoryTest {
 
@@ -84,6 +104,47 @@ class OperatorInventoryTest {
         return names
     }
 
+    /** `kotlin.Metadata.kind` for a Kotlin file facade — see [kotlin.Metadata]'s own KDoc. */
+    private val fileFacadeMetadataKind = 2
+
+    /**
+     * True iff [className] is a Kotlin compiler-generated file-facade class rather than a
+     * hand-written or KSP-generated one, determined by loading the class and reading its own
+     * `kotlin.Metadata` annotation — positive evidence stamped by the compiler on the class file
+     * itself, rather than an inference from the source tree.
+     *
+     * **Why this is exact, not merely quieter (computenet-4ru.19, replacing computenet-4ru.15's
+     * source-existence heuristic).** `kotlin.Metadata` carries `RUNTIME` retention (it is how
+     * the Kotlin reflection and compiler tooling read a class's shape at all), and every class
+     * the Kotlin compiler emits — file facade, regular class, KSP-generated class alike — carries
+     * one. Its `kind` property distinguishes `FILE_FACADE_KIND` (2, what a file's top-level
+     * declarations compile to) from `CLASS_KIND` (1, an ordinary named class) unconditionally:
+     * unlike the old filter, this does not depend on the class's name matching any source file,
+     * so it is immune to both edges the old heuristic missed:
+     * 1. A `<Bare>.kt` carrying *no* top-level declaration emits no facade at all, so a
+     *    hand-written class literally named `<Bare>Kt` beside it has `CLASS_KIND`, not
+     *    `FILE_FACADE_KIND` — it is correctly left in the diffed set and reddens the gate as any
+     *    new operator must (the old filter, keying on the source file's mere existence, dropped
+     *    it silently instead).
+     * 2. `@file:JvmName("…")` renames a facade off its file's base name, but the renamed class
+     *    still carries `FILE_FACADE_KIND` regardless of what it is named — it is correctly
+     *    filtered out (the old filter, keying on a name match against the source tree, missed the
+     *    rename and left the facade reddening the gate as a false positive).
+     *
+     * A hand-written class's own generated `*Base`/`*Ports`/`*Api` companions never carry
+     * `FILE_FACADE_KIND` either (they are ordinary KSP-emitted classes), so a rename of a
+     * hand-written class still reddens the gate on all of its renamed companions, as it must.
+     *
+     * A class outside `civictech.cell.data.op`'s Kotlin-compiled surface (there is none on this
+     * classpath, but defensively) has no `kotlin.Metadata` at all and is treated as not a facade.
+     */
+    private fun isKotlinFileFacade(className: String): Boolean {
+        val classLoader = OperatorInventoryTest::class.java.classLoader
+        val clazz = Class.forName("civictech.cell.data.op.$className", false, classLoader)
+        val metadata = clazz.getAnnotation(Metadata::class.java) ?: return false
+        return metadata.kind == fileFacadeMetadataKind
+    }
+
     private fun declaredInventory(): Set<String> {
         val stream = OperatorInventoryTest::class.java.classLoader
             .getResourceAsStream("operator-inventory.txt")
@@ -105,7 +166,7 @@ class OperatorInventoryTest {
 
     @Test
     fun `civictech-cell-data-op's top-level classes match the checked-in inventory`() {
-        val actual = actualTopLevelClassNames()
+        val actual = actualTopLevelClassNames().filterNot(::isKotlinFileFacade).toSet()
         val declared = declaredInventory()
 
         val added = (actual - declared).sorted()
@@ -114,9 +175,13 @@ class OperatorInventoryTest {
         withClue(
             "civictech.cell.data.op has drifted from " +
                 "oracle/src/test/resources/operator-inventory.txt (epic computenet-4ru §9 " +
-                "risk 2). Added: $added. Removed: $removed. Update the inventory AND " +
-                "OperatorCatalog's registration AND the reference model for the changed " +
-                "operator(s) in the same change, per the inventory file's own header.",
+                "risk 2). Added: $added. Removed: $removed. (Kotlin file-facade classes are " +
+                "filtered out by isKotlinFileFacade using each class's own kotlin.Metadata " +
+                "kind, so every name here is real operator-vocabulary churn — see that " +
+                "function's KDoc.) " +
+                "Update the inventory AND OperatorCatalog's " +
+                "registration AND the reference model for the changed operator(s) in the same " +
+                "change, per the inventory file's own header.",
         ) {
             (added + removed).shouldBeEmpty()
         }

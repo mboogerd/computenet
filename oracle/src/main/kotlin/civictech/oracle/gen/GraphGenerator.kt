@@ -138,6 +138,71 @@ class GraphGenerator(private val config: GeneratorConfig) {
         return builder.build(sourceEntries)
     }
 
+    companion object {
+
+        /**
+         * Lowers a [CaseTopology] to kernel steps: one [SpawnStep] per node carrying the
+         * catalog's own `Entry.kernel` factory, then one [ConnectStep] per edge using the port
+         * names the catalog declares. Spawns precede connects so `GraphSpec.applyTo` has every
+         * endpoint resolved when it reaches a link.
+         *
+         * ## Why this is public rather than the generator's private business
+         *
+         * `GraphSpec` carries factory *lambdas*, which are opaque — nothing can read a spec back
+         * into the topology it came from, so a component that wants to change a topology and get
+         * the matching spec has to lower it again. The shrinker
+         * (`civictech.oracle.shrink.Shrinker`, `[ORA1-SHRINK-01]`) is exactly that component: it
+         * reduces at [CaseTopology] + [CaseScript] level and re-lowers every candidate. This
+         * function is that seam, and it is the same code the generated path runs — a candidate
+         * spec is therefore lowered by the identical rule a generated one is, not by a second
+         * implementation that could drift.
+         *
+         * Determinism is a property of the *input*: equal [CaseTopology]s (node order included)
+         * lower to equal [GraphSpec]s, because every iteration here runs over
+         * [CaseTopology.nodes] in list order and every value drawn comes from the catalog entry
+         * the node's id resolves to. Nothing here reads [Random], a clock or a hash.
+         *
+         * @throws IllegalStateException naming the catalog id, if a node's [TopologyNode.catalogId]
+         *   is not registered, or naming the handle, if a node's [TopologyNode.inputs] name a
+         *   handle the topology does not declare. Loud rather than silent: a spec lowered from a
+         *   topology with a dangling edge would fail later, at apply time, with the cause several
+         *   steps removed.
+         */
+        fun lower(topology: CaseTopology): GraphSpec {
+            val entries = topology.nodes.associate { node ->
+                node.handle to (
+                    OperatorCatalog.entry(node.catalogId)
+                        ?: error(
+                            "Topology node '${node.handle}' names catalog id '${node.catalogId}', " +
+                                "which is not registered in OperatorCatalog; registered ids are " +
+                                "${OperatorCatalog.ids().sorted()}.",
+                        )
+                    )
+            }
+            val spawns: List<GraphStep> = topology.nodes.map { node ->
+                SpawnStep(node.handle, entries.getValue(node.handle).kernel)
+            }
+            val connects: List<GraphStep> = topology.nodes.flatMap { node ->
+                val entry = entries.getValue(node.handle)
+                node.inputs.mapIndexed { port, from ->
+                    val upstream = entries[from]
+                        ?: error(
+                            "Topology node '${node.handle}' takes input '$from' on port $port, " +
+                                "which the topology does not declare; it declares " +
+                                "${topology.nodes.map { it.handle }}.",
+                        )
+                    ConnectStep(
+                        from = from,
+                        outlet = upstream.shape.outputPort,
+                        to = node.handle,
+                        inlet = entry.shape.inputPorts[port],
+                    )
+                }
+            }
+            return GraphSpec(spawns + connects)
+        }
+    }
+
     /** One node of the graph under construction. */
     private class Node(
         val handle: String,
@@ -182,14 +247,15 @@ class GraphGenerator(private val config: GeneratorConfig) {
 
             val terminals = chooseTerminals(open)
             val allTerminals = if (config.lateJoiner) terminals + chooseLateTerminal() else terminals
-            return GeneratedGraph(
-                topology = CaseTopology(
-                    nodes = nodes.values.map { TopologyNode(it.handle, it.entry.id, it.inputs, it.source) },
-                    terminals = allTerminals,
-                    placement = choosePlacement(),
-                ),
-                spec = lower(),
+            // Built before the spec, and the placement draw stays inside the constructor call, so
+            // the rng is consumed in exactly the order it was before `lower` moved out of this
+            // class: choosePlacement() then a lowering that draws nothing at all.
+            val topology = CaseTopology(
+                nodes = nodes.values.map { TopologyNode(it.handle, it.entry.id, it.inputs, it.source) },
+                terminals = allTerminals,
+                placement = choosePlacement(),
             )
+            return GeneratedGraph(topology = topology, spec = GraphGenerator.lower(topology))
         }
 
         /**
@@ -396,27 +462,6 @@ class GraphGenerator(private val config: GeneratorConfig) {
 
             val extras = extraPool.shuffled(rng).take(config.terminalCount - open.size)
             return (open + extras).mapIndexed { i, handle -> TerminalSpec("terminal-$i", handle) }
-        }
-
-        /**
-         * Lowers the topology to kernel steps: one [SpawnStep] per node carrying the catalog's
-         * own `Entry.kernel` factory, then one [ConnectStep] per edge using the port names the
-         * catalog declares. Spawns precede connects so `GraphSpec.applyTo` has every endpoint
-         * resolved when it reaches a link.
-         */
-        private fun lower(): GraphSpec {
-            val spawns: List<GraphStep> = nodes.values.map { SpawnStep(it.handle, it.entry.kernel) }
-            val connects: List<GraphStep> = nodes.values.flatMap { node ->
-                node.inputs.mapIndexed { port, from ->
-                    ConnectStep(
-                        from = from,
-                        outlet = nodes.getValue(from).entry.shape.outputPort,
-                        to = node.handle,
-                        inlet = node.entry.shape.inputPorts[port],
-                    )
-                }
-            }
-            return GraphSpec(spawns + connects)
         }
 
         private fun add(node: Node) {
