@@ -2267,8 +2267,24 @@ none were present — exactly the "no VM options" case this entry's own procedur
 describes — fell back to `runtime.maxMemory()`, formatted as
 `"maxHeapBytes=$maxMemory"`. The three JMH forks that produced the scores above
 had exited long before anything rendered this entry; the 4 GiB figure is
-`Runtime.maxMemory()` of whatever JVM ran the rendering step (the `:bench:test`
-Gradle JVM, on this host), not a heap setting any measuring fork received.
+`Runtime.maxMemory()` of whatever JVM ran the rendering step, not a heap setting
+any measuring fork received.
+
+Which JVM that was is **not** the `:bench:test` Gradle JVM, and the heap field
+itself is what rules that out. `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`
+sets `maxHeapSize = "2g"` on every `Test` task, so a render inside `:bench:test`
+is launched with an explicit `-Xmx2g` and takes `captureHeapSettings`' *first*
+branch, rendering `heap -Xmx2g` — which is how `computenet-hqid`'s own commit
+message describes the renderer ("running in the Gradle `:bench:test` JVM
+(toolchain 21, `-Xmx2g`)"), and what the `-Xmx2g` heap fields on other `Harness:`
+lines in this file read. This entry took the **fallback** branch instead, reached
+only when neither `-Xms` nor `-Xmx` was passed. So the rendering JVM carried no
+heap flag at all, and `4294967296` is simply that JVM's ergonomic default heap:
+measured on this host (Apple M2 Pro, 10 cores, 16 GiB) with the entry's own
+declared toolchain, `java -XX:+PrintFlagsFinal -version` reports
+`MaxHeapSize = 4294967296 {ergonomic}` when launched with no VM options, against
+`2147483648 {command line}` under `-Xmx2g`. Which launcher it actually was is not
+recoverable from anything still on disk, and this correction does not guess at it.
 
 **Whether the calibration run's own retained JMH banner is still on disk**: it is
 not. This entry's own procedure states the runs were captured as JSON
