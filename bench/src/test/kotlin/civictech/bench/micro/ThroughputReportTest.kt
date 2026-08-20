@@ -853,6 +853,325 @@ class ThroughputReportTest {
         )
         assertNotNull(report.perDrive.single().entry)
     }
+
+    // ---------------------------------------------------------------------------------
+    // computenet-x9e.10: a sweep whose @Params are NOT subject/direction renders through
+    // the shipped path, with no hand-written driver.
+    //
+    // What the defect cost, before this change: `labelOf` hard-coded `subject` and
+    // `direction` — `OperatorThroughputBenchmark`'s two parameters — so `renderRun`
+    // refused every other sweep in this module ("cannot be labelled"), including the two
+    // named next: `CellFootprintBenchmark` (`family`, `scale`) and `BoundedReadBenchmark`
+    // (`scale`). computenet-x9e.6.4 therefore rendered the V1C-BENCH E1 entry through a
+    // ~60-line throwaway `E1Render.java` driver against the JMH fat jar; that entry in
+    // doc/bench/findings.md says so in as many words. Every honesty-bearing STEP was
+    // shipped code, but the invocation was hand-written and uncommitted.
+    //
+    // These tests fail if the hard-coding returns: the first because a `family`/`scale`
+    // file would refuse instead of rendering, and the registry test because the column
+    // choice would no longer be declared anywhere that a benchmark's own `@Param`s can be
+    // checked against.
+    // ---------------------------------------------------------------------------------
+
+    /**
+     * `CellFootprintBenchmark`'s columns — `family` and `scale`, and no `subject` or
+     * `direction` anywhere in the file.
+     *
+     * Its one `@Benchmark` method is `realSnapshot`, which names its [Drive] the way
+     * `[BEN1-26]` requires, so these rows reach the table on the drive rule unchanged.
+     * The third row is deliberately far too dispersed (90/1500 = 0.06, against
+     * `NOISE_FLOOR` 0.005): the dispersion gate and the omission accounting have to stay
+     * on this path too, not only on the subject/direction one.
+     */
+    private val footprintCsv = listOf(
+        """"Benchmark","Mode","Threads","Samples","Score","Score Error (99.9%)","Unit",""" +
+            """"Param: family","Param: scale"""",
+        """"civictech.bench.micro.CellFootprintBenchmark.realSnapshot","avgt",1,20,12.5,0.02,"us/op","SET_CELL","N1E3"""",
+        """"civictech.bench.micro.CellFootprintBenchmark.realSnapshot","avgt",1,20,140.0,0.3,"us/op","SET_CELL","N1E4"""",
+        """"civictech.bench.micro.CellFootprintBenchmark.realSnapshot","avgt",1,20,1500.0,90.0,"us/op","MAP_CELL","N1E5"""",
+    ).joinToString("\n")
+
+    @Test
+    fun `a sweep labelled by family and scale renders through renderRun`(@TempDir dir: File) {
+        assertFalse(footprintCsv.contains("subject"), footprintCsv)
+        assertFalse(footprintCsv.contains("direction"), footprintCsv)
+
+        val results = runArtifacts(
+            dir,
+            footprintCsv,
+            log = banner("21.0.11", knobs = knobBanner(mode = "AverageTime, time/op")),
+        )
+
+        val report = ThroughputReport.renderRun(
+            results = results,
+            harnessCommitSha = "b861114d",
+            date = "2026-08-19",
+            subject = "cell footprint",
+        )
+
+        val driveReport = report.perDrive.single()
+        assertEquals(Drive.REAL, driveReport.drive)
+        val entry = driveReport.entry!!
+        assertTrue(entry.contains("| SET_CELL N1E3 | 12.5 ± 0.02 us/op |"), entry)
+        assertTrue(entry.contains("| SET_CELL N1E4 | 140.0 ± 0.3 us/op |"), entry)
+
+        // F3's writer produced this, not a second render route: its environment line, its
+        // knob line off the run's own banner, and its incomplete-trigger line are all here.
+        assertTrue(entry.contains("Harness: b861114d"), entry)
+        assertTrue(entry.contains("mode=AverageTime"), entry)
+        assertTrue(entry.contains("drive=REAL"), entry)
+        assertTrue(entry.contains("MARKED INCOMPLETE"), entry)
+
+        // The dispersion gate and the omission accounting are on this path too.
+        assertFalse(entry.contains("MAP_CELL"), entry)
+        assertEquals(listOf("MAP_CELL N1E5"), report.omissions.map { it.label })
+        assertTrue(report.text().contains("MAP_CELL N1E5 (drive=REAL)"), report.text())
+    }
+
+    @Test
+    fun `an explicit RowLabel overrides the registered columns`(@TempDir dir: File) {
+        // The parameterisation is a caller's to state as well as a benchmark's to register
+        // — a results file from a benchmark nobody has registered is rendered by naming its
+        // columns here, which is what replaces the throwaway driver.
+        val results = runArtifacts(
+            dir,
+            footprintCsv,
+            log = banner("21.0.11", knobs = knobBanner(mode = "AverageTime, time/op")),
+        )
+
+        val entry = ThroughputReport.renderRun(
+            results = results,
+            harnessCommitSha = "b861114d",
+            date = "2026-08-19",
+            subject = "cell footprint",
+            label = RowLabel(params = listOf("scale", "family"), lowercased = setOf("family")),
+        ).perDrive.single().entry!!
+
+        // Reordered, and the chosen column lowercased: both are the label's to decide.
+        assertTrue(entry.contains("| N1E3 set_cell | 12.5 ± 0.02 us/op |"), entry)
+        assertFalse(entry.contains("SET_CELL"), entry)
+    }
+
+    /**
+     * `BoundedReadBenchmark`'s shape — two `@Benchmark` methods over one `scale` — which is
+     * why [RowLabel.includeMethod] exists.
+     *
+     * The method names here are NOT the benchmark's own (`direct`, `hostedSnapshotOf`):
+     * those name no [Drive], so `driveOf` refuses them outright (`[BEN1-26]`) and no label
+     * choice reaches a table at all. That is a benchmark-side gap in
+     * `bench/src/jmh/kotlin`, tracked separately; the fixture names the drive-bearing form
+     * the benchmark needs so that what this test decides is the LABEL rule.
+     */
+    private val twoMethodCsv = listOf(
+        """"Benchmark","Mode","Threads","Samples","Score","Score Error (99.9%)","Unit",""" +
+            """"Param: scale"""",
+        """"civictech.bench.micro.BoundedReadBenchmark.realDirect","avgt",1,20,0.0375,1.0E-4,"ms/op","N1E3"""",
+        """"civictech.bench.micro.BoundedReadBenchmark.realHostedSnapshotOf","avgt",1,20,0.0488,1.2E-4,"ms/op","N1E3"""",
+    ).joinToString("\n")
+
+    @Test
+    fun `two rows that would share a label are refused, not rendered ambiguously`() {
+        // Labelled by `scale` alone, both rows read "N1E3". FindingsTable cannot see this
+        // — the labels are non-blank and there is one per result — so the refusal has to
+        // be here, where the columns were chosen.
+        val failure = assertThrows(ThroughputReportException::class.java) {
+            ThroughputReport.render(
+                twoMethodCsv,
+                env,
+                "2026-08-19",
+                "bounded read",
+                label = RowLabel(params = listOf("scale")),
+            )
+        }
+        assertTrue(failure.message!!.contains("share a label"), failure.message)
+        assertTrue(failure.message!!.contains("'N1E3' x 2"), failure.message)
+        assertTrue(failure.message!!.contains("includeMethod"), failure.message)
+
+        // And F3 itself would have rendered it: the collision is invisible to FindingsTable.
+        val ambiguous = ThroughputReport.toResults(
+            ThroughputReport.parseCsv(twoMethodCsv),
+            env,
+            RowLabel(params = listOf("scale")),
+        )
+        assertEquals(listOf("N1E3", "N1E3"), ambiguous.map { it.label })
+        assertNotNull(
+            Findings.entry(
+                date = "2026-08-19",
+                subject = "bounded read",
+                results = FindingsTable(ambiguous.map { it.result }, ambiguous.map { it.label }),
+            )
+        )
+    }
+
+    @Test
+    fun `includeMethod distinguishes rows that share a parameter set`() {
+        val entry = ThroughputReport.render(
+            twoMethodCsv,
+            env,
+            "2026-08-19",
+            "bounded read",
+            label = RowLabel(params = listOf("scale"), includeMethod = true),
+        ).perDrive.single().entry!!
+
+        assertTrue(entry.contains("| realDirect N1E3 | 0.0375 ± 1.0E-4 ms/op |"), entry)
+        assertTrue(
+            entry.contains("| realHostedSnapshotOf N1E3 | 0.0488 ± 1.2E-4 ms/op |"),
+            entry,
+        )
+    }
+
+    @Test
+    fun `a benchmark class with no registered columns is refused, never guessed at`() {
+        val csv = twoMethodCsv.replace("BoundedReadBenchmark", "SomeFutureBenchmark")
+        val failure = assertThrows(ThroughputReportException::class.java) {
+            ThroughputReport.render(csv, env, "2026-08-19", "something new")
+        }
+        assertTrue(failure.message!!.contains("SomeFutureBenchmark"), failure.message)
+        assertTrue(failure.message!!.contains("RowLabel.REGISTERED"), failure.message)
+        // The escape hatch the refusal names actually works, on the same file.
+        assertNotNull(
+            ThroughputReport.render(
+                csv,
+                env,
+                "2026-08-19",
+                "something new",
+                label = RowLabel(params = listOf("scale"), includeMethod = true),
+            ).perDrive.single().entry
+        )
+    }
+
+    @Test
+    fun `a row missing one of its label columns is refused rather than labelled unknown`() {
+        val csv = footprintCsv.replace(""""Param: family"""", """"Param: unrelated"""")
+        val failure = assertThrows(ThroughputReportException::class.java) {
+            ThroughputReport.render(csv, env, "2026-08-19", "cell footprint")
+        }
+        assertTrue(failure.message!!.contains("no usable 'family' parameter"), failure.message)
+        assertTrue(failure.message!!.contains("cannot be labelled"), failure.message)
+    }
+
+    @Test
+    fun `RowLabel refuses a column set it cannot label with`() {
+        assertThrows(IllegalArgumentException::class.java) { RowLabel(params = emptyList()) }
+        assertThrows(IllegalArgumentException::class.java) {
+            RowLabel(params = listOf("scale", " "))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RowLabel(params = listOf("scale", "scale"))
+        }
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            RowLabel(params = listOf("scale"), lowercased = setOf("family"))
+        }
+        assertTrue(failure.message!!.contains("family"), failure.message)
+    }
+
+    @Test
+    fun `the subject-direction columns still render the labels the landed entries carry`() {
+        // The default is a named value, not an accident of a signature: three entries in
+        // doc/bench/findings.md are labelled `<SUBJECT> insert`/`<SUBJECT> retract`, and
+        // this is what has to keep producing them.
+        assertEquals(listOf("subject", "direction"), RowLabel.SUBJECT_DIRECTION.params)
+        assertEquals(setOf("direction"), RowLabel.SUBJECT_DIRECTION.lowercased)
+        assertFalse(RowLabel.SUBJECT_DIRECTION.includeMethod)
+        assertEquals(
+            RowLabel.SUBJECT_DIRECTION,
+            RowLabel.REGISTERED.getValue("OperatorThroughputBenchmark"),
+        )
+        val row = ThroughputReport.parseCsv(quietCsv).first()
+        assertEquals("FILTER insert", ThroughputReport.labelOf(row))
+    }
+
+    // ---------------------------------------------------------------------------------
+    // The registry is pinned against the benchmark sources themselves.
+    //
+    // `RowLabel.REGISTERED` has to live in `main` — the `jmh` source set is invisible to
+    // both `main` and `test`, the same reason this file's `FORKS`/`WARMUP_ITERATIONS`
+    // constants do — so nothing in the type system keeps it in step with the `@Param`s the
+    // benchmarks actually declare. This reads the benchmark sources from the checkout and
+    // does it by hand.
+    //
+    // The failure it prevents is not a wrong number but a QUIET one: a sweep that gains a
+    // dimension whose registered label omits it renders rows that collide, and while
+    // `renderResults` refuses a collision, it refuses at measurement time — after the JMH
+    // sweep has been paid for. This says so at `:bench:test` speed instead.
+    //
+    // On staleness: the mutations this catches (a `@Param` added, renamed or removed, a
+    // benchmark class added or deleted) all change the generated `META-INF/BenchmarkList`,
+    // which bench/build.gradle.kts already declares as an input of `:bench:test` — so the
+    // task should not be reported UP-TO-DATE across them. That is reasoning about JMH's
+    // generated resource, not something measured here.
+    // ---------------------------------------------------------------------------------
+
+    @Test
+    fun `every param-bearing benchmark's registered columns name exactly its own params`() {
+        val root = System.getProperty("computenet.repo.root")
+            ?: error(
+                "System property 'computenet.repo.root' is not set. It must be wired in " +
+                    "bench/build.gradle.kts on the :bench `test` task so this test can " +
+                    "locate bench/src/jmh/kotlin."
+            )
+        val dir = File(root, "bench/src/jmh/kotlin/civictech/bench/micro")
+        check(dir.isDirectory) { "no JMH benchmark sources at ${dir.absolutePath}" }
+        val sources = dir.listFiles { file -> file.name.endsWith("Benchmark.kt") }
+            ?.sortedBy { it.name }
+            ?: emptyList()
+        // Guard against a vacuous pass if the tree moves: this suite knows of five.
+        assertTrue(sources.size >= 5, "only ${sources.size} benchmark sources under $dir")
+
+        val declared = sources.associate { it.nameWithoutExtension to paramsDeclaredIn(it) }
+        val withParams = declared.filterValues { it.isNotEmpty() }
+        assertEquals(
+            withParams.keys.sorted(),
+            RowLabel.REGISTERED.keys.sorted(),
+            "RowLabel.REGISTERED must name exactly the @Param-bearing benchmarks; " +
+                "declared params were $declared",
+        )
+        withParams.forEach { (benchmark, params) ->
+            assertEquals(
+                params,
+                RowLabel.REGISTERED.getValue(benchmark).params.toSet(),
+                "$benchmark declares @Params $params; its registered label columns are " +
+                    "${RowLabel.REGISTERED.getValue(benchmark).params}. A parameter " +
+                    "missing from the label is a dimension the table cannot show",
+            )
+        }
+        // The parser is doing real work, not returning empty sets that trivially agree.
+        assertEquals(
+            setOf("subject", "direction"),
+            declared.getValue("OperatorThroughputBenchmark"),
+        )
+        assertEquals(emptySet<String>(), declared.getValue("SmokeBenchmark"))
+
+        // And the key these entries are read under is the one a parsed row resolves to,
+        // so agreeing with the sources here means agreeing at render time.
+        val rowClass = ThroughputReport.parseCsv(footprintCsv).first().benchmarkClass
+        assertEquals("CellFootprintBenchmark", rowClass)
+        assertEquals(
+            RowLabel.REGISTERED.getValue(rowClass),
+            RowLabel.forBenchmark("civictech.bench.micro.CellFootprintBenchmark.realSnapshot"),
+        )
+    }
+
+    /**
+     * The `@Param`-annotated property names a benchmark source declares.
+     *
+     * Deliberately crude: a `@Param` on its own line — the shape every benchmark in this
+     * module uses, `@Param` / `@JvmField` / `var <name>: <Enum>` — followed within a few
+     * lines by the property it annotates. A KDoc mention of `@Param` does not match,
+     * because a doc line trims to `*` first.
+     */
+    private fun paramsDeclaredIn(source: File): Set<String> {
+        val lines = source.readLines()
+        val property = Regex("""\bvar\s+(\w+)\s*:""")
+        return lines.indices
+            .filter { lines[it].trim().startsWith("@Param") }
+            .mapNotNull { at ->
+                (at + 1..minOf(at + 4, lines.lastIndex)).firstNotNullOfOrNull { ahead ->
+                    property.find(lines[ahead])?.groupValues?.get(1)
+                }
+            }
+            .toSet()
+    }
 }
 
 /**
