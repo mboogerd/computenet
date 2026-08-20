@@ -1241,20 +1241,40 @@ magnitudes that agree with neither this table nor the row above:
 | 10⁴ | 4.6915 ms | 3.0582 ms | **+34.8%** |
 | 10⁵ | 32.6462 ms | 27.0332 ms | **+17.2%** |
 
-None of this is a code difference: `git log` shows neither `BoundedReadFixtures.kt` nor
-`BoundedReadBenchmark.kt` has changed since this entry landed (`61593208`), across both
-re-runs above. Three runs of the identical command against identical code have now produced
-three disagreeing patterns — this table's own (positive at every scale), the PR #325 review's
-(negative at 1e4/1e5), and `computenet-xlst`'s (positive at every scale again, at yet other
-magnitudes). Every row in both re-run tables classifies `Unreportable` against `NOISE_FLOOR`
-(relDispersion 4.46–22.37, same as this table's own rows below) for exactly this reason:
-**maxGap is a worst-case order statistic on a shared machine and does not concentrate,** so a
-reader meeting the "reduction, this run" column must not take 6.7%/17.9%/46% as a stable
-measured benefit — it is one noisy draw among several that disagree in sign as well as size.
-This does **not** weaken this entry's finding that E3 and §6 do not reproduce the original's
-~85–99% reduction: every one of the nine reductions measured across all three runs, including
-the positive ones, stays far below that range, and the negative runs are more damning of the
-original's claim, not less.
+None of the three patterns above is a code difference: across all three runs `git log` shows
+neither `BoundedReadFixtures.kt` nor `BoundedReadBenchmark.kt` changed after this entry landed
+(`61593208`). **`computenet-xlst`'s own commit `b5d10bdb` then changed one of them**, and that
+matters to anyone re-running the command above: it raises `BoundedReadFixtures.TRIALS` from 3
+to 5, acting on the recommendation in "Deviations from the original method" below. A run at or
+after that commit therefore takes **five** trials per condition, not the three that every
+table in this entry — §4, §5, §6 and both re-run tables above — was measured at. Those
+medians are no longer reproducible verbatim by that command; only the instability they
+document is, and the five-trial run below is what establishes that.
+
+The feature review of `computenet-xlst` (PR #370) ran the identical command at five trials
+(HEAD `b5d10bdb`, same harness SHA, JUnit XML timestamp `2026-08-20T08:01:25.862Z`, 6 tests, 0
+failures, `n=5` on every reported row) and landed on a **fourth** pattern:
+
+| n | E2 concurrent maxGap (median) | E3 paged maxGap (median) | reduction |
+| --- | --- | --- | --- |
+| 10³ | 5.6020 ms | 2.8364 ms | **+49.4%** |
+| 10⁴ | 6.8267 ms | 3.6019 ms | **+47.2%** |
+| 10⁵ | 30.1108 ms | 26.7733 ms | **+11.1%** |
+
+Four runs of this command have now produced four disagreeing patterns — this table's own
+(positive at every scale), the PR #325 review's (negative at 1e4/1e5), `computenet-xlst`'s
+(positive again, other magnitudes), and the five-trial run just above (positive again, other
+magnitudes still). Every row of every one of them classifies `Unreportable` against
+`NOISE_FLOOR` — the five-trial run's E2/E3 relative dispersions span 0.66–8.44 and this
+entry's own 2.96–29.91, both orders above the floor — for exactly this reason: **maxGap is a
+worst-case order statistic on a shared machine and does not concentrate,** so a reader meeting
+the "reduction, this run" column must not take 6.7%/17.9%/46% as a stable measured benefit —
+it is one noisy draw among several that disagree in sign as well as size. **Raising `TRIALS`
+to five does not settle it**, which is the fourth run's own contribution: a larger sample
+moved the magnitudes again rather than converging them. This does **not** weaken this entry's
+finding that E3 and §6 do not reproduce the original's ~85–99% reduction: every one of the
+twelve reductions measured across all four runs, including the positive ones, stays far below
+that range, and the negative runs are more damning of the original's claim, not less.
 
 Total-work premium (E3 summed page wall ÷ E1 whole copy at the same *n*): **5.9×** at 10⁵
 (65.543 / 11.196), against the original's 1.7–2.4×; at 10⁴ the ratio is 26× before the
@@ -1360,6 +1380,12 @@ prevent, not a workaround this entry declined for taste.
   replication; it costs seconds, it makes the medians materially more robust against exactly
   the outlier trials E2's 10³/10⁴ baselines show, and it does not change any `Unreportable`
   classification (5 trials still needs ~10⁴ trials to reach the floor).
+  **Since acted on** (`computenet-xlst`, commit `b5d10bdb`): `BoundedReadFixtures.TRIALS` is
+  **5** in the tree from that commit onward, so this bullet records the sample *this entry was
+  measured at*, not the constant a reader will find in the file. Both of its predictions were
+  then checked at five trials by that item's review: the six probe tests take **3.238 s**
+  (JUnit XML, up from 2.155 s) and every E2/E3 row is still `Unreportable`. What five trials
+  did **not** do is stabilise the §6 reduction — see the caveat under "§6 — E2 vs E3" above.
 - **E3 drives 8,000 adds with warmup, trials and a 1 ms delay**, per §5's prose, not the
   appendix's 5,000/one untimed trial/t0 — see harness difference 2.
 - **The target grows monotonically across trials**, the original harness's own behaviour,
