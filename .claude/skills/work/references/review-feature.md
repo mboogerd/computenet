@@ -261,6 +261,17 @@ Look for what task-level review structurally cannot see:
 
 ## 3. Prove the feature's tests actually ran
 
+**Before any of it: a check whose failure mode is SILENCE is not evidence
+until you have shown it prints something on the branch where it should fail.**
+Two measured instances, both from reviewers on 2026-08-19 — a per-line read of
+a multi-line Kotlin `toString` that under-reported a dump by an order of
+magnitude in the reassuring direction, and an unquoted `--include=*.kt` glob
+that zsh ate so the grep never ran and its silence read as "no dependents".
+Both in
+[references/gradle-evidence.md](gradle-evidence.md#measurements-whose-failure-mode-is-a-pass)
+(computenet-rf0a). Quote your globs; measure dumps per block, not per line;
+treat an implausibly reassuring number as a measurement bug.
+
 **First, settle whether any suite applies — by proving it, not asserting it.**
 A markdown-only feature has no suite to run, but "docs-only" is a claim about
 the diff and needs the diff as its evidence:
@@ -431,8 +442,13 @@ can rather than sending it back.
 
 **Budget the repair, because it obliges a CI cycle.** A repair moves the head,
 so §6's re-read is no longer optional for you: you owe one full required-check
-cycle — **2–4 minutes on this repo** — plus the poll to watch it, on top of
-the repair itself. **Repair anyway**; this note exists so the cost is
+cycle — **9–12 minutes on this repo**, governed by `build-test-fast`, which is
+the long pole; the other five settle in 15s–5m26s — plus the poll to watch it,
+on top of the repair itself. (Measured 2026-08-19 across four runs: 8m58s,
+12m1s, 8m52s, ~9m. The figure here read "2–4 minutes" until computenet-678u
+measured it; a reviewer budgeting a merge-and-re-check cycle against its own
+deadline was working from a number 2–4x too small, which is what turns "I can
+still certify inside my window" into a review that runs out of time mid-cycle.) **Repair anyway**; this note exists so the cost is
 *expected*, not so it is avoided (computenet-elm3). Plan it against the
 ~45–60 minute bound you were dispatched with, and if the repair plus its cycle
 will not fit, that is the moment to hand back rather than after you have spent

@@ -300,8 +300,27 @@ run, every job — measured on #254's run 32008091003: 7553 lines, 828 KB, 3s.
 Column 1 of each line is the job name, so the output also says *which lane*
 skipped. Save it, then read it with two greps:
 
+**Get `<run-id>` from a REQUIRED check's row, never from `.[0]`.** The
+auto-merge workflow appears in `gh pr checks` as an ordinary row (conclusion
+`skipping`) and on PR #347 it sorted FIRST, so
+`gh pr checks <n> --json link -q '.[0].link'` returned the auto-merge run.
+`gh run view <that-id> --log` then SUCCEEDS and returns ZERO lines, and both
+greps below match nothing — which reads exactly like "nothing skipped, all
+good". The anti-cache-replay check silently becomes a no-op (computenet-7ust).
+Same false-negative shape this file already warns about for `bd search`: an
+empty result is never evidence of an empty query.
+
 ```bash
-gh run view <run-id> --log > "$SCRATCH/ci.log"
+RUN=$(gh pr checks <pr-url> 2>&1 | grep concord-full | grep -oE 'runs/[0-9]+' | cut -d/ -f2)
+[ -n "$RUN" ] || { echo "NOT CHECKED: no concord-full row; do not read the greps below"; }
+gh run view "$RUN" --log > "$SCRATCH/ci.log"
+# A non-empty log is the precondition for reading EITHER grep as evidence.
+wc -l "$SCRATCH/ci.log"   # zero lines = wrong run id, not a clean run
+```
+
+Read the two greps only after `wc -l` shows a non-empty log:
+
+```bash
 grep -E 'SKIPPED|NO-SOURCE' "$SCRATCH/ci.log" | grep -v '> Task '          # tests that skipped
 grep -E '> Task [^ ]*:test (SKIPPED|NO-SOURCE|UP-TO-DATE|FROM-CACHE)' "$SCRATCH/ci.log"   # suites never run
 ```

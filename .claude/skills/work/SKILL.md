@@ -1794,8 +1794,9 @@ executes. Any of them, or any doubt → second tier.
 
 **The cost this tier exists to avoid is real and compounds.** Every merge of
 `origin/main` pushes a new head, and every new head restarts all six required
-checks — **~4 minutes** — which a sibling merge can invalidate before it
-finishes, so the churn is superlinear in the number of concurrent same-file
+checks — **9–12 minutes**, governed by `build-test-fast` (measured across four
+runs, computenet-678u; this said ~4 minutes until then) — which a sibling merge
+can invalidate before it finishes, so the churn is superlinear in the number of concurrent same-file
 PRs (computenet-nxac: one PR paid the cycle three times). Which is the other
 half of the answer: **keep at most ~2 PRs open against any one file** —
 beyond that, sequence. Stated where it bites in
