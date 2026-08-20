@@ -88,9 +88,25 @@ fun socketAnnouncementSigning(
  * impersonation rather than collapsing into `BAD_SIGNATURE`.
  * `WsAnnouncementIdentityTest` pins that, and fails if the order is swapped.
  */
-fun connectionBoundVerifier(peer: PeerId, key: PublicKey): AnnouncementVerifier {
+fun connectionBoundVerifier(peer: PeerId, key: PublicKey): AnnouncementVerifier =
+    announcementVerifier { minting -> key.takeIf { minting == peer } }
+
+/**
+ * The general shape: verify under whatever key [publicKeys] resolves for the
+ * *minting* peer, over [announcementCanonicalBytes].
+ *
+ * A directory resolver is the right shape for a peering that is not a socket —
+ * a `Peering.loopback` has no hello, so the key a side must verify under comes
+ * from the opposite side's configuration and is known before the peering
+ * exists. On a socket, prefer [connectionBoundVerifier], which resolves exactly
+ * one key and is what makes the gate's binding check observable.
+ *
+ * Total, because [Ed25519SignatureVerifier] is: an unknown peer, a non-Ed25519
+ * key, an unencodable announcement and a malformed signature are all `false`.
+ */
+fun announcementVerifier(publicKeys: (PeerId) -> PublicKey?): AnnouncementVerifier {
     val seam = Ed25519SignatureVerifier(
-        publicKeys = { minting -> key.takeIf { minting == peer } },
+        publicKeys = publicKeys,
         canonicalBytes = { _, _, payload -> announcementCanonicalBytes(payload as SignableAnnouncement) },
     )
     return AnnouncementVerifier { minting, counter, announcement, signature ->
@@ -114,8 +130,16 @@ fun connectionBoundVerifier(peer: PeerId, key: PublicKey): AnnouncementVerifier 
 fun socketAnnouncementVerification(
     clock: () -> Long = System::currentTimeMillis,
     skewMillis: Long = DEFAULT_ANNOUNCEMENT_SKEW_MILLIS,
+    /**
+     * The keys this side can verify under **without** a hello to bind one —
+     * the `Peering.loopback` shape, where the peer's key comes from the
+     * opposite side's configuration rather than from a handshake. Defaults to
+     * the fail-closed empty directory described above; every socket ingress
+     * rebinds it anyway.
+     */
+    publicKeys: (PeerId) -> PublicKey? = { null },
 ): AnnouncementVerification = AnnouncementVerification(
-    verifier = { _, _, _, _ -> false },
+    verifier = announcementVerifier(publicKeys),
     clock = clock,
     skewMillis = skewMillis,
     clockName = "the receiver's system clock",

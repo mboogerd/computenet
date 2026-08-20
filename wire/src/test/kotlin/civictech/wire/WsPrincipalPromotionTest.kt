@@ -93,9 +93,17 @@ class WsPrincipalPromotionTest {
             auth = if (keyed) PeerAuthPolicy.RequireAuthenticated() else PeerAuthPolicy.Open,
             credentials = identity?.asPeerCredentials(),
             announcementSigning = if (keyed) socketAnnouncementSigning() else null,
-            announcementVerification = if (keyed) socketAnnouncementVerification() else null,
+            // The loopback parity case has no hello to bind a key, so this side
+            // verifies against a directory the test fills with the opposite
+            // side's key (see `principalOverLoopback`). On the socket path the
+            // ingress rebinds this with the hello-bound key regardless.
+            announcementVerification =
+                if (keyed) socketAnnouncementVerification(publicKeys = { knownKeys[it] }) else null,
         )
     }
+
+    /** Peer keys known without a handshake — populated only by the loopback case. */
+    private val knownKeys = java.util.concurrent.ConcurrentHashMap<PeerId, java.security.PublicKey>()
 
     private fun await(what: String, timeoutMs: Long = 30_000, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
@@ -152,6 +160,9 @@ class WsPrincipalPromotionTest {
     private fun principalOverLoopback(server: Stack, client: Stack): Principal {
         val probe = PrincipalProbeCell()
         server.host.managementInlet.call.spawn(probe)
+        // Both sides sign now (RequireAuthenticated implies it in :wire), and a
+        // loopback carries no hello, so each side is told the other's key here.
+        listOf(server, client).forEach { s -> s.identity?.let { knownKeys[it.peerId] = it.publicKey } }
         val loopback = Peering.loopback(server.side, client.side)
         await("the loopback peering settled") { client.registry.location(probe.ref) is LocationRegistry.Remote }
         loopback.bToA.deliver(protocolFrame(probe.ref))
