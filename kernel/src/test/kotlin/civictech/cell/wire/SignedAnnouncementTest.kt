@@ -22,6 +22,7 @@ import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.ints.shouldBeGreaterThan
+import io.kotest.matchers.longs.shouldBeGreaterThan
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -137,11 +138,30 @@ class SignedAnnouncementTest {
         args = a.args,
     )
 
-    /** The honest emit-side encoder: `:identity`'s canonical bytes, unmodified. */
+    /**
+     * The honest emit-side encoder: `:identity`'s canonical bytes, unmodified.
+     *
+     * [incarnation] defaults to `{ 0L }` — i.e. counter floor zero, the
+     * pre-`computenet-ssa.6` sequence `1, 2, 3, ...` — rather than to the
+     * production wall-clock default. Two reasons, both about this file's
+     * subject: the counters appear verbatim in the gate's dead-letter details
+     * and high-water assertions below, where `1` reads and `1782541056409600`
+     * does not; and every clause this file pins is a property of the *gate*,
+     * which never looks at a counter's magnitude, only at its order. The floor
+     * itself is pinned by the restart case below (which names two incarnations
+     * explicitly) and, for the production default, by
+     * `SignedAnnouncementEmitTest`.
+     */
     private fun signingConfig(
         ttlMillis: Long = 60_000L,
         encode: (SignableAnnouncement) -> ByteArray = { canonicalBytes(input(it)) },
-    ) = AnnouncementSigningConfig(encode = encode, clock = senderClock, ttlMillis = ttlMillis)
+        incarnation: () -> Long = { 0L },
+    ) = AnnouncementSigningConfig(
+        encode = encode,
+        clock = senderClock,
+        ttlMillis = ttlMillis,
+        incarnation = incarnation,
+    )
 
     /**
      * The receive-side half, built on the kernel's own verifier seam: this is
@@ -448,6 +468,100 @@ class SignedAnnouncementTest {
         rig.side.announcementAdmission!!.highWaterFor(peerB) shouldBe 25L
         rig.registry.remoteRefs() shouldHaveSize 25
         rig.rejected shouldBe 0L
+    }
+
+    // ================================================ process restart, ssa.6
+
+    /**
+     * `computenet-ssa.6`, the deterministic half: a signing **process** restarts
+     * while re-minting the same identity, and the receiver — whose `Peering.Side`
+     * and therefore whose replay ledger never went away — accepts the burst
+     * instead of dead-lettering all of it as REPLAY.
+     *
+     * "A process restart" here is a *fresh `Peering.Side` over the same
+     * credentials*, which is exactly what a restart is in kernel terms: a new
+     * [AnnouncementSigner], a virgin `AtomicLong`, the same key-derived
+     * [PeerId]. Nothing about the receiver is rebuilt — a rebuilt receiver would
+     * hand the burst a virgin ledger that accepts anything and the test would
+     * pass without the property holding, the same trap BS-13 calls out in
+     * `:wire`.
+     *
+     * The two incarnations are **named**, not taken from the wall clock: with the
+     * production default two `Sender`s built in the same millisecond would share
+     * a floor and this test would flake on a fast machine. The production default
+     * is pinned separately, in `SignedAnnouncementEmitTest`.
+     *
+     * **Measured discrimination** (`computenet-ssa.6`): against the pre-fix
+     * signer — `AtomicLong(0)`, no incarnation seam — this case fails at the
+     * `deadLetters.shouldBeEmpty()` line with
+     * `reason=REPLAY ... counter=1 does not exceed the highest already accepted
+     * from '<peerB>' (3)`, while every other case in this file stays green.
+     */
+    @Test
+    fun `a signing process that restarts re-minting the same identity is accepted, not REPLAY`() {
+        val rig = Rig(boundPeer = peerB)
+        val firstBoot = 1_700_000_000_000L
+        val secondBoot = firstBoot + 60_000L // the process was down for a minute
+
+        // incarnation 1 announces; the receiver's high-water mark advances
+        val first = Sender(Keys(identityB), signingConfig(incarnation = { firstBoot }))
+        repeat(3) { rig.feed(first.publish(rig.mirror.ref)) }
+        rig.rejected shouldBe 0L
+        val highWaterBeforeRestart = rig.side.announcementAdmission!!.highWaterFor(peerB).shouldNotBeNull()
+        rig.registry.remoteRefs() shouldHaveSize 3
+
+        // the PROCESS restarts: a brand-new `Peering.Side`, hence a brand-new
+        // `AnnouncementSigner` and a virgin counter, re-minting the SAME
+        // identity. The receiver is untouched -- same Side, same ledger, its
+        // high-water mark for this identity already past the fresh sequence.
+        val restarted = Sender(Keys(identityB), signingConfig(incarnation = { secondBoot }))
+        restarted.side.announcementSigner!!.lastCounter shouldBe
+            announcementCounterFloor(secondBoot) // nothing signed yet, but the floor is already past
+        val afterRestart = CellRef(UUID.randomUUID())
+        rig.feed(restarted.publish(rig.mirror.ref, afterRestart))
+
+        rig.deadLetters.shouldBeEmpty()
+        rig.rejected shouldBe 0L
+        rig.registry.remoteRefs() shouldContain afterRestart
+        rig.side.announcementAdmission!!.highWaterFor(peerB)
+            .shouldNotBeNull() shouldBeGreaterThan highWaterBeforeRestart
+    }
+
+    /**
+     * The second acceptance clause of `computenet-ssa.6`, stated where it can be
+     * broken: the fix must not buy restart recovery with replay tolerance.
+     *
+     * A byte-identical redelivery is REPLAY *within* an incarnation (BS-06
+     * above), and it is still REPLAY when it is redelivered **across** one — a
+     * captured frame from incarnation 1 replayed after the peer restarted stays
+     * refused, because the ledger's high-water mark for that identity never went
+     * down. Recovery comes from the sender's floor going *up*, and a floor that
+     * only ever rises cannot re-admit anything already seen.
+     */
+    @Test
+    fun `a frame captured before the restart is still REPLAY after it`() {
+        val rig = Rig(boundPeer = peerB)
+        val firstBoot = 1_700_000_000_000L
+        val first = Sender(Keys(identityB), signingConfig(incarnation = { firstBoot }))
+        val captured = first.publish(rig.mirror.ref)
+
+        rig.feed(captured)
+        rig.rejected shouldBe 0L
+        val afterAcceptance = rig.registrySnapshot()
+
+        // the peer restarts and announces afresh; the burst is admitted
+        val restarted = Sender(Keys(identityB), signingConfig(incarnation = { firstBoot + 60_000L }))
+        rig.feed(restarted.publish(rig.mirror.ref))
+        rig.rejected shouldBe 0L
+        val afterRestart = rig.registrySnapshot()
+
+        // and now the captured frame is injected again. Still REPLAY.
+        rig.feed(captured)
+
+        rig.lastDenial().reason shouldBe DenialReason.REPLAY
+        rig.rejected shouldBe 1L
+        rig.registrySnapshot() shouldBe afterRestart
+        afterRestart shouldNotBe afterAcceptance // the restart burst really did land
     }
 
     // ========================================================= BS-07, expired

@@ -127,7 +127,7 @@ class WsReconnectSmokeTest {
      * signs every announcement it emits and verifies every one it receives,
      * under the key the peer's hello proved.
      */
-    private class KeyedStack(seed: String) {
+    private class KeyedStack(seed: String, incarnation: Long = System.currentTimeMillis()) {
         val identity = PeerIdentity(DeterministicKeySource.keyPairFromSeed(seed.toByteArray()))
         val peerId: PeerId get() = identity.peerId
         val registry = LocationRegistry()
@@ -140,7 +140,11 @@ class WsReconnectSmokeTest {
             peer = identity.peerId,
             auth = PeerAuthPolicy.RequireAuthenticated(),
             credentials = identity.asPeerCredentials(),
-            announcementSigning = socketAnnouncementSigning(),
+            // `incarnation` is named rather than left to the wall clock so the
+            // restart case below can build two incarnations of one identity
+            // without waiting for a millisecond to pass (`computenet-ssa.6`);
+            // every other stack here takes the production default.
+            announcementSigning = socketAnnouncementSigning().copy(incarnation = { incarnation }),
             announcementVerification = socketAnnouncementVerification(),
         )
 
@@ -348,6 +352,125 @@ class WsReconnectSmokeTest {
             //    two ingresses and two mirrors on the server side.
             server.ledger.trackedPeers shouldBe 1
             client.ledger.trackedPeers shouldBe 1
+        } finally {
+            connection.shutdown()
+            runCatching { listener.stop(1000) }
+            endpoint.close()
+        }
+    }
+
+    /**
+     * `computenet-ssa.6` — the gap BS-13 above names and deliberately does not
+     * cover: a signing peer's **process** restarts, re-minting the same
+     * identity, and the peer that stayed up accepts its catch-up burst instead
+     * of dead-lettering all of it as `REPLAY`.
+     *
+     * **What is rebuilt, and what is not, is the whole test.** The *client*
+     * process dies: its connection is shut down and its entire `KeyedStack` —
+     * registry, hosts, `Peering.Side`, and therefore its `AnnouncementSigner`
+     * and its counter — is thrown away and rebuilt from the same key seed, so
+     * `peerId` is unchanged and the new signer's counter is virgin. The
+     * *server* is untouched throughout: same listener, same `Peering.Side`,
+     * same `AnnouncementAdmission`, and its high-water mark for the client's
+     * identity is already well past `1` when the new process starts talking.
+     * That asymmetry is what makes the clause checkable — a rebuilt server, or
+     * a client rebuilt under a fresh seed, would hand the burst a virgin ledger
+     * that accepts anything and the test would pass without the property
+     * holding.
+     *
+     * The mechanism under test is `AnnouncementSigner.counterFloor`: the second
+     * incarnation's counters start above the first's, so the server's
+     * `counter <= seen` test admits them with **no change to the gate** — no
+     * reset, no window, no exemption. The two incarnations are named a minute
+     * apart rather than taken from the wall clock so that the property is
+     * asserted rather than raced (see [KeyedStack]).
+     *
+     * **Measured discrimination** (`computenet-ssa.6`): against the pre-fix
+     * signer — `AtomicLong(0)`, no incarnation floor — this case fails at
+     * *timed out awaiting: the restarted process's announcements were accepted*,
+     * with the server's replay dead letters carrying
+     * `counter=1 does not exceed the highest already accepted`. The kernel-level
+     * twin, `SignedAnnouncementTest`'s
+     * `a signing process that restarts re-minting the same identity is accepted,
+     * not REPLAY`, fails deterministically under the same mutation.
+     *
+     * The complementary clause — that recovery was not bought with replay
+     * tolerance — is pinned in `:kernel`, by
+     * `a frame captured before the restart is still REPLAY after it`, where a
+     * captured frame can actually be re-injected.
+     */
+    @Test
+    fun `an authenticated signing peer that restarts its process re-converges rather than replaying`() {
+        val firstBoot = 1_700_000_000_000L
+        val server = KeyedStack("ssa6-server", incarnation = firstBoot)
+        var client = KeyedStack("ssa6-client", incarnation = firstBoot)
+        val clientId = client.peerId
+        val endpoint = HeldPort()
+        val port = endpoint.port
+        val listener = endpoint.serve(server.side)
+        var connection = WsTransport.connect(URI("ws://localhost:$port"), client.side) { 0L }
+        try {
+            val collector = CollectorCell()
+            server.host.managementInlet.call.spawn(collector)
+            await("collector announced") { client.registry.location(collector.ref) is LocationRegistry.Remote }
+
+            val writer = SetCell<String>()
+            client.host.managementInlet.call.spawn(writer)
+            val remoteInlet = (HostedCellProxy.create(collector.ref, client.registry, DeltaInletProxy::class.java)
+                    as DeltaInletProxy).inlet.call
+            writer.outlet.subscribe(Use.fixed(remoteInlet, PortRef.generate()))
+            val api = (HostedCellProxy.create(writer.ref, client.registry, SetInletProxy::class.java)
+                    as SetInletProxy).inlet.call
+            api.add("milk")
+            await("pre-restart convergence") { membership(collector.arrivals.toList()) == setOf("milk") }
+
+            // the server really did verify signed announcements from the client,
+            // so the high-water mark it holds is earned rather than absent
+            await("the server verified the client's announcements") {
+                server.ledger.highWaterFor(clientId) != null
+            }
+            val serverSawBeforeRestart = server.ledger.highWaterFor(clientId).shouldNotBeNull()
+            val floorBeforeRestart = client.side.announcementSigner!!.counterFloor
+            server.rejected shouldBe 0L
+
+            // -- the client PROCESS dies and comes back, same identity, later
+            //    incarnation. Everything client-side is rebuilt; the server's
+            //    side, listener and ledger are the ones from before.
+            connection.shutdown()
+            client = KeyedStack("ssa6-client", incarnation = firstBoot + 60_000L)
+            client.peerId shouldBe clientId // the same identity, re-minted
+            client.side.announcementSigner!!.counterFloor shouldBeGreaterThan floorBeforeRestart
+            client.ledger.highWaterFor(server.peerId) shouldBe null // a virgin ledger, as a restart has
+            connection = WsTransport.connect(URI("ws://localhost:$port"), client.side) { 0L }
+
+            // the burst from the restarted process is ACCEPTED, not replayed:
+            // the server's mark for this identity advances past where the dead
+            // process left it.
+            await("the restarted process's announcements were accepted") {
+                (server.ledger.highWaterFor(clientId) ?: 0L) > serverSawBeforeRestart
+            }
+            server.replayDeadLetters().shouldBeEmpty()
+            server.rejected shouldBe 0L
+
+            // and the peering RE-CONVERGES: the new process learns the server's
+            // collector and its writes land there again.
+            await("the restarted process re-learned the collector") {
+                client.registry.location(collector.ref) is LocationRegistry.Remote
+            }
+            val writer2 = SetCell<String>()
+            client.host.managementInlet.call.spawn(writer2)
+            val remoteInlet2 = (HostedCellProxy.create(collector.ref, client.registry, DeltaInletProxy::class.java)
+                    as DeltaInletProxy).inlet.call
+            writer2.outlet.subscribe(Use.fixed(remoteInlet2, PortRef.generate()))
+            val api2 = (HostedCellProxy.create(writer2.ref, client.registry, SetInletProxy::class.java)
+                    as SetInletProxy).inlet.call
+            api2.add("cheese")
+            await("post-restart convergence") { membership(collector.arrivals.toList()).contains("cheese") }
+
+            server.replayDeadLetters().shouldBeEmpty()
+            server.rejected shouldBe 0L
+            // still one entry per identity: the restart did not mint a second
+            server.ledger.trackedPeers shouldBe 1
         } finally {
             connection.shutdown()
             runCatching { listener.stop(1000) }

@@ -61,6 +61,50 @@ data class AnnouncementSignature(
 const val DEFAULT_ANNOUNCEMENT_TTL_MILLIS: Long = 5 * 60 * 1000L
 
 /**
+ * How many bits of a signed announcement's counter are the per-announcement
+ * sequence, leaving the high bits for the signer's **incarnation**
+ * ([AnnouncementSigningConfig.incarnation]) — the mechanism that carries
+ * [DSC1-ANN-04]'s strict increase across a process restart (`computenet-ssa.6`).
+ *
+ * Twenty bits, i.e. 1,048,576 announcements per millisecond of incarnation
+ * headroom. Two numbers bound the choice from either side, and both are
+ * arithmetic rather than measurement:
+ *
+ * - *Below*: an incarnation's sequence must not run far enough to reach the
+ *   floor a **later** incarnation would be given, or a restart would go
+ *   backwards after all. With a millisecond-resolution incarnation, that needs
+ *   more than 2^20 announcements per millisecond of uptime sustained for the
+ *   whole run — a rate three orders of magnitude above what an announcement
+ *   path can carry (announcements are per publish/unpublish/link/unlink, epic
+ *   §9 risk 5), so the margin is not close.
+ * - *Above*: `epochMillis shl 20` must stay a positive `Long`. It does until
+ *   `(2^63 - 1) ushr 20` milliseconds — the year 2248. Past that
+ *   [AnnouncementSigner] refuses at construction rather than wrapping into a
+ *   negative counter, which the receiver's `counter <= seen` test would read as
+ *   a permanent replay.
+ */
+const val ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT: Int = 20
+
+/**
+ * The counter floor an [AnnouncementSigningConfig.incarnation] value stands
+ * for: the value below which that incarnation of a signer will never assign a
+ * counter.
+ *
+ * `0` maps to `0`, so an injected `{ 0L }` reproduces the pre-`computenet-ssa.6`
+ * sequence exactly (`1, 2, 3, ...`) — which is what the emit-side transcript
+ * tests inject, since what they assert is the increment and not the floor.
+ */
+fun announcementCounterFloor(incarnation: Long): Long {
+    require(incarnation >= 0 && incarnation <= (Long.MAX_VALUE ushr ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT)) {
+        "announcement counter incarnation out of range: $incarnation does not fit " +
+            "$ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT bits below Long.MAX_VALUE, so the floor it names " +
+            "would wrap negative and every announcement this signer minted would classify as REPLAY " +
+            "(valid range 0..${Long.MAX_VALUE ushr ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT})"
+    }
+    return incarnation shl ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT
+}
+
+/**
  * The injection surface: everything a [Peering.Side] needs in order to sign
  * its announcements that the kernel cannot supply itself.
  *
@@ -86,12 +130,21 @@ const val DEFAULT_ANNOUNCEMENT_TTL_MILLIS: Long = 5 * 60 * 1000L
  *   [PeerCredentials.peerId] name, which *is* the key's fingerprint on every
  *   `:identity`-backed implementation — so the default is already a key id,
  *   not a peer name that happens to be nearby.
+ * @property incarnation which *run* of this signing identity's process this
+ *   signer belongs to, read **once**, at construction. See
+ *   [AnnouncementSigner.counterFloor] for what it buys and what it assumes.
+ *   Injected rather than read directly for the same reason [clock] is — so a
+ *   test can name two incarnations without waiting for a clock to tick — and
+ *   held separate from [clock] because the two are read on different schedules
+ *   (once per signer versus once per announcement) and an operator who later
+ *   wants a *durable* incarnation source has somewhere to put it.
  */
 data class AnnouncementSigningConfig(
     val encode: (SignableAnnouncement) -> ByteArray,
     val clock: () -> Long = System::currentTimeMillis,
     val ttlMillis: Long = DEFAULT_ANNOUNCEMENT_TTL_MILLIS,
     val signerKeyId: String? = null,
+    val incarnation: () -> Long = System::currentTimeMillis,
 )
 
 /**
@@ -107,6 +160,12 @@ data class AnnouncementSigningConfig(
  * the receiver's per-identity high-water mark would then reject the whole
  * catch-up burst as replay.
  *
+ * **A `Side` is per process, though, and that is the other half.** The counter
+ * is therefore seeded from the signer's [counterFloor] rather than from zero, so
+ * that the sequence carries across a *process* restart the way it already
+ * carried across a reconnect (`computenet-ssa.6`). The reasoning, the assumption
+ * it rests on and the way it fails are on [counterFloor].
+ *
  * **Sign at send, never cache.** [sign] is called once per outgoing
  * announcement and always assigns the next counter, so a catch-up
  * re-announcement after a reconnect is a *new* signing event rather than a
@@ -118,12 +177,59 @@ class AnnouncementSigner internal constructor(
     val credentials: PeerCredentials,
     private val config: AnnouncementSigningConfig,
 ) {
-    private val counter = AtomicLong(0)
+    /**
+     * The value below which this signer will never assign a counter:
+     * [announcementCounterFloor] of [AnnouncementSigningConfig.incarnation],
+     * read once, here, and never again.
+     *
+     * **This is the whole of `computenet-ssa.6`'s fix, and it is a seed, not a
+     * rule change.** [DSC1-ANN-04] requires each counter to be strictly greater
+     * than every counter previously assigned *on that peering* — across the
+     * peering's life, not across one process's. The pre-`ssa.6` signer met that
+     * only within one process: a peer that restarted and re-minted the same
+     * identity began again at `1` while its peer's high-water mark for that
+     * identity was already past it, so its entire catch-up burst classified as
+     * [civictech.cell.DenialReason.REPLAY], produced zero registry change, and
+     * the peering never re-converged — silently from the sender's side, and
+     * permanently, because nothing lowers a high-water mark.
+     *
+     * Seeding the counter from the incarnation makes a later incarnation's first
+     * counter exceed an earlier incarnation's last, so the receiver accepts the
+     * burst with **no change to the gate at all** — no reset, no window, no
+     * exemption. That is the property that keeps BS-06 true: [sign] still does
+     * one `incrementAndGet` per announcement, counters within a signer are still
+     * strictly increasing, and a byte-identical redelivery still carries a
+     * counter the receiver has already recorded, so it is still `<= seen` and
+     * still REPLAY. Nothing about replay detection is relaxed; only the *floor*
+     * a fresh signer starts from moves.
+     *
+     * ## What it assumes, and how it fails
+     *
+     * With the default [AnnouncementSigningConfig.incarnation] the ordering of
+     * incarnations is the ordering of the signer's own wall clock across its
+     * own restarts. That is **exactly** the loosely-synchronised-clock
+     * assumption [DSC1-NV-03] already declares for expiry — this adds no new
+     * assumption, and needs less than expiry does, since only one machine's
+     * clock is compared with itself.
+     *
+     * A clock that steps **backwards** across a restart (an NTP correction, a
+     * container with no battery-backed clock) yields a floor below the peer's
+     * high-water mark, and the burst dead-letters as REPLAY — which is today's
+     * behaviour exactly, not a new failure, and it fails *closed*. What it is
+     * **not** is a durable counter: a signer whose incarnation source is the
+     * clock cannot prove monotonicity, only observe it. An operator who needs
+     * the proof injects a durable [AnnouncementSigningConfig.incarnation]
+     * (a persisted, monotonically bumped integer alongside the key material);
+     * the seam is deliberately shaped so that requires no change here.
+     */
+    val counterFloor: Long = announcementCounterFloor(config.incarnation())
+
+    private val counter = AtomicLong(counterFloor)
 
     /** See [AnnouncementSigningConfig.signerKeyId]. */
     val signerKeyId: String = config.signerKeyId ?: credentials.peerId.name
 
-    /** The last counter assigned; `0` before the first announcement. Test surface. */
+    /** The last counter assigned; [counterFloor] before the first announcement. Test surface. */
     val lastCounter: Long get() = counter.get()
 
     /**
