@@ -97,7 +97,8 @@ class CounterexampleRenderTest {
         val rendered = counterexample.renderKotlin()
 
         withClue(rendered) {
-            rendered shouldContain "civictech.oracle.run.DifferentialRunner.run(case)"
+            rendered shouldContain "civictech.oracle.run.DifferentialRunner.run(case, " +
+                "wavePrefix = civictech.oracle.run.WavePrefixOption.OFF)"
             rendered shouldContain "check(outcome is"
             rendered shouldNotContain "io.kotest"
             rendered shouldNotContain "org.junit"
@@ -156,11 +157,11 @@ class CounterexampleRenderTest {
     }
 
     @Test
-    fun `renderKotlin renders wavePrefix = ALWAYS only for a WavePrefixViolation outcome`() {
+    fun `renderKotlin renders wavePrefix = ALWAYS for a WavePrefixViolation outcome and OFF for every other outcome (computenet-kgsd)`() {
         val mismatch = shrunkCounterexample(seed = 106L)
         withClue(mismatch.renderKotlin()) {
-            mismatch.renderKotlin() shouldContain "civictech.oracle.run.DifferentialRunner.run(case)"
-            mismatch.renderKotlin() shouldNotContain "wavePrefix"
+            mismatch.renderKotlin() shouldContain "civictech.oracle.run.DifferentialRunner.run(case, " +
+                "wavePrefix = civictech.oracle.run.WavePrefixOption.OFF)"
         }
 
         val terminal = mismatch.case.topology.terminals.single().name
