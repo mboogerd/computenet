@@ -290,8 +290,12 @@ class AnnouncementAdmission private constructor(
             )
         }
 
-        // computenet-l8y5: MALFORMED_ANNOUNCEMENT, above everything else this
-        // gate decides. An announcement whose portName or minting-peer name is
+        // computenet-l8y5: MALFORMED_ANNOUNCEMENT, above every reason this gate
+        // decides EXCEPT [DenialReason.UNSIGNED] above, which is structurally
+        // prior and cannot be reordered under this: the minting-peer half reads
+        // `signerKeyId`, and on an unsigned frame that field is null — there is
+        // no minting-peer name to be ill-formed yet.
+        // An announcement whose portName or minting-peer name is
         // ill-formed UTF-16 is *unencodable*, so there are no canonical bytes
         // for any of the checks below to be about: no signature over it could
         // verify (a total verifier answers false, which used to read as
