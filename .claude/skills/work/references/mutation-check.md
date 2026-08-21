@@ -92,16 +92,24 @@ which a cache restore also freshens.
 
   ```bash
   git -C <your-worktree> diff -- <file> > "$SCRATCH/my-edits.patch"
-  git -C <your-worktree> checkout -- <file>   # now exactly HEAD's content
+  git -C <your-worktree> checkout HEAD -- <file>   # now exactly HEAD's content
   # ... mutate, run, watch the named test FAIL, then revert ...
-  git -C <your-worktree> checkout -- <file>
+  git -C <your-worktree> checkout HEAD -- <file>
   git -C <your-worktree> apply "$SCRATCH/my-edits.patch"
   ```
+
+  **`HEAD` in the revert is load-bearing too.** If you mutated with
+  `git checkout <sha> -- <file>` — "back to base" — that form also STAGES
+  what it writes, and a bare `git checkout -- <file>` afterwards restores
+  from the index, i.e. the mutation. One reviewer ran two later mutations
+  against unreverted sources that way (computenet-l8ju). `checkout HEAD --`
+  restores from the commit whatever the index holds.
 
 Then prove it:
 
 ```bash
 git -C <your-worktree> diff HEAD -- <file>  # tracked: expect EMPTY output
+git -C <your-worktree> diff --cached -- <file>   # and nothing STAGED either
 grep -n '<the mutated phrase>' <file>       # untracked: expect NO match
 rm -f <your-worktree>/.mutation-in-progress
 ls <your-worktree>/.mutation-in-progress    # expect: No such file
