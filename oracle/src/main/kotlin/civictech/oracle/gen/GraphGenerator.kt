@@ -23,6 +23,11 @@ data class GeneratedGraph(
     val topology: CaseTopology,
     /** The lowered, replayable kernel graph. */
     val spec: GraphSpec,
+    /**
+     * `null` unless `GeneratorConfig.replicaCount > 1`: which source handle is replicated, onto
+     * which hosts, under which replica [SourceId]s (`[ORA2-GEN-03]`).
+     */
+    val replicaPlan: ReplicaPlan? = null,
 ) : Serializable
 
 /**
@@ -273,12 +278,15 @@ class GraphGenerator(private val config: GeneratorConfig) {
             // Built before the spec, and the placement draw stays inside the constructor call, so
             // the rng is consumed in exactly the order it was before `lower` moved out of this
             // class: choosePlacement() then a lowering that draws nothing at all.
+            val placement = choosePlacement()
+            val plan = chooseReplicaPlan(placement)
             val topology = CaseTopology(
                 nodes = nodes.values.map { TopologyNode(it.handle, it.entry.id, it.inputs, it.source) },
                 terminals = allTerminals,
-                placement = choosePlacement(),
+                placement = placement,
+                replicaPlacement = plan?.let { mapOf(it.handle to it.hosts) }.orEmpty(),
             )
-            return GeneratedGraph(topology = topology, spec = GraphGenerator.lower(topology))
+            return GeneratedGraph(topology = topology, spec = GraphGenerator.lower(topology), replicaPlan = plan)
         }
 
         /**
@@ -310,8 +318,8 @@ class GraphGenerator(private val config: GeneratorConfig) {
          * always available; no self-loop can be drawn since an input always names an
          * already-existing, distinct node.
          */
-        private fun choosePlacement(): Map<String, Int> {
-            if (config.hostCount <= 1) return nodes.keys.associateWith { 0 }
+        private fun choosePlacement(): MutableMap<String, Int> {
+            if (config.hostCount <= 1) return LinkedHashMap(nodes.keys.associateWith { 0 })
 
             val edges = nodes.values.flatMap { node -> node.inputs.map { from -> from to node.handle } }
             check(edges.isNotEmpty()) {
@@ -329,6 +337,40 @@ class GraphGenerator(private val config: GeneratorConfig) {
             placement[to] = toOrdinal
 
             return placement
+        }
+
+        /**
+         * `[ORA2-GEN-03]`: the replica-placement dimension. `null` for `replicaCount == 1`, which
+         * is why an ORA1 case's [rng] stream is untouched by this method existing.
+         *
+         * One source node is replicated — the first one, deterministically, rather than a drawn
+         * one: which source carries the replicas is not a dimension anything varies over (every
+         * source of a case shares an output shape and a catalog entry family, `chooseRootShape`),
+         * so drawing it would consume [rng] to no effect and change every downstream draw.
+         *
+         * Its replicas take **distinct** host ordinals, drawn as a prefix of a shuffled
+         * `0 until hostCount` so the mesh is genuinely cross-host and never collapses two replicas
+         * onto one `ManagedHost`. `GeneratorConfig` already required `hostCount >= replicaCount`,
+         * so the draw cannot exhaust. The primary's own ordinal in [placement] is overwritten to
+         * the first replica's, so the two views never disagree about where replica 0 lives.
+         */
+        private fun chooseReplicaPlan(placement: MutableMap<String, Int>): ReplicaPlan? {
+            if (!config.replicated) return null
+            val sourceNode = nodes.values.firstOrNull { it.source != null }
+                ?: error("replicaCount ${config.replicaCount} > 1 needs a source node to replicate; this topology has none")
+
+            val ordinals = (0 until config.hostCount).toMutableList()
+            val hosts = ArrayList<Int>(config.replicaCount)
+            repeat(config.replicaCount) { hosts += ordinals.removeAt(rng.nextInt(ordinals.size)) }
+
+            placement[sourceNode.handle] = hosts.first()
+            val base = sourceNode.source!!.id
+            return ReplicaPlan(
+                handle = sourceNode.handle,
+                replicas = (0 until config.replicaCount).map { SourceId("$base#r$it") },
+                writers = (0 until config.replicaCount).map { "w$it" },
+                hosts = hosts,
+            )
         }
 
         /**
