@@ -85,8 +85,8 @@ class CaseExecutionTest {
     // ------------------------------------------------------------------ the two sink cells
 
     /**
-     * A sink with an ordinary [FanInlet] — **no** policy of any tier, so it is the cell the
-     * refusal must NOT fire on, and the instrument for the link measurement.
+     * A sink with an ordinary [FanInlet] — **no** policy of any tier, so it is the instrument
+     * for the bare link measurement and for the policy-free control.
      */
     private class Recorder(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         val received = mutableListOf<SetDelta<Any?>>()
@@ -104,8 +104,8 @@ class CaseExecutionTest {
     /**
      * The same sink with a [WaveFrontier] installed on its inlet — the general opt-in form
      * ("any plain cell can opt into the same completeness gate", [GlitchFreeCell]'s KDoc),
-     * deliberately used here in preference to [GlitchFreeCell] itself so the refusal is pinned
-     * to the **policy tier** rather than to the sugar class. [alignedSugarJoinIsRefusedToo]
+     * deliberately used here in preference to [GlitchFreeCell] itself so the equality is pinned
+     * to the **policy tier** rather than to the sugar class. [alignedSugarJoinIsBridgedToo]
      * covers the sugar class as well.
      */
     private class AlignedJoin(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
