@@ -60,6 +60,11 @@ a plausible result — a verdict for a run that never happened:
 grep -E '^e:|BUILD' "$SCRATCH/mut.log"     # 'e:' lines = it never compiled
 ```
 
+**A `println` probe prints nothing here** — Gradle hides test stdout; read
+it from the JUnit XML's `<system-out>` ([gradle-evidence.md](gradle-evidence.md),
+"The console is not the suite"). One reviewer lost a round waiting for console output that was in
+the XML all along (computenet-ozgs).
+
 **`--rerun` alone is not enough here.** It can print an unmarked task line
 while restoring the previous run's JUnit XML from the build cache, so an
 unmarked line is **not** proof of execution (computenet-qsfu). For a

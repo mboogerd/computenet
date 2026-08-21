@@ -59,6 +59,17 @@ re-run with `--rerun` — **one `--rerun` per task name**: it binds to the task
 it follows, so `:a:test :b:test --rerun` re-runs only `:b:test`
 (computenet-jobe; [semantics](#--rerun-semantics) below).
 
+**The console is not the suite, and test stdout is not in it at all.**
+Gradle's console shows the tail of what it chose to print, never a suite
+total: one implementer read `27 tests` off the tail of a `:oracle:test`
+run whose XML held 408 across 45 files, and the undercount passed as "all
+green" (computenet-ozgs). Counts come from `junit-count.py` below, nothing
+else — not a hand-rolled XML regex: `<testcase>`/`<failure>` adjacency
+reads failures as passes. And a `println` inside a test goes **nowhere** on this build —
+`testLogging.showStandardStreams` is off — so a print probe, or a test whose
+acceptance is "reports its own figure", reads as silence; its output is in
+the XML's `<system-out>`: `grep -A3 '<system-out>' <module>/build/test-results/test/TEST-<Class>.xml`.
+
 **3. The JUnit XML counts and timestamp**, which separate a run from a
 replay — a cached repeat run leaves `newest` unchanged with identical counts
 and a green build; `--rerun` advances it (measured 2026-08-14). Count with
