@@ -1,9 +1,23 @@
 package civictech.oracle.run
 
+import civictech.cell.Cell
+import civictech.cell.CellRef
+import civictech.cell.Propagate
+import civictech.cell.consistency.GlitchFree
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.view.SetView
 import civictech.cell.graph.ConnectStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.GraphStep
 import civictech.cell.graph.SpawnStep
+import civictech.cell.host.ManagedHost
+import civictech.cell.host.inlet
+import civictech.cell.port.FanInlet
+import civictech.cell.port.PolicyTier
+import civictech.cell.port.PortRef
+import civictech.cell.port.PortRegistry
+import civictech.cell.port.Use
+import civictech.cell.port.registerPort
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
 import civictech.oracle.gen.CaseGenerator
@@ -31,6 +45,8 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import civictech.testkit.SimWorld
+import java.util.UUID
 
 /**
  * BS-8 / `[ORA1-DIFF-06]` — the wave-prefix glitch-freedom oracle, epic design **D5**: while a
@@ -103,13 +119,17 @@ class WavePrefixTest {
      *            └── exp (flatMapSet: characters) ────┘
      * ```
      *
+     * [expansionArmHost] places the `flatMapSet` arm on a second host ordinal (everything else
+     * stays on 0) — computenet-g25w's reproduction, and the only knob that separates the
+     * co-hosted and cross-host readings of one identical graph.
+     *
      * `intersect` is deliberately NOT the fan-in here even though computenet-vvre (`8d840f26`)
      * and computenet-88hv (`d40e66f8`) landed its tag-minting fix in this branch's base: `union`
      * keeps both arms' contributions visible in the terminal's value, which is what makes a
      * half-published wave a distinguishable state. An `intersect` would hide one arm's
      * contribution behind the other's.
      */
-    private fun diamondCase(script: CaseScript, seed: Long = 8L) = GeneratedCase(
+    private fun diamondCase(script: CaseScript, seed: Long = 8L, expansionArmHost: Int = 0) = GeneratedCase(
         seed = seed,
         topology = CaseTopology(
             nodes = listOf(
@@ -119,7 +139,7 @@ class WavePrefixTest {
                 TopologyNode("u", CoreOperators.Ids.UNION, listOf("flt", "exp"), null),
             ),
             terminals = listOf(TerminalSpec("united", "u")),
-            placement = mapOf("src" to 0, "flt" to 0, "exp" to 0, "u" to 0),
+            placement = mapOf("src" to 0, "flt" to 0, "exp" to expansionArmHost, "u" to 0),
         ),
         spec = spec(
             SpawnStep("src", factory(CoreOperators.Ids.SET)),
@@ -398,8 +418,232 @@ class WavePrefixTest {
         val twoHost = single.copy(
             topology = single.topology.copy(placement = single.topology.placement + ("u" to 1)),
         )
-        withClue("cross-host mid-wave states of undecided provenance — computenet-g25w") {
+        withClue("the settled multi-host reason still cites its bead — computenet-g25w") {
             WavePrefixOracle.notApplicableBecause(twoHost).shouldNotBeNull().contains("computenet-g25w") shouldBe true
+        }
+    }
+
+    // ------------------------------------ computenet-g25w: the cross-host mid-wave observation
+
+    /**
+     * The pinned reproduction behind [WavePrefixOracle.notApplicableBecause]'s multi-host
+     * refusal (computenet-g25w), and the measurement that settles what it is.
+     *
+     * The bead asked a binary question: is the cross-host diamond's mid-wave terminal state a
+     * kernel glitch-freedom defect, or an artifact of [CaseExecution.assemble]'s bare-`Propagate`
+     * cross-host wiring? **It is neither**, and the three tests below are the three measurements
+     * that show it, in the order they discriminate:
+     *
+     * 1. [`the cross-host diamond publishes terminal states matching no wave prefix`] reproduces
+     *    it: the same script over the same graph is prefix-clean at `expansionArmHost = 0` and
+     *    shows three non-prefix states at `expansionArmHost = 1`.
+     * 2. [`the same torn states are published on ONE host, so the tear is not the host boundary`]
+     *    is the discriminator: read the union's **published stream** rather than the
+     *    scheduler-step boundary and the *co-hosted* graph — zero cross-host edges — publishes
+     *    the identical six-state sequence, torn states included. So the wiring cannot be the
+     *    cause: the effect is there without it.
+     * 3. [`nothing in the diamond declares glitch-freedom, so an eager per-arm publish is
+     *    permitted`] is why that is legal rather than a defect: `[22-GF-01]` makes glitch-freedom
+     *    **opt-in** ("a cell that has *declared itself* glitch-free SHALL NOT expose derived state
+     *    that mixes pre-wave and post-wave inputs … Non-declaring cells process eagerly with zero
+     *    coordination cost"), and no operator in this diamond declares it.
+     *
+     * What the host boundary changes is **observation granularity, not semantics**. Co-hosted,
+     * the whole cascade runs inline inside the one scheduler task the source op started, so the
+     * per-step observer never lands between the two arms' publishes; across a host boundary the
+     * far arm's delta is a separate task, so the same intermediate becomes visible at a step
+     * boundary. That is why [WavePrefixOracle.appliesTo]'s single-host restriction **stays**: the
+     * property it checks is a wave-boundary property that only the co-hosted inlining makes
+     * observable-at-wave-boundaries, not a kernel guarantee about non-declaring fan-ins.
+     *
+     * The fourth test records the residual the bead's hypothesis was half-right about: the
+     * cross-host connect really does establish no target-side link, so it really would carry no
+     * completeness protocol — to a join that had one. None of these cases does, which is why it
+     * is a filed follow-up (**computenet-xj0v**) and not this bead's answer.
+     */
+    private fun crossHostScript() = CaseScript(
+        listOf(
+            CaseStep.Op(source, ScriptEvent.Add(writer, "ab")),
+            CaseStep.Op(source, ScriptEvent.Add(writer, "cd")),
+            CaseStep.Op(source, ScriptEvent.Remove(writer, "ab")),
+        ),
+    )
+
+    /**
+     * Drives [case] one scheduler step at a time, reading the terminal after every productive
+     * step — [DifferentialRunner.Driving]'s own observation point, reproduced here because
+     * [DifferentialRunner.run] refuses to prefix-check a multi-host case by design.
+     */
+    private fun stepBoundaryStates(case: GeneratedCase): List<ModelState> {
+        val world = SimWorld(seed = case.seed)
+        val graph = CaseExecution.assemble(case, world).graph
+        val observed = mutableListOf<ModelState>()
+        case.script.steps.filterIsInstance<CaseStep.Op>().forEach { op ->
+            when (val event = op.event) {
+                is ScriptEvent.Add -> graph.sources.getValue(op.source).add(event.element)
+                is ScriptEvent.Remove -> graph.sources.getValue(op.source).remove(event.element)
+                else -> Unit
+            }
+            while (world.controller.step()) observed += graph.terminals.getValue("united").current()
+        }
+        return observed
+    }
+
+    @Test
+    fun `the cross-host diamond publishes terminal states matching no wave prefix`() {
+        val coHosted = diamondCase(crossHostScript())
+        val crossHost = diamondCase(crossHostScript(), expansionArmHost = 1)
+        val prefixes = WavePrefixOracle.prefixesOf(coHosted.script, diamondReference(coHosted))
+            .map { it.getValue("united") }
+
+        withClue("the two cases differ ONLY in placement, so the graph cannot be the variable") {
+            crossHost.copy(topology = crossHost.topology.copy(placement = coHosted.topology.placement)) shouldBe coHosted
+        }
+
+        val coHostedStates = stepBoundaryStates(coHosted)
+        withClue("co-hosted: one productive step per wave, every one of them a prefix") {
+            coHostedStates shouldBe listOf(prefixes[1], prefixes[2], prefixes[3])
+        }
+
+        val crossHostStates = stepBoundaryStates(crossHost)
+        val torn = crossHostStates.filter { it !in prefixes }
+        withClue("cross-host: the three torn states, one per wave — filter arm in, expansion arm not") {
+            torn.distinct() shouldBe listOf(
+                ModelState.SetState(setOf("ab")),
+                ModelState.SetState(setOf("ab", "a", "b", "cd")),
+                ModelState.SetState(setOf("a", "b", "cd", "c", "d")),
+            )
+        }
+        withClue("and the checker calls them NO_MATCHING_PREFIX, not REGRESSED") {
+            val checker = WavePrefixOracle.checker(crossHost, "marker", diamondReference(crossHost))
+            val violation = crossHostStates.firstNotNullOfOrNull { checker.observeTerminal("united", it) }
+            violation.shouldNotBeNull().kind shouldBe RunOutcome.WavePrefixViolation.Kind.NO_MATCHING_PREFIX
+        }
+        withClue("NOTHING is lost: both placements settle on the same, correct final state") {
+            coHostedStates.last() shouldBe prefixes.last()
+            crossHostStates.last() shouldBe prefixes.last()
+        }
+    }
+
+    /**
+     * A recorder of the union's **published** stream: its running fold after every arriving
+     * delta, which is a strictly finer observation point than a scheduler-step boundary.
+     */
+    private class PublishRecorder(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        private val view = SetView<Any?>()
+        val published = mutableListOf<ModelState>()
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Any?>>>())
+
+        init {
+            inlet.serve(object : Propagate<SetDelta<Any?>> {
+                override fun propagate(value: SetDelta<Any?>) {
+                    view.apply(value)
+                    published += ModelState.SetState(view.current())
+                }
+            })
+        }
+    }
+
+    @Test
+    fun `the same torn states are published on ONE host, so the tear is not the host boundary`() {
+        val case = diamondCase(crossHostScript())
+        withClue("this case has no cross-host edge at all") {
+            case.topology.placement.values.toSet() shouldBe setOf(0)
+        }
+        val prefixes = WavePrefixOracle.prefixesOf(case.script, diamondReference(case))
+            .map { it.getValue("united") }
+
+        val world = SimWorld(seed = case.seed)
+        val assembly = CaseExecution.assemble(case, world)
+        val recorder = PublishRecorder()
+        world.host.managementInlet.call.spawn(recorder)
+        world.host.managementInlet.call.connect(assembly.refs.getValue("u"), "outlet", recorder.ref, "inlet")
+
+        case.script.steps.filterIsInstance<CaseStep.Op>().forEach { op ->
+            when (val event = op.event) {
+                is ScriptEvent.Add -> assembly.graph.sources.getValue(op.source).add(event.element)
+                is ScriptEvent.Remove -> assembly.graph.sources.getValue(op.source).remove(event.element)
+                else -> Unit
+            }
+        }
+        while (world.controller.step()) { /* drain */ }
+
+        withClue("two publishes per wave — one per arm — even though every cell is co-hosted") {
+            recorder.published.size shouldBe 6
+        }
+        withClue("and three of them are the SAME torn states the cross-host case exposes") {
+            recorder.published.filter { it !in prefixes } shouldBe listOf(
+                ModelState.SetState(setOf("ab")),
+                ModelState.SetState(setOf("ab", "a", "b", "cd")),
+                ModelState.SetState(setOf("a", "b", "cd", "c", "d")),
+            )
+        }
+    }
+
+    @Test
+    fun `nothing in the diamond declares glitch-freedom, so an eager per-arm publish is permitted`() {
+        listOf(
+            CoreOperators.Ids.SET,
+            CoreOperators.Ids.FILTER,
+            CoreOperators.Ids.FLAT_MAP_SET,
+            CoreOperators.Ids.UNION,
+        ).forEach { id ->
+            val cell = factory(id).create(CellRef(UUID.randomUUID()))
+            withClue("$id must not carry the PN-12 GlitchFree marker") {
+                (cell is GlitchFree) shouldBe false
+            }
+            val ports = PortRegistry.of(cell)
+            withClue("$id must carry no ALIGN-tier (wave-frontier) inlet policy either") {
+                ports.names().filter { name ->
+                    (ports[name] as? FanInlet<*>)?.hasPolicy(PolicyTier.ALIGN) == true
+                }.shouldBeEmpty()
+            }
+        }
+    }
+
+    @Test
+    fun `the cross-host wiring establishes no target-side link, and still drops nothing`() {
+        val case = diamondCase(crossHostScript())
+        val world = SimWorld(seed = case.seed)
+        val assembly = CaseExecution.assemble(case, world)
+        val union = assembly.refs.getValue("u")
+
+        val local = PublishRecorder()
+        world.host.managementInlet.call.spawn(local)
+        world.host.managementInlet.call.connect(union, "outlet", local.ref, "inlet")
+
+        val remoteHost = ManagedHost(scheduler = world.controller.scheduler(), registry = world.registry)
+        val remote = PublishRecorder()
+        remoteHost.managementInlet.call.spawn(remote)
+        world.host.managementInlet.call.connect(
+            union,
+            "outlet",
+            Use.fixed(world.registry.inlet<Any>(remote.ref, "inlet"), PortRef.generate()),
+        )
+
+        withClue("a same-host connect registers a link the target inlet can see") {
+            local.inlet.linking.links.size shouldBe 1
+        }
+        withClue(
+            "the bare-Propagate cross-host connect does not: no link identity on the target " +
+                "side means no EdgeOpen and no per-inlink frontier bookkeeping there. That is a " +
+                "real harness limit for [22-GF-03] — it is just not the cause of this bead, " +
+                "because no case builds a frontier join across the cut.",
+        ) {
+            remote.inlet.linking.links.shouldBeEmpty()
+        }
+
+        case.script.steps.filterIsInstance<CaseStep.Op>().forEach { op ->
+            when (val event = op.event) {
+                is ScriptEvent.Add -> assembly.graph.sources.getValue(op.source).add(event.element)
+                is ScriptEvent.Remove -> assembly.graph.sources.getValue(op.source).remove(event.element)
+                else -> Unit
+            }
+        }
+        while (world.controller.step()) { /* drain */ }
+
+        withClue("the data plane is unaffected: same publish count, same final value") {
+            remote.published shouldBe local.published
         }
     }
 
