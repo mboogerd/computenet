@@ -23,6 +23,11 @@ for the `requiredHarnessSha` guard); every first attempt without them fails
   --tests '*<ProbeTest>*' -Dcivictech.bench.harnessSha=$(git rev-parse --short HEAD)
 ```
 
+**A cited test class may not be findable by filename**: `--tests` takes the
+class name, and `ThroughputReportRenderTest` lives inside
+`ThroughputReportTest.kt` — `grep -rn "class <Name>" --include='*.kt' bench/src`
+finds it where `git ls-files | grep <Name>` does not (computenet-db3k).
+
 **Any command, flag or entry point the diff DOCUMENTS is a claim, and you
 check a claim by running it.** Extract it with `sed`/`awk` rather than
 retyping — a check that only works when retyped charitably is not a working
