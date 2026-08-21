@@ -185,6 +185,13 @@ edge already models the race; the prose must not copy it. Write "do not
 edit X.kt: it is claimed by whichever open sibling holds it in
 `metadata.files` — check before editing", and name no ids.
 
+**Decision ids are qualified, always.** An epic and a feature each carry a
+numbered decision list and bd renders both as bare `D<n>`; `4ru`'s D6 and
+`4ru.1`'s D6 were different decisions, an implementer cited the wrong one
+twice, and its reviewer nearly "corrected" a right one (computenet-6ag4).
+Emit lists as `<bead-short-id>-D<n>` (`4ru.1-D6`) and cite them the same
+way; a bare `D<n>` in a task is a defect of the breakdown.
+
 **A task is a plan, not a request** — see the task section of
 [issue-quality.md](issue-quality.md). What you hand the implementer is what
 plan mode would hand you: the design already decided, only execution left. If
