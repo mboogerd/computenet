@@ -1510,6 +1510,13 @@ either widen the claim or satisfy yourself the file is read-only. This
 applies wherever you author a bead, not only here: 5c's red-check task, 5e's
 residuals, step 7's friction items.
 
+**It is blind to anything that is not a path** — a bracketed requirement id
+(`[ORA1-HONEST-02]`), a marker, a type name — and passes such a bead CLEAN
+(computenet-hws5, then computenet-vjrs). Resolve each one by hand before
+dispatching: `git grep -l -F '[THE-ID]'` lists the files that *cite* it,
+which is usually not where the artifact lives; the pinning test's KDoc says
+where ("which is `MapCellModel`'s file KDoc"). Widen the claim to that file.
+
 Dispatch the batch in one message. Anything you add reaches the agent as
 established fact — relay artifacts, not mechanism:
 
