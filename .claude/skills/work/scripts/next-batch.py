@@ -42,6 +42,7 @@ ever returned alone — safer than guessing a claim for it.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -495,7 +496,11 @@ def merged_into_feature(tid, feature):
     for ref in (f"refs/heads/feature/{feature}", f"refs/remotes/origin/feature/{feature}"):
         try:
             out = subprocess.run(
-                ["git", "log", "--oneline", "-1", f"--grep={tid}", ref],
+                # Anchored: `--grep` is an unanchored substring regex, so a bare
+                # id for task .5.1 would match a sibling's `.5.10` commit and
+                # route fresh work to review (the inverse failure).
+                ["git", "log", "--oneline", "-1", "-E",
+                 f"--grep={re.escape(tid)}([^0-9.]|$)", ref],
                 capture_output=True, text=True, timeout=10)
             if out.returncode == 0 and out.stdout.strip():
                 return True
