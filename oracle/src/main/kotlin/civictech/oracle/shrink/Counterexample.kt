@@ -22,7 +22,7 @@ import kotlin.reflect.KClass
  * non-quiescence and report a counterexample for a defect nobody was looking at. The variant
  * plus the terminal is the pair that survives reduction and still names one finding.
  *
- * ## The three variants that carry no terminal
+ * ## The variants that carry no terminal
  *
  * [RunOutcome.DeadLetterFailure], [RunOutcome.NonQuiescence] and
  * [RunOutcome.ModelEvaluationFailure] carry no terminal name — there is no terminal to name; the
@@ -34,6 +34,15 @@ import kotlin.reflect.KClass
  * a smaller reproduction — but it cannot tell one dead-lettered message apart from another, so a
  * reduction that changes *which* message is lost is retained as if it were the same failure.
  * Read a shrunk dead-letter counterexample with that in mind.
+ *
+ * ORA2's two **mesh** verdicts ([RunOutcome.ReplicaDivergence], [RunOutcome.ReplicasAgreeButWrong])
+ * join that group, and for a structural reason rather than an omission: neither is reported *on* a
+ * terminal. A mesh verdict is about the replicas of one logical id, so the field that would
+ * discriminate two such findings is the logical id and the differing key set, not a terminal name.
+ * They are still told apart from each other and from every other kind by the variant — which is
+ * the distinctness `[ORA2-CONV-03]` requires — so a shrink can never walk from a divergence to a
+ * unanimous-wrong answer and report the wrong defect. Within one variant it matches by kind alone,
+ * the same deliberately-weaker discipline the three above have.
  *
  * @property kind the reported [RunOutcome] variant.
  * @property terminal the terminal the failure was reported on, or `null` for a variant that
@@ -61,6 +70,10 @@ data class FailureSignature(val kind: KClass<out RunOutcome>, val terminal: Stri
             is RunOutcome.NonQuiescence -> FailureSignature(RunOutcome.NonQuiescence::class, null)
             is RunOutcome.ModelEvaluationFailure ->
                 FailureSignature(RunOutcome.ModelEvaluationFailure::class, null)
+
+            is RunOutcome.ReplicaDivergence -> FailureSignature(RunOutcome.ReplicaDivergence::class, null)
+            is RunOutcome.ReplicasAgreeButWrong ->
+                FailureSignature(RunOutcome.ReplicasAgreeButWrong::class, null)
         }
     }
 }
