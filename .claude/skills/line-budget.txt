@@ -31,7 +31,8 @@
 # 8059 -> 8069 on 2026-08-21: computenet-ex6w — a mutation must not overlap the
 # original (prefix-preserving renames, coerced numbers, glob-matching paths).
 # 8069 -> 8075 on 2026-08-21: computenet-vjrs (see PR body).
-work                8075
+# 8075 -> 8082 on 2026-08-21: computenet-xbkm — route 0 contention stated in terms of the repo-wide gate.
+work                8082
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
