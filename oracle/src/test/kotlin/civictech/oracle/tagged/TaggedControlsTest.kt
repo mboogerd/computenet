@@ -77,6 +77,19 @@ import java.util.UUID
  * single-instance generated OR-map case could carry a substituted reference through
  * `DifferentialRunner`, which is a seam these two did not have when they were written; neither
  * has been rewritten onto it.
+ *
+ * **That single-instance seam serves only ONE of the two, and which one is measured, not
+ * assumed.** With a single instance there are no deliveries and no concurrency for the dot order
+ * to resolve, so a key's winner is simply its last write — which is exactly what
+ * [NaiveArrivalOrderMapModel] computes. Over a delivery-free one-source script
+ * (`put/put/re-put/removeKey/put/removeKey/put`) its fold is **equal** to
+ * [civictech.oracle.bind.SingleInstanceOrMapModel]'s dot fold, both `{k1=vZ, k2=v3}` (measured
+ * 2026-08-21, reviewing computenet-6v7y). CTL-01 ported onto that path would therefore hold
+ * identically under the mutant and under the correct reference — the vacuous shape this file's
+ * own CTL-01 KDoc records as the defect a prior review caught — so CTL-01 still has no seam it
+ * could usefully move to. [RemoveAllDotModel] does discriminate there (a put *after* a remove
+ * lives under the real reset-remove and stays wiped under the mutant: `{}` against
+ * `{k1=vZ, k2=v3}` on the same script), so CTL-03 is the one this seam could carry.
  */
 class TaggedControlsTest {
 
