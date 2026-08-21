@@ -58,13 +58,17 @@ import java.util.UUID
  * completeness condition over an edge set **missing the cross-host arm**, which is the opposite
  * of what [22-GF-03] requires.
  *
- * The bead left two routes open. Bridging the edge through a real link — `:wire`'s
- * `WireEdgeLink`, the shape spec 22 names — is **not reachable from here**:
- * `[ORA1-API-04]` forbids `:oracle` a dependency on `:wire`, and
- * `civictech.oracle.ModuleDependencyTest` enforces it on both the classpath and the build file.
- * So the harness takes the other route and **refuses at assemble time**, naming the handle, the
- * inlet and the policy tier. The limit becomes a loud, named refusal instead of a silently
- * truncated edge set.
+ * The bead left two routes open, and **both are reachable from here** — the bead's phrase
+ * "`:wire`'s `WireEdgeLink`" is misleading: `WireEdgeLink`, `bridgeTo`/`bridgeFrom`,
+ * `BridgeEgressCell`/`BridgeIngressCell` and `WireCodec` are all in **`:kernel`**
+ * (`civictech.cell.wire`, not `:wire`'s `civictech.wire`), which `:oracle` depends on, so
+ * `[ORA1-API-04]` does not bar them;
+ * `kernel/src/test/kotlin/civictech/cell/consistency/GlitchFreeBridgedDiamondTest.kt` builds
+ * this very shape across two `ManagedHost`s with no `:wire` dependency. Bridging every
+ * cross-host edge for real changes the harness's cross-host model, so it is filed as follow-up
+ * work; what is done **here** is the other route — **refuse at assemble time**, naming the
+ * handle, the inlet and the policy tier — so the limit is a loud, named refusal instead of a
+ * silently truncated edge set while that work is outstanding.
  *
  * Nothing in the corpus can build that shape today: no registered catalog operator carries
  * `GlitchFree` or installs an ALIGN policy. The refusal is a tripwire for the moment one does —

@@ -191,9 +191,9 @@ object CaseExecution {
      * runs on a second host instead of being refused.
      *
      * **One cross-host shape is still refused** — a connect into an ALIGN-tier inlet, i.e. a
-     * wave-frontier join fed across the cut. See [refuseFrontierAcrossCut] for the measurement
-     * and for why a named refusal, not a bridged link, is the answer available in this module
-     * (computenet-xj0v, `[22-GF-03]`).
+     * wave-frontier join fed across the cut. See [refuseFrontierAcrossCut] for the measurement,
+     * and for why the refusal is a tripwire standing in for a bridged link this harness does
+     * not build yet (computenet-xj0v, `[22-GF-03]`).
      *
      * Then links a fold behind every **eager** (non-late) terminal — on the SAME host as the
      * node it reads, so that link is always same-host too — and binds every source.
@@ -289,11 +289,23 @@ object CaseExecution {
      * cut would therefore compute its completeness condition over an edge set that omits the
      * cross-host arm — the opposite of `[22-GF-03]`.
      *
-     * The other route — routing the edge through a real bridged link, `:wire`'s `WireEdgeLink`
-     * being the shape spec 22 names — is **not reachable from this module**: `[ORA1-API-04]`
-     * forbids `:oracle` a dependency on `:wire`, enforced by
-     * `civictech.oracle.ModuleDependencyTest` on both the classpath and the build file. So the
-     * limit is made loud instead of silent. Nothing the generator can draw trips this today
+     * The other route — routing the edge through a real bridged link — **is** reachable from
+     * this module, and the bead's phrase "`:wire`'s `WireEdgeLink`" is what misleads here.
+     * [civictech.cell.wire.WireEdgeLink], `bridgeTo`/`bridgeFrom`,
+     * [civictech.cell.wire.BridgeEgressCell]/[civictech.cell.wire.BridgeIngressCell] and
+     * [civictech.cell.wire.WireCodec] all live in **`:kernel`** (package `civictech.cell.wire`,
+     * *not* `:wire`'s `civictech.wire`, whose fingerprint in
+     * `civictech.oracle.ModuleDependencyTest` is `civictech.wire.WsTransport`), and `:oracle`
+     * has `api(project(":kernel"))` — so `[ORA1-API-04]` does not bar them.
+     * `kernel/src/test/kotlin/civictech/cell/consistency/GlitchFreeBridgedDiamondTest.kt`
+     * bridges two [ManagedHost]s under one `SimulationController`, with a
+     * [civictech.cell.proxy.InvocationSink] for egress and no `:wire` dependency at all — that
+     * is this exact `[22-GF-03]` shape, built from `:kernel` alone.
+     *
+     * So this refusal is a **cheap tripwire, not the only option available**: wiring every
+     * cross-host edge as a bridged pair changes the harness's whole cross-host model and is
+     * filed as follow-up work rather than done here. Until it lands the limit is loud instead
+     * of silent. Nothing the generator can draw trips this today
      * (no registered catalog operator carries [civictech.cell.consistency.GlitchFree] or
      * installs an ALIGN policy); it fires the moment one is registered, which is exactly when
      * a silent miscomputation would otherwise begin.
@@ -317,11 +329,13 @@ object CaseExecution {
                 "join). The harness wires a cross-host edge as a bare Propagate handle on the " +
                 "source host only, so the target inlet registers no link, and a frontier there " +
                 "would fold its completeness condition over an edge set MISSING this arm — " +
-                "which [22-GF-03] forbids. Bridging the edge for real needs :wire's " +
-                "WireEdgeLink, and [ORA1-API-04] bars :oracle from depending on :wire, so this " +
-                "case is refused rather than run on a truncated edge set (computenet-xj0v). " +
+                "which [22-GF-03] forbids. Bridging the edge for real means wiring it as a " +
+                "kernel bridged pair (civictech.cell.wire's bridgeTo/bridgeFrom and " +
+                "WireEdgeLink, which are in :kernel and so ARE available here — see " +
+                "GlitchFreeBridgedDiamondTest); this harness does not do that yet, so the case " +
+                "is refused rather than run on a truncated edge set (computenet-xj0v). " +
                 "Place '${step.to}' on the same host ordinal as '${step.from}', or bridge the " +
-                "edge from a module that may depend on :wire."
+                "edge as a real link."
         }
     }
 
