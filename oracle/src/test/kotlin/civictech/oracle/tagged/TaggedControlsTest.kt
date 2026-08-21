@@ -85,13 +85,23 @@ class TaggedControlsTest {
      * `[ORA2-CTL-01]`/BS-13: over [GeneratorConfig.REPLICATED_SWEEP_SEEDS] (the fixed, checked-in
      * range the replicated generator dimension is measured against —
      * `civictech.oracle.tagged.MultiWriterGenerationTest` uses the same range), at least one
-     * replica's [NaiveArrivalOrderMapModel] fold must disagree with [DotModel]'s converged
-     * reference. If it never did, the arrival-order fold would be observationally equivalent to
-     * the dot-order one and the control would prove nothing — precisely the failure mode
-     * [civictech.oracle.run.DivergenceControlTest] found for ORA1's `SetCell` case. The OR-map's
-     * concurrent-put resolution is a genuinely different mechanism from arrival order (dot
-     * `(counter, sourceId)` versus "last write wins"), so unlike that ORA1 case this control is
-     * expected to fire.
+     * replica's [NaiveArrivalOrderMapModel] fold must disagree with **that same replica's**
+     * [DotModel] fold. If it never did, the arrival-order fold would be observationally
+     * equivalent to the dot-order one and the control would prove nothing — precisely the
+     * failure mode [civictech.oracle.run.DivergenceControlTest] found for ORA1's `SetCell` case.
+     * The OR-map's concurrent-put resolution is a genuinely different mechanism from arrival
+     * order (dot `(counter, sourceId)` versus "last write wins"), so unlike that ORA1 case this
+     * control is expected to fire.
+     *
+     * **The comparison is per-replica on BOTH sides, and that is load-bearing.** As first
+     * landed this test compared each replica's naive fold against [DotModel]'s *converged*
+     * state, which is vacuous: these seeds do not fully gossip, so a replica's own — perfectly
+     * CORRECT — dot fold differs from the converged state on all 40 seeds too (measured
+     * 2026-08-21 while reviewing computenet-4ru.1.5). The assertion therefore held identically
+     * under the correct implementation and under the mutant, pinning nothing while reading as
+     * evidence. Like-for-like, the mutant is discriminated on 28 of the 40 seeds, and
+     * substituting the correct per-replica fold for [NaiveArrivalOrderMapModel] now reddens
+     * this test — which is the property that makes it a control at all.
      */
     @Test
     fun `CTL-01 an untagged arrival-order fold disagrees with the tagged dot-order reference on at least one seed`() {
@@ -109,17 +119,21 @@ class TaggedControlsTest {
             // (one instance, no peer to tie against), so its position among the rest is immaterial.
             val order = DotOrder.ranked(audit.plan.replicas + (script.sources() - audit.plan.replicas.toSet()))
 
-            val real = DotModel(order).evaluate(script) // the converged, correct reference
+            val real = DotModel(order)
+            // The correct reference, per replica — NOT the converged state. See the KDoc: a
+            // replica's own correct fold already differs from the converged one here, so a
+            // converged comparison cannot tell the mutant from the real thing.
+            val reference = real.perInstance(script).mapValues { real.entries(it.value).entries }
             val naive = NaiveArrivalOrderMapModel.perInstance(script) // every replica's untagged fold
 
-            val disagreeing = naive.filterValues { it != real.entries }
+            val disagreeing = naive.filter { (source, fold) -> reference.getValue(source) != fold }
             if (disagreeing.isNotEmpty()) differingSeeds += seed
         }
 
         withClue(
             "[ORA2-CTL-01]/BS-13: over ${GeneratorConfig.REPLICATED_SWEEP_SEEDS}, the untagged " +
-                "arrival-order fold must disagree with the dot-order reference on at least one " +
-                "seed. Zero differing seeds means this control cannot fail and is not evidence " +
+                "arrival-order fold must disagree with the SAME replica's dot-order fold on at " +
+                "least one seed. Zero differing seeds means this control cannot fail and is not evidence " +
                 "(differing seeds observed: $differingSeeds).",
         ) {
             differingSeeds shouldNotBe emptyList<Long>()

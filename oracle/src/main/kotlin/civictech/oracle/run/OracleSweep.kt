@@ -167,6 +167,16 @@ import civictech.testkit.forEachSeed
  * - `[ORA2-CTL-04]` — one replica's withheld gossip must be reported as a divergence naming both
  *   replicas and the differing key (BS-8), not passed or silently resolved to one answer.
  *
+ * And the same honesty applies to the controls themselves: **three of the four are model-vs-model,
+ * not kernel-driven.** `CaseExecution` wires no tagged terminal and no `OR_MAP` source
+ * (computenet-6v7y), so no generated OR-map case executes end to end and there is no
+ * `DifferentialRunner` path to substitute a mutant through. `[ORA2-CTL-01]` and `[ORA2-CTL-03]`
+ * therefore compare a mutant reference against `DotModel` directly, and `[ORA2-CTL-02]` drives
+ * `ConvergenceCheck` over a hand-built mesh; only `[ORA2-CTL-04]` — also hand-built — exercises
+ * a real runner seam unmocked. What they establish is that **the reference would catch these
+ * defects if a kernel-driven OR-map case reached it**; what they do NOT establish is that any
+ * such case reaches it today. That second half is the runner gap, not this ledger's to close.
+ *
  * Pinned by [civictech.oracle.HonestyLedgerTest] beside `[ORA1-HONEST-01]`, so this statement is
  * build-checked prose too, not a paragraph a refactor can quietly drop.
  *

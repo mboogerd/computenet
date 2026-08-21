@@ -244,6 +244,17 @@ class HonestyLedgerTest {
         ) {
             sweep.mustState("a green ORA2 sweep is not evidence without")
         }
+        withClue(
+            "And the controls' OWN bound, added while reviewing computenet-4ru.1.5: three of the " +
+                "four are model-vs-model because no generated OR-map case executes end to end " +
+                "(computenet-6v7y). A ledger that names them as compensating evidence without " +
+                "saying what they cannot discriminate is the exact omission [ORA2-HONEST-*] exists " +
+                "to forbid.",
+        ) {
+            sweep.mustState("three of the four are model-vs-model")
+            sweep.mustState("computenet-6v7y")
+            sweep.mustState("what they do NOT establish")
+        }
     }
 
     // -------------------------------------------------- [ORA2-HONEST-02]
