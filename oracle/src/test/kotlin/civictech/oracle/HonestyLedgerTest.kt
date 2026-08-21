@@ -222,6 +222,7 @@ class HonestyLedgerTest {
         "`MergeableGroupByCell`",
         "Window close / eviction",
         "`CoalescingCombineCell`",
+        "`WatermarkCell`",
     )
 
     @Test
@@ -293,18 +294,23 @@ class HonestyLedgerTest {
     }
 
     @Test
-    fun `the WatermarkCell gap is named as open rather than left silent`() {
+    fun `the WatermarkCell exclusion is resolved with a reason, not left as an open pointer`() {
         val ledger = exclusionLedger()
 
         withClue(
-            "WatermarkCell is in neither OperatorCatalog nor this ledger (computenet-fx5b). That " +
-                "is a real gap in [ORA1-HONEST-02]'s coverage, and naming it is the difference " +
-                "between a known gap and an invisible one. This assertion pins the POINTER, not a " +
-                "verdict: when fx5b registers or excludes the cell, this test's expectation moves " +
-                "with it.",
+            "computenet-fx5b: WatermarkCell was in neither OperatorCatalog nor this ledger, " +
+                "recorded as an open pointer. fx5b settles it as an exclusion — replication " +
+                "settlement is CHA1/CHA3's decided scope (epic computenet-4ru §6), and the cell " +
+                "is also structurally undriveable by a batch script reference (no @Contract, no " +
+                "application-facing Use<Ops> inlet). Both reasons must survive in the ledger " +
+                "text, not just the bead comment.",
         ) {
             ledger.mustState("WatermarkCell")
             ledger.mustState("computenet-fx5b")
+            ledger.mustState("kernel/src/main/kotlin/civictech/cell/data/Watermark.kt")
+            ledger.mustState("there is no `@Contract`")
+            ledger.mustState("Replication, partition, crash-restart, membership")
+            ledger.mustState("not named in epic computenet-4ru §3.1's operator inventory")
         }
     }
 

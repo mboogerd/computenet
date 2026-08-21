@@ -192,16 +192,38 @@ import java.io.Serializable
  *   `DISPUTES.md`, resolved). What is absent here is a *batch* check of it, which is this
  *   ledger's subject and not a gap in the requirement's coverage.
  *
- * - **`WatermarkCell` — NOT CLASSIFIED HERE; the question is open and owned elsewhere.**
- *   `civictech.cell.data.WatermarkCell` (`kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`)
- *   is in neither `OperatorCatalog` nor this ledger. That gap is real and pre-existing; it is
- *   recorded by the source-cell drift guard (`oracle/src/test/resources/source-cell-inventory.txt`,
- *   computenet-y9p4) and filed as **computenet-fx5b**, which owns the decision of whether the
- *   cell is registered into the vocabulary or excluded with a written reason. It is named here
- *   so the omission is visible rather than silent — this bullet is a pointer, **not** a verdict,
- *   and does not close fx5b. Note also that `WatermarkCell` is not named in epic
- *   computenet-4ru §3.1's operator inventory, so whether it is even in this ledger's stated
- *   population is part of what fx5b has to settle.
+ * - **`WatermarkCell`.** (computenet-fx5b, resolving the pointer this bullet used to be.)
+ *   Verified against its own KDoc
+ *   (`kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`): it is a *replicable
+ *   delivered-watermark lattice (spec 40/42, E3.2)*, whose four independent grow-only/
+ *   pointwise-monotone lanes (`rows`, `closed`, `suspendEpoch`, `members`) exist to let
+ *   `civictech.cell.consistency.ReplicaQuorum.frontier` decide, across a mesh of replicas,
+ *   whether a covering quorum has settled — a cross-replica settlement read, not a data
+ *   transformation. Its own KDoc says so directly: instances "converge by delta gossip over
+ *   `deltaInlet` exactly like the tagged-set family and `PnCounterCell`", and unlike every
+ *   registered source cell **"there is no `@Contract`"** — nothing here is spawned or driven
+ *   through the generated `*Base`/`*Ports` machinery `OperatorCatalog.register`'s `CellFactory`
+ *   binds. The mutating methods (`advance`, `close`, `suspend`, `resume`, `announceMember`) are
+ *   not served on an application-facing `Use<Ops>` inlet a script's events could enqueue into,
+ *   the way `MapCell`'s `Use<MapOps>` or `CounterCell`'s `Use<CounterOps>` are — they are called
+ *   directly by replication machinery, and `advance` is itself driven by tapping *another* cell's
+ *   outlet and reading `CurrentContext.get()?.timestamp` (`trackDeliveriesOf`), a live-wave
+ *   signal with no expression in a local [Script]/[ScriptEvent] slice. This is epic
+ *   computenet-4ru §6's own scope boundary — "Replication, partition, crash-restart, membership
+ *   churn" is `CHA1`/`CHA3`'s, not ORA1's, "ORA1 may run cells across hosts … but does not inject
+ *   faults" — and `WatermarkCell`'s entire reason to exist is that settlement mechanism. It is
+ *   also not named in epic computenet-4ru §3.1's operator inventory at all, confirming it was
+ *   never part of the algebra this ledger's vocabulary enumerates. **Excluded** for both reasons:
+ *   out of ORA1's decided scope, and — independently — structurally undriveable by a batch
+ *   script reference even if it were in scope.
+ *   *DISPUTES audit: no filing.* Replication settlement is `CHA1`/`CHA3`'s decided scope (epic
+ *   §6), the same conclusion this ledger already reaches for `MergeableGroupByCell`'s removal
+ *   path — a scope assignment, not an absence of any honest check. `WatermarkCell`'s own
+ *   behaviour is exercised today by the kernel's own suites
+ *   (`kernel/src/test/kotlin/civictech/cell/data/WatermarkCellTest.kt`,
+ *   `WatermarkCellBoundedReadTest.kt`,
+ *   `kernel/src/test/kotlin/civictech/cell/replication/DeliveredWatermarkTest.kt`), and by
+ *   `civictech.cell.consistency.ReplicaQuorum`'s own tests where it is actually consumed.
  */
 
 /**
