@@ -11,14 +11,21 @@ import civictech.cell.graph.ConnectStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.SpawnStep
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.inlet
+import civictech.cell.link.Linked
 import civictech.cell.link.LinkResult
 import civictech.cell.port.FanInlet
-import civictech.cell.port.PolicyTier
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.Port
 import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
+import civictech.cell.proxy.InvocationSink
+import civictech.cell.wire.PortAddress
+import civictech.cell.wire.bridgeFrom
+import civictech.cell.wire.bridgeTo
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
 import civictech.oracle.gen.CaseTopology
@@ -181,19 +188,13 @@ object CaseExecution {
      * other ordinal gets a fresh [ManagedHost] on [world]'s shared scheduler.
      *
      * Every [SpawnStep] lands on its handle's own host. A [ConnectStep] whose two ends share a
-     * host connects the ordinary same-host way; one that crosses hosts routes through
-     * [civictech.cell.host.inlet] — a registry-resolved [civictech.cell.Propagate] handle to
-     * the target port, wrapped as a fixed [Use] for `ManagedHost.connect(from, outlet, to:
-     * Use<*>)` — mirroring `GenerativeGraphTest`'s cross-host wiring
-     * (`kernel/src/test/kotlin/civictech/cell/verify/GenerativeGraphTest.kt`) without a
-     * per-port typed proxy interface (`RoutedInlet.kt`'s own point). This REPLACES the former
-     * `require(placement.values.all { it == 0 })` guard: a topology naming a second ordinal now
-     * runs on a second host instead of being refused.
-     *
-     * **One cross-host shape is still refused** — a connect into an ALIGN-tier inlet, i.e. a
-     * wave-frontier join fed across the cut. See [refuseFrontierAcrossCut] for the measurement,
-     * and for why the refusal is a tripwire standing in for a bridged link this harness does
-     * not build yet (computenet-xj0v, `[22-GF-03]`).
+     * host connects the ordinary same-host way; one that crosses hosts gets **two** things: the
+     * data path, a registry-resolved [civictech.cell.Propagate] handle to the target port
+     * ([civictech.cell.host.inlet]) wrapped as a fixed [Use] for `ManagedHost.connect(from,
+     * outlet, to: Use<*>)`, and — since computenet-vpiz — a real **bridged link pair** over the
+     * same edge ([bridgeAcrossCut]), so the target inlet carries a link identity instead of
+     * nothing. This REPLACES the former `require(placement.values.all { it == 0 })` guard: a
+     * topology naming a second ordinal now runs on a second host instead of being refused.
      *
      * Then links a fold behind every **eager** (non-late) terminal — on the SAME host as the
      * node it reads, so that link is always same-host too — and binds every source.
@@ -233,9 +234,9 @@ object CaseExecution {
                                 "rejected: ${(result as LinkResult.Rejected).reason}"
                         }
                     } else {
-                        refuseFrontierAcrossCut(step, cells.getValue(step.to))
                         val sink = world.registry.inlet<Any>(toRef, step.inlet)
                         fromHost.managementInlet.call.connect(fromRef, step.outlet, Use.fixed(sink, PortRef.generate()))
+                        bridgeAcrossCut(step, cells.getValue(step.from), cells.getValue(step.to), world.registry)
                     }
                 }
 
@@ -272,71 +273,98 @@ object CaseExecution {
     }
 
     /**
-     * The named refusal that stands in for a bridged frontier edge (computenet-xj0v,
-     * `[22-GF-03]`): a cross-host [ConnectStep] whose **target inlet** carries an ALIGN-tier
-     * [civictech.cell.port.InletPolicy] is rejected here, before anything is wired.
+     * Wires a cross-host [ConnectStep] as a **real bridged link pair** (computenet-vpiz,
+     * `[22-GF-03]`), on top of the data-plane handle [assemble] already issues.
      *
-     * ## Why a refusal and not a bridge
+     * ## What this replaces, and why it had to
      *
-     * [assemble]'s cross-host branch issues a bare `Propagate` handle resolved from the
-     * [civictech.cell.host.LocationRegistry] and wrapped in [Use.fixed], on the SOURCE host
-     * only, so the **target inlet registers no link at all** — measured, on otherwise identical
-     * cells: 1 link for the same-host connect, 0 across the cut
-     * (`CaseExecutionTest`, re-deriving computenet-g25w's finding). Link identity is what every
-     * frontier bookkeeping is keyed by: [civictech.cell.consistency.WaveFrontier] folds its
-     * edge set from per-link `EdgeOpen`/`EdgeClose`, and watermarks, `Progress(thru)`
-     * absorb-acks and stall markers all travel per-link. A wave-frontier join fed across this
-     * cut would therefore compute its completeness condition over an edge set that omits the
-     * cross-host arm — the opposite of `[22-GF-03]`.
+     * Before this, a cross-host edge was *only* that data handle — a bare `Propagate` resolved
+     * from the [LocationRegistry], wrapped in [Use.fixed], issued on the SOURCE host — so the
+     * **target inlet registered no link at all**: 1 link for a same-host connect, 0 across the
+     * cut, measured on otherwise identical cells (`CaseExecutionTest`, re-deriving
+     * computenet-g25w). Link identity is what every frontier bookkeeping is keyed by:
+     * [civictech.cell.consistency.WaveFrontier] folds its edge set from per-link
+     * `EdgeOpen`/`EdgeClose`, and watermarks, `Progress(thru)` absorb-acks and stall markers all
+     * travel per-link. A wave-frontier join fed across that cut would have folded its
+     * completeness condition over an edge set *missing the cross-host arm* — the opposite of
+     * `[22-GF-03]`. computenet-xj0v shipped a named refusal as an interim tripwire; this is the
+     * bridge that refusal stood in for, so the refusal is gone.
      *
-     * The other route — routing the edge through a real bridged link — **is** reachable from
-     * this module, and the bead's phrase "`:wire`'s `WireEdgeLink`" is what misleads here.
-     * [civictech.cell.wire.WireEdgeLink], `bridgeTo`/`bridgeFrom`,
-     * [civictech.cell.wire.BridgeEgressCell]/[civictech.cell.wire.BridgeIngressCell] and
-     * [civictech.cell.wire.WireCodec] all live in **`:kernel`** (package `civictech.cell.wire`,
-     * *not* `:wire`'s `civictech.wire`, whose fingerprint in
-     * `civictech.oracle.ModuleDependencyTest` is `civictech.wire.WsTransport`), and `:oracle`
-     * has `api(project(":kernel"))` — so `[ORA1-API-04]` does not bar them.
-     * `kernel/src/test/kotlin/civictech/cell/consistency/GlitchFreeBridgedDiamondTest.kt`
-     * bridges two [ManagedHost]s under one `SimulationController`, with a
-     * [civictech.cell.proxy.InvocationSink] for egress and no `:wire` dependency at all — that
-     * is this exact `[22-GF-03]` shape, built from `:kernel` alone.
+     * ## Why no bridge *cells* are needed here
      *
-     * So this refusal is a **cheap tripwire, not the only option available**: wiring every
-     * cross-host edge as a bridged pair changes the harness's whole cross-host model and is
-     * filed as follow-up work rather than done here. Until it lands the limit is loud instead
-     * of silent. Nothing the generator can draw trips this today
-     * (no registered catalog operator carries [civictech.cell.consistency.GlitchFree] or
-     * installs an ALIGN policy); it fires the moment one is registered, which is exactly when
-     * a silent miscomputation would otherwise begin.
+     * [civictech.cell.wire.BridgeEgressCell]/[civictech.cell.wire.BridgeIngressCell] exist to
+     * turn an invocation into bytes and back across a real transport. A [SimWorld]'s hosts are
+     * one process sharing **one** [LocationRegistry], and `LocationRegistry::deliver` is already
+     * an [InvocationSink] that routes a [civictech.cell.proxy.HostedPortInvocation] to whichever
+     * host owns the ref — so it is the egress for both halves, and protocol frames reach the
+     * peer endpoint without a codec round trip. That is the only simplification against
+     * `kernel/src/test/kotlin/civictech/cell/consistency/GlitchFreeBridgedDiamondTest.kt`, which
+     * builds this same `[22-GF-03]` shape from `:kernel` alone; the link types, the handshake
+     * and the `EdgeOpen` path are identical. **What is therefore NOT exercised here is the wire
+     * codec**: this harness pins cross-host *link identity and frontier bookkeeping*, not frame
+     * encoding, and a genuinely serialized cut would need the bridge cell pair.
      *
-     * ## Scoped to the connected inlet, not the whole cell
+     * ## The pair, and which half does what
      *
-     * The frontier edge `[22-GF-03]` speaks of is an inlink into an ALIGN inlet, and a
-     * frontier's completeness condition ranges over *that inlet's* edge set. A cell carrying an
-     * ALIGN policy on some **other** inlet is unaffected by a cross-host connect into a
-     * policy-free one, so the check keys on [ConnectStep.inlet] — the same criterion the kernel
-     * itself uses to detect a frontier join (`civictech.cell.host.hasFrontierPolicy`, CP-A4,
-     * PN-9), narrowed from the cell to the port.
+     * [bridgeTo] on the producer's outlet registers a [civictech.cell.wire.WireEdgeLink] on the
+     * outlet's own bookkeeping and fires `EdgeOpen` across [sink], landing on the consumer
+     * inlet's real port through the ordinary `PORT_PROTOCOL` delivery path. [bridgeFrom] on the
+     * consumer's inlet registers the reverse half, so an upstream emission walking
+     * `inlet.linking.links` finds an edge to route back over — and so the inlet reports the
+     * arm at all. Data still rides the [Use.fixed] handle [assemble] issues: a bridged link
+     * carries protocol frames, not payloads (its `toPort` is null on the producer side), which
+     * is exactly the split `GlitchFreeBridgedDiamondTest` uses.
      *
-     * @throws IllegalStateException naming the handle, the inlet and the tier.
+     * Both halves go through the shared `handshake`, so inlet link policies and the peer
+     * allowlist fire on this edge as on a local one — a [LinkResult.Rejected] here is a real
+     * refusal and is raised rather than swallowed.
+     *
+     * @throws IllegalStateException if either endpoint port is missing or not a linkable port,
+     *   or if either half of the handshake is rejected.
      */
-    private fun refuseFrontierAcrossCut(step: ConnectStep, target: Cell) {
-        val inlet = PortRegistry.of(target)[step.inlet] as? FanInlet<*> ?: return
-        check(!inlet.hasPolicy(PolicyTier.ALIGN)) {
-            "connect ${step.from}.${step.outlet} -> ${step.to}.${step.inlet} crosses a host cut " +
-                "into an inlet carrying a ${PolicyTier.ALIGN}-tier policy (a wave-frontier " +
-                "join). The harness wires a cross-host edge as a bare Propagate handle on the " +
-                "source host only, so the target inlet registers no link, and a frontier there " +
-                "would fold its completeness condition over an edge set MISSING this arm — " +
-                "which [22-GF-03] forbids. Bridging the edge for real means wiring it as a " +
-                "kernel bridged pair (civictech.cell.wire's bridgeTo/bridgeFrom and " +
-                "WireEdgeLink, which are in :kernel and so ARE available here — see " +
-                "GlitchFreeBridgedDiamondTest); this harness does not do that yet, so the case " +
-                "is refused rather than run on a truncated edge set (computenet-xj0v). " +
-                "Place '${step.to}' on the same host ordinal as '${step.from}', or bridge the " +
-                "edge as a real link."
+    private fun bridgeAcrossCut(step: ConnectStep, fromCell: Cell, toCell: Cell, registry: LocationRegistry) {
+        val outlet = portOf<FanOutlet<*>>(fromCell, step.outlet, step, "source outlet")
+        val inlet = portOf<FanInlet<*>>(toCell, step.inlet, step, "target inlet")
+        val egress = InvocationSink(registry::deliver)
+        val fromAddr = PortAddress(fromCell.ref, step.outlet)
+        val toAddr = PortAddress(toCell.ref, step.inlet)
+
+        val producerHalf = outlet.bridgeTo(selfAddr = fromAddr, toAddr = toAddr, sink = egress)
+        check(producerHalf !is LinkResult.Rejected) {
+            "bridging ${step.from}.${step.outlet} -> ${step.to}.${step.inlet} across a host cut " +
+                "was rejected on the producer half: ${(producerHalf as LinkResult.Rejected).reason}"
         }
+        val consumerHalf = inlet.bridgeFrom(selfAddr = toAddr, fromAddr = fromAddr, sink = egress)
+        check(consumerHalf !is LinkResult.Rejected) {
+            "bridging ${step.from}.${step.outlet} -> ${step.to}.${step.inlet} across a host cut " +
+                "was rejected on the consumer half: ${(consumerHalf as LinkResult.Rejected).reason}"
+        }
+    }
+
+    /**
+     * [cell]'s port named [port], as the `Linked & Port` receiver [bridgeTo]/[bridgeFrom]
+     * require — a named failure rather than a raw `ClassCastException`, because a handle naming
+     * a port the cell does not register, or registers with the wrong fan direction, is a
+     * spec-lowering bug and should say which.
+     *
+     * `T` is supplied explicitly at both call sites ([FanOutlet] for the producer half,
+     * [FanInlet] for the consumer half); it cannot be inferred, since the receiver constraint is
+     * an intersection Kotlin has no return type for.
+     */
+    private inline fun <reified T> portOf(cell: Cell, port: String, step: ConnectStep, role: String): T
+        where T : Linked, T : Port {
+        val resolved = PortRegistry.of(cell)[port]
+            ?: error(
+                "connect ${step.from}.${step.outlet} -> ${step.to}.${step.inlet} names $role " +
+                    "'$port', which cell ${cell.ref} does not register; its ports are " +
+                    "${PortRegistry.of(cell).names()}.",
+            )
+        return resolved as? T
+            ?: error(
+                "connect ${step.from}.${step.outlet} -> ${step.to}.${step.inlet} names $role " +
+                    "'$port', which is a ${resolved::class.simpleName} and not a " +
+                    "${T::class.simpleName}, so it cannot carry a bridged link across a host cut.",
+            )
     }
 
     /**
