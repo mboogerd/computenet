@@ -56,12 +56,16 @@ const val DEFAULT_ANNOUNCEMENT_SKEW_MILLIS: Long = 30_000L
  * mismatched key, an encoder that throws — is `false`, never an exception:
  * a verifier that can throw turns hostile input into a control-flow event at an
  * ingress seam. `Ed25519SignatureVerifier` already guarantees exactly this, and
- * that guarantee is why the gate never has to guard the call. One consequence
- * is recorded on `computenet-l8y5`: an *unencodable* announcement (the
- * ill-formed-UTF-16 `portName` `canonicalBytes` rejects) verifies `false` and
- * so classifies here as [DenialReason.BAD_SIGNATURE], which is honest but not
- * distinguishing. Giving it its own reason is that item's work, and nothing
- * here forecloses it.
+ * that guarantee is why the gate never has to guard the call.
+ *
+ * An *unencodable* announcement — the ill-formed-UTF-16 `portName` or minting
+ * peer name `canonicalBytes` rejects — used to arrive here as `false` and so
+ * classify as [DenialReason.BAD_SIGNATURE]: honest, and wrong about the cause.
+ * `computenet-l8y5` gave that case [DenialReason.MALFORMED_ANNOUNCEMENT] and
+ * decides it *before* the verifier is called ([AnnouncementAdmission]'s
+ * `malformed`), so this path now sees it only if the encoder's domain and the
+ * gate's mirror of it have drifted apart. The totality requirement is unchanged
+ * and is exactly what makes such a drift a degradation rather than a hole.
  */
 fun interface AnnouncementVerifier {
     fun verify(
@@ -165,6 +169,15 @@ data class AnnouncementRejection(val reason: DenialReason, val detail: String)
  * peer set an operator provisioned.
  *
  * ## Order of checks, which is a semantic decision and not an optimization
+ *
+ * [DenialReason.MALFORMED_ANNOUNCEMENT] is decided **first**, above both of the
+ * orderings argued below (`computenet-l8y5`). An announcement whose `portName`
+ * or minting-peer name is not well-formed UTF-16 has no canonical encoding at
+ * all, so every check under it would be answering a question about bytes that
+ * do not exist: the binding check reports `ID_MISMATCH` (a name that cannot be
+ * an identity is certainly not the bound one) and the verifier reports
+ * `BAD_SIGNATURE` (nothing could ever verify). Both refuse, and both name a
+ * cause that is not the cause — which is the whole content of that item.
  *
  * [DenialReason.ID_MISMATCH] is decided **before** the signature is verified,
  * so that which reason a frame gets does not depend on where the verifier
