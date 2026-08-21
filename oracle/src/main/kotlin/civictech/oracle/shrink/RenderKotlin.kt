@@ -1,5 +1,6 @@
 package civictech.oracle.shrink
 
+import civictech.oracle.gen.CaseDelivery
 import civictech.oracle.gen.CaseScript
 import civictech.oracle.gen.CaseStep
 import civictech.oracle.gen.CaseTopology
@@ -62,8 +63,9 @@ import civictech.oracle.run.RunOutcome
  * itself. Rendering the replay with no `wavePrefix` argument leaves it at
  * `civictech.oracle.run.WavePrefixOption.DEFAULT` (a 0.25 selection fraction), so whether the
  * violation reproduces depends on whether `DEFAULT.selects(case.seed)` happens to be `true` —
- * measured over `WavePrefixTest`'s four `SEAM_SEEDS`, exactly half do and half report a plain
- * `Mismatch` instead.
+ * measured over the four seeds `ShrinkerBs14Test.SEEDS` pins (30, 40, 50, 58 — `WavePrefixTest`'s
+ * former `SEAM_SEEDS` literal, kept there for exactly this split after computenet-i3vo emptied
+ * that ledger), exactly half do and half report a plain `Mismatch` instead.
  *
  * The fix does not require knowing which [civictech.oracle.run.WavePrefixOption] the shrink was
  * actually given — `civictech.oracle.run.WavePrefixOption.selects` is a pure predicate over the
@@ -82,7 +84,7 @@ import civictech.oracle.run.RunOutcome
  * `selects(seed)` was `false`) could be replayed with it *on*, and a prefix-dirty case would then
  * report a [RunOutcome.WavePrefixViolation] where the counterexample names, say, a
  * [RunOutcome.Mismatch]: the emitted `check()` would fail, naming a different kind than the
- * counterexample it was rendered from. Measured over the same four `WavePrefixTest` `SEAM_SEEDS`,
+ * counterexample it was rendered from. Measured over the same four seeds (`ShrinkerBs14Test.SEEDS`),
  * each shrunk with `WavePrefixOption.OFF` (a `Mismatch` counterexample for all four) and replayed
  * with no `wavePrefix` argument: seeds 50 and 58 (`DEFAULT.selects(seed) == true`) replayed as
  * `WavePrefixViolation`, seeds 30 and 40 replayed faithfully.
@@ -142,6 +144,15 @@ internal fun renderCounterexample(counterexample: Counterexample): String {
         appendLine("    steps = listOf(")
         case.script.steps.forEach { step -> appendLine("        ${renderStep(step)},") }
         appendLine("    ),")
+        // Emitted only when the case actually has gossip, so every non-replicated render stays
+        // byte-identical to what it was before computenet-r38y — `deliveries` defaults to empty.
+        // Omitting the argument for a REPLICATED case is what this renders instead of: the
+        // snippet would then rebuild a non-replicated script and fail to reproduce, silently.
+        if (case.script.deliveries.isNotEmpty()) {
+            appendLine("    deliveries = listOf(")
+            case.script.deliveries.forEach { delivery -> appendLine("        ${renderDelivery(delivery)},") }
+            appendLine("    ),")
+        }
         appendLine(")")
         appendLine()
         appendLine("val case = civictech.oracle.gen.GeneratedCase(")
@@ -198,6 +209,17 @@ private fun renderTerminal(terminal: TerminalSpec): String =
         "name = ${literal(terminal.name)}, " +
         "handle = ${literal(terminal.handle)}, " +
         "late = ${terminal.late})"
+
+/**
+ * One gossip delivery as a literal `CaseDelivery`, named arguments and all: `atStep` is a bare
+ * position and `into`/`from` are two `SourceId`s of the same shape, so positional arguments would
+ * render a snippet a reader cannot check by eye.
+ */
+private fun renderDelivery(delivery: CaseDelivery): String =
+    "civictech.oracle.gen.CaseDelivery(" +
+        "atStep = ${delivery.atStep}, " +
+        "into = ${renderSourceId(delivery.into)}, " +
+        "from = ${renderSourceId(delivery.from)})"
 
 private fun renderStep(step: CaseStep): String = when (step) {
     is CaseStep.Op -> "civictech.oracle.gen.CaseStep.Op(${renderSourceId(step.source)}, ${renderEvent(step.event)})"

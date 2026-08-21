@@ -44,6 +44,42 @@ import java.util.*
  * [OrMapCell]/[TaggedMapDelta], where a key has a *value* and not merely
  * presence, so convergence must be asserted over both.
  *
+ * ## computenet-4ru.1.7: kernel-fold subsumption judgment — nothing slimmed
+ *
+ * Checked against `civictech.oracle.tagged.ConvergenceCheckTest`,
+ * `ConvergenceSweepTest`, `TaggedControlsTest` and `TaggedScenariosTest`
+ * (computenet-4ru.1.4/1.6, now landed). No test below is annotated or slimmed
+ * as subsumed — every one either exercises a property ORA2's oracle does not
+ * model at all, or exercises it under conditions the oracle's own measured
+ * evidence says it does not reach:
+ *
+ * - **The mid-run partition/heal in "three replicas converge... under 100
+ *   seeds"** is explicitly out of ORA2's scope by design (feature computenet-4ru.1's D6 — the
+ *   ORA1 epic's own D6 is a different decision, this
+ *   feature's own bead: "Deliberately no faults... partition/reorder/
+ *   duplicate/crash/journal/restart is CHA1's rig"). No oracle sweep injects
+ *   a partition, so nothing here can be attributed to one.
+ * - **Diamond dedup/re-emission, pull baseline, scoped pull, partial-interest
+ *   mesh, superseded-source dot resurrection, and pull-merge re-baseline**
+ *   are wire-protocol/replication-MECHANISM assertions — `Peering`,
+ *   `DeadLetter`, `LinkResult` interest scoping, `MessageContext.baseline`
+ *   stamping. ORA2's script model drives sources through
+ *   `civictech.oracle.gen.CaseDelivery` (an abstract "replica X absorbed
+ *   replica Y's prefix" statement) and never touches `Peering`/pull/interest
+ *   at all — there is no oracle-side equivalent to name for any of these.
+ * - **The 100-seed convergence sweep's own concurrency**, even where a real
+ *   oracle sweep exists (`ConvergenceSweepTest`), is measured — not assumed —
+ *   to realize at most 1 live dot per key across the default 40-seed range
+ *   (computenet-4ru.1.7's own dispatch note, re-verified against the landed
+ *   sweep). A kernel test asserting convergence under GENUINE concurrent
+ *   same-key puts cannot be called subsumed by a sweep with no concurrency to
+ *   check it against — the exact defect this bead's subsumption clause exists
+ *   to prevent (removing an assertion with no oracle-side equivalent).
+ *
+ * Per this bead's own instruction: kept, not subsumed, because none of the
+ * above is demonstrably covered without weakening what this file already
+ * asserts.
+ *
  * What is proven here:
  *
  * - **Convergence** (`[24-TMAP-01..04]`): 100 seeded three-peer meshes with a

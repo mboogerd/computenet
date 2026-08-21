@@ -1,5 +1,6 @@
 package civictech.oracle.run
 
+import civictech.oracle.bind.OptionalFamilies
 import civictech.oracle.gen.CaseGenerator
 import civictech.oracle.gen.GeneratorConfig
 import civictech.testkit.forEachSeed
@@ -141,6 +142,109 @@ import civictech.testkit.forEachSeed
  * see the file KDoc of `civictech.oracle.model.MapCellModel`. Both halves are pinned by
  * [civictech.oracle.HonestyLedgerTest], so this is build-checked prose, not decoration.
  *
+ * ## ORA2's model is LESS independent, and what compensates `[ORA2-HONEST-01]`
+ *
+ * The four defenses above are ORA1's. ORA2 widens the vocabulary with the tagged/keyed family
+ * (`civictech.oracle.model.DotModel`), and that widening costs something the first defense —
+ * independence — cannot fully keep. `[ORA1-MODEL-03]` forbids ORA1's model from reading tag
+ * identity, tag counts or any `SetDelta`/`TaggedMapDelta` internal, precisely so it cannot agree
+ * with the kernel about a shared bug in the tag algebra. An OR-map's *value*, unlike an OR-set's
+ * *membership*, is decided by a total order over dots — `[24-TMAP-03]` — and no reference that
+ * refuses to name a dot can state which of two concurrent puts wins. So `DotModel` reads
+ * **modelled dot order** (its own `civictech.oracle.model.DotOrder`, minted from the script,
+ * never a kernel `Timestamp`) and is therefore **LESS independent of the tag algebra it checks**
+ * than ORA1's membership-only model is.
+ *
+ * What compensates is not an argument, it is four discrimination controls, each a named test in
+ * `civictech.oracle.tagged.TaggedControlsTest` — **a green ORA2 sweep is not evidence without
+ * them**, the same blocking status feature computenet-4ru.1 §4.9 gives them in as many words:
+ *
+ * - `[ORA2-CTL-01]` — the tagged map's reads replaced by an arrival-order (untagged
+ *   `MapDelta`/`MapView`) fold must FAIL on at least one seed of a fixed range (BS-13).
+ * - `[ORA2-CTL-02]` — an inverted dot order must be detected and attributed to the right key.
+ * - `[ORA2-CTL-03]` — reset-remove replaced by remove-all must be detected, naming the key
+ *   (BS-4) — proving the add-wins boundary is actually exercised.
+ * - `[ORA2-CTL-04]` — one replica's withheld gossip must be reported as a divergence naming both
+ *   replicas and the differing key (BS-8), not passed or silently resolved to one answer.
+ *
+ * And the same honesty applies to the controls themselves: **not one of them observes state a
+ * kernel replica produced.** The bound is unchanged; its former *reason* is not. Until
+ * computenet-6v7y, `CaseExecution` wired no `OR_MAP` script source and never folded a tagged
+ * terminal, so no generated OR-map case reached the differential runner at all. It now resolves
+ * both — an `orMap` source binds through the same `MapOps` surface `MapCell` uses, and an
+ * `orMap` terminal folds through `TaggedMapTerminalFold` instead of the arrival-order
+ * `MapTerminalFold` — so a **single-instance** generated OR-map case does reach the runner
+ * today, and for that case there IS now a `DifferentialRunner` path to substitute a mutant
+ * through. Two things keep the bound true anyway: **no control below has been written onto that
+ * path** (each still runs where it was written), and the path is single-instance only —
+ * `SingleInstanceOrMapModel` refuses a slice carrying gossip deliveries, and `CaseExecution`
+ * materialises no replicas, so the *replicated* mesh has no runner path even now. Marker by
+ * marker, rather than by a count:
+ *
+ * - `[ORA2-CTL-01]` and `[ORA2-CTL-03]` are **model-vs-model**: a mutant reference compared
+ *   against `DotModel` directly, with no runner in the loop at all.
+ * - `[ORA2-CTL-02]` and `[ORA2-CTL-04]` both drive the real, unmocked `ConvergenceCheck.check` —
+ *   the same seam, entered the same way, differing only in the mutation site — but each over a
+ *   **hand-built** `MeshObservation` whose per-replica folds come from `DotModel`, not from
+ *   replicas the kernel ran.
+ *
+ * So what the four establish is that **the reference would catch these defects if a kernel-driven
+ * OR-map case reached it**; what they do NOT establish is that any of THESE FOUR observes one.
+ * That second half used to be a missing runner path; computenet-6v7y closed the single-instance
+ * half of it, so what remains is that no control has been ported onto the path, and that CTL-04's
+ * replicated mesh still has none. Both are the sweep/differential work, not this ledger's to
+ * close.
+ *
+ * Read that as a bound on the four controls and on the DIFFERENTIAL RUNNER path — not as a claim
+ * that no OR-map coverage anywhere is kernel-driven, which would be false in two distinct ways.
+ * Kernel-driven OR-map coverage does exist outside this file, at two different levels of
+ * hand-authorship, and a reader needs both to size what is missing:
+ *
+ * - **Hand-built meshes**: `civictech.oracle.tagged.ConvergenceCheckTest`'s BS-1, BS-6 and BS-7
+ *   drive live `OrMapCell` replicas in a `SimWorld` through this same `ConvergenceCheck`, inverted
+ *   dot order included. These are the tests that actually discriminate concurrent dot resolution:
+ *   reversing the kernel's `TaggedMapDelta.DOT_ORDER` tie-break reddens exactly four tests and all
+ *   four are here (review of computenet-4ru.1, 2026-08-21).
+ * - **Generated meshes**: `civictech.oracle.tagged.ConvergenceSweepTest` drives 40 GENERATED
+ *   three-replica `OrMapCell` meshes in a `SimWorld` — so a generated replicated mesh IS
+ *   kernel-driven today, and the "no runner path" clause above is specifically about
+ *   `CaseExecution`/`DifferentialRunner`, not about the kernel never running a generated mesh.
+ *   What that sweep does NOT establish is the `[ORA2-DIFF-08]` "at scale" clause: it neither enters
+ *   `ConvergenceCheck.check()` (a full-sync mesh is a mutual barrier and encodes as a cyclic
+ *   `Delivery` graph, which `DotModel.Fold` refuses by name) nor realises any concurrency (its own
+ *   report prints `max live dots at any key = 1`, against a generator-achieved mean of 0.970). The
+ *   `DOT_ORDER` mutation above leaves it green.
+ *
+ * ## What is filed rather than built `[ORA2-HONEST-03]`
+ *
+ * Both gaps the paragraph above names are recorded in `concord/corpus/DISPUTES.md`, per the epic's
+ * rule — and AGENTS.md's — that a requirement which cannot be checked honestly is **filed**, never
+ * weakened into a passing scenario:
+ *
+ * - `[ORA2-DIFF-08]` "at scale" — the generated convergence sweep realises no concurrency, and the
+ *   quiescent all-to-all mesh it drives is not expressible as a `Delivery` graph. Filed with the
+ *   cyclic-`Delivery` reason and the 40/40 measurement; `computenet-9892` is the drive that closes
+ *   it and deletes the entry.
+ * - BS-9 / `[ORA2-DIFF-07]` — no operator in the vocabulary consumes a `TaggedMapDelta` outlet, so
+ *   the two-path diamond BS-9 states is unconstructible and `TaggedWavePrefixTest` exercises a bare
+ *   `orMap` source terminal instead. Filed with the `MapDelta`-vs-`TaggedMapDelta` typing bound;
+ *   `96 §E1.5`'s `UntagCell`/`TaggedMapView` is what would resolve it.
+ *
+ * The ORA1 half of the same rule is `[ORA1-DIFF-09]`/BS-12, filed in the same file. All three
+ * filings are pinned by [civictech.oracle.HonestyLedgerTest], so none can be silently deleted.
+ *
+ * Pinned by [civictech.oracle.HonestyLedgerTest] beside `[ORA1-HONEST-01]`, so this statement is
+ * build-checked prose too, not a paragraph a refactor can quietly drop.
+ *
+ * ## What each sweep records about the optional families `[ORA2-HONEST-02]`
+ *
+ * ORA2's vocabulary has optional families — the weighted (Z-set) family and the E1.4/E1.5
+ * adopters — that may not exist in the kernel at all (`civictech.oracle.bind.OptionalFamilies`).
+ * [reportOptionalFamilies] consumes that availability surface and prints, once per sweep, which
+ * families were active and which reported not-applicable with their reason (BS-15): never
+ * silently skipped, never a disabled test, never a stub that passes vacuously. This extends the
+ * existing progress/failure report [run] already prints; it is not a second report format.
+ *
  * ## Non-goals
  *
  * The wave-prefix subset and its own knob, late-joiner and multi-host sweep configurations,
@@ -198,6 +302,25 @@ object OracleSweep {
     fun defaultSeeds(): LongRange = 0L until defaultSeedCount().toLong()
 
     /**
+     * `[ORA2-HONEST-02]`/BS-15: one line per optional family, recording whether it was active in
+     * the kernel this JVM is running against or reported not-applicable with its reason. Called
+     * once per [run], before the range starts, and returns the lines it printed so a test can
+     * assert on them directly rather than capturing stdout.
+     *
+     * Consumes [OptionalFamilies.probe] — the availability surface `civictech.oracle.bind`
+     * already exposes — rather than probing the classpath a second way; this is the "extend the
+     * existing report, never a second report format" clause in as many words.
+     */
+    fun reportOptionalFamilies(families: List<OptionalFamilies.Availability> = OptionalFamilies.probe()): List<String> {
+        val lines = families.map { family ->
+            val status = if (family.available) "active" else "not-applicable (${family.reason})"
+            "[oracle-sweep] optional family '${family.family}': $status"
+        }
+        lines.forEach { println(it) }
+        return lines
+    }
+
+    /**
      * Sweeps [seeds], generating each case from [config] and executing it, and throws
      * `forEachSeed`'s one density summary if any seed did not reach [RunOutcome.Success].
      *
@@ -230,6 +353,7 @@ object OracleSweep {
         reference: Reference? = null,
         onProgress: (Progress) -> Unit = { println(it) },
     ) {
+        reportOptionalFamilies()
         val generator = CaseGenerator(config)
         val total = (seeds.last - seeds.first + 1L).coerceAtLeast(0L).toInt()
         var index = 0
@@ -258,8 +382,12 @@ object OracleSweep {
      * that say *what* disagreed — in kilobytes of replayable input. The script is recoverable
      * from the seed and the config, which is exactly why the seed is what a failure carries.
      *
-     * Two kinds carry one: [RunOutcome.Mismatch] and [RunOutcome.WavePrefixViolation]. The
-     * remaining kinds ([RunOutcome.NonQuiescence], [RunOutcome.DeadLetterFailure],
+     * Four kinds carry one: [RunOutcome.Mismatch], [RunOutcome.WavePrefixViolation],
+     * [RunOutcome.ReplicaDivergence] and [RunOutcome.ReplicasAgreeButWrong] — the last two added
+     * by computenet-4ru.1.5 after 4ru.1.4's reviewer flagged that the `else` branch below used to
+     * dump both mesh verdicts' whole `script` field via `toString()`, the exact kilobytes-of-
+     * replayable-input problem this function otherwise exists to avoid. The remaining kinds
+     * ([RunOutcome.NonQuiescence], [RunOutcome.DeadLetterFailure],
      * [RunOutcome.ModelEvaluationFailure]) hold no script, so `toString` is the honest rendering
      * for them — a new sealed kind that *does* carry one needs a branch here, not the `else`.
      *
@@ -286,6 +414,15 @@ object OracleSweep {
                 "observationIndex=${outcome.observationIndex}, matchedFloor=${outcome.matchedFloor}, " +
                 "regressedTo=${outcome.regressedTo}, observed=${outcome.observed}, " +
                 "nearestPrefixes=${outcome.nearestPrefixes}, spec=${outcome.renderedGraphSpec})"
+
+        is RunOutcome.ReplicaDivergence ->
+            "ReplicaDivergence(logicalId=${outcome.logicalId}, caseMarker=${outcome.caseMarker}, " +
+                "expected=${outcome.expected}, perReplica=${outcome.perReplica}, keys=${outcome.keys})"
+
+        is RunOutcome.ReplicasAgreeButWrong ->
+            "ReplicasAgreeButWrong(logicalId=${outcome.logicalId}, caseMarker=${outcome.caseMarker}, " +
+                "replicas=${outcome.replicas}, difference=${outcome.difference}, " +
+                "expected=${outcome.expected}, actual=${outcome.actual}, keys=${outcome.keys})"
 
         else -> outcome.toString()
     }

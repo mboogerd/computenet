@@ -1384,10 +1384,39 @@ open class ManagedHost(
         }
 
         val internalHostRoutingApi = object : HostRoutingApi {
+            /**
+             * computenet-weo8 — the route fault site, and the ONLY place a
+             * failing `route` can honour AGENTS.md's core invariant ("no
+             * failure, suppression, shadow, park, or dead-letter path may
+             * silently drop an exclusive payload").
+             *
+             * The throw below lands in [enqueue]'s catch, which dead-letters
+             * *without* a [HostedPortInvocation] (computenet-mouq, see the
+             * `routerInlet.serve` comment), so `DeadLetters.sanitizeForDeadLetter`
+             * — which keys off exactly that invocation — never runs and can
+             * never be what discharges these args. Discharging here, rather
+             * than synthesizing a capture for the fault path, keeps the
+             * dead-letter record shape unchanged (`invocation == null`, the
+             * host-ref fallback the Inspector asserts) while closing the leak.
+             *
+             * Discharge-exactly-once holds because this runs strictly *before*
+             * the target inlet is reached: on any path that reaches
+             * `invocation.invoke(inlet.call)` this has not run, and the
+             * downstream owner takes the payload as usual. A throw out of the
+             * inlet's own handler is a different case with a different owner
+             * (the handler received the args) and is deliberately untouched.
+             */
+            private fun refuse(invocation: Invocation, message: String): Nothing {
+                invocation.args.forEach(Proxy::discharge)
+                throw IllegalArgumentException(message)
+            }
+
             override fun route(target: CellRef, inletName: String, invocation: Invocation) {
-                val toCell = cells[target] ?: throw IllegalArgumentException("Target cell not found: $target")
-                val inlet = findPort(toCell, inletName) as? Use<*>
-                    ?: throw IllegalArgumentException("Inlet not found or not usable: $inletName on $target")
+                val toCell = cells[target] ?: refuse(invocation, "Target cell not found: $target")
+                val port = findPort(toCell, inletName)
+                    ?: refuse(invocation, "Inlet not found or not usable: $inletName on $target")
+                val inlet = port as? Use<*>
+                    ?: refuse(invocation, "Inlet not found or not usable: $inletName on $target")
 
                 invocation.invoke(inlet.call)
             }
@@ -1436,8 +1465,12 @@ open class ManagedHost(
         //    `LifecycleAndDeadLetterTest."a route-driven dead letter carries no
         //    invocation, so per-argument capture is unreachable through it"`.
         //  - An `Owned`/`Leased` argument handed to a *failing* `route` is
-        //    therefore dropped undischarged. Observed, not blessed; filed
-        //    separately rather than fixed here.
+        //    therefore NOT discharged by this fault path. computenet-weo8
+        //    closed that leak at the route fault site itself
+        //    (`internalHostRoutingApi.refuse` above) rather than by giving this
+        //    dispatch an invocation to hand the catch — so the record shape
+        //    described here is unchanged, and the exclusives are consumed/
+        //    released before the throw ever reaches it.
         routerInlet.serve(Proxy.fromClass(HostRoutingApi::class.java) { _, method, args ->
             if (intakeControl.intakeState == IntakeState.CLOSED) throw IntakeClosedException(ref)
             val invocation = Invocation.of(method, args).withTarget(internalHostRoutingApi)

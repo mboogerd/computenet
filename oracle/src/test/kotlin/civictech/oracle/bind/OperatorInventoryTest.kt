@@ -296,18 +296,19 @@ class OperatorInventoryTest {
      * [OperatorInventoryTest]'s does, not a hand-picked subset of "the cells", so a human still
      * has to read what actually changed before deciding whether it is vocabulary churn.
      *
-     * Also present here and *not* named in the bead that requested this test: `WatermarkCell`
-     * / `WatermarkCellPorts` (`kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`) — a
-     * cell in this package that is neither registered in [OperatorCatalog] nor listed in the
-     * `[ORA1-HONEST-02]` exclusion ledger. The bead's own description names five registered
-     * source cells (`SetCell`, `KeyedSetCell`, `MapCell`, `CounterCell`, `PnCounterCell`) and
-     * two ledger exclusions (`ListCell`, `OrMapCell`) — seven cell types — but the compiled
-     * package has 41 top-level classpath names across those seven cells' own `*Api`/`*Base`/
-     * `*Ports` companions plus the non-cell helpers above plus `WatermarkCell`'s pair, none of
-     * which is a discrepancy this test resolves: it is a mechanical classpath diff, the same
-     * contract [OperatorInventoryTest] already has for `.op`, and closing `WatermarkCell`'s
-     * gap (registering it, or adding it to the exclusion ledger) is vocabulary work outside
-     * this task's claim.
+     * Also present here: `WatermarkCell` / `WatermarkCellPorts`
+     * (`kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`) — at the time this test was
+     * written, a cell in this package that was neither registered in [OperatorCatalog] nor
+     * listed in the `[ORA1-HONEST-02]` exclusion ledger, closed by computenet-fx5b as an
+     * exclusion (replication-settlement scope, epic computenet-4ru §6; see the `WatermarkCell`
+     * entry in `civictech.oracle.model.MapCellModel`'s file KDoc for the reason). The bead's own
+     * description names five registered source cells (`SetCell`, `KeyedSetCell`, `MapCell`,
+     * `CounterCell`, `PnCounterCell`) and two ledger exclusions (`ListCell`, `OrMapCell`) — seven
+     * cell types — but the compiled package has 41 top-level classpath names across those seven
+     * cells' own `*Api`/`*Base`/`*Ports` companions plus the non-cell helpers above plus
+     * `WatermarkCell`'s pair, none of which is a discrepancy this test resolves: it is a
+     * mechanical classpath diff, the same contract [OperatorInventoryTest] already has for
+     * `.op`.
      */
     private val sourceCellPackagePath = "civictech/cell/data"
 

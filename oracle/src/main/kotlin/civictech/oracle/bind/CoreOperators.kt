@@ -232,9 +232,50 @@ object CoreOperators {
             model = KeyedSetSourceModel,
         )
 
+        /*
+         * The two scalar sources, and the coverage limit they carry (computenet-gff7).
+         *
+         * `counter` and `pnCounter` are the only entries here whose output shape is a bare
+         * [ElementShape.Scalar], and **no registered operator consumes a bare scalar on any
+         * port**. `GraphGenerator.Builder.chooseRootShape` draws a case's root shape only among
+         * source shapes something in the vocabulary can consume, and `[ORA1-GEN-03]` forbids a
+         * source standing as a terminal itself, so neither entry can appear in ANY generated
+         * case: they are registered, paired, and honestly modelled, but never *exercised* by a
+         * differential sweep. `CatalogReachabilityTest` computes that from the registrations.
+         *
+         * **This is a decided limit, not an open TODO** (computenet-gff7, whose first
+         * acceptance clause offers exactly this fork). Closing it needs a registered operator
+         * consuming `Scalar`, and a scalar edge in this catalog carries
+         * `Propagate<CounterDelta>` — the type `CounterCell.outlet`, `PnCounterCell.outlet`
+         * (as `PnCounterDelta`) and `CountCell.outlet` emit. Exactly ONE cell in the whole
+         * kernel serves that type on an inlet: `CoalescingCombineCell`
+         * (`kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt`,
+         * `inlet: Serve<Propagate<CounterDelta>>`); every other operator inlet under
+         * `civictech.cell.data.op` serves `SetDelta` or `MapDelta`. And that one cell is
+         * already **excluded by name** from the vocabulary by the `[ORA1-HONEST-02]` ledger in
+         * `civictech.oracle.model.MapCellModel`'s file KDoc, because its observable is a
+         * wave-completion fold the script vocabulary cannot name — a batch model of it would
+         * silently assume the completeness condition it cannot check.
+         *
+         * So the scalar hole is not the pair-shaped hole computenet-4ru.16 closed. That one was
+         * repairable inside the catalog: `keyBy` reuses an already-registered kernel cell
+         * (`FlatMapSetCell`) and an already-registered model, adding only a function. There is
+         * no such reuse here — a scalar consumer would have to be a NEW kernel cell in
+         * `civictech.cell.data.op`, written for the oracle's benefit and used by nothing else,
+         * or the one existing cell whose exclusion is already reasoned and pinned. Registering
+         * either would trade a *visible* coverage gap for a dishonest green.
+         *
+         * `counter`/`pnCounter` therefore stay registered — the pairing is real and
+         * `CounterSourceModel`/`PnCounterSourceModel` remain the reference a future consumer
+         * would use — and this comment, the `CatalogReachabilityTest` pin, and the
+         * `[ORA1-HONEST-02]` ledger record that "registered" does not imply "exercised" for
+         * these two.
+         */
+
         /* `CounterCell` — net total. Merge is addition: commutative, NOT idempotent, so the
          * cell is single-instance and never replicated ([24-OP-COUNTER-01]). A generated
-         * case must not replicate it; that constraint belongs to the generator. */
+         * case must not replicate it; that constraint belongs to the generator. Unspawnable by
+         * shape-typed generation — see the note above. */
         OperatorCatalog.register(
             id = Ids.COUNTER,
             shape = ShapeRule.source(SCALAR),
@@ -244,7 +285,8 @@ object CoreOperators {
 
         /* `PnCounterCell` — the replicable counter ([24-OP-PNCOUNTER-01]). Same batch value
          * as `counter` and deliberately its own entry: they differ in convergence class,
-         * which a replicated case distinguishes and a batch fold cannot. */
+         * which a replicated case distinguishes and a batch fold cannot. Unspawnable by
+         * shape-typed generation for the same reason `counter` is — see the note above. */
         OperatorCatalog.register(
             id = Ids.PN_COUNTER,
             shape = ShapeRule.source(SCALAR),

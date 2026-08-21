@@ -149,6 +149,14 @@ saturation frame vs transport flow control (93 I-12/I-15/I-9/I-19/I-26).
   deterministic `SimulationController` issues schedulers of either color; a
   simulated task runs undispatched until it completes or genuinely suspends,
   and resumptions re-enter the simulation as ordinary steps.
+- **The read plane is colorless** (31 §The read plane). Color governs the
+  *invocation* path — what may block, what may suspend, and which context an
+  invocation runs on. An off-host synchronous read runs on the observer's own
+  thread and returns a published immutable value, so it never blocks a
+  🔵 thread on a 🟣 host's suspension or vice versa, and needs no bridge. This
+  is also why the read is a snapshot rather than a lock: a monitor held across
+  a color crossing would be exactly the blocked single-consumer host thread
+  rejected above (§Bridges, "Block-the-sender … rejected as the default").
 - Delivery is suspend-aware: `Invocation.invokeSuspending` calls a target
   suspend fun with a real continuation (falling back to plain invocation for
   non-suspend targets), and the wave context (G-4) rides a coroutine context

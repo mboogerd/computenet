@@ -2,6 +2,7 @@ package civictech.oracle.shrink
 
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
+import civictech.oracle.gen.CaseDelivery
 import civictech.oracle.gen.CaseGenerator
 import civictech.oracle.gen.CaseScript
 import civictech.oracle.gen.CaseStep
@@ -13,6 +14,7 @@ import civictech.oracle.model.ModelState
 import civictech.oracle.model.Script
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SourceId
+import civictech.oracle.model.WriterId
 import civictech.oracle.run.CaseExecution
 import civictech.oracle.run.DifferentialRunner
 import civictech.oracle.run.Reference
@@ -21,6 +23,7 @@ import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.comparables.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.AfterEach
@@ -326,7 +329,363 @@ class ShrinkerTest {
         }
     }
 
+    // ------------------------------------------- computenet-r38y: gossip survives a shrink
+
+    /**
+     * The bug this pins: every candidate assembly rebuilt the script with `CaseScript(steps)`,
+     * the single-argument constructor, so a shrink DROPPED `CaseScript.deliveries` — and a
+     * replicated counterexample reduced to a non-replicated one that no longer reproduces. It
+     * failed silently, which is the failure shape this epic exists to remove, so a test that only
+     * asserted "the shrink returned something" would have gone green throughout.
+     *
+     * Asserted twice over, deliberately: the field survives, AND the reduced script still
+     * *projects* to a replicated model script. The second is the one that cannot be satisfied by
+     * a field that is merely carried around — [CaseScript.toScript] only derives an `absorbed`
+     * lane if a delivery genuinely names a position in the surviving drive order.
+     */
+    @Test
+    fun `computenet-r38y a shrunk replicated case still carries its gossip deliveries`() {
+        val case = gossipingCase(seed = 1L)
+        val terminal = case.topology.terminals.first().name
+
+        val result = Shrinker.run(case, reference = alwaysFails(case, terminal))
+
+        withClue("a shrink that drops the gossip silently reduces a replicated case to a non-replicated one") {
+            result.case.script.deliveries.isNotEmpty() shouldBe true
+        }
+        withClue("deliveries=${result.case.script.deliveries} steps=${result.case.script.steps.size}") {
+            result.case.script.toScript().slices.any { it.deliveries.isNotEmpty() } shouldBe true
+        }
+    }
+
+    /**
+     * The `atStep` shift, stated as the property that makes it correct rather than as an index
+     * arithmetic golden value: a delivery is a POSITION, so after any reduction it must still be
+     * a position this script has. `CaseScript`'s own `init` rejects an out-of-range `atStep`, so
+     * an unshifted or over-shifted delivery surfacing here throws rather than returning a wrong
+     * answer — and pass 1 deletes aggressively under [alwaysFails], so the shift is exercised
+     * hard (most scripts reduce to a handful of steps from 60).
+     */
+    @Test
+    fun `computenet-r38y a shrunk case's deliveries stay positions in the script that survived`() {
+        (1L..3L).forEach { seed ->
+            val case = gossipingCase(seed)
+            val terminal = case.topology.terminals.first().name
+
+            val result = Shrinker.run(case, reference = alwaysFails(case, terminal))
+
+            withClue("seed=$seed steps=${result.case.script.steps.size} deliveries=${result.case.script.deliveries}") {
+                // Non-vacuity first: a shrink that dropped the gossip would satisfy every
+                // statement below by having nothing to check.
+                result.case.script.deliveries.isNotEmpty() shouldBe true
+                result.case.script.deliveries.forEach { delivery ->
+                    (delivery.atStep in 0..result.case.script.steps.size) shouldBe true
+                }
+                // Re-constructing from the same parts must not throw: the `init` contract above,
+                // asserted directly so this test names the invariant rather than relying on the
+                // shrinker having happened to run it.
+                CaseScript(result.case.script.steps, result.case.script.deliveries)
+            }
+        }
+    }
+
+    /**
+     * Pass 3's rule, and the one worth a test of its own: [Shrinker]'s `without` removes a source
+     * node and every step that drove it, and a delivery naming that source must be **dropped**,
+     * never merely shifted. A shift-only fix leaves a script asserting "replica X absorbed
+     * replica Y" for a Y this case no longer contains — `CaseScript` cannot catch it (its `init`
+     * checks the step index, not the source names) and `toScript` would mint a slice for the
+     * absent source, so the case shrinks into a DIFFERENT replication shape while still looking
+     * like a faithful reduction. That is the same silent wrongness as the dropped-gossip bug,
+     * relocated one pass along.
+     *
+     * The fixture is chosen so pass 3 genuinely has a source to drop: [retiringConfig] puts three
+     * sources behind two terminals, and the injected failure names only the first — so pass 3
+     * drops the second terminal, then the branch nothing reads any more, and with it a source
+     * that two of the three attached deliveries name.
+     */
+    @Test
+    fun `computenet-r38y no delivery survives that names a source the shrink removed`() {
+        (1L..3L).forEach { seed ->
+            val case = branchedGossipingCase(seed)
+            val terminal = case.topology.terminals.first().name
+
+            val result = Shrinker.run(case, reference = alwaysFails(case, terminal))
+
+            val before = case.topology.nodes.mapNotNull { it.source }.toSet()
+            val after = result.case.topology.nodes.mapNotNull { it.source }.toSet()
+            val retired = before - after
+            withClue("seed=$seed: pass 3 retired no source, so this test would witness nothing") {
+                retired.isNotEmpty() shouldBe true
+            }
+            withClue("seed=$seed: the fixture's gossip must name a retired source, or nothing is dropped") {
+                case.script.deliveries.any { it.into in retired || it.from in retired } shouldBe true
+            }
+            withClue("seed=$seed retired=$retired deliveries=${result.case.script.deliveries}") {
+                // The gossip BETWEEN survivors must still be there — otherwise "no delivery names
+                // a retired source" is satisfied by having dropped every delivery, which is the
+                // very bug this bead removes.
+                result.case.script.deliveries.isNotEmpty() shouldBe true
+                result.case.script.deliveries.forEach { delivery ->
+                    after.contains(delivery.into) shouldBe true
+                    after.contains(delivery.from) shouldBe true
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------- computenet-4ru.1.7 moves
+
+    /**
+     * Pass 1a (`dropWriters`): a two-writer script over one non-order-dependent `SET` source
+     * collapses to the single writer the failure needs. `chainConfig`'s baseline is
+     * `writerCount = 1` for the other tests' sake, so this test opts into `writerCount = 2`
+     * itself — the ORA2 multi-writer dimension (`[ORA2-GEN-01]`).
+     *
+     * ## Why the injected failure is GROUP-wise, and not simply "w0 wrote"
+     *
+     * A monotone predicate ("some `w0` add survives") does not discriminate this pass at all:
+     * pass 1 runs to completion first and descends to single-step chunks, so it removes every
+     * `w1` step on its own and pass 1a finds nothing left to drop. Measured during review of
+     * computenet-4ru.1.7: with such a predicate, disabling `dropWriters` outright left
+     * `:oracle:test --tests civictech.oracle.shrink.*` at 29/29 green — the test asserted a
+     * property pass 1 already delivered.
+     *
+     * So the reference below fails only where `w1`'s adds are **all present or all absent**.
+     * Step-wise deletion of any proper subset of them stops the failure and is rejected; the
+     * one candidate that removes them together is [Shrinker]'s own writer-wise move. That is
+     * also the honest statement of what pass 1a buys over pass 1 — an atomic group removal a
+     * chunk-wise pass cannot express — rather than the candidate-count saving the object KDoc
+     * originally claimed, which pass 1a cannot deliver from a position after pass 1.
+     */
+    @Test
+    fun `pass 1a drops a whole writer's steps once the failure no longer needs them`() {
+        val case = generated(chainConfig().copy(writerCount = 2, scriptLength = 30), seed = 10L)
+        val terminal = case.topology.terminals.single().name
+        val source = case.topology.nodes.single { it.source != null }.source!!
+        val required = WriterId("w0")
+        val addsOf = { writer: WriterId ->
+            case.script.toScript().slice(source).events
+                .filterIsInstance<ScriptEvent.Add>().any { it.writer == writer }
+        }
+        withClue("the fixture needs an add from the required writer or the predicate is vacuous") {
+            addsOf(required) shouldBe true
+        }
+        withClue("the fixture needs an add from a DIFFERENT writer or nothing is there to drop") {
+            addsOf(WriterId("w1")) shouldBe true
+        }
+        val otherAddsOriginally = case.script.toScript().slice(source).events
+            .filterIsInstance<ScriptEvent.Add>().count { it.writer == WriterId("w1") }
+        val reference = failWhenever(case, terminal) { script ->
+            val adds = script.slice(source).events.filterIsInstance<ScriptEvent.Add>()
+            val otherAdds = adds.count { it.writer == WriterId("w1") }
+            adds.any { it.writer == required } && (otherAdds == 0 || otherAdds == otherAddsOriginally)
+        }
+
+        val result = Shrinker.run(case, reference = reference)
+
+        result.truncated shouldBe false
+        withClue("every surviving Op step must be the required writer's") {
+            result.case.script.steps.all { it !is CaseStep.Op || it.event.writer == required } shouldBe true
+        }
+        withClue("the reduction must be the writer-wise one: no w1 Add may survive") {
+            result.case.script.toScript().slice(source).events
+                .filterIsInstance<ScriptEvent.Add>().none { it.writer == WriterId("w1") } shouldBe true
+        }
+        result.outcome.shouldBeInstanceOf<RunOutcome.Mismatch>().terminal shouldBe terminal
+    }
+
+    /**
+     * Pass 1b (`dropReplicas`): a gossiping source the failure no longer needs is dropped
+     * ENTIRELY — its own steps AND every [CaseDelivery] naming it — and the topology is left
+     * alone, because this move is orthogonal to pass 3.
+     *
+     * The distinguishing property from plain step deletion (pass 1): pass 1 deletes
+     * [CaseStep.Op] entries only and never removes a [CaseDelivery], so it can empty a source's
+     * own steps while leaving a delivery that names it DANGLING — carried to a new position but
+     * never dropped. This move is what removes the dangling delivery too.
+     *
+     * Three sources, not two: [dropReplicas]' own floor refuses a drop that would zero every
+     * delivery in the script (its KDoc — "drop A replica" is not "de-mesh the case"), and with
+     * only two gossiping sources every [CaseDelivery] names both, so dropping either one would
+     * always hit that floor and this test would witness nothing. With three, [attachGossip]'s
+     * cyclic deliveries each name only two of the three, so dropping one source leaves the
+     * delivery between the other two intact.
+     *
+     * `other = sources[2]` on purpose, not `sources[1]`: [dropReplicas] tries the
+     * LAST-listed candidate first, and [attachGossip]'s cyclic deliveries make `sources[2]` the
+     * one that pass 4 drops cleanly on its first attempt — dropping it first leaves exactly one
+     * delivery (`sources[0]` \<-\> `sources[1]`), and the floor above then rightly refuses to
+     * touch either of THOSE, which is a different (also correct) outcome this test is not about.
+     */
+    @Test
+    fun `pass 1b drops a gossiping source's own steps and every delivery naming it`() {
+        val case = attachGossip(generated(threeWayFanInConfig(), seed = 9L))
+        val terminal = case.topology.terminals.single().name
+        val sources = case.topology.nodes.mapNotNull { it.source }.distinct()
+        withClue("the fixture needs exactly three sources, all feeding the one terminal") {
+            sources.size shouldBe 3
+            sourcesFeeding(case.topology, case.topology.terminals.single().handle) shouldContainExactly sources.toSet()
+        }
+        val kept = sources[0]
+        val other = sources[2]
+        withClue("dropping 'other' must not be the drop this test's own floor would refuse") {
+            case.script.deliveries.filterNot { it.into == other || it.from == other } shouldNotBe emptyList<CaseDelivery>()
+        }
+        withClue("the fixture's gossip must name the other source or this test witnesses nothing") {
+            case.script.deliveries.any { it.into == other || it.from == other } shouldBe true
+        }
+        withClue("the kept source needs an add or the predicate is vacuous") {
+            case.script.toScript().slice(kept).events.filterIsInstance<ScriptEvent.Add>().isNotEmpty() shouldBe true
+        }
+        val reference = failWhenever(case, terminal) { script ->
+            script.slice(kept).events.filterIsInstance<ScriptEvent.Add>().isNotEmpty()
+        }
+
+        val result = Shrinker.run(case, reference = reference)
+
+        result.truncated shouldBe false
+        withClue("dropReplicas must remove every step the shrink no longer needs from the other source") {
+            result.case.script.steps.none { it is CaseStep.Op && it.source == other } shouldBe true
+        }
+        withClue("a delivery naming a fully-dropped replica must not dangle in the reduced script") {
+            result.case.script.deliveries.none { it.into == other || it.from == other } shouldBe true
+        }
+        withClue("dropping a replica's script participation must not touch the topology") {
+            result.case.topology.nodes.size shouldBe case.topology.nodes.size
+            result.case.topology.terminals.size shouldBe case.topology.terminals.size
+        }
+        result.outcome.shouldBeInstanceOf<RunOutcome.Mismatch>().terminal shouldBe terminal
+    }
+
     // ------------------------------------------------------------------------------ fixtures
+
+    /**
+     * A **gossiping** case: a two-branch ORA1 topology whose script carries [CaseDelivery]s
+     * between its two sources.
+     *
+     * ## Why the deliveries are attached rather than generated
+     *
+     * `GeneratorConfig.replicatedSweep()` produces the real thing, but its sources are `orMap`
+     * cells and `CaseExecution.scriptSourceFor` refuses those: *"Source node 'source-0'
+     * instantiates catalog id 'orMap', for which the runner has no script binding"*. The
+     * shrinker EXECUTES every candidate, so a generated replicated case cannot be shrunk at all
+     * on this branch — the ORA2 runner half that drives a mesh is not landed here yet
+     * (measured, not assumed: see this item's report).
+     *
+     * What is landed, and what this bead is actually about, is the *data*: `CaseScript` carries
+     * `deliveries`, and the three candidate-assembly sites plus the renderer have to preserve
+     * them. A `CaseDelivery` is inert to the kernel drive loop — `DifferentialRunner` walks
+     * `case.script.steps` and nothing else — so attaching gossip to a drivable topology exercises
+     * exactly the bookkeeping under test, with a case the runner can still execute. When the mesh
+     * runner lands, the same assertions should be re-pointed at `replicatedSweep()` and will then
+     * cover the generated shape too.
+     *
+     * [attachGossip] spreads the positions across the drive order on purpose, but this fixture has
+     * only TWO sources and therefore only two deliveries — at the front and in the middle. The
+     * `steps.size` tail position is reached by [branchedGossipingCase]'s third delivery (and by
+     * `CounterexampleRenderTest`'s render fixture), not here.
+     */
+    private fun gossipingCase(seed: Long): GeneratedCase = attachGossip(generated(fanInConfig(), seed))
+
+    /**
+     * The same, on [retiringConfig] — the shape in which pass 3 genuinely retires a source, so
+     * `without`'s drop rule is reachable. Separate from [gossipingCase] on purpose: there the
+     * deliveries must SURVIVE, here some of them must not, and one fixture cannot witness both.
+     */
+    private fun branchedGossipingCase(seed: Long): GeneratedCase = attachGossip(generated(retiringConfig(), seed))
+
+    /**
+     * Three set sources and two terminals over a `union` vocabulary: enough that a failure naming
+     * one terminal lets pass 3 retire a source while at least two survive. Two survivors is the
+     * point — with only two sources every delivery names the retired one (a replica does not
+     * gossip with itself), so *every* delivery would be legitimately dropped and the surviving-set
+     * assertion would hold vacuously. Here some gossip must survive AND none of it may name what
+     * was retired, which is the pair of statements `without`'s drop rule actually has to satisfy.
+     */
+    private fun retiringConfig() = chainConfig().copy(
+        sourceCount = 3,
+        terminalCount = 2,
+        vocabulary = listOf(CoreOperators.Ids.SET, CoreOperators.Ids.UNION),
+    ).validated()
+
+    /**
+     * Two set sources fanning in to one `union` and one terminal. Both sources are read by the
+     * union, so pass 3 retires neither and a delivery between them has to survive the whole
+     * shrink on its own merits rather than because nothing challenged it.
+     */
+    private fun fanInConfig() = chainConfig().copy(
+        sourceCount = 2,
+        terminalCount = 1,
+        vocabulary = listOf(CoreOperators.Ids.SET, CoreOperators.Ids.UNION),
+    ).validated()
+
+    /**
+     * Three set sources fanning in to one terminal through a `union` chain: [fanInConfig]'s
+     * shape widened to three sources so [attachGossip]'s cyclic deliveries each name only two of
+     * the three — the fixture `pass 1b` needs to drop the middle source without tripping
+     * [Shrinker]'s own no-empty-mesh floor (see that test's KDoc). A wider depth range than
+     * [chainConfig]'s `1..1` because chaining three sources into one terminal through a binary
+     * `union` needs at least two operator levels.
+     */
+    private fun threeWayFanInConfig() = chainConfig().copy(
+        sourceCount = 3,
+        terminalCount = 1,
+        depthRange = 2..3,
+        vocabulary = listOf(CoreOperators.Ids.SET, CoreOperators.Ids.UNION),
+    ).validated()
+
+    /**
+     * [case] with [CaseDelivery]s attached between its two sources.
+     *
+     * ## Why the deliveries are attached rather than generated
+     *
+     * `GeneratorConfig.replicatedSweep()` produces the real thing, but its sources are `orMap`
+     * cells and `CaseExecution.scriptSourceFor` refuses those: *"Source node 'source-0'
+     * instantiates catalog id 'orMap', for which the runner has no script binding"*. The shrinker
+     * EXECUTES every candidate, so a generated replicated case cannot be shrunk at all on this
+     * branch — the ORA2 runner half that drives a mesh is not landed here yet (measured, not
+     * assumed).
+     *
+     * What IS landed, and what this bead is about, is the *data*: `CaseScript` carries
+     * `deliveries`, and the three candidate-assembly sites plus the renderer have to preserve
+     * them. A `CaseDelivery` is inert to the kernel drive loop — `DifferentialRunner` walks
+     * `case.script.steps` and nothing else — so attaching gossip to a drivable topology exercises
+     * exactly the bookkeeping under test with a case the runner can still execute. When the mesh
+     * runner lands, these assertions should be re-pointed at `replicatedSweep()`.
+     *
+     * One delivery per source, cycled over three positions spread across the drive order — the
+     * very front, the middle, and `steps.size` (the "after the last step" position `CaseDelivery`
+     * admits) — because a shift bug invisible at index 0 is not invisible at the tail. Cycled, so
+     * a two-source case reaches only the first two of those; the tail needs three sources.
+     */
+    private fun attachGossip(case: GeneratedCase): GeneratedCase {
+        val sources = case.topology.nodes.mapNotNull { it.source }.distinct()
+        withClue("the fixture needs at least two sources to gossip between") {
+            (sources.size >= 2) shouldBe true
+        }
+        val steps = case.script.steps.size
+        // One delivery per adjacent pair, cycled, at spread positions: front, middle, and the
+        // `steps.size` tail position `CaseDelivery` admits.
+        val positions = listOf(0, steps / 2, steps)
+        val deliveries = sources.indices.map { index ->
+            CaseDelivery(
+                atStep = positions[index % positions.size],
+                into = sources[index],
+                from = sources[(index + 1) % sources.size],
+            )
+        }
+        return case.copy(script = CaseScript(case.script.steps, deliveries))
+    }
+
+    /**
+     * A reference that reports [terminal] as [SENTINEL] unconditionally — so every reduction is
+     * retained and the passes run to their limit. That is what makes these tests about the
+     * shrinker's *bookkeeping* rather than about which reductions a particular failure survives:
+     * the maximal reduction is the one most likely to mis-shift or orphan a delivery.
+     */
+    private fun alwaysFails(case: GeneratedCase, terminal: String): Reference =
+        failWhenever(case, terminal) { true }
 
     /**
      * The case for `(config, seed)`, with its **baseline asserted clean** — the honest
