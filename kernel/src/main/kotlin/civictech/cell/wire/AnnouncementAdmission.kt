@@ -444,4 +444,5 @@ class AnnouncementAdmission private constructor(
                 "over this announcement could verify by anybody. The string itself is not " +
                 "reported here ([DSC1-OBS-05])",
         )
+    }
 }
