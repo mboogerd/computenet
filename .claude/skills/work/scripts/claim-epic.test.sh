@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for claim-epic.sh. Stubs `bd` on PATH; every case gets a fresh control
-# dir. Exits 0 if all cases pass. Expect "13 passed, 0 failed".
+# dir. Exits 0 if all cases pass. Expect "14 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claim-epic.sh"}
@@ -131,6 +131,12 @@ touch "$CTRL/refuse-claim"
 out=$("$SCRIPT" computenet-e 2>&1); rc=$?
 { [ "$rc" = 0 ] && grep -q "is dead" <<<"$out"; } \
   && ok "a dead holder is taken over" || bad "rc=$rc out=$out"
+# bz5c: a holder minted on ANOTHER machine is FOREIGN — refused, never "dead"
+fixture
+holder_show open "testbox" "other-box/testbox:99999:Tue Jan  1 00:00:00 2020"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+[ "$rc" = 1 ] && grep -q "ANOTHER machine" <<<"$out" && ! grep -q "owner:" "$BD_LOG" \
+  && ok "a foreign holder is refused, not taken over" || bad "foreign: rc=$rc out=$out"
 
 # An UNEVALUABLE holder must not become an all-clear NOR a hard block: it falls
 # back to the recency test that governed before, and says so.
