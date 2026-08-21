@@ -56,8 +56,11 @@ import java.util.UUID
  *   input to it and not a mock.
  *
  * What **none** of the four does is observe state a kernel replica produced: CTL-02's and
- * CTL-04's folds are [DotModel]'s too. `CaseExecution` wires no `OR_MAP` script source and never
- * folds a tagged terminal (computenet-6v7y), so no *generated* OR-map case reaches the runner.
+ * CTL-04's folds are [DotModel]'s too. That still holds, but no longer for want of a runner path:
+ * computenet-6v7y wired `CaseExecution` to resolve an `OR_MAP` script source and to fold a tagged
+ * terminal through `TaggedMapTerminalFold`, so a *single-instance* generated OR-map case now does
+ * reach the runner. None of these four has been written onto that path, and the replicated mesh
+ * CTL-02 and CTL-04 build by hand still has no path at all (previous paragraph).
  * Kernel-driven OR-map coverage lives one file over, in
  * [civictech.oracle.tagged.ConvergenceCheckTest] — see the next section.
  *
@@ -68,9 +71,12 @@ import java.util.UUID
  * with the key named). This suite does not repeat that kernel drive — `ConvergenceCheckTest.kt`
  * is owned by the sibling task that landed it, and duplicating a live `SimWorld` mesh here would
  * be exactly the "second sweep loop" the feature design forbids. What is missing without a test
- * *here* is CTL-01's arrival-order control and CTL-03's remove-all control, for which no kernel
- * seam exists at all (previous paragraph) — those two, plus a CTL-02/CTL-04 instance scoped to
- * this task's own bead, are what this file adds.
+ * *here* is CTL-01's arrival-order control and CTL-03's remove-all control, for which no
+ * *replicated* kernel seam exists (previous paragraph) — those two, plus a CTL-02/CTL-04
+ * instance scoped to this task's own bead, are what this file adds. Since computenet-6v7y a
+ * single-instance generated OR-map case could carry a substituted reference through
+ * `DifferentialRunner`, which is a seam these two did not have when they were written; neither
+ * has been rewritten onto it.
  */
 class TaggedControlsTest {
 
