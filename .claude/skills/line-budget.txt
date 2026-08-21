@@ -38,7 +38,8 @@
 # 8106 -> 8114 on 2026-08-21: computenet-l8ju — rebased onto main (see PR #416).
 # 8114 -> 8122 on 2026-08-21: computenet-9cji — rebased onto main (see PR #439).
 # 8122 -> 8128 on 2026-08-21: computenet-af9q — rebased onto main (see PR #432).
-work                8128
+# 8128 -> 8136 on 2026-08-21: computenet-af9q — rebased onto main (see PR #432).
+work                8136
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
