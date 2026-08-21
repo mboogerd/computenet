@@ -27,10 +27,10 @@ import civictech.oracle.gen.GeneratorConfig
  * entry, so pinning an unfixed failure would redden every build rather than record it. Unfixed
  * findings are tracked as their own beads and, where the discovering test already carries a
  * named-constant ledger (e.g. `civictech.oracle.run.WavePrefixTest`'s `SEAM_SEEDS`,
- * `RAW_VIEW_FLICKER_SEEDS`, `CHAIN_ARTIFACT_SEEDS`), stay pinned to *that* population there,
- * not duplicated here. As of this file's creation the open, NOT-pinned-here populations are:
- * `WavePrefixTest`'s `SEAM_SEEDS` (30, 40, 50, 58), `RAW_VIEW_FLICKER_SEEDS` (8, 28, 44, 54)
- * and `CHAIN_ARTIFACT_SEEDS` (38) — all residual under computenet-eeys — and
+ * `HEALED_DIVERGENCE_SEEDS`, `SINGLE_PATH_DIVERGENCE_SEEDS`), stay pinned to *that* population
+ * there, not duplicated here. As of this file's creation the open, NOT-pinned-here populations
+ * are: `WavePrefixTest`'s `SEAM_SEEDS` (30, 40, 50, 58), `HEALED_DIVERGENCE_SEEDS` (8, 28, 44,
+ * 54) and `SINGLE_PATH_DIVERGENCE_SEEDS` (38) — all residual under computenet-eeys — and
  * computenet-4ru.18's BS-1 seed 27. None of those belong here until the defect they name is
  * fixed.
  *
@@ -54,12 +54,12 @@ import civictech.oracle.gen.GeneratorConfig
  * recorded there 2026-08-19, commit `a3176733`), all under `WavePrefixTest`'s own
  * `generatedSweepConfig()` at `scriptLength = 30`:
  *
- * - **34** — left `RAW_VIEW_FLICKER_SEEDS` (was `[28, 34, 44, 46, 54]`, is now `[8, 28, 44,
+ * - **34** — left `HEALED_DIVERGENCE_SEEDS` (was `[28, 34, 44, 46, 54]`, is now `[8, 28, 44,
  *   54]`); no longer violates at all.
  * - **36** — left the `GLITCH_CANDIDATE_SEEDS` bucket (was `[36]`, is now `[]`); filed as the
  *   glitch candidate under computenet-qjtp (closed) and clean once the generator stopped
  *   naming live elements in unobserved removes.
- * - **46** — left `RAW_VIEW_FLICKER_SEEDS` alongside 34, for the same reason.
+ * - **46** — left `HEALED_DIVERGENCE_SEEDS` alongside 34, for the same reason.
  *
  * All three were re-verified to replay `Success` against this file's own base commit before
  * being pinned below.
@@ -123,7 +123,7 @@ object PinnedSeeds {
             seed = 34L,
             config = QCM1_SWEEP_CONFIG,
             fixedBy = "computenet-qcm1",
-            reason = "Left WavePrefixTest's RAW_VIEW_FLICKER_SEEDS entirely once " +
+            reason = "Left WavePrefixTest's HEALED_DIVERGENCE_SEEDS entirely once " +
                 "ScriptGenerator.emitUnobservedRemove stopped naming a live element another " +
                 "writer added; the violation was the generator's manufactured divergence, not " +
                 "a kernel defect.",
@@ -140,7 +140,7 @@ object PinnedSeeds {
             seed = 46L,
             config = QCM1_SWEEP_CONFIG,
             fixedBy = "computenet-qcm1",
-            reason = "Left WavePrefixTest's RAW_VIEW_FLICKER_SEEDS entirely, the same " +
+            reason = "Left WavePrefixTest's HEALED_DIVERGENCE_SEEDS entirely, the same " +
                 "emitUnobservedRemove fix as seed 34.",
         ),
     )
