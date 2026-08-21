@@ -34,7 +34,8 @@
 # 8075 -> 8082 on 2026-08-21: computenet-xbkm — route 0 contention stated in terms of the repo-wide gate.
 # 8082 -> 8090 on 2026-08-21: computenet-d52d — rebased onto main (see PR #425).
 # 8090 -> 8095 on 2026-08-21: computenet-5b34 — rebased onto main (see PR #423).
-work                8095
+# 8095 -> 8106 on 2026-08-21: computenet-jobe — rebased onto main (see PR #422).
+work                8106
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
