@@ -456,10 +456,14 @@ class WavePrefixTest {
      * property it checks is a wave-boundary property that only the co-hosted inlining makes
      * observable-at-wave-boundaries, not a kernel guarantee about non-declaring fan-ins.
      *
-     * The fourth test records the residual the bead's hypothesis was half-right about: the
-     * cross-host connect really does establish no target-side link, so it really would carry no
-     * completeness protocol — to a join that had one. None of these cases does, which is why it
-     * is a filed follow-up (**computenet-xj0v**) and not this bead's answer.
+     * The fourth test records the residual the bead's hypothesis was half-right about: a
+     * bare-`Propagate` cross-host connect really does establish no target-side link, so it
+     * really would carry no completeness protocol — to a join that had one. None of these cases
+     * does, which is why it was a filed follow-up (**computenet-xj0v**) and not this bead's
+     * answer. That follow-up has since been answered: **computenet-vpiz** makes
+     * [CaseExecution.assemble] wire a cross-host edge as a real bridged link pair, so the
+     * harness's own cross-host wiring no longer has this gap; the fourth test now pins the bare
+     * pattern it hand-builds, not what `assemble` does.
      */
     private fun crossHostScript() = CaseScript(
         listOf(
@@ -654,7 +658,7 @@ class WavePrefixTest {
     }
 
     @Test
-    fun `the cross-host wiring establishes no target-side link, and still drops nothing`() {
+    fun `a bare-Propagate cross-host connect establishes no target-side link, and still drops nothing`() {
         val case = diamondCase(crossHostScript())
         val world = SimWorld(seed = case.seed)
         val assembly = CaseExecution.assemble(case, world)
@@ -677,10 +681,13 @@ class WavePrefixTest {
             local.inlet.linking.links.size shouldBe 1
         }
         withClue(
-            "the bare-Propagate cross-host connect does not: no link identity on the target " +
-                "side means no EdgeOpen and no per-inlink frontier bookkeeping there. That is a " +
-                "real harness limit for [22-GF-03] — it is just not the cause of this bead, " +
-                "because no case builds a frontier join across the cut.",
+            "the bare-Propagate cross-host connect hand-built above does not: no link identity " +
+                "on the target side means no EdgeOpen and no per-inlink frontier bookkeeping " +
+                "there. That WAS the harness's own cross-host wiring, and the real [22-GF-03] " +
+                "limit it carried — until computenet-vpiz made CaseExecution.assemble bridge a " +
+                "cross-host edge as a real link pair, so an assemble-wired cut now DOES register " +
+                "the target-side link (CaseExecutionTest). What this test still pins is the bare " +
+                "pattern itself, which is what the bead's hypothesis was about.",
         ) {
             remote.inlet.linking.links.shouldBeEmpty()
         }
