@@ -96,6 +96,21 @@ after a red suite:
   route — so a claim of `<module>/,settings.gradle.kts` is **unsatisfiable by
   construction**. Two sessions hit this the same day, independently, on
   `:oracle` and `:identity` (computenet-d7qn, computenet-m9px).
+- **A test whose design needs a capability its module's build file lacks
+  claims that `build.gradle.kts`.** A test-local `@Serializable` type on
+  `:wire` needs the serialization plugin and `testImplementation` in
+  `wire/build.gradle.kts`; the bead never names it because it is a
+  consequence of the design, not a requirement, and a test-only claim is then
+  unsatisfiable (computenet-wliv, one dispatch cycle). Heuristic: a new
+  annotation, library or source set in the test → check the module's plugins
+  and dependencies blocks, and claim the build file if either lacks it.
+- **A task that makes one kernel package reference another claims
+  `kernel/src/test/resources/architecture/package-edges.txt`.**
+  `ArchitectureRatchetTest` fails on any edge not in that baseline, and a task
+  without the file in its claim routes around it with a worse design — a
+  moved declaration, a duplicated interface — twice in one epic
+  (computenet-le08). Claiming the baseline is what lets the task add the one
+  edge and let its reviewer judge the edge on the merits.
 - **A criterion that names a TYPE claims that type's defining file.** "…
   matchable by kind from `RunOutcome`" names the only file a kind can be added
   to, and a type name is not slash-separated and has no extension, so nothing

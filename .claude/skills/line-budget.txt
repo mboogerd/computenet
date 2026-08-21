@@ -65,7 +65,8 @@
 # 8295 -> 8306 on 2026-08-21: computenet-wahz — rebased onto main (see PR #413).
 # 8306 -> 8310 on 2026-08-21: computenet-4dip — rebased onto main (see PR #437).
 # 8310 -> 8326 on 2026-08-21: computenet-f7gy — rebased onto main (see PR #430).
-work                8326
+# 8326 -> 8341 on 2026-08-21: computenet-wliv — rebased onto main (see PR #429).
+work                8341
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
