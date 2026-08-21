@@ -43,7 +43,7 @@ SKILL.md and the other references cite this file as "`bd` traps".
   three-bead status loop 177KB, each costing round-trips through the
   persisted-output file (computenet-9r2z). `jq -r '.[0] | "\(.status)
   \(.assignee)"'` is the same call and 40 bytes; read a description with
-  `jq -r .[0].description` into a file and Read it.
+  `jq -r '.[0].description'` into a file and Read it.
 - `bd` prints warnings on stdout **before** the JSON, so `jq` and
   `json.loads` fail on the raw stream; slice from the first line starting
   `[` or `{` (`sed -n '/^[[{]/,$p'`) before parsing. **Every documented
