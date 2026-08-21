@@ -106,7 +106,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `wait-checks.sh` | THE settle loop on `gh pr checks` — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`QUERY-FAILED` |
 | `verify-branch-sync.sh` | 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
 | `merge-task.sh` | 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
-| `session-holder.sh` | this session's unique holder token, and `--check <token>` → MINE/LIVE/DEAD/UNKNOWN; what tells a live sibling from a crash leftover, which `assignee` cannot |
+| `session-holder.sh` | this session's unique holder token, and `--check <token>` → MINE/LIVE/DEAD/UNKNOWN/FOREIGN; what tells a live sibling from a crash leftover, which `assignee` cannot |
 | `junit-count.py` | JUnit XML accounting (counts + newest timestamp, both glob depths); refuses to report zero result files |
 
 (`scripts/beads-nightly-sync.sh` is the **repo-root** catch-up job; no
@@ -1074,7 +1074,7 @@ A worktree already on disk that this session did not create may also belong
 to a *concurrent session* on this machine, not just a dead one — step 3's
 liveness check races a run that starts mid-slot. Before adopting one, check
 its bead: `metadata.holder` via
-`.claude/skills/work/scripts/session-holder.sh --check` (LIVE → occupied), or
+`.claude/skills/work/scripts/session-holder.sh --check` (LIVE or FOREIGN → occupied), or
 failing that `in_progress` with `updated_at` in the last 15 minutes →
 occupied, leave it.
 
