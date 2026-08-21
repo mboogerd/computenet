@@ -127,7 +127,7 @@ class WsReconnectSmokeTest {
      * signs every announcement it emits and verifies every one it receives,
      * under the key the peer's hello proved.
      */
-    private class KeyedStack(seed: String, incarnation: Long = System.currentTimeMillis()) {
+    private class KeyedStack(seed: String, incarnation: () -> Long = System::currentTimeMillis) {
         val identity = PeerIdentity(DeterministicKeySource.keyPairFromSeed(seed.toByteArray()))
         val peerId: PeerId get() = identity.peerId
         val registry = LocationRegistry()
@@ -144,7 +144,7 @@ class WsReconnectSmokeTest {
             // restart case below can build two incarnations of one identity
             // without waiting for a millisecond to pass (`computenet-ssa.6`);
             // every other stack here takes the production default.
-            announcementSigning = socketAnnouncementSigning().copy(incarnation = { incarnation }),
+            announcementSigning = socketAnnouncementSigning().copy(incarnation = incarnation),
             announcementVerification = socketAnnouncementVerification(),
         )
 
@@ -405,8 +405,8 @@ class WsReconnectSmokeTest {
     @Test
     fun `an authenticated signing peer that restarts its process re-converges rather than replaying`() {
         val firstBoot = 1_700_000_000_000L
-        val server = KeyedStack("ssa6-server", incarnation = firstBoot)
-        var client = KeyedStack("ssa6-client", incarnation = firstBoot)
+        val server = KeyedStack("ssa6-server", incarnation = { firstBoot })
+        var client = KeyedStack("ssa6-client", incarnation = { firstBoot })
         val clientId = client.peerId
         val endpoint = HeldPort()
         val port = endpoint.port
@@ -440,7 +440,7 @@ class WsReconnectSmokeTest {
             //    incarnation. Everything client-side is rebuilt; the server's
             //    side, listener and ledger are the ones from before.
             connection.shutdown()
-            client = KeyedStack("ssa6-client", incarnation = firstBoot + 60_000L)
+            client = KeyedStack("ssa6-client", incarnation = { firstBoot + 60_000L })
             client.peerId shouldBe clientId // the same identity, re-minted
             client.side.announcementSigner!!.counterFloor shouldBeGreaterThan floorBeforeRestart
             client.ledger.highWaterFor(server.peerId) shouldBe null // a virgin ledger, as a restart has
@@ -474,6 +474,61 @@ class WsReconnectSmokeTest {
             server.rejected shouldBe 0L
             // still one entry per identity: the restart did not mint a second
             server.ledger.trackedPeers shouldBe 1
+        } finally {
+            connection.shutdown()
+            runCatching { listener.stop(1000) }
+            endpoint.close()
+        }
+    }
+
+    /**
+     * computenet-tdcx step 3 REPRODUCTION (temporary form): the same restart as
+     * above, but the signer's own wall clock steps BACKWARDS across it. With the
+     * clock-seeded incarnation default this must fail — the second incarnation's
+     * floor lands below the server's high-water mark and the burst dead-letters
+     * as REPLAY.
+     */
+    @Test
+    fun `a signing process whose clock steps backwards across a restart re-converges`() {
+        val firstBoot = 1_700_000_000_000L
+        val secondBoot = firstBoot - 60_000L // an NTP correction across the crash
+        val server = KeyedStack("tdcx-server", incarnation = { firstBoot })
+        var client = KeyedStack("tdcx-client", incarnation = { firstBoot })
+        val clientId = client.peerId
+        val endpoint = HeldPort()
+        val port = endpoint.port
+        val listener = endpoint.serve(server.side)
+        var connection = WsTransport.connect(URI("ws://localhost:$port"), client.side) { 0L }
+        try {
+            val collector = CollectorCell()
+            server.host.managementInlet.call.spawn(collector)
+            await("collector announced") { client.registry.location(collector.ref) is LocationRegistry.Remote }
+
+            val writer = SetCell<String>()
+            client.host.managementInlet.call.spawn(writer)
+            val remoteInlet = (HostedCellProxy.create(collector.ref, client.registry, DeltaInletProxy::class.java)
+                    as DeltaInletProxy).inlet.call
+            writer.outlet.subscribe(Use.fixed(remoteInlet, PortRef.generate()))
+            val api = (HostedCellProxy.create(writer.ref, client.registry, SetInletProxy::class.java)
+                    as SetInletProxy).inlet.call
+            api.add("milk")
+            await("pre-restart convergence") { membership(collector.arrivals.toList()) == setOf("milk") }
+            await("the server verified the client's announcements") {
+                server.ledger.highWaterFor(clientId) != null
+            }
+            val serverSawBeforeRestart = server.ledger.highWaterFor(clientId).shouldNotBeNull()
+            val floorBeforeRestart = client.side.announcementSigner!!.counterFloor
+
+            connection.shutdown()
+            client = KeyedStack("tdcx-client", incarnation = { secondBoot })
+            client.peerId shouldBe clientId
+            connection = WsTransport.connect(URI("ws://localhost:$port"), client.side) { 0L }
+
+            await("the restarted process's announcements were accepted", timeoutMs = 10_000) {
+                (server.ledger.highWaterFor(clientId) ?: 0L) > serverSawBeforeRestart
+            }
+            server.replayDeadLetters().shouldBeEmpty()
+            server.rejected shouldBe 0L
         } finally {
             connection.shutdown()
             runCatching { listener.stop(1000) }
