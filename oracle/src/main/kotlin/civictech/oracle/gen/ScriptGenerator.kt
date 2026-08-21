@@ -73,38 +73,64 @@ import kotlin.random.Random
  * writer observation of its own adds automatically and of nothing else. Both paths are
  * exercised — a writer removing what it added itself, and a writer that observes first.
  *
- * **An unobserved remove also never names a *live* element (`computenet-qcm1`).** "Not added
- * nor observed by this writer" alone is only half of what makes the step a no-op: it is a
- * `Membership` no-op, but the kernel's `SetCell.inletHandler.remove` retracts
- * `liveTags(element)` unconditionally without consulting the removing writer's causal history,
- * so a cross-writer remove of a *live* element takes effect in the kernel while the model
- * ignores it — a Mismatch manufactured by the generator rather than found in the kernel. The
- * draw in [emitUnobservedRemove] therefore also excludes everything live at that position of
- * the slice, read from [Membership.live] over the events emitted into that source so far
- * (never added, added and already covered, or added only later are all admissible). Liveness
- * is *called* from the reference model, not re-derived here, so the generator cannot come to
- * hold a second and subtly different notion of it. Before the fix, on this suite's own fixture
- * (two set sources, `writerCount = 2`, domain 64, length 200, ratio 0.3, seeds 1..25), 20 of
- * 699 unobserved removes (2.9%) named a live element — roughly one per seed; it is 0 of 699
- * now, and `ScriptGeneratorTest` asserts that zero.
+ * ## No emitted remove leaves its element live (`computenet-qcm1`, `computenet-i3vo`)
  *
- * The narrowing leaves the *bias* untouched: an unobserved remove records nothing into a
- * writer's known set, so restricting which element it names changes no later candidate set and
- * consumes no different amount of [rng]. Measured on that same fixture, before and after are
- * identical to every digit — aggregate unobserved fraction 699/2201 = 0.3176 over seeds 1..25,
- * and 27/87 = 0.3103 for seed 42 — so the `unobservedRemoveRatio` tolerances
- * `ScriptGeneratorTest` asserts stand as written and needed no re-statement. What the narrowing
- * *can* do is exhaust the candidate pool sooner at a **small `elementDomainSize`**, where a
- * writer's known set plus the live set may cover the whole domain; that case falls back to an
- * add exactly as the pre-existing no-candidate path does, which biases the measured unobserved
- * fraction downward rather than resampling.
+ * One post-condition governs **every** remove this generator emits, whichever branch drew it:
+ * folding the emitted `Remove` into the source's slice must not leave its element in
+ * [Membership.live]. `SetCell.inletHandler.remove` retracts `liveTags(element)` unconditionally,
+ * without consulting the removing writer's causal history, while `Membership` covers only the
+ * adds that writer had *observed* — so a remove that leaves the element live in the model has
+ * taken effect in the kernel and is a Mismatch manufactured by the generator rather than found
+ * in the kernel.
  *
- * Scope note, so the next reader does not mistake this for a cure: it removes only the
- * generator's *manufactured* divergence. A cross-writer **observed** remove path diverges
- * independently of it — at `unobservedRemoveRatio = 0.0`, nine of sixty cases of
- * `WavePrefixTest`'s sweep still mismatch at quiescence and six still violate the wave-prefix
- * check (measured 2026-08-19, computenet-4ru.8.5). That residual is `computenet-eeys`, not
- * this.
+ * It is stated once, in [SourceState.settlingRemoves], and every candidate set is drawn through
+ * it. Liveness is *called* from the reference model, never re-derived here, so the generator
+ * cannot come to hold a second and subtly different notion of it.
+ *
+ * The three branches it governs, and what it excludes on each:
+ *
+ * - **Unobserved** ([emitUnobservedRemove], `computenet-qcm1`): an element the writer never
+ *   added nor observed has none of its adds covered by that writer's remove, so the
+ *   post-condition coincides exactly with "not currently live". On this suite's own fixture
+ *   (two set sources, `writerCount = 2`, domain 64, length 200, ratio 0.3, seeds 1..25) 20 of
+ *   699 unobserved removes (2.9%) named a live element before qcm1; 0 since.
+ * - **Observed, *direct*** ([emitObservedRemove], `computenet-i3vo`): `SourceState.known` is
+ *   monotone, so it offers an element the writer added or once observed even when a **later**
+ *   add by another writer is still uncovered. This is where the residual sat — the steps audit
+ *   `observed = true`, which is exactly why `unobservedRemoveRatio = 0.0` could not clear them.
+ *   Measured 2026-08-21 on a two-set-plus-keyed fixture over seeds 1..25: 20 of 2300 removes
+ *   left their element live, all twenty audited observed; 0 since.
+ * - **Observed, *cross*** ([emitObservedRemove]): the filter is a no-op today, because the
+ *   `Observe` emitted immediately before the remove grants the writer every earlier add. It is
+ *   applied anyway, with that pending `Observe` handed to the post-condition, so the fact is
+ *   measured rather than assumed.
+ *
+ * A keyed remove (`RemoveKey`) satisfies the post-condition vacuously and is not filtered:
+ * [Membership.live] ignores `Put`/`RemoveKey` entirely, so a key is never live in it. Keyed
+ * membership is `KeyedSetSourceModel`/`MapCellSourceModel`'s last-writer fold, which has no
+ * observation relation and therefore no asymmetry to manufacture.
+ *
+ * The narrowing leaves the observed/unobserved *bias* untouched, and for a structural reason
+ * rather than a lucky one: rejecting candidates *within* a writer's list shortens the list the
+ * element is picked from but leaves the `(writer, candidates)` pair present, so exactly the same
+ * [rng] draws happen in the same order and only which element is named changes. The stream moves
+ * only where a writer's **entire** list is rejected — and where every writer's is, the branch
+ * falls back to an add exactly as the pre-existing no-candidate path does, which biases the
+ * measured unobserved fraction upward rather than resampling. Re-measured under
+ * `computenet-i3vo` on `ScriptGeneratorTest`'s two-set fixture: aggregate unobserved fraction
+ * 699/2201 = 0.3176 over seeds 1..25 and 27/87 = 0.3103 for seed 42, identical to every digit
+ * before and after both this fix and qcm1's, so the `unobservedRemoveRatio` tolerances that
+ * suite asserts stand as written and needed no re-statement. The exhaustion caveat applies at a
+ * **small `elementDomainSize`**, where a writer's known set plus the live set may cover the
+ * whole domain.
+ *
+ * What this does *not* claim to be is a cure for the underlying asymmetry: it removes the
+ * generator's *manufactured* divergence only. The asymmetry itself is settled, and settled
+ * against the model — see `WavePrefixTest`'s
+ * `a remove of an element another writer added is applied by the kernel and ignored by the model`
+ * (`computenet-eeys`): `[24-SET-03]`'s observer is the CELL, and the generated drive path builds
+ * one replica, so the model's per-writer rule is sound only for writers that are separate
+ * replicas. Constraining the generator is the repair that leaves both sides untouched.
  *
  * Every remove — `Remove` on a set source and `RemoveKey` on a keyed one — is recorded in a
  * [RemoveRecord]. `RemoveKey`'s "observed" reading is the one its source model supports:
@@ -475,9 +501,9 @@ class ScriptGenerator(
 
     /**
      * Appends one op step AND records the event in [source]'s own slice, which is what
-     * [SourceState.liveElements] folds through [Membership.live]. Every op step goes through
+     * [SourceState.settlingRemoves] folds through [Membership.live]. Every op step goes through
      * here: a step appended straight to [steps] would be invisible to the liveness fold and
-     * would silently reintroduce `computenet-qcm1`.
+     * would silently reintroduce `computenet-qcm1` / `computenet-i3vo`.
      */
     private fun append(source: SourceState, event: ScriptEvent, steps: MutableList<CaseStep>) {
         source.recordEvent(event)
@@ -498,27 +524,28 @@ class ScriptGenerator(
     }
 
     /**
-     * A remove naming an element its writer has neither added nor observed **and which is not
-     * live at this position of the source's slice** (`computenet-qcm1`).
+     * A remove naming an element its writer has neither added nor observed, and which
+     * [SourceState.settlingRemoves] admits (`computenet-qcm1`, restated as the post-condition of
+     * `computenet-i3vo`).
      *
      * Both conditions are needed for the step to be a no-op on *both* sides of the differential.
-     * "Not added nor observed" makes it a `Membership` no-op; "not live" is what makes it a
-     * kernel no-op, because `SetCell.inletHandler.remove` retracts `liveTags(element)`
+     * "Not added nor observed" makes it a `Membership` no-op; the post-condition is what makes it
+     * a kernel no-op, because `SetCell.inletHandler.remove` retracts `liveTags(element)`
      * unconditionally and does not consult the removing writer's causal history. Without the
      * second condition a cross-writer remove of a live element takes effect in the kernel while
      * the model ignores it — a Mismatch manufactured by the generator rather than found in the
      * kernel.
      *
-     * Liveness comes from [Membership.live] over the events emitted into this source so far
-     * ([SourceState.liveElements]) — the model's own fold, called rather than re-derived, so the
-     * generator cannot hold a second and subtly different notion of "live" from the one the
-     * runner compares against.
+     * On *this* branch the post-condition coincides exactly with qcm1's "not live" filter, and
+     * the candidate sets are element-for-element identical: an element the writer has neither
+     * added nor observed has none of its adds covered by this writer's remove, so live-before
+     * implies live-after here. The general form is used anyway so the constraint has one
+     * statement rather than one per branch.
      */
     private fun emitUnobservedRemove(source: SourceState, steps: MutableList<CaseStep>, audit: MutableList<RemoveRecord>): Boolean {
-        val live = source.liveElements()
         val candidates = source.writers.mapNotNull { writer ->
-            elementDomain
-                .filterNot { it in source.known(writer) || it in live }
+            source
+                .settlingRemoves(writer, elementDomain.filterNot { it in source.known(writer) })
                 .takeIf { it.isNotEmpty() }
                 ?.let { writer to it }
         }
@@ -535,16 +562,35 @@ class ScriptGenerator(
      * added itself, or (with an explicit `Observe` emitted first) an element another writer
      * added. Both paths are offered whenever both have candidates, so a population contains
      * self-removes *and* cross-writer observed removes.
+     *
+     * Both candidate sets go through [SourceState.settlingRemoves] (`computenet-i3vo`), which is
+     * where the *direct* branch's residual sat: `known(writer)` is monotone, so it offers an
+     * element the writer added or once observed even when a **later** add by another writer is
+     * still uncovered. The remove then takes effect in the kernel and is a `Membership` no-op —
+     * the same manufactured Mismatch qcm1 removed from the unobserved branch, audited
+     * `observed = true`, which is why `unobservedRemoveRatio = 0.0` never reached it.
+     *
+     * On the *cross* branch the filter is a no-op today and is applied anyway: the `Observe`
+     * emitted immediately before the remove grants the writer every add at an earlier position,
+     * so no add of any element can be left uncovered. Passing that pending `Observe` to
+     * [SourceState.settlingRemoves] is what makes that a *measured* fact rather than an
+     * assumption — if the `Observe` ever stops immediately preceding the remove, the filter
+     * starts excluding candidates instead of the constraint silently lapsing.
      */
     private fun emitObservedRemove(source: SourceState, remaining: Int, steps: MutableList<CaseStep>, audit: MutableList<RemoveRecord>): Boolean {
         val direct = source.writers.mapNotNull { writer ->
-            source.known(writer).takeIf { it.isNotEmpty() }?.let { writer to it.toList() }
+            source.settlingRemoves(writer, source.known(writer).toList())
+                .takeIf { it.isNotEmpty() }?.let { writer to it }
         }
         val cross = if (remaining < 2) {
             emptyList()
         } else {
             source.writers.mapNotNull { writer ->
-                source.addedAnywhere.filterNot { it in source.known(writer) }.takeIf { it.isNotEmpty() }?.let { writer to it }
+                source.settlingRemoves(
+                    writer = writer,
+                    candidates = source.addedAnywhere.filterNot { it in source.known(writer) },
+                    pending = listOf(ScriptEvent.Observe(writer)),
+                ).takeIf { it.isNotEmpty() }?.let { writer to it }
             }
         }
 
@@ -659,16 +705,42 @@ class ScriptGenerator(
         }
 
         /**
-         * The elements live at this position of the slice, per [Membership.live] — literally the
-         * model's definition, over the prior events only, which is the set a remove has to avoid
-         * to be a no-op in the kernel as well (`computenet-qcm1`).
+         * The subset of [candidates] that [writer] may remove **here** without leaving the element
+         * live — the one statement of `computenet-i3vo`'s post-condition, which every branch of
+         * [emitObservedRemove] and [emitUnobservedRemove] draws through.
          *
-         * Recomputed from scratch on each call rather than maintained incrementally: `Membership`
-         * is the single definition of liveness in this system, and an incremental mirror of it
+         * Liveness is recomputed from scratch on each call rather than maintained incrementally:
+         * `Membership` is the single definition of it in this system, and an incremental mirror
          * here would be a second one, free to drift. Scripts are hundreds of events long, so the
          * fold's cost is irrelevant beside that.
+         *
+         * The constraint: a `Remove(writer, e)` appended to this slice (after [pending], the
+         * steps the caller will emit ahead of it — today at most one `Observe`) must not leave `e`
+         * in [Membership.live]. An element already dead trivially satisfies it, so the interesting
+         * exclusions are the live ones the remove would fail to kill: an add by another writer
+         * that `writer` never observed stays uncovered, the model keeps `e` live, and the kernel's
+         * `SetCell.inletHandler.remove` retracts every live tag of it regardless — a divergence
+         * manufactured by the generator rather than found in the kernel.
+         *
+         * Everything is read from [Membership]'s own fold, never re-derived (qcm1's discipline),
+         * and in **two** calls rather than one per candidate: the removes of all live candidates
+         * are appended together and the survivors read off in one go. That is sound because
+         * `Membership` decides coverage per element and only [ScriptEvent.Observe] events between
+         * an add and a remove affect it — the appended sibling removes are neither adds nor
+         * observations, so each behaves exactly as it would alone.
          */
-        fun liveElements(): Set<Any?> = Membership.live(events)
+        fun settlingRemoves(
+            writer: WriterId,
+            candidates: List<Any?>,
+            pending: List<ScriptEvent> = emptyList(),
+        ): List<Any?> {
+            if (candidates.isEmpty()) return candidates
+            val live = Membership.live(events + pending)
+            val risky = candidates.filter { it in live }
+            if (risky.isEmpty()) return candidates
+            val survivors = Membership.live(events + pending + risky.map { ScriptEvent.Remove(writer, it) })
+            return candidates.filterNot { it in survivors }
+        }
 
         /**
          * What [writer] has added or observed so far. Monotone on purpose: a writer that has

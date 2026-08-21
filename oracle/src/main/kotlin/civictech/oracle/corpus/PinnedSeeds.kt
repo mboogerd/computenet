@@ -28,20 +28,62 @@ import civictech.oracle.gen.GeneratorConfig
  * findings are tracked as their own beads and, where the discovering test already carries a
  * named-constant ledger (e.g. `civictech.oracle.run.WavePrefixTest`'s `SEAM_SEEDS`,
  * `HEALED_DIVERGENCE_SEEDS`, `SINGLE_PATH_DIVERGENCE_SEEDS`), stay pinned to *that* population
- * there, not duplicated here. As of this file's creation the open, NOT-pinned-here populations
- * are: `WavePrefixTest`'s `SEAM_SEEDS` (30, 40, 50, 58), `HEALED_DIVERGENCE_SEEDS` (8, 28, 44,
- * 54) and `SINGLE_PATH_DIVERGENCE_SEEDS` (38) — all residual under computenet-eeys — and
- * computenet-4ru.18's BS-1 seed 27. None of those belong here until the defect they name is
- * fixed.
+ * there, not duplicated here.
  *
- * **The moment a discoverer's fix lands, the newly-clean seed's home changes**: it leaves
- * whichever open-findings ledger tracked it while it failed (per that ledger's own re-pin
- * convention) and is APPENDED here instead, carrying the seed, its full [GeneratorConfig]
- * (embedded by value — never a reference to a test-source config, since main sources cannot
- * depend on `oracle/src/test`), the bead that fixed the underlying defect, and a one-line
- * reason. Verify the seed actually replays [civictech.oracle.run.RunOutcome.Success] before
- * appending it; an entry that does not replay Success would fail this corpus's own regression
- * test the moment it lands, which is the append-time check that a "fixed" claim is real.
+ * **As of computenet-i3vo (2026-08-21) all three of those `WavePrefixTest` ledgers are EMPTY,
+ * and computenet-9fij decided they stay that way — the nine seeds are NOT appended below, on
+ * purpose, permanently.** They held `SEAM_SEEDS` (30, 40, 50, 58), `HEALED_DIVERGENCE_SEEDS`
+ * (8, 28, 44, 54) and `SINGLE_PATH_DIVERGENCE_SEEDS` (38) — the computenet-eeys residual —
+ * until `ScriptGenerator` gained the post-condition that no emitted remove may leave its
+ * element live in `Membership`, at which point no generated seed under
+ * `WavePrefixTest.generatedSweepConfig()` carries the step-class and all nine left their
+ * ledgers at once. computenet-9fij (2026-08-21) is the decision record; this paragraph and the
+ * rule below are its outcome, not a pointer to it.
+ *
+ * **Why not (route (a), append anyway): this is not a fixed defect, and appending would say it
+ * is.** computenet-eeys (closed 2026-08-20, PR #365; `concord/corpus/DISPUTES.md`'s
+ * `[ORA1-DIFF-09]` entry) settled that these nine's disagreement was the **reference model**
+ * reading `[24-SET-03]`'s "observed" as writer-scoped, against the kernel's cell-scoped
+ * reading — **no kernel defect is implied by any of them**, and `Membership` still carries that
+ * reading today: nothing in this system fixed it. `ScriptGenerator`'s post-condition does not
+ * correct `Membership`; it reads `Membership.live` and refuses to *emit* a script the model
+ * would get wrong, so the sweep stops exercising the disagreement rather than the disagreement
+ * closing. That is categorically unlike computenet-qcm1's 34/36/46, where a generator bug
+ * (`emitUnobservedRemove` naming a live element) was the thing found wrong and the thing fixed
+ * — the seed still draws the same kind of script, which now runs correctly through code that
+ * used to be broken. Pinning the nine would read as "this defect was found and fixed", and the
+ * defect these seeds' disagreement pointed at is still open, filed, and unfixed. That reason
+ * outweighs the append-only corpus's own asymmetry (an entry cannot be withdrawn) rather than
+ * being outweighed by it: the corpus's append-only property makes a wrong entry permanent, and
+ * asserting `Success` for a claimed-fixed defect that was not fixed is a wrong entry.
+ *
+ * **Why not (route (c), pin the hand-built computenet-eeys case instead): it cannot pass.**
+ * The three-event case that mechanism is built from — `w0` adds `ab`, `w1` adds `ab`, `w0`
+ * removes `ab` (`WavePrefixTest`'s `divergingCase`, also driven by `ShrinkerBs14Test` and
+ * `DivergenceControlTest`) — is the demonstration that the model disagrees with the kernel: it
+ * replays `RunOutcome.Mismatch`, not `Success`. [PinnedSeed] asserts `Success` for every entry
+ * (`PinnedSeedsTest`); there is no [PinnedSeed] this file's shape can express for a case whose
+ * entire point is to mismatch. Route (c) collapses into (b): the case that "actually survived"
+ * survives as `WavePrefixTest`'s `divergingCase` and `DivergenceControlTest`'s own fixture, not
+ * as a member of this corpus.
+ *
+ * **The population that remains open and un-pinned here is computenet-4ru.18's BS-1 seed 27**,
+ * which does not belong here until its defect — not merely its exposure — is fixed.
+ *
+ * **The moment a discoverer's fix lands, the newly-clean seed's home changes** — but "fix"
+ * here means a defect in the system under test (`ScriptGenerator`'s own emission logic, or a
+ * kernel defect) was corrected, so the seed still exercises the path that used to fail and now
+ * passes for a real reason. It does **not** mean the generator stopped being ABLE to draw the
+ * failing script-class at all, with the underlying disagreement the class exposed left standing
+ * — that is this file's nine-seed case, and per the paragraphs above it does not qualify. A
+ * seed that does qualify leaves whichever open-findings ledger tracked it while it failed (per
+ * that ledger's own re-pin convention) and is APPENDED here instead, carrying the seed, its
+ * full [GeneratorConfig] (embedded by value — never a reference to a test-source config, since
+ * main sources cannot depend on `oracle/src/test`), the bead that fixed the underlying defect,
+ * and a one-line reason. Verify the seed actually replays
+ * [civictech.oracle.run.RunOutcome.Success] before appending it; an entry that does not replay
+ * Success would fail this corpus's own regression test the moment it lands, which is the
+ * append-time check that a "fixed" claim is real.
  *
  * ## Initial population — the computenet-qcm1 footprint
  *
@@ -54,9 +96,9 @@ import civictech.oracle.gen.GeneratorConfig
  * recorded there 2026-08-19, commit `a3176733`), all under `WavePrefixTest`'s own
  * `generatedSweepConfig()` at `scriptLength = 30`:
  *
- * - **34** — left `HEALED_DIVERGENCE_SEEDS` (was `[28, 34, 44, 46, 54]`, is now `[8, 28, 44,
- *   54]`); no longer violates at all.
- * - **36** — left the `GLITCH_CANDIDATE_SEEDS` bucket (was `[36]`, is now `[]`); filed as the
+ * - **34** — left `HEALED_DIVERGENCE_SEEDS` (was `[28, 34, 44, 46, 54]`, became `[8, 28, 44,
+ *   54]` at that re-pin, and is empty since computenet-i3vo); no longer violates at all.
+ * - **36** — left the `GLITCH_CANDIDATE_SEEDS` bucket (was `[36]`, empty since); filed as the
  *   glitch candidate under computenet-qjtp (closed) and clean once the generator stopped
  *   naming live elements in unobserved removes.
  * - **46** — left `HEALED_DIVERGENCE_SEEDS` alongside 34, for the same reason.

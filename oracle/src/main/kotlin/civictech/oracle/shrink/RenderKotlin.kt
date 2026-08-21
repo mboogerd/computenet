@@ -63,8 +63,9 @@ import civictech.oracle.run.RunOutcome
  * itself. Rendering the replay with no `wavePrefix` argument leaves it at
  * `civictech.oracle.run.WavePrefixOption.DEFAULT` (a 0.25 selection fraction), so whether the
  * violation reproduces depends on whether `DEFAULT.selects(case.seed)` happens to be `true` —
- * measured over `WavePrefixTest`'s four `SEAM_SEEDS`, exactly half do and half report a plain
- * `Mismatch` instead.
+ * measured over the four seeds `ShrinkerBs14Test.SEEDS` pins (30, 40, 50, 58 — `WavePrefixTest`'s
+ * former `SEAM_SEEDS` literal, kept there for exactly this split after computenet-i3vo emptied
+ * that ledger), exactly half do and half report a plain `Mismatch` instead.
  *
  * The fix does not require knowing which [civictech.oracle.run.WavePrefixOption] the shrink was
  * actually given — `civictech.oracle.run.WavePrefixOption.selects` is a pure predicate over the
@@ -83,7 +84,7 @@ import civictech.oracle.run.RunOutcome
  * `selects(seed)` was `false`) could be replayed with it *on*, and a prefix-dirty case would then
  * report a [RunOutcome.WavePrefixViolation] where the counterexample names, say, a
  * [RunOutcome.Mismatch]: the emitted `check()` would fail, naming a different kind than the
- * counterexample it was rendered from. Measured over the same four `WavePrefixTest` `SEAM_SEEDS`,
+ * counterexample it was rendered from. Measured over the same four seeds (`ShrinkerBs14Test.SEEDS`),
  * each shrunk with `WavePrefixOption.OFF` (a `Mismatch` counterexample for all four) and replayed
  * with no `wavePrefix` argument: seeds 50 and 58 (`DEFAULT.selects(seed) == true`) replayed as
  * `WavePrefixViolation`, seeds 30 and 40 replayed faithfully.
