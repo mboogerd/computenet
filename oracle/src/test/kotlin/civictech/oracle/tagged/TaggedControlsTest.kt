@@ -40,17 +40,26 @@ import java.util.UUID
  * [civictech.oracle.run.RemoveAllDotModel] in `MutantModels.kt`, and an inverted
  * [DotOrder]/uncoordinated mesh built by hand here).
  *
- * ## Why three of the four are model-vs-model, not kernel-driven
+ * ## What these controls drive, and what none of them drives
  *
  * `civictech.oracle.bind.TaggedOperators`'s file KDoc explains why `OrMapCell`'s catalog
  * registration (`SingleInstanceOrMapModel`) is restricted to a single, delivery-free slice: the
  * cross-instance case [DotModel]'s merge exists to check needs the WHOLE multi-instance
  * [Script], which `OperatorCatalog`'s per-node evaluation shapes cannot supply. So there is no
  * `DifferentialRunner` path for a replicated OR-map case at all — the feature's own design
- * assigns the replicated differential to "driving `DotModel.converged`/`stateOf` directly", and
- * that is what CTL-01, CTL-02 and CTL-03 do here. CTL-04 is the one control with a real runner
- * seam to drive: [ConvergenceCheck] is built exactly to take a hand-supplied [MeshObservation],
- * so it is exercised as itself, unmocked.
+ * assigns the replicated differential to "driving `DotModel.converged`/`stateOf` directly".
+ *
+ * - CTL-01 and CTL-03 do exactly that: **model-vs-model**, no runner in the loop.
+ * - CTL-02 and CTL-04 **both** drive the real, unmocked [ConvergenceCheck] — the same seam,
+ *   entered the same way, differing only in where the mutation sits. [ConvergenceCheck] is built
+ *   to take a hand-supplied [MeshObservation], which is why a synthesised mesh is a legitimate
+ *   input to it and not a mock.
+ *
+ * What **none** of the four does is observe state a kernel replica produced: CTL-02's and
+ * CTL-04's folds are [DotModel]'s too. `CaseExecution` wires no `OR_MAP` script source and never
+ * folds a tagged terminal (computenet-6v7y), so no *generated* OR-map case reaches the runner.
+ * Kernel-driven OR-map coverage lives one file over, in
+ * [civictech.oracle.tagged.ConvergenceCheckTest] — see the next section.
  *
  * ## Why CTL-02/03 build meshes by hand rather than from the generator
  *

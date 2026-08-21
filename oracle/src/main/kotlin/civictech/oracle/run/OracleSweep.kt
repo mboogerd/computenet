@@ -167,15 +167,28 @@ import civictech.testkit.forEachSeed
  * - `[ORA2-CTL-04]` — one replica's withheld gossip must be reported as a divergence naming both
  *   replicas and the differing key (BS-8), not passed or silently resolved to one answer.
  *
- * And the same honesty applies to the controls themselves: **three of the four are model-vs-model,
- * not kernel-driven.** `CaseExecution` wires no tagged terminal and no `OR_MAP` source
- * (computenet-6v7y), so no generated OR-map case executes end to end and there is no
- * `DifferentialRunner` path to substitute a mutant through. `[ORA2-CTL-01]` and `[ORA2-CTL-03]`
- * therefore compare a mutant reference against `DotModel` directly, and `[ORA2-CTL-02]` drives
- * `ConvergenceCheck` over a hand-built mesh; only `[ORA2-CTL-04]` — also hand-built — exercises
- * a real runner seam unmocked. What they establish is that **the reference would catch these
- * defects if a kernel-driven OR-map case reached it**; what they do NOT establish is that any
- * such case reaches it today. That second half is the runner gap, not this ledger's to close.
+ * And the same honesty applies to the controls themselves: **not one of them observes state a
+ * kernel replica produced.** `CaseExecution` wires no `OR_MAP` script source and never folds a
+ * tagged terminal (computenet-6v7y), so no *generated* OR-map case reaches the differential
+ * runner and there is no `DifferentialRunner` path to substitute a mutant through. Marker by
+ * marker, rather than by a count:
+ *
+ * - `[ORA2-CTL-01]` and `[ORA2-CTL-03]` are **model-vs-model**: a mutant reference compared
+ *   against `DotModel` directly, with no runner in the loop at all.
+ * - `[ORA2-CTL-02]` and `[ORA2-CTL-04]` both drive the real, unmocked `ConvergenceCheck.check` —
+ *   the same seam, entered the same way, differing only in the mutation site — but each over a
+ *   **hand-built** `MeshObservation` whose per-replica folds come from `DotModel`, not from
+ *   replicas the kernel ran.
+ *
+ * So what the four establish is that **the reference would catch these defects if a kernel-driven
+ * OR-map case reached it**; what they do NOT establish is that a *generated* case reaches it
+ * today. That second half is the runner gap (computenet-6v7y), not this ledger's to close.
+ *
+ * Read that as a bound on the GENERATED path only. Kernel-driven OR-map coverage does exist,
+ * outside this file: `civictech.oracle.tagged.ConvergenceCheckTest`'s BS-1, BS-6 and BS-7 drive
+ * live `OrMapCell` replicas in a `SimWorld` through this same `ConvergenceCheck`, inverted dot
+ * order included. A reader who took the paragraph above for "no OR-map coverage is kernel-driven
+ * anywhere" would be taking from it more than it says.
  *
  * Pinned by [civictech.oracle.HonestyLedgerTest] beside `[ORA1-HONEST-01]`, so this statement is
  * build-checked prose too, not a paragraph a refactor can quietly drop.

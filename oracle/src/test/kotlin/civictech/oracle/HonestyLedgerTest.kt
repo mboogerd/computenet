@@ -245,15 +245,24 @@ class HonestyLedgerTest {
             sweep.mustState("a green ORA2 sweep is not evidence without")
         }
         withClue(
-            "And the controls' OWN bound, added while reviewing computenet-4ru.1.5: three of the " +
-                "four are model-vs-model because no generated OR-map case executes end to end " +
-                "(computenet-6v7y). A ledger that names them as compensating evidence without " +
-                "saying what they cannot discriminate is the exact omission [ORA2-HONEST-*] exists " +
-                "to forbid.",
+            "And the controls' OWN bound, added while reviewing computenet-4ru.1.5: no generated " +
+                "OR-map case reaches the differential runner (computenet-6v7y), so none of the " +
+                "four observes state a kernel replica produced. A ledger that names them as " +
+                "compensating evidence without saying what they cannot discriminate is the exact " +
+                "omission [ORA2-HONEST-*] exists to forbid. " +
+                "These pins are deliberately COUNT-FREE. A first attempt pinned the literal " +
+                "phrase 'three of the four are model-vs-model', which was false on every reading " +
+                "— two of the four drive ConvergenceCheck.check, and by the stricter " +
+                "kernel-driven reading all four are model-derived — and pinning it made the false " +
+                "sentence load-bearing in the very test that exists to keep the ledger honest. " +
+                "Pin the runner-gap id, the stated negative bound, the mesh's provenance, and the " +
+                "pointer to where kernel-driven coverage DOES live: four claims that a later " +
+                "edit cannot quietly falsify by re-partitioning the controls.",
         ) {
-            sweep.mustState("three of the four are model-vs-model")
             sweep.mustState("computenet-6v7y")
             sweep.mustState("what they do NOT establish")
+            sweep.mustState("hand-built")
+            sweep.mustState("civictech.oracle.tagged.ConvergenceCheckTest")
         }
     }
 
