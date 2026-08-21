@@ -18,11 +18,15 @@ import civictech.cell.host.DeadLetter
 import civictech.cell.link.PeerId
 import civictech.cell.wire.PeerAuthPolicy
 import civictech.cell.wire.Peering
+import civictech.cell.wire.ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT
+import civictech.cell.wire.announcementCounterFloor
 import civictech.identity.DeterministicKeySource
 import civictech.identity.FilePeerIncarnationStore
 import civictech.identity.PeerIdentity
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.longs.shouldBeGreaterThan
+import io.kotest.matchers.longs.shouldBeGreaterThanOrEqual
+import io.kotest.matchers.longs.shouldBeLessThanOrEqual
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -483,6 +487,36 @@ class WsReconnectSmokeTest {
             runCatching { listener.stop(1000) }
             endpoint.close()
         }
+    }
+
+    /**
+     * `computenet-tdcx` criterion 2: the durable source is **additive**, and the
+     * pre-existing wall-clock default is untouched.
+     *
+     * It has to be. A durable store needs a directory beside the identity to
+     * write into, and a *derived* identity — [DeterministicKeySource], a seed
+     * phrase, an HSM- or KMS-backed key — has none, so a file-backed
+     * incarnation covers a strict subset of the identities the clock default
+     * covers. A caller that names no `incarnation` still gets
+     * `System::currentTimeMillis`, and a signer built from it still starts at
+     * that clock's floor.
+     */
+    @Test
+    fun `a socket signing config names no incarnation still takes the wall clock`() {
+        val before = System.currentTimeMillis()
+        val incarnation = socketAnnouncementSigning().incarnation()
+        val after = System.currentTimeMillis()
+
+        incarnation shouldBeGreaterThanOrEqual before
+        incarnation shouldBeLessThanOrEqual after
+
+        // and it reaches the counter floor: a stack built with the production
+        // default starts where that clock says, not at zero.
+        val stack = KeyedStack("tdcx-default-incarnation")
+        stack.side.announcementSigner!!.counterFloor shouldBe announcementCounterFloor(
+            stack.side.announcementSigner!!.counterFloor ushr ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT,
+        )
+        (stack.side.announcementSigner!!.counterFloor ushr ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT) shouldBeGreaterThanOrEqual before
     }
 
     /**
