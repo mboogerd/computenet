@@ -43,6 +43,8 @@ while [ $# -gt 0 ]; do
     --title)         TITLE=$2; shift 2 ;;
     --desc)          DESC=$2; shift 2 ;;
     --accept)        ACCEPT=$2; shift 2 ;;
+    --desc-file)     DESC_FILE=$2; shift 2 ;;      # preferred: body never passes through a shell word (computenet-s5dh)
+    --accept-file)   ACCEPT_FILE=$2; shift 2 ;;
     --parent)        PARENT=$2; shift 2 ;;
     --priority)      PRIO=$2; shift 2 ;;
     --skill-version) SKILL_V=$2; shift 2 ;;
@@ -50,8 +52,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$TYPE" in bug|feature) ;; *) echo "--type must be bug or feature (bug = the skill misbehaved; feature = a missing capability)" >&2; exit 2 ;; esac
+[ -n "${DESC_FILE:-}" ] && { DESC=$(cat "$DESC_FILE") || { echo "cannot read --desc-file $DESC_FILE" >&2; exit 2; }; }
+[ -n "${ACCEPT_FILE:-}" ] && { ACCEPT=$(cat "$ACCEPT_FILE") || { echo "cannot read --accept-file $ACCEPT_FILE" >&2; exit 2; }; }
 [ -n "$TITLE" ] && [ -n "$DESC" ] && [ -n "$ACCEPT" ] \
-  || { echo "--title, --desc and --accept are all required" >&2; exit 2; }
+  || { echo "--title, --desc[-file] and --accept[-file] are all required" >&2; exit 2; }
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 [ -n "$SKILL_V" ] || SKILL_V=$(git hash-object "$SCRIPT_DIR/../SKILL.md")
@@ -70,5 +74,5 @@ done
 
 exec "$SCRIPT_DIR/create-ticket.sh" \
   --type "$TYPE" --title "work skill: $TITLE" --parent "$PARENT" \
-  --desc "$DESC" --accept "$ACCEPT" --priority "$PRIO" \
+  --desc-file <(printf '%s' "$DESC") --accept-file <(printf '%s' "$ACCEPT") --priority "$PRIO" \
   --label skill-friction --metadata "{\"skill_version\":\"$SKILL_V\"}"

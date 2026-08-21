@@ -33,7 +33,7 @@
 #   through a shell word, so backticks and $(...) in it are inert. `--desc
 #   "$(cat f)"` expands them before the script runs (computenet-s5dh;
 #   issue-quality.md "Backticks…"). Prefer the -file forms for any multi-line
-#   body (file-friction.sh still takes --desc; switch it when it next changes).
+#   body; file-friction.sh exposes the same flags.
 #
 # Prints the new bead id on stdout. Exit 2 on bad arguments, 1 on a failed
 # step, saying which. A crash between create and re-parent leaves an

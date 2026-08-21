@@ -2208,7 +2208,10 @@ description, and if the close reason starts `rejected:` answer it — your
 recurrence is the appeal. Not found:
 
 ```bash
-# Build bodies with quoted heredocs — backticks in a double-quoted argument
+# Write bodies to a file and pass --desc-file/--accept-file (create-ticket.sh
+# and file-friction.sh): the text never crosses a shell word, so backticks
+# and $(...) are inert (computenet-s5dh). A quoted heredoc into a FILE, then
+# the -file flag — not a heredoc interpolated into "--desc" — because
 # execute as shell before the script ever runs, silently deleting the
 # quoted phrases and running them (issue-quality.md, computenet-9w9):
 DESC=$(cat <<'EOF'

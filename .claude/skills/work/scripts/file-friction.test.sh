@@ -100,5 +100,10 @@ fixture
 out=$("$SCRIPT" --type bug --title "work skill: " --desc d --accept a 2>&1); st=$?
 [ "$st" = 2 ] && ok "a title that is only the prefix exits 2" || bad "prefix-only: exit=$st out=$out"
 
+# s5dh: --desc-file body reaches create-ticket verbatim, backticks inert
+printf 'has `ticks` and $(echo NO)\n' > "$ROOT/body.txt"
+out=$("$SCRIPT" --type bug --title t --desc-file "$ROOT/body.txt" --accept a --skill-version abc 2>&1); st=$?
+[ "$st" = 0 ] && ok "--desc-file accepted" || bad "desc-file: exit=$st out=$out"
+
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
