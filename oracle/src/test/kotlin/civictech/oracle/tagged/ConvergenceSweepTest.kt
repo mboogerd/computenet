@@ -101,7 +101,9 @@ import org.junit.jupiter.api.Test
  * `OrMapCell.put`'s retract-on-put reddens it — but it is not evidence about concurrent dot
  * resolution, and it must not be quoted as such. Closing that gap needs a drive that batches a
  * round of writes before draining (the shape [ConvergenceCheckTest]'s `MeshScript` uses), and a
- * reference the `Delivery` graph can express for it; that is filed, not built here.
+ * reference the `Delivery` graph can express for it; that is filed, not built here — as
+ * `computenet-9ips` (the honest `concord/corpus/DISPUTES.md` record of the gap) and
+ * `computenet-9892` (the drive that closes it, which deletes that record when it lands).
  *
  * The density loop is `civictech.testkit.forEachSeed` over
  * [GeneratorConfig.REPLICATED_SWEEP_SEEDS] — the SAME fixed range

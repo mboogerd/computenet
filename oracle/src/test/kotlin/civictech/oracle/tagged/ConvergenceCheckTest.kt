@@ -247,7 +247,13 @@ class ConvergenceCheckTest {
     }
 
     // =====================================================================
-    // BS-1
+    // BS-1 — concurrent same-key puts resolve by dot order, everywhere
+    // `[ORA2-DIFF-02]` (with `[ORA2-MODEL-04]`, `[ORA2-CONV-02]`): this is the ONLY site
+    // where `[ORA2-DIFF-02]`'s "two writers put the same key without either having observed
+    // the other" is actually realised. The generated sweep does not reach it —
+    // [ConvergenceSweepTest] measures max-live-dots-per-key = 1 across its whole seed range,
+    // so a reversed `TaggedMapDelta.DOT_ORDER` tie-break reddens the tests below and nothing
+    // in that sweep (measured 2026-08-21).
     // =====================================================================
 
     @Test
