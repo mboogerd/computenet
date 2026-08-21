@@ -147,9 +147,12 @@ class PinnedSeedsTest {
      * ## What "round-trips" means here, concretely
      *
      * The [PinnedSeed] value below embeds a [GeneratorConfig] naming `orMap` in its vocabulary —
-     * the tagged case SHAPE — exactly as a real entry would if the generator could ever build
-     * one. [replay] treats it the same as any other entry: it tries [CaseGenerator.generate],
-     * and because that throws (the arity-0/no-consumer defect above), the SAME
+     * the tagged case SHAPE — exactly as a real entry would if there were ever a legitimate
+     * tagged case to pin. [replay] treats it the same as any other entry: it tries
+     * [CaseGenerator.generate], and because this config's vocabulary names `orMap` and nothing
+     * else it throws on `check(operatorEntries.isNotEmpty())` (the arity-0-only vocabulary
+     * above — NOT "no operator can consume `orMap`", which is a kernel-typing bound, not a
+     * generator one), so the SAME
      * `[ORA1-REPRO-03]` "no longer constructible" branch a real pinned case would hit on a stale
      * shape rule fires — loudly, naming the seed and the underlying exception, never a silent
      * skip. That is the entry form and its build-time check working exactly as designed, at the
