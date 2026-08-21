@@ -55,7 +55,9 @@ lines above the end of a 178-line run, so `| tail -30` drops it) and **`-q`**
 (prints no task lines, no task-count line, and no `BUILD SUCCESSFUL` at
 all). Redirect to a file and grep it. With only a truncated log, do not
 claim this check — fall back to the task-count line plus the XML below, or
-re-run with `--rerun`.
+re-run with `--rerun` — **one `--rerun` per task name**: it binds to the task
+it follows, so `:a:test :b:test --rerun` re-runs only `:b:test`
+(computenet-jobe; [semantics](#--rerun-semantics) below).
 
 **3. The JUnit XML counts and timestamp**, which separate a run from a
 replay — a cached repeat run leaves `newest` unchanged with identical counts

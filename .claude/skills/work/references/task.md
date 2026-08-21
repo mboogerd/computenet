@@ -28,6 +28,11 @@ The ten steps are one sequence; the groupings above exist so you can find a
 step again, not so you can skip to one.
 
 
+**The Write tool may refuse a deliverable by its basename** — `findings.md`,
+`report.md` — with "Subagents should return findings as text". The file is
+your deliverable; write it from Bash with a quoted heredoc
+(`cat > path <<'EOF'`) and say so (computenet-jobe).
+
 **Any bead body you write that quotes code goes through a quoted heredoc or
 `bd comment <id> --file <path>`** — backticks inside a double-quoted
 argument execute as shell and silently vanish from the stored text

@@ -5,6 +5,10 @@ task.md, review-task.md and review-feature.md all point here; this file is
 the single copy. Nothing here is advisory: each rule exists because its
 absence cost a session (the cited bead holds the story — `bd show <id>`).
 
+**Open these references with the Read tool, not `cat`.** review-feature.md
+overruns the Bash tool's result cap, and so does `cat` on the persisted
+overflow file it points you at; Read pages (computenet-jobe).
+
 ## Contents
 
 - [Your scratch dir is yours alone](#your-scratch-dir-is-yours-alone)
