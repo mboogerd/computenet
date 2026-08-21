@@ -253,7 +253,7 @@ def cap_batch(batch, skipped, cap):
     return batch[:cap], skipped
 
 
-def plan_batch(candidates):
+def plan_batch(candidates, feature=None):
     """(batch, skipped) from `[(task, resumed)]` — the claim-disjointness rule.
 
     A task with no `files` claim is returned ALONE and everything else is
@@ -279,7 +279,7 @@ def plan_batch(candidates):
             if batch:
                 skipped.append({"id": tid, "reason": "no files claim; must run alone"})
                 continue
-            batch.append(_entry(task, resumed, sorted(files)))
+            batch.append(_entry(task, resumed, sorted(files), feature))
             already = {s["id"] for s in skipped}
             skipped.extend({"id": t["id"], "reason": "deferred behind unclaimed-files task"}
                            for t, _ in candidates if t["id"] != tid and t["id"] not in already)
@@ -290,7 +290,7 @@ def plan_batch(candidates):
                             "reason": "overlaps " + ",".join(sorted(collisions))})
             continue
         taken |= files
-        batch.append(_entry(task, resumed, sorted(files)))
+        batch.append(_entry(task, resumed, sorted(files), feature))
     return batch, skipped
 
 
@@ -321,7 +321,7 @@ def main():
         candidates.append((task, resumed))
 
     try:
-        batch, skipped = plan_batch(candidates)
+        batch, skipped = plan_batch(candidates, feature)
     except ClaimError as exc:
         # Named and actionable: the bead id, what its claim looked like, and
         # the one fix. A bare traceback here names split() on a list and not
@@ -477,12 +477,40 @@ def branch_has_commits(branch):
         return False
 
 
-def _entry(task, resumed, files):
+def merged_into_feature(tid, feature):
+    """Is this task's work already on the FEATURE branch, by commit message?
+
+    The cross-machine twin of branch_has_commits: a session on ANOTHER machine
+    implemented the task, merged it into the feature branch, pushed, and died
+    before review or close. Here the task branch and worktree do not exist, so
+    branch_has_commits is False, `resumed` is False, and the entry reads as
+    fresh work — an orchestrator following it would put a second implementer
+    onto merged work (computenet-kklt, computenet-ssa.5.1: commit 907be6ae
+    plus merge ca71e162 already on origin/feature/computenet-ssa.5). Every
+    commit and merge in this skill carries the task id in its subject, so the
+    feature branch's log is the witness. Looks at the local ref first, then
+    origin's (the common case: the branch was never fetched into a local ref
+    on this machine). False on any error, same contract as branch_has_commits.
+    """
+    for ref in (f"refs/heads/feature/{feature}", f"refs/remotes/origin/feature/{feature}"):
+        try:
+            out = subprocess.run(
+                ["git", "log", "--oneline", "-1", f"--grep={tid}", ref],
+                capture_output=True, text=True, timeout=10)
+            if out.returncode == 0 and out.stdout.strip():
+                return True
+        except (OSError, subprocess.SubprocessError):
+            return False
+    return False
+
+
+def _entry(task, resumed, files, feature=None):
     meta = task.get("metadata") or {}
     tid = task["id"]
     branch = meta.get("branch") or f"task/{tid}"
     # A branch carrying commits means resumed, whatever the bead status says.
     has_work = branch_has_commits(branch)
+    on_feature = merged_into_feature(tid, feature) if feature else False
     return {
         "id": tid,
         "model": meta.get("model") or "",     # empty => breakdown omitted it
@@ -499,6 +527,10 @@ def _entry(task, resumed, files):
         # worktree and `bd comments` on the bead, then route to 5c (review and
         # merge) rather than to an implementer, if the work is already done.
         "branch_has_commits": has_work,
+        # The work is on the FEATURE branch already (a dead session on another
+        # machine merged it). Route to 5c review against the merged range,
+        # with the feature worktree standing in for the absent task worktree.
+        "merged_into_feature": on_feature,
     }
 
 
