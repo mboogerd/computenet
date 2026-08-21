@@ -13,6 +13,21 @@ Every step below names the evidence it consumes — a diff, a task-count line,
 a test name, a command's output. A step you could satisfy by writing
 "verified" has not been done.
 
+**A `:bench` probe needs two arguments the bench reference never names**
+(`-PbenchOnly=true` to select `@Tag("bench")`, and `-Dcivictech.bench.harnessSha=$(git rev-parse --short HEAD)`
+for the `requiredHarnessSha` guard); every first attempt without them fails
+3/3 and costs a Gradle cycle (computenet-db3k). The form that works:
+
+```bash
+./gradlew :bench:test -PbenchOnly=true --rerun --no-build-cache \
+  --tests '*<ProbeTest>*' -Dcivictech.bench.harnessSha=$(git rev-parse --short HEAD)
+```
+
+**A cited test class may not be findable by filename**: `--tests` takes the
+class name, and `ThroughputReportRenderTest` lives inside
+`ThroughputReportTest.kt` — `grep -rn "class <Name>" --include='*.kt' bench/src`
+finds it where `git ls-files | grep <Name>` does not (computenet-db3k).
+
 **Any command, flag or entry point the diff DOCUMENTS is a claim, and you
 check a claim by running it.** Extract it with `sed`/`awk` rather than
 retyping — a check that only works when retyped charitably is not a working
