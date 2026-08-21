@@ -1379,7 +1379,21 @@ verdict. (`parked` is only meaningful on an empty batch.)
   reported out and filed separately. If the residual's prose names its files —
   several do, in a trailing `Files: …` line — use those.
 
-  And never let a
+  **The failure shape of that weakness is specific**: a claim derived from
+  the design space covers the MECHANISM's files and misses the files holding
+  the INVARIANT the change moves — the test pinning a counter's magnitude was
+  the file ssa.6's claim lacked (computenet-af9q). So, before choosing a
+  mechanism: name the invariant the acceptance constrains (there, the counter
+  value a receiver records), grep for the symbols that OBSERVE it —
+  `grep -rn 'highWaterFor\|sigCounter' --include='*.kt' .` — and claim what
+  comes back as well. When the grep returns a lot, **prefer the wider claim
+  and say the breadth is deliberate**: an over-broad lock costs a sibling a
+  batch slot; an under-broad one costs an implementer a mid-task stall it
+  cannot resolve alone. Keep saying on the bead that the claim is
+  orchestrator-authored and how it was derived — that record is what lets
+  the next miss be diagnosed.
+
+  Never let a
   task take a nominal claim over files it merely reads: a claim is a lock, so
   a read-only lock blocks a sibling for no benefit. A *descriptive string*
   where a path list belongs (`none (tracker mutations only)`) is that same
