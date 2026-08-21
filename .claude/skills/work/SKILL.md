@@ -1379,6 +1379,12 @@ verdict. (`parked` is only meaningful on an empty batch.)
   reported out and filed separately. If the residual's prose names its files —
   several do, in a trailing `Files: …` line — use those.
 
+  **Author it from the code, not the prose**: for every type, function or
+  marker the acceptance names, `grep -rn "<name>" --include='*.kt' .` (glob
+  quoted) and claim every file that DECLARES one — the design space a bead
+  enumerates is not where the edits land, and a claim derived from the
+  criteria alone reached a second file on its first ten minutes
+  (computenet-af9q; the invariant grep, not the acceptance, is the source).
   And never let a
   task take a nominal claim over files it merely reads: a claim is a lock, so
   a read-only lock blocks a sibling for no benefit. A *descriptive string*
