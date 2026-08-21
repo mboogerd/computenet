@@ -2,6 +2,7 @@ package civictech.oracle.model
 
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
@@ -35,6 +36,15 @@ object ModelImportBoundaryScanner {
     private val forbiddenPrefixes = listOf("civictech.cell.data.op.")
 
     private val forbiddenExact = setOf(
+        // ORA2 (`[ORA2-MODEL-12]`, computenet-4ru.1.1). The tagged/keyed model must agree with the
+        // kernel about dot ORDER, and the one way to get that wrong invisibly is to reach for the
+        // kernel's own dot identity: `Timestamp(sourceId, counter)`, whose `sourceId` the kernel
+        // derives per instance. `DotModel` mints `ModelDot`s of its own and takes the instance
+        // order from the harness as ranks; an import of `Timestamp` here would mean the model had
+        // started reading the kernel's identity instead of stating its own, which is exactly the
+        // independence `[ORA2-MODEL-06]`/`[ORA2-MODEL-12]` buy. Not a `civictech.cell.data` type,
+        // so no prefix above would have caught it.
+        "civictech.cell.Timestamp",
         "civictech.cell.data.SetCell",
         "civictech.cell.data.MapCell",
         "civictech.cell.data.ListCell",
@@ -159,5 +169,50 @@ class ModelImportBoundaryTest {
         withClue("civictech.oracle.model imports forbidden types $violations [ORA1-MODEL-10]") {
             violations.shouldBeEmpty()
         }
+    }
+
+    /**
+     * `[ORA2-MODEL-11]`: the boundary covers **ORA2's** sources too, and demonstrably so.
+     *
+     * The positive gate above scans a directory, so it would keep passing unchanged if ORA2's
+     * files were never written, were written elsewhere, or were renamed — a clean result for the
+     * wrong reason, the same failure mode `scanDirectory`'s own empty/absent checks exist to
+     * prevent one level up. Naming the files is what turns "the package is clean" into "these
+     * sources are covered".
+     */
+    @Test
+    fun `ORA2-MODEL-11 the tagged and keyed model sources are inside the scanned boundary`() {
+        val modelSourceDir = File("src/main/kotlin/civictech/oracle/model")
+
+        val scanned = modelSourceDir.walkTopDown().filter { it.isFile && it.extension == "kt" }
+            .map { it.name }
+            .toSet()
+
+        withClue("scanned $scanned") {
+            scanned shouldContainAll setOf("DotModel.kt", "TaggedKeyedModels.kt", "Script.kt")
+        }
+    }
+
+    /**
+     * The permanent proof the ORA2 half of the rule CAN fail: a model source reaching for the
+     * kernel's own dot identity (`civictech.cell.Timestamp`) is flagged. Without this, the
+     * `Timestamp` entry added for `[ORA2-MODEL-12]` would be an untested line in a set.
+     */
+    @Test
+    fun `ORA2-MODEL-12 a model source importing the kernel Timestamp is flagged`() {
+        val violations = ModelImportBoundaryScanner.scanText(
+            "Synthetic.kt",
+            """
+            package civictech.oracle.model
+
+            import civictech.cell.Timestamp
+
+            class Synthetic(val dot: Timestamp)
+            """.trimIndent(),
+        )
+
+        violations shouldBe listOf(
+            ModelImportBoundaryScanner.Violation("Synthetic.kt", "civictech.cell.Timestamp"),
+        )
     }
 }

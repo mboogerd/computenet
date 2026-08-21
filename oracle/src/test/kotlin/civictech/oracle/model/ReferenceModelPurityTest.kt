@@ -424,4 +424,73 @@ class ReferenceModelPurityTest {
             OperatorCatalog.reset()
         }
     }
+
+    // -------------------------------------------------------------------
+    // computenet-4ru.1.1 (ORA2): `[ORA2-MODEL-07]`, the same requirement in
+    // the same idiom, over the tagged/keyed models — which ORA1's
+    // full-vocabulary test above cannot reach, because they are not
+    // `OperatorCatalog` entries yet (registration is a sibling ORA2 task)
+    // and, for the dot model, because they fold a whole multi-instance
+    // `Script` rather than one slice.
+    //
+    // Both halves in one test because they are one requirement: equal
+    // results across two evaluations, and a structurally unchanged script,
+    // compared against an independently constructed twin rather than
+    // against the same object.
+    // -------------------------------------------------------------------
+
+    @Test
+    fun `ORA2 the tagged and keyed models are pure functions of one shared script`() {
+        val one = SourceId("replica-1")
+        val two = SourceId("replica-2")
+
+        fun taggedScript() = Script(
+            listOf(
+                SourceScript(
+                    one,
+                    listOf(
+                        ScriptEvent.Put(writer, "k", "v1"),
+                        ScriptEvent.Add(writer, "xx"),
+                        ScriptEvent.Increment(writer, 7),
+                        ScriptEvent.RemoveKey(writer, "k"),
+                        ScriptEvent.Put(writer, "k", "v2"),
+                    ),
+                ),
+                SourceScript(
+                    two,
+                    listOf(
+                        ScriptEvent.Put(writer, "k", "other"),
+                        ScriptEvent.Add(writer, "yyy"),
+                        ScriptEvent.Decrement(writer, 2),
+                    ),
+                    deliveries = listOf(Delivery(afterEvents = 1, from = one, throughEvents = 5)),
+                ),
+            ),
+        )
+
+        val dots = DotModel(DotOrder.ranked(one, two))
+        val grouped = MergeableGroupByModel(
+            keyOf = { element -> element.toString().length },
+            accumulate = { 1L },
+            merge = { left, right -> (left as Long) + (right as Long) },
+        )
+
+        val subject = taggedScript()
+        val untouchedTwin = taggedScript()
+
+        withClue("[ORA2-MODEL-07]: two evaluations of one script are equal") {
+            dots.evaluate(subject) shouldBe dots.evaluate(subject)
+            dots.perInstance(subject) shouldBe dots.perInstance(subject)
+            KeyedReputModel.evaluate(subject.slice(one)) shouldBe KeyedReputModel.evaluate(subject.slice(one))
+            grouped.evaluate(subject.slice(two)) shouldBe grouped.evaluate(subject.slice(two))
+            PnCounterConvergenceModel.evaluate(subject) shouldBe PnCounterConvergenceModel.evaluate(subject)
+        }
+        withClue("a mixed-vocabulary script really did produce content, so equality is not vacuous") {
+            dots.evaluate(subject) shouldBe ModelState.MapState(mapOf("k" to "v2"))
+            PnCounterConvergenceModel.evaluate(subject) shouldBe ModelState.ScalarState(5L)
+        }
+        withClue("[ORA2-MODEL-07]: evaluation must not mutate the script") {
+            subject shouldBe untouchedTwin
+        }
+    }
 }
