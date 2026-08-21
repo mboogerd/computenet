@@ -247,3 +247,26 @@ so the next reader does not re-derive them:
 - The `:concord` corpus is unchanged by this epic, as §5 intended: the corpus
   has no vocabulary for peers, hellos, keys, signatures or dead-letter reasons,
   and adding one is a gated schema change, not a side effect of DSC1.
+
+---
+
+## 2026-08-21 — `computenet-l8y5` closed: the ill-formed-announcement gap is no longer open
+
+Names the DSC1 entry above, whose "Kernel gaps surfaced by this epic" section
+records `computenet-l8y5` as *open, in flight at the time of writing*, with "a
+distinct `DenialReason` … pending on that item; as of this entry's commit the
+enum ends at `EXPIRED`". Both statements were true of that entry's commit
+(`a65a09f5`) and are recorded, not edited, per this file's append-only rule.
+
+What changed: `computenet-l8y5` landed as PR #408 (`69deff06` on `main`, merged
+while this lane's first entry was still on its feature branch). Ingress now
+classifies an ill-formed announcement encoding as **`MALFORMED_ANNOUNCEMENT`** —
+a fourteenth `DenialReason`, distinct from `BAD_SIGNATURE` (which is what the
+case was misfiled as) and from `MALFORMED_HELLO` (same kind of fact, different
+sub-protocol). The record names the field, the offending index and the string's
+length, never the string itself (`[DSC1-OBS-05]`). The enum therefore no longer
+ends at `EXPIRED`, and the bead is `closed`.
+
+Nothing else in the entry above is affected: `computenet-tdcx` is still open,
+`[DSC1-NV-01..03]` are still explicitly unverified, and the key-rotation
+position and its follow-up (`computenet-aimh`) are unchanged.
