@@ -15,6 +15,12 @@ so the bound goes in the wrapper:
 perl -e 'alarm shift @ARGV; exec @ARGV' 3600 <cmd>    # exits 142 at the deadline (verified)
 ```
 
+**`nohup … &` detaches, and the Bash tool's completion fires at once and
+means nothing** — the wrapper exits 0 the moment the child is backgrounded,
+so the notification you get seconds later is the *detach*, not the job
+(computenet-wahz). A job started that way is tracked only through its own
+log file: poll it with Read or the stall watch below, never the notification.
+
 **A hung child does not fail, it waits.** A JVM after `OutOfMemoryError`, a
 container whose main thread died, a Gradle daemon that lost its worker — all
 keep their process alive with no exit status ever arriving. The timeout has
