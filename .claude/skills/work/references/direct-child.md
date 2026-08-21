@@ -7,7 +7,9 @@ feature queries return empty while work sits ready, so this route, not 5f,
 is what applies.
 
 **Work these directly**: each gets its own worktree, branch, and PR off
-`origin/main` via 5a's flow with the item id in place of the feature id —
+`origin/main` — **unless `metadata.base_branch` names a feature branch**: then
+cut from that branch and merge back into it; the subject is not on `main`
+(computenet-nb44) — via 5a's flow with the item id in place of the feature id —
 including tasks parented straight to the epic (5b's task flow needs a
 feature branch to cut from and merge into, which doesn't exist here —
 computenet-9xj). Same filters as everywhere: skip `human`-labeled and
