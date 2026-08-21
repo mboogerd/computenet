@@ -998,13 +998,24 @@ bd update <id> --status=open --assignee="" --remove-label=human
 ```
 
 (All three: a leftover `human` label re-hides it from every filter; a
-leftover assignee makes it permanently `--claim`-refused.) **And amend the
-bead's text to the answer before anyone is dispatched on it**: a park is
+leftover assignee makes it permanently `--claim`-refused.) **And reconcile the
+bead's TEXT with the answer before anyone is dispatched on it**: a park is
 usually about WHAT to build, and the acceptance still demands the rejected
 option until someone rewrites it — a reviewer scores against `bd show`, not a
 comment thread, and two beads shipped against criteria that contradicted the
-decision (computenet-wv9c). `bd update <id> --acceptance=… --design=…`, and
-say in a comment which human answer it now encodes. The 6h `parked_at`
+decision (computenet-wv9c). Concretely:
+
+- `bd update <id> --acceptance=…` (and `--description=…` where it prescribes
+  the rejected approach), **keeping the superseded text verbatim under a
+  `Superseded <date> by human answer:` label** so provenance survives;
+- check the PARENT feature's and epic's criteria for the same clause — the
+  park is filed on the narrowest item but the answer's blast radius is every
+  criterion that cites it — and amend those too or say on the bead why not;
+- an overridden criterion that still names real work nobody now carries is
+  **filed as its own bead**, not deleted (4ru.10's reviewer did this unprompted
+  as computenet-ylka);
+- and the dispatch prompt says `this bead was parked and answered — read its
+  comment thread`, so the decision is not invisible by default. The 6h `parked_at`
 window doesn't apply here — these are cross-session and evidence-gated.
 
 **Select the feature.** Resume before starting new — this query is the
