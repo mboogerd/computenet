@@ -20,17 +20,26 @@
 # Widening or narrowing the recency window cannot fix a lock whose identity
 # cannot name the holder. This can.
 #
-# THE IDENTITY. `<actor>:<pid>:<start>` where pid/start describe the nearest
+# THE IDENTITY. `<host>/<actor>:<pid>:<start>` where pid/start describe the nearest
 # ancestor process that IS the agent session (the `claude` CLI), so the token
 # is alive exactly as long as the session is. `start` is the process start
 # timestamp, which is what makes the test survive PID REUSE — a recycled pid
 # with a different start time reads as dead, not as live.
 #
+# `host` is `hostname -s`: BEADS_ACTOR is assumed unique per machine and
+# nothing enforces it — two physical machines ran as MacBoo on 2026-08-21, and
+# a pid test against a FOREIGN token answered DEAD, the one answer that
+# authorises releasing the other box's live epic (computenet-bz5c). A token
+# minted elsewhere is now FOREIGN, never DEAD. Tokens minted before this
+# (no `/`) are checked as before.
+#
 # Usage:
 #   session-holder.sh                 # print this session's holder token
-#   session-holder.sh --check <token> # LIVE | DEAD | UNKNOWN | MINE
-# Exit: 0 for LIVE/MINE, 1 for DEAD, 3 for UNKNOWN (nothing was established —
-#   treat exactly like ready-in-epic.sh's exit 3: not an all-clear).
+#   session-holder.sh --check <token> # LIVE | DEAD | UNKNOWN | MINE | FOREIGN
+# Exit: 0 for LIVE/MINE, 1 for DEAD, 3 for UNKNOWN or FOREIGN (nothing was
+#   established — treat exactly like ready-in-epic.sh's exit 3: not an
+#   all-clear; FOREIGN additionally means the row is NOT this machine's
+#   leftover and must not be released by the step-3 crash-leftover rule).
 set -uo pipefail
 
 # Walk up from this shell to the session process. A fixed ancestor hop is
@@ -56,7 +65,7 @@ mine() {
   pid=$(session_pid) || return 1
   start=$(start_of "$pid")
   [ -n "$start" ] || return 1
-  printf '%s:%s:%s' "${BEADS_ACTOR:-unknown}" "$pid" "$start"
+  printf '%s/%s:%s:%s' "$(hostname -s 2>/dev/null || echo unknown-host)" "${BEADS_ACTOR:-unknown}" "$pid" "$start"
 }
 
 if [ "${1:-}" = --check ]; then
@@ -64,7 +73,12 @@ if [ "${1:-}" = --check ]; then
   self=$(mine)
   if [ -n "$self" ] && [ "$token" = "$self" ]; then echo MINE; exit 0; fi
 
-  # actor:pid:start — start itself contains colons, so split on the first two.
+  # host/actor:pid:start — start itself contains colons, so split on the
+  # first two. A host other than ours: the pid is meaningless here.
+  head=${token%%:*}
+  case "$head" in */*)
+    if [ "${head%%/*}" != "$(hostname -s 2>/dev/null || echo unknown-host)" ]; then echo FOREIGN; exit 3; fi ;;
+  esac
   rest=${token#*:}
   pid=${rest%%:*}
   start=${rest#*:}

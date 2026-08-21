@@ -90,6 +90,9 @@ if [ -n "$held" ]; then
       echo "REFUSED: $id is held by a LIVE session ($held) — not a crash leftover" >&2
       exit 1 ;;
     DEAD) echo "note: $id's previous holder ($held) is dead — taking it over" ;;
+    FOREIGN)
+      echo "REFUSED: $id is held by a session on ANOTHER machine ($held) — liveness cannot be tested here; it is not this box's leftover (computenet-bz5c)" >&2
+      exit 1 ;;
     *)    echo "note: $id's holder ($held) could not be evaluated (rc=$hrc) — proceeding on the recency test above" ;;
   esac
 fi

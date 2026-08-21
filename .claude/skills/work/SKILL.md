@@ -494,10 +494,16 @@ and its process either exists or does not:
 .claude/skills/work/scripts/session-holder.sh --check "<the row's metadata.holder>"
 # MINE (0) = this session's own | LIVE (0) = a live sibling: leave it alone
 # DEAD (1) = crash leftover: releasable | UNKNOWN (3) = nothing established
+# FOREIGN (3) = minted on ANOTHER machine: not yours, never release it
 ```
 
 `UNKNOWN` and an absent `holder` (rows claimed before 2026-08-19) are **not
 an all-clear** — fall back to the 15-minute rule below and say you did.
+`FOREIGN` is not a fallback case: `BEADS_ACTOR` is only *assumed* unique per
+machine, and two boxes ran as the same actor on 2026-08-21 — the row is the
+other machine's live run, whatever its age; report it and leave it
+(computenet-bz5c). A `metadata.worktree` path that does not exist locally
+is the same signal on a row with no holder.
 
 Falling back: any row with `updated_at` within 15 minutes probably belongs to
 a live overlapping run on this machine — stop and report rather than colliding
