@@ -154,6 +154,12 @@ bd create --type=feature --parent=<epic-id> --validate \
   --design="<the examples: Given/When/Then per rule, plus assumptions you decided>"
 ```
 
+**Number decisions in `--design` as `<short-id>-D<n>` (`4ru.1-D6`), never
+bare `D<n>`.** bd renders the epic's list and each feature's list as
+identical `D<n>` rows, and a task citing "D6" then has two candidates; one
+implementer cited the wrong one twice and its reviewer nearly "corrected" a
+right one (computenet-6ag4; feature.md's breakdown rule cites the same way).
+
 `--acceptance` is not optional. A dedicated reviewer judges the finished
 feature against exactly these statements and decides on that basis whether
 its PR ships ([review-feature.md](review-feature.md)) — a feature without
