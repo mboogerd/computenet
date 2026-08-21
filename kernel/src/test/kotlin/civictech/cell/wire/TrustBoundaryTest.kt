@@ -252,10 +252,14 @@ class TrustBoundaryTest {
      * exchange itself raises zero new dead letters.
      *
      * Non-vacuousness (test-only route, no production mutation): locally
-     * flipping `q` to hold credentials and re-running the principal
-     * assertion turns the observed principal into
-     * `Peer(PeerId("q"), Authenticated)` — see the task's final report for
-     * the exact assertion watched failing.
+     * giving **both** `p` and `q` [PeerCredentials] whose `peerId` matches
+     * their own [Peering.Side.peer] and re-running the principal assertion
+     * turns the observed principal into `Peer(PeerId("q"), Authenticated)`.
+     * Both sides are load-bearing: [Peering.loopbackAuthLevel] short-circuits
+     * to [AuthLevel.TransportVouched] the moment either the sender's or the
+     * *receiver's* credentials are absent, so crediting `q` alone leaves this
+     * assertion green and proves nothing. See the task's final report for the
+     * exact assertion watched failing.
      */
     @Test
     fun `BS-03 - a default-open loopback stays TransportVouched, converges, and adds no dead letters from the exchange`() {
