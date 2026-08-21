@@ -55,7 +55,8 @@
 # 8225 -> 8231 on 2026-08-21: computenet-wv9c — rebased onto main (see PR #433).
 # 8231 -> 8242 on 2026-08-21: computenet-wv9c — rebased onto main (see PR #433).
 # 8242 -> 8248 on 2026-08-21: computenet-wv9c — rebased onto main (see PR #433).
-work                8248
+# 8248 -> 8255 on 2026-08-21: computenet-w8cp — rebased onto main (see PR #434).
+work                8255
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

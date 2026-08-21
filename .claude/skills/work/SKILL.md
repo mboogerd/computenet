@@ -1432,6 +1432,13 @@ verdict. (`parked` is only meaningful on an empty batch.)
   defect wearing a non-empty claim — `next-batch.py` reads it as a path and
   batches on it, so it never reaches this bullet; if you see one, rewrite the
   field empty and move the sentence into the description.
+- **A describe-ahead breakdown (5f route 0 / 2b, before its blocker landed)
+  has stale anchors by construction** — every line number, every "contracts
+  from predecessor tasks" section, every `verified at <sha>` is older than
+  the code it now describes (four of four tasks needed correcting,
+  computenet-w8cp). Before dispatching one, re-run its premise check against
+  `origin/main` yourself, fix or label each drifted anchor, and put the
+  landed predecessors' real signatures in the dispatch prompt.
 - **Date a prescribed reproduction before you repeat it.** A bead that
   prescribes its own repro or mutation froze an assumption about the code on
   the day it was filed, and within one epic the siblings are deliberately
