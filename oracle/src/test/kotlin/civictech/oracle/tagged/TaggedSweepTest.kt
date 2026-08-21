@@ -224,7 +224,7 @@ class TaggedSweepTest {
      * kind — there is no tagged-specific branch to add or to miss.
      */
     @Test
-    fun `ORA2-DIFF-10 dead-letter reporting is structurally unconditional on the terminal's delta type`() {
+    fun `ORA2-DIFF-10 is NOT demonstrated - a tagged run's dead-letter path is argued structurally, never forced red`() {
         // No assertion beyond "this sweep's own graph is subscribed the same way every other
         // DifferentialRunner caller's is" — see the KDoc above for why a forced repro is out of
         // scope. This test exists so the reasoning is pinned beside code rather than only in prose.

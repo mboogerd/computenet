@@ -75,6 +75,34 @@ import org.junit.jupiter.api.Test
  * chain that was observed and abandoned rather than patched around.
  *
 
+ * ## What full synchronization COSTS — read this before quoting a green run
+ *
+ * The deviation above is not free, and the price is the whole point of an OR-map. A `runToIdle`
+ * after **every** op means no two writes are ever concurrent: each event observes literally
+ * everything before it, so the mesh is driven as one totally-ordered sequential writer. Measured
+ * over all 40 seeds of [GeneratorConfig.REPLICATED_SWEEP_SEEDS] (2026-08-21, review of
+ * computenet-4ru.1.6):
+ *
+ * - **No key ever holds more than ONE live dot** ([maxLiveDotsRealised] is 1, reported by the
+ *   sweep test below on every run so this cannot rot silently). Add-wins (`[24-TMAP-02]`,
+ *   BS-3) and the `[24-TMAP-03]` dot-order tie-break (`[ORA2-MODEL-12]`) are therefore **never
+ *   reached** by this sweep, even though [DotOrders.of] supplies the real kernel order to the
+ *   reference: `DotModel.value` ranks the single live dot and never compares two.
+ * - The generated cases DID carry the concurrency: `ConcurrencyAudit.achieved` averages ~0.97
+ *   over the same 40 seeds ([configuredConcurrency], reported alongside). The drive schedule
+ *   discards it; the generator did not fail to produce it.
+ * - Confirmed by mutation: reversing the kernel's `TaggedMapDelta.DOT_ORDER` tie-break
+ *   (`thenBy { it.sourceId }` -> `thenByDescending`) leaves this sweep **green**. Only the
+ *   hand-built meshes of [ConvergenceCheckTest] (BS-1, BS-7, `[ORA2-CONV-01]`) go red.
+ *
+ * So what a green run of this sweep establishes is narrower than `[ORA2-DIFF-08]` "at scale"
+ * reads: **40 generated three-replica meshes, driven sequentially, agree with a sequential
+ * reference fold and with each other.** It does catch a real class of defect — dropping
+ * `OrMapCell.put`'s retract-on-put reddens it — but it is not evidence about concurrent dot
+ * resolution, and it must not be quoted as such. Closing that gap needs a drive that batches a
+ * round of writes before draining (the shape [ConvergenceCheckTest]'s `MeshScript` uses), and a
+ * reference the `Delivery` graph can express for it; that is filed, not built here.
+ *
  * The density loop is `civictech.testkit.forEachSeed` over
  * [GeneratorConfig.REPLICATED_SWEEP_SEEDS] — the SAME fixed range
  * `civictech.oracle.tagged.MultiWriterGenerationTest` and `civictech.oracle.tagged.TaggedControlsTest`
@@ -96,6 +124,16 @@ class ConvergenceSweepTest {
     }
 
     private val config = GeneratorConfig.replicatedSweep()
+
+    /**
+     * The largest number of live dots any key ever held under this file's reference fold, across
+     * every case driven so far. **1 means no concurrency was realised at all** — see the "What
+     * full synchronization costs" section of the file KDoc. Measured, not assumed.
+     */
+    private var maxLiveDotsRealised = 0
+
+    /** Each driven case's generator-*achieved* concurrency, for contrast with [maxLiveDotsRealised]. */
+    private val configuredConcurrency = mutableListOf<Double>()
 
     /** [MapOps] as the sink one replica's driving reads from. */
     private fun proxyFor(world: SimWorld, ref: CellRef): MapOps<Any?, Any?> {
@@ -238,7 +276,14 @@ class ConvergenceSweepTest {
                 is ScriptEvent.RemoveKey -> expectedState = expectedState.resetRemove(event.key)
                 else -> Unit // this vocabulary emits Put/RemoveKey only for orMap sources
             }
+            // What the drive schedule actually REALISED, measured rather than assumed — see the
+            // "What full synchronization costs" section of this file's KDoc.
+            expectedState.membership().forEach { key ->
+                val live = expectedState.liveDots(key).size
+                if (live > maxLiveDotsRealised) maxLiveDotsRealised = live
+            }
         }
+        configuredConcurrency += case.replication!!.concurrency.achieved
         val expected = civictech.oracle.model.DotModel(order).entries(expectedState)
 
         val agreed = observation.agreed && observation.folds.values.distinct().size == 1
@@ -283,6 +328,15 @@ class ConvergenceSweepTest {
             withClue("seed=$seed outcome=$outcome") { outcome shouldBe RunOutcome.Success }
         }
         println("[conv-sweep] $count generated meshes converged over ${GeneratorConfig.REPLICATED_SWEEP_SEEDS} [ORA2-DIFF-08]")
+        println(
+            "[conv-sweep] REALISED concurrency: max live dots at any key = $maxLiveDotsRealised " +
+                "(1 == none); generator-achieved concurrency mean = " +
+                "${"%.3f".format(configuredConcurrency.average())} — see this file's " +
+                "\"What full synchronization costs\" KDoc before quoting this run as [ORA2-DIFF-08] evidence",
+        )
+        withClue("the reference fold must have run at all, or the bound above means nothing") {
+            (maxLiveDotsRealised >= 1) shouldBe true
+        }
     }
 
     // =====================================================================
