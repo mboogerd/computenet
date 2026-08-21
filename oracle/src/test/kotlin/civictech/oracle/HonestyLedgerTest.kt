@@ -208,6 +208,60 @@ class HonestyLedgerTest {
         }
     }
 
+    // -------------------------------------------------- [ORA2-HONEST-01]
+
+    /**
+     * `[ORA2-HONEST-01]`: the same module entry point states that ORA2's tagged/keyed model is
+     * LESS independent of the tag algebra than ORA1's membership-only model, and names
+     * `[ORA2-CTL-01]`..`[ORA2-CTL-04]` as the compensating evidence — feature computenet-4ru.1
+     * §4.9 and §4.10, computenet-4ru.1.5's own acceptance criteria.
+     */
+    @Test
+    fun `the module entry point states that ORA2's model is LESS independent, and names the four controls`() {
+        val sweep = sweepKdoc().flat()
+
+        withClue("[ORA2-HONEST-01] must be claimed by marker, so a reader can find it") {
+            sweep.mustState("[ORA2-HONEST-01]")
+        }
+        withClue(
+            "The statement itself: ORA2's model reads MODELLED dot order and is therefore LESS " +
+                "independent of the tag algebra it checks than ORA1's membership-only model is.",
+        ) {
+            sweep.mustState("LESS independent of the tag algebra")
+            sweep.mustState("modelled dot order")
+        }
+        withClue("Every one of the four blocking controls must be named by marker, not just counted") {
+            listOf("[ORA2-CTL-01]", "[ORA2-CTL-02]", "[ORA2-CTL-03]", "[ORA2-CTL-04]").forEach { marker ->
+                sweep.mustState(marker)
+            }
+        }
+        withClue("The landed test class carrying the four controls must be named") {
+            sweep.mustState("civictech.oracle.tagged.TaggedControlsTest")
+        }
+        withClue(
+            "The blocking status feature §4.9 states in as many words: a green sweep is not " +
+                "evidence without these four.",
+        ) {
+            sweep.mustState("a green ORA2 sweep is not evidence without")
+        }
+    }
+
+    // -------------------------------------------------- [ORA2-HONEST-02]
+
+    @Test
+    fun `the module entry point states what a sweep records about the optional families`() {
+        val sweep = sweepKdoc().flat()
+
+        withClue("[ORA2-HONEST-02] must be claimed by marker") {
+            sweep.mustState("[ORA2-HONEST-02]")
+        }
+        withClue("It must name the instrument that does the recording, and that it reuses the existing report") {
+            sweep.mustState("reportOptionalFamilies")
+            sweep.mustState("civictech.oracle.bind.OptionalFamilies")
+            sweep.mustState("not a second report format")
+        }
+    }
+
     // -------------------------------------------------- [ORA1-HONEST-02]
 
     /**
