@@ -77,6 +77,12 @@ than restarting. That's the whole reason the worktree is preserved.
 
 ## 1–2. Read the task, then check its dependencies
 
+**If the bead carries `parked_at` metadata, a `human` label in its history,
+or an unpark/`Superseded … by human answer` comment, read `bd comments <id>`
+BEFORE the description**: the deliverable may have been changed by a human
+answer that the criteria were amended to — or, if the amendment was missed,
+that only the thread records (computenet-wv9c).
+
 What the bead says, what its context says, and what has to have landed first.
 
 1. Read the task and its context:
