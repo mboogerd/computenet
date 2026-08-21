@@ -1623,8 +1623,10 @@ than making it quietly. ${repoAge}
 Run every verification command — Gradle above all — in ONE foreground Bash
 call with an explicit timeout, up to 600000 ms. If you already know the suite
 outruns that 10-minute cap, COMMIT FIRST (do not `git push`, and do not
-`bd dolt push` either — the orchestrator serializes syncs; see your
-reference),
+`bd dolt push` either, NOT EVEN for an authorized cross_bead write: AGENTS.md's
+"shared-surface writes push at once" is the orchestrator's duty, and this
+dispatch's no-push rule is the exception it names for dispatched agents —
+your write rides out on the orchestrator's next bracket),
 then background it and wait
 with a BOUNDED until-loop on its log (your reference gives the form) — never
 wait first, or a stop strands uncommitted work that reads as nothing.
