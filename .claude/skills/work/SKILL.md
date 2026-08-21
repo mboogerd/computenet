@@ -1559,11 +1559,6 @@ in the batch:
 .claude/skills/work/scripts/check-files-claim.sh <task-id>...   # exit 1 = look
 ```
 
-(Any grep YOU run here is copied, not typed: `grep -rn "needle" --include='*.kt' .`
-— the glob **quoted**. Unquoted, zsh aborts with `no matches found` and the
-empty output reads as "nothing references this"; the orchestrator hit it
-authorising a rename — computenet-l5rc, u0b0, dy7q.)
-
 It greps the description and acceptance for path-shaped strings and prints
 each one the claim does not cover. It **warns** rather than blocks — a bead
 may legitimately name a file it only reads — so read what it prints and
@@ -1577,6 +1572,11 @@ residuals, step 7's friction items.
 dispatching: `git grep -l -F '[THE-ID]'` lists the files that *cite* it,
 which is usually not where the artifact lives; the pinning test's KDoc says
 where ("which is `MapCellModel`'s file KDoc"). Widen the claim to that file.
+
+(Any grep YOU run here is copied, not typed: `grep -rn "needle" --include='*.kt' .`
+— the glob **quoted**. Unquoted, zsh aborts with `no matches found` and the
+empty output reads as "nothing references this"; the orchestrator hit it
+authorising a rename — computenet-l5rc, u0b0, dy7q.)
 
 Dispatch the batch in one message. Anything you add reaches the agent as
 established fact — relay artifacts, not mechanism:
