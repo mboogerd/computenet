@@ -1,6 +1,7 @@
 package civictech.oracle.shrink
 
 import civictech.oracle.bind.OperatorCatalog
+import civictech.oracle.gen.CaseDelivery
 import civictech.oracle.gen.CaseScript
 import civictech.oracle.gen.CaseStep
 import civictech.oracle.gen.CaseTopology
@@ -162,6 +163,7 @@ object Shrinker {
                 if (!session.canSpend()) return
                 val script = CaseScript(
                     session.best.case.script.steps.filterIndexed { index, _ -> index !in drop },
+                    carried(session.best.case.script.deliveries, drop),
                 )
                 if (!session.tryCandidate(withScript(session.best.case, script))) offset += chunk
             }
@@ -358,7 +360,23 @@ object Shrinker {
         val script = if (node.source == null) {
             case.script
         } else {
-            CaseScript(case.script.steps.filterNot { it is CaseStep.Op && it.source == node.source })
+            val dropped = case.script.steps.withIndex()
+                .filter { (_, step) -> step is CaseStep.Op && step.source == node.source }
+                .mapTo(mutableSetOf()) { it.index }
+            // A delivery naming the departing source is DROPPED, not shifted: shifting it would
+            // leave a delivery into (or from) a replica this case no longer has — a script that
+            // still says "replica X absorbed replica Y" when Y is gone. `CaseScript` cannot catch
+            // that (its `init` checks the step index, not the source names), and `toScript` would
+            // dutifully mint a slice for the absent source, so the case would shrink into a
+            // DIFFERENT replication shape while still looking like a faithful reduction. That is
+            // the same silent wrongness computenet-r38y removes, just relocated to pass 3.
+            CaseScript(
+                case.script.steps.filterIndexed { index, _ -> index !in dropped },
+                carried(
+                    case.script.deliveries.filterNot { it.into == node.source || it.from == node.source },
+                    dropped,
+                ),
+            )
         }
         return case.copy(
             topology = topology,
@@ -384,9 +402,40 @@ object Shrinker {
                     }
                 }
             },
+            // A 1:1 rewrite of each step in place: no step is added or removed, so every
+            // delivery's position still names the step it always named. Carried verbatim —
+            // no shift, and nothing to drop, because remapping an element cannot retire a source.
+            case.script.deliveries,
         )
         return withScript(case, script)
     }
+
+    /**
+     * [deliveries] carried across a deletion of the steps at [dropped].
+     *
+     * A [CaseDelivery] states its gossip as a **position** in the drive order — "just before step
+     * `atStep`" — so deleting steps moves it left by however many deleted indices lie before it.
+     * This is `ScriptGenerator.insertBarrier`'s shift rule run backwards: that one splices a step
+     * in and shifts at `>= position`, this one takes steps out and shifts by the count below.
+     * Either way the invariant is the same one, and it is the whole point of the position
+     * representation — the delivery stays before the *same* `Op` it was before, so the
+     * `afterEvents`/`throughEvents` [CaseScript.toScript] derives for the surviving prefix are
+     * unchanged rather than re-stated.
+     *
+     * Reconstructing a [CaseScript] with the single-argument constructor instead — which every
+     * site here did before computenet-r38y — silently drops the gossip, so a shrunk replicated
+     * counterexample reproduces as a NON-replicated one: the reduction quietly removes the very
+     * property that made the case a counterexample, and the rendered artifact then fails to
+     * reproduce for a reason nothing reports.
+     */
+    private fun carried(deliveries: List<CaseDelivery>, dropped: Set<Int>): List<CaseDelivery> =
+        if (dropped.isEmpty() || deliveries.isEmpty()) {
+            deliveries
+        } else {
+            deliveries.map { delivery ->
+                delivery.copy(atStep = delivery.atStep - dropped.count { index -> index < delivery.atStep })
+            }
+        }
 
     /**
      * [script]'s remove audit, re-derived from the script itself: one [RemoveRecord] per
