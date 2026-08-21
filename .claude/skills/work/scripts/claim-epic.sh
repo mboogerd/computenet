@@ -51,6 +51,44 @@ if [ "$id" = computenet-wpvy ]; then
   exit 1
 fi
 
+# hl8x: the tracker cannot show the OTHER machine inside this subtree — its
+# epic claim is released at Finalize while an in-flight child continues, and
+# every other step-3 guard is this-machine-only. So before claiming, test
+# whether the subtree is HOT by two assignee-blind signals: any descendant
+# bead touched within STALE_MIN, or any origin/feature/<epic>* tip pushed
+# within STALE_MIN. A hit means SKIP this candidate (exit 1, signal named),
+# not park: the epic is fine, someone is simply still in it. One machine
+# claimed computenet-ssa this way 2 minutes after the other merged a task
+# under it and sat in feature review; the reversal cost ~12 minutes and a
+# hand-resolved Dolt conflict. CLAIM_SKIP_HOT=1 bypasses (resume of your own
+# subtree after a crash is the honest case).
+if [ "${CLAIM_SKIP_HOT:-}" != 1 ]; then
+  cutoff=$(( $(date +%s) - STALE_MIN * 60 ))
+  hot=$(bd list --all --limit 0 --json 2>/dev/null | sed -n '/^[[{]/,$p' \
+    | jq -r --arg e "$id" --argjson c "$cutoff" '
+        (if type=="array" then . else (.issues // []) end) as $all
+        | [$e] as $seed
+        | reduce range(0;6) as $_ ($seed;
+            . as $set | $set + [$all[] | select((.parent // "") as $p
+                | ($set | index($p)) != null or (.id | startswith($e + "."))) | .id] | unique)
+        | (. - [$e]) as $kids
+        | $all[] | select(.id as $i | $kids | index($i))
+        | select(((.updated_at // "") | sub("\\.[0-9]+"; "") | try fromdateiso8601 catch 0) >= $c)
+        | "\(.id) updated \(.updated_at)"' 2>/dev/null | head -3)
+  if [ -n "$hot" ]; then
+    echo "SKIP: $id's subtree is hot — a child was touched within ${STALE_MIN}m (the other machine may be in it):" >&2
+    printf '  %s\n' $hot >&2 2>/dev/null || printf '%s\n' "$hot" >&2
+    exit 1
+  fi
+  git fetch -q origin "refs/heads/feature/$id*:refs/remotes/origin/feature/$id*" 2>/dev/null || true
+  hotref=$(git for-each-ref --format='%(refname:short) %(committerdate:unix)' "refs/remotes/origin/feature/$id*" 2>/dev/null \
+    | awk -v c="$cutoff" '$2 >= c {print $1}' | head -3)
+  if [ -n "$hotref" ]; then
+    echo "SKIP: $id's subtree is hot — a feature branch tip was pushed within ${STALE_MIN}m: $hotref" >&2
+    exit 1
+  fi
+fi
+
 out=$(bd update "$id" --claim 2>&1); st=$?
 if [ $st -ne 0 ] || grep -qi "already claimed" <<<"$out"; then
   grep -qi "already claimed" <<<"$out" || { echo "claim failed: $out" >&2; exit 1; }
