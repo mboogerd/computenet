@@ -308,6 +308,66 @@ class HonestyLedgerTest {
         }
     }
 
+    /**
+     * The `counter`/`pnCounter` coverage note (computenet-gff7): the ledger's own section
+     * text, from its `###` heading to the next one.
+     *
+     * Scoped to the section rather than asserted against the whole ledger, because the words
+     * that matter here — `CoalescingCombineCell` above all — also occur in that cell's own
+     * exclusion entry further down. A whole-ledger `mustState("CoalescingCombineCell")` would
+     * stay green with this section deleted outright, which is precisely the silent-deletion
+     * path this file exists to close.
+     */
+    private fun counterCoverageNote(): String {
+        val ledger = exclusionLedger()
+        val start = ledger.indexOf("### `counter` / `pnCounter`")
+        withClue(
+            "The ledger must carry the counter/pnCounter coverage note as its own section " +
+                "(computenet-gff7). It is what stops `registered` reading as `exercised` for the " +
+                "two entries no generated case can spawn.",
+        ) {
+            (start >= 0) shouldBe true
+        }
+        val end = ledger.indexOf("\n###", start + 1).let { if (it < 0) ledger.length else it }
+        return ledger.substring(start, end)
+    }
+
+    @Test
+    fun `the ledger records that counter and pnCounter are registered but never exercised`() {
+        val note = counterCoverageNote().flat()
+
+        withClue(
+            "computenet-gff7's third criterion: the ledger must say WHICH of its two outcomes " +
+                "holds for counter/pnCounter, so that `registered` stops implying `exercised`. " +
+                "The outcome recorded is NOT-FIXED-deliberately, and the verdict has to be in the " +
+                "text — a section that describes the hole without stating the decision leaves the " +
+                "next reader to re-litigate it.",
+        ) {
+            note.mustState("REGISTERED but NOT EXERCISED")
+            note.mustState("computenet-gff7")
+            note.mustState("\"registered\" does not imply \"exercised\"")
+            note.mustState("no registered operator consumes a bare scalar on any port")
+        }
+    }
+
+    @Test
+    fun `the counter coverage note gives its reason and its DISPUTES audit, like every other entry`() {
+        val note = counterCoverageNote().flat()
+
+        withClue(
+            "The same two clauses every exclusion entry carries — a reason evidenced against " +
+                "kernel source, and a recorded DISPUTES conclusion — bind this note too. Its " +
+                "reason is specifically that the ONE cell serving Propagate<CounterDelta> on an " +
+                "inlet is CoalescingCombineCell, which this ledger already excludes: the note is " +
+                "an exclusion's consequence, and without that citation it is an assertion rather " +
+                "than a reason.",
+        ) {
+            note.mustState("CoalescingCombineCell")
+            note.mustState("kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt")
+            note.mustState("DISPUTES audit: no filing")
+        }
+    }
+
     // -------------------------------------------------- the DISPUTES filing
 
     @Test

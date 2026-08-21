@@ -46,6 +46,59 @@ import java.io.Serializable
  *   4ru.16's eventual outcome is one entry in whichever home is chosen, not a re-design of this
  *   ledger.
  *
+ * A third combination exists and is recorded below, because it is not either of those: an entry
+ * that is registered and honestly modelled, and unreachable *because* of an exclusion this
+ * ledger already made. See the counter coverage note.
+ *
+ * ### `counter` / `pnCounter`: REGISTERED but NOT EXERCISED (computenet-gff7)
+ *
+ * `[ORA1-HONEST-02]`'s subject is what the vocabulary does not cover, and coverage has two
+ * separable halves — whether an operator is *bound* and whether it is ever *run*. For every
+ * other entry in `civictech.oracle.bind.CoreOperators` the two coincide. For these two they do
+ * not, so **"registered" does not imply "exercised" here, and this note is what stops it
+ * reading that way.**
+ *
+ * `counter` (`CounterCell`) and `pnCounter` (`PnCounterCell`) are registered with both halves
+ * bound and are modelled honestly by `CounterSourceModel`/`PnCounterSourceModel`. But they are
+ * the only entries emitting a bare [ElementShape.Scalar], and **no registered operator consumes
+ * a bare scalar on any port**. `GraphGenerator.Builder.chooseRootShape` draws a case's root
+ * shape only among source shapes something in the vocabulary can consume, and `[ORA1-GEN-03]`
+ * forbids a source standing as a terminal itself, so no generated case can spawn either one.
+ * Every existing completeness test says they are covered; no differential sweep has ever run
+ * them. `civictech.oracle.bind.CatalogReachabilityTest` computes that from the registrations
+ * rather than asserting it.
+ *
+ * **The outcome that holds is: not fixed, and deliberately so** — computenet-gff7's first
+ * acceptance clause offered "register a `Scalar`-consuming operator, or record the decision not
+ * to", and this is that record. A scalar edge in this catalog carries
+ * `Propagate<CounterDelta>`, and exactly ONE cell in the kernel serves that type on an inlet:
+ * `CoalescingCombineCell` (`kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt`,
+ * `inlet: Serve<Propagate<CounterDelta>>`). Every other operator inlet under
+ * `civictech.cell.data.op` serves `SetDelta` or `MapDelta`; `CounterCell.inlet` is
+ * `Use<CounterOps>` and `PnCounterCell.deltaInlet` is the replication seam, not an operator
+ * input. And that one cell is **excluded by this very ledger**, in its own entry below, for a
+ * reason that has not weakened: its observable is a wave-completion fold the script vocabulary
+ * cannot name.
+ *
+ * That is why this note belongs here rather than under "unreachable by shape-typed generation"
+ * above. That class is a generator-coverage defect repaired by changing the generator; this one
+ * cannot be repaired that way at all. The generator is behaving correctly — there is genuinely
+ * nothing to link a counter into — and the only in-catalog repairs are to register the cell
+ * this ledger excludes (writing the batch model the exclusion exists to forbid) or to add a new
+ * kernel cell to `civictech.cell.data.op` existing solely so the oracle has a scalar consumer.
+ * It is an exclusion's consequence, not an independent oversight, which makes it this ledger's
+ * subject by transitivity. Contrast the pair-shaped hole, which *was* repairable in-catalog:
+ * `keyBy` reuses an already-registered cell (`FlatMapSetCell`) and an already-registered model,
+ * adding only a function. No such reuse exists for `Scalar`.
+ *
+ * *DISPUTES audit: no filing.* Nothing normative goes unchecked. `[24-OP-COUNTER-01]` and
+ * `[24-OP-PNCOUNTER-01]` are checked where counters actually run — `concord/corpus` and the
+ * kernel's own suites. Note also what is NOT missing: the scalar *shape* is swept, as a
+ * terminal, through `count` (`CountCell`, registered and emittable), so it is these two source
+ * cells that go unrun, not scalar-valued observation as such. What is absent is a *batch
+ * differential* check of `CounterCell`/`PnCounterCell` themselves, which is this ledger's
+ * subject and not a gap in the requirements' coverage.
+ *
  * ### The `DISPUTES.md` audit (`concord/corpus/DISPUTES.md`)
  *
  * `DISPUTES.md` files a requirement that cannot be checked honestly **anywhere**, not one this
