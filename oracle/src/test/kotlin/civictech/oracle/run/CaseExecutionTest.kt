@@ -15,11 +15,14 @@ import civictech.cell.port.PolicyTier
 import civictech.cell.port.registerPort
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
+import civictech.oracle.bind.TaggedOperators
 import civictech.oracle.gen.CaseScript
 import civictech.oracle.gen.CaseStep
 import civictech.oracle.gen.CaseTopology
 import civictech.oracle.gen.GeneratedCase
+import civictech.oracle.gen.TerminalSpec
 import civictech.oracle.gen.TopologyNode
+import civictech.oracle.model.ModelState
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SourceId
 import civictech.oracle.model.WriterId
@@ -27,6 +30,7 @@ import civictech.testkit.SimWorld
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -64,6 +68,19 @@ import java.util.UUID
  * Nothing the generator can draw exercises the frontier path today: no registered catalog
  * operator carries `GlitchFree` or installs an ALIGN policy. Hence the hand-built [AlignedJoin]
  * here — the smallest cell that puts an ALIGN-tier policy on the far side of the cut.
+ *
+ * ## The second thing this file pins: the tagged wiring (computenet-6v7y)
+ *
+ * [CaseExecution] is also where a *tagged* case meets the runner, and until computenet-6v7y it
+ * did not: [CaseExecution.scriptSourceFor] had no `orMap` branch (so binding an OR-map source
+ * threw, naming the id) and `foldFor` dispatched on [civictech.oracle.model.ElementShape] alone
+ * (so an OR-map terminal, whose declared output shape is `MapOf`, resolved to
+ * [MapTerminalFold] — an **arrival-order** fold over a stream that carries
+ * `TaggedMapDelta`s). Every piece of the chain existed and none of them met, so no generated
+ * OR-map case executed end to end. The `orMap …` tests below are that wiring's pins; they live
+ * here rather than in `GeneratedCaseExecutionTest` because both dispatches are
+ * [CaseExecution]'s, and the fold-identity assertion has to read the assembly this class
+ * already builds by hand.
  */
 class CaseExecutionTest {
 
@@ -73,6 +90,10 @@ class CaseExecutionTest {
     @BeforeEach
     fun registerCatalog() {
         CoreOperators.registerAll()
+        // The tagged half of the vocabulary, for the orMap wiring tests below. Registering it
+        // for every test is harmless — the two objects share no id — and `resetCatalog` drops
+        // both.
+        TaggedOperators.registerAll()
     }
 
     @AfterEach
@@ -340,5 +361,133 @@ class CaseExecutionTest {
         drive(case, world, assembly)
 
         remote.received.shouldNotBeEmpty()
+    }
+
+    // -------------------------------------------------- the tagged wiring, computenet-6v7y
+
+    /**
+     * `orMap(src) -> terminal` — the smallest *generated-shaped* case whose source is a tagged
+     * one. Hand-constructed for the same reason every case in `GeneratedCaseExecutionTest` is:
+     * invoking `CaseGenerator` here would make this a test of the generator's current draws
+     * rather than of the wiring, and it uses the catalog's own registered factory so the kernel
+     * half and the model half cannot drift.
+     */
+    private fun orMapCase(script: CaseScript, seed: Long = 91L) = GeneratedCase(
+        seed = seed,
+        topology = CaseTopology(
+            nodes = listOf(TopologyNode("om", TaggedOperators.Ids.OR_MAP, emptyList(), source)),
+            terminals = listOf(TerminalSpec("tagged", "om")),
+            placement = mapOf("om" to 0),
+        ),
+        spec = GraphSpec(listOf(SpawnStep("om", OperatorCatalog.entry(TaggedOperators.Ids.OR_MAP)!!.kernel))),
+        script = script,
+        removeAudit = emptyList(),
+    )
+
+    /**
+     * `put(k1,v1) put(k2,v2) put(k1,v9) removeKey(k2)` — a re-put (`[24-TMAP-03]`: the fresh dot
+     * wins) and a reset-remove (`[24-TMAP-04]`), so the answer is `{k1: v9}` and is not the
+     * answer an empty or put-only script would give.
+     */
+    private fun orMapScript() = CaseScript(
+        listOf(
+            CaseStep.Op(source, ScriptEvent.Put(writer, "k1", "v1")),
+            CaseStep.Op(source, ScriptEvent.Put(writer, "k2", "v2")),
+            CaseStep.Op(source, ScriptEvent.Put(writer, "k1", "v9")),
+            CaseStep.Op(source, ScriptEvent.RemoveKey(writer, "k2")),
+            CaseStep.Barrier,
+        ),
+    )
+
+    /**
+     * The end-to-end half of computenet-6v7y: a case naming an `orMap` source runs through
+     * [DifferentialRunner] and agrees with the catalog-resolved reference.
+     *
+     * Against the unfixed wiring this failed at `CaseExecution.scriptSourceFor`, which had no
+     * `orMap` branch and threw naming the id — the source could not be bound at all, so nothing
+     * downstream of it ever ran.
+     *
+     * The barrier reading is what makes the `Success` non-vacuous: two empty states agree too.
+     */
+    @Test
+    fun `orMap - a generated case naming a tagged source executes end to end`() {
+        var observed: Map<String, ModelState>? = null
+
+        DifferentialRunner.run(orMapCase(orMapScript())) { observed = it } shouldBe RunOutcome.Success
+
+        withClue(
+            "non-vacuity: the terminal really holds the OR-map's reading — the re-put's dot won " +
+                "at k1 [24-TMAP-03] and the reset-remove took k2 [24-TMAP-04]",
+        ) {
+            observed shouldBe mapOf("tagged" to ModelState.MapState(mapOf("k1" to "v9")))
+        }
+    }
+
+    /**
+     * The dispatch half: an `orMap` terminal resolves to [TaggedMapTerminalFold], **not** to
+     * [MapTerminalFold].
+     *
+     * This is asserted on the fold's identity rather than only on the run's verdict because the
+     * two folds are not interchangeable and the difference is invisible in a single-writer
+     * final state: [MapTerminalFold] folds by *arrival order* through
+     * [civictech.cell.data.view.MapView], while a tagged map's per-key value is decided by the
+     * `(counter, sourceId)` order over the key's live dots. Substituting the arrival-order fold
+     * is `[ORA2-CTL-01]`'s control, and it must not become reachable here by accident — which is
+     * exactly what dispatching on [civictech.oracle.model.ElementShape] alone did, since `orMap`
+     * declares a `MapOf` output shape like every untagged map operator.
+     *
+     * The `MapTerminalFold` clause is the regression pin the acceptance criterion asks for: a
+     * `foldFor` that fell back to the shape-only branch would satisfy the `MapOf` reading and
+     * fail here.
+     */
+    @Test
+    fun `orMap - the terminal folds through the tagged fold, not the arrival-order map fold`() {
+        val case = orMapCase(orMapScript())
+        val world = SimWorld(seed = case.seed)
+
+        val assembly = CaseExecution.assemble(case, world)
+
+        val fold = assembly.graph.terminals.getValue("tagged")
+        withClue("the tagged terminal resolves to the dot-algebra fold") {
+            fold.shouldBeInstanceOf<TaggedMapTerminalFold<*, *>>()
+        }
+        withClue("and specifically NOT to the arrival-order MapView fold [ORA2-CTL-01]") {
+            (fold is MapTerminalFold<*, *>) shouldBe false
+        }
+        withClue(
+            "and the source really was bound — scriptSourceFor resolved orMap rather than " +
+                "refusing it by name",
+        ) {
+            assembly.graph.sources.keys shouldBe setOf(source)
+        }
+    }
+
+    /**
+     * The tagged fold is fed by the same [civictech.cell.data.delta.TaggedMapDelta] stream the
+     * kernel cell emits, and reads it through the dot algebra: driving the script straight at
+     * the bound source and draining leaves the fold holding the OR-map's own answer.
+     *
+     * Distinct from the end-to-end test above in what it can fail on — no reference model, no
+     * runner, no barrier — so a regression in the *binding* (a source bound to the wrong ops
+     * surface) is separable from a regression in the *comparison*.
+     */
+    @Test
+    fun `orMap - the bound source drives the kernel cell and the fold reads its dots`() {
+        val case = orMapCase(orMapScript())
+        val world = SimWorld(seed = case.seed)
+        val assembly = CaseExecution.assemble(case, world)
+        val bound = assembly.graph.sources.getValue(source)
+
+        case.script.steps.filterIsInstance<CaseStep.Op>().forEach { step ->
+            when (val event = step.event) {
+                is ScriptEvent.Put -> bound.put(event.key, event.element)
+                is ScriptEvent.RemoveKey -> bound.removeKey(event.key)
+                else -> Unit
+            }
+        }
+        while (world.controller.step()) { /* drain */ }
+
+        assembly.graph.terminals.getValue("tagged").current() shouldBe
+            ModelState.MapState(mapOf("k1" to "v9"))
     }
 }

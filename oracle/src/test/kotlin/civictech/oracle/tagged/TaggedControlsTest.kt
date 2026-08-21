@@ -56,8 +56,11 @@ import java.util.UUID
  *   input to it and not a mock.
  *
  * What **none** of the four does is observe state a kernel replica produced: CTL-02's and
- * CTL-04's folds are [DotModel]'s too. `CaseExecution` wires no `OR_MAP` script source and never
- * folds a tagged terminal (computenet-6v7y), so no *generated* OR-map case reaches the runner.
+ * CTL-04's folds are [DotModel]'s too. That still holds, but no longer for want of a runner path:
+ * computenet-6v7y wired `CaseExecution` to resolve an `OR_MAP` script source and to fold a tagged
+ * terminal through `TaggedMapTerminalFold`, so a *single-instance* generated OR-map case now does
+ * reach the runner. None of these four has been written onto that path, and the replicated mesh
+ * CTL-02 and CTL-04 build by hand still has no path at all (previous paragraph).
  * Kernel-driven OR-map coverage lives one file over, in
  * [civictech.oracle.tagged.ConvergenceCheckTest] — see the next section.
  *
@@ -68,9 +71,40 @@ import java.util.UUID
  * with the key named). This suite does not repeat that kernel drive — `ConvergenceCheckTest.kt`
  * is owned by the sibling task that landed it, and duplicating a live `SimWorld` mesh here would
  * be exactly the "second sweep loop" the feature design forbids. What is missing without a test
- * *here* is CTL-01's arrival-order control and CTL-03's remove-all control, for which no kernel
- * seam exists at all (previous paragraph) — those two, plus a CTL-02/CTL-04 instance scoped to
- * this task's own bead, are what this file adds.
+ * *here* is CTL-01's arrival-order control and CTL-03's remove-all control, for which no
+ * *replicated* kernel seam exists (previous paragraph) — those two, plus a CTL-02/CTL-04
+ * instance scoped to this task's own bead, are what this file adds. Since computenet-6v7y a
+ * single-instance generated OR-map case could carry a substituted reference through
+ * `DifferentialRunner`, which is a seam these two did not have when they were written; neither
+ * has been rewritten onto it.
+ *
+ * **That single-instance seam serves only ONE of the two, and which one is measured, not
+ * assumed.** With a single instance there are no deliveries and no concurrency for the dot order
+ * to resolve, so a key's winner is simply its last write — which is exactly what
+ * [NaiveArrivalOrderMapModel] computes. Over a delivery-free one-source script
+ * (`put/put/re-put/removeKey/put/removeKey/put`) its fold is **equal** to
+ * [civictech.oracle.bind.SingleInstanceOrMapModel]'s dot fold, both `{k1=vZ, k2=v3}` (measured
+ * 2026-08-21, reviewing computenet-6v7y). That is not one lucky script: the equality was
+ * re-derived independently over 2000 random single-source delivery-free scripts (mixed
+ * puts/removes over three keys) with **zero** disagreements (measured 2026-08-21, second
+ * review of computenet-6v7y), and it holds structurally — a delivery-free slice is the only
+ * thing this seam can carry at all, since
+ * [civictech.oracle.bind.SingleInstanceOrMapModel] refuses a slice with deliveries by name, and
+ * within one instance a re-put or a remove tombstones every dot the key had live, leaving the
+ * last put's dot as the sole survivor. CTL-01 ported onto that path would therefore hold
+ * identically under the mutant and under the correct reference — the vacuous shape this file's
+ * own CTL-01 KDoc records as the defect a prior review caught — so CTL-01 still has no seam it
+ * could usefully move to.
+ *
+ * [RemoveAllDotModel] does discriminate there (a put *after* a remove lives under the real
+ * reset-remove and stays wiped under the mutant: `{}` against `{k1=vZ, k2=v3}` on the same
+ * script), so CTL-03 is the one of the two this seam could carry — **but it would carry a
+ * strictly weaker control than the one below.** The same single-instance restriction that makes
+ * CTL-01 vacuous also removes BS-4's actual subject: a dot minted *concurrently at another
+ * instance* surviving a peer's reset-remove cannot arise with one instance. A ported CTL-03
+ * would pin only the narrower "a remove tombstones dots, not the key outright", so the
+ * two-instance script in CTL-03's own test below stays the one that exercises add-wins, and a
+ * port would have to be an addition to it rather than a replacement.
  */
 class TaggedControlsTest {
 

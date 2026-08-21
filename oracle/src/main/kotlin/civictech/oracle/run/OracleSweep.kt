@@ -168,9 +168,17 @@ import civictech.testkit.forEachSeed
  *   replicas and the differing key (BS-8), not passed or silently resolved to one answer.
  *
  * And the same honesty applies to the controls themselves: **not one of them observes state a
- * kernel replica produced.** `CaseExecution` wires no `OR_MAP` script source and never folds a
- * tagged terminal (computenet-6v7y), so no *generated* OR-map case reaches the differential
- * runner and there is no `DifferentialRunner` path to substitute a mutant through. Marker by
+ * kernel replica produced.** The bound is unchanged; its former *reason* is not. Until
+ * computenet-6v7y, `CaseExecution` wired no `OR_MAP` script source and never folded a tagged
+ * terminal, so no generated OR-map case reached the differential runner at all. It now resolves
+ * both — an `orMap` source binds through the same `MapOps` surface `MapCell` uses, and an
+ * `orMap` terminal folds through `TaggedMapTerminalFold` instead of the arrival-order
+ * `MapTerminalFold` — so a **single-instance** generated OR-map case does reach the runner
+ * today, and for that case there IS now a `DifferentialRunner` path to substitute a mutant
+ * through. Two things keep the bound true anyway: **no control below has been written onto that
+ * path** (each still runs where it was written), and the path is single-instance only —
+ * `SingleInstanceOrMapModel` refuses a slice carrying gossip deliveries, and `CaseExecution`
+ * materialises no replicas, so the *replicated* mesh has no runner path even now. Marker by
  * marker, rather than by a count:
  *
  * - `[ORA2-CTL-01]` and `[ORA2-CTL-03]` are **model-vs-model**: a mutant reference compared
@@ -181,8 +189,11 @@ import civictech.testkit.forEachSeed
  *   replicas the kernel ran.
  *
  * So what the four establish is that **the reference would catch these defects if a kernel-driven
- * OR-map case reached it**; what they do NOT establish is that a *generated* case reaches it
- * today. That second half is the runner gap (computenet-6v7y), not this ledger's to close.
+ * OR-map case reached it**; what they do NOT establish is that any of THESE FOUR observes one.
+ * That second half used to be a missing runner path; computenet-6v7y closed the single-instance
+ * half of it, so what remains is that no control has been ported onto the path, and that CTL-04's
+ * replicated mesh still has none. Both are the sweep/differential work, not this ledger's to
+ * close.
  *
  * Read that as a bound on the GENERATED path only. Kernel-driven OR-map coverage does exist,
  * outside this file: `civictech.oracle.tagged.ConvergenceCheckTest`'s BS-1, BS-6 and BS-7 drive
