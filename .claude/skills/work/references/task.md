@@ -281,6 +281,13 @@ The smallest coherent change, and proof the tests actually executed.
    first, then the affected module's suite. Don't report success on an
    untested claim, and don't let `BUILD SUCCESSFUL` be the claim: Gradle
    replays cached results, so a green build is not evidence a test executed.
+   - **Your FIRST Gradle or npm call, and every one after it, passes
+     `dangerouslyDisableSandbox`.** The default Bash sandbox fails KSP with
+     `Operation not permitted`, and the daemon it starts stays poisoned for
+     every later call until `./gradlew --stop` — two agents each lost their
+     first three builds discovering this in a fresh worktree
+     (computenet-l0jf, recurred as computenet-lq0p; mechanism in
+     [agent-execution.md](agent-execution.md)).
    - **Prove the run happened per [gradle-evidence.md](gradle-evidence.md)**
      — the task-count line, the per-task state line read as an absence, and
      the JUnit XML counts + `timestamp` via `.claude/skills/work/scripts/junit-count.py` — from a

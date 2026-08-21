@@ -268,6 +268,10 @@ Then, for anything with a suite:
 
 `BUILD SUCCESSFUL` is not evidence that a test executed — a cached green
 build is indistinguishable from a real one in the output you normally read.
+**Every Gradle/npm call passes `dangerouslyDisableSandbox`, from the first**
+— a sandboxed first call fails KSP and poisons the shared daemon
+(computenet-lq0p; [agent-execution.md](agent-execution.md)).
+
 **[gradle-evidence.md](gradle-evidence.md) is the proof standard**: the
 task-count line, the per-task state line read as an absence (four states,
 only two marked), the `| tail -N` and `-q` traps that destroy it, `--rerun`
