@@ -998,7 +998,13 @@ bd update <id> --status=open --assignee="" --remove-label=human
 ```
 
 (All three: a leftover `human` label re-hides it from every filter; a
-leftover assignee makes it permanently `--claim`-refused.) The 6h `parked_at`
+leftover assignee makes it permanently `--claim`-refused.) **And amend the
+bead's text to the answer before anyone is dispatched on it**: a park is
+usually about WHAT to build, and the acceptance still demands the rejected
+option until someone rewrites it — a reviewer scores against `bd show`, not a
+comment thread, and two beads shipped against criteria that contradicted the
+decision (computenet-wv9c). `bd update <id> --acceptance=… --design=…`, and
+say in a comment which human answer it now encodes. The 6h `parked_at`
 window doesn't apply here — these are cross-session and evidence-gated.
 
 **Select the feature.** Resume before starting new — this query is the
