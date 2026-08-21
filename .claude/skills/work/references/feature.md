@@ -83,7 +83,7 @@ to size.*
 
 ## What a file claim must include that the bead never says
 
-`check-files-claim.sh` greps the bead's text for path-shaped strings, so three
+`check-files-claim.sh` greps the bead's text for path-shaped strings, so these
 kinds of required file are invisible to it by construction. Get them into the
 claim **at filing**, where you know the answer, rather than having it widened
 after a red suite:
@@ -98,8 +98,9 @@ after a red suite:
   `:oracle` and `:identity` (computenet-d7qn, computenet-m9px).
 - **A test whose design needs a capability its module's build file lacks
   claims that `build.gradle.kts`.** A test-local `@Serializable` type on
-  `:wire` needs the serialization plugin and `testImplementation` in
-  `wire/build.gradle.kts`; the bead never names it because it is a
+  `:wire` needed the serialization plugin and `testImplementation` added to
+  `wire/build.gradle.kts` (they landed in computenet-051.6.2); the bead never
+  named the file because it is a
   consequence of the design, not a requirement, and a test-only claim is then
   unsatisfiable (computenet-wliv, one dispatch cycle). Heuristic: a new
   annotation, library or source set in the test → check the module's plugins
