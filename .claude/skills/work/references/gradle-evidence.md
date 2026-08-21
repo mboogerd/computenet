@@ -60,7 +60,12 @@ re-run with `--rerun`.
 **3. The JUnit XML counts and timestamp**, which separate a run from a
 replay — a cached repeat run leaves `newest` unchanged with identical counts
 and a green build; `--rerun` advances it (measured 2026-08-14). Count with
-the committed script rather than an inline program:
+the committed script rather than an inline program — and **count BEFORE any
+filtered rerun**: `--tests '<filter>'` deletes that module's XML for every
+class the filter did not match, so a 1209-result kernel run followed by one
+narrow rerun leaves ~100 files, and a later sweep reports the module as thin
+(computenet-5b34). A sharp drop between two reads is that signature, not a
+shrunken suite. Capture the broad run's numbers into your report first.
 
 ```bash
 .claude/skills/work/scripts/junit-count.py '<module>/build/test-results'
