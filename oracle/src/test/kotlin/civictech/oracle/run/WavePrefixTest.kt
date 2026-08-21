@@ -473,6 +473,17 @@ class WavePrefixTest {
      * Drives [case] one scheduler step at a time, reading the terminal after every productive
      * step — [DifferentialRunner.Driving]'s own observation point, reproduced here because
      * [DifferentialRunner.run] refuses to prefix-check a multi-host case by design.
+     *
+     * The drain here happens **per op** — `while (world.controller.step())` runs to quiescence
+     * before the next op is issued, not once after all three are issued. That is not a stylistic
+     * choice: it is what makes the co-hosted and cross-host published streams comparable at all
+     * (see [publishedStream] below, and "the union's published stream is identical under both
+     * placements, drained per op"). Issuing all three ops first and draining only once gives the
+     * cross-host messaging room to interleave work from op N with op N+1 before either settles,
+     * so the resulting sequence of intermediates no longer lines up wave-for-wave with the
+     * co-hosted case's. A single end-of-run drain is not a cheaper version of this measurement —
+     * it measures a genuinely different, protocol-dependent thing, and the two placements'
+     * published streams diverge under it even though they agree under drain-per-op.
      */
     private fun stepBoundaryStates(case: GeneratedCase): List<ModelState> {
         val world = SimWorld(seed = case.seed)
@@ -577,6 +588,47 @@ class WavePrefixTest {
                 ModelState.SetState(setOf("ab", "a", "b", "cd")),
                 ModelState.SetState(setOf("a", "b", "cd", "c", "d")),
             )
+        }
+    }
+
+    /**
+     * Records [case]'s union-published stream under the drain-per-op protocol
+     * [stepBoundaryStates] uses — drain to quiescence after each op, not once after all three
+     * are issued. See [stepBoundaryStates]'s KDoc for why the protocol is load-bearing: only
+     * under drain-per-op are the co-hosted and cross-host published streams the same measurement.
+     */
+    private fun publishedStream(case: GeneratedCase): List<ModelState> {
+        val world = SimWorld(seed = case.seed)
+        val assembly = CaseExecution.assemble(case, world)
+        val recorder = PublishRecorder()
+        world.host.managementInlet.call.spawn(recorder)
+        world.host.managementInlet.call.connect(assembly.refs.getValue("u"), "outlet", recorder.ref, "inlet")
+        case.script.steps.filterIsInstance<CaseStep.Op>().forEach { op ->
+            when (val event = op.event) {
+                is ScriptEvent.Add -> assembly.graph.sources.getValue(op.source).add(event.element)
+                is ScriptEvent.Remove -> assembly.graph.sources.getValue(op.source).remove(event.element)
+                else -> Unit
+            }
+            while (world.controller.step()) { /* drain per op, matching stepBoundaryStates */ }
+        }
+        return recorder.published
+    }
+
+    @Test
+    fun `the union's published stream is identical under both placements, drained per op`() {
+        val coHosted = diamondCase(crossHostScript())
+        val crossHost = diamondCase(crossHostScript(), expansionArmHost = 1)
+        withClue("the two cases differ ONLY in placement, so the graph cannot be the variable") {
+            crossHost.copy(topology = crossHost.topology.copy(placement = coHosted.topology.placement)) shouldBe coHosted
+        }
+
+        val coHostedPublished = publishedStream(coHosted)
+        val crossHostPublished = publishedStream(crossHost)
+
+        withClue("the co-hosted case has zero cross-host edges, so if the two published streams " +
+            "are identical, the cross-host wiring cannot be the cause of computenet-g25w's " +
+            "mid-wave observation — the effect is present with the wiring entirely absent") {
+            crossHostPublished shouldBe coHostedPublished
         }
     }
 
