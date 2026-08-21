@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for file-friction.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "10 passed, 0 failed".
+# Expect "11 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/file-friction.sh"}

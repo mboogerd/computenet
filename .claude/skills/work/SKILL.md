@@ -2208,23 +2208,21 @@ description, and if the close reason starts `rejected:` answer it — your
 recurrence is the appeal. Not found:
 
 ```bash
-# Write bodies to a file and pass --desc-file/--accept-file (create-ticket.sh
-# and file-friction.sh): the text never crosses a shell word, so backticks
-# and $(...) are inert (computenet-s5dh). A quoted heredoc into a FILE, then
-# the -file flag — not a heredoc interpolated into "--desc" — because
-# execute as shell before the script ever runs, silently deleting the
-# quoted phrases and running them (issue-quality.md, computenet-9w9):
-DESC=$(cat <<'EOF'
+# Write bodies to FILES and pass --desc-file/--accept-file (create-ticket.sh
+# and file-friction.sh expose both): the text never crosses a shell word, so
+# backticks and $(...) in it are inert (computenet-s5dh). A heredoc
+# interpolated into "--desc" is the trap issue-quality.md names — the shell
+# executes backticks before the script runs, silently deleting the quoted
+# phrases (computenet-9w9):
+cat > "$SCRATCH/friction-desc.md" <<'EOF'
 <what the skill says, what actually happened, what you did instead, what it cost>
 EOF
-)
-ACCEPT=$(cat <<'EOF'
+cat > "$SCRATCH/friction-accept.md" <<'EOF'
 <what would have to change in the skill for this not to recur>
 EOF
-)
 .claude/skills/work/scripts/file-friction.sh --type <bug|feature> \
   --title "<the friction in one line — NO 'work skill:' prefix; the script adds it>" \
-  --desc "$DESC" --accept "$ACCEPT" \
+  --desc-file "$SCRATCH/friction-desc.md" --accept-file "$SCRATCH/friction-accept.md" \
   --skill-version <the epic's metadata.skill_version>
 ```
 
