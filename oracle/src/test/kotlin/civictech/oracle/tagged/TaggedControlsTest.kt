@@ -84,12 +84,27 @@ import java.util.UUID
  * [NaiveArrivalOrderMapModel] computes. Over a delivery-free one-source script
  * (`put/put/re-put/removeKey/put/removeKey/put`) its fold is **equal** to
  * [civictech.oracle.bind.SingleInstanceOrMapModel]'s dot fold, both `{k1=vZ, k2=v3}` (measured
- * 2026-08-21, reviewing computenet-6v7y). CTL-01 ported onto that path would therefore hold
+ * 2026-08-21, reviewing computenet-6v7y). That is not one lucky script: the equality was
+ * re-derived independently over 2000 random single-source delivery-free scripts (mixed
+ * puts/removes over three keys) with **zero** disagreements (measured 2026-08-21, second
+ * review of computenet-6v7y), and it holds structurally — a delivery-free slice is the only
+ * thing this seam can carry at all, since
+ * [civictech.oracle.bind.SingleInstanceOrMapModel] refuses a slice with deliveries by name, and
+ * within one instance a re-put or a remove tombstones every dot the key had live, leaving the
+ * last put's dot as the sole survivor. CTL-01 ported onto that path would therefore hold
  * identically under the mutant and under the correct reference — the vacuous shape this file's
  * own CTL-01 KDoc records as the defect a prior review caught — so CTL-01 still has no seam it
- * could usefully move to. [RemoveAllDotModel] does discriminate there (a put *after* a remove
- * lives under the real reset-remove and stays wiped under the mutant: `{}` against
- * `{k1=vZ, k2=v3}` on the same script), so CTL-03 is the one this seam could carry.
+ * could usefully move to.
+ *
+ * [RemoveAllDotModel] does discriminate there (a put *after* a remove lives under the real
+ * reset-remove and stays wiped under the mutant: `{}` against `{k1=vZ, k2=v3}` on the same
+ * script), so CTL-03 is the one of the two this seam could carry — **but it would carry a
+ * strictly weaker control than the one below.** The same single-instance restriction that makes
+ * CTL-01 vacuous also removes BS-4's actual subject: a dot minted *concurrently at another
+ * instance* surviving a peer's reset-remove cannot arise with one instance. A ported CTL-03
+ * would pin only the narrower "a remove tombstones dots, not the key outright", so the
+ * two-instance script in CTL-03's own test below stays the one that exercises add-wins, and a
+ * port would have to be an addition to it rather than a replacement.
  */
 class TaggedControlsTest {
 
