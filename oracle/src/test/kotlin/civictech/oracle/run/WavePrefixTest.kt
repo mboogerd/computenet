@@ -87,6 +87,30 @@ import java.util.UUID
  *    computenet-2hur). The sweep keeps the *ordinary* writer and unobserved-remove knobs — see
  *    [generatedSweepConfig] and the sweep test's own KDoc for how the known cross-writer seam is
  *    partitioned out by MEASUREMENT rather than by configuration.
+ *
+ * ## Retired-name provenance is exempt from computenet-lllz's grep criterion
+ *
+ * computenet-lllz's acceptance criterion reads: "No file under `oracle/` names
+ * `RAW_VIEW_FLICKER_SEEDS`, `CHAIN_ARTIFACT_SEEDS` or `isWithinWaveTransient` (grep is the
+ * check)." That criterion exists to catch a **dangling live reference** — a call site, an import,
+ * a doc link that still points at a name that no longer resolves, so "a reader following those
+ * references now finds nothing." This file's three renamed-from-X sentences (on
+ * [isPlateauRegression], `HEALED_DIVERGENCE_SEEDS`, and `SINGLE_PATH_DIVERGENCE_SEEDS` below) are
+ * the opposite of that failure mode: they are the landing page for a reader who arrives holding
+ * one of the old names — from a stale local branch, an old bead, or an old comment elsewhere in
+ * the repo that computenet-eeys's rename did not touch — and needs to find where it went and why.
+ * Rewording them to avoid the literal old name (e.g. "renamed by computenet-eeys" with the name
+ * dropped) would satisfy the grep and defeat the sentence's only reader.
+ *
+ * **computenet-73hp restates the criterion**, per its own acceptance clause, to: no file under
+ * `oracle/` contains a *live* reference to `RAW_VIEW_FLICKER_SEEDS`, `CHAIN_ARTIFACT_SEEDS` or
+ * `isWithinWaveTransient` — a reference a reader would follow expecting to resolve to a symbol —
+ * outside of rename-provenance prose that names its own replacement and the bead that renamed it.
+ * The three mentions here satisfy the restated criterion by construction: each sits in the KDoc of
+ * the symbol that replaced the name it mentions, immediately identifies the replacement, and cites
+ * computenet-eeys. `PinnedSeeds.kt`, which computenet-lllz actually scoped, carries none of the
+ * old names at all — provenance or otherwise — so this file is the only place the exemption
+ * applies.
  */
 class WavePrefixTest {
 
