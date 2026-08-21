@@ -2,6 +2,7 @@ package civictech.oracle.run
 
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
+import civictech.oracle.bind.OptionalFamilies
 import civictech.oracle.gen.GeneratorConfig
 import civictech.oracle.gen.GraphGenerator
 import civictech.oracle.model.ModelState
@@ -409,6 +410,86 @@ class OracleSweepTest {
         // A kind that carries no script is still fine through `toString`.
         OracleSweep.describe(RunOutcome.NonQuiescence(seed = 1L, stepBudget = 7)) shouldBe
             "NonQuiescence(seed=1, stepBudget=7)"
+    }
+
+    /**
+     * The rough edge 4ru.1.4's reviewer flagged and this task fixes: [OracleSweep.describe] used
+     * to fall through to the `else -> outcome.toString()` branch for both mesh verdicts, dumping
+     * a whole [Script] into a report line exactly like the wave-prefix kind did before it got its
+     * own branch. Same evidence as that test: no buried script text, and the fields a reader
+     * actually needs.
+     */
+    @Test
+    fun `a sweep renders both mesh verdicts field by field, never dumping the script`() {
+        val buriedScript = Script(
+            listOf(
+                SourceScript(
+                    SourceId("r0"),
+                    List(30) { ScriptEvent.Add(WriterId("writer-0"), "buried-mesh-script-event-$it") },
+                ),
+            ),
+        )
+
+        val divergence = RunOutcome.ReplicaDivergence(
+            seed = 4L,
+            logicalId = "logical-id-4",
+            caseMarker = "CTL-04",
+            script = buriedScript,
+            expected = ModelState.MapState(mapOf("k" to "v1")),
+            perReplica = mapOf("r0" to ModelState.MapState(mapOf("k" to "v0")), "r1" to ModelState.MapState(mapOf("k" to "v1"))),
+            keys = emptyList(),
+        )
+        val renderedDivergence = OracleSweep.describe(divergence)
+        renderedDivergence shouldNotContain "buried-mesh-script-event"
+        renderedDivergence shouldNotContain "script="
+        renderedDivergence shouldContain "ReplicaDivergence("
+        renderedDivergence shouldContain "logicalId=logical-id-4"
+        renderedDivergence shouldContain "caseMarker=CTL-04"
+
+        val wrong = RunOutcome.ReplicasAgreeButWrong(
+            seed = 2L,
+            logicalId = "logical-id-2",
+            caseMarker = "CTL-02",
+            script = buriedScript,
+            expected = ModelState.MapState(mapOf("k" to "v2")),
+            actual = ModelState.MapState(mapOf("k" to "v0")),
+            difference = StateDifference.MapDifference(emptyMap(), emptyMap(), mapOf("k" to ("v2" to "v0"))),
+            replicas = setOf("r0", "r1", "r2"),
+            keys = emptyList(),
+        )
+        val renderedWrong = OracleSweep.describe(wrong)
+        renderedWrong shouldNotContain "buried-mesh-script-event"
+        renderedWrong shouldNotContain "script="
+        renderedWrong shouldContain "ReplicasAgreeButWrong("
+        renderedWrong shouldContain "logicalId=logical-id-2"
+        renderedWrong shouldContain "caseMarker=CTL-02"
+        renderedWrong shouldContain "replicas=[r0, r1, r2]"
+    }
+
+    /**
+     * `[ORA2-HONEST-02]`/BS-15: [OracleSweep.reportOptionalFamilies] consumes
+     * `civictech.oracle.bind.OptionalFamilies.probe()` verbatim — every family it names, in
+     * order, each line saying whether it was active or not-applicable with a reason — rather than
+     * a second probe of its own.
+     */
+    @Test
+    fun `a sweep reports which optional families were active and which were not-applicable`() {
+        val families = OptionalFamilies.probe()
+        val lines = OracleSweep.reportOptionalFamilies(families)
+
+        withClue("lines=$lines families=$families") {
+            lines.size shouldBe families.size
+        }
+        families.forEach { family ->
+            val expected = if (family.available) {
+                "'${family.family}': active"
+            } else {
+                "'${family.family}': not-applicable (${family.reason})"
+            }
+            withClue("family=${family.family} lines=$lines") {
+                lines.any { it.contains(expected) } shouldBe true
+            }
+        }
     }
 
     /**

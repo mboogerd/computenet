@@ -48,8 +48,23 @@ import java.io.File
  * is not an exclusion: `[ORA1-DIFF-09]`/BS-12, the divergence control that cannot be built while
  * `civictech.oracle.model.Membership` and `SetCell` disagree about `[24-SET-03]`'s observer
  * (settled by `computenet-eeys`: the reference model is the wrong side, and no kernel defect is
- * implied). The last test below pins that entry's own fingerprint, so the filing cannot be
+ * implied). The last tests below pin that entry's own fingerprint, so the filing cannot be
  * dropped while the disagreement stands.
+ *
+ * ORA2 adds two more filings of the same shape, and they are `[ORA2-HONEST-03]`'s only realising
+ * artifact (`computenet-4ru.1.8`): `[ORA2-DIFF-08]`'s "at scale" clause, whose generated
+ * convergence sweep realises no concurrency and whose quiescent all-to-all mesh is not expressible
+ * as a `Delivery` graph (`computenet-9ips`, route (b)); and BS-9/`[ORA2-DIFF-07]`, whose two-path
+ * diamond is unconstructible because no operator in the vocabulary consumes a `TaggedMapDelta`
+ * outlet (`computenet-valh`). Both are pinned below the ORA1 one, by the same reasoning: text
+ * satisfies a requirement only while it is still there.
+ *
+ * What is deliberately NOT pinned, and deliberately not filed: `computenet-880k` — the generator's
+ * shape system cannot tell `TaggedMapDelta` from `MapDelta`, so it can emit a kernel-illegal
+ * `orMap` edge. That is a soundness DEFECT with a fix pending, not a behaviour excluded as
+ * uncheckable, and the two are different classes. The BS-9 entry names it as adjacent so a reader
+ * does not mistake that entry for its filing; this test pins that cross-reference, not a verdict
+ * on 880k.
  *
  * Every phrase assertion runs against **whitespace-flattened** text, so re-wrapping a
  * KDoc paragraph or a Markdown bullet never reddens this test — only deleting or rewriting the
@@ -205,6 +220,80 @@ class HonestyLedgerTest {
             sweepKdoc().flat().mustState("civictech.oracle.model.MapCellModel")
             exclusionLedger().flat().mustState("[ORA1-HONEST-01]")
             exclusionLedger().flat().mustState("civictech.oracle.run.OracleSweep")
+        }
+    }
+
+    // -------------------------------------------------- [ORA2-HONEST-01]
+
+    /**
+     * `[ORA2-HONEST-01]`: the same module entry point states that ORA2's tagged/keyed model is
+     * LESS independent of the tag algebra than ORA1's membership-only model, and names
+     * `[ORA2-CTL-01]`..`[ORA2-CTL-04]` as the compensating evidence — feature computenet-4ru.1
+     * §4.9 and §4.10, computenet-4ru.1.5's own acceptance criteria.
+     */
+    @Test
+    fun `the module entry point states that ORA2's model is LESS independent, and names the four controls`() {
+        val sweep = sweepKdoc().flat()
+
+        withClue("[ORA2-HONEST-01] must be claimed by marker, so a reader can find it") {
+            sweep.mustState("[ORA2-HONEST-01]")
+        }
+        withClue(
+            "The statement itself: ORA2's model reads MODELLED dot order and is therefore LESS " +
+                "independent of the tag algebra it checks than ORA1's membership-only model is.",
+        ) {
+            sweep.mustState("LESS independent of the tag algebra")
+            sweep.mustState("modelled dot order")
+        }
+        withClue("Every one of the four blocking controls must be named by marker, not just counted") {
+            listOf("[ORA2-CTL-01]", "[ORA2-CTL-02]", "[ORA2-CTL-03]", "[ORA2-CTL-04]").forEach { marker ->
+                sweep.mustState(marker)
+            }
+        }
+        withClue("The landed test class carrying the four controls must be named") {
+            sweep.mustState("civictech.oracle.tagged.TaggedControlsTest")
+        }
+        withClue(
+            "The blocking status feature §4.9 states in as many words: a green sweep is not " +
+                "evidence without these four.",
+        ) {
+            sweep.mustState("a green ORA2 sweep is not evidence without")
+        }
+        withClue(
+            "And the controls' OWN bound, added while reviewing computenet-4ru.1.5: no generated " +
+                "OR-map case reaches the differential runner (computenet-6v7y), so none of the " +
+                "four observes state a kernel replica produced. A ledger that names them as " +
+                "compensating evidence without saying what they cannot discriminate is the exact " +
+                "omission [ORA2-HONEST-*] exists to forbid. " +
+                "These pins are deliberately COUNT-FREE. A first attempt pinned the literal " +
+                "phrase 'three of the four are model-vs-model', which was false on every reading " +
+                "— two of the four drive ConvergenceCheck.check, and by the stricter " +
+                "kernel-driven reading all four are model-derived — and pinning it made the false " +
+                "sentence load-bearing in the very test that exists to keep the ledger honest. " +
+                "Pin the runner-gap id, the stated negative bound, the mesh's provenance, and the " +
+                "pointer to where kernel-driven coverage DOES live: four claims that a later " +
+                "edit cannot quietly falsify by re-partitioning the controls.",
+        ) {
+            sweep.mustState("computenet-6v7y")
+            sweep.mustState("what they do NOT establish")
+            sweep.mustState("hand-built")
+            sweep.mustState("civictech.oracle.tagged.ConvergenceCheckTest")
+        }
+    }
+
+    // -------------------------------------------------- [ORA2-HONEST-02]
+
+    @Test
+    fun `the module entry point states what a sweep records about the optional families`() {
+        val sweep = sweepKdoc().flat()
+
+        withClue("[ORA2-HONEST-02] must be claimed by marker") {
+            sweep.mustState("[ORA2-HONEST-02]")
+        }
+        withClue("It must name the instrument that does the recording, and that it reuses the existing report") {
+            sweep.mustState("reportOptionalFamilies")
+            sweep.mustState("civictech.oracle.bind.OptionalFamilies")
+            sweep.mustState("not a second report format")
         }
     }
 
@@ -413,6 +502,147 @@ class HonestyLedgerTest {
         ) {
             entry.mustState("DivergenceControlTest")
             entry.mustState("tripwire")
+        }
+    }
+
+    // ------------------------------------------------ [ORA2-HONEST-03]: the two ORA2 filings
+
+    /**
+     * One `##` section of `DISPUTES.md`, from its heading up to the next `##` heading (or EOF).
+     *
+     * Scoped rather than read to end-of-file, unlike the ORA1 assertion above, because these two
+     * entries are adjacent: a whole-tail `mustState` would stay green with either section deleted
+     * outright as long as the other survived — precisely the silent-deletion path this file exists
+     * to close.
+     */
+    private fun disputesSection(heading: String, what: String): String {
+        val disputes = disputesSource()
+        val start = disputes.indexOf(heading)
+        withClue(
+            "$what must exist in concord/corpus/DISPUTES.md, under a heading starting \"$heading\". " +
+                "It is [ORA2-HONEST-03]'s realising artifact: the epic's rule is that a requirement " +
+                "which cannot be checked honestly is FILED, never weakened into a passing scenario. " +
+                "Deleting the entry without building the instrument IS the weakening.",
+        ) {
+            start shouldBeGreaterThan -1
+        }
+        val end = disputes.indexOf("\n## ", start + 1).let { if (it < 0) disputes.length else it }
+        return disputes.substring(start, end).flat()
+    }
+
+    @Test
+    fun `the DISPUTES filing for ORA2-DIFF-08 at scale records why the sweep is not evidence`() {
+        val entry = disputesSection(
+            "## ORA2 (the generated convergence sweep)",
+            "The [ORA2-DIFF-08] \"at scale\" filing",
+        )
+
+        withClue("It must be greppable by the requirement marker it realises, and by the clause it files") {
+            entry.mustState("[ORA2-HONEST-03]")
+            entry.mustState("[ORA2-DIFF-08]")
+        }
+        withClue(
+            "It must state the REASON the check cannot be entered as specified — a full-sync mesh " +
+                "is a mutual barrier, and DotModel.Fold refuses the cyclic Delivery graph that " +
+                "encodes it by name. Without the mechanism the entry is an excuse, not a reason.",
+        ) {
+            entry.mustState("DotModel.CyclicDeliveryException")
+            entry.mustState("mutual")
+        }
+        withClue(
+            "It must carry the measurement, not only the argument: the 40/40 cyclic-vs-acyclic " +
+                "split, and the sweep's own realised concurrency of one live dot.",
+        ) {
+            entry.mustState("40 of 40")
+            entry.mustState("max live dots at any key = 1")
+        }
+        withClue(
+            "And the mutation result, which is what makes 'not evidence' a measured claim rather " +
+                "than a worry: a reversed TaggedMapDelta.DOT_ORDER tie-break reddens the hand-built " +
+                "meshes and leaves the generated sweep green.",
+        ) {
+            entry.mustState("DOT_ORDER")
+            entry.mustState("ConvergenceSweepTest")
+            entry.mustState("ConvergenceCheckTest")
+        }
+        withClue(
+            "It must name what would resolve it — computenet-9892's batched drive — so the entry " +
+                "is a filing with an exit, not a permanent excuse.",
+        ) {
+            entry.mustState("computenet-9892")
+        }
+    }
+
+    @Test
+    fun `the DISPUTES filing for BS-9 records the typing bound that makes the diamond unconstructible`() {
+        val entry = disputesSection(
+            "## ORA2 (the wave-prefix diamond)",
+            "The BS-9/[ORA2-DIFF-07] narrowing filing",
+        )
+
+        withClue("It must be greppable by the requirement marker it realises, and by the id it narrows") {
+            entry.mustState("[ORA2-HONEST-03]")
+            entry.mustState("[ORA2-DIFF-07]")
+        }
+        withClue(
+            "The bound itself, in kernel types: OrMapCell's outlet is TaggedMapDelta and every " +
+                "registered MapOf-consuming operator is typed to MapDelta. A filing that says " +
+                "'unconstructible' without the two type names is an assertion, not a reason.",
+        ) {
+            entry.mustState("TaggedMapDelta")
+            entry.mustState("MapDelta")
+            entry.mustState("OrMapCell")
+        }
+        withClue("And the generator half of the same bound: orMap is registered arity-0, source only") {
+            entry.mustState("ShapeRule.source")
+        }
+        withClue(
+            "It must say what IS covered instead — a bare orMap source terminal with no fan-in, so " +
+                "no glitch the case could exhibit — or a reader takes the green for the diamond.",
+        ) {
+            entry.mustState("TaggedWavePrefixTest")
+            entry.mustState("no fan-in")
+        }
+        withClue(
+            "It must keep computenet-880k on the right side of the line: named as ADJACENT and " +
+                "deliberately not filed, because a soundness defect with a fix pending is not a " +
+                "behaviour excluded as uncheckable. Dropping that sentence lets a later reader " +
+                "read this entry as 880k's filing and close the bead against it.",
+        ) {
+            entry.mustState("computenet-880k")
+            entry.mustState("deliberately NOT filed here")
+        }
+        withClue("And what would resolve it: 96 §E1.5's tagged-aware downstream adapters") {
+            entry.mustState("UntagCell")
+            entry.mustState("TaggedMapView")
+        }
+    }
+
+    @Test
+    fun `the module entry point points at both ORA2 filings, and corrects the kernel-driven coverage claim`() {
+        val sweep = sweepKdoc().flat()
+
+        withClue("[ORA2-HONEST-03] must be claimed by marker at the entry point too, beside the other two") {
+            sweep.mustState("[ORA2-HONEST-03]")
+        }
+        withClue(
+            "A reader at the ledger must be able to reach the filings: both ids, and the file they " +
+                "live in.",
+        ) {
+            sweep.mustState("concord/corpus/DISPUTES.md")
+            sweep.mustState("computenet-9892")
+            sweep.mustState("UntagCell")
+        }
+        withClue(
+            "The staleness computenet-4ru.1.8 was filed for: the closing coverage paragraph named " +
+                "only ConvergenceCheckTest's hand-built meshes, so it read as 'no GENERATED " +
+                "replicated mesh is ever kernel-driven' — false since ConvergenceSweepTest landed. " +
+                "The ledger must name that sweep AND state the two things its green does not " +
+                "establish, or the correction has traded one overstatement for another.",
+        ) {
+            sweep.mustState("civictech.oracle.tagged.ConvergenceSweepTest")
+            sweep.mustState("max live dots at any key = 1")
+            sweep.mustState("ConvergenceCheck.check()")
         }
     }
 }

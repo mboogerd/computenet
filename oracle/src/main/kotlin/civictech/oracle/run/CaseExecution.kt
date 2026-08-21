@@ -28,6 +28,7 @@ import civictech.cell.wire.bridgeFrom
 import civictech.cell.wire.bridgeTo
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
+import civictech.oracle.bind.TaggedOperators
 import civictech.oracle.gen.CaseTopology
 import civictech.oracle.gen.GeneratedCase
 import civictech.oracle.gen.TerminalSpec
@@ -72,6 +73,11 @@ import civictech.testkit.SimWorld
  * typed kernel call (`SetOps.add`, `CounterOps.increment`), and no shape rule carries that.
  * A consumer registering a new *operator* needs nothing here; only a new **source family**
  * does, and it gets a named refusal rather than silence until it is added.
+ *
+ * [foldFor] carries the same exception for the same reason at the other end of the graph: a
+ * `ShapeRule` states shapes, and no shape says which *delta type* an outlet emits, so the ids
+ * whose delta family does not follow from their shape — the tagged family, which declares
+ * `MapOf` and emits `TaggedMapDelta` — are named there. See its own KDoc.
  */
 object CaseExecution {
 
@@ -425,24 +431,49 @@ object CaseExecution {
     private const val TERMINAL_INLET = "inlet"
 
     /**
-     * The fold that matches an operator's declared output shape — which is what decides the
-     * delta family its outlet carries.
+     * The fold that matches the delta family [catalogId]'s outlet actually carries.
      *
-     * `SetOf` → `SetDelta` → [SetTerminalFold]; `MapOf` → `MapDelta` → [MapTerminalFold];
-     * `Scalar` → `CounterDelta` → [ScalarTerminalFold]. **The widths are not
-     * interchangeable**: `count`'s scalar arrives as a `Long` while `presenceCount`'s map
-     * values stay `Int`, and `ModelState`'s structural equality distinguishes
-     * `ScalarState(2L)` from `ScalarState(2)`. Picking the fold by shape is what carries that
-     * pinning through catalog resolution instead of re-deciding it per case.
+     * ## Shape decides it, EXCEPT where two families share a shape
+     *
+     * For every untagged entry the declared output shape decides the delta family, and picking
+     * the fold from the shape is what carries the *width* pinning through catalog resolution
+     * instead of re-deciding it per case: `SetOf` → `SetDelta` → [SetTerminalFold]; `MapOf` →
+     * `MapDelta` → [MapTerminalFold]; `Scalar` → `CounterDelta` → [ScalarTerminalFold]. The
+     * widths are not interchangeable — `count`'s scalar arrives as a `Long` while
+     * `presenceCount`'s map values stay `Int`, and `ModelState`'s structural equality
+     * distinguishes `ScalarState(2L)` from `ScalarState(2)`.
+     *
+     * The **tagged** family breaks that correspondence, and this is where computenet-6v7y found
+     * it. `orMap` declares `MapOf` — correctly: what a caller reads out of an OR-map IS a map —
+     * but `OrMapCell.outlet` carries a
+     * [civictech.cell.data.delta.TaggedMapDelta], not a `MapDelta`. Shape alone therefore
+     * resolved it to [MapTerminalFold], and two things followed: the fold's inlet could not
+     * even accept the stream (a `ClassCastException` per delta, arriving as a dead letter), and
+     * had it been able to, [civictech.cell.data.view.MapView] would have folded by **arrival
+     * order** — which is `[ORA2-CTL-01]`'s deliberately-wrong control, not the reading
+     * `[24-TMAP-03]` defines. So the tagged ids are named here, ahead of the shape dispatch.
+     *
+     * ## Why an id branch, and why it is not `[ORA1-API-03]`'s forbidden one
+     *
+     * The same argument [scriptSourceFor] carries, one seam over: a `ShapeRule` states shapes,
+     * and no shape says which delta type an outlet emits. `[ORA1-API-03]` is about the
+     * *generator* — a consumer registering a new operator must be picked up without generator
+     * edits, and `GraphGenerator` has no id branch anywhere. Registering a new operator over an
+     * existing delta family still needs nothing here; only a new **delta family** does, and
+     * adding one is a change at this seam either way.
      */
-    private fun foldFor(output: ElementShape, catalogId: String): TerminalFold = when (output) {
-        is ElementShape.SetOf -> SetTerminalFold<Any?>()
-        is ElementShape.MapOf -> MapTerminalFold<Any?, Any?>()
-        ElementShape.Scalar -> ScalarTerminalFold()
-        is ElementShape.Tuple -> error(
-            "Catalog id '$catalogId' declares output shape $output, which no kernel delta " +
-                "family carries on its own; a tuple stream is observed as SetOf(Tuple(n)).",
-        )
+    private fun foldFor(output: ElementShape, catalogId: String): TerminalFold = when (catalogId) {
+        TaggedOperators.Ids.OR_MAP -> TaggedMapTerminalFold<Any?, Any?>()
+
+        else -> when (output) {
+            is ElementShape.SetOf -> SetTerminalFold<Any?>()
+            is ElementShape.MapOf -> MapTerminalFold<Any?, Any?>()
+            ElementShape.Scalar -> ScalarTerminalFold()
+            is ElementShape.Tuple -> error(
+                "Catalog id '$catalogId' declares output shape $output, which no kernel delta " +
+                    "family carries on its own; a tuple stream is observed as SetOf(Tuple(n)).",
+            )
+        }
     }
 
     /** `SetCell`'s inlet, reached by name through a hosted invocation. */
@@ -504,6 +535,20 @@ object CaseExecution {
         }
 
         CoreOperators.Ids.MAP -> {
+            val ops = proxy(ref, world, MapInlet::class.java).inlet.call
+            object : ScriptSource {
+                override fun put(key: Any?, element: Any?) = ops.put(key, element)
+                override fun removeKey(key: Any?) = ops.remove(key)
+            }
+        }
+
+        /* `OrMapCell.inlet` is `Use<MapOps<K, V>>` — the SAME `@Contract` `MapCell` exposes,
+         * verbatim (`OrMapApi`'s own KDoc: "the tagged map is a new convergence semantics for the
+         * same keyed-write vocabulary, not a new vocabulary"). So the driving surface is
+         * `MapInlet` and the branch is the MAP one; what differs is downstream, in the delta the
+         * outlet carries and therefore in the fold [foldFor] picks. Sharing the branch is the
+         * honest encoding of that: two ids, one ops surface. */
+        TaggedOperators.Ids.OR_MAP -> {
             val ops = proxy(ref, world, MapInlet::class.java).inlet.call
             object : ScriptSource {
                 override fun put(key: Any?, element: Any?) = ops.put(key, element)
