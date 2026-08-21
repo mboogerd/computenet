@@ -19,6 +19,15 @@ dolt repo, so the dolt CLI resolves it.
 
 ## Scope — what this file resolves, and what still stops the session
 
+**The signature is not only a `pull` abort.** A `bd` MUTATION (`--claim`,
+`update`, `close`) can fail with `Error 1105: Merge conflict detected,
+@autocommit transaction rolled back …` — same conflict, raw SQL wording, and
+the write you asked for did NOT happen. It can also self-clear: `dolt
+conflicts` showed `issues, 1` and two calls later nothing, with the write
+still silently absent (computenet-zy98). Treat 1105 as this file's entry
+point: run step 2's scope table, resolve or escalate, then **re-issue the
+mutation and re-read the bead** — never assume it landed.
+
 This route is **only** for a `modify/modify` conflict confined to the `issues`
 table. That is the common shape, and the resolution rule below is
 last-write-wins by `updated_at`, which is meaningless or destructive elsewhere.
