@@ -5,11 +5,15 @@ import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.Propagate
+import civictech.cell.control.Attention
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.host.SupervisionPolicy
+import civictech.cell.link.AuthLevel
+import civictech.cell.membrane.Principal
+import civictech.cell.membrane.currentPrincipal
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom
 import civictech.cell.link.PeerId
@@ -17,7 +21,10 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.link.allowPeers
 import civictech.cell.port.input
+import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import io.kotest.matchers.booleans.shouldBeTrue
@@ -27,6 +34,7 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import java.util.*
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * M8.2–M8.4 (G-29 phase 1, spec 43): identity rides deliveries into link
@@ -194,5 +202,118 @@ class TrustBoundaryTest {
 
         val admitted = requestFrom(PeerId("good"))
         admitted.linking.links.size shouldBe 1
+    }
+
+    /**
+     * Records the ambient [Principal] of every `Attention` assertion it is
+     * handed — the same probe [LoopbackPrincipalTest] uses to observe what
+     * [Peering.loopbackAuthLevel] decided. Reused here (rather than edited
+     * there) to keep BS-03 self-contained in this file.
+     */
+    private class PrincipalProbeCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val principals = CopyOnWriteArrayList<Principal>()
+
+        val outlet = registerPort("outlet", FanOutlet.create<Propagate<String>>())
+
+        init {
+            ProtocolSupport.of(outlet).handle(Protocols.Attention) { _, _ ->
+                principals += currentPrincipal()
+            }
+        }
+    }
+
+    /** A bare `PORT_PROTOCOL` `Attention` frame addressed to [target] — the one invocation type that carries the ambient peer stamp all the way to [currentPrincipal] (see [LoopbackPrincipalTest]'s KDoc). */
+    private fun protocolFrame(target: CellRef): HostedPortInvocation = HostedPortInvocation(
+        cellRef = target,
+        portName = "outlet",
+        type = HostedPortInvocation.Type.PORT_PROTOCOL,
+        invocation = Invocation("", emptyList(), emptyList()),
+        protocolId = Protocols.Attention,
+        protocolLink = WireEdgeLink(
+            id = UUID.randomUUID(),
+            from = PortRef.generate(),
+            to = PortRef.generate(target),
+            fromAddr = PortAddress(CellRef(UUID.randomUUID()), "inlet"),
+            toAddr = PortAddress(target, "outlet"),
+        ),
+        protocolMessage = Attention(1f),
+    )
+
+    /**
+     * BS-03 ([DSC1-HELLO-10], [DSC1-ANN-11], [DSC1-WIRE-06]): a
+     * [Peering.Side] built with no identity configuration at all — no
+     * [Peering.Side.allow], no [PeerCredentials], nothing beyond the
+     * [PeerAuthPolicy.Open] default — is the exact construction every
+     * existing demo makes. Connecting, announcing and exchanging data over
+     * such a loopback behaves indistinguishably from before this epic: a
+     * genuine crossing's principal is [Principal.Peer] at
+     * [AuthLevel.TransportVouched] and never [AuthLevel.Authenticated], the
+     * registry converges (Q resolves P's collector remotely), and the data
+     * exchange itself raises zero new dead letters.
+     *
+     * Non-vacuousness (test-only route, no production mutation): locally
+     * giving **both** `p` and `q` [PeerCredentials] whose `peerId` matches
+     * their own [Peering.Side.peer] and re-running the principal assertion
+     * turns the observed principal into `Peer(PeerId("q"), Authenticated)`.
+     * Both sides are load-bearing: [Peering.loopbackAuthLevel] short-circuits
+     * to [AuthLevel.TransportVouched] the moment either the sender's or the
+     * *receiver's* credentials are absent, so crediting `q` alone leaves this
+     * assertion green and proves nothing. See the task's final report for the
+     * exact assertion watched failing.
+     */
+    @Test
+    fun `BS-03 - a default-open loopback stays TransportVouched, converges, and adds no dead letters from the exchange`() {
+        val controller = SimulationController(0)
+        val registryP = LocationRegistry()
+        val hostP = ManagedHost(scheduler = controller.scheduler(), registry = registryP)
+        val bridgeP = ManagedHost(scheduler = controller.scheduler(), registry = registryP)
+        val registryQ = LocationRegistry()
+        val bridgeQ = ManagedHost(scheduler = controller.scheduler(), registry = registryQ)
+
+        // No allow, no credentials, no auth policy, no signing, no
+        // verification: the construction every existing demo makes.
+        val p = Peering.Side(registryP, bridgeP, peer = PeerId("p"))
+        val q = Peering.Side(registryQ, bridgeQ, peer = PeerId("q"))
+
+        val deadLettersP = mutableListOf<DeadLetter>()
+        listOf(hostP, bridgeP).forEach { h ->
+            h.deadLetterOutlet.subscribe(
+                Use.fixed(
+                    object : Propagate<DeadLetter> {
+                        override fun propagate(value: DeadLetter) {
+                            deadLettersP += value
+                        }
+                    },
+                    PortRef.generate(),
+                ),
+            )
+        }
+
+        val loopback = Peering.loopback(p, q)
+        val collector = CollectingCell()
+        hostP.managementInlet.call.spawn(collector)
+        val probe = PrincipalProbeCell()
+        bridgeP.managementInlet.call.spawn(probe)
+        controller.runToIdle()
+
+        // connect + announce converged: Q resolves P's collector remotely,
+        // exactly as every pre-epic peering did.
+        (registryQ.location(collector.ref) is LocationRegistry.Remote).shouldBeTrue()
+
+        val lettersBefore = deadLettersP.size
+
+        // a genuine crossing observes Peer(q, TransportVouched), never Authenticated
+        loopback.bToA.deliver(protocolFrame(probe.ref))
+        controller.runToIdle()
+        probe.principals.lastOrNull() shouldBe Principal.Peer(PeerId("q"), AuthLevel.TransportVouched)
+
+        // ordinary data still crosses, with nothing refused at the boundary
+        val proxy = (HostedCellProxy.create(collector.ref, registryQ, CollectorProxy::class.java)
+                as CollectorProxy).inlet.call
+        repeat(5) { i -> proxy.provide("q-$i") }
+        controller.runToIdle()
+
+        collector.received shouldBe (0 until 5).map { "q-$it" }
+        deadLettersP.size shouldBe lettersBefore // zero new dead letters from the exchange
     }
 }

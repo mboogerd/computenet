@@ -2,20 +2,29 @@ package civictech.wire
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Propagate
+import civictech.cell.host.DeadLetter
+import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.AuthLevel
 import civictech.cell.link.PeerId
 import civictech.cell.port.FanInlet
+import civictech.cell.port.PortRef
+import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.Consumer
 import civictech.cell.wire.Peering
+import civictech.cell.wire.WireCodec
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldNotContain
 import io.kotest.matchers.types.shouldNotBeSameInstanceAs
 import org.junit.jupiter.api.Test
 import org.opentest4j.AssertionFailedError
 import java.net.URI
 import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * V4-PEERID over a real socket: the case `Peering.loopback` cannot pose.
@@ -43,13 +52,25 @@ import java.util.UUID
 class WsPeerIdentityTest {
 
     class CollectingCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        // Thread-safe: unlike the loopback-only fixtures elsewhere in this
+        // package, this class's cells run on a real ManagedHost scheduler
+        // thread while the test thread reads `received`.
+        val received = CopyOnWriteArrayList<String>()
+
         val inlet = registerPort("inlet", FanInlet.create<Consumer<String>>())
 
         init {
             inlet.serve(object : Consumer<String> {
-                override fun provide(input: String) = Unit
+                override fun provide(input: String) {
+                    received += input
+                }
             })
         }
+    }
+
+    /** BS-03's data-exchange proxy: a remote caller's view of [CollectingCell.inlet]. */
+    private interface CollectorProxy {
+        val inlet: Use<Consumer<String>>
     }
 
     private class Stack(name: String?) {
@@ -242,5 +263,116 @@ class WsPeerIdentityTest {
             connection.shutdown()
             runCatching { listener.stop(1000) }
         }
+    }
+
+    /**
+     * BS-03, socket half ([DSC1-HELLO-10], [DSC1-WIRE-06]): a
+     * [Peering.Side] with no identity configuration at all — no
+     * credentials, no [civictech.cell.wire.PeerAuthPolicy] beyond its
+     * `Open` default — connects, announces and exchanges data over a real
+     * socket exactly as before this epic. Both ends admit at
+     * [AuthLevel.TransportVouched] and never [AuthLevel.Authenticated]
+     * ([WsTransport.Session.achievedAuthLevel]/[WsListener.achievedAuthLevels]/
+     * [WsTransport.WsConnection.achievedAuthLevel] are the production
+     * observation of the very same admission decision the hello path made),
+     * the registry converges, and the exchange itself raises zero new dead
+     * letters on the listener side.
+     *
+     * Non-vacuousness (test-only route, no production mutation): locally
+     * giving both [Stack]s credentials and a `RequireAuthenticated`
+     * `client.side`/an `AnnouncementSigningConfig`/verification turns
+     * `connection.achievedAuthLevel` into `Authenticated` — see the task's
+     * final report for the exact assertion watched failing.
+     */
+    @Test
+    fun `BS-03 - a default-open connection over a real socket admits at TransportVouched, converges, and adds no dead letters`() {
+        val client = Stack(null)
+        val server = Stack(null)
+        val collector = CollectingCell()
+        server.host.managementInlet.call.spawn(collector)
+
+        val serverDeadLetters = CopyOnWriteArrayList<DeadLetter>()
+        listOf(server.host, server.bridgeHost).forEach { h ->
+            h.deadLetterOutlet.subscribe(
+                Use.fixed(
+                    object : Propagate<DeadLetter> {
+                        override fun propagate(value: DeadLetter) {
+                            serverDeadLetters += value
+                        }
+                    },
+                    PortRef.generate(),
+                ),
+            )
+        }
+
+        val listener = WsTransport.listen(0, server.side)
+        val connection = WsTransport.connect(URI("ws://localhost:${listener.port}"), client.side)
+        try {
+            await("collector announced") { client.registry.location(collector.ref) is LocationRegistry.Remote }
+
+            // [DSC1-HELLO-10]/[DSC1-WIRE-06]: default-open admits at
+            // TransportVouched, never Authenticated, on both ends.
+            connection.achievedAuthLevel shouldBe AuthLevel.TransportVouched
+            listener.achievedAuthLevels shouldBe listOf(AuthLevel.TransportVouched)
+
+            val lettersBefore = serverDeadLetters.size
+
+            val proxy = (HostedCellProxy.create(collector.ref, client.registry, CollectorProxy::class.java)
+                    as CollectorProxy).inlet.call
+            repeat(5) { i -> proxy.provide("ping-$i") }
+            await("data crossed the socket") { collector.received.size >= 5 }
+
+            collector.received.toList() shouldBe (0 until 5).map { "ping-$it" }
+            serverDeadLetters.size shouldBe lettersBefore // zero new dead letters from the exchange
+        } finally {
+            connection.shutdown()
+            runCatching { listener.stop(1000) }
+        }
+    }
+
+    /**
+     * BS-03, frame half ([DSC1-WIRE-02], [DSC1-WIRE-06]): the encoded frames
+     * a default-open side's real [WsTransport.Session] egress actually
+     * produces carry none of the four signing fields — absent from the
+     * wire JSON, not present as an explicit `null` — exactly the additive-
+     * encoding property `SignedAnnouncementEmitTest` (`:kernel`) pins for a
+     * bare `Peering.Side`, restated here against the `Session` a real
+     * socket connection is built from ([WsTransport.WsConnection.egress]/
+     * [WsTransport.WsListener]'s per-connection `Session`, both internal
+     * but this is the exact same construction:
+     * `BridgeEgressCell(signer = side.announcementSigner)`).
+     */
+    @Test
+    fun `BS-03 - a default-open side's encoded frames carry no signing fields`() {
+        val registry = LocationRegistry()
+        val open = Peering.Side(registry, ManagedHost(registry = registry))
+        open.announcementSigner.shouldBeNull()
+
+        val bytes = CopyOnWriteArrayList<ByteArray>()
+        val session = WsTransport.Session(open, send = { b: ByteArray -> bytes += b }, refuse = {})
+
+        val published = CellRef(UUID.randomUUID())
+        registry.publish(published, open.bridgeHost)
+        Peering.announceTo(open, peerMirror = CellRef(UUID.randomUUID()), via = session.egress).close()
+
+        val frame = WireCodec.decodeFrame(bytes.single()).frame
+        frame.signature.shouldBeNull()
+        frame.signerKeyId.shouldBeNull()
+        frame.sigCounter.shouldBeNull()
+        frame.notAfter.shouldBeNull()
+
+        // absent, not null-populated ([DSC1-WIRE-02]): `:wire`'s test
+        // classpath does not see kotlinx-serialization's JSON element API
+        // directly (`implementation(project(":kernel"))` does not leak it),
+        // so the same "no explicit null" property `SignedAnnouncementEmitTest`
+        // proves via `jsonObject.keys` is proven here as a plain substring
+        // check on the raw wire bytes instead — a JSON encoder with
+        // `encodeDefaults = true` would print the key name even for a null
+        // value, and this fails exactly the same way that would.
+        val json = bytes.single().decodeToString()
+        json shouldNotContain "\"signature\""
+        json shouldNotContain "\"signerKeyId\""
+        json shouldNotContain "\"sigCounter\""
+        json shouldNotContain "\"notAfter\""
     }
 }
