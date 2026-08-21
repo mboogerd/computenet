@@ -59,10 +59,39 @@ import kotlin.random.Random
  *   of 38 correctly-settling three-source cases produced an observation matching no
  *   total-order prefix, whose provenance (legal interleaving vs. real glitch) is undecided.
  * - **Multi-host.** A cross-host arm was measured producing mid-wave states matching no
- *   prefix; whether that is a kernel glitch or an artifact of [CaseExecution.assemble]'s
- *   bare-`Propagate` cross-host wiring is open, filed as **computenet-g25w** per epic design
- *   D10 (a defect found here is a pinned seed and a filed bead, never a fix). Multi-host is
- *   an explicit non-goal of computenet-4ru.8.5 in any case.
+ *   prefix. **computenet-g25w settled what that is (2026-08-21), and it is neither of the two
+ *   things that bead asked about**: not a kernel glitch, and not [CaseExecution.assemble]'s
+ *   bare-`Propagate` wiring dropping arm completeness. It is an **eager per-arm publish at a
+ *   fan-in that never declared glitch-freedom**, which `[22-GF-01]` expressly permits — "a cell
+ *   that has declared itself glitch-free SHALL NOT expose derived state that mixes pre-wave and
+ *   post-wave inputs … Non-declaring cells process eagerly with zero coordination cost" — and
+ *   `UnionSetCell` declares none (no `civictech.cell.consistency.GlitchFree` marker, no
+ *   ALIGN-tier inlet policy; asserted in `WavePrefixTest`).
+ *
+ *   The discriminating measurement is that **the tear is not caused by the host boundary at
+ *   all**: read the union's *published stream* instead of the scheduler-step boundary and the
+ *   fully **co-hosted** diamond — zero cross-host edges — publishes the identical six-state
+ *   sequence over `add(ab), add(cd), remove(ab)`, the three torn states included
+ *   (`{ab}`, `{ab, a, b, cd}`, `{a, b, cd, c, d}`). What the host boundary changes is
+ *   **observation granularity**: co-hosted, the whole cascade runs inline inside the one
+ *   scheduler task the source op started, so the per-step observer can never land between the
+ *   two arms' publishes; across a cut the far arm is a separate task and the same intermediate
+ *   becomes visible. Both placements settle on the same correct final state; nothing is lost.
+ *
+ *   So the restriction **stays**, with its reason upgraded from undecided to confirmed: what
+ *   makes this check sound is not "one host" as such but that co-hosted inlining puts every
+ *   observation on a wave boundary (see the granularity bullet below). Lift the guard and the
+ *   oracle would report a spec-permitted intermediate as kernel evidence — the false-positive
+ *   direction D5 forbids just as firmly as weakening. No `doc/demo-findings.md` entry follows,
+ *   because there is no kernel counterexample to record.
+ *
+ *   One residual the bead's own hypothesis was half-right about, filed rather than fixed here:
+ *   [CaseExecution.assemble]'s cross-host connect establishes **no link on the target inlet**
+ *   (measured: 1 link for a same-host connect, 0 across the cut), so it carries no `EdgeOpen`
+ *   and no per-inlink frontier bookkeeping to the target. Data delivery is unaffected — same
+ *   publish sequence, same final value — and no generated case builds a frontier join, so it
+ *   cannot explain this observation; but it does mean `[22-GF-03]` would not hold across that
+ *   cut for a case that ever placed one there. Filed as **computenet-xj0v**.
  *
  * Neither refusal is a weakening to final-state equality: the check is unchanged wherever it
  * is sound, and [WavePrefixOption] cannot turn it off by default (see [DEFAULT_FRACTION]).
@@ -216,9 +245,12 @@ object WavePrefixOracle {
         }
         val hosts = case.topology.placement.values.filter { it != 0 }.distinct()
         if (hosts.isNotEmpty()) {
-            return "the case places cells on host ordinals ${hosts.sorted()} besides 0; " +
-                "cross-host arms were measured publishing mid-wave states matching no prefix, " +
-                "of undecided provenance (computenet-g25w)"
+            return "the case places cells on host ordinals ${hosts.sorted()} besides 0; a " +
+                "cross-host arm makes a fan-in's eager per-arm publish observable at a " +
+                "scheduler-step boundary, and at a fan-in that declares no glitch-freedom that " +
+                "intermediate is permitted by [22-GF-01] rather than kernel evidence — " +
+                "co-hosted inlining, not the host count, is what puts every observation on a " +
+                "wave boundary (settled, computenet-g25w)"
         }
         return null
     }

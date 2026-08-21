@@ -79,6 +79,98 @@ private fun simpleClassOf(benchmark: String): String =
     benchmark.substringBeforeLast('.').substringAfterLast('.')
 
 /**
+ * The secondary-metric key a JMH `Benchmark` cell names, or `null` for a primary row.
+ *
+ * JMH writes a secondary metric as its own CSV row, named `<benchmark>:<metric key>`;
+ * the primary row's name carries no colon. Nothing else in the file distinguishes them —
+ * not the `Mode` column (both say `avgt`), not `Samples`, not `Threads` — so this suffix
+ * is the whole of the selection evidence.
+ */
+private fun metricKeyOf(benchmarkCell: String): String? =
+    benchmarkCell.substringAfter(':', missingDelimiterValue = "").takeIf { it.isNotBlank() }
+
+/** [benchmarkCell] with any `:<metric key>` suffix removed. */
+private fun benchmarkNameOf(benchmarkCell: String): String = benchmarkCell.substringBefore(':')
+
+/**
+ * Which of a JMH results file's metrics a render reads.
+ *
+ * A results file written under a profiler holds SEVERAL answers per benchmark: the
+ * primary score, plus one row per secondary metric the profiler contributed. They are
+ * different quantities in different units — `CellFootprintBenchmark` under `-prof gc`
+ * reports `us/op` of wall clock as its primary and `B/op` of allocation as
+ * `gc.alloc.rate.norm` — so which one an entry reports is a decision, and the renderer
+ * makes the caller state it rather than inferring one.
+ *
+ * Before computenet-6zqz there was no such decision to make: [ThroughputReport.parseCsv]
+ * read the primary `Score` column and refused any file holding a `NaN` dispersion, which
+ * a `-prof gc` file always does (`gc.count` and `gc.time` are sums, and JMH writes their
+ * error as `NaN`). So a `-prof gc` sweep could not be rendered AT ALL, and
+ * `CellFootprintBenchmark`'s allocation figures — the quantity G-21 phase 3's trigger
+ * actually names — were read by hand off stdout.
+ *
+ * This is a CLOSED set of two shapes, not a `(JmhRow) -> Boolean` predicate, for the
+ * reason [RowLabel] is data: a caller that could supply the selection RULE could select
+ * two metrics at once and render a table mixing `B/op` and `us/op` rows under one
+ * subject, which [Findings.entry] would accept perfectly happily (it renders each row's
+ * own unit). Selecting exactly one metric per render is the property, and it is enforced
+ * by there being no way to express anything else.
+ */
+sealed interface Metric {
+
+    /**
+     * JMH's primary metric — the `Score` column of the benchmark's own row.
+     *
+     * This is every row of a file produced without a `-prof` profiler, and it stays the
+     * default everywhere a metric is accepted, so every render that predates
+     * computenet-6zqz keeps reading exactly what it read before.
+     */
+    object Primary : Metric
+
+    /**
+     * One named secondary metric, e.g. `gc.alloc.rate.norm` under `-prof gc`.
+     *
+     * @param key the metric's key exactly as JMH suffixes it onto the benchmark name.
+     *   Matched verbatim: `gc.alloc.rate` and `gc.alloc.rate.norm` are different
+     *   quantities (MB/sec against B/op) and a prefix match would silently render the
+     *   first when the second was asked for.
+     */
+    data class Secondary(val key: String) : Metric {
+        init {
+            require(key.isNotBlank()) {
+                "Metric.Secondary requires a non-blank metric key: a render that cannot " +
+                    "say which metric it read cannot be checked"
+            }
+        }
+    }
+
+    /** Whether a row carrying [rowMetricKey] (`null` for a primary row) is this metric. */
+    fun selects(rowMetricKey: String?): Boolean = when (this) {
+        is Primary -> rowMetricKey == null
+        is Secondary -> rowMetricKey == key
+    }
+
+    /** How a refusal names this metric. */
+    fun describe(): String = when (this) {
+        is Primary -> "the primary metric"
+        is Secondary -> "secondary metric '$key'"
+    }
+
+    companion object {
+
+        /**
+         * `-prof gc`'s bytes-allocated-per-operation metric.
+         *
+         * Named here rather than spelled at each call site because it is the metric G-21
+         * phase 3's trigger is about — allocation PRESSURE, which is not the retained
+         * occupancy `Footprint.kt` measures — and a typo in the key renders nothing
+         * rather than something wrong, but renders nothing confusingly.
+         */
+        val GC_ALLOC_RATE_NORM: Secondary = Secondary("gc.alloc.rate.norm")
+    }
+}
+
+/**
  * Which `@Param` columns of a sweep label its rows, and how their values compose.
  *
  * The renderer used to hard-code `subject`/`direction` — `OperatorThroughputBenchmark`'s
@@ -109,8 +201,10 @@ private fun simpleClassOf(benchmark: String): String =
  *   constants, so those entries stay re-derivable only while this stays expressible.
  * @param includeMethod whether the `@Benchmark` method's own name prefixes the label.
  *   Needed when one class's methods share a parameter set — `BoundedReadBenchmark` measures
- *   `direct` and `hostedSnapshotOf` over the same three `scale`s, so `scale` alone names
- *   six rows with three names.
+ *   `realDirect` and `realHostedSnapshotOf` over the same three `scale`s, so `scale` alone
+ *   names six rows with three names. (Those two were called `direct` and
+ *   `hostedSnapshotOf` until computenet-7w4e, which is the name the already-published E1
+ *   entries in `doc/bench/findings.md` carry.)
  */
 data class RowLabel(
     val params: List<String>,
@@ -179,13 +273,49 @@ data class RowLabel(
          * which is the documented route for a sweep whose rows are not a parameter cross
          * product.
          *
-         * Registration is not on its own sufficient to render a sweep: `BoundedReadBenchmark`'s
-         * `direct`/`hostedSnapshotOf` name no [Drive], so [ThroughputReport.driveOf] still
-         * refuses its rows (`[BEN1-26]`) until those methods say which regime they measure,
-         * and `BoundedReadBenchmark`/`CellFootprintBenchmark` print no host-facts banner, so
-         * [HostFacts.fromJmhLog] still refuses their logs (computenet-yhbd). Both are
-         * benchmark-side gaps in `bench/src/jmh/kotlin`, and both are refusals rather than
-         * wrong entries.
+         * Registration is not on its own sufficient to render a sweep, and this is where
+         * the rest is named. THREE things have to hold, of which a registration here is
+         * only the first:
+         *
+         * 1. **The label columns are declared** — registered here, or passed as an
+         *    explicit [RowLabel] at the call site. [forBenchmark] REFUSES an unregistered
+         *    class rather than guessing which columns name a row (`[BEN1-30]`).
+         * 2. **The benchmark prints a host-facts banner** from inside the measuring fork,
+         *    from a `@Setup(Level.Trial)` hook. [HostFacts.fromJmhLog] is the only source
+         *    `RunEnvironment.forRun`'s JMH-sweep overload accepts, and it refuses a log
+         *    that carries no such line rather than answering with the RENDERING host
+         *    (computenet-yhbd).
+         * 3. **Each `@Benchmark` method names its regime.** [ThroughputReport.driveOf]
+         *    tokenizes the method name and requires exactly one `sim`/`real` token,
+         *    because a result must never lose the drive that produced it (`[BEN1-26]`,
+         *    `[BEN1-27]`); stating the drive at the render site instead is the exact
+         *    substitution those requirements exist to prevent.
+         *
+         * As of computenet-7w4e all four classes registered below satisfy all three: it
+         * added the `@Setup(Level.Trial)` banner hook to `CellFootprintBenchmark` and to
+         * both of `BoundedReadBenchmark`'s state classes, and renamed the latter's methods
+         * to `realDirect`/`realHostedSnapshotOf` (from `direct`/`hostedSnapshotOf`, which
+         * is the name the already-published E1 entries in `doc/bench/findings.md` carry).
+         * That is a fact about those four classes and NOT a property of this type — a
+         * benchmark added tomorrow that is registered here and does neither of (2) nor (3)
+         * still renders nothing, and should. `ThroughputReportTest` pins (2) and (3)
+         * against the sources under `bench/src/jmh/kotlin` for every benchmark, present
+         * and future, so that failure lands at `:bench:test` speed rather than after a JMH
+         * sweep has been paid for.
+         *
+         * A FOURTH obstacle stood open until computenet-6zqz, and none of the three
+         * closed it: this renderer read the primary `Score` column only, so a benchmark
+         * whose answer is a JMH SECONDARY metric could not be rendered at all —
+         * `CellFootprintBenchmark` under `-prof gc` being the live case, its
+         * `gc.alloc.rate.norm` figures read by hand off stdout. [Metric] closes it, and
+         * the closure is a fourth REQUIREMENT rather than a widening: the caller states
+         * which metric the entry reports ([Metric.Primary] by default), and a file that
+         * holds no row for the metric asked for is refused naming the metrics it does
+         * hold, rather than falling back to the primary score — which for this class is
+         * wall clock in `us/op` where the caller asked for allocation in `B/op`.
+         *
+         * Every failure named above is a REFUSAL rather than a wrong entry, which is what
+         * makes it safe to leave each standing until it is closed.
          */
         val REGISTERED: Map<String, RowLabel> = mapOf(
             "OperatorThroughputBenchmark" to SUBJECT_DIRECTION,
@@ -425,15 +555,28 @@ object ThroughputReport {
     const val DELTAS_PER_BATCH: Int = 512
 
     /**
-     * Parses JMH's CSV results format into raw rows.
+     * Parses JMH's CSV results format into raw rows, keeping only [metric]'s rows.
      *
      * Header-driven rather than positional: columns are located by name, so a JMH
      * release that adds a secondary-metric column, or reorders the `Param:` columns,
      * does not silently shift the score one field to the left. A missing required
      * column throws [ThroughputReportException] naming it, rather than producing a row
      * with a plausible wrong number in it.
+     *
+     * Metric selection happens BEFORE the NaN-dispersion refusal below, and that order is
+     * load-bearing rather than incidental. A `-prof gc` file carries `gc.count` and
+     * `gc.time` rows whose error column JMH writes as literally `NaN` — they are sums, not
+     * means — so a parser that refused on the first NaN it saw refused the whole file
+     * before reaching the `gc.alloc.rate.norm` rows the run was for. That was measured on
+     * this host, not predicted (computenet-6zqz). Refusing a NaN dispersion in a row
+     * NOBODY ASKED FOR is not honesty; refusing one in the selected metric still is, and
+     * still happens.
+     *
+     * @param metric which of the file's metrics to read. Defaults to [Metric.Primary] —
+     *   JMH's `Score` column for the benchmark itself, which is every row of a file
+     *   produced without a `-prof` profiler.
      */
-    fun parseCsv(csv: String): List<JmhRow> {
+    fun parseCsv(csv: String, metric: Metric = Metric.Primary): List<JmhRow> {
         val lines = csv.lineSequence().filter { it.isNotBlank() }.toList()
         if (lines.isEmpty()) {
             throw ThroughputReportException("JMH results file is empty — no header row")
@@ -476,7 +619,7 @@ object ThroughputReport {
             .filter { (_, name) -> name.startsWith(PARAM_PREFIX) }
             .associate { (index, name) -> name.removePrefix(PARAM_PREFIX) to index }
 
-        return lines.drop(1).mapIndexed { offset, line ->
+        val dataLines = lines.drop(1).mapIndexed { offset, line ->
             val fields = splitCsvLine(line)
             if (fields.size < header.size) {
                 throw ThroughputReportException(
@@ -484,6 +627,33 @@ object ThroughputReport {
                         "declares ${header.size}: $line"
                 )
             }
+            Triple(offset, line, fields)
+        }
+
+        // JMH names a secondary metric's row by suffixing the benchmark with
+        // `:<metric key>` — `...CellFootprintBenchmark.realSnapshot:gc.alloc.rate.norm`
+        // — and leaves the primary row's name bare. That suffix is the ONLY thing in the
+        // file distinguishing the two, so it is what selection reads.
+        val selected = dataLines.filter { (_, _, fields) ->
+            metric.selects(metricKeyOf(fields[benchmarkIndex]))
+        }
+        if (selected.isEmpty()) {
+            val present = dataLines.map { (_, _, fields) -> metricKeyOf(fields[benchmarkIndex]) }
+                .distinct()
+                .map { it ?: "<primary>" }
+                .sorted()
+            throw ThroughputReportException(
+                "JMH results file carries no rows for ${metric.describe()}; the metrics " +
+                    "present are $present. A `-prof gc` secondary metric such as " +
+                    "'${Metric.GC_ALLOC_RATE_NORM.key}' exists in a results file ONLY when " +
+                    "the sweep was RUN with `-prof gc`: a run without it completes " +
+                    "successfully and writes the primary score instead, which answers a " +
+                    "different question. Re-run the sweep with the profiler, or render the " +
+                    "metric this file actually holds"
+            )
+        }
+
+        return selected.map { (offset, line, fields) ->
             fun number(index: Int, what: String): Double =
                 fields[index].toDoubleOrNull() ?: throw ThroughputReportException(
                     "JMH results row ${offset + 1} has non-numeric $what " +
@@ -510,7 +680,13 @@ object ThroughputReport {
                 )
             }
             JmhRow(
-                benchmark = fields[benchmarkIndex],
+                // The `:<metric key>` suffix is STRIPPED, so that `benchmarkClass`,
+                // `method`, [driveOf] and [RowLabel.forBenchmark] all read the same name
+                // whichever metric was selected. Which metric a row carries is stated by
+                // the row's own [JmhRow.unit] (`B/op` for gc.alloc.rate.norm, against the
+                // primary's `us/op`) and by the entry's subject line — not by a mangled
+                // benchmark name that would make every registered label lookup miss.
+                benchmark = benchmarkNameOf(fields[benchmarkIndex]),
                 mode = fields[modeIndex],
                 score = number(scoreIndex, "score"),
                 scoreError = scoreError,
@@ -650,6 +826,9 @@ object ThroughputReport {
      *   MARKED INCOMPLETE line rather than as a finding.
      * @param label which `@Param` columns label every row, or `null` — the default — to
      *   resolve each row's columns from [RowLabel.forBenchmark].
+     * @param metric which of the file's metrics the entry reports. Defaults to
+     *   [Metric.Primary]; pass [Metric.GC_ALLOC_RATE_NORM] to report a `-prof gc` run's
+     *   bytes-allocated-per-operation instead of its wall clock.
      */
     fun render(
         csv: String,
@@ -658,7 +837,8 @@ object ThroughputReport {
         subject: String,
         trigger: TriggerClaim = TriggerClaim.None,
         label: RowLabel? = null,
-    ): Report = renderResults(toResults(parseCsv(csv), env, label), date, subject, trigger)
+        metric: Metric = Metric.Primary,
+    ): Report = renderResults(toResults(parseCsv(csv, metric), env, label), date, subject, trigger)
 
     /**
      * Where the run log of a results file must sit: beside it, same base name, `.log`.
@@ -732,6 +912,7 @@ object ThroughputReport {
         subject: String,
         trigger: TriggerClaim = TriggerClaim.None,
         label: RowLabel? = null,
+        metric: Metric = Metric.Primary,
     ): Report {
         if (!results.isFile) {
             throw ThroughputReportException(
@@ -764,7 +945,7 @@ object ThroughputReport {
             hostFacts = HostFacts.fromJmhLog(logText, log.absolutePath),
             harnessCommitSha = harnessCommitSha,
         )
-        return render(results.readText(), env, date, subject, trigger, label)
+        return render(results.readText(), env, date, subject, trigger, label, metric)
     }
 
     /**

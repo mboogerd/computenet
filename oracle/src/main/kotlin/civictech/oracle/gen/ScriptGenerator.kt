@@ -1,6 +1,9 @@
 package civictech.oracle.gen
 
 import civictech.oracle.bind.CoreOperators
+import civictech.oracle.bind.TaggedOperators
+import civictech.oracle.model.DotModel
+import civictech.oracle.model.DotOrder
 import civictech.oracle.model.Membership
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SourceId
@@ -70,38 +73,64 @@ import kotlin.random.Random
  * writer observation of its own adds automatically and of nothing else. Both paths are
  * exercised — a writer removing what it added itself, and a writer that observes first.
  *
- * **An unobserved remove also never names a *live* element (`computenet-qcm1`).** "Not added
- * nor observed by this writer" alone is only half of what makes the step a no-op: it is a
- * `Membership` no-op, but the kernel's `SetCell.inletHandler.remove` retracts
- * `liveTags(element)` unconditionally without consulting the removing writer's causal history,
- * so a cross-writer remove of a *live* element takes effect in the kernel while the model
- * ignores it — a Mismatch manufactured by the generator rather than found in the kernel. The
- * draw in [emitUnobservedRemove] therefore also excludes everything live at that position of
- * the slice, read from [Membership.live] over the events emitted into that source so far
- * (never added, added and already covered, or added only later are all admissible). Liveness
- * is *called* from the reference model, not re-derived here, so the generator cannot come to
- * hold a second and subtly different notion of it. Before the fix, on this suite's own fixture
- * (two set sources, `writerCount = 2`, domain 64, length 200, ratio 0.3, seeds 1..25), 20 of
- * 699 unobserved removes (2.9%) named a live element — roughly one per seed; it is 0 of 699
- * now, and `ScriptGeneratorTest` asserts that zero.
+ * ## No emitted remove leaves its element live (`computenet-qcm1`, `computenet-i3vo`)
  *
- * The narrowing leaves the *bias* untouched: an unobserved remove records nothing into a
- * writer's known set, so restricting which element it names changes no later candidate set and
- * consumes no different amount of [rng]. Measured on that same fixture, before and after are
- * identical to every digit — aggregate unobserved fraction 699/2201 = 0.3176 over seeds 1..25,
- * and 27/87 = 0.3103 for seed 42 — so the `unobservedRemoveRatio` tolerances
- * `ScriptGeneratorTest` asserts stand as written and needed no re-statement. What the narrowing
- * *can* do is exhaust the candidate pool sooner at a **small `elementDomainSize`**, where a
- * writer's known set plus the live set may cover the whole domain; that case falls back to an
- * add exactly as the pre-existing no-candidate path does, which biases the measured unobserved
- * fraction downward rather than resampling.
+ * One post-condition governs **every** remove this generator emits, whichever branch drew it:
+ * folding the emitted `Remove` into the source's slice must not leave its element in
+ * [Membership.live]. `SetCell.inletHandler.remove` retracts `liveTags(element)` unconditionally,
+ * without consulting the removing writer's causal history, while `Membership` covers only the
+ * adds that writer had *observed* — so a remove that leaves the element live in the model has
+ * taken effect in the kernel and is a Mismatch manufactured by the generator rather than found
+ * in the kernel.
  *
- * Scope note, so the next reader does not mistake this for a cure: it removes only the
- * generator's *manufactured* divergence. A cross-writer **observed** remove path diverges
- * independently of it — at `unobservedRemoveRatio = 0.0`, nine of sixty cases of
- * `WavePrefixTest`'s sweep still mismatch at quiescence and six still violate the wave-prefix
- * check (measured 2026-08-19, computenet-4ru.8.5). That residual is `computenet-eeys`, not
- * this.
+ * It is stated once, in [SourceState.settlingRemoves], and every candidate set is drawn through
+ * it. Liveness is *called* from the reference model, never re-derived here, so the generator
+ * cannot come to hold a second and subtly different notion of it.
+ *
+ * The three branches it governs, and what it excludes on each:
+ *
+ * - **Unobserved** ([emitUnobservedRemove], `computenet-qcm1`): an element the writer never
+ *   added nor observed has none of its adds covered by that writer's remove, so the
+ *   post-condition coincides exactly with "not currently live". On this suite's own fixture
+ *   (two set sources, `writerCount = 2`, domain 64, length 200, ratio 0.3, seeds 1..25) 20 of
+ *   699 unobserved removes (2.9%) named a live element before qcm1; 0 since.
+ * - **Observed, *direct*** ([emitObservedRemove], `computenet-i3vo`): `SourceState.known` is
+ *   monotone, so it offers an element the writer added or once observed even when a **later**
+ *   add by another writer is still uncovered. This is where the residual sat — the steps audit
+ *   `observed = true`, which is exactly why `unobservedRemoveRatio = 0.0` could not clear them.
+ *   Measured 2026-08-21 on a two-set-plus-keyed fixture over seeds 1..25: 20 of 2300 removes
+ *   left their element live, all twenty audited observed; 0 since.
+ * - **Observed, *cross*** ([emitObservedRemove]): the filter is a no-op today, because the
+ *   `Observe` emitted immediately before the remove grants the writer every earlier add. It is
+ *   applied anyway, with that pending `Observe` handed to the post-condition, so the fact is
+ *   measured rather than assumed.
+ *
+ * A keyed remove (`RemoveKey`) satisfies the post-condition vacuously and is not filtered:
+ * [Membership.live] ignores `Put`/`RemoveKey` entirely, so a key is never live in it. Keyed
+ * membership is `KeyedSetSourceModel`/`MapCellSourceModel`'s last-writer fold, which has no
+ * observation relation and therefore no asymmetry to manufacture.
+ *
+ * The narrowing leaves the observed/unobserved *bias* untouched, and for a structural reason
+ * rather than a lucky one: rejecting candidates *within* a writer's list shortens the list the
+ * element is picked from but leaves the `(writer, candidates)` pair present, so exactly the same
+ * [rng] draws happen in the same order and only which element is named changes. The stream moves
+ * only where a writer's **entire** list is rejected — and where every writer's is, the branch
+ * falls back to an add exactly as the pre-existing no-candidate path does, which biases the
+ * measured unobserved fraction upward rather than resampling. Re-measured under
+ * `computenet-i3vo` on `ScriptGeneratorTest`'s two-set fixture: aggregate unobserved fraction
+ * 699/2201 = 0.3176 over seeds 1..25 and 27/87 = 0.3103 for seed 42, identical to every digit
+ * before and after both this fix and qcm1's, so the `unobservedRemoveRatio` tolerances that
+ * suite asserts stand as written and needed no re-statement. The exhaustion caveat applies at a
+ * **small `elementDomainSize`**, where a writer's known set plus the live set may cover the
+ * whole domain.
+ *
+ * What this does *not* claim to be is a cure for the underlying asymmetry: it removes the
+ * generator's *manufactured* divergence only. The asymmetry itself is settled, and settled
+ * against the model — see `WavePrefixTest`'s
+ * `a remove of an element another writer added is applied by the kernel and ignored by the model`
+ * (`computenet-eeys`): `[24-SET-03]`'s observer is the CELL, and the generated drive path builds
+ * one replica, so the model's per-writer rule is sound only for writers that are separate
+ * replicas. Constraining the generator is the repair that leaves both sides untouched.
  *
  * Every remove — `Remove` on a set source and `RemoveKey` on a keyed one — is recorded in a
  * [RemoveRecord]. `RemoveKey`'s "observed" reading is the one its source model supports:
@@ -137,6 +166,11 @@ class ScriptGenerator(
     private val config: GeneratorConfig,
     private val topology: CaseTopology,
     private val rng: Random,
+    /**
+     * `null` for an ORA1 case, and then nothing below this line runs: the emitted script, the
+     * audit and every [rng] draw are what they were before the replicated dimension existed.
+     */
+    private val plan: ReplicaPlan? = null,
 ) {
 
     /** The writer pool every non-order-dependent source draws from. */
@@ -151,7 +185,7 @@ class ScriptGenerator(
      * decided**: exactly one for an order-dependent source, the whole pool otherwise.
      */
     private val sources: List<SourceState> = topology.nodes
-        .filter { it.source != null }
+        .filter { it.source != null && it.handle != plan?.handle }
         .map { node ->
             val kind = SourceKind.of(node.catalogId)
             SourceState(
@@ -163,8 +197,28 @@ class ScriptGenerator(
             )
         }
 
+    /**
+     * The replicated node's replicas, in [ReplicaPlan.replicas] order — empty for an ORA1 case.
+     *
+     * A replicated node must be a *tagged* source: the whole point of the dimension is the dot
+     * algebra, and `[ORA2-GEN-01]`'s convergent-vocabulary gate (`GeneratorConfig.validateReplication`)
+     * has already excluded the untagged order-dependent families at configuration time. What is
+     * checked here is the remaining case the gate cannot see — a convergent but *un-keyed* source
+     * (a set or a counter) drawn as the replicated node — and it is checked rather than silently
+     * driven, because the replicated write path below emits keyed events only.
+     */
+    private val replicas: List<ReplicaState> = plan?.let { p ->
+        val node = topology.nodes.single { it.handle == p.handle }
+        require(node.catalogId == TaggedOperators.Ids.OR_MAP) {
+            "Replica placement is a tagged-family dimension: handle '${p.handle}' names catalog id " +
+                "'${node.catalogId}', which mints no dots. [ORA2-GEN-01]/[ORA2-GEN-03] replicate " +
+                "'${TaggedOperators.Ids.OR_MAP}'."
+        }
+        p.replicas.indices.map { i -> ReplicaState(p.replicas[i], WriterId(p.writers[i])) }
+    }.orEmpty()
+
     init {
-        require(sources.isNotEmpty()) {
+        require(sources.isNotEmpty() || replicas.isNotEmpty()) {
             "ScriptGenerator needs at least one source node (a TopologyNode with a non-null source); " +
                 "topology has ${topology.nodes.size} node(s), none of them a source."
         }
@@ -185,15 +239,207 @@ class ScriptGenerator(
         val steps = mutableListOf<CaseStep>()
         val audit = mutableListOf<RemoveRecord>()
 
-        while (steps.size < config.scriptLength) {
-            val source = sources[rng.nextInt(sources.size)]
-            emitOne(source, remaining = config.scriptLength - steps.size, steps = steps, audit = audit)
-        }
+        val deliveries = mutableListOf<CaseDelivery>()
 
-        val (finalSteps, finalAudit) = if (config.lateJoiner) insertBarrier(steps, audit) else steps to audit
-        val script = CaseScript(finalSteps)
+        while (steps.size < config.scriptLength) {
+            val replicated = replicas.isNotEmpty() && (sources.isEmpty() || rng.nextInt(sources.size + 1) == 0)
+            if (replicated) {
+                emitReplicaStep(steps, deliveries, audit)
+            } else {
+                val source = sources[rng.nextInt(sources.size)]
+                emitOne(source, remaining = config.scriptLength - steps.size, steps = steps, audit = audit)
+            }
+        }
+        // One closing round, so the last writes are gossiped where the rules allow it. It is not
+        // forced: a round at prefixes a previous round already used composes with that round into
+        // exactly the cycle `DotModel` refuses, and nothing about being last exempts it. Nor does
+        // it need to be forced — `DotModel.converged` merges every replica's final state anyway,
+        // so an ungossiped tail costs the reference nothing; what a closing round buys is causal
+        // depth in the script, not correctness of the converged answer.
+        if (replicas.isNotEmpty()) openGossipRound(steps.size, deliveries)
+
+        val spliced = if (config.lateJoiner) insertBarrier(steps, audit, deliveries) else null
+        val finalSteps = spliced?.first ?: steps
+        val finalAudit = spliced?.second ?: audit
+        val script = CaseScript(finalSteps, spliced?.third ?: deliveries)
         assertOrderDependentSingleWriter(script)
-        return GeneratedScript(script, finalAudit)
+        return GeneratedScript(script, finalAudit, replicationAudit(script))
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The replicated dimension ([ORA2-GEN-01]..[ORA2-GEN-05]). Everything below is unreachable
+    // for `replicaCount == 1`.
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * One replica's step: a gossip round if one is due, then one keyed write.
+     *
+     * `config.concurrencyRatio` is the knob and it acts *here*, on whether the gossip that would
+     * order this write against its peers happens before it or not — which is the only place
+     * concurrency can be created. It is not a post-hoc filter and it is not a retry: a write is
+     * emitted either way, and whether it turned out genuinely concurrent is **measured**
+     * ([ConcurrencyAudit]), never assumed from the draw.
+     */
+    private fun emitReplicaStep(
+        steps: MutableList<CaseStep>,
+        deliveries: MutableList<CaseDelivery>,
+        audit: MutableList<RemoveRecord>,
+    ) {
+        if (rng.nextDouble() >= config.concurrencyRatio) openGossipRound(steps.size, deliveries)
+
+        val replica = replicas[rng.nextInt(replicas.size)]
+        val key = chooseReplicaKey(replica)
+        val add = rng.nextDouble() < config.addRemoveRatio || replica.view.isEmpty()
+
+        recordWrite(replica, key)
+        if (add) {
+            replica.ownPuts += 1
+            replica.view.add(key)
+            append(replica, ScriptEvent.Put(replica.writer, key, pick(elementDomain)), steps)
+        } else {
+            audit += RemoveRecord(stepIndex = steps.size, observed = key in replica.view)
+            replica.view.remove(key)
+            append(replica, ScriptEvent.RemoveKey(replica.writer, key), steps)
+        }
+    }
+
+    /**
+     * `[ORA2-GEN-05]`: which key a replica writes, biased toward keys that are already populated
+     * — and, when concurrency is being sought, toward a key another replica wrote that this one
+     * has NOT absorbed, which is what makes the write causally unordered rather than merely
+     * simultaneous-looking.
+     *
+     * `[ORA2-GEN-04]`/BS-2's counter tie is targeted *inside* that first branch: among the
+     * unabsorbed peer writes, one whose peer minted it at the same 1-based put counter this
+     * replica is about to mint at is preferred. Two live dots at one key then share a counter and
+     * are separated only by instance rank — the tie-break `[24-TMAP-03]` exists for. It is a bias,
+     * exactly like `unobservedRemoveRatio`: the tie is not forced, it is made frequent, and
+     * whether one actually survived to the converged state is measured afterwards
+     * ([replicationAudit]) rather than assumed here.
+     */
+    private fun chooseReplicaKey(replica: ReplicaState): Any? {
+        if (rng.nextDouble() < config.concurrencyRatio) {
+            val unabsorbed = keyWrites.entries
+                .filter { (_, writes) -> writes.any { it.replica != replica.id && replica.absorbed(it.replica) < it.opIndex } }
+            if (unabsorbed.isNotEmpty()) {
+                val nextCounter = replica.ownPuts + 1
+                val tying = unabsorbed.filter { (_, writes) ->
+                    writes.any { it.replica != replica.id && replica.absorbed(it.replica) < it.opIndex && it.putCounter == nextCounter }
+                }
+                return pick((if (tying.isNotEmpty()) tying else unabsorbed).map { it.key })
+            }
+        }
+        val populated = replica.view.toList()
+        if (populated.isNotEmpty() && rng.nextDouble() < config.populatedKeyBias) return pick(populated)
+        return pick(keyDomain)
+    }
+
+    /**
+     * A gossip round: a chain of [CaseDelivery]s along a fresh permutation of the replicas, so
+     * every replica after the head absorbs everything ahead of it.
+     *
+     * ## Why a chain along a permutation, and not an all-to-all sync
+     *
+     * `DotModel` refuses a script whose deliveries are cyclic, and a *full* all-to-all round at
+     * one point of the drive order is exactly such a cycle: two replicas each claiming to have
+     * absorbed the other at their current event counts describe no reachable state
+     * (computenet-4ru.1.4's finding). A chain is a DAG within the round.
+     *
+     * ## Why that is enough to make a cycle unconstructable, not merely rare
+     *
+     * A chain per round is not sufficient on its own — two rounds using different permutations
+     * at the SAME event counts compose into a cycle. The second rule is what closes it: a round
+     * only opens when **every** replica has emitted at least one own event since the previous
+     * round ([force] excepted, for the closing round after the last step, which is the last thing
+     * emitted and so has no successor to close a cycle with).
+     *
+     * With both rules, every replica's event count strictly increases between rounds, so the
+     * deliveries into one replica at one event count all come from one round; within that round
+     * they follow the permutation strictly downward; and the permutation-head receives nothing.
+     * A dependency edge therefore strictly decreases `(round, position in that round's
+     * permutation)` lexicographically, and a cycle would have to be a strictly decreasing loop.
+     * `MultiWriterGenerationTest` folds every case of the default replicated sweep through
+     * `DotModel` and asserts no `CyclicDeliveryException`, so the argument is checked and not
+     * merely argued.
+     */
+    private fun openGossipRound(atStep: Int, deliveries: MutableList<CaseDelivery>) {
+        if (replicas.size < 2) return
+        if (replicas.any { it.opsSinceRound == 0 }) return
+
+        val order = replicas.toMutableList()
+        for (i in order.indices.reversed()) {
+            val j = rng.nextInt(i + 1)
+            val swap = order[i]; order[i] = order[j]; order[j] = swap
+        }
+        for (i in 1 until order.size) {
+            val into = order[i]
+            val from = order[i - 1]
+            deliveries += CaseDelivery(atStep, into.id, from.id)
+            into.absorb(from)
+        }
+        replicas.forEach { it.opsSinceRound = 0 }
+    }
+
+    /** Every keyed write any replica has issued, by key, in emission order. */
+    private val keyWrites = LinkedHashMap<Any?, MutableList<KeyWrite>>()
+
+    private var concurrentWrites = 0
+    private var comparableWrites = 0
+    private var totalWrites = 0
+
+    /**
+     * Measures one write's concurrency against the peers' prior writes to the same key, then
+     * records it.
+     *
+     * Concurrency is decided by causality alone: the write is concurrent iff some peer's earlier
+     * write to this key has not been absorbed by this replica. The converse half of "neither
+     * observed the other" needs no separate test — the peer's write is earlier in the total drive
+     * order, so it cannot have absorbed this one.
+     */
+    private fun recordWrite(replica: ReplicaState, key: Any?) {
+        val prior = keyWrites[key].orEmpty()
+        val peers = prior.filter { it.replica != replica.id }
+        totalWrites += 1
+        if (peers.isNotEmpty()) {
+            comparableWrites += 1
+            if (peers.any { replica.absorbed(it.replica) < it.opIndex }) concurrentWrites += 1
+        }
+        keyWrites.getOrPut(key) { mutableListOf() } += KeyWrite(
+            replica = replica.id,
+            opIndex = replica.ownOps + 1,
+            putCounter = replica.ownPuts + 1,
+        )
+    }
+
+    /**
+     * The replication half of the audit — what this case ACHIEVED, folded off the emitted script.
+     *
+     * The counter ties are read from `DotModel`'s converged state rather than predicted from the
+     * generation bias, because the two genuinely differ: a tie the generator arranged can still be
+     * tombstoned by a later reset-remove, and only the fold knows. Ranking the replicas in plan
+     * order here is sound *for this question* even though the kernel's rank order is unknown until
+     * apply time: whether two live dots share a counter is a property of the dots, and no ordering
+     * of the instances changes it. Which of them WINS does depend on the order, and that is
+     * exactly why nothing here reports a winner.
+     */
+    private fun replicationAudit(script: CaseScript): ReplicationAudit? {
+        val p = plan ?: return null
+        val state = DotModel(DotOrder.ranked(p.replicas)).converged(script.toScript())
+        val ties = state.membership().filter { key ->
+            state.liveDots(key).keys.groupingBy { it.counter }.eachCount().any { it.value > 1 }
+        }
+        return ReplicationAudit(
+            plan = p,
+            concurrency = ConcurrencyAudit(config.concurrencyRatio, concurrentWrites, comparableWrites, totalWrites),
+            counterTieKeys = ties,
+            deliveryCount = script.deliveries.size,
+        )
+    }
+
+    private fun append(replica: ReplicaState, event: ScriptEvent, steps: MutableList<CaseStep>) {
+        replica.ownOps += 1
+        replica.opsSinceRound += 1
+        steps += CaseStep.Op(replica.id, event)
     }
 
     /**
@@ -206,7 +452,11 @@ class ScriptGenerator(
      *   interior position needs at least one `Op` on each side, which `config.scriptLength >= 2`
      *   is required to offer.
      */
-    private fun insertBarrier(steps: List<CaseStep>, audit: List<RemoveRecord>): Pair<List<CaseStep>, List<RemoveRecord>> {
+    private fun insertBarrier(
+        steps: List<CaseStep>,
+        audit: List<RemoveRecord>,
+        deliveries: List<CaseDelivery>,
+    ): Triple<List<CaseStep>, List<RemoveRecord>, List<CaseDelivery>> {
         require(steps.size >= 2) {
             "lateJoiner needs a strictly interior Barrier position, which requires scriptLength " +
                 ">= 2; got ${steps.size}"
@@ -219,7 +469,11 @@ class ScriptGenerator(
         spliced += CaseStep.Barrier
         spliced.addAll(steps.subList(position, steps.size))
         val shiftedAudit = audit.map { if (it.stepIndex >= position) it.copy(stepIndex = it.stepIndex + 1) else it }
-        return spliced to shiftedAudit
+        // Same shift, same reason: a delivery names a *position*, and the splice moved the step it
+        // named. Shifting at `>= position` keeps the gossip before the same `Op` it was before,
+        // which is what makes the derived event counts unchanged.
+        val shiftedDeliveries = deliveries.map { if (it.atStep >= position) it.copy(atStep = it.atStep + 1) else it }
+        return Triple(spliced, shiftedAudit, shiftedDeliveries)
     }
 
     /**
@@ -232,7 +486,8 @@ class ScriptGenerator(
         val add = rng.nextDouble() < config.addRemoveRatio
         when (source.kind) {
             SourceKind.SET -> if (add) emitAdd(source, steps) else emitSetRemove(source, remaining, steps, audit)
-            SourceKind.KEYED_SET, SourceKind.MAP -> if (add) emitPut(source, steps) else emitRemoveKey(source, steps, audit)
+            SourceKind.KEYED_SET, SourceKind.MAP, SourceKind.OR_MAP ->
+                if (add) emitPut(source, steps) else emitRemoveKey(source, steps, audit)
             SourceKind.COUNTER, SourceKind.PN_COUNTER -> emitCounter(source, add, steps)
         }
     }
@@ -246,9 +501,9 @@ class ScriptGenerator(
 
     /**
      * Appends one op step AND records the event in [source]'s own slice, which is what
-     * [SourceState.liveElements] folds through [Membership.live]. Every op step goes through
+     * [SourceState.settlingRemoves] folds through [Membership.live]. Every op step goes through
      * here: a step appended straight to [steps] would be invisible to the liveness fold and
-     * would silently reintroduce `computenet-qcm1`.
+     * would silently reintroduce `computenet-qcm1` / `computenet-i3vo`.
      */
     private fun append(source: SourceState, event: ScriptEvent, steps: MutableList<CaseStep>) {
         source.recordEvent(event)
@@ -269,27 +524,28 @@ class ScriptGenerator(
     }
 
     /**
-     * A remove naming an element its writer has neither added nor observed **and which is not
-     * live at this position of the source's slice** (`computenet-qcm1`).
+     * A remove naming an element its writer has neither added nor observed, and which
+     * [SourceState.settlingRemoves] admits (`computenet-qcm1`, restated as the post-condition of
+     * `computenet-i3vo`).
      *
      * Both conditions are needed for the step to be a no-op on *both* sides of the differential.
-     * "Not added nor observed" makes it a `Membership` no-op; "not live" is what makes it a
-     * kernel no-op, because `SetCell.inletHandler.remove` retracts `liveTags(element)`
+     * "Not added nor observed" makes it a `Membership` no-op; the post-condition is what makes it
+     * a kernel no-op, because `SetCell.inletHandler.remove` retracts `liveTags(element)`
      * unconditionally and does not consult the removing writer's causal history. Without the
      * second condition a cross-writer remove of a live element takes effect in the kernel while
      * the model ignores it — a Mismatch manufactured by the generator rather than found in the
      * kernel.
      *
-     * Liveness comes from [Membership.live] over the events emitted into this source so far
-     * ([SourceState.liveElements]) — the model's own fold, called rather than re-derived, so the
-     * generator cannot hold a second and subtly different notion of "live" from the one the
-     * runner compares against.
+     * On *this* branch the post-condition coincides exactly with qcm1's "not live" filter, and
+     * the candidate sets are element-for-element identical: an element the writer has neither
+     * added nor observed has none of its adds covered by this writer's remove, so live-before
+     * implies live-after here. The general form is used anyway so the constraint has one
+     * statement rather than one per branch.
      */
     private fun emitUnobservedRemove(source: SourceState, steps: MutableList<CaseStep>, audit: MutableList<RemoveRecord>): Boolean {
-        val live = source.liveElements()
         val candidates = source.writers.mapNotNull { writer ->
-            elementDomain
-                .filterNot { it in source.known(writer) || it in live }
+            source
+                .settlingRemoves(writer, elementDomain.filterNot { it in source.known(writer) })
                 .takeIf { it.isNotEmpty() }
                 ?.let { writer to it }
         }
@@ -306,16 +562,35 @@ class ScriptGenerator(
      * added itself, or (with an explicit `Observe` emitted first) an element another writer
      * added. Both paths are offered whenever both have candidates, so a population contains
      * self-removes *and* cross-writer observed removes.
+     *
+     * Both candidate sets go through [SourceState.settlingRemoves] (`computenet-i3vo`), which is
+     * where the *direct* branch's residual sat: `known(writer)` is monotone, so it offers an
+     * element the writer added or once observed even when a **later** add by another writer is
+     * still uncovered. The remove then takes effect in the kernel and is a `Membership` no-op —
+     * the same manufactured Mismatch qcm1 removed from the unobserved branch, audited
+     * `observed = true`, which is why `unobservedRemoveRatio = 0.0` never reached it.
+     *
+     * On the *cross* branch the filter is a no-op today and is applied anyway: the `Observe`
+     * emitted immediately before the remove grants the writer every add at an earlier position,
+     * so no add of any element can be left uncovered. Passing that pending `Observe` to
+     * [SourceState.settlingRemoves] is what makes that a *measured* fact rather than an
+     * assumption — if the `Observe` ever stops immediately preceding the remove, the filter
+     * starts excluding candidates instead of the constraint silently lapsing.
      */
     private fun emitObservedRemove(source: SourceState, remaining: Int, steps: MutableList<CaseStep>, audit: MutableList<RemoveRecord>): Boolean {
         val direct = source.writers.mapNotNull { writer ->
-            source.known(writer).takeIf { it.isNotEmpty() }?.let { writer to it.toList() }
+            source.settlingRemoves(writer, source.known(writer).toList())
+                .takeIf { it.isNotEmpty() }?.let { writer to it }
         }
         val cross = if (remaining < 2) {
             emptyList()
         } else {
             source.writers.mapNotNull { writer ->
-                source.addedAnywhere.filterNot { it in source.known(writer) }.takeIf { it.isNotEmpty() }?.let { writer to it }
+                source.settlingRemoves(
+                    writer = writer,
+                    candidates = source.addedAnywhere.filterNot { it in source.known(writer) },
+                    pending = listOf(ScriptEvent.Observe(writer)),
+                ).takeIf { it.isNotEmpty() }?.let { writer to it }
             }
         }
 
@@ -430,16 +705,42 @@ class ScriptGenerator(
         }
 
         /**
-         * The elements live at this position of the slice, per [Membership.live] — literally the
-         * model's definition, over the prior events only, which is the set a remove has to avoid
-         * to be a no-op in the kernel as well (`computenet-qcm1`).
+         * The subset of [candidates] that [writer] may remove **here** without leaving the element
+         * live — the one statement of `computenet-i3vo`'s post-condition, which every branch of
+         * [emitObservedRemove] and [emitUnobservedRemove] draws through.
          *
-         * Recomputed from scratch on each call rather than maintained incrementally: `Membership`
-         * is the single definition of liveness in this system, and an incremental mirror of it
+         * Liveness is recomputed from scratch on each call rather than maintained incrementally:
+         * `Membership` is the single definition of it in this system, and an incremental mirror
          * here would be a second one, free to drift. Scripts are hundreds of events long, so the
          * fold's cost is irrelevant beside that.
+         *
+         * The constraint: a `Remove(writer, e)` appended to this slice (after [pending], the
+         * steps the caller will emit ahead of it — today at most one `Observe`) must not leave `e`
+         * in [Membership.live]. An element already dead trivially satisfies it, so the interesting
+         * exclusions are the live ones the remove would fail to kill: an add by another writer
+         * that `writer` never observed stays uncovered, the model keeps `e` live, and the kernel's
+         * `SetCell.inletHandler.remove` retracts every live tag of it regardless — a divergence
+         * manufactured by the generator rather than found in the kernel.
+         *
+         * Everything is read from [Membership]'s own fold, never re-derived (qcm1's discipline),
+         * and in **two** calls rather than one per candidate: the removes of all live candidates
+         * are appended together and the survivors read off in one go. That is sound because
+         * `Membership` decides coverage per element and only [ScriptEvent.Observe] events between
+         * an add and a remove affect it — the appended sibling removes are neither adds nor
+         * observations, so each behaves exactly as it would alone.
          */
-        fun liveElements(): Set<Any?> = Membership.live(events)
+        fun settlingRemoves(
+            writer: WriterId,
+            candidates: List<Any?>,
+            pending: List<ScriptEvent> = emptyList(),
+        ): List<Any?> {
+            if (candidates.isEmpty()) return candidates
+            val live = Membership.live(events + pending)
+            val risky = candidates.filter { it in live }
+            if (risky.isEmpty()) return candidates
+            val survivors = Membership.live(events + pending + risky.map { ScriptEvent.Remove(writer, it) })
+            return candidates.filterNot { it in survivors }
+        }
 
         /**
          * What [writer] has added or observed so far. Monotone on purpose: a writer that has
@@ -470,7 +771,45 @@ class ScriptGenerator(
 data class GeneratedScript(
     val script: CaseScript,
     val removeAudit: List<RemoveRecord>,
+    /** `null` for a non-replicated case; `GeneratedCase.replication` otherwise. */
+    val replication: ReplicationAudit? = null,
 )
+
+/**
+ * One replica's generation state: what it has issued, what it has absorbed from its peers, and
+ * the keys it currently believes populated.
+ *
+ * [view] is a *local* belief, not the converged truth, and that is the point: `[ORA2-GEN-05]`'s
+ * bias toward populated keys has to be biased by what the WRITING replica can see, or a
+ * "re-put" would name a key that replica has never heard of.
+ */
+private class ReplicaState(val id: SourceId, val writer: WriterId) {
+    /** Own events emitted so far — the count a `Delivery.throughEvents` refers to. */
+    var ownOps: Int = 0
+
+    /** Own `Put`s so far — the 1-based dot counter the next put will mint (`ModelDot`). */
+    var ownPuts: Int = 0
+
+    /** Own events since the last gossip round; the strict-increase rule reads this. */
+    var opsSinceRound: Int = 0
+
+    /** Keys this replica believes populated, from its own writes and the gossip it absorbed. */
+    val view: MutableSet<Any?> = LinkedHashSet()
+
+    private val seen = LinkedHashMap<SourceId, Int>()
+
+    fun absorbed(peer: SourceId): Int = seen[peer] ?: 0
+
+    /** Absorbs [from]'s emissions AND, transitively, everything [from] had itself absorbed. */
+    fun absorb(from: ReplicaState) {
+        from.seen.forEach { (peer, through) -> if (peer != id) seen[peer] = maxOf(seen[peer] ?: 0, through) }
+        seen[from.id] = maxOf(seen[from.id] ?: 0, from.ownOps)
+        view.addAll(from.view)
+    }
+}
+
+/** One keyed write, as the concurrency measurement reads it back. */
+private data class KeyWrite(val replica: SourceId, val opIndex: Int, val putCounter: Int)
 
 /**
  * The arity-0 catalog entries a script can drive, and the event vocabulary each accepts.
@@ -497,6 +836,15 @@ enum class SourceKind(val catalogId: String, val orderDependent: Boolean) {
 
     /** `PnCounterCell` — `Increment` / `Decrement`. */
     PN_COUNTER(CoreOperators.Ids.PN_COUNTER, orderDependent = false),
+
+    /**
+     * `OrMapCell` — `Put` / `RemoveKey`, convergent under concurrent writers (`[24-TMAP-03]`).
+     *
+     * Registered by `TaggedOperators`, and drivable through the ordinary keyed path as well as
+     * the replicated one: without this entry `SourceKind.of` would reject an `orMap` source node
+     * by name, and the catalog entry would be unreachable from generation altogether.
+     */
+    OR_MAP(TaggedOperators.Ids.OR_MAP, orderDependent = false),
     ;
 
     companion object {

@@ -46,6 +46,59 @@ import java.io.Serializable
  *   4ru.16's eventual outcome is one entry in whichever home is chosen, not a re-design of this
  *   ledger.
  *
+ * A third combination exists and is recorded below, because it is not either of those: an entry
+ * that is registered and honestly modelled, and unreachable *because* of an exclusion this
+ * ledger already made. See the counter coverage note.
+ *
+ * ### `counter` / `pnCounter`: REGISTERED but NOT EXERCISED (computenet-gff7)
+ *
+ * `[ORA1-HONEST-02]`'s subject is what the vocabulary does not cover, and coverage has two
+ * separable halves — whether an operator is *bound* and whether it is ever *run*. For every
+ * other entry in `civictech.oracle.bind.CoreOperators` the two coincide. For these two they do
+ * not, so **"registered" does not imply "exercised" here, and this note is what stops it
+ * reading that way.**
+ *
+ * `counter` (`CounterCell`) and `pnCounter` (`PnCounterCell`) are registered with both halves
+ * bound and are modelled honestly by `CounterSourceModel`/`PnCounterSourceModel`. But they are
+ * the only entries emitting a bare [ElementShape.Scalar], and **no registered operator consumes
+ * a bare scalar on any port**. `GraphGenerator.Builder.chooseRootShape` draws a case's root
+ * shape only among source shapes something in the vocabulary can consume, and `[ORA1-GEN-03]`
+ * forbids a source standing as a terminal itself, so no generated case can spawn either one.
+ * Every existing completeness test says they are covered; no differential sweep has ever run
+ * them. `civictech.oracle.bind.CatalogReachabilityTest` computes that from the registrations
+ * rather than asserting it.
+ *
+ * **The outcome that holds is: not fixed, and deliberately so** — computenet-gff7's first
+ * acceptance clause offered "register a `Scalar`-consuming operator, or record the decision not
+ * to", and this is that record. A scalar edge in this catalog carries
+ * `Propagate<CounterDelta>`, and exactly ONE cell in the kernel serves that type on an inlet:
+ * `CoalescingCombineCell` (`kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt`,
+ * `inlet: Serve<Propagate<CounterDelta>>`). Every other operator inlet under
+ * `civictech.cell.data.op` serves `SetDelta` or `MapDelta`; `CounterCell.inlet` is
+ * `Use<CounterOps>` and `PnCounterCell.deltaInlet` is the replication seam, not an operator
+ * input. And that one cell is **excluded by this very ledger**, in its own entry below, for a
+ * reason that has not weakened: its observable is a wave-completion fold the script vocabulary
+ * cannot name.
+ *
+ * That is why this note belongs here rather than under "unreachable by shape-typed generation"
+ * above. That class is a generator-coverage defect repaired by changing the generator; this one
+ * cannot be repaired that way at all. The generator is behaving correctly — there is genuinely
+ * nothing to link a counter into — and the only in-catalog repairs are to register the cell
+ * this ledger excludes (writing the batch model the exclusion exists to forbid) or to add a new
+ * kernel cell to `civictech.cell.data.op` existing solely so the oracle has a scalar consumer.
+ * It is an exclusion's consequence, not an independent oversight, which makes it this ledger's
+ * subject by transitivity. Contrast the pair-shaped hole, which *was* repairable in-catalog:
+ * `keyBy` reuses an already-registered cell (`FlatMapSetCell`) and an already-registered model,
+ * adding only a function. No such reuse exists for `Scalar`.
+ *
+ * *DISPUTES audit: no filing.* Nothing normative goes unchecked. `[24-OP-COUNTER-01]` and
+ * `[24-OP-PNCOUNTER-01]` are checked where counters actually run — `concord/corpus` and the
+ * kernel's own suites. Note also what is NOT missing: the scalar *shape* is swept, as a
+ * terminal, through `count` (`CountCell`, registered and emittable), so it is these two source
+ * cells that go unrun, not scalar-valued observation as such. What is absent is a *batch
+ * differential* check of `CounterCell`/`PnCounterCell` themselves, which is this ledger's
+ * subject and not a gap in the requirements' coverage.
+ *
  * ### The `DISPUTES.md` audit (`concord/corpus/DISPUTES.md`)
  *
  * `DISPUTES.md` files a requirement that cannot be checked honestly **anywhere**, not one this
@@ -83,6 +136,17 @@ import java.io.Serializable
  *   nothing can check: ORA2 (computenet-4ru.1) takes it with the same machinery, and until then
  *   the corpus carries it.
  *
+ *   **Update (computenet-4ru.1.2): partially superseded, not resolved.** ORA2 has since
+ *   registered `orMap` in `civictech.oracle.bind.TaggedOperators`, but restricted to a single
+ *   instance's own atomic-put/tombstone/dot-minting semantics
+ *   ([civictech.oracle.bind.SingleInstanceOrMapModel]) — it fails loudly, by
+ *   name, on any slice carrying a peer delivery rather than silently approximating one. The
+ *   gossiped-delivery convergence half this bullet named (`[ORA2-DIFF-01..09]`, driven by
+ *   `civictech.oracle.model.DotModel` over the whole multi-instance [Script]) remains
+ *   unregistered in the per-node catalog and belongs to the mesh differential runner, per
+ *   `TaggedOperators`' own KDoc. So this exclusion is no longer accurate as "not modelled here"
+ *   for the single-instance slice; it stands only for the cross-instance merge.
+ *
  * - **`MergeableGroupByCell`.** Verified against its own KDoc
  *   (`kernel/src/main/kotlin/civictech/cell/data/op/MergeableGroupByCell.kt`): *"unlike
  *   `GroupByCell` there is no `retract` — a merge cannot be un-applied in general … The
@@ -101,6 +165,23 @@ import java.io.Serializable
  *   *DISPUTES audit: no filing.* The removal path is a replication mechanism, and replication
  *   is `CHA1`/`CHA3`'s decided scope (epic §6) — a scope assignment, not an absence of any
  *   honest check.
+ *
+ *   **Update (computenet-4ru.1.1): superseded in scope by `[ORA2-MODEL-09]`, not withdrawn.**
+ *   `civictech.oracle.model.MergeableGroupByModel` (`TaggedKeyedModels.kt`) now models this
+ *   cell's grow/merge-only aggregation, stating non-retraction itself as the specification
+ *   rather than approximating a retraction it cannot see. That model does not fix what this
+ *   entry found wrong: it does not model the gossiped-`MapDelta.removals` path either — the
+ *   ORA1 reasoning above (`[ORA1-MODEL-06]`'s retraction demand, and the replication mechanism
+ *   this epic does not model) stands as stated, it is simply no longer the only requirement in
+ *   play. What changed is which requirement governs the cell: ORA1 measured it against exact
+ *   retraction and found it unmodellable; ORA2 measures it against grow/merge-only and models
+ *   *that*, a strictly smaller and honestly-labelled claim. Separately, `MergeableGroupByModel`
+ *   is not wired into the operator catalog — `civictech.oracle.bind.TaggedOperators`' own KDoc
+ *   explains why: the cell needs an `OperatorModel` shape to sit downstream of a source, but the
+ *   model is deliberately a `SourceModel` (it needs the script's own add/remove history, which a
+ *   live `ModelState.SetState` has already discarded), so no registration exists yet. The
+ *   grow/merge-only slice is modelled as a standalone reference class; it is not exercised by a
+ *   differential sweep.
  *
  * - **Window close / eviction.** `Windows` (`kernel/src/main/kotlin/civictech/cell/data/
  *   Windows.kt`) is not a cell — it is two pure key-assignment functions, `tumbling`/`sliding`,
@@ -139,16 +220,38 @@ import java.io.Serializable
  *   `DISPUTES.md`, resolved). What is absent here is a *batch* check of it, which is this
  *   ledger's subject and not a gap in the requirement's coverage.
  *
- * - **`WatermarkCell` — NOT CLASSIFIED HERE; the question is open and owned elsewhere.**
- *   `civictech.cell.data.WatermarkCell` (`kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`)
- *   is in neither `OperatorCatalog` nor this ledger. That gap is real and pre-existing; it is
- *   recorded by the source-cell drift guard (`oracle/src/test/resources/source-cell-inventory.txt`,
- *   computenet-y9p4) and filed as **computenet-fx5b**, which owns the decision of whether the
- *   cell is registered into the vocabulary or excluded with a written reason. It is named here
- *   so the omission is visible rather than silent — this bullet is a pointer, **not** a verdict,
- *   and does not close fx5b. Note also that `WatermarkCell` is not named in epic
- *   computenet-4ru §3.1's operator inventory, so whether it is even in this ledger's stated
- *   population is part of what fx5b has to settle.
+ * - **`WatermarkCell`.** (computenet-fx5b, resolving the pointer this bullet used to be.)
+ *   Verified against its own KDoc
+ *   (`kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`): it is a *replicable
+ *   delivered-watermark lattice (spec 40/42, E3.2)*, whose four independent grow-only/
+ *   pointwise-monotone lanes (`rows`, `closed`, `suspendEpoch`, `members`) exist to let
+ *   `civictech.cell.consistency.ReplicaQuorum.frontier` decide, across a mesh of replicas,
+ *   whether a covering quorum has settled — a cross-replica settlement read, not a data
+ *   transformation. Its own KDoc says so directly: instances "converge by delta gossip over
+ *   `deltaInlet` exactly like the tagged-set family and `PnCounterCell`", and unlike every
+ *   registered source cell **"there is no `@Contract`"** — nothing here is spawned or driven
+ *   through the generated `*Base`/`*Ports` machinery `OperatorCatalog.register`'s `CellFactory`
+ *   binds. The mutating methods (`advance`, `close`, `suspend`, `resume`, `announceMember`) are
+ *   not served on an application-facing `Use<Ops>` inlet a script's events could enqueue into,
+ *   the way `MapCell`'s `Use<MapOps>` or `CounterCell`'s `Use<CounterOps>` are — they are called
+ *   directly by replication machinery, and `advance` is itself driven by tapping *another* cell's
+ *   outlet and reading `CurrentContext.get()?.timestamp` (`trackDeliveriesOf`), a live-wave
+ *   signal with no expression in a local [Script]/[ScriptEvent] slice. This is epic
+ *   computenet-4ru §6's own scope boundary — "Replication, partition, crash-restart, membership
+ *   churn" is `CHA1`/`CHA3`'s, not ORA1's, "ORA1 may run cells across hosts … but does not inject
+ *   faults" — and `WatermarkCell`'s entire reason to exist is that settlement mechanism. It is
+ *   also not named in epic computenet-4ru §3.1's operator inventory at all, confirming it was
+ *   never part of the algebra this ledger's vocabulary enumerates. **Excluded** for both reasons:
+ *   out of ORA1's decided scope, and — independently — structurally undriveable by a batch
+ *   script reference even if it were in scope.
+ *   *DISPUTES audit: no filing.* Replication settlement is `CHA1`/`CHA3`'s decided scope (epic
+ *   §6), the same conclusion this ledger already reaches for `MergeableGroupByCell`'s removal
+ *   path — a scope assignment, not an absence of any honest check. `WatermarkCell`'s own
+ *   behaviour is exercised today by the kernel's own suites
+ *   (`kernel/src/test/kotlin/civictech/cell/data/WatermarkCellTest.kt`,
+ *   `WatermarkCellBoundedReadTest.kt`,
+ *   `kernel/src/test/kotlin/civictech/cell/replication/DeliveredWatermarkTest.kt`), and by
+ *   `civictech.cell.consistency.ReplicaQuorum`'s own tests where it is actually consumed.
  */
 
 /**

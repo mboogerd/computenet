@@ -1,6 +1,11 @@
 plugins {
     // Shared code is located in `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`.
     id("buildsrc.convention.kotlin-jvm")
+    // computenet-051.6.2: test-only — a test-source `@Serializable` delta type
+    // (WireCodec's late-contribution seam, JAR1 [JAR1-REG-08]) needs the
+    // compiler plugin to get a generated serializer at all; :kernel applies it
+    // the same way for its own main sources.
+    alias(libs.plugins.kotlin.plugin.serialization)
 }
 
 // ponytail: the WebSocket dependency lives here so :kernel stays dependency-free;
@@ -16,6 +21,11 @@ dependencies {
     implementation(project(":kernel"))
     implementation(project(":identity"))
     implementation(libs.java.websocket)
+    // computenet-051.6.2: test-only — WsLateWireSerializersRoundTripTest
+    // defines a test-local @Serializable delta type and a WireSerializers
+    // (SerializersModule) contribution; kernel's own kotlinx-serialization
+    // dependency is `implementation`-scoped and not exposed transitively.
+    testImplementation(libs.kotlinx.serialization)
 }
 
 // The burst/stress probes read `wire.burst.*` and `wire.stress.*` from the JVM

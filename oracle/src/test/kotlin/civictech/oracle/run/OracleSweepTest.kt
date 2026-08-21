@@ -2,13 +2,17 @@ package civictech.oracle.run
 
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
+import civictech.oracle.bind.OptionalFamilies
 import civictech.oracle.gen.GeneratorConfig
+import civictech.oracle.gen.GraphGenerator
 import civictech.oracle.model.ModelState
 import civictech.oracle.model.Script
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SourceId
 import civictech.oracle.model.SourceScript
 import civictech.oracle.model.WriterId
+import io.kotest.assertions.withClue
+import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
@@ -113,6 +117,136 @@ class OracleSweepTest {
         println(
             "[oracle-sweep] BS-1: $count seeds ($seeds) in $elapsedMs ms " +
                 "(${"%.1f".format(elapsedMs.toDouble() / count)} ms/seed) [ORA1-PERF-01]",
+        )
+    }
+
+    /**
+     * The **pair-shaped** sweep config: the whole registered vocabulary
+     * ([CoreOperators.Ids.ALL]), so `keyBy` and the eleven entries it bootstraps —
+     * `joinSet`/`semiJoin`/`antiJoin` and the eight `groupBy*` — are drawable, at the wide
+     * knobs `PairShapeBootstrapTest` and `GraphGeneratorTest` use (depth 3..5, three sources,
+     * element domain 6, 40 script ops).
+     *
+     * Two knobs differ from `PairShapeBootstrapTest.wideConfig`, and both are deliberate
+     * because this config is *executed* rather than only generated:
+     *
+     * - **`writerCount = 1`**, against `GeneratorConfig`'s default of 2. At two writers this
+     *   config mismatches for a reason that has nothing to do with the pair family: the
+     *   computenet-qcm1 / computenet-4ru.6.3 cross-writer remove asymmetry (`SetCell`'s inlet
+     *   retracts unconditionally, while the batch `Membership` model no-ops a cross-writer
+     *   remove that lacks a preceding `Observe`) — the same seam `baselineConfig` excludes for
+     *   the same reason. So this test says **nothing** about multi-writer pair-shaped scripts;
+     *   that is qcm1's item, not this one.
+     * - **`unobservedRemoveRatio = 0.0`**, against 0.25. Unobserved removes are the same
+     *   qcm1 seam approached from the other side, so biasing towards them here would measure
+     *   that seam rather than kernel-vs-model agreement over the pair family.
+     */
+    private fun pairShapedConfig() = GeneratorConfig(
+        depthRange = 3..5,
+        sourceCount = 3,
+        vocabulary = CoreOperators.Ids.ALL,
+        elementDomainSize = 6,
+        scriptLength = 40,
+        addRemoveRatio = 0.6,
+        unobservedRemoveRatio = 0.0,
+        terminalCount = 2,
+        writerCount = 1,
+    ).validated()
+
+    /**
+     * `[ORA1-DIFF-01]` `[ORA1-DIFF-04]` for the **pair-shaped half of the vocabulary**
+     * (computenet-q21w).
+     *
+     * ## The hole this closes
+     *
+     * computenet-4ru.16 registered `keyBy` and thereby made the eleven pair-shaped entries
+     * *generable*; `PairShapeBootstrapTest` pins that they are generated. What no committed
+     * test did was **run** one: every differential-execution suite in this module —
+     * [OracleSweepTest]'s own BS-1 above, [DivergenceControlTest], [WavePrefixTest],
+     * `PinnedSeedsTest`, [GeneratedCaseExecutionTest], [FailureTaxonomyTest], the shrinker
+     * suites — names an explicit set-algebra vocabulary and none names `keyBy` or any
+     * pair-shaped id, so ~40% of the operator algebra was reachable and unexecuted. This test
+     * executes it, kernel against batch reference, and asserts agreement — no Mismatch, no
+     * dead letter, no non-quiescence, which is what [OracleSweep.run] fails a seed on.
+     *
+     * ## Why the population is counted before it is swept
+     *
+     * The sweep alone would pass **vacuously** on a population that happens to contain no
+     * pair-shaped node — which is exactly the state the module was in before 4ru.16, and
+     * exactly the state it returns to if `keyBy` is unregistered or reshaped, or a generator
+     * change steers the frontier away from `SetOf(Tuple(2))`. So the population is counted
+     * first, over the *same* `(seed, config)` pairs the sweep then executes:
+     * [civictech.oracle.gen.CaseGenerator] derives its graph as
+     * `GraphGenerator(config).generate(Random(seed))`, which is exactly what
+     * [GraphGenerator.generate]`(seed)` is defined as, so the two enumerate the same
+     * topologies rather than two similar ones.
+     *
+     * The count is asserted **twice, on the producer and the consumers separately**, because a
+     * single count over the union of the twelve is not enough: `keyBy` alone is drawn often,
+     * so its count can stay healthy while the eleven it exists to unblock disappear. See
+     * [PAIR_CONSUMERS] for the mutation that measured exactly that.
+     *
+     * [PAIR_CONSUMER_MINIMUM] is a floor well under what is observed, not the observed figure:
+     * the assertion exists to catch the family *collapsing*, and pinning the exact count would
+     * make this test fail on any innocuous generator retune. Observed 2026-08-20 on this
+     * config (macOS/arm64): **53 of 200** seeds carry `keyBy` and **47 of 200** carry one of
+     * the eleven — a superset of, and consistent with, the 23 join/groupBy-bearing seeds
+     * computenet-q21w measured on the closely related `unobservedRemoveRatio = 0.25` variant.
+     * The seed list is printed on every run so the margin is visible rather than inferred
+     * from a bare green tick.
+     *
+     * ## What a failure here means
+     *
+     * A dropped count is a **generation/registration** regression — read
+     * `PairShapeBootstrapTest` next. A sweep failure is a **disagreement** between the kernel
+     * and the reference over an operator this config draws, and per the epic's D10 it is fixed
+     * where it lives, never narrowed away here. And read [OracleSweep]'s "what a green sweep
+     * MEANS" KDoc before quoting this test: agreement defends the reference model, it does not
+     * prove it.
+     */
+    @Test
+    fun `the pair-shaped vocabulary executes differentially and agrees with the batch reference`() {
+        val config = pairShapedConfig()
+        val seeds = 0L until PAIR_SHAPED_SWEEP_SEEDS
+
+        val generator = GraphGenerator(config)
+        val topologies = seeds.associateWith { generator.generate(it).topology.nodes.map { n -> n.catalogId } }
+        val keyBySeeds = topologies.filterValues { CoreOperators.Ids.KEY_BY in it }.keys
+        val consumerSeeds = topologies.filterValues { ids -> ids.any { it in PAIR_CONSUMERS } }.keys
+        println(
+            "[oracle-sweep] pair-shaped: of $PAIR_SHAPED_SWEEP_SEEDS seeds, " +
+                "${keyBySeeds.size} carry keyBy and ${consumerSeeds.size} carry one of the " +
+                "eleven pair-consuming ids: $consumerSeeds",
+        )
+        withClue(
+            "No seed of this sweep draws a node that CONSUMES a SetOf(Tuple(2)) — no " +
+                "joinSet/semiJoin/antiJoin and no groupBy* — so executing it would assert " +
+                "nothing about the eleven entries computenet-4ru.16 unblocked. That is the " +
+                "vacuity this test exists to exclude, and it is the pre-4ru.16 state of the " +
+                "module. Either `keyBy` (the SetOf(Scalar) -> SetOf(Tuple(2)) bootstrap) is no " +
+                "longer registered or no longer has that shape, or a generator change has " +
+                "steered the frontier away from pair-shaped nodes. See PairShapeBootstrapTest " +
+                "for the generation-side measurement. keyBy-bearing seeds: ${keyBySeeds.size} " +
+                "— note a healthy keyBy count alone does NOT rescue this: keyBy emitting " +
+                "while nothing consumes its output is exactly the shape mutation this " +
+                "assertion was written to catch.",
+        ) {
+            consumerSeeds.size shouldBeGreaterThanOrEqual PAIR_CONSUMER_MINIMUM
+        }
+        withClue(
+            "No seed draws `keyBy` itself. Nothing else in the catalog produces " +
+                "SetOf(Tuple(2)) from SetOf(Scalar), so the eleven above cannot be reached " +
+                "except through it; a zero here means the bootstrap is gone.",
+        ) {
+            keyBySeeds.size shouldBeGreaterThanOrEqual PAIR_CONSUMER_MINIMUM
+        }
+
+        val startedAt = System.nanoTime()
+        OracleSweep.run(config, seeds, onProgress = {})
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+        println(
+            "[oracle-sweep] pair-shaped: $PAIR_SHAPED_SWEEP_SEEDS seeds in $elapsedMs ms " +
+                "(${"%.1f".format(elapsedMs.toDouble() / PAIR_SHAPED_SWEEP_SEEDS)} ms/seed)",
         )
     }
 
@@ -279,6 +413,86 @@ class OracleSweepTest {
     }
 
     /**
+     * The rough edge 4ru.1.4's reviewer flagged and this task fixes: [OracleSweep.describe] used
+     * to fall through to the `else -> outcome.toString()` branch for both mesh verdicts, dumping
+     * a whole [Script] into a report line exactly like the wave-prefix kind did before it got its
+     * own branch. Same evidence as that test: no buried script text, and the fields a reader
+     * actually needs.
+     */
+    @Test
+    fun `a sweep renders both mesh verdicts field by field, never dumping the script`() {
+        val buriedScript = Script(
+            listOf(
+                SourceScript(
+                    SourceId("r0"),
+                    List(30) { ScriptEvent.Add(WriterId("writer-0"), "buried-mesh-script-event-$it") },
+                ),
+            ),
+        )
+
+        val divergence = RunOutcome.ReplicaDivergence(
+            seed = 4L,
+            logicalId = "logical-id-4",
+            caseMarker = "CTL-04",
+            script = buriedScript,
+            expected = ModelState.MapState(mapOf("k" to "v1")),
+            perReplica = mapOf("r0" to ModelState.MapState(mapOf("k" to "v0")), "r1" to ModelState.MapState(mapOf("k" to "v1"))),
+            keys = emptyList(),
+        )
+        val renderedDivergence = OracleSweep.describe(divergence)
+        renderedDivergence shouldNotContain "buried-mesh-script-event"
+        renderedDivergence shouldNotContain "script="
+        renderedDivergence shouldContain "ReplicaDivergence("
+        renderedDivergence shouldContain "logicalId=logical-id-4"
+        renderedDivergence shouldContain "caseMarker=CTL-04"
+
+        val wrong = RunOutcome.ReplicasAgreeButWrong(
+            seed = 2L,
+            logicalId = "logical-id-2",
+            caseMarker = "CTL-02",
+            script = buriedScript,
+            expected = ModelState.MapState(mapOf("k" to "v2")),
+            actual = ModelState.MapState(mapOf("k" to "v0")),
+            difference = StateDifference.MapDifference(emptyMap(), emptyMap(), mapOf("k" to ("v2" to "v0"))),
+            replicas = setOf("r0", "r1", "r2"),
+            keys = emptyList(),
+        )
+        val renderedWrong = OracleSweep.describe(wrong)
+        renderedWrong shouldNotContain "buried-mesh-script-event"
+        renderedWrong shouldNotContain "script="
+        renderedWrong shouldContain "ReplicasAgreeButWrong("
+        renderedWrong shouldContain "logicalId=logical-id-2"
+        renderedWrong shouldContain "caseMarker=CTL-02"
+        renderedWrong shouldContain "replicas=[r0, r1, r2]"
+    }
+
+    /**
+     * `[ORA2-HONEST-02]`/BS-15: [OracleSweep.reportOptionalFamilies] consumes
+     * `civictech.oracle.bind.OptionalFamilies.probe()` verbatim — every family it names, in
+     * order, each line saying whether it was active or not-applicable with a reason — rather than
+     * a second probe of its own.
+     */
+    @Test
+    fun `a sweep reports which optional families were active and which were not-applicable`() {
+        val families = OptionalFamilies.probe()
+        val lines = OracleSweep.reportOptionalFamilies(families)
+
+        withClue("lines=$lines families=$families") {
+            lines.size shouldBe families.size
+        }
+        families.forEach { family ->
+            val expected = if (family.available) {
+                "'${family.family}': active"
+            } else {
+                "'${family.family}': not-applicable (${family.reason})"
+            }
+            withClue("family=${family.family} lines=$lines") {
+                lines.any { it.contains(expected) } shouldBe true
+            }
+        }
+    }
+
+    /**
      * Runs [block] with [OracleSweep.SEED_COUNT_PROPERTY] set to [value] (or cleared, for
      * `null`), restoring whatever the surrounding invocation had — a `-Poracle.seeds` run
      * really does set this property for the whole test JVM, so leaking a value here would
@@ -300,5 +514,40 @@ class OracleSweepTest {
                 System.setProperty(OracleSweep.SEED_COUNT_PROPERTY, previous)
             }
         }
+    }
+
+    private companion object {
+        /**
+         * The eleven entries computenet-4ru.16 unblocked: everything that **consumes** a
+         * `SetOf(Tuple(2))`. `keyBy` is deliberately NOT a member — it is the *producer*, and
+         * counting it here would let a healthy keyBy count mask the eleven vanishing.
+         *
+         * That is not hypothetical. Measured by mutation (2026-08-20, macOS/arm64): retyping
+         * `keyBy`'s shape rule to `unary(SCALAR_SET, SCALAR_SET)` — registered, still drawn,
+         * but no longer producing pairs — leaves 55 of 200 seeds carrying `keyBy` and **zero**
+         * carrying any of the eleven. A guard over the union of the twelve passes that
+         * mutation green; this split is what fails it.
+         */
+        val PAIR_CONSUMERS: Set<String> = setOf(
+            CoreOperators.Ids.JOIN_SET,
+            CoreOperators.Ids.SEMI_JOIN,
+            CoreOperators.Ids.ANTI_JOIN,
+            CoreOperators.Ids.GROUP_BY_GLOBAL,
+        ) + CoreOperators.Ids.GROUP_BY_AGGREGATES
+
+        /**
+         * The same 200-seed population size `PairShapeBootstrapTest` and `GraphGeneratorTest`
+         * draw, so the count printed here is on the same scale as theirs rather than a
+         * different one.
+         */
+        const val PAIR_SHAPED_SWEEP_SEEDS: Long = 200L
+
+        /**
+         * A deliberately loose floor on how many of [PAIR_SHAPED_SWEEP_SEEDS] must carry a
+         * [PAIR_CONSUMERS] node, and separately a `keyBy` node — the guard against a vacuous
+         * sweep, not a pin on the generator's exact draws. See the test's KDoc for the
+         * observed figures.
+         */
+        const val PAIR_CONSUMER_MINIMUM: Int = 10
     }
 }

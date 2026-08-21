@@ -1,9 +1,23 @@
 package civictech.oracle.run
 
+import civictech.cell.Cell
+import civictech.cell.CellRef
+import civictech.cell.Propagate
+import civictech.cell.consistency.GlitchFree
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.view.SetView
 import civictech.cell.graph.ConnectStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.GraphStep
 import civictech.cell.graph.SpawnStep
+import civictech.cell.host.ManagedHost
+import civictech.cell.host.inlet
+import civictech.cell.port.FanInlet
+import civictech.cell.port.PolicyTier
+import civictech.cell.port.PortRef
+import civictech.cell.port.PortRegistry
+import civictech.cell.port.Use
+import civictech.cell.port.registerPort
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
 import civictech.oracle.gen.CaseGenerator
@@ -31,6 +45,8 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import civictech.testkit.SimWorld
+import java.util.UUID
 
 /**
  * BS-8 / `[ORA1-DIFF-06]` — the wave-prefix glitch-freedom oracle, epic design **D5**: while a
@@ -71,6 +87,30 @@ import org.junit.jupiter.api.Test
  *    computenet-2hur). The sweep keeps the *ordinary* writer and unobserved-remove knobs — see
  *    [generatedSweepConfig] and the sweep test's own KDoc for how the known cross-writer seam is
  *    partitioned out by MEASUREMENT rather than by configuration.
+ *
+ * ## Retired-name provenance is exempt from computenet-lllz's grep criterion
+ *
+ * computenet-lllz's acceptance criterion reads: "No file under `oracle/` names
+ * `RAW_VIEW_FLICKER_SEEDS`, `CHAIN_ARTIFACT_SEEDS` or `isWithinWaveTransient` (grep is the
+ * check)." That criterion exists to catch a **dangling live reference** — a call site, an import,
+ * a doc link that still points at a name that no longer resolves, so "a reader following those
+ * references now finds nothing." This file's three renamed-from-X sentences (on
+ * [isPlateauRegression], `HEALED_DIVERGENCE_SEEDS`, and `SINGLE_PATH_DIVERGENCE_SEEDS` below) are
+ * the opposite of that failure mode: they are the landing page for a reader who arrives holding
+ * one of the old names — from a stale local branch, an old bead, or an old comment elsewhere in
+ * the repo that computenet-eeys's rename did not touch — and needs to find where it went and why.
+ * Rewording them to avoid the literal old name (e.g. "renamed by computenet-eeys" with the name
+ * dropped) would satisfy the grep and defeat the sentence's only reader.
+ *
+ * **computenet-73hp restates the criterion**, per its own acceptance clause, to: no file under
+ * `oracle/` contains a *live* reference to `RAW_VIEW_FLICKER_SEEDS`, `CHAIN_ARTIFACT_SEEDS` or
+ * `isWithinWaveTransient` — a reference a reader would follow expecting to resolve to a symbol —
+ * outside of rename-provenance prose that names its own replacement and the bead that renamed it.
+ * The three mentions here satisfy the restated criterion by construction: each sits in the KDoc of
+ * the symbol that replaced the name it mentions, immediately identifies the replacement, and cites
+ * computenet-eeys. `PinnedSeeds.kt`, which computenet-lllz actually scoped, carries none of the
+ * old names at all — provenance or otherwise — so this file is the only place the exemption
+ * applies.
  */
 class WavePrefixTest {
 
@@ -103,13 +143,17 @@ class WavePrefixTest {
      *            └── exp (flatMapSet: characters) ────┘
      * ```
      *
+     * [expansionArmHost] places the `flatMapSet` arm on a second host ordinal (everything else
+     * stays on 0) — computenet-g25w's reproduction, and the only knob that separates the
+     * co-hosted and cross-host readings of one identical graph.
+     *
      * `intersect` is deliberately NOT the fan-in here even though computenet-vvre (`8d840f26`)
      * and computenet-88hv (`d40e66f8`) landed its tag-minting fix in this branch's base: `union`
      * keeps both arms' contributions visible in the terminal's value, which is what makes a
      * half-published wave a distinguishable state. An `intersect` would hide one arm's
      * contribution behind the other's.
      */
-    private fun diamondCase(script: CaseScript, seed: Long = 8L) = GeneratedCase(
+    private fun diamondCase(script: CaseScript, seed: Long = 8L, expansionArmHost: Int = 0) = GeneratedCase(
         seed = seed,
         topology = CaseTopology(
             nodes = listOf(
@@ -119,7 +163,7 @@ class WavePrefixTest {
                 TopologyNode("u", CoreOperators.Ids.UNION, listOf("flt", "exp"), null),
             ),
             terminals = listOf(TerminalSpec("united", "u")),
-            placement = mapOf("src" to 0, "flt" to 0, "exp" to 0, "u" to 0),
+            placement = mapOf("src" to 0, "flt" to 0, "exp" to expansionArmHost, "u" to 0),
         ),
         spec = spec(
             SpawnStep("src", factory(CoreOperators.Ids.SET)),
@@ -398,8 +442,291 @@ class WavePrefixTest {
         val twoHost = single.copy(
             topology = single.topology.copy(placement = single.topology.placement + ("u" to 1)),
         )
-        withClue("cross-host mid-wave states of undecided provenance — computenet-g25w") {
+        withClue("the settled multi-host reason still cites its bead — computenet-g25w") {
             WavePrefixOracle.notApplicableBecause(twoHost).shouldNotBeNull().contains("computenet-g25w") shouldBe true
+        }
+    }
+
+    // ------------------------------------ computenet-g25w: the cross-host mid-wave observation
+
+    /**
+     * The pinned reproduction behind [WavePrefixOracle.notApplicableBecause]'s multi-host
+     * refusal (computenet-g25w), and the measurement that settles what it is.
+     *
+     * The bead asked a binary question: is the cross-host diamond's mid-wave terminal state a
+     * kernel glitch-freedom defect, or an artifact of [CaseExecution.assemble]'s bare-`Propagate`
+     * cross-host wiring? **It is neither**, and the three tests below are the three measurements
+     * that show it, in the order they discriminate:
+     *
+     * 1. [`the cross-host diamond publishes terminal states matching no wave prefix`] reproduces
+     *    it: the same script over the same graph is prefix-clean at `expansionArmHost = 0` and
+     *    shows three non-prefix states at `expansionArmHost = 1`.
+     * 2. [`the same torn states are published on ONE host, so the tear is not the host boundary`]
+     *    is the discriminator: read the union's **published stream** rather than the
+     *    scheduler-step boundary and the *co-hosted* graph — zero cross-host edges — publishes
+     *    the identical six-state sequence, torn states included. So the wiring cannot be the
+     *    cause: the effect is there without it.
+     * 3. [`nothing in the diamond declares glitch-freedom, so an eager per-arm publish is
+     *    permitted`] is why that is legal rather than a defect: `[22-GF-01]` makes glitch-freedom
+     *    **opt-in** ("a cell that has *declared itself* glitch-free SHALL NOT expose derived state
+     *    that mixes pre-wave and post-wave inputs … Non-declaring cells process eagerly with zero
+     *    coordination cost"), and no operator in this diamond declares it.
+     *
+     * What the host boundary changes is **observation granularity, not semantics**. Co-hosted,
+     * the whole cascade runs inline inside the one scheduler task the source op started, so the
+     * per-step observer never lands between the two arms' publishes; across a host boundary the
+     * far arm's delta is a separate task, so the same intermediate becomes visible at a step
+     * boundary. That is why [WavePrefixOracle.appliesTo]'s single-host restriction **stays**: the
+     * property it checks is a wave-boundary property that only the co-hosted inlining makes
+     * observable-at-wave-boundaries, not a kernel guarantee about non-declaring fan-ins.
+     *
+     * The fourth test records the residual the bead's hypothesis was half-right about: a
+     * bare-`Propagate` cross-host connect really does establish no target-side link, so it
+     * really would carry no completeness protocol — to a join that had one. None of these cases
+     * does, which is why it was a filed follow-up (**computenet-xj0v**) and not this bead's
+     * answer. That follow-up has since been answered: **computenet-vpiz** makes
+     * [CaseExecution.assemble] wire a cross-host edge as a real bridged link pair, so the
+     * harness's own cross-host wiring no longer has this gap; the fourth test now pins the bare
+     * pattern it hand-builds, not what `assemble` does.
+     */
+    private fun crossHostScript() = CaseScript(
+        listOf(
+            CaseStep.Op(source, ScriptEvent.Add(writer, "ab")),
+            CaseStep.Op(source, ScriptEvent.Add(writer, "cd")),
+            CaseStep.Op(source, ScriptEvent.Remove(writer, "ab")),
+        ),
+    )
+
+    /**
+     * Drives [case] one scheduler step at a time, reading the terminal after every productive
+     * step — [DifferentialRunner.Driving]'s own observation point, reproduced here because
+     * [DifferentialRunner.run] refuses to prefix-check a multi-host case by design.
+     *
+     * The drain here happens **per op** — `while (world.controller.step())` runs to quiescence
+     * before the next op is issued, not once after all three are issued. That is not a stylistic
+     * choice: it is what makes the co-hosted and cross-host published streams comparable at all
+     * (see [publishedStream] below, and "the union's published stream is identical under both
+     * placements, drained per op"). Issuing all three ops first and draining only once gives the
+     * cross-host messaging room to interleave work from op N with op N+1 before either settles,
+     * so the resulting sequence of intermediates no longer lines up wave-for-wave with the
+     * co-hosted case's. A single end-of-run drain is not a cheaper version of this measurement —
+     * it measures a genuinely different, protocol-dependent thing, and the two placements'
+     * published streams diverge under it even though they agree under drain-per-op.
+     */
+    private fun stepBoundaryStates(case: GeneratedCase): List<ModelState> {
+        val world = SimWorld(seed = case.seed)
+        val graph = CaseExecution.assemble(case, world).graph
+        val observed = mutableListOf<ModelState>()
+        case.script.steps.filterIsInstance<CaseStep.Op>().forEach { op ->
+            when (val event = op.event) {
+                is ScriptEvent.Add -> graph.sources.getValue(op.source).add(event.element)
+                is ScriptEvent.Remove -> graph.sources.getValue(op.source).remove(event.element)
+                else -> Unit
+            }
+            while (world.controller.step()) observed += graph.terminals.getValue("united").current()
+        }
+        return observed
+    }
+
+    @Test
+    fun `the cross-host diamond publishes terminal states matching no wave prefix`() {
+        val coHosted = diamondCase(crossHostScript())
+        val crossHost = diamondCase(crossHostScript(), expansionArmHost = 1)
+        val prefixes = WavePrefixOracle.prefixesOf(coHosted.script, diamondReference(coHosted))
+            .map { it.getValue("united") }
+
+        withClue("the two cases differ ONLY in placement, so the graph cannot be the variable") {
+            crossHost.copy(topology = crossHost.topology.copy(placement = coHosted.topology.placement)) shouldBe coHosted
+        }
+
+        val coHostedStates = stepBoundaryStates(coHosted)
+        withClue("co-hosted: one productive step per wave, every one of them a prefix") {
+            coHostedStates shouldBe listOf(prefixes[1], prefixes[2], prefixes[3])
+        }
+
+        val crossHostStates = stepBoundaryStates(crossHost)
+        val torn = crossHostStates.filter { it !in prefixes }
+        withClue("cross-host: the three torn states, one per wave — filter arm in, expansion arm not") {
+            torn.distinct() shouldBe listOf(
+                ModelState.SetState(setOf("ab")),
+                ModelState.SetState(setOf("ab", "a", "b", "cd")),
+                ModelState.SetState(setOf("a", "b", "cd", "c", "d")),
+            )
+        }
+        withClue("and the checker calls them NO_MATCHING_PREFIX, not REGRESSED") {
+            val checker = WavePrefixOracle.checker(crossHost, "marker", diamondReference(crossHost))
+            val violation = crossHostStates.firstNotNullOfOrNull { checker.observeTerminal("united", it) }
+            violation.shouldNotBeNull().kind shouldBe RunOutcome.WavePrefixViolation.Kind.NO_MATCHING_PREFIX
+        }
+        withClue("NOTHING is lost: both placements settle on the same, correct final state") {
+            coHostedStates.last() shouldBe prefixes.last()
+            crossHostStates.last() shouldBe prefixes.last()
+        }
+    }
+
+    /**
+     * A recorder of the union's **published** stream: its running fold after every arriving
+     * delta, which is a strictly finer observation point than a scheduler-step boundary.
+     */
+    private class PublishRecorder(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        private val view = SetView<Any?>()
+        val published = mutableListOf<ModelState>()
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Any?>>>())
+
+        init {
+            inlet.serve(object : Propagate<SetDelta<Any?>> {
+                override fun propagate(value: SetDelta<Any?>) {
+                    view.apply(value)
+                    published += ModelState.SetState(view.current())
+                }
+            })
+        }
+    }
+
+    @Test
+    fun `the same torn states are published on ONE host, so the tear is not the host boundary`() {
+        val case = diamondCase(crossHostScript())
+        withClue("this case has no cross-host edge at all") {
+            case.topology.placement.values.toSet() shouldBe setOf(0)
+        }
+        val prefixes = WavePrefixOracle.prefixesOf(case.script, diamondReference(case))
+            .map { it.getValue("united") }
+
+        val world = SimWorld(seed = case.seed)
+        val assembly = CaseExecution.assemble(case, world)
+        val recorder = PublishRecorder()
+        world.host.managementInlet.call.spawn(recorder)
+        world.host.managementInlet.call.connect(assembly.refs.getValue("u"), "outlet", recorder.ref, "inlet")
+
+        case.script.steps.filterIsInstance<CaseStep.Op>().forEach { op ->
+            when (val event = op.event) {
+                is ScriptEvent.Add -> assembly.graph.sources.getValue(op.source).add(event.element)
+                is ScriptEvent.Remove -> assembly.graph.sources.getValue(op.source).remove(event.element)
+                else -> Unit
+            }
+        }
+        while (world.controller.step()) { /* drain */ }
+
+        withClue("two publishes per wave — one per arm — even though every cell is co-hosted") {
+            recorder.published.size shouldBe 6
+        }
+        withClue("and three of them are the SAME torn states the cross-host case exposes") {
+            recorder.published.filter { it !in prefixes } shouldBe listOf(
+                ModelState.SetState(setOf("ab")),
+                ModelState.SetState(setOf("ab", "a", "b", "cd")),
+                ModelState.SetState(setOf("a", "b", "cd", "c", "d")),
+            )
+        }
+    }
+
+    /**
+     * Records [case]'s union-published stream under the drain-per-op protocol
+     * [stepBoundaryStates] uses — drain to quiescence after each op, not once after all three
+     * are issued. See [stepBoundaryStates]'s KDoc for why the protocol is load-bearing: only
+     * under drain-per-op are the co-hosted and cross-host published streams the same measurement.
+     */
+    private fun publishedStream(case: GeneratedCase): List<ModelState> {
+        val world = SimWorld(seed = case.seed)
+        val assembly = CaseExecution.assemble(case, world)
+        val recorder = PublishRecorder()
+        world.host.managementInlet.call.spawn(recorder)
+        world.host.managementInlet.call.connect(assembly.refs.getValue("u"), "outlet", recorder.ref, "inlet")
+        case.script.steps.filterIsInstance<CaseStep.Op>().forEach { op ->
+            when (val event = op.event) {
+                is ScriptEvent.Add -> assembly.graph.sources.getValue(op.source).add(event.element)
+                is ScriptEvent.Remove -> assembly.graph.sources.getValue(op.source).remove(event.element)
+                else -> Unit
+            }
+            while (world.controller.step()) { /* drain per op, matching stepBoundaryStates */ }
+        }
+        return recorder.published
+    }
+
+    @Test
+    fun `the union's published stream is identical under both placements, drained per op`() {
+        val coHosted = diamondCase(crossHostScript())
+        val crossHost = diamondCase(crossHostScript(), expansionArmHost = 1)
+        withClue("the two cases differ ONLY in placement, so the graph cannot be the variable") {
+            crossHost.copy(topology = crossHost.topology.copy(placement = coHosted.topology.placement)) shouldBe coHosted
+        }
+
+        val coHostedPublished = publishedStream(coHosted)
+        val crossHostPublished = publishedStream(crossHost)
+
+        withClue("the co-hosted case has zero cross-host edges, so if the two published streams " +
+            "are identical, the cross-host wiring cannot be the cause of computenet-g25w's " +
+            "mid-wave observation — the effect is present with the wiring entirely absent") {
+            crossHostPublished shouldBe coHostedPublished
+        }
+    }
+
+    @Test
+    fun `nothing in the diamond declares glitch-freedom, so an eager per-arm publish is permitted`() {
+        listOf(
+            CoreOperators.Ids.SET,
+            CoreOperators.Ids.FILTER,
+            CoreOperators.Ids.FLAT_MAP_SET,
+            CoreOperators.Ids.UNION,
+        ).forEach { id ->
+            val cell = factory(id).create(CellRef(UUID.randomUUID()))
+            withClue("$id must not carry the PN-12 GlitchFree marker") {
+                (cell is GlitchFree) shouldBe false
+            }
+            val ports = PortRegistry.of(cell)
+            withClue("$id must carry no ALIGN-tier (wave-frontier) inlet policy either") {
+                ports.names().filter { name ->
+                    (ports[name] as? FanInlet<*>)?.hasPolicy(PolicyTier.ALIGN) == true
+                }.shouldBeEmpty()
+            }
+        }
+    }
+
+    @Test
+    fun `a bare-Propagate cross-host connect establishes no target-side link, and still drops nothing`() {
+        val case = diamondCase(crossHostScript())
+        val world = SimWorld(seed = case.seed)
+        val assembly = CaseExecution.assemble(case, world)
+        val union = assembly.refs.getValue("u")
+
+        val local = PublishRecorder()
+        world.host.managementInlet.call.spawn(local)
+        world.host.managementInlet.call.connect(union, "outlet", local.ref, "inlet")
+
+        val remoteHost = ManagedHost(scheduler = world.controller.scheduler(), registry = world.registry)
+        val remote = PublishRecorder()
+        remoteHost.managementInlet.call.spawn(remote)
+        world.host.managementInlet.call.connect(
+            union,
+            "outlet",
+            Use.fixed(world.registry.inlet<Any>(remote.ref, "inlet"), PortRef.generate()),
+        )
+
+        withClue("a same-host connect registers a link the target inlet can see") {
+            local.inlet.linking.links.size shouldBe 1
+        }
+        withClue(
+            "the bare-Propagate cross-host connect hand-built above does not: no link identity " +
+                "on the target side means no EdgeOpen and no per-inlink frontier bookkeeping " +
+                "there. That WAS the harness's own cross-host wiring, and the real [22-GF-03] " +
+                "limit it carried — until computenet-vpiz made CaseExecution.assemble bridge a " +
+                "cross-host edge as a real link pair, so an assemble-wired cut now DOES register " +
+                "the target-side link (CaseExecutionTest). What this test still pins is the bare " +
+                "pattern itself, which is what the bead's hypothesis was about.",
+        ) {
+            remote.inlet.linking.links.shouldBeEmpty()
+        }
+
+        case.script.steps.filterIsInstance<CaseStep.Op>().forEach { op ->
+            when (val event = op.event) {
+                is ScriptEvent.Add -> assembly.graph.sources.getValue(op.source).add(event.element)
+                is ScriptEvent.Remove -> assembly.graph.sources.getValue(op.source).remove(event.element)
+                else -> Unit
+            }
+        }
+        while (world.controller.step()) { /* drain */ }
+
+        withClue("the data plane is unaffected: same publish count, same final value") {
+            remote.published shouldBe local.published
         }
     }
 
@@ -415,11 +742,15 @@ class WavePrefixTest {
      * this feature uses — so the known cross-writer remove seam (a spawned `SetCell` retracts a
      * live element on any remove, while the model no-ops a cross-writer remove no `Observe`
      * preceded) is **inside** this population. The sweep partitions it out by measurement, not by
-     * configuration — see the sweep test. Its *unobserved* half was computenet-qcm1 and is fixed:
-     * the generator no longer draws an unobserved remove of a live element, so what remains
-     * inside this population is the **observed** cross-writer remove, computenet-eeys — settled
-     * as a *generator* residual of the same asymmetry, not a second one: see
-     * [kernelEffectiveModelInertRemoves].
+     * configuration — see the sweep test. Its *unobserved* half was computenet-qcm1 and its
+     * **observed** half computenet-i3vo; both are fixed, so the seam no longer reaches this
+     * population at all and every pinned list below is empty. The knobs are deliberately NOT
+     * narrowed to keep it that way: `writerCount` stays 2 and `unobservedRemoveRatio` stays 0.25,
+     * so a generator regression that reintroduces the step-class shows up here as seeds
+     * reappearing in those lists rather than as a population that was configured never to contain
+     * them. What the seam *is* — a remove the kernel applies and the model ignores, with the model
+     * the wrong side on this single-replica drive path — is computenet-eeys, and it is still
+     * demonstrated, on a hand-built script: see [kernelEffectiveModelInertRemoves].
      */
     private fun generatedSweepConfig() = GeneratorConfig(
         depthRange = 3..5,
@@ -540,11 +871,16 @@ class WavePrefixTest {
         //     audits `observed = true`, which is why the unobserved knob cannot reach it. See
         //     [kernelEffectiveModelInertRemoves] and its two tests below for the distinguishing
         //     run and the per-seed attribution.
-        //     computenet-qcm1 has since landed (commit a3176733) and accounts for three of those
-        //     twelve: seeds 34, 46 and 36 leave the pinned population altogether and seed 8 moves
-        //     from (a) to the flicker bucket, leaving NINE pinned seeds. The nine are a subset of
-        //     the twelve, so the knob-dependence measured above carries over to them unchanged
-        //     and was not re-run. The earlier
+        //     computenet-qcm1 has since landed (commit a3176733) and accounted for three of those
+        //     twelve: seeds 34, 46 and 36 left the pinned population altogether and seed 8 moved
+        //     from (a) to the flicker bucket, leaving NINE pinned seeds. The nine were a subset of
+        //     the twelve, so the knob-dependence measured above carried over to them unchanged
+        //     and was not re-run. **computenet-i3vo has since landed and accounts for the
+        //     remaining nine**: it states qcm1's constraint as a post-condition over EVERY remove
+        //     the generator emits, which reaches `emitObservedRemove`'s direct branch, so no
+        //     generated seed carries the step-class at all and all four lists below are EMPTY.
+        //     The knobs are unchanged — this is the seam being made unconstructable, not the
+        //     population being narrowed away from it. The earlier
         //     reading of these two buckets as artifacts of THIS observation point (a raw
         //     `TerminalFold` versus `InternalConsistencyTest`'s aligned sink) does not hold:
         //     re-driving each seed with a `Barrier` after every Op and inspecting only the
@@ -558,7 +894,8 @@ class WavePrefixTest {
         // is what stops the partition from becoming an escape hatch: a NEW seed in it fails.
         // (That bucket is EMPTY as of computenet-qcm1: seed 36, its only member, was the
         // generator's manufactured divergence and is clean now — see [GLITCH_CANDIDATE_SEEDS] for
-        // why an empty exact-equality list is the strongest value here rather than a dormant one.)
+        // why an empty exact-equality list is the strongest value here rather than a dormant one,
+        // and for the mutation substitution that now applies to all four lists.)
         val settledMismatch = mutableListOf<Long>()
         val plateauFlicker = mutableListOf<Long>()
         val chainArtifact = mutableListOf<Long>()
@@ -606,22 +943,25 @@ class WavePrefixTest {
             totalObservations shouldBeGreaterThan 0
         }
         withClue(
-            "the cross-writer remove seam's footprint (computenet-eeys; its *unobserved* half " +
-                "was computenet-qcm1 and no longer reaches this population) — a change here is " +
-                "a change in the seam, not in this oracle; re-measured 2026-08-19 on MacBoo " +
-                "under computenet-qcm1. $summary",
+            "the cross-writer remove seam's footprint — EMPTY since computenet-i3vo constrained " +
+                "every emitted remove (its unobserved half was computenet-qcm1); a seed appearing " +
+                "here is the generator emitting the step-class again, not this oracle changing. " +
+                "Re-measured 2026-08-21 on Darwin arm64 under computenet-i3vo. $summary",
         ) {
             settledMismatch shouldBe SEAM_SEEDS
         }
         withClue(
-            "the raw-view plateau-flicker footprint (computenet-eeys) — pinned so it stays " +
-                "visible; re-measured 2026-08-19 on MacBoo under computenet-qcm1. $summary",
+            "the healed-divergence footprint (computenet-eeys) — EMPTY since computenet-i3vo; " +
+                "pinned so it stays visible, and it is the bucket only this instrument can see, " +
+                "the final-state comparison being blind to it. Re-measured 2026-08-21 on Darwin " +
+                "arm64. $summary",
         ) {
             plateauFlicker shouldBe HEALED_DIVERGENCE_SEEDS
         }
         withClue(
             "the single-path (chain) violation footprint (computenet-eeys) — a chain cannot tear, " +
-                "so whatever this is, it is not a reconvergence tear. $summary",
+                "so whatever appears here is not a reconvergence tear. EMPTY since " +
+                "computenet-i3vo; re-measured 2026-08-21 on Darwin arm64. $summary",
         ) {
             chainArtifact shouldBe SINGLE_PATH_DIVERGENCE_SEEDS
         }
@@ -634,6 +974,10 @@ class WavePrefixTest {
         }
 
         val pinned = settledMismatch.size + plateauFlicker.size + chainArtifact.size + glitchCandidate.size
+        // Kept as a floor rather than tightened to `pinned shouldBe 0`: the four exact-equality
+        // assertions above already say the population is entirely clean, and this line's job is
+        // the different one of refusing a future re-pin that buys green by pinning a third of the
+        // sweep. Measured 0/60 pinned on 2026-08-21 under computenet-i3vo.
         withClue("the majority of the population must be genuinely clean, not merely pinned. $summary") {
             pinned shouldBeLessThan cases.size / 3
         }
@@ -813,52 +1157,88 @@ class WavePrefixTest {
     }
 
     /**
-     * The attribution the bead's first criterion demands of the *pinned population*: every one of
-     * the nine pinned seeds' scripts contains at least one
-     * [kernelEffectiveModelInertRemoves] step, and no seed at `writerCount = 1` contains one at
-     * all — which is why that knob is 60/60 clean and why `unobservedRemoveRatio` is not.
+     * The attribution, **inverted by `computenet-i3vo`**: no generated seed carries a
+     * [kernelEffectiveModelInertRemoves] step any more, in any of the three configurations this
+     * test drives — which is why all four pinned lists below are empty.
      *
-     * The condition is **necessary, not sufficient**, and this test asserts it in exactly that
-     * direction. Measured on Darwin arm64, 2026-08-20, over [generatedSweepConfig] seeds 0..59:
-     * 22 of 60 seeds carry such a step and only 9 of those 22 surface as a Mismatch or a prefix
-     * violation — the other 13 are masked downstream, where the sweep's `filter`, `quorumSet` or
-     * `count` operators do not let the element's presence reach the terminal. That gap is the
-     * honest limit of this attribution: it explains why the nine fail, and does not predict which
-     * of the twenty-two will.
+     * What this test asserted before the fix, and why the inversion is the same claim: over
+     * [generatedSweepConfig] seeds 0..59 at `writerCount = 2`, 22 of 60 seeds carried such a step
+     * and 9 of those 22 surfaced as a Mismatch or a prefix violation (measured 2026-08-20, Darwin
+     * arm64; reproduced unchanged on this branch's base, commit abcf53bc). The other 13 were
+     * masked downstream, where the sweep's `filter`, `quorumSet` or `count` operators did not let
+     * the element's presence reach the terminal. The condition was **necessary, not sufficient**,
+     * and it was asserted in exactly that direction: every pinned seed carried one, more seeds
+     * carried one than failed. `ScriptGenerator` now states the constraint as a post-condition
+     * over every remove it emits (`computenet-i3vo`), so the carrier population is empty and the
+     * pinned population — a subset of it — is empty with it.
+     *
+     * `unobservedRemoveRatio = 0.0` is kept as a configuration here for continuity: it used to be
+     * the *discriminating* control (it did NOT clear the carriers, which is how the residual was
+     * attributed to `emitObservedRemove` rather than to qcm1's branch), and it is now simply one
+     * more configuration that is clean.
+     *
+     * **This is not a dormant predicate.** The two controls that keep it live:
+     *
+     *  - [`a remove of an element another writer added is applied by the kernel and ignored by the model`]
+     *    builds the three-event script by hand, with no generator, and asserts this predicate
+     *    finds exactly one step in it. The mechanism is still real and still diverges; what has
+     *    changed is only that the generator no longer manufactures it.
+     *  - [syntheticCarrierScript] below, asserted here, so a mutation that made
+     *    [kernelEffectiveModelInertRemoves] return `emptyList()` unconditionally fails *this*
+     *    test rather than only its neighbour.
      */
     @Test
-    fun `every pinned seed carries a kernel-effective, model-inert remove, and no single-writer seed does`() {
+    fun `no generated seed carries a kernel-effective, model-inert remove, under any writer or remove knob`() {
         val seeds = (0L until 60L).toList()
-        val pinned = SEAM_SEEDS + HEALED_DIVERGENCE_SEEDS + SINGLE_PATH_DIVERGENCE_SEEDS
 
-        val twoWriter = CaseGenerator(generatedSweepConfig())
-        val carriers = seeds.filter { kernelEffectiveModelInertRemoves(twoWriter.generate(it).script).isNotEmpty() }
-
-        withClue("the mechanism must be present in every seed the sweep pins, or it is not the mechanism") {
-            (pinned - carriers.toSet()).shouldBeEmpty()
-        }
-        withClue("necessary, not sufficient: it is present in strictly more seeds than fail") {
-            carriers.size shouldBeGreaterThan pinned.size
+        fun carriers(config: GeneratorConfig): List<Long> {
+            val generator = CaseGenerator(config)
+            return seeds.filter { kernelEffectiveModelInertRemoves(generator.generate(it).script).isNotEmpty() }
         }
 
-        val oneWriter = CaseGenerator(generatedSweepConfig().copy(writerCount = 1).validated())
-        val singleWriterCarriers =
-            seeds.filter { kernelEffectiveModelInertRemoves(oneWriter.generate(it).script).isNotEmpty() }
         withClue(
-            "a writer observes its own adds, so under one writer no remove can leave its element " +
-                "live in the model — which is the whole of why writerCount = 1 is 60/60 clean",
+            "computenet-i3vo: every remove ScriptGenerator emits leaves its element not live in " +
+                "Membership, so no generated seed can carry the mechanism at all",
         ) {
-            singleWriterCarriers.shouldBeEmpty()
+            carriers(generatedSweepConfig()).shouldBeEmpty()
+        }
+        withClue(
+            "a writer observes its own adds, so under one writer no remove could leave its element " +
+                "live even before computenet-i3vo — which is why writerCount = 1 was already 60/60 clean",
+        ) {
+            carriers(generatedSweepConfig().copy(writerCount = 1).validated()).shouldBeEmpty()
+        }
+        withClue(
+            "unobservedRemoveRatio = 0.0 used to be the discriminating control — it did NOT clear " +
+                "the carriers, which is how the residual was attributed to emitObservedRemove's " +
+                "observed = true steps rather than to computenet-qcm1's branch",
+        ) {
+            carriers(generatedSweepConfig().copy(unobservedRemoveRatio = 0.0).validated()).shouldBeEmpty()
         }
 
-        val zeroUnobserved = CaseGenerator(generatedSweepConfig().copy(unobservedRemoveRatio = 0.0).validated())
         withClue(
-            "and unobservedRemoveRatio = 0.0 does NOT clear it — the fact the bead requires any " +
-                "answer to account for; these are emitObservedRemove's steps, audited observed = true",
+            "and the predicate is not dormant: it still names the step in a hand-built script that " +
+                "carries one, so the three empty results above are the generator's doing",
         ) {
-            seeds.count { kernelEffectiveModelInertRemoves(zeroUnobserved.generate(it).script).isNotEmpty() } shouldBeGreaterThan 0
+            kernelEffectiveModelInertRemoves(syntheticCarrierScript()).size shouldBe 1
         }
     }
+
+    /**
+     * The minimal script that carries the mechanism — `w0` adds `ab`, `w1` adds `ab`, `w0` removes
+     * `ab` — built by hand so [kernelEffectiveModelInertRemoves] has a positive case to be checked
+     * against now that no generated seed produces one.
+     *
+     * The same three events the distinguishing run above drives through the differential; here
+     * they are only folded through [Membership], so this helper asserts nothing about the kernel.
+     */
+    private fun syntheticCarrierScript(): CaseScript = CaseScript(
+        listOf(
+            CaseStep.Op(source, ScriptEvent.Add(WriterId("w0"), "ab")),
+            CaseStep.Op(source, ScriptEvent.Add(WriterId("w1"), "ab")),
+            CaseStep.Op(source, ScriptEvent.Remove(WriterId("w0"), "ab")),
+        ),
+    )
 
     private companion object {
         /**
@@ -881,11 +1261,26 @@ class WavePrefixTest {
          *
          * The distinction a later reader needs: this list only ever **shrinks** under a generator
          * fix, and every departure is accounted for below. Nothing was removed to make the suite
-         * green — the four seeds still here are the residual `computenet-qcm1` explicitly did not
-         * claim to fix (its acceptance bound says so; the residual is computenet-eeys), and one
-         * NEW seed appearing here still fails this assertion.
+         * green, and one NEW seed appearing here still fails this assertion.
+         *
+         * **EMPTY as of 2026-08-21, re-pinned by `computenet-i3vo`, from `[30, 40, 50, 58]`.**
+         * That bead completed what qcm1 started: the constraint qcm1 put on
+         * `ScriptGenerator.emitUnobservedRemove` — a remove must not leave its element live in
+         * `Membership` — is now a post-condition over **every** remove the generator emits, which
+         * reaches `emitObservedRemove`'s *direct* branch where the residual sat. All four seeds
+         * depart for the same single reason, individually: each of 30, 40, 50 and 58 carried at
+         * least one [kernelEffectiveModelInertRemoves] step whose audit said `observed = true`,
+         * and with that step-class unconstructable none of the four disagrees at quiescence any
+         * more. No seed moved to another bucket this time — the other three lists emptied in the
+         * same measurement rather than absorbing anyone. `computenet-eeys` settled that the
+         * *model* is the wrong side on this drive path and left the repair to the generator; this
+         * is that repair landing, not the kernel changing.
+         *
+         * See [GLITCH_CANDIDATE_SEEDS] for why an empty exact-equality list is the strongest value
+         * these constants can hold, and for the substitution that re-demonstrates it under
+         * mutation now that the pre-fix mutant is a no-op.
          */
-        val SEAM_SEEDS: List<Long> = listOf(30L, 40L, 50L, 58L)
+        val SEAM_SEEDS: List<Long> = emptyList()
 
         /**
          * Seeds whose terminal REGRESSES across a wave the model did not change, and which
@@ -908,8 +1303,17 @@ class WavePrefixTest {
          *    all, so the violation they showed was the generator's manufactured divergence;
          *  - seed **8 arrived from [SEAM_SEEDS]** — it stops disagreeing at quiescence and what
          *    remains of it is an intermediate-wave regression, which is this bucket's signature.
+         *
+         * **EMPTY as of 2026-08-21, re-pinned by `computenet-i3vo`, from `[8, 28, 44, 54]`.**
+         * Each of the four leaves the pinned population entirely — no intermediate-wave regression
+         * survives at any of them — and each for the same reason, checked one by one: 8, 28, 44
+         * and 54 all carried a [kernelEffectiveModelInertRemoves] step, and the generator can no
+         * longer emit one. That this bucket empties *together with* [SEAM_SEEDS] and
+         * [SINGLE_PATH_DIVERGENCE_SEEDS] is the evidence for what computenet-eeys claimed and this
+         * bead acted on — all three lists were ever only one mechanism, kept apart so a change in
+         * one would be visible without re-measuring the others.
          */
-        val HEALED_DIVERGENCE_SEEDS: List<Long> = listOf(8L, 28L, 44L, 54L)
+        val HEALED_DIVERGENCE_SEEDS: List<Long> = emptyList()
 
         /**
          * Seeds whose topology is a single path source-to-terminal and which nonetheless show a
@@ -923,12 +1327,18 @@ class WavePrefixTest {
          *
          * **Renamed from `CHAIN_ARTIFACT_SEEDS` by computenet-eeys** — it is not an artifact.
          *
-         * **Unchanged by `computenet-qcm1`'s re-pin (2026-08-19).** Named here because it is the
-         * control: three of these four lists moved and this one did not, so the re-pin is the
-         * measured footprint of one generator fix rather than a wholesale re-measurement that
+         * **Unchanged by `computenet-qcm1`'s re-pin (2026-08-19).** Named here because it was the
+         * control then: three of these four lists moved and this one did not, so that re-pin was
+         * the measured footprint of one generator fix rather than a wholesale re-measurement that
          * happened to land on a green population.
+         *
+         * **EMPTY as of 2026-08-21, re-pinned by `computenet-i3vo`, from `[38]`.** Seed 38's one
+         * carrier step was the one named above — `s[23]` — and it is exactly the step-class the
+         * generator can no longer emit, so the chain shows no `NO_MATCHING_PREFIX` observation any
+         * more. This departure is the sharpest of the three, because a chain has no second arm:
+         * there was never an alternative reconvergence explanation for it to fall back on.
          */
-        val SINGLE_PATH_DIVERGENCE_SEEDS: List<Long> = listOf(38L)
+        val SINGLE_PATH_DIVERGENCE_SEEDS: List<Long> = emptyList()
 
         /**
          * Glitch CANDIDATES: reconvergent shapes showing a state that is no prefix, which is
@@ -955,6 +1365,13 @@ class WavePrefixTest {
          * synthetic candidate into the measured list (`glitchCandidate += 999L` after the sweep
          * loop) and this assertion fails with `expected:<[]> but was:<[999]>`. Measured
          * 2026-08-19 on Darwin arm64 (MacBoo) under `computenet-qcm1`.
+         *
+         * **As of `computenet-i3vo` (2026-08-21) that reasoning governs all four lists**, since
+         * the other three are empty too: whichever one is being touched, the substitution is the
+         * same — inject a synthetic seed into the corresponding measured list after the sweep
+         * loop (`settledMismatch += 999L`, `plateauFlicker += 999L`, `chainArtifact += 999L`) and
+         * watch that list's assertion fail with `expected:<[]> but was:<[999]>`. Verified in that
+         * form for [SEAM_SEEDS] on 2026-08-21, Darwin arm64.
          */
         val GLITCH_CANDIDATE_SEEDS: List<Long> = emptyList()
     }

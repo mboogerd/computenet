@@ -175,6 +175,68 @@ enum class DenialReason {
      * kind and this reason exists to record it.
      */
     MALFORMED_HELLO,
+
+    /**
+     * Seam 1 announcement: the announcement's `notAfter` is in the past
+     * relative to the *receiver's* clock, less that receiver's configured skew
+     * allowance (DSC1, `[DSC1-ANN-07]`;
+     * `civictech.cell.wire.AnnouncementVerification`).
+     *
+     * **The record names the clock that refused** (epic §9.6), in
+     * [BoundaryDenial.detail]: expiry is the one reason in this taxonomy whose
+     * verdict depends on state the *peer cannot see*, so "expired" without
+     * whose-now is unactionable — a clock this side is running slow produces
+     * exactly the same refusal as a genuinely stale frame, and only the named
+     * clock separates them. Nothing here detects skew
+     * (`civictech.cell.wire.DEFAULT_ANNOUNCEMENT_SKEW_MILLIS` states that
+     * limit); the allowance is a configured constant (`[DSC1-NV-03]`).
+     *
+     * Distinct from [REPLAY], which they are easily confused with because both
+     * refuse an announcement that "arrived too late": [REPLAY] means this side
+     * has already accepted an announcement at least as new from that identity,
+     * and is a *statement about this receiver's history*. This one means the
+     * signer itself declared the announcement stale, and holds even for a
+     * counter this side has never seen.
+     */
+    EXPIRED,
+
+    /**
+     * Seam 1 announcement: the announcement's `portName` or its minting peer's
+     * name is not well-formed UTF-16 — a surrogate code unit that is not part
+     * of a high/low pair (DSC1; `computenet-l8y5`, discovered by the review of
+     * `computenet-9qgg`).
+     *
+     * Such an announcement is **unencodable**, not merely unverifiable: the
+     * canonical signing encoding (`civictech.identity.announce.canonicalBytes`)
+     * refuses it rather than substituting `'?'`, because that substitution
+     * collides distinct announcements and so lets one signature verify two.
+     * Reachable from the network — the wire codec is kotlinx JSON, whose
+     * escapes are per-UTF-16-code-unit, so a lone `\ud800` escape decodes
+     * straight into `civictech.cell.wire.WireFrame.portName`
+     * (`WirePortNameSurrogateReachabilityTest` measures exactly that).
+     *
+     * **Machine-distinguishable from [BAD_SIGNATURE] on purpose**, which is the
+     * whole content of `computenet-l8y5`. A total verifier answers `false` for
+     * an announcement it cannot encode, so before this constant the case
+     * classified as "the signature does not verify" — honest, and wrong about
+     * the cause. Nothing was *wrong with the crypto*: no signature over these
+     * fields could ever verify, by anybody, because the bytes to verify against
+     * do not exist. An operator reading `BAD_SIGNATURE` looks at keys and
+     * clocks; the fact worth acting on is that a peer sent a structurally
+     * impossible announcement.
+     *
+     * Also distinct from [MALFORMED_HELLO], which is the same *kind* of fact
+     * (a structurally invalid frame) at the hello sub-protocol rather than at
+     * an announcement. The two are kept apart for the reason the whole taxonomy
+     * is per seam: [BoundaryDenial.seam] is `ADMISSION` for both, so the reason
+     * is the only thing that says which crossing was refused.
+     *
+     * The record names the field, the offending index and the string's length —
+     * never the string itself ([DSC1-OBS-05]): an ill-formed string rendered
+     * into a log line is precisely the thing a reader cannot trust their
+     * terminal about.
+     */
+    MALFORMED_ANNOUNCEMENT,
 }
 
 /**

@@ -150,6 +150,82 @@ class ScriptGeneratorTest {
     }
 
     /**
+     * `computenet-i3vo`: **no emitted remove leaves its element live** — the constraint stated
+     * over *every* remove rather than over the unobserved flavour alone.
+     *
+     * The predicate is the one `WavePrefixTest.kernelEffectiveModelInertRemoves` names: the
+     * element is live in [Membership] over the source's prior slice *and still live* once the
+     * remove is folded in. Such a step takes effect in the kernel — `SetCell.inletHandler.remove`
+     * retracts `liveTags(element)` without consulting the removing writer's causal history — and
+     * is a no-op in the model, so it is a Mismatch manufactured by the generator.
+     *
+     * The test's own reading of "leaves it live" folds [Membership] over `prior + event`, which is
+     * equivalent to the criterion's "not live before, OR not live after": a remove cannot make a
+     * dead element live, so live-after implies live-before.
+     *
+     * `computenet-qcm1` had already established this for `emitUnobservedRemove` (the test below);
+     * what this one adds is the **observed** population, which is where the residual sat — a
+     * writer removing an element it added itself that another writer also added (the *direct*
+     * branch), audited `observed = true`, which is exactly why `unobservedRemoveRatio = 0.0`
+     * could not clear it.
+     *
+     * The fixture carries a keyed source as well, so the sweep really is over every remove the
+     * generator emits. A `RemoveKey` satisfies the constraint vacuously — [Membership.live]
+     * ignores `Put`/`RemoveKey` entirely, so a key is never live in it — and it is counted here
+     * rather than skipped so the claim is over the whole audit and not a filtered part of it.
+     *
+     * Measured against the unfixed generator (2026-08-21, Darwin arm64), this fixture over
+     * seeds 1..25 produced 20 offending removes out of 2300 (1546 of them observed) — **every
+     * one of them audited `observed = true`**, which is the bead's claim reproduced. It is 0 now.
+     */
+    @Test
+    fun `no emitted remove leaves its element live in the model`() {
+        val topology = topologyOf(
+            "s0" to CoreOperators.Ids.SET,
+            "s1" to CoreOperators.Ids.SET,
+            "k0" to CoreOperators.Ids.KEYED_SET,
+        )
+        val config = config(
+            unobservedRemoveRatio = 0.3,
+            vocabulary = listOf(CoreOperators.Ids.SET, CoreOperators.Ids.KEYED_SET),
+        )
+
+        var removes = 0
+        var observedRemoves = 0
+        var leftLive = 0
+        val offenders = mutableListOf<String>()
+        (1L..25L).forEach { seed ->
+            val generated = generate(topology, config, seed)
+            val steps = generated.script.steps
+            generated.removeAudit.forEach { record ->
+                val op = steps[record.stepIndex] as CaseStep.Op
+                removes++
+                if (record.observed) observedRemoves++
+                val event = op.event as? ScriptEvent.Remove ?: return@forEach
+                val prior = priorEvents(steps, record.stepIndex, op.source)
+                if (event.element in Membership.live(prior) && event.element in Membership.live(prior + event)) {
+                    leftLive++
+                    if (offenders.size < 5) {
+                        offenders += "seed $seed step ${record.stepIndex} ${event.writer.id} removes ${event.element}" +
+                            " (observed=${record.observed})"
+                    }
+                }
+            }
+        }
+
+        // Not a vacuous zero, and not a zero carried by the unobserved half alone: the OBSERVED
+        // population is the one this bead is about, and it has to be large here.
+        removes shouldExceed 500
+        observedRemoves shouldExceed 500
+        withClue(
+            "removes=$removes observedRemoves=$observedRemoves leftLive=$leftLive " +
+                "first offenders: $offenders",
+        ) {
+            leftLive shouldBe 0
+        }
+    }
+
+    /**
      * The audit is not a claim about the generator's intent but about the script it emitted:
      * re-deriving each remove's classification from the script alone — did this writer add the
      * element earlier in this source's slice, or does an `Observe` by it sit between somebody

@@ -190,6 +190,10 @@ class OperatorBoundedReadTest {
             bothEntries.single { it.subState == "left" }.tags +
                 bothEntries.single { it.subState == "right" }.tags,
         ).shouldBeEmpty()
+        // MintedLedger's own monotone mint counter rides every page's attributes,
+        // as it does for JoinSetCell and SemiJoinCell (KDoc lines ~169-172).
+        val counter = (snapshot.slot(2) as List<*>)[1]
+        pages.forEach { it.attributes[OperatorPaging.MINT_COUNTER] shouldBe counter }
     }
 
     @Test

@@ -28,6 +28,14 @@ responsibility for its inputs; unattended subgraphs quiesce; attended ones get
 resources proportional to attention. The suspension machinery (33) is the
 enforcement arm: no interest → suspend; renewed interest → resume.
 
+Everything scheduled here is an **invocation**. An off-host synchronous read is
+not one: it is answered from a published immutable snapshot without entering the
+queue, so it has no band, raises no attention (P6), cannot park or be parked,
+and cannot perturb the schedule it is observing (31 §The read plane). The
+asynchronous state reads that *do* enqueue (`snapshotOf` and its paged sibling)
+are ordinary tasks and are scheduled as such — which is precisely why they hand
+back a future the caller bounds.
+
 ## What is fixed by the ADRs
 
 1. **Attention is a generic protocol** (12-multiplex): it propagates

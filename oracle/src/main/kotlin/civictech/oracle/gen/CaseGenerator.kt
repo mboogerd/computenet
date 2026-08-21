@@ -75,13 +75,14 @@ class CaseGenerator(private val config: GeneratorConfig) {
     fun generate(seed: Long): GeneratedCase {
         val rng = Random(seed)
         val graph = GraphGenerator(config).generate(rng)
-        val script = ScriptGenerator(config, graph.topology, rng).generate()
+        val script = ScriptGenerator(config, graph.topology, rng, graph.replicaPlan).generate()
         return GeneratedCase(
             seed = seed,
             topology = graph.topology,
             spec = graph.spec,
             script = script.script,
             removeAudit = script.removeAudit,
+            replication = script.replication,
         )
     }
 

@@ -30,6 +30,7 @@ import civictech.oracle.model.Script
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SourceId
 import civictech.oracle.model.SourceScript
+import civictech.oracle.shrink.FailureSignature
 import civictech.oracle.model.WriterId
 import civictech.testkit.SimWorld
 import io.kotest.assertions.withClue
@@ -622,5 +623,59 @@ class FailureTaxonomyTest {
 
     private companion object {
         const val SYNTHETIC_DESCRIPTION = "synthetic dead letter from FailureTaxonomyTest"
+    }
+
+    // =====================================================================
+    // ORA2's mesh verdicts sit in the same taxonomy ([ORA2-CONV-03])
+    // =====================================================================
+
+    @Test
+    fun `ORA2's mesh verdicts are separate signatures from each other and from Mismatch`() {
+        // The shrinker identifies a failure by its RunOutcome VARIANT (plus the terminal, where
+        // one is named). Adding the two mesh kinds without extending FailureSignature would make a
+        // shrink of a divergence retain a unanimous-wrong-answer case as "the same failure" — the
+        // exact confusion [ORA2-CONV-03] exists to prevent, arriving one layer down.
+        //
+        // Neither names a terminal, and that is structural rather than an omission: a mesh verdict
+        // is about the replicas of one logical id, not about a terminal of a graph.
+        val expected = ModelState.MapState(mapOf("k" to "v1"))
+        val actual = ModelState.MapState(mapOf("k" to "v0"))
+        val diverged: RunOutcome = RunOutcome.ReplicaDivergence(
+            seed = 1L,
+            logicalId = "logical",
+            caseMarker = "mesh",
+            script = Script.EMPTY,
+            expected = expected,
+            perReplica = mapOf("r0" to expected, "r1" to actual),
+            keys = emptyList(),
+        )
+        val wrong: RunOutcome = RunOutcome.ReplicasAgreeButWrong(
+            seed = 1L,
+            logicalId = "logical",
+            caseMarker = "mesh",
+            script = Script.EMPTY,
+            expected = expected,
+            actual = actual,
+            difference = StateDifference.between(expected, actual),
+            replicas = setOf("r0", "r1"),
+            keys = emptyList(),
+        )
+        val mismatch: RunOutcome = RunOutcome.Mismatch(
+            seed = 1L,
+            terminal = "t",
+            renderedGraphSpec = "spec",
+            script = Script.EMPTY,
+            expected = expected,
+            actual = actual,
+            difference = StateDifference.between(expected, actual),
+        )
+
+        val signatures = listOf(diverged, wrong, mismatch).map { FailureSignature.of(it) }
+        signatures.forEach { it.shouldNotBeNull() }
+        signatures.toSet() shouldBe signatures.toSet()
+        signatures.distinct() shouldBe signatures
+        FailureSignature.of(diverged)!!.terminal shouldBe null
+        FailureSignature.of(wrong)!!.terminal shouldBe null
+        FailureSignature.of(mismatch)!!.terminal shouldBe "t"
     }
 }

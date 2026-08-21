@@ -402,23 +402,83 @@ export interface HeartbeatEvent {
 // --- M2: errors (20-api-contract.md "ErrorSnapshot (M2)", "error.* events") ----
 
 /** `civictech.cell.BoundarySeam.name` — which `BoundaryPolicy` seam refused
- *  a crossing (spec 40/43 "three seams, one per dispatch class"). */
-export type BoundarySeam = 'ADMISSION' | 'LINK_AUTHORITY' | 'PROTOCOL_AUTHORITY' | 'DISCLOSURE' | 'INTEGRITY';
+ *  a crossing (spec 40/43 "three seams, one per dispatch class").
+ *
+ *  Mirrors `civictech.cell.BoundarySeam`
+ *  (`kernel/src/main/kotlin/civictech/cell/BoundaryDenials.kt`) constant for
+ *  constant — see `BOUNDARY_SEAMS` below, which
+ *  `test/boundary-denials-sync.test.ts` (computenet-nu49) checks against
+ *  that file in both directions so the two cannot drift apart unnoticed. */
+export const BOUNDARY_SEAMS = ['ADMISSION', 'LINK_AUTHORITY', 'PROTOCOL_AUTHORITY', 'DISCLOSURE', 'INTEGRITY'] as const;
+
+export type BoundarySeam = (typeof BOUNDARY_SEAMS)[number];
 
 /** `civictech.cell.DenialReason.name` — why a crossing was refused. Deliberately
  *  closed and named per seam, not free text: a denial record is meant to be
  *  machine-readable. There is no reason constant for an attention clamp — a
- *  clamp is not a denial and produces no record (30/34 decision 6). */
-export type DenialReason =
-  | 'NOT_ADMITTED'
-  | 'LINK_REFUSED'
-  | 'MIN_AUTH'
-  | 'RATE'
-  | 'DISCLOSURE_DENIED'
-  | 'DISCLOSURE_PROJECTED_AWAY'
-  | 'UNSIGNED'
-  | 'BAD_SIGNATURE'
-  | 'REPLAY';
+ *  clamp is not a denial and produces no record (30/34 decision 6).
+ *
+ *  Mirrors `civictech.cell.DenialReason`
+ *  (`kernel/src/main/kotlin/civictech/cell/BoundaryDenials.kt`) constant for
+ *  constant — see `DENIAL_REASONS` below, which
+ *  `test/boundary-denials-sync.test.ts` (computenet-ssa.7) checks against that
+ *  file in both directions so the two cannot drift apart unnoticed again. */
+export const DENIAL_REASONS = [
+  'NOT_ADMITTED',
+  'LINK_REFUSED',
+  'MIN_AUTH',
+  'RATE',
+  'DISCLOSURE_DENIED',
+  'DISCLOSURE_PROJECTED_AWAY',
+  'UNSIGNED',
+  'BAD_SIGNATURE',
+  'REPLAY',
+  /** Seam 1 hello: the side's policy is `RequireAuthenticated` and the hello
+   *  did not carry the key material or signature that policy demands — a
+   *  legacy name-only `HELLO`, or a `HELLO2` never followed by a `PROOF`
+   *  (DSC1 `[DSC1-HELLO-08]`/`[DSC1-HELLO-09]`). Machine-distinguishable
+   *  from `NOT_ADMITTED`: that means "I know who you claim to be and you
+   *  are not welcome"; this means "you never proved who you claim to be". */
+  'AUTH_REQUIRED',
+  /** Seam 1 hello: the peer id a `HELLO2` claimed is not the id derived from
+   *  the public key that same `HELLO2` presented (DSC1 `[DSC1-HELLO-06]`) —
+   *  an impersonation attempt. **Not a synonym for `BAD_SIGNATURE`**: the
+   *  proof may verify perfectly under the presented key. What fails here is
+   *  the *binding* between key and claimed name, not the signature itself —
+   *  conflating the two loses the fact that this was an impersonation
+   *  attempt rather than a forged or corrupt signature. */
+  'ID_MISMATCH',
+  /** Seam 1 hello: a structurally invalid authenticated hello — wrong token
+   *  count on a `HELLO2` line, an undecodable base64url field, a claimed id
+   *  outside the fixed key-derived form, or a protocol message out of order
+   *  (a `PROOF` before any `HELLO2`). Exists so a malformed hello is never
+   *  silently absorbed into a peer name. */
+  'MALFORMED_HELLO',
+  /** Seam 1 announcement: the announcement's `notAfter` is in the past
+   *  relative to the receiver's clock, less the receiver's configured skew
+   *  allowance (DSC1 `[DSC1-ANN-07]`). Distinct from `REPLAY`: `REPLAY` means
+   *  this receiver has already accepted an announcement at least as new from
+   *  this identity (a statement about this receiver's history); `EXPIRED`
+   *  means the signer itself declared the announcement stale, and holds even
+   *  for a counter this receiver has never seen. */
+  'EXPIRED',
+  /** Seam 1 announcement: the announcement's `portName` or its minting peer's
+   *  name is not well-formed UTF-16 — a surrogate code unit outside a
+   *  high/low pair (computenet-l8y5). Such an announcement is *unencodable*,
+   *  not merely unverified: the canonical signing encoding refuses it rather
+   *  than substituting `'?'`, which would collide distinct announcements, so
+   *  no signature over it could verify by anybody. Distinct from
+   *  `BAD_SIGNATURE`, which it used to be reported as: nothing is wrong with
+   *  the crypto, so an operator should be looking at what the peer sent
+   *  rather than at keys and clocks. Distinct from `MALFORMED_HELLO`, which
+   *  is the same kind of fact one sub-protocol over — `seam` is `ADMISSION`
+   *  for both, so the reason is the only thing that separates them. The
+   *  record names the field, the offending index and the length, never the
+   *  string itself. */
+  'MALFORMED_ANNOUNCEMENT',
+] as const;
+
+export type DenialReason = (typeof DENIAL_REASONS)[number];
 
 /** computenet-usd.7 / computenet-4ixu — `DeadLetterRow.denial`: the
  *  structural discriminator that lets a client tell a `BoundaryPolicy`

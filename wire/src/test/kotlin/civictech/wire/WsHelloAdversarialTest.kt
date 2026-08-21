@@ -55,6 +55,8 @@ class WsHelloAdversarialTest {
             allow = allow,
             auth = auth,
             credentials = identity.asPeerCredentials(),
+            announcementSigning = socketAnnouncementSigning(),
+            announcementVerification = socketAnnouncementVerification(),
         )
     }
 

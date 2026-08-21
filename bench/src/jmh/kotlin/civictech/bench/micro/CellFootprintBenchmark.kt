@@ -1,5 +1,6 @@
 package civictech.bench.micro
 
+import civictech.bench.HostFacts
 import org.openjdk.jmh.annotations.Benchmark
 import org.openjdk.jmh.annotations.BenchmarkMode
 import org.openjdk.jmh.annotations.Fork
@@ -89,17 +90,28 @@ import java.util.concurrent.TimeUnit
  * `FanOutScalingBenchmark`'s smoke run warns that `-i 1` leaves a written CSV's error column
  * `NaN`, which `ThroughputReport.parseCsv` then refuses outright. That specific hazard does
  * not apply to the smoke run above: it passes no `-rf csv`, so there is no CSV for
- * `parseCsv` to refuse, and — as stated below — `ThroughputReport` cannot render this
- * benchmark's `-prof gc` secondary metric regardless of iteration count. `-i 1` here only
- * means the single reported `gc.alloc.rate.norm` value is read by hand off stdout, same as
- * any other run of this class.
+ * `parseCsv` to refuse — and, unlike a `-rf csv` run, there is no file for
+ * [CellFootprintAllocRenderTest] to render either. `-i 1` here only means the single
+ * reported `gc.alloc.rate.norm` value is read by hand off stdout, same as any smoke run
+ * that skips `-rf csv`; a full sweep written to CSV renders through that test instead.
  *
  * The `| tee` matters for the same reason it does for `OperatorThroughputBenchmark`: JMH's
  * results file records nothing about the JVM that produced it, and `MeasuringJvm.fromJmhLog`
- * reads the banner beside it. **`ThroughputReport` cannot render this file** — it parses the
- * primary `Score` column, and this benchmark's answer lives in a `-prof gc` secondary
- * metric. Reading these numbers is a hand step, deliberately; wiring a renderer for a
- * secondary metric belongs to whichever task actually needs one.
+ * reads the banner beside it — as does `civictech.bench.HostFacts.fromJmhLog`, off
+ * [CellState.announceHost]'s CPU/core/OS lines on that same log (computenet-yhbd, wired
+ * into this class by computenet-7w4e).
+ *
+ * **A `-prof gc` run of this class renders through the shipped path.**
+ * [ThroughputReport.parseCsv] takes a [ThroughputReport.Metric] selector — [Metric.Primary]
+ * by default, or [Metric.GC_ALLOC_RATE_NORM] to read the secondary `gc.alloc.rate.norm`
+ * column instead of the primary `Score` column — and [CellFootprintAllocRenderTest] is the
+ * `@Tag("bench")` entry point that reads this class's `-prof gc` CSV with that selector,
+ * states a FIRES/RETIRES/INCONCLUSIVE verdict on G-21 phase 3's trigger, and renders a
+ * `doc/bench/findings.md` entry with no hand-written driver. The banner closes a
+ * *different* refusal (host facts unknown) that also blocked the plain, no-`-prof gc`
+ * time-per-`snapshot()` sweep of this same class, whose rows
+ * `ThroughputReport.RowLabel.REGISTERED` already labels by `family`/`scale`; both sweeps
+ * need it, for the same reason.
  */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
@@ -136,6 +148,39 @@ open class CellFootprintBenchmark {
      */
     @State(Scope.Thread)
     open class CellState {
+
+        /**
+         * Prints this fork's host facts to stdout once per trial — the same mechanism
+         * `OperatorThroughputBenchmark.GraphState.announceHost` and
+         * `FanOutScalingBenchmark.RigState.announceHost` use, for the identical reason
+         * (computenet-yhbd, closed here for this class by computenet-7w4e):
+         * `civictech.bench.HostFacts.fromJmhLog` is the ONLY source
+         * `RunEnvironment.forRun`'s JMH-sweep overload accepts, it reads these lines off
+         * the tee'd run log, and it refuses — `HostFactsUnknownException` — rather than
+         * falling back to the rendering process's own host. Without this hook every log
+         * this class produces was refused, however well-labelled its rows.
+         *
+         * `Level.Trial` runs INSIDE the measuring fork, before warmup, which is what
+         * makes the line trustworthy: the renderer runs in a different, later process,
+         * possibly on a different machine, and no JMH artifact otherwise records which
+         * host measured.
+         *
+         * **This is not what makes a `-prof gc` run of this class renderable** — that is
+         * [CellFootprintAllocRenderTest], reading `gc.alloc.rate.norm` (a JMH *secondary*
+         * metric) via `Metric.GC_ALLOC_RATE_NORM` rather than the primary `Score` column
+         * `ThroughputReport` reads by default. What this hook closes is a narrower,
+         * shared problem both sweeps of this class hit: the host-facts refusal, which
+         * also blocked the plain (no `-prof gc`) time-per-`snapshot()` sweep, whose rows
+         * `RowLabel.REGISTERED` already labels by `family`/`scale`.
+         */
+        @Setup(Level.Trial)
+        fun announceHost() {
+            // The leading newline is load-bearing — see OperatorThroughputBenchmark's
+            // identical comment for the measured reason (JMH writes its progress prefix
+            // with no trailing newline and relays this fork's stdout onto that line).
+            println()
+            HostFacts.captureCurrent().bannerLines().forEach(::println)
+        }
 
         @Param
         @JvmField

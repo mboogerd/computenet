@@ -40,6 +40,28 @@ data class Script(
         require(duplicated.isEmpty()) {
             "A script holds at most one slice per source; duplicated: ${duplicated.map { it.id }.sorted()}"
         }
+        val sizes = slices.associate { it.source to it.events.size }
+        slices.forEach { slice ->
+            slice.deliveries.forEach { delivery ->
+                require(delivery.from != slice.source) {
+                    "Source '${slice.source.id}' cannot be delivered its own emissions; " +
+                        "an instance observes its own writes at issue time"
+                }
+                require(delivery.afterEvents <= slice.events.size) {
+                    "Delivery into '${slice.source.id}' names afterEvents=${delivery.afterEvents}, " +
+                        "past the end of its ${slice.events.size}-event log"
+                }
+                val emitted = sizes[delivery.from]
+                require(emitted != null || delivery.throughEvents == 0) {
+                    "Delivery into '${slice.source.id}' names sender '${delivery.from.id}', " +
+                        "which this script does not drive, through ${delivery.throughEvents} events"
+                }
+                require(emitted == null || delivery.throughEvents <= emitted) {
+                    "Delivery into '${slice.source.id}' names ${delivery.throughEvents} events of " +
+                        "'${delivery.from.id}', whose log holds only $emitted"
+                }
+            }
+        }
     }
 
     private val bySource: Map<SourceId, SourceScript> = slices.associateBy { it.source }
@@ -64,11 +86,63 @@ data class Script(
     }
 }
 
-/** One source cell's ordered event log. Position in [events] is the source's arrival order. */
+/**
+ * One source cell's ordered event log. Position in [events] is the source's arrival order.
+ *
+ * [deliveries] is the **second lane** ORA2 adds (`[ORA2-MODEL-06]`): the gossip this instance
+ * absorbed from its peers, and the only thing that ever advances what it has observed. It is
+ * deliberately *not* a [ScriptEvent] variant. A `ScriptEvent` is "one thing a writer asked a
+ * source cell to do" — an inlet call — and a delivery is nothing of the kind: it is a
+ * replication event, arriving on `deltaInlet`, that no writer issued. Keeping the two lanes
+ * apart also keeps `ScriptEvent`'s existing `when`s exhaustive without touching them.
+ *
+ * Empty for every ORA1 case, which is why the parameter carries a default: a non-replicated
+ * script is one whose instances never hear from each other.
+ */
 data class SourceScript(
     val source: SourceId,
     val events: List<ScriptEvent>,
+    val deliveries: List<Delivery> = emptyList(),
 ) : Serializable
+
+/**
+ * One gossip delivery into the slice that carries it: *"after my first [afterEvents] own
+ * events, I absorbed everything [from] had emitted through its first [throughEvents] events."*
+ *
+ * This is the script-level statement of causality that `[ORA2-MODEL-06]` requires and the
+ * whole reason the dot model can be a *second implementation* rather than a mirror: the model
+ * learns what a replica had seen from the script, never by reading a kernel cell, a delta, or
+ * a `Timestamp`. It is the cross-instance sibling of [ScriptEvent.Observe], which states
+ * observation *within* one slice for one writer and cannot reach another source at all.
+ *
+ * Both indices are **event counts, not positions**: `afterEvents = 0` is "before my first
+ * event", `throughEvents = 0` is "nothing of theirs yet". Counting rather than pointing is what
+ * makes the referenced prefix well defined without a global interleaving — a [Script] orders
+ * events *within* a slice only ([Script]'s KDoc), so "everything they had emitted so far" would
+ * otherwise name nothing.
+ *
+ * Two deliveries into one slice at one [afterEvents] are unordered with respect to each other,
+ * and a conforming model must be indifferent to that: merge is commutative and associative
+ * (`[ORA2-MODEL-02]`).
+ *
+ * A delivery may name a prefix that itself contains deliveries, so the relation is transitive
+ * — that is exactly a multi-hop mesh. It must not be **cyclic**: two slices that each claim to
+ * have absorbed a prefix of the other containing that very claim describe no reachable state,
+ * and [DotModel] refuses such a script by name rather than folding it to something plausible.
+ */
+data class Delivery(
+    /** How many of the receiving slice's own events had been applied when this arrived. */
+    val afterEvents: Int,
+    /** The instance whose emissions arrived. */
+    val from: SourceId,
+    /** How many of [from]'s own events had been applied at the moment it emitted them. */
+    val throughEvents: Int,
+) : Serializable {
+    init {
+        require(afterEvents >= 0) { "Delivery.afterEvents must not be negative, got $afterEvents" }
+        require(throughEvents >= 0) { "Delivery.throughEvents must not be negative, got $throughEvents" }
+    }
+}
 
 /**
  * A source cell's name in the script. A plain wrapper rather than a raw `String` so a
