@@ -195,11 +195,43 @@ import civictech.testkit.forEachSeed
  * replicated mesh still has none. Both are the sweep/differential work, not this ledger's to
  * close.
  *
- * Read that as a bound on the GENERATED path only. Kernel-driven OR-map coverage does exist,
- * outside this file: `civictech.oracle.tagged.ConvergenceCheckTest`'s BS-1, BS-6 and BS-7 drive
- * live `OrMapCell` replicas in a `SimWorld` through this same `ConvergenceCheck`, inverted dot
- * order included. A reader who took the paragraph above for "no OR-map coverage is kernel-driven
- * anywhere" would be taking from it more than it says.
+ * Read that as a bound on the four controls and on the DIFFERENTIAL RUNNER path — not as a claim
+ * that no OR-map coverage anywhere is kernel-driven, which would be false in two distinct ways.
+ * Kernel-driven OR-map coverage does exist outside this file, at two different levels of
+ * hand-authorship, and a reader needs both to size what is missing:
+ *
+ * - **Hand-built meshes**: `civictech.oracle.tagged.ConvergenceCheckTest`'s BS-1, BS-6 and BS-7
+ *   drive live `OrMapCell` replicas in a `SimWorld` through this same `ConvergenceCheck`, inverted
+ *   dot order included. These are the tests that actually discriminate concurrent dot resolution:
+ *   reversing the kernel's `TaggedMapDelta.DOT_ORDER` tie-break reddens exactly four tests and all
+ *   four are here (review of computenet-4ru.1, 2026-08-21).
+ * - **Generated meshes**: `civictech.oracle.tagged.ConvergenceSweepTest` drives 40 GENERATED
+ *   three-replica `OrMapCell` meshes in a `SimWorld` — so a generated replicated mesh IS
+ *   kernel-driven today, and the "no runner path" clause above is specifically about
+ *   `CaseExecution`/`DifferentialRunner`, not about the kernel never running a generated mesh.
+ *   What that sweep does NOT establish is the `[ORA2-DIFF-08]` "at scale" clause: it neither enters
+ *   `ConvergenceCheck.check()` (a full-sync mesh is a mutual barrier and encodes as a cyclic
+ *   `Delivery` graph, which `DotModel.Fold` refuses by name) nor realises any concurrency (its own
+ *   report prints `max live dots at any key = 1`, against a generator-achieved mean of 0.970). The
+ *   `DOT_ORDER` mutation above leaves it green.
+ *
+ * ## What is filed rather than built `[ORA2-HONEST-03]`
+ *
+ * Both gaps the paragraph above names are recorded in `concord/corpus/DISPUTES.md`, per the epic's
+ * rule — and AGENTS.md's — that a requirement which cannot be checked honestly is **filed**, never
+ * weakened into a passing scenario:
+ *
+ * - `[ORA2-DIFF-08]` "at scale" — the generated convergence sweep realises no concurrency, and the
+ *   quiescent all-to-all mesh it drives is not expressible as a `Delivery` graph. Filed with the
+ *   cyclic-`Delivery` reason and the 40/40 measurement; `computenet-9892` is the drive that closes
+ *   it and deletes the entry.
+ * - BS-9 / `[ORA2-DIFF-07]` — no operator in the vocabulary consumes a `TaggedMapDelta` outlet, so
+ *   the two-path diamond BS-9 states is unconstructible and `TaggedWavePrefixTest` exercises a bare
+ *   `orMap` source terminal instead. Filed with the `MapDelta`-vs-`TaggedMapDelta` typing bound;
+ *   `96 §E1.5`'s `UntagCell`/`TaggedMapView` is what would resolve it.
+ *
+ * The ORA1 half of the same rule is `[ORA1-DIFF-09]`/BS-12, filed in the same file. All three
+ * filings are pinned by [civictech.oracle.HonestyLedgerTest], so none can be silently deleted.
  *
  * Pinned by [civictech.oracle.HonestyLedgerTest] beside `[ORA1-HONEST-01]`, so this statement is
  * build-checked prose too, not a paragraph a refactor can quietly drop.
