@@ -30,7 +30,8 @@
 # make room, which is the wrong incentive for a budget to create.
 # 8059 -> 8069 on 2026-08-21: computenet-ex6w — a mutation must not overlap the
 # original (prefix-preserving renames, coerced numbers, glob-matching paths).
-work                8069
+# 8069 -> 8075 on 2026-08-21: computenet-vjrs (see PR body).
+work                8075
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
