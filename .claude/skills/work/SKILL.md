@@ -328,7 +328,12 @@ any budget notification arriving with "stream ended" right behind it.
 
 **On ANY budget notification — not only at budget-gated decisions — recompute
 elapsed from `$SCRATCH/slot-start` before acting on it, and act on the number
-rather than on which tier fired:**
+rather than on which tier fired — and recompute it anyway at every dispatch
+and every verdict, notification or not.** After a second host suspension the
+monitor went permanently silent and no tier ever fired; the slot had expired
+~20 minutes before an accidental check noticed (computenet-6664). A rule keyed
+on a notification cannot see the case where none arrives; the subtraction is
+one line and costs nothing:
 
 ```bash
 echo $(( ($(date -u +%s) - $(cat "$SCRATCH/slot-start")) / 60 ))m elapsed \

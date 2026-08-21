@@ -45,7 +45,8 @@
 # 8154 -> 8161 on 2026-08-21: computenet-tjyl — rebased onto main (see PR #438).
 # 8161 -> 8167 on 2026-08-21: computenet-bz5c — rebased onto main (see PR #421).
 # 8167 -> 8171 on 2026-08-21: computenet-kklt — rebased onto main (see PR #420).
-work                8171
+# 8171 -> 8176 on 2026-08-21: computenet-6664 — rebased onto main (see PR #431).
+work                8176
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
