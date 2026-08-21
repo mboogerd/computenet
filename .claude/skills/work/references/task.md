@@ -348,6 +348,12 @@ The smallest coherent change, and proof the tests actually executed.
 Your own index, work discovered on the way, and the bead state you leave behind.
 
 7. **Commit on your branch. Do NOT push it — that is the orchestrator's.**
+   If your run left artifacts (a CSV, a log, host conditions) that a reviewer
+   re-renders, record their paths in a bd comment **and say they are
+   ephemeral**: the worktree is removed at the orchestrator's Finalize, so
+   anything under it dies with the item. Evidence that must outlive the
+   worktree is copied to `$HOME/computenet-runs/<task-id>/` first and the
+   comment names that path (computenet-mzuc).
    Your worktree has its own index, so ordinary staging is safe here:
    ```bash
    git -C <your-worktree> add <your paths>
