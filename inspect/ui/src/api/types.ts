@@ -462,6 +462,20 @@ export const DENIAL_REASONS = [
    *  means the signer itself declared the announcement stale, and holds even
    *  for a counter this receiver has never seen. */
   'EXPIRED',
+  /** Seam 1 announcement: the announcement's `portName` or its minting peer's
+   *  name is not well-formed UTF-16 — a surrogate code unit outside a
+   *  high/low pair (computenet-l8y5). Such an announcement is *unencodable*,
+   *  not merely unverified: the canonical signing encoding refuses it rather
+   *  than substituting `'?'`, which would collide distinct announcements, so
+   *  no signature over it could verify by anybody. Distinct from
+   *  `BAD_SIGNATURE`, which it used to be reported as: nothing is wrong with
+   *  the crypto, so an operator should be looking at what the peer sent
+   *  rather than at keys and clocks. Distinct from `MALFORMED_HELLO`, which
+   *  is the same kind of fact one sub-protocol over — `seam` is `ADMISSION`
+   *  for both, so the reason is the only thing that separates them. The
+   *  record names the field, the offending index and the length, never the
+   *  string itself. */
+  'MALFORMED_ANNOUNCEMENT',
 ] as const;
 
 export type DenialReason = (typeof DENIAL_REASONS)[number];
