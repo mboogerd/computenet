@@ -33,8 +33,10 @@ import civictech.cell.data.op.UnionSetCell
  * `civictech.oracle.gen.CaseDelivery`, never about interleaving orderings of
  * an already-materialized delta list at one view. No test landed under
  * computenet-4ru.1 — `ConvergenceCheckTest`, `ConvergenceSweepTest`,
- * `TaggedControlsTest`, `TaggedScenariosTest` — checks this property or uses
- * `UnionSetCell`/plain `SetDelta` at all; ORA1's own `naiveFold`-control
+ * `TaggedControlsTest`, `TaggedScenariosTest` — checks this property, and none
+ * uses `UnionSetCell` at all (`TaggedScenariosTest` does observe a `KeyedSetCell`
+ * through a plain `SetDelta` terminal, which is re-put atomicity at one prefix,
+ * not interleaving invariance); ORA1's own `naiveFold`-control
  * pattern (design D6, `GenerativeGraphTest`) is the nearer relative, and ORA1
  * is this feature's dependency, not its own scope.
  *

@@ -442,9 +442,21 @@ class ShrinkerTest {
      * `writerCount = 1` for the other tests' sake, so this test opts into `writerCount = 2`
      * itself — the ORA2 multi-writer dimension (`[ORA2-GEN-01]`).
      *
-     * Step-wise pass 1 alone *could* reach the same STEP COUNT by deleting the other writer's
-     * steps one at a time — the sharp assertion is not step count but writer *identity*: every
-     * surviving [CaseStep.Op] names the required writer, none the other.
+     * ## Why the injected failure is GROUP-wise, and not simply "w0 wrote"
+     *
+     * A monotone predicate ("some `w0` add survives") does not discriminate this pass at all:
+     * pass 1 runs to completion first and descends to single-step chunks, so it removes every
+     * `w1` step on its own and pass 1a finds nothing left to drop. Measured during review of
+     * computenet-4ru.1.7: with such a predicate, disabling `dropWriters` outright left
+     * `:oracle:test --tests civictech.oracle.shrink.*` at 29/29 green — the test asserted a
+     * property pass 1 already delivered.
+     *
+     * So the reference below fails only where `w1`'s adds are **all present or all absent**.
+     * Step-wise deletion of any proper subset of them stops the failure and is rejected; the
+     * one candidate that removes them together is [Shrinker]'s own writer-wise move. That is
+     * also the honest statement of what pass 1a buys over pass 1 — an atomic group removal a
+     * chunk-wise pass cannot express — rather than the candidate-count saving the object KDoc
+     * originally claimed, which pass 1a cannot deliver from a position after pass 1.
      */
     @Test
     fun `pass 1a drops a whole writer's steps once the failure no longer needs them`() {
@@ -462,8 +474,12 @@ class ShrinkerTest {
         withClue("the fixture needs an add from a DIFFERENT writer or nothing is there to drop") {
             addsOf(WriterId("w1")) shouldBe true
         }
+        val otherAddsOriginally = case.script.toScript().slice(source).events
+            .filterIsInstance<ScriptEvent.Add>().count { it.writer == WriterId("w1") }
         val reference = failWhenever(case, terminal) { script ->
-            script.slice(source).events.filterIsInstance<ScriptEvent.Add>().any { it.writer == required }
+            val adds = script.slice(source).events.filterIsInstance<ScriptEvent.Add>()
+            val otherAdds = adds.count { it.writer == WriterId("w1") }
+            adds.any { it.writer == required } && (otherAdds == 0 || otherAdds == otherAddsOriginally)
         }
 
         val result = Shrinker.run(case, reference = reference)
@@ -471,6 +487,10 @@ class ShrinkerTest {
         result.truncated shouldBe false
         withClue("every surviving Op step must be the required writer's") {
             result.case.script.steps.all { it !is CaseStep.Op || it.event.writer == required } shouldBe true
+        }
+        withClue("the reduction must be the writer-wise one: no w1 Add may survive") {
+            result.case.script.toScript().slice(source).events
+                .filterIsInstance<ScriptEvent.Add>().none { it.writer == WriterId("w1") } shouldBe true
         }
         result.outcome.shouldBeInstanceOf<RunOutcome.Mismatch>().terminal shouldBe terminal
     }

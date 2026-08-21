@@ -26,13 +26,20 @@ import civictech.oracle.run.WavePrefixOption
  * 1. **Delete op-script steps.** Chunk-wise, halving the chunk each round, so a 200-step script
  *    collapses in tens of candidates rather than hundreds.
  * 1a. **Drop a writer.** One [WriterId] at a time, from the last distinct writer named in the
- *    script towards the first: every step that writer issued is removed in one candidate (the
- *    multi-writer dimension `[ORA2-GEN-01]` adds — a script step is the unit pass 1 reduces by,
- *    a *writer* is the unit this reduces by, and collapsing a whole writer in one candidate finds
- *    the single-writer floor in writer-count-many tries rather than in however many chunk rounds
- *    pass 1 needs to happen to isolate the same steps). Stops once one writer remains — dropping
- *    the last writer would empty the source's own slice for no reduction pass 1 could not already
- *    reach by deleting its steps one at a time.
+ *    script towards the first: every step that writer issued is removed in **one** candidate (the
+ *    multi-writer dimension `[ORA2-GEN-01]` adds — a script step is the unit pass 1 reduces by, a
+ *    *writer* is the unit this reduces by). Stops once one writer remains — dropping the last
+ *    writer would empty the source's own slice.
+ *
+ *    **What this buys over pass 1 is ATOMICITY, not candidate count.** Pass 1 runs to completion
+ *    before this pass starts and descends to single-step chunks, so wherever the failure survives
+ *    step-by-step removal it has already reached the single-writer floor and pass 1a finds nothing
+ *    to drop — a candidate-count saving is not something a pass sequenced *after* pass 1 can
+ *    deliver. What pass 1 cannot express is a removal that is only valid taken TOGETHER: a failure
+ *    that survives "all of `w1`'s steps" and "none of `w1`'s steps" but not any proper subset is
+ *    rejected at every chunk size and left standing. That is the reduction this pass adds, and it
+ *    is what `ShrinkerTest`'s "pass 1a drops a whole writer's steps" fixture injects — deliberately,
+ *    because a monotone predicate leaves this pass unconstrained (see that test's KDoc).
  * 2. **Narrow the element domain.** Remap the script's element payloads onto fewer distinct
  *    values — first the whole domain onto one element, then, if that fails, one element at a time
  *    onto its predecessor.

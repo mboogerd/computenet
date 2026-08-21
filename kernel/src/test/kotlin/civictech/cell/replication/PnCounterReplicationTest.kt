@@ -43,7 +43,7 @@ import civictech.cell.data.delta.CounterDelta
  * - **"a late replica syncs... through catch-up"** and **"partitioned
  *   counters diverge... and heal"** are late-join and partition/heal
  *   scenarios respectively; ORA2 is deliberately quiescent and fault-free
- *   (epic D6: "partition/reorder/duplicate/crash/journal/restart is CHA1's
+ *   (feature computenet-4ru.1's D6: "partition/reorder/duplicate/crash/journal/restart is CHA1's
  *   rig"), so no oracle sweep exercises either.
  *
  * Per this bead's own instruction: kept, not subsumed — BS-12 is additional

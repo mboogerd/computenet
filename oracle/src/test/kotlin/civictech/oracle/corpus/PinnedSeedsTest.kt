@@ -119,21 +119,28 @@ class PinnedSeedsTest {
      * tagged-shaped config through the same [replay] path every real entry runs on every build,
      * and that the path answers correctly at the one tagged case it CAN construct.
      *
-     * ## Why this is the only tagged case there is to construct
+     * ## Why there is no LEGITIMATE tagged case to pin
      *
-     * `civictech.oracle.bind.TaggedOperators`' own file KDoc and
-     * `civictech.oracle.tagged.TaggedSweepTest`'s (`"Why this drives DifferentialRunner.check
-     * rather than OracleSweep.run"`) independently reach the same conclusion:
-     * `TaggedOperators.registerAll()` binds exactly one id, `orMap`, as an ARITY-0 source; no
-     * operator anywhere in the catalog can consume a `TaggedMapDelta`, and
-     * `[ORA1-GEN-03]`/`GraphGenerator`'s own `check` requires at least one operator between
-     * every source and every terminal. So [CaseGenerator] — the ONLY generator [PinnedSeed]'s
-     * form replays through — cannot build ANY terminal-bearing graph over `orMap`: not a
-     * multi-writer one, not a replicated one, not even the plainest single-writer case. This is
-     * a structural property of the generator, verified here rather than assumed, and it is why
-     * [PinnedSeeds.ALL] holds no tagged entry: there is no fixed defect to pin AND no
-     * constructible tagged case for a fix to have been pinned against, at any point ORA2 could
-     * have landed one. `civictech.oracle.tagged.TaggedSweepTest`/`ConvergenceSweepTest` cover
+     * `TaggedOperators.registerAll()` binds exactly one id, `orMap`, as an ARITY-0 source, so the
+     * config below — whose vocabulary names `orMap` and nothing else — is refused by
+     * `[ORA1-GEN-03]`/`GraphGenerator`'s `check(operatorEntries.isNotEmpty())`, which is the
+     * throw this test observes.
+     *
+     * **That is where the claim stops.** It is NOT true that [CaseGenerator] cannot build a
+     * terminal-bearing `orMap` graph at all: `GraphGenerator` is shape-typed on `ElementShape`
+     * and branches on no catalog id, and `orMap`'s output shape `MapOf(Scalar, Scalar)` equals
+     * `map`'s, so a vocabulary naming `orMap` beside `join`, `combineLatest` or `lookupJoin`
+     * generates one on 20 of 20 seeds (measured in review of computenet-4ru.1.7). What makes
+     * such a graph illegitimate is the KERNEL typing, not the generator: `OrMapCell.outlet` is
+     * `Propagate<TaggedMapDelta<K, V>>` and those three consumers take `Propagate<MapDelta<K, V>>`,
+     * so the case runs to `DeadLetterFailure` with `ClassCastException: TaggedMapDelta cannot be
+     * cast to MapDelta` — the same MapDelta-vs-TaggedMapDelta bound computenet-valh tracks, and
+     * the same one `civictech.oracle.tagged.TaggedSweepTest`'s KDoc names when it says no
+     * operator can *legally* consume an `orMap` outlet.
+     *
+     * So [PinnedSeeds.ALL] holds no tagged entry because there is no fixed defect to pin AND no
+     * legitimate generated tagged case for a fix to have been pinned against — not because the
+     * generator structurally refuses one. `TaggedSweepTest`/`ConvergenceSweepTest` cover
      * `[ORA2-DIFF-01..09]` through `DifferentialRunner`'s bring-your-own seam instead — a
      * different entry point than this corpus replays, and one [PinnedSeed] cannot name.
      *

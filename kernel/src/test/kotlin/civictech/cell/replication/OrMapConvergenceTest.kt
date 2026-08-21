@@ -54,7 +54,8 @@ import java.util.*
  * evidence says it does not reach:
  *
  * - **The mid-run partition/heal in "three replicas converge... under 100
- *   seeds"** is explicitly out of ORA2's scope by design (epic D6, this
+ *   seeds"** is explicitly out of ORA2's scope by design (feature computenet-4ru.1's D6 — the
+ *   ORA1 epic's own D6 is a different decision, this
  *   feature's own bead: "Deliberately no faults... partition/reorder/
  *   duplicate/crash/journal/restart is CHA1's rig"). No oracle sweep injects
  *   a partition, so nothing here can be attributed to one.
