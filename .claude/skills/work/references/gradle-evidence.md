@@ -64,7 +64,8 @@ Gradle's console shows the tail of what it chose to print, never a suite
 total: one implementer read `27 tests` off the tail of a `:oracle:test`
 run whose XML held 408 across 45 files, and the undercount passed as "all
 green" (computenet-ozgs). Counts come from `junit-count.py` below, nothing
-else. And a `println` inside a test goes **nowhere** on this build —
+else — not a hand-rolled XML regex: `<testcase>`/`<failure>` adjacency
+reads failures as passes. And a `println` inside a test goes **nowhere** on this build —
 `testLogging.showStandardStreams` is off — so a print probe, or a test whose
 acceptance is "reports its own figure", reads as silence; its output is in
 the XML's `<system-out>`: `grep -A3 '<system-out>' <module>/build/test-results/test/TEST-<Class>.xml`.
