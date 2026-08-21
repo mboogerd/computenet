@@ -1,10 +1,17 @@
 package civictech.oracle.tagged
 
+import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Propagate
 import civictech.cell.data.MapOps
 import civictech.cell.data.OrMapCell
+import civictech.cell.data.delta.TaggedMapDelta
+import civictech.cell.host.DeadLetter
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.ManagedHost
+import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
+import civictech.cell.port.registerPort
 import civictech.oracle.model.DotOrder
 import civictech.oracle.model.DotModel
 import civictech.oracle.model.ModelState
@@ -61,6 +68,8 @@ import kotlin.random.Random
  * `civictech.oracle.bind.SingleInstanceOrMapModel` can honestly evaluate, and exactly what a
  * single `OrMapCell` driven directly is.
  */
+private const val SYNTHETIC_DESCRIPTION = "TaggedSweepTest synthetic dead letter [ORA2-DIFF-10]"
+
 class TaggedSweepTest {
 
     private val source = SourceId("s")
@@ -207,35 +216,105 @@ class TaggedSweepTest {
     }
 
     // =====================================================================
-    // [ORA2-DIFF-10] — reused, not re-demonstrated by fault injection
+    // [ORA2-DIFF-10] — a dead letter during a tagged run surfaces as the reused kind
     // =====================================================================
 
     /**
-     * `[ORA2-DIFF-10]` asks that a dead letter during a tagged run surface as
+     * `[ORA2-DIFF-10]`: a dead letter during a tagged run must surface as
      * [RunOutcome.DeadLetterFailure] — the SAME kind ORA1 already produces, unconditionally of
      * which delta type the graph carries (`DifferentialRunner.execute`'s dead-letter check reads
-     * `letters`, not the graph's shape). Manufacturing an actual dead letter needs breaking a
-     * link or a host mid-run, which is fault injection — this feature's own NON-GOALS (§6:
-     * "Faults... are CHA1... ORA2 builds quiescent meshes") forbid it. So this is recorded as a
-     * structural argument rather than a forced repro: [buildGraph] above is dead-letter-
-     * subscribed exactly like every other [DifferentialRunner] caller
-     * (`DifferentialRunner.execute`'s own subscription loop, unconditional on graph shape), so
-     * a lost message during THIS sweep would already be caught and reported through the reused
-     * kind — there is no tagged-specific branch to add or to miss.
+     * `letters`, not the graph's shape).
+     *
+     * An earlier version of this test asserted only [RunOutcome.Success] and reasoned about the
+     * dead-letter path structurally rather than forcing it red — which review correctly rejected:
+     * asserting Success is compatible with the dead-letter path never being reached at all.
+     * `civictech.oracle.run.FailureTaxonomyTest` (ORA1) shows the sanctioned, non-fault-injection
+     * mechanism this test now reuses: `ManagedHost.deadLetterOutlet` is a public `FanOutlet` and
+     * [DeadLetter] a public data class, so a component fanned off the source's outlet can publish
+     * a SYNTHETIC dead letter without breaking a link or a host — no fault injection, and nothing
+     * this feature's NON-GOALS (§6: quiescent meshes only) forbid. [TaggedDeadLetterEmitter] below
+     * is that component, ported to `TaggedMapDelta` from ORA1's `SetDelta` original.
      */
     @Test
-    fun `ORA2-DIFF-10 is NOT demonstrated - a tagged run's dead-letter path is argued structurally, never forced red`() {
-        // No assertion beyond "this sweep's own graph is subscribed the same way every other
-        // DifferentialRunner caller's is" — see the KDoc above for why a forced repro is out of
-        // scope. This test exists so the reasoning is pinned beside code rather than only in prose.
+    fun `ORA2-DIFF-10 a dead letter during a tagged run surfaces as DeadLetterFailure`() {
         val slice = randomScript(seed = 1L)
         val outcome = DifferentialRunner.check(
             seed = 1L,
-            caseMarker = "tagged-sweep-dead-letter-note",
+            caseMarker = "tagged-sweep-dead-letter",
+            script = Script(listOf(slice)),
+            reference = referenceFor(slice),
+            buildGraph = ::buildGraphWithDeadLetterEmitter,
+        )
+
+        val failure = outcome.shouldBeInstanceOf<RunOutcome.DeadLetterFailure>()
+        failure.seed shouldBe 1L
+        failure.deadLetters.isEmpty() shouldBe false
+        failure.deadLetters.first().description shouldBe SYNTHETIC_DESCRIPTION
+    }
+
+    /**
+     * The discrimination this needs: identical seed, script and reference, with only the
+     * emitter removed. Without this control, [RunOutcome.DeadLetterFailure] above could be
+     * produced by something else in the graph and this test would prove nothing about the
+     * dead-letter path specifically.
+     */
+    @Test
+    fun `the same tagged case without the dead-letter emitter is Success, so the verdict is the letter and not the graph`() {
+        val slice = randomScript(seed = 1L)
+        val outcome = DifferentialRunner.check(
+            seed = 1L,
+            caseMarker = "tagged-sweep-dead-letter-control",
             script = Script(listOf(slice)),
             reference = referenceFor(slice),
             buildGraph = ::buildGraph,
         )
         outcome shouldBe RunOutcome.Success
+    }
+
+    /** [buildGraph], with a [TaggedDeadLetterEmitter] fanned off the source's outlet. */
+    private fun buildGraphWithDeadLetterEmitter(world: SimWorld): CaseGraph {
+        val cell = OrMapCell<Any?, Any?>(CellRef(java.util.UUID.randomUUID()))
+        val fold = TaggedMapTerminalFold<Any?, Any?>()
+        val emitter = TaggedDeadLetterEmitter(world.host)
+        world.host.managementInlet.call.spawn(cell)
+        world.host.managementInlet.call.spawn(fold)
+        world.host.managementInlet.call.spawn(emitter)
+        world.host.managementInlet.call.connect(cell.ref, "outlet", fold.ref, "inlet")
+        world.host.managementInlet.call.connect(cell.ref, "outlet", emitter.ref, "inlet")
+        @Suppress("UNCHECKED_CAST")
+        val ops = (
+            HostedCellProxy.create(cell.ref, world.registry, OrMapInletProxy::class.java) as OrMapInletProxy
+            ).inlet.call as MapOps<Any?, Any?>
+        return CaseGraph(
+            terminals = mapOf("orMap" to fold),
+            sources = mapOf(source to ops.asOrMapScriptSource()),
+        )
+    }
+
+    /**
+     * Publishes one synthetic dead letter on [host]'s outlet the first time a `TaggedMapDelta`
+     * reaches it — mid-run, driven by the same stream the terminal fold sees. Ported from
+     * `civictech.oracle.run.FailureTaxonomyTest.DeadLetterEmitter` (ORA1), whose KDoc records
+     * that this route is real and reachable, not merely described.
+     */
+    private class TaggedDeadLetterEmitter(
+        private val host: ManagedHost,
+        override val ref: CellRef = CellRef(java.util.UUID.randomUUID()),
+    ) : Cell {
+        private var emitted = false
+
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<TaggedMapDelta<Any?, Any?>>>())
+
+        init {
+            inlet.serve(object : Propagate<TaggedMapDelta<Any?, Any?>> {
+                override fun propagate(value: TaggedMapDelta<Any?, Any?>) {
+                    if (emitted) return
+                    emitted = true
+                    host.deadLetterOutlet.call.propagate(
+                        DeadLetter(hostRef = host.ref, cause = null, description = SYNTHETIC_DESCRIPTION),
+                    )
+                }
+            })
+        }
     }
 }
