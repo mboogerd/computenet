@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for create-ticket.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "8 passed, 0 failed".
+# Expect "12 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/create-ticket.sh"}
@@ -86,6 +86,22 @@ out=$(run --claim); st=$?
 fixture
 out=$("$SCRIPT" --type bug --title t 2>&1); st=$?
 [ "$st" = 2 ] && ok "missing --parent exits 2" || bad "args: exit=$st out=$out"
+
+# 7xeh: --top-level creates unparented and never calls update --parent
+fixture
+out=$("$SCRIPT" --type bug --title t --top-level 2>&1); st=$?
+[ "$st" = 0 ] && [ "$out" = computenet-h4sh ] && ! grep -q -- '--parent' "$BD_LOG" \
+  && ok "--top-level creates unparented" || bad "top-level: exit=$st out=$out log=$(cat "$BD_LOG")"
+out=$("$SCRIPT" --type bug --title t --top-level --parent x 2>&1); st=$?
+[ "$st" = 2 ] && ok "--top-level and --parent are exclusive" || bad "exclusive: exit=$st out=$out"
+
+# s5dh: --desc-file passes backticks and $(...) through inert
+printf 'body with `backticks` and $(echo NO)\n' > "$CTRL/body.txt"
+out=$("$SCRIPT" --type bug --title t --parent p --desc-file "$CTRL/body.txt" 2>&1); st=$?
+[ "$st" = 0 ] && grep -qF -- '`backticks` and $(echo NO)' "$BD_LOG" \
+  && ok "--desc-file body reaches bd verbatim" || bad "desc-file: exit=$st log=$(cat "$BD_LOG")"
+out=$("$SCRIPT" --type bug --title t --parent p --desc-file "$CTRL/missing.txt" 2>&1); st=$?
+[ "$st" = 2 ] && ok "missing --desc-file is exit 2" || bad "missing file: exit=$st out=$out"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
