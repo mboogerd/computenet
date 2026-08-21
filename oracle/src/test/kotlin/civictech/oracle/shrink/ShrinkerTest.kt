@@ -14,6 +14,7 @@ import civictech.oracle.model.ModelState
 import civictech.oracle.model.Script
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SourceId
+import civictech.oracle.model.WriterId
 import civictech.oracle.run.CaseExecution
 import civictech.oracle.run.DifferentialRunner
 import civictech.oracle.run.Reference
@@ -22,6 +23,7 @@ import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.comparables.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.AfterEach
@@ -432,6 +434,130 @@ class ShrinkerTest {
         }
     }
 
+    // -------------------------------------------------------------- computenet-4ru.1.7 moves
+
+    /**
+     * Pass 1a (`dropWriters`): a two-writer script over one non-order-dependent `SET` source
+     * collapses to the single writer the failure needs. `chainConfig`'s baseline is
+     * `writerCount = 1` for the other tests' sake, so this test opts into `writerCount = 2`
+     * itself — the ORA2 multi-writer dimension (`[ORA2-GEN-01]`).
+     *
+     * ## Why the injected failure is GROUP-wise, and not simply "w0 wrote"
+     *
+     * A monotone predicate ("some `w0` add survives") does not discriminate this pass at all:
+     * pass 1 runs to completion first and descends to single-step chunks, so it removes every
+     * `w1` step on its own and pass 1a finds nothing left to drop. Measured during review of
+     * computenet-4ru.1.7: with such a predicate, disabling `dropWriters` outright left
+     * `:oracle:test --tests civictech.oracle.shrink.*` at 29/29 green — the test asserted a
+     * property pass 1 already delivered.
+     *
+     * So the reference below fails only where `w1`'s adds are **all present or all absent**.
+     * Step-wise deletion of any proper subset of them stops the failure and is rejected; the
+     * one candidate that removes them together is [Shrinker]'s own writer-wise move. That is
+     * also the honest statement of what pass 1a buys over pass 1 — an atomic group removal a
+     * chunk-wise pass cannot express — rather than the candidate-count saving the object KDoc
+     * originally claimed, which pass 1a cannot deliver from a position after pass 1.
+     */
+    @Test
+    fun `pass 1a drops a whole writer's steps once the failure no longer needs them`() {
+        val case = generated(chainConfig().copy(writerCount = 2, scriptLength = 30), seed = 10L)
+        val terminal = case.topology.terminals.single().name
+        val source = case.topology.nodes.single { it.source != null }.source!!
+        val required = WriterId("w0")
+        val addsOf = { writer: WriterId ->
+            case.script.toScript().slice(source).events
+                .filterIsInstance<ScriptEvent.Add>().any { it.writer == writer }
+        }
+        withClue("the fixture needs an add from the required writer or the predicate is vacuous") {
+            addsOf(required) shouldBe true
+        }
+        withClue("the fixture needs an add from a DIFFERENT writer or nothing is there to drop") {
+            addsOf(WriterId("w1")) shouldBe true
+        }
+        val otherAddsOriginally = case.script.toScript().slice(source).events
+            .filterIsInstance<ScriptEvent.Add>().count { it.writer == WriterId("w1") }
+        val reference = failWhenever(case, terminal) { script ->
+            val adds = script.slice(source).events.filterIsInstance<ScriptEvent.Add>()
+            val otherAdds = adds.count { it.writer == WriterId("w1") }
+            adds.any { it.writer == required } && (otherAdds == 0 || otherAdds == otherAddsOriginally)
+        }
+
+        val result = Shrinker.run(case, reference = reference)
+
+        result.truncated shouldBe false
+        withClue("every surviving Op step must be the required writer's") {
+            result.case.script.steps.all { it !is CaseStep.Op || it.event.writer == required } shouldBe true
+        }
+        withClue("the reduction must be the writer-wise one: no w1 Add may survive") {
+            result.case.script.toScript().slice(source).events
+                .filterIsInstance<ScriptEvent.Add>().none { it.writer == WriterId("w1") } shouldBe true
+        }
+        result.outcome.shouldBeInstanceOf<RunOutcome.Mismatch>().terminal shouldBe terminal
+    }
+
+    /**
+     * Pass 1b (`dropReplicas`): a gossiping source the failure no longer needs is dropped
+     * ENTIRELY — its own steps AND every [CaseDelivery] naming it — and the topology is left
+     * alone, because this move is orthogonal to pass 3.
+     *
+     * The distinguishing property from plain step deletion (pass 1): pass 1 deletes
+     * [CaseStep.Op] entries only and never removes a [CaseDelivery], so it can empty a source's
+     * own steps while leaving a delivery that names it DANGLING — carried to a new position but
+     * never dropped. This move is what removes the dangling delivery too.
+     *
+     * Three sources, not two: [dropReplicas]' own floor refuses a drop that would zero every
+     * delivery in the script (its KDoc — "drop A replica" is not "de-mesh the case"), and with
+     * only two gossiping sources every [CaseDelivery] names both, so dropping either one would
+     * always hit that floor and this test would witness nothing. With three, [attachGossip]'s
+     * cyclic deliveries each name only two of the three, so dropping one source leaves the
+     * delivery between the other two intact.
+     *
+     * `other = sources[2]` on purpose, not `sources[1]`: [dropReplicas] tries the
+     * LAST-listed candidate first, and [attachGossip]'s cyclic deliveries make `sources[2]` the
+     * one that pass 4 drops cleanly on its first attempt — dropping it first leaves exactly one
+     * delivery (`sources[0]` \<-\> `sources[1]`), and the floor above then rightly refuses to
+     * touch either of THOSE, which is a different (also correct) outcome this test is not about.
+     */
+    @Test
+    fun `pass 1b drops a gossiping source's own steps and every delivery naming it`() {
+        val case = attachGossip(generated(threeWayFanInConfig(), seed = 9L))
+        val terminal = case.topology.terminals.single().name
+        val sources = case.topology.nodes.mapNotNull { it.source }.distinct()
+        withClue("the fixture needs exactly three sources, all feeding the one terminal") {
+            sources.size shouldBe 3
+            sourcesFeeding(case.topology, case.topology.terminals.single().handle) shouldContainExactly sources.toSet()
+        }
+        val kept = sources[0]
+        val other = sources[2]
+        withClue("dropping 'other' must not be the drop this test's own floor would refuse") {
+            case.script.deliveries.filterNot { it.into == other || it.from == other } shouldNotBe emptyList<CaseDelivery>()
+        }
+        withClue("the fixture's gossip must name the other source or this test witnesses nothing") {
+            case.script.deliveries.any { it.into == other || it.from == other } shouldBe true
+        }
+        withClue("the kept source needs an add or the predicate is vacuous") {
+            case.script.toScript().slice(kept).events.filterIsInstance<ScriptEvent.Add>().isNotEmpty() shouldBe true
+        }
+        val reference = failWhenever(case, terminal) { script ->
+            script.slice(kept).events.filterIsInstance<ScriptEvent.Add>().isNotEmpty()
+        }
+
+        val result = Shrinker.run(case, reference = reference)
+
+        result.truncated shouldBe false
+        withClue("dropReplicas must remove every step the shrink no longer needs from the other source") {
+            result.case.script.steps.none { it is CaseStep.Op && it.source == other } shouldBe true
+        }
+        withClue("a delivery naming a fully-dropped replica must not dangle in the reduced script") {
+            result.case.script.deliveries.none { it.into == other || it.from == other } shouldBe true
+        }
+        withClue("dropping a replica's script participation must not touch the topology") {
+            result.case.topology.nodes.size shouldBe case.topology.nodes.size
+            result.case.topology.terminals.size shouldBe case.topology.terminals.size
+        }
+        result.outcome.shouldBeInstanceOf<RunOutcome.Mismatch>().terminal shouldBe terminal
+    }
+
     // ------------------------------------------------------------------------------ fixtures
 
     /**
@@ -491,6 +617,21 @@ class ShrinkerTest {
     private fun fanInConfig() = chainConfig().copy(
         sourceCount = 2,
         terminalCount = 1,
+        vocabulary = listOf(CoreOperators.Ids.SET, CoreOperators.Ids.UNION),
+    ).validated()
+
+    /**
+     * Three set sources fanning in to one terminal through a `union` chain: [fanInConfig]'s
+     * shape widened to three sources so [attachGossip]'s cyclic deliveries each name only two of
+     * the three — the fixture `pass 1b` needs to drop the middle source without tripping
+     * [Shrinker]'s own no-empty-mesh floor (see that test's KDoc). A wider depth range than
+     * [chainConfig]'s `1..1` because chaining three sources into one terminal through a binary
+     * `union` needs at least two operator levels.
+     */
+    private fun threeWayFanInConfig() = chainConfig().copy(
+        sourceCount = 3,
+        terminalCount = 1,
+        depthRange = 2..3,
         vocabulary = listOf(CoreOperators.Ids.SET, CoreOperators.Ids.UNION),
     ).validated()
 

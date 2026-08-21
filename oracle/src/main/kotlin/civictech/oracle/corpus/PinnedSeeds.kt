@@ -105,6 +105,37 @@ import civictech.oracle.gen.GeneratorConfig
  *
  * All three were re-verified to replay `Success` against this file's own base commit before
  * being pinned below.
+ *
+ * ## No tagged/OR-map entry — a mechanism limit, not an oversight (computenet-4ru.1.7)
+ *
+ * Every entry here replays through [civictech.oracle.gen.CaseGenerator.generate], the SAME
+ * single-instance generator `PinnedSeedsTest` calls. `civictech.oracle.bind.TaggedOperators`
+ * registers `orMap` as its only id, an arity-0 SOURCE, so a vocabulary naming `orMap` and
+ * nothing else is refused outright by `GraphGenerator`'s `[ORA1-GEN-03]` check ("at least one
+ * operator between every source and every terminal") — which is the case the test named below
+ * hands to [replay].
+ *
+ * **The bound is kernel type legality, not the generator's construction check** — measured in
+ * review of computenet-4ru.1.7, and stated narrowly here because a wider claim would be false.
+ * `GraphGenerator` is shape-typed on [civictech.oracle.model.ElementShape] and branches on no
+ * catalog id, and `orMap`'s output shape `MapOf(Scalar, Scalar)` is *identical* to `map`'s, so a
+ * vocabulary naming `orMap` beside `join`, `combineLatest` or `lookupJoin` generates
+ * terminal-bearing `orMap` graphs perfectly happily (measured: 20 of 20 seeds, for each of the
+ * three). Those graphs are not legitimate cases: `OrMapCell.outlet` is
+ * `Propagate<TaggedMapDelta<K, V>>` while `JoinCell`/`CombineLatestCell`/`LookupJoinCell` are
+ * typed to `Propagate<MapDelta<K, V>>`, so executing one yields `RunOutcome.DeadLetterFailure`
+ * carrying `ClassCastException: TaggedMapDelta cannot be cast to MapDelta` (measured, seed 1,
+ * `orMap` + `combineLatest`) — a kernel wiring violation the oracle's shape system does not
+ * distinguish, tracked as computenet-valh. So there is no *legitimate* tagged case this corpus's
+ * entry form could have pinned a fix against; ORA2's
+ * tagged/keyed coverage (`[ORA2-DIFF-01..09]`) runs through
+ * `civictech.oracle.run.DifferentialRunner`'s bring-your-own seam instead
+ * (`civictech.oracle.tagged.TaggedSweepTest`, `ConvergenceSweepTest`), a different entry point
+ * this file's `PinnedSeed` cannot name. `PinnedSeedsTest`'s
+ * "computenet-4ru 1 7 the pinned-seed entry form round-trips a tagged config without pinning
+ * one" pins this finding as an executable check: a `PinnedSeed` naming `orMap` constructs fine
+ * as data and fails LOUDLY at `replay()`'s `[ORA1-REPRO-03]` branch, never silently — the same
+ * outcome a stale shape rule would produce for any other entry.
  */
 data class PinnedSeed(
     /** The seed this entry pins. Feeds [civictech.oracle.gen.CaseGenerator.generate] directly. */
