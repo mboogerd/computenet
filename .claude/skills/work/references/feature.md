@@ -312,6 +312,15 @@ descriptive string there (`none (tracker mutations only)`) is read as a path
 and batched on, which is worse than an empty claim, not better
 (computenet-wpvy.30).
 
+**A describe-ahead breakdown — run before the feature's blocker lands (5f
+route 0 / 2b) — marks every PREDICTED anchor as such.** Its "contracts from
+predecessor tasks" sections, line numbers and `verified at <sha>` notes
+describe code that does not exist yet; label them `predicted:` (as against
+`observed at <sha>:`) in each task's description, so the orchestrator's
+pre-dispatch check (SKILL.md 5b) knows which anchors to re-verify and the
+implementer knows which to distrust (computenet-w8cp: four of four tasks
+needed correcting).
+
 **A clause that predicts CURRENT behaviour gets the same premise check you
 applied to your input.** You verify the epic's premises before splitting it;
 the examples and acceptance clauses *you write* are premises too, and an
