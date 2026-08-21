@@ -423,7 +423,33 @@ if "branch_has_commits" not in nb._entry({"id": "t"}, False, []):
     failed += 1
     print("FAIL: every entry must carry branch_has_commits for the 5b inspect rule")
 
-total = (len(cases) + len(branch_cases) + entry_resume_cases + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
+# kklt: the task's work can sit on the FEATURE branch with no local task
+# branch at all (a dead session on another machine merged and pushed it).
+merged_cases = 3
+# the grep is anchored: a sibling's `.10` commit must not read as `.1` merged
+import subprocess as _sp, tempfile as _tf, os as _os
+_d = _tf.mkdtemp(); _sp.run(["git", "init", "-q", _d], check=True)
+_sp.run(["git", "-C", _d, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+         "--allow-empty", "-m", "Merge computenet-f.10 into feature"], check=True)
+_sp.run(["git", "-C", _d, "branch", "feature/computenet-f"], check=True)
+_cwd = _os.getcwd(); _os.chdir(_d)
+try:
+    if nb.merged_into_feature("computenet-f.1", "computenet-f") is not False:
+        failed += 1
+        print("FAIL: task .1 must not match a sibling's .10 commit")
+    if nb.merged_into_feature("computenet-f.10", "computenet-f") is not True:
+        failed += 1
+        print("FAIL: task .10 must match its own merge commit")
+finally:
+    _os.chdir(_cwd)
+if nb.merged_into_feature("computenet-nope", "definitely-not-a-feature") is not False:
+    failed += 1
+    print("FAIL: merged_into_feature must be False when no feature ref exists")
+if "merged_into_feature" not in nb._entry({"id": "t"}, False, []):
+    failed += 1
+    print("FAIL: every entry must carry merged_into_feature for the 5b inspect rule")
+
+total = (merged_cases + len(cases) + len(branch_cases) + entry_resume_cases + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
          + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
          + len(capacity_cases) + len(cap_cases) + capacity_reason_cases
          + len(claim_shape_cases) + len(claim_error_cases))
