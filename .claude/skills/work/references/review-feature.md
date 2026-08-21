@@ -420,6 +420,14 @@ So:
   measurement: run the suite in a JDK-21 Linux container (`groovy:4.0-jdk21`
   is present locally; `eclipse-temurin:21` costs a ~10-minute pull) and quote
   that result too.
+- **A red required check is attributed with
+  [red-check-attribution.md](red-check-attribution.md), never by the query
+  that occurs to you.** Its artifact 3 searches by the failing TEST CLASS; a
+  reviewer that searched by module attributed a first-sighting `:wire` class
+  to a different class's characterised flake and called a `:inspect` class
+  "no prior bead" when one existed (computenet-9cji) — both errors in the
+  direction that dismisses a red. Quote the artifact-3 query and its result
+  in the verdict.
 - **Before you set `review=passed`, read the branch's own CI run** — it is
   the only Linux evidence that exists:
 
