@@ -49,7 +49,8 @@
 # 8176 -> 8191 on 2026-08-21: computenet-ozgs — rebased onto main (see PR #410).
 # 8191 -> 8192 on 2026-08-21: computenet-ozgs — rebased onto main (see PR #410).
 # 8192 -> 8199 on 2026-08-21: computenet-6ag4 — rebased onto main (see PR #424).
-work                8199
+# 8199 -> 8205 on 2026-08-21: computenet-6ag4 — rebased onto main (see PR #424).
+work                8205
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
