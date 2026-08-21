@@ -609,8 +609,8 @@ of these is true:
 
   Empty means the merge is a pure union of its parents and authored nothing
   novel; anything printed is yours and counts. Run it per conflicted file; do
-  not `&&`-chain it — `comm`/`diff` exit non-zero on output and the chain
-  silently drops whatever follows.
+  not `&&`-chain a `diff` variant of it — `diff` exits 1 on any difference
+  and the chain silently drops whatever follows (`comm` itself exits 0).
 
   **Zero is the first bullet's answer too**: nothing executable changed. Two
   reviewers handed the same commit — "28 insertions, 15 deletions, mostly
