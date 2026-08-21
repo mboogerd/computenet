@@ -35,7 +35,8 @@
 # 8082 -> 8090 on 2026-08-21: computenet-d52d — rebased onto main (see PR #425).
 # 8090 -> 8095 on 2026-08-21: computenet-5b34 — rebased onto main (see PR #423).
 # 8095 -> 8106 on 2026-08-21: computenet-jobe — rebased onto main (see PR #422).
-work                8106
+# 8106 -> 8114 on 2026-08-21: computenet-l8ju — rebased onto main (see PR #416).
+work                8114
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
