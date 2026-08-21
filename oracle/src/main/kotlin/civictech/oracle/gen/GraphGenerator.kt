@@ -55,9 +55,22 @@ data class GeneratedGraph(
  *
  * Operators come exclusively from [OperatorCatalog] registrations named in
  * [GeneratorConfig.vocabulary]. Everything the `[ORA1-HONEST-02]` ledger excludes — `ListCell`,
- * `OrMapCell`, `MergeableGroupByCell`, `CoalescingCombineCell`, window close/eviction
+ * `MergeableGroupByCell`, `CoalescingCombineCell`, window close/eviction
  * (`civictech.oracle.model.MapCellModel`'s module KDoc) — is unregistered, and therefore
  * unemittable here by construction rather than by a filter that could be forgotten.
+ *
+ * `OrMapCell` is a partial exception, and it is why this paragraph used to (wrongly) list it
+ * alongside the fully-absent operators above: `civictech.oracle.bind.TaggedOperators` DOES
+ * register it, as a source, so it is emittable — but restricted, not absent. It carries
+ * [ElementShape.TaggedMapOf] rather than the [ElementShape.MapOf] the map/join family consumes
+ * (`civictech.oracle.model.ElementShape.TaggedMapOf`'s own KDoc has the kernel reason), so
+ * nothing in [CoreOperators] can ever satisfy a port from an `orMap` source and no downstream
+ * edge into `join`/`combineLatest`/`lookupJoin` can be drawn — refused by shape *inequality* at
+ * [satisfiedBy] (and, upstream of that, by [Builder.chooseRootShape]'s `[ORA1-GEN-03]` check
+ * when nothing in the vocabulary can consume it at all), the same "unemittable by construction"
+ * property the fully-unregistered operators get from never being in the catalog
+ * (computenet-880k; before this shape existed, `orMap` was wrongly shape-equal to
+ * `CoreOperators`' `SCALAR_MAP` and this generator emitted the illegal edge).
  *
  * ## Static topologies only
  *

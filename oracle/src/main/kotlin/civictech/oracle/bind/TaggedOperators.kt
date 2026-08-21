@@ -120,7 +120,20 @@ object TaggedOperators {
     }
 
     private val SCALAR = ElementShape.Scalar
-    private val SCALAR_MAP = ElementShape.MapOf(SCALAR, SCALAR)
+
+    /**
+     * `OrMapCell.outlet` carries `Propagate<TaggedMapDelta<K, V>>`, not `MapDelta` — deliberately
+     * [ElementShape.TaggedMapOf], not the plain [ElementShape.MapOf] every other map-shaped
+     * entry in [CoreOperators] uses. Registering `orMap` as `MapOf(Scalar, Scalar)` here made it
+     * shape-equal to `CoreOperators`' `SCALAR_MAP`, so `GraphGenerator` treated `orMap`'s output
+     * as fit to feed `join`/`combineLatest`/`lookupJoin` — an edge that is a genuine kernel type
+     * violation (`TaggedMapDelta` cannot cast to `MapDelta`), reachable on 20/20 generated seeds
+     * before this fix (computenet-880k). [ElementShape.TaggedMapOf]'s own KDoc has the full
+     * mechanism; the fix is entirely this one shape, since `GraphGenerator.satisfiedBy` already
+     * refuses by shape *inequality* — no generator edit is needed once the two shapes are
+     * genuinely distinct.
+     */
+    private val TAGGED_SCALAR_MAP = ElementShape.TaggedMapOf(SCALAR, SCALAR)
 
     /**
      * Binds every id in [Ids.ALL] into [OperatorCatalog].
@@ -134,7 +147,7 @@ object TaggedOperators {
          * and `MergeableGroupByCell` are not registered here at all. */
         OperatorCatalog.register(
             id = Ids.OR_MAP,
-            shape = ShapeRule.source(SCALAR_MAP),
+            shape = ShapeRule.source(TAGGED_SCALAR_MAP),
             kernel = CellFactory { ref -> OrMapCell<Any?, Any?>(ref) },
             model = SingleInstanceOrMapModel,
         )

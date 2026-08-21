@@ -58,4 +58,30 @@ sealed interface ElementShape {
 
     /** A keyed stream: [key] to [value] — the map/group-by family. */
     data class MapOf(val key: ElementShape, val value: ElementShape) : ElementShape
+
+    /**
+     * A keyed stream of [key] to [value], carried on the kernel's `TaggedMapDelta` rather than
+     * `MapDelta` — `civictech.cell.data.OrMapCell`'s outlet and nothing else today
+     * (computenet-880k).
+     *
+     * Deliberately a **separate variant from [MapOf], not the same shape with an extra flag**,
+     * and deliberately **not equal to `MapOf(key, value)` for the same [key]/[value]** even
+     * though both describe "a keyed stream of scalars to scalars" at the structural level this
+     * type otherwise works at. The distinction this variant exists to carry is not structural —
+     * it is which kernel delta type rides the wire, and the two are not interchangeable at a
+     * link: `JoinCell`/`CombineLatestCell`/`LookupJoinCell`'s `inlet`s are typed to
+     * `Propagate<MapDelta<K, V>>`, and connecting an `OrMapCell` outlet (`Propagate<TaggedMapDelta<K,
+     * V>>`) to one is a genuine kernel type violation, not a legitimate generated edge — wiring
+     * one produces a `ClassCastException` deep in delivery, not a compile error, because
+     * `ShapeRule`/`GraphSpec` carry no generic parameter for `GraphGenerator.satisfiedBy` to
+     * check against. Before this variant existed, `TaggedOperators`' `orMap` registered as
+     * plain `MapOf(Scalar, Scalar)` — byte-identical to `CoreOperators`' `SCALAR_MAP` — so shape
+     * equality wrongly declared the two link-compatible and `GraphGenerator` emitted the
+     * illegal edge on 20/20 seeds (computenet-880k's measured repro). Keeping this as its own
+     * variant, rather than a boolean or nominal tag on [MapOf], is what makes that
+     * mis-unification structurally impossible again: a `when` or `==` over [ElementShape] sees
+     * two distinct cases, the same way [SetOf] and [MapOf] themselves never conflate a set with
+     * a map of the same element shape.
+     */
+    data class TaggedMapOf(val key: ElementShape, val value: ElementShape) : ElementShape
 }
