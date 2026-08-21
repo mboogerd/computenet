@@ -11,6 +11,7 @@ import civictech.cell.graph.ConnectStep
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.SpawnStep
 import civictech.cell.port.FanInlet
+import civictech.cell.port.PolicyTier
 import civictech.cell.port.registerPort
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
@@ -24,55 +25,45 @@ import civictech.oracle.model.SourceId
 import civictech.oracle.model.WriterId
 import civictech.testkit.SimWorld
 import io.kotest.assertions.withClue
-import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertThrows
 import java.util.UUID
 
 /**
- * computenet-xj0v — what [CaseExecution.assemble] does at a **host cut**, and the one shape it
- * now refuses there.
+ * computenet-vpiz — what [CaseExecution.assemble] does at a **host cut**: it bridges the edge
+ * for real, so the cut is invisible to a wave-frontier join.
  *
- * ## The measurement this rests on, re-established here
+ * ## The equality this file exists to pin
  *
- * [`the cross-host connect registers no target-side link, while the same-host connect does`]
- * re-derives computenet-g25w's finding against *this* branch's `CaseExecution` rather than
- * taking it on trust: a `ConnectStep` whose two ends share a host produces **1** link the
- * target inlet can see; the same step across a cut produces **0**, because the cross-host
- * branch issues a bare `Propagate` handle resolved from the `LocationRegistry` and wrapped in
- * `Use.fixed`, on the SOURCE host only. The data plane is unaffected — same deltas, same
- * order — which is exactly why the gap is invisible until something reads link identity.
+ * `[22-GF-03]`: "WHERE a frontier edge is bridged across a host boundary, a glitch-free join
+ * SHALL compute an identical completeness condition and preserve the diamond guarantee across
+ * the cut." A frontier's completeness condition ranges over its inlet's **edge set**, which is
+ * folded from per-link `EdgeOpen`/`EdgeClose` — and watermarks, `Progress(thru)` absorb-acks
+ * and stall markers all travel per-link. So "identical completeness condition" is, concretely,
+ * *the same links on the same inlet either side of the cut*, and that is what
+ * [`a cross-host connect registers the same target-side link a same-host connect does`] and
+ * [`an ALIGN-tier join computes the same completeness condition across the cut as in-process`]
+ * assert, on graphs that differ only in the host ordinal the sink is placed on.
  *
- * ## Why that gap is a defect for [22-GF-03], and what is done about it
+ * ## What this replaced
  *
- * Every frontier/completeness bookkeeping is keyed by link identity: `WaveFrontier`'s edge set
- * is folded from per-link `EdgeOpen`/`EdgeClose`, and watermarks, `Progress(thru)` absorb-acks
- * and stall markers all travel per-link. A wave-frontier join (an inlet carrying an ALIGN-tier
- * policy — `PolicyTier.ALIGN`, the kernel's own criterion in
- * `civictech.cell.host.hasFrontierPolicy`) fed across such a cut would therefore compute its
- * completeness condition over an edge set **missing the cross-host arm**, which is the opposite
- * of what [22-GF-03] requires.
+ * computenet-g25w measured, and computenet-xj0v re-derived, that a cross-host `ConnectStep` used
+ * to be issued as a bare `Propagate` handle resolved from the `LocationRegistry` and wrapped in
+ * `Use.fixed`, on the SOURCE host only — so the target inlet registered **0** links against a
+ * same-host connect's **1**. The data plane was unaffected, which is exactly why the gap was
+ * invisible until something read link identity; a frontier there would have folded its
+ * completeness condition over an edge set missing its only arm. computenet-xj0v shipped a named
+ * refusal at assemble time as an interim tripwire. computenet-vpiz replaces it with the bridged
+ * link pair the refusal stood in for (`civictech.cell.wire`'s `bridgeTo`/`bridgeFrom`, which are
+ * in `:kernel` and so available here — `[ORA1-API-04]` bars `:wire`, a different module and a
+ * different package), and this file's refusal tests became the positive equality above.
  *
- * The bead left two routes open, and **both are reachable from here** — the bead's phrase
- * "`:wire`'s `WireEdgeLink`" is misleading: `WireEdgeLink`, `bridgeTo`/`bridgeFrom`,
- * `BridgeEgressCell`/`BridgeIngressCell` and `WireCodec` are all in **`:kernel`**
- * (`civictech.cell.wire`, not `:wire`'s `civictech.wire`), which `:oracle` depends on, so
- * `[ORA1-API-04]` does not bar them;
- * `kernel/src/test/kotlin/civictech/cell/consistency/GlitchFreeBridgedDiamondTest.kt` builds
- * this very shape across two `ManagedHost`s with no `:wire` dependency. Bridging every
- * cross-host edge for real changes the harness's cross-host model, so it is filed as follow-up
- * work; what is done **here** is the other route — **refuse at assemble time**, naming the
- * handle, the inlet and the policy tier — so the limit is a loud, named refusal instead of a
- * silently truncated edge set while that work is outstanding.
- *
- * Nothing in the corpus can build that shape today: no registered catalog operator carries
- * `GlitchFree` or installs an ALIGN policy. The refusal is a tripwire for the moment one does —
- * hence the hand-built [AlignedJoin] here, which is the smallest cell that trips it.
+ * Nothing the generator can draw exercises the frontier path today: no registered catalog
+ * operator carries `GlitchFree` or installs an ALIGN policy. Hence the hand-built [AlignedJoin]
+ * here — the smallest cell that puts an ALIGN-tier policy on the far side of the cut.
  */
 class CaseExecutionTest {
 
@@ -183,11 +174,14 @@ class CaseExecutionTest {
     // ------------------------------------------------------------------ the measurement
 
     /**
-     * computenet-g25w's finding, re-derived on this branch: 1 target-side link same-host, 0
-     * across the cut, on otherwise identical cells — and an identical data plane either way.
+     * The core of `[22-GF-03]` at its cheapest: the same graph either side of the cut registers
+     * the **same** target-side link count, on otherwise identical cells, with an identical data
+     * plane. Before computenet-vpiz this test read `shouldBeEmpty()` on the cross-host side —
+     * 1 same-host, 0 across the cut — which is precisely the truncated edge set the bridge
+     * removes.
      */
     @Test
-    fun `the cross-host connect registers no target-side link, while the same-host connect does`() {
+    fun `a cross-host connect registers the same target-side link a same-host connect does`() {
         lateinit var coHosted: Recorder
         val sameHostWorld = SimWorld(seed = 1L)
         val sameHostCase = caseWith({ ref -> Recorder(ref).also { coHosted = it } }, sinkHost = 0)
@@ -202,11 +196,12 @@ class CaseExecutionTest {
             coHosted.inlet.linking.links.size shouldBe 1
         }
         withClue(
-            "the cross-host ConnectStep does not: a bare Propagate handle wrapped in Use.fixed " +
-                "and issued on the source host leaves NO link identity on the target side, so " +
-                "no EdgeOpen and no per-inlink frontier bookkeeping can happen there",
+            "and so does the cross-host one, now that it is wired as a bridged link pair " +
+                "(bridgeTo on the source outlet, bridgeFrom on the target inlet): the arm has " +
+                "link identity, so EdgeOpen/EdgeClose, per-source watermarks and Progress(thru) " +
+                "absorb-acks have something to travel on [22-GF-03]",
         ) {
-            remote.inlet.linking.links.shouldBeEmpty()
+            remote.inlet.linking.links.size shouldBe coHosted.inlet.linking.links.size
         }
 
         drive(sameHostCase, sameHostWorld, sameHostAssembly)
@@ -220,7 +215,7 @@ class CaseExecutionTest {
                 emptySet<Any?>() to setOf("ab"),
             )
         }
-        withClue("the data plane is unaffected by the missing link — same deltas, same order") {
+        withClue("and the data plane is unchanged by the bridge — same deltas, same order") {
             remote.received.map(::shapeOf) shouldBe coHosted.received.map(::shapeOf)
         }
     }
@@ -234,51 +229,86 @@ class CaseExecutionTest {
     private fun shapeOf(delta: SetDelta<Any?>): Pair<Set<Any?>, Set<Any?>> =
         delta.adds.keys.toSet() to delta.dels.keys.toSet()
 
-    // ------------------------------------------------------------------ the refusal
+    // -------------------------------------------------- the [22-GF-03] equality, across the cut
 
     /**
-     * The reproduction this bead exists for: the same graph, with the sink carrying an
-     * ALIGN-tier policy, placed across the cut. Before the fix it assembled happily and the
-     * frontier's edge set silently omitted the only arm feeding it.
+     * The reproduction this bead exists for, in its positive form: the same graph, with the sink
+     * carrying an ALIGN-tier policy, once co-hosted with its upstream and once across the cut.
+     * The frontier's completeness condition ranges over its inlet's edge set, so "identical
+     * completeness condition" is the same edge set — and the bridged arm is in it.
+     *
+     * Under computenet-xj0v the cross-host half of this threw `IllegalStateException` at
+     * assemble time (the interim refusal); before that it assembled with the frontier folding
+     * over an edge set of size 0.
      */
     @Test
-    fun `a cross-host connect into an ALIGN-tier inlet is refused at assemble time`() {
-        lateinit var join: AlignedJoin
-        val world = SimWorld(seed = 1L)
-        val case = caseWith({ ref -> AlignedJoin(ref).also { join = it } }, sinkHost = 1)
+    fun `an ALIGN-tier join computes the same completeness condition across the cut as in-process`() {
+        lateinit var coHosted: AlignedJoin
+        val sameHostWorld = SimWorld(seed = 1L)
+        val sameHostCase = caseWith({ ref -> AlignedJoin(ref).also { coHosted = it } }, sinkHost = 0)
+        val sameHostAssembly = CaseExecution.assemble(sameHostCase, sameHostWorld)
 
-        val failure = assertThrows<IllegalStateException> { CaseExecution.assemble(case, world) }
+        lateinit var bridged: AlignedJoin
+        val crossHostWorld = SimWorld(seed = 1L)
+        val crossHostCase = caseWith({ ref -> AlignedJoin(ref).also { bridged = it } }, sinkHost = 1)
+        val crossHostAssembly = CaseExecution.assemble(crossHostCase, crossHostWorld)
 
-        withClue("the message names the handle, the inlet and the policy tier [22-GF-03]") {
-            failure.message.shouldContain("sink")
-            failure.message.shouldContain("inlet")
-            failure.message.shouldContain("ALIGN")
+        withClue("non-vacuity: both sinks really do carry the ALIGN-tier policy [22-GF-03] is about") {
+            coHosted.inlet.hasPolicy(PolicyTier.ALIGN) shouldBe true
+            bridged.inlet.hasPolicy(PolicyTier.ALIGN) shouldBe true
         }
-        withClue("non-vacuity: the sink really did carry the policy the refusal names") {
-            join.inlet.hasPolicy(civictech.cell.port.PolicyTier.ALIGN) shouldBe true
+        withClue("the in-process frontier waits on exactly the one arm feeding it") {
+            coHosted.inlet.linking.links.size shouldBe 1
+        }
+        withClue(
+            "and so does the bridged one: the completeness condition is computed over an edge " +
+                "set of the same size, INCLUDING the cross-host arm [22-GF-03]",
+        ) {
+            bridged.inlet.linking.links.size shouldBe coHosted.inlet.linking.links.size
+        }
+
+        drive(sameHostCase, sameHostWorld, sameHostAssembly)
+        drive(crossHostCase, crossHostWorld, crossHostAssembly)
+
+        withClue("non-vacuity: the WAIT-mode frontier released the waves in-process") {
+            coHosted.received.shouldNotBeEmpty()
+        }
+        withClue(
+            "and released the same waves, in the same order, across the cut — a frontier folding " +
+                "over a truncated edge set would have held them forever",
+        ) {
+            bridged.received.map(::shapeOf) shouldBe coHosted.received.map(::shapeOf)
         }
     }
 
-    /** The sugar cell (`GlitchFreeCell`) trips the same refusal — it installs the same policy. */
+    /** The sugar cell (`GlitchFreeCell`) gets the same bridged arm — it installs the same policy. */
     @Test
-    fun alignedSugarJoinIsRefusedToo() {
+    fun alignedSugarJoinIsBridgedToo() {
+        lateinit var sugar: GlitchFreeCell<*>
         val world = SimWorld(seed = 1L)
         val case = caseWith(
-            { ref -> GlitchFreeCell(Propagate::class.java, ref) },
+            { ref -> GlitchFreeCell(Propagate::class.java, ref).also { sugar = it } },
             sinkHost = 1,
         )
 
-        val failure = assertThrows<IllegalStateException> { CaseExecution.assemble(case, world) }
-        failure.message.shouldContain("ALIGN")
+        CaseExecution.assemble(case, world)
+
+        withClue("non-vacuity: the sugar cell carries the ALIGN-tier policy") {
+            sugar.inlet.hasPolicy(PolicyTier.ALIGN) shouldBe true
+        }
+        withClue("and its inlet sees the bridged arm across the cut") {
+            sugar.inlet.linking.links.size shouldBe 1
+        }
     }
 
     /**
-     * The refusal is scoped to the **cut**, not to the policy: the identical ALIGN-tier fan-in
-     * co-hosted with its upstream assembles, links, and runs. Without this control the fix
-     * would be indistinguishable from one that banned frontier joins outright.
+     * The in-process baseline the equality above is measured against, standing on its own: the
+     * ALIGN-tier fan-in co-hosted with its upstream assembles, links, and runs. It is what makes
+     * "the same completeness condition" a comparison rather than a coincidence — a bridge that
+     * registered two links, or none, would still have to differ from this.
      */
     @Test
-    fun `the same ALIGN-tier fan-in is not refused when it shares a host with its upstream`() {
+    fun `the same ALIGN-tier fan-in links and runs when it shares a host with its upstream`() {
         lateinit var join: AlignedJoin
         val world = SimWorld(seed = 1L)
         val case = caseWith({ ref -> AlignedJoin(ref).also { join = it } }, sinkHost = 0)
@@ -295,9 +325,10 @@ class CaseExecutionTest {
     }
 
     /**
-     * The complementary control: a cross-host connect into an inlet with **no** ALIGN policy is
-     * untouched. This is what keeps the fix from becoming a ban on multi-host cases — every
-     * case the generator can draw today lands here.
+     * The complementary control: a cross-host connect into an inlet with **no** ALIGN policy
+     * still delivers. Every case the generator can draw today lands here, so this is what keeps
+     * the bridged pair from silently breaking the ordinary multi-host data path — the bridged
+     * link carries protocol frames, and payloads still ride the registry-resolved handle.
      */
     @Test
     fun `a cross-host connect into a policy-free inlet is still allowed`() {
