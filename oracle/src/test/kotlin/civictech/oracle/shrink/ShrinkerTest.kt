@@ -397,8 +397,8 @@ class ShrinkerTest {
      * like a faithful reduction. That is the same silent wrongness as the dropped-gossip bug,
      * relocated one pass along.
      *
-     * The fixture is chosen so pass 3 genuinely has a source to drop: [twoBranchConfig] gives
-     * each source its own terminal, and the injected failure names only the first — so pass 3
+     * The fixture is chosen so pass 3 genuinely has a source to drop: [retiringConfig] puts three
+     * sources behind two terminals, and the injected failure names only the first — so pass 3
      * drops the second terminal, then the branch nothing reads any more, and with it a source
      * that two of the three attached deliveries name.
      */
@@ -455,14 +455,15 @@ class ShrinkerTest {
      * runner lands, the same assertions should be re-pointed at `replicatedSweep()` and will then
      * cover the generated shape too.
      *
-     * The positions are spread across the drive order on purpose — one at the very front, one in
-     * the middle, one at `steps.size` (the "after the last step" position `CaseDelivery` admits) —
-     * because a shift bug that is invisible at index 0 is not invisible at the tail.
+     * [attachGossip] spreads the positions across the drive order on purpose, but this fixture has
+     * only TWO sources and therefore only two deliveries — at the front and in the middle. The
+     * `steps.size` tail position is reached by [branchedGossipingCase]'s third delivery (and by
+     * `CounterexampleRenderTest`'s render fixture), not here.
      */
     private fun gossipingCase(seed: Long): GeneratedCase = attachGossip(generated(fanInConfig(), seed))
 
     /**
-     * The same, on [twoBranchConfig] — the shape in which pass 3 genuinely retires a source, so
+     * The same, on [retiringConfig] — the shape in which pass 3 genuinely retires a source, so
      * `without`'s drop rule is reachable. Separate from [gossipingCase] on purpose: there the
      * deliveries must SURVIVE, here some of them must not, and one fixture cannot witness both.
      */
@@ -512,9 +513,10 @@ class ShrinkerTest {
      * exactly the bookkeeping under test with a case the runner can still execute. When the mesh
      * runner lands, these assertions should be re-pointed at `replicatedSweep()`.
      *
-     * The positions are spread across the drive order deliberately — one at the very front, one
-     * in the middle, one at `steps.size` (the "after the last step" position `CaseDelivery`
-     * admits) — because a shift bug invisible at index 0 is not invisible at the tail.
+     * One delivery per source, cycled over three positions spread across the drive order — the
+     * very front, the middle, and `steps.size` (the "after the last step" position `CaseDelivery`
+     * admits) — because a shift bug invisible at index 0 is not invisible at the tail. Cycled, so
+     * a two-source case reaches only the first two of those; the tail needs three sources.
      */
     private fun attachGossip(case: GeneratedCase): GeneratedCase {
         val sources = case.topology.nodes.mapNotNull { it.source }.distinct()
@@ -543,7 +545,6 @@ class ShrinkerTest {
      */
     private fun alwaysFails(case: GeneratedCase, terminal: String): Reference =
         failWhenever(case, terminal) { true }
-
 
     /**
      * The case for `(config, seed)`, with its **baseline asserted clean** — the honest
