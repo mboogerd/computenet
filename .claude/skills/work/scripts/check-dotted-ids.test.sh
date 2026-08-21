@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for check-dotted-ids.sh. Stubs `bd` on PATH. Expect "10 passed, 0 failed".
+# Tests for check-dotted-ids.sh. Stubs `bd` on PATH. Expect "12 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-dotted-ids.sh"}
@@ -17,7 +17,7 @@ case "$1" in
       *--label=owner:*) cat "$CTRL/mine.json" 2>/dev/null || echo '[]' ;;
       *) cat "$CTRL/list.json" ;;
     esac ;;
-  show) printf '[{"id":"%s","assignee":"%s"}]\n' "$2" "$(cat "$CTRL/owner.$2" 2>/dev/null)" ;;
+  show) printf '[{"id":"%s","assignee":"%s","parent":"%s"}]\n' "$2" "$(cat "$CTRL/owner.$2" 2>/dev/null)" "$(cat "$CTRL/parent.$2" 2>/dev/null)" ;;
 esac
 EOF
 chmod +x "$ROOT/bin/bd"
@@ -53,6 +53,23 @@ echo MacBoo > "$CTRL/owner.computenet-k9d"
 out=$("$SCRIPT" 2>&1); st=$?
 [ "$st" = 0 ] && [ -z "$out" ] \
   && ok "own claimed parent is silent" || bad "own: exit=$st out=$out"
+
+# 3b. grandchild under a feature with NO assignee, whose EPIC we hold: silent
+fixture
+echo '[{"id":"computenet-ssa.4.1","created_by":"MacBoo"}]' > "$CTRL/list.json"
+echo '[{"id":"computenet-ssa"}]' > "$CTRL/mine.json"
+out=$("$SCRIPT" 2>&1); st=$?
+[ "$st" = 0 ] && [ -z "$out" ] \
+  && ok "unassigned feature under our epic is silent" || bad "effective epic: exit=$st out=$out"
+
+# 3c. explicit .parent overrides the dotted prefix on the walk up
+fixture
+echo '[{"id":"computenet-oxv.6.2","created_by":"MacBoo"}]' > "$CTRL/list.json"
+echo computenet-k9d > "$CTRL/parent.computenet-oxv.6"
+echo MacBoo > "$CTRL/owner.computenet-k9d"
+out=$("$SCRIPT" 2>&1); st=$?
+[ "$st" = 0 ] && [ -z "$out" ] \
+  && ok "explicit parent chain to our epic is silent" || bad "explicit parent: exit=$st out=$out"
 
 # 4. hash ids are never flagged
 fixture
