@@ -796,31 +796,38 @@ class SignedAnnouncementTest {
         rig.ingressCells.single().boundaryDenials["announcement-admission"]!!.denialCount shouldBe 1L
     }
 
-    // ============================ computenet-l8y5's boundary, pinned not solved
+    // ====================== computenet-l8y5, MALFORMED_ANNOUNCEMENT
 
     /**
-     * **Not this task's fix — this task's measurement.** `computenet-l8y5` asks
-     * for an ill-formed announcement *encoding* to be distinguishable from a
-     * forged signature. Today it is not, and this pins exactly how it is not, so
-     * that item starts from measured behaviour and so its fix shows up here as a
-     * failing assertion rather than as silence.
+     * `computenet-l8y5`: an **unencodable** announcement is refused as
+     * [DenialReason.MALFORMED_ANNOUNCEMENT], not as a forged signature.
      *
-     * The mechanism: `civictech.identity.announce.canonicalBytes` **refuses** a
-     * `portName` carrying an unpaired surrogate (`computenet-9qgg`) rather than
-     * letting UTF-8 substitute `?` and collide two announcements;
-     * `Ed25519SignatureVerifier` is total and maps that throw to `verify=false`;
-     * and this gate reads `false` as [DenialReason.BAD_SIGNATURE]. So an
-     * announcement that is *unencodable* and one that is *forged* arrive at an
-     * operator as the same word.
+     * This test replaces the residue measurement the previous session left here
+     * ("an unencodable announcement is BAD_SIGNATURE today"), which pinned the
+     * defect rather than the fix; that assertion is what turns red when the
+     * well-formedness check is removed from [AnnouncementAdmission], so it is
+     * still doing its job — inverted.
+     *
+     * The mechanism it closes: `civictech.identity.announce.canonicalBytes`
+     * **refuses** a `portName` carrying an unpaired surrogate
+     * (`computenet-9qgg`) rather than letting UTF-8 substitute `?` and collide
+     * two announcements; `Ed25519SignatureVerifier` is total and maps that throw
+     * to `verify=false`; and the gate used to read `false` as
+     * [DenialReason.BAD_SIGNATURE]. So an announcement that is *unencodable* and
+     * one that is *forged* arrived at an operator as the same word, and the
+     * exception the encoder raised was classified by accident rather than on
+     * purpose.
      *
      * The port name is injected by rewriting the encoded frame's JSON, which is
      * how it reaches a receiver in the first place: the kernel wire codec decodes
      * a JSON-escaped lone `\ud800` straight into [WireFrame.portName]
      * (`:identity`'s `WirePortNameSurrogateReachabilityTest` measures that), so
-     * this is remote input, not a synthetic value.
+     * this is remote input, not a synthetic value. The frame stays an
+     * announcement under the patch because `WireCodec.isAnnouncement` keys off
+     * `contractId`, never the port name.
      */
     @Test
-    fun `an unencodable announcement is BAD_SIGNATURE today — computenet-l8y5's residue, measured`() {
+    fun `an unencodable portName is MALFORMED_ANNOUNCEMENT, not BAD_SIGNATURE`() {
         val rig = Rig(boundPeer = peerB)
         val frame = Sender(Keys(identityB)).publish(rig.mirror.ref)
         val illFormed = frame.decodeToString()
@@ -831,10 +838,73 @@ class SignedAnnouncementTest {
         val before = rig.registrySnapshot()
         rig.feed(illFormed.toByteArray())
 
-        // the residue, in one line: unencodable reads as forged
-        rig.lastDenial().reason shouldBe DenialReason.BAD_SIGNATURE
+        rig.lastDenial().reason shouldBe DenialReason.MALFORMED_ANNOUNCEMENT
         rig.registrySnapshot() shouldBe before
         rig.rejected shouldBe 1L
+        // the record names the field, the index and the length, and is
+        // actionable without the string ([DSC1-OBS-05])
+        rig.lastDenial().detail shouldContain "portName"
+        rig.lastDenial().detail shouldContain "index 0"
+        rig.lastDenial().detail shouldContain "length 1"
+    }
+
+    /**
+     * The other half of the criterion, and the half the ordering decision is
+     * about: an ill-formed **minting peer name**.
+     *
+     * `signerKeyId` is the minting identity's name, and an ill-formed one can
+     * never equal the connection's bound peer — so with the well-formedness
+     * check placed after the binding check this frame would report
+     * [DenialReason.ID_MISMATCH], which is true and useless: it invites an
+     * operator to hunt an impersonation attempt when what arrived is a name no
+     * identity could have. The check therefore runs *before* the binding check,
+     * and this case is what says so. (It does not disturb the
+     * `ID_MISMATCH`-before-`BAD_SIGNATURE` ordering the class KDoc argues for;
+     * it sits above both.)
+     */
+    @Test
+    fun `an unencodable minting peer name is MALFORMED_ANNOUNCEMENT, not ID_MISMATCH`() {
+        val rig = Rig(boundPeer = peerB)
+        val frame = Sender(Keys(identityB)).publish(rig.mirror.ref)
+        val illFormed = frame.decodeToString()
+            .replace("\"signerKeyId\":\"${peerB.name}\"", "\"signerKeyId\":\"ed25519:\\udc00\"")
+        illFormed shouldNotBe frame.decodeToString()
+
+        val before = rig.registrySnapshot()
+        rig.feed(illFormed.toByteArray())
+
+        rig.lastDenial().reason shouldBe DenialReason.MALFORMED_ANNOUNCEMENT
+        rig.registrySnapshot() shouldBe before
+        rig.rejected shouldBe 1L
+        rig.lastDenial().detail shouldContain "mintingPeerId.name"
+        rig.lastDenial().detail shouldContain "index 8"
+    }
+
+    /**
+     * The third acceptance clause of `computenet-l8y5`, asserted rather than
+     * argued: **the offending string never reaches the record**. An ill-formed
+     * string rendered into a dead letter is the one value a log reader cannot
+     * trust their terminal about — a lone surrogate is displayed as a
+     * replacement character or dropped entirely, so the reader sees a string
+     * that is not what arrived.
+     */
+    @Test
+    fun `a MALFORMED_ANNOUNCEMENT record does not reproduce the offending string`() {
+        val rig = Rig(boundPeer = peerB)
+        val frame = Sender(Keys(identityB)).publish(rig.mirror.ref)
+        rig.feed(
+            frame.decodeToString()
+                .replace("\"portName\":\"inlet\"", "\"portName\":\"orders/\\ud800/x\"")
+                .toByteArray(),
+        )
+
+        val letter = rig.deadLetters.single()
+        val rendered = letter.description + "|" + letter.denial!!.detail + "|" + letter.denial
+        letter.denial!!.reason shouldBe DenialReason.MALFORMED_ANNOUNCEMENT
+        rendered shouldNotContain "\uD800"
+        // and not the well-formed remainder either: the field/index/length the
+        // encoder's own message names is what an operator acts on
+        rendered shouldNotContain "orders/"
     }
 
     // ================================================================ secrecy

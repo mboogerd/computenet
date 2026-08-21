@@ -37,11 +37,19 @@ import java.security.PublicKey
  * disagree across the socket.
  *
  * It **throws** for an announcement `canonicalBytes` refuses to encode
- * injectively (an ill-formed-UTF-16 `portName`, `computenet-9qgg`). On the emit
- * side that throw propagates rather than being softened into an unsigned frame;
- * on the receive side [Ed25519SignatureVerifier] catches it and verifies
- * `false` — recorded on `computenet-l8y5`, which owns giving that case its own
- * reason.
+ * injectively (an ill-formed-UTF-16 `portName` or minting peer name,
+ * `computenet-9qgg`). On the emit side that throw propagates rather than being
+ * softened into an unsigned frame.
+ *
+ * On the receive side it is no longer reached for that input:
+ * `civictech.cell.wire.AnnouncementAdmission` refuses an ill-formed
+ * announcement as `civictech.cell.DenialReason.MALFORMED_ANNOUNCEMENT` before
+ * the verifier is called (`computenet-l8y5`), which is what makes an
+ * unencodable announcement distinguishable from a forged one in the audit
+ * trail. The safety net stays: [Ed25519SignatureVerifier] is total, so if the
+ * encoder's domain and the gate's mirror of it ever drift apart the throw is
+ * still caught and still verifies `false` — a `BAD_SIGNATURE` refusal rather
+ * than an exception out of the ingress path.
  */
 fun announcementCanonicalBytes(announcement: SignableAnnouncement): ByteArray = canonicalBytes(
     AnnouncementSigningInput(
