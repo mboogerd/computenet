@@ -62,14 +62,38 @@ mine=$(bd list --all --label="owner:$BEADS_ACTOR" --limit 0 --json 2>/dev/null \
 
 # Resolve ownership once per PARENT, not once per child: `bd show` is ~0.5s and
 # a wide window can hold dozens of children of one epic.
+#
+# Ownership is the EFFECTIVE EPIC's, not the direct parent's (AGENTS.md:
+# "breakdown children under an epic or feature this session has claimed are
+# exclusive by that claim"). A feature under a held epic carries no assignee
+# by design, so reading only the direct parent warned on every legitimate
+# .N.M breakdown — four times per push, all session — and trained sessions to
+# scroll past the one warning that was right (computenet-qbp2). Walk up as
+# epic-of.sh does: explicit .parent, else the dotted prefix, up to 12 hops;
+# held at ANY hop is held.
+held_by_us() {  # $1 = bead id; sets $owner to the last assignee seen
+  local id=$1 n=0 row p
+  owner=
+  while [ -n "$id" ] && [ "$n" -lt 12 ]; do
+    n=$((n+1))
+    # -Fx: whole-line match, or computenet-7em.1 would match the line
+    # computenet-7em.1.6 and silently skip a real finding.
+    printf '%s\n' "$mine" | grep -Fxq "$id" && return 0
+    row=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,$p')
+    owner=$(printf '%s' "$row" | jq -r '.[0].assignee // ""' 2>/dev/null)
+    [ "$owner" = "$BEADS_ACTOR" ] && return 0
+    p=$(printf '%s' "$row" | jq -r '.[0].parent // empty' 2>/dev/null)
+    if [ -z "$p" ]; then case "$id" in *.*) p="${id%.*}";; esac; fi
+    id=$p
+  done
+  return 1
+}
+
 flagged=
 for parent in $(for id in $dotted; do echo "${id%.*}"; done | sort -u); do
-  # -Fx: whole-line match, or parent computenet-7em.1 would match the line
-  # computenet-7em.1.6 and silently skip a real finding.
-  printf '%s\n' "$mine" | grep -Fxq "$parent" && continue
+  held_by_us "$parent" && continue
   owner=$(bd show "$parent" --json 2>/dev/null | sed -n '/^[[{]/,$p' \
           | jq -r '.[0].assignee // ""' 2>/dev/null)
-  [ "$owner" = "$BEADS_ACTOR" ] && continue
   for id in $dotted; do
     [ "${id%.*}" = "$parent" ] || continue
     flagged="$flagged  $id  (parent $parent held by ${owner:-nobody})
