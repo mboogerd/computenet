@@ -1853,3 +1853,149 @@ BS-12 buildable is the **Resolves** bullet at the end of this entry.
   kernel genuinely does not share — **or** a kernel in which a `SetCell` remove is writer-scoped,
   which is the tripwire above. With either, build the control BS-12 specifies and delete this
   entry.
+
+## ORA2 (the generated convergence sweep): `[ORA2-DIFF-08]`'s "at scale" clause is filed, not built — a quiescent all-to-all mesh is not expressible as a `DotModel` `Delivery` graph
+
+Filed by `computenet-4ru.1.8` (feature `computenet-4ru.1`, epic `computenet-4ru`) as the realising
+artifact of `[ORA2-HONEST-03]` — that feature's clause that *unverifiable behaviour is excluded with
+a written reason and filed in `concord/corpus/DISPUTES.md`*. The route was decided on
+`computenet-9ips` (orchestrator, 2026-08-21): record the gap now, and file the drive that closes it
+separately as `computenet-9892`, rather than spend a slot gambling on unsolved design while the
+honest record stays unwritten. Same rule as the `[ORA1-DIFF-09]` entry above, and the same shape: a
+requirement that cannot be checked honestly is filed here, never weakened into a passing scenario.
+
+### `[ORA2-DIFF-08]` "at scale" / `[ORA2-HONEST-03]` — **`oracle-gap`** (reference-model expressiveness), blocked on a replica drive whose gossip matches a stated `Delivery` schedule
+
+- **Category**: `oracle-gap`. Nothing in the concord corpus is weakened by this entry and no scenario
+  is authored, renamed or softened on account of it. The obstacle is that the instrument
+  `[ORA2-DIFF-08]`'s "at scale" clause specifies — a *generated* multi-replica case swept through
+  `ConvergenceCheck.check()` — cannot be entered as specified against the landed harness.
+
+- **The clause in dispute**: `[ORA2-DIFF-08]` asks for generated multi-replica cases to be swept
+  **through** `civictech.oracle.tagged.ConvergenceCheck.check()`. The sweep itself exists and is
+  green — `civictech.oracle.tagged.ConvergenceSweepTest` drives 40 generated three-replica
+  `OrMapCell` meshes over `GeneratorConfig.REPLICATED_SWEEP_SEEDS` in a `SimWorld` and reads them
+  through the same `MeshObservation`/`ReplicaConvergence` seam `ConvergenceCheck` reads through. What
+  is filed is the **"at scale" reading of that green**: that it is evidence about concurrent dot
+  resolution. It is not.
+
+- **Why the check cannot be entered as specified.** `ConvergenceCheck.check()`'s only reference input
+  is a `civictech.oracle.model.Script`, whose gossip is a `Delivery` graph, and
+  `civictech.oracle.model.DotModel.Fold` refuses a cyclic `Delivery` graph by name
+  (`DotModel.CyclicDeliveryException`, pinned by `DotModelTest`). Full synchronization — a
+  `runToIdle` after every op, which is what makes a real `replicate()`d mesh quiescent — is a
+  **mutual** barrier and therefore cyclic by construction: `stateAfter(A,n)` needs `stateAfter(B,m)`
+  needs `stateAfter(A,n)`. `ConvergenceCheckTest`'s own `MeshScript` KDoc states this limit for its
+  hand-written meshes and works around it by hand-stating only the deliveries a later tombstone
+  depends on — a workaround that does not generalise to a generated interleaving with many concurrent
+  removes across replicas. So `ConvergenceSweepTest` folds `DotState`'s own public primitives over the
+  realized global total order instead of calling `ConvergenceCheck.check()`, a deviation documented in
+  that file's own KDoc rather than hidden.
+
+- **What was measured.** Three measurements, and they are attributed rather than pooled, because two
+  of them are inherited from the reviews that made them and one was re-observed for this entry.
+  - **Inherited, recorded on `computenet-9ips` from the review of `computenet-4ru.1.6` (2026-08-21);
+    not re-run here.** Over `GeneratorConfig.REPLICATED_SWEEP_SEEDS` (1..40), a per-op
+    full-synchronization drive — the schedule `ConvergenceSweepTest` actually uses — encodes as a
+    **cyclic** delivery graph on **40 of 40** seeds, while the generated cases' *own* delivery
+    schedule is **acyclic** on **40 of 40** (`ScriptGenerator.openGossipRound` is chain-shaped on
+    purpose, its KDoc says so). The gap is therefore the **drive**, not the model:
+    `case.script.toScript()` *is* an admissible input to `ConvergenceCheck.check()`. What is missing
+    is a harness that makes a real `OrMapCell` mesh exchange exactly the gossip that schedule states —
+    `civictech.oracle.run.CaseExecution` materialises no replicas, and a `replicate()`d mesh gossips
+    all-to-all to quiescence, which is the mutual barrier above.
+  - **Re-observed for this entry** (`./gradlew :oracle:test --rerun`, Darwin arm64, 2026-08-21, this
+    branch): `ConvergenceSweepTest`'s own shipped report prints `[conv-sweep] REALISED concurrency:
+    max live dots at any key = 1 (1 == none); generator-achieved concurrency mean = 0.970`. No key
+    ever holds two live dots, so add-wins (`[24-TMAP-02]`/BS-3) and the `[24-TMAP-03]` dot-order
+    tie-break (`[ORA2-MODEL-12]`) are **never reached** by this sweep — even though the generator did
+    produce the concurrency and `DotOrders.of` supplies the real kernel order to the reference. The
+    drive discards it.
+  - **Inherited, recorded on `computenet-4ru.1.8` from the review of `computenet-4ru.1` (2026-08-21,
+    head `0d59d674`); not re-run here.** Reversing
+    `kernel/src/main/kotlin/civictech/cell/data/delta/TaggedMapDelta.kt`'s `DOT_ORDER` tie-break
+    (`thenBy { it.sourceId }` -> `thenByDescending`) and running
+    `./gradlew :oracle:test --rerun --no-build-cache` reddens **exactly four** tests, all of them
+    `ConvergenceCheckTest`'s hand-built meshes — `[ORA2-CONV-01]`, BS-1, BS-7, and BS-7's own control.
+    `ConvergenceSweepTest`, `TaggedSweepTest`, `TaggedControlsTest` and `TaggedScenariosTest` all stay
+    **green**. So the generated convergence sweep exercises no concurrent dot resolution at all: a
+    kernel that resolves ties backwards passes it.
+
+- **What was NOT done instead.** No seed range was rotated to a friendlier one; no assertion was
+  written that would redden for a reason unrelated to dot order; the sweep was not deleted, disabled
+  or weakened; and its green was not restated anywhere as `[ORA2-DIFF-08]` "at scale" coverage. The
+  sweep is kept because it does catch a real class of defect — dropping `OrMapCell.put`'s
+  retract-on-put reddens it — just not the class the "at scale" clause names.
+
+- **What is not lost.** `ConvergenceSweepTest` reports `maxLiveDotsRealised` alongside the generator's
+  achieved concurrency **on every run**, so the "1 == none" fact is a printed measurement rather than
+  a paragraph, and cannot rot silently. Kernel-driven *concurrent* dot resolution is covered outside
+  the generated path by `ConvergenceCheckTest`'s hand-built meshes (BS-1, BS-6, BS-7) — the very
+  tests the `DOT_ORDER` mutation reddens. What no artifact covers today is a **generated** mesh whose
+  concurrency survives the drive.
+
+- **Resolves**: `computenet-9892` — a replica drive that batches a round of writes before draining
+  (the shape `ConvergenceCheckTest`'s `Mesh.drive` already uses) and derives the model `Script` from
+  the generated `CaseDelivery` positions via `CaseScript.toScript()`, then calls
+  `ConvergenceCheck.check()` unchanged. Its open sub-problem is stated openly on that bead: a way to
+  keep the real mesh from delivering more than the script states. When it lands with a measured **more
+  than one live dot at some key** and a reversed `DOT_ORDER` tie-break turning the sweep **red**,
+  delete this entry — do not repair it.
+
+## ORA2 (the wave-prefix diamond): BS-9 / `[ORA2-DIFF-07]` is narrowed, not built — no operator in the vocabulary consumes a `TaggedMapDelta` outlet
+
+Filed by `computenet-4ru.1.8` on the same `[ORA2-HONEST-03]` clause, carrying `computenet-valh`'s
+finding from the review of `computenet-4ru.1.6`. It is recorded here rather than only in a test's
+KDoc because a reader arriving from the requirement side — `doc/spec/CONCORDANCE.md`, or this file —
+otherwise reads `[ORA2-DIFF-07]` as covered at the shape BS-9 states, which it is not.
+
+### BS-9 / `[ORA2-DIFF-07]` (the tagged wave-prefix diamond) — **`oracle-gap`** (vocabulary/kernel typing), blocked on `96 §E1.5`'s `UntagCell`/`TaggedMapView`
+
+- **Category**: `oracle-gap`. No corpus scenario is weakened, renamed or softened by this entry; the
+  landed test is green on its own narrower claim and stays exactly as it is.
+
+- **The clause in dispute**: BS-9 / `[ORA2-DIFF-07]`'s `Given` is *"a tagged map feeding a glitch-free
+  consumer through two paths"* — the `WavePrefixTest` diamond, where a source fans into two operators
+  that reconverge at a fan-in. That shape is not constructible for `orMap` against today's kernel.
+
+- **Why it is unconstructible** (read from kernel source at this branch's base, `0d59d674`):
+  - `OrMapCell`'s outlet is `Subscribe<Propagate<TaggedMapDelta<K, V>>>`
+    (`kernel/src/main/kotlin/civictech/cell/data/OrMapCell.kt`).
+  - every registered `MapOf`-consuming operator is typed to `Propagate<MapDelta<K, V>>` on **every**
+    input port — `CoreOperators`' `join` -> `JoinCell.left`/`right`, `combineLatest` ->
+    `CombineLatestCell.left`/`right`, `lookupJoin` -> `LookupJoinCell.fact`/`dimension`
+    (`kernel/src/main/kotlin/civictech/cell/data/op/{JoinCell,CombineLatestCell,LookupJoinCell}.kt`).
+    Wiring an `OrMapCell` outlet into one is a genuine kernel type violation, not a restriction that
+    could be relaxed by configuration.
+  - `civictech.oracle.bind.TaggedOperators` registers `orMap` as `ShapeRule.source(MapOf(Scalar,
+    Scalar))` — **arity 0** — and `GraphGenerator.generate` requires a nonzero-arity entry
+    (`check(operatorEntries.isNotEmpty())`), so no generated case can place anything downstream of a
+    tagged terminal either.
+  - the tagged-aware downstream adapters that would bridge the two delta types — `96 §E1.5`'s
+    `UntagCell` / `TaggedMapView` — **do not exist**: verified 2026-08-21, the only file under
+    `kernel/src/main` naming either is `OrMapCell.kt`'s own prose.
+
+- **What is covered instead.** `civictech.oracle.tagged.TaggedWavePrefixTest` applies
+  `civictech.oracle.run.WavePrefixOracle` **unchanged** to a **bare `orMap` source observed as its own
+  terminal**, walking every intermediate observation through `DifferentialRunner`'s real per-step
+  observer, with non-vacuity and discrimination controls so a reader can see how much the case does
+  cover. It is honestly narrower than the diamond: with **no fan-in there is no glitch the case could
+  exhibit**. That was already stated in the test's own KDoc; what this entry adds is the same
+  statement on the requirement side.
+
+- **Adjacent, and deliberately NOT filed here**: `computenet-880k` — the generator's `ElementShape`
+  system cannot tell `TaggedMapDelta` from `MapDelta`, so a vocabulary naming `orMap` alongside
+  `join`/`combineLatest`/`lookupJoin` emits an edge the kernel refuses at run time (a
+  `ClassCastException` surfacing as `RunOutcome.DeadLetterFailure`). That is the same typing bound
+  seen from the generator side, but it is a **soundness defect with a fix pending**, not a behaviour
+  excluded as uncheckable, so it belongs in the tracker until it is fixed rather than in this file. It
+  is named here only so a reader does not take this entry for its filing.
+
+- **What was NOT done instead.** No operator was registered that would type-erase the tagged outlet to
+  make the diamond constructible; no adapter cell was added to the kernel to manufacture a fan-in; and
+  `TaggedWavePrefixTest`'s green is not restated anywhere as coverage of BS-9's stated shape.
+
+- **Resolves**: `96 §E1.5`'s `UntagCell` / `TaggedMapView` landing in the kernel and being registered
+  as a nonzero-arity catalog entry that consumes a tagged outlet. With either, build BS-9 at its
+  stated shape — a tagged map feeding a glitch-free consumer through two paths, reconverging at a
+  fan-in — and delete this entry.
