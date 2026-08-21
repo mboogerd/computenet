@@ -37,6 +37,15 @@ will not:
   strongest mutations (computenet-pi3h). Go through Bash instead:
   `perl -pi -e 's/OLD/NEW/' <file>` or `sed -i '' 's/OLD/NEW/' <file>` (BSD
   `sed` needs the empty `''` argument).
+- **A mutation must not OVERLAP the original.** Choose it so the old value
+  cannot match the new one under any matcher the code might use — and you
+  cannot assume the matcher, because it is the thing under test. A RENAME
+  keeps the old name out of the new one entirely: `DenialReason` →
+  `Foo`, never `DenialReasonRenamed`. A guard using `indexOf`/`startsWith`/
+  `contains` accepted the suffixed name and the mutation PASSED, one sentence
+  from being written up as proof the guard worked (computenet-ex6w). Same
+  hazard: a number the code coerces back to the original (`1` → `1.0`, `"1"`),
+  a path that still matches the glob, an enum case that shares a prefix.
 - **If the strongest mutation is unavailable at all, say so in your report and
   name it.** Substituting a weaker one silently turns "I proved the test
   constrains this" into "I proved it constrains something".
