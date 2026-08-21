@@ -406,6 +406,17 @@ so plainly in the PR body and in the session summary, or file it — never
 report CI green as verification of the behaviour. An `assumeTrue` guard that
 CI can never satisfy is a real finding about the test, not a detail.
 
+**A review finding that changes what a LATER task must do is written on that
+task's own thread, by you** — `bd comment <successor-id> --file …` — not
+only on the feature's. A task bead is written before its predecessors run;
+when ssa.4.2's and .4.3's reviews each enlarged ssa.4.4, the amended list
+sat one hop away on the feature thread and the implementer had to be told
+which of two comments superseded the other (computenet-tjyl). Open the
+comment with `AMENDS <task-id>'s obligations (supersedes <earlier comment
+date>, from review of <predecessor-id>):` so the successor's `bd comments`
+read is complete on its own; reviewers report the amendment, you write it
+(cross-bead writes are not theirs).
+
 The task reviewer tested a branch without its merged siblings; this is the
 first signal the whole still builds. Red is work: file a task for the next
 batch — one call, because `bd create` has no `--set-metadata` and a follow-up

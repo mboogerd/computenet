@@ -64,6 +64,12 @@ Two cases reach past that line, and they route differently:
   requires it, and leave it for the orchestrator. Either way the item is not
   failed by this — reporting the split is a complete answer to that clause.
 
+**Your obligations may have been amended since the bead was written.** A
+predecessor's review can enlarge what you must do; the orchestrator writes
+that on THIS bead's thread as `AMENDS <your-id>'s obligations (supersedes
+…)`. Read `bd comments <your-id>` before the description and take the latest
+such comment as authoritative (computenet-tjyl).
+
 **You may be a resumed task.** If the worktree already has commits, an
 earlier session started this and stopped at a clean point — read the beads
 comments for what's done and what's left, and continue from there rather
