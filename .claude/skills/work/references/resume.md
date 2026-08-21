@@ -90,4 +90,14 @@ System Settings can. Do not retry, do not re-request the folder. Finish what
 is already certified and stop: `cd /` (outside the denied tree), then
 `gh pr ready <n> --repo mboogerd/computenet` for any PR a reviewer has
 already passed, `gh pr comment` the verdicts you cannot record in bd, and
-end the session with the list of bead writes that did not happen.
+end the session with the list of bead writes that did not happen. The two
+git reads 5e needs have `gh` substitutes: `gh api
+repos/mboogerd/computenet/commits/main` for the landed-since fetch, and
+`gh run view <run-id> --log --repo mboogerd/computenet` for the
+executed-not-skipped read. A certified green PR still ships. Finalize's
+publication push is impossible and that is recoverable: the local bead
+writes are intact on disk, and the next session's step-3 sweeps close the
+merged items and release the dead epic claim on their own. A DISPATCHED
+agent that loses bd mid-task writes its verdict to a file outside the tree
+and names the path in its result (agent-execution.md says so) — the
+orchestrator posts it.

@@ -130,7 +130,7 @@ References carry the deep protocols; read one when its situation arises:
 | `references/review-task.md` / `review-feature.md` | handed to reviewer dispatches |
 | `references/agent-execution.md` | execution discipline every dispatched agent runs under; task.md and both review references point at it |
 | `references/gradle-evidence.md` | the cache-accounting rules — proving a Gradle run happened; cited by task.md and both review references |
-| `references/resume.md` | a `status=stopped` task-notification from the PREVIOUS session — the host process died; re-arm the clock, query side effects |
+| `references/resume.md` | a `status=stopped` task-notification from the PREVIOUS session — the host process died; re-arm the clock, query side effects. Also: a host REBOOT, and `Operation not permitted` on everything under `~/Documents` mid-slot |
 | `references/long-jobs.md` | before starting any long background Bash job of your own — wrapper timeout, stall watch |
 | `references/direct-child.md` | step 5, when the epic has no feature layer — direct bugs/tasks worked as their own PRs |
 
@@ -275,7 +275,8 @@ date -u +%s > "$SCRATCH/slot-start"; echo "$SLOT" > "$SCRATCH/slot-seconds"
 
 Record the *length* as well as the start: a resume that assumes 5h on a 3h
 slot re-arms a clock that never expires. The files outlive the host process —
-the harness scratchpad is not cleaned between sessions — but `$SCRATCH` is a
+the harness scratchpad is not cleaned between sessions, though a REBOOT
+clears `/private/tmp` and with it `$SCRATCH` (resume.md, computenet-hd2f) — but `$SCRATCH` is a
 shell variable and nothing exports it across calls, let alone across a
 restart, so **note the directory's absolute path** here in as many words. A
 resume reads the *previous* session's dir by that literal path.
