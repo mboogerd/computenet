@@ -1,9 +1,11 @@
 package civictech.identity
 
+import civictech.cell.wire.ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
@@ -55,6 +57,18 @@ enum class KeyStoreRefusal {
 
     /** The filesystem exposes no POSIX permission view, so owner-only storage cannot be established or checked. */
     NO_POSIX_PERMISSIONS,
+
+    /** The incarnation file exists but cannot be read (permissions, IO). */
+    INCARNATION_UNREADABLE,
+
+    /** The incarnation file is not a decimal integer in range: truncated, empty, negative, or garbage. */
+    INCARNATION_MALFORMED,
+
+    /** The bumped incarnation could not be persisted, so returning it would be a promise this node cannot keep. */
+    INCARNATION_UNWRITABLE,
+
+    /** The next incarnation would not fit the bits a counter floor leaves for it. */
+    INCARNATION_EXHAUSTED,
 }
 
 /**
@@ -324,5 +338,182 @@ class FilePeerKeyStore(private val directory: Path) : PeerKeyStore {
          */
         private val CONSISTENCY_PROBE: ByteArray =
             "computenet:identity:keypair-consistency-probe".toByteArray(Charsets.UTF_8)
+    }
+}
+
+/**
+ * Where a node's **incarnation** comes from: a number that is strictly greater
+ * on every run of one signing identity's process ([DSC1-ANN-04], `computenet-tdcx`).
+ *
+ * `civictech.cell.wire.AnnouncementSigningConfig.incarnation` reads its source
+ * once, at signer construction, and seeds the announcement counter from
+ * `civictech.cell.wire.announcementCounterFloor` of it — so a later incarnation's
+ * first counter exceeds an earlier one's last, and a restarted process's
+ * catch-up burst is accepted rather than classified as
+ * `civictech.cell.DenialReason.REPLAY`.
+ *
+ * **This interface is additive to the wall-clock default, never a replacement
+ * for it** (`computenet-ssa.6`, and the coverage limit `computenet-tdcx`
+ * restates). A durable store needs somewhere to write next to the identity it
+ * belongs to; a *derived* identity — [DeterministicKeySource], a seed phrase, an
+ * HSM- or KMS-backed key — has no such place, so a file-backed incarnation
+ * covers a strict subset of the identities the clock default covers. The clock
+ * default stays the default for exactly that reason.
+ */
+fun interface IncarnationStore {
+    /**
+     * The incarnation for *this* run: strictly greater than every value this
+     * store has previously returned, and persisted before it is returned.
+     *
+     * Called once per signer. Never falls back to a clock on failure — see
+     * [FilePeerIncarnationStore].
+     *
+     * @throws KeyStoreRefusedException when the stored value cannot be read,
+     *   parsed, bumped or persisted.
+     */
+    fun nextIncarnation(): Long
+}
+
+/**
+ * The default [IncarnationStore]: one small file, `peer.incarnation`, beside
+ * the key material [FilePeerKeyStore] writes into the same [directory].
+ *
+ * `nextIncarnation()` reads the stored value, adds one, **persists it, and only
+ * then returns it**. Persist-before-return is the whole property: a crash after
+ * the write and before the caller uses the value wastes an incarnation, which
+ * costs nothing; a crash after the *return* and before the write would hand two
+ * runs the same incarnation, which is the defect this type exists to prevent.
+ * The write is a temp file plus a durable rename, so a torn write leaves the
+ * previous value intact rather than a truncated one.
+ *
+ * ## What it does and does not prove
+ *
+ * From the second call onward the wall clock is **not read at all**, so
+ * monotonicity is *proven* rather than observed: a clock that steps backwards
+ * across a restart (an NTP correction, a container with no battery-backed
+ * clock) changes nothing about the sequence.
+ *
+ * The **first** call on a fresh directory has nothing to succeed, and seeds from
+ * [initial], which defaults to the wall clock. That is deliberate and is the
+ * only clock read in the type's life: an existing deployment running on the
+ * clock default has already minted counters at `announcementCounterFloor(now)`,
+ * and a durable store that began at `1` would seed every floor far *below* the
+ * peer's high-water mark and dead-letter its whole burst as REPLAY —
+ * permanently, because nothing lowers a high-water mark. Seeding from the clock
+ * makes adopting this store safe on a live identity; every subsequent run is
+ * clock-independent. A caller who knows the identity is new (or who is testing)
+ * pins [initial] instead.
+ *
+ * ## Refusal, never fallback
+ *
+ * Every failure throws [KeyStoreRefusedException] with an
+ * `INCARNATION_*` [KeyStoreRefusal], in the same discipline
+ * [FilePeerKeyStore] uses for key material. **None of them falls back to the
+ * clock.** A silent fallback would be the worst mode available: the operator
+ * configured a durable source precisely because the clock is not trustworthy
+ * here, and quietly reverting to it would reintroduce the defect while
+ * reporting success.
+ *
+ * Not thread-safe against *other processes*: two live processes sharing one
+ * directory is two nodes sharing one identity, which is outside what this
+ * (or [FilePeerKeyStore]) defends. Within one process the file operations are
+ * serialised on this object.
+ */
+class FilePeerIncarnationStore(
+    private val directory: Path,
+    private val initial: () -> Long = System::currentTimeMillis,
+) : IncarnationStore {
+
+    /** The file this store reads and writes; nothing else under [directory] is touched. */
+    val incarnationFile: Path = directory.resolve(INCARNATION_FILE)
+
+    @Synchronized
+    override fun nextIncarnation(): Long {
+        val previous = readPrevious()
+        val next = if (previous == null) seed() else previous + 1
+        if (next > MAX_INCARNATION) {
+            throw KeyStoreRefusedException(
+                KeyStoreRefusal.INCARNATION_EXHAUSTED,
+                incarnationFile,
+                "the next incarnation $next does not fit the " +
+                    "${Long.SIZE_BITS - ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT} bits an announcement counter " +
+                    "floor leaves for it (maximum $MAX_INCARNATION); the floor it names would wrap negative " +
+                    "and every announcement this signer minted would classify as REPLAY",
+            )
+        }
+        persist(next)
+        return next
+    }
+
+    /** The persisted value, or `null` when this identity has no incarnation yet. */
+    private fun readPrevious(): Long? {
+        if (!Files.exists(incarnationFile)) return null
+        val text = try {
+            Files.readString(incarnationFile, Charsets.UTF_8)
+        } catch (e: IOException) {
+            throw KeyStoreRefusedException(
+                KeyStoreRefusal.INCARNATION_UNREADABLE,
+                incarnationFile,
+                "cannot be read; refusing rather than restarting the incarnation sequence, " +
+                    "which would make this run's announcements replays at every peer",
+                e,
+            )
+        }
+        val value = text.trim().toLongOrNull()
+        if (value == null || value < 0 || value > MAX_INCARNATION) {
+            throw KeyStoreRefusedException(
+                KeyStoreRefusal.INCARNATION_MALFORMED,
+                incarnationFile,
+                "is not a decimal incarnation in 0..$MAX_INCARNATION (${text.length} characters); " +
+                    "refusing rather than guessing a value that may be below one already used",
+            )
+        }
+        return value
+    }
+
+    private fun seed(): Long {
+        val seed = initial()
+        require(seed >= 0 && seed <= MAX_INCARNATION) {
+            "initial incarnation out of range: $seed is not in 0..$MAX_INCARNATION"
+        }
+        return seed
+    }
+
+    private fun persist(value: Long) {
+        val temporary = directory.resolve("$INCARNATION_FILE.$TEMP_SUFFIX")
+        try {
+            Files.createDirectories(directory)
+            Files.newByteChannel(
+                temporary,
+                setOf(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE, StandardOpenOption.SYNC),
+            ).use { it.write(ByteBuffer.wrap(value.toString().toByteArray(Charsets.UTF_8))) }
+            Files.move(temporary, incarnationFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } catch (e: IOException) {
+            runCatching { Files.deleteIfExists(temporary) }
+            throw KeyStoreRefusedException(
+                KeyStoreRefusal.INCARNATION_UNWRITABLE,
+                incarnationFile,
+                "incarnation $value could not be persisted, so returning it would promise a monotonicity " +
+                    "the next run cannot honour",
+                e,
+            )
+        }
+    }
+
+    override fun toString(): String = "FilePeerIncarnationStore(directory=$directory)"
+
+    companion object {
+        /** The incarnation file, beside [FilePeerKeyStore.PRIVATE_KEY_FILE]. Decimal text, UTF-8. */
+        const val INCARNATION_FILE: String = "peer.incarnation"
+
+        private const val TEMP_SUFFIX: String = "next"
+
+        /**
+         * The largest incarnation an announcement counter floor can carry —
+         * the same bound `civictech.cell.wire.announcementCounterFloor` enforces,
+         * checked here so the refusal names the store and its file rather than
+         * surfacing as an `IllegalArgumentException` out of signer construction.
+         */
+        const val MAX_INCARNATION: Long = Long.MAX_VALUE ushr ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT
     }
 }

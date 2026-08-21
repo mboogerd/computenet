@@ -18,17 +18,25 @@ import civictech.cell.host.DeadLetter
 import civictech.cell.link.PeerId
 import civictech.cell.wire.PeerAuthPolicy
 import civictech.cell.wire.Peering
+import civictech.cell.wire.ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT
+import civictech.cell.wire.announcementCounterFloor
 import civictech.identity.DeterministicKeySource
+import civictech.identity.FilePeerIncarnationStore
 import civictech.identity.PeerIdentity
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.longs.shouldBeGreaterThan
+import io.kotest.matchers.longs.shouldBeGreaterThanOrEqual
+import io.kotest.matchers.longs.shouldBeLessThanOrEqual
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import org.opentest4j.AssertionFailedError
 import java.net.URI
+import java.nio.file.Path
 import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import civictech.cell.data.delta.SetDelta
 
 /**
@@ -127,7 +135,7 @@ class WsReconnectSmokeTest {
      * signs every announcement it emits and verifies every one it receives,
      * under the key the peer's hello proved.
      */
-    private class KeyedStack(seed: String, incarnation: Long = System.currentTimeMillis()) {
+    private class KeyedStack(seed: String, incarnation: () -> Long = System::currentTimeMillis) {
         val identity = PeerIdentity(DeterministicKeySource.keyPairFromSeed(seed.toByteArray()))
         val peerId: PeerId get() = identity.peerId
         val registry = LocationRegistry()
@@ -144,7 +152,7 @@ class WsReconnectSmokeTest {
             // restart case below can build two incarnations of one identity
             // without waiting for a millisecond to pass (`computenet-ssa.6`);
             // every other stack here takes the production default.
-            announcementSigning = socketAnnouncementSigning().copy(incarnation = { incarnation }),
+            announcementSigning = socketAnnouncementSigning().copy(incarnation = incarnation),
             announcementVerification = socketAnnouncementVerification(),
         )
 
@@ -405,8 +413,8 @@ class WsReconnectSmokeTest {
     @Test
     fun `an authenticated signing peer that restarts its process re-converges rather than replaying`() {
         val firstBoot = 1_700_000_000_000L
-        val server = KeyedStack("ssa6-server", incarnation = firstBoot)
-        var client = KeyedStack("ssa6-client", incarnation = firstBoot)
+        val server = KeyedStack("ssa6-server", incarnation = { firstBoot })
+        var client = KeyedStack("ssa6-client", incarnation = { firstBoot })
         val clientId = client.peerId
         val endpoint = HeldPort()
         val port = endpoint.port
@@ -440,7 +448,7 @@ class WsReconnectSmokeTest {
             //    incarnation. Everything client-side is rebuilt; the server's
             //    side, listener and ledger are the ones from before.
             connection.shutdown()
-            client = KeyedStack("ssa6-client", incarnation = firstBoot + 60_000L)
+            client = KeyedStack("ssa6-client", incarnation = { firstBoot + 60_000L })
             client.peerId shouldBe clientId // the same identity, re-minted
             client.side.announcementSigner!!.counterFloor shouldBeGreaterThan floorBeforeRestart
             client.ledger.highWaterFor(server.peerId) shouldBe null // a virgin ledger, as a restart has
@@ -473,6 +481,140 @@ class WsReconnectSmokeTest {
             server.replayDeadLetters().shouldBeEmpty()
             server.rejected shouldBe 0L
             // still one entry per identity: the restart did not mint a second
+            server.ledger.trackedPeers shouldBe 1
+        } finally {
+            connection.shutdown()
+            runCatching { listener.stop(1000) }
+            endpoint.close()
+        }
+    }
+
+    /**
+     * `computenet-tdcx` criterion 2: the durable source is **additive**, and the
+     * pre-existing wall-clock default is untouched.
+     *
+     * It has to be. A durable store needs a directory beside the identity to
+     * write into, and a *derived* identity — [DeterministicKeySource], a seed
+     * phrase, an HSM- or KMS-backed key — has none, so a file-backed
+     * incarnation covers a strict subset of the identities the clock default
+     * covers. A caller that names no `incarnation` still gets
+     * `System::currentTimeMillis`, and a signer built from it still starts at
+     * that clock's floor.
+     */
+    @Test
+    fun `a socket signing config names no incarnation still takes the wall clock`() {
+        val before = System.currentTimeMillis()
+        val incarnation = socketAnnouncementSigning().incarnation()
+        val after = System.currentTimeMillis()
+
+        incarnation shouldBeGreaterThanOrEqual before
+        incarnation shouldBeLessThanOrEqual after
+
+        // and it reaches the counter floor: a stack built with the production
+        // default starts where that clock says, not at zero.
+        val stack = KeyedStack("tdcx-default-incarnation")
+        stack.side.announcementSigner!!.counterFloor shouldBe announcementCounterFloor(
+            stack.side.announcementSigner!!.counterFloor ushr ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT,
+        )
+        (stack.side.announcementSigner!!.counterFloor ushr ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT) shouldBeGreaterThanOrEqual before
+    }
+
+    /**
+     * `computenet-tdcx`: the same process restart as the case above, but the
+     * signer's own wall clock steps **BACKWARDS** across it — an NTP correction
+     * over a crash, or a container that boots with no battery-backed clock —
+     * and the catch-up burst is still accepted.
+     *
+     * That is the whole point of a durable incarnation source, and the reason
+     * it is a proof rather than an observation. `computenet-ssa.6` seeds the
+     * announcement counter from an incarnation whose production default is
+     * `System::currentTimeMillis`; with that default this case FAILS, and it
+     * fails exactly the way the pre-`ssa.6` defect failed — measured before the
+     * durable store existed, the second incarnation's floor came out below the
+     * first's (`1782579137085440000 should be > 1782579200000000000`) and,
+     * with that assertion removed so the burst could be observed, the test died
+     * at *timed out awaiting: the restarted process's announcements were
+     * accepted*, the server's high-water mark for the client never advancing.
+     *
+     * Here the incarnation comes from a [FilePeerIncarnationStore] over a
+     * directory that survives the restart, so the second run reads the first
+     * run's persisted value and adds one **without consulting a clock at all**.
+     * `initial` is pinned to the backwards-stepping clock to prove that: the
+     * only clock read in the store's life is the seed on a directory that has
+     * no incarnation yet, and by the second boot that read cannot happen.
+     *
+     * Everything else matches the `ssa.6` case deliberately — the client
+     * process is rebuilt from the same key seed while the *server's* side,
+     * listener and ledger are the ones from before, so the high-water mark the
+     * burst has to clear is earned rather than absent.
+     */
+    @Test
+    fun `a signing process whose clock steps backwards across a restart still re-converges`(@TempDir keyDir: Path) {
+        val firstBoot = 1_700_000_000_000L
+        val backwardsClock = AtomicLong(firstBoot)
+        // One directory, surviving the restart: the durable incarnation lives
+        // beside the key material, exactly as it would for a file-backed identity.
+        val incarnations = { FilePeerIncarnationStore(keyDir, initial = backwardsClock::get) }
+
+        val server = KeyedStack("tdcx-server", incarnation = { firstBoot })
+        var client = KeyedStack("tdcx-client", incarnation = durableIncarnation(incarnations()))
+        val clientId = client.peerId
+        val endpoint = HeldPort()
+        val port = endpoint.port
+        val listener = endpoint.serve(server.side)
+        var connection = WsTransport.connect(URI("ws://localhost:$port"), client.side) { 0L }
+        try {
+            val collector = CollectorCell()
+            server.host.managementInlet.call.spawn(collector)
+            await("collector announced") { client.registry.location(collector.ref) is LocationRegistry.Remote }
+
+            val writer = SetCell<String>()
+            client.host.managementInlet.call.spawn(writer)
+            val remoteInlet = (HostedCellProxy.create(collector.ref, client.registry, DeltaInletProxy::class.java)
+                    as DeltaInletProxy).inlet.call
+            writer.outlet.subscribe(Use.fixed(remoteInlet, PortRef.generate()))
+            val api = (HostedCellProxy.create(writer.ref, client.registry, SetInletProxy::class.java)
+                    as SetInletProxy).inlet.call
+            api.add("milk")
+            await("pre-restart convergence") { membership(collector.arrivals.toList()) == setOf("milk") }
+            await("the server verified the client's announcements") {
+                server.ledger.highWaterFor(clientId) != null
+            }
+            val serverSawBeforeRestart = server.ledger.highWaterFor(clientId).shouldNotBeNull()
+            val floorBeforeRestart = client.side.announcementSigner!!.counterFloor
+
+            // -- the client PROCESS dies, and its clock comes back a minute EARLIER.
+            connection.shutdown()
+            backwardsClock.set(firstBoot - 60_000L)
+            client = KeyedStack("tdcx-client", incarnation = durableIncarnation(incarnations()))
+            client.peerId shouldBe clientId // the same identity, re-minted
+            // The floor still climbed, though every clock read available to it went down.
+            client.side.announcementSigner!!.counterFloor shouldBeGreaterThan floorBeforeRestart
+            client.ledger.highWaterFor(server.peerId) shouldBe null // a virgin ledger, as a restart has
+            connection = WsTransport.connect(URI("ws://localhost:$port"), client.side) { 0L }
+
+            await("the restarted process's announcements were accepted") {
+                (server.ledger.highWaterFor(clientId) ?: 0L) > serverSawBeforeRestart
+            }
+            server.replayDeadLetters().shouldBeEmpty()
+            server.rejected shouldBe 0L
+
+            // and the peering RE-CONVERGES under the backwards clock.
+            await("the restarted process re-learned the collector") {
+                client.registry.location(collector.ref) is LocationRegistry.Remote
+            }
+            val writer2 = SetCell<String>()
+            client.host.managementInlet.call.spawn(writer2)
+            val remoteInlet2 = (HostedCellProxy.create(collector.ref, client.registry, DeltaInletProxy::class.java)
+                    as DeltaInletProxy).inlet.call
+            writer2.outlet.subscribe(Use.fixed(remoteInlet2, PortRef.generate()))
+            val api2 = (HostedCellProxy.create(writer2.ref, client.registry, SetInletProxy::class.java)
+                    as SetInletProxy).inlet.call
+            api2.add("cheese")
+            await("post-restart convergence") { membership(collector.arrivals.toList()).contains("cheese") }
+
+            server.replayDeadLetters().shouldBeEmpty()
+            server.rejected shouldBe 0L
             server.ledger.trackedPeers shouldBe 1
         } finally {
             connection.shutdown()

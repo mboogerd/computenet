@@ -10,6 +10,7 @@ import civictech.cell.wire.PeerAuthPolicy
 import civictech.cell.wire.Peering
 import civictech.cell.wire.SignableAnnouncement
 import civictech.identity.Ed25519SignatureVerifier
+import civictech.identity.IncarnationStore
 import civictech.identity.announce.AnnouncementSigningInput
 import civictech.identity.announce.canonicalBytes
 import java.security.PublicKey
@@ -70,17 +71,56 @@ fun announcementCanonicalBytes(announcement: SignableAnnouncement): ByteArray = 
  *
  * Signing still activates only when the side also holds credentials — see
  * `Peering.Side.announcementSigning`.
+ *
+ * @param incarnation which run of this signing identity's process the signer
+ *   belongs to, read once at signer construction; see
+ *   `civictech.cell.wire.AnnouncementSigner.counterFloor`. The default is the
+ *   wall clock, which fails *closed* but can only observe monotonicity across
+ *   a restart, never prove it. An operator who needs the proof — and whose
+ *   identity has a directory to write into — passes
+ *   [durableIncarnation] instead (`computenet-tdcx`).
  */
 fun socketAnnouncementSigning(
     clock: () -> Long = System::currentTimeMillis,
     ttlMillis: Long = DEFAULT_ANNOUNCEMENT_TTL_MILLIS,
     signerKeyId: String? = null,
+    incarnation: () -> Long = System::currentTimeMillis,
 ): AnnouncementSigningConfig = AnnouncementSigningConfig(
     encode = ::announcementCanonicalBytes,
     clock = clock,
     ttlMillis = ttlMillis,
     signerKeyId = signerKeyId,
+    incarnation = incarnation,
 )
+
+/**
+ * The incarnation source a durable [IncarnationStore] provides, in the shape
+ * `socketAnnouncementSigning`'s `incarnation` parameter takes.
+ *
+ * The composition is the whole of `computenet-tdcx` on this side: the kernel's
+ * seam is a `() -> Long` read once at construction (`computenet-ssa.6` shaped
+ * it that way deliberately), so swapping the clock for a persisted, durably
+ * bumped integer needs no kernel change at all. Store failures propagate as
+ * `civictech.identity.KeyStoreRefusedException`; nothing here catches them and
+ * nothing falls back to the clock, because an operator who configured a durable
+ * source did so precisely because this machine's clock is not trustworthy.
+ *
+ * Pair it with a [civictech.identity.FilePeerIncarnationStore] over the same
+ * directory the node's [civictech.identity.FilePeerKeyStore] uses, so the
+ * incarnation lives beside the identity it belongs to:
+ *
+ * ```kotlin
+ * socketAnnouncementSigning(
+ *     incarnation = durableIncarnation(FilePeerIncarnationStore(keyDirectory)),
+ * )
+ * ```
+ *
+ * A **derived** identity (`DeterministicKeySource`, a seed phrase, an HSM- or
+ * KMS-backed key) has no directory beside its key, so this covers a strict
+ * subset of the identities the clock default covers. It is additive to that
+ * default, not a replacement for it.
+ */
+fun durableIncarnation(store: IncarnationStore): () -> Long = store::nextIncarnation
 
 /**
  * A verifier that knows **one** key: the one [peer] presented in the hello that
