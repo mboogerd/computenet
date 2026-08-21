@@ -2141,6 +2141,9 @@ extra fix worktree — only what passes **both** gates:
 
 ```bash
 git worktree remove <worktree-root>/$(basename <branch>)   # the recorded metadata.branch
+# run artifacts under it go too: task.md step 7 had the implementer either
+# copy them to $HOME/computenet-runs/<id>/ or mark the recorded paths
+# ephemeral (computenet-mzuc); nothing here preserves them
 ```
 
 Leave unfinished features' and tasks' worktrees for the next session's 5a.
