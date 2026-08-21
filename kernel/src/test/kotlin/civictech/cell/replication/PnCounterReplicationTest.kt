@@ -20,6 +20,35 @@ import civictech.cell.data.delta.CounterDelta
  * idempotent where plain CounterDelta is not — so a full replica mesh
  * (including its echoes) converges to the true total, through the same
  * Replication wiring, partitions and late joins as the tagged set family.
+ *
+ * ## computenet-4ru.1.7: kernel-fold subsumption judgment — nothing slimmed
+ *
+ * `civictech.oracle.tagged.TaggedScenariosTest`'s "BS-12 PnCounter converges to
+ * the per-source pointwise-max total" (computenet-4ru.1.6, landed) is the
+ * closest oracle-side case: three replicas, mixed increments/decrements,
+ * checked against `PnCounterConvergenceModel` as an independent reference
+ * rather than a golden value. It is a genuine, stronger check on the SAME
+ * pointwise-max arithmetic the first test below asserts — but it is not a
+ * substitute for that test, and neither of the other two below has any
+ * oracle-side counterpart at all:
+ *
+ * - **"a three-peer mesh converges... despite gossip echoes"** wires three
+ *   explicit bilateral `Peering` links (a triangle: every pair peered
+ *   directly), so each delta reaches every other replica over TWO paths and
+ *   the assertion is specifically that the duplicate path does not
+ *   double-count. BS-12 replicates through `Replication`/`ManagedHost`
+ *   directly, which does not construct that duplicate-path topology — its
+ *   pass says nothing about echo idempotence, only about the total being
+ *   right under whatever gossip topology `Replication` itself uses.
+ * - **"a late replica syncs... through catch-up"** and **"partitioned
+ *   counters diverge... and heal"** are late-join and partition/heal
+ *   scenarios respectively; ORA2 is deliberately quiescent and fault-free
+ *   (epic D6: "partition/reorder/duplicate/crash/journal/restart is CHA1's
+ *   rig"), so no oracle sweep exercises either.
+ *
+ * Per this bead's own instruction: kept, not subsumed — BS-12 is additional
+ * coverage of the arithmetic, not a replacement for the echo, catch-up or
+ * partition properties this file asserts.
  */
 class PnCounterReplicationTest {
 

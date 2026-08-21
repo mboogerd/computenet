@@ -105,6 +105,24 @@ import civictech.oracle.gen.GeneratorConfig
  *
  * All three were re-verified to replay `Success` against this file's own base commit before
  * being pinned below.
+ *
+ * ## No tagged/OR-map entry — a mechanism limit, not an oversight (computenet-4ru.1.7)
+ *
+ * Every entry here replays through [civictech.oracle.gen.CaseGenerator.generate], the SAME
+ * single-instance generator `PinnedSeedsTest` calls. `civictech.oracle.bind.TaggedOperators`
+ * registers `orMap` as its only id, an arity-0 SOURCE, and no operator in the catalog can
+ * consume a `TaggedMapDelta` — so `GraphGenerator`'s own `[ORA1-GEN-03]` check ("at least one
+ * operator between every source and every terminal") makes a terminal-bearing `orMap` graph
+ * unconstructible through this generator, full stop, not merely undiscovered. There is
+ * therefore no tagged case this corpus's entry form could ever have pinned a fix against; ORA2's
+ * tagged/keyed coverage (`[ORA2-DIFF-01..09]`) runs through
+ * `civictech.oracle.run.DifferentialRunner`'s bring-your-own seam instead
+ * (`civictech.oracle.tagged.TaggedSweepTest`, `ConvergenceSweepTest`), a different entry point
+ * this file's `PinnedSeed` cannot name. `PinnedSeedsTest`'s
+ * "computenet-4ru 1 7 the pinned-seed entry form round-trips a tagged config without pinning
+ * one" pins this finding as an executable check: a `PinnedSeed` naming `orMap` constructs fine
+ * as data and fails LOUDLY at `replay()`'s `[ORA1-REPRO-03]` branch, never silently — the same
+ * outcome a stale shape rule would produce for any other entry.
  */
 data class PinnedSeed(
     /** The seed this entry pins. Feeds [civictech.oracle.gen.CaseGenerator.generate] directly. */

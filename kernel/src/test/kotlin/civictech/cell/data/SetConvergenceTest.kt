@@ -21,6 +21,25 @@ import civictech.cell.data.op.UnionSetCell
  * identical membership regardless of arrival interleaving — invariant-checked
  * over many seeds, with a control proving that untagged arrival-order
  * application (the pre-tag semantics) diverges under the same interleavings.
+ *
+ * ## computenet-4ru.1.7: kernel-fold subsumption judgment — nothing slimmed
+ *
+ * This file's property is arrival-interleaving invariance of ONE view merging
+ * an already-produced [SetDelta] stream — a claim about merge commutativity
+ * at a single fold point, not about multi-replica gossip convergence. It
+ * predates and sits outside ORA2's remit (the tagged/keyed OR-map, PN-counter
+ * family, `[ORA2-CONV-01..04]`): `civictech.oracle.model.DotModel`/
+ * `ConvergenceCheck` reason about a *script's* per-replica causal history via
+ * `civictech.oracle.gen.CaseDelivery`, never about interleaving orderings of
+ * an already-materialized delta list at one view. No test landed under
+ * computenet-4ru.1 — `ConvergenceCheckTest`, `ConvergenceSweepTest`,
+ * `TaggedControlsTest`, `TaggedScenariosTest` — checks this property or uses
+ * `UnionSetCell`/plain `SetDelta` at all; ORA1's own `naiveFold`-control
+ * pattern (design D6, `GenerativeGraphTest`) is the nearer relative, and ORA1
+ * is this feature's dependency, not its own scope.
+ *
+ * Per this bead's own instruction: kept, not subsumed — there is no
+ * oracle-side test to name as covering it.
  */
 class SetConvergenceTest {
 

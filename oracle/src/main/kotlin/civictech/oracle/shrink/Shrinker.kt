@@ -11,6 +11,7 @@ import civictech.oracle.gen.RemoveRecord
 import civictech.oracle.gen.TopologyNode
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SourceId
+import civictech.oracle.model.WriterId
 import civictech.oracle.run.DifferentialRunner
 import civictech.oracle.run.Reference
 import civictech.oracle.run.RunOutcome
@@ -20,21 +21,49 @@ import civictech.oracle.run.WavePrefixOption
  * Reduces a failing [GeneratedCase] to a smaller case that still fails the same way
  * (`[ORA1-SHRINK-01]`..`[ORA1-SHRINK-03]`, `[ORA1-SHRINK-05]`; epic computenet-4ru design D7).
  *
- * ## The three passes, in this order
+ * ## The passes, in this order
  *
  * 1. **Delete op-script steps.** Chunk-wise, halving the chunk each round, so a 200-step script
  *    collapses in tens of candidates rather than hundreds.
+ * 1a. **Drop a writer.** One [WriterId] at a time, from the last distinct writer named in the
+ *    script towards the first: every step that writer issued is removed in one candidate (the
+ *    multi-writer dimension `[ORA2-GEN-01]` adds — a script step is the unit pass 1 reduces by,
+ *    a *writer* is the unit this reduces by, and collapsing a whole writer in one candidate finds
+ *    the single-writer floor in writer-count-many tries rather than in however many chunk rounds
+ *    pass 1 needs to happen to isolate the same steps). Stops once one writer remains — dropping
+ *    the last writer would empty the source's own slice for no reduction pass 1 could not already
+ *    reach by deleting its steps one at a time.
  * 2. **Narrow the element domain.** Remap the script's element payloads onto fewer distinct
  *    values — first the whole domain onto one element, then, if that fails, one element at a time
  *    onto its predecessor.
  * 3. **Remove operator cells and terminals.** Drop every terminal but the failing one, then drop
  *    nodes nothing reads any more, then splice out unary operators whose consumers can take their
  *    input directly, then drop whatever that orphaned.
+ * 4. **Drop a replica.** One gossiping [SourceId] at a time — a "replica" here is any source
+ *    named on either side of a [CaseDelivery], the ORA2 sense (`[ORA2-GEN-03]`/`[ORA2-MODEL-06]`)
+ *    of a source that participates in a mesh rather than driving in isolation. Every step that
+ *    source issued, and every delivery naming it on either side, is removed in one candidate —
+ *    dropping the SOURCE's role in the mesh, never a [TopologyNode]: the node stays linked and
+ *    simply goes quiet, so this move is orthogonal to pass 3's topology reduction and reachable
+ *    on a topology pass 3 would never touch (a source still read by an operator is never
+ *    "unreferenced"). This is the script/delivery-level half of what dropping a replica means;
+ *    a [ReplicaPlan]-replicated case cannot reach this shrinker at all today because
+ *    [DifferentialRunner] has no runner path for one (`civictech.oracle.run.OracleSweep`'s own
+ *    KDoc), so there is nothing here to drop the topology-level plan out from under.
  *
- * The order is the requirement's and it is also the cheap-first order: a script step is the
- *  smallest unit and deleting it never invalidates a topology, while a dropped node can only
- * usefully go once the terminal reading it has gone. Each pass runs on the smallest case the
- * previous pass left.
+ *    **Runs LAST, after pass 3, not alongside pass 1's other script-level moves.** Pass 3's own
+ *    `without()` already drops a delivery naming a source it topologically retires, unconditional
+ *    on any floor. Running this pass earlier let it collapse the mesh down to the one delivery a
+ *    LATER pass-3 retirement then had no floor to protect, zeroing every delivery in a case that
+ *    still needed one (a real regression this item's own tests caught: `ShrinkerTest`'s
+ *    computenet-r38y pins over exactly the empty-deliveries shape). Running it after pass 3 means
+ *    it only ever trims gossip among sources pass 3 already decided to keep.
+ *
+ * The order is the requirement's and it is also the cheap-first order: a script step (or a whole
+ * writer's steps) is the smallest unit and deleting it never invalidates a topology, while a
+ * dropped node can only usefully go once the terminal reading it has gone, and a replica's mesh
+ * role is only meaningful to drop once the topology it is inert against has settled. Each pass
+ * runs on the smallest case the previous pass left.
  *
  * ## Every candidate is re-executed; nothing is retained on a rule (`[ORA1-SHRINK-02]`)
  *
@@ -129,8 +158,10 @@ object Shrinker {
         session.best = original
 
         deleteScriptSteps(session)
+        dropWriters(session)
         narrowElementDomain(session)
         reduceTopology(session)
+        dropReplicas(session)
 
         // [ORA1-SHRINK-05]: the reported case is one that failed on ITS OWN last execution,
         // never one that was merely retained earlier. Deliberately outside the budget.
@@ -171,6 +202,45 @@ object Shrinker {
             chunk = maxOf(1, chunk / 2)
         }
     }
+
+    // ---------------------------------------------------------------- pass 1a: drop a writer
+
+    /**
+     * Removes one [WriterId]'s steps at a time, from the last distinct writer named in the
+     * script towards the first, stopping once a single writer remains — see the object KDoc's
+     * "1a. Drop a writer".
+     */
+    private fun dropWriters(session: Session) {
+        var index = writersOf(session.best.case.script).size - 1
+        while (index >= 0) {
+            val writers = writersOf(session.best.case.script)
+            if (writers.size <= 1) return
+            if (index >= writers.size) {
+                index = writers.size - 1
+                continue
+            }
+            val writer = writers[index]
+            if (!session.canSpend()) return
+            val dropped = opIndicesWhere(session.best.case.script) { it.event.writer == writer }
+            if (dropped.isNotEmpty()) {
+                val script = CaseScript(
+                    session.best.case.script.steps.filterIndexed { i, _ -> i !in dropped },
+                    carried(session.best.case.script.deliveries, dropped),
+                )
+                session.tryCandidate(withScript(session.best.case, script))
+            }
+            index -= 1
+        }
+    }
+
+    /** Every distinct [WriterId] any [CaseStep.Op] in [script] names, in first-appearance order. */
+    private fun writersOf(script: CaseScript): List<WriterId> =
+        script.steps.filterIsInstance<CaseStep.Op>().map { it.event.writer }.distinct()
+
+    private fun opIndicesWhere(script: CaseScript, predicate: (CaseStep.Op) -> Boolean): Set<Int> =
+        script.steps.withIndex()
+            .filter { (_, step) -> step is CaseStep.Op && predicate(step) }
+            .mapTo(mutableSetOf()) { it.index }
 
     // ------------------------------------------------------- pass 2: element domain narrowing
 
@@ -342,6 +412,60 @@ object Shrinker {
     private fun shapeOf(topology: CaseTopology, handle: String) =
         topology.nodes.firstOrNull { it.handle == handle }
             ?.let { OperatorCatalog.entry(it.catalogId)?.shape }
+
+    // --------------------------------------------------------------- pass 4: drop a replica
+
+    /**
+     * Removes one gossiping [SourceId]'s steps and every [CaseDelivery] naming it, one source at
+     * a time — see the object KDoc's "4. Drop a replica", including why this pass runs last.
+     * Recomputes the candidate list every iteration, the same discipline
+     * [dropTerminals]/[dropUnreferencedNodes] use, because dropping one replica can retire a
+     * delivery that made another source a candidate too.
+     *
+     * Refuses a drop that would leave the script with NO deliveries at all when it had some —
+     * "drop A replica" reduces a mesh by one member, it does not de-mesh the case entirely. That
+     * floor mirrors [dropTerminals]'s "except the last one": a mesh of one gossips with nothing,
+     * exactly as a case with no terminal observes nothing, so both moves stop one short of that.
+     * Content-blind reductions (an injected failure with no script predicate at all, the shape
+     * every other pass's own worst case uses) would otherwise zero the mesh out from under a
+     * failure that never needed it kept — which is a legitimate smaller counterexample, but a
+     * DIFFERENT one than what a caller asked to shrink, and the floor keeps this move from being
+     * the one place a generated case silently stops being the replicated shape it started as.
+     */
+    private fun dropReplicas(session: Session) {
+        var index = replicasOf(session.best.case.script).size - 1
+        while (index >= 0) {
+            val replicas = replicasOf(session.best.case.script)
+            if (index >= replicas.size) {
+                index = replicas.size - 1
+                continue
+            }
+            val replica = replicas[index]
+            val script = session.best.case.script
+            val dropped = opIndicesWhere(script) { it.source == replica }
+            val survivingDeliveries = script.deliveries.filterNot { it.into == replica || it.from == replica }
+            if (survivingDeliveries.isEmpty() && script.deliveries.isNotEmpty()) {
+                index -= 1
+                continue
+            }
+            if (!session.canSpend()) return
+            if (dropped.isNotEmpty() || survivingDeliveries.size != script.deliveries.size) {
+                val candidate = CaseScript(
+                    script.steps.filterIndexed { i, _ -> i !in dropped },
+                    carried(survivingDeliveries, dropped),
+                )
+                session.tryCandidate(withScript(session.best.case, candidate))
+            }
+            index -= 1
+        }
+    }
+
+    /**
+     * Every [SourceId] named on either side of a [CaseDelivery] in [script] — the ORA2 sense of
+     * "replica": a source that participates in a mesh, distinct from [TopologyNode.source].
+     */
+    private fun replicasOf(script: CaseScript): List<SourceId> =
+        script.deliveries.flatMap { listOf(it.into, it.from) }.distinct()
 
     // ------------------------------------------------------------------- candidate assembly
 
