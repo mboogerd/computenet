@@ -177,6 +177,14 @@ Read the feature (`bd show <id>`), its parent epic, and every spec section
 they cite — that text is the authority (AGENTS.md). Verify every file,
 module, and test you name actually exists before writing it into a task.
 
+**A do-not-edit constraint is a CONDITION, not a roster.** "Do not edit
+X.kt — claimed by computenet-a, -b, -c" is a snapshot that ages silently: at
+dispatch three of four named beads were closed, twice in one slot, and the
+orchestrator re-derived every list by hand (computenet-d52d). The dependency
+edge already models the race; the prose must not copy it. Write "do not
+edit X.kt: it is claimed by whichever open sibling holds it in
+`metadata.files` — check before editing", and name no ids.
+
 **A task is a plan, not a request** — see the task section of
 [issue-quality.md](issue-quality.md). What you hand the implementer is what
 plan mode would hand you: the design already decided, only execution left. If
