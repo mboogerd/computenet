@@ -277,6 +277,17 @@ class AnnouncementAdmission private constructor(
             )
         }
 
+        // computenet-l8y5: MALFORMED_ANNOUNCEMENT, above everything else this
+        // gate decides. An announcement whose portName or minting-peer name is
+        // ill-formed UTF-16 is *unencodable*, so there are no canonical bytes
+        // for any of the checks below to be about: no signature over it could
+        // verify (a total verifier answers false, which used to read as
+        // BAD_SIGNATURE), and its name cannot be an identity, so the binding
+        // check would report ID_MISMATCH. Both are true and neither is the
+        // fact. Deciding it first is what makes the reason mean something.
+        malformed("portName", frame.portName)?.let { return it }
+        malformed("mintingPeerId.name", signerKeyId)?.let { return it }
+
         // [DSC1-ANN-08] ID_MISMATCH, before any crypto — see the class KDoc.
         // `signerKeyId` IS the minting identity's name: on every :identity-backed
         // signer it defaults to `credentials.peerId.name`, which is the key's own
@@ -360,5 +371,64 @@ class AnnouncementAdmission private constructor(
 
     private companion object {
         val BASE64URL: Base64.Decoder = Base64.getUrlDecoder()
-    }
+
+        /**
+         * [DenialReason.MALFORMED_ANNOUNCEMENT] for a [value] carrying a
+         * surrogate code unit that is not part of a high-then-low pair, or
+         * `null` when it is well-formed UTF-16 (`computenet-l8y5`).
+         *
+         * **This is a mirror of a domain rule that is defined elsewhere** —
+         * `civictech.identity.announce.canonicalBytes`'s
+         * `requireWellFormedUtf16`, which is the authority, and which `:kernel`
+         * may not import ([DSC1-WIRE-04] keeps the canonical encoder out of the
+         * kernel entirely). Stating the limit here rather than only in the bead:
+         * the two are kept in agreement by *nothing structural*. What bounds the
+         * damage is which way they can drift.
+         *
+         * - Should this check ever become **stricter** than the encoder, a
+         *   perfectly encodable announcement would be refused. That is the
+         *   dangerous direction, and it is why this predicate is exactly the
+         *   Unicode well-formedness rule and carries no other notion of a
+         *   "reasonable" port name — no length cap, no character class, nothing
+         *   the encoder does not also refuse.
+         * - Should it become **laxer** — the encoder narrowing its domain
+         *   again — the case simply falls through to the verifier, which is
+         *   total and answers `false`, and the frame is refused as
+         *   [DenialReason.BAD_SIGNATURE]. That is the pre-`computenet-l8y5`
+         *   behaviour: less informative, still closed, still no exception out
+         *   of the verification path. The gate degrades, it does not open.
+         *
+         * The scan is positional because the [AnnouncementRejection.detail] names
+         * the offending **index**, the unpaired half and the string's length —
+         * and never the string itself ([DSC1-OBS-05]). A lone surrogate rendered
+         * into a log line is displayed as a replacement character or dropped, so
+         * reproducing it would tell a reader something false about what arrived;
+         * the position and length say what happened without that risk.
+         */
+        fun malformed(field: String, value: String): AnnouncementRejection? {
+            var index = 0
+            while (index < value.length) {
+                val unit = value[index]
+                if (unit.isHighSurrogate()) {
+                    if (index + 1 >= value.length || !value[index + 1].isLowSurrogate()) {
+                        return unpaired(field, value, index, "high")
+                    }
+                    index += 2
+                } else {
+                    if (unit.isLowSurrogate()) return unpaired(field, value, index, "low")
+                    index++
+                }
+            }
+            return null
+        }
+
+        fun unpaired(field: String, value: String, index: Int, half: String) = AnnouncementRejection(
+            DenialReason.MALFORMED_ANNOUNCEMENT,
+            "announcement $field is not well-formed UTF-16: unpaired $half surrogate " +
+                "U+%04X at index %d (length %d)".format(value[index].code, index, value.length) +
+                " — the canonical announcement encoding refuses it rather than substituting '?', " +
+                "which would collide distinct announcements (computenet-9qgg), so no signature " +
+                "over this announcement could verify by anybody. The string itself is not " +
+                "reported here ([DSC1-OBS-05])",
+        )
 }
