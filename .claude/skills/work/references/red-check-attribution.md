@@ -86,7 +86,7 @@ guessing one here cost a reviewer 8 runs):
    this test, or an earlier run of the identical failure you can link, is
    the artifact. "I have seen this before" is not. Nothing found in
    **either** → this is a first sighting, not a flake: file it as an
-   unparented bug bead (the fix belongs on `main`, not on a feature branch,
+   unparented bug bead — `create-ticket.sh --type bug --top-level --desc-file …` (the fix belongs on `main`, not on a feature branch,
    because every other PR is equally blocked) and treat the check as red
    work. The bead carries the primary evidence per issue-quality.md's
    "CI evidence must outlive the run it cites" — failing task, exception

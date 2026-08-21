@@ -21,8 +21,19 @@
 #
 # Usage:
 #   create-ticket.sh --type <bug|feature|task|chore> --title "<one line>" \
-#     --parent <id> [--desc D] [--accept A] [--priority N] \
+#     (--parent <id> | --top-level) [--desc D | --desc-file F] \
+#     [--accept A | --accept-file F] [--priority N] \
 #     [--label L]... [--metadata '<json>'] [--claim]
+#
+# --top-level: the one sanctioned unparented create (red-check-attribution.md
+#   artifact 3's first-sighting bug). This was refused with "use bd create
+#   directly", which meant re-typing a composed heredoc body under a different
+#   tool mid-attribution, twice in one session (computenet-7xeh).
+# --desc-file / --accept-file: the body is read from a file and never passes
+#   through a shell word, so backticks and $(...) in it are inert. `--desc
+#   "$(cat f)"` expands them before the script runs (computenet-s5dh;
+#   issue-quality.md "Backticks…"). Prefer the -file forms for any multi-line
+#   body; file-friction.sh exposes the same flags.
 #
 # Prints the new bead id on stdout. Exit 2 on bad arguments, 1 on a failed
 # step, saying which. A crash between create and re-parent leaves an
@@ -30,7 +41,7 @@
 #   bd update <id> --parent=<parent>
 set -uo pipefail
 
-TYPE= TITLE= PARENT= DESC= ACCEPT= PRIO=2 META= CLAIM=0
+TYPE= TITLE= PARENT= DESC= ACCEPT= PRIO=2 META= CLAIM=0 TOP=0
 LABELS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -39,6 +50,9 @@ while [ $# -gt 0 ]; do
     --parent)   PARENT=$2; shift 2 ;;
     --desc)     DESC=$2; shift 2 ;;
     --accept)   ACCEPT=$2; shift 2 ;;
+    --desc-file)   DESC=$(cat "$2")   || { echo "cannot read --desc-file $2" >&2; exit 2; }; shift 2 ;;
+    --accept-file) ACCEPT=$(cat "$2") || { echo "cannot read --accept-file $2" >&2; exit 2; }; shift 2 ;;
+    --top-level) TOP=1; shift ;;
     --priority) PRIO=$2; shift 2 ;;
     --label)    LABELS+=("$2"); shift 2 ;;
     --metadata) META=$2; shift 2 ;;
@@ -48,7 +62,10 @@ while [ $# -gt 0 ]; do
 done
 case "$TYPE" in bug|feature|task|chore) ;; *) echo "--type must be bug, feature, task or chore" >&2; exit 2 ;; esac
 [ -n "$TITLE" ]  || { echo "--title is required" >&2; exit 2; }
-[ -n "$PARENT" ] || { echo "--parent is required (this script exists to attach safely; use bd create directly for a top-level bead)" >&2; exit 2; }
+if [ -z "$PARENT" ] && [ "$TOP" != 1 ]; then
+  echo "--parent is required, or --top-level for a deliberately unparented bead (a first-sighting red-check bug, red-check-attribution.md artifact 3)" >&2; exit 2
+fi
+if [ -n "$PARENT" ] && [ "$TOP" = 1 ]; then echo "--parent and --top-level are exclusive" >&2; exit 2; fi
 
 args=(create "$TITLE" --type="$TYPE" --priority="$PRIO" --json)
 for l in ${LABELS+"${LABELS[@]}"}; do args+=(--label="$l"); done
@@ -63,9 +80,11 @@ for l in ${LABELS+"${LABELS[@]}"}; do args+=(--label="$l"); done
 NEW=$(bd "${args[@]}" | jq -r '.id // empty')
 [ -n "$NEW" ] || { echo "bd create failed or returned no id" >&2; exit 1; }
 
-# 2. attach; the id does not change.
-bd update "$NEW" --parent="$PARENT" \
-  || { echo "$NEW created but NOT parented — recover: bd update $NEW --parent=$PARENT" >&2; exit 1; }
+# 2. attach; the id does not change. (--top-level: nothing to attach.)
+if [ "$TOP" != 1 ]; then
+  bd update "$NEW" --parent="$PARENT" \
+    || { echo "$NEW created but NOT parented — recover: bd update $NEW --parent=$PARENT" >&2; exit 1; }
+fi
 
 # 3. optionally claim, so exactly one lane drains it. A failed claim is a
 #    note: the bead is filed and attached, which is the part that matters.

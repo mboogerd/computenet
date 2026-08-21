@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for file-friction.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "10 passed, 0 failed".
+# Expect "11 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/file-friction.sh"}
@@ -99,6 +99,11 @@ title_case "work skill: work skill: x"    "x"         "a doubled prefix collapse
 fixture
 out=$("$SCRIPT" --type bug --title "work skill: " --desc d --accept a 2>&1); st=$?
 [ "$st" = 2 ] && ok "a title that is only the prefix exits 2" || bad "prefix-only: exit=$st out=$out"
+
+# s5dh: --desc-file body reaches create-ticket verbatim, backticks inert
+printf 'has `ticks` and $(echo NO)\n' > "$ROOT/body.txt"
+out=$("$SCRIPT" --type bug --title t --desc-file "$ROOT/body.txt" --accept a --skill-version abc 2>&1); st=$?
+[ "$st" = 0 ] && ok "--desc-file accepted" || bad "desc-file: exit=$st out=$out"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
