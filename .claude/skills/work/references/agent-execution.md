@@ -8,6 +8,12 @@ absence cost a session (the cited bead holds the story — `bd show <id>`).
 **Open these references with the Read tool, not `cat`.** review-feature.md
 overruns the Bash tool's result cap, and so does `cat` on the persisted
 overflow file it points you at; Read pages (computenet-jobe).
+**If `bd` (or anything under `~/Documents`) starts failing `Operation not
+permitted` mid-task, it is macOS revoking the grant, not the sandbox** — it
+will not come back. Finish your verdict or report, write it to a file
+OUTSIDE that tree (`$SCRATCH` lives under `/private/tmp`), and name the path
+in your final message; the orchestrator posts it (computenet-hc3s — the one
+reviewer that did this is the reason its verdict survived).
 
 ## Contents
 
