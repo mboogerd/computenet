@@ -24,11 +24,18 @@ these:**
   agent, not just this batch);
 - its `metadata.files` claim is **disjoint from every running unit's** — and
   from their acceptance cross-references, per 5b;
-- **module and build contention is part of the test, not just files.** Two
-  units driving the same Gradle modules share caches, daemons and the
-  `buildLogic.lock`, which is how a "parallel" pair runs slower than the
-  sequence would (task.md's contention signatures). Disjoint files over the
-  *same* module is not disjoint work;
+- **build contention is part of the test, and `metadata.files` cannot
+  answer it.** Every implementer runs the repo-wide `./gradlew test` gate
+  (task.md step 6 via AGENTS.md), so **any two concurrent implementers
+  contend on the whole build** — shared caches, daemons, `buildLogic.lock` —
+  whatever their claims name. A docs-only or leaf-module claim does not
+  exempt one: a single-markdown unit's gate timed out `InspectorEventsTest`
+  at load 13 while its sibling built `:bench` (computenet-xbkm). Two
+  implementers run together only when the dispatch prompt **scopes the
+  gate** — a docs-only unit is told to skip `./gradlew test` and why, or the
+  contention is accepted and the prompt says a timeout in an untouched module
+  is load, to re-run in isolation before reporting. Otherwise the second
+  lane carries reviewers or non-Gradle work;
 - it lands on **its own branch and PR** — never a second unit merging into a
   feature branch another unit is still using, which is 5c's serialized merge
   and does not survive two writers.
