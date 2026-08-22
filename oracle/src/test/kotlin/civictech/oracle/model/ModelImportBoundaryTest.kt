@@ -114,9 +114,9 @@ object ModelImportBoundaryScanner {
 
     /**
      * A declaration header runs from the `class`/`object` keyword to the `{` that opens its body,
-     * and the gaps below exclude `{`, `}` and `;` rather than newlines — so the match can span the
-     * multi-line headers this codebase actually writes, but can never run past one declaration's
-     * opening brace into the next. Excluding the newline instead (the first version of this scan,
+     * and [headerAfter] reads exactly that — so recognition spans the multi-line headers this
+     * codebase actually writes, but can never run past one declaration's opening brace into the
+     * next. Stopping at the newline instead (the first version of this scan,
      * computenet-n00e) missed `GroupByModel`, a real `OperatorModel` in
      * `civictech.oracle.model` whose constructor parameters put `: OperatorModel, Serializable {`
      * on its own line, and any `ReferenceOp` outside `civictech.oracle.model` formatted the same
@@ -124,46 +124,145 @@ object ModelImportBoundaryScanner {
      * it recognised no declaration, not because the declaration was clean (review of
      * computenet-n00e; demonstrated by the two synthetic-text tests below).
      *
-     * The looser form can over-match — a class that merely *takes* a `SourceModel` constructor
-     * parameter reads the same to a text scanner — and that is the intended direction: an
-     * over-match scans one extra file whole and can only produce a loud, visible violation, while
-     * an under-match is a silent hole of exactly the kind this widening closes. (On the real tree
-     * today the over-match costs nothing: the only file matched for a reason other than its own
-     * `ReferenceOp` declaration is `ReferenceModel.kt`, which `scanDirectory` already scans.)
+     * A text scan can over-match, and that is the direction to err in: an over-match scans one
+     * extra file whole and can only produce a loud, visible violation, while an under-match is a
+     * silent hole of exactly the kind this widening closes. It does not need to over-match by
+     * much, though. Only the **supertype list** counts — [headerAfter] returns the header at
+     * parenthesis depth 0 — so a class that merely *takes* a `ReferenceOp` constructor parameter
+     * (`ReferenceModel.ModelNode.Source`, `OperatorCatalog.Entry`) is not read as declaring one.
+     * On the real tree that leaves exactly the six files that really do declare a `ReferenceOp`,
+     * with nothing matched for any other reason.
      *
      * Two further under-matches were measured by the second reader of computenet-n00e and are
      * closed here, because each is a *silent* hole — the same failure mode as the newline one:
-     *  - a gap may contain a **balanced brace pair** ([headerGap]), so a default lambda argument
-     *    (`val f: (Int) -> Int = { it },`) or a brace inside a string literal in the header no
-     *    longer terminates the header early. Measured: a compiling `SourceModel` written into
-     *    `civictech.oracle.bind` importing `civictech.cell.data.op.FilterCell` left the real-tree
-     *    gate GREEN when its constructor carried `= { it }`. The pair is single-level on purpose
-     *    — it must not be able to swallow a nested body and run into the next declaration.
+     *  - a brace **inside** the header no longer ends it: a default lambda argument
+     *    (`val f: (Int) -> Int = { it },`) or a brace inside a string literal used to. Measured:
+     *    a compiling `SourceModel` written into `civictech.oracle.bind` importing
+     *    `civictech.cell.data.op.FilterCell` left the real-tree gate GREEN when its constructor
+     *    carried `= { it }`.
      *  - a header may end at `by` as well as at `{`, so a body-less delegating declaration
      *    (`class J(d: SourceModel) : SourceModel by d`) is recognised.
      *
-     * Known remaining hole, deliberately not closed: a declaration with **no body and no
-     * delegation** (`object K : ReferenceOp`) has no terminator to match. Only the memberless
-     * marker [ReferenceOp] can be implemented that way — [SourceModel] and [OperatorModel] both
-     * carry an abstract `evaluate`, so an implementation of either always has a body or a `by` —
-     * and such an object is not evaluable and cannot be registered. Terminating at end-of-line
-     * instead was tried and rejected: it drags in unrelated wiring files (`OperatorCatalog.kt`
-     * matches) for no gain.
+     * ## Why this is a scan and not one regex
+     *
+     * Both were first closed by widening the pattern's gaps to `(?:[^{};]|\{[^{}]*\})*?` — a lazy
+     * loop over an alternation. `java.util.regex` evaluates such a loop **recursively**, one
+     * frame set per character consumed, so on `:oracle`'s ~46 KB source files it recursed tens of
+     * thousands deep and threw `StackOverflowError`. It passed on darwin/arm64 and failed on
+     * ubuntu-latest purely because the default thread stack differs; measured directly (same
+     * files, same patterns, varying `-Xss`): at 1 MB — Linux's default — that pattern overflowed
+     * on 2 of 37 files and at 512 KB on 12, while the character-class forms above overflowed on
+     * none at any size. That is not backtracking that can be tuned away; it is recursion depth
+     * proportional to input length, so no equivalent pattern is safe here. The header is a
+     * balanced construct and a regex asked to track balance is doing a parser's job, so
+     * [headerAfter] does it with one non-recursive loop instead: constant stack, linear in the
+     * header it reads, and it stops at the first terminator.
+     *
+     * The one shape given up for that bound: a header with a **blank line inside it** (between
+     * the parameter list and the supertype list) is not recognised, because the blank line is
+     * what stops a body-less declaration's header from running on into the next declaration.
+     * ktlint — which runs over these sources — does not produce that shape, and no header in the
+     * repository contains a blank line. Nothing else was traded: every other shape measured
+     * (single- and multi-line supertype lists, multi-line constructors, `where` clauses, trailing
+     * commas, annotations, comments inside the header, default lambdas, plain and triple-quoted
+     * string literals containing braces, superclass constructor calls, `enum class`, private
+     * constructors, `by` delegation, and a declaration with no body at all) is recognised.
      */
-    private val headerGap = """(?:[^{};]|\{[^{}]*\})*?"""
+    private val declarationKeyword = Regex("""\b(?:class|object)\s+\w+""")
 
-    private val declarationHeader = Regex(
-        """\b(?:class|object)\s+\w+$headerGap:$headerGap""" +
-            """\b(?:ReferenceOp|SourceModel|OperatorModel)\b$headerGap(?:\{|\bby\b)""",
-    )
+    private val supertypeName = Regex("""\b(?:ReferenceOp|SourceModel|OperatorModel)\b""")
+
+    /**
+     * The **supertype list** of the declaration starting at [from] (just past the declared name),
+     * or `null` when what starts there has no supertype list — either because it is not a
+     * declaration header at all, or because the declaration implements nothing.
+     *
+     * One forward pass, no recursion and no backtracking. It ends at the `{` that opens the body,
+     * at the `by` of a delegating declaration, or at a blank line (which no declaration header
+     * ever contains, and which is what stops the scan of a body-less declaration such as a
+     * parameters-only `data class` from running on into the next one); it gives up at a `}` or
+     * `;`. So it can never run past one declaration into the next.
+     *
+     * Only text at **parenthesis depth 0** is returned. That is what keeps the primary
+     * constructor's parameters out of the answer — `data class Entry(val model: ReferenceOp)`
+     * *takes* a `ReferenceOp`, it does not implement one — while a brace inside the parameter
+     * list (a default lambda) is still just header text rather than the body's opening. String
+     * and character literals and both comment forms are skipped whole, so a brace, quote or
+     * semicolon inside one cannot end the header early, and a supertype name merely *mentioned*
+     * in a comment inside the header is not read as a supertype.
+     */
+    private fun headerAfter(text: String, from: Int): String? {
+        val outer = StringBuilder()
+        var i = from
+        var parens = 0
+        while (i < text.length) {
+            val c = text[i]
+            when {
+                c == '"' || c == '\'' -> {
+                    i = skipLiteral(text, i)
+                    continue
+                }
+                c == '/' && text.startsWith("//", i) -> {
+                    i = text.indexOf('\n', i).let { if (it < 0) text.length else it }
+                    continue
+                }
+                c == '/' && text.startsWith("/*", i) -> {
+                    i = text.indexOf("*/", i + 2).let { if (it < 0) text.length else it + 2 }
+                    continue
+                }
+                c == '(' -> parens++
+                c == ')' -> if (parens > 0) parens--
+                c == '{' -> if (parens == 0) return outer.toString()
+                c == '}' || c == ';' -> if (parens == 0) return null
+                parens == 0 && c == '\n' && startsBlankLine(text, i) -> return outer.toString()
+                parens == 0 && c == 'b' && text.startsWith("by", i) &&
+                    !text[i - 1].isLetterOrDigit() &&
+                    (i + 2 >= text.length || !text[i + 2].isLetterOrDigit()) -> return outer.toString()
+            }
+            if (parens == 0) outer.append(c)
+            i++
+        }
+        return null
+    }
+
+    /** Whether the newline at [at] is followed by a line holding nothing but whitespace. */
+    private fun startsBlankLine(text: String, at: Int): Boolean {
+        var i = at + 1
+        while (i < text.length && (text[i] == ' ' || text[i] == '\t' || text[i] == '\r')) i++
+        return i >= text.length || text[i] == '\n'
+    }
+
+    /** The index just past the string or character literal opening at [start]. */
+    private fun skipLiteral(text: String, start: Int): Int {
+        if (text.startsWith("\"\"\"", start)) {
+            val end = text.indexOf("\"\"\"", start + 3)
+            return if (end < 0) text.length else end + 3
+        }
+        val quote = text[start]
+        var i = start + 1
+        while (i < text.length) {
+            when (text[i]) {
+                '\\' -> i++
+                quote -> return i + 1
+                '\n' -> return i
+            }
+            i++
+        }
+        return text.length
+    }
 
     /**
      * Whether [text] declares a `class`/`object` implementing [ReferenceOp] (directly, or via
      * [SourceModel]/[OperatorModel], the only two evaluable sub-interfaces — see
      * `ReferenceOp.kt`). A supertype-list match over the declaration header, single- or
-     * multi-line ([declarationHeader]): pure text, not a compiler-level check.
+     * multi-line ([headerAfter]): pure text, not a compiler-level check.
      */
-    fun declaresReferenceOp(text: String): Boolean = declarationHeader.containsMatchIn(text)
+    fun declaresReferenceOp(text: String): Boolean =
+        declarationKeyword.findAll(text).any { keyword ->
+            val header = headerAfter(text, keyword.range.last + 1)
+            val colon = header?.indexOf(':') ?: -1
+            colon >= 0 && supertypeName.containsMatchIn(header!!.substring(colon))
+        }
 
     /**
      * `[ORA2-MODEL-11]`'s general form: every file **anywhere** under [root] that declares a
@@ -557,6 +656,30 @@ class ModelImportBoundaryTest {
     }
 
     /**
+     * Recognition must be **stack-bounded on a real file's size**, not merely correct.
+     *
+     * The version of this predicate that first closed the two shapes above used a lazy regex loop
+     * over an alternation to track balanced braces; `java.util.regex` evaluates that recursively,
+     * one frame set per character, and it threw `StackOverflowError` on `:oracle`'s own ~46 KB
+     * sources on ubuntu-latest (1 MB default thread stack) while passing on darwin/arm64 — the
+     * gate red for a reason that had nothing to do with what it was checking. This input is an
+     * order of magnitude past that, so a recursive matcher would overflow at any plausible stack
+     * size rather than only on the smaller of two platforms; [headerAfter] iterates, so depth is
+     * constant.
+     */
+    @Test
+    fun `computenet-n00e recognition is stack-bounded on an input far larger than any real source file`() {
+        val filler = "// a line of ordinary comment text with no declaration on it at all\n".repeat(15_000)
+        val large = "package civictech.oracle.bind\n\n" + filler + "object Tail : SourceModel {\n}\n"
+
+        withClue("this synthetic is well past :oracle's largest real source file") {
+            (large.length > 500_000) shouldBe true
+        }
+        ModelImportBoundaryScanner.declaresReferenceOp(large) shouldBe true
+        ModelImportBoundaryScanner.declaresReferenceOp(filler) shouldBe false
+    }
+
+    /**
      * The other half of [declaresReferenceOp]'s bound: the header match must not run past a
      * declaration's own opening brace, or a file holding an unrelated `class`/`object` and a
      * later mention of `SourceModel` would be dragged into the scan for no reason. `{`, `}` and
@@ -596,5 +719,25 @@ class ModelImportBoundaryTest {
             """.trimIndent()
 
         ModelImportBoundaryScanner.declaresReferenceOp(bodyThenMention) shouldBe false
+
+        // Second reader of computenet-n00e: only the supertype list counts. A class that TAKES a
+        // ReferenceOp is not one — `ReferenceModel.ModelNode.Source` and `OperatorCatalog.Entry`
+        // are the two real cases, and both are wiring, not models. Recognising them would scan
+        // `OperatorCatalog.kt` — the one file whose whole job is to hold kernel cell factories —
+        // for kernel imports.
+        val takesOneAsAParameter =
+            """
+            package civictech.oracle.bind
+
+            import civictech.cell.data.op.FilterCell
+
+            data class Entry(
+                val id: String,
+                val model: SourceModel,
+                val cell: FilterCell<*>?,
+            )
+            """.trimIndent()
+
+        ModelImportBoundaryScanner.declaresReferenceOp(takesOneAsAParameter) shouldBe false
     }
 }
