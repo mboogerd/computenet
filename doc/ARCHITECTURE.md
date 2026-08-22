@@ -50,7 +50,7 @@ runtime classpath, so KotlinPoet/`symbol-processing-api`/`kotlin-reflect`
 | `:identity` | JDK-only Ed25519 keypairs, a fail-closed file-backed key store with machine-distinguishable refusal reasons (`WORLD_READABLE`, `MALFORMED`, `UNSUPPORTED`, `KEYPAIR_MISMATCH`, `INCOMPLETE_PAIR`, `NO_POSIX_PERMISSIONS`), and key-derived `PeerId` fingerprints; implements the kernel's `SignatureVerifier` seam (DSC1, epic `computenet-ssa`). JDK-only — no third-party crypto. | `api(:kernel)`; `:kernel` must not depend on it |
 | `:concord` | Executable specification / conformance suite (see §5). | `:kernel`, kotlinx-serialization; kaml (test) |
 | `:demo:shell` | Shared JDK `httpserver` + SSE shell (`DemoShell`, `demoPort`) used by every runnable demo, and also consumed by `:inspect` (not itself a demo). `DemoShell`'s API takes no cell-model type today, so it has no `:kernel` dependency. | — |
-| `:demo:*` (8 apps) | Demo applications (see §6). `:demo:shopping`, `:demo:exchange` and `:demo:beadsmirror` use `:wire` — beadsmirror's dependency is opt-in only, for its two-node gossip mode (§6); `:demo:shopping` and `:demo:skillmatch` additionally depend on `:inspect` (opt-in, `--inspect-port`); only `:demo:backlog-triage` defines its own KSP cell (`RatingCell`, `@CellBase` — T09 §C; `agora` annotates nothing and dropped the `ksp-cell` convention plugin accordingly); only `:demo:exchange` needs `:nature` (it asserts composed manifests). | `:kernel`, `:demo:shell`, + per-demo extras |
+| `:demo:*` (9 apps) | Demo applications (see §6). `:demo:shopping`, `:demo:exchange` and `:demo:beadsmirror` use `:wire` — beadsmirror's dependency is opt-in only, for its two-node gossip mode (§6); `:demo:shopping` and `:demo:skillmatch` additionally depend on `:inspect` (opt-in, `--inspect-port`); only `:demo:backlog-triage` defines its own KSP cell (`RatingCell`, `@CellBase` — T09 §C; `agora` annotates nothing and dropped the `ksp-cell` convention plugin accordingly); only `:demo:exchange` needs `:nature` (it asserts composed manifests). | `:kernel`, `:demo:shell`, + per-demo extras |
 | `:inspect` | The Inspector backend — a read-only HTTP/SSE view of a host process's live dataflow graph (`doc/spec/90-roadmap/97-inspector-plan/`, all six milestones M0–M5 merged). Reuses `:demo:shell`'s JDK-`httpserver`/SSE framing rather than duplicating it; adds no third-party dependency beyond kotlinx.serialization. Its frontend `inspect/ui/` (SolidJS + Vite + TypeScript) is npm-only and deliberately not wired into Gradle — same decision as `demo/agora/ui`. Required five kernel accessors added specifically for it: `ManagedHost.outletAt`, `ManagedHost.snapshotOf`, `ManagedHost.isDrained`, `ManagedHost.isSuspended`, `LocationRegistry.describe` — rationale in `doc/spec/90-roadmap/97-inspector-plan/90-progress-log.md`'s orchestrator closing note. | `:kernel`, `:demo:shell`, kotlinx.serialization |
 
 Non-module directories: `buildSrc/` (two convention plugins —
@@ -346,6 +346,10 @@ else `$PORT`, else 8080. See the README for run commands.
   board.
 - `:demo:backlog-triage` — collective ranking with pluggable rating engines
   (elo, Bradley–Terry, TrueSkill, …) and a JSON agent API.
+- `:demo:dialogue` — argumentation extraction from recorded dialogue
+  transcripts (AGO1, epic `computenet-2aw`); depends on `:kernel`,
+  `:demo:shell` and `:demo:agora` (reuses agora's claim/edge vocabulary
+  rather than minting a parallel one).
 - `:demo:beadsmirror` — mirrors a `bd`/Dolt-backed beads workspace: polls the
   workspace's Dolt commit graph (`dolt_diff_issues`/`dolt_diff_dependencies` in
   `dolt_log` order), projects each change through kernel cells into a
