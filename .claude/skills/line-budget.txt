@@ -58,7 +58,12 @@
 # 8248 -> 8255 on 2026-08-21: computenet-w8cp — rebased onto main (see PR #434).
 # 8255 -> 8264 on 2026-08-21: computenet-w8cp — rebased onto main (see PR #434).
 # 8264 -> 8273 on 2026-08-21: computenet-mzuc — rebased onto main (see PR #428).
-work                8273
+# 8273 -> 8276 on 2026-08-21: computenet-wv64 — rebased onto main (see PR #435).
+# 8276 -> 8286 on 2026-08-21: computenet-db3k — rebased onto main (see PR #442).
+# 8286 -> 8291 on 2026-08-21: computenet-db3k — rebased onto main (see PR #442).
+# 8291 -> 8295 on 2026-08-21: computenet-jd4q — rebased onto main (see PR #440).
+# 8295 -> 8306 on 2026-08-21: computenet-wahz — rebased onto main (see PR #413).
+work                8306
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

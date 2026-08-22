@@ -202,6 +202,11 @@ which is what makes them worth naming rather than leaving to be rediscovered.
   skipping a repo-wide test run (computenet-l5rc). Write
   `--include='*.kt'`. This is the same family as AGENTS.md's zsh
   history-modifier trap.
+- **`bd -C <path>` cannot live in a shell variable.** `BD="bd -C /path"; $BD
+  show x` fails with `no such file or directory: bd -C /path` — zsh does not
+  word-split an unquoted expansion, so the whole string is looked up as one
+  command name. Type `bd -C "$WT" show x` each time, or define a function:
+  `bd() { command bd -C "$WT" "$@"; }` (computenet-wahz).
 - **`strings` cannot be trusted on `.class` files on darwin.** Java's class
   magic `0xCAFEBABE` is *also* the Mach-O universal-binary magic, so Apple's
   `strings` reads the next words as `cputype`/`cpusubtype` and fails with

@@ -1623,8 +1623,10 @@ than making it quietly. ${repoAge}
 Run every verification command — Gradle above all — in ONE foreground Bash
 call with an explicit timeout, up to 600000 ms. If you already know the suite
 outruns that 10-minute cap, COMMIT FIRST (do not `git push`, and do not
-`bd dolt push` either — the orchestrator serializes syncs; see your
-reference),
+`bd dolt push` either, NOT EVEN for an authorized cross_bead write: AGENTS.md's
+"shared-surface writes push at once" is the orchestrator's duty, and this
+dispatch's no-push rule is the exception it names for dispatched agents —
+your write rides out on the orchestrator's next bracket),
 then background it and wait
 with a BOUNDED until-loop on its log (your reference gives the form) — never
 wait first, or a stop strands uncommitted work that reads as nothing.
@@ -1656,7 +1658,10 @@ and reviewer alike — reviewers drive the same suites. Telling an agent to
 "run it in the foreground" does not work and was already tried: the
 foreground/background choice belongs to the Bash tool's 120s default, not to
 the agent's intent, so only an explicit `timeout` argument changes it.
-`:demo:beadsmirror:test` takes ~3m40s; without that argument the call is
+`:demo:beadsmirror:test` in full takes ~11m45s — over the cap, background
+it (gradle-evidence.md "How long the suites take" is the named list; an
+earlier ~3m40s figure here was one part of it, computenet-wv64); without that
+argument the call is
 backgrounded, the agent ends its turn saying it will wait, and nothing ever
 wakes it. Five stalls across two items in one session, ~40 minutes lost
 (computenet-hob2). The three agent-facing references carry the same rule
