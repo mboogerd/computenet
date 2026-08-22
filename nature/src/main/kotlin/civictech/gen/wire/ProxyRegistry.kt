@@ -2,6 +2,11 @@
 // `civictech.gen.wire` despite the module move.
 package civictech.gen.wire
 
+import civictech.nature.ModuleId
+import civictech.nature.ModuleRegistration
+import civictech.nature.Provenance
+import civictech.nature.RegistryMutation
+import civictech.nature.Staging
 import java.lang.reflect.InvocationHandler
 import java.util.ServiceLoader
 import java.util.concurrent.ConcurrentHashMap
@@ -32,14 +37,61 @@ interface ProxyModule {
  */
 object ProxyRegistry {
     private val byInterface = ConcurrentHashMap<Class<*>, ProxyConstructor>()
+    private val provenance = Provenance<Class<*>>()
 
     init {
         ServiceLoader.load(ProxyModule::class.java, ProxyModule::class.java.classLoader)
-            .forEach(::register)
+            .forEach { register(it) }
     }
 
-    fun register(module: ProxyModule) {
-        byInterface.putAll(module.factories)
+    /**
+     * Record [module]'s factories as contributions of [owner], defaulting to
+     * [ModuleId.HOST] so pre-existing callers are unaffected.
+     *
+     * Proxy entries are keyed on `Class<*>` and their values are constructors,
+     * which cannot be compared by equality — so an already-present key is treated
+     * as an idempotent *additional contribution* rather than a conflict. Under
+     * JAR1's shared-prefix rule a contract interface is one `Class` across
+     * modules and its generated proxy constructor is functionally identical, so
+     * there is nothing for a comparison to catch; unregistration drops the entry
+     * only when no contributor remains.
+     */
+    fun register(module: ProxyModule, owner: ModuleId = ModuleId.HOST) {
+        synchronized(RegistryMutation.lock) { commit(module, owner) }
+    }
+
+    /** Drop [owner]'s factory contributions. Prefer [ModuleRegistration.unregister]. */
+    fun unregister(owner: ModuleId) {
+        require(owner != ModuleId.HOST) {
+            "the host module is not unregisterable: descriptors present at process start back the " +
+                "running graph, so removing them would strand live cells"
+        }
+        synchronized(RegistryMutation.lock) { removeOwner(owner) }
+    }
+
+    /** Modules that contributed a proxy constructor for [clazz]. */
+    fun contributorsOf(clazz: Class<*>): List<ModuleId> = provenance.of(clazz)
+
+    /**
+     * No conflict is reachable here (see [register]): constructors are not
+     * comparable, so there is no non-equal contribution to detect. Present so the
+     * combined seam can stage all three registries uniformly.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    internal fun stage(module: ProxyModule, staging: Staging) = Unit
+
+    internal fun commit(module: ProxyModule, owner: ModuleId) {
+        module.factories.forEach { (clazz, constructor) ->
+            // First writer wins: a later contributor of the same Class records itself
+            // as an additional contributor without repointing the live constructor,
+            // which is what makes removing one contributor leave the other resolvable.
+            byInterface.putIfAbsent(clazz, constructor)
+            provenance.add(clazz, owner)
+        }
+    }
+
+    internal fun removeOwner(owner: ModuleId) {
+        provenance.drop(owner).forEach { byInterface.remove(it) }
     }
 
     /** The generated proxy constructor for [clazz], or null when it carries no `@Contract`. */
