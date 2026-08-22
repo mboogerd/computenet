@@ -19,6 +19,9 @@
 #   --no-append    Compare and print, but do not write to the series file.
 #   --dry-run      Print what would run and exit. Runs no benchmark.
 #
+#   BENCH_SERIES_JAVA   Launcher for the MEASURING JVM. Must be JDK 21 (the module's
+#                       toolchain); defaults to `java` and refuses if that is not 21.
+#
 # THE HOST-STATE ATTESTATION IS NOT OPTIONAL AND IS NOT GUESSED.
 # Nothing here can prove a machine was idle. The script performs a cheap sanity check
 # (load average vs core count) and REFUSES to record a run as quiesced when that check
@@ -69,6 +72,10 @@ FORKS=5
 WARMUP_ITERATIONS=5
 MEASUREMENT_ITERATIONS=5
 
+# The major version of the JDK the sweep must MEASURE under, matching the module's
+# Gradle toolchain. See the pin check below for why this is not left to `java`.
+PINNED_JDK_MAJOR=21
+
 HOST_STATE=""
 DRY_RUN=0
 APPEND=1
@@ -80,7 +87,7 @@ while [[ $# -gt 0 ]]; do
     --selector)   ONLY_SELECTORS+=("${2:-}"); shift 2 ;;
     --no-append)  APPEND=0; shift ;;
     --dry-run)    DRY_RUN=1; shift ;;
-    -h|--help)    sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)    sed -n '2,31p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -129,6 +136,51 @@ confirm a right one. Either quiesce the machine and re-run, or re-run with
 MSG
     exit 1
   fi
+fi
+
+# --------------------------------------------------------------------------------------
+# THE MEASURING JVM IS PINNED, NOT INHERITED (review repair on computenet-b7k4).
+#
+# doc/bench/regression-series.md §3 pins `jvmVendor`/`jvmVersion` to the module's
+# toolchain JDK. That pin has to hold for the JVM that RUNS the sweep — the one this
+# script launches the JMH jar with — and not merely for the Gradle task that ingests the
+# results afterwards, which measures nothing. Bare `java` on a developer machine is
+# routinely something else: measured on this repository's own host, 2026-08-22, `java`
+# was JDK 25.0.2 while the toolchain is 21, and a sweep launched with it would have been
+# recorded, correctly, as a JDK 25 run.
+#
+# The failure that guard prevents is the reassuring one. A wrong-JDK run does not corrupt
+# an existing band — `EnvironmentFingerprint` puts it in a fresh population — it produces
+# a series that quietly never accumulates three comparable entries and answers
+# `InsufficientHistory` forever, which reads as "young series" rather than "misconfigured
+# lane". It matters most under a scheduler: §6 already notes that a `launchd` agent does
+# not inherit a login shell's PATH, so the unattended run is exactly the one whose `java`
+# nobody is watching.
+#
+# Set BENCH_SERIES_JAVA to a JDK ${PINNED_JDK_MAJOR} launcher when `java` is not one.
+JAVA_CMD="${BENCH_SERIES_JAVA:-java}"
+if ! JAVA_VERSION_LINE="$("${JAVA_CMD}" -version 2>&1 | head -1)"; then
+  echo "REFUSED: could not run '${JAVA_CMD} -version'. Set BENCH_SERIES_JAVA to a JDK ${PINNED_JDK_MAJOR} launcher." >&2
+  exit 1
+fi
+JAVA_MAJOR="$(printf '%s\n' "${JAVA_VERSION_LINE}" | sed -nE 's/.*version "([0-9]+).*/\1/p')"
+
+echo "Measuring JVM: ${JAVA_CMD} -> ${JAVA_VERSION_LINE}"
+
+if [[ "${JAVA_MAJOR}" != "${PINNED_JDK_MAJOR}" ]]; then
+  cat >&2 <<MSG
+
+REFUSED: the series measures under JDK ${PINNED_JDK_MAJOR}, but '${JAVA_CMD}' is
+${JAVA_VERSION_LINE}.
+
+This is not a formality. The JDK is part of EnvironmentFingerprint, so a run under a
+different one is not compared against the existing rows at all — it silently starts a
+fresh population and reports InsufficientHistory, forever, if the JDK keeps changing.
+
+  BENCH_SERIES_JAVA=/path/to/jdk${PINNED_JDK_MAJOR}/bin/java scripts/bench-series/run-series.sh ...
+
+MSG
+  exit 1
 fi
 
 RUN_ID="$(date -u '+%Y-%m-%dT%H-%M-%SZ')"
@@ -192,7 +244,7 @@ for entry in "${SELECTORS[@]}"; do
   # knobs and which host produced these numbers — the results file carries no such
   # columns — and SeriesIngest refuses a run whose log cannot answer.
   # shellcheck disable=SC2086
-  java -jar "${JMH_JAR}" \
+  "${JAVA_CMD}" -jar "${JMH_JAR}" \
     "${regex}" \
     -f "${FORKS}" -wi "${WARMUP_ITERATIONS}" -i "${MEASUREMENT_ITERATIONS}" \
     -rf csv -rff "${results}" \

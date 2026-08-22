@@ -106,9 +106,19 @@ rows may be compared:
 | Fingerprint field | Pinned to | Why it is in the fingerprint |
 | --- | --- | --- |
 | `cpuModel`, `coreCount`, `os` | one machine | The M2 Pro / M3 Max incomparability this ticket was filed from. |
-| `jvmVendor`, `jvmVersion` | the module's toolchain JDK 21 | The JDK-vendor substitution that superseded two entries. |
+| `jvmVendor`, `jvmVersion` | the module's toolchain JDK 21, **enforced by `run-series.sh`** | The JDK-vendor substitution that superseded two entries. |
 | `heapSettings` | whatever the forks were launched with, stated | Heap configuration moves scores directly. |
 | `jmhMode`, `forkCount`, `warmupIterations`, `measurementIterations` | `-f 5 -wi 5 -i 5`, written down in `run-series.sh` | `-f`/`-wi`/`-i` override annotations, so annotations state the declaration, not the run. |
+
+The JDK pin is **checked, not assumed**. `run-series.sh` launches the JMH jar with
+`BENCH_SERIES_JAVA` (default `java`) and refuses the run when that launcher is not
+JDK 21 — measured on this repository's own host, 2026-08-22, bare `java` was JDK
+25.0.2 while the toolchain is 21. The refusal matters because the failure it prevents
+is the *reassuring* one: a run under the wrong JDK does not corrupt an existing band,
+it lands in a fresh population and answers `InsufficientHistory` forever, which reads
+as a young series rather than a misconfigured lane. Under the scheduler of §6 — where
+a `launchd` agent does not inherit a login shell's `PATH` — that is the likeliest way
+for the wrong `java` to be picked up, and nobody is watching when it happens.
 
 `harnessCommitSha` is deliberately **excluded** — it changes on every commit, and
 it is the thing the series exists to vary. Including it would make every run its
@@ -188,7 +198,9 @@ beside its results file, then compares and appends through the `:bench:benchSeri
 Gradle task.
 
 Useful flags: `--dry-run` (prints the plan, runs nothing), `--no-append` (compare
-without recording), `--selector <name>` (one selector only).
+without recording), `--selector <name>` (one selector only). Set
+`BENCH_SERIES_JAVA=/path/to/jdk21/bin/java` when `java` is not the pinned JDK; the
+script prints the measuring JVM it resolved and refuses any other major version (§3).
 
 The comparator can also be driven directly:
 
