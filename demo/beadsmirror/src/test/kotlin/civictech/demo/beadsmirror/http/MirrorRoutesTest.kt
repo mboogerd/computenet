@@ -276,6 +276,62 @@ class MirrorRoutesTest {
         }
     }
 
+    /**
+     * One workspace, served through the same N-workspace [MirrorRoutes.Workspace]
+     * list the app builds — a real identity, not the `default` placeholder the
+     * single-[MirrorState] constructor supplies. This is the configuration in
+     * which BOTH surfaces exist at once, which no other test in this module
+     * covers: the class's other single-fold tests read only the legacy path and
+     * [TwoWorkspaceRig] has no legacy path at all.
+     */
+    private class OneWorkspaceRig(identity: String) : AutoCloseable {
+        val projector = MirrorProjector(DotMinter(identity))
+        val state = MirrorState(projector)
+        val shell = DemoShell(0)
+        val probe: HttpProbe
+
+        init {
+            MirrorRoutes(listOf(MirrorRoutes.Workspace(identity, state))).register(shell)
+            shell.start()
+            probe = HttpProbe("http://localhost:${shell.boundPort}")
+        }
+
+        override fun close() {
+            probe.close()
+            shell.stop()
+        }
+    }
+
+    @Test
+    fun `a one-workspace process serves the segmented and legacy surfaces identically`() {
+        OneWorkspaceRig("beads_scratch_42").use { rig ->
+            rig.projector.apply(issueRecord(1, "A1", DiffType.ADDED, "title" to "Alpha One"))
+
+            // Both surfaces are registered, and both name the same fold.
+            Json.parseToJsonElement(rig.probe.get("/workspaces").body())
+                .jsonArray.map { it.jsonPrimitive.content } shouldBe listOf("beads_scratch_42")
+
+            val segmented = rig.probe.get("/workspaces/beads_scratch_42/beads/issues")
+            val legacy = rig.probe.get("/beads/issues")
+            segmented.statusCode() shouldBe 200
+            legacy.statusCode() shouldBe 200
+            // Byte-identical: one implementation, one fold, two addresses.
+            segmented.body() shouldBe legacy.body()
+
+            val segmentedOne = rig.probe.get("/workspaces/beads_scratch_42/beads/issues/A1")
+            val legacyOne = rig.probe.get("/beads/issues/A1")
+            segmentedOne.statusCode() shouldBe 200
+            segmentedOne.body() shouldBe legacyOne.body()
+
+            // The unknown-workspace 404 is not an N > 1 privilege: a
+            // one-workspace process refuses a foreign identity the same way,
+            // rather than falling through to its sole fold.
+            val unknown = rig.probe.get("/workspaces/wsZ/beads/issues")
+            unknown.statusCode() shouldBe 404
+            Json.parseToJsonElement(unknown.body()).jsonObject.keys shouldBe setOf("error")
+        }
+    }
+
     @Test
     fun `a two-workspace process registers no legacy unsegmented beads issues route`() {
         TwoWorkspaceRig().use { rig ->

@@ -645,8 +645,12 @@ internal fun Array<String>.extractFlag(name: String): Pair<String?, Array<String
  * A left-to-right scan rather than a loop over [extractFlag], because
  * [extractFlag] answers the inline `=` spelling *first* wherever it sits: over
  * `--workspace /a --workspace=/b` a loop would report `/b` before `/a`, and
- * the order is not cosmetic — the first configured workspace is the one served
- * on the legacy HTTP path until computenet-3bso.1.2 lands.
+ * the order is not cosmetic — it is the order [BeadsMirrorApp.mirrors] and
+ * `GET /workspaces` report, and the order the start-time refusals and
+ * baselines run in. (It was, before computenet-3bso.1.2 landed, also what
+ * picked the workspace served on the legacy unsegmented HTTP path; that path
+ * is now registered only when exactly one workspace is configured, so with
+ * N > 1 there is no legacy route for a first workspace to win.)
  */
 internal fun Array<String>.extractFlagAll(name: String): Pair<List<String>, Array<String>> {
     val prefix = "$name="
