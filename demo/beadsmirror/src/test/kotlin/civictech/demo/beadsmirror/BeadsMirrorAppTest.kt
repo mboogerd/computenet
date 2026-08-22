@@ -752,9 +752,12 @@ class BeadsMirrorAppTest {
 
     /**
      * Feature rule: `--workspace` may repeat, and **one occurrence must behave
-     * exactly as today**. [extractFlagAll] is a loop over the unchanged
-     * [extractFlag] precisely so the single-occurrence path is the identical
-     * one, and these pin both ends of that.
+     * exactly as today**. [extractFlagAll] is a left-to-right scan rather than
+     * a loop over [extractFlag] — a loop would report the inline `=` spelling
+     * first and lose command-line order — so single-occurrence equivalence with
+     * [extractFlag] is a property to be asserted, not one inherited from
+     * delegation. The first test below is that assertion; the others pin the
+     * repeated case and the absent case.
      */
     @Nested
     inner class RepeatedWorkspaceFlagParsing {
