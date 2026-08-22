@@ -99,6 +99,14 @@ check "invalid --host-state -> exit 2" 2 "must be 'quiesced' or 'shared'" \
 check "unknown argument -> exit 2" 2 "unknown argument: --frobnicate" \
   -- --frobnicate
 
+# 3b. --host-state as the last argument, with no value following it.
+check "--host-state with no value -> exit 2" 2 "--host-state requires a value" \
+  -- --host-state
+
+# 3c. --selector as the last argument, with no value following it.
+check "--selector with no value -> exit 2" 2 "--selector requires a value" \
+  -- --selector
+
 # 4. --host-state quiesced, load average above the threshold -> refused.
 set_uptime "9.99"
 check "quiesced above threshold -> REFUSED, exit 1" 1 "REFUSED: you attested 'quiesced'" \
