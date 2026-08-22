@@ -67,3 +67,37 @@ git -C <task-worktree> log --oneline; git -C <task-worktree> status --short
 **Resume, don't restart**, wherever those show work landed — 5b's resume
 query picks up an `in_progress` item with its worktree and branch intact.
 Re-dispatch only what left nothing behind.
+
+## A host REBOOT, not a crash: the epic claim is gone and so is `$SCRATCH`
+
+Both are correct consequences and neither is covered above (computenet-hd2f).
+The dead process's holder token is DEAD by definition, so a sibling's step-3
+sweep has probably **released your epic** — re-run `claim-epic.sh` before
+touching the subtree (it SKIPs if another machine has since taken it, and
+that is the right answer). And `$SCRATCH` under `/private/tmp` does not
+survive a reboot: re-create it, re-write `slot-start` from the ORIGINAL slot
+start (above), and re-ledger any job you restart.
+
+## macOS revoked `~/Documents` mid-slot (`Operation not permitted` everywhere)
+
+Signature: `ls ~/` works, `ls ~/Documents` is denied, and the beads DB, the
+checkout's `.git/objects` and `.beads/config.yaml` all return EPERM — the
+**identical** error with `dangerouslyDisableSandbox`, EPERM from the Read
+tool too, and `request_directory` grants with no effect; some individual
+files still read while enumeration fails (computenet-hc3s). **It is not the
+Bash sandbox** and an unattended session cannot recover it: only a human at
+System Settings can. Do not retry, do not re-request the folder. Finish what
+is already certified and stop: `cd /` (outside the denied tree), then
+`gh pr ready <n> --repo mboogerd/computenet` for any PR a reviewer has
+already passed, `gh pr comment` the verdicts you cannot record in bd, and
+end the session with the list of bead writes that did not happen. The two
+git reads 5e needs have `gh` substitutes: `gh api
+repos/mboogerd/computenet/commits/main` for the landed-since fetch, and
+`gh run view <run-id> --log --repo mboogerd/computenet` for the
+executed-not-skipped read. A certified green PR still ships. Finalize's
+publication push is impossible and that is recoverable: the local bead
+writes are intact on disk, and the next session's step-3 sweeps close the
+merged items and release the dead epic claim on their own. A DISPATCHED
+agent that loses bd mid-task writes its verdict to a file outside the tree
+and names the path in its result (agent-execution.md says so) — the
+orchestrator posts it.
