@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for claim-epic.sh. Stubs `bd` on PATH; every case gets a fresh control
-# dir. Exits 0 if all cases pass. Expect "14 passed, 0 failed".
+# dir. Exits 0 if all cases pass. Expect "18 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claim-epic.sh"}
@@ -10,6 +10,9 @@ ROOT=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/claim-epic-test.XXXXXX")" && pwd -P)
 trap 'rm -rf "$ROOT"' EXIT
 mkdir -p "$ROOT/bin"
 export BEADS_ACTOR=testbox
+# the subtree-hot check reads git refs: point git at an empty repo so the real
+# checkout's feature branches cannot leak into the cases
+git init -q "$ROOT/git"; export GIT_DIR="$ROOT/git/.git"
 
 cat > "$ROOT/bin/bd" <<'EOF'
 #!/usr/bin/env bash
@@ -22,6 +25,7 @@ case "$1" in
     done
     exit 0 ;;
   show) cat "$CTRL/show.json" ;;
+  list) cat "$CTRL/list.json" 2>/dev/null || echo '[]' ;;
   dolt)
     case "$2" in
       push)
@@ -56,6 +60,35 @@ if [ "$st" = 0 ] && grep -q -- "--claim" "$BD_LOG" \
    && grep -q "skill_version=" "$BD_LOG" && grep -q "dolt push" "$BD_LOG"; then
   ok "clean claim runs the full bracket"
 else bad "clean claim: exit=$st log=$(tr '\n' '|' < "$BD_LOG")"; fi
+
+# 2b. hl8x: a descendant touched within the window -> SKIP before any write
+fixture
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '[{"id":"computenet-e.3","parent":"computenet-e","updated_at":"%s"},{"id":"computenet-e.3.2","parent":"computenet-e.3","updated_at":"%s"}]' "2020-01-01T00:00:00Z" "$now" > "$CTRL/list.json"
+out=$("$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 1 ] && grep -q "subtree is hot" <<<"$out" && grep -q "computenet-e.3.2" <<<"$out" \
+  && ! grep -q -- "--claim" "$BD_LOG" \
+  && ok "hot grandchild (via explicit parent) skips the epic, no claim written" \
+  || bad "hot subtree: exit=$st out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# 2c. a fresh origin/feature/<epic>* tip -> SKIP
+fixture
+git -C "$ROOT/git" commit -q --allow-empty -m x 2>/dev/null
+git -C "$ROOT/git" update-ref refs/remotes/origin/feature/computenet-e.1 HEAD
+out=$("$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 1 ] && grep -q "feature branch tip" <<<"$out" && ! grep -q -- "--claim" "$BD_LOG" \
+  && ok "fresh feature ref skips the epic" || bad "hot ref: exit=$st out=$out"
+git -C "$ROOT/git" update-ref -d refs/remotes/origin/feature/computenet-e.1
+
+# 2d. cold subtree (old child, no refs) claims normally; CLAIM_SKIP_HOT bypasses a hot one
+fixture
+printf '[{"id":"computenet-e.3","parent":"computenet-e","updated_at":"2020-01-01T00:00:00Z"}]' > "$CTRL/list.json"
+out=$("$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 0 ] && grep -q -- "--claim" "$BD_LOG" && ok "cold subtree claims" || bad "cold: exit=$st out=$out"
+fixture
+printf '[{"id":"computenet-e.3","parent":"computenet-e","updated_at":"%s"}]' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$CTRL/list.json"
+out=$(CLAIM_SKIP_HOT=1 "$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 0 ] && ok "CLAIM_SKIP_HOT=1 bypasses the hot check" || bad "bypass: exit=$st out=$out"
 
 # 3. refusal on an open, stale epic -> takeover
 fixture; touch "$CTRL/refuse-claim"; old_show open Anva@A0030

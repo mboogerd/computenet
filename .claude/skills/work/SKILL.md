@@ -630,7 +630,12 @@ be selected at all. Finishing beats starting; this is the rule that says so.
 
 A **stale** resumable is not an exception here — 5a's resume route reads the
 feature's state and may find it dead rather than paused. That is 5a's call,
-not a reason to skip the epic at selection.
+not a reason to skip the epic at selection. **A HOT one is**: `claim-epic.sh`
+exits 1 with `SKIP: … subtree is hot` when any descendant bead or
+`origin/feature/<epic>*` tip moved within 15 minutes — the other machine
+released the epic at its Finalize and is still inside a child (computenet-hl8x).
+Take the next row and say which signal fired; `CLAIM_SKIP_HOT=1` only when
+the hot child is your own crash leftover.
 
 **Among the non-resumable remainder: candidates that appear in
 `$SCRATCH/bv-rank.txt` first, in that file's order; the rest by priority.**
