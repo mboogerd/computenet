@@ -41,6 +41,12 @@ interface ProbeCellRepoint
 /** computenet-b7fr: HOST-then-module cell repoint probe. */
 interface ProbeCellHostRepoint
 
+/** computenet-b7fr: three-contributor ordering probe (middle / first contributor departs). */
+interface ProbeCellOrder
+
+/** computenet-b7fr: re-registration ordering probe (one contributor registers the same fqn twice). */
+interface ProbeCellReregister
+
 private fun descriptorOf(iface: Class<*>, contractId: Long = StableHash.of(iface.name)): ContractDescriptor =
     ContractDescriptor(
         contractId = contractId,
@@ -355,6 +361,82 @@ class RegistryProvenanceTest {
         } finally {
             ModuleRegistration.unregister(module)
             // HOST contribution is deliberately not cleaned up — permanent by design.
+        }
+    }
+
+    /**
+     * computenet-b7fr, orderings beyond the two the fix was filed against. The
+     * criterion is universal ("a still-live contributor's descriptor, never the
+     * departed one's"), so the invariant `removeOwner` has to hold is: after any
+     * unregistration, `cellsByFqn[fqn]` is the *last surviving* contribution in
+     * registration order — exactly what `commit`'s last-writer-wins would have
+     * left had the departed contributor never registered.
+     *
+     * Three contributors on one fqn: the FIRST departs (a no-op — C is still the
+     * last writer), then C, the contributor that actually repointed the fqn,
+     * departs while B survives (the repoint must reverse to B, not to C and not
+     * to the already-departed A), then B departs and the fqn is orphaned.
+     */
+    @Test
+    fun `b7fr three contributors resolve the last surviving one whichever departs`() {
+        val a = ModuleId("b7fr-order-a")
+        val b = ModuleId("b7fr-order-b")
+        val c = ModuleId("b7fr-order-c")
+        val fqn = ProbeCellOrder::class.java.name
+        val dA = CellDescriptor(fqn = fqn, color = CellColor.PURE)
+        val dB = CellDescriptor(fqn = fqn, color = CellColor.BLOCKING)
+        val dC = CellDescriptor(fqn = fqn, color = CellColor.SUSPENDING)
+        ContractRegistry.register(moduleOf(cells = listOf(dA)), a)
+        try {
+            ContractRegistry.register(moduleOf(cells = listOf(dB)), b)
+            ContractRegistry.register(moduleOf(cells = listOf(dC)), c)
+
+            ModuleRegistration.unregister(a) // the FIRST contributor; C is still the last writer
+            assertEquals(dC, ContractRegistry.cellDescriptor(ProbeCellOrder::class.java), "first contributor departed: C still holds the fqn")
+
+            ModuleRegistration.unregister(c) // the contributor that repointed it; B survives
+            assertEquals(dB, ContractRegistry.cellDescriptor(ProbeCellOrder::class.java), "the departed repointer's descriptor outlived it; B's should have resolved")
+
+            ModuleRegistration.unregister(b)
+            assertNull(ContractRegistry.cellDescriptor(ProbeCellOrder::class.java), "no contributor left: the fqn must be gone, not stranded")
+        } finally {
+            ModuleRegistration.unregister(a)
+            ModuleRegistration.unregister(b)
+            ModuleRegistration.unregister(c)
+        }
+    }
+
+    /**
+     * computenet-b7fr: one contributor registering the same fqn twice contributes
+     * twice, so `unregister` must drop *both* of its contributions and fall back
+     * to the other contributor's — not to its own earlier descriptor.
+     */
+    @Test
+    fun `b7fr a contributor registering the same fqn twice drops both contributions`() {
+        val a = ModuleId("b7fr-rereg-a")
+        val b = ModuleId("b7fr-rereg-b")
+        val fqn = ProbeCellReregister::class.java.name
+        val first = CellDescriptor(fqn = fqn, color = CellColor.PURE)
+        val other = CellDescriptor(fqn = fqn, color = CellColor.BLOCKING)
+        val again = CellDescriptor(fqn = fqn, color = CellColor.SUSPENDING)
+        ContractRegistry.register(moduleOf(cells = listOf(first)), a)
+        try {
+            ContractRegistry.register(moduleOf(cells = listOf(other)), b)
+            ContractRegistry.register(moduleOf(cells = listOf(again)), a)
+            assertEquals(again, ContractRegistry.cellDescriptor(ProbeCellReregister::class.java), "A's second contribution did not take")
+
+            ModuleRegistration.unregister(a)
+            assertEquals(
+                other,
+                ContractRegistry.cellDescriptor(ProbeCellReregister::class.java),
+                "A departed: B's descriptor must resolve, not either of A's",
+            )
+
+            ModuleRegistration.unregister(b)
+            assertNull(ContractRegistry.cellDescriptor(ProbeCellReregister::class.java), "no contributor left: the fqn must be gone")
+        } finally {
+            ModuleRegistration.unregister(a)
+            ModuleRegistration.unregister(b)
         }
     }
 
