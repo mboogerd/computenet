@@ -106,7 +106,7 @@ rows may be compared:
 | Fingerprint field | Pinned to | Why it is in the fingerprint |
 | --- | --- | --- |
 | `cpuModel`, `coreCount`, `os` | one machine | The M2 Pro / M3 Max incomparability this ticket was filed from. |
-| `jvmVendor`, `jvmVersion` | the module's toolchain JDK 21, **enforced by `run-series.sh`** | The JDK-vendor substitution that superseded two entries. |
+| `jvmVendor`, `jvmVersion` | the module's toolchain JDK 21 — **major version enforced by `run-series.sh`**, vendor and patch level recorded, not enforced | The JDK-vendor substitution that superseded two entries. |
 | `heapSettings` | whatever the forks were launched with, stated | Heap configuration moves scores directly. |
 | `jmhMode`, `forkCount`, `warmupIterations`, `measurementIterations` | `-f 5 -wi 5 -i 5`, written down in `run-series.sh` | `-f`/`-wi`/`-i` override annotations, so annotations state the declaration, not the run. |
 
@@ -119,6 +119,17 @@ it lands in a fresh population and answers `InsufficientHistory` forever, which 
 as a young series rather than a misconfigured lane. Under the scheduler of §6 — where
 a `launchd` agent does not inherit a login shell's `PATH` — that is the likeliest way
 for the wrong `java` to be picked up, and nobody is watching when it happens.
+
+**What that check does and does not cover.** It parses the *major* version out of
+`<launcher> -version` and refuses anything but 21; it does not check the vendor or the
+patch level, so Corretto 21.0.5 and Microsoft OpenJDK 21.0.11 both pass it while
+producing two different fingerprints. That is deliberate rather than a hole: `jvmVendor`
+and `jvmVersion` are read off the run's own JMH banner at ingest, so a vendor or
+patch-level swap is *recorded* and starts a fresh population exactly as this section
+describes — visibly incomparable, never silently averaged in. What the check adds is the
+one case that needed catching in advance, a whole major version off the toolchain. The
+check also fails closed on an unparseable banner: a JDK 21 launcher whose first
+`-version` line is `Picked up JAVA_TOOL_OPTIONS: …` is refused rather than accepted.
 
 `harnessCommitSha` is deliberately **excluded** — it changes on every commit, and
 it is the thing the series exists to vary. Including it would make every run its
@@ -246,6 +257,12 @@ verify rather than as a tested recipe:
     <string>/absolute/path/to/computenet/scripts/bench-series/run-series.sh</string>
     <string>--host-state</string><string>quiesced</string>
   </array>
+  <!-- Not optional here: a launchd agent's PATH is not a login shell's, and the
+       script refuses the run outright when its launcher is not JDK 21 (§3). -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>BENCH_SERIES_JAVA</key><string>/absolute/path/to/jdk21/bin/java</string>
+  </dict>
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>0</integer></dict>
   <key>StandardOutPath</key>  <string>/tmp/bench-series.log</string>
@@ -257,7 +274,11 @@ Two things to check before trusting it, both of which are why the belief is
 labelled: whether `launchd` runs the job at all when the machine is asleep at the
 scheduled hour (and whether it then fires late on wake), and whether the job's
 environment has `git` and a JDK on `PATH` — a `launchd` agent does not inherit a
-login shell's environment.
+login shell's environment. The second of those is why `BENCH_SERIES_JAVA` is set
+in the plist rather than left to `PATH`: without it the nightly run does not
+mis-measure, it *refuses* — every night, into `/tmp/bench-series.err`, where
+nobody is looking. Whoever installs this agent should run the script by hand once
+under the same environment first and see the `Measuring JVM:` line name a JDK 21.
 
 The `--host-state quiesced` in that plist is doing real work: a scheduled 04:00 run
 is the case where quiescence is most plausible and least observed, and the script's
