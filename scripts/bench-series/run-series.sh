@@ -83,8 +83,10 @@ ONLY_SELECTORS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --host-state) HOST_STATE="${2:-}"; shift 2 ;;
-    --selector)   ONLY_SELECTORS+=("${2:-}"); shift 2 ;;
+    --host-state) [[ $# -ge 2 ]] || { echo "--host-state requires a value" >&2; exit 2; }
+                  HOST_STATE="$2"; shift 2 ;;
+    --selector)   [[ $# -ge 2 ]] || { echo "--selector requires a value" >&2; exit 2; }
+                  ONLY_SELECTORS+=("$2"); shift 2 ;;
     --no-append)  APPEND=0; shift ;;
     --dry-run)    DRY_RUN=1; shift ;;
     -h|--help)    sed -n '2,31p' "${BASH_SOURCE[0]}"; exit 0 ;;
