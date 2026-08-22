@@ -30,6 +30,10 @@ interface ProbeIncumbent { fun incumbent(value: Long) }
 interface ProbeShared { fun shared(value: Long) }
 interface ProbeComplete { fun complete(value: Long) }
 interface ProbeProxied { fun proxied(value: Long) }
+interface ProbeShredProxied { fun shredProxied(value: Long) }
+
+/** A real class so its name can back a [CellDescriptor] and be looked up via [ContractRegistry.cellDescriptor]. */
+interface ProbeCellHost
 
 private fun descriptorOf(iface: Class<*>, contractId: Long = StableHash.of(iface.name)): ContractDescriptor =
     ContractDescriptor(
@@ -205,7 +209,7 @@ class RegistryProvenanceTest {
     fun `every resolution path answers after registration`() {
         val owner = ModuleId("resolution-complete")
         val contract = descriptorOf(ProbeAlpha::class.java)
-        val cell = CellDescriptor(fqn = "civictech.nature.ResolutionProbeCell", color = CellColor.PURE)
+        val cell = CellDescriptor(fqn = ProbeCellHost::class.java.name, color = CellColor.PURE)
         val protocol = ProtocolDescriptor("resolution-protocol", contract.contractId, ProtocolDirection.DOWNSTREAM, 1)
         val proxies = proxyModuleOf(ProbeProxied::class.java to stubConstructor)
 
@@ -228,6 +232,9 @@ class RegistryProvenanceTest {
                 ContractRegistry.idsOf(ProbeAlpha::class.java.declaredMethods.first()),
             )
             assertNotNull(ContractRegistry.cells.find { it.fqn == cell.fqn })
+            // [JAR1-REG-07] names cellDescriptor by hand — exercise that path, not only `cells`.
+            assertEquals(cell, ContractRegistry.cellDescriptor(ProbeCellHost::class.java))
+            assertEquals(listOf(owner), ContractRegistry.cellContributorsOf(cell.fqn))
             assertEquals(protocol, ProtocolRegistry.protocol("resolution-protocol"))
             assertEquals(protocol, ProtocolRegistry.protocol(contract.contractId))
             assertNotNull(ProxyRegistry.factory(ProbeProxied::class.java))
@@ -241,6 +248,44 @@ class RegistryProvenanceTest {
         assertNull(ContractRegistry.idsOf(ProbeAlpha::class.java.declaredMethods.first()))
         assertNull(ProtocolRegistry.protocol("resolution-protocol"))
         assertNull(ProxyRegistry.factory(ProbeProxied::class.java))
+        assertNull(ContractRegistry.cellDescriptor(ProbeCellHost::class.java), "the cell descriptor outlived its owner")
+    }
+
+    /**
+     * The proxy half of [JAR1-REG-06] / the task's decided point 8: constructors are
+     * not comparable, so a second contributor of the same `Class` key is recorded as
+     * an additional contributor WITHOUT repointing the live entry (first writer wins),
+     * and the entry survives until the last contributor leaves.
+     */
+    @Test
+    fun `proxy entries are a contributor multiset, not last-writer`() {
+        val a = ModuleId("proxy-a")
+        val b = ModuleId("proxy-b")
+        val ctorA: ProxyConstructor = { _ -> Any() }
+        val ctorB: ProxyConstructor = { _ -> Any() }
+        ProxyRegistry.register(proxyModuleOf(ProbeShredProxied::class.java to ctorA), a)
+        try {
+            ProxyRegistry.register(proxyModuleOf(ProbeShredProxied::class.java to ctorB), b)
+            assertEquals(listOf(a, b), ProxyRegistry.contributorsOf(ProbeShredProxied::class.java))
+            assertTrue(
+                ProxyRegistry.factory(ProbeShredProxied::class.java) === ctorA,
+                "a second contributor repointed the live constructor",
+            )
+
+            ModuleRegistration.unregister(a)
+            assertTrue(
+                ProxyRegistry.factory(ProbeShredProxied::class.java) === ctorA,
+                "the factory stopped resolving after one of two contributors left",
+            )
+            assertEquals(listOf(b), ProxyRegistry.contributorsOf(ProbeShredProxied::class.java))
+        } finally {
+            ModuleRegistration.unregister(a)
+            ModuleRegistration.unregister(b)
+        }
+        assertNull(
+            ProxyRegistry.factory(ProbeShredProxied::class.java),
+            "the last contributor's exit left the proxy entry behind",
+        )
     }
 
     /** [JAR1-REG-01]: `validate` is a dry run — a conflict is reported without touching anything. */
