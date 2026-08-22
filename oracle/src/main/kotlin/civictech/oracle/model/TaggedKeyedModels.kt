@@ -298,3 +298,56 @@ data class PnCounterState(
         val EMPTY: PnCounterState = PnCounterState()
     }
 }
+
+// ---------------------------------------------------------------------------
+// OrMapCell — single-instance dot semantics, `[ORA2-MODEL-11]`
+// ---------------------------------------------------------------------------
+
+/**
+ * Adapts [DotModel] to [SourceModel]'s single-slice contract — the seam every other registered
+ * source model implements, and the one [DotModel] itself was never built to (it needs a whole
+ * multi-instance [Script]; see `civictech.oracle.bind.TaggedOperators`' file KDoc, where this
+ * model is registered under the catalog id `orMap`, for the full reasoning of why only this
+ * single-instance restriction is registered and not the cross-instance convergence check).
+ *
+ * Correct **only** for a slice with no gossip [Delivery] — which is every slice this adapter
+ * can honestly answer from alone, since resolving a delivery needs the sender's own log and
+ * this method receives none. A slice with deliveries fails loudly by name rather than silently
+ * folding without them, the same idiom [MapCellSourceModel]'s `MultiWriterMapSliceException`
+ * uses for `MapCell`'s own single-writer restriction.
+ *
+ * The [DotOrder] is synthesized fresh per call, ranking only [SourceScript.source] itself: with
+ * exactly one instance in play there is no tie to break (two dots from the *same* source can
+ * never share a counter), so the rank value is inconsequential and does not need to come from a
+ * harness the way a genuine multi-instance case's does (`[ORA2-MODEL-12]`).
+ *
+ * ## Why this file, not beside its registration
+ *
+ * `civictech.oracle.bind.TaggedOperators.registerAll()` is where this model is bound into
+ * `OperatorCatalog`, and that file legitimately imports the concrete kernel cell `OrMapCell` to
+ * build the [civictech.cell.graph.CellFactory] side of the registration — the wiring `bind/` is
+ * for. This model itself must not: `[ORA1-MODEL-10]`/`[ORA2-MODEL-11]` forbid a `ReferenceOp`
+ * from referencing a concrete data-cell class, and `civictech.oracle.model`'s own source set is
+ * exactly what `ModelImportBoundaryTest` scans to enforce that. Declaring this model in
+ * `civictech.oracle.bind` instead (as it originally was, computenet-4ru.1.2) put a `ReferenceOp`
+ * outside that scan's reach — closed by computenet-n00e, which moved it here and additionally
+ * widened `ModelImportBoundaryTest` to catch any future `ReferenceOp` declared outside this
+ * package too, wherever it lands.
+ */
+object SingleInstanceOrMapModel : SourceModel, Serializable {
+    override fun evaluate(slice: SourceScript): ModelState {
+        require(slice.deliveries.isEmpty()) {
+            "SingleInstanceOrMapModel (catalog id 'orMap') cannot honestly evaluate a slice " +
+                "carrying gossip deliveries for '${slice.source.id}': DotModel's cross-instance " +
+                "merge needs the peer instances' own event logs " +
+                "(DotModel.Fold.applyDeliveries reads script.slice(delivery.from)), which a single " +
+                "SourceScript does not carry. This registration checks ONE OrMapCell instance's own " +
+                "dot semantics in isolation; the replicated-mesh differential is the sweep/runner " +
+                "task's, driving DotModel.converged/stateOf directly over a multi-instance Script."
+        }
+        val order = DotOrder.ranked(listOf(slice.source))
+        return DotModel(order).evaluate(Script(listOf(slice)))
+    }
+
+    override fun toString(): String = "SingleInstanceOrMapModel"
+}

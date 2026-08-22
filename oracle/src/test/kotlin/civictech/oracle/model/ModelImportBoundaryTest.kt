@@ -59,19 +59,21 @@ object ModelImportBoundaryScanner {
     fun isForbidden(importFqn: String): Boolean =
         forbiddenPrefixes.any { importFqn.startsWith(it) } || importFqn in forbiddenExact
 
+    /** Every `import ...` line's FQN in [text], in file order — the shared parsing [scanText] and [scanForReferenceOpDeclarations] both build on. */
+    private fun importLines(text: String): List<String> =
+        text.lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith("import ") }
+            .map { it.removePrefix("import ").trim().substringBefore(" as ").trim() }
+            .toList()
+
     /**
      * Pure over source text (no filesystem access): whether an import line is forbidden
      * depends only on its own text, which is what makes this independently testable against a
      * synthetic string and against a real file's content.
      */
     fun scanText(fileLabel: String, text: String): List<Violation> =
-        text.lineSequence()
-            .map { it.trim() }
-            .filter { it.startsWith("import ") }
-            .map { it.removePrefix("import ").trim().substringBefore(" as ").trim() }
-            .filter(::isForbidden)
-            .map { Violation(fileLabel, it) }
-            .toList()
+        importLines(text).filter(::isForbidden).map { Violation(fileLabel, it) }
 
     /**
      * Scans every `.kt` file under [dir]. Fails loudly — never an empty, and therefore
@@ -90,6 +92,65 @@ object ModelImportBoundaryScanner {
                 "— cannot verify [ORA1-MODEL-10] against zero files."
         }
         return ktFiles.flatMap { scanText(it.path, it.readText()) }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // computenet-n00e: `[ORA2-MODEL-11]`'s general form — a `ReferenceOp` implementation is
+    // covered wherever it is declared, not only under `civictech.oracle.model`.
+    //
+    // Whole-FILE, same as [scanDirectory] above — deliberately not scoped to only the text
+    // "inside" the matched declaration. An earlier version of this scan tried body-scoping (so a
+    // file could mix a `ReferenceOp` with unrelated kernel-wiring code that legitimately imports
+    // a forbidden type) by searching the declaration's body text for the forbidden import's
+    // simple name as a token. That is unsound: a `require(...)` message or KDoc paragraph
+    // EXPLAINING the restriction in English prose can and does contain the very class name it is
+    // talking about — `SingleInstanceOrMapModel`'s own error message says "checks ONE OrMapCell
+    // instance's own dot semantics", which the token search flagged as if it were a live
+    // reference to `OrMapCell`. Import lines are unambiguous (this scanner's whole premise);
+    // free-form text is not, so this scan stays at the same file-wide granularity [scanText]
+    // already uses and instead keeps `ReferenceOp` declarations out of files that need a
+    // forbidden import for something else — see [declaresReferenceOp]'s own KDoc.
+    // -----------------------------------------------------------------------------------------
+
+    private val declarationHeader = Regex(
+        """\b(?:class|object)\s+\w+[^\n{]*:\s*[^\n{]*\b(?:ReferenceOp|SourceModel|OperatorModel)\b[^\n{]*\{""",
+    )
+
+    /**
+     * Whether [text] declares a `class`/`object` implementing [ReferenceOp] (directly, or via
+     * [SourceModel]/[OperatorModel], the only two evaluable sub-interfaces — see
+     * `ReferenceOp.kt`). A single-line supertype-list match, like the rest of this scanner: pure
+     * text, not a compiler-level check.
+     */
+    fun declaresReferenceOp(text: String): Boolean = declarationHeader.containsMatchIn(text)
+
+    /**
+     * `[ORA2-MODEL-11]`'s general form: every file **anywhere** under [root] that declares a
+     * `ReferenceOp` implementation is scanned whole, the same way [scanDirectory] scans a whole
+     * file under `civictech.oracle.model` — regardless of what package the file lives in. A file
+     * with no `ReferenceOp` declaration is never scanned, so registration/wiring code that
+     * legitimately imports a kernel type is untouched **as long as it does not share a file with
+     * a `ReferenceOp` declaration**; a file that does both is flagged for the wiring import too,
+     * same as `civictech.oracle.model` itself would be. That is deliberate, not a limitation:
+     * see [declaresReferenceOp]'s KDoc for why a finer-grained, declaration-scoped version of
+     * this check is unsound.
+     *
+     * Fails loudly on an absent/empty [root], for the same reason [scanDirectory] does.
+     */
+    fun scanForReferenceOpDeclarations(root: File): List<Violation> {
+        check(root.isDirectory) {
+            "Module source directory does not exist: ${root.absolutePath} " +
+                "— cannot verify [ORA2-MODEL-11] against an absent source tree."
+        }
+        val ktFiles = root.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
+        check(ktFiles.isNotEmpty()) {
+            "Module source directory has no .kt files: ${root.absolutePath} " +
+                "— cannot verify [ORA2-MODEL-11] against zero files."
+        }
+        return ktFiles
+            .map { it to it.readText() }
+            .filter { (_, text) -> declaresReferenceOp(text) }
+            .flatMap { (file, text) -> scanText(file.path, text) }
     }
 }
 
@@ -214,5 +275,120 @@ class ModelImportBoundaryTest {
         violations shouldBe listOf(
             ModelImportBoundaryScanner.Violation("Synthetic.kt", "civictech.cell.Timestamp"),
         )
+    }
+
+    // -------------------------------------------------------------------------------------
+    // computenet-n00e: the `scanForReferenceOpDeclarations` gate — `[ORA2-MODEL-11]` covers a
+    // `ReferenceOp` wherever it is declared, not only under `civictech.oracle.model`.
+    // -------------------------------------------------------------------------------------
+
+    /**
+     * The acceptance's own synthetic: a `ReferenceOp` declared OUTSIDE `civictech.oracle.model`
+     * (here, `civictech.oracle.bind`, the package the real `SingleInstanceOrMapModel` was
+     * declared in before this gate existed) that imports a `civictech.cell.data.op` type is
+     * flagged by file and import, exactly like the model-only [scanDirectory] gate's own
+     * synthetic above.
+     */
+    @Test
+    fun `computenet-n00e a synthetic ReferenceOp declared outside civictech-oracle-model importing a forbidden op type is flagged`() {
+        val tempDir = Files.createTempDirectory("model-import-boundary-outside-model").toFile()
+        try {
+            val offender = File(tempDir, "OutsideModelOffender.kt")
+            offender.writeText(
+                """
+                package civictech.oracle.bind
+
+                import civictech.cell.data.op.FilterCell
+                import civictech.oracle.model.ModelState
+                import civictech.oracle.model.SourceModel
+                import civictech.oracle.model.SourceScript
+
+                object OutsideModelOffender : SourceModel {
+                    private val factory: FilterCell<*>? = null
+                    override fun evaluate(slice: SourceScript): ModelState = throw UnsupportedOperationException()
+                }
+                """.trimIndent(),
+            )
+
+            val violations = ModelImportBoundaryScanner.scanForReferenceOpDeclarations(tempDir)
+
+            violations shouldBe listOf(
+                ModelImportBoundaryScanner.Violation(offender.path, "civictech.cell.data.op.FilterCell"),
+            )
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    /**
+     * The gate is deliberately whole-file, not declaration-scoped — see
+     * [ModelImportBoundaryScanner]'s "computenet-n00e" section comment for why a body-scoped
+     * version is unsound (it can mistake a `ReferenceOp`'s own error-message prose ABOUT a
+     * forbidden class for a live reference to it). The consequence: a file that declares a
+     * `ReferenceOp` AND separately imports a forbidden type for unrelated wiring is flagged too,
+     * for the wiring import even though the `ReferenceOp` declaration never touches it. That
+     * consequence is exactly what pushed the real `SingleInstanceOrMapModel` out of
+     * `civictech.oracle.bind.TaggedOperators.kt` — a file that legitimately needs `OrMapCell`
+     * for kernel-cell wiring elsewhere in the same file — and into
+     * `civictech.oracle.model.TaggedKeyedModels.kt`, where it lives now.
+     */
+    @Test
+    fun `a forbidden import used only by unrelated wiring code sharing a file with a ReferenceOp declaration is still flagged`() {
+        val tempDir = Files.createTempDirectory("model-import-boundary-mixed-file").toFile()
+        try {
+            val mixed = File(tempDir, "Mixed.kt")
+            mixed.writeText(
+                """
+                package civictech.oracle.bind
+
+                import civictech.cell.data.OrMapCell
+                import civictech.oracle.model.ModelState
+                import civictech.oracle.model.SourceModel
+                import civictech.oracle.model.SourceScript
+
+                object Registration {
+                    fun build() = OrMapCell<Any?, Any?>(null)
+                }
+
+                object CleanModel : SourceModel {
+                    override fun evaluate(slice: SourceScript): ModelState = throw UnsupportedOperationException()
+                }
+                """.trimIndent(),
+            )
+
+            val violations = ModelImportBoundaryScanner.scanForReferenceOpDeclarations(tempDir)
+
+            violations shouldBe listOf(
+                ModelImportBoundaryScanner.Violation(mixed.path, "civictech.cell.data.OrMapCell"),
+            )
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    /**
+     * The positive gate for [ModelImportBoundaryScanner.scanForReferenceOpDeclarations]: every
+     * `ReferenceOp` declared anywhere under `:oracle`'s main sources is import-clean today.
+     * Every real declaration currently lives under `civictech.oracle.model` (computenet-n00e
+     * moved the one that did not, `SingleInstanceOrMapModel`, out of `civictech.oracle.bind`),
+     * so the sanity check below — that the scan actually recognises a real production file as
+     * declaring a `ReferenceOp` — guards against the positive gate passing because zero
+     * declarations were found anywhere, rather than because the ones that exist are clean.
+     */
+    @Test
+    fun `computenet-n00e every ReferenceOp declared anywhere under oracle main sources is import-clean`() {
+        val root = File("src/main/kotlin")
+
+        withClue("sanity: TaggedKeyedModels.kt really is recognised as declaring a ReferenceOp") {
+            ModelImportBoundaryScanner.declaresReferenceOp(
+                File(root, "civictech/oracle/model/TaggedKeyedModels.kt").readText(),
+            ) shouldBe true
+        }
+
+        val violations = ModelImportBoundaryScanner.scanForReferenceOpDeclarations(root)
+
+        withClue("ReferenceOp declarations anywhere in :oracle import forbidden types $violations [ORA2-MODEL-11]") {
+            violations.shouldBeEmpty()
+        }
     }
 }
