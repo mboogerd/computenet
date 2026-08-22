@@ -1,6 +1,7 @@
 package civictech.bench.micro
 
 import civictech.bench.BenchResult
+import civictech.bench.ComparisonClaim
 import civictech.bench.Drive
 import civictech.bench.Findings
 import civictech.bench.FindingsRefusalException
@@ -169,9 +170,9 @@ class ThroughputReportTest {
     fun `groups by drive into one entry per drive, labelled subject plus direction`() {
         val report = ThroughputReport.render(quietCsv, env, "2026-08-18", "operator throughput")
         assertEquals(listOf(Drive.SIM, Drive.REAL), report.perDrive.map { it.drive })
-        assertTrue(report.omissions.isEmpty())
+        assertTrue(report.dispersions.none { it.aboveHarnessSanityBound })
 
-        val sim = report.perDrive.single { it.drive == Drive.SIM }.entry!!
+        val sim = report.perDrive.single { it.drive == Drive.SIM }.entry
         assertTrue(sim.contains("drive=SIM"), sim)
         assertFalse(sim.contains("drive=REAL"), sim)
         assertTrue(sim.contains("| FILTER insert | 120000.0 ± 240.0 ops/s |"), sim)
@@ -179,7 +180,7 @@ class ThroughputReportTest {
         // The REAL rows are in the other entry, never in this one.
         assertFalse(sim.contains("45000.0"), sim)
 
-        val real = report.perDrive.single { it.drive == Drive.REAL }.entry!!
+        val real = report.perDrive.single { it.drive == Drive.REAL }.entry
         assertTrue(real.contains("drive=REAL"), real)
         assertTrue(real.contains("| FILTER insert | 45000.0 ± 90.0 ops/s |"), real)
 
@@ -189,7 +190,8 @@ class ThroughputReportTest {
         assertTrue(sim.contains("MARKED INCOMPLETE"), sim)
 
         val text = report.text()
-        assertTrue(text.contains("Omitted rows (drive=SIM):\n- none"), text)
+        assertTrue(text.contains("Row dispersion (drive=SIM;"), text)
+        assertTrue(text.contains("- FILTER insert (drive=SIM): 120000.0 ± 240.0 ops/s"), text)
     }
 
     @Test
@@ -217,58 +219,141 @@ class ThroughputReportTest {
     ).joinToString("\n")
 
     @Test
-    fun `an Unreportable row is excluded from the table and named in the output`() {
+    fun `a row above the harness sanity bound is rendered with its error bar, not excluded`() {
         val report = ThroughputReport.render(noisyCsv, env, "2026-08-18", "operator throughput")
-        val entry = report.perDrive.single().entry!!
+        val entry = report.perDrive.single().entry
 
-        // Excluded from the table...
-        assertTrue(entry.contains("| FILTER insert |"), entry)
-        assertFalse(entry.contains("GROUP_BY_MIN"), entry)
+        // computenet-785b: the row is IN the table, with its own error bar attached, so
+        // the reader can discount it. Before 2026-08-22 it was dropped and named in an
+        // omission list, which on hosted-graph sweeps emptied the table entirely.
+        assertTrue(entry.contains("| FILTER insert | 120000.0 ± 240.0 ops/s |"), entry)
+        assertTrue(entry.contains("| GROUP_BY_MIN retract | 90000.0 ± 27000.0 ops/s |"), entry)
 
-        // ...and named, with the threshold it failed against, in the renderer's output.
-        assertEquals(1, report.omissions.size)
-        val omission = report.omissions.single()
-        assertEquals("GROUP_BY_MIN retract", omission.label)
-        assertEquals(Drive.SIM, omission.drive)
+        // Its dispersion is stated beside the table, flagged against the harness's own
+        // sanity bound — informational, and gating nothing.
+        val notes = report.dispersions
+        assertEquals(2, notes.size)
+        val noisy = notes.single { it.label == "GROUP_BY_MIN retract" }
+        assertEquals(Drive.SIM, noisy.drive)
+        assertTrue(noisy.aboveHarnessSanityBound)
+        assertFalse(notes.single { it.label == "FILTER insert" }.aboveHarnessSanityBound)
         val text = report.text()
-        assertTrue(text.contains("GROUP_BY_MIN retract"), text)
-        assertTrue(text.contains("exceeds NOISE_FLOOR $NOISE_FLOOR"), text)
-        assertTrue(text.contains("excluded from the table"), text)
+        assertTrue(text.contains("above the harness sanity bound NOISE_FLOOR $NOISE_FLOOR"), text)
+        assertTrue(text.contains("the row is reported"), text)
     }
 
     @Test
-    fun `the excluded row is one F3 would itself refuse to render`() {
-        val noisy = ThroughputReport.toResults(ThroughputReport.parseCsv(noisyCsv), env)
-            .single { it.label.startsWith("GROUP_BY_MIN") }
-            .result
+    fun `F3 renders the dispersed row alone but refuses a comparison drawn from it`() {
+        val results = ThroughputReport.toResults(ThroughputReport.parseCsv(noisyCsv), env)
+        val noisy = results.single { it.label.startsWith("GROUP_BY_MIN") }.result
         assertEquals(Reportability.Unreportable, classify(noisy))
 
-        // Proof the exclusion is not a bypass: handed to Findings directly, the same row
-        // refuses the whole entry. The renderer excludes-and-names precisely because F3
-        // would otherwise (correctly) refuse everything alongside it.
+        // Standalone: reportable, because the entry states its error bar.
+        val entry = Findings.entry(
+            date = "2026-08-18",
+            subject = "operator throughput",
+            results = FindingsTable(listOf(noisy), listOf("GROUP_BY_MIN retract")),
+        )
+        assertTrue(entry.contains("| GROUP_BY_MIN retract | 90000.0 ± 27000.0 ops/s |"), entry)
+
+        // Compared with a sibling 10000 ops/s away: refused, because that effect is
+        // well inside the two rows' combined 27000 + 27000 error bars.
+        val sibling = noisy.copy(value = 100000.0)
         val failure = assertThrows(FindingsRefusalException::class.java) {
             Findings.entry(
                 date = "2026-08-18",
                 subject = "operator throughput",
-                results = FindingsTable(listOf(noisy), listOf("GROUP_BY_MIN retract")),
+                results = FindingsTable(
+                    listOf(sibling, noisy),
+                    listOf("GROUP_BY_MIN insert", "GROUP_BY_MIN retract"),
+                ),
+                comparisons = listOf(
+                    ComparisonClaim(
+                        "GROUP_BY_MIN insert",
+                        "GROUP_BY_MIN retract",
+                        "GROUP_BY_MIN inserts outrun its retracts",
+                    )
+                ),
             )
         }
-        assertTrue(failure.message!!.contains("Unreportable"), failure.message)
+        assertTrue(
+            failure.message!!.contains("does not exceed the combined 99.9% error bars"),
+            failure.message,
+        )
     }
 
     @Test
-    fun `a drive whose every row is Unreportable renders no table and says so`() {
+    fun `a drive whose every row is above the sanity bound still renders its table`() {
         val csv = listOf(
             header,
             """"civictech.bench.micro.OperatorThroughputBenchmark.real","thrpt",1,20,90000.0,27000.0,"ops/s","INSERT","QUORUM"""",
         ).joinToString("\n")
         val report = ThroughputReport.render(csv, env, "2026-08-18", "operator throughput")
         val driveReport = report.perDrive.single()
-        assertNull(driveReport.entry)
-        assertEquals(1, driveReport.omitted.size)
+        assertTrue(driveReport.entry.contains("| QUORUM insert | 90000.0 ± 27000.0 ops/s |"))
+        assertEquals(1, driveReport.dispersions.size)
+        assertTrue(driveReport.dispersions.single().aboveHarnessSanityBound)
         val text = report.text()
-        assertTrue(text.contains("no entry for drive=REAL"), text)
+        assertFalse(text.contains("no entry for drive=REAL"), text)
         assertTrue(text.contains("QUORUM insert"), text)
+    }
+
+    @Test
+    fun `a comparison whose effect clears the combined error bars is rendered`() {
+        val report = ThroughputReport.render(
+            quietCsv,
+            env,
+            "2026-08-18",
+            "operator throughput",
+            comparisons = listOf(
+                ComparisonClaim(
+                    "FILTER insert",
+                    "FILTER retract",
+                    "insert outruns retract on this graph",
+                )
+            ),
+        )
+        val sim = report.perDrive.single { it.drive == Drive.SIM }.entry
+        // 120000 - 90000 = 30000 ops/s of effect against 240 + 180 = 420 of combined bar.
+        assertTrue(sim.contains("Comparisons (effect vs combined error bars):"), sim)
+        assertTrue(
+            sim.contains("|Δ| = 30000.0 ops/s > combined 99.9% error 420.0 ops/s"),
+            sim,
+        )
+        assertTrue(sim.contains("insert outruns retract on this graph"), sim)
+        // Both drives carry both labels in this fixture, so the claim is drawn once per
+        // drive, from that drive's own rows — never across the two.
+        val real = report.perDrive.single { it.drive == Drive.REAL }.entry
+        assertTrue(
+            real.contains("|Δ| = 15000.0 ops/s > combined 99.9% error 150.0 ops/s"),
+            real,
+        )
+    }
+
+    @Test
+    fun `a comparison naming rows of two different drives is refused`() {
+        // SIM carries FILTER only, REAL carries GROUP_BY_MIN only, so this claim's two
+        // rows live in different entries.
+        val csv = listOf(
+            header,
+            """"civictech.bench.micro.OperatorThroughputBenchmark.sim","thrpt",1,20,120000.0,240.0,"ops/s","INSERT","FILTER"""",
+            """"civictech.bench.micro.OperatorThroughputBenchmark.real","thrpt",1,20,45000.0,90.0,"ops/s","INSERT","GROUP_BY_MIN"""",
+        ).joinToString("\n")
+        val failure = assertThrows(ThroughputReportException::class.java) {
+            ThroughputReport.render(
+                csv,
+                env,
+                "2026-08-18",
+                "operator throughput",
+                comparisons = listOf(
+                    ComparisonClaim("FILTER insert", "GROUP_BY_MIN insert", "SIM outruns REAL"),
+                ),
+            )
+        }
+        assertTrue(
+            failure.message!!.contains("no single drive's table carries"),
+            failure.message,
+        )
     }
 
     @Test
@@ -304,7 +389,7 @@ class ThroughputReportTest {
             "operator throughput",
             TriggerClaim.Cited("G-21 phase 3", "INCONCLUSIVE: the sweep does not discriminate."),
         )
-        assertTrue(report.perDrive.all { it.entry!!.contains("Trigger: G-21 phase 3") })
+        assertTrue(report.perDrive.all { it.entry.contains("Trigger: G-21 phase 3") })
     }
 
     // ---------------------------------------------------------------------------------
@@ -505,7 +590,7 @@ class ThroughputReportTest {
 
         val entry = ThroughputReport
             .renderRun(results, "b861114d", "2026-08-18", "operator throughput")
-            .perDrive.first { it.drive == Drive.SIM }.entry!!
+            .perDrive.first { it.drive == Drive.SIM }.entry
 
         // The RECORDED JVM reaches the entry...
         assertTrue(entry.contains("JVM Acme JDK/26.0.1"), entry)
@@ -530,7 +615,7 @@ class ThroughputReportTest {
 
         val entry = ThroughputReport
             .renderRun(results, "b861114d", "2026-08-18", "operator throughput")
-            .perDrive.first().entry!!
+            .perDrive.first().entry
         assertTrue(entry.contains("heap -Xms8g -Xmx8g"), entry)
         // The non-heap option is not smuggled into the heap field.
         assertFalse(entry.contains("-Dfoo=bar"), entry)
@@ -745,7 +830,7 @@ class ThroughputReportTest {
 
         val entry = ThroughputReport
             .renderRun(results, "b861114d", "2026-08-19", "operator throughput")
-            .perDrive.first { it.drive == Drive.SIM }.entry!!
+            .perDrive.first { it.drive == Drive.SIM }.entry
 
         // The RECORDED knobs reach the entry, as one line...
         assertTrue(entry.contains("mode=Average time forks=1 warmup=3 iters=4"), entry)
@@ -826,7 +911,7 @@ class ThroughputReportTest {
 
         val entry = ThroughputReport
             .renderRun(results, "b861114d", "2026-08-19", "operator throughput")
-            .perDrive.first { it.drive == Drive.SIM }.entry!!
+            .perDrive.first { it.drive == Drive.SIM }.entry
 
         // The RECORDED host reaches the entry...
         assertTrue(entry.contains("Genuine Intel Xeon Platinum 8375C, 64 cores"), entry)
@@ -880,8 +965,9 @@ class ThroughputReportTest {
      * Its one `@Benchmark` method is `realSnapshot`, which names its [Drive] the way
      * `[BEN1-26]` requires, so these rows reach the table on the drive rule unchanged.
      * The third row is deliberately far too dispersed (90/1500 = 0.06, against
-     * `NOISE_FLOOR` 0.005): the dispersion gate and the omission accounting have to stay
-     * on this path too, not only on the subject/direction one.
+     * `NOISE_FLOOR` 0.005): the dispersion NOTE has to stay on this path too, not only on
+     * the subject/direction one. It is no longer excluded from the table
+     * (`computenet-785b`) — it is rendered with its error bar and flagged beside it.
      */
     private val footprintCsv = listOf(
         """"Benchmark","Mode","Threads","Samples","Score","Score Error (99.9%)","Unit",""" +
@@ -911,7 +997,7 @@ class ThroughputReportTest {
 
         val driveReport = report.perDrive.single()
         assertEquals(Drive.REAL, driveReport.drive)
-        val entry = driveReport.entry!!
+        val entry = driveReport.entry
         assertTrue(entry.contains("| SET_CELL N1E3 | 12.5 ± 0.02 us/op |"), entry)
         assertTrue(entry.contains("| SET_CELL N1E4 | 140.0 ± 0.3 us/op |"), entry)
 
@@ -922,9 +1008,13 @@ class ThroughputReportTest {
         assertTrue(entry.contains("drive=REAL"), entry)
         assertTrue(entry.contains("MARKED INCOMPLETE"), entry)
 
-        // The dispersion gate and the omission accounting are on this path too.
-        assertFalse(entry.contains("MAP_CELL"), entry)
-        assertEquals(listOf("MAP_CELL N1E5"), report.omissions.map { it.label })
+        // computenet-785b: the dispersed row is rendered here too, with its error bar,
+        // and its dispersion is stated beside the table instead of excluding it.
+        assertTrue(entry.contains("| MAP_CELL N1E5 | 1500.0 ± 90.0 us/op |"), entry)
+        assertEquals(
+            listOf("MAP_CELL N1E5"),
+            report.dispersions.filter { it.aboveHarnessSanityBound }.map { it.label },
+        )
         assertTrue(report.text().contains("MAP_CELL N1E5 (drive=REAL)"), report.text())
     }
 
@@ -945,7 +1035,7 @@ class ThroughputReportTest {
             date = "2026-08-19",
             subject = "cell footprint",
             label = RowLabel(params = listOf("scale", "family"), lowercased = setOf("family")),
-        ).perDrive.single().entry!!
+        ).perDrive.single().entry
 
         // Reordered, and the chosen column lowercased: both are the label's to decide.
         assertTrue(entry.contains("| N1E3 set_cell | 12.5 ± 0.02 us/op |"), entry)
@@ -1059,15 +1149,19 @@ class ThroughputReportTest {
             metric = Metric.GC_ALLOC_RATE_NORM,
         )
 
-        val entry = report.perDrive.single().entry!!
+        val entry = report.perDrive.single().entry
         // B/op, not us/op: the entry reports the metric that was asked for, and the unit
         // is carried per row rather than restated by the caller.
         assertTrue(entry.contains("| SET_CELL N1E3 | 265247.39 ± 4.15 B/op |"), entry)
         assertFalse(entry.contains("us/op"), entry)
         assertTrue(entry.contains("Trigger: G-21 phase 3 — INCONCLUSIVE"), entry)
 
-        // The dispersion gate is on the secondary-metric path too.
-        assertEquals(listOf("MAP_CELL N1E5"), report.omissions.map { it.label })
+        // The dispersion note is on the secondary-metric path too (computenet-785b:
+        // a note beside the table, not an exclusion from it).
+        assertEquals(
+            listOf("MAP_CELL N1E5"),
+            report.dispersions.filter { it.aboveHarnessSanityBound }.map { it.label },
+        )
         assertTrue(report.text().contains("MAP_CELL N1E5 (drive=REAL)"), report.text())
     }
 
@@ -1133,7 +1227,7 @@ class ThroughputReportTest {
             "2026-08-19",
             "bounded read",
             label = RowLabel(params = listOf("scale"), includeMethod = true),
-        ).perDrive.single().entry!!
+        ).perDrive.single().entry
 
         assertTrue(entry.contains("| realDirect N1E3 | 0.0375 ± 1.0E-4 ms/op |"), entry)
         assertTrue(

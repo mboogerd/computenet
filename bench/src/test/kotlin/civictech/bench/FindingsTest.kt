@@ -98,48 +98,168 @@ class FindingsTest {
     }
 
     // ---------------------------------------------------------------------------
-    // Rule 1 [BEN1-25] (BS-11 writer half): Unreportable results are refused, and
-    // the refusal names the refused result.
+    // Rule 1 [BEN1-25] (BS-11 writer half), AMENDED by computenet-785b: the gate is
+    // claim-relative. A standalone row is rendered with its error bar whatever its
+    // dispersion; a COMPARISON is refused unless the claimed effect exceeds the two
+    // rows' combined error bars.
     // ---------------------------------------------------------------------------
 
     @Test
-    fun `entry refuses a table containing an Unreportable result`() {
-        val bad = unreportableResult()
-        val table = FindingsTable(listOf(reportableResult(), bad), labels = listOf("a", "b"))
+    fun `entry admits a dispersed standalone result, rendering its error bar`() {
+        val noisy = unreportableResult()
+        classify(noisy) shouldBe Reportability.Unreportable
+        val table = FindingsTable(listOf(reportableResult(), noisy), labels = listOf("a", "b"))
 
-        val ex = shouldThrow<FindingsRefusalException> {
-            Findings.entry(date = "2026-08-18", subject = "x", results = table)
-        }
-        ex.message shouldContain "Unreportable"
-        // The message must name THIS result, not just say "some result is bad".
-        ex.message shouldContain "value=${bad.value}"
-        ex.message shouldContain "dispersion=${bad.dispersion}"
+        // Before 2026-08-22 this refused. A number that states its own precision is
+        // reportable; withholding it told the reader less, not more.
+        val rendered = Findings.entry(date = "2026-08-18", subject = "x", results = table)
+        rendered shouldContain "| b | ${noisy.value} ± ${noisy.dispersion} ops/s | |"
     }
 
     @Test
-    fun `entry refuses a table containing the PROBE-A negative-value result from the bug report`() {
-        // value=-100.0, dispersion=50.0: relativeDispersion is -0.5, which a naive
-        // "relativeDispersion > NOISE_FLOOR" comparison never flags because the ratio
-        // is negative. This is the exact shape computenet-x9e.3.6 was filed against.
+    fun `entry admits the PROBE-A negative-value result, whose ratio classify cannot use`() {
+        // value=-100.0, dispersion=50.0: relativeDispersion is -0.5. classify still
+        // refuses it as above the harness sanity bound (computenet-x9e.3.6's shape), and
+        // that no longer decides whether the row may be printed.
         val negative = validResult(value = -100.0, dispersion = 50.0)
+        classify(negative) shouldBe Reportability.Unreportable
         val table = FindingsTable(listOf(reportableResult(), negative), labels = listOf("a", "b"))
 
-        val ex = shouldThrow<FindingsRefusalException> {
-            Findings.entry(date = "2026-08-18", subject = "x", results = table)
-        }
-        ex.message shouldContain "Unreportable"
-        ex.message shouldContain "value=${negative.value}"
-        ex.message shouldContain "dispersion=${negative.dispersion}"
+        val rendered = Findings.entry(date = "2026-08-18", subject = "x", results = table)
+        rendered shouldContain "| b | -100.0 ± 50.0 ops/s | |"
     }
 
     @Test
-    fun `entry admits a table of only Reportable results`() {
+    fun `entry refuses a comparison whose effect is inside the combined error bars`() {
+        val left = validResult(value = 100.0, dispersion = 10.0)
+        val right = validResult(value = 108.0, dispersion = 10.0)
+        resolveEffect(left, right) shouldBe EffectResolution.Unresolved
+        val table = FindingsTable(listOf(left, right), labels = listOf("a", "b"))
+
+        val ex = shouldThrow<FindingsRefusalException> {
+            Findings.entry(
+                date = "2026-08-18",
+                subject = "x",
+                results = table,
+                comparisons = listOf(ComparisonClaim("a", "b", "b is slower than a")),
+            )
+        }
+        ex.message shouldContain "does not exceed the combined 99.9% error bars"
+        // The message must name the arithmetic, not merely assert a refusal.
+        ex.message shouldContain "claims an effect of 8.0"
+        ex.message shouldContain "20.0"
+    }
+
+    @Test
+    fun `entry renders a comparison whose effect clears the combined error bars`() {
+        val left = validResult(value = 100.0, dispersion = 10.0)
+        val right = validResult(value = 130.0, dispersion = 10.0)
+        resolveEffect(left, right) shouldBe EffectResolution.Resolved
+        val table = FindingsTable(listOf(left, right), labels = listOf("a", "b"))
+
+        val rendered = Findings.entry(
+            date = "2026-08-18",
+            subject = "x",
+            results = table,
+            comparisons = listOf(ComparisonClaim("a", "b", "b outruns a by ~30%")),
+        )
+        rendered shouldContain "Comparisons (effect vs combined error bars):"
+        rendered shouldContain "- a vs b: |Δ| = 30.0 ops/s > combined 99.9% error 20.0 ops/s"
+        rendered shouldContain "b outruns a by ~30%"
+    }
+
+    @Test
+    fun `a comparison exactly equal to its combined error bars is refused, not admitted`() {
+        // The criterion is STRICT, matching the fan-out criterion it generalizes.
+        val left = validResult(value = 100.0, dispersion = 10.0)
+        val right = validResult(value = 120.0, dispersion = 10.0)
+        resolveEffect(left, right) shouldBe EffectResolution.Unresolved
+
+        shouldThrow<FindingsRefusalException> {
+            Findings.entry(
+                date = "2026-08-18",
+                subject = "x",
+                results = FindingsTable(listOf(left, right), labels = listOf("a", "b")),
+                comparisons = listOf(ComparisonClaim("a", "b", "b is faster")),
+            )
+        }
+    }
+
+    @Test
+    fun `entry refuses a comparison naming a row the table does not carry`() {
+        val table = FindingsTable(
+            listOf(validResult(value = 100.0, dispersion = 1.0), validResult(value = 200.0, dispersion = 1.0)),
+            labels = listOf("a", "b"),
+        )
+        val ex = shouldThrow<FindingsRefusalException> {
+            Findings.entry(
+                date = "2026-08-18",
+                subject = "x",
+                results = table,
+                comparisons = listOf(ComparisonClaim("a", "c", "c is faster")),
+            )
+        }
+        ex.message shouldContain "'c', which is not a row of this table"
+    }
+
+    @Test
+    fun `entry refuses a comparison of a row with itself`() {
+        val table = FindingsTable(
+            listOf(validResult(value = 100.0, dispersion = 1.0), validResult(value = 200.0, dispersion = 1.0)),
+            labels = listOf("a", "b"),
+        )
+        val ex = shouldThrow<FindingsRefusalException> {
+            Findings.entry(
+                date = "2026-08-18",
+                subject = "x",
+                results = table,
+                comparisons = listOf(ComparisonClaim("a", "a", "a differs from a")),
+            )
+        }
+        ex.message shouldContain "same row on both sides"
+    }
+
+    @Test
+    fun `entry refuses a comparison that states nothing`() {
+        val table = FindingsTable(
+            listOf(validResult(value = 100.0, dispersion = 1.0), validResult(value = 200.0, dispersion = 1.0)),
+            labels = listOf("a", "b"),
+        )
+        val ex = shouldThrow<FindingsRefusalException> {
+            Findings.entry(
+                date = "2026-08-18",
+                subject = "x",
+                results = table,
+                comparisons = listOf(ComparisonClaim("a", "b", "   ")),
+            )
+        }
+        ex.message shouldContain "statement is blank"
+    }
+
+    @Test
+    fun `entry refuses a comparison that subtracts across units`() {
+        val nsPerOp = validResult(value = 100.0, dispersion = 1.0).copy(unit = "ns/op")
+        val opsPerS = validResult(value = 200.0, dispersion = 1.0)
+        val table = FindingsTable(listOf(nsPerOp, opsPerS), labels = listOf("a", "b"))
+        val ex = shouldThrow<FindingsRefusalException> {
+            Findings.entry(
+                date = "2026-08-18",
+                subject = "x",
+                results = table,
+                comparisons = listOf(ComparisonClaim("a", "b", "a beats b")),
+            )
+        }
+        ex.message shouldContain "subtracts across units"
+    }
+
+    @Test
+    fun `an entry drawing no comparison renders no comparisons block`() {
         val table = FindingsTable(
             listOf(reportableResult(), reportableResult()),
             labels = listOf("a", "b"),
         )
-        // Must not throw.
-        Findings.entry(date = "2026-08-18", subject = "x", results = table)
+        val rendered = Findings.entry(date = "2026-08-18", subject = "x", results = table)
+        (rendered.contains("Comparisons")) shouldBe false
     }
 
     // ---------------------------------------------------------------------------
@@ -154,7 +274,12 @@ class FindingsTest {
         entryMethods.size shouldBe 1
         val results = entryMethods.single().parameterTypes.toList()
         results shouldContainElement FindingsTable::class.java
-        results.none { it == List::class.java || it == Collection::class.java } shouldBe true
+        // The only List parameter is `comparisons: List<ComparisonClaim>`
+        // (computenet-785b); no overload takes results as a raw List/Collection of
+        // BenchResult, which is the invariant [BEN1-27] rests on.
+        entryMethods.single().genericParameterTypes
+            .map { it.typeName }
+            .none { it.contains("BenchResult") } shouldBe true
     }
 
     @Test

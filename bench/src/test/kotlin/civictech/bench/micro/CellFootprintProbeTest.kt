@@ -111,14 +111,13 @@ class CellFootprintProbeTest {
         println("Provenance (the table has no column for these):")
         println(FootprintReport.provenance(measurements))
 
-        // Every row is either rendered in its drive's table or named in the omission list.
+        // Every row is rendered in its drive's table and carries a dispersion note.
         // Nothing is silently dropped — that is the property, and it belongs to
         // ThroughputReport; asserting it here is what proves the footprint path actually
         // goes through it rather than around it.
-        val rendered = report.perDrive.count { it.entry != null }
         assertTrue(
-            rendered > 0 || report.omissions.isNotEmpty(),
-            "a sweep must produce either an entry or a named omission for every row",
+            report.perDrive.isNotEmpty() && report.dispersions.isNotEmpty(),
+            "a sweep must produce an entry and a dispersion note for every row",
         )
         val counters = measurements.filterNot { it.subject.scalesWithElements }
         assertTrue(

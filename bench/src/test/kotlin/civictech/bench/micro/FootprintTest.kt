@@ -518,10 +518,11 @@ class FootprintTest {
     /**
      * The rendered entry goes through F3's writer, so a footprint entry inherits every
      * refusal `Findings.entry` makes — including its trigger-verdict check. The renderer
-     * excludes the too-dispersed rows and names them, exactly as it does for throughput.
+     * renders the too-dispersed rows and notes their dispersion beside the table, exactly
+     * as it does for throughput (`computenet-785b`).
      */
     @Test
-    fun renderGoesThroughTheFindingsWriterAndNamesItsOmissions() {
+    fun renderGoesThroughTheFindingsWriterAndNotesItsDispersion() {
         val clean = measurement(
             total = Stat(mean = 1_000_000.0, dispersion = 100.0, samples = 10),
             payload = Stat(mean = 160_000.0, dispersion = 10.0, samples = 10),
@@ -529,7 +530,7 @@ class FootprintTest {
         )
         val noisy = measurement(
             elements = 1_000,
-            // 50% relative dispersion: far past NOISE_FLOOR, so this row is excluded.
+            // 50% relative dispersion: far past NOISE_FLOOR, so this row is flagged.
             total = Stat(mean = 1_000.0, dispersion = 500.0, samples = 10),
             payload = Stat(mean = 100.0, dispersion = 50.0, samples = 10),
             tagMetadata = Stat(mean = 200.0, dispersion = 100.0, samples = 10),
@@ -548,11 +549,14 @@ class FootprintTest {
         assertTrue(text.contains("drive=REAL"), text)
         assertTrue(text.contains("SetCell n=100000 UNATTRIBUTED"), text)
         assertTrue(text.contains("Trigger: G-21 phase 3"), text)
-        assertTrue(report.omissions.isNotEmpty(), "the noisy rows must be named as omissions")
+        val flagged = report.dispersions.filter { it.aboveHarnessSanityBound }
+        assertTrue(flagged.isNotEmpty(), "the noisy rows must carry a dispersion note")
         assertTrue(
-            report.omissions.all { it.label.startsWith("SetCell n=1000 ") },
-            "only the noisy measurement's rows are omitted: ${report.omissions.map { it.label }}",
+            flagged.all { it.label.startsWith("SetCell n=1000 ") },
+            "only the noisy measurement's rows are flagged: ${flagged.map { it.label }}",
         )
+        // ...and they are still IN the table, with their error bars attached.
+        assertTrue(text.contains("| SetCell n=1000 total retained | 1000.0 ± 500.0 bytes |"), text)
     }
 
     @Test

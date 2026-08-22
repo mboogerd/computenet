@@ -54,6 +54,18 @@ FIRES / RETIRES / INCONCLUSIVE (`[BEN1-31]`). An entry answering no gap trigger
 question is rendered explicitly **MARKED INCOMPLETE** and is not a finding
 (`[BEN1-32]`).
 
+**Amended 2026-08-22 (`computenet-785b`) — the paragraph above describes the
+writer as it stood until that date.** Per this file's own append-only rule the
+sentence is left as published rather than corrected in place; what changed is
+recorded in the last entry of this file, *"the reportability gate becomes
+claim-relative"*. In one line: `Findings.entry` no longer refuses a result for
+being too dispersed against `NOISE_FLOOR` — a standalone number is rendered with
+its error bar attached — and it now refuses a **comparison** whose claimed effect
+does not exceed the combined error bars of the two rows it is drawn from. Every
+other refusal named above still stands. Entries below this point that report a
+row the old gate would have excluded are doing so under the new criterion, not in
+violation of the old one.
+
 The `**Status**` line above uses the vocabulary
 `concord/src/main/kotlin/civictech/concord/lint/DocLints.kt` enforces for
 `doc/spec`. `docLints` scans only `doc/spec`, so for this file the line is a
@@ -3422,3 +3434,128 @@ the figures above, and the sweep is 24 repetitions of one unmodified command. `N
 (confirmed: `const val NOISE_FLOOR: Double = 0.005`). No entry above this one was edited,
 reordered or deleted — in particular the `computenet-xlst` caveat under §6 keeps its text and
 its conclusion, and §6's own tables keep theirs.
+
+---
+
+## 2026-08-22 — the reportability gate becomes claim-relative: effect vs combined error bars, and `NOISE_FLOOR` demoted to a harness sanity bound
+
+**This entry derives a criterion; it measures nothing.** No sweep was run for it, no
+number in this file is revised by it, and `NOISE_FLOOR` is **not re-derived** — the
+constant is still `0.005` in `bench/src/main/kotlin/civictech/bench/Dispersion.kt`. What
+changed is what that constant *reaches*. `Dispersion.kt`'s own amendment condition
+requires the derivation to be stated forward, its margin fixed before the numbers it
+gates are known, and appended here rather than folded into an earlier entry; this entry
+is that discharge, for the criterion that replaces it.
+
+### The problem, measured
+
+The 2026-08-21 findings review counted what the absolute gate was doing to this file:
+
+- **66 of 72** hosted-graph throughput rows classified `Unreportable`.
+- **All 10** fan-out rows classified `Unreportable`.
+- **Seven** `## (no entry for drive=…)` headings stand above this line — drive blocks in
+  which the *whole table* was empty and the omission list was the only content. (Counted,
+  not recalled: `grep -c '^## (no entry for drive=' doc/bench/findings.md` at this entry's
+  base commit.)
+
+The mechanism is stated in `NOISE_FLOOR`'s own KDoc, in the section headed "What this
+value does NOT establish", and it was right the day it was written: `0.005` is the
+dispersion of `SmokeBenchmark.baseline` — a deterministic branch-free bit mixer, the
+cheapest thing this repository can measure — on a host deliberately quiesced. A hosted
+graph running real cells over real state disperses 0.01–0.15 as a matter of course. Using
+the first as an admission threshold for the second is not conservatism; it is a gate
+calibrated on a quantity it does not govern, and its effect was to withhold nearly every
+number the epic paid to measure while telling the reader nothing about how noisy any of
+them was.
+
+### The criterion, stated forward
+
+Two rules, and the split between them is the whole idea:
+
+1. **A standalone number is always reportable, with its error bar attached.** `value ±
+   dispersion unit` states its own precision. A reader who wants to discount a row by its
+   dispersion can; a reader who never sees the row cannot. Dispersion is now reported
+   *beside* the table (`ThroughputReport.DispersionNote`) instead of deciding whether the
+   table has rows.
+2. **A comparison is reportable only when the claimed effect exceeds the combined error
+   bars of the rows it is drawn from.** Formally, for two rows in one unit:
+
+   ```
+   |left.value - right.value| > COMBINED_ERROR_MARGIN × (left.dispersion + right.dispersion)
+   ```
+
+   with `COMBINED_ERROR_MARGIN = 1.0`, the dispersions being JMH's error at **99.9%**
+   confidence, and the comparison **strict**. Anything else is `Unresolved`: the rows may
+   each be reported, but the claim that they differ may not — not even its sign.
+
+### The margin, and why it was fixed before the numbers
+
+`COMBINED_ERROR_MARGIN = 1.0`, combined by **conservative sum** rather than root-sum-square.
+Three things make that a forward derivation rather than a fit:
+
+- **The convention is adopted, not invented here.** `FanOutFixedStateRenderTest` and
+  `FanOutBatchFixedStateRenderTest` already resolve a segment marginal by `|marginal| >
+  combinedError`, with `combinedError` the two endpoints' 99.9% half-widths **summed**
+  (`(p1.error + p2.error) / span`). That is the criterion that produced this epic's
+  cleanest verdict — the 2026-08-20 BATCH fixed-state entry above, in which 3 of 4 (REAL)
+  and 4 of 4 (SIM) segments resolved and G-43's "linear in degree, not worse" reading
+  SURVIVES. The margin was settled by an entry that could not see this generalization's
+  numbers, because they do not exist.
+- **No number was consulted in choosing it.** This change runs no sweep. There is no
+  measurement whose outcome could have moved the margin, and the criterion is pinned by
+  `DispersionTest`, whose assertions are pure arithmetic on fixtures.
+- **The direction of the conservatism is stated, not hoped for.** The sum is the widest
+  defensible combination of two error bars — it is what you get when the two errors are
+  perfectly correlated and both point against the claim. Root-sum-square, the usual
+  choice for independent errors, is ~0.71× as wide for two equal bars, so the sum already
+  carries ~1.41× of headroom over it, and the bars themselves are 99.9% half-widths, not
+  standard errors. `NOISE_FLOOR`'s 2× margin was needed because *it* compared a single
+  row against a floor measured on a different benchmark entirely; here both terms come
+  from the very rows being compared, so the margin has no structural gap to bridge.
+  Doubling on top of the sum would refuse effects these measurements do establish — which
+  is the failure being corrected, repeated one level in.
+
+### What `NOISE_FLOOR` still is
+
+A **sanity bound on the harness itself**: the quantity `SmokeBenchmark.baseline` would be
+re-measured against to detect drift in the discovery sentinel, which is the only thing
+the 2026-08-18 derivation ever measured. **No such drift check is wired today** — that is
+the role the constant is kept for, not a job something currently runs; `classify`'s only
+caller in `bench/src/main` is `ThroughputReport.DispersionNote`, which reports the
+classification and acts on nothing. `classify` and `Reportability` keep their names
+and their arithmetic — including the absolute-value and non-finite handling
+`computenet-x9e.3.6` added — and `ThroughputReport` still *reports* which rows sit above
+that bound, as an informational note. It gates nothing.
+
+### What this entry does NOT claim
+
+- **That any earlier entry's numbers change.** Nothing above this line is edited,
+  reordered or deleted. The four `## (no entry for drive=…)` headings stand, as do the
+  omission lists under every entry that has one; they are the honest record of what the
+  old gate did, and a later re-render under the new criterion would be a new entry, not a
+  revision of theirs.
+- **That the previously-omitted rows are now findings.** They become *printable*, each
+  with its error bar. Whether any comparison can be drawn from them is exactly the
+  question the new criterion asks, and for most of those rows the answer will be no — a
+  row at 0.15 relative dispersion resolves against very little.
+- **That `NOISE_FLOOR` is wrong.** Its derivation is sound for what it measured. What was
+  wrong was its reach.
+- **Anything about a host, a JVM, a benchmark or a gap trigger.** This entry cites no gap
+  and answers no trigger question; it is a criterion change, and it is marked as such
+  rather than dressed as a finding.
+
+### Scope
+
+The diff for this change is `bench/` and this file. No change under `kernel/src/main`,
+`concord/`, `inspect/src`, `wire/src`, `demo/` or `doc/spec`; no gap-table or
+`CONCORDANCE.md` edit; no benchmark fixture, drive size or iteration count altered. The
+one edit above the insertion point is in the file's **front matter**, not in an entry: the
+paragraph describing what `Findings.entry` refuses now carries an amendment note pointing
+here, because leaving it to state a gate that no longer exists would mislead every reader
+who does not reach the end of the file.
+
+### Verification
+
+```
+./gradlew :bench:test --rerun
+```
