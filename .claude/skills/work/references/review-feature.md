@@ -902,6 +902,14 @@ bd show <epic-id> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'
 | a **closed** epic ancestor | no parent, plus `bd dep add "$RES" <feature-id> --type=discovered-from` — a closed epic schedules nothing (nobody selects it at step 3), and the edge keeps the residual reachable from the work it came out of: `bv --robot-triage --graph-root` traverses it exactly like parentage |
 | **no epic at all** (a 5f route-4 item — `(unparented)` is normal, computenet-wpvy.42) | `bd update "$RES" --parent=<item-id>` — parent it to the reviewed item itself, and do **not** also add the `discovered-from` edge (one-slot rule below) |
 
+**If the residual's subject exists only on the feature branch** — a type, a
+field, a layer that is not on `main` yet — stamp it, or the next session cuts
+it from `origin/main` and the implementer reports wrong-branch
+(computenet-nb44, one dispatch cycle): `bd update "$RES" --set-metadata
+base_branch=feature/<feature-id>`. Parenting to the epic stays right for
+schedulability; the field is what the direct-child route and 5a read to pick
+the base.
+
 Create it the same way in all three cases:
 
 ```bash
