@@ -453,6 +453,15 @@ object CaseExecution {
      * order** — which is `[ORA2-CTL-01]`'s deliberately-wrong control, not the reading
      * `[24-TMAP-03]` defines. So the tagged ids are named here, ahead of the shape dispatch.
      *
+     * `pnCounter` (computenet-f5zo) is the same defect one family over: it declares a bare
+     * `Scalar` output — correctly, same as `counter` — but `PnCounterCell.outlet` carries a
+     * [civictech.cell.data.delta.PnCounterDelta], not a `CounterDelta`. Shape alone resolved it
+     * to [ScalarTerminalFold], whose inlet cannot accept the stream (the same per-delta
+     * `ClassCastException`, dead-lettered) and which, had it been able to, would have SUMMED
+     * arriving amounts — not idempotent, so a gossip echo double-counts — where
+     * [PnCounterTerminalFold] merges by pointwise max, the reading `[24-OP-PNCOUNTER-01]`
+     * defines. So `pnCounter` is named here too, ahead of the shape dispatch.
+     *
      * ## Why an id branch, and why it is not `[ORA1-API-03]`'s forbidden one
      *
      * The same argument [scriptSourceFor] carries, one seam over: a `ShapeRule` states shapes,
@@ -464,6 +473,7 @@ object CaseExecution {
      */
     private fun foldFor(output: ElementShape, catalogId: String): TerminalFold = when (catalogId) {
         TaggedOperators.Ids.OR_MAP -> TaggedMapTerminalFold<Any?, Any?>()
+        CoreOperators.Ids.PN_COUNTER -> PnCounterTerminalFold()
 
         else -> when (output) {
             is ElementShape.SetOf -> SetTerminalFold<Any?>()

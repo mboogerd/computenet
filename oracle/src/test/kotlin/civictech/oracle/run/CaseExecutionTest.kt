@@ -490,4 +490,108 @@ class CaseExecutionTest {
         assembly.graph.terminals.getValue("tagged").current() shouldBe
             ModelState.MapState(mapOf("k1" to "v9"))
     }
+
+    // -------------------------------------------------- the pnCounter dispatch, computenet-f5zo
+
+    /**
+     * `pnCounter(src) -> terminal` — hand-constructed for the same reason [orMapCase] is: this
+     * shape (a terminal linked directly onto a `pnCounter` source) is not one `GraphGenerator`
+     * ever draws (`CoreOperators.registerAll`'s KDoc: no registered operator consumes a bare
+     * `Scalar`, so `pnCounter` can never appear inside a generated case), but [CaseExecution]
+     * does not know that — `foldFor` dispatches on the catalog entry's declared shape for any
+     * topology handed to it, generated or not. Constructing it directly is what exercises that
+     * dispatch in isolation from the generator's own reachability limit.
+     */
+    private fun pnCounterCase(script: CaseScript, seed: Long = 91L) = GeneratedCase(
+        seed = seed,
+        topology = CaseTopology(
+            nodes = listOf(TopologyNode("pn", CoreOperators.Ids.PN_COUNTER, emptyList(), source)),
+            terminals = listOf(TerminalSpec("total", "pn")),
+            placement = mapOf("pn" to 0),
+        ),
+        spec = GraphSpec(listOf(SpawnStep("pn", OperatorCatalog.entry(CoreOperators.Ids.PN_COUNTER)!!.kernel))),
+        script = script,
+        removeAudit = emptyList(),
+    )
+
+    /** `increment(5) increment(3) decrement(2)` — net total 6, not the 0 an empty script gives. */
+    private fun pnCounterScript() = CaseScript(
+        listOf(
+            CaseStep.Op(source, ScriptEvent.Increment(writer, 5L)),
+            CaseStep.Op(source, ScriptEvent.Increment(writer, 3L)),
+            CaseStep.Op(source, ScriptEvent.Decrement(writer, 2L)),
+            CaseStep.Barrier,
+        ),
+    )
+
+    /**
+     * The dispatch half of computenet-f5zo: a `pnCounter` terminal resolves to
+     * [PnCounterTerminalFold], **not** to [ScalarTerminalFold].
+     *
+     * `pnCounter` declares a bare [civictech.oracle.model.ElementShape.Scalar] output shape,
+     * same as `counter` — but `PnCounterCell.outlet` carries a
+     * [civictech.cell.data.delta.PnCounterDelta], not a `CounterDelta`, so the shape-only
+     * dispatch [foldFor] uses for the untagged families resolves it to the wrong fold, whose
+     * inlet cannot even accept the stream. Asserted on fold identity, exactly like the `orMap`
+     * pin above, for the same reason: a `foldFor` that fell back to the shape-only branch would
+     * satisfy the `Scalar` reading and fail here.
+     *
+     * Measured against the unfixed dispatch (review of computenet-f5zo, the `PN_COUNTER` branch
+     * of `foldFor` deleted): this test fails here, on its own assertion —
+     * `AssertionError: the pnCounter terminal resolves to the pointwise-max fold /
+     * ScalarTerminalFold ... is of type ScalarTerminalFold but expected PnCounterTerminalFold`.
+     * `assemble` completes; the wrong fold is simply linked.
+     */
+    @Test
+    fun `pnCounter - the terminal folds through the pn-counter fold, not the summing scalar fold`() {
+        val case = pnCounterCase(pnCounterScript())
+        val world = SimWorld(seed = case.seed)
+
+        val assembly = CaseExecution.assemble(case, world)
+
+        val fold = assembly.graph.terminals.getValue("total")
+        withClue("the pnCounter terminal resolves to the pointwise-max fold") {
+            fold.shouldBeInstanceOf<PnCounterTerminalFold>()
+        }
+        withClue("and specifically NOT to the summing ScalarTerminalFold") {
+            (fold is ScalarTerminalFold) shouldBe false
+        }
+    }
+
+    /**
+     * The end-to-end half: a case naming a `pnCounter` terminal runs through
+     * [DifferentialRunner] and agrees with the catalog-resolved reference.
+     *
+     * Against the unfixed wiring, `foldFor` resolved the terminal to [ScalarTerminalFold], whose
+     * inlet is `FanInlet<Propagate<CounterDelta>>` — but `PnCounterCell.outlet` emits
+     * `Propagate<PnCounterDelta>`, and `PnCounterDelta` is not a `CounterDelta`. Connecting the
+     * two raises a `ClassCastException` per delta at the fold's inlet, which the fan-in port
+     * dead-letters rather than propagating. `assemble` does **not** throw and the run is not
+     * aborted: `DifferentialRunner` returns `RunOutcome.DeadLetterFailure` carrying one
+     * `DeadLetter` per script event — measured on review, three of them, each
+     * `java.lang.ClassCastException: class civictech.cell.data.delta.PnCounterDelta cannot be
+     * cast to class civictech.cell.data.delta.CounterDelta`. That outcome, not an exception, is
+     * what the `shouldBe RunOutcome.Success` below discriminates.
+     *
+     * **The expected value pins the merge semantics, not only the delta type.** A
+     * `PnCounterDelta` carries each source's *cumulative* total, so the three events emit
+     * `incs={s:5}`, `incs={s:8}`, `decs={s:2}`. Pointwise max reads 8 − 2 = 6; a fold that
+     * *summed* those arrivals the way [ScalarTerminalFold] sums `CounterDelta.amount` would read
+     * 5 + 8 − 2 = 11. Measured on review by mutating [PnCounterTerminalFold]'s merge to
+     * pointwise addition while leaving its type and the dispatch above intact: this test fails
+     * (`WavePrefixViolation`, `observed=ScalarState(13)` against prefixes `{1=5, 2=8}`) while the
+     * identity assertion above still passes. So a differently-typed-but-still-summing
+     * substitution is caught here, and caught by the runner's agreement with the reference
+     * model rather than only by the literal below.
+     */
+    @Test
+    fun `pnCounter - a generated case naming a pnCounter terminal executes end to end`() {
+        var observed: Map<String, ModelState>? = null
+
+        DifferentialRunner.run(pnCounterCase(pnCounterScript())) { observed = it } shouldBe RunOutcome.Success
+
+        withClue("non-vacuity: net total is 5 + 3 - 2 = 6, not the 0 an empty script gives") {
+            observed shouldBe mapOf("total" to ModelState.ScalarState(6L))
+        }
+    }
 }
