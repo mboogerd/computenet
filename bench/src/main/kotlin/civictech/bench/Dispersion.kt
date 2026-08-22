@@ -221,8 +221,51 @@ fun combinedError(left: BenchResult, right: BenchResult): Double {
  *
  * @throws IllegalArgumentException if the two results are not expressed in the same unit.
  */
-fun resolveEffect(left: BenchResult, right: BenchResult): EffectResolution {
-    val bar = COMBINED_ERROR_MARGIN * combinedError(left, right)
-    val effect = kotlin.math.abs(left.value - right.value)
+fun resolveEffect(left: BenchResult, right: BenchResult): EffectResolution =
+    resolveEffect(
+        effect = kotlin.math.abs(left.value - right.value),
+        combinedError = combinedError(left, right),
+    )
+
+/**
+ * The arithmetic core of [resolveEffect], over two bare magnitudes
+ * (`computenet-b7k4`).
+ *
+ * **This overload exists so that a second caller cannot restate the criterion.** The
+ * regression-tracking series (`civictech.bench.series`) compares a fresh run against a
+ * *historical band* rather than against another [BenchResult] row: a band's centre is a
+ * summary of several past runs, and its half-width is derived from their run-to-run
+ * spread, so there is no single measurement — and therefore no [RunEnvironment] and no
+ * [Drive] — for the right-hand side to honestly carry. Constructing a synthetic
+ * [BenchResult] to reach the two-row overload would mean inventing an environment for a
+ * row that was never measured. Extracting the arithmetic instead keeps **one** definition
+ * of "beyond the error bars" in this repository, which is the property that matters: if
+ * [COMBINED_ERROR_MARGIN] or the strictness of the comparison is ever changed, the series
+ * comparator changes with it, in the same commit, without anyone having to remember it
+ * exists.
+ *
+ * What the caller owes, and what this function cannot check for it: [combinedError] must
+ * already be the conservative **sum** of the two half-widths, and both magnitudes must be
+ * expressed in the same unit. The two-row overload enforces the unit agreement in
+ * [combinedError]; a caller reaching this overload directly enforces it itself (see
+ * `civictech.bench.series.HistoricalBand`, which refuses a band whose entries disagree
+ * about the unit before it can reach here).
+ *
+ * @param effect the magnitude of the claimed difference. Non-negative.
+ * @param combinedError the two error bars combined by sum, in the same unit as [effect].
+ *   Non-negative.
+ * @throws IllegalArgumentException if either argument is negative or non-finite. A
+ *   `NaN` would make the strict `>` below `false` and so silently resolve to
+ *   [EffectResolution.Unresolved] — the same IEEE 754 trap [classify] refuses explicitly
+ *   rather than depending on.
+ */
+fun resolveEffect(effect: Double, combinedError: Double): EffectResolution {
+    require(effect.isFinite() && effect >= 0.0) {
+        "effect must be a finite non-negative magnitude, was $effect"
+    }
+    require(combinedError.isFinite() && combinedError >= 0.0) {
+        "combinedError must be finite and non-negative, was $combinedError"
+    }
+    val bar = COMBINED_ERROR_MARGIN * combinedError
     return if (effect > bar) EffectResolution.Resolved else EffectResolution.Unresolved
 }

@@ -3559,3 +3559,112 @@ who does not reach the end of the file.
 ```
 ./gradlew :bench:test --rerun
 ```
+
+## 2026-08-22 — a regression-tracking series is stood up, and deliberately starts EMPTY
+
+**This entry derives a process; it measures nothing.** No sweep was run for it, no
+number in this file is revised by it, and no constant is derived or re-derived. It
+records that the lane described in `doc/bench/regression-series.md` now exists, what
+it decided, and — the part that has to be in this file rather than only in that one —
+**why its series has no entries.**
+
+### What it is
+
+The same benchmarks, one pinned machine and toolchain JDK, run repeatedly, with each
+run compared against that benchmark's own accumulated history rather than against an
+absolute floor. Filed as `computenet-b7k4` from the 2026-08-21 findings review, which
+named the failure mode this file already demonstrates: two entries superseded by a
+JDK-vendor substitution, M2 Pro and M3 Max entries not comparable to each other, and
+quiesced-host discipline that was manual and therefore sometimes absent.
+
+The full design is in `doc/bench/regression-series.md`. Three decisions worth naming
+here, because a later reader of *this* file needs them:
+
+- **Storage: in the repository.** `bench/series/series.csv` is the append-only index,
+  one row per benchmark per run; `bench/series/runs/<runId>/` holds the raw JMH CSV
+  and the teed log that row was derived from. The alternatives were CI artifacts
+  (which expire, and which a locally-run sweep cannot read) and a data branch (which
+  severs a series row from the commit whose code it measured). The reasoning is in
+  §2 of that document.
+- **The comparator is the criterion the entry above this one derived, not a new one.**
+  "Beyond the band" is `|run − band.centre| > COMBINED_ERROR_MARGIN × (run.dispersion
+  + band.halfWidth)` — literally `civictech.bench.resolveEffect`, reached through a
+  magnitude overload added to `Dispersion.kt` in the same change, because a band has
+  no single measurement behind it and therefore no honest `RunEnvironment` to make it
+  a `BenchResult`. `BandTest` pins the two forms' agreement row for row, so a future
+  change to `COMBINED_ERROR_MARGIN` moves both or fails.
+- **The lane is local and gates nothing.** `:bench:benchSeries` is a `JavaExec` task
+  that no lifecycle task depends on, and `.github/workflows/` is untouched by the
+  change. No GitHub Actions workflow was added, because a hosted runner is not a
+  pinned machine and a series run on one would produce bands too wide for anything to
+  ever move — the reassuring failure.
+
+### Why the series is empty, which is the honest state
+
+`bench/series/series.csv` ships with its header and **no rows**.
+
+The machine available when this lane was built was demonstrably not quiesced. Measured
+at the time, not recalled: 16 cores, 1-minute load average **4.98** — the run script's
+own guard refused a `--host-state quiesced` invocation against it, which is how that
+number was obtained — Microsoft Defender's scanner at ~100% of a core, and two other
+agent sessions live on the host.
+
+A first entry measured under that interference would not be a slightly worse baseline.
+It would be a **poisoned** one, and the asymmetry is the whole argument: the first
+entries are the seed of the band every later run is judged against, so a centre pulled
+by interference silently reclassifies healthy runs as movement and real movement as
+healthy. That is strictly worse than no series at all, because an empty series reports
+`InsufficientHistory` — visibly not a pass — while a poisoned one reports `WithinBand`.
+
+What would have to be true to seed it, in full: a genuinely idle pinned machine (no
+other agent session, no build, no scheduled scan, nobody at the keyboard);
+`scripts/bench-series/run-series.sh --host-state quiesced` completing without the
+load-average refusal; and that repeated **three** times, because `MIN_BAND_ENTRIES` is
+3 and one or two runs form no band. Roughly 45 minutes of wall clock for the current
+single-selector set. Filed as its own beads item under `computenet-x9e`.
+
+### What this entry does NOT claim
+
+- **That any earlier entry's numbers change.** Nothing above this line is edited,
+  reordered or deleted.
+- **That the lane has been exercised end to end on real benchmark output.** It has
+  been exercised on fixtures — the codec, the band, the comparator, the ingest and
+  every refusal are covered by `bench/src/test/kotlin/civictech/bench/series/` — and
+  the run script's guard has been exercised against this host. What has *not* run is a
+  full pinned sweep through to an appended row, because the host could not honestly
+  produce one.
+- **Anything about `launchd`.** `regression-series.md` §6 gives a plist shape for a
+  nightly run and labels it as a belief to verify, because no such agent was loaded on
+  any machine as part of this work.
+- **Anything about a host, a JVM, a benchmark or a gap trigger.** This entry cites no
+  gap and answers no trigger question; it is a process change, marked as such rather
+  than dressed as a finding.
+
+### Scope
+
+`bench/` (the new `civictech.bench.series` package and its tests, one added overload
+and its tests in `Dispersion.kt`, a host-banner `@Setup` hook on `SmokeBenchmark`, one
+new Gradle task), `scripts/bench-series/`, `doc/bench/regression-series.md`, and this
+file. No change under `kernel/src/main`, `concord/`, `inspect/src`, `wire/src`,
+`demo/`, `doc/spec` or `.github/`; no gap-table or `CONCORDANCE.md` edit; no benchmark
+fixture, drive size or iteration count altered.
+
+The `SmokeBenchmark` hook deserves a sentence, since it touches a benchmark: it prints
+`HostFacts.captureCurrent().bannerLines()` once per fork from a `@Setup(Level.Trial)`
+hook, exactly as `OperatorThroughputBenchmark` already does, outside the timed method.
+Without it the sentinel's log carries no host banner and `SeriesIngest` refuses it — so
+the one benchmark the harness drift check exists for (see `NOISE_FLOOR`'s "DEMOTED"
+section) would have been the one benchmark that could not enter the series.
+
+### Verification
+
+```
+./gradlew :bench:test --rerun
+```
+
+265 tests, 0 failures, 0 errors, 0 skipped. `:bench:build`, `:bench:check` and the
+repository-wide `test` lifecycle were each queried with `--dry-run` and reach
+`benchSeries` zero times. The six required status checks were confirmed unchanged two
+ways: the ruleset's own list (`build-test-fast`, `build-test-serial`, `concord-full`,
+`ui-test`, `agora-ui-test`, `kernel-test`) still names exactly those six, and no file
+under `.github/` is modified by this change.
