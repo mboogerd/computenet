@@ -362,7 +362,11 @@ this skill already warns about for local Gradle runs, and it is less visible,
 because `gh pr checks` reports a conclusion and a duration and nothing else.
 
 `gh run view <run-id> --log` works non-interactively and returns the whole
-run, every job — measured on #254's run 32008091003: 7553 lines, 828 KB, 3s.
+run, every job — **once the whole run has finished**: it refuses with
+`run … is still in progress` while ANY job is running, `--job=<id>` included,
+even for a job that completed minutes ago. So the read waits on the slowest
+required check (~8m `build-test-fast`), not on the lane you need; the refusal
+is not an error and not a reason to skip this step (computenet-4dip) — measured on #254's run 32008091003: 7553 lines, 828 KB, 3s.
 Column 1 of each line is the job name, so the output also says *which lane*
 skipped. Save it, then read it with two greps:
 
