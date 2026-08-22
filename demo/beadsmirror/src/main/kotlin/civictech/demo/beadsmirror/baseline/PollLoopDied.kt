@@ -20,8 +20,16 @@ import civictech.demo.beadsmirror.feed.DoltFeedPoller
  * `sealed interface`'s direct implementations must sit in its own package. A
  * second output channel for this one event would be strictly worse than the
  * package mismatch: it would be the channel an operator has not wired up.
+ *
+ * **[workspaceIdentity] is the whole of the failure-isolation report** (task
+ * computenet-3bso.1.1). With N workspaces mirrored in one process each has its
+ * own [DoltFeedPoller] on its own thread, so one loop dying leaves the others
+ * polling — and the only way an operator sharing one `onEvent` can tell which
+ * fold froze is this field. The surviving siblings' liveness is read per
+ * workspace from [civictech.demo.beadsmirror.WorkspaceMirror.pollLoopStopped].
  */
 data class PollLoopDied(
     val failure: Throwable,
     val checkpoint: String?,
+    override val workspaceIdentity: String,
 ) : MirrorEvent

@@ -1,6 +1,5 @@
 package civictech.demo.beadsmirror
 
-import civictech.demo.beadsmirror.baseline.BdExportReader
 import civictech.demo.beadsmirror.baseline.MirrorEvent
 import civictech.demo.beadsmirror.baseline.PollLoopDied
 import civictech.demo.beadsmirror.baseline.Rebaseline
@@ -39,27 +38,66 @@ import kotlin.system.exitProcess
  * function of the workspace path, so it is the same across a restart against
  * the same `--workspace` argument — the one property [DotMinter] requires of
  * its `workspaceIdentity`.
+ *
+ * **N workspaces, one process** (task computenet-3bso.1.1, feature
+ * computenet-3bso.1). This class is now a *coordinator*: the per-workspace
+ * wiring lives in [WorkspaceMirror], one instance per
+ * [BeadsMirrorConfig.workspaces] entry, and what they share is exactly the
+ * process, the [DemoShell] and the [BeadsMirrorConfig.onEvent] sink — which is
+ * why every [MirrorEvent] names its workspace. A single-workspace run is the
+ * same run it always was: one mirror, `--run-dir` used verbatim, the same
+ * baseline-then-socket-then-poller order, and [state]/[peering]/[pollerFailure]
+ * still reading it directly.
  */
 class BeadsMirrorApp private constructor(
     private val shell: DemoShell,
-    private val poller: DoltFeedPoller,
+    /**
+     * One [WorkspaceMirror] per configured workspace, in configuration order,
+     * each with its own feed, checkpoint, baseline, projector, dot identity
+     * and poller thread (task computenet-3bso.1.1). Never empty:
+     * [BeadsMirrorConfig] refuses a configuration naming no workspace.
+     *
+     * Keyed reads go through [mirror]; the `single()`-delegating conveniences
+     * below ([state], [peering], [pollerFailure]) are the single-workspace
+     * shorthand every pre-N caller uses.
+     */
+    val mirrors: List<WorkspaceMirror>,
+) : AutoCloseable {
+
+    /** The port the shell actually bound — meaningful once [start] has run. */
+    val boundPort: Int get() = shell.boundPort
+
+    /**
+     * The mirror hosting the workspace whose [WorkspaceMirror.identity] is
+     * [identity], or `null` if this process hosts no such workspace. Identity
+     * is a usable key precisely because [start] refuses a configuration in
+     * which two workspaces share one ([DuplicateWorkspaceIdentityException]).
+     */
+    fun mirror(identity: String): WorkspaceMirror? = mirrors.firstOrNull { it.identity == identity }
+
     /**
      * The live projector handle, swapped wholesale by a re-baseline. Exposed
      * so a test can read [MirrorProjector.view]/`edgeView` and
      * [MirrorState.rebaselineCount] directly instead of only through HTTP.
+     *
+     * **Single-workspace shorthand.** Throws when this process hosts more than
+     * one workspace, because there is then no such thing as "the" fold — read
+     * [mirrors] or [mirror] instead. Deliberately not a silent "first one":
+     * every caller of this predates multi-workspace mode and means the only
+     * one.
      */
-    val state: MirrorState,
+    val state: MirrorState get() = mirrors.single().state
+
     /**
      * The two-node replica mesh, or `null` in solo mode — which is every run
      * with no [BeadsMirrorConfig.peering], and is why nothing in a solo run
      * loads a `:wire` or `civictech.cell.replication` class (see
      * [MirrorPeering]).
+     *
+     * Always the single workspace's: peering with N > 1 is refused at startup
+     * (decision 3bso.1-D3, [MultiWorkspacePeeringException]).
      */
-    val peering: MirrorPeering? = null,
-) : AutoCloseable {
-
-    /** The port the shell actually bound — meaningful once [start] has run. */
-    val boundPort: Int get() = shell.boundPort
+    val peering: MirrorPeering? get() = mirrors.single().peering
 
     /**
      * The peering port this node is listening on, or `null` in dial/solo mode
@@ -76,16 +114,21 @@ class BeadsMirrorApp private constructor(
      * This is a convenience for a test holding the app object, **not** the
      * mechanism by which the failure is made observable: nothing in a real
      * run polls it (which is the whole of computenet-dqj.12). The operator
-     * learns through [BeadsMirrorConfig.onEvent] receiving a [PollLoopDied],
-     * and a consumer of the HTTP surface learns because every route switches
-     * to `503` — see [MirrorRoutes].
+     * learns through [BeadsMirrorConfig.onEvent] receiving a [PollLoopDied]
+     * — which names the workspace it came from — and a consumer of the HTTP
+     * surface learns because every route switches to `503` — see
+     * [MirrorRoutes].
+     *
+     * Single-workspace shorthand, like [state]: with N workspaces each
+     * poller's state is read per workspace at
+     * [WorkspaceMirror.pollLoopStopped], since one dead loop leaves the others
+     * running.
      */
-    val pollerFailure: Throwable? get() = poller.failure
+    val pollerFailure: Throwable? get() = mirrors.single().pollerFailure
 
     fun stop() {
-        poller.stop()
+        mirrors.forEach { it.stop() }
         shell.stop()
-        peering?.close()
     }
 
     override fun close() = stop()
@@ -93,17 +136,24 @@ class BeadsMirrorApp private constructor(
     companion object {
 
         /**
-         * Builds and starts every component — [DoltCommitFeed], [FeedCheckpoint],
-         * [MirrorState] over a [MirrorProjector], [Rebaseline], [DoltFeedPoller]
-         * (started immediately), [MirrorRoutes] on a started [DemoShell] — and
-         * returns the running app.
+         * Builds and starts one [WorkspaceMirror] per
+         * [BeadsMirrorConfig.workspaces] entry — each its own [DoltCommitFeed],
+         * [FeedCheckpoint], [MirrorState] over a [MirrorProjector],
+         * [Rebaseline] and [DoltFeedPoller] — registers [MirrorRoutes] on one
+         * shared started [DemoShell], starts every poll loop, and returns the
+         * running app.
          *
-         * Refuses via [LiveBeadsWorkspaceException] before starting anything
-         * ([refuseIfLiveBeads]) when [BeadsMirrorConfig.workspace] resolves to
-         * this repository's own live `.beads`. That refusal is the very first
-         * statement here specifically so it precedes the `bd export`
-         * subprocess a first-start baseline would otherwise spawn against the
-         * live tracker.
+         * **Three refusals, all before any component of any workspace starts**:
+         *
+         * - [LiveBeadsWorkspaceException] ([refuseIfLiveBeads]), run for EACH
+         *   configured workspace, when one resolves to this repository's own
+         *   live `.beads`. It stays the very first thing here specifically so
+         *   it precedes the `bd export` subprocess a first-start baseline would
+         *   otherwise spawn against the live tracker.
+         * - [DuplicateWorkspaceIdentityException] (decision 3bso.1-D2) when two
+         *   configured workspaces share a [sanitizedDoltDatabaseName].
+         * - [MultiWorkspacePeeringException] (decision 3bso.1-D3) when a
+         *   configuration names N > 1 workspaces and two-node peering.
          *
          * **Three paths reach [Rebaseline], and none is the genesis walk**
          * (feature computenet-dqj.3 rules 1 and 3; the restart path is
@@ -134,89 +184,102 @@ class BeadsMirrorApp private constructor(
          *   it.
          */
         fun start(config: BeadsMirrorConfig): BeadsMirrorApp {
-            refuseIfLiveBeads(config.workspace, config.repoSearchRoot)
+            // Every refusal precedes every component, and the live-.beads one
+            // precedes the rest: it is what stops a `bd export` subprocess
+            // being spawned against the repository's own tracker, and it runs
+            // for EACH configured workspace — one safe workspace in the list
+            // does not make an unsafe sibling acceptable.
+            config.workspaces.forEach { refuseIfLiveBeads(it, config.repoSearchRoot) }
+            refuseCollidingIdentities(config.workspaces)
+            refuseMultiWorkspacePeering(config)
 
-            val doltRoot = doltRootFor(config.workspace)
-            val runDir = config.runDir ?: config.workspace.resolve(".beadsmirror")
-            val workspaceIdentity = sanitizedDoltDatabaseName(config.workspace)
+            val mirrors = config.workspaces.map { workspace ->
+                WorkspaceMirror.start(
+                    workspace = workspace,
+                    runDir = config.runDirFor(workspace),
+                    pollInterval = config.pollInterval,
+                    onEvent = config.onEvent,
+                    peeringSettings = config.peering,
+                    peeringTransport = config.peeringTransport,
+                )
+            }
 
-            val feed = DoltCommitFeed(doltRoot)
-            val checkpoint = FeedCheckpoint(runDir)
-
-            // Two-node mode, and NOTHING of it in solo mode: with
-            // `config.peering` null this stays null, `refs` stays null, the
-            // projector keeps its random-ref default, MirrorState keeps its
-            // no-op swap hook, and no `:wire`/replication class is loaded.
-            // Constructed before the projector because Replication's registry
-            // hooks must precede every announcement (see [MirrorPeering]).
-            val peering = config.peering?.let { MirrorPeering(it, config.peeringTransport ?: WsMirrorTransport()) }
-            val refs = peering?.refs
-
-            val minter = DotMinter(workspaceIdentity)
-            val initial = if (refs != null) MirrorProjector(minter, refs) else MirrorProjector(minter)
-            val state = MirrorState(initial, onSwap = { next -> peering?.rebind(next) })
-            peering?.attach(initial)
-
-            val rebaseline = Rebaseline(
-                export = BdExportReader(config.workspace)::read,
-                feed = feed,
-                checkpoint = checkpoint,
-                state = state,
-                workspaceIdentity = workspaceIdentity,
-                onEvent = config.onEvent,
-                refs = refs,
-            )
-
-            val poller = DoltFeedPoller(
-                feed = feed,
-                checkpoint = checkpoint,
-                interval = config.pollInterval,
-                // Re-read the handle per batch: a re-baseline earlier in this
-                // very tick may have replaced the projector.
-                onBatch = { records -> state.current.applyAll(records) },
-                onCondition = { condition ->
-                    when (condition) {
-                        is FeedCondition.CheckpointGone ->
-                            rebaseline.run(RebaselineReason.CheckpointGone(condition.checkpoint))
-                        // A `bd dolt pull` merged peer history in. Same
-                        // synchronous-on-the-poller-thread path: the tick that
-                        // detected it emitted nothing, and returns straight
-                        // after this call, so no record derived from merged
-                        // history can reach a projector.
-                        is FeedCondition.HistoryMerged ->
-                            rebaseline.run(RebaselineReason.HistoryMerged(condition.mergeCommit))
-                    }
-                },
-                // computenet-dqj.12: the loop dying is the one thing this
-                // process cannot keep to itself. It reports through the same
-                // channel as every other MirrorEvent, so an operator who
-                // wired up `onEvent` at all hears it without wiring anything
-                // else, and the default handler prints it.
-                onStopped = { config.onEvent(PollLoopDied(it.failure, it.checkpoint)) },
-            )
-
-            // Before the socket: a start-time baseline is part of "started",
-            // so the very first request is answered from complete state rather
-            // than from an empty projector that fills in moments later. It
-            // runs on EVERY start, checkpoint or not — see the class doc.
-            val persisted = checkpoint.read()
-            rebaseline.run(
-                if (persisted == null) RebaselineReason.FirstStart else RebaselineReason.Restart(persisted),
-            )
-
-            // The socket opens LAST — after the start-time baseline has swapped
-            // its projector in and `rebind` has re-pointed the mesh — so the
-            // peer's first announcement lands on cells that are already the
-            // live ones. (`rebind` is correct under concurrent gossip; this
+            // The socket opens after every workspace's start-time baseline has
+            // swapped its projector in and `rebind` has re-pointed the mesh —
+            // so a peer's first announcement lands on cells that are already
+            // the live ones. (`rebind` is correct under concurrent gossip; this
             // simply means the start-time swap never has to rely on that.)
-            peering?.connect()
-
+            //
+            // Routes are registered for the FIRST configured workspace, which
+            // in a single-workspace process — every caller before this task —
+            // is the only one. Addressing folds per workspace on the HTTP
+            // surface is deliberately not this task's: it is sibling task
+            // computenet-3bso.1.2, which replaces this line with a
+            // workspace-segmented surface. Until it lands, an N > 1 process
+            // holds N live folds and serves the first one on the legacy path.
             val shell = DemoShell(config.port)
-            MirrorRoutes(state, poller::stopped).register(shell)
+            val served = mirrors.first()
+            MirrorRoutes(served.state) { served.pollLoopStopped }.register(shell)
             shell.start()
-            poller.start()
+            mirrors.forEach { it.startPolling() }
 
-            return BeadsMirrorApp(shell, poller, state, peering)
+            return BeadsMirrorApp(shell, mirrors)
+        }
+
+        /**
+         * Decision 3bso.1-D2: two configured workspaces whose sanitized
+         * identities collide are refused before anything starts.
+         *
+         * The identity is [sanitizedDoltDatabaseName] — the workspace
+         * directory's *basename* with non-`[A-Za-z0-9_]` characters replaced by
+         * `_` — so two genuinely different workspaces collide easily and
+         * silently: `/a/ws` and `/b/ws` (same basename, different parents), or
+         * `/tmp/a-b` and `/tmp/a_b` (different basenames, one sanitization).
+         * A collision is not cosmetic. The identity is the [DotMinter] source
+         * identity, so two colliding mirrors would mint dots from one source
+         * and their last-writer-wins ordering would interleave; it is the
+         * attribution on every [MirrorEvent], so an operator could not tell
+         * which fold froze; and it is the key [mirror] resolves, so a lookup
+         * would answer with whichever came first. Refusing is the only honest
+         * option that does not invent a second identity scheme, which
+         * 3bso.1-D2 explicitly rules out.
+         */
+        private fun refuseCollidingIdentities(workspaces: List<Path>) {
+            val byIdentity = workspaces.groupBy(::sanitizedDoltDatabaseName)
+            val collision = byIdentity.entries.firstOrNull { it.value.size > 1 } ?: return
+            throw DuplicateWorkspaceIdentityException(
+                "refusing to mirror ${collision.value.joinToString(", ")} in one process: they share the " +
+                    "workspace identity '${collision.key}'. That identity is the dot-minting source, the " +
+                    "attribution on every MirrorEvent and the per-workspace key, so two workspaces cannot " +
+                    "hold it at once. Rehome one of them under a directory whose basename sanitizes to " +
+                    "something else.",
+            )
+        }
+
+        /**
+         * Decision 3bso.1-D3: peering (two-node gossip) is refused outright
+         * when more than one workspace is configured.
+         *
+         * [MirrorPeeringSettings] names ONE rig and ONE endpoint, and the rig
+         * name is hashed into the shared logical `CellRef`s both nodes derive
+         * ([MirrorPeering]). N workspaces in one process would therefore have
+         * to share one rig's refs — which would gossip N unrelated folds into
+         * one logical cell — or else the settings would have to become
+         * per-workspace, which is a config, CLI and rig-protocol change that
+         * generalizing gossip was explicitly excluded from this feature.
+         * Refusing is the cheaper honest option 3bso.1-D3 permits: a
+         * single-workspace process keeps two-node mode exactly as it was, and
+         * nothing silently half-works.
+         */
+        private fun refuseMultiWorkspacePeering(config: BeadsMirrorConfig) {
+            if (config.peering == null || config.workspaces.size == 1) return
+            throw MultiWorkspacePeeringException(
+                "refusing to start ${config.workspaces.size} workspaces with peering: --rig names one rig, " +
+                    "whose name is hashed into the shared logical CellRefs both nodes derive, so N " +
+                    "workspaces in one process would gossip N unrelated folds into one logical cell. " +
+                    "Two-node mode is single-workspace only (decision 3bso.1-D3); run one process per " +
+                    "workspace to peer, or drop --rig/--listen/--peer to mirror several workspaces.",
+            )
         }
     }
 }
@@ -226,14 +289,24 @@ class BeadsMirrorApp private constructor(
  * command-line parsing so tests can drive both the refusal path and the
  * end-to-end path in-process without a subprocess.
  *
- * @param workspace the bd workspace root to mirror. Required by [main]; there
- *   is no default, because there is no scratch path that is always safe to
- *   pick for the caller.
+ * @param workspaces the bd workspace roots to mirror, in the order they were
+ *   configured — one [WorkspaceMirror] each, all behind one [DemoShell] (task
+ *   computenet-3bso.1.1). Must name at least one; there is no default, because
+ *   there is no scratch path that is always safe to pick for the caller. Two
+ *   workspaces sharing a [sanitizedDoltDatabaseName] are refused at startup
+ *   (decision 3bso.1-D2). The single-workspace secondary constructor takes a
+ *   `workspace: Path` and is what every pre-N caller uses unchanged.
  * @param port the [DemoShell] port; `0` (the default) binds an ephemeral
  *   loopback port, matching every other demo's ephemeral-port convention.
- * @param pollInterval [DoltFeedPoller]'s poll cadence; defaults to 1 second.
+ * @param pollInterval [DoltFeedPoller]'s poll cadence, per workspace; defaults
+ *   to 1 second.
  * @param runDir [FeedCheckpoint]'s persistence directory; defaults to
- *   `<workspace>/.beadsmirror` when `null`.
+ *   `<workspace>/.beadsmirror` per workspace when `null`. When given
+ *   explicitly it is used **verbatim for a single workspace** — which is what
+ *   `--run-dir` has always meant — and as a *parent* for N > 1, each workspace
+ *   getting `<runDir>/<identity>`. Sharing one directory between N checkpoints
+ *   is not an option: [FeedCheckpoint] writes a fixed `checkpoint` filename, so
+ *   N mirrors would overwrite each other's feed position. See [runDirFor].
  * @param repoSearchRoot where [refuseIfLiveBeads] starts walking upward to
  *   find the repository's own `.beads` directory; defaults to the process's
  *   working directory. Overridable so a test can point the search at a
@@ -247,7 +320,9 @@ class BeadsMirrorApp private constructor(
  *   [BeadsMirrorApp.Companion.start] for a start-time [RebaselineReason.FirstStart]
  *   or [RebaselineReason.Restart] one),
  *   synchronously, so an implementation that blocks stalls polling.
- * @param peering opt-in two-node mode (task computenet-7em.1.2): the mirror's
+ * @param peering opt-in two-node mode (task computenet-7em.1.2), **single
+ *   workspace only** — a configuration naming N > 1 workspaces and peering is
+ *   refused by [MultiWorkspacePeeringException] (decision 3bso.1-D3): the mirror's
  *   two cells become replicas of one logical cell and gossip their deltas to
  *   one peer over `:wire`. **`null` — the default — is solo mode, and solo
  *   mode is exactly the app that existed before this parameter did**: no
@@ -261,7 +336,7 @@ class BeadsMirrorApp private constructor(
  *   partition and heal are properties of the peering rather than of a node.
  */
 data class BeadsMirrorConfig(
-    val workspace: Path,
+    val workspaces: List<Path>,
     val port: Int = 0,
     val pollInterval: Duration = Duration.ofMillis(1000),
     val runDir: Path? = null,
@@ -269,7 +344,60 @@ data class BeadsMirrorConfig(
     val onEvent: (MirrorEvent) -> Unit = ::printMirrorEvent,
     val peering: MirrorPeeringSettings? = null,
     val peeringTransport: MirrorTransport? = null,
-)
+) {
+
+    init {
+        require(workspaces.isNotEmpty()) {
+            "a beadsmirror configuration must name at least one workspace: there is no scratch path " +
+                "that is always safe to pick for the caller"
+        }
+    }
+
+    /**
+     * The single-workspace form, unchanged from before this config could name
+     * more than one: `BeadsMirrorConfig(workspace = ..., ...)` is exactly
+     * `BeadsMirrorConfig(workspaces = listOf(...), ...)`. Kept as a
+     * constructor rather than a factory so every existing named-argument call
+     * site compiles untouched.
+     */
+    constructor(
+        workspace: Path,
+        port: Int = 0,
+        pollInterval: Duration = Duration.ofMillis(1000),
+        runDir: Path? = null,
+        repoSearchRoot: Path = Path.of("").toAbsolutePath(),
+        onEvent: (MirrorEvent) -> Unit = ::printMirrorEvent,
+        peering: MirrorPeeringSettings? = null,
+        peeringTransport: MirrorTransport? = null,
+    ) : this(listOf(workspace), port, pollInterval, runDir, repoSearchRoot, onEvent, peering, peeringTransport)
+
+    /**
+     * The one workspace this configuration names, for a caller that knows it
+     * names exactly one. Throws when it names several — the same deliberate
+     * refusal to guess as [BeadsMirrorApp.state].
+     */
+    val workspace: Path get() = workspaces.single()
+
+    /**
+     * [FeedCheckpoint]'s directory for [workspace]: the configured [runDir]
+     * verbatim when this configuration names one workspace, `<runDir>/<its
+     * sanitized identity>` when it names several, and
+     * `<workspace>/.beadsmirror` when no [runDir] was configured at all.
+     *
+     * The single-workspace case is verbatim on purpose: `--run-dir` has always
+     * meant "put the checkpoint here", and a test that reads
+     * `runDir/checkpoint` is reading the documented contract, not an
+     * implementation detail. The N > 1 case cannot honour that reading for
+     * every workspace at once — one `checkpoint` filename, N feed positions —
+     * so it segments by the identity that is already unique by
+     * [BeadsMirrorApp.Companion.start]'s own refusal.
+     */
+    fun runDirFor(workspace: Path): Path = when {
+        runDir == null -> workspace.resolve(".beadsmirror")
+        workspaces.size == 1 -> runDir
+        else -> runDir.resolve(sanitizedDoltDatabaseName(workspace))
+    }
+}
 
 /**
  * The default [BeadsMirrorConfig.onEvent]: one line per event on stdout, plus
@@ -285,8 +413,9 @@ fun printMirrorEvent(event: MirrorEvent) {
     println("beadsmirror: $event")
     if (event is PollLoopDied) {
         System.err.println(
-            "beadsmirror: the poll loop has stopped for good; the served fold is frozen at " +
-                "${event.checkpoint ?: "(no checkpoint)"} and every route now answers 503.",
+            "beadsmirror: workspace '${event.workspaceIdentity}': the poll loop has stopped for good; " +
+                "its fold is frozen at ${event.checkpoint ?: "(no checkpoint)"} and its routes now answer " +
+                "503. Any other workspace this process mirrors is unaffected — each has its own poll loop.",
         )
         event.failure.printStackTrace()
     }
@@ -300,6 +429,25 @@ fun printMirrorEvent(event: MirrorEvent) {
  * stack trace.
  */
 class LiveBeadsWorkspaceException(message: String) : IllegalArgumentException(message)
+
+/**
+ * Raised by [BeadsMirrorApp.Companion.start] when two configured workspaces
+ * share one [sanitizedDoltDatabaseName] (decision 3bso.1-D2). A named subtype
+ * of [IllegalArgumentException], following [LiveBeadsWorkspaceException]: a
+ * caller that only wants "bad input" handling need not know this type exists,
+ * a test can name it, and [main] catches it to print a clean refusal instead
+ * of a stack trace. Thrown before any component of any workspace starts.
+ */
+class DuplicateWorkspaceIdentityException(message: String) : IllegalArgumentException(message)
+
+/**
+ * Raised by [BeadsMirrorApp.Companion.start] when a configuration names more
+ * than one workspace *and* two-node peering (decision 3bso.1-D3 — gossip is
+ * not generalized to N workspaces; see `refuseMultiWorkspacePeering` for the
+ * mechanism, and [BeadsMirrorConfig.peering] for the rule). Same named-subtype
+ * shape as [LiveBeadsWorkspaceException], for the same reasons.
+ */
+class MultiWorkspacePeeringException(message: String) : IllegalArgumentException(message)
 
 /**
  * The bd/Dolt embedded-database directory name for a bd workspace whose root
@@ -478,6 +626,49 @@ internal fun Array<String>.extractFlag(name: String): Pair<String?, Array<String
 }
 
 /**
+ * Every occurrence of `--name value` / `--name=value`, **in command-line
+ * order**, with all matched tokens stripped.
+ *
+ * `--workspace` is repeatable as of task computenet-3bso.1.1 — one mirror per
+ * occurrence — and one occurrence must behave exactly as it always did, which
+ * it does: a single occurrence of either spelling yields the same value and
+ * the same remaining array [extractFlag] would. An empty list means the flag
+ * was absent, and a trailing `--name` with no value after it is left in the
+ * remainder rather than consumed, matching [extractFlag]'s `i + 1 >= size`
+ * case.
+ *
+ * A left-to-right scan rather than a loop over [extractFlag], because
+ * [extractFlag] answers the inline `=` spelling *first* wherever it sits: over
+ * `--workspace /a --workspace=/b` a loop would report `/b` before `/a`, and
+ * the order is not cosmetic — the first configured workspace is the one served
+ * on the legacy HTTP path until computenet-3bso.1.2 lands.
+ */
+internal fun Array<String>.extractFlagAll(name: String): Pair<List<String>, Array<String>> {
+    val prefix = "$name="
+    val values = mutableListOf<String>()
+    val rest = mutableListOf<String>()
+    var i = 0
+    while (i < size) {
+        val token = this[i]
+        when {
+            token.startsWith(prefix) -> {
+                values += token.substring(prefix.length)
+                i++
+            }
+            token == name && i + 1 < size -> {
+                values += this[i + 1]
+                i += 2
+            }
+            else -> {
+                rest += token
+                i++
+            }
+        }
+    }
+    return values to rest.toTypedArray()
+}
+
+/**
  * Parses the three two-node flags out of [args] and returns the settings they
  * describe together with the remaining arguments — `--rig <name>` plus exactly
  * one of `--listen <wsPort>` (listener) or `--peer <ws-uri>` (dialer). The
@@ -522,11 +713,13 @@ internal fun Array<String>.extractPeering(): Pair<MirrorPeeringSettings?, Array<
 }
 
 fun main(args: Array<String>) {
-    val (workspaceArg, afterWorkspace) = args.extractFlag("--workspace")
-    if (workspaceArg == null) {
+    val (workspaceArgs, afterWorkspace) = args.extractFlagAll("--workspace")
+    if (workspaceArgs.isEmpty()) {
         System.err.println(
-            "usage: beadsmirror --workspace <path> [--poll-interval-ms <ms>] " +
-                "[--run-dir <path>] [--rig <name> (--listen <wsPort> | --peer <ws-uri>)] [port]",
+            "usage: beadsmirror --workspace <path> [--workspace <path> ...] [--poll-interval-ms <ms>] " +
+                "[--run-dir <path>] [--rig <name> (--listen <wsPort> | --peer <ws-uri>)] [port]\n" +
+                "  --workspace may repeat: one mirror per workspace, all on one HTTP port. Two-node " +
+                "mode (--rig) is single-workspace only.",
         )
         exitProcess(1)
     }
@@ -540,7 +733,7 @@ fun main(args: Array<String>) {
     }
 
     val config = BeadsMirrorConfig(
-        workspace = Path.of(workspaceArg).toAbsolutePath().normalize(),
+        workspaces = workspaceArgs.map { Path.of(it).toAbsolutePath().normalize() },
         port = demoPort(remaining),
         pollInterval = Duration.ofMillis(pollIntervalArg?.toLongOrNull() ?: 1000L),
         runDir = runDirArg?.let { Path.of(it) },
@@ -552,9 +745,16 @@ fun main(args: Array<String>) {
     } catch (e: LiveBeadsWorkspaceException) {
         System.err.println("beadsmirror: ${e.message}")
         exitProcess(1)
+    } catch (e: DuplicateWorkspaceIdentityException) {
+        System.err.println("beadsmirror: ${e.message}")
+        exitProcess(1)
+    } catch (e: MultiWorkspacePeeringException) {
+        System.err.println("beadsmirror: ${e.message}")
+        exitProcess(1)
     }
 
     println("computenet beadsmirror: http://localhost:${app.boundPort}")
+    app.mirrors.forEach { println("  mirroring ${it.workspace} as '${it.identity}' (run dir ${it.runDir})") }
     announcePort("http", app.boundPort)
     when (val wire = peering?.wire) {
         is MirrorWire.Listen -> {
