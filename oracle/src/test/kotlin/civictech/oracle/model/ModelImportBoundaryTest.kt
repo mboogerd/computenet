@@ -112,15 +112,32 @@ object ModelImportBoundaryScanner {
     // forbidden import for something else — see [declaresReferenceOp]'s own KDoc.
     // -----------------------------------------------------------------------------------------
 
+    /**
+     * A declaration header runs from the `class`/`object` keyword to the `{` that opens its body,
+     * and the gaps below exclude `{`, `}` and `;` rather than newlines — so the match can span the
+     * multi-line headers this codebase actually writes, but can never run past one declaration's
+     * opening brace into the next. Excluding the newline instead (the first version of this scan,
+     * computenet-n00e) missed `GroupByModel`, a real `OperatorModel` in
+     * `civictech.oracle.model` whose constructor parameters put `: OperatorModel, Serializable {`
+     * on its own line, and any `ReferenceOp` outside `civictech.oracle.model` formatted the same
+     * way would have evaded [scanForReferenceOpDeclarations] entirely — the gate passing because
+     * it recognised no declaration, not because the declaration was clean (review of
+     * computenet-n00e; demonstrated by the two synthetic-text tests below).
+     *
+     * The looser form can over-match — a class that merely *takes* a `SourceModel` constructor
+     * parameter reads the same to a text scanner — and that is the intended direction: an
+     * over-match scans one extra file whole and can only produce a loud, visible violation, while
+     * an under-match is a silent hole of exactly the kind this widening closes.
+     */
     private val declarationHeader = Regex(
-        """\b(?:class|object)\s+\w+[^\n{]*:\s*[^\n{]*\b(?:ReferenceOp|SourceModel|OperatorModel)\b[^\n{]*\{""",
+        """\b(?:class|object)\s+\w+[^{};]*?:[^{};]*?\b(?:ReferenceOp|SourceModel|OperatorModel)\b[^{};]*?\{""",
     )
 
     /**
      * Whether [text] declares a `class`/`object` implementing [ReferenceOp] (directly, or via
      * [SourceModel]/[OperatorModel], the only two evaluable sub-interfaces — see
-     * `ReferenceOp.kt`). A single-line supertype-list match, like the rest of this scanner: pure
-     * text, not a compiler-level check.
+     * `ReferenceOp.kt`). A supertype-list match over the declaration header, single- or
+     * multi-line ([declarationHeader]): pure text, not a compiler-level check.
      */
     fun declaresReferenceOp(text: String): Boolean = declarationHeader.containsMatchIn(text)
 
@@ -384,11 +401,97 @@ class ModelImportBoundaryTest {
                 File(root, "civictech/oracle/model/TaggedKeyedModels.kt").readText(),
             ) shouldBe true
         }
+        withClue(
+            "sanity: GroupByModel.kt too — a REAL OperatorModel whose multi-line constructor puts " +
+                "': OperatorModel, Serializable {' on its own line. The first version of this scan " +
+                "matched single-line headers only and silently skipped this file; the same " +
+                "formatting outside civictech.oracle.model would have evaded the gate entirely",
+        ) {
+            ModelImportBoundaryScanner.declaresReferenceOp(
+                File(root, "civictech/oracle/model/GroupByModel.kt").readText(),
+            ) shouldBe true
+        }
 
         val violations = ModelImportBoundaryScanner.scanForReferenceOpDeclarations(root)
 
         withClue("ReferenceOp declarations anywhere in :oracle import forbidden types $violations [ORA2-MODEL-11]") {
             violations.shouldBeEmpty()
         }
+    }
+
+    /**
+     * The acceptance's synthetic again, in the two multi-line header shapes this codebase
+     * actually writes — a wrapped supertype list, and constructor parameters one per line. Both
+     * were **missed** by the first version of [ModelImportBoundaryScanner.declaresReferenceOp],
+     * whose header match could not cross a newline: the offending file was never scanned and the
+     * gate went green on a `ReferenceOp` importing `civictech.cell.data.op.FilterCell`. Found by
+     * the review of computenet-n00e, by writing exactly these files into `:oracle`'s real
+     * `civictech.oracle.bind` source directory and watching the positive gate above stay green.
+     *
+     * These are text-level, not filesystem-level, on purpose: a formatting variant is a property
+     * of the predicate, and pinning it here keeps it independent of what happens to be committed.
+     */
+    @Test
+    fun `computenet-n00e a ReferenceOp declared with a multi-line header is recognised, so its file is scanned`() {
+        val wrappedSupertypes =
+            """
+            package civictech.oracle.bind
+
+            import civictech.cell.data.op.FilterCell
+
+            object WrappedSupertypes :
+                SourceModel,
+                Serializable {
+                val unused: FilterCell<*>? = null
+            }
+            """.trimIndent()
+        val wrappedConstructor =
+            """
+            package civictech.oracle.bind
+
+            import civictech.cell.data.op.FilterCell
+
+            class WrappedConstructor(
+                private val keyFn: ElementKey,
+                private val aggregate: AggregateFunction,
+            ) : OperatorModel, Serializable {
+                val unused: FilterCell<*>? = null
+            }
+            """.trimIndent()
+
+        withClue("a wrapped supertype list is still a ReferenceOp declaration") {
+            ModelImportBoundaryScanner.declaresReferenceOp(wrappedSupertypes) shouldBe true
+        }
+        withClue("so is a multi-line constructor header — GroupByModel's real shape") {
+            ModelImportBoundaryScanner.declaresReferenceOp(wrappedConstructor) shouldBe true
+        }
+        withClue("and recognising them is what makes the forbidden import visible to the scan") {
+            ModelImportBoundaryScanner.scanText("WrappedSupertypes.kt", wrappedSupertypes) shouldBe listOf(
+                ModelImportBoundaryScanner.Violation("WrappedSupertypes.kt", "civictech.cell.data.op.FilterCell"),
+            )
+        }
+    }
+
+    /**
+     * The other half of [declaresReferenceOp]'s bound: the header match must not run past a
+     * declaration's own opening brace, or a file holding an unrelated `class`/`object` and a
+     * later mention of `SourceModel` would be dragged into the scan for no reason. `{`, `}` and
+     * `;` are excluded from the match's gaps precisely to hold this.
+     */
+    @Test
+    fun `computenet-n00e a file with no ReferenceOp declaration is not recognised, however it mentions one`() {
+        val notADeclaration =
+            """
+            package civictech.oracle.bind
+
+            import civictech.cell.data.op.FilterCell
+
+            object Registration {
+                fun modelFor(id: String): SourceModel = error(id)
+                val cell: FilterCell<*>? = null
+            }
+            """.trimIndent()
+
+        ModelImportBoundaryScanner.declaresReferenceOp(notADeclaration) shouldBe false
     }
 }
