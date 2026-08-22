@@ -5,6 +5,23 @@ import java.util.ServiceLoader
 import java.util.concurrent.ConcurrentHashMap
 
 /**
+ * Snapshot of a concurrently-mutated collection that cannot throw while it is
+ * taken. Deliberately **not** `Iterable<T>.toList()`: kotlin-stdlib
+ * special-cases a `Collection` of `size == 1` as `listOf(iterator().next())`,
+ * which reads `size()` and then calls `iterator()`/`next()` as two separate,
+ * unsynchronized operations. Against a [ConcurrentHashMap] view, an entry
+ * removed between those two reads makes `next()` raise
+ * `NoSuchElementException` instead of yielding an empty list — observed on
+ * every concurrent `ModuleRegistration.register` call, which reads these
+ * getters lock-free by design (computenet-pu0c, [JAR1-REG-09]).
+ *
+ * `ArrayList(c)` goes through `c.toArray()`, which walks the weakly-consistent
+ * view once and treats `size` as a capacity hint only, so a concurrent
+ * insertion or removal yields a shorter or longer snapshot but never an error.
+ */
+internal fun <T> Collection<T>.concurrentSnapshot(): List<T> = java.util.ArrayList(this)
+
+/**
  * Runtime index of generated [ContractModule]s (ServiceLoader-discovered).
  * Resolves a reflective in-process capture to its stable wire identity — the
  * only place reflection and wire ids meet (C-5): in-process dispatch stays
@@ -164,11 +181,15 @@ object ContractRegistry {
         return byMethodKey[key]?.let { (c, m) -> c.contractId to m.methodId }
     }
 
-    /** Defensive copy (T03): a live map view let a caller iterate a registry that mutates underneath it. */
-    val contracts: Collection<ContractDescriptor> get() = byId.values.toList()
+    /**
+     * Defensive copy (T03): a live map view let a caller iterate a registry that
+     * mutates underneath it. Taken via [concurrentSnapshot] — this getter is read
+     * lock-free, including by `ModuleRegistration.ensureRegistriesInitialized`.
+     */
+    val contracts: Collection<ContractDescriptor> get() = byId.values.concurrentSnapshot()
 
     /** Defensive copy (T03), same reasoning as [contracts]. */
-    val cells: Collection<CellDescriptor> get() = cellsByFqn.values.toList()
+    val cells: Collection<CellDescriptor> get() = cellsByFqn.values.concurrentSnapshot()
 }
 
 /** Runtime index of the generated, bounded metadata-protocol descriptors. */
@@ -262,7 +283,7 @@ object ProtocolRegistry {
     fun protocol(contractId: Long): ProtocolDescriptor? = byContractId[contractId]
 
     /** Defensive copy (T03), same reasoning as [ContractRegistry.contracts]. */
-    val protocols: Collection<ProtocolDescriptor> get() = byId.values.toList()
+    val protocols: Collection<ProtocolDescriptor> get() = byId.values.concurrentSnapshot()
 }
 
 /**

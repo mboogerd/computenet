@@ -192,7 +192,11 @@ internal class Provenance<K : Any> {
     /** Keys whose last contribution by [owner] leaves nobody behind. */
     fun drop(owner: ModuleId): List<K> {
         val orphaned = mutableListOf<K>()
-        contributors.keys.toList().forEach { key ->
+        // concurrentSnapshot, not toList(): every mutation here happens under
+        // RegistryMutation.lock so the size==1 TOCTOU is not reachable today, but the
+        // shape is the one that broke the lock-free getters (computenet-pu0c) and
+        // nothing in the type stops a future caller reading provenance off-lock.
+        contributors.keys.concurrentSnapshot().forEach { key ->
             val remaining = (contributors[key] ?: emptyList()).filterNot { it == owner }
             if (remaining.isEmpty()) {
                 contributors.remove(key)
