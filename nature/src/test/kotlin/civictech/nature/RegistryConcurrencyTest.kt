@@ -1,9 +1,12 @@
 package civictech.nature
 
 import java.time.Duration
+import java.util.concurrent.BrokenBarrierException
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -222,6 +225,45 @@ class RegistryConcurrencyTest {
      * timing") — the timeout bounds the whole run against a hang, it is not
      * itself the assertion. Exercises the same contended shared key with a
      * fresh descriptor so it cannot share state with the first test.
+     *
+     * The overlap `contentionHits` witnesses is made STRUCTURAL rather than
+     * asserted (computenet-96fs): every worker parks on a shared
+     * [CyclicBarrier] after its own [ModuleRegistration.register] returns
+     * and before it reads [ContractRegistry.contributorsOf] for that
+     * iteration. [ModuleRegistration.register] takes and releases
+     * [RegistryMutation.lock] internally (it returns only after the
+     * `synchronized` block completes), so by the time any worker reaches the
+     * barrier it no longer holds that lock — parking on the barrier cannot
+     * deadlock the registry. Because the barrier requires all [threads]
+     * workers to arrive before any of them proceeds, every worker that gets
+     * past it is guaranteed to observe every other worker's registration for
+     * that same iteration already committed: `contributorsOf(...).size ==
+     * threads` by construction, not by scheduling luck. `contentionHits > 0`
+     * is therefore a fact about this test, not about the runner.
+     *
+     * The barrier await is bounded (`barrier.await(timeout, unit)`) so a
+     * worker that never reaches the barrier — e.g. because a `check(...)`
+     * above it threw — cannot hang its seven siblings forever: the JDK
+     * [CyclicBarrier] contract breaks the barrier for every other waiting
+     * party once one party's bounded wait times out, so the survivors fail
+     * fast with [BrokenBarrierException]/[TimeoutException] instead of
+     * blocking for the outer 60s and reporting an unrelated timeout. Every
+     * worker's real exception (including a broken-barrier one) is still
+     * routed through the existing `failures` queue and surfaces as itself in
+     * the final `AssertionError`, so a genuine assertion failure is not
+     * masked by the barrier machinery.
+     *
+     * The main stress test above (`totalIterations` = 1600, observed
+     * `contentionHits=1005` on a real run) is NOT changed: its contention
+     * window is wide enough — 8 threads free-running with no per-iteration
+     * synchronization, hammering one shared key for 200 iterations each —
+     * that it has never been observed to flake, unlike this test's narrower
+     * 100-iteration, otherwise-identical window that CI did observe going
+     * red then green on the same commit. The same fragility argument
+     * technically applies to it too, but forcing lockstep there would change
+     * what it exercises (free-running contention, not barrier-gated
+     * contention) for no evidenced benefit; it is left as the free-running
+     * witness test the fix intentionally keeps un-forced.
      */
     @Test
     fun `bounded concurrent contention on a shared descriptor never loses a contributor`() {
@@ -231,6 +273,13 @@ class RegistryConcurrencyTest {
         val startGate = CountDownLatch(1)
         val contentionHits = AtomicInteger(0)
         val failures = java.util.concurrent.ConcurrentLinkedQueue<Throwable>()
+        // Forces the overlap the test witnesses: every worker parks here,
+        // inside its own registered window (register() has returned and
+        // released RegistryMutation.lock; unregister() has not yet run),
+        // until all `threads` workers have done the same for this
+        // iteration. See the class doc above for the deadlock-safety and
+        // non-vacuousness argument.
+        val barrier = CyclicBarrier(threads)
 
         assertTimeoutPreemptively(Duration.ofSeconds(60)) {
             val pool = Executors.newFixedThreadPool(threads)
@@ -243,6 +292,16 @@ class RegistryConcurrencyTest {
                                 val owner = ModuleId("bounded-shared-t$t-i$i")
                                 ModuleRegistration.register(owner, contractModules = listOf(concModuleOf(boundDescriptor)))
                                 try {
+                                    // Bounded: a sibling that never arrives (e.g. it threw
+                                    // above) breaks the barrier for everyone waiting once the
+                                    // timeout elapses, rather than hanging this thread forever.
+                                    try {
+                                        barrier.await(20, TimeUnit.SECONDS)
+                                    } catch (e: TimeoutException) {
+                                        throw AssertionError("t$t/i$i: timed out waiting for siblings at the contention barrier", e)
+                                    } catch (e: BrokenBarrierException) {
+                                        throw AssertionError("t$t/i$i: contention barrier broken by a sibling failure", e)
+                                    }
                                     val contributors = ContractRegistry.contributorsOf(boundDescriptor.contractId)
                                     check(owner in contributors) { "t$t/i$i: own contribution missing right after register" }
                                     if (contributors.size > 1) contentionHits.incrementAndGet()
