@@ -210,16 +210,21 @@ class BeadsMirrorApp private constructor(
             // the live ones. (`rebind` is correct under concurrent gossip; this
             // simply means the start-time swap never has to rely on that.)
             //
-            // Routes are registered for the FIRST configured workspace, which
-            // in a single-workspace process — every caller before this task —
-            // is the only one. Addressing folds per workspace on the HTTP
-            // surface is deliberately not this task's: it is sibling task
-            // computenet-3bso.1.2, which replaces this line with a
-            // workspace-segmented surface. Until it lands, an N > 1 process
-            // holds N live folds and serves the first one on the legacy path.
+            // Routes are addressed per workspace (task computenet-3bso.1.2):
+            // `GET /workspaces` lists every configured identity, and
+            // `/workspaces/{identity}/beads/issues[/{id}]` serves that
+            // workspace's fold, 503-with-stale-envelope on ITS routes alone
+            // once ITS poll loop has died — a sibling workspace's routes stay
+            // 200. The legacy unsegmented `/beads/issues` path is registered
+            // too, bound to the sole workspace, exactly when this process
+            // hosts exactly one (MirrorRoutes.register's size == 1 case) — the
+            // shape every caller before N-workspace mode used, kept working
+            // unchanged.
             val shell = DemoShell(config.port)
-            val served = mirrors.first()
-            MirrorRoutes(served.state) { served.pollLoopStopped }.register(shell)
+            val routeWorkspaces = mirrors.map { mirror ->
+                MirrorRoutes.Workspace(mirror.identity, mirror.state) { mirror.pollLoopStopped }
+            }
+            MirrorRoutes(routeWorkspaces).register(shell)
             shell.start()
             mirrors.forEach { it.startPolling() }
 
