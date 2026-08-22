@@ -65,8 +65,28 @@ sealed interface RebaselineReason {
  * deliberately *not* an event, because the whole point of rule 5 is that a
  * rebuild is distinguishable from a resume, and a resume that also emitted an
  * event would blur exactly that line.
+ *
+ * **Every event names the workspace it came from** ([workspaceIdentity], task
+ * computenet-3bso.1.1). One process now hosts N workspace mirrors sharing one
+ * `BeadsMirrorConfig.onEvent`
+ * ([civictech.demo.beadsmirror.WorkspaceMirror]), so an event that did not say
+ * which workspace produced it would be unattributable the moment N > 1 — and
+ * "which mirror froze" is exactly what the surviving siblings' operator needs.
+ * It is a member of the *interface*, not of one implementation, so no future
+ * [MirrorEvent] can be added without an attribution; and it is a machine-
+ * readable field rather than a substring of a printed line, so a test asserts
+ * it instead of parsing prose.
  */
 sealed interface MirrorEvent {
+
+    /**
+     * Which workspace produced this event: the sanitized identity from
+     * [civictech.demo.beadsmirror.sanitizedDoltDatabaseName], which is also the
+     * [DotMinter] source identity of the projector the event concerns and the
+     * per-workspace key of the coordinator that hosts it. A pure function of
+     * the workspace path, so it is stable across restarts.
+     */
+    val workspaceIdentity: String
 
     /**
      * The mirror rebuilt its whole state from `bd export` at [headCommit],
@@ -76,6 +96,7 @@ sealed interface MirrorEvent {
         val reason: RebaselineReason,
         val headCommit: String,
         val issueCount: Int,
+        override val workspaceIdentity: String,
     ) : MirrorEvent
 }
 
@@ -329,6 +350,9 @@ class Rebaseline(
         state.swap(rebuilt)
         checkpoint.write(headCommit)
 
-        onEvent(MirrorEvent.Rebaselined(reason, headCommit, rows.size))
+        // [workspaceIdentity] is already this instance's own — the identity it
+        // rebuilds under — so the event's attribution cannot drift from the
+        // projector it describes.
+        onEvent(MirrorEvent.Rebaselined(reason, headCommit, rows.size, workspaceIdentity))
     }
 }

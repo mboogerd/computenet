@@ -536,6 +536,11 @@ class BeadsMirrorAppTest {
             val died = events.filterIsInstance<PollLoopDied>().single()
             died.checkpoint shouldBe frozenCheckpoint
             (died.failure is DoltSqlException) shouldBe true
+            // computenet-3bso.1.1: and it names the workspace whose loop died,
+            // machine-readably, not only in the printed line — with N mirrors
+            // sharing one onEvent that is the only thing distinguishing "a
+            // fold froze" from "which fold froze".
+            died.workspaceIdentity shouldBe sanitizedDoltDatabaseName(workspace.root)
         }
 
         /** [BeadsMirrorApp.start] against this test's scratch workspace, reporting into [events]. */
@@ -548,6 +553,362 @@ class BeadsMirrorAppTest {
                 onEvent = events::add,
             ),
         )
+
+        private fun BdScratchWorkspace.createIssue(title: String): String {
+            val output = run("create", title, "--json")
+            return Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(output)!!.groupValues[1]
+        }
+
+        private fun commandAvailable(vararg command: String): Boolean = try {
+            ProcessBuilder(*command)
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start()
+                .waitFor() == 0
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // =================================================================
+    // computenet-3bso.1.1 — N workspaces in one process
+    // =================================================================
+
+    /**
+     * The two startup refusals decisions 3bso.1-D2 and 3bso.1-D3 require, and
+     * the reason they can be tested without `bd` or `dolt`: both are decided
+     * from the configuration alone, before any component of any workspace is
+     * built. A workspace directory here is an empty temp directory with no
+     * `.beads` and no Dolt database at all — if a refusal did not fire first,
+     * `start` would fail some other, noisier way (a missing-database
+     * `DoltSqlException`, a `bd export` failure), so the exception *type* is
+     * the evidence the refusal preceded everything.
+     */
+    @Nested
+    inner class MultiWorkspaceRefusals {
+
+        private lateinit var searchRoot: Path
+        private val created = mutableListOf<Path>()
+
+        @BeforeEach
+        fun setUp() {
+            searchRoot = Files.createTempDirectory("beadsmirror-multi-searchroot-").also { created.add(it) }
+        }
+
+        @AfterEach
+        fun tearDown() {
+            created.forEach { it.toFile().deleteRecursively() }
+            created.clear()
+        }
+
+        /** A directory named [name] under its own fresh temp parent, so only the basename is shared. */
+        private fun workspaceNamed(name: String): Path {
+            val parent = Files.createTempDirectory("beadsmirror-multi-parent-").also { created.add(it) }
+            return Files.createDirectory(parent.resolve(name))
+        }
+
+        private fun start(vararg workspaces: Path, peering: MirrorPeeringSettings? = null) =
+            BeadsMirrorApp.start(
+                BeadsMirrorConfig(
+                    workspaces = workspaces.toList(),
+                    repoSearchRoot = searchRoot,
+                    peering = peering,
+                ),
+            )
+
+        /**
+         * 3bso.1-D2, the plain collision: identity is the *basename*, so two
+         * workspaces under different parents can be entirely different
+         * workspaces and still claim one identity.
+         */
+        @Test
+        fun `refuses two workspaces whose basenames give them the same identity`() {
+            val a = workspaceNamed("shared")
+            val b = workspaceNamed("shared")
+
+            val error = shouldThrow<DuplicateWorkspaceIdentityException> { start(a, b) }
+
+            error.message?.contains("shared") shouldBe true
+            // Nothing of either mirror was created: the refusal precedes every
+            // component, so neither workspace got a run directory.
+            Files.exists(a.resolve(".beadsmirror")) shouldBe false
+            Files.exists(b.resolve(".beadsmirror")) shouldBe false
+        }
+
+        /**
+         * 3bso.1-D2, the sanitization collision — the one a reader is most
+         * likely to miss: `a-b` and `a_b` are different directory names that
+         * [sanitizedDoltDatabaseName] maps onto one identity.
+         */
+        @Test
+        fun `refuses two workspaces whose different basenames sanitize to one identity`() {
+            val dashed = workspaceNamed("team-alpha")
+            val underscored = workspaceNamed("team_alpha")
+            sanitizedDoltDatabaseName(dashed) shouldBe sanitizedDoltDatabaseName(underscored)
+
+            shouldThrow<DuplicateWorkspaceIdentityException> { start(dashed, underscored) }
+        }
+
+        /** The degenerate collision: the same workspace named twice is still two mirrors of one identity. */
+        @Test
+        fun `refuses the same workspace configured twice`() {
+            val a = workspaceNamed("only")
+
+            shouldThrow<DuplicateWorkspaceIdentityException> { start(a, a) }
+        }
+
+        /**
+         * 3bso.1-D3: peering is refused outright for N > 1 rather than
+         * half-generalized. The rig name is hashed into the shared logical
+         * `CellRef`s both nodes derive, so one rig across N folds would gossip
+         * N unrelated folds into one logical cell.
+         */
+        @Test
+        fun `refuses a multi-workspace configuration that also asks for peering`() {
+            val a = workspaceNamed("alpha")
+            val b = workspaceNamed("beta")
+
+            val error = shouldThrow<MultiWorkspacePeeringException> {
+                start(a, b, peering = MirrorPeeringSettings("rig", MirrorWire.Listen(0)))
+            }
+
+            error.message?.contains("3bso.1-D3") shouldBe true
+            Files.exists(a.resolve(".beadsmirror")) shouldBe false
+            Files.exists(b.resolve(".beadsmirror")) shouldBe false
+        }
+
+        /** A configuration naming no workspace at all is not a mirror of nothing; it is a usage error. */
+        @Test
+        fun `refuses a configuration naming no workspace`() {
+            shouldThrow<IllegalArgumentException> { BeadsMirrorConfig(workspaces = emptyList()) }
+        }
+    }
+
+    /**
+     * The mechanism half of feature rule 3 (task computenet-3bso.1.1): with N
+     * mirrors sharing one [BeadsMirrorConfig.onEvent], an event that did not
+     * name its workspace would be unattributable. These assert through the
+     * [MirrorEvent] *interface* type on purpose — the attribution is a member
+     * of the sealed interface, so no implementation can be added without one,
+     * and reading it through the supertype is what pins that.
+     */
+    @Nested
+    inner class EventWorkspaceAttribution {
+
+        @Test
+        fun `a Rebaselined event exposes its workspace identity through the MirrorEvent interface`() {
+            val event: MirrorEvent = MirrorEvent.Rebaselined(RebaselineReason.FirstStart, "head", 3, "ws_alpha")
+
+            event.workspaceIdentity shouldBe "ws_alpha"
+        }
+
+        @Test
+        fun `a PollLoopDied event exposes its workspace identity through the MirrorEvent interface`() {
+            val event: MirrorEvent = PollLoopDied(RuntimeException("boom"), "c0", "ws_beta")
+
+            event.workspaceIdentity shouldBe "ws_beta"
+        }
+    }
+
+    /**
+     * Per-workspace checkpoint placement. [FeedCheckpoint][civictech.demo.beadsmirror.feed.FeedCheckpoint]
+     * writes a fixed `checkpoint` filename, so N mirrors sharing one run
+     * directory would overwrite each other's feed position — which is why the
+     * N > 1 case segments by identity, and why the N == 1 case must NOT, since
+     * `--run-dir` has always meant "the checkpoint goes here".
+     */
+    @Nested
+    inner class RunDirectoryPerWorkspace {
+
+        private val alpha: Path = Path.of("/tmp/alpha")
+        private val beta: Path = Path.of("/tmp/beta")
+
+        @Test
+        fun `a single workspace uses the configured run dir verbatim`() {
+            val runDir = Path.of("/tmp/run")
+            val config = BeadsMirrorConfig(workspace = alpha, runDir = runDir)
+
+            config.runDirFor(alpha) shouldBe runDir
+        }
+
+        @Test
+        fun `several workspaces each get their own subdirectory of the configured run dir`() {
+            val runDir = Path.of("/tmp/run")
+            val config = BeadsMirrorConfig(workspaces = listOf(alpha, beta), runDir = runDir)
+
+            config.runDirFor(alpha) shouldBe runDir.resolve("alpha")
+            config.runDirFor(beta) shouldBe runDir.resolve("beta")
+            (config.runDirFor(alpha) == config.runDirFor(beta)) shouldBe false
+        }
+
+        @Test
+        fun `with no configured run dir each workspace keeps its own dot-beadsmirror`() {
+            val config = BeadsMirrorConfig(workspaces = listOf(alpha, beta))
+
+            config.runDirFor(alpha) shouldBe alpha.resolve(".beadsmirror")
+            config.runDirFor(beta) shouldBe beta.resolve(".beadsmirror")
+        }
+    }
+
+    /**
+     * Feature rule: `--workspace` may repeat, and **one occurrence must behave
+     * exactly as today**. [extractFlagAll] is a loop over the unchanged
+     * [extractFlag] precisely so the single-occurrence path is the identical
+     * one, and these pin both ends of that.
+     */
+    @Nested
+    inner class RepeatedWorkspaceFlagParsing {
+
+        @Test
+        fun `extractFlagAll reads a single occurrence exactly as extractFlag does`() {
+            val (values, rest) = arrayOf("--workspace", "/tmp/ws", "port").extractFlagAll("--workspace")
+            values shouldBe listOf("/tmp/ws")
+            rest shouldBe arrayOf("port")
+        }
+
+        @Test
+        fun `extractFlagAll reads every occurrence in order, mixing both spellings`() {
+            val (values, rest) = arrayOf("--workspace", "/tmp/a", "--workspace=/tmp/b", "8080")
+                .extractFlagAll("--workspace")
+            values shouldBe listOf("/tmp/a", "/tmp/b")
+            rest shouldBe arrayOf("8080")
+        }
+
+        @Test
+        fun `extractFlagAll returns an empty list when the flag is absent`() {
+            val (values, rest) = arrayOf("8080").extractFlagAll("--workspace")
+            values shouldBe emptyList()
+            rest shouldBe arrayOf("8080")
+        }
+    }
+
+    /**
+     * Feature rule a, against real workspaces: one process, N >= 2 configured
+     * workspaces, **one of each per workspace** — feed, checkpoint, baseline,
+     * projector, dot identity and poll loop — behind one
+     * [civictech.demo.shell.DemoShell].
+     *
+     * Every assertion here is chosen to fail if any one of those were shared:
+     * a shared baseline or projector would give the two mirrors one fold; a
+     * shared checkpoint would give them one file and one head; a shared dot
+     * minter would give them one `sourceId`; a shared poller would give them
+     * one liveness. The 30s poll interval means no tick can have run by the
+     * time these read, so what is asserted is the *start-time* wiring, not a
+     * race against polling.
+     *
+     * Mutation isolation on a later write, and poll-loop failure isolation, are
+     * sibling task computenet-3bso.1.3's e2e demonstrations, deliberately not
+     * repeated here.
+     */
+    @Nested
+    inner class AcrossTwoScratchWorkspaces {
+
+        private lateinit var wsA: BdScratchWorkspace
+        private lateinit var wsB: BdScratchWorkspace
+        private lateinit var runDir: Path
+        private lateinit var isolatedSearchRoot: Path
+        private var app: BeadsMirrorApp? = null
+
+        private val events: MutableList<MirrorEvent> = java.util.Collections.synchronizedList(mutableListOf())
+
+        @BeforeEach
+        fun setUp() {
+            assumeTrue(commandAvailable("bd", "--version"), "bd is not on PATH — skipping")
+            assumeTrue(commandAvailable("dolt", "version"), "dolt is not on PATH — skipping")
+            events.clear()
+            wsA = BdScratchWorkspace.create()
+            wsB = BdScratchWorkspace.create()
+            runDir = Files.createTempDirectory("beadsmirror-multi-run-")
+            isolatedSearchRoot = Files.createTempDirectory("beadsmirror-multi-searchroot-")
+        }
+
+        @AfterEach
+        fun tearDown() {
+            app?.stop()
+            if (::wsA.isInitialized) wsA.close()
+            if (::wsB.isInitialized) wsB.close()
+            if (::runDir.isInitialized) runDir.toFile().deleteRecursively()
+            if (::isolatedSearchRoot.isInitialized) isolatedSearchRoot.toFile().deleteRecursively()
+        }
+
+        @Test
+        fun `two configured workspaces run as two independent mirrors behind one shell`() {
+            val idsA = (1..2).map { wsA.createIssue("A issue $it") }
+            val idsB = (1..3).map { wsB.createIssue("B issue $it") }
+            val headA = DoltCommitFeed(wsA.doltRoot).history().last()
+            val headB = DoltCommitFeed(wsB.doltRoot).history().last()
+
+            app = BeadsMirrorApp.start(
+                BeadsMirrorConfig(
+                    workspaces = listOf(wsA.root, wsB.root),
+                    pollInterval = Duration.ofSeconds(30),
+                    runDir = runDir,
+                    repoSearchRoot = isolatedSearchRoot,
+                    onEvent = events::add,
+                ),
+            )
+            val app = this.app!!
+
+            // --- one mirror per workspace, distinct identities -------------
+            app.mirrors.size shouldBe 2
+            val identityA = sanitizedDoltDatabaseName(wsA.root)
+            val identityB = sanitizedDoltDatabaseName(wsB.root)
+            (identityA == identityB) shouldBe false
+            app.mirrors.map { it.identity } shouldBe listOf(identityA, identityB)
+            app.mirror(identityA)?.workspace shouldBe wsA.root
+            app.mirror(identityB)?.workspace shouldBe wsB.root
+            app.mirror("no-such-workspace") shouldBe null
+
+            val a = app.mirror(identityA)!!
+            val b = app.mirror(identityB)!!
+
+            // --- one baseline and one projector each ----------------------
+            // Disjoint folds: a shared baseline or a shared projector would
+            // put all five issues in both.
+            a.state.current.view().keys shouldBe idsA.toSet()
+            b.state.current.view().keys shouldBe idsB.toSet()
+            a.state.rebaselineCount shouldBe 1
+            b.state.rebaselineCount shouldBe 1
+
+            // --- one checkpoint each, at its own workspace's head ----------
+            a.runDir shouldBe runDir.resolve(identityA)
+            b.runDir shouldBe runDir.resolve(identityB)
+            Files.readString(a.runDir.resolve("checkpoint")).trim() shouldBe headA
+            Files.readString(b.runDir.resolve("checkpoint")).trim() shouldBe headB
+            (headA == headB) shouldBe false
+
+            // --- one dot identity each ------------------------------------
+            a.minter.workspaceIdentity shouldBe identityA
+            b.minter.workspaceIdentity shouldBe identityB
+            (a.minter.sourceId == b.minter.sourceId) shouldBe false
+
+            // --- one poll loop each, liveness readable per workspace -------
+            a.pollLoopStopped shouldBe null
+            b.pollLoopStopped shouldBe null
+            (a === b) shouldBe false
+
+            // --- one shell ------------------------------------------------
+            (app.boundPort > 0) shouldBe true
+
+            // --- and every event names the workspace it came from ----------
+            val baselines = events.filterIsInstance<MirrorEvent.Rebaselined>()
+            baselines.map { it.workspaceIdentity } shouldBe listOf(identityA, identityB)
+            val byWorkspace = baselines.associateBy { it.workspaceIdentity }
+            byWorkspace.getValue(identityA).let {
+                it.reason shouldBe RebaselineReason.FirstStart
+                it.headCommit shouldBe headA
+                it.issueCount shouldBe 2
+            }
+            byWorkspace.getValue(identityB).let {
+                it.reason shouldBe RebaselineReason.FirstStart
+                it.headCommit shouldBe headB
+                it.issueCount shouldBe 3
+            }
+
+            // --- the single-workspace shorthands refuse to guess -----------
+            shouldThrow<IllegalArgumentException> { app.state }
+            shouldThrow<IllegalArgumentException> { app.pollerFailure }
+        }
 
         private fun BdScratchWorkspace.createIssue(title: String): String {
             val output = run("create", title, "--json")
