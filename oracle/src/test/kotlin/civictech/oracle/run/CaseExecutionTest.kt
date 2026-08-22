@@ -490,4 +490,90 @@ class CaseExecutionTest {
         assembly.graph.terminals.getValue("tagged").current() shouldBe
             ModelState.MapState(mapOf("k1" to "v9"))
     }
+
+    // -------------------------------------------------- the pnCounter dispatch, computenet-f5zo
+
+    /**
+     * `pnCounter(src) -> terminal` — hand-constructed for the same reason [orMapCase] is: this
+     * shape (a terminal linked directly onto a `pnCounter` source) is not one `GraphGenerator`
+     * ever draws (`CoreOperators.registerAll`'s KDoc: no registered operator consumes a bare
+     * `Scalar`, so `pnCounter` can never appear inside a generated case), but [CaseExecution]
+     * does not know that — `foldFor` dispatches on the catalog entry's declared shape for any
+     * topology handed to it, generated or not. Constructing it directly is what exercises that
+     * dispatch in isolation from the generator's own reachability limit.
+     */
+    private fun pnCounterCase(script: CaseScript, seed: Long = 91L) = GeneratedCase(
+        seed = seed,
+        topology = CaseTopology(
+            nodes = listOf(TopologyNode("pn", CoreOperators.Ids.PN_COUNTER, emptyList(), source)),
+            terminals = listOf(TerminalSpec("total", "pn")),
+            placement = mapOf("pn" to 0),
+        ),
+        spec = GraphSpec(listOf(SpawnStep("pn", OperatorCatalog.entry(CoreOperators.Ids.PN_COUNTER)!!.kernel))),
+        script = script,
+        removeAudit = emptyList(),
+    )
+
+    /** `increment(5) increment(3) decrement(2)` — net total 6, not the 0 an empty script gives. */
+    private fun pnCounterScript() = CaseScript(
+        listOf(
+            CaseStep.Op(source, ScriptEvent.Increment(writer, 5L)),
+            CaseStep.Op(source, ScriptEvent.Increment(writer, 3L)),
+            CaseStep.Op(source, ScriptEvent.Decrement(writer, 2L)),
+            CaseStep.Barrier,
+        ),
+    )
+
+    /**
+     * The dispatch half of computenet-f5zo: a `pnCounter` terminal resolves to
+     * [PnCounterTerminalFold], **not** to [ScalarTerminalFold].
+     *
+     * `pnCounter` declares a bare [civictech.oracle.model.ElementShape.Scalar] output shape,
+     * same as `counter` — but `PnCounterCell.outlet` carries a
+     * [civictech.cell.data.delta.PnCounterDelta], not a `CounterDelta`, so the shape-only
+     * dispatch [foldFor] uses for the untagged families resolves it to the wrong fold, whose
+     * inlet cannot even accept the stream. Asserted on fold identity, exactly like the `orMap`
+     * pin above, for the same reason: a `foldFor` that fell back to the shape-only branch would
+     * satisfy the `Scalar` reading and fail here.
+     *
+     * Against the unfixed dispatch this never got far enough to fail an assertion here — see
+     * the end-to-end test below for where the unfixed code actually breaks.
+     */
+    @Test
+    fun `pnCounter - the terminal folds through the pn-counter fold, not the summing scalar fold`() {
+        val case = pnCounterCase(pnCounterScript())
+        val world = SimWorld(seed = case.seed)
+
+        val assembly = CaseExecution.assemble(case, world)
+
+        val fold = assembly.graph.terminals.getValue("total")
+        withClue("the pnCounter terminal resolves to the pointwise-max fold") {
+            fold.shouldBeInstanceOf<PnCounterTerminalFold>()
+        }
+        withClue("and specifically NOT to the summing ScalarTerminalFold") {
+            (fold is ScalarTerminalFold) shouldBe false
+        }
+    }
+
+    /**
+     * The end-to-end half: a case naming a `pnCounter` terminal runs through
+     * [DifferentialRunner] and agrees with the catalog-resolved reference.
+     *
+     * Against the unfixed wiring, `foldFor` resolved the terminal to [ScalarTerminalFold], whose
+     * inlet is `FanInlet<Propagate<CounterDelta>>` — but `PnCounterCell.outlet` emits
+     * `Propagate<PnCounterDelta>`, and `PnCounterDelta` is not a `CounterDelta`. Connecting the
+     * two raises a `ClassCastException` per delta at the fold's inlet, which the fan-in port
+     * dead-letters rather than propagating past `connect` — so the run never reaches
+     * `DifferentialRunner`'s comparison at all: `assemble` itself throws.
+     */
+    @Test
+    fun `pnCounter - a generated case naming a pnCounter terminal executes end to end`() {
+        var observed: Map<String, ModelState>? = null
+
+        DifferentialRunner.run(pnCounterCase(pnCounterScript())) { observed = it } shouldBe RunOutcome.Success
+
+        withClue("non-vacuity: net total is 5 + 3 - 2 = 6, not the 0 an empty script gives") {
+            observed shouldBe mapOf("total" to ModelState.ScalarState(6L))
+        }
+    }
 }
