@@ -221,19 +221,34 @@ internal data class CellProvenanceDrop(val orphaned: List<String>, val repointed
 /**
  * Contributor multiset for [ContractRegistry]'s cell table, specialized (not
  * built on [Provenance]) because cell registration is deliberately
- * last-writer-wins and NOT validated [JAR1-REG-01] — unlike contracts,
- * protocols and proxies, a later contributor's [CellDescriptor] can silently
+ * last-writer-wins and NOT validated [JAR1-REG-01] — unlike contract/method/
+ * protocol *primary* keys, a later contributor's [CellDescriptor] can silently
  * repoint an fqn a still-live contributor already holds. [drop] has to know
  * not just who is left (what [Provenance] tracks) but *which descriptor* they
  * contributed, so [ContractRegistry.removeOwner] can restore it — otherwise a
  * departed contributor's descriptor outlives it whenever it was not the last
  * one to unregister (computenet-b7fr).
  *
- * Contracts, protocols and proxies keep using the plain [Provenance]: contract
- * and protocol contributions are refused outright when non-equal
- * [JAR1-REG-05], and proxy contributions are first-writer-wins with
- * functionally-identical constructors — neither table can be repointed by a
- * later contributor, so neither needs a descriptor to restore.
+ * Contract*Ids*, protocols and proxies keep using the plain [Provenance] for
+ * their own primary keys: contract and protocol contributions are refused
+ * outright when non-equal [JAR1-REG-05], and proxy contributions are
+ * first-writer-wins with functionally-identical constructors — neither
+ * primary table can be repointed by a later contributor, so neither needs a
+ * descriptor to restore.
+ *
+ * `ContractRegistry.byFqn`/`byMethodKey` are a **different** case, despite
+ * looking like the primary-key case: they are *secondary* indexes, keyed on
+ * fqn / method-key rather than contractId, and [ContractRegistry.stage]
+ * validates by contractId only — it never compares the fqn. Two contracts
+ * with different contractIds can therefore legitimately share one fqn (only
+ * reachable via a hand-constructed [ContractDescriptor] today; JAR2's
+ * same-FQN-two-versions requirement — epic computenet-051's G-49 note — is
+ * built to make it reachable in production), and `commit` repoints
+ * `byFqn[fqn]` to whichever contract committed last. computenet-dhgy is that
+ * hole: [ContractRegistry.removeOwner] restores `byFqn`/`byMethodKey` from
+ * [ContractFqnIndex] the same way, keyed on contractId rather than [ModuleId]
+ * since it is a still-live *contractId* under the fqn, not a still-live
+ * module, that the caller needs to fall back to.
  */
 internal class CellProvenance {
     private val contributions = java.util.concurrent.ConcurrentHashMap<String, List<Pair<ModuleId, CellDescriptor>>>()
@@ -273,5 +288,48 @@ internal class CellProvenance {
             }
         }
         return CellProvenanceDrop(orphaned, repointed)
+    }
+}
+
+/**
+ * Tracks, per fqn, the distinct contractIds that have ever committed a
+ * [ContractDescriptor] under it, in commit order — bookkeeping
+ * `ContractRegistry.byFqn`'s last-writer-wins index does not itself retain,
+ * needed so [ContractRegistry.removeOwner] can repoint `byFqn`/`byMethodKey`
+ * to the surviving contract rather than stranding them (computenet-dhgy).
+ *
+ * Deliberately **not** built on [Provenance]: `Provenance` answers "which
+ * [ModuleId]s still hold this key", scanning every key a departing module
+ * touched. This index answers a different question — "which *contractIds*
+ * still target this fqn" — and the caller already knows the one fqn to ask
+ * about (the departing contract's own), so it is a direct per-fqn add/remove
+ * rather than an owner-wide scan. [CellProvenance] was considered as a
+ * template too, but its value type ([CellDescriptor]) is per-contribution and
+ * keeps every contributor's own descriptor for exact equality comparison on
+ * removal (`remove(fqn, descriptor)`); here the value that matters is just
+ * the *contractId*, because [ContractRegistry.byId] is already the source of
+ * truth for the descriptor a live contractId currently holds — reusing that
+ * table on repoint is what keeps this index from also having to duplicate
+ * descriptor storage.
+ */
+internal class ContractFqnIndex {
+    private val byFqn = java.util.concurrent.ConcurrentHashMap<String, List<Long>>()
+
+    /** Record [contractId] as a contributor to [fqn], if not already recorded. */
+    fun add(fqn: String, contractId: Long) {
+        val existing = byFqn[fqn] ?: emptyList()
+        if (contractId !in existing) byFqn[fqn] = existing + contractId
+    }
+
+    /**
+     * Remove [contractId] from [fqn]'s contributor list and return the last
+     * remaining contractId, if any — the survivor `byFqn`/`byMethodKey` should
+     * repoint to, mirroring the last-writer-wins order [ContractRegistry.commit]
+     * applies. `null` means [fqn] has no live contractId left at all.
+     */
+    fun remove(fqn: String, contractId: Long): Long? {
+        val remaining = (byFqn[fqn] ?: emptyList()) - contractId
+        if (remaining.isEmpty()) byFqn.remove(fqn) else byFqn[fqn] = remaining
+        return remaining.lastOrNull()
     }
 }
