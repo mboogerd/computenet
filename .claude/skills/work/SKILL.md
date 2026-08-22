@@ -1158,6 +1158,9 @@ Attach and verify:
 # Substitute the printed values literally — each fenced block is a separate
 # Bash call and shell variables do not survive between calls; an empty var
 # here silently retargets origin/main or the main checkout.
+# Third argument: metadata.base_branch when the bead carries one (a residual
+# whose subject is feature-branch-only, review-feature.md §7 / direct-child.md,
+# computenet-nb44) — then origin/<that branch>, and the PR targets it too.
 .claude/skills/work/scripts/ensure-worktree.sh <worktree> <branch> origin/main
 
 .claude/skills/work/scripts/verify-branch-sync.sh <worktree> <branch>
