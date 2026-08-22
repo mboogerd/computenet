@@ -208,3 +208,70 @@ internal class Provenance<K : Any> {
         return orphaned
     }
 }
+
+/**
+ * Outcome of [CellProvenance.drop]: which fqns lost their last contributor
+ * entirely ([orphaned]), and which fqns still have a live contributor but must
+ * have [ContractRegistry]'s `cellsByFqn` restored to that contributor's own
+ * descriptor ([repointed]) because the departing contributor's descriptor was
+ * the one currently resolving (computenet-b7fr).
+ */
+internal data class CellProvenanceDrop(val orphaned: List<String>, val repointed: Map<String, CellDescriptor>)
+
+/**
+ * Contributor multiset for [ContractRegistry]'s cell table, specialized (not
+ * built on [Provenance]) because cell registration is deliberately
+ * last-writer-wins and NOT validated [JAR1-REG-01] — unlike contracts,
+ * protocols and proxies, a later contributor's [CellDescriptor] can silently
+ * repoint an fqn a still-live contributor already holds. [drop] has to know
+ * not just who is left (what [Provenance] tracks) but *which descriptor* they
+ * contributed, so [ContractRegistry.removeOwner] can restore it — otherwise a
+ * departed contributor's descriptor outlives it whenever it was not the last
+ * one to unregister (computenet-b7fr).
+ *
+ * Contracts, protocols and proxies keep using the plain [Provenance]: contract
+ * and protocol contributions are refused outright when non-equal
+ * [JAR1-REG-05], and proxy contributions are first-writer-wins with
+ * functionally-identical constructors — neither table can be repointed by a
+ * later contributor, so neither needs a descriptor to restore.
+ */
+internal class CellProvenance {
+    private val contributions = java.util.concurrent.ConcurrentHashMap<String, List<Pair<ModuleId, CellDescriptor>>>()
+
+    fun add(fqn: String, owner: ModuleId, descriptor: CellDescriptor) {
+        contributions[fqn] = (contributions[fqn] ?: emptyList()) + (owner to descriptor)
+    }
+
+    fun of(fqn: String): List<ModuleId> = (contributions[fqn] ?: emptyList()).map { it.first }
+
+    /**
+     * Remove every contribution [owner] made. An fqn left with no contributors
+     * is dropped entirely and reported in [CellProvenanceDrop.orphaned]. An fqn
+     * that still has contributors after [owner]'s are removed is reported in
+     * [CellProvenanceDrop.repointed], mapped to the *last remaining*
+     * contributor's descriptor — the same last-writer-wins ordering
+     * [ContractRegistry.commit] applies among survivors — so the caller can
+     * restore it even when it was not the one currently resolving (a harmless
+     * no-op write in that case).
+     */
+    fun drop(owner: ModuleId): CellProvenanceDrop {
+        val orphaned = mutableListOf<String>()
+        val repointed = mutableMapOf<String, CellDescriptor>()
+        // concurrentSnapshot, not toList(): same TOCTOU reasoning as Provenance.drop —
+        // every mutation here happens under RegistryMutation.lock.
+        contributions.keys.concurrentSnapshot().forEach { fqn ->
+            val existing = contributions[fqn] ?: emptyList()
+            val remaining = existing.filterNot { it.first == owner }
+            if (remaining.isEmpty()) {
+                contributions.remove(fqn)
+                orphaned += fqn
+            } else {
+                contributions[fqn] = remaining
+                if (remaining.size != existing.size) {
+                    repointed[fqn] = remaining.last().second
+                }
+            }
+        }
+        return CellProvenanceDrop(orphaned, repointed)
+    }
+}
