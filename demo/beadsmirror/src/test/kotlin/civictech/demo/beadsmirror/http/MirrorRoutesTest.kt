@@ -6,6 +6,7 @@ import civictech.demo.beadsmirror.feed.DiffType
 import civictech.demo.beadsmirror.feed.EdgeDiff
 import civictech.demo.beadsmirror.feed.FeedPosition
 import civictech.demo.beadsmirror.feed.FieldDiff
+import civictech.demo.beadsmirror.feed.PollLoopStopped
 import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.MirrorProjector
 import civictech.demo.shell.DemoShell
@@ -179,5 +180,166 @@ class MirrorRoutesTest {
         Json.parseToJsonElement(probe.get("/beads/issues/C").body())
             .jsonObject.getValue("dependencies").jsonArray.size shouldBe 0
         state.rebaselineCount shouldBe 1
+    }
+
+    // -----------------------------------------------------------------
+    // computenet-3bso.1.2 — workspace-addressed HTTP surface
+    // -----------------------------------------------------------------
+
+    /**
+     * Two workspaces sharing one shell, each served under its own
+     * `/workspaces/{identity}/beads/issues` route rather than the single-fold
+     * `shell`/`probe` this class's other tests use.
+     */
+    private class TwoWorkspaceRig(
+        wsAFrozen: () -> PollLoopStopped? = { null },
+        wsBFrozen: () -> PollLoopStopped? = { null },
+    ) : AutoCloseable {
+        val projectorA = MirrorProjector(DotMinter("wsA"))
+        val projectorB = MirrorProjector(DotMinter("wsB"))
+        val stateA = MirrorState(projectorA)
+        val stateB = MirrorState(projectorB)
+        val shell = DemoShell(0)
+        val probe: HttpProbe
+
+        init {
+            MirrorRoutes(
+                listOf(
+                    MirrorRoutes.Workspace("wsA", stateA, wsAFrozen),
+                    MirrorRoutes.Workspace("wsB", stateB, wsBFrozen),
+                ),
+            ).register(shell)
+            shell.start()
+            probe = HttpProbe("http://localhost:${shell.boundPort}")
+        }
+
+        override fun close() {
+            probe.close()
+            shell.stop()
+        }
+    }
+
+    @Test
+    fun `GET workspaces lists every configured workspace identity`() {
+        TwoWorkspaceRig().use { rig ->
+            val body = Json.parseToJsonElement(rig.probe.get("/workspaces").body())
+            body.jsonArray.map { it.jsonPrimitive.content }.toSet() shouldBe setOf("wsA", "wsB")
+        }
+    }
+
+    @Test
+    fun `a workspace-segmented route serves that workspace's fold and none of its sibling's`() {
+        TwoWorkspaceRig().use { rig ->
+            rig.projectorA.apply(issueRecord(1, "A1", DiffType.ADDED, "title" to "Alpha One"))
+            rig.projectorB.apply(issueRecord(1, "B1", DiffType.ADDED, "title" to "Beta One"))
+
+            val fromA = Json.parseToJsonElement(rig.probe.get("/workspaces/wsA/beads/issues").body()).jsonObject
+            fromA.keys shouldBe setOf("A1")
+
+            val fromB = Json.parseToJsonElement(rig.probe.get("/workspaces/wsB/beads/issues").body()).jsonObject
+            fromB.keys shouldBe setOf("B1")
+
+            val single = rig.probe.get("/workspaces/wsA/beads/issues/A1")
+            single.statusCode() shouldBe 200
+            Json.parseToJsonElement(single.body()).jsonObject["title"]?.jsonPrimitive?.content shouldBe "Alpha One"
+        }
+    }
+
+    @Test
+    fun `a request naming an unknown workspace identity answers a plain 404, not the frozen envelope`() {
+        TwoWorkspaceRig().use { rig ->
+            val response = rig.probe.get("/workspaces/wsZ/beads/issues")
+            response.statusCode() shouldBe 404
+            val body = Json.parseToJsonElement(response.body()).jsonObject
+            // Plain 404: no "mirror":"frozen" envelope — an unknown workspace
+            // is a config fact, never a frozen-fold fact.
+            body.keys shouldBe setOf("error")
+        }
+    }
+
+    @Test
+    fun `one workspace's dead poll loop answers 503 on its own routes while its sibling stays 200`() {
+        val frozen = PollLoopStopped(RuntimeException("dolt vanished"), checkpoint = "commit-9")
+        TwoWorkspaceRig(wsAFrozen = { frozen }).use { rig ->
+            rig.projectorA.apply(issueRecord(1, "A1", DiffType.ADDED, "title" to "Alpha One"))
+            rig.projectorB.apply(issueRecord(1, "B1", DiffType.ADDED, "title" to "Beta One"))
+
+            val fromA = rig.probe.get("/workspaces/wsA/beads/issues")
+            fromA.statusCode() shouldBe 503
+            val frozenBody = Json.parseToJsonElement(fromA.body()).jsonObject
+            frozenBody["mirror"]?.jsonPrimitive?.content shouldBe "frozen"
+            frozenBody["frozen_at_checkpoint"]?.jsonPrimitive?.content shouldBe "commit-9"
+
+            val fromB = rig.probe.get("/workspaces/wsB/beads/issues")
+            fromB.statusCode() shouldBe 200
+            Json.parseToJsonElement(fromB.body()).jsonObject.keys shouldBe setOf("B1")
+        }
+    }
+
+    /**
+     * One workspace, served through the same N-workspace [MirrorRoutes.Workspace]
+     * list the app builds — a real identity, not the `default` placeholder the
+     * single-[MirrorState] constructor supplies. This is the configuration in
+     * which BOTH surfaces exist at once, which no other test in this module
+     * covers: the class's other single-fold tests read only the legacy path and
+     * [TwoWorkspaceRig] has no legacy path at all.
+     */
+    private class OneWorkspaceRig(identity: String) : AutoCloseable {
+        val projector = MirrorProjector(DotMinter(identity))
+        val state = MirrorState(projector)
+        val shell = DemoShell(0)
+        val probe: HttpProbe
+
+        init {
+            MirrorRoutes(listOf(MirrorRoutes.Workspace(identity, state))).register(shell)
+            shell.start()
+            probe = HttpProbe("http://localhost:${shell.boundPort}")
+        }
+
+        override fun close() {
+            probe.close()
+            shell.stop()
+        }
+    }
+
+    @Test
+    fun `a one-workspace process serves the segmented and legacy surfaces identically`() {
+        OneWorkspaceRig("beads_scratch_42").use { rig ->
+            rig.projector.apply(issueRecord(1, "A1", DiffType.ADDED, "title" to "Alpha One"))
+
+            // Both surfaces are registered, and both name the same fold.
+            Json.parseToJsonElement(rig.probe.get("/workspaces").body())
+                .jsonArray.map { it.jsonPrimitive.content } shouldBe listOf("beads_scratch_42")
+
+            val segmented = rig.probe.get("/workspaces/beads_scratch_42/beads/issues")
+            val legacy = rig.probe.get("/beads/issues")
+            segmented.statusCode() shouldBe 200
+            legacy.statusCode() shouldBe 200
+            // Byte-identical: one implementation, one fold, two addresses.
+            segmented.body() shouldBe legacy.body()
+
+            val segmentedOne = rig.probe.get("/workspaces/beads_scratch_42/beads/issues/A1")
+            val legacyOne = rig.probe.get("/beads/issues/A1")
+            segmentedOne.statusCode() shouldBe 200
+            segmentedOne.body() shouldBe legacyOne.body()
+
+            // The unknown-workspace 404 is not an N > 1 privilege: a
+            // one-workspace process refuses a foreign identity the same way,
+            // rather than falling through to its sole fold.
+            val unknown = rig.probe.get("/workspaces/wsZ/beads/issues")
+            unknown.statusCode() shouldBe 404
+            Json.parseToJsonElement(unknown.body()).jsonObject.keys shouldBe setOf("error")
+        }
+    }
+
+    @Test
+    fun `a two-workspace process registers no legacy unsegmented beads issues route`() {
+        TwoWorkspaceRig().use { rig ->
+            // The legacy path is bound to "the sole workspace" only when there
+            // is one; with two hosted, DemoShell has no context registered at
+            // the bare "/beads/issues" prefix, so the request 404s at the
+            // server level rather than resolving to either fold.
+            rig.probe.get("/beads/issues").statusCode() shouldBe 404
+        }
     }
 }

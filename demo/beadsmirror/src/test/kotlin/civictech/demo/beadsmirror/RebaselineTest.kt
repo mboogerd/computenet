@@ -312,7 +312,7 @@ class RebaselineTest {
         ).run(RebaselineReason.CheckpointGone("gone-hash"))
 
         events shouldBe listOf(
-            MirrorEvent.Rebaselined(RebaselineReason.CheckpointGone("gone-hash"), "head", 2),
+            MirrorEvent.Rebaselined(RebaselineReason.CheckpointGone("gone-hash"), "head", 2, IDENTITY),
         )
     }
 
@@ -526,7 +526,7 @@ class RebaselineTest {
         state.current.view().keys shouldBe setOf("A", "P")
         state.current.view().getValue("A")["title"] shouldBe "\"Alpha\""
         checkpoint.read() shouldBe MERGE
-        events shouldBe listOf(MirrorEvent.Rebaselined(RebaselineReason.HistoryMerged(MERGE), MERGE, 2))
+        events shouldBe listOf(MirrorEvent.Rebaselined(RebaselineReason.HistoryMerged(MERGE), MERGE, 2, IDENTITY))
     }
 
     /**
