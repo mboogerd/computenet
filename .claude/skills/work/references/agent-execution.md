@@ -207,6 +207,14 @@ which is what makes them worth naming rather than leaving to be rediscovered.
   word-split an unquoted expansion, so the whole string is looked up as one
   command name. Type `bd -C "$WT" show x` each time, or define a function:
   `bd() { command bd -C "$WT" "$@"; }` (computenet-wahz).
+- **A `/*` inside a Kotlin KDoc comments out the rest of the file.** Kotlin
+  block comments NEST, so a path glob like `micro/*Benchmark.kt` written in a
+  `/** … */` opens a second level that never closes. The errors land
+  elsewhere — `Unresolved reference` at an unrelated line, `Unclosed comment`
+  at EOF (computenet-dy7q). Write `micro/` + `Benchmark.kt` or escape it,
+  and after any KDoc edit the opener and closer counts must match:
+  `grep -o '/\*' f.kt | wc -l` vs `grep -o '\*/' f.kt | wc -l` (`-o`, not
+  `-c`: `-c` counts lines and reads the motivating line as 1 = 1).
 - **`strings` cannot be trusted on `.class` files on darwin.** Java's class
   magic `0xCAFEBABE` is *also* the Mach-O universal-binary magic, so Apple's
   `strings` reads the next words as `cputype`/`cpusubtype` and fails with
