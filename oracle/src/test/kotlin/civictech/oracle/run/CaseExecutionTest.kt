@@ -536,8 +536,11 @@ class CaseExecutionTest {
      * pin above, for the same reason: a `foldFor` that fell back to the shape-only branch would
      * satisfy the `Scalar` reading and fail here.
      *
-     * Against the unfixed dispatch this never got far enough to fail an assertion here — see
-     * the end-to-end test below for where the unfixed code actually breaks.
+     * Measured against the unfixed dispatch (review of computenet-f5zo, the `PN_COUNTER` branch
+     * of `foldFor` deleted): this test fails here, on its own assertion —
+     * `AssertionError: the pnCounter terminal resolves to the pointwise-max fold /
+     * ScalarTerminalFold ... is of type ScalarTerminalFold but expected PnCounterTerminalFold`.
+     * `assemble` completes; the wrong fold is simply linked.
      */
     @Test
     fun `pnCounter - the terminal folds through the pn-counter fold, not the summing scalar fold`() {
@@ -563,8 +566,23 @@ class CaseExecutionTest {
      * inlet is `FanInlet<Propagate<CounterDelta>>` — but `PnCounterCell.outlet` emits
      * `Propagate<PnCounterDelta>`, and `PnCounterDelta` is not a `CounterDelta`. Connecting the
      * two raises a `ClassCastException` per delta at the fold's inlet, which the fan-in port
-     * dead-letters rather than propagating past `connect` — so the run never reaches
-     * `DifferentialRunner`'s comparison at all: `assemble` itself throws.
+     * dead-letters rather than propagating. `assemble` does **not** throw and the run is not
+     * aborted: `DifferentialRunner` returns `RunOutcome.DeadLetterFailure` carrying one
+     * `DeadLetter` per script event — measured on review, three of them, each
+     * `java.lang.ClassCastException: class civictech.cell.data.delta.PnCounterDelta cannot be
+     * cast to class civictech.cell.data.delta.CounterDelta`. That outcome, not an exception, is
+     * what the `shouldBe RunOutcome.Success` below discriminates.
+     *
+     * **The expected value pins the merge semantics, not only the delta type.** A
+     * `PnCounterDelta` carries each source's *cumulative* total, so the three events emit
+     * `incs={s:5}`, `incs={s:8}`, `decs={s:2}`. Pointwise max reads 8 − 2 = 6; a fold that
+     * *summed* those arrivals the way [ScalarTerminalFold] sums `CounterDelta.amount` would read
+     * 5 + 8 − 2 = 11. Measured on review by mutating [PnCounterTerminalFold]'s merge to
+     * pointwise addition while leaving its type and the dispatch above intact: this test fails
+     * (`WavePrefixViolation`, `observed=ScalarState(13)` against prefixes `{1=5, 2=8}`) while the
+     * identity assertion above still passes. So a differently-typed-but-still-summing
+     * substitution is caught here, and caught by the runner's agreement with the reference
+     * model rather than only by the literal below.
      */
     @Test
     fun `pnCounter - a generated case naming a pnCounter terminal executes end to end`() {
