@@ -6,6 +6,7 @@ import civictech.cell.graph.SpawnStep
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
 import civictech.oracle.bind.ShapeRule
+import civictech.oracle.bind.TaggedOperators
 import civictech.oracle.model.ElementShape
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
@@ -408,6 +409,45 @@ class GraphGeneratorTest {
 
         thrown.message!! shouldContain "the generated frontier holds 3 unconsumed nodes but terminalCount is 1"
         thrown.message!! shouldContain "offers no fan-in operator able to converge"
+    }
+
+    // -- computenet-880k: orMap's TaggedMapDelta shape must not unify with join/combineLatest/lookupJoin's MapDelta ---
+
+    /**
+     * `[ORA1-API-03]`'s soundness bound, pinned by name rather than by an execution-time
+     * `RunOutcome.DeadLetterFailure`: `TaggedOperators`' `orMap` and `CoreOperators`' map-family
+     * consumers (`combineLatest`, `join`, `lookupJoin`) both used to advertise
+     * `ElementShape.MapOf(Scalar, Scalar)`, so shape equality wrongly declared them
+     * link-compatible and this generator built the edge on 20/20 seeds — `DifferentialRunner`
+     * only found out downstream, as `ClassCastException: TaggedMapDelta cannot be cast to
+     * MapDelta` (computenet-880k's measured repro, seed 1, vocabulary=[orMap, combineLatest]).
+     *
+     * Since `TaggedOperators` gave `orMap` its own [ElementShape.TaggedMapOf] shape, the two
+     * are no longer shape-equal, and a vocabulary of only `orMap` plus one map-family consumer
+     * has no fan-in at all: `orMap`'s output satisfies no port in the vocabulary, so
+     * `Builder.chooseRootShape` refuses before any node is even built, by name,
+     * `[ORA1-GEN-03]`-tagged — the same loud-refusal idiom the converge-failure test above pins,
+     * not a filter bolted onto this specific pair. Covers all three named consumers, at the
+     * bead's own seed.
+     */
+    @Test
+    fun `orMap cannot root a case consumed by combineLatest, join, or lookupJoin`() {
+        TaggedOperators.registerAll()
+
+        listOf(CoreOperators.Ids.COMBINE_LATEST, CoreOperators.Ids.JOIN, CoreOperators.Ids.LOOKUP_JOIN).forEach { opId ->
+            val config = defaultConfig(sourceCount = 2)
+                .copy(vocabulary = listOf(TaggedOperators.Ids.OR_MAP, opId))
+                .validated()
+
+            val thrown = withClue("vocabulary=[orMap, $opId]") {
+                shouldThrow<IllegalStateException> { GraphGenerator(config).generate(1L) }
+            }
+
+            withClue("vocabulary=[orMap, $opId]: ${thrown.message}") {
+                thrown.message!! shouldContain "[ORA1-GEN-03] cannot be satisfied"
+                thrown.message!! shouldContain "no source in the vocabulary produces a shape any operator in the vocabulary consumes"
+            }
+        }
     }
 
     private companion object {

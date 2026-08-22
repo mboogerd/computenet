@@ -3,7 +3,6 @@ package civictech.oracle.tagged
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
 import civictech.oracle.bind.TaggedOperators
-import civictech.oracle.gen.CaseGenerator
 import civictech.oracle.gen.GeneratorConfig
 import civictech.oracle.model.Delivery
 import civictech.oracle.model.DotModel
@@ -142,24 +141,32 @@ class TaggedControlsTest {
      * CORRECT — dot fold differs from the converged state on all 40 seeds too (measured
      * 2026-08-21 while reviewing computenet-4ru.1.5). The assertion therefore held identically
      * under the correct implementation and under the mutant, pinning nothing while reading as
-     * evidence. Like-for-like, the mutant is discriminated on 28 of the 40 seeds, and
+     * evidence. Like-for-like, the mutant is discriminated on **21 of the 40 seeds** — `[3, 4,
+     * 5, 7, 8, 12, 13, 16, 17, 22, 24, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38]` — and
      * substituting the correct per-replica fold for [NaiveArrivalOrderMapModel] now reddens
-     * this test — which is the property that makes it a control at all.
+     * this test (differing seeds `[]`), which is the property that makes it a control at all.
+     * Both re-measured 2026-08-22 while reviewing computenet-880k: the count read `28` until
+     * then, measured against the case set `CaseGenerator(replicatedSweep()).generate` produced
+     * before that bead replaced the `join` scaffolding with
+     * [civictech.oracle.gen.GeneratorConfig.replicatedOrMapMeshCase]. The cases changed, so the
+     * count did; the control still fires, which is what this paragraph is for.
      */
     @Test
     fun `CTL-01 an untagged arrival-order fold disagrees with the tagged dot-order reference on at least one seed`() {
         val config = GeneratorConfig.replicatedSweep()
-        val generator = CaseGenerator(config)
         val differingSeeds = mutableListOf<Long>()
 
         GeneratorConfig.REPLICATED_SWEEP_SEEDS.forEach { seed ->
-            val case = generator.generate(seed)
+            // GeneratorConfig.replicatedOrMapMeshCase, not CaseGenerator(config).generate: this
+            // config names no operator at all (computenet-880k — see that function's KDoc for
+            // why `join` was scaffolding for a shape-collision bug, not a real edge).
+            val case = GeneratorConfig.replicatedOrMapMeshCase(config, seed)
             val audit = case.replication ?: error("seed $seed produced no replication plan for a replicated config")
             val script = case.script.toScript()
-            // `replicatedSweep()`'s vocabulary also names a SECOND, unreplicated `orMap` source
-            // (the `join` arm) — every source the script actually drives needs a rank, not only
-            // the replicated handle's. The unreplicated source is never concurrent with anything
-            // (one instance, no peer to tie against), so its position among the rest is immaterial.
+            // `replicatedSweep()`'s sourceCount also names a SECOND, unreplicated `orMap` source
+            // — every source the script actually drives needs a rank, not only the replicated
+            // handle's. The unreplicated source is never concurrent with anything (one instance,
+            // no peer to tie against), so its position among the rest is immaterial.
             val order = DotOrder.ranked(audit.plan.replicas + (script.sources() - audit.plan.replicas.toSet()))
 
             val real = DotModel(order)

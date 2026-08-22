@@ -52,10 +52,14 @@ class MultiWriterGenerationTest {
         OperatorCatalog.reset()
     }
 
-    private fun sweep(config: GeneratorConfig = GeneratorConfig.replicatedSweep()): List<GeneratedCase> {
-        val generator = CaseGenerator(config)
-        return GeneratorConfig.REPLICATED_SWEEP_SEEDS.map { generator.generate(it) }
-    }
+    /**
+     * `GeneratorConfig.replicatedOrMapMeshCase`, not `CaseGenerator(config).generate` — this
+     * config has no operator in its vocabulary at all (computenet-880k: `join` was scaffolding
+     * for a shape-collision bug, not a real edge any test here exercised), so it never went
+     * through `GraphGenerator` proper. See `GeneratorConfig.replicatedOrMapMeshCase`'s KDoc.
+     */
+    private fun sweep(config: GeneratorConfig = GeneratorConfig.replicatedSweep()): List<GeneratedCase> =
+        GeneratorConfig.REPLICATED_SWEEP_SEEDS.map { GeneratorConfig.replicatedOrMapMeshCase(config, it) }
 
     // -- [ORA2-GEN-01] / [ORA2-DIFF-12] / BS-14 ------------------------------------------------
 
@@ -245,8 +249,8 @@ class MultiWriterGenerationTest {
     fun `(seed, config) reproduces an identical replicated case`() {
         val config = GeneratorConfig.replicatedSweep()
         GeneratorConfig.REPLICATED_SWEEP_SEEDS.forEach { seed ->
-            val first = CaseGenerator(config).generate(seed)
-            val second = CaseGenerator(config).generate(seed)
+            val first = GeneratorConfig.replicatedOrMapMeshCase(config, seed)
+            val second = GeneratorConfig.replicatedOrMapMeshCase(config, seed)
             withClue("seed $seed") {
                 first shouldBe second
                 first.script.deliveries shouldContainExactly second.script.deliveries

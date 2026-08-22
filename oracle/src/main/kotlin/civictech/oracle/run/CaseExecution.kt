@@ -473,6 +473,17 @@ object CaseExecution {
                 "Catalog id '$catalogId' declares output shape $output, which no kernel delta " +
                     "family carries on its own; a tuple stream is observed as SetOf(Tuple(n)).",
             )
+            // Unreachable via this path today (computenet-880k): the only registration whose
+            // output is `ElementShape.TaggedMapOf` is `orMap`, and the `TaggedOperators.Ids.OR_MAP`
+            // branch above already claims it before this `when` is ever reached. Kept as a named
+            // error rather than folded into an `else`, matching the `Tuple` arm right above it —
+            // a future TaggedMapOf-shaped registration that reaches here by some other id needs a
+            // real `TerminalFold` for `TaggedMapDelta`, which does not exist yet.
+            is ElementShape.TaggedMapOf -> error(
+                "Catalog id '$catalogId' declares output shape $output (TaggedMapOf), which only " +
+                    "has a TerminalFold via the TaggedOperators.Ids.OR_MAP id branch above; no " +
+                    "shape-only TaggedMapDelta fold exists.",
+            )
         }
     }
 

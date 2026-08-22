@@ -13,7 +13,6 @@ import civictech.cell.verify.ReplicaConvergence
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
 import civictech.oracle.bind.TaggedOperators
-import civictech.oracle.gen.CaseGenerator
 import civictech.oracle.gen.CaseStep
 import civictech.oracle.gen.DotOrders
 import civictech.oracle.gen.GeneratorConfig
@@ -35,22 +34,26 @@ import org.junit.jupiter.api.Test
  * The **generated** multi-replica sweep through the convergence check — `[ORA2-DIFF-08]` at
  * scale, `[ORA2-DIFF-05]`'s late-joiner half.
  *
- * `civictech.oracle.gen.GeneratorConfig.replicatedSweep()` and `CaseGenerator` already produce
- * replayable multi-replica `orMap` cases (`civictech.oracle.tagged.MultiWriterGenerationTest`
- * exercises the generator dimension directly). What they do NOT produce is a runner path:
+ * `civictech.oracle.gen.GeneratorConfig.replicatedSweep()` and
+ * `civictech.oracle.gen.GeneratorConfig.replicatedOrMapMeshCase` already produce replayable
+ * multi-replica `orMap` cases (`civictech.oracle.tagged.MultiWriterGenerationTest` exercises the
+ * generator dimension directly). What they do NOT produce is a runner path:
  * `civictech.oracle.run.CaseExecution` materialises no replicas
  * (`civictech.oracle.run.OracleSweep`'s own KDoc, "the replicated mesh has no runner path even
- * now"), and the generated topology's OTHER source — the unreplicated `orMap` arm
- * `GeneratorConfig.replicatedSweep()` names to fill `join`'s second port — cannot be wired at
- * all (`join`'s `JoinCell` is typed to `MapDelta`, not `TaggedMapDelta`; see
- * `civictech.oracle.tagged.TaggedSweepTest`'s KDoc for the same finding). So this sweep drives
- * the mesh itself, the same way `civictech.oracle.tagged.ConvergenceCheckTest` does for its
- * hand-built meshes, but sourced from [CaseGenerator]'s output: it reads
+ * now"). This file's mesh has no operator layer at all — `replicatedOrMapMeshCase` builds a
+ * topology with no consuming operator, deliberately (computenet-880k: an earlier version of
+ * `replicatedSweep()` named `join` purely as scaffolding for a shape-collision bug this sweep
+ * never actually wired through — `join`'s `JoinCell` is typed to `MapDelta`, not
+ * `TaggedMapDelta`; see `civictech.oracle.tagged.TaggedSweepTest`'s KDoc for the same finding).
+ * So this sweep drives the mesh itself, the same way `civictech.oracle.tagged.ConvergenceCheckTest`
+ * does for its hand-built meshes, but sourced from
+ * [civictech.oracle.gen.GeneratorConfig.replicatedOrMapMeshCase]'s output: it reads
  * [civictech.oracle.gen.GeneratedCase.replication] for the replica plan, drives only the
- * REPLICATED source's events (the unreplicated `join` arm's events are generated but irrelevant
- * to this logical cell's convergence and are skipped, never wired to a `JoinCell`), and reads the
- * mesh through [civictech.oracle.run.MeshObservation]/[civictech.cell.verify.ReplicaConvergence] —
- * the SAME reading seam `ConvergenceCheck` itself reads through, composed rather than duplicated.
+ * REPLICATED source's events (the unreplicated second `orMap` arm's events are generated but
+ * irrelevant to this logical cell's convergence and are skipped — there is no operator for them
+ * to feed even in principle now), and reads the mesh through
+ * [civictech.oracle.run.MeshObservation]/[civictech.cell.verify.ReplicaConvergence] — the SAME
+ * reading seam `ConvergenceCheck` itself reads through, composed rather than duplicated.
  *
  * ## A documented deviation: NOT `ConvergenceCheck.check()` itself
  *
@@ -163,7 +166,7 @@ class ConvergenceSweepTest {
         lateLinkAfterOps: Int? = null,
         onLateLink: (TaggedMapTerminalFold<Any?, Any?>, ModelState) -> Unit = { _, _ -> },
     ): Pair<RunOutcome, Map<SourceId, ModelState>> {
-        val case = CaseGenerator(config).generate(seed)
+        val case = GeneratorConfig.replicatedOrMapMeshCase(config, seed)
         val plan = (case.replication ?: error("seed $seed produced no replication plan")).plan
         val replicaSet = plan.replicas.toSet()
 
@@ -350,7 +353,7 @@ class ConvergenceSweepTest {
         val seed = GeneratorConfig.REPLICATED_SWEEP_SEEDS.first
         // (seed, config) is deterministic ([ORA2-GEN-07]), so the plan can be re-derived here
         // without threading it out of driveAndCheck.
-        val plan = CaseGenerator(config).generate(seed).replication!!.plan
+        val plan = GeneratorConfig.replicatedOrMapMeshCase(config, seed).replication!!.plan
         var lateFold: TaggedMapTerminalFold<Any?, Any?>? = null
         var linked = false
         val (outcome, folds) = driveAndCheck(seed, lateLinkAfterOps = 3) { fold, _ ->
