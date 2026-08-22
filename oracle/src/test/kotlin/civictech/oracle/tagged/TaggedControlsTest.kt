@@ -3,7 +3,6 @@ package civictech.oracle.tagged
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
 import civictech.oracle.bind.TaggedOperators
-import civictech.oracle.gen.CaseGenerator
 import civictech.oracle.gen.GeneratorConfig
 import civictech.oracle.model.Delivery
 import civictech.oracle.model.DotModel
@@ -149,17 +148,19 @@ class TaggedControlsTest {
     @Test
     fun `CTL-01 an untagged arrival-order fold disagrees with the tagged dot-order reference on at least one seed`() {
         val config = GeneratorConfig.replicatedSweep()
-        val generator = CaseGenerator(config)
         val differingSeeds = mutableListOf<Long>()
 
         GeneratorConfig.REPLICATED_SWEEP_SEEDS.forEach { seed ->
-            val case = generator.generate(seed)
+            // GeneratorConfig.replicatedOrMapMeshCase, not CaseGenerator(config).generate: this
+            // config names no operator at all (computenet-880k — see that function's KDoc for
+            // why `join` was scaffolding for a shape-collision bug, not a real edge).
+            val case = GeneratorConfig.replicatedOrMapMeshCase(config, seed)
             val audit = case.replication ?: error("seed $seed produced no replication plan for a replicated config")
             val script = case.script.toScript()
-            // `replicatedSweep()`'s vocabulary also names a SECOND, unreplicated `orMap` source
-            // (the `join` arm) — every source the script actually drives needs a rank, not only
-            // the replicated handle's. The unreplicated source is never concurrent with anything
-            // (one instance, no peer to tie against), so its position among the rest is immaterial.
+            // `replicatedSweep()`'s sourceCount also names a SECOND, unreplicated `orMap` source
+            // — every source the script actually drives needs a rank, not only the replicated
+            // handle's. The unreplicated source is never concurrent with anything (one instance,
+            // no peer to tie against), so its position among the rest is immaterial.
             val order = DotOrder.ranked(audit.plan.replicas + (script.sources() - audit.plan.replicas.toSet()))
 
             val real = DotModel(order)
