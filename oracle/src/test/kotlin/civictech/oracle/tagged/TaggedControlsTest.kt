@@ -141,9 +141,15 @@ class TaggedControlsTest {
      * CORRECT — dot fold differs from the converged state on all 40 seeds too (measured
      * 2026-08-21 while reviewing computenet-4ru.1.5). The assertion therefore held identically
      * under the correct implementation and under the mutant, pinning nothing while reading as
-     * evidence. Like-for-like, the mutant is discriminated on 28 of the 40 seeds, and
+     * evidence. Like-for-like, the mutant is discriminated on **21 of the 40 seeds** — `[3, 4,
+     * 5, 7, 8, 12, 13, 16, 17, 22, 24, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38]` — and
      * substituting the correct per-replica fold for [NaiveArrivalOrderMapModel] now reddens
-     * this test — which is the property that makes it a control at all.
+     * this test (differing seeds `[]`), which is the property that makes it a control at all.
+     * Both re-measured 2026-08-22 while reviewing computenet-880k: the count read `28` until
+     * then, measured against the case set `CaseGenerator(replicatedSweep()).generate` produced
+     * before that bead replaced the `join` scaffolding with
+     * [civictech.oracle.gen.GeneratorConfig.replicatedOrMapMeshCase]. The cases changed, so the
+     * count did; the control still fires, which is what this paragraph is for.
      */
     @Test
     fun `CTL-01 an untagged arrival-order fold disagrees with the tagged dot-order reference on at least one seed`() {
