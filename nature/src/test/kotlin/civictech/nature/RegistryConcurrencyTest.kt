@@ -121,17 +121,23 @@ class RegistryConcurrencyTest {
                             val sharedOwner = ModuleId("conc-shared-t$t-i$i")
 
                             // --- private module: no cross-thread contractId collision ---
+                            // Registration and its checks are wrapped so unregister runs on the
+                            // failure path too (a check throwing must not leak the contributor id
+                            // into the process-global registries — see the class doc).
                             ModuleRegistration.register(privateOwner, contractModules = listOf(concModuleOf(privateDescriptor)))
-                            check(ContractRegistry.contract(privateDescriptor.contractId) == privateDescriptor) {
-                                "t$t/i$i: private contract failed to resolve after register"
+                            try {
+                                check(ContractRegistry.contract(privateDescriptor.contractId) == privateDescriptor) {
+                                    "t$t/i$i: private contract failed to resolve after register"
+                                }
+                                check(ContractRegistry.descriptor(privateIface) == privateDescriptor) {
+                                    "t$t/i$i: private descriptor lookup by class failed after register"
+                                }
+                                check(ContractRegistry.idsOf(privateIface.declaredMethods.first()) != null) {
+                                    "t$t/i$i: private idsOf failed to resolve after register"
+                                }
+                            } finally {
+                                ModuleRegistration.unregister(privateOwner)
                             }
-                            check(ContractRegistry.descriptor(privateIface) == privateDescriptor) {
-                                "t$t/i$i: private descriptor lookup by class failed after register"
-                            }
-                            check(ContractRegistry.idsOf(privateIface.declaredMethods.first()) != null) {
-                                "t$t/i$i: private idsOf failed to resolve after register"
-                            }
-                            ModuleRegistration.unregister(privateOwner)
                             check(ContractRegistry.contract(privateDescriptor.contractId) == null) {
                                 "t$t/i$i: private contract survived unregister"
                             }
@@ -141,18 +147,21 @@ class RegistryConcurrencyTest {
 
                             // --- shared, byte-equal module: the contended key ---
                             ModuleRegistration.register(sharedOwner, contractModules = listOf(concModuleOf(sharedDescriptor)))
-                            check(ContractRegistry.contract(sharedDescriptor.contractId) == sharedDescriptor) {
-                                "t$t/i$i: shared contract failed to resolve after register"
+                            try {
+                                check(ContractRegistry.contract(sharedDescriptor.contractId) == sharedDescriptor) {
+                                    "t$t/i$i: shared contract failed to resolve after register"
+                                }
+                                val contributorsNow = ContractRegistry.contributorsOf(sharedDescriptor.contractId)
+                                check(sharedOwner in contributorsNow) {
+                                    "t$t/i$i: our own contribution missing from the shared multiset right after registering"
+                                }
+                                if (contributorsNow.size > 1) {
+                                    contentionHits.incrementAndGet()
+                                    maxConcurrentContributors.updateAndGet { prev -> maxOf(prev, contributorsNow.size) }
+                                }
+                            } finally {
+                                ModuleRegistration.unregister(sharedOwner)
                             }
-                            val contributorsNow = ContractRegistry.contributorsOf(sharedDescriptor.contractId)
-                            check(sharedOwner in contributorsNow) {
-                                "t$t/i$i: our own contribution missing from the shared multiset right after registering"
-                            }
-                            if (contributorsNow.size > 1) {
-                                contentionHits.incrementAndGet()
-                                maxConcurrentContributors.updateAndGet { prev -> maxOf(prev, contributorsNow.size) }
-                            }
-                            ModuleRegistration.unregister(sharedOwner)
                         }
                     } catch (t: Throwable) {
                         failures += t
@@ -233,10 +242,13 @@ class RegistryConcurrencyTest {
                             repeat(iterations) { i ->
                                 val owner = ModuleId("bounded-shared-t$t-i$i")
                                 ModuleRegistration.register(owner, contractModules = listOf(concModuleOf(boundDescriptor)))
-                                val contributors = ContractRegistry.contributorsOf(boundDescriptor.contractId)
-                                check(owner in contributors) { "t$t/i$i: own contribution missing right after register" }
-                                if (contributors.size > 1) contentionHits.incrementAndGet()
-                                ModuleRegistration.unregister(owner)
+                                try {
+                                    val contributors = ContractRegistry.contributorsOf(boundDescriptor.contractId)
+                                    check(owner in contributors) { "t$t/i$i: own contribution missing right after register" }
+                                    if (contributors.size > 1) contentionHits.incrementAndGet()
+                                } finally {
+                                    ModuleRegistration.unregister(owner)
+                                }
                             }
                         } catch (t: Throwable) {
                             failures += t
