@@ -236,3 +236,61 @@ tasks.named<Test>("test") {
 // Provider<RegularFile> and Task.logger, and never reaches for `project` from an
 // execution-time action, which is the usual way a hand-written task loses the cache.
 // -----------------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------------
+// THE REGRESSION-TRACKING SERIES' COMMAND-LINE FACE (computenet-b7k4).
+//
+// `civictech.bench.series.SeriesTool` ingests one JMH run's artifacts and compares its
+// rows against each benchmark's own stored history. It runs over `main`'s runtime
+// classpath, which is why it is a plain JavaExec and not the `application` plugin: this
+// module already has three source sets and exactly one reason to produce a binary, and
+// the `application` plugin would wire `run`, `distZip`, `installDist` and friends into
+// the lifecycle for a tool that is invoked by hand and by a local scheduler.
+//
+// DELIBERATELY OUTSIDE `check`, `build` AND `test`, exactly as `:bench:jmh` and
+// `:bench:jmhJar` are [BEN1-01]. Nothing in this file makes it a dependency of any
+// lifecycle task, so it is unreachable from `./gradlew test`, from `:bench:build`, and
+// therefore from every required CI check. The tool itself only READS the JMH artifacts
+// a separate run produced — it launches no benchmark and forks no JVM of its own — so
+// even a caller who wired it into `check` by mistake would not have made a required
+// check run a benchmark. That is defence in depth, not the guarantee; the guarantee is
+// that no task depends on it.
+//
+// Arguments arrive through the `seriesArgs` Gradle property, read via `providers` so it
+// is a declared input rather than a configuration-time `project` read (see the
+// CONFIGURATION CACHE note at the end of this file for why that matters here):
+//
+//   ./gradlew :bench:benchSeries -PseriesArgs="compare --results ... --series ..."
+//
+// scripts/bench-series/run-series.sh is the intended caller and documents the full
+// invocation; `-PseriesArgs="--help"` prints the usage.
+tasks.register<JavaExec>("benchSeries") {
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+    description =
+        "Compares a JMH run against the stored regression series and optionally appends " +
+            "it (computenet-b7k4). Not wired into check/build/test."
+    mainClass.set("civictech.bench.series.SeriesToolKt")
+    classpath = sourceSets["main"].runtimeClasspath
+
+    // Pinned to the same toolchain the module compiles and benchmarks under. Gradle
+    // would default a JavaExec to the `java` extension's toolchain anyway, but the
+    // series exists precisely to keep a JDK from changing underneath a comparison, so
+    // the pin is stated rather than inherited.
+    javaLauncher.set(
+        javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(21)) },
+    )
+
+    // Arguments arrive as one whitespace-separated `seriesArgs` property. Read through
+    // `providers` and captured as a Provider — not a configuration-time `project` read —
+    // so the task stays configuration-cache compatible, the property becomes a declared
+    // input, and `-PseriesArgs=...` changing does not silently replay a previous run.
+    // Every argument the tool takes is a flag or a path under a run directory this
+    // repository controls, so splitting on whitespace is sufficient and no quoting
+    // convention is invented here.
+    val seriesArgs = providers.gradleProperty("seriesArgs").orElse("--help")
+    argumentProviders.add(
+        CommandLineArgumentProvider {
+            seriesArgs.get().split(Regex("\\s+")).filter { it.isNotBlank() }
+        },
+    )
+}

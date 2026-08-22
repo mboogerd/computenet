@@ -1,0 +1,3 @@
+Raw JMH artifacts land here, one directory per run: `<runId>/<selector>.csv` (the
+`-rf csv` results file) and `<selector>.log` (the teed stdout, which is the only
+record of the JVM, the JMH knobs and the host). See doc/bench/regression-series.md.

@@ -96,4 +96,53 @@ class DispersionTest {
             combinedError(result(100.0, 1.0, unit = "ns/op"), result(100.0, 1.0, unit = "ops/s"))
         }
     }
+
+    // -------------------------------------------------------------------------------
+    // The magnitude overload (computenet-b7k4) — the shared arithmetic core the
+    // regression-tracking series reaches, so that "beyond the band" cannot become a
+    // second, independently-drifting definition of "beyond the error bars".
+    // -------------------------------------------------------------------------------
+
+    @Test
+    fun `the magnitude overload agrees with the two-row form for every sign arrangement`() {
+        listOf(
+            Triple(100.0, 130.0, 10.0),
+            Triple(100.0, 100.0, 10.0),
+            Triple(130.0, 100.0, 1.0),
+            Triple(-100.0, -130.0, 10.0),
+            Triple(100.0, 121.0, 10.0),
+        ).forEach { (left, right, error) ->
+            val a = result(left, error)
+            val b = result(right, error)
+            resolveEffect(kotlin.math.abs(left - right), combinedError(a, b)) shouldBe resolveEffect(a, b)
+        }
+    }
+
+    @Test
+    fun `the magnitude overload applies COMBINED_ERROR_MARGIN and the same strictness`() {
+        resolveEffect(effect = 10.0, combinedError = 10.0) shouldBe EffectResolution.Unresolved
+        resolveEffect(effect = 10.000001, combinedError = 10.0) shouldBe EffectResolution.Resolved
+        resolveEffect(effect = 0.0, combinedError = 0.0) shouldBe EffectResolution.Unresolved
+        // A caller that computed the bar itself would get the same answer, which is what
+        // makes COMBINED_ERROR_MARGIN the single knob.
+        resolveEffect(effect = 3.0, combinedError = 3.0 / COMBINED_ERROR_MARGIN) shouldBe
+            EffectResolution.Unresolved
+    }
+
+    @Test
+    fun `the magnitude overload refuses NaN rather than silently resolving Unresolved`() {
+        // IEEE 754 makes `NaN > x` false, so an unchecked NaN would report "no difference
+        // established" — the reassuring answer — for a comparison that is meaningless.
+        shouldThrow<IllegalArgumentException> { resolveEffect(Double.NaN, 1.0) }
+        shouldThrow<IllegalArgumentException> { resolveEffect(1.0, Double.NaN) }
+        shouldThrow<IllegalArgumentException> { resolveEffect(Double.POSITIVE_INFINITY, 1.0) }
+    }
+
+    @Test
+    fun `the magnitude overload refuses a negative magnitude`() {
+        // `effect` is a magnitude by contract; a negative one means the caller forgot the
+        // abs(), and would then never resolve regardless of how large the difference was.
+        shouldThrow<IllegalArgumentException> { resolveEffect(-5.0, 1.0) }
+        shouldThrow<IllegalArgumentException> { resolveEffect(5.0, -1.0) }
+    }
 }
