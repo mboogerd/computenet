@@ -127,10 +127,34 @@ object ModelImportBoundaryScanner {
      * The looser form can over-match — a class that merely *takes* a `SourceModel` constructor
      * parameter reads the same to a text scanner — and that is the intended direction: an
      * over-match scans one extra file whole and can only produce a loud, visible violation, while
-     * an under-match is a silent hole of exactly the kind this widening closes.
+     * an under-match is a silent hole of exactly the kind this widening closes. (On the real tree
+     * today the over-match costs nothing: the only file matched for a reason other than its own
+     * `ReferenceOp` declaration is `ReferenceModel.kt`, which `scanDirectory` already scans.)
+     *
+     * Two further under-matches were measured by the second reader of computenet-n00e and are
+     * closed here, because each is a *silent* hole — the same failure mode as the newline one:
+     *  - a gap may contain a **balanced brace pair** ([headerGap]), so a default lambda argument
+     *    (`val f: (Int) -> Int = { it },`) or a brace inside a string literal in the header no
+     *    longer terminates the header early. Measured: a compiling `SourceModel` written into
+     *    `civictech.oracle.bind` importing `civictech.cell.data.op.FilterCell` left the real-tree
+     *    gate GREEN when its constructor carried `= { it }`. The pair is single-level on purpose
+     *    — it must not be able to swallow a nested body and run into the next declaration.
+     *  - a header may end at `by` as well as at `{`, so a body-less delegating declaration
+     *    (`class J(d: SourceModel) : SourceModel by d`) is recognised.
+     *
+     * Known remaining hole, deliberately not closed: a declaration with **no body and no
+     * delegation** (`object K : ReferenceOp`) has no terminator to match. Only the memberless
+     * marker [ReferenceOp] can be implemented that way — [SourceModel] and [OperatorModel] both
+     * carry an abstract `evaluate`, so an implementation of either always has a body or a `by` —
+     * and such an object is not evaluable and cannot be registered. Terminating at end-of-line
+     * instead was tried and rejected: it drags in unrelated wiring files (`OperatorCatalog.kt`
+     * matches) for no gain.
      */
+    private val headerGap = """(?:[^{};]|\{[^{}]*\})*?"""
+
     private val declarationHeader = Regex(
-        """\b(?:class|object)\s+\w+[^{};]*?:[^{};]*?\b(?:ReferenceOp|SourceModel|OperatorModel)\b[^{};]*?\{""",
+        """\b(?:class|object)\s+\w+$headerGap:$headerGap""" +
+            """\b(?:ReferenceOp|SourceModel|OperatorModel)\b$headerGap(?:\{|\bby\b)""",
     )
 
     /**
@@ -473,6 +497,66 @@ class ModelImportBoundaryTest {
     }
 
     /**
+     * Second reader of computenet-n00e: two further header shapes that the newline fix alone
+     * still missed, each a *silent* hole of the same kind — a brace inside the header (a default
+     * lambda argument, or a brace in a string literal) terminated the match early, and a
+     * body-less delegating declaration has no `{` to terminate at. Measured before the fix by
+     * writing the first shape into `:oracle`'s real `civictech.oracle.bind` source directory as a
+     * compiling `SourceModel` importing `civictech.cell.data.op.FilterCell`: the real-tree gate
+     * stayed GREEN.
+     */
+    @Test
+    fun `computenet-n00e a header carrying braces or ending at by is still a ReferenceOp declaration`() {
+        val lambdaDefault =
+            """
+            package civictech.oracle.bind
+
+            import civictech.cell.data.op.FilterCell
+
+            class LambdaDefault(
+                private val f: (Int) -> Int = { it },
+            ) : OperatorModel, Serializable {
+                val unused: FilterCell<*>? = null
+            }
+            """.trimIndent()
+        val braceInStringLiteral =
+            """
+            package civictech.oracle.bind
+
+            import civictech.cell.data.op.FilterCell
+
+            class BraceInLiteral(
+                private val label: String = "group {key}",
+            ) : OperatorModel, Serializable {
+                val unused: FilterCell<*>? = null
+            }
+            """.trimIndent()
+        val delegatingNoBody =
+            """
+            package civictech.oracle.bind
+
+            import civictech.cell.data.op.FilterCell
+
+            class Delegating(delegate: SourceModel, val unused: FilterCell<*>?) : SourceModel by delegate
+            """.trimIndent()
+
+        withClue("a default lambda argument is inside the header, not the body") {
+            ModelImportBoundaryScanner.declaresReferenceOp(lambdaDefault) shouldBe true
+        }
+        withClue("so is a brace that only appears inside a string literal") {
+            ModelImportBoundaryScanner.declaresReferenceOp(braceInStringLiteral) shouldBe true
+        }
+        withClue("a delegating declaration has no body brace at all; its header ends at `by`") {
+            ModelImportBoundaryScanner.declaresReferenceOp(delegatingNoBody) shouldBe true
+        }
+        withClue("and each one's forbidden import is what recognising it makes visible") {
+            ModelImportBoundaryScanner.scanText("LambdaDefault.kt", lambdaDefault) shouldBe listOf(
+                ModelImportBoundaryScanner.Violation("LambdaDefault.kt", "civictech.cell.data.op.FilterCell"),
+            )
+        }
+    }
+
+    /**
      * The other half of [declaresReferenceOp]'s bound: the header match must not run past a
      * declaration's own opening brace, or a file holding an unrelated `class`/`object` and a
      * later mention of `SourceModel` would be dragged into the scan for no reason. `{`, `}` and
@@ -493,5 +577,24 @@ class ModelImportBoundaryTest {
             """.trimIndent()
 
         ModelImportBoundaryScanner.declaresReferenceOp(notADeclaration) shouldBe false
+
+        // Second reader of computenet-n00e: the same bound with a *closed* unrelated body in
+        // front of the mention — the header gap admits one balanced brace pair (so a default
+        // lambda argument survives), and that pair must not be able to swallow a whole
+        // declaration body and carry the match on to an unrelated `SourceModel` mention below it.
+        val bodyThenMention =
+            """
+            package civictech.oracle.bind
+
+            import civictech.cell.data.op.FilterCell
+
+            class Wiring(private val cell: FilterCell<*>?) {
+                fun name() = "wiring"
+            }
+
+            fun modelFor(id: String): SourceModel = error(id)
+            """.trimIndent()
+
+        ModelImportBoundaryScanner.declaresReferenceOp(bodyThenMention) shouldBe false
     }
 }
