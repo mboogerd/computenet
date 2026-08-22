@@ -596,6 +596,22 @@ of these is true:
     | grep -vE '^[+-][[:space:]]*(\*|//|/\*|#)' | wc -l
   ```
 
+  **When your contribution is a MERGE commit** — you resolved a conflict with
+  `main` — `git show <sha>` prints the first-parent diff (§6) and the count
+  above is undefined. "What I authored" is then the lines present in neither
+  parent; two reviewers independently reinvented the measure
+  (computenet-f7gy):
+
+  ```bash
+  comm -23 <(git show <sha>:<file> | sort -u) \
+           <(cat <(git show <sha>^1:<file>) <(git show <sha>^2:<file>) | sort -u)
+  ```
+
+  Empty means the merge is a pure union of its parents and authored nothing
+  novel; anything printed is yours and counts. Run it per conflicted file; do
+  not `&&`-chain a `diff` variant of it — `diff` exits 1 on any difference
+  and the chain silently drops whatever follows (`comm` itself exits 0).
+
   **Zero is the first bullet's answer too**: nothing executable changed. Two
   reviewers handed the same commit — "28 insertions, 15 deletions, mostly
   wrapped prose" — now get the same number from the same command, so no
