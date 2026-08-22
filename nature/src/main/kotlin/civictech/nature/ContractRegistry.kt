@@ -42,6 +42,7 @@ object ContractRegistry {
 
     private val contractProvenance = Provenance<Long>()
     private val cellProvenance = CellProvenance()
+    private val fqnIndex = ContractFqnIndex()
 
     init {
         ServiceLoader.load(ContractModule::class.java, ContractModule::class.java.classLoader)
@@ -143,6 +144,7 @@ object ContractRegistry {
                 byMethodKey[methodKey(contract, method)] = contract to method
             }
             contractProvenance.add(contract.contractId, owner)
+            fqnIndex.add(contract.fqn, contract.contractId)
         }
         module.cells.forEach {
             cellsByFqn[it.fqn] = it
@@ -153,9 +155,23 @@ object ContractRegistry {
     internal fun removeOwner(owner: ModuleId) {
         contractProvenance.drop(owner).forEach { contractId ->
             val descriptor = byId.remove(contractId) ?: return@forEach
-            byFqn.remove(descriptor.fqn, descriptor)
+            val wasFqnHolder = byFqn.remove(descriptor.fqn, descriptor)
             descriptor.methods.forEach { method ->
                 byMethodKey.remove(methodKey(descriptor, method), descriptor to method)
+            }
+            // computenet-dhgy: byFqn/byMethodKey are secondary indexes keyed on fqn /
+            // method-key, not on contractId — stage() validates contractId only, so a
+            // different contractId can legitimately share this fqn (JAR2's territory,
+            // computenet-051 G-49) and commit()'s last-writer-wins may have pointed
+            // byFqn/byMethodKey at the contract that just departed. Restore the last
+            // surviving contractId's own descriptor when that happened, same
+            // last-writer-wins ordering commit applies — a harmless no-op write when
+            // the departing contractId was not the fqn's current holder.
+            val survivorId = fqnIndex.remove(descriptor.fqn, contractId)
+            if (wasFqnHolder && survivorId != null) {
+                val survivor = byId[survivorId] ?: return@forEach
+                byFqn[survivor.fqn] = survivor
+                survivor.methods.forEach { method -> byMethodKey[methodKey(survivor, method)] = survivor to method }
             }
         }
         val cellDrop = cellProvenance.drop(owner)

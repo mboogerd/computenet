@@ -47,6 +47,13 @@ interface ProbeCellOrder
 /** computenet-b7fr: re-registration ordering probe (one contributor registers the same fqn twice). */
 interface ProbeCellReregister
 
+/**
+ * computenet-dhgy: byFqn/byMethodKey repoint probe — two distinct contractIds
+ * sharing one fqn (only reachable via hand-constructed descriptors today; see
+ * [descriptorOf]'s `contractId` override).
+ */
+interface ProbeContractFqnRepoint { fun repoint(value: Long) }
+
 private fun descriptorOf(iface: Class<*>, contractId: Long = StableHash.of(iface.name)): ContractDescriptor =
     ContractDescriptor(
         contractId = contractId,
@@ -438,6 +445,53 @@ class RegistryProvenanceTest {
             ModuleRegistration.unregister(a)
             ModuleRegistration.unregister(b)
         }
+    }
+
+    /**
+     * computenet-dhgy: `ContractRegistry.stage` validates by contractId only, so
+     * two ContractDescriptors sharing an fqn but carrying different contractIds
+     * (and equal methodIds, so no METHOD_KEY conflict either) are both accepted;
+     * `commit` does `byFqn[fqn] = later`, repointing it. `contractProvenance` is
+     * keyed by contractId, so unregistering the later contributor must not leave
+     * `byFqn`/`byMethodKey` stranded with no entry while the earlier contract is
+     * still live in `byId` — the same repoint-and-strand hole computenet-b7fr
+     * fixed for `cellsByFqn`, one table over.
+     */
+    @Test
+    fun `dhgy byFqn and byMethodKey repoint reverses on unregister, not stranded`() {
+        val moduleA = ModuleId("dhgy-a")
+        val moduleB = ModuleId("dhgy-b")
+        val fqn = ProbeContractFqnRepoint::class.java.name
+        val method = ProbeContractFqnRepoint::class.java.declaredMethods.first()
+        val descriptorA = descriptorOf(ProbeContractFqnRepoint::class.java, contractId = 111_111L)
+        val descriptorB = descriptorOf(ProbeContractFqnRepoint::class.java, contractId = 222_222L)
+        ContractRegistry.register(moduleOf(contracts = listOf(descriptorA)), moduleA)
+        try {
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorB)), moduleB)
+            assertEquals(descriptorB, ContractRegistry.descriptor(ProbeContractFqnRepoint::class.java), "B's descriptor did not take")
+
+            ModuleRegistration.unregister(moduleB)
+
+            assertNotNull(
+                ContractRegistry.contract(descriptorA.contractId),
+                "A's contract should still be live in byId",
+            )
+            assertEquals(
+                descriptorA,
+                ContractRegistry.descriptor(ProbeContractFqnRepoint::class.java),
+                "byFqn lost a still-live contract",
+            )
+            assertEquals(
+                descriptorA.contractId to descriptorA.methods.single().methodId,
+                ContractRegistry.idsOf(method),
+                "byMethodKey lost a still-live contract's method",
+            )
+        } finally {
+            ModuleRegistration.unregister(moduleA)
+            ModuleRegistration.unregister(moduleB)
+        }
+        assertNull(ContractRegistry.descriptor(ProbeContractFqnRepoint::class.java), "no contributor left: fqn must be gone")
+        assertNull(ContractRegistry.idsOf(method), "no contributor left: method key must be gone")
     }
 
     /** [JAR1-REG-01]: `validate` is a dry run — a conflict is reported without touching anything. */
