@@ -6,6 +6,7 @@ import civictech.oracle.model.ElementShape
 import civictech.oracle.model.ModelState
 import civictech.oracle.model.OperatorModel
 import civictech.oracle.model.ScriptEvent
+import civictech.oracle.model.SingleInstanceOrMapModel
 import civictech.oracle.model.SourceId
 import civictech.oracle.model.SourceModel
 import civictech.oracle.model.SourceScript
@@ -145,7 +146,12 @@ class TaggedOperatorsTest {
             deliveries = listOf(Delivery(afterEvents = 0, from = peer, throughEvents = 0)),
         )
         val failure = shouldThrow<IllegalArgumentException> { model.evaluate(slice) }
-        failure.message.shouldNotBeNull().shouldContain("deliveries")
+        val message = failure.message.shouldNotBeNull()
+        withClue("'by name' means BOTH the model's own name and the catalog id it registered under") {
+            message shouldContain "SingleInstanceOrMapModel"
+            message shouldContain TaggedOperators.Ids.OR_MAP
+        }
+        message shouldContain "deliveries"
     }
 
     // -------------------------------------------------------------------
@@ -173,6 +179,22 @@ class TaggedOperatorsTest {
                 entry.reason!!.shouldContain("ORA2-WGT-06")
             }
         }
+    }
+
+    /**
+     * The positive arm [probe] itself can never exercise: every [OptionalFamilies.CANDIDATES]
+     * entry is absent today, so nothing committed proved `probe()` can report `available = true`
+     * for a family that IS present — verified during the review by mutation (pointing
+     * `TaggedMapView`'s FQN at `civictech.cell.data.SetCell`, an existing class, reddened the
+     * all-absent test above), but never pinned. [OptionalFamilies.probeOne] is `internal`
+     * exactly so this test can drive the `true` branch directly, against a real class that
+     * genuinely is on the classpath, without touching [OptionalFamilies.CANDIDATES] itself.
+     */
+    @Test
+    fun `OptionalFamilies probeOne reports available=true and no reason for a family class that is present on the classpath`() {
+        val availability = OptionalFamilies.probeOne("SetCell", "civictech.cell.data.SetCell")
+
+        availability shouldBe OptionalFamilies.Availability("SetCell", available = true, reason = null)
     }
 
     private fun serialize(value: Any) {

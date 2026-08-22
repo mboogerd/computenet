@@ -2,13 +2,8 @@ package civictech.oracle.bind
 
 import civictech.cell.data.OrMapCell
 import civictech.cell.graph.CellFactory
-import civictech.oracle.model.DotModel
-import civictech.oracle.model.DotOrder
 import civictech.oracle.model.ElementShape
-import civictech.oracle.model.ModelState
-import civictech.oracle.model.Script
-import civictech.oracle.model.SourceModel
-import civictech.oracle.model.SourceScript
+import civictech.oracle.model.SingleInstanceOrMapModel
 import java.io.Serializable
 
 /**
@@ -101,13 +96,18 @@ import java.io.Serializable
  * one slice with zero peer instances (no deliveries to resolve), and — unlike
  * `MergeableGroupByCell` above — a slice carrying deliveries IS detectable at evaluation time
  * (`slice.deliveries.isNotEmpty()`), so the restriction can fail loudly instead of silently
- * guessing. [SingleInstanceOrMapModel] below registers exactly that: correct for a
- * delivery-free slice, and it throws, by name, rather than silently ignoring a delivery it
- * cannot honestly resolve — the same idiom
- * `civictech.oracle.model.MapCellSourceModel.MultiWriterMapSliceException` already uses for the
- * single-writer restriction on `MapCell`. The replicated-mesh differential
+ * guessing. [SingleInstanceOrMapModel] registers exactly that: correct for a delivery-free
+ * slice, and it throws, by name, rather than silently ignoring a delivery it cannot honestly
+ * resolve — the same idiom `civictech.oracle.model.MapCellSourceModel.MultiWriterMapSliceException`
+ * already uses for the single-writer restriction on `MapCell`. The replicated-mesh differential
  * (`[ORA2-DIFF-01..09]`) stays the sweep/runner task's, driving `DotModel.converged`/`stateOf`
  * directly.
+ *
+ * `SingleInstanceOrMapModel` itself lives in `civictech.oracle.model`
+ * (`TaggedKeyedModels.kt`), not here beside its registration — `[ORA1-MODEL-10]`/
+ * `[ORA2-MODEL-11]`'s import boundary is enforced by scanning `civictech.oracle.model`'s source
+ * set, and this file legitimately imports the concrete kernel cell `OrMapCell` for wiring, which
+ * a `ReferenceOp` implementation must never do (computenet-n00e; `ModelImportBoundaryTest`).
  */
 object TaggedOperators {
 
@@ -152,41 +152,6 @@ object TaggedOperators {
             model = SingleInstanceOrMapModel,
         )
     }
-}
-
-/**
- * Adapts [DotModel] to [SourceModel]'s single-slice contract — the seam every other registered
- * source model implements, and the one [DotModel] itself was never built to (it needs a whole
- * multi-instance [Script]; see [TaggedOperators]' file KDoc for the full reasoning).
- *
- * Correct **only** for a slice with no gossip [civictech.oracle.model.Delivery] — which is
- * every slice this adapter can honestly answer from alone, since resolving a delivery needs the
- * sender's own log and this method receives none. A slice with deliveries fails loudly by name
- * rather than silently folding without them, the same idiom
- * `civictech.oracle.model.MapCellModel`'s `MultiWriterMapSliceException` uses for `MapCell`'s
- * own single-writer restriction.
- *
- * The [DotOrder] is synthesized fresh per call, ranking only [SourceScript.source] itself: with
- * exactly one instance in play there is no tie to break (two dots from the *same* source can
- * never share a counter), so the rank value is inconsequential and does not need to come from a
- * harness the way a genuine multi-instance case's does (`[ORA2-MODEL-12]`).
- */
-object SingleInstanceOrMapModel : SourceModel, Serializable {
-    override fun evaluate(slice: SourceScript): ModelState {
-        require(slice.deliveries.isEmpty()) {
-            "SingleInstanceOrMapModel (catalog id '${TaggedOperators.Ids.OR_MAP}') cannot honestly " +
-                "evaluate a slice carrying gossip deliveries for '${slice.source.id}': DotModel's " +
-                "cross-instance merge needs the peer instances' own event logs " +
-                "(DotModel.Fold.applyDeliveries reads script.slice(delivery.from)), which a single " +
-                "SourceScript does not carry. This registration checks ONE OrMapCell instance's own " +
-                "dot semantics in isolation; the replicated-mesh differential is the sweep/runner " +
-                "task's, driving DotModel.converged/stateOf directly over a multi-instance Script."
-        }
-        val order = DotOrder.ranked(listOf(slice.source))
-        return DotModel(order).evaluate(Script(listOf(slice)))
-    }
-
-    override fun toString(): String = "SingleInstanceOrMapModel"
 }
 
 /**
@@ -257,7 +222,13 @@ object OptionalFamilies {
      */
     fun probe(): List<Availability> = CANDIDATES.map { (family, fqcn) -> probeOne(family, fqcn) }
 
-    private fun probeOne(family: String, fqcn: String): Availability =
+    /**
+     * `internal`, not `private`: computenet-n00e's positive-arm test calls this directly with a
+     * real, present class name to prove [Availability.available] can be `true` — [probe] alone
+     * only ever exercises the [CANDIDATES] list, every entry of which is absent today, so
+     * nothing committed proved the `true` branch without this seam.
+     */
+    internal fun probeOne(family: String, fqcn: String): Availability =
         try {
             Class.forName(fqcn)
             Availability(family, available = true, reason = null)
