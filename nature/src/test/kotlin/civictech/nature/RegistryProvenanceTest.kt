@@ -35,6 +35,12 @@ interface ProbeShredProxied { fun shredProxied(value: Long) }
 /** A real class so its name can back a [CellDescriptor] and be looked up via [ContractRegistry.cellDescriptor]. */
 interface ProbeCellHost
 
+/** computenet-b7fr: module-then-module cell repoint probe. */
+interface ProbeCellRepoint
+
+/** computenet-b7fr: HOST-then-module cell repoint probe. */
+interface ProbeCellHostRepoint
+
 private fun descriptorOf(iface: Class<*>, contractId: Long = StableHash.of(iface.name)): ContractDescriptor =
     ContractDescriptor(
         contractId = contractId,
@@ -286,6 +292,70 @@ class RegistryProvenanceTest {
             ProxyRegistry.factory(ProbeShredProxied::class.java),
             "the last contributor's exit left the proxy entry behind",
         )
+    }
+
+    /**
+     * computenet-b7fr, module-then-module ordering: a later contributor's
+     * CellDescriptor repoints the fqn (cells are not validated,
+     * [JAR1-REG-01]); when that later contributor unregisters, the earlier
+     * (still-live) contributor's descriptor must resolve again — not the
+     * departed one's.
+     */
+    @Test
+    fun `b7fr module-then-module cell repoint reverses on unregister`() {
+        val first = ModuleId("b7fr-first")
+        val second = ModuleId("b7fr-second")
+        val d1 = CellDescriptor(fqn = ProbeCellRepoint::class.java.name, color = CellColor.PURE)
+        val d2 = CellDescriptor(fqn = ProbeCellRepoint::class.java.name, color = CellColor.BLOCKING)
+        ContractRegistry.register(moduleOf(cells = listOf(d1)), first)
+        try {
+            ContractRegistry.register(moduleOf(cells = listOf(d2)), second)
+            assertEquals(d2, ContractRegistry.cellDescriptor(ProbeCellRepoint::class.java), "second contributor's descriptor did not take")
+
+            ModuleRegistration.unregister(second)
+            assertEquals(
+                d1,
+                ContractRegistry.cellDescriptor(ProbeCellRepoint::class.java),
+                "the departed contributor's descriptor outlived it",
+            )
+        } finally {
+            ModuleRegistration.unregister(first)
+            ModuleRegistration.unregister(second)
+        }
+    }
+
+    /**
+     * computenet-b7fr, HOST-then-module ordering: the init-time scan attributes
+     * a CellDescriptor to [ModuleId.HOST]; a module registering later can still
+     * repoint the same fqn (cells are not validated), and unregistering that
+     * module must restore HOST's descriptor rather than leaving the departed
+     * module's behind.
+     */
+    @Test
+    fun `b7fr host-then-module cell repoint reverses on unregister`() {
+        val module = ModuleId("b7fr-host-then-module")
+        val hostDescriptor = CellDescriptor(fqn = ProbeCellHostRepoint::class.java.name, color = CellColor.PURE)
+        val moduleDescriptor = CellDescriptor(fqn = ProbeCellHostRepoint::class.java.name, color = CellColor.BLOCKING)
+        // Default owner is HOST — the same attribution the init-time ServiceLoader scan gets.
+        ContractRegistry.register(moduleOf(cells = listOf(hostDescriptor)))
+        try {
+            ContractRegistry.register(moduleOf(cells = listOf(moduleDescriptor)), module)
+            assertEquals(
+                moduleDescriptor,
+                ContractRegistry.cellDescriptor(ProbeCellHostRepoint::class.java),
+                "module contributor's descriptor did not take",
+            )
+
+            ModuleRegistration.unregister(module)
+            assertEquals(
+                hostDescriptor,
+                ContractRegistry.cellDescriptor(ProbeCellHostRepoint::class.java),
+                "the departed module's descriptor outlived it; HOST's descriptor should have resolved again",
+            )
+        } finally {
+            ModuleRegistration.unregister(module)
+            // HOST contribution is deliberately not cleaned up — permanent by design.
+        }
     }
 
     /** [JAR1-REG-01]: `validate` is a dry run — a conflict is reported without touching anything. */

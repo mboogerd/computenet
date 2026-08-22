@@ -41,7 +41,7 @@ object ContractRegistry {
     private val cellsByFqn = ConcurrentHashMap<String, CellDescriptor>()
 
     private val contractProvenance = Provenance<Long>()
-    private val cellProvenance = Provenance<String>()
+    private val cellProvenance = CellProvenance()
 
     init {
         ServiceLoader.load(ContractModule::class.java, ContractModule::class.java.classLoader)
@@ -146,7 +146,7 @@ object ContractRegistry {
         }
         module.cells.forEach {
             cellsByFqn[it.fqn] = it
-            cellProvenance.add(it.fqn, owner)
+            cellProvenance.add(it.fqn, owner, it)
         }
     }
 
@@ -158,7 +158,13 @@ object ContractRegistry {
                 byMethodKey.remove(methodKey(descriptor, method), descriptor to method)
             }
         }
-        cellProvenance.drop(owner).forEach { cellsByFqn.remove(it) }
+        val cellDrop = cellProvenance.drop(owner)
+        cellDrop.orphaned.forEach { cellsByFqn.remove(it) }
+        // computenet-b7fr: cells are last-writer-wins on register (never validated,
+        // [JAR1-REG-01]), so a departed contributor may have repointed cellsByFqn[fqn]
+        // away from a still-live contributor's descriptor. Restore the surviving
+        // contributor's own descriptor rather than leaving the departed one's behind.
+        cellDrop.repointed.forEach { (fqn, descriptor) -> cellsByFqn[fqn] = descriptor }
     }
 
     private fun methodKey(contract: ContractDescriptor, method: MethodDescriptor): String =
