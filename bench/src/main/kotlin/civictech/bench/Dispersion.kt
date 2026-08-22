@@ -69,10 +69,13 @@ package civictech.bench
  * ## DEMOTED 2026-08-22 (`computenet-785b`): what this constant still gates
  *
  * The value is unchanged and **not re-derived**; what changed is its *reach*. It no
- * longer gates whether a measurement may be reported. It is now a **sanity bound on the
- * harness itself** — the quantity `SmokeBenchmark.baseline` is re-measured against to
- * detect drift in the discovery sentinel, which is the only thing the 2026-08-18
- * derivation above ever measured.
+ * longer gates whether a measurement may be reported. What it is kept as is a **sanity
+ * bound on the harness itself** — the quantity `SmokeBenchmark.baseline` would be
+ * re-measured against to detect drift in the discovery sentinel, which is the only thing
+ * the 2026-08-18 derivation above ever measured. That is the constant's remaining ROLE,
+ * not a check that runs: no drift check is wired anywhere in this repository today, and
+ * [classify]'s only caller under `bench/src/main` is `ThroughputReport.DispersionNote`,
+ * which prints the classification and acts on nothing.
  *
  * The reason is stated in the section directly above, and the 2026-08-21 findings review
  * measured its consequence: because 0.005 is the dispersion of the cheapest possible
@@ -99,8 +102,9 @@ const val NOISE_FLOOR: Double = 0.005
  * "DEMOTED" section). [Unreportable] does not mean the result may not be published — a
  * standalone number is always reportable with its error bar attached, and whether a
  * *comparison* may be drawn is [resolveEffect]'s question, not this one. The names are
- * kept because the harness's own drift check ([classify] over `SmokeBenchmark.baseline`)
- * is what they were derived for and still describe.
+ * kept because a harness drift check over `SmokeBenchmark.baseline` is what they were
+ * derived for and would still describe — see [NOISE_FLOOR] for why that check does not
+ * exist yet.
  */
 enum class Reportability {
     /** [BenchResult.relativeDispersion] is at or below [NOISE_FLOOR]. */

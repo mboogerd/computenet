@@ -3453,8 +3453,10 @@ The 2026-08-21 findings review counted what the absolute gate was doing to this 
 
 - **66 of 72** hosted-graph throughput rows classified `Unreportable`.
 - **All 10** fan-out rows classified `Unreportable`.
-- Four `## (no entry for drive=…)` headings stand above this line — entries in which the
-  *whole table* was empty and the omission list was the only content.
+- **Seven** `## (no entry for drive=…)` headings stand above this line — drive blocks in
+  which the *whole table* was empty and the omission list was the only content. (Counted,
+  not recalled: `grep -c '^## (no entry for drive=' doc/bench/findings.md` at this entry's
+  base commit.)
 
 The mechanism is stated in `NOISE_FLOOR`'s own KDoc, in the section headed "What this
 value does NOT establish", and it was right the day it was written: `0.005` is the
@@ -3515,9 +3517,12 @@ Three things make that a forward derivation rather than a fit:
 
 ### What `NOISE_FLOOR` still is
 
-A **sanity bound on the harness itself**: the quantity `SmokeBenchmark.baseline` is
+A **sanity bound on the harness itself**: the quantity `SmokeBenchmark.baseline` would be
 re-measured against to detect drift in the discovery sentinel, which is the only thing
-the 2026-08-18 derivation ever measured. `classify` and `Reportability` keep their names
+the 2026-08-18 derivation ever measured. **No such drift check is wired today** — that is
+the role the constant is kept for, not a job something currently runs; `classify`'s only
+caller in `bench/src/main` is `ThroughputReport.DispersionNote`, which reports the
+classification and acts on nothing. `classify` and `Reportability` keep their names
 and their arithmetic — including the absolute-value and non-finite handling
 `computenet-x9e.3.6` added — and `ThroughputReport` still *reports* which rows sit above
 that bound, as an informational note. It gates nothing.
