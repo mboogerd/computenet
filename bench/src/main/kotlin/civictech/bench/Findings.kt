@@ -4,13 +4,22 @@ package civictech.bench
  * Thrown when [Findings.entry] refuses to render a markdown entry (`[BEN1-25]`,
  * `[BEN1-30]`..`[BEN1-32]`).
  *
- * A single exception type covers every refusal this writer makes — an
- * [Reportability.Unreportable] result, an incomplete entry (missing date, subject,
- * results table, or per-row labels), a cited gap whose id is blank, or a cited gap
- * whose trigger statement does not state exactly one of FIRES / RETIRES /
- * INCONCLUSIVE. [message] always names what was refused and why, so a caller reading a
- * thrown exception (rather than stepping through the writer's source) still learns
- * which fact was missing or which result was rejected.
+ * A single exception type covers every refusal this writer makes — a [ComparisonClaim]
+ * whose effect does not exceed the combined error bars of the rows it names, an
+ * incomplete entry (missing date, subject, results table, or per-row labels), a cited
+ * gap whose id is blank, or a cited gap whose trigger statement does not state exactly
+ * one of FIRES / RETIRES / INCONCLUSIVE. [message] always names what was refused and
+ * why, so a caller reading a thrown exception (rather than stepping through the
+ * writer's source) still learns which fact was missing or which claim was rejected.
+ *
+ * **A dispersed standalone row is no longer among them** (`computenet-785b`). Until
+ * 2026-08-22 this writer refused any entry containing a result whose relative dispersion
+ * exceeded [NOISE_FLOOR]; that gate is gone, because it was refusing 66 of 72 throughput
+ * rows and all 10 fan-out rows for being noisier than the cheapest possible benchmark on
+ * an idle host. A number is now rendered with its error bar attached and the reader
+ * discounts it themselves. What is refused instead is the claim that two such numbers
+ * *differ*, when the difference is inside their combined error bars — see
+ * [ComparisonClaim] and [resolveEffect].
  */
 class FindingsRefusalException(message: String) : IllegalArgumentException(message)
 
@@ -54,6 +63,33 @@ sealed interface TriggerClaim {
 }
 
 /**
+ * A claim that two rows of an entry's table DIFFER, and the reading drawn from that
+ * difference (`computenet-785b`).
+ *
+ * This is the unit the reportability criterion now applies to. A standalone row is
+ * always rendered — `value ± dispersion unit` states its own precision — but a claim
+ * that one row is faster, larger or worse than another asserts something the two error
+ * bars may not support, and [Findings.entry] refuses such a claim rather than rendering
+ * it: `|left.value - right.value|` must exceed [combinedError] of the two rows, scaled
+ * by [COMBINED_ERROR_MARGIN]. See [resolveEffect].
+ *
+ * @param leftLabel the [FindingsTable.labels] entry naming one of the two rows. Must
+ *   appear in the table exactly once, and must differ from [rightLabel] — a row compared
+ *   with itself has an effect of zero and is refused by the criterion anyway, but is
+ *   refused by name here so the message says what the caller actually did.
+ * @param rightLabel the label naming the other row.
+ * @param statement the reading drawn from the difference, free text — e.g. `"insert
+ *   outruns retract by ~3x on this graph"`. Unlike [TriggerClaim.Cited.statement] no
+ *   vocabulary is imposed on it; what is checked is the arithmetic the claim rests on,
+ *   not its wording. Blank is refused.
+ */
+data class ComparisonClaim(
+    val leftLabel: String,
+    val rightLabel: String,
+    val statement: String,
+)
+
+/**
  * Renders `doc/bench/findings.md` entries following the epic's template, and refuses to
  * render one that would misrepresent a measurement (`[BEN1-25]`, `[BEN1-30]`..`[BEN1-32]`).
  *
@@ -81,10 +117,10 @@ object Findings {
      *   entry renders a single environment line taken from `results.first().env`, so a
      *   table that let a later result carry a different environment would have that
      *   result silently reported under the first result's JVM/harness/JMH config), so
-     *   this writer inherits both refusals rather than re-implementing them. Every
-     *   result in [results] must be
-     *   [Reportability.Reportable] — the first [Reportability.Unreportable] one found
-     *   refuses the whole entry, and the refusal message names it (`[BEN1-25]`).
+     *   this writer inherits both refusals rather than re-implementing them. No result
+     *   in [results] is refused for its dispersion: every row is rendered with its own
+     *   error bar attached, and the criterion applies to [comparisons] instead
+     *   (`computenet-785b`, amending `[BEN1-25]`'s reach).
      *   [FindingsTable.labels] must be non-`null` — the results table's per-row
      *   subject/label, distinct from [BenchResult.unit], that makes an insert row and a
      *   retract row of the same operator distinguishable and a before/after pair
@@ -93,7 +129,12 @@ object Findings {
      *   an incomplete entry (`[BEN1-30]`).
      * @param trigger what the entry says about a cited gap's trigger question, or
      *   [TriggerClaim.None] if it answers none. Defaults to [TriggerClaim.None].
-     * @throws FindingsRefusalException naming the refused result or the missing/malformed
+     * @param comparisons claims that two rows of [results] differ. Each is checked
+     *   against the combined error bars of the two rows it names and refused when the
+     *   claimed effect does not exceed them (`computenet-785b`). Defaults to empty — an
+     *   entry that draws no comparison makes no claim for this criterion to check, which
+     *   is the ordinary case for a sweep that only reports numbers.
+     * @throws FindingsRefusalException naming the refused claim or the missing/malformed
      *   field.
      */
     fun entry(
@@ -101,6 +142,7 @@ object Findings {
         subject: String?,
         results: FindingsTable?,
         trigger: TriggerClaim = TriggerClaim.None,
+        comparisons: List<ComparisonClaim> = emptyList(),
     ): String {
         if (date.isNullOrBlank()) {
             throw FindingsRefusalException(
@@ -126,20 +168,10 @@ object Findings {
             )
         }
 
-        val unreportable = results.results.firstOrNull { classify(it) == Reportability.Unreportable }
-        if (unreportable != null) {
-            throw FindingsRefusalException(
-                "Findings entry refused: result is Unreportable (relative dispersion " +
-                    "${unreportable.relativeDispersion} exceeds NOISE_FLOOR $NOISE_FLOOR) " +
-                    "- value=${unreportable.value}${unreportable.unit} " +
-                    "dispersion=${unreportable.dispersion}${unreportable.unit} " +
-                    "drive=${unreportable.drive} env=${unreportable.env}"
-            )
-        }
-
-        // Fail fast on a malformed trigger claim before spending any effort rendering
-        // the rest of the template.
+        // Fail fast on a malformed trigger claim or an unsupported comparison before
+        // spending any effort rendering the rest of the template.
         val triggerLine = renderTriggerLine(trigger)
+        val comparisonLines = renderComparisons(results, comparisons)
 
         val env = results.results.first().env
         return buildString {
@@ -155,8 +187,76 @@ object Findings {
                     "· drive=${results.drive}"
             )
             appendLine(renderTable(results))
+            if (comparisonLines != null) {
+                appendLine(comparisonLines)
+            }
             append(triggerLine)
         }
+    }
+
+    /**
+     * Renders the entry's `Comparisons:` block, or `null` when no comparison is claimed.
+     *
+     * Every claim is checked before any is rendered, so an entry with one unsupported
+     * claim among several is refused whole rather than emitted with the bad one dropped —
+     * the same posture [FindingsTable] takes towards a mixed table.
+     */
+    private fun renderComparisons(
+        results: FindingsTable,
+        comparisons: List<ComparisonClaim>,
+    ): String? {
+        if (comparisons.isEmpty()) {
+            return null
+        }
+        val labels = results.labels!!
+        val byLabel = labels.zip(results.results).toMap()
+        val rendered = comparisons.map { claim ->
+            if (claim.statement.isBlank()) {
+                throw FindingsRefusalException(
+                    "Findings entry refused: comparison of '${claim.leftLabel}' with " +
+                        "'${claim.rightLabel}' states nothing — statement is blank"
+                )
+            }
+            if (claim.leftLabel == claim.rightLabel) {
+                throw FindingsRefusalException(
+                    "Findings entry refused: comparison names the same row on both sides " +
+                        "('${claim.leftLabel}'); a row does not differ from itself"
+                )
+            }
+            val left = byLabel[claim.leftLabel] ?: throw FindingsRefusalException(
+                "Findings entry refused: comparison names '${claim.leftLabel}', which is " +
+                    "not a row of this table; rows are ${labels.sorted()}"
+            )
+            val right = byLabel[claim.rightLabel] ?: throw FindingsRefusalException(
+                "Findings entry refused: comparison names '${claim.rightLabel}', which is " +
+                    "not a row of this table; rows are ${labels.sorted()}"
+            )
+            if (left.unit != right.unit) {
+                throw FindingsRefusalException(
+                    "Findings entry refused: comparison of '${claim.leftLabel}' " +
+                        "(${left.unit}) with '${claim.rightLabel}' (${right.unit}) " +
+                        "subtracts across units, which yields a number with no meaning"
+                )
+            }
+            val effect = kotlin.math.abs(left.value - right.value)
+            val bar = COMBINED_ERROR_MARGIN * combinedError(left, right)
+            if (resolveEffect(left, right) == EffectResolution.Unresolved) {
+                throw FindingsRefusalException(
+                    "Findings entry refused: comparison of '${claim.leftLabel}' " +
+                        "(${left.value} ± ${left.dispersion} ${left.unit}) with " +
+                        "'${claim.rightLabel}' (${right.value} ± ${right.dispersion} " +
+                        "${right.unit}) claims an effect of $effect ${left.unit}, which " +
+                        "does not exceed the combined 99.9% error bars $bar ${left.unit} " +
+                        "(margin ${COMBINED_ERROR_MARGIN}x). These measurements do not " +
+                        "establish that the two rows differ — not even the sign. Report " +
+                        "each row on its own with its error bar, or measure more"
+                )
+            }
+            "- ${claim.leftLabel} vs ${claim.rightLabel}: |Δ| = $effect ${left.unit} > " +
+                "combined 99.9% error $bar ${left.unit} — ${claim.statement}"
+        }
+        return listOf("Comparisons (effect vs combined error bars):").plus(rendered)
+            .joinToString(separator = "\n")
     }
 
     private fun renderTriggerLine(trigger: TriggerClaim): String = when (trigger) {

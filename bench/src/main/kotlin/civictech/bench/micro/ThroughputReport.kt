@@ -1,6 +1,7 @@
 package civictech.bench.micro
 
 import civictech.bench.BenchResult
+import civictech.bench.ComparisonClaim
 import civictech.bench.Drive
 import civictech.bench.Findings
 import civictech.bench.FindingsTable
@@ -352,62 +353,70 @@ data class RowLabel(
 data class LabelledResult(val label: String, val result: BenchResult)
 
 /**
- * A row that was NOT rendered, and why.
+ * One row's dispersion, stated beside the table rather than used to exclude it.
  *
- * The omission list is the point of this type. A renderer that dropped a too-dispersed
- * row and rendered the rest would produce a table that looks complete and is not — the
- * reader cannot see that the noisiest measurements are the missing ones, which is
- * precisely the shape `[BEN1-25]` exists to prevent. So every excluded row is carried
- * here and named in [Report.text], next to the table it is missing from.
+ * **This type replaces the omission list** (`computenet-785b`). Until 2026-08-22 a row
+ * whose relative dispersion exceeded `NOISE_FLOOR` was dropped from its drive's table
+ * and named in an omission list — which, on hosted-graph sweeps, dropped 66 of 72
+ * throughput rows and every fan-out row, so the omission list was the report and the
+ * table was empty. Every row is now rendered, with its own error bar attached, and this
+ * note carries what the omission list carried: how noisy each measurement was, so the
+ * reader discounts it themselves instead of having it withheld.
+ *
+ * [aboveHarnessSanityBound] is informational and gates nothing. It says only that this
+ * row is more dispersed than `SmokeBenchmark.baseline` on a quiesced host — the
+ * quantity `NOISE_FLOOR` was actually derived from — which is the expected state of any
+ * hosted-graph measurement.
  */
-data class Omission(
+data class DispersionNote(
     val label: String,
     val drive: Drive,
     val result: BenchResult,
 ) {
+    val aboveHarnessSanityBound: Boolean
+        get() = classify(result) == Reportability.Unreportable
+
     fun describe(): String =
-        "$label (drive=$drive): relative dispersion ${result.relativeDispersion} exceeds " +
-            "NOISE_FLOOR $NOISE_FLOOR — value=${result.value} ± ${result.dispersion} " +
-            "${result.unit}; Unreportable, excluded from the table"
+        "$label (drive=$drive): ${result.value} ± ${result.dispersion} ${result.unit}, " +
+            "relative dispersion ${result.relativeDispersion}" +
+            if (aboveHarnessSanityBound) {
+                " — above the harness sanity bound NOISE_FLOOR $NOISE_FLOOR " +
+                    "(informational; the row is reported, and no comparison is drawn " +
+                    "from it that its error bar does not support)"
+            } else {
+                ""
+            }
 }
 
 /**
- * One drive's rendered findings entry, plus that drive's omissions.
+ * One drive's rendered findings entry, plus that drive's per-row dispersion notes.
  *
- * [entry] is `null` when every row of this drive classified [Reportability.Unreportable]:
- * there is then no table to render (a [FindingsTable] cannot be empty), and inventing
- * one would be the exact dishonesty this chain refuses. The drive still appears in the
- * report — as a stated absence with its omissions named — rather than vanishing.
+ * [entry] is never `null` and never absent: a drive appears in a [Report] only because
+ * [Drive] grouping found rows for it, and every row it found is now rendered. The
+ * "(no entry for drive=…)" placeholder this field used to carry — emitted when the
+ * `NOISE_FLOOR` gate excluded every row of a drive, leaving no table to build — has no
+ * remaining way to occur.
  */
 data class DriveReport(
     val drive: Drive,
-    val entry: String?,
-    val omitted: List<Omission>,
+    val entry: String,
+    val dispersions: List<DispersionNote>,
 )
 
-/** Every drive's report, in [Drive] declaration order, plus the flattened omission list. */
-data class Report(val perDrive: List<DriveReport>, val omissions: List<Omission>) {
+/** Every drive's report, in [Drive] declaration order, plus the flattened note list. */
+data class Report(val perDrive: List<DriveReport>, val dispersions: List<DispersionNote>) {
 
     /**
-     * The renderer's output: each drive's findings entry (or the stated absence of one),
-     * each followed by that drive's omission list — including an explicit "none" line,
-     * so a reader can tell "nothing was omitted" apart from "the omission list was not
-     * rendered".
+     * The renderer's output: each drive's findings entry, each followed by that drive's
+     * per-row dispersion notes — a list that is never empty, because every rendered row
+     * has one.
      */
     fun text(): String = perDrive.joinToString(separator = "\n\n") { report ->
         buildString {
-            appendLine(
-                report.entry
-                    ?: "## (no entry for drive=${report.drive}) — every row classified " +
-                    "Unreportable against NOISE_FLOOR $NOISE_FLOOR; see the omissions below"
-            )
+            appendLine(report.entry)
             appendLine()
-            appendLine("Omitted rows (drive=${report.drive}):")
-            if (report.omitted.isEmpty()) {
-                append("- none")
-            } else {
-                append(report.omitted.joinToString(separator = "\n") { "- ${it.describe()}" })
-            }
+            appendLine("Row dispersion (drive=${report.drive}; informational, nothing excluded):")
+            append(report.dispersions.joinToString(separator = "\n") { "- ${it.describe()}" })
         }
     }
 }
@@ -838,7 +847,14 @@ object ThroughputReport {
         trigger: TriggerClaim = TriggerClaim.None,
         label: RowLabel? = null,
         metric: Metric = Metric.Primary,
-    ): Report = renderResults(toResults(parseCsv(csv, metric), env, label), date, subject, trigger)
+        comparisons: List<ComparisonClaim> = emptyList(),
+    ): Report = renderResults(
+        toResults(parseCsv(csv, metric), env, label),
+        date,
+        subject,
+        trigger,
+        comparisons,
+    )
 
     /**
      * Where the run log of a results file must sit: beside it, same base name, `.log`.
@@ -913,6 +929,7 @@ object ThroughputReport {
         trigger: TriggerClaim = TriggerClaim.None,
         label: RowLabel? = null,
         metric: Metric = Metric.Primary,
+        comparisons: List<ComparisonClaim> = emptyList(),
     ): Report {
         if (!results.isFile) {
             throw ThroughputReportException(
@@ -945,7 +962,7 @@ object ThroughputReport {
             hostFacts = HostFacts.fromJmhLog(logText, log.absolutePath),
             harnessCommitSha = harnessCommitSha,
         )
-        return render(results.readText(), env, date, subject, trigger, label, metric)
+        return render(results.readText(), env, date, subject, trigger, label, metric, comparisons)
     }
 
     /**
@@ -966,6 +983,7 @@ object ThroughputReport {
         date: String,
         subject: String,
         trigger: TriggerClaim = TriggerClaim.None,
+        comparisons: List<ComparisonClaim> = emptyList(),
     ): Report {
         if (results.isEmpty()) {
             throw ThroughputReportException(
@@ -989,26 +1007,46 @@ object ThroughputReport {
                         "methods share a parameter set"
                 )
             }
-            val (reportable, unreportable) = rows.partition {
-                classify(it.result) == Reportability.Reportable
+            val labels = rows.map { it.label }.toSet()
+            // A claim belongs to the drive whose table carries BOTH of its rows. A claim
+            // that names one row of this drive and one of another is not a comparison
+            // this renderer can draw at all — each entry is one drive's table — and is
+            // caught by the no-drive-claimed check below rather than silently ignored.
+            val claims = comparisons.filter {
+                it.leftLabel in labels && it.rightLabel in labels
             }
-            val omitted = unreportable.map { Omission(it.label, drive, it.result) }
-            val entry = if (reportable.isEmpty()) {
-                null
-            } else {
-                Findings.entry(
-                    date = date,
-                    subject = subject,
-                    results = FindingsTable(
-                        results = reportable.map { it.result },
-                        labels = reportable.map { it.label },
-                    ),
-                    trigger = trigger,
-                )
-            }
-            DriveReport(drive = drive, entry = entry, omitted = omitted)
+            val entry = Findings.entry(
+                date = date,
+                subject = subject,
+                results = FindingsTable(
+                    results = rows.map { it.result },
+                    labels = rows.map { it.label },
+                ),
+                trigger = trigger,
+                comparisons = claims,
+            )
+            DriveReport(
+                drive = drive,
+                entry = entry,
+                dispersions = rows.map { DispersionNote(it.label, drive, it.result) },
+            )
         }
-        return Report(perDrive = perDrive, omissions = perDrive.flatMap { it.omitted })
+        val claimed = perDrive.indices.flatMap { i ->
+            val labels = byDrive.getValue(perDrive[i].drive).map { it.label }.toSet()
+            comparisons.filter { it.leftLabel in labels && it.rightLabel in labels }
+        }.toSet()
+        val unplaced = comparisons.filterNot { it in claimed }
+        if (unplaced.isNotEmpty()) {
+            throw ThroughputReportException(
+                "comparison claims name rows no single drive's table carries: " +
+                    unplaced.joinToString { "'${it.leftLabel}' vs '${it.rightLabel}'" } +
+                    ". Each entry is one drive's table, so a comparison must be drawn " +
+                    "between two rows of the same drive; a cross-drive claim compares " +
+                    "measurements taken under different regimes and this renderer will " +
+                    "not draw it"
+            )
+        }
+        return Report(perDrive = perDrive, dispersions = perDrive.flatMap { it.dispersions })
     }
 
     /**
