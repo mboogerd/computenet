@@ -195,30 +195,43 @@ object Proxy {
      *   on evidence rather than pre-emptively. A `Result`'s **failure** is likewise not
      *   walked: `exceptionOrNull()` yields a `Throwable`, which is a diagnostic, not payload
      *   the SPSC handshake ever transferred.
-     * - **An `Owned`'s payload is walked; a `Leased`'s is not** (computenet-woto). `take()`
-     *   returns the moved value, so an `Owned` nested inside the value of an outer `Owned` is
-     *   now within this walk — previously `take()`'s result was discarded and the inner
-     *   exclusive was silently dropped. Note what the scan does and does not say here:
-     *   `carriesExclusive` returns `true` at `EXCLUSIVE_MARKERS` on the *outer* `Owned`,
-     *   **before** its type-argument walk, so it never inspects the inner one individually.
-     *   What it asserts is that the whole parameter is exclusive payload this method is the
-     *   sole consumer of; the walk owes a consumer to everything transferred with it, and the
-     *   inner `Owned` has no other.
+     * - **Both an `Owned`'s payload and a `Leased`'s value are walked** (computenet-woto for
+     *   `Owned`, computenet-zyg1 for `Leased`). `take()` returns the moved value, so an
+     *   `Owned` nested inside the value of an outer `Owned` is within this walk — previously
+     *   `take()`'s result was discarded and the inner exclusive was silently dropped. Note
+     *   what the scan does and does not say here: `carriesExclusive` returns `true` at
+     *   `EXCLUSIVE_MARKERS` on the *outer* marker, **before** its type-argument walk, so it
+     *   never inspects the inner one individually. What it asserts is that the whole
+     *   parameter is exclusive payload this method is the sole consumer of; the walk owes a
+     *   consumer to everything transferred with it, and the inner `Owned` has no other.
      *
-     *   `Leased` stops at `release()`, and that asymmetry is **not** the scan's: the scan
-     *   short-circuits identically on both markers. It is the ownership contract — `release()`
-     *   returns `Unit` and hands the value back to its pool, which from that instant is its
-     *   owner, so consuming exclusives reachable from it would be consuming the *pool's*
-     *   payload, the over-reach direction of the same invariant. **The limit that argument
-     *   currently has, stated here rather than in a bead:** `Leased.returnToPool` defaults to
-     *   `{}` and pooling is unbuilt (`Ownership.kt`, "G-21 phase 3"), so today no pool
-     *   receives the value and an exclusive held inside a `Leased`'s value is left live with
-     *   no consumer at all — measured 2026-08-18 under review (`Carrier(Leased(Env(inner)))`
-     *   with `Env(val o: Owned<String>)`: `releases=1`, inner still live), while
-     *   `carriesExclusive` does mark such a method exclusive. That is the same
-     *   descriptor-asserts-discharged divergence one shape over; it is out of this change's
-     *   named scope and is filed as computenet-zyg1, whose resolution needs the pool contract
-     *   rather than a branch here.
+     *   `Leased` was previously stopped at `release()`, justified by the ownership contract:
+     *   `release()` returns `Unit` and hands the value back to its pool, which from that
+     *   instant is its owner, so consuming exclusives reachable from it would be consuming
+     *   the *pool's* payload — the over-reach direction of the same invariant. **That
+     *   justification asserted a transfer the code does not perform.**
+     *   `Leased.returnToPool` defaults to `{}` (`Ownership.kt`), pooling is G-21 phase 3 and
+     *   deliberately unbuilt, and no `Leased` anywhere in this repository's *main* source
+     *   sets is constructed with a pool callback at all — every non-default `returnToPool` is
+     *   a test counter. So no pool receives the value, the inner exclusive had no consumer
+     *   whatsoever, and the descriptor still asserted the method was discharged: the same
+     *   silent drop, one shape over (measured 2026-08-18 under review, reproduced 2026-08-23
+     *   against this walk — `Carrier(Leased(Env(inner)))` with `Env(val o: Owned<String>)`
+     *   gave `releases=1` and the inner `Owned` still live). The walk therefore descends into
+     *   `Leased.value` after a successful `release()`, and only after one: a release that
+     *   *failed* (an already-released lease) means this walk is not the one that discharged
+     *   the lease, so it owes nothing reachable through it — the same asymmetry `Owned`'s
+     *   already-taken branch has, and the guard against consuming a live consumer's payload
+     *   from a cleanup path.
+     *
+     *   **What would change this answer** (for whoever builds G-21 phase 3): a `returnToPool`
+     *   that genuinely transfers the value to a pool. From the instant a real pool receives
+     *   it, the pool is the value's owner, exclusives reachable from it are the pool's
+     *   payload, and walking them here becomes the over-reach the original justification
+     *   feared. The decision recorded here is *not* "a `Leased`'s value is payload"; it is
+     *   "today nothing else consumes it, and an exclusive with no consumer at all is the
+     *   worse of the two failures". Revisit this branch, and the
+     *   `ProxyDischargeReachTest` cases naming computenet-zyg1, together with that work.
      * - **Function values are not opened** (computenet-h6sf, defect 1 — over-reach). A
      *   `kotlin.Function*` type is a *platform* declaration, so `carriesExclusive` stops at it
      *   and can never mark a method exclusive on account of a captured exclusive. A lambda's
@@ -285,7 +298,7 @@ object Proxy {
         if (value == null || !seen.add(value)) return
         when (value) {
             is Owned<*> -> consuming { value.take() }?.let { discharge(it, seen) }
-            is Leased<*> -> consuming { value.release() }
+            is Leased<*> -> consuming { value.release() }?.let { discharge(value.value, seen) }
             is Map<*, *> -> value.forEach { (key, item) ->
                 discharge(key, seen)
                 discharge(item, seen)

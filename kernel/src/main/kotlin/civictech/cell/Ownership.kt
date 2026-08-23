@@ -65,7 +65,16 @@ class Owned<T : Any>(private val value: T) {
 class Leased<T : Any>(val value: T, private val returnToPool: (T) -> Unit = {}) {
     private var released = false
 
-    /** Return this value to its pool; a lease obligation is discharged exactly once. */
+    /**
+     * Return this value to its pool; a lease obligation is discharged exactly once.
+     *
+     * [returnToPool] defaults to `{}` and pooling is G-21 phase 3, unbuilt — so today
+     * a release transfers the value to nothing. `Proxy.discharge` relies on that: it
+     * walks [value] after a successful release, because an exclusive held inside it
+     * would otherwise have no consumer at all (computenet-zyg1). Giving `Leased` a
+     * `returnToPool` that genuinely transfers ownership reopens that decision; see
+     * `Proxy.discharge`'s KDoc.
+     */
     fun release() {
         check(!released) { "Leased value already released" }
         released = true
