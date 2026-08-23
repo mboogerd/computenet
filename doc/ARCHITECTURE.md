@@ -373,10 +373,24 @@ else `$PORT`, else 8080. See the README for run commands.
   JSONL spend log (schema-versioned `{v, project, machine, work_item,
   started, ended}` records, one per worker session) via a total per-line
   classifier (`Valid`/`Malformed`/`UnknownVersion`) into the v1 `SpendRecord`
-  model. This scaffolding task (`computenet-fpml.1.1`) adds the module and
-  the classifier only; byte-offset checkpointed ingest into cells, derived
-  R5/R6 views, and HTTP/SSE serving land in later `computenet-fpml.1`
-  features.
+  model. Feature `computenet-fpml.1` lands the whole ingest half:
+  `SpendLogTailReader` reads only new complete lines from a persisted
+  byte-offset checkpoint (`OffsetCheckpoint`, atomic-move writes, persisted
+  only *after* the batch reaches its consumer) and re-baselines from offset 0
+  when length or head fingerprint says the log was truncated or replaced;
+  `SpendLogIngester` folds the classified records into a kernel `SetCell`
+  keyed by the full record tuple, reconciling rather than appending on a
+  re-baseline, and exposes monotonic per-reason failure counts
+  (`SpendIngestFailures`) so no bad line is silently dropped. The checkpoint
+  and re-baseline idioms are copied from `:demo:beadsmirror` by example, not
+  imported — the epic defers a shared connector SPI to CON2
+  (`computenet-rrf`). Still to come: allocation declarations
+  (`computenet-fpml.2`), the derived R5/R6 views (`computenet-fpml.3`),
+  HTTP/SSE serving over `:demo:shell` (`computenet-fpml.4`, which is why the
+  module has no `application` block yet), and the differential oracle against
+  socaity's replay script (`computenet-fpml.5` — socaity has implemented
+  neither the log nor the script yet, so that comparison is external evidence
+  this module cannot produce on its own).
 
 The incremental-dataflow demos exist to showcase the operator suite and surface
 kernel gaps into `doc/demo-findings.md`.

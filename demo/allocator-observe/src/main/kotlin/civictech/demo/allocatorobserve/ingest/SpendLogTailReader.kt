@@ -141,6 +141,47 @@ data class TailBatch(
  * ever read twice. The single exception is a re-baseline, where re-reading
  * from 0 is the whole point.
  *
+ * ## Bounded by the size of ONE read, not of the log
+ *
+ * [readCompleteLines] buffers the whole `[start, length)` range in memory in
+ * one `ByteArray`, so a single poll's cost is the size of that range. For the
+ * steady state — an append-only log polled regularly — the range is whatever
+ * arrived since the last poll and this is nothing. The two polls that read the
+ * *whole* file are the ones to size against: a [TailReason.FirstStart] with no
+ * checkpoint, and every [TailReason.ReBaselined].
+ *
+ * **Above 2 GiB the range is narrowed unsoundly, and past 4 GiB it fails
+ * SILENTLY.** [readCompleteLines] sizes its buffer with
+ * `(length - start).toInt()`, which is a low-32-bits truncation, so the three
+ * regimes are (measured, not inferred):
+ *
+ * - **`[2 GiB, 4 GiB)`** — the span goes negative and `ByteBuffer.allocate`
+ *   raises `IllegalArgumentException` out of [poll]. Loud.
+ * - **exactly `4 GiB`** — the span is `0`, the read returns no bytes, no
+ *   newline is found, and the poll reports an empty batch at the unchanged
+ *   offset. Indistinguishable from an idle log.
+ * - **`> 4 GiB`** — the span is the range modulo 4 GiB, so the poll reads and
+ *   delivers a *prefix* of the file and advances the checkpoint into it. The
+ *   next poll's remaining span narrows to something small, and the reader
+ *   settles into delivering nothing while the log keeps growing.
+ *
+ * Nothing in the last two regimes throws, increments a failure count, or
+ * otherwise says the reader has stopped following the log. Below 2 GiB the
+ * remaining bound is ordinary: a whole-file read larger than the free heap
+ * raises `OutOfMemoryError`, which at least does not advance the checkpoint
+ * (it precedes the hand-off), so that batch is retried rather than skipped.
+ *
+ * At the v1 record width (~130 bytes, one record per worker session) 2 GiB is
+ * on the order of 16 million sessions, so the bound is real rather than
+ * imminent. Chunking the read to remove it is deliberately NOT done here —
+ * it is tracked as a residual on `computenet-fpml`, because no test in this
+ * module can exercise a multi-gigabyte file and untested arithmetic is not an
+ * improvement on documented arithmetic. Recorded next to the claim rather
+ * than only in the bead: the "read each byte at most once" property above
+ * says nothing about how much of the file one read holds at a time, and the
+ * `> 4 GiB` regime violates the *other* half of that property — it reads each
+ * byte at most once by never reading most of them at all.
+ *
  * @param logPath the spend log. A parameter, never a hardcoded path
  *   (fpml.1-D1): no real socaity log exists yet and its eventual location is
  *   undecided. It need not exist.
@@ -221,6 +262,12 @@ class SpendLogTailReader(
 
     /**
      * Reads `[start, length)` and splits off the complete lines.
+     *
+     * The whole range is buffered at once, and `(length - start).toInt()`
+     * below is a low-32-bits truncation, so this is only correct for a range
+     * under 2 GiB — above that it throws, and above 4 GiB it silently reads a
+     * prefix. Only a whole-file read (a first start, or a re-baseline) can get
+     * there; see the class KDoc's "Bounded by the size of ONE read".
      *
      * @return the lines (newline stripped) and the offset just past the last
      *   `'\n'` — equal to [start] when the range holds no newline at all.
