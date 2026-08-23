@@ -3,19 +3,44 @@ package civictech.dialogue
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
+import civictech.cell.data.op.FlatMapSetApi
+import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graphOf
 import civictech.cell.graph.lookupOrThrow
 import civictech.cell.graph.refAs
 import civictech.cell.host.ManagedHost
+import civictech.dialogue.extract.ExtractedItem
+import civictech.dialogue.extract.ExtractionAccounting
+import civictech.dialogue.extract.ExtractionGate
+import civictech.dialogue.extract.Extractor
 
 /**
- * The AGO1 dialogue pipeline's graph spec (epic computenet-2aw §2.2 stage 1).
+ * The AGO1 dialogue pipeline's graph spec (epic computenet-2aw §2.2
+ * stages 1–3).
  *
- * At this feature's stage the graph is exactly one cell: the transcript
- * ingress. Segmentation and extraction (F2), minting (F3) and the applier
- * (F4) extend this spec by spawning further cells and linking them off
- * [Refs.utterances]' outlet; nothing here is meant to stay a single node.
+ * ```
+ *   utterances (SetCell<Utterance>)          ── stage 1, transcript ingress
+ *     └─► segments (FlatMapSetCell, ::segment)         ── stage 2
+ *           └─► extractedItems (FlatMapSetCell, gate)  ── stage 3
+ * ```
+ *
+ * Minting (F3) and the applier (F4) extend this spec by spawning further
+ * cells and linking them off [Refs.extractedItems]' outlet; nothing here is
+ * meant to stay a three-node chain.
+ *
+ * Stages 2 and 3 are both `FlatMapSetCell`s, so the tagged-set algebra —
+ * add-tag pass-through, effective-only emission, diamond dedup, and above
+ * all **retraction** ([24-SET-01]/[24-SET-03]) — is inherited, not
+ * reimplemented: retracting an utterance retracts its segments, and their
+ * extracted items with them. That inheritance is what buys `[AGO1-EXTR-02]`
+ * for free at the set level too: two segments whose extraction yields the
+ * same item contribute one element carrying both tag sets.
+ *
+ * Wiring uses the DSL's typed [civictech.cell.graph.GraphBuilder.link]
+ * rather than agora's routed idiom: this is a static extraction pipeline
+ * whose topology is fixed at build time, so a compile-checked port link is
+ * both sufficient and preferable (epic design notes).
  *
  * The pipeline owns the graph; [TranscriptSource] owns the *drive* and is
  * deliberately not a cell (2aw.F1-D1 / epic 2aw-D2). Its only contact with
@@ -59,17 +84,65 @@ object DialoguePipeline {
     data class Refs(
         /** The transcript ingress: the admitted utterance set. */
         val utterances: TypedRef<SetApi<Utterance>>,
+        /** Stage 2: the segments derived from the admitted utterances. */
+        val segments: TypedRef<FlatMapSetApi<Utterance, Segment>>,
+        /** Stage 3: the well-formed items extracted from those segments. */
+        val extractedItems: TypedRef<FlatMapSetApi<Segment, ExtractedItem>>,
     )
 
-    /** Spawn the pipeline into [host] and return handles onto its cells. */
-    fun build(host: ManagedHost): Refs {
+    /**
+     * What [build] hands back: the graph handles, plus the extraction
+     * ledger the gate writes to.
+     *
+     * [accounting] is not a ref because it is not cell state — it is the
+     * pipeline's status surface ([AGO1-EXTR-06] "visible on the status
+     * surface"), read from outside the graph. F5 serves it over HTTP; the
+     * tests read it directly.
+     */
+    data class Built(
+        val refs: Refs,
+        val accounting: ExtractionAccounting,
+    )
+
+    /**
+     * Spawn the pipeline into [host] and return handles onto its cells.
+     *
+     * [extractor] is required rather than defaulted: it is the determinism
+     * firewall ([AGO1-EXTR-01], epic 2aw-D4), and which extractor a pipeline
+     * runs under is exactly the decision that must never be made silently by
+     * a default. Callers pass
+     * [civictech.dialogue.extract.RuleExtractor] for the zero-dependency
+     * demo path, or a
+     * [civictech.dialogue.extract.CassetteExtractor] for a gating test.
+     *
+     * The extractor is wrapped in an [ExtractionGate] before it reaches the
+     * cell: `FlatMapSetCell` requires a pure, total mapper, and an
+     * `Extractor` is neither. See [ExtractionGate]'s KDoc for the full
+     * reconciliation.
+     */
+    fun build(host: ManagedHost, extractor: Extractor): Built {
+        val gate = ExtractionGate(extractor)
         // Factories stay pure (replay-safe): each takes the resolved ref and
         // captures no instance. graphOf returns the block's result directly.
+        // `gate` and `::segment` are pure functions, not cell state — the
+        // same values on every replay of this spec.
         val (refs, _) = graphOf(host.managementInlet) {
             val utterances = spawn("utterances") { ref -> SetCell<Utterance>(ref = ref) }
-            Refs(utterances = utterances.refAs())
+            val segments = spawn("segments") { ref ->
+                FlatMapSetCell<Utterance, Segment>(ref = ref, f = ::segment)
+            }
+            val extractedItems = spawn("extractedItems") { ref ->
+                FlatMapSetCell<Segment, ExtractedItem>(ref = ref, f = gate::extract)
+            }
+            link(utterances.cell.outlet, segments.cell.inlet)
+            link(segments.cell.outlet, extractedItems.cell.inlet)
+            Refs(
+                utterances = utterances.refAs(),
+                segments = segments.refAs(),
+                extractedItems = extractedItems.refAs(),
+            )
         }
-        return refs
+        return Built(refs, gate.accounting)
     }
 
     /**
