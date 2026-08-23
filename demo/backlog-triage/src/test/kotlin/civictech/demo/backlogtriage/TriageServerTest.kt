@@ -28,7 +28,9 @@ class TriageServerTest {
             probe.postJson("""{"title":"Relational View DSL","id":"relational-view-dsl"}""", "/features")
 
             // all three unranked until a preference arrives
-            var json = probe.awaitFeatures { order(it).size == 3 }
+            // gate on the asserted state, not a proxy for it (computenet-i6vx):
+            // `rank` is a different fold from the feature list itself.
+            var json = probe.awaitFeatures { order(it).size == 3 && """"rank":null""" in it }
             assertTrue(""""rank":null""" in json, "features should start unranked: $json")
 
             // detail endpoint serves the body
@@ -39,14 +41,19 @@ class TriageServerTest {
             probe.postJson("""{"agent":"ada","winner":"bucket-cell","loser":"typed-graph-wiring"}""", "/prefer")
             probe.postJson("""{"agent":"bo","winner":"bucket-cell","loser":"relational-view-dsl"}""", "/prefer")
             probe.postJson("""{"agent":"cy","winner":"typed-graph-wiring","loser":"relational-view-dsl"}""", "/prefer")
-            json = probe.awaitFeatures { order(it) == listOf("bucket-cell", "typed-graph-wiring", "relational-view-dsl") }
+            json = probe.awaitFeatures {
+                order(it) == listOf("bucket-cell", "typed-graph-wiring", "relational-view-dsl") &&
+                    """"rank":1,"id":"bucket-cell","title":"BucketCell","score":1.0000""" in it
+            }
             assertEquals(listOf("bucket-cell", "typed-graph-wiring", "relational-view-dsl"), order(json), json)
             assertTrue(""""rank":1,"id":"bucket-cell","title":"BucketCell","score":1.0000""" in json, json)
 
             // ada flips: typed>bucket auto-retracts her reverse vote →
             // typed climbs to the top (score 1.0), bucket drops to 0.0
             probe.postJson("""{"agent":"ada","winner":"typed-graph-wiring","loser":"bucket-cell"}""", "/prefer")
-            json = probe.awaitFeatures { order(it).firstOrNull() == "typed-graph-wiring" }
+            json = probe.awaitFeatures {
+                order(it) == listOf("typed-graph-wiring", "bucket-cell", "relational-view-dsl")
+            }
             assertEquals(listOf("typed-graph-wiring", "bucket-cell", "relational-view-dsl"), order(json), json)
 
             // retraction: cy withdraws → relational loses one loss
@@ -71,7 +78,12 @@ class TriageServerTest {
             // surviving prefs: only bo's bucket>relational.
             probe.postJson("""{"id":"typed-graph-wiring","title":"Typed Graph Wiring!"}""", "/features")
             probe.awaitFeatures { order(it).size == 3 }
-            val bo = probe.get("/triage?agent=bo").body()
+            // /triage is its own read model: gating on /features says nothing about
+            // when it settles (computenet-i6vx). Await the state asserted below.
+            val bo = probe.await(path = "/triage?agent=bo") {
+                """"prefs":[{"winner":"bucket-cell","loser":"relational-view-dsl"}]""" in it &&
+                    """"features":[{"id":"typed-graph-wiring","title":"Typed Graph Wiring!","comparisons":0,"mine":0}""" in it
+            }
             for (leak in listOf(""""rank"""", """"score"""", """"wins"""", """"losses"""")) {
                 assertTrue(leak !in bo, "/triage must not leak $leak: $bo")
             }

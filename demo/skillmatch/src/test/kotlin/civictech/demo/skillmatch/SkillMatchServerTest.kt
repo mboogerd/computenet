@@ -38,7 +38,12 @@ class SkillMatchServerTest {
 
             // retraction revokes: removing ada's sql demotes to 1/2 and restores the gap
             probe.post("action=uncskill&candidate=ada&skill=sql")
-            json = probe.await { """"qualified":false""" in it && """"skill":"sql"""" in it.substringAfter("\"gap\"") }
+            // the gate carries the whole asserted state, matched/required included
+            // (computenet-i6vx): those counters are a different fold from `qualified`.
+            json = probe.await {
+                """"matched":1,"required":2,"qualified":false""" in it &&
+                    """"skill":"sql"""" in it.substringAfter("\"gap\"")
+            }
             assertTrue(""""matched":1,"required":2,"qualified":false""" in json, "retraction should demote: $json")
 
             // boundary validation
