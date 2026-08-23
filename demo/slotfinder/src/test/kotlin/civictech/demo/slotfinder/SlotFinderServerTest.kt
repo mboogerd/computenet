@@ -27,8 +27,21 @@ class SlotFinderServerTest {
                 }
             }
 
-            // ops flow writer → intersect chain → hubs asynchronously; poll /state
-            var json = probe.await { "\"byDay\":{\"Tue\":1}" in it }
+            // ops flow writer → intersect chain → hubs asynchronously; poll /state.
+            // Await the JOINT condition, never one arm of it (computenet-i6vx). The
+            // panels are folded by `observeAll`, the point-consistent composite, so a
+            // read can pair `common` at wave t-1 with `byDay` at wave t (the F-5 flash;
+            // `observeAligned` is the wave-aligned sibling this demo does not use). The
+            // old gate — `byDay` reaching {"Tue":1} — carried *zero* information about
+            // the Tue-19 half of the assertion below: `byDay` counts the business-hours
+            // FILTERED set, which admits Tue-14 only, so it reads {"Tue":1} whether
+            // Tue-19 has propagated or not (measured: it holds identically when Tue-19
+            // is never written at all). The gate now IS the asserted state.
+            var json = probe.await {
+                "\"common\":[\"Tue-14\",\"Tue-19\"]" in it &&
+                    "\"filtered\":[\"Tue-14\"]" in it &&
+                    "\"byDay\":{\"Tue\":1}" in it
+            }
             assertTrue("\"common\":[\"Tue-14\",\"Tue-19\"]" in json, "common slots missing in $json")
             assertTrue("\"filtered\":[\"Tue-14\"]" in json, "business-hours filter wrong in $json")
             assertTrue("\"byDay\":{\"Tue\":1}" in json, "per-day count wrong in $json")

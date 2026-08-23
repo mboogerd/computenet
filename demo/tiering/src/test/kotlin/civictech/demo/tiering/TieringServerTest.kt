@@ -23,7 +23,11 @@ class TieringServerTest {
             // two S valuations put pizza in S (tierAvg 6 → score 1.0)
             probe.post("action=tier&agent=ada&item=pizza&tier=S")
             probe.post("action=tier&agent=bo&item=pizza&tier=S")
-            json = probe.await { """"S":[{"item":"pizza"""" in it }
+            // gate on the asserted state, not a prefix of it (computenet-i6vx): the
+            // board's tier buckets and their scores are independent folds behind
+            // `observeAll`, so `"S":[{"item":"pizza"` matches ada's valuation alone —
+            // one element short of the two-valuation score this asserts.
+            json = probe.await { """"S":[{"item":"pizza","score":1.0000}]""" in it }
             assertTrue(""""S":[{"item":"pizza","score":1.0000}]""" in json, "pizza should be tier S: $json")
 
             // a pairwise vote alone tiers sushi (pref-only signal: (1+1)/2 = 1.0 → S)
