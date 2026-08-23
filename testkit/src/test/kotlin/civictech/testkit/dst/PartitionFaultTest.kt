@@ -178,7 +178,7 @@ class PartitionFaultTest {
 
     @Test
     fun `a drop partition destroys every frame on the edge inside its window and none outside it`() {
-        val (report, _) = run(7L, PartitionFault.drop("cut", A_TO_B, from = FROM, until = UNTIL))
+        val (report, graph) = run(7L, PartitionFault.drop("cut", A_TO_B, from = FROM, until = UNTIL))
 
         val firings = report.firingsOn(A_TO_B, "cut")
         assertTrue(firings.isNotEmpty(), "the fault never fired — nothing was tested: ${report.summary()}")
@@ -197,6 +197,13 @@ class PartitionFaultTest {
             report.framesOn(A_TO_B).any { it.step >= UNTIL },
             "no frame crossed after the heal — the window's end is untested",
         )
+
+        // The trace alone would still read like this if the interposer counted frames and
+        // delivered them anyway (measured: mutating FrameInterposers.drop to return the frame
+        // leaves every assertion above green). What only destruction can produce is a peerB
+        // that never learned what peerA wrote into the window.
+        val (viewA, viewB) = graph.views()
+        assertTrue(viewB.keys.size < viewA.keys.size, "nothing was actually lost: $viewB")
     }
 
     @Test
