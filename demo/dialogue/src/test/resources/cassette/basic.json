@@ -1,0 +1,43 @@
+{
+    "0669b4c1d5a6b14a0c301d536a517ac9285902564cdb9e3cc4daff76a50f37e1": [
+        {
+            "type": "claim",
+            "text": "The sky is blue",
+            "speaker": "alice",
+            "utteranceId": "u-sky-recorded"
+        }
+    ],
+    "d392a90d65d128ffebeac896b25a12dcba9962059659b959bc9ec7303ab9a11b": [
+        {
+            "type": "claim",
+            "text": "It rains because clouds are heavy",
+            "speaker": "bob",
+            "utteranceId": "u-rain-recorded"
+        },
+        {
+            "type": "relation",
+            "sourceText": "clouds are heavy",
+            "targetText": "It rains",
+            "polarity": "SUPPORT",
+            "utteranceId": "u-rain-recorded"
+        }
+    ],
+    "06415616e1927d42f9cb19b2a229676884eb29065c250b11fd3b10e83f6bb752": [
+        {
+            "type": "stance",
+            "claimText": "that",
+            "speaker": "alice",
+            "value": 0.8,
+            "utteranceId": "u-stance-recorded"
+        }
+    ],
+    "b8ebfa4ffe374cace3fda642c51392ddc9c846604b7798d54fe93bbb1415e243": [
+        {
+            "type": "relation",
+            "sourceText": "the moon landing being real",
+            "targetText": "official evidence",
+            "polarity": "SKEPTICAL",
+            "utteranceId": "u-badpolarity-recorded"
+        }
+    ]
+}
