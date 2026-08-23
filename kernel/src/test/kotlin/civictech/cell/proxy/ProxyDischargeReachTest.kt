@@ -46,6 +46,10 @@ class ProxyDischargeReachTest {
 
     private class Envelope(val inner: Owned<String>)
 
+    private class LeasedEnvelope(val inner: Owned<String>)
+
+    private class LeaseValueCarrier(val leased: Leased<LeasedEnvelope>)
+
     private fun isLive(owned: Owned<*>): Boolean = runCatching { owned.take() }.isSuccess
 
     // ------------------------------------------------------------------
@@ -288,6 +292,64 @@ class ProxyDischargeReachTest {
         Proxy.discharge(outer)
 
         isLive(outer) shouldBe false
+    }
+
+    // ------------------------------------------------------------------
+    // Defect 4 — UNDER-REACH through a Leased's value (computenet-zyg1).
+    //
+    // `carriesExclusive` returns true at EXCLUSIVE_MARKERS on the `Leased`
+    // itself, so a method carrying one IS marked exclusive and the suppression
+    // proxy selects `Proxy.discharging`. The walk stopped at `release()`, whose
+    // stated justification was that the pool becomes the value's owner — but
+    // `Leased.returnToPool` defaults to `{}`, no production code constructs a
+    // `Leased` with a real pool callback, and pooling is G-21 phase 3, unbuilt.
+    // So nothing received the value and an `Owned` inside it had no consumer at
+    // all: the same descriptor-asserts-discharged silent drop, one shape over.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `an Owned inside a Leased's value is discharged exactly once`() {
+        val before = Proxy.doubleDischarges
+        val inner = Owned("leased-inner")
+        var releases = 0
+
+        Proxy.discharge(LeaseValueCarrier(Leased(LeasedEnvelope(inner)) { releases++ }))
+
+        releases shouldBe 1
+        isLive(inner) shouldBe false
+        Proxy.doubleDischarges shouldBe before
+    }
+
+    /**
+     * The lease obligation itself is unchanged by the widening: still released
+     * exactly once, and still refuses a second release.
+     */
+    @Test
+    fun `discharging a Leased carrying an exclusive still releases the lease exactly once`() {
+        val leased = Leased(LeasedEnvelope(Owned("inner"))) { }
+
+        Proxy.discharge(LeaseValueCarrier(leased))
+
+        assertThrows<IllegalStateException> { leased.release() }
+    }
+
+    /**
+     * ...and an *already*-released lease is not walked, mirroring
+     * `Owned`'s already-taken branch: the release failed, so this walk is not
+     * the one that discharged the lease and owes nothing reachable through it.
+     * Without that symmetry, a lease released by its real consumer and then met
+     * by a cleanup walk would have its value consumed underneath that consumer —
+     * the over-reach direction of the same invariant.
+     */
+    @Test
+    fun `an already-released Leased's value is not walked`() {
+        val inner = Owned("inner")
+        val leased = Leased(LeasedEnvelope(inner)) { }
+        leased.release()
+
+        Proxy.discharge(LeaseValueCarrier(leased))
+
+        isLive(inner) shouldBe true
     }
 
     /** The exclusive-payload types themselves keep their exactly-once check. */
