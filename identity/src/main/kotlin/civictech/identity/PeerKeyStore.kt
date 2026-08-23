@@ -3,6 +3,7 @@ package civictech.identity
 import civictech.cell.wire.ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT
 import java.io.IOException
 import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -384,7 +385,18 @@ fun interface IncarnationStore {
  * costs nothing; a crash after the *return* and before the write would hand two
  * runs the same incarnation, which is the defect this type exists to prevent.
  * The write is a temp file plus a durable rename, so a torn write leaves the
- * previous value intact rather than a truncated one.
+ * previous value intact rather than a truncated one. After the rename,
+ * [persist] also makes a best-effort attempt to flush [directory]'s own
+ * metadata (see `fsyncDirectoryBestEffort`), so an interruption between the
+ * rename and the filesystem persisting its directory entry — a power loss or
+ * kernel panic, as opposed to the process crash the paragraph above covers —
+ * does not resurrect the previous incarnation on the *platforms and
+ * filesystems where directory `fsync` is meaningful*. That best-effort step
+ * is an explicit non-goal beyond those platforms: it is a silent no-op on
+ * ones without it (Windows, notably), and even where the JDK reports success,
+ * this class cannot prove the write actually reached the storage device —
+ * that reaches past what a JVM can observe, let alone verify in a test. Only
+ * the process-crash property this section opens with is proven end to end.
  *
  * ## What it does and does not prove
  *
@@ -497,6 +509,32 @@ class FilePeerIncarnationStore(
                     "the next run cannot honour",
                 e,
             )
+        }
+        fsyncDirectoryBestEffort()
+    }
+
+    /**
+     * Best-effort hardening for the rename [persist] just performed: flushes
+     * [directory]'s own metadata so the new directory entry (not just the file
+     * content, which [StandardOpenOption.SYNC] and `ATOMIC_MOVE` already made
+     * durable) survives a power loss or kernel panic, not only a process crash.
+     *
+     * Never throws. Directory `fsync` is a no-op or unsupported on some
+     * platforms and filesystems (notably Windows, where a directory cannot be
+     * opened as a [FileChannel] at all), and a failure here does not undo the
+     * content durability [persist] already achieved — so it is swallowed
+     * rather than escalated to [KeyStoreRefusedException]. See the class KDoc
+     * for exactly what this does and does not prove.
+     */
+    private fun fsyncDirectoryBestEffort() {
+        try {
+            FileChannel.open(directory, StandardOpenOption.READ).use { it.force(true) }
+        } catch (_: IOException) {
+            // Unsupported here (or a transient failure); the rename's content
+            // durability already stands regardless.
+        } catch (_: UnsupportedOperationException) {
+            // Same: the channel exists but force(metaData = true) is not
+            // implemented on this platform.
         }
     }
 

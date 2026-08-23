@@ -1,7 +1,9 @@
 package civictech.identity
 
+import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermission
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -269,5 +271,22 @@ class FilePeerIncarnationStoreTest {
             setOf(KeyStoreRefusal.INCARNATION_MALFORMED, KeyStoreRefusal.INCARNATION_EXHAUSTED),
             reasons,
         )
+    }
+
+    /**
+     * `persist()`'s directory-fsync hardening (computenet-96eg) is
+     * best-effort: this platform's JDK is the thing that decides whether it
+     * is anything more than a no-op, and that cannot be asserted from inside
+     * `FilePeerIncarnationStore` itself. This test pins the assumption
+     * directly, independent of the store: if a future JDK or CI image makes
+     * opening a directory as a [FileChannel] and calling `force(true)`
+     * throw, this fails and says so, rather than the hardening silently
+     * degrading to a no-op everywhere without any signal.
+     */
+    @Test
+    fun `this platform's JDK supports fsyncing a directory, which persist()'s best-effort hardening relies on`(
+        @TempDir dir: Path,
+    ) {
+        FileChannel.open(dir, StandardOpenOption.READ).use { it.force(true) }
     }
 }
