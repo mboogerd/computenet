@@ -229,6 +229,33 @@ class ReplayTest {
         assertTrue(original.traceDigest.hex in thrown.message!!)
     }
 
+    /**
+     * The digest is graded on its own account, not merely as a side effect of a run that also
+     * differed in outcome or step count.
+     *
+     * This test exists because of a mutation that survived without it: deleting the trace-digest
+     * comparison from [DstReplay.grade] left every other replay test green, since a seed or
+     * parameter mutation changes the outcome too. Grading a report that differs from the
+     * recorded observation in *nothing but* the digest — and, separately, in nothing but the
+     * trace length — is the only shape that pins [CHA1-32]'s "with the same trace digest".
+     */
+    @Test
+    fun gradingDetectsADigestOnlyDivergence_CHA1_32() {
+        val (original, file) = writeFailingArtifact()
+        val artifact = DstArtifacts.read(file)
+        assertEquals(ReplayVerdict.REPLAYED, DstReplay.grade(artifact, original).verdict, "control")
+
+        val forged = original.copy(traceDigest = TraceDigest("00".repeat(32)))
+        val digestOnly = DstReplay.grade(artifact, forged)
+        assertEquals(ReplayVerdict.DIVERGED, digestOnly.verdict, digestOnly.message)
+        assertTrue("trace digest: recorded ${original.traceDigest.hex}" in digestOnly.message, digestOnly.message)
+        assertTrue("00".repeat(32) in digestOnly.message, digestOnly.message)
+
+        val lengthOnly = DstReplay.grade(artifact, original.copy(trace = original.trace.drop(1)))
+        assertEquals(ReplayVerdict.DIVERGED, lengthOnly.verdict, lengthOnly.message)
+        assertTrue("trace length: recorded" in lengthOnly.message, lengthOnly.message)
+    }
+
     // ------------------------------------------------------------------ risk 6 / CHA1-40
 
     /**
