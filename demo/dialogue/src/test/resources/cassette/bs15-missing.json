@@ -1,0 +1,10 @@
+{
+    "61691c93c18e19ce4c34fc45a69a029c5fb6c150e490c383c0fcc24283ce174b": [
+        {
+            "type": "claim",
+            "text": "Recorded sentence",
+            "speaker": "alice",
+            "utteranceId": "u1"
+        }
+    ]
+}

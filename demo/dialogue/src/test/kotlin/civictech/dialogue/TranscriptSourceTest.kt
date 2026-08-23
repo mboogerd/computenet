@@ -9,6 +9,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.dialogue.extract.RuleExtractor
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -38,7 +39,10 @@ class TranscriptSourceTest {
     private class Rig(seed: Long = 1L) {
         val controller = SimulationController(seed)
         val host = ManagedHost(scheduler = controller.scheduler())
-        val refs = DialoguePipeline.build(host)
+        // F2 made the extractor an explicit build parameter; this suite
+        // exercises the ingress alone, so it runs under the pure,
+        // zero-dependency RuleExtractor.
+        val refs = DialoguePipeline.build(host, RuleExtractor).refs
 
         /** Membership as the graph's consumers see it. */
         val view = SetView<Utterance>()
