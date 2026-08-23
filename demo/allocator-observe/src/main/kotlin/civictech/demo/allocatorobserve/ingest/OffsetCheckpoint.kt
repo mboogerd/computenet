@@ -36,11 +36,15 @@ const val FINGERPRINT_WINDOW_BYTES: Int = 4096
  *   shorter than [offset] — length alone cannot, because a log replaced by a
  *   different log of at least the same size looks exactly like one that grew.
  *   It is deliberately NOT a whole-file hash (see [FINGERPRINT_WINDOW_BYTES]),
- *   so the one case it cannot see is a replacement whose first
- *   [FINGERPRINT_WINDOW_BYTES] bytes are byte-identical to the old log's and
- *   whose length is >= [offset]. For an append-only, one-writer log that is
- *   not a shape the socaity spec can produce; it is recorded here rather than
- *   hidden because a future multi-writer or rotating log could.
+ *   so the case it cannot see is a replacement whose length is >= [offset] and
+ *   whose first `min(offset, FINGERPRINT_WINDOW_BYTES)` bytes are byte-identical
+ *   to the old log's. Note that the compared prefix is the SMALLER of the two:
+ *   early in a log's life, with [offset] far below the window, only those few
+ *   leading bytes are checked, so the blind spot is widest exactly when the
+ *   checkpoint is youngest — it is not bounded at 4 KiB of agreement. For an
+ *   append-only, one-writer log a replacement is not a shape the socaity spec
+ *   can produce at all; the limit is recorded here rather than hidden because
+ *   a future multi-writer or rotating log could.
  */
 data class CheckpointState(val offset: Long, val fingerprint: String)
 
