@@ -84,6 +84,10 @@ included. A host that must stay responsive while one link is congested keeps its
 own outstanding `DATA` on that link within the 256-message bound rather than
 relying on the socket to absorb it.
 
+The sharpest case of this is a **freshly accepted link whose dialler has not yet
+spoken**, where that queue has no consumer at all; §3's `LINK_UP` entry states
+it, and a host author who reads only this section will not have joined the two.
+
 ## 3. Message kinds
 
 Kinds below `0x80` originate at the host. Kinds at or above `0x80` originate at
@@ -157,6 +161,15 @@ host has to know:
 
 * `DATA` sent on a freshly accepted link is *queued* until the stream is
   adopted, not refused. It is delivered in order once the dialler speaks.
+  **Until adoption that queue has no consumer at all**, so §2's 256-message
+  bound is an absolute count here, not a rate the link drains: the 257th `DATA`
+  on an unadopted link blocks the sidecar's single message loop, and with it
+  every later message on that socket — `GET_ID`, `CLOSE_LINK` and `SHUTDOWN`,
+  on *every* link — until the dialler finally speaks or the connection drops.
+  (Measured 2026-08-23 at review: 400 `DATA` on an unadopted inbound link left
+  both a following `GET_ID` and a following `SHUTDOWN` unanswered.) A host that
+  cannot bound its own outstanding `DATA` waits for the peer's first frame
+  before sending on an inbound link.
 * The accepting side's `LINK_UP` itself does **not** wait for adoption; it is
   already out. What waits is that side's outbound traffic. A dialling host that
   wants the accepting side's queued `DATA` moving immediately sends an **empty
