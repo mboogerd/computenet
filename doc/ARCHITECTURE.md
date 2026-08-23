@@ -50,7 +50,7 @@ runtime classpath, so KotlinPoet/`symbol-processing-api`/`kotlin-reflect`
 | `:identity` | JDK-only Ed25519 keypairs, a fail-closed file-backed key store with machine-distinguishable refusal reasons (`WORLD_READABLE`, `MALFORMED`, `UNSUPPORTED`, `KEYPAIR_MISMATCH`, `INCOMPLETE_PAIR`, `NO_POSIX_PERMISSIONS`), and key-derived `PeerId` fingerprints; implements the kernel's `SignatureVerifier` seam (DSC1, epic `computenet-ssa`). JDK-only — no third-party crypto. | `api(:kernel)`; `:kernel` must not depend on it |
 | `:concord` | Executable specification / conformance suite (see §5). | `:kernel`, kotlinx-serialization; kaml (test) |
 | `:demo:shell` | Shared JDK `httpserver` + SSE shell (`DemoShell`, `demoPort`) used by every runnable demo, and also consumed by `:inspect` (not itself a demo). `DemoShell`'s API takes no cell-model type today, so it has no `:kernel` dependency. | — |
-| `:demo:*` (9 apps) | Demo applications (see §6). `:demo:shopping`, `:demo:exchange` and `:demo:beadsmirror` use `:wire` — beadsmirror's dependency is opt-in only, for its two-node gossip mode (§6); `:demo:shopping` and `:demo:skillmatch` additionally depend on `:inspect` (opt-in, `--inspect-port`); only `:demo:backlog-triage` defines its own KSP cell (`RatingCell`, `@CellBase` — T09 §C; `agora` annotates nothing and dropped the `ksp-cell` convention plugin accordingly); only `:demo:exchange` needs `:nature` (it asserts composed manifests). | `:kernel`, `:demo:shell`, + per-demo extras |
+| `:demo:*` (10 apps) | Demo applications (see §6). `:demo:shopping`, `:demo:exchange` and `:demo:beadsmirror` use `:wire` — beadsmirror's dependency is opt-in only, for its two-node gossip mode (§6); `:demo:shopping` and `:demo:skillmatch` additionally depend on `:inspect` (opt-in, `--inspect-port`); only `:demo:backlog-triage` defines its own KSP cell (`RatingCell`, `@CellBase` — T09 §C; `agora` annotates nothing and dropped the `ksp-cell` convention plugin accordingly); only `:demo:exchange` needs `:nature` (it asserts composed manifests); `:demo:allocator-observe` is the newest leaf, ingesting a socaity-owned JSONL spend log (epic `computenet-fpml`). | `:kernel`, `:demo:shell`, + per-demo extras |
 | `:inspect` | The Inspector backend — a read-only HTTP/SSE view of a host process's live dataflow graph (`doc/spec/90-roadmap/97-inspector-plan/`, all six milestones M0–M5 merged). Reuses `:demo:shell`'s JDK-`httpserver`/SSE framing rather than duplicating it; adds no third-party dependency beyond kotlinx.serialization. Its frontend `inspect/ui/` (SolidJS + Vite + TypeScript) is npm-only and deliberately not wired into Gradle — same decision as `demo/agora/ui`. Required five kernel accessors added specifically for it: `ManagedHost.outletAt`, `ManagedHost.snapshotOf`, `ManagedHost.isDrained`, `ManagedHost.isSuspended`, `LocationRegistry.describe` — rationale in `doc/spec/90-roadmap/97-inspector-plan/90-progress-log.md`'s orchestrator closing note. | `:kernel`, `:demo:shell`, kotlinx.serialization |
 
 Non-module directories: `buildSrc/` (two convention plugins —
@@ -367,6 +367,30 @@ else `$PORT`, else 8080. See the README for run commands.
   scratch workspace (`BdScratchWorkspace`) and self-skips, visibly, if those
   binaries are absent from PATH — CI installs both specifically so the
   real-workspace tests run rather than skip.
+
+- `:demo:allocator-observe` — spend-log observability for the socaity
+  allocator MVP (ALOB, epic `computenet-fpml`): ingests the socaity-owned
+  JSONL spend log (schema-versioned `{v, project, machine, work_item,
+  started, ended}` records, one per worker session) via a total per-line
+  classifier (`Valid`/`Malformed`/`UnknownVersion`) into the v1 `SpendRecord`
+  model. Feature `computenet-fpml.1` lands the whole ingest half:
+  `SpendLogTailReader` reads only new complete lines from a persisted
+  byte-offset checkpoint (`OffsetCheckpoint`, atomic-move writes, persisted
+  only *after* the batch reaches its consumer) and re-baselines from offset 0
+  when length or head fingerprint says the log was truncated or replaced;
+  `SpendLogIngester` folds the classified records into a kernel `SetCell`
+  keyed by the full record tuple, reconciling rather than appending on a
+  re-baseline, and exposes monotonic per-reason failure counts
+  (`SpendIngestFailures`) so no bad line is silently dropped. The checkpoint
+  and re-baseline idioms are copied from `:demo:beadsmirror` by example, not
+  imported — the epic defers a shared connector SPI to CON2
+  (`computenet-rrf`). Still to come: allocation declarations
+  (`computenet-fpml.2`), the derived R5/R6 views (`computenet-fpml.3`),
+  HTTP/SSE serving over `:demo:shell` (`computenet-fpml.4`, which is why the
+  module has no `application` block yet), and the differential oracle against
+  socaity's replay script (`computenet-fpml.5` — socaity has implemented
+  neither the log nor the script yet, so that comparison is external evidence
+  this module cannot produce on its own).
 
 The incremental-dataflow demos exist to showcase the operator suite and surface
 kernel gaps into `doc/demo-findings.md`.
