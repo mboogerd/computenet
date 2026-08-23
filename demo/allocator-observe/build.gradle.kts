@@ -8,11 +8,12 @@ plugins {
 
 // :demo:allocator-observe ingests the socaity-owned JSONL spend log (epic
 // computenet-fpml) into kernel cells and will later serve derived views over
-// :demo:shell's HTTP/SSE plumbing (F4, not yet implemented). This task
-// (computenet-fpml.1.1) only adds the module scaffold and the v1
-// SpendRecord model plus its per-line classifier — no ingest, no cells, no
-// application entry point yet, so there is deliberately no `application`
-// block here.
+// :demo:shell's HTTP/SSE plumbing (F4, not yet implemented). Feature
+// computenet-fpml.1 has landed the v1 SpendRecord model and its per-line
+// classifier (1.1), the checkpointed tail reader (1.2), and the
+// SpendLogIngester that folds records into a kernel SetCell (1.3). Serving and
+// an application entry point belong to F4, so there is still deliberately no
+// `application` block here.
 dependencies {
     implementation(project(":kernel"))
     implementation(project(":demo:shell"))

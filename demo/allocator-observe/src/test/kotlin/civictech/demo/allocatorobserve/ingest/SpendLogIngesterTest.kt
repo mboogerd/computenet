@@ -98,14 +98,25 @@ class SpendLogIngesterTest {
      * disk is the byte offset; the fold is handed across because the cell's own
      * durability is the kernel `Stateful` seam, which this feature does not
      * wire up — see [SpendLogIngester]'s `records` parameter.
+     *
+     * **A malformed line sits in the pre-restart segment on purpose.** Re-reading
+     * a valid line is invisible in the fold (set semantics make it a no-op) and
+     * invisible in `added` (which is computed against live membership), so
+     * neither can witness "only the new bytes were read". A *bad* line can: the
+     * restarted ingester's failure counters start at zero and count
+     * classification attempts, so if the reader had re-read from offset 0 the
+     * resumed ingester would have re-counted it. Measured: without this
+     * assertion a reader mutated to `start = 0L` while still reporting
+     * `Resumed(offset)` passes this test.
      */
     @Test
     fun `a restarted ingester resumes at the checkpoint, reads only new bytes, and matches an uninterrupted run`() {
-        append(line(workItem = "a"), line(workItem = "b"), line(workItem = "c"))
+        append(line(workItem = "a"), "not json", line(workItem = "b"), line(workItem = "c"))
 
         val fold = SetCell<SpendRecord>()
         val first = ingester(fold = fold)
         first.poll().added shouldBe 3
+        first.failures shouldBe SpendIngestFailures(malformed = 1, unknownVersion = 0)
         val offsetAtRestart = Files.size(log)
 
         // --- restart ---------------------------------------------------------
@@ -113,11 +124,14 @@ class SpendLogIngesterTest {
         append(line(workItem = "d"), line(workItem = "e"))
 
         val outcome = resumed.poll()
-        // Only the new bytes: the reader resumed exactly where the first
-        // ingester's checkpoint left it, so the three earlier lines were not
-        // re-read (they would have been re-added as no-ops and invisible in the
-        // membership — `added` is what makes the difference observable).
+        // Only the new bytes, on two independent witnesses: the reader reports
+        // resuming at exactly the offset the first ingester's checkpoint left,
+        // and the restarted ingester never classified the pre-restart segment —
+        // had it re-read from 0 it would have re-counted the malformed line
+        // there.
         outcome.reason shouldBe TailReason.Resumed(offsetAtRestart)
+        resumed.failures shouldBe SpendIngestFailures(malformed = 0, unknownVersion = 0)
+        outcome.failures shouldBe SpendIngestFailures(malformed = 0, unknownVersion = 0)
         outcome.added shouldBe 2
         outcome.removed shouldBe 0
 
