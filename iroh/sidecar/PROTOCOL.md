@@ -77,6 +77,13 @@ messages). A host that stops reading eventually stalls the QUIC read loop
 feeding it; a peer that stops reading eventually stalls the host's `DATA`
 dispatch. Nothing buffers without limit and nothing is dropped.
 
+A stall is **head-of-line for the whole host connection**, not for one link: the
+sidecar reads and dispatches host messages one at a time, so once a queue is full
+every later message on that socket waits behind it — `CLOSE_LINK` and `SHUTDOWN`
+included. A host that must stay responsive while one link is congested keeps its
+own outstanding `DATA` on that link within the 256-message bound rather than
+relying on the socket to absorb it.
+
 ## 3. Message kinds
 
 Kinds below `0x80` originate at the host. Kinds at or above `0x80` originate at
@@ -150,9 +157,12 @@ host has to know:
 
 * `DATA` sent on a freshly accepted link is *queued* until the stream is
   adopted, not refused. It is delivered in order once the dialler speaks.
-* A dialling host that wants the accepting side's link visible immediately can
-  send an **empty `DATA`** — a zero-length frame is legal on the wire and is
-  delivered to the peer as an empty `DATA`.
+* The accepting side's `LINK_UP` itself does **not** wait for adoption; it is
+  already out. What waits is that side's outbound traffic. A dialling host that
+  wants the accepting side's queued `DATA` moving immediately sends an **empty
+  `DATA`** as its first message on the link: a zero-length frame is legal on the
+  wire, it is what adopts the stream, and it arrives at the peer as an empty
+  `DATA`.
 
 On the **dialling** side `LINK_UP` follows the successful `DIAL` and its stream
 exists already.
