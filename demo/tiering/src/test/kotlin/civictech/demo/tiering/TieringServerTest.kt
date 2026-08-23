@@ -24,9 +24,13 @@ class TieringServerTest {
             probe.post("action=tier&agent=ada&item=pizza&tier=S")
             probe.post("action=tier&agent=bo&item=pizza&tier=S")
             // gate on the asserted state, not a prefix of it (computenet-i6vx): the
-            // board's tier buckets and their scores are independent folds behind
-            // `observeAll`, so `"S":[{"item":"pizza"` matches ada's valuation alone —
-            // one element short of the two-valuation score this asserts.
+            // old gate `"S":[{"item":"pizza"` stopped short of the score, so any S-tier
+            // pizza opened it whatever score the board carried. The gate now IS the
+            // asserted string. Note this one was not itself flaky: `tierAvg` is a MEAN,
+            // so ada alone already scores 6/6 = 1.0000 and the assertion holds before
+            // bo's valuation lands (measured: deleting bo's post above still passes here
+            // and first fails at the re-tier assert below). The tightening closes the
+            // prefix/full-string gap, not a one-vs-two-valuation race.
             json = probe.await { """"S":[{"item":"pizza","score":1.0000}]""" in it }
             assertTrue(""""S":[{"item":"pizza","score":1.0000}]""" in json, "pizza should be tier S: $json")
 
