@@ -122,10 +122,23 @@ object DialoguePipeline {
      */
     fun build(host: ManagedHost, extractor: Extractor): Built {
         val gate = ExtractionGate(extractor)
-        // Factories stay pure (replay-safe): each takes the resolved ref and
-        // captures no instance. graphOf returns the block's result directly.
-        // `gate` and `::segment` are pure functions, not cell state — the
-        // same values on every replay of this spec.
+        // graphOf returns the block's result directly. The ingress and
+        // segmentation factories still meet F1's strict bar — each takes the
+        // resolved ref and captures no instance; `::segment` is a top-level
+        // pure function.
+        //
+        // Stage 3's factory does NOT, and cannot: `gate::extract` is bound to
+        // one ExtractionGate instance, and `GraphBuilder.spawn` records the
+        // factory into the GraphSpec, so every re-lowering of this spec
+        // re-spawns a cell over the SAME gate — sharing its outcome memo and
+        // its accounting ledger. That sharing is deliberate and load-bearing:
+        // the ledger is the status surface `build` hands back, so it must
+        // outlive any one cell instance, and the shared memo is what keeps the
+        // mapper observably pure across a del translation or a catch-up.
+        // The caveat it buys: replaying this spec as a *second* graph in one
+        // process would pool both graphs' extractions into one ledger. Nothing
+        // in F2 replays it, and F5 — which serves the ledger — is where that
+        // has to be decided.
         val (refs, _) = graphOf(host.managementInlet) {
             val utterances = spawn("utterances") { ref -> SetCell<Utterance>(ref = ref) }
             val segments = spawn("segments") { ref ->
