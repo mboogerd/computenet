@@ -19,7 +19,7 @@ import kotlin.test.assertTrue
 class TraceDigestTest {
 
     @Test
-    fun `same seed and plan produce the same trace digest`() {
+    fun `BS-2 - same seed and plan produce the same trace digest`() {
         val run = DstRun(SelfTestGraphs.crossTalk(), FaultPlan.empty(41))
         val first = run.execute()
         val second = run.execute()
@@ -49,7 +49,7 @@ class TraceDigestTest {
     }
 
     @Test
-    fun `with an empty plan the rig's digest equals a bare controller drive of the same graph`() {
+    fun `BS-2 - with an empty plan the rig's digest equals a bare controller drive of the same graph`() {
         val graph = SelfTestGraphs.crossTalk()
         val seed = 41L
 

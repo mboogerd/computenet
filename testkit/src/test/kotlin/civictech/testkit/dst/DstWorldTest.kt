@@ -227,7 +227,7 @@ class DstWorldTest {
     // ------------------------------------------------------------------ seam 5 + [CHA1-24]
 
     @Test
-    fun `seam 5 - per-fault firing is counted and a fault that never fired is inert`() {
+    fun `BS-13 - per-fault firing is counted and a fault that never fired is inert (seam 5)`() {
         val fires = ScriptedFault(
             id = "fires-at-3",
             targets = listOf(FaultTarget.Host("peerA")),
@@ -247,6 +247,24 @@ class DstWorldTest {
         assertTrue(inert.inert, "a configured fault that never fired is flagged, not hidden")
         assertContentEquals(listOf("never-fires"), report.inertFaults.map { it.id })
         assertTrue(report.summary().contains("inert=[never-fires]"))
+    }
+
+    @Test
+    fun `BS-13 - a fault scheduled past quiescence is reported inert, not quietly absent`() {
+        val lateFault = ScriptedFault(
+            id = "partition-at-5000",
+            targets = listOf(FaultTarget.Edge("a->b")),
+            atStep = { world, step ->
+                if (step >= 5000) world.trace.fault("partition-at-5000", port = "a->b")
+            },
+        )
+        val report = DstRun(SelfTestGraphs.crossTalk(), FaultPlan.of(7, lateFault)).execute()
+
+        assertEquals(DstOutcome.PASSED, report.outcome)
+        assertTrue(report.steps < 5000, "the run quiesced long before the activation step (${report.steps})")
+        val applied = report.appliedFaults.single()
+        assertEquals(0, applied.fired)
+        assertTrue(applied.inert, "a plan that silently tests nothing must be visible in the report")
     }
 
     @Test

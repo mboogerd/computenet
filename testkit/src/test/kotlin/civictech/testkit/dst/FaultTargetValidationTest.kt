@@ -19,7 +19,7 @@ class FaultTargetValidationTest {
         FaultPlan.of(1, ScriptedFault(id = "typo", targets = listOf(target)))
 
     @Test
-    fun `an unknown edge, host, cell or journal fails the run, naming the target and the known set`() {
+    fun `BS-12 - an unknown edge, host, cell or journal fails the run, naming the target and the known set`() {
         val cases = listOf(
             FaultTarget.Edge("no-such-edge") to ("edge" to "e"),
             FaultTarget.Host("no-such-host") to ("host" to "h"),
