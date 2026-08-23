@@ -1,0 +1,20 @@
+{"id":"u1","turn":1,"speaker":"alice","tsMillis":1000,"text":"Good morning everyone."}
+{"id":"u2","turn":2,"speaker":"bob","tsMillis":1500,"text":"Morning, Alice."}
+{"id":"u3","turn":3,"speaker":"alice","tsMillis":2000,"text":"Shall we start with the agenda?"}
+{"id":"u4","turn":4,"speaker":"carol","tsMillis":2500,"text":"Sounds good to me."}
+{"id":"u5","turn":5,"speaker":"bob","tsMillis":3000,"text":"I have one item to add."}
+{"id":"u6","turn":6,"speaker":"alice","tsMillis":3500,"text":"Go ahead."}
+{"id":"u7","turn":7,"speaker":"bob","tsMillis":4000,"text":"We need to review the budget."}
+{"id":"u8","turn":8,"speaker":"carol","tsMillis":4500,"text":"Agreed, that's overdue."}
+{"id":"u9","turn":9,"speaker":"alice","tsMillis":5000,"text":"Let's put it first then."}
+{"id":"u10","turn":10,"speaker":"bob","tsMillis":"not-a-number","text":"this line has a string where a long is expected"}
+{"id":"u11","turn":11,"speaker":"carol","tsMillis":5500,"text":"Works for me."}
+{"id":"u12","turn":12,"speaker":"alice","tsMillis":6000,"text":"Okay, budget review first."}
+{"id":"u13","turn":13,"speaker":"bob","tsMillis":6500,"text":"I'll share my screen."}
+{"id":"u14","turn":14,"speaker":"carol","tsMillis":7000,"text":"Take your time."}
+{"id":"u15","turn":15,"speaker":"alice","tsMillis":7500,"text":"Looks reasonable overall."}
+{"id":"u16","turn":16,"speaker":"bob","tsMillis":8000,"text":"One line item is over budget."}
+{"id":"u17","turn":17,"speaker":"carol","tsMillis":8500,"text":"Which one?"}
+{"id":"u18","turn":18,"speaker":"bob","tsMillis":9000,"text":"Travel expenses."}
+{"id":"u19","turn":19,"speaker":"alice","tsMillis":9500,"text":"We can revisit that next quarter."}
+{"id":"u20","turn":20,"speaker":"carol","tsMillis":10000,"text":"Sounds like a plan."}
