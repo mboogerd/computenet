@@ -1,0 +1,42 @@
+{
+    "52ae4fd504d855f1dd094ab54e2da8402c96250ef75ef775a3cf20ff39d0cb2b": [
+        {
+            "type": "claim",
+            "text": "The sky is blue",
+            "speaker": "alice",
+            "utteranceId": "u1"
+        }
+    ],
+    "ac072f324b7848f84266808764d580fb5bb8c02a28a4af25a23b48669f74c47b": [
+        {
+            "type": "claim",
+            "text": "   ",
+            "speaker": "alice",
+            "utteranceId": "u1"
+        },
+        {
+            "type": "claim",
+            "text": "Rain follows clouds",
+            "speaker": "alice",
+            "utteranceId": "u1"
+        }
+    ],
+    "3272dd5cb756b3304ac2d0bde96dd0543b06b87705418ae6bf8911a350033e98": [
+        {
+            "type": "stance",
+            "claimText": "The sky is blue",
+            "speaker": "alice",
+            "value": 1.7,
+            "utteranceId": "u1"
+        }
+    ],
+    "39175f905ab2fb1a5a0b92e863fa35e161db97eaa1ab15d0a41ffa3d82459551": [
+        {
+            "type": "relation",
+            "sourceText": "taxes are high",
+            "targetText": "taxes are high ",
+            "polarity": "SUPPORT",
+            "utteranceId": "u1"
+        }
+    ]
+}

@@ -302,3 +302,55 @@ outside this epic's scope. Consumers of `bd` inside this repository should read
 readiness from the edge set (`bd dep list` plus the targets' statuses), not from
 `bd ready`, whenever the distinction matters; instance 2 above is what happens
 when a tool does not.
+
+## F-13 — `FlatMapSetCell` has no seam for a mapper that can fail or must be accounted
+
+**Observation**: `:demo:dialogue`'s extraction stage (epic `computenet-2aw`
+`[AGO1-EXTR-04..08]`) is naturally a `FlatMapSetCell<Segment, ExtractedItem>`
+whose mapper is an injected `Extractor` — the pipeline's determinism firewall.
+But an `Extractor` may **throw** (a live model erroring, a cassette miss that
+must fail loudly rather than look like an empty extraction), and the pipeline
+must **record** each malformed item and each failed segment *exactly once*,
+with the segment id and reason, on a status surface.
+
+`FlatMapSetCell`'s contract forbids both: "`[f]` must be pure — dels re-apply
+it to translate removals", and `catchUpOnLinked` recomputes the whole output
+by re-applying `f` to the input state. So a throwing mapper faults a delta
+translation that is not even the failing element's own arrival, and a mapper
+that records anything double-counts on every removal, every re-admission and
+every late join.
+
+The demo's workaround is `civictech.dialogue.extract.ExtractionGate` — a
+memoizing adapter that caches the delegate's outcome under the segment's
+content hash, catches every `Throwable` into a cached "failed" outcome that
+maps to an empty output, and guards its accounting writes by segment id so
+re-application records nothing further. It is ~60 lines of adapter that exist
+solely to make a fallible, effectful function look pure to the kernel.
+
+**Why it's a gap**: "map each element through a function that can fail, keep
+the successes in the derived set, and account the failures out-of-band" is a
+generic incremental-dataflow need, not a dialogue-specific one — any operator
+fed by an external service, a parser, or a validator has it. The kernel offers
+no vocabulary for it, so every such demo must independently rediscover
+memoize-by-content-key + catch-all + per-element accounting guard, and each
+one gets to invent its own subtly different definition of "the same element"
+(this demo keys on a SHA-256 of the segment text, deliberately ignoring the
+segment's identity fields). Getting it wrong is silent: the output set still
+looks right while the failure ledger inflates on every retraction.
+
+**Proposed shape**: a `TryFlatMapSetCell<A, B>(f: (A) -> Result<Iterable<B>>)`
+(or `FlatMapSetCell` gaining an `onFailure` seam) that keeps the *successful*
+image in the derived set, retains each element's outcome so removals and
+catch-up translate from the retained outcome instead of re-invoking `f`, and
+surfaces failures on a separate outlet or a bounded read rather than through
+the app's own side channel. The retention is what makes purity structural
+rather than a discipline each app has to re-impose: with the outcome retained
+per live input element, the mapper is invoked exactly once per element and the
+"must be pure" clause becomes an internal detail instead of a caller
+obligation.
+
+**Honest limit of this entry**: the workaround has only been exercised at one
+site (`:demo:dialogue`), on a single-threaded simulated host, and the gate's
+cache is unbounded and non-thread-safe by the same choice `TranscriptSource`
+makes. A kernel operator would additionally have to decide eviction and
+concurrency, which this finding does not settle.
