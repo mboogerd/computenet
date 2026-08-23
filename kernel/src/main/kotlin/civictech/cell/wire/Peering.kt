@@ -735,7 +735,74 @@ object Peering {
         else AuthLevel.TransportVouched
     }
 
-    fun loopback(a: Side, b: Side): Loopback {
+    /**
+     * What a [loopback] direction does to each frame between the sending
+     * side's [BridgeEgressCell] and the receiving side's hosted ingress:
+     * returns the frames to deliver in that frame's place.
+     *
+     * `listOf(frame)` passes it through (the default, [PASS_THROUGH]), the
+     * empty list drops it, a mutated copy corrupts it, the same frame twice
+     * duplicates it, and a frame held in the lambda's own state and prepended
+     * to a later call's result delays or reorders it.
+     *
+     * **A list rather than the nullable single frame** the one-off interposer
+     * in `BridgedGraphTest` uses (`(ByteArray, Int) -> ByteArray?`, null =
+     * drop): that shape can express drop and corrupt but not duplicate or
+     * delay, and the adversarial rig (`civictech.testkit.dst`) needs all four
+     * on the same seam. `emptyList()` is the null of that older shape.
+     *
+     * There is deliberately **no step or frame index parameter**. The
+     * loopback has no clock and must not acquire one; a caller that schedules
+     * by step index — which is the rig's only activation clock — closes over
+     * its own driver's index, exactly as [civictech.cell.host.SimulationController]
+     * users already do.
+     */
+    fun interface FrameInterpose {
+        fun apply(frame: ByteArray): List<ByteArray>
+
+        companion object {
+            /** Deliver every frame unchanged: today's behaviour, and the default. */
+            val PASS_THROUGH: FrameInterpose = FrameInterpose { listOf(it) }
+        }
+    }
+
+    /**
+     * Compose [interpose] over [downstream]. Kept a private helper rather than
+     * inlined at both call sites so that the two directions cannot drift.
+     */
+    private fun interposed(
+        interpose: FrameInterpose,
+        downstream: Propagate<ByteArray>,
+    ): Propagate<ByteArray> =
+        Propagate<ByteArray> { frame -> interpose.apply(frame).forEach(downstream::propagate) }
+
+    /**
+     * The in-process peer connection.
+     *
+     * [interposeAToB] and [interposeBToA] are **additive, default-preserving
+     * test seams** (CHA1, `computenet-umx.3.2`): trailing parameters with a
+     * default of [FrameInterpose.PASS_THROUGH], so every existing caller
+     * compiles unchanged and delivers exactly the frames it delivered before —
+     * one `propagate` per frame, in the same order, on the same thread. That
+     * is a property of the signature, not of a test.
+     *
+     * They exist because a loopback's frame plane was otherwise unreachable:
+     * `egress.outlet.subscribe(hostIngress(...))` was hard-wired here, so
+     * every test that needed to lose, duplicate or delay a frame had to
+     * re-implement the bridge by hand (`BridgedGraphTest`,
+     * `GlitchFreeBridgedDiamondTest`). One seam per direction rather than one
+     * for the pair, because **a partition can be one-way** and the two
+     * directions of a peering are independent links.
+     *
+     * @param interposeAToB applied to frames [a] sends to [b].
+     * @param interposeBToA applied to frames [b] sends to [a].
+     */
+    fun loopback(
+        a: Side,
+        b: Side,
+        interposeAToB: FrameInterpose = FrameInterpose.PASS_THROUGH,
+        interposeBToA: FrameInterpose = FrameInterpose.PASS_THROUGH,
+    ): Loopback {
         lateinit var ingressOnB: BridgeIngressCell
         lateinit var ingressOnA: BridgeIngressCell
         // Fixed here, before either ingress exists — the same happens-before
@@ -750,7 +817,10 @@ object Peering {
         val aToB = BridgeEgressCell(signer = a.announcementSigner).also {
             it.outlet.subscribe(
                 Use.fixed(
-                    hostIngress(b, fromPeer = a.peer, fromPeerAuth = aToBLevel, onSpawn = { ingressOnB = it }),
+                    interposed(
+                        interposeAToB,
+                        hostIngress(b, fromPeer = a.peer, fromPeerAuth = aToBLevel, onSpawn = { ingressOnB = it }),
+                    ),
                     PortRef.generate(),
                 ),
             )
@@ -758,7 +828,10 @@ object Peering {
         val bToA = BridgeEgressCell(signer = b.announcementSigner).also {
             it.outlet.subscribe(
                 Use.fixed(
-                    hostIngress(a, fromPeer = b.peer, fromPeerAuth = bToALevel, onSpawn = { ingressOnA = it }),
+                    interposed(
+                        interposeBToA,
+                        hostIngress(a, fromPeer = b.peer, fromPeerAuth = bToALevel, onSpawn = { ingressOnA = it }),
+                    ),
                     PortRef.generate(),
                 ),
             )
