@@ -8,13 +8,18 @@ license = "Apache-2.0"
 publish = false
 
 # Only `iroh` — deliberately no iroh-gossip / iroh-docs (epic computenet-egl §3
-# excludes them). The library half of the sidecar (computenet-egl.1.1); the bin
-# and its local-socket protocol are a follow-on task.
+# excludes them). tokio became a real dependency with the bin and its
+# local-socket protocol (computenet-egl.1.2): the loopback listener, the message
+# pumps and the per-link tasks all live in the library so tests can drive the
+# protocol in-process.
 [dependencies]
 iroh = "1.0"
-
-[dev-dependencies]
-# iroh is tokio-based (its own docs bind endpoints under `#[tokio::main]`, and
-# `noq`, the QUIC layer it re-exports, ships a tokio runtime module), so tokio
-# is the executor the tests drive it with.
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = [
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }

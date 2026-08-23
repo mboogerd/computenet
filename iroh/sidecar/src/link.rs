@@ -117,6 +117,17 @@ impl Link {
         self.receiver.closed().await
     }
 
+    /// A cloneable handle that observes and forces link-down independently of
+    /// the halves that carry frames.
+    ///
+    /// [`Link::closed`] borrows the link, so a task that has moved the receiver
+    /// into a read loop can no longer ask when the link went down. The watcher
+    /// exists for exactly that: take one before splitting, and the read loop and
+    /// the down-observer can run as separate tasks.
+    pub fn watcher(&self) -> LinkWatcher {
+        self.receiver.watcher()
+    }
+
     /// Splits the link so one task can send while another receives — both still
     /// on the same single bi-directional stream.
     pub fn into_split(self) -> (LinkSender, LinkReceiver) {
@@ -152,6 +163,15 @@ impl LinkSender {
     /// Sends one frame.
     pub async fn send_frame(&mut self, payload: &[u8]) -> Result<()> {
         write_frame(&mut self.stream, payload).await
+    }
+
+    /// A cloneable link-down observer for this link. See [`Link::watcher`].
+    pub fn watcher(&self) -> LinkWatcher {
+        LinkWatcher {
+            id: self.id,
+            remote: self.remote,
+            conn: self.conn.clone(),
+        }
     }
 
     /// Finishes the stream, signalling a clean end of frames to the peer. The
@@ -195,11 +215,110 @@ impl LinkReceiver {
 
     /// Resolves when the link goes down, for whatever reason.
     pub async fn closed(&self) -> LinkDown {
+        self.watcher().closed().await
+    }
+
+    /// A cloneable link-down observer for this link. See [`Link::watcher`].
+    pub fn watcher(&self) -> LinkWatcher {
+        LinkWatcher {
+            id: self.id,
+            remote: self.remote,
+            conn: self.conn.clone(),
+        }
+    }
+}
+
+/// A connection whose link exists but whose single bi-directional stream has not
+/// been adopted yet.
+///
+/// QUIC reveals a stream to the peer only when its opener first writes, so an
+/// accepting endpoint knows *who* connected long before `accept_bi` can return.
+/// Splitting the two lets a sidecar report the link up immediately and adopt the
+/// stream when the dialler's first frame arrives — the alternative being a link
+/// that is invisible to its own host until the peer decides to talk.
+#[derive(Debug)]
+pub struct PendingLink {
+    id: LinkId,
+    conn: Connection,
+}
+
+impl PendingLink {
+    pub(crate) fn new(id: LinkId, conn: Connection) -> Self {
+        PendingLink { id, conn }
+    }
+
+    /// The id this link will have once established.
+    pub fn id(&self) -> LinkId {
+        self.id
+    }
+
+    /// The peer that connected. Known from the QUIC handshake, before any
+    /// stream exists.
+    pub fn remote(&self) -> EndpointId {
+        self.conn.remote_id()
+    }
+
+    /// A link-down observer that is valid already — the connection can be lost,
+    /// or closed locally, before its stream is ever adopted.
+    pub fn watcher(&self) -> LinkWatcher {
+        LinkWatcher {
+            id: self.id,
+            remote: self.conn.remote_id(),
+            conn: self.conn.clone(),
+        }
+    }
+
+    /// Adopts the link's one bi-directional stream, resolving when the dialler
+    /// opens it by writing its first frame.
+    pub async fn establish(self) -> Result<Link> {
+        let (send, recv) = self
+            .conn
+            .accept_bi()
+            .await
+            .map_err(|e| crate::error::Error::OpenStream(Box::new(e)))?;
+        Ok(Link::new(self.id, self.conn, send, recv))
+    }
+}
+
+/// Observes — and can force — one link's transition to down, without holding
+/// either half of its stream.
+///
+/// Cloneable and independent of [`LinkSender`] / [`LinkReceiver`], so the task
+/// that pumps frames off a link and the task that reports the link going down
+/// can be different tasks. This is the "report link up/down" half of the
+/// contract the host process programs against.
+#[derive(Debug, Clone)]
+pub struct LinkWatcher {
+    id: LinkId,
+    remote: EndpointId,
+    conn: Connection,
+}
+
+impl LinkWatcher {
+    /// This link's process-local id.
+    pub fn id(&self) -> LinkId {
+        self.id
+    }
+
+    /// The peer on the other end.
+    pub fn remote(&self) -> EndpointId {
+        self.remote
+    }
+
+    /// Resolves when the link goes down, for whatever reason — the peer closing
+    /// it, a local [`LinkWatcher::close`], or the connection being lost.
+    pub async fn closed(&self) -> LinkDown {
         let reason = self.conn.closed().await.to_string();
         LinkDown {
             link: self.id,
             remote: self.remote,
             reason,
         }
+    }
+
+    /// Takes the link down locally. Every outstanding
+    /// [`LinkWatcher::closed`] on this link then resolves.
+    pub fn close(&self) {
+        self.conn.close(0u32.into(), b"link closed");
     }
 }

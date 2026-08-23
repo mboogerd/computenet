@@ -23,10 +23,21 @@
 //! # }
 //! ```
 //!
-//! Scope: this is the library only. The bin that wraps it in a local-socket
-//! protocol toward the host JVM is a separate work item; the API here is shaped
-//! for it — links carry ids, frames are sent and received one at a time, and
-//! link-down is observable via [`Link::closed`].
+//! # The two protocols
+//!
+//! Peer-to-peer traffic rides QUIC ([`frame`]): one bi-directional stream per
+//! link, 4-byte big-endian length prefix per frame.
+//!
+//! The host process talks to the sidecar over a **loopback TCP** connection
+//! instead ([`protocol`], [`serve`]), whose messages carry the same 4-byte
+//! length prefix plus a kind byte and an 8-byte link id. That header multiplexes
+//! control traffic and every link's frames onto the one host connection — a
+//! *local* multiplexing that never becomes a second QUIC stream. `PROTOCOL.md`
+//! beside this crate's `Cargo.toml` is its normative description.
+//!
+//! The binary is a thin wrapper: bind an endpoint, bind an ephemeral
+//! `127.0.0.1` TCP port, print one JSON handshake line
+//! ([`handshake_line`]), and hand each host connection to [`serve`].
 
 #![deny(missing_docs)]
 
@@ -34,11 +45,15 @@ mod endpoint;
 mod error;
 pub mod frame;
 mod link;
+pub mod protocol;
+mod server;
 
 pub use endpoint::{LookupMode, SidecarConfig, SidecarEndpoint, ALPN};
 pub use error::{Error, Result};
 pub use frame::{LENGTH_PREFIX_LEN, MAX_FRAME_LEN};
-pub use link::{Link, LinkDown, LinkId, LinkReceiver, LinkSender};
+pub use link::{Link, LinkDown, LinkId, LinkReceiver, LinkSender, LinkWatcher, PendingLink};
+pub use protocol::{handshake_line, Message, MAX_MESSAGE_LEN, MSG_HEADER_LEN};
+pub use server::{serve, serve_io, ServeOutcome};
 
 // Re-exported so callers need not depend on iroh directly for the few types
 // that appear in this crate's signatures.

@@ -15,7 +15,7 @@ use iroh::{
 
 use crate::{
     error::{Error, Result},
-    link::{Link, LinkId},
+    link::{Link, LinkId, PendingLink},
 };
 
 /// The ALPN this sidecar speaks. Peers that do not offer it are refused during
@@ -188,16 +188,28 @@ impl SidecarEndpoint {
 
     /// Accepts the next inbound link, adopting the bi-directional stream the
     /// dialler opened. `Ok(None)` once this endpoint is closed.
+    ///
+    /// This waits for the dialler's *first frame*, because that is when QUIC
+    /// reveals the stream. A caller that wants to know a peer has connected
+    /// before it says anything uses [`SidecarEndpoint::accept_pending`].
     pub async fn accept(&self) -> Result<Option<Link>> {
+        match self.accept_pending().await? {
+            Some(pending) => Ok(Some(pending.establish().await?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Accepts the next inbound connection **without** waiting for its stream.
+    ///
+    /// The returned [`PendingLink`] already knows the peer and can be watched
+    /// and closed; [`PendingLink::establish`] adopts the stream once the dialler
+    /// writes. `Ok(None)` once this endpoint is closed.
+    pub async fn accept_pending(&self) -> Result<Option<PendingLink>> {
         let Some(incoming) = self.endpoint.accept().await else {
             return Ok(None);
         };
         let conn = incoming.await.map_err(|e| Error::Accept(Box::new(e)))?;
-        let (send, recv) = conn
-            .accept_bi()
-            .await
-            .map_err(|e| Error::OpenStream(Box::new(e)))?;
-        Ok(Some(Link::new(self.next_link_id(), conn, send, recv)))
+        Ok(Some(PendingLink::new(self.next_link_id(), conn)))
     }
 
     /// Closes the endpoint; any pending [`SidecarEndpoint::accept`] yields
