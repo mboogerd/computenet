@@ -275,6 +275,33 @@ class PartitionFaultTest {
         assertEquals(listOf(FROM, UNTIL), report.appliedFaults.single().activationSteps)
         assertEquals(2, report.appliedFaults.single().fired)
         assertTrue(graph.converged(), "park + heal did not converge: ${graph.views()}")
+
+        // [CHA1-11] for PARK: the control actually stopped the traffic. Everything above is
+        // also true of a park control that does nothing at all — the activation steps come
+        // from the trace, which `onStep` emits either way, and a graph that was never
+        // partitioned converges trivially. Measured during review: replacing
+        // `LinkControl.severing`'s park/heal with no-ops leaves all eleven tests in this
+        // class green without these three assertions.
+        //
+        // Exactly zero, not "fewer": `Fault.onStep` runs before the controller drives the
+        // step, so nothing is in flight across the seam when the sever lands. Both directions,
+        // because severing a loopback is bidirectional — which is what the control's `scope`
+        // claims and what [CHA1-12]'s label reports.
+        assertEquals(
+            0,
+            report.framesOn(A_TO_B).count { it.step in FROM until UNTIL },
+            "frames crossed peerA->peerB while the partition was parked",
+        )
+        assertEquals(
+            0,
+            report.framesOn(B_TO_A).count { it.step in FROM until UNTIL },
+            "frames crossed peerB->peerA while parked, so the control's stated bidirectional " +
+                "scope is not what it did",
+        )
+        assertTrue(
+            report.framesOn(A_TO_B).any { it.step >= UNTIL },
+            "no frame crossed after the heal — the replay half of park is untested",
+        )
     }
 
     // -------------------------------------------------------------------------------------
