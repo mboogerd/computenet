@@ -4,12 +4,14 @@ import civictech.cell.CellRef
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.durability.Journal
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.SimulationController
 import civictech.cell.proxy.Invocation
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotSame
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -39,6 +41,30 @@ class DstWorldTest {
         // the kernel controller itself, not a wrapper: driving it directly still works
         val steps = world.controller.runToIdle()
         assertTrue(steps > 0, "the bare controller drains the rig's world")
+    }
+
+    /**
+     * Review repair ([CHA1-04], [CHA1-30]). Everything else that checks the empty-plan claim —
+     * `DstRun.execute`, `DstBaseline.run`, `DstBaseline.runToIdleSteps` — builds its graph in a
+     * [DstWorld], so all three share whatever seed that world hands its controller and agree
+     * with each other no matter what it is. Measured: seeding the world's controller with
+     * `seed + 1` left all 30 tests green. [CHA1-04] says *the same seed*, so the pin has to
+     * compare against a `SimulationController` this package did not construct.
+     */
+    @Test
+    fun `the world's controller carries the run seed, not merely a seed`() {
+        val bare = pickOrder(SimulationController(41))
+        assertEquals(bare, pickOrder(DstWorld(seed = 41).controller), "DstWorld(s).controller must be SimulationController(s)")
+        assertNotEquals(bare, pickOrder(SimulationController(42)), "if the pick order ignored the seed this pin would be vacuous")
+    }
+
+    /** The controller's seeded cross-host pick, as an observable sequence of scheduler indices. */
+    private fun pickOrder(controller: SimulationController, hosts: Int = 3, tasks: Int = 40): List<Int> {
+        val order = mutableListOf<Int>()
+        val schedulers = (0 until hosts).map { controller.scheduler() }
+        schedulers.forEachIndexed { index, scheduler -> repeat(tasks) { scheduler.submit(10) { order += index } } }
+        while (controller.step()) Unit
+        return order
     }
 
     @Test

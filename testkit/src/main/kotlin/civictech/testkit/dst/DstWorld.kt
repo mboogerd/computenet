@@ -198,8 +198,19 @@ data class FaultActivity(val fired: Int, val activationSteps: List<Int>) {
 /**
  * Transforms a frame in flight on one edge. Returns the frames to deliver in its place:
  * the frame unchanged (pass), **empty** (drop), the same frame twice (duplicate), a mutated
- * copy (corrupt), or a frame held back and released later (delay/reorder — hold it in the
- * interposer's own state and emit it on a later call or from a [StepHooks] hook).
+ * copy (corrupt), or a frame held back and released on a **later call of this same method**
+ * (delay/reorder — hold it in the interposer's own state and prepend it to what a subsequent
+ * frame produces).
+ *
+ * **Known limit — an edge is a transform, not a transport.** [Edge.deliver] hands its result
+ * back to the *graph builder*, which is what actually delivers; this seam owns no sink. So a
+ * held frame can only leave the buffer when another frame traverses the same edge, and a
+ * [StepHooks] hook has **no** way to release one: nothing a hook can call reaches the target
+ * host. A reorder or delay fault must therefore release on a window-full condition rather than
+ * on a step deadline, and frames still held when traffic stops are stranded for the rest of
+ * the run. Closing that gap means giving [Edges.declare] a delivery sink and adding an
+ * injection call — a change to this file, which the six-seam contract otherwise forbids, so it
+ * belongs to whoever owns the seam rather than to a fault class working around it.
  *
  * @param step the controller step during which the frame is in flight, so an interposer can
  *   decide by step index without keeping a clock of its own ([CHA1-02]).
