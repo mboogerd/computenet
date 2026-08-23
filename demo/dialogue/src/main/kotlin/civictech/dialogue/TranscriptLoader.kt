@@ -67,15 +67,19 @@ data class TranscriptLoadResult(
  * [Utterance] like any other — that policing (turn-order admission, dedup)
  * belongs to the replay driver, not this loader.
  *
- * **Limit, at this feature's stage (F1):** the driver's dedup keys on the
- * whole utterance — id *and* content — not on the id alone (see
- * [TranscriptSource.offer]). So a transcript carrying one id twice with
- * *different* content and an ascending turn is admitted twice, and nothing
- * in this module rejects it: the ingress set then holds two elements sharing
- * one id. Id uniqueness is an assumed property of the transcript here, not
- * an enforced one. The fixture
- * `demo/dialogue/src/test/resources/duplicate-id-parseable.jsonl` is exactly
- * that shape.
+ * **Id policing happens at the driver, not here** (computenet-gkol). This
+ * loader still returns a transcript carrying one id twice — with identical
+ * or different content — as two parsed [Utterance]s, exactly as before; the
+ * fixture `demo/dialogue/src/test/resources/duplicate-id-parseable.jsonl` is
+ * that shape and still parses cleanly. What now differs is what happens when
+ * those two parsed utterances are *admitted* through [TranscriptSource.offer]:
+ * a second offer of an already-admitted id with identical content is a
+ * silent no-op ([AGO1-SRC-02]), and a second offer of an already-admitted id
+ * with *different* content is rejected with [DuplicateUtteranceIdException]
+ * rather than being admitted alongside the first — the ingress set can no
+ * longer end up holding two elements sharing one id. Id uniqueness remains
+ * an assumed property of the transcript as far as this loader is concerned;
+ * only the driver enforces it.
  */
 object TranscriptLoader {
 

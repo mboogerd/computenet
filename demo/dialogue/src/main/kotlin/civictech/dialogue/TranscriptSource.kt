@@ -49,6 +49,25 @@ class OutOfOrderTurnException(
 )
 
 /**
+ * The named error for the id-collision case computenet-gkol closes: an
+ * offer re-uses an id already admitted with *different* content.
+ * [AGO1-SRC-01] states id uniqueness as a property of the accepted input, so
+ * such an offer is malformed input, and — mirroring [OutOfOrderTurnException]
+ * for [AGO1-SRC-04]/BS-17 — is rejected whole rather than silently dropped or
+ * treated as a replacement. No `SetOps` call is made, so the admitted set is
+ * unchanged. (The identical-content case stays the [AGO1-SRC-02] silent
+ * no-op; this exception is for a genuine content mismatch only.)
+ */
+class DuplicateUtteranceIdException(
+    val utteranceId: String,
+    val admitted: Utterance,
+    val offered: Utterance,
+) : IllegalStateException(
+    "TranscriptSource rejected utterance '$utteranceId': an utterance with this id is " +
+        "already admitted with different content (admitted=$admitted, offered=$offered)",
+)
+
+/**
  * The replayable transcript drive (epic computenet-2aw §2.2 stage 1).
  *
  * **A driver, not a cell** (2aw.F1-D1 / epic 2aw-D2). It owns turn ordering,
@@ -70,25 +89,28 @@ class OutOfOrderTurnException(
  *
  *    This check runs **before** the turn check deliberately: a duplicate
  *    necessarily carries a turn ordinal equal to one already admitted, so
- *    rule 2 would otherwise reject it with an error where the specification
- *    asks for a silent no-op. The two clauses agree on the observable
- *    outcome (admitted set unchanged) and differ only in whether the caller
- *    is told; [AGO1-SRC-02]'s "no-op" wins for the exact-duplicate case, and
- *    [AGO1-SRC-04]'s error covers every other non-advancing turn.
+ *    rule 3 (the turn check) would otherwise reject it with an error where
+ *    the specification asks for a silent no-op. The two clauses agree on the
+ *    observable outcome (admitted set unchanged) and differ only in whether
+ *    the caller is told; [AGO1-SRC-02]'s "no-op" wins for the exact-duplicate
+ *    case, and [AGO1-SRC-04]'s error covers every other non-advancing turn
+ *    *whose id is not already admitted* — an id already admitted is rule 2's,
+ *    whatever its turn.
  *
- *    **This dedup keys on the whole utterance, not on the id**, and that is
- *    a real limit of this stage rather than a restatement of the rule: an
- *    offer that re-uses an admitted id with *different* content and a
- *    strictly greater turn passes both rules and is admitted, so the ingress
- *    set ends up holding two elements under one id and two effective adds
- *    have been emitted for it. Measured, not inferred: replaying
- *    `duplicate-id-parseable.jsonl` yields a set of size 2 with ids
- *    `[u1, u1]`. Id uniqueness is assumed of the transcript ([AGO1-SRC-01]
- *    states it as a property of the input) and enforced nowhere in F1;
- *    whether such an offer should be rejected with a named error, silently
- *    dropped, or treated as a replacement is an open decision left to a
- *    successor feature.
- * 2. **Turns must strictly ascend** [AGO1-SRC-03]/[AGO1-SRC-04]. An offer
+ * 2. **Id reuse with different content is rejected** (computenet-gkol). An
+ *    offer whose id is already admitted but whose content differs throws
+ *    [DuplicateUtteranceIdException] and touches nothing — no `SetOps` call,
+ *    admitted set unchanged. This runs in the same step as rule 1, before
+ *    the turn check, so it also catches an id collision that happens to
+ *    carry a strictly greater turn (which would otherwise pass rule 3
+ *    unnoticed). [AGO1-SRC-01] states id uniqueness as a property of the
+ *    accepted input, so a same-id/different-content offer is malformed
+ *    input; this mirrors [AGO1-SRC-04]/BS-17's existing "reject with a named
+ *    error, leave state unchanged" idiom rather than silently dropping the
+ *    offer or replacing the admitted element (replacement is
+ *    `KeyedSetCell`'s contract and would reopen 2aw.F1-D2, which F1 settled
+ *    on `SetCell`).
+ * 3. **Turns must strictly ascend** [AGO1-SRC-03]/[AGO1-SRC-04]. An offer
  *    whose turn is not greater than the last admitted turn throws
  *    [OutOfOrderTurnException] and touches nothing.
  *
@@ -136,11 +158,22 @@ class TranscriptSource(
      * @return `true` if it was admitted (one effective add reached the
      *   graph), `false` if it was an identical re-admission of an already
      *   admitted id (rule 1 above — a no-op, not an error).
+     * @throws DuplicateUtteranceIdException if its id is already admitted
+     *   with *different* content. Pipeline state is unchanged when this
+     *   throws.
      * @throws OutOfOrderTurnException if its turn does not advance past the
      *   last admitted one. Pipeline state is unchanged when this throws.
      */
     fun offer(utterance: Utterance): Boolean {
-        if (admittedById[utterance.id] == utterance) return false
+        val existing = admittedById[utterance.id]
+        if (existing != null) {
+            if (existing == utterance) return false
+            throw DuplicateUtteranceIdException(
+                utteranceId = utterance.id,
+                admitted = existing,
+                offered = utterance,
+            )
+        }
 
         val last = lastTurn
         if (last != null && utterance.turn <= last) {

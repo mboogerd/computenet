@@ -108,6 +108,36 @@ class TranscriptSourceTest {
     }
 
     @Test
+    fun `computenet-gkol - an offer that reuses an admitted id with different content is rejected with a named error`() {
+        val rig = Rig()
+        val source = rig.source()
+        val first = Utterance(id = "u1", turn = 1, speaker = "alice", tsMillis = 1000, text = "first")
+
+        assertTrue(source.offer(first), "first admission is admitted")
+        rig.quiesce()
+
+        val before = rig.view.current()
+        val deltasBefore = rig.deltas.size
+        val admittedBefore = source.admitted
+
+        // Same id, different content, strictly greater turn: passes the
+        // SRC-02 identical-content dedup and the SRC-03/04 turn-order rule,
+        // so only an id-uniqueness check can catch it.
+        val conflicting = Utterance(id = "u1", turn = 2, speaker = "bob", tsMillis = 1500, text = "DIFFERENT")
+        val failure = assertFailsWith<DuplicateUtteranceIdException> { source.offer(conflicting) }
+
+        assertEquals("u1", failure.utteranceId)
+        assertEquals(first, failure.admitted)
+        assertEquals(conflicting, failure.offered)
+
+        rig.quiesce()
+        assertEquals(before, rig.view.current(), "the admitted set is unchanged by the rejection")
+        assertEquals(1, before.size)
+        assertEquals(deltasBefore, rig.deltas.size, "the rejection propagated no delta at all")
+        assertEquals(admittedBefore, source.admitted)
+    }
+
+    @Test
     fun `AGO1-SRC-03 - the source admits from an incremental feed without the full transcript up front`() {
         val rig = Rig()
         // No transcript given to the driver at all: utterances arrive one at
