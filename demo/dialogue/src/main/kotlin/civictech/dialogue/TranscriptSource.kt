@@ -75,6 +75,19 @@ class OutOfOrderTurnException(
  *    outcome (admitted set unchanged) and differ only in whether the caller
  *    is told; [AGO1-SRC-02]'s "no-op" wins for the exact-duplicate case, and
  *    [AGO1-SRC-04]'s error covers every other non-advancing turn.
+ *
+ *    **This dedup keys on the whole utterance, not on the id**, and that is
+ *    a real limit of this stage rather than a restatement of the rule: an
+ *    offer that re-uses an admitted id with *different* content and a
+ *    strictly greater turn passes both rules and is admitted, so the ingress
+ *    set ends up holding two elements under one id and two effective adds
+ *    have been emitted for it. Measured, not inferred: replaying
+ *    `duplicate-id-parseable.jsonl` yields a set of size 2 with ids
+ *    `[u1, u1]`. Id uniqueness is assumed of the transcript ([AGO1-SRC-01]
+ *    states it as a property of the input) and enforced nowhere in F1;
+ *    whether such an offer should be rejected with a named error, silently
+ *    dropped, or treated as a replacement is an open decision left to a
+ *    successor feature.
  * 2. **Turns must strictly ascend** [AGO1-SRC-03]/[AGO1-SRC-04]. An offer
  *    whose turn is not greater than the last admitted turn throws
  *    [OutOfOrderTurnException] and touches nothing.

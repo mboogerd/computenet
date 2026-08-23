@@ -66,6 +66,16 @@ data class TranscriptLoadResult(
  * duplicate-id or otherwise odd-but-parseable line is returned as a parsed
  * [Utterance] like any other — that policing (turn-order admission, dedup)
  * belongs to the replay driver, not this loader.
+ *
+ * **Limit, at this feature's stage (F1):** the driver's dedup keys on the
+ * whole utterance — id *and* content — not on the id alone (see
+ * [TranscriptSource.offer]). So a transcript carrying one id twice with
+ * *different* content and an ascending turn is admitted twice, and nothing
+ * in this module rejects it: the ingress set then holds two elements sharing
+ * one id. Id uniqueness is an assumed property of the transcript here, not
+ * an enforced one. The fixture
+ * `demo/dialogue/src/test/resources/duplicate-id-parseable.jsonl` is exactly
+ * that shape.
  */
 object TranscriptLoader {
 
