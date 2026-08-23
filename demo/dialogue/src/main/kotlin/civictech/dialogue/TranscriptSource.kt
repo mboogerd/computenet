@@ -89,11 +89,13 @@ class DuplicateUtteranceIdException(
  *
  *    This check runs **before** the turn check deliberately: a duplicate
  *    necessarily carries a turn ordinal equal to one already admitted, so
- *    rule 2 would otherwise reject it with an error where the specification
- *    asks for a silent no-op. The two clauses agree on the observable
- *    outcome (admitted set unchanged) and differ only in whether the caller
- *    is told; [AGO1-SRC-02]'s "no-op" wins for the exact-duplicate case, and
- *    [AGO1-SRC-04]'s error covers every other non-advancing turn.
+ *    rule 3 (the turn check) would otherwise reject it with an error where
+ *    the specification asks for a silent no-op. The two clauses agree on the
+ *    observable outcome (admitted set unchanged) and differ only in whether
+ *    the caller is told; [AGO1-SRC-02]'s "no-op" wins for the exact-duplicate
+ *    case, and [AGO1-SRC-04]'s error covers every other non-advancing turn
+ *    *whose id is not already admitted* — an id already admitted is rule 2's,
+ *    whatever its turn.
  *
  * 2. **Id reuse with different content is rejected** (computenet-gkol). An
  *    offer whose id is already admitted but whose content differs throws
