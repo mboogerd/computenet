@@ -178,10 +178,24 @@ class BridgeIngressCell(
      * N requests establish N links on one target port, and each fires its own
      * `onLinked` catch-up and every subsequent delta, so a peer can still
      * amplify P's outbound traffic N-fold. What the binding takes away is the
-     * *aim*: every one of those links now terminates at the requesting peer's
-     * own endpoint, so the amplifier can only be pointed at the peer paying for
-     * it, never at a third party or at the receiver's own cells. A per-peer cap
-     * is a separate decision and is not made here.
+     * *aim*: every one of those links is admitted only against the requesting
+     * peer's own endpoint, so the amplifier cannot be *pointed* at a third
+     * party or at the receiver's own cells by the request itself. A per-peer
+     * cap is a separate decision and is not made here.
+     *
+     * **And the aim is bound at the request, not for the link's lifetime**
+     * (measured in review, computenet-zlm2). This check runs once; the endpoint
+     * [RemoteLinkRequests.translate] builds then re-resolves `(cell, port)`
+     * through `LocationRegistry.deliver` on *every* delivery. Because a
+     * mirrored announcement overwrites `locations[ref]` whoever sent it, a
+     * *different* admitted peer that later announces the same [CellRef]
+     * captures the stream — and, announcing first, can even turn a ref this
+     * side hosts locally into a `Remote` that then passes [namedByPeer]. That
+     * is not specific to this seam: the same announcement captures an ordinary
+     * `HostedCellProxy` link P made itself, with no link request in play, which
+     * is why it is filed as its own defect rather than fixed here. Read this
+     * seam as "a peer may only ask for a link to a ref it has announced", not
+     * as "the data can only ever reach that peer".
      *
      * **Defaults to `{ null }`, which refuses every link request** — fail
      * closed. [Peering.hostIngress] is the only production construction and
@@ -240,6 +254,16 @@ class BridgeIngressCell(
      * unpublished one, which is precisely the binding this is for. An anonymous
      * peering therefore cannot establish a remote link; it never had an
      * identity to bind one to.
+     *
+     * Two measured limits on how much that buys (computenet-zlm2, review of
+     * this change): "a [CellRef] this side hosts itself" is refused only while
+     * no peer has *announced* it — a mirrored announcement overwrites a
+     * [civictech.cell.host.LocationRegistry.Local] location, and the ref then
+     * resolves as that peer's [civictech.cell.host.LocationRegistry.Remote] and
+     * passes here; and only the **cell** half is judged — the `port` half of
+     * the named address is never checked, so a peer may name any port name on
+     * its own cell (deliveries then dead-letter at the requester, on its side
+     * of the boundary, not this one).
      */
     private fun namedByPeer(named: CellRef): Boolean {
         val whose = peer ?: return false
@@ -378,13 +402,15 @@ interface RemoteLink {
      * requesting peer's consumer, which lives at ([cell], [port]) and speaks the
      * contract identified by [apiContractId].
      *
-     * ([cell], [port]) is **checked against the requesting peer before it is
-     * used** (computenet-a4ha): the receiving [BridgeIngressCell] refuses the
-     * request unless [cell] resolves, on its own registry, to a location that
-     * peer announced — see [BridgeIngressCell.locate]. Everything the linked
-     * port then emits is forwarded to that address, so the check is what keeps
-     * "the requesting peer's consumer" in the sentence above true rather than
-     * aspirational.
+     * [cell] is **checked against the requesting peer before it is used**
+     * (computenet-a4ha): the receiving [BridgeIngressCell] refuses the request
+     * unless [cell] resolves, on its own registry, to a location that peer
+     * announced — see [BridgeIngressCell.locate], whose KDoc also states the
+     * two limits of that check ([port] is not bound, and the binding is taken
+     * at the request rather than held for the link's lifetime). Everything the
+     * linked port then emits is forwarded to that address, so the check is what
+     * keeps "the requesting peer's consumer" in the sentence above true at the
+     * moment the link is admitted.
      */
     fun requestLinkTo(cell: CellRef, port: String, apiContractId: Long)
 
