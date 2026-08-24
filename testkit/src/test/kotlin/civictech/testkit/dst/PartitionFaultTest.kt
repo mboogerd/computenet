@@ -74,6 +74,9 @@ class PartitionFaultTest {
 
         /** Salt for the collector's logical id, seed-derived for the same reason as [ORMAP_SALT]. */
         const val COLLECTOR_SALT = 0x25L
+
+        /** Scheduler band for [HeldCollector]'s keepalive — deliberately worse than any real work. */
+        const val KEEPALIVE_BAND = 10_000
     }
 
     /** The dynamic-proxy view of a replica's write inlet — no KSP involved. */
@@ -220,8 +223,12 @@ class PartitionFaultTest {
         lateinit var cell: CollectorCell
             private set
 
-        /** `received`, and whether the ref was held, as they stood at the start of each step. */
+        /**
+         * `received`, the registry's parked queue, and the hold flag, as they stood at the
+         * start of each step — before that step's write and before the fault's own hook.
+         */
         val receivedAtStepStart = mutableMapOf<Int, List<Int>>()
+        val parkedAtStepStart = mutableMapOf<Int, List<Int>>()
         val heldAtStepStart = mutableMapOf<Int, Boolean>()
 
         val spec: GraphSpec = GraphSpec(id) { world -> build(world) }
@@ -254,12 +261,20 @@ class PartitionFaultTest {
             var issued = 0
             world.steps.onStep { _, step ->
                 receivedAtStepStart[step] = collector.received.toList()
+                parkedAtStepStart[step] = registry.parkedFor(collector.ref)
+                    .map { it.invocation.args.single() as Int }
                 heldAtStepStart[step] = registry.isHeld(collector.ref)
                 if (issued < writes) {
                     inlet.provide(issued++)
                     // The keepalive; see this class's kdoc. Inside the guard, so the run stops
                     // producing work once the schedule is exhausted and can actually quiesce.
-                    scheduler.submit(10) { world.trace.emit(host = "solo", cell = "collector", port = "tick") }
+                    // KEEPALIVE_BAND, not a small number: `ScheduledTask` orders by priority
+                    // first, so a keepalive at the band real deliveries use would win every
+                    // step and starve them — measured, and it silently made the arrival-order
+                    // observation below vacuous (nothing arrived before step 60 at all).
+                    scheduler.submit(KEEPALIVE_BAND) {
+                        world.trace.emit(host = "solo", cell = "collector", port = "tick")
+                    }
                 }
             }
         }
@@ -411,21 +426,36 @@ class PartitionFaultTest {
             "the ref was not held across the window: ${graph.heldAtStepStart}",
         )
 
-        // Nothing issued inside the window arrived while it was held. Values are the issue
-        // index, which equals the step, so the 30 values FROM+1..UNTIL are exactly the writes
-        // the hold was covering — none of them is in the cell yet at the healing step.
-        // A no-op control leaves this list running up to UNTIL-1 and fails here, which is
-        // what makes this an assertion about the control rather than about the trace.
+        // The traffic issued inside the window is sitting in the registry's park queue, in
+        // arrival order, and nowhere else. Values are the issue index, which equals the step,
+        // so this list names exactly the writes the hold covered: FROM+1 (the first issued
+        // after the park landed) through UNTIL-1. It is the assertion that distinguishes a
+        // hold from a drop *and* from a control that does nothing — a no-op control leaves
+        // this queue empty at every step.
+        assertEquals(
+            (FROM + 1 until UNTIL).toList(),
+            graph.parkedAtStepStart.getValue(UNTIL),
+            "the window's writes were not parked in arrival order at the healing step",
+        )
+        // …and none of them had reached the cell.
         val atHeal = graph.receivedAtStepStart.getValue(UNTIL)
         assertTrue(
             atHeal.all { it <= FROM },
             "values issued inside the park window arrived before the heal: $atHeal",
         )
+        // That assertion is only meaningful because the cell was in fact receiving right up to
+        // the park: without this, `atHeal` could be vacuously empty (measured — it was, until
+        // the keepalive was moved off the delivery band; see [HeldCollector]).
+        assertEquals((0..FROM).toList(), atHeal, "traffic was not flowing before the park")
 
-        // …and the release drained every one of them, in park order, on top of a prefix that
-        // was never parked: the whole schedule, in issue order, with nothing lost or reordered.
+        // The release drained every parked value, in park order, on top of the prefix that was
+        // never parked: the whole schedule, in issue order, nothing lost and nothing reordered.
         // This is the property `severing` cannot support and `holding` exists for.
         assertEquals((0 until WRITES).toList(), graph.cell.received)
+        assertTrue(
+            graph.parkedAtStepStart.filterKeys { it > UNTIL }.all { it.value.isEmpty() },
+            "traffic was still parked after the heal: ${graph.parkedAtStepStart.filterKeys { it > UNTIL }}",
+        )
     }
 
     @Test
