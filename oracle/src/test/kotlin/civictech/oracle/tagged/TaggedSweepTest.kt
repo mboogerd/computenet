@@ -65,7 +65,7 @@ import kotlin.random.Random
  * already-populated keys so re-puts and reset-removes actually occur — the same bias
  * `[ORA2-GEN-05]`'s generator dimension states, applied here by hand since the case is not a
  * `GeneratedCase`. One instance, one writer, no gossip deliveries: exactly what
- * `civictech.oracle.bind.SingleInstanceOrMapModel` can honestly evaluate, and exactly what a
+ * `civictech.oracle.model.SingleInstanceOrMapModel` can honestly evaluate, and exactly what a
  * single `OrMapCell` driven directly is.
  */
 private const val SYNTHETIC_DESCRIPTION = "TaggedSweepTest synthetic dead letter [ORA2-DIFF-10]"

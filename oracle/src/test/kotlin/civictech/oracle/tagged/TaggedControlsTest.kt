@@ -82,13 +82,13 @@ import java.util.UUID
  * to resolve, so a key's winner is simply its last write — which is exactly what
  * [NaiveArrivalOrderMapModel] computes. Over a delivery-free one-source script
  * (`put/put/re-put/removeKey/put/removeKey/put`) its fold is **equal** to
- * [civictech.oracle.bind.SingleInstanceOrMapModel]'s dot fold, both `{k1=vZ, k2=v3}` (measured
+ * [civictech.oracle.model.SingleInstanceOrMapModel]'s dot fold, both `{k1=vZ, k2=v3}` (measured
  * 2026-08-21, reviewing computenet-6v7y). That is not one lucky script: the equality was
  * re-derived independently over 2000 random single-source delivery-free scripts (mixed
  * puts/removes over three keys) with **zero** disagreements (measured 2026-08-21, second
  * review of computenet-6v7y), and it holds structurally — a delivery-free slice is the only
  * thing this seam can carry at all, since
- * [civictech.oracle.bind.SingleInstanceOrMapModel] refuses a slice with deliveries by name, and
+ * [civictech.oracle.model.SingleInstanceOrMapModel] refuses a slice with deliveries by name, and
  * within one instance a re-put or a remove tombstones every dot the key had live, leaving the
  * last put's dot as the sole survivor. CTL-01 ported onto that path would therefore hold
  * identically under the mutant and under the correct reference — the vacuous shape this file's
