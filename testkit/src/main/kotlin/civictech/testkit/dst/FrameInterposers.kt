@@ -124,6 +124,134 @@ object FrameInterposers {
         else FrameInterposer { frame, step ->
             stages.fold(listOf(frame)) { frames, stage -> frames.flatMap { stage.apply(it, step) } }
         }
+
+    /**
+     * Re-deliver each frame [copies] extra times, with probability [probability] per frame,
+     * while the step is inside [window] ([CHA1-16]).
+     *
+     * The copies are **byte-identical and distinct arrays** (`ByteArray.copyOf`), not the same
+     * object handed over twice: a receiver that mutated the frame it decoded would otherwise
+     * corrupt its own "second" delivery, and the property under test — that a system tolerates
+     * seeing the same bytes twice — would be tested against something it is not.
+     *
+     * The original comes first, then its copies, so a duplicating stage never changes which
+     * frame arrives *first*. Ordering is [reordering]'s job, and keeping the two separable is
+     * what lets a suite attribute a failure to one of them.
+     *
+     * [probability] is consulted **once per frame, only inside the window**, from [rng] — so
+     * two runs on the same seed duplicate exactly the same frames ([CHA1-30]), and adding a
+     * window to a fault does not re-roll the frames outside it into different decisions.
+     * [onDuplicate] is called once per frame that was actually duplicated, with the number of
+     * copies made; that is the count [CHA1-24] reports.
+     */
+    fun duplicating(
+        copies: Int = 1,
+        probability: Double = 1.0,
+        rng: java.util.Random,
+        window: StepWindow = StepWindow.ALWAYS,
+        onDuplicate: (Int) -> Unit = {},
+    ): FrameInterposer {
+        require(copies >= 1) { "a duplicate makes at least one extra copy, got copies=$copies" }
+        require(probability > 0.0 && probability <= 1.0) {
+            "probability is a per-frame chance in (0, 1], got $probability"
+        }
+        return FrameInterposer { frame, step ->
+            if (!window.contains(step)) {
+                listOf(frame)
+            } else if (probability < 1.0 && rng.nextDouble() >= probability) {
+                listOf(frame)
+            } else {
+                onDuplicate(copies)
+                listOf(frame) + List(copies) { frame.copyOf() }
+            }
+        }
+    }
+
+    /**
+     * Hold frames back and release them in bursts, optionally permuted ([CHA1-14], [CHA1-15]).
+     *
+     * ## What it does, and which reordering that produces
+     *
+     * Frames arriving while the step is inside [active] are appended to a buffer of at most
+     * [window] frames. When the buffer reaches its release threshold the whole buffer is
+     * returned at once, and the interposer returns *nothing* for the frames it is still
+     * holding.
+     *
+     *  - **[permute] false — the default, and per-link FIFO ([CHA1-15]).** The buffer is
+     *    released in arrival order, so the order *on this edge* is exactly the order the graph
+     *    produced. What changes is when those frames arrive relative to frames on **other**
+     *    edges, which is cross-link/cross-host reorder and nothing else. The threshold is
+     *    re-drawn from [rng] in `1..window` after every release, so the burst boundaries — and
+     *    therefore the cross-link interleaving — vary by seed while FIFO is preserved by
+     *    construction, not by luck.
+     *  - **[permute] true — the opt-in single-link permutation ([CHA1-15]).** The threshold is
+     *    exactly [window] and the released buffer is shuffled with [rng], i.e. a permutation of
+     *    up to [window] items derived solely from the run seed ([CHA1-14]). This breaks per-link
+     *    FIFO, which is why it is opt-in and why it exists as a diverging control rather than a
+     *    default.
+     *
+     * ## Release is traffic-driven, and the window is gated *inside* here
+     *
+     * Both are consequences of [FrameInterposer]'s known limit — an edge is a transform, not a
+     * transport — and both are easy to get wrong:
+     *
+     *  - **Nothing but a later frame on this same edge can flush the buffer.** No step hook, no
+     *    `onStep`, no healing step. Frames still held when traffic on the edge stops for good
+     *    are **stranded for the rest of the run**, and a stranded frame is indistinguishable
+     *    from a dropped one in its effect on the graph. A suite that wants reorder without loss
+     *    must therefore keep traffic flowing past the end of [active] and assert that
+     *    everything held was released — see `ReorderFault`'s KDoc for the accounting it exposes
+     *    for exactly that assertion.
+     *  - **[active] is checked in here, not by wrapping this in [windowed].** Wrapping a
+     *    stateful buffer in an activation window strands its contents permanently: at
+     *    `until` the buffer simply stops being applied, so whatever it holds is never seen
+     *    again. Handled here, the first frame at or after `until` flushes the buffer in arrival
+     *    order ahead of itself — the window closing releases what it held instead of losing it.
+     *
+     * [onHold] is called once per frame appended to the buffer: a held frame is the observable
+     * effect of this fault, so that is what [CHA1-24] counts. [onRelease] is called once per
+     * burst with the number of frames released, which is what lets a suite prove nothing was
+     * stranded.
+     */
+    fun reordering(
+        window: Int,
+        permute: Boolean = false,
+        rng: java.util.Random,
+        active: StepWindow = StepWindow.ALWAYS,
+        onHold: () -> Unit = {},
+        onRelease: (Int) -> Unit = {},
+    ): FrameInterposer {
+        require(window >= 1) { "a reorder buffer holds at least one frame, got window=$window" }
+        val held = mutableListOf<ByteArray>()
+        var threshold = if (permute) window else 1 + rng.nextInt(window)
+        return FrameInterposer { frame, step ->
+            if (!active.contains(step)) {
+                // The window has closed (or has not opened): release what is held, in arrival
+                // order, ahead of the frame that woke us. Never strand it — see the KDoc.
+                if (held.isEmpty()) {
+                    listOf(frame)
+                } else {
+                    val flushed = held.toList()
+                    held.clear()
+                    onRelease(flushed.size)
+                    flushed + frame
+                }
+            } else {
+                held += frame
+                onHold()
+                if (held.size < threshold) {
+                    emptyList()
+                } else {
+                    val released = held.toMutableList()
+                    if (permute) java.util.Collections.shuffle(released, rng)
+                    held.clear()
+                    threshold = if (permute) window else 1 + rng.nextInt(window)
+                    onRelease(released.size)
+                    released
+                }
+            }
+        }
+    }
 }
 
 /** [FrameInterposers.chain] for two stages, infix: `tracing(...) then drop()`. */
