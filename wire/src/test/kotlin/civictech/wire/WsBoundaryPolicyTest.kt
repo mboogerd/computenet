@@ -31,6 +31,8 @@ import civictech.cell.port.registerPort
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.InvocationSink
+import civictech.cell.wire.RemoteLinkRequests
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.Peering
 import civictech.cell.wire.PortAddress
@@ -55,31 +57,30 @@ import java.util.concurrent.CopyOnWriteArrayList
  * scenario is written twice against the identical fixture, not shared as
  * code).
  *
- * ## The wall this task hit, confirmed independently before writing a line
- * here (the sibling task that wrote the loopback half reported it first)
+ * ## The wall this task hit — closed by computenet-wb6s
  *
+ * When this file was written, a link request could not cross a socket at all.
  * [WireCodec.encode] requires `@Contract` ids for anything other than a
  * `PORT_PROTOCOL` frame — see its own `@throws` KDoc: `"not wire-capable:
- * '$methodName' was not captured from a @Contract interface"`. `LinkTo.linkTo`
- * / `LinkFrom.linkFrom` are ordinary port-management methods with no
- * `@Contract` capture, so a **link request cannot cross a real socket at
- * all**: [civictech.cell.wire.BridgeEgressCell.deliver] calls
- * [WireCodec.encode] unconditionally, and that call throws for a
- * `PORT_MANAGEMENT` invocation before a single byte reaches the wire. This is
- * not specific to this fixture — `kernel`'s own
- * `TrustBoundaryTest.\`link requests carry the delivering peer's identity into
- * policies\`` and `BridgeBoundaryPolicyTest` both establish their remote link
- * the same way this file does, by handing the *already-decoded* invocation
- * straight to the target side's [LocationRegistry.deliver] rather than routing
- * it through an egress. That is not a workaround invented here; it is the
- * existing, only-available way this repository's own tests establish a
- * cross-boundary link, and it is honestly a **finding**, not a gap this task
- * can close: closing it would mean giving `LinkTo`/`LinkFrom` `@Contract`
- * captures (a frame-form change to what may cross `PORT_MANAGEMENT`), which
- * the feature's own non-goals forbid ("no frame fork, no version-byte bump").
- * See the acceptance-clause mapping at the bottom of this file's KDoc for
- * exactly what that means for [SEC1-18]'s "the link SHALL remain established"
- * wording.
+ * '$methodName' was not captured from a @Contract interface"` — and
+ * `LinkTo.linkTo` / `LinkFrom.linkFrom` are ordinary port-management methods
+ * with none, so [civictech.cell.wire.BridgeEgressCell.deliver]'s unconditional
+ * encode threw before a byte reached the wire. Every cross-boundary link test
+ * in this repository therefore handed the *already-decoded* invocation straight
+ * to the target side's [LocationRegistry.deliver], stamped with the peer a real
+ * ingress decode would have applied.
+ *
+ * computenet-wb6s closed that without touching the frame or `LinkTo`/`LinkFrom`
+ * (whose argument is a live port object, which no encoding could carry across a
+ * machine boundary): what crosses is
+ * [civictech.cell.wire.RemoteLinkRequests]' addressable form of the request —
+ * an ordinary ids-only `PORT_MANAGEMENT` frame over the
+ * [civictech.cell.wire.RemoteLink] contract — and the receiving
+ * [civictech.cell.wire.BridgeIngressCell] translates it back into the `linkTo`
+ * invocation an in-process caller would have made, stamped with the peer it
+ * authenticated. [linkQTo] below uses it, so the link-request half of the
+ * identity seam is now verified through a real socket rather than up to an
+ * injection point.
  *
  * ## What genuinely crosses the real socket here, and what does not
  *
@@ -108,18 +109,15 @@ import java.util.concurrent.CopyOnWriteArrayList
  * "the onLinked catch-up and live deltas SHALL both arrive filtered by the
  * same disclosure transform, with the remote-triggered catch-up evaluation
  * observing Principal = Peer(id, TransportVouched)" — held, and genuinely
- * wire-crossed for the deltas themselves; the link *request* that causes the
- * catch-up is injected (the wall above), exactly as the loopback task's own
- * `BridgeBoundaryPolicyTest` KDoc documents for its path.
+ * wire-crossed end to end since computenet-wb6s: the link *request* that causes
+ * the catch-up now crosses the socket too, so the principal the catch-up
+ * observes comes from the ingress stamp rather than from a test-supplied
+ * invocation.
  *
  * "no catch-up and no live delta SHALL cross the wire, the link SHALL remain
- * established" — held for what "established" can honestly mean on this path:
- * the exposure's own `linking.links` records the endpoint (the same
- * observable `BridgeBoundaryPolicyTest` asserts), and `PORT_PROTOCOL` traffic
- * genuinely still crosses the real socket to it. Whether a *literal* socket
- * `LinkTo` frame would also have succeeded is exactly the question the wall
- * above answers "no" to, independent of disclosure — so this clause is
- * verified up to that same, already-reported limit.
+ * established" — held: the exposure's own `linking.links` records the endpoint
+ * the ingress reconstructed from the socket-borne request, and `PORT_PROTOCOL`
+ * traffic genuinely still crosses the real socket to it.
  *
  * "a remotely-asserted attention level SHALL arrive clamped to the ceiling and
  * applied" — held, fully wire-crossed (no injection at all).
@@ -256,42 +254,33 @@ class WsBoundaryPolicyTest {
         }
 
         /**
-         * Peer q links to [exposure] across the bridge. The endpoint forwards
-         * every disclosed delta to `collector` through a real
-         * [HostedCellProxy] over the real, wire-mirrored [LocationRegistry.Remote]
-         * location — so what the endpoint calls genuinely crosses the socket.
+         * Peer q links to [exposure] across the **real socket**
+         * (computenet-wb6s): a [RemoteLinkRequests] request resolved through
+         * `registryQ`'s real, wire-mirrored [LocationRegistry.Remote] location
+         * for the membrane, genuinely encoded, genuinely crossing the socket to
+         * P's real ingress — which stamps the peer and reconstructs the local
+         * endpoint that forwards every disclosed delta back to [collector] over
+         * the same socket.
          *
-         * The link REQUEST itself cannot: see this file's class KDoc "the wall".
-         * It is delivered straight to `registryP`, carrying exactly the peer
-         * stamp a real ingress decode would apply, exactly as
-         * `BridgeBoundaryPolicyTest`/`TrustBoundaryTest` already do for the
-         * in-process bridge.
+         * Nothing here supplies a [PeerId]: the identity the handshake and the
+         * disclosure transform evaluate against is the one the ingress decode
+         * applied.
          */
-        fun linkQTo(exposure: String, collector: DeltaCollectorCell): FanInlet<Propagate<SetDelta<String>>> {
-            val remote = (
-                HostedCellProxy.create(collector.ref, registryP, DeltaInletProxy::class.java) as DeltaInletProxy
-                ).inlet.call
-            val endpoint = FanInlet.create<Propagate<SetDelta<String>>>()
-            endpoint.serve(object : Propagate<SetDelta<String>> {
-                override fun propagate(value: SetDelta<String>) = remote.propagate(value)
-            })
-            registryP.deliver(
-                HostedPortInvocation(
-                    cellRef = membraneRef,
-                    portName = exposure,
-                    type = HostedPortInvocation.Type.PORT_MANAGEMENT,
-                    invocation = Invocation.of(LINK_TO, arrayOf(endpoint)),
-                    peer = PeerId("q"),
-                ),
+        fun linkQTo(exposure: String, collector: DeltaCollectorCell) {
+            await("Q mirrored P's membrane") { registryQ.location(membraneRef) is LocationRegistry.Remote }
+            RemoteLinkRequests.requestLinkTo(
+                sink = InvocationSink(registryQ::deliver),
+                target = PortAddress(membraneRef, exposure),
+                consumer = PortAddress(collector.ref, "inlet"),
+                api = Propagate::class.java,
             )
-            await("q linked to $exposure") { linkedOn(exposure, endpoint) }
-            return endpoint
+            await("q linked to $exposure") { linkedOn(exposure) }
         }
 
-        private fun linkedOn(exposure: String, endpoint: FanInlet<Propagate<SetDelta<String>>>): Boolean =
+        private fun linkedOn(exposure: String): Boolean =
             when (exposure) {
-                "projectedOutlet" -> membrane.projectedOutlet.linking.links.any { it.to == endpoint.ref }
-                "deniedOutlet" -> membrane.deniedOutlet.linking.links.any { it.to == endpoint.ref }
+                "projectedOutlet" -> membrane.projectedOutlet.linking.links.isNotEmpty()
+                "deniedOutlet" -> membrane.deniedOutlet.linking.links.isNotEmpty()
                 else -> error("unknown exposure $exposure")
             }
 
@@ -406,11 +395,11 @@ class WsBoundaryPolicyTest {
             }
 
             val collector = run.collectorOnQ()
-            val endpoint = run.linkQTo("deniedOutlet", collector)
+            run.linkQTo("deniedOutlet", collector)
 
             // The link IS established (up to the honest limit stated in the class
             // KDoc): Deny suppresses disclosure, it does not refuse the peering.
-            run.membrane.deniedOutlet.linking.links.any { it.to == endpoint.ref } shouldBe true
+            run.membrane.deniedOutlet.linking.links.size shouldBe 1
 
             // No catch-up crossed. This is not a race against the socket: the
             // suppression happens entirely on P's own outbound disclosure filter,
