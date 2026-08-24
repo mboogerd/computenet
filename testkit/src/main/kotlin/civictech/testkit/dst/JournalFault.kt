@@ -1,5 +1,12 @@
 package civictech.testkit.dst
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+
 /**
  * Mutate one named journal's records for a window of controller steps ([CHA1-19], [CHA1-20]).
  *
@@ -82,6 +89,129 @@ data class JournalFault(
     }
 
     companion object {
+
+        /** The `kind` a [JournalFault] is written under in a [FaultRecord]. A published name. */
+        const val KIND: String = "dst-journal"
+
+        /**
+         * This class's [FaultCodec], registered when the class is loaded — see
+         * [CrashFault.CODEC] for why the companion object is the registration point.
+         *
+         * ## The mutation is a discriminator plus flat parameters
+         *
+         * [JournalMutation] is a sealed hierarchy, and it is written as a `mutation` tag naming
+         * which one plus that mutation's own parameters at the **top level** of `params` —
+         * `n`, `index`, `i`/`j`, `corruption`. Flat for [PartitionFault.CODEC]'s reason: a
+         * nested object is unreachable to [ReductionStrategies.numericParamToward], and `n` and
+         * `index` are exactly the knobs a shrinker wants to walk toward zero. The tags are
+         * written out as literals rather than derived from class names, so renaming a mutation
+         * class does not silently orphan every artifact that recorded it.
+         *
+         * [JournalMutation.CorruptAt.corruption] is a `ByteArray`, encoded as a lowercase hex
+         * **string** rather than a JSON array. A string primitive is what keeps
+         * `numericParamToward` safe if a caller ever names `"corruption"`: it reads the
+         * parameter's `jsonPrimitive`, which throws on an array, and yields a null `double` on
+         * a string — a skip instead of a crash.
+         */
+        val CODEC: FaultCodec = FaultCodecs.register(
+            kind = KIND,
+            owns = { it is JournalFault },
+            encode = { fault ->
+                val journalFault = fault as JournalFault
+                buildJsonObject {
+                    put("journal", journalFault.journal)
+                    put("from", journalFault.window.from)
+                    put("until", journalFault.window.until)
+                    encodeMutation(journalFault.mutation)
+                }
+            },
+            decode = { id, params -> decodeFrom(id, params) },
+        )
+
+        private fun decodeFrom(id: String, params: JsonObject): JournalFault = JournalFault(
+            id = id,
+            journal = params.getValue("journal").jsonPrimitive.content,
+            mutation = decodeMutation(params),
+            window = StepWindow(
+                from = params.getValue("from").jsonPrimitive.int,
+                until = params.getValue("until").jsonPrimitive.int,
+            ),
+        )
+
+        private const val TRUNCATE_TAIL = "truncate-tail"
+        private const val TRUNCATE_PREFIX = "truncate-prefix"
+        private const val CORRUPT_AT = "corrupt-at"
+        private const val DUPLICATE_AT = "duplicate-at"
+        private const val REORDER_AT = "reorder-at"
+        private const val FAIL_APPEND_AFTER = "fail-append-after"
+
+        private fun JsonObjectBuilder.encodeMutation(mutation: JournalMutation) {
+            when (mutation) {
+                is JournalMutation.TruncateTail -> {
+                    put("mutation", TRUNCATE_TAIL)
+                    put("n", mutation.n)
+                }
+
+                is JournalMutation.TruncatePrefix -> {
+                    put("mutation", TRUNCATE_PREFIX)
+                    put("n", mutation.n)
+                }
+
+                is JournalMutation.CorruptAt -> {
+                    put("mutation", CORRUPT_AT)
+                    put("index", mutation.index)
+                    put("corruption", mutation.corruption.toHex())
+                }
+
+                is JournalMutation.DuplicateAt -> {
+                    put("mutation", DUPLICATE_AT)
+                    put("index", mutation.index)
+                }
+
+                is JournalMutation.ReorderAt -> {
+                    put("mutation", REORDER_AT)
+                    put("i", mutation.i)
+                    put("j", mutation.j)
+                }
+
+                is JournalMutation.FailAppendAfter -> {
+                    put("mutation", FAIL_APPEND_AFTER)
+                    put("n", mutation.n)
+                }
+            }
+        }
+
+        private fun decodeMutation(params: JsonObject): JournalMutation {
+            val tag = params.getValue("mutation").jsonPrimitive.content
+            fun int(name: String): Int = params.getValue(name).jsonPrimitive.int
+            return when (tag) {
+                TRUNCATE_TAIL -> JournalMutation.TruncateTail(int("n"))
+                TRUNCATE_PREFIX -> JournalMutation.TruncatePrefix(int("n"))
+                CORRUPT_AT -> JournalMutation.CorruptAt(
+                    int("index"),
+                    params.getValue("corruption").jsonPrimitive.content.fromHex(),
+                )
+
+                DUPLICATE_AT -> JournalMutation.DuplicateAt(int("index"))
+                REORDER_AT -> JournalMutation.ReorderAt(int("i"), int("j"))
+                FAIL_APPEND_AFTER -> JournalMutation.FailAppendAfter(int("n"))
+                else -> throw IllegalArgumentException(
+                    "unknown journal mutation \"$tag\"; known: " +
+                        "${listOf(
+                            TRUNCATE_TAIL, TRUNCATE_PREFIX, CORRUPT_AT,
+                            DUPLICATE_AT, REORDER_AT, FAIL_APPEND_AFTER,
+                        ).sorted()}. An artifact naming a mutation this rig does not have " +
+                        "cannot be replayed.",
+                )
+            }
+        }
+
+        private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+
+        private fun String.fromHex(): ByteArray {
+            require(length % 2 == 0) { "a hex-encoded byte string has an even length; got \"$this\"" }
+            return ByteArray(length / 2) { substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+        }
 
         /** Drop the last [n] records ([JournalMutation.TruncateTail]). */
         fun truncateTail(id: String, journal: String, n: Int, window: StepWindow = StepWindow.ALWAYS) =

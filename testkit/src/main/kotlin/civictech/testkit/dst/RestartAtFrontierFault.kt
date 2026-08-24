@@ -2,6 +2,13 @@ package civictech.testkit.dst
 
 import civictech.cell.durability.Journal
 import civictech.cell.host.SimulationController
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 /**
  * Restart a host from an **arbitrary journal prefix**, optionally with its processed-frontier
@@ -122,6 +129,51 @@ data class RestartAtFrontierFault(
     }
 
     companion object {
+
+        /** The `kind` a [RestartAtFrontierFault] is written under. A published name. */
+        const val KIND: String = "dst-restart-at-frontier"
+
+        /**
+         * This class's [FaultCodec], registered when the class is loaded — see
+         * [CrashFault.CODEC] for why the companion object is the registration point.
+         *
+         * Only the five constructor parameters are written, which is the whole configuration:
+         * [lastRecovery] and [recordsAtRestart] are per-*run* observations written back onto
+         * the instance, not configuration, and an artifact that carried them would be claiming
+         * a restart's result as part of the plan that produced it. The report and the trace
+         * carry that result already — see [PrefixRestartEntry.recoveryTag], which reads it off
+         * the trace precisely because a decoded fault has no `lastRecovery`.
+         *
+         * `prefix` and `keepFrontierAdvances` are nullable and are written as JSON `null` when
+         * absent rather than omitted, so an artifact says out loud that the knob was not in
+         * force. Both are also the two numeric knobs a shrinker can walk toward zero, which is
+         * why they are top-level primitives — see [PartitionFault.CODEC].
+         */
+        val CODEC: FaultCodec = FaultCodecs.register(
+            kind = KIND,
+            owns = { it is RestartAtFrontierFault },
+            encode = { fault ->
+                val restart = fault as RestartAtFrontierFault
+                buildJsonObject {
+                    put("host", restart.host)
+                    put("journal", restart.journal)
+                    put("atStep", restart.atStep)
+                    put("prefix", JsonPrimitive(restart.prefix))
+                    put("keepFrontierAdvances", JsonPrimitive(restart.keepFrontierAdvances))
+                }
+            },
+            decode = { id, params -> decodeFrom(id, params) },
+        )
+
+        private fun decodeFrom(id: String, params: JsonObject): RestartAtFrontierFault =
+            RestartAtFrontierFault(
+                id = id,
+                host = params.getValue("host").jsonPrimitive.content,
+                journal = params.getValue("journal").jsonPrimitive.content,
+                atStep = params.getValue("atStep").jsonPrimitive.int,
+                prefix = params["prefix"]?.jsonPrimitive?.intOrNull,
+                keepFrontierAdvances = params["keepFrontierAdvances"]?.jsonPrimitive?.intOrNull,
+            )
 
         /** Restart [host] from the first [k] records of [journal] ([CHA1-21]). */
         fun atPrefix(id: String, host: String, journal: String, atStep: Int, k: Int) =

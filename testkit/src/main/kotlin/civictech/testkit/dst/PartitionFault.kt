@@ -3,6 +3,11 @@ package civictech.testkit.dst
 import civictech.cell.CellRef
 import civictech.cell.host.LocationRegistry
 import civictech.cell.wire.Peering
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import java.util.WeakHashMap
 
 /**
@@ -258,6 +263,53 @@ data class PartitionFault(
     }
 
     companion object {
+
+        /** The `kind` a [PartitionFault] is written under in a [FaultRecord]. A published name. */
+        const val KIND: String = "dst-partition"
+
+        /**
+         * This class's [FaultCodec], registered when the class is loaded — see
+         * [CrashFault.CODEC] for why the companion object is the registration point and what
+         * the decode path's load requirement is.
+         *
+         * ## The window is encoded flat, and that is load-bearing
+         *
+         * [StepWindow] is written as two top-level parameters, `from` and `until`, not as a
+         * nested object. [ReductionStrategies.numericParamToward] reads a parameter by name off
+         * `FaultRecord.params`, so `until` toward `from` — the epic's own "shorten the partition
+         * window" reduction — is only reachable if `until` is a top-level primitive. A nested
+         * `{"window": {"from": ..., "until": ...}}` would round-trip perfectly and leave the
+         * shrinker with nothing to shrink.
+         *
+         * A candidate with `until <= from` is refused by [StepWindow]'s own `require`, which is
+         * exactly the "codec refuses these parameters" case
+         * [ReductionStrategies.numericParamToward] documents as silently skipped: an
+         * unbuildable window is not a plan, so it is never run.
+         */
+        val CODEC: FaultCodec = FaultCodecs.register(
+            kind = KIND,
+            owns = { it is PartitionFault },
+            encode = { fault ->
+                val partition = fault as PartitionFault
+                buildJsonObject {
+                    put("edge", partition.edge)
+                    put("mode", partition.mode.name)
+                    put("from", partition.window.from)
+                    put("until", partition.window.until)
+                }
+            },
+            decode = { id, params -> decodeFrom(id, params) },
+        )
+
+        private fun decodeFrom(id: String, params: JsonObject): PartitionFault = PartitionFault(
+            id = id,
+            edge = params.getValue("edge").jsonPrimitive.content,
+            mode = PartitionMode.valueOf(params.getValue("mode").jsonPrimitive.content),
+            window = StepWindow(
+                from = params.getValue("from").jsonPrimitive.int,
+                until = params.getValue("until").jsonPrimitive.int,
+            ),
+        )
 
         /** Destroy every frame on [edge] for `[from, until)`. See [PartitionMode.DROP]. */
         fun drop(id: String, edge: String, from: Int, until: Int = Int.MAX_VALUE): PartitionFault =
