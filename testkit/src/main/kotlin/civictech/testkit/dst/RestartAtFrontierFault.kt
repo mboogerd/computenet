@@ -272,6 +272,14 @@ data class PrefixRestartSweepReport(
             e.recoveryTag?.takeIf { it.startsWith("recovery-incomplete") }?.let { e.k to it }
         }.toMap()
 
+    /**
+     * The whole sweep in one line.
+     *
+     * **Reporting only**, for [DstSweepReport.density]'s reason: the failure count and the
+     * failing `k`s move with the run, so this string belongs in a report or in
+     * [SweepFailure.detail] — never in the message of a failing check, where it would become
+     * part of the property's identity and defeat [PlanShrinker] (computenet-umx.4).
+     */
     fun summary(): String = buildString {
         append("DST prefix-restart sweep graph=$graphId host=$host journal=$journal seed=$seed ")
         append("prefixes=0..$records (executed $total); failed on ${failures.size} of $total")
@@ -283,16 +291,22 @@ data class PrefixRestartSweepReport(
     /**
      * Fail naming the first bad prefix, with its own throwable as the cause so an IDE's
      * jump-to-failure lands on the real assertion — [DstSweepReport.assertAllPassed]'s shape,
-     * over prefixes instead of seeds. A `BUDGET_EXHAUSTED` prefix fails the sweep too: it
-     * disproved nothing, and must not read as a pass.
+     * over prefixes instead of seeds, including its identity/detail split ([SweepFailure]).
+     *
+     * The count and the first failing `k` are exactly as run-varying as a seed sweep's density,
+     * and this `assertAllPassed` is reachable as a [DstCheck]'s failure path in the same way, so
+     * they live in [SweepFailure.detail] and the thrown message names the failure mode alone
+     * (computenet-umx.4). A `BUDGET_EXHAUSTED` prefix fails the sweep too: it disproved nothing,
+     * and must not read as a pass.
      */
     fun assertAllPassed() {
         val bad = entries.filter { it.failed || it.exhausted }
         if (bad.isEmpty()) return
         val first = bad.first()
-        throw AssertionError(
-            "failed on ${bad.size} of $total prefixes; first: k=${first.k} — ${first.message} [${summary()}]",
-            first.cause,
+        throw SweepFailure(
+            identity = "DST prefix-restart sweep graph=$graphId host=$host journal=$journal failed: ${first.message}",
+            detail = "failed on ${bad.size} of $total prefixes; first: k=${first.k} — ${first.message} [${summary()}]",
+            cause = first.cause,
         )
     }
 }
