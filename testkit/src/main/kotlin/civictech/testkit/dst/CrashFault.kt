@@ -1,5 +1,13 @@
 package civictech.testkit.dst
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+
 /**
  * When, relative to the target host's own activity, the crash lands ([CHA1-17], [CHA1-18]).
  *
@@ -240,6 +248,64 @@ data class CrashFault(
     }
 
     companion object {
+
+        /** The `kind` a [CrashFault] is written under in a [FaultRecord]. A published name. */
+        const val KIND: String = "dst-crash"
+
+        /**
+         * This class's [FaultCodec], registered the moment the class is loaded ([CHA1-31]).
+         *
+         * ## Why it lives in the companion object
+         *
+         * A companion object's property initialisers run in the *outer* class's static
+         * initialiser, so constructing any `CrashFault` — or reading `CrashFault.CODEC` — has
+         * already registered this codec. Naming `CrashFault.KIND` does **not**: it is a
+         * `const val`, which the compiler inlines into the referencing file's constant pool as
+         * a string literal, so it loads nothing (verified in bytecode; it is what made
+         * `FaultCodecRoundTripTest.everyLandedFaultClassRegistersACodec_CHA1_31` order-dependent).
+         * Code that must force registration reads `CODEC`. That is what makes the **encode**
+         * path unconditional:
+         * `FaultCodecs.encode(fault)` cannot be reached without a `CrashFault` instance, and an
+         * instance cannot exist without the class being loaded.
+         *
+         * The **decode** path has the load requirement every by-name registry here has, and it
+         * is the same one [GraphRegistry] and [CheckRegistry] carry: a JVM that has never
+         * touched `CrashFault` has not registered `"dst-crash"`, so reading an artifact naming
+         * it fails with [FaultCodecs]' own message listing the registered kinds. A replay
+         * harness already has to load the code that registers the artifact's graph and check;
+         * loading its fault classes is the same obligation, not a new one.
+         *
+         * Public so a suite that had to [FaultCodecs.unregister] this kind can put it back —
+         * re-registration is by value, and the static initialiser will not run twice.
+         */
+        val CODEC: FaultCodec = FaultCodecs.register(
+            kind = KIND,
+            owns = { it is CrashFault },
+            encode = { fault ->
+                val crash = fault as CrashFault
+                buildJsonObject {
+                    put("host", crash.host)
+                    put("atStep", crash.atStep)
+                    put("mode", crash.mode.name)
+                    put("journal", JsonPrimitive(crash.journal))
+                }
+            },
+            decode = { id, params -> decodeFrom(id, params) },
+        )
+
+        /**
+         * Rebuild from a record's parameters. Flat primitives only, and deliberately so:
+         * [ReductionStrategies.numericParamToward] reaches a parameter by *name* on the
+         * record's top-level `params`, so a nested `{"window": {...}}` would be invisible to
+         * the shrinker's semantics-aware strategy. `atStep` is the numeric knob here.
+         */
+        private fun decodeFrom(id: String, params: JsonObject): CrashFault = CrashFault(
+            id = id,
+            host = params.getValue("host").jsonPrimitive.content,
+            atStep = params.getValue("atStep").jsonPrimitive.int,
+            mode = CrashMode.valueOf(params.getValue("mode").jsonPrimitive.content),
+            journal = params["journal"]?.jsonPrimitive?.contentOrNull,
+        )
 
         /** Crash while the host has accepted-but-unapplied work. See [CrashMode.MID_DRAIN]. */
         fun midDrain(id: String, host: String, atStep: Int, journal: String? = null): CrashFault =
