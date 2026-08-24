@@ -318,11 +318,13 @@ class ReorderFaultTest {
     /**
      * The opt-in control, and **the one place this suite does not use BS-7's window of 8**.
      *
-     * Measured on this graph over all 100 seeds (2026-08-24, this commit): the arms carry about
-     * six frames each inside `[0, REORDER_UNTIL)`, so a buffer of 8 **never fills**, the
-     * permutation therefore never runs, and the control is inert — 0 of 100 seeds failed, with
-     * every frame merely delayed and then flushed. At [CONTROL_WINDOW] the buffer fills
-     * repeatedly and 61 of 100 seeds tear a composite (window 3: 71, window 2: 57).
+     * Measured on this graph over all 100 seeds (re-measured 2026-08-24 at this commit, three
+     * identical repetitions): each arm buffers about six frames inside `[0, REORDER_UNTIL)` —
+     * mean 5.96 per arm per run, range 1..11 — so a buffer of 8 **usually never fills**, on the
+     * few seeds where it does the one permuted burst is absorbed anyway, and the control is
+     * inert at BS-7's window: **0 of 100 seeds failed**. At [CONTROL_WINDOW] the buffer fills
+     * repeatedly and **62 of 100** seeds tear a composite (window 3: 72, window 2: 55). Every
+     * failing seed fails with the same message — the composite mixes two waves' timestamps.
      *
      * That is a property of this graph's traffic volume, not of [ReorderFault]: a consumer suite
      * with heavier per-step traffic can use any window it likes. It is recorded here because a
