@@ -15,15 +15,44 @@ import kotlin.io.path.writeText
  * the live `.beads` of this repository.
  *
  * **The workspace is COPIED from a per-JVM template, not initialised per test**
- * (computenet-s5hx). `bd --sandbox init` costs 5.17s on this machine (bd 1.1.2 /
- * dolt 2.2.3, darwin/arm64, 2026-08-19) and 83 tests in this module built one
- * each in an `@BeforeEach` — ~430s, 38% of the module's 18m40s runtime, spent
- * before any assertion ran. Copying the 2.4MB (77-file) pristine workspace costs
- * ~0.1-0.2s instead. Nothing is mocked and no fidelity is lost: the copy is a
- * real bd workspace over a real embedded Dolt database, and every test that
- * spawned `bd`/`dolt` subprocesses still spawns them. Only the *creation* of the
- * database is amortised — one `bd --sandbox init` per JVM per [bdEnv], in
- * [templateFor].
+ * (computenet-s5hx). BEFORE that optimisation, `bd --sandbox init` cost 5.17s
+ * on the machine that motivated the change (bd 1.1.2 / dolt 2.2.3,
+ * darwin/arm64, 2026-08-19) and 83 tests in this module built one each in an
+ * `@BeforeEach` — ~430s, 38% of the module's then-18m40s runtime, spent
+ * before any assertion ran. That per-test-init figure is a historical
+ * measurement of the pre-optimisation regime, kept here as the reason the
+ * copy exists — **it is not today's cost** and should not be read as one.
+ *
+ * AFTER the optimisation (i.e. today, with this file as committed), copying
+ * the ~2.4MB (72-77 file) pristine workspace costs ~0.08-0.11s per copy
+ * (measured 2026-08-24, `NL-MGD6FQJW91`, darwin/arm64, bd 1.1.2 / dolt 2.2.3,
+ * via `cp -R` of a live `bd --sandbox init` template as a proxy for
+ * [copyTemplateInto]'s `File.copyRecursively`), against ~5.0s for a fresh
+ * `bd --sandbox init` measured the same way. Both of those are **quiesced**
+ * per-operation figures — one operation at a time on an otherwise idle host.
+ * Under the 4-way parallel test run described below the same operations cost
+ * roughly 2.5x more in situ (22.0s across 86 copies is ~0.26s per copy;
+ * 37.7s across 5 inits is ~7.5s per init). The ratio between them — which is
+ * what motivates the copy — is what survives either way. The module's actual runtime
+ * today, measured with `./gradlew :demo:beadsmirror:test --rerun` on the
+ * same host/date (two full runs, both confirmed executed rather than
+ * UP-TO-DATE/FROM-CACHE, both 53 files / 325 tests), is **6m30s-6m42s
+ * wall-clock, not 18m40s.** A direct instrumentation of [templateFor] and
+ * [copyTemplateInto] in that same run (temporary counters, removed before
+ * commit) recorded, across the 4 parallel test JVM forks Gradle used: 5
+ * template inits totaling 37.7s of `bd --sandbox init` time and 86 workspace
+ * copies totaling 22.0s of copy time — combined ~59.6s of workspace-setup
+ * time, in a pass whose wall clock was 6m38s (398s). **Do not divide 59.6 by
+ * 398**: the 59.6s is summed across 4 concurrent forks, so the denominator
+ * that matches it is the sum of fork-seconds, ~4 x 398s = ~1592, giving 3.7%.
+ * Against the single worst-case fork's own critical path it is ~5%. So the
+ * share is **roughly 3-5% of the module's current runtime**, a range because
+ * the two defensible denominators disagree — not the 38% the pre-optimisation
+ * figure above describes.
+ * Nothing is mocked and no fidelity is lost: the copy is a real bd workspace
+ * over a real embedded Dolt database, and every test that spawned `bd`/`dolt`
+ * subprocesses still spawns them. Only the *creation* of the database is
+ * amortised — one `bd --sandbox init` per JVM per [bdEnv], in [templateFor].
  *
  * **The copy is REHOMED, which is not optional** — see [copyTemplateInto]. The
  * embedded Dolt database directory keeps the name it was created under, while
