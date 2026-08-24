@@ -341,6 +341,284 @@ class WavePrefixTest {
         checker.floorOf("filtered") shouldBe 1
     }
 
+
+    // ---------------------------------------- multi-source: the per-source frontier product
+
+    private val sourceA = SourceId("a")
+    private val sourceB = SourceId("b")
+
+    /**
+     * computenet-2hur's shape: a **two-source** diamond, one source per arm, reconverging at the
+     * same `union` terminal.
+     *
+     * ```
+     *   srcA (set) ── flt (filter: text length even) ──┐
+     *                                                  ├── u (union) ── "united"
+     *   srcB (set) ── exp (flatMapSet: characters) ────┘
+     * ```
+     *
+     * Two sources rather than [diamondCase]'s one is the whole point: the kernel may legally have
+     * absorbed one of `srcA`'s deltas and none of `srcB`'s, and that state is **no total-order
+     * prefix** of the drive order. Different operators on the two arms for [diamondCase]'s own
+     * reason — identical arms carry identical values and could not distinguish a half-published
+     * wave from a complete one.
+     */
+    private fun twoSourceDiamondCase(script: CaseScript, seed: Long = 2L) = GeneratedCase(
+        seed = seed,
+        topology = CaseTopology(
+            nodes = listOf(
+                TopologyNode("srcA", CoreOperators.Ids.SET, emptyList(), sourceA),
+                TopologyNode("srcB", CoreOperators.Ids.SET, emptyList(), sourceB),
+                TopologyNode("flt", CoreOperators.Ids.FILTER, listOf("srcA"), null),
+                TopologyNode("exp", CoreOperators.Ids.FLAT_MAP_SET, listOf("srcB"), null),
+                TopologyNode("u", CoreOperators.Ids.UNION, listOf("flt", "exp"), null),
+            ),
+            terminals = listOf(TerminalSpec("united", "u")),
+            placement = mapOf("srcA" to 0, "srcB" to 0, "flt" to 0, "exp" to 0, "u" to 0),
+        ),
+        spec = spec(
+            SpawnStep("srcA", factory(CoreOperators.Ids.SET)),
+            SpawnStep("srcB", factory(CoreOperators.Ids.SET)),
+            SpawnStep("flt", factory(CoreOperators.Ids.FILTER)),
+            SpawnStep("exp", factory(CoreOperators.Ids.FLAT_MAP_SET)),
+            SpawnStep("u", factory(CoreOperators.Ids.UNION)),
+            ConnectStep("srcA", "outlet", "flt", "inlet"),
+            ConnectStep("srcB", "outlet", "exp", "inlet"),
+            ConnectStep("flt", "outlet", "u", "inlet"),
+            ConnectStep("exp", "outlet", "u", "inlet"),
+        ),
+        script = script,
+        removeAudit = emptyList(),
+    )
+
+    /**
+     * Four Ops alternating between the two sources, so the total drive order visits only the
+     * chain `(0,0) (1,0) (1,1) (2,1) (2,2)` of a 3x3 frontier lattice — leaving four frontiers
+     * ((0,1), (0,2), (1,2), (2,0)) that are legal states no total-order prefix denotes.
+     */
+    private fun twoSourceScript() = CaseScript(
+        listOf(
+            CaseStep.Op(sourceA, ScriptEvent.Add(writer, "ab")),
+            CaseStep.Op(sourceB, ScriptEvent.Add(writer, "cd")),
+            CaseStep.Op(sourceA, ScriptEvent.Add(writer, "efgh")),
+            CaseStep.Op(sourceB, ScriptEvent.Add(writer, "ij")),
+        ),
+    )
+
+    private fun twoSourceChecker(): WavePrefixOracle.Checker {
+        val case = twoSourceDiamondCase(twoSourceScript())
+        return WavePrefixOracle.checker(case, "marker", diamondReference(case))
+    }
+
+    /** `united` as the model has it at frontier ([a], [b]) — [a] Ops of `srcA`, [b] of `srcB`. */
+    private fun unitedAt(a: Int, b: Int): ModelState {
+        val case = twoSourceDiamondCase(
+            CaseScript(
+                twoSourceScript().steps.filterIsInstance<CaseStep.Op>().let { ops ->
+                    var takenA = 0
+                    var takenB = 0
+                    ops.filter { op ->
+                        if (op.source == sourceA) (takenA < a).also { if (it) takenA++ }
+                        else (takenB < b).also { if (it) takenB++ }
+                    }
+                },
+            ),
+        )
+        return diamondReference(case).evaluate(case.script.toScript()).getValue("united")
+    }
+
+    @Test
+    fun `a multi-source case is admitted, and its live run matches the per-source frontier product`() {
+        val case = twoSourceDiamondCase(twoSourceScript())
+        var checker: WavePrefixOracle.Checker? = null
+
+        withClue("computenet-2hur: multi-source is no longer a refusal") {
+            WavePrefixOracle.notApplicableBecause(case).shouldBeNull()
+            WavePrefixOracle.appliesTo(case) shouldBe true
+        }
+
+        val outcome = DifferentialRunner.run(
+            case = case,
+            wavePrefix = WavePrefixOption.ALWAYS,
+            onWavePrefixChecker = { checker = it },
+        )
+
+        outcome shouldBe RunOutcome.Success
+
+        val live = checker.shouldNotBeNull()
+        withClue("two axes, one per source, in total-order first-appearance order") {
+            live.sourceAxes() shouldBe listOf(sourceA, sourceB)
+        }
+        withClue("four waves cannot be zero observations") {
+            live.observations shouldBeGreaterThanOrEqualTo 4
+        }
+        withClue("both sources must have been absorbed to the end, not just the total-order sum") {
+            live.frontierFloorOf("united") shouldBe listOf(2, 2)
+        }
+    }
+
+    @Test
+    fun `a legal multi-source observation that is no total-order prefix is accepted`() {
+        // THE widening. Frontier (0,1) — srcB's first delta absorbed, srcA's not — is a state the
+        // kernel may legally show and that equals NO entry of the total-order prefix list, so the
+        // pre-computenet-2hur checker would have called it a glitch. It is the mutation-check
+        // target: restrict the search back to the total-order chain and this test reddens.
+        val checker = twoSourceChecker()
+        val offChain = unitedAt(0, 1)
+
+        withClue("the control is only meaningful if this state really is no total-order prefix") {
+            checker.prefixes.map { it.getValue("united") }.contains(offChain) shouldBe false
+        }
+
+        checker.observeTerminal("united", offChain).shouldBeNull()
+        checker.frontierFloorOf("united") shouldBe listOf(0, 1)
+
+        // and the run continues legally from there, through another off-chain frontier (1,2) and
+        // on to the top.
+        checker.observeTerminal("united", unitedAt(1, 2)).shouldBeNull()
+        checker.observeTerminal("united", unitedAt(2, 2)).shouldBeNull()
+        checker.frontierFloorOf("united") shouldBe listOf(2, 2)
+    }
+
+    @Test
+    fun `a torn multi-source observation still matches no frontier and is rejected`() {
+        // Widening where the check applies must not widen what it accepts. This state has the
+        // expansion arm half-published — `c` without `d` — which no frontier of either source
+        // produces, so it is a tear and not an interleaving.
+        val checker = twoSourceChecker()
+        val torn = ModelState.SetState(setOf("ab", "c"))
+
+        val everyFrontier = (0..2).flatMap { a -> (0..2).map { b -> unitedAt(a, b) } }
+        withClue("the torn state must be no frontier at all, or this control proves nothing") {
+            everyFrontier.contains(torn) shouldBe false
+        }
+
+        checker.observeTerminal("united", unitedAt(1, 1)).shouldBeNull()
+        val violation = checker.observeTerminal("united", torn).shouldNotBeNull()
+
+        violation.kind shouldBe RunOutcome.WavePrefixViolation.Kind.NO_MATCHING_PREFIX
+        violation.observed shouldBe torn
+        violation.regressedTo.shouldBeNull()
+        withClue("the floor is reported as the absorbed-Op count of the least admissible frontier") {
+            violation.matchedFloor shouldBe 2
+        }
+    }
+
+    @Test
+    fun `a multi-source frontier that goes backwards on one axis is a regression`() {
+        // Componentwise non-decreasing, per the bead: a frontier below the floor on EITHER axis
+        // is a regression even though its value is a perfectly legal state of the graph.
+        val checker = twoSourceChecker()
+
+        checker.observeTerminal("united", unitedAt(2, 2)).shouldBeNull()
+        val violation = checker.observeTerminal("united", unitedAt(1, 2)).shouldNotBeNull()
+
+        violation.kind shouldBe RunOutcome.WavePrefixViolation.Kind.REGRESSED
+        violation.matchedFloor shouldBe 4
+        violation.regressedTo shouldBe 3
+    }
+
+    @Test
+    fun `the cost of frontier matching is the memoized lattice, measured`() {
+        // The bead's open question, answered with a number rather than an estimate. The cost that
+        // matters is DISTINCT reference evaluations per case: the checker memoizes
+        // frontier -> states, so the lattice prod(opsPerSource_i + 1) is a per-case ceiling
+        // however many observations a run takes. MAX_FRONTIER_LATTICE is set from this.
+        val config = multiSourceCostConfig()
+        val seeds = (0L until 8L).toList()
+
+        var cases = 0
+        var admitted = 0
+        var lattice = 0L
+        var evaluations = 0L
+        var scanned = 0L
+        var observations = 0L
+        val outcomes = LinkedHashMap<String, Int>()
+
+        val elapsedNanos = seeds.sumOf { seed ->
+            val case = CaseGenerator.generate(seed, config)
+            cases++
+            lattice += WavePrefixOracle.frontierLatticeSize(case)
+            var checker: WavePrefixOracle.Checker? = null
+            val started = System.nanoTime()
+            val outcome = DifferentialRunner.run(
+                case = case,
+                wavePrefix = WavePrefixOption.ALWAYS,
+                onWavePrefixChecker = { checker = it },
+            )
+            val took = System.nanoTime() - started
+            outcomes[outcome::class.simpleName ?: "?"] = (outcomes[outcome::class.simpleName ?: "?"] ?: 0) + 1
+            checker?.let {
+                admitted++
+                evaluations += it.frontierEvaluations
+                scanned += it.frontiersScanned
+                observations += it.observations
+            }
+            took
+        }
+
+        val perCase = { total: Long -> total.toDouble() / cases }
+        println(
+            "WAVE-PREFIX COST sources=${config.sourceCount} scriptLength=${config.scriptLength} " +
+                "cases=$cases admitted=$admitted " +
+                "lattice/case=${"%.0f".format(perCase(lattice))} " +
+                "evaluations/case=${"%.0f".format(perCase(evaluations))} " +
+                "scanned/case=${"%.0f".format(perCase(scanned))} " +
+                "observations/case=${"%.0f".format(perCase(observations))} " +
+                "wall/case=${"%.1f".format(perCase(elapsedNanos) / 1e6)}ms " +
+                "outcomes=$outcomes",
+        )
+
+        withClue("the measurement is worthless if no multi-source case was admitted") {
+            admitted shouldBe cases
+            (lattice / cases) shouldBeGreaterThan 100L
+        }
+        withClue("the lattice really is the per-case ceiling on reference evaluations") {
+            (evaluations <= lattice) shouldBe true
+        }
+        withClue("and it is a ceiling the admission rule enforces") {
+            (lattice / cases <= WavePrefixOracle.MAX_FRONTIER_LATTICE) shouldBe true
+        }
+    }
+
+    @Test
+    fun `a lattice too large to search is refused on cost, naming cost and not soundness`() {
+        // The BS-1 sweep shape: four sources, 200 ops, ~6.8M frontiers. Refused — but the reason
+        // must say COST, because a reader who takes it for a soundness limit would conclude the
+        // per-source check does not hold there, and it does.
+        val case = CaseGenerator.generate(0L, multiSourceCostConfig().copy(sourceCount = 4, scriptLength = 200))
+
+        WavePrefixOracle.frontierLatticeSize(case) shouldBeGreaterThan WavePrefixOracle.MAX_FRONTIER_LATTICE
+        val reason = WavePrefixOracle.notApplicableBecause(case).shouldNotBeNull()
+        reason.contains("COST refusal") shouldBe true
+        WavePrefixOracle.appliesTo(case) shouldBe false
+    }
+
+    /**
+     * The multi-source shape this module actually sweeps —
+     * `GraphSpecLinkSweepTest.sweepConfig`'s source count and script length, single-host so the
+     * (still standing) multi-host refusal does not decide the measurement instead.
+     */
+    private fun multiSourceCostConfig() = GeneratorConfig(
+        depthRange = 3..5,
+        sourceCount = 3,
+        vocabulary = listOf(
+            CoreOperators.Ids.SET,
+            CoreOperators.Ids.FILTER,
+            CoreOperators.Ids.FLAT_MAP_SET,
+            CoreOperators.Ids.MAP_SET,
+            CoreOperators.Ids.COUNT,
+            CoreOperators.Ids.UNION,
+            CoreOperators.Ids.INTERSECT,
+            CoreOperators.Ids.PRESENCE_COUNT,
+        ),
+        elementDomainSize = 6,
+        scriptLength = 40,
+        addRemoveRatio = 0.6,
+        unobservedRemoveRatio = 0.25,
+        terminalCount = 1,
+    ).validated()
+
     // ------------------------------------------------------------------ the subset knob
 
     /** A reference that is wrong at every prefix AND at quiescence. */
@@ -435,8 +713,8 @@ class WavePrefixTest {
                 nodes = single.topology.nodes + TopologyNode("src2", CoreOperators.Ids.SET, emptyList(), SourceId("s2")),
             ),
         )
-        withClue("multi-source needs per-source frontiers — computenet-2hur") {
-            WavePrefixOracle.notApplicableBecause(twoSource).shouldNotBeNull().contains("computenet-2hur") shouldBe true
+        withClue("multi-source is checked against the per-source frontier product — computenet-2hur") {
+            WavePrefixOracle.notApplicableBecause(twoSource).shouldBeNull()
         }
 
         val twoHost = single.copy(
