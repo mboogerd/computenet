@@ -1,12 +1,17 @@
 package civictech.testkit.dst
 
+import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Consumer
 import civictech.cell.data.MapOps
 import civictech.cell.data.OrMapCell
+import civictech.cell.host.HostScheduler
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
+import civictech.cell.port.registerPort
 import civictech.cell.replication.Replication
 import civictech.cell.wire.Peering
 import civictech.testkit.forEachSeed
@@ -63,11 +68,42 @@ class PartitionFaultTest {
 
         /** Salt for the replicas' shared logical id, so it is seed-derived and not random. */
         const val ORMAP_SALT = 0x24L
+
+        /** The single edge of the [HeldCollector] graph — the park fault's target name. */
+        const val INTO_COLLECTOR = "into-collector"
+
+        /** Salt for the collector's logical id, seed-derived for the same reason as [ORMAP_SALT]. */
+        const val COLLECTOR_SALT = 0x25L
     }
 
     /** The dynamic-proxy view of a replica's write inlet — no KSP involved. */
     interface OrMapInletProxy {
         val inlet: Use<MapOps<String, String>>
+    }
+
+    /** The dynamic-proxy view of [CollectorCell]'s inlet — no KSP involved. */
+    interface CollectorProxy {
+        val inlet: Use<Consumer<Int>>
+    }
+
+    /**
+     * A plain inlet that records what it receives, in order — the fixture `RelocationTest` and
+     * `RepartitionHoldTest` use to pin the registry's park/drain ordering, reused here because
+     * the property under test is the same one, driven through the rig instead of by hand.
+     */
+    class CollectorCell(override val ref: CellRef) : Cell {
+        val received = mutableListOf<Int>()
+
+        @Suppress("UNCHECKED_CAST")
+        val inlet = registerPort("inlet", FanInlet(Consumer::class.java as Class<Consumer<Int>>))
+
+        init {
+            inlet.serve(object : Consumer<Int> {
+                override fun provide(input: Int) {
+                    received += input
+                }
+            })
+        }
     }
 
     // -------------------------------------------------------------------------------------
@@ -152,6 +188,78 @@ class PartitionFaultTest {
                     val who = issued % 2
                     ops[who].put("k$issued", "w$who")
                     issued++
+                }
+            }
+        }
+    }
+
+    /**
+     * One host, one [CollectorCell], and a park control that is
+     * `LocationRegistry.hold`/`release` on that cell's ref — the *other* [LinkControl], the
+     * one whose heal genuinely drains a buffer.
+     *
+     * ## Why this graph is not the peered pair above
+     *
+     * `holding` parks deliveries at a registry, per ref. It needs no wire and no second peer:
+     * a single hosted cell fed one invocation per step is the smallest graph in which "held
+     * during the window, drained in park order at the heal" is observable at all, and the
+     * observation is the cell's own `received` list rather than an edge trace — frames are not
+     * what a registry hold stops.
+     *
+     * ## The keepalive is load-bearing
+     *
+     * Parked invocations are not scheduler work, so during the hold this graph would have
+     * *nothing* to run: `controller.step()` would return false and the run would quiesce
+     * mid-window, ending still held, with the heal never reached (exactly the hazard
+     * [PartitionFault]'s "What it costs when the window never closes" describes). One trivial
+     * task per step keeps the controller busy so the run reaches [UNTIL]. The peered graph
+     * above needs no such thing because a peer's local writes are work in their own right.
+     */
+    private class HeldCollector(id: String, private val writes: Int = WRITES) {
+
+        lateinit var cell: CollectorCell
+            private set
+
+        /** `received`, and whether the ref was held, as they stood at the start of each step. */
+        val receivedAtStepStart = mutableMapOf<Int, List<Int>>()
+        val heldAtStepStart = mutableMapOf<Int, Boolean>()
+
+        val spec: GraphSpec = GraphSpec(id) { world -> build(world) }
+
+        private fun build(world: DstWorld) {
+            val registry = world.registry
+            lateinit var scheduler: HostScheduler
+            val host = world.hosts.declare("solo") { ctx ->
+                scheduler = ctx.scheduler
+                ManagedHost(scheduler = ctx.scheduler, registry = registry)
+            }
+
+            val collector = CollectorCell(CellRef(UUID(world.seed, COLLECTOR_SALT), 0L))
+            cell = collector
+            host.host.managementInlet.call.spawn(collector)
+            world.cells.declare("collector", collector.ref)
+
+            // The edge exists so the fault has a declared target to name; what the control
+            // actually stops is the ref, which is precisely why LinkControl carries a scope.
+            world.edges.declare(INTO_COLLECTOR, from = "solo", to = "solo")
+            LinkControls.declare(world, INTO_COLLECTOR, LinkControl.holding(registry, collector.ref))
+
+            // Settle the spawn before the rig's clock starts, as ReplicatedPair settles the
+            // peering handshake, so window indices do not depend on setup length.
+            world.controller.runToIdle()
+
+            val inlet = (
+                HostedCellProxy.create(collector.ref, registry, CollectorProxy::class.java) as CollectorProxy
+                ).inlet.call
+            var issued = 0
+            world.steps.onStep { _, step ->
+                receivedAtStepStart[step] = collector.received.toList()
+                heldAtStepStart[step] = registry.isHeld(collector.ref)
+                if (issued < writes) {
+                    inlet.provide(issued++)
+                    // The keepalive; see this class's kdoc. Inside the guard, so the run stops
+                    // producing work once the schedule is exhausted and can actually quiesce.
+                    scheduler.submit(10) { world.trace.emit(host = "solo", cell = "collector", port = "tick") }
                 }
             }
         }
@@ -261,9 +369,79 @@ class PartitionFaultTest {
         val parkLabel = parked.appliedFaults.single().description
         assertNotEquals(dropLabel, parkLabel)
         assertTrue("DROP" in dropLabel && "destroyed" in dropLabel, dropLabel)
-        assertTrue("PARK" in parkLabel && "replays on heal" in parkLabel, parkLabel)
+        assertTrue("PARK" in parkLabel && "without being destroyed" in parkLabel, parkLabel)
         // the control's scope is wider than the edge, and the label admits it
         assertTrue("both directions" in parkLabel, parkLabel)
+        // …and the label reports what THIS control's heal does, rather than repeating
+        // PartitionMode.PARK's spec sentence. A severing control replays nothing: it opens a
+        // fresh connection and re-announces. The label used to claim "traffic parks and
+        // replays on heal" for it, which was false of every park run this suite has ever
+        // executed (computenet-cstu).
+        assertTrue("re-announces" in parkLabel, parkLabel)
+    }
+
+    /**
+     * The other park control, and the only one whose heal literally replays what the window
+     * held — so it is the one that has to prove the claim its [LinkControl.scope] makes
+     * ([CHA1-12] labelling, and the acceptance of computenet-cstu).
+     *
+     * `LinkControl.holding` had no caller and no test in the repo, while every park run in
+     * this suite used `severing`. That is why the report's old "replays on heal" wording was
+     * never caught by a test: nothing exercised a control that replays.
+     */
+    @Test
+    fun `a park backed by LocationRegistry hold withholds the window's traffic and drains it in park order`() {
+        val graph = HeldCollector("dst-partition-held-collector")
+        val report = DstRun(
+            graph.spec,
+            FaultPlan.of(7L, PartitionFault.park("cut", INTO_COLLECTOR, from = FROM, until = UNTIL)),
+            budget = 20_000,
+        ).execute()
+        assertEquals(DstOutcome.PASSED, report.outcome, "run did not quiesce: ${report.summary()}")
+
+        // Both endpoints fired: without the release, the assertions below would be about a run
+        // that ended still held, and "drained on heal" would be untested.
+        assertEquals(listOf(FROM, UNTIL), report.appliedFaults.single().activationSteps)
+
+        // The control was engaged for the whole window. It starts at the step AFTER `from`
+        // because `Fault.onStep` is registered after the graph builder's hooks, so at step
+        // `from` this snapshot is taken (and that step's write issued) before the park lands.
+        assertTrue(
+            (FROM + 1..UNTIL).all { graph.heldAtStepStart[it] == true },
+            "the ref was not held across the window: ${graph.heldAtStepStart}",
+        )
+
+        // Nothing issued inside the window arrived while it was held. Values are the issue
+        // index, which equals the step, so the 30 values FROM+1..UNTIL are exactly the writes
+        // the hold was covering — none of them is in the cell yet at the healing step.
+        // A no-op control leaves this list running up to UNTIL-1 and fails here, which is
+        // what makes this an assertion about the control rather than about the trace.
+        val atHeal = graph.receivedAtStepStart.getValue(UNTIL)
+        assertTrue(
+            atHeal.all { it <= FROM },
+            "values issued inside the park window arrived before the heal: $atHeal",
+        )
+
+        // …and the release drained every one of them, in park order, on top of a prefix that
+        // was never parked: the whole schedule, in issue order, with nothing lost or reordered.
+        // This is the property `severing` cannot support and `holding` exists for.
+        assertEquals((0 until WRITES).toList(), graph.cell.received)
+    }
+
+    @Test
+    fun `the report labels a hold-backed park by what the hold does, not by the mode's spec sentence`() {
+        val graph = HeldCollector("dst-partition-held-collector")
+        val report = DstRun(
+            graph.spec,
+            FaultPlan.of(7L, PartitionFault.park("cut", INTO_COLLECTOR, from = FROM, until = UNTIL)),
+            budget = 20_000,
+        ).execute()
+
+        val label = report.appliedFaults.single().description
+        assertTrue("PARK" in label && "without being destroyed" in label, label)
+        // The replay claim belongs to this control and appears only for it.
+        assertTrue("in park order" in label, label)
+        assertTrue("both directions" !in label, label)
     }
 
     @Test
