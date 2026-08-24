@@ -81,7 +81,7 @@ it. Record it in the form step 3's selection can test, and stand down without
 blocking anyone:
 
 ```bash
-bd update <epic> --add-label "needs:cargo"     # the tool, as `command -v` spells it
+bd update <epic> --add-label "needs:cargo"     # the tool, as have-tool.sh probes it
 bd comment <epic> "Skipped on <machine>: needs cargo, absent here (command -v cargo empty, no ~/.cargo). Labelled needs:cargo; selectable on a machine that has it."
 ```
 

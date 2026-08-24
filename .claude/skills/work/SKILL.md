@@ -330,7 +330,11 @@ any budget notification arriving with "stream ended" right behind it.
 **On ANY budget notification — not only at budget-gated decisions — recompute
 elapsed from `$SCRATCH/slot-start` before acting on it, and act on the number
 rather than on which tier fired — and recompute it anyway at every dispatch
-and every verdict, notification or not.** After a second host suspension the
+and at the moment you READ any
+completion notification, notification or not. A notification's `duration_ms`
+is the agent's own runtime, NOT the slot's wall clock: one reporting 7m15s
+arrived after 148 minutes of wall clock, and a session trusting it ran 54m
+over slot (computenet-vzhs).** After a second host suspension the
 monitor went permanently silent and no tier ever fired; the slot had expired
 ~20 minutes before an accidental check noticed (computenet-6664). A rule keyed
 on a notification cannot see the case where none arrives; the subtraction is
@@ -500,6 +504,8 @@ and its process either exists or does not:
 .claude/skills/work/scripts/session-holder.sh --check "<the row's metadata.holder>"
 # MINE (0) = this session's own | LIVE (0) = a live sibling: leave it alone
 # DEAD (1) = crash leftover: releasable | UNKNOWN (3) = nothing established
+# STALE (1) = host-process residue (token older than any slot): releasable
+#   like DEAD; the worktree is still not yours to enter (computenet-nkz3)
 # FOREIGN (3) = minted on ANOTHER machine: not yours, never release it
 ```
 
@@ -514,7 +520,9 @@ is the same signal on a row with no holder.
 Falling back: any row with `updated_at` within 15 minutes probably belongs to
 a live overlapping run on this machine — stop and report rather than colliding
 with it. Check every row. Older rows: an *epic* is a crash leftover — release
-it (`bd update <id> --status=open --assignee=""`); leave non-epic rows alone —
+it (`bd update <id> --status=open --assignee="" --unset-metadata holder` —
+clearing the holder too, or the residue token blocks the next claim,
+computenet-nkz3); leave non-epic rows alone —
 stale *tasks* the sweep above already reopened, and a stale *feature* is the
 5a resume marker, not a leak.
 
@@ -524,7 +532,9 @@ running, it is a capacity input. `next-batch.py --siblings N` splits the
 machine's parallelism budget instead of letting each session claim all of it:
 four sessions on a 10-core box each computed a cap of 2 independently, every
 one correct by its own accounting, for 4x the measured safe parallelism
-(computenet-arow).
+(computenet-arow). Re-run this step-3 listing AFTER the claim and use that
+count for `--siblings`, so a sibling that finished during selection is not
+counted (computenet-nkz3).
 
 **This check is a race, not a lock, and the holder does not change that.** It
 only ever trips on a sibling that has ALREADY claimed something — two sibling
@@ -677,7 +687,7 @@ from scratch. Check the durable form before claiming:
 bd show <candidate> --json | sed -n '/^[[{]/,$p' \
   | jq -r '.[0].labels[]? | select(startswith("needs:")) | ltrimstr("needs:")' \
   | while read -r tool; do
-      command -v "$tool" >/dev/null || echo "SKIP: needs $tool, absent here"
+      .claude/skills/work/scripts/have-tool.sh "$tool" || echo "SKIP: needs $tool, absent or not runnable here"
     done
 ```
 
@@ -687,6 +697,8 @@ run it.
 
 **When YOU are the session that discovers the missing toolchain, record it in
 that form** — `bd update <epic> --add-label "needs:<tool>"` — and skip.
+The label names the tool as have-tool.sh probes it (needs:docker means a
+running daemon, not a binary).
 Do **not** ask-human it. A `human` park is `blocked` + `assignee=human` +
 the `human` label, which removes the epic from **every** machine's queue until
 a person answers, so a machine-capability fact becomes a repo-wide block by
@@ -1305,6 +1317,16 @@ corrupting the evidence (computenet-k9d.2). Entries `skipped` as
 **Don't raise the cap by hand**; it rests on measurement, and the derivation
 and its limits live in the script.
 
+**The cap bounds agents; the contention unit is the repo-wide gate.** Three
+file-disjoint implementers each running `./gradlew test` contend on the whole
+build at any claim disjointness (route 0 already says this for a free lane;
+it holds for a batch: load 338-724 on 16 cores, three gates, rotating
+:demo:beadsmirror timeouts — computenet-qmjd). In a batch of two or more, at
+most ONE dispatch keeps the repo-wide gate; every other prompt scopes the
+gate to the modules its claim touches and says where the wide evidence comes
+from instead (the feature PR's six required checks). Set `${gateScope}`
+accordingly per dispatch.
+
 An entry with empty `model` → dispatch at `sonnet`, comment on the task, log
 friction. **Empty batch** → read `verdict`, don't infer:
 
@@ -1641,12 +1663,21 @@ outruns that 10-minute cap, COMMIT FIRST (do not `git push`, and do not
 "shared-surface writes push at once" is the orchestrator's duty, and this
 dispatch's no-push rule is the exception it names for dispatched agents —
 your write rides out on the orchestrator's next bracket),
-then background it and wait
-with a BOUNDED until-loop on its log (your reference gives the form) — never
-wait first, or a stop strands uncommitted work that reads as nothing.
+then background it and IMMEDIATELY, in this same turn, RUN the bounded
+log-waiter from agent-execution.md ("The bounded until-loop" — the python3
+block) as a foreground Bash call; when it expires, reissue it. Waiting is that
+command RUNNING — it is never something you end a turn to do, and a final
+message that says you are waiting is a stalled result, not a status. Never
+wait before committing, or a stop strands uncommitted work that reads as
+nothing (computenet-v5ah).
 The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
 background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
+${gateScope — either "" for the one wide-gate dispatch, or: "Scope your final
+gate to <modules>; the repo-wide evidence comes from the feature PR's required
+checks. Before any long Gradle run read `uptime`; a timeout in a module you
+did not touch under high load is machine contention, not a failure — re-run
+that suite in isolation before reporting it."}
 If you won't finish within ~45-60 minutes, stop at a clean point and leave
 the task in_progress with a bd comment saying what's done and what's left.
 State any NEXT STEP with the state it depends on — the branch and sha, or the
@@ -1699,8 +1730,16 @@ three are how you establish whether an agent that returned *without* an
 outcome still has work in flight — you never need its transcript to answer
 that, and `SendMessage` to the agent is the fourth signal and also the
 remedy, because it keeps the agent's context where `TaskStop` discards it
-(computenet-77cx). An agent that seems slow is waited on or `TaskStop`ped at
-the budget deadline below — there is nothing useful between.
+(computenet-77cx). An agent that seems slow but has SOME side effect (a commit, an edit, a bead
+comment) is waited on or `TaskStop`ped at the budget deadline — there is
+nothing useful between. An agent with NO side effect on any of the three
+signals is different: it may never have started (one stalled before its first
+tool call and occupied ~120m of a 300m slot, its watchdog notification
+arriving only afterwards — computenet-znlh). When a batch is running, arm one
+bounded Monitor (`persistent: false`, a single `sleep 1200; echo "PROGRESS
+CHECK <batch>"`); when it fires, recompute elapsed (step 2) and read the three
+signals — all still empty → `SendMessage` the agent; no substantive reply →
+`TaskStop` and re-dispatch rather than keep waiting.
 
 **Find a stated outcome in an implementer's result before acting on it** —
 the same rule 5c gives reviewers, and the same failure. A completion
@@ -1794,7 +1833,7 @@ Agent({
   description: "Review feature <id>",
   model: "opus",
   run_in_background: true,
-  prompt: `Read .claude/skills/work/references/review-feature.md — from
+  prompt: `Read (with the Read tool — cat truncates it to a ~2KB preview) .claude/skills/work/references/review-feature.md — from
 ${worktree}, never the main checkout, whose local branch is stale — and follow
 it to review feature ${id} against its own acceptance criteria.
 Worktree: ${worktree}  ·  Branch: ${branch}  ·  PR: ${pr}
@@ -1811,9 +1850,14 @@ really a park and not a child blocked on a real dependency that inherited the
 human label from its parent; a real block means work remains.
 Run every verification command — Gradle above all — in ONE foreground Bash
 call with an explicit timeout, up to 600000 ms. If you already know the suite
-outruns that 10-minute cap, COMMIT AND PUSH FIRST, then background it and wait
-with a BOUNDED until-loop on its log (your reference gives the form) — never
-wait first, or a stop strands uncommitted work that reads as nothing.
+outruns that 10-minute cap, COMMIT AND PUSH FIRST, then background it and
+IMMEDIATELY, in this same turn, RUN the bounded log-waiter from
+agent-execution.md ("The bounded until-loop" — the python3 block) as a
+foreground Bash call; when it expires, reissue it. Waiting is that command
+RUNNING — it is never something you end a turn to do, and a final message
+that says you are waiting is a stalled result, not a status. Never wait
+before committing, or a stop strands uncommitted work that reads as nothing
+(computenet-v5ah).
 The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
 background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
@@ -2100,9 +2144,10 @@ bd list --parent=<epic> --all --json     # children; must be non-empty to close
   is mid-breakdown, never close it) → `bd close <epic>` and drop the owner
   label.
 - **Open, work remains** → release: `bd update <epic> --status=open
-  --assignee=""` — the claim binds the epic to this *session*; a kept
-  assignee makes it `--claim`-refused everywhere else. The `owner:` label
-  stays as provenance.
+  --assignee="" --unset-metadata holder` — the claim binds the epic to this
+  *session*; a kept assignee makes it `--claim`-refused everywhere else, and
+  a kept holder is residue that blocks the next claim (computenet-nkz3). The
+  `owner:` label stays as provenance.
 
 **2. Record utilisation** (data for the top-up-vs-resize question):
 

@@ -35,8 +35,10 @@
 #
 # Usage:
 #   session-holder.sh                 # print this session's holder token
-#   session-holder.sh --check <token> # LIVE | DEAD | UNKNOWN | MINE | FOREIGN
-# Exit: 0 for LIVE/MINE, 1 for DEAD, 3 for UNKNOWN or FOREIGN (nothing was
+#   session-holder.sh --check <token> # LIVE | DEAD | STALE | UNKNOWN | MINE | FOREIGN
+# STALE: the pid is alive but the token is older than any slot (>HOLDER_MAX_AGE_S,
+#   default 21600s) — host-process residue, releasable like DEAD (computenet-nkz3).
+# Exit: 0 for LIVE/MINE, 1 for DEAD or STALE, 3 for UNKNOWN or FOREIGN (nothing was
 #   established — treat exactly like ready-in-epic.sh's exit 3: not an
 #   all-clear; FOREIGN additionally means the row is NOT this machine's
 #   leftover and must not be released by the step-3 crash-leftover rule).
@@ -86,7 +88,18 @@ if [ "${1:-}" = --check ]; then
 
   now=$(start_of "$pid")
   if [ -z "$now" ]; then echo DEAD; exit 1; fi
-  if [ "$now" = "$start" ]; then echo LIVE; exit 0; fi
+  if [ "$now" = "$start" ]; then
+    # The pid is the session HOST (desktop app), which outlives the session by
+    # days (computenet-nkz3: 7 of 9 holders false-LIVE, ages 14h-2d09h). A token
+    # older than any slot cannot be a live /work run, whatever ps says.
+    start_epoch=$(date -j -f "%a %b %d %T %Y" "$start" +%s 2>/dev/null \
+                  || date -d "$start" +%s 2>/dev/null)
+    if [ -n "$start_epoch" ] && \
+       [ $(( $(date +%s) - start_epoch )) -gt "${HOLDER_MAX_AGE_S:-21600}" ]; then
+      echo STALE; exit 1     # releasable like DEAD; the WORKTREE is still not yours to enter
+    fi
+    echo LIVE; exit 0
+  fi
   # Same pid, different start time: the original process is gone and the pid
   # was recycled. That is DEAD, and reading it as LIVE would deadlock the
   # epic behind a process that has nothing to do with it.

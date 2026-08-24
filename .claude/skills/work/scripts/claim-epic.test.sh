@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for claim-epic.sh. Stubs `bd` on PATH; every case gets a fresh control
-# dir. Exits 0 if all cases pass. Expect "18 passed, 0 failed".
+# dir. Exits 0 if all cases pass. Expect "20 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claim-epic.sh"}
@@ -179,6 +179,36 @@ touch "$CTRL/refuse-claim"
 out=$("$SCRIPT" computenet-e 2>&1); rc=$?
 { [ "$rc" = 0 ] && grep -q "could not be evaluated" <<<"$out"; } \
   && ok "an unevaluable holder falls back, loudly" || bad "rc=$rc out=$out"
+
+# hdow: a LIVE refusal is WRITE-FREE. The recheck runs BEFORE the claim write,
+# so a refused epic is left exactly as found — the post-write ordering
+# claimed-then-disowned two epics per run (computenet-hdow). Stub the holder
+# check to a hard LIVE so the refusal is forced regardless of local processes.
+fixture
+mkdir -p "$ROOT/stubbed"
+cp "$SCRIPT" "$ROOT/stubbed/claim-epic.sh"
+cat > "$ROOT/stubbed/session-holder.sh" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = --check ]; then echo LIVE; exit 0; fi
+echo "stub-host/stub:1:now"
+EOF
+chmod +x "$ROOT/stubbed/claim-epic.sh" "$ROOT/stubbed/session-holder.sh"
+: > "$ROOT/SKILL.md"
+holder_show open "Other@Machine" "someone:123:whenever"
+out=$("$ROOT/stubbed/claim-epic.sh" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "LIVE session" <<<"$out" \
+  && ! grep -qE -- "--claim|--status" "$BD_LOG"; } \
+  && ok "a LIVE refusal writes nothing — no --claim, no --status" \
+  || bad "hdow: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# nkz3: a RELEASED epic (open, no assignee) carrying a LIVE holder is residue
+# from the releasing session, not a live claim — proceed, don't refuse.
+fixture
+holder_show open "" "someone-else:$live_pid:$live_start"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q "residue on a released epic" <<<"$out"; } \
+  && ok "a live holder on a released epic is residue, claim proceeds" \
+  || bad "released-epic residue: rc=$rc out=$out"
 
 # The re-check reads bd AGAIN at the claim, so a slow step 3 cannot widen the
 # window (computenet-yurq). Two `show` calls is the observable of that.

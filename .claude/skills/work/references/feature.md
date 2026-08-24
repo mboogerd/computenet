@@ -121,6 +121,14 @@ after a red suite:
   (computenet-hws5). The sibling consequence counts too: **adding a kind to a
   sealed hierarchy breaks every exhaustive `when` over it**, so the test
   holding that `when` is required and belongs in the claim as well.
+- **An acceptance that mandates a PUBLIC signature change claims the call
+  sites it breaks.** A required parameter ("no default that hides it"), a
+  rename, a type change, or a removed default conscripts every caller, and
+  none of them is a string any grep can find. Resolve them at filing —
+  `git grep -n '<Symbol>' -- '<module>'` (glob quoted, per AGENTS.md) against
+  origin/main — and put the hits in the claim, or state in the description
+  why there are none. A 4-line mechanical test update in another feature's
+  file made a task unsatisfiable as written (computenet-khh3).
 - **"The file does not exist yet" is NOT evidence the claim is free.** A
   breakdown checked that `doc/bench/findings.md` existed neither on
   `origin/main` nor on the sibling feature branch — both true — and filed a

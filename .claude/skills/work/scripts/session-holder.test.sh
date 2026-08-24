@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for session-holder.sh. Uses REAL processes rather than a ps stub: the
 # whole point of the token is that it tracks a live OS process, and a stubbed
-# ps would test the parser instead of the property. Expect "10 passed, 0 failed".
+# ps would test the parser instead of the property. Expect "12 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/session-holder.sh"}
@@ -43,6 +43,19 @@ check "test-actor:$victim:$vstart" DEAD 1 "the same token reads DEAD once it exi
 # 7. PID REUSE: a live pid whose start time does not match is DEAD, not LIVE.
 # Reading it as LIVE would deadlock an epic behind an unrelated process.
 check "test-actor:$pid:Tue Jan  1 00:00:00 2020" DEAD 1 "a recycled pid reads DEAD, not LIVE"
+
+# STALE (computenet-nkz3): a live pid whose token is older than HOLDER_MAX_AGE_S
+# is host-process residue, releasable like DEAD. Force it with a tiny max age
+# against a live child; the same token under the default max age reads LIVE.
+sleep 30 & elder=$!
+estart=$(ps -o lstart= -p "$elder" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
+sleep 2
+out=$(HOLDER_MAX_AGE_S=1 "$SCRIPT" --check "test-actor:$elder:$estart" 2>&1); rc=$?
+{ [ "$out" = STALE ] && [ "$rc" = 1 ]; } \
+  && ok "a live pid older than HOLDER_MAX_AGE_S reads STALE" \
+  || bad "old-token STALE — got '$out' rc=$rc, wanted 'STALE' rc=1"
+check "test-actor:$elder:$estart" LIVE 0 "the same fresh token reads LIVE under the default max age"
+kill "$elder" 2>/dev/null; wait "$elder" 2>/dev/null
 
 # 8-9. Nothing established is UNKNOWN (exit 3), never an all-clear.
 check "nonsense" UNKNOWN 3 "an unparseable token is UNKNOWN, not DEAD"

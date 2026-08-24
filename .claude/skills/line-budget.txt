@@ -74,7 +74,13 @@
 # 8392 -> 8403 on 2026-08-21: computenet-hc3s — rebased onto main (see PR #427).
 # 8403 -> 8409 on 2026-08-21: computenet-hc3s — rebased onto main (see PR #427).
 # 8409 -> 8414 on 2026-08-21: computenet-hl8x — rebased onto main (see PR #415).
-work                8414
+# 8414 -> 8577 on 2026-08-24: 17-item SDLC drain in one PR (this branch): 163
+# lines bought 23 friction fixes across SKILL.md + 10 references — among them
+# nkz3's STALE holder verdict, qmjd's gate-scoping rule, v5ah's fourth-recurrence
+# rewrite of the wait instruction, 9swr's cargo proof standard, and bgdb's
+# read-tool notes. Six of the 23 are mechanical (scripts), priced separately
+# at zero here.
+work                8577
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

@@ -1,5 +1,9 @@
 # Task review
 
+**Read this file with the Read tool, not `cat`** — through Bash it truncates
+to a ~2KB preview with no marker, and the mutation-check and verdict rules
+are past the cut (computenet-bgdb).
+
 One task, on its own branch, before it merges into the feature branch. You
 didn't write it: read what's there, not what you expect to be there.
 
@@ -70,8 +74,11 @@ reading a self-modifying change needs, before §5.
 ## 1. The standard, then the diff
 
 ```bash
-bd show <task-id> --json                          # criteria, files claim (a LIST — unwrap .[0])
-bd comments <task-id> --json                      # the implementer's landing notes
+bd show <task-id> --json > "$SCRATCH/<id>.json"        # criteria, files claim (a LIST — unwrap .[0])
+bd comments <task-id> --json > "$SCRATCH/<id>-c.json"  # the implementer's landing notes
+# Redirect BOTH, then grep/jq the files: a task inlines its parent epic's whole
+# description, and a big epic overruns the tool result with nothing saying so
+# (computenet-h0dj, computenet-rram, computenet-yc1w).
 git -C <task-worktree> fetch origin main
 git -C <task-worktree> fetch origin <feature-branch> || true   # may not exist yet
 FB=$(git -C <task-worktree> rev-parse --verify -q origin/<feature-branch> \
@@ -280,7 +287,8 @@ counts + `timestamp` via `.claude/skills/work/scripts/junit-count.py`. Consume a
 per run and quote them — counts, module list, `newest` — in your report. An
 unquantified "suite green", yours or the implementer's, is not a
 verification record, and the orchestrator never re-runs it: your report *is*
-the evidence the next session trusts.
+the evidence the next session trusts. A cargo-touching task has a different
+standard — gradle-evidence.md § "Cargo is not Gradle".
 
 **Carry `--no-build-cache`, here, at the point of use.** A bare `--rerun` can
 still restore a CACHED result: the console prints its task-count line, the
@@ -293,6 +301,11 @@ belongs in the command you actually run:
 
 ```bash
 ./gradlew :<module>:test --rerun --no-build-cache
+# several modules: repeat --rerun after EACH task (or use --rerun-tasks) —
+# it binds only to the task immediately before it, and the combined
+# task-count line reads plausibly while stale modules replay; prove each
+# module by its own fresh JUnit timestamp (computenet-a61u)
+./gradlew :a:test --rerun :b:test --rerun --no-build-cache
 ```
 
 **Where a prior task's measurement artifacts live**, when the deliverable is a
@@ -480,8 +493,10 @@ So:
   Linux is unverified, so neither of them skips that gate on your say-so.
 - For a port/socket/filesystem/process item, turn the inference into a
   measurement: run the suite in a JDK-21 Linux container (`groovy:4.0-jdk21`
-  is present locally; `eclipse-temurin:21` costs a ~10-minute pull) and quote
-  that result too.
+  has been present on some machines; `eclipse-temurin:21` costs a ~10-minute
+  pull; a present `docker` binary does not mean a running daemon —
+  `docker info` decides, and the CI deferral above is the substitute
+  (computenet-799w)) and quote that result too.
 
 ## 4. Repair, don't bounce
 

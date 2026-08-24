@@ -89,6 +89,36 @@ if [ "${CLAIM_SKIP_HOT:-}" != 1 ]; then
   fi
 fi
 
+# yurq: re-verify AT THE CLAIM, not at the top of step 3 — and BEFORE the
+# write, so a LIVE/FOREIGN refusal leaves the bead exactly as found; the
+# post-write ordering claimed-then-disowned two epics per run (computenet-hdow).
+recheck=$(bd show "$id" --json | sed -n '/^[[{]/,$p')
+held=$(jq -r '.[0].metadata.holder // ""' <<<"$recheck")
+if [ -n "$held" ]; then
+  verdict=$("$SCRIPT_DIR/session-holder.sh" --check "$held"); hrc=$?
+  case "$verdict" in
+    MINE) : ;;                      # already ours, this session — idempotent
+    LIVE)
+      re_status=$(jq -r '.[0].status // ""' <<<"$recheck")
+      re_assignee=$(jq -r '.[0].assignee // ""' <<<"$recheck")
+      if [ "$re_status" = open ] && [ -z "$re_assignee" ]; then
+        # A released epic (open, no assignee) still carrying a holder: the
+        # holder is residue from the releasing session, not a live claim
+        # (computenet-nkz3) — proceed and overwrite it below.
+        echo "note: $id's holder ($held) is residue on a released epic — proceeding"
+      else
+        echo "REFUSED: $id is held by a LIVE session ($held) — not a crash leftover" >&2
+        exit 1
+      fi ;;
+    DEAD) echo "note: $id's previous holder ($held) is dead — taking it over" ;;
+    STALE) echo "note: $id's holder ($held) is a host process older than any slot — residue, taking over" ;;
+    FOREIGN)
+      echo "REFUSED: $id is held by a session on ANOTHER machine ($held) — liveness cannot be tested here; it is not this box's leftover (computenet-bz5c)" >&2
+      exit 1 ;;
+    *)    echo "note: $id's holder ($held) could not be evaluated (rc=$hrc) — proceeding on the recency test above" ;;
+  esac
+fi
+
 out=$(bd update "$id" --claim 2>&1); st=$?
 if [ $st -ne 0 ] || grep -qi "already claimed" <<<"$out"; then
   grep -qi "already claimed" <<<"$out" || { echo "claim failed: $out" >&2; exit 1; }
@@ -113,26 +143,6 @@ if [ $st -ne 0 ] || grep -qi "already claimed" <<<"$out"; then
   bd update "$id" --assignee="$BEADS_ACTOR" --status=in_progress \
     || { echo "takeover write failed on $id" >&2; exit 1; }
   echo "took over $id from stale assignee '$assignee' (open, idle > ${STALE_MIN}m)"
-fi
-
-# yurq: re-verify AT THE CLAIM, not at the top of step 3. An arbitrarily slow
-# step 3 cannot widen the window if the window is re-measured here. Re-read
-# from bd rather than trusting anything computed above.
-recheck=$(bd show "$id" --json | sed -n '/^[[{]/,$p')
-held=$(jq -r '.[0].metadata.holder // ""' <<<"$recheck")
-if [ -n "$held" ]; then
-  verdict=$("$SCRIPT_DIR/session-holder.sh" --check "$held"); hrc=$?
-  case "$verdict" in
-    MINE) : ;;                      # already ours, this session — idempotent
-    LIVE)
-      echo "REFUSED: $id is held by a LIVE session ($held) — not a crash leftover" >&2
-      exit 1 ;;
-    DEAD) echo "note: $id's previous holder ($held) is dead — taking it over" ;;
-    FOREIGN)
-      echo "REFUSED: $id is held by a session on ANOTHER machine ($held) — liveness cannot be tested here; it is not this box's leftover (computenet-bz5c)" >&2
-      exit 1 ;;
-    *)    echo "note: $id's holder ($held) could not be evaluated (rc=$hrc) — proceeding on the recency test above" ;;
-  esac
 fi
 
 bd update "$id" --add-label="owner:$BEADS_ACTOR" >/dev/null

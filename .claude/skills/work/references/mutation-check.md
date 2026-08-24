@@ -37,6 +37,15 @@ will not:
   strongest mutations (computenet-pi3h). Go through Bash instead:
   `perl -pi -e 's/OLD/NEW/' <file>` or `sed -i '' 's/OLD/NEW/' <file>` (BSD
   `sed` needs the empty `''` argument).
+- **Prove the mutation LANDED before running anything.** `perl`/`sed` exit 0
+  whether or not the pattern matched, and a suite run against unmutated code
+  prints the same green transcript as a suite that fails to catch the
+  mutation — the false answer is the one that fails good work
+  (computenet-isde). Require a NON-empty `git diff HEAD -- <file>` (or, for
+  an untracked file, a grep hit on the mutated phrase) before the run. Escape-
+  heavy perl patterns (`\Q…\E`) have arrived mangled through the Bash tool in
+  at least one harness — for replacement of a metacharacter-heavy line, prefer
+  line-addressed sed: `sed -i '' '<N>s|.*|<new line>|' <file>`.
 - **A mutation must not OVERLAP the original.** Choose it so the old value
   cannot match the new one under any matcher the code might use — and you
   cannot assume the matcher, because it is the thing under test. A RENAME

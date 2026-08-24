@@ -208,6 +208,18 @@ which is what makes them worth naming rather than leaving to be rediscovered.
   skipping a repo-wide test run (computenet-l5rc). Write
   `--include='*.kt'`. This is the same family as AGENTS.md's zsh
   history-modifier trap.
+  Same shell, loud variant: a word starting with `=` expands to a command
+  path, so an unquoted `echo ===` separator dies (`== not found`) — quote it
+  (`echo '==='`) or use `printf` (computenet-a49j).
+- **A git pathspec ending at a DIRECTORY name matches nothing under it** — it
+  matches a path ending there, i.e. a *file* named `main`. Measured:
+  `git grep -ln 'FileJournal(' -- '*/src/main'` → 0 hits, exit 1;
+  `-- '*/src/main/*'` → 3 files (computenet-fd9d). Every module here nests
+  sources at `*/src/{main,test}/…`, so the failing shape is the natural one.
+  The quoting is correct — this is the pathspec, not the shell. Before reading
+  any zero-hit search as "absent", re-run it in a form whose failure would look
+  different: a plain recursive grep, or the same query against a string you
+  KNOW is present.
 - **`bd -C <path>` cannot live in a shell variable.** `BD="bd -C /path"; $BD
   show x` fails with `no such file or directory: bd -C /path` — zsh does not
   word-split an unquoted expansion, so the whole string is looked up as one

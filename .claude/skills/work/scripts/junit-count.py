@@ -21,7 +21,7 @@ because the timestamp, not the count, is what separates a run from a cached
 replay: a build-cache restore leaves the previous run's XML under fresh file
 mtimes with identical counts (computenet-qsfu).
 
-Usage: junit-count.py <results-dir> [<results-dir>...]
+Usage: junit-count.py <results-dir | result-file.xml> [<results-dir | result-file.xml>...]
 Prints one line per directory and a TOTAL line, each with
 files/tests/failures/errors/skipped and the newest timestamp seen.
 Exit: 0 = counted (failures included — read the numbers); 2 = bad usage;
@@ -60,7 +60,13 @@ def count_dir(d):
     Both depths, deliberately — see the module docstring. sorted(set(...)) so
     a file cannot be counted twice and the order is stable.
     """
-    paths = sorted(set(p for pat in _patterns(d) for p in glob.glob(pat)))
+    if os.path.isfile(d):
+        # An XML result file passed directly — accept it rather than globbing
+        # under it, which can never match and reads as "no tests ran"
+        # (computenet-be43, third wrong-path variant after lpp6/v38r).
+        paths = [d]
+    else:
+        paths = sorted(set(p for pat in _patterns(d) for p in glob.glob(pat)))
     t = f = e = s = 0
     newest = ""
     for p in paths:
@@ -85,7 +91,7 @@ def line(label, files, t, f, e, s, newest):
 def main(argv):
     dirs = argv[1:]
     if not dirs:
-        print("usage: junit-count.py <results-dir> [<results-dir>...]",
+        print("usage: junit-count.py <results-dir | result-file.xml> [<results-dir | result-file.xml>...]",
               file=sys.stderr)
         return 2
     total = [0, 0, 0, 0, 0]
