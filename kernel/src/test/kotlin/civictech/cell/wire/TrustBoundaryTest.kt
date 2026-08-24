@@ -562,4 +562,29 @@ class TrustBoundaryTest {
         (rig.ingressFromQ.boundaryDenials["link-request"]?.denialCount ?: 0L) shouldBe before
         rig.deadLettersP.drop(lettersBefore).mapNotNull { it.denial }.shouldBeEmpty()
     }
+
+    /**
+     * computenet-a4ha's fourth probe, `PROBE repeated links = 5`, and what the
+     * binding does to it — pinned rather than left to the bead, because the
+     * honest answer is a *partial* one.
+     *
+     * Repetition is still unbounded: five identical requests make five links,
+     * and P's single emission crosses five times. What the binding takes away
+     * is the aim — every copy lands on the requesting peer's own consumer, so
+     * the amplifier can only be pointed at the peer paying for it. A third
+     * peer's address does not reach this test at all; it is refused one arm up.
+     */
+    @Test
+    fun `computenet-a4ha - repeated link requests are still uncapped, but only ever at the requester itself`() {
+        val rig = RedirectRig()
+        repeat(5) { rig.requestFromQ(PortAddress(rig.consumerOnQ.ref, "inlet")) }
+
+        rig.source.outlet.linking.links.size shouldBe 5 // no de-dup, no cap: unchanged
+        rig.emit("p-internal-secret")
+
+        // ...and every copy went to the requester's own consumer, nowhere else.
+        rig.consumerOnQ.received shouldBe List(5) { "p-internal-secret" }
+        rig.victimOnP.received.shouldBeEmpty()
+        rig.consumerOnR.received.shouldBeEmpty()
+    }
 }

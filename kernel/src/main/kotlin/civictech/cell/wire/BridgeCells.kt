@@ -173,6 +173,16 @@ class BridgeIngressCell(
      * the wire it need only *name* an address. Requiring the named address to
      * resolve to a location this peer announced is what restores the symmetry.
      *
+     * **What this does NOT bound, stated here rather than only on the bead.**
+     * Repeated identical requests are still neither de-duplicated nor capped:
+     * N requests establish N links on one target port, and each fires its own
+     * `onLinked` catch-up and every subsequent delta, so a peer can still
+     * amplify P's outbound traffic N-fold. What the binding takes away is the
+     * *aim*: every one of those links now terminates at the requesting peer's
+     * own endpoint, so the amplifier can only be pointed at the peer paying for
+     * it, never at a third party or at the receiver's own cells. A per-peer cap
+     * is a separate decision and is not made here.
+     *
      * **Defaults to `{ null }`, which refuses every link request** — fail
      * closed. [Peering.hostIngress] is the only production construction and
      * supplies `side.registry::location`; the kernel tests that construct this
