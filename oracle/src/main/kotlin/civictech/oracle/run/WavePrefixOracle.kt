@@ -276,9 +276,18 @@ object WavePrefixOracle {
      *    figure is the whole `DifferentialRunner.run`, kernel driving included, for a case whose
      *    checking dominates it; the same case with `WavePrefixOption.OFF` evaluates the
      *    reference once.
-     * 3. **So 50_000 is about half a second** of prefix checking for the worst case it admits,
-     *    against ~7 minutes for the BS-1 sweep shape (`sourceCount = 4`, `scriptLength = 200`,
-     *    ~6.8M frontiers) that it refuses.
+     * 3. **So 50_000 is of the order of a second** of prefix checking for the worst case it
+     *    admits, against minutes for the BS-1 sweep shape (`sourceCount = 4`,
+     *    `scriptLength = 200`, ~6.8M frontiers) that it refuses.
+     *
+     * **Fact 3 is an EXTRAPOLATION from facts 1-2, not a measurement, and it is a lower bound.**
+     * The µs/frontier rate above was measured at `scriptLength = 40`; one frontier evaluation
+     * replays the *retained* script, so the rate grows roughly linearly with a case's op count.
+     * A 50_000-frontier case at `sourceCount = 3` needs ~36 Ops per source (`scriptLength ~ 108`,
+     * ~2.7x the measured shape), so read "half a second at the measured rate" as ~1 s in
+     * practice; the BS-1 shape's 50 Ops per source is ~5x, which is where "minutes" comes from.
+     * Only the fenced line above was run. Neither figure changes where the line is drawn: a
+     * second of checking on the worst admitted case is affordable and the refused shape is not.
      *
      * It is a **budget knob** `[ORA1-PERF-01]`, not a soundness one — raising it admits more
      * cases and costs more; it can never make the check accept a torn observation. The cheaper
