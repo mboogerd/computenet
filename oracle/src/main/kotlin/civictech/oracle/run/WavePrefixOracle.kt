@@ -4,6 +4,7 @@ import civictech.oracle.gen.CaseScript
 import civictech.oracle.gen.CaseStep
 import civictech.oracle.gen.GeneratedCase
 import civictech.oracle.model.ModelState
+import civictech.oracle.model.SourceId
 import kotlin.random.Random
 
 /**
@@ -48,16 +49,30 @@ import kotlin.random.Random
  *
  * ## Where it is sound, and where it deliberately refuses
  *
- * [appliesTo] admits **single-source, single-host** cases only, and the refusal is a
- * soundness statement rather than a convenience:
+ * [appliesTo] admits **single-host** cases whose frontier lattice fits [MAX_FRONTIER_LATTICE],
+ * and each refusal is a soundness or a cost statement rather than a convenience:
  *
- * - **Multi-source.** A total-order prefix denotes a real frontier only for one source. With
- *   two independent sources the kernel may legally have absorbed three of source A's deltas
- *   and one of source B's — a per-source frontier the total-order prefix list does not
- *   contain — so an honest check needs per-source frontiers. Filed as **computenet-2hur**;
- *   measured at review time (2026-08-19, on the sibling machine): with the guard bypassed, 4
- *   of 38 correctly-settling three-source cases produced an observation matching no
- *   total-order prefix, whose provenance (legal interleaving vs. real glitch) is undecided.
+ * - **Multi-source: admitted since computenet-2hur, against the per-source frontier product.**
+ *   A total-order prefix denotes a real frontier only for one source. With two independent
+ *   sources the kernel may legally have absorbed three of source A's deltas and one of source
+ *   B's — a per-source frontier the total-order prefix list does not contain — so checking a
+ *   multi-source case against total-order prefixes alone would manufacture glitch reports out
+ *   of correct runs (measured 2026-08-19 before this generalization: with the old guard
+ *   bypassed, 4 of 38 correctly-settling three-source cases produced an observation matching no
+ *   total-order prefix). [Checker] therefore matches an observation against the **product** of
+ *   the per-source prefixes — the frontier vector `(f_1..f_n)`, one absorbed-op count per
+ *   source — and requires that vector to be **componentwise non-decreasing per terminal**,
+ *   which is what `InternalConsistencyTest` means by "in per-source counter order". The
+ *   single-source case is the `n = 1` degenerate of exactly that: the lattice is the chain
+ *   `0..opCount`, the antichain of admissible frontiers is always a single scalar floor, and
+ *   the behavior is unchanged.
+ *
+ *   **The frontier lattice is the cost, and it is bounded per case, not per observation.**
+ *   [Checker] memoizes `frontier -> every terminal's modelled state`, so a case evaluates the
+ *   reference at most `prod(opsPerSource_i + 1)` times however many observations it takes
+ *   (against `opCount + 1` for the single-source chain, which is that product at `n = 1`).
+ *   [MAX_FRONTIER_LATTICE] is where the admission line is drawn, and the number behind it is
+ *   measured, not estimated — see that constant.
  * - **Multi-host.** A cross-host arm was measured producing mid-wave states matching no
  *   prefix. **computenet-g25w settled what that is (2026-08-21), and it is neither of the two
  *   things that bead asked about**: not a kernel glitch, and not [CaseExecution.assemble]'s
@@ -105,12 +120,17 @@ import kotlin.random.Random
  *   BS-8 diamond produces 3 productive steps and 3 observations. This oracle therefore bounds
  *   "the terminal equals the model at every wave, never only the last, and never goes
  *   backwards"; it cannot resolve an instant *inside* one wave on one host.
- * - **Generated-path admission.** [appliesTo] rejects every multi-source config, and the
- *   configs this feature's other suites construct are all `sourceCount >= 3` — measured 0/200
- *   seeds admitted on each (`GraphSpecLinkSweepTest.sweepConfig`, `Bs16Case.CONFIG`, the BS-1
- *   sweep config; measured 2026-08-19). Coverage of the generated path therefore rests on the
- *   single-source sweep `WavePrefixTest` runs itself. Widening it to the multi-source configs
- *   needs computenet-2hur.
+ * - **Generated-path admission.** Until computenet-2hur [appliesTo] rejected every multi-source
+ *   config, and the configs this feature's other suites construct are all `sourceCount >= 3` —
+ *   measured 0/200 seeds admitted on each (`GraphSpecLinkSweepTest.sweepConfig`,
+ *   `Bs16Case.CONFIG`, the BS-1 sweep config; measured 2026-08-19). Two of those three are now
+ *   admitted or excluded for a *different* reason, and the distinction matters when reading an
+ *   old measurement: `Bs16Case.CONFIG` is still refused, but for `hostCount = 2`; the BS-1
+ *   sweep config (`sourceCount = 4`, `scriptLength = 200`) is still refused, but for a frontier
+ *   lattice of ~6.8M (see [MAX_FRONTIER_LATTICE]); `GraphSpecLinkSweepTest.sweepConfig`
+ *   (`sourceCount = 3`, `scriptLength = 40`) is now **admitted**, at a lattice of a few
+ *   thousand. `WavePrefixTest`'s own two-source diamond and its multi-source sweep are what
+ *   demonstrate the widened check.
  * - **What that sweep found** (`WavePrefixTest.generatedSweepConfig`, seeds 0..59, ordinary
  *   `writerCount = 2` / `unobservedRemoveRatio = 0.25` knobs, Darwin arm64, 2026-08-19): 60/60
  *   admitted, 47/60 carrying a source-to-terminal pair joined by two paths with *different*
@@ -226,8 +246,96 @@ object WavePrefixOracle {
      */
     const val DEFAULT_FRACTION: Double = 0.25
 
-    /** Whether the prefix check is sound for [case] — see [notApplicableBecause]. */
+    /**
+     * The largest frontier lattice — `prod(opsPerSource_i + 1)` — a case may have and still be
+     * prefix-checked. Above it, [notApplicableBecause] refuses on **cost**, which is a different
+     * refusal from the two soundness ones and says so.
+     *
+     * ## The number is measured
+     *
+     * The lattice is the per-case ceiling on reference evaluations ([Checker] memoizes
+     * `frontier -> states`, so no frontier is evaluated twice however many observations a run
+     * takes). Measured on Darwin arm64 (M-series), 2026-08-24, by
+     * `WavePrefixTest."the cost of frontier matching is the memoized lattice, measured"`:
+     *
+     * ```
+     * WAVE-PREFIX COST sources=3 scriptLength=40 cases=8 admitted=8 lattice/case=2794
+     *   evaluations/case=2794 scanned/case=86882 observations/case=35 wall/case=30.6ms
+     *   outcomes={Success=8}
+     * ```
+     *
+     * Read it as three facts:
+     *
+     * 1. **Evaluations equal the lattice, not the observation count.** 2794 of 2794 frontiers
+     *    were evaluated and 35 observations were taken — the very first observation's search
+     *    region is the whole lattice (its floor is the zero frontier), so a multi-source case
+     *    pays its ceiling once and every later observation is memo hits. `scanned/case` (86882)
+     *    is those hits: ~31 sweeps of the lattice, costing no model evaluation at all.
+     * 2. **~8-11 µs per frontier, all-in** (`wall/case` was 30.6 ms on the first run of the day
+     *    and 21.8 ms on a warm JVM in the same session — quote the range, not either end). That
+     *    figure is the whole `DifferentialRunner.run`, kernel driving included, for a case whose
+     *    checking dominates it; the same case with `WavePrefixOption.OFF` evaluates the
+     *    reference once.
+     * 3. **So 50_000 is of the order of a second** of prefix checking for the worst case it
+     *    admits, against minutes for the BS-1 sweep shape (`sourceCount = 4`,
+     *    `scriptLength = 200`, ~6.8M frontiers) that it refuses.
+     *
+     * **Fact 3 is an EXTRAPOLATION from facts 1-2, not a measurement, and it is a lower bound.**
+     * The µs/frontier rate above was measured at `scriptLength = 40`; one frontier evaluation
+     * replays the *retained* script, so the rate grows roughly linearly with a case's op count.
+     * A 50_000-frontier case at `sourceCount = 3` needs ~36 Ops per source (`scriptLength ~ 108`,
+     * ~2.7x the measured shape), so read "half a second at the measured rate" as ~1 s in
+     * practice; the BS-1 shape's 50 Ops per source is ~5x, which is where "minutes" comes from.
+     * Only the fenced line above was run. Neither figure changes where the line is drawn: a
+     * second of checking on the worst admitted case is affordable and the refused shape is not.
+     *
+     * It is a **budget knob** `[ORA1-PERF-01]`, not a soundness one — raising it admits more
+     * cases and costs more; it can never make the check accept a torn observation. The cheaper
+     * exact algorithm the bead asked about (advancing the frontier incrementally so only
+     * frontiers near the run's own trajectory are evaluated) is not what is implemented, and
+     * deliberately: the run's real frontier is not observable from the terminal's value, so a
+     * search that stopped at the first match could pick a frontier the run was not on and reject
+     * a legal later observation for not being above it. The other option the bead named — a
+     * per-source counter read off the observation, the way `InternalConsistencyTest` reads the
+     * outer map's `size` — is unavailable here: a [ModelState] is a set, map or count with no
+     * per-source provenance in it, which is precisely what makes that test domain-specific and
+     * this one generic.
+     *
+     * Single-source cases are unaffected: their lattice is `opCount + 1`, which no generated
+     * config comes near.
+     */
+    const val MAX_FRONTIER_LATTICE: Long = 50_000L
+
+    /** Whether the prefix check is sound and affordable for [case] — see [notApplicableBecause]. */
     fun appliesTo(case: GeneratedCase): Boolean = notApplicableBecause(case) == null
+
+    /**
+     * How many [CaseStep.Op]s [case]'s script directs at each source, in the order the sources
+     * first appear in the total drive order — the per-source axis lengths of the frontier
+     * lattice.
+     *
+     * A source *node* the script never drives contributes no axis: an axis of length 0 is a
+     * factor of 1 in the lattice and a coordinate that can never advance, so leaving it out
+     * changes nothing but the arithmetic's readability.
+     */
+    fun opCountsPerSource(case: GeneratedCase): Map<SourceId, Int> {
+        val counts = LinkedHashMap<SourceId, Int>()
+        case.script.steps.filterIsInstance<CaseStep.Op>().forEach { op ->
+            counts[op.source] = (counts[op.source] ?: 0) + 1
+        }
+        return counts
+    }
+
+    /**
+     * The size of [case]'s frontier lattice, `prod(opsPerSource_i + 1)`, saturating at
+     * [Long.MAX_VALUE] rather than overflowing — a config wide enough to overflow is refused
+     * either way, and an overflowed negative would admit it.
+     */
+    fun frontierLatticeSize(case: GeneratedCase): Long =
+        opCountsPerSource(case).values.fold(1L) { acc, count ->
+            val next = acc * (count + 1L)
+            if (count > 0 && next / (count + 1L) != acc) Long.MAX_VALUE else next
+        }
 
     /**
      * Why the prefix check does not apply to [case], or `null` if it does.
@@ -237,12 +345,6 @@ object WavePrefixOracle {
      * indistinguishable from a clean one, which is the failure mode this epic exists to avoid.
      */
     fun notApplicableBecause(case: GeneratedCase): String? {
-        val sources = case.topology.nodes.count { it.source != null }
-        if (sources != 1) {
-            return "the case drives $sources sources; a total-order prefix denotes a real " +
-                "frontier only for a single source, so multi-source needs per-source " +
-                "frontiers (computenet-2hur)"
-        }
         val hosts = case.topology.placement.values.filter { it != 0 }.distinct()
         if (hosts.isNotEmpty()) {
             return "the case places cells on host ordinals ${hosts.sorted()} besides 0; a " +
@@ -251,6 +353,16 @@ object WavePrefixOracle {
                 "intermediate is permitted by [22-GF-01] rather than kernel evidence — " +
                 "co-hosted inlining, not the host count, is what puts every observation on a " +
                 "wave boundary (settled, computenet-g25w)"
+        }
+        val lattice = frontierLatticeSize(case)
+        if (lattice > MAX_FRONTIER_LATTICE) {
+            val counts = opCountsPerSource(case)
+            return "the case's frontier lattice is $lattice frontiers " +
+                "(${counts.entries.joinToString(" x ") { "${it.key.id}:${it.value + 1}" }}), " +
+                "above MAX_FRONTIER_LATTICE=$MAX_FRONTIER_LATTICE; that is a COST refusal " +
+                "[ORA1-PERF-01], not a soundness one — the per-source frontier check is exact " +
+                "here, it is the memoized evaluation ceiling that does not fit the module's " +
+                "test budget"
         }
         return null
     }
@@ -272,9 +384,22 @@ object WavePrefixOracle {
         return (0..ops.size).map { i -> reference.evaluate(CaseScript(ops.take(i)).toScript()) }
     }
 
-    /** A [Checker] over [case]'s script, with the prefix list computed by [prefixesOf]. */
+    /**
+     * A [Checker] over [case]'s script.
+     *
+     * The total-order chain [prefixesOf] computes is evaluated **eagerly**, exactly as before:
+     * it is the checker's [Checker.prefixes], it seeds the frontier memo with the `opCount + 1`
+     * frontiers a single-source case ever needs, and — load-bearingly — it is what makes a
+     * reference that cannot evaluate a prefix throw HERE, before the graph is built, so
+     * [DifferentialRunner.run] can report [RunOutcome.ModelEvaluationFailure] instead of letting
+     * a throw escape from inside the per-step observer.
+     *
+     * Off-chain frontiers (multi-source only) are evaluated lazily and memoized, so a case pays
+     * for the frontiers its observations actually reach, up to the [frontierLatticeSize]
+     * ceiling.
+     */
     fun checker(case: GeneratedCase, caseMarker: String, reference: Reference): Checker =
-        Checker(case.seed, caseMarker, case.script, prefixesOf(case.script, reference))
+        Checker(case.seed, caseMarker, case.script, reference)
 
     /**
      * The running check: hand it every intermediate observation, in order, and it answers
@@ -301,10 +426,21 @@ object WavePrefixOracle {
         private val seed: Long,
         private val caseMarker: String,
         private val script: CaseScript,
-        /** `prefixes[i]` = every terminal's modelled state after the first *i* Ops. */
-        val prefixes: List<Map<String, ModelState>>,
+        private val reference: Reference,
     ) {
-        private val floors = LinkedHashMap<String, Int>()
+        /** The script's Ops in total drive order — the material every frontier restricts. */
+        private val ops: List<CaseStep.Op> = script.steps.filterIsInstance<CaseStep.Op>()
+
+        /** The frontier vector's axes, in the order the sources first appear in the total order. */
+        private val sourceOrder: List<SourceId> = ops.map { it.source }.distinct()
+
+        /** `ceiling[i]` = how many Ops source `i` has; a frontier coordinate's maximum. */
+        private val ceiling: List<Int> = sourceOrder.map { source -> ops.count { it.source == source } }
+
+        private val zero: List<Int> = List(sourceOrder.size) { 0 }
+
+        /** `frontier -> every terminal's modelled state`, so no frontier is evaluated twice. */
+        private val memo = LinkedHashMap<List<Int>, Map<String, ModelState>>()
 
         /** How many observations have been offered — a run's non-vacuity witness. */
         var observations: Int = 0
@@ -314,8 +450,88 @@ object WavePrefixOracle {
         var comparisons: Int = 0
             private set
 
-        /** [terminal]'s current matched-prefix floor, or `null` if it has never matched one. */
-        fun floorOf(terminal: String): Int? = floors[terminal]
+        /**
+         * How many **distinct frontiers** this checker has evaluated the reference on — the cost
+         * measure `[ORA1-PERF-01]` cares about, bounded by [WavePrefixOracle.frontierLatticeSize]
+         * however many observations arrive. `opCount + 1` at the moment a single-source checker
+         * is constructed, and never more.
+         */
+        var frontierEvaluations: Int = 0
+            private set
+
+        /** How many frontiers have been *visited* (memo hit or miss) across all searches. */
+        var frontiersScanned: Long = 0L
+            private set
+
+        /**
+         * `prefixes[i]` = every terminal's modelled state after the first *i* Ops **of the total
+         * drive order** — the chain through the frontier lattice that the total order traces.
+         *
+         * For a single-source case this chain IS the lattice, which is why the single-source
+         * check is unchanged by the frontier generalization. For a multi-source case it is one
+         * chain through it, kept because it is the eager evaluation that catches a broken
+         * reference before driving, and because it seeds the memo along the path a run's
+         * frontier usually stays near.
+         */
+        val prefixes: List<Map<String, ModelState>> = run {
+            val counters = IntArray(sourceOrder.size)
+            (0..ops.size).map { i ->
+                if (i > 0) counters[sourceOrder.indexOf(ops[i - 1].source)]++
+                stateAt(counters.toList())
+            }
+        }
+
+        /** Per terminal, the antichain of minimal frontiers still consistent with its history. */
+        private val candidates = LinkedHashMap<String, List<List<Int>>>()
+
+        /**
+         * [terminal]'s current matched floor as an **op count** — the total number of Ops the
+         * componentwise-least admissible frontier has absorbed — or `null` if it has never
+         * matched one.
+         *
+         * For a single-source case that count IS the prefix index, unchanged. For a multi-source
+         * one it is the frontier vector's sum, which is lossy on purpose: this accessor's shape
+         * is fixed by [RunOutcome.WavePrefixViolation]'s `Int` fields. [frontierFloorOf] is the
+         * unlossy reading.
+         */
+        fun floorOf(terminal: String): Int? = frontierFloorOf(terminal)?.sum()
+
+        /**
+         * [terminal]'s componentwise-least admissible frontier — one absorbed-Op count per
+         * source, in [sourceAxes] order — or `null` if it has never matched one.
+         *
+         * The componentwise minimum of the candidate antichain rather than a single frontier:
+         * when several minimal frontiers match an observation, all of them stay live (a later
+         * observation decides which the run was really on), and this is the greatest lower bound
+         * on where the run can be.
+         */
+        fun frontierFloorOf(terminal: String): List<Int>? =
+            candidates[terminal]?.let { set -> zero.indices.map { i -> set.minOf { it[i] } } }
+
+        /** The frontier vector's axes: the sources, in the order the total drive order first names them. */
+        fun sourceAxes(): List<SourceId> = sourceOrder
+
+        /** How many minimal frontiers are still live for [terminal] — 1 for every single-source case. */
+        fun candidateCountOf(terminal: String): Int = candidates[terminal]?.size ?: 0
+
+        /**
+         * Every terminal's modelled state at [frontier] — the reference evaluated on the script
+         * restricted to each source's first `frontier[i]` Ops, memoized.
+         *
+         * Restricting per source and re-reading the result in total order is what makes this the
+         * per-source frontier product rather than a total-order prefix: the surviving Ops keep
+         * their relative order within each source, which is all
+         * `civictech.oracle.model.Script` contracts on.
+         */
+        private fun stateAt(frontier: List<Int>): Map<String, ModelState> = memo.getOrPut(frontier) {
+            frontierEvaluations++
+            val taken = IntArray(sourceOrder.size)
+            val kept = ops.filter { op ->
+                val axis = sourceOrder.indexOf(op.source)
+                (taken[axis] < frontier[axis]).also { if (it) taken[axis]++ }
+            }
+            reference.evaluate(CaseScript(kept).toScript())
+        }
 
         /**
          * One intermediate observation — every terminal's fold at one instant, read through the
@@ -347,13 +563,29 @@ object WavePrefixOracle {
          */
         fun observeTerminal(terminal: String, state: ModelState): RunOutcome.WavePrefixViolation? {
             comparisons++
-            val floor = floors[terminal] ?: 0
-            val matched = (floor..prefixes.lastIndex).firstOrNull { prefixes[it][terminal] == state }
-            if (matched != null) {
-                floors[terminal] = matched
+            val live = candidates.getOrPut(terminal) { listOf(zero) }
+            val lower = zero.indices.map { i -> live.minOf { it[i] } }
+
+            // The admissible region: every frontier at or above SOME live candidate. Searched in
+            // full, not to the first hit — the run's real frontier is one of the matches and we
+            // do not know which, so every MINIMAL match has to stay live or a later legal
+            // observation could be rejected for not being above the one we happened to pick.
+            val matches = frontiersIn(lower).filter { f ->
+                live.any { candidate -> dominates(f, candidate) } && stateAt(f)[terminal] == state
+            }.toList()
+            if (matches.isNotEmpty()) {
+                candidates[terminal] = minimalElements(matches)
                 return null
             }
-            val regressedTo = (0 until floor).firstOrNull { prefixes[it][terminal] == state }
+
+            // No admissible frontier matches. Scanning the WHOLE lattice separates the two kinds:
+            // a state that is some frontier the run has already passed is a regression, a state
+            // that is no frontier at all is a tear. Reached only on a violation, and a violation
+            // ends the run's checking, so the full scan is paid at most once per case.
+            val regressed = frontiersIn(zero)
+                .filter { stateAt(it)[terminal] == state }
+                .minByOrNull { it.sum() }
+            val regressedTo = regressed?.sum()
             return RunOutcome.WavePrefixViolation(
                 seed = seed,
                 terminal = terminal,
@@ -366,24 +598,67 @@ object WavePrefixOracle {
                 script = script.toScript(),
                 observed = state,
                 observationIndex = observations,
-                matchedFloor = floor,
+                matchedFloor = lower.sum(),
                 regressedTo = regressedTo,
-                nearestPrefixes = nearestPrefixes(terminal, floor),
+                nearestPrefixes = nearestPrefixes(terminal, lower),
             )
         }
 
         /**
          * [terminal]'s modelled state at the floor and at the floor's successor — the two
-         * prefixes a torn observation sits between, which is the evidence a reader needs and
-         * the whole prefix list is not.
+         * frontiers a torn observation sits between, which is the evidence a reader needs and
+         * the whole lattice is not.
+         *
+         * Keyed by absorbed-Op count, because [RunOutcome.WavePrefixViolation.nearestPrefixes]
+         * is `Map<Int, ModelState>`. For a single-source case that key is the prefix index and
+         * the two entries are `floor` and `floor + 1`, unchanged. For a multi-source case every
+         * successor shares the key `floor + 1`, so the entry shown is the successor along the
+         * FIRST axis that can still advance; [frontierFloorOf] and [sourceAxes] are how a reader
+         * recovers the vector the count flattens.
          */
-        private fun nearestPrefixes(terminal: String, floor: Int): Map<Int, ModelState> {
+        private fun nearestPrefixes(terminal: String, floor: List<Int>): Map<Int, ModelState> {
             val nearest = LinkedHashMap<Int, ModelState>()
-            listOf(floor, floor + 1).forEach { index ->
-                prefixes.getOrNull(index)?.get(terminal)?.let { nearest[index] = it }
+            stateAt(floor)[terminal]?.let { nearest[floor.sum()] = it }
+            val axis = floor.indices.firstOrNull { floor[it] < ceiling[it] }
+            if (axis != null) {
+                val successor = floor.toMutableList().also { it[axis] = it[axis] + 1 }
+                stateAt(successor)[terminal]?.let { nearest[successor.sum()] = it }
             }
             return nearest
         }
+
+        /**
+         * Every frontier in the box `[lower, ceiling]`, componentwise — the region an admissible
+         * frontier can lie in, given that the run has already reached [lower] on every axis.
+         *
+         * Enumerated as a sequence so the caller's own filter decides how much of it is ever
+         * evaluated, and bounded by construction: the box is a sub-box of the lattice, whose
+         * size [notApplicableBecause] has already admitted against
+         * [WavePrefixOracle.MAX_FRONTIER_LATTICE].
+         */
+        private fun frontiersIn(lower: List<Int>): Sequence<List<Int>> {
+            var frontiers = sequenceOf(emptyList<Int>())
+            lower.indices.forEach { axis ->
+                frontiers = frontiers.flatMap { head -> (lower[axis]..ceiling[axis]).asSequence().map { head + it } }
+            }
+            return frontiers.onEach { frontiersScanned++ }
+        }
+
+        /** Whether [f] is at or above [other] on every axis. */
+        private fun dominates(f: List<Int>, other: List<Int>): Boolean =
+            f.indices.all { f[it] >= other[it] }
+
+        /**
+         * The componentwise-minimal elements of [frontiers] — the antichain that carries exactly
+         * the same "everything at or above one of these" region as the whole set.
+         *
+         * Keeping only the minima is not an approximation: any frontier the run can reach later
+         * is above the one it is on now, which is one of these.
+         */
+        private fun minimalElements(frontiers: List<List<Int>>): List<List<Int>> =
+            frontiers.filter { candidate ->
+                frontiers.none { other -> other != candidate && dominates(candidate, other) }
+            }
     }
 }
 
