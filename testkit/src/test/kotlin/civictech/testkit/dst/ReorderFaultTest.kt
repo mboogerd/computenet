@@ -64,9 +64,12 @@ import kotlin.test.assertTrue
  * [FrameInterposer]'s known limit: an edge is a transform, not a transport, so only a later
  * frame on the same edge can flush a reorder buffer. The workload emits a wave per controller
  * step for [WAVES] steps and the fault's window closes at [REORDER_UNTIL], comfortably inside
- * it — so the remaining waves' traffic flushes whatever the buffer still holds. Every test here
- * asserts [ReorderFault.strandedFrames] is zero, because a stranded frame is a *drop*, and a
- * reorder test that silently became a drop test would prove the wrong thing.
+ * it — so the remaining waves' traffic flushes whatever the buffer still holds. The **passing**
+ * cross-link sweep asserts [ReorderFault.strandedFrames] is zero, because a stranded frame is a
+ * *drop*, and a reorder test that silently became a drop test would prove the wrong thing. The
+ * intra-link control cannot assert that (it is asserting a failure, not a clean run); what pins
+ * it to a *tear* rather than a loss is that every failing seed reports the one same message —
+ * a composite mixing two waves' timestamps, never a half or a missing composite.
  *
  * ## Failure messages are deliberately count-free
  *
