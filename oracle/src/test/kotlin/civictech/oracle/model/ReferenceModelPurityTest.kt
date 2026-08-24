@@ -2,6 +2,7 @@ package civictech.oracle.model
 
 import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
+import civictech.oracle.bind.TaggedOperators
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
@@ -15,10 +16,11 @@ import org.junit.jupiter.api.Test
  * afterwards.
  *
  * This is the **engine-level** purity test, using hand-built model instances over a small
- * pipeline. The full-vocabulary version below — one script of exactly 200 mixed operations
- * across every operator [CoreOperators] registers, evaluated through the real
- * [OperatorCatalog] entries rather than re-constructed model objects — is
- * computenet-4ru.5.3's, which closes the vocabulary out.
+ * pipeline. The full-vocabulary version below — one script of exactly 220 mixed operations
+ * across every operator [CoreOperators] and [TaggedOperators] register, evaluated through the
+ * real [OperatorCatalog] entries rather than re-constructed model objects — is
+ * computenet-4ru.5.3's, which closes the vocabulary out (widened by computenet-jdwy to cover
+ * [TaggedOperators]' `orMap` id, which computenet-4ru.5.3 never registered into this sweep).
  */
 class ReferenceModelPurityTest {
 
@@ -256,12 +258,15 @@ class ReferenceModelPurityTest {
     private val mapRight = SourceId("fv-map-right")
     private val counterSrc = SourceId("fv-counter")
     private val pnCounterSrc = SourceId("fv-pncounter")
+    private val orMapSrc = SourceId("fv-ormap")
 
     /**
-     * Exactly 200 events across nine sources — a plain-scalar pair, a keyed-set source, a
+     * Exactly 220 events across ten sources — a plain-scalar pair, a keyed-set source, a
      * pair-shaped pair (feeding the join-set/semi-join/group-by family), a map-shaped pair
-     * (feeding the map-join family, each a single-writer `MapCell` slice per `[ORA1-MODEL-08]`)
-     * and a counter pair. `30+30+20+25+25+20+20+15+15 = 200`.
+     * (feeding the map-join family, each a single-writer `MapCell` slice per `[ORA1-MODEL-08]`),
+     * a counter pair, and a single-writer OR-map source (`[ORA2-MODEL-11]`'s
+     * `SingleInstanceOrMapModel`, delivery-free so the single-instance restriction it enforces
+     * does not fire — see [TaggedOperators]' KDoc). `30+30+20+25+25+20+20+15+15+20 = 220`.
      */
     private fun fullVocabularyScript(): Script = Script(
         listOf(
@@ -274,13 +279,14 @@ class ReferenceModelPurityTest {
             keyedChurn(mapRight, 20),
             counterChurn(counterSrc, 15),
             counterChurn(pnCounterSrc, 15),
+            keyedChurn(orMapSrc, 20),
         ),
     )
 
     /**
-     * One [ReferenceModel] naming every id [CoreOperators] registers, resolved through
-     * [OperatorCatalog] rather than reconstructed — so this test exercises the exact models a
-     * differential run would.
+     * One [ReferenceModel] naming every id [CoreOperators] and [TaggedOperators] register,
+     * resolved through [OperatorCatalog] rather than reconstructed — so this test exercises the
+     * exact models a differential run would.
      */
     private fun fullVocabularyModel(): ReferenceModel {
         val plainLeftNode = ModelNode.Source(NodeId("plainLeft"), plainLeft, catalogSource(CoreOperators.Ids.SET))
@@ -293,6 +299,8 @@ class ReferenceModelPurityTest {
         val counterNode = ModelNode.Source(NodeId("counter"), counterSrc, catalogSource(CoreOperators.Ids.COUNTER))
         val pnCounterNode =
             ModelNode.Source(NodeId("pnCounter"), pnCounterSrc, catalogSource(CoreOperators.Ids.PN_COUNTER))
+        val orMapNode =
+            ModelNode.Source(NodeId("orMap"), orMapSrc, catalogSource(TaggedOperators.Ids.OR_MAP))
 
         val filterNode = ModelNode.Operator(NodeId("filter"), catalogOperator(CoreOperators.Ids.FILTER), plainLeftNode.id)
         val flatMapNode =
@@ -378,7 +386,7 @@ class ReferenceModelPurityTest {
 
         val sourceNodes = listOf(
             plainLeftNode, plainRightNode, keyedNode, pairLeftNode, pairRightNode,
-            mapLeftNode, mapRightNode, counterNode, pnCounterNode,
+            mapLeftNode, mapRightNode, counterNode, pnCounterNode, orMapNode,
         )
 
         val allNodes: List<ModelNode> = sourceNodes + operatorNodes
@@ -388,29 +396,38 @@ class ReferenceModelPurityTest {
     }
 
     /**
-     * `[ORA1-MODEL-11]`'s purity, at full-vocabulary scale: every operator [CoreOperators]
-     * registers gets a node, wired against the real [OperatorCatalog] entries, over one
-     * 200-event script — evaluated twice, with equal results and an unmutated script.
+     * `[ORA1-MODEL-11]`'s purity, at full-vocabulary scale: every operator [CoreOperators] and
+     * [TaggedOperators] register gets a node, wired against the real [OperatorCatalog] entries,
+     * over one 220-event script — evaluated twice, with equal results and an unmutated script.
+     *
+     * `TaggedOperators.registerAll()` sits beside `CoreOperators.registerAll()` here rather than
+     * only in `TaggedOperatorsTest`: this is the *full-vocabulary* sweep, and `orMap` — the one
+     * id `TaggedOperators` registers — was never resolved through it (computenet-jdwy). The
+     * coverage assertion below grows to the **union** of both catalogs' registered ids rather
+     * than silently widening to one of them, so it still fails the moment a future registration
+     * (in either file) is added without a node here.
      */
     @Test
-    fun `the full registered vocabulary evaluated twice on one 200-event script yields equal results and an unmutated script`() {
+    fun `the full registered vocabulary evaluated twice on one 220-event script yields equal results and an unmutated script`() {
         OperatorCatalog.reset()
         CoreOperators.registerAll()
+        TaggedOperators.registerAll()
         idsExercised.clear()
         try {
             val model = fullVocabularyModel()
             val subject = fullVocabularyScript()
             val untouchedTwin = fullVocabularyScript()
+            val registeredIds = CoreOperators.Ids.ALL.toSet() + TaggedOperators.Ids.ALL.toSet()
 
-            withClue("sanity: the script really is exactly 200 events") {
-                subject.slices.sumOf { it.events.size } shouldBe 200
+            withClue("sanity: the script really is exactly 220 events") {
+                subject.slices.sumOf { it.events.size } shouldBe 220
             }
             withClue(
-                "every id CoreOperators registers was resolved through OperatorCatalog while " +
-                    "building this test's graph — missing: ${CoreOperators.Ids.ALL.toSet() - idsExercised}, " +
-                    "unexpected: ${idsExercised - CoreOperators.Ids.ALL.toSet()}",
+                "every id CoreOperators/TaggedOperators register was resolved through " +
+                    "OperatorCatalog while building this test's graph — missing: " +
+                    "${registeredIds - idsExercised}, unexpected: ${idsExercised - registeredIds}",
             ) {
-                idsExercised shouldBe CoreOperators.Ids.ALL.toSet()
+                idsExercised shouldBe registeredIds
             }
 
             val first = model.eval(subject)
