@@ -18,6 +18,9 @@ import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.InvocationSink
+import civictech.testkit.dst.FrameInterposer
+import civictech.testkit.dst.FrameInterposers
+import civictech.testkit.dst.StepWindow
 import civictech.testkit.forEachSeed
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -82,11 +85,17 @@ class BridgedGraphTest {
         val framesCrossed: Int,
     )
 
-    /** [interpose] sees each crossing frame (bytes, index); returning null drops it. */
+    /**
+     * [interposer] sees each crossing frame with its 0-based crossing index standing in for the
+     * rig's step ([civictech.testkit.dst.FrameInterposer]); returning the empty list drops it —
+     * the DST rig's own [FrameInterposers.drop]/[FrameInterposers.windowed] primitives
+     * (computenet-umx.3.2/computenet-umx.3.3) replace the one-off `interpose` lambda this test
+     * used to hand-roll.
+     */
     private fun runBridged(
         seed: Long,
         ops: Int,
-        interpose: (ByteArray, Int) -> ByteArray? = { bytes, _ -> bytes },
+        interposer: FrameInterposer = FrameInterposers.pass,
     ): Run {
         val controller = SimulationController(seed)
         val rnd = Random(seed)
@@ -117,7 +126,7 @@ class BridgedGraphTest {
         var crossed = 0
         egress.outlet.subscribe(Use.fixed(object : Propagate<ByteArray> {
             override fun propagate(value: ByteArray) {
-                interpose(value, crossed++)?.let(ingressApi::propagate)
+                interposer.apply(value, crossed++).forEach(ingressApi::propagate)
             }
         }, PortRef.generate()))
 
@@ -231,9 +240,12 @@ class BridgedGraphTest {
 
     @Test
     fun `control - dropping one frame diverges the bridged view on at least one seed`() {
+        // rig fault: PartitionFault(mode=DROP)'s own primitive, windowed to the single crossing
+        // frame at index 2 — see FrameInterposers.drop/windowed (computenet-umx.3.2).
+        val dropThirdFrame = FrameInterposers.windowed(StepWindow(2, 3), FrameInterposers.drop())
         var diverged = 0
         for (seed in 0L until 30L) {
-            val run = runBridged(seed, ops = 40) { bytes, index -> if (index == 2) null else bytes }
+            val run = runBridged(seed, ops = 40, interposer = dropThirdFrame)
             val rOk = tagFold(run.earlyR.arrivals) == run.expected &&
                     run.countsR.arrivals.sumOf { it.amount } == run.expected.size.toLong()
             if (!rOk) diverged++
@@ -244,9 +256,13 @@ class BridgedGraphTest {
 
     @Test
     fun `control - a corrupt frame surfaces as a dead letter, traffic continues`() {
-        val run = runBridged(seed = 7, ops = 40) { bytes, index ->
-            if (index == 1) bytes.copyOf(bytes.size / 2) else bytes // truncation breaks decode
-        }
+        // truncation breaks decode; windowed to the single crossing frame at index 1, same
+        // FrameInterposers.windowed primitive as the drop control above.
+        val truncateSecondFrame = FrameInterposers.windowed(
+            StepWindow(1, 2),
+            FrameInterposer { frame, _ -> listOf(frame.copyOf(frame.size / 2)) },
+        )
+        val run = runBridged(seed = 7, ops = 40, interposer = truncateSecondFrame)
         run.framesCrossed shouldBeGreaterThan 2
         (run.letters.size shouldBeGreaterThan 0)
     }

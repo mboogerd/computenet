@@ -30,6 +30,8 @@ import civictech.cell.wire.WireCodec
 import civictech.cell.wire.bridgeFrom
 import civictech.cell.wire.bridgeTo
 import civictech.cell.wire.defaultProtocolCapabilities
+import civictech.testkit.dst.FrameInterposer
+import civictech.testkit.dst.FrameInterposers
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
@@ -152,15 +154,27 @@ class GlitchFreeBridgedDiamondTest {
 
             val ingressNFApi = (HostedCellProxy.create(ingressNF.ref, registryFar, FrameInlet::class.java)
                     as FrameInlet).inlet.call
-            // duplicate protocol frames on a coin flip: idempotency of the frontier plane
+            // Duplicate protocol frames with probability 0.5, seeded from this net's own `rnd`:
+            // idempotency of the frontier plane under redelivery. Uses the DST rig's own
+            // DuplicateFault primitive, FrameInterposers.duplicating (computenet-umx.3.3), gated
+            // to PORT_PROTOCOL frames only — a plain data frame duplicated here would not be
+            // testing what this test is about. `step` is unused by [duplicateProtocolFrame]'s
+            // window (StepWindow.ALWAYS, the default), so 0 is passed for every call.
+            val duplicateProtocolFrame: FrameInterposer = FrameInterposers.duplicating(
+                copies = 1,
+                probability = 0.5,
+                rng = rnd,
+            )
+            val protocolDuplicator = FrameInterposer { frame, step ->
+                if (WireCodec.decode(frame).type == civictech.cell.proxy.HostedPortInvocation.Type.PORT_PROTOCOL) {
+                    duplicateProtocolFrame.apply(frame, step)
+                } else {
+                    listOf(frame)
+                }
+            }
             egressNF.outlet.subscribe(Use.fixed(object : Propagate<ByteArray> {
                 override fun propagate(value: ByteArray) {
-                    ingressNFApi.propagate(value)
-                    if (WireCodec.decode(value).type == civictech.cell.proxy.HostedPortInvocation.Type.PORT_PROTOCOL &&
-                        rnd.nextBoolean()
-                    ) {
-                        ingressNFApi.propagate(value)
-                    }
+                    protocolDuplicator.apply(value, 0).forEach(ingressNFApi::propagate)
                 }
             }, PortRef.generate()))
 
