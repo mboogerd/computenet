@@ -30,16 +30,24 @@ enum class PartitionMode {
     DROP,
 
     /**
-     * **Senders park.** Traffic stops arriving, the sender buffers it (or the receiving
-     * registry does), and healing replays everything the window held back, in order. A
+     * **Traffic stops without being destroyed.** Nothing that was in flight is lost, and a
      * correct graph converges after the heal with no repair protocol of its own — which is
      * what makes park the *converging* half of the [CHA1-62]/[CHA1-63] pair.
      *
-     * This is `Peering.Loopback.partition()`/`heal()`'s semantics, and
-     * `LocationRegistry.hold`/`release`'s. Neither is reachable from the frame plane — a
-     * [FrameInterposer] can drop a frame but cannot hold one and inject it later (see
-     * [FrameInterposer]'s known limit) — so park is applied through a [LinkControl] the graph
-     * builder declares, not through [DstWorld.edges].
+     * **How the heal restores the traffic is the [LinkControl]'s, not this mode's**, and the
+     * two primitives the kernel offers differ exactly there:
+     * `LocationRegistry.hold`/`release` ([LinkControl.holding]) parks deliveries in arrival
+     * order and *drains* them on release, while `Peering.Loopback.partition()`/`heal()`
+     * ([LinkControl.severing]) severs the peering and re-announces on a fresh connection,
+     * replaying no buffer at all. Both leave a converging graph converged; only the first
+     * literally replays. That difference is why [PartitionFault.describe] reports the
+     * declared control's own [LinkControl.scope] instead of asserting a replay for every park
+     * ([CHA1-12] "labelled in the report").
+     *
+     * Neither primitive is reachable from the frame plane — a [FrameInterposer] can drop a
+     * frame but cannot hold one and inject it later (see [FrameInterposer]'s known limit) —
+     * so park is applied through a [LinkControl] the graph builder declares, not through
+     * [DstWorld.edges].
      */
     PARK,
 }
@@ -56,12 +64,20 @@ enum class PartitionMode {
  * declares one per edge, and [PartitionFault] in [PartitionMode.PARK] is reduced to calling
  * it.
  *
- * [scope] is the honest description of **what this control actually stops**, and it is
- * reported by [PartitionFault.describe] ([CHA1-12] "labelled in the report"). It matters
- * because reach and direction can disagree: an edge is one direction by construction, while
- * `Loopback.partition()` severs both. A control whose scope is wider than its edge is legal —
- * it is what the kernel offers — but it must say so, or a report will claim a one-way
- * partition that was not one.
+ * [scope] is the honest description of **what this control actually stops, and what its heal
+ * actually does**, and it is reported verbatim by [PartitionFault.describe] ([CHA1-12]
+ * "labelled in the report").
+ *
+ * It carries both halves because a park report cannot be honest without either:
+ *  - **Reach and direction can disagree.** An edge is one direction by construction, while
+ *    `Loopback.partition()` severs both. A control whose scope is wider than its edge is
+ *    legal — it is what the kernel offers — but it must say so, or a report will claim a
+ *    one-way partition that was not one.
+ *  - **Only one of the two primitives replays.** [holding] drains a buffer on release;
+ *    [severing] re-announces on a fresh connection and replays nothing. `describe` used to
+ *    print [PartitionMode.PARK]'s spec sentence ("traffic parks and replays on heal") for
+ *    both, which made the report claim a replay for every severing-backed park that never
+ *    happened. The claim now lives here, in the scope of the control that can support it.
  */
 class LinkControl(
     val scope: String,
@@ -90,7 +106,8 @@ class LinkControl(
         fun holding(
             registry: LocationRegistry,
             ref: CellRef,
-            scope: String,
+            scope: String = "deliveries to $ref on one registry — parked in arrival order " +
+                "and replayed on heal, in park order",
         ): LinkControl = LinkControl(scope, { registry.hold(ref) }, { registry.release(ref) })
 
         /**
@@ -103,7 +120,8 @@ class LinkControl(
          */
         fun severing(
             loopback: Peering.Loopback,
-            scope: String = "the whole loopback peering — park severs both directions",
+            scope: String = "the whole loopback peering — park severs both directions, and " +
+                "heal re-announces on a fresh connection rather than replaying a buffer",
         ): LinkControl = LinkControl(scope, loopback::partition, loopback::heal)
     }
 }
@@ -216,9 +234,12 @@ data class PartitionFault(
             "partition(edge=$edge, DROP, ${window}): frames on this edge are destroyed; " +
                 "healing stops the destruction and replays nothing"
 
+        // The mode's guarantee is only that nothing is destroyed; what the heal actually
+        // restores is the declared control's, so the label reports that control's own scope
+        // rather than repeating [PartitionMode.PARK]'s spec sentence. See [LinkControl.scope].
         PartitionMode.PARK ->
-            "partition(edge=$edge, PARK, ${window}): traffic parks and replays on heal, " +
-                "via ${control?.scope ?: "an undeclared control"}"
+            "partition(edge=$edge, PARK, ${window}): traffic stops without being destroyed; " +
+                "via ${control?.scope ?: "an undeclared control, so nothing fired"}"
     }
 
     override fun install(world: DstWorld) {
@@ -316,8 +337,10 @@ data class PartitionFault(
             PartitionFault(id, edge, PartitionMode.DROP, StepWindow(from, until))
 
         /**
-         * Park traffic on [edge] for `[from, until)`, replaying it at [until]. See
-         * [PartitionMode.PARK]; the graph must have declared [edge]'s [LinkControl].
+         * Park traffic on [edge] for `[from, until)`, releasing the control at [until].
+         * Whether that release replays a buffer or re-announces is the declared
+         * [LinkControl]'s — see [PartitionMode.PARK] — and the graph must have declared one
+         * for [edge].
          */
         fun park(id: String, edge: String, from: Int, until: Int): PartitionFault =
             PartitionFault(id, edge, PartitionMode.PARK, StepWindow(from, until))
