@@ -21,8 +21,13 @@ import java.util.*
 
 /**
  * M10 exit, sim level (spec 24 durability, G-25): a three-peer replicated session where one peer
- * CRASHES mid-run — its host, registry, queues, and links all discarded; only its journal
- * survives. The peer rebuilds its graph, recovers by checkpoint-restore + frame replay through
+ * CRASHES mid-run — its host, scheduler, queues, and links all discarded; only its journal
+ * survives. (Before the DST-rig retrofit below the peer's `LocationRegistry` was discarded too;
+ * under the rig it is [DstWorld.registry] and deliberately survives, per [HostBuildContext]'s
+ * "the scheduler is fresh per generation … while `registry` and the journals are the same
+ * objects, because surviving the crash is precisely their job". The rebuilt cells re-register at
+ * the *same* `CellRef`s, so this changes no assertion — every seed's outcome is unchanged — but
+ * it is a real difference from what this sentence used to claim.) The peer rebuilds its graph, recovers by checkpoint-restore + frame replay through
  * the ordinary intake, re-peers, and all replicas converge under 100 seeds — including the burst
  * of writes accepted (journaled) but still in flight at the crash. The control run (recovery
  * without the journal) still converges — replicated state is recoverable from peers via
@@ -68,6 +73,14 @@ import java.util.*
  * once at the step that matches `atStep`" contract does not require driving a step-indexed loop
  * through the rig at all — only that `onStep` see `step == atStep` exactly once, which this test
  * arranges by construction (the crash always lands on the still-undrained burst).
+ *
+ * **The MID_DRAIN precondition here is unchecked.** No [civictech.testkit.dst.CrashWitness] is
+ * declared for `"peer0"`, so [CrashFault]'s own precondition check sees `pendingWork() == null`
+ * and passes unconditionally — the rig's `[unwitnessed: MID_DRAIN is the caller's assertion, not
+ * an observation]` case, which a `DstReport` would say out loud and a direct drive has nowhere to
+ * print. "Still in flight at the crash" therefore rests on this session's construction (two
+ * `ops0.add` calls with no intervening `step()`), exactly as it did before the retrofit — not on
+ * an observation the rig made.
  */
 class CrashRecoveryTest {
 
