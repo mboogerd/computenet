@@ -524,9 +524,10 @@ class DivergenceControlTest {
     private companion object {
         /**
          * The single source the hand-built cases drive. Named, not generated: `SourceId` is what
-         * [CaseStep.Op] routes on, and the diamond has exactly one source by construction (which
-         * is also `WavePrefixOracle.appliesTo`'s soundness domain, though nothing here
-         * prefix-checks).
+         * [CaseStep.Op] routes on, and the diamond has exactly one source by construction (a
+         * scope choice of these cases, not a gate: since computenet-2hur
+         * `WavePrefixOracle.appliesTo` admits multi-source too — and nothing here prefix-checks
+         * anyway).
          */
         val HAND_BUILT_SOURCE: SourceId = SourceId("s")
 

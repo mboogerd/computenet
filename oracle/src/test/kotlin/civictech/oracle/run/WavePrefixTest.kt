@@ -87,8 +87,11 @@ import java.util.UUID
  *    refuses only a case placed off host ordinal 0 or a frontier lattice above
  *    `MAX_FRONTIER_LATTICE` (see [WavePrefixOracle.notApplicableBecause]). `sourceCount = 1` here
  *    is a scope choice for *this* sweep, not a soundness requirement; a multi-source shape is now
- *    admissible and is exercised separately by `GraphSpecLinkSweepTest.sweepConfig`
- *    (`sourceCount = 3`). The sweep keeps the *ordinary* writer and unobserved-remove knobs — see
+ *    admissible and is exercised elsewhere in *this* file — the two-source diamond tests above
+ *    and [multiSourceCostConfig], which is `GraphSpecLinkSweepTest.sweepConfig`'s shape
+ *    (`sourceCount = 3`, `scriptLength = 40`) at single host. (That sweep test itself asserts
+ *    linking and quiescence, not prefixes; it is named here for its config shape only.)
+ *    The sweep keeps the *ordinary* writer and unobserved-remove knobs — see
  *    [generatedSweepConfig] and the sweep test's own KDoc for how the known cross-writer seam is
  *    partitioned out by MEASUREMENT rather than by configuration.
  *
@@ -1175,8 +1178,10 @@ class WavePrefixTest {
      * case placed off host ordinal 0 or a frontier lattice above `MAX_FRONTIER_LATTICE` (see
      * [WavePrefixOracle.notApplicableBecause]) — but a deliberate scope choice for this sweep,
      * kept single-source to bound the lattice this suite pins seeds against; a multi-source shape
-     * is admissible now and is exercised separately by `GraphSpecLinkSweepTest.sweepConfig`
-     * (`sourceCount = 3`). The **ordinary** writer and remove knobs are kept —
+     * is admissible now and is exercised by this file's own two-source diamond tests and by
+     * [multiSourceCostConfig] — `GraphSpecLinkSweepTest.sweepConfig`'s shape (`sourceCount = 3`,
+     * `scriptLength = 40`) at single host, that sweep test being a linking/quiescence assertion
+     * rather than a prefix check. The **ordinary** writer and remove knobs are kept —
      * `writerCount = 2` and `unobservedRemoveRatio = 0.25`, the same values every other sweep in
      * this feature uses — so the known cross-writer remove seam (a spawned `SetCell` retracts a
      * live element on any remove, while the model no-ops a cross-writer remove no `Observe`
