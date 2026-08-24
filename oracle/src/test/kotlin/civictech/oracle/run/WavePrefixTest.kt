@@ -82,10 +82,13 @@ import java.util.UUID
  *    them — the shape would test nothing. With `filter` + `flatMapSet`, `add("ab")` contributes
  *    `{ab}` through one arm and `{a, b}` through the other, so a half-published wave is a state
  *    that is no prefix at all, which is exactly what the torn control uses.
- * 2. **The generated sweep is single-source.** Not a narrowing to dodge failures: it is
- *    [WavePrefixOracle.appliesTo]'s documented soundness domain (a total-order prefix denotes a
- *    real frontier only for one source; multi-source needs per-source frontiers,
- *    computenet-2hur). The sweep keeps the *ordinary* writer and unobserved-remove knobs — see
+ * 2. **The generated sweep is single-source.** No longer [WavePrefixOracle.appliesTo]'s soundness
+ *    domain — since computenet-2hur widened it, `appliesTo` admits multi-source cases too and
+ *    refuses only a case placed off host ordinal 0 or a frontier lattice above
+ *    `MAX_FRONTIER_LATTICE` (see [WavePrefixOracle.notApplicableBecause]). `sourceCount = 1` here
+ *    is a scope choice for *this* sweep, not a soundness requirement; a multi-source shape is now
+ *    admissible and is exercised separately by `GraphSpecLinkSweepTest.sweepConfig`
+ *    (`sourceCount = 3`). The sweep keeps the *ordinary* writer and unobserved-remove knobs — see
  *    [generatedSweepConfig] and the sweep test's own KDoc for how the known cross-writer seam is
  *    partitioned out by MEASUREMENT rather than by configuration.
  *
@@ -1167,8 +1170,13 @@ class WavePrefixTest {
      * The generated-path config, deliberately `civictech.oracle.gen.GraphSpecLinkSweepTest`'s
      * `sweepConfig` shape with `sourceCount = 1`.
      *
-     * `sourceCount` is the ONLY departure, and it is [WavePrefixOracle.appliesTo]'s soundness
-     * domain rather than a comfort setting. The **ordinary** writer and remove knobs are kept —
+     * `sourceCount` is the ONLY departure. It is not [WavePrefixOracle.appliesTo]'s soundness
+     * domain — since computenet-2hur, `appliesTo` admits multi-source cases and refuses only a
+     * case placed off host ordinal 0 or a frontier lattice above `MAX_FRONTIER_LATTICE` (see
+     * [WavePrefixOracle.notApplicableBecause]) — but a deliberate scope choice for this sweep,
+     * kept single-source to bound the lattice this suite pins seeds against; a multi-source shape
+     * is admissible now and is exercised separately by `GraphSpecLinkSweepTest.sweepConfig`
+     * (`sourceCount = 3`). The **ordinary** writer and remove knobs are kept —
      * `writerCount = 2` and `unobservedRemoveRatio = 0.25`, the same values every other sweep in
      * this feature uses — so the known cross-writer remove seam (a spawned `SetCell` retracts a
      * live element on any remove, while the model no-ops a cross-writer remove no `Observe`
