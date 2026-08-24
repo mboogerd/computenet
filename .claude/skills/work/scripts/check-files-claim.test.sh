@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "19 passed, 0 failed".
+# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "20 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-files-claim.sh"}
@@ -36,6 +36,9 @@ bead() { # description acceptance files
 
 bead "must change a/b/Step.kt" "" "a/c/Other.kt"
 check "names an uncovered path -> reports, exit 1" 1 "names a/b/Step.kt"
+# qkm8: the mention line is a pointer to verify, not a verdict — the marker
+# text must say so, or readers treat every mention as a violation.
+check "mention line carries the not-a-verdict marker" 1 "a MENTION, possibly read-only"
 
 bead "must change a/b/Step.kt" "" "a/b/Step.kt,a/c/Other.kt"
 check "path is covered -> silent, exit 0" 0 ""

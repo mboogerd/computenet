@@ -125,6 +125,24 @@ with tempfile.TemporaryDirectory() as tmp:
     check("unparseable after a healthy dir: still exit 3", rc == 3,
           f"rc={rc}")
 
+    # --- a result FILE passed directly (computenet-be43) -------------------
+    # Globbing under a file path can never match; the file itself must count.
+    rc, out, err = run(d1 / "TEST-Top.xml")
+    check("direct xml file: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("direct xml file: counts that file's tests",
+          "1 files: 4 tests, 1 failures" in out, out)
+
+    # ...while directory inputs keep working: a module root (results under
+    # build/test-results/<task>/) and a results dir both still count.
+    mod = tmp / "module"
+    xml(mod / "build" / "test-results" / "test" / "TEST-Mod.xml", tests=5)
+    rc, out, err = run(mod)
+    check("module root: exit 0", rc == 0, f"rc={rc} err={err}")
+    check("module root: counts nested results", "1 files: 5 tests" in out, out)
+    rc, out, err = run(d1)
+    check("results dir still counts after file support",
+          rc == 0 and "2 files: 10 tests" in out, f"rc={rc} out={out}")
+
     # --- usage ------------------------------------------------------------
     rc, out, err = run()
     check("no args: exit 2", rc == 2, f"rc={rc}")

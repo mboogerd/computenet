@@ -96,7 +96,7 @@ for id in "$@"; do
   # no slash), so an early exit here would make it unreachable.
   if [ -n "$mentioned" ]; then
     while IFS= read -r path; do
-      covered "$path" || { echo "$id: names $path, not in metadata.files"; found=1; }
+      covered "$path" || { echo "$id: names $path, not in metadata.files (a MENTION, possibly read-only — verify against the intended edits, not a violation)"; found=1; }
     done <<<"$mentioned"
   fi
 

@@ -1,5 +1,9 @@
 # Feature review
 
+**Read this file with the Read tool, not `cat`** — through Bash it truncates
+to a ~2KB preview with no marker, and the authorship bound (§5) and
+verdict-token rule (§8) are past the cut (computenet-bgdb).
+
 Every task here is closed and each passed its own acceptance criteria. That
 is not the same as the feature being done — tasks pass individually and
 still leave seams nobody owned or criteria no task claimed.
@@ -68,10 +72,12 @@ echo "${JAVA_HOME:-<unset>}"
 ```
 
 **A JVM claim must come from the RUN'S OWN banner, not from the environment.**
-`/usr/libexec/java_home -V` used to be listed here and answers nothing on this
-host — it returns *"Unable to locate a Java Runtime"*, because every JDK here
-is either Gradle-provisioned under `~/.gradle/jdks` or Homebrew-installed, and
-neither registers where `java_home` looks. Worse, the environment and the run
+`/usr/libexec/java_home -V` used to be listed here and is the wrong source on
+every machine in this fleet — on some hosts it returns *"Unable to locate a
+Java Runtime"* (Gradle-provisioned and Homebrew JDKs don't register where it
+looks), on others it lists nine JVMs; either answer says nothing about which
+JVM the run used, and a reviewer on a listing host must not read an
+implementer's `java_home` citation as fabricated (computenet-799w). Worse, the environment and the run
 can disagree: bare `java` on this host is Homebrew JDK 26, **not** the Gradle
 toolchain's Adoptium 21 that a Gradle-driven measurement actually uses. Two
 BEN1 findings entries shipped with the wrong recorded JVM by exactly that
@@ -343,6 +349,17 @@ to run, resolve every path and id it cites, and run the greps its acceptance
 criteria name — quoting the output. A verdict that reports no such artifact
 has reviewed nothing.
 
+**A diff whose changed content is comments, KDoc figures or recorded
+measurements inside a COMPILED file is a fourth shape**: no suite exercises
+comment text, so green checks evidence compilation and nothing about the
+numbers. The review's evidence is re-derivation — recompute every stated
+ratio from its own operands, check each figure names its host/date, and
+confirm a quoted number is the one measured, not a blend. The failure mode: a
+ratio printed beside a number that is not its denominator reads as checked
+when it is not (computenet-z4h8: "59.6s / 398s ≈ 3–5%", true denominator
+~1592 fork-seconds). Say in the verdict that re-derivation, not the checks,
+is the evidence (computenet-61qu).
+
 The module suites the tasks ran individually may not cover their
 interaction. Run the affected module tests, and the repo-wide gate if the
 feature touched anything cross-cutting — then prove the run happened.
@@ -350,6 +367,8 @@ feature touched anything cross-cutting — then prove the run happened.
 task-count line, the per-task state line read as an absence, and the JUnit
 XML counts + timestamp via `.claude/skills/work/scripts/junit-count.py`, plus the `--rerun` and
 `--no-build-cache` semantics.
+A cargo-touching task has a different standard — gradle-evidence.md
+§ "Cargo is not Gradle".
 **Carry `--no-build-cache`, here, at the point of use.** A bare `--rerun` can
 still restore a CACHED result: the console prints its task-count line, the
 `> Task :<module>:test` line carries no marker, and only the JUnit `timestamp`
@@ -361,6 +380,11 @@ belongs in the command you actually run:
 
 ```bash
 ./gradlew :<module>:test --rerun --no-build-cache
+# several modules: repeat --rerun after EACH task (or use --rerun-tasks) —
+# it binds only to the task immediately before it, and the combined
+# task-count line reads plausibly while stale modules replay; prove each
+# module by its own fresh JUnit timestamp (computenet-a61u)
+./gradlew :a:test --rerun :b:test --rerun --no-build-cache
 ```
 
 **Where a prior task's measurement artifacts live**, when the deliverable is a
@@ -433,8 +457,11 @@ So:
   pass"** — you have not run them and must not claim to.
 - For a port/socket/filesystem/process feature, turn the inference into a
   measurement: run the suite in a JDK-21 Linux container (`groovy:4.0-jdk21`
-  is present locally; `eclipse-temurin:21` costs a ~10-minute pull) and quote
-  that result too.
+  has been present on some machines; `eclipse-temurin:21` costs a ~10-minute
+  pull — and a present `docker` **binary** does not mean a running daemon:
+  `docker info` decides) and quote that result too; where no daemon runs, the
+  branch's own CI run two bullets below is the documented Linux substitute,
+  not an improvisation (computenet-799w).
 - **A red required check is attributed with
   [red-check-attribution.md](red-check-attribution.md), never by the query
   that occurs to you.** Its artifact 3 searches by the failing TEST CLASS; a
@@ -630,6 +657,10 @@ of these is true:
   corrected KDoc that contradicted measured exit codes (computenet-h6a),
   another a workflow header naming the wrong surface (computenet-dqy.63).
   Both were right; both were checked before they shipped;
+  One case the count does not govern at all: a repaired file that is itself
+  named in the item's acceptance criteria is the deliverable, whatever the
+  filter prints — set `metadata.second_reader=<shas>` and certify, so
+  ship-feature.md §4 routes it (computenet-wbl7);
 - any **new or semantically changed test, corpus scenario, or assertion** —
   writing the check that decides the verdict is authoring the verdict.
   **Exception, and it is narrow: a test-only repair** — no production file in
@@ -855,7 +886,11 @@ git -C <worktree> push
 ```
 
 ```bash
-bd comment <feature-id> "Review passed: <criteria verified with their evidence; test counts and executed/from-cache accounting; uname; gh pr checks conclusions; re-fetch result; what you repaired and its --stat>. Verdict: ready."
+bd comment <feature-id> --file - <<'EOF'
+Review passed: <criteria verified with their evidence; test counts and
+executed/from-cache accounting; uname; gh pr checks conclusions; re-fetch
+result; what you repaired and its --stat>. Verdict: ready.
+EOF
 ```
 
 ```bash
@@ -1006,13 +1041,21 @@ Not good enough, or your repairs were substantive (§5). Say concretely why,
 and leave the work recoverable rather than vague:
 
 ```bash
-bd comment <feature-id> "Review: staying in draft. <what's missing and why repair wasn't the right call, or: what I authored and why it needs an independent check — <--stat and shas>>"
+bd comment <feature-id> --file - <<'EOF'
+Review: staying in draft. <what's missing and why repair wasn't the right
+call, or: what I authored and why it needs an independent check — <--stat
+and shas>>
+EOF
 ```
 
 Create beads tasks for the remaining work (`bd create --parent=<feature-id>`
 with `model` and `files` metadata, per [feature.md](feature.md)) so the next
-batch picks them up — a feature left in draft with no tasks describing what's
-missing is a dead end. Two drafts legitimately have no tasks, and each is
+batch picks them up. Attach anything you create by the residual-attachment
+table above — on an unparented route-4 item that means `--parent=<item-id>` —
+and the one-slot rule (parent XOR `discovered-from`, computenet-ofzz) and the
+`base_branch` stamp apply here with MORE force: a draft's subject is by
+construction not on `main` (computenet-4uv1). A feature left in draft with no
+tasks describing what's missing is a dead end. Two drafts legitimately have no tasks, and each is
 routed by what the comment names rather than by a task id (SKILL.md 5e):
 the **substantive-repair** case, where nothing is missing except a reader for
 your own commits — name the commit shas and their `--stat`, or it is the same

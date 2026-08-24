@@ -31,7 +31,14 @@ apply.
 - **Its draft PR opens after the implementer's FIRST commit**, not after a
   5c merge — 5d's "on the first merge" trigger has nothing to fire on, since
   no task branches merge here. Open it as soon as there is a commit, so CI
-  starts and the PR exists to attach the review to. Everything else in 5d —
+  starts and the PR exists to attach the review to. **Exception: a first
+  commit KNOWN to be red** — the implementer said so, or you already know the
+  branch fails — defers the open to the first commit believed green. A run
+  you know is red spends the full six-check cycle (~9–12 min,
+  computenet-678u) to report nothing, so the CI-churn bound (computenet-nxac)
+  governs over the bright line here. computenet-a4cj's precondition binds
+  unchanged: the PR must exist before the reviewer is dispatched
+  (computenet-j378). Everything else in 5d —
   the `metadata.pr` guard, the `bd update --set-metadata pr=`, draft until
   5e — is unchanged.
 

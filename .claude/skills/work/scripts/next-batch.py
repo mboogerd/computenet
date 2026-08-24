@@ -223,6 +223,18 @@ def capacity_limit(cores, siblings=0):
     session count, not an observed run; what was observed is the session count,
     the core count and the formula.
 
+    WHY THE SPLIT FLOORS RATHER THAN ROUNDS (computenet-rjpu). On 16 cores
+    with one sibling the fair share of 3 lanes is 1.5, and this returns 1,
+    which serialized a slot of sub-minute :oracle:test units while the
+    sibling ran no Gradle at all. That cost is real and measured — and so is
+    the other side: sessions cannot coordinate who takes the extra lane, so
+    two sessions each rounding up run 4 lanes against a measured-safe 3,
+    which is the computenet-arow failure again. Until the build-check arms
+    below are measured, the floor division stands; do not round up, and do
+    not weight by what a sibling "is doing" — that is unobservable here.
+    A sibling count inflated by stale holders is computenet-nkz3's defect,
+    not this formula's.
+
     Floor of 1 again on the division: a session that knows it has siblings
     still gets one agent, so concurrency degrades to serial rather than to
     deadlock.
