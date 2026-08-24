@@ -160,6 +160,29 @@ class GlitchFreeBridgedDiamondTest {
             // to PORT_PROTOCOL frames only — a plain data frame duplicated here would not be
             // testing what this test is about. `step` is unused by [duplicateProtocolFrame]'s
             // window (StepWindow.ALWAYS, the default), so 0 is passed for every call.
+            //
+            // The PORT_PROTOCOL gate is hand-built here rather than taken from `DuplicateFault`
+            // because the rig's frame plane selects a fault's target by EDGE NAME, not by frame
+            // content, and this graph is wired by hand with no named `DstGraph` edges. That is a
+            // reach limit of the rig, not a preference — reported to computenet-umx.3.
+            //
+            // Two caveats on what this injector proves, both measured under the
+            // computenet-umx.3.9 review:
+            //  - This is a STRESSOR, not a discriminator. Neutralising it — delivering only the
+            //    original and never a copy — leaves all five tests in this file green, so no
+            //    per-seed verdict here is evidence that duplication occurred. What proves the
+            //    primitive fires is the opposite mutation: removing the PORT_PROTOCOL gate so
+            //    data frames duplicate too turns `bridged diamond is glitch-free for every seed`
+            //    red (observation count 49 against an expected 40). The discriminating control
+            //    for duplication itself is BS-6 in `DuplicateFaultTest` (computenet-umx.3.3).
+            //  - The seed DERIVATION is preserved (same `rnd`, same `Random(seed)`), but the
+            //    per-frame draw sequence is not the pre-retrofit one: `duplicating` consults
+            //    `nextDouble()` where the hand-rolled duplicator consulted `nextBoolean()`, which
+            //    consumes the LCG differently. On seed 0 the two disagree on 21 of the first 40
+            //    frame decisions. Each seed is therefore still a reproducible sample of the same
+            //    Bernoulli(0.5) fault distribution, but it is a DIFFERENT sample than before the
+            //    retrofit — do not read a per-seed outcome here as a like-for-like comparison
+            //    against a pre-retrofit run.
             val duplicateProtocolFrame: FrameInterposer = FrameInterposers.duplicating(
                 copies = 1,
                 probability = 0.5,
