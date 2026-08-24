@@ -91,6 +91,9 @@ class ReorderFaultTest {
         /** BS-7's buffer size. */
         const val WINDOW = 8
 
+        /** The intra-link control's buffer size — see [intraLink] for why it is not [WINDOW]. */
+        const val CONTROL_WINDOW = 4
+
         /** BS-7's sweep. */
         val SWEEP = 0L until 100L
 
@@ -312,8 +315,22 @@ class ReorderFaultTest {
     private fun crossLink(edge: String) =
         ReorderFault.crossLink("reorder-$edge", edge, window = WINDOW, from = 0, until = REORDER_UNTIL)
 
+    /**
+     * The opt-in control, and **the one place this suite does not use BS-7's window of 8**.
+     *
+     * Measured on this graph over all 100 seeds (2026-08-24, this commit): the arms carry about
+     * six frames each inside `[0, REORDER_UNTIL)`, so a buffer of 8 **never fills**, the
+     * permutation therefore never runs, and the control is inert — 0 of 100 seeds failed, with
+     * every frame merely delayed and then flushed. At [CONTROL_WINDOW] the buffer fills
+     * repeatedly and 61 of 100 seeds tear a composite (window 3: 71, window 2: 57).
+     *
+     * That is a property of this graph's traffic volume, not of [ReorderFault]: a consumer suite
+     * with heavier per-step traffic can use any window it likes. It is recorded here because a
+     * control sized past the traffic available to it is the exact failure the [CHA1-63] pairing
+     * exists to catch, and the number that makes it inert is not guessable from the code.
+     */
     private fun intraLink(edge: String) =
-        ReorderFault.intraLink("reorder-$edge", edge, window = WINDOW, from = 0, until = REORDER_UNTIL)
+        ReorderFault.intraLink("reorder-$edge", edge, window = CONTROL_WINDOW, from = 0, until = REORDER_UNTIL)
 
     // -------------------------------------------------------------------------------------
     // [CHA1-14] / [CHA1-15] — the primitive, at unit scale
@@ -327,10 +344,15 @@ class ReorderFaultTest {
     fun `CHA1-15 - the default buffers frames but releases them in arrival order`() {
         forEachSeed(0L until 20L) { seed ->
             val interposer = FrameInterposers.reordering(window = WINDOW, rng = java.util.Random(seed))
-            val out = release(interposer, 64)
+            var withheld = 0
+            val out = (0 until 64).flatMap { i ->
+                interposer.apply(byteArrayOf(i.toByte()), 0)
+                    .also { if (it.isEmpty()) withheld++ }
+                    .map { frame -> frame[0].toInt() }
+            }
             // Per-link FIFO: whatever was released came out in the order it went in.
             assertEquals(out.sorted(), out, "seed $seed reordered a single link with FIFO in force")
-            assertTrue(out.size < 64, "seed $seed buffered nothing, so no delay was applied at all")
+            assertTrue(withheld > 0, "seed $seed never withheld a frame, so no delay was applied at all")
         }
     }
 
@@ -455,6 +477,16 @@ class ReorderFaultTest {
             failures.isNotEmpty(),
             "no seed failed under an intra-link permutation — the opt-in control is inert and " +
                 "the cross-link sweep above proves nothing",
+        )
+        // The shrinker's same-failure predicate compares the failing check's *message*
+        // (FailurePredicate.sameFailingCheck), so a message that varied per run would make every
+        // genuine reduction of this plan look like a different failure. One distinct message
+        // across every failing seed is the evidence that it does not.
+        assertEquals(
+            1,
+            failures.map { it.second }.toSet().size,
+            "the control produced run-varying failure messages, which silently defeats shrinking: " +
+                failures.map { it.second }.toSet(),
         )
     }
 
