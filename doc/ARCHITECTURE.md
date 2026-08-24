@@ -48,9 +48,10 @@ runtime classpath, so KotlinPoet/`symbol-processing-api`/`kotlin-reflect`
 | `:oracle` | Batch-oracle differential tester over the operator algebra (ORA1, epic `computenet-4ru`). `civictech.oracle.bind.OperatorCatalog` binds a catalog id to a kernel `CellFactory` and an independent `ReferenceOp` *together* — half a binding fails at registration time naming the id — and `ShapeRule`/`ElementShape` state an operator's ports as data, so a newly registered operator reaches the generator without a generator edit. `civictech.oracle.model` may reference value/key/delta types but no `civictech.cell.data.op` type: that independence is what makes the oracle a check on the implementation rather than a second copy of it. Lives in `src/main` like `:testkit`; `gen`/`run`/`shrink`/`corpus` are placeholders owned by later ORA1 features. Deliberately a separate module rather than part of `:concord` (ORA1 D1): the oracle is kernel-coupled by construction, and §5's rule that only `civictech.concord.driver.kernel` may import `civictech.cell.*` is what folding it in would cost. | `api(:kernel)`, `api(:testkit)`. The `:kernel` edge runs both ways but in different scopes — `:kernel`'s **test** source set takes `testImplementation(project(":oracle"))`, which is the point of the module (a consumer reaches it through a plain project dep and nothing else), while nothing on `:kernel`'s main classpath knows it exists. Must not depend on `:concord`, `:wire`, `:inspect` or `:demo:*`; its own `ModuleDependencyTest` enforces that against both the build file and the runtime classpath |
 | `:wire` | The one concrete transport: `WsTransport` over Java-WebSocket. Another transport = another small module behind the same kernel bridge cells. | `:kernel`, Java-WebSocket |
 | `:identity` | JDK-only Ed25519 keypairs, a fail-closed file-backed key store with machine-distinguishable refusal reasons (`WORLD_READABLE`, `MALFORMED`, `UNSUPPORTED`, `KEYPAIR_MISMATCH`, `INCOMPLETE_PAIR`, `NO_POSIX_PERMISSIONS`), and key-derived `PeerId` fingerprints; implements the kernel's `SignatureVerifier` seam (DSC1, epic `computenet-ssa`). JDK-only — no third-party crypto. | `api(:kernel)`; `:kernel` must not depend on it |
+| `:iroh` | Wraps the iroh sidecar crate at `iroh/sidecar/` — dial/accept by NodeId, length-prefixed frames on one bi-directional QUIC stream per peer link (DSC0, epic `computenet-egl`). No JVM sources in this feature: applies only the `base` plugin. Cargo tasks (`cargoBuild`, `cargoTest`) are registered — and wired into `build`/`check` — only behind the `-Piroh.enabled=true` project property, so the default build and CI stay pure-JVM with no Rust toolchain required. | none (Gradle-side); Rust deps pinned in `iroh/sidecar/Cargo.toml` |
 | `:concord` | Executable specification / conformance suite (see §5). | `:kernel`, kotlinx-serialization; kaml (test) |
 | `:demo:shell` | Shared JDK `httpserver` + SSE shell (`DemoShell`, `demoPort`) used by every runnable demo, and also consumed by `:inspect` (not itself a demo). `DemoShell`'s API takes no cell-model type today, so it has no `:kernel` dependency. | — |
-| `:demo:*` (9 apps) | Demo applications (see §6). `:demo:shopping`, `:demo:exchange` and `:demo:beadsmirror` use `:wire` — beadsmirror's dependency is opt-in only, for its two-node gossip mode (§6); `:demo:shopping` and `:demo:skillmatch` additionally depend on `:inspect` (opt-in, `--inspect-port`); only `:demo:backlog-triage` defines its own KSP cell (`RatingCell`, `@CellBase` — T09 §C; `agora` annotates nothing and dropped the `ksp-cell` convention plugin accordingly); only `:demo:exchange` needs `:nature` (it asserts composed manifests). | `:kernel`, `:demo:shell`, + per-demo extras |
+| `:demo:*` (10 apps) | Demo applications (see §6). `:demo:shopping`, `:demo:exchange` and `:demo:beadsmirror` use `:wire` — beadsmirror's dependency is opt-in only, for its two-node gossip mode (§6); `:demo:shopping` and `:demo:skillmatch` additionally depend on `:inspect` (opt-in, `--inspect-port`); only `:demo:backlog-triage` defines its own KSP cell (`RatingCell`, `@CellBase` — T09 §C; `agora` annotates nothing and dropped the `ksp-cell` convention plugin accordingly); only `:demo:exchange` needs `:nature` (it asserts composed manifests); `:demo:allocator-observe` is the newest leaf, ingesting a socaity-owned JSONL spend log (epic `computenet-fpml`). | `:kernel`, `:demo:shell`, + per-demo extras |
 | `:inspect` | The Inspector backend — a read-only HTTP/SSE view of a host process's live dataflow graph (`doc/spec/90-roadmap/97-inspector-plan/`, all six milestones M0–M5 merged). Reuses `:demo:shell`'s JDK-`httpserver`/SSE framing rather than duplicating it; adds no third-party dependency beyond kotlinx.serialization. Its frontend `inspect/ui/` (SolidJS + Vite + TypeScript) is npm-only and deliberately not wired into Gradle — same decision as `demo/agora/ui`. Required five kernel accessors added specifically for it: `ManagedHost.outletAt`, `ManagedHost.snapshotOf`, `ManagedHost.isDrained`, `ManagedHost.isSuspended`, `LocationRegistry.describe` — rationale in `doc/spec/90-roadmap/97-inspector-plan/90-progress-log.md`'s orchestrator closing note. | `:kernel`, `:demo:shell`, kotlinx.serialization |
 
 Non-module directories: `buildSrc/` (two convention plugins —
@@ -367,6 +368,30 @@ else `$PORT`, else 8080. See the README for run commands.
   scratch workspace (`BdScratchWorkspace`) and self-skips, visibly, if those
   binaries are absent from PATH — CI installs both specifically so the
   real-workspace tests run rather than skip.
+
+- `:demo:allocator-observe` — spend-log observability for the socaity
+  allocator MVP (ALOB, epic `computenet-fpml`): ingests the socaity-owned
+  JSONL spend log (schema-versioned `{v, project, machine, work_item,
+  started, ended}` records, one per worker session) via a total per-line
+  classifier (`Valid`/`Malformed`/`UnknownVersion`) into the v1 `SpendRecord`
+  model. Feature `computenet-fpml.1` lands the whole ingest half:
+  `SpendLogTailReader` reads only new complete lines from a persisted
+  byte-offset checkpoint (`OffsetCheckpoint`, atomic-move writes, persisted
+  only *after* the batch reaches its consumer) and re-baselines from offset 0
+  when length or head fingerprint says the log was truncated or replaced;
+  `SpendLogIngester` folds the classified records into a kernel `SetCell`
+  keyed by the full record tuple, reconciling rather than appending on a
+  re-baseline, and exposes monotonic per-reason failure counts
+  (`SpendIngestFailures`) so no bad line is silently dropped. The checkpoint
+  and re-baseline idioms are copied from `:demo:beadsmirror` by example, not
+  imported — the epic defers a shared connector SPI to CON2
+  (`computenet-rrf`). Still to come: allocation declarations
+  (`computenet-fpml.2`), the derived R5/R6 views (`computenet-fpml.3`),
+  HTTP/SSE serving over `:demo:shell` (`computenet-fpml.4`, which is why the
+  module has no `application` block yet), and the differential oracle against
+  socaity's replay script (`computenet-fpml.5` — socaity has implemented
+  neither the log nor the script yet, so that comparison is external evidence
+  this module cannot produce on its own).
 
 The incremental-dataflow demos exist to showcase the operator suite and surface
 kernel gaps into `doc/demo-findings.md`.

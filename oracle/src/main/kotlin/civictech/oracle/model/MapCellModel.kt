@@ -139,7 +139,7 @@ import java.io.Serializable
  *   **Update (computenet-4ru.1.2): partially superseded, not resolved.** ORA2 has since
  *   registered `orMap` in `civictech.oracle.bind.TaggedOperators`, but restricted to a single
  *   instance's own atomic-put/tombstone/dot-minting semantics
- *   ([civictech.oracle.bind.SingleInstanceOrMapModel]) — it fails loudly, by
+ *   ([civictech.oracle.model.SingleInstanceOrMapModel]) — it fails loudly, by
  *   name, on any slice carrying a peer delivery rather than silently approximating one. The
  *   gossiped-delivery convergence half this bullet named (`[ORA2-DIFF-01..09]`, driven by
  *   `civictech.oracle.model.DotModel` over the whole multi-instance [Script]) remains

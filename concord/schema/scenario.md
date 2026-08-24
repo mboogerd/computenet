@@ -496,6 +496,14 @@ effect per delivered added element, keyed by the element). Anything else refuses
   (computenet-61w.1);
 - a direct upstream is itself fed by a link, or the same feeder is linked into the
   sink twice, so its emissions are not one-per-scripted-add;
+- a direct upstream declares **`replica-of`**. A replicated set can gain elements
+  no `add` names, by merging a peer's delta — a feed from outside the script
+  entirely — so the derived set would omit them and an element that fired zero
+  times would pass over vacuously. No `type:`/`replica-of` combination reaches
+  this refusal under today's kernel driver (an `effect-sink` binds only in the
+  `dur` driver, which never reads `replica-of`); it is a scenario-level guard
+  kept so that a driver which later did honour `replica-of` on a durable cell
+  meets a refusal rather than a silent vacuous pass (computenet-cr7g);
 - the topology into the cone moves mid-script (`connect`/`disconnect` whose `to` is
   in the cone);
 - any cell in the cone is `despawn`ed, `restart`ed or `restore`d;

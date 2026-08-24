@@ -12,6 +12,7 @@ what is specific to its role. Cited beads carry the full incidents
 - [Aggregate tasks lie about their members](#aggregate-tasks-lie-about-their-members)
 - [Clearing results is denied to dispatched agents](#clearing-results-is-denied-to-dispatched-agents)
 - [Measurements whose failure mode is a PASS](#measurements-whose-failure-mode-is-a-pass)
+- [Cargo is not Gradle](#cargo-is-not-gradle)
 - [`--rerun` semantics](#--rerun-semantics)
 - [A killed test task corrupts the results store](#a-killed-test-task-corrupts-the-results-store)
 - [How long the suites take](#how-long-the-suites-take)
@@ -180,6 +181,23 @@ reviewers on 2026-08-19 (computenet-rf0a):
   agent-execution.md, which orchestrators never read (computenet-u0b0) — it is
   now in AGENTS.md's zsh subsection as well, and here, so every reading chain
   reaches it.
+
+## Cargo is not Gradle
+
+None of the accounting above maps onto the `:iroh` cargo tasks
+(computenet-9swr); do not read its absence as a gap in your review:
+
+- `cargo test` re-executes its test binaries on every invocation — there is
+  no cached-vs-executed accounting and no `--rerun` analogue. The suite's own
+  `N passed; M failed` line IS the evidence; note a cold `target/` when it
+  applies.
+- cargo emits no JUnit XML, so `junit-count.py` and the timestamp check do
+  not apply.
+- Gradle `Exec` tasks resolve their command from the DAEMON's environment,
+  not the invoking shell's: a stub `cargo` on the client PATH is silently
+  ignored and the real suite passes — a false green, measured. To prove
+  failure propagation, induce a genuine failure in the underlying tool
+  instead of stubbing the binary.
 
 ## `--rerun` semantics
 

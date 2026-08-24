@@ -1,0 +1,25 @@
+[package]
+name = "computenet-iroh-sidecar"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+description = "ComputeNet iroh sidecar: peer links over QUIC, dialled by endpoint id, carrying length-prefixed frames"
+license = "Apache-2.0"
+publish = false
+
+# Only `iroh` — deliberately no iroh-gossip / iroh-docs (epic computenet-egl §3
+# excludes them). tokio became a real dependency with the bin and its
+# local-socket protocol (computenet-egl.1.2): the loopback listener, the message
+# pumps and the per-link tasks all live in the library so tests can drive the
+# protocol in-process.
+[dependencies]
+iroh = "1.0"
+tokio = { version = "1", features = [
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }

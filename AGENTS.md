@@ -186,6 +186,12 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   recorded HERE, not only in `.claude/skills/work/references/agent-execution.md`,
   because that file is handed to dispatched agents and the orchestrator never
   reads it — which is why the first fix did not stop the recurrence.
+- Third member of the same family, in git itself: a pathspec ending at a
+  directory name matches a FILE by that name, not the tree under it —
+  `git grep -ln 'X' -- '*/src/main'` is 0 hits where `-- '*/src/main/*'`
+  finds them (computenet-fd9d). A zero result from `git grep -- <pathspec>`
+  is evidence about the pathspec before it is evidence about the symbol:
+  re-run zero-hit searches in a form whose failure would look different.
 
 ## Verification
 

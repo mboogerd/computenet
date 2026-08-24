@@ -56,9 +56,13 @@ outruns that 10-minute cap, COMMIT FIRST (do not `git push`, and do not
 "shared-surface writes push at once" is the orchestrator's duty, and this
 dispatch's no-push rule is the exception it names for dispatched agents —
 your write rides out on the orchestrator's next bracket),
-then background it and wait
-with a BOUNDED until-loop on its log (your reference gives the form) — never
-wait first, or a stop strands uncommitted work that reads as nothing.
+then background it and IMMEDIATELY, in this same turn, RUN the bounded
+log-waiter from agent-execution.md ("The bounded until-loop" — the python3
+block) as a foreground Bash call; when it expires, reissue it. Waiting is that
+command RUNNING — it is never something you end a turn to do, and a final
+message that says you are waiting is a stalled result, not a status. Never
+wait before committing, or a stop strands uncommitted work that reads as
+nothing. (computenet-v5ah)
 The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
 background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
@@ -176,16 +180,18 @@ pass/fail stated → `SendMessage` the same agent (context intact) to finish
 and state a verdict plus a NOT VERIFIED section. Agent-completed is not
 task-reviewed; a result skimmed as done here merges unreviewed code.
 
-**A pass carrying a SUBSTANTIVE repair is not final** (computenet-r197). If
-the task reviewer names repair shas and withholds `metadata.review=passed`, it
-has told you it authored part of the deliverable — dispatch a second reader
-scoped to *those shas only* before merging, rather than treating the pass as
-final. The dispatch template is
-[ship-feature.md](ship-feature.md) §4, written for a feature
-reviewer's substantive repair; read task for feature and the task worktree
-and branch for the feature's. A prose or design-record deliverable is
-substantive by default, because there rewriting the text is rewriting the
-thing under review.
+**A pass carrying a SUBSTANTIVE repair is not final** (computenet-r197). The
+trigger is AUTHORSHIP, not the marker: if the reviewer's repair commits touch
+a behavioural path, a test, or **any file the task's acceptance criteria
+name** — a prose or design-record deliverable is substantive by default,
+because there rewriting the text is rewriting the thing under review —
+dispatch a second reader scoped to *those shas only* before merging, whether
+or not the reviewer set `metadata.review=passed`. A reviewer that classified
+its own repair trivial by a code-line count on a Markdown deliverable counted
+0, not triviality (computenet-wbl7). The dispatch template is
+[ship-feature.md](ship-feature.md) §4, written for a feature reviewer's
+substantive repair; read task for feature and the task worktree and branch
+for the feature's.
 
 ## 3. Merge the pass yourself, one at a time
 

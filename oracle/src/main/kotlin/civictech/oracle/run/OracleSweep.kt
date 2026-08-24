@@ -209,29 +209,31 @@ import civictech.testkit.forEachSeed
  *   three-replica `OrMapCell` meshes in a `SimWorld` — so a generated replicated mesh IS
  *   kernel-driven today, and the "no runner path" clause above is specifically about
  *   `CaseExecution`/`DifferentialRunner`, not about the kernel never running a generated mesh.
- *   What that sweep does NOT establish is the `[ORA2-DIFF-08]` "at scale" clause: it neither enters
- *   `ConvergenceCheck.check()` (a full-sync mesh is a mutual barrier and encodes as a cyclic
- *   `Delivery` graph, which `DotModel.Fold` refuses by name) nor realises any concurrency (its own
- *   report prints `max live dots at any key = 1`, against a generator-achieved mean of 0.970). The
- *   `DOT_ORDER` mutation above leaves it green.
+ *   Since computenet-9892 that sweep DOES establish the `[ORA2-DIFF-08]` "at scale" clause: it
+ *   enters `ConvergenceCheck.check()` unchanged, because the mesh is driven under its own
+ *   `CaseDelivery` schedule (silenced at spawn by unsubscribing every derived gossip ref, then one
+ *   directed `streamTo` edge per stated delivery, retracted again) instead of under a full-sync
+ *   mutual barrier — which is what made the old drive's causality a cyclic `Delivery` graph. And it
+ *   realises the concurrency the previous drive discarded: its shipped report prints `max live dots
+ *   at any key = 3` with 11 of 40 seeds carrying a counter tie, against a generator-achieved mean of
+ *   0.969. The `DOT_ORDER` mutation above now reddens it on 7 of 40 seeds
+ *   (`ReplicasAgreeButWrong`, first at seed 5), where before computenet-9892 it left it green.
  *
  * ## What is filed rather than built `[ORA2-HONEST-03]`
  *
- * Both gaps the paragraph above names are recorded in `concord/corpus/DISPUTES.md`, per the epic's
- * rule — and AGENTS.md's — that a requirement which cannot be checked honestly is **filed**, never
- * weakened into a passing scenario:
+ * The one gap the paragraph above still names is recorded in `concord/corpus/DISPUTES.md`, per the
+ * epic's rule — and AGENTS.md's — that a requirement which cannot be checked honestly is **filed**,
+ * never weakened into a passing scenario. (`[ORA2-DIFF-08]` "at scale" was filed here too until
+ * computenet-9892 built the drive that closes it; its entry was deleted in the same change, which is
+ * what that entry's own `Resolves` clause instructed.)
  *
- * - `[ORA2-DIFF-08]` "at scale" — the generated convergence sweep realises no concurrency, and the
- *   quiescent all-to-all mesh it drives is not expressible as a `Delivery` graph. Filed with the
- *   cyclic-`Delivery` reason and the 40/40 measurement; `computenet-9892` is the drive that closes
- *   it and deletes the entry.
  * - BS-9 / `[ORA2-DIFF-07]` — no operator in the vocabulary consumes a `TaggedMapDelta` outlet, so
  *   the two-path diamond BS-9 states is unconstructible and `TaggedWavePrefixTest` exercises a bare
  *   `orMap` source terminal instead. Filed with the `MapDelta`-vs-`TaggedMapDelta` typing bound;
  *   `96 §E1.5`'s `UntagCell`/`TaggedMapView` is what would resolve it.
  *
- * The ORA1 half of the same rule is `[ORA1-DIFF-09]`/BS-12, filed in the same file. All three
- * filings are pinned by [civictech.oracle.HonestyLedgerTest], so none can be silently deleted.
+ * The ORA1 half of the same rule is `[ORA1-DIFF-09]`/BS-12, filed in the same file. Both remaining
+ * filings are pinned by [civictech.oracle.HonestyLedgerTest], so neither can be silently deleted.
  *
  * Pinned by [civictech.oracle.HonestyLedgerTest] beside `[ORA1-HONEST-01]`, so this statement is
  * build-checked prose too, not a paragraph a refactor can quietly drop.

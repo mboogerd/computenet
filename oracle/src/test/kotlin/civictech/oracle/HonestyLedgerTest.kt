@@ -51,13 +51,20 @@ import java.io.File
  * implied). The last tests below pin that entry's own fingerprint, so the filing cannot be
  * dropped while the disagreement stands.
  *
- * ORA2 adds two more filings of the same shape, and they are `[ORA2-HONEST-03]`'s only realising
- * artifact (`computenet-4ru.1.8`): `[ORA2-DIFF-08]`'s "at scale" clause, whose generated
- * convergence sweep realises no concurrency and whose quiescent all-to-all mesh is not expressible
- * as a `Delivery` graph (`computenet-9ips`, route (b)); and BS-9/`[ORA2-DIFF-07]`, whose two-path
- * diamond is unconstructible because no operator in the vocabulary consumes a `TaggedMapDelta`
- * outlet (`computenet-valh`). Both are pinned below the ORA1 one, by the same reasoning: text
- * satisfies a requirement only while it is still there.
+ * ORA2 adds one more filing of the same shape, `[ORA2-HONEST-03]`'s remaining realising artifact
+ * (`computenet-4ru.1.8`): BS-9/`[ORA2-DIFF-07]`, whose two-path diamond is unconstructible because
+ * no operator in the vocabulary consumes a `TaggedMapDelta` outlet (`computenet-valh`). It is
+ * pinned below the ORA1 one, by the same reasoning: text satisfies a requirement only while it is
+ * still there.
+ *
+ * A second ORA2 filing stood beside it until `computenet-9892`: `[ORA2-DIFF-08]`'s "at scale"
+ * clause, whose generated convergence sweep realised no concurrency and whose quiescent all-to-all
+ * mesh was not expressible as a `Delivery` graph (`computenet-9ips`, route (b)). That entry's own
+ * `Resolves` clause said to **delete** it, not repair it, once the drive landed with more than one
+ * live dot at some key and a reversed `DOT_ORDER` reddening the sweep — both of which
+ * `computenet-9892` measured. So the pin below inverts: it now asserts the entry is GONE **and**
+ * that the ledger carries the closure with its numbers, which is what stops the deletion from being
+ * a silent one and stops the sweep from quietly regressing to the state that justified the filing.
  *
  * What is deliberately NOT pinned, and deliberately not filed: `computenet-880k` — the generator's
  * shape system cannot tell `TaggedMapDelta` from `MapDelta`, so it can emit a kernel-illegal
@@ -530,46 +537,44 @@ class HonestyLedgerTest {
         return disputes.substring(start, end).flat()
     }
 
+    /**
+     * The inverse pin of the one this file used to carry (see the file KDoc): the
+     * `[ORA2-DIFF-08]` "at scale" filing must be **gone**, because `computenet-9892` built the
+     * drive the entry's own `Resolves` clause named — and the ledger must carry the closure with
+     * the measurements that justify it.
+     *
+     * Both halves matter. Asserting only the absence would let the sweep regress to the
+     * no-concurrency drive with nothing filed and nothing said; asserting only the prose would let
+     * a stale filing sit beside a closed gap and mislead every reader arriving from
+     * `doc/spec/CONCORDANCE.md`.
+     */
     @Test
-    fun `the DISPUTES filing for ORA2-DIFF-08 at scale records why the sweep is not evidence`() {
-        val entry = disputesSection(
-            "## ORA2 (the generated convergence sweep)",
-            "The [ORA2-DIFF-08] \"at scale\" filing",
-        )
+    fun `the ORA2-DIFF-08 at scale filing is deleted, and the ledger carries the closure it was deleted for`() {
+        withClue(
+            "concord/corpus/DISPUTES.md must no longer carry the [ORA2-DIFF-08] \"at scale\" entry: " +
+                "computenet-9892 built the drive, and that entry instructed 'delete this entry — do " +
+                "not repair it'. A surviving entry beside a closed gap is a false filing.",
+        ) {
+            disputesSource().contains("## ORA2 (the generated convergence sweep)") shouldBe false
+        }
 
-        withClue("It must be greppable by the requirement marker it realises, and by the clause it files") {
-            entry.mustState("[ORA2-HONEST-03]")
-            entry.mustState("[ORA2-DIFF-08]")
+        val sweep = sweepKdoc().flat()
+        withClue(
+            "The ledger must say the sweep now ENTERS ConvergenceCheck.check() and why the old " +
+                "drive could not — the mutual full-sync barrier that made its causality a cyclic " +
+                "Delivery graph. Without the mechanism the closure is an assertion, not a reason.",
+        ) {
+            sweep.mustState("CaseDelivery")
+            sweep.mustState("mutual barrier")
         }
         withClue(
-            "It must state the REASON the check cannot be entered as specified — a full-sync mesh " +
-                "is a mutual barrier, and DotModel.Fold refuses the cyclic Delivery graph that " +
-                "encodes it by name. Without the mechanism the entry is an excuse, not a reason.",
+            "And it must carry the two measurements the deleted entry demanded: more than one live " +
+                "dot realised, and the DOT_ORDER mutation reddening the sweep. Prose without them " +
+                "restates the claim the filing existed to refuse.",
         ) {
-            entry.mustState("DotModel.CyclicDeliveryException")
-            entry.mustState("mutual")
-        }
-        withClue(
-            "It must carry the measurement, not only the argument: the 40/40 cyclic-vs-acyclic " +
-                "split, and the sweep's own realised concurrency of one live dot.",
-        ) {
-            entry.mustState("40 of 40")
-            entry.mustState("max live dots at any key = 1")
-        }
-        withClue(
-            "And the mutation result, which is what makes 'not evidence' a measured claim rather " +
-                "than a worry: a reversed TaggedMapDelta.DOT_ORDER tie-break reddens the hand-built " +
-                "meshes and leaves the generated sweep green.",
-        ) {
-            entry.mustState("DOT_ORDER")
-            entry.mustState("ConvergenceSweepTest")
-            entry.mustState("ConvergenceCheckTest")
-        }
-        withClue(
-            "It must name what would resolve it — computenet-9892's batched drive — so the entry " +
-                "is a filing with an exit, not a permanent excuse.",
-        ) {
-            entry.mustState("computenet-9892")
+            sweep.mustState("max live dots at any key = 3")
+            sweep.mustState("DOT_ORDER")
+            sweep.mustState("7 of 40")
         }
     }
 
@@ -619,7 +624,7 @@ class HonestyLedgerTest {
     }
 
     @Test
-    fun `the module entry point points at both ORA2 filings, and corrects the kernel-driven coverage claim`() {
+    fun `the module entry point points at the ORA2 filing, and states what the generated sweep now covers`() {
         val sweep = sweepKdoc().flat()
 
         withClue("[ORA2-HONEST-03] must be claimed by marker at the entry point too, beside the other two") {
@@ -637,11 +642,11 @@ class HonestyLedgerTest {
             "The staleness computenet-4ru.1.8 was filed for: the closing coverage paragraph named " +
                 "only ConvergenceCheckTest's hand-built meshes, so it read as 'no GENERATED " +
                 "replicated mesh is ever kernel-driven' — false since ConvergenceSweepTest landed. " +
-                "The ledger must name that sweep AND state the two things its green does not " +
-                "establish, or the correction has traded one overstatement for another.",
+                "The ledger must name that sweep AND state what its green now establishes, which " +
+                "since computenet-9892 includes entering ConvergenceCheck.check() unchanged.",
         ) {
             sweep.mustState("civictech.oracle.tagged.ConvergenceSweepTest")
-            sweep.mustState("max live dots at any key = 1")
+            sweep.mustState("max live dots at any key = 3")
             sweep.mustState("ConvergenceCheck.check()")
         }
     }
