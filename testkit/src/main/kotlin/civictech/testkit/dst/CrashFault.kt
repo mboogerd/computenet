@@ -258,8 +258,13 @@ data class CrashFault(
          * ## Why it lives in the companion object
          *
          * A companion object's property initialisers run in the *outer* class's static
-         * initialiser, so constructing any `CrashFault` — or naming `CrashFault.KIND` — has
-         * already registered this codec. That is what makes the **encode** path unconditional:
+         * initialiser, so constructing any `CrashFault` — or reading `CrashFault.CODEC` — has
+         * already registered this codec. Naming `CrashFault.KIND` does **not**: it is a
+         * `const val`, which the compiler inlines into the referencing file's constant pool as
+         * a string literal, so it loads nothing (verified in bytecode; it is what made
+         * `FaultCodecRoundTripTest.everyLandedFaultClassRegistersACodec_CHA1_31` order-dependent).
+         * Code that must force registration reads `CODEC`. That is what makes the **encode**
+         * path unconditional:
          * `FaultCodecs.encode(fault)` cannot be reached without a `CrashFault` instance, and an
          * instance cannot exist without the class being loaded.
          *
