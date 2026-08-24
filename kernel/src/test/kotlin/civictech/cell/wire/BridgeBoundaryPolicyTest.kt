@@ -32,6 +32,7 @@ import civictech.cell.port.registerPort
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.InvocationSink
 import civictech.cell.proxy.Invocation
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
@@ -167,15 +168,14 @@ private class BridgedMembrane(
  *
  * ## How the remote link request is delivered
  *
- * A link request is a `PORT_MANAGEMENT` invocation, and management invocations
- * are **not wire-encodable**: `WireCodec.encode` requires the `@Contract` ids
- * that only a `@Contract`-captured method carries, and `LinkTo.linkTo` /
- * `LinkFrom.linkFrom` are ordinary port-management methods with none. So the
- * request is handed to *exactly* the sink [Peering.hostIngress] gives
- * [BridgeIngressCell] — `Peering.Side.registry::deliver` — carrying *exactly*
- * the stamp that ingress applies (`decoded.copy(peer = peer)`). That is the
- * same shape `TrustBoundaryTest` uses for its link-request seam, and the same
- * `ManagedHost` `PORT_MANAGEMENT` branch consumes it.
+ * Over a real frame, since computenet-wb6s. `LinkTo.linkTo` / `LinkFrom.linkFrom`
+ * still carry no `@Contract` capture and still could not be encoded — their
+ * argument is a live port object, which no encoding could carry across a
+ * machine boundary. What crosses instead is [RemoteLinkRequests]' addressable
+ * form of the same request, and P's [BridgeIngressCell] translates it back into
+ * exactly the `linkTo` invocation an in-process caller would have made, stamped
+ * with the peer that ingress authenticated. Nothing in this file supplies a
+ * `PeerId` any more.
  *
  * Everything the crossing then *emits* travels the real loopback: the catch-up
  * unicast and every live delta are encoded by [BridgeEgressCell], decoded by
@@ -252,33 +252,25 @@ class BridgeBoundaryPolicyTest {
         }
 
         /**
-         * Peer q links to [exposure] across the bridge: the local endpoint for
-         * the remote consumer forwards every disclosed delta onto the wire
-         * (`registryP` resolves [collector] as a `Remote` routed through the
-         * peering's egress), and the link request itself arrives peer-stamped
-         * through the ingress's own delivery sink.
+         * Peer q links to [exposure] across the bridge **as a real wire frame**
+         * (computenet-wb6s): a [RemoteLinkRequests] request resolved through
+         * `registryQ`'s wire-mirrored `Remote` location for the membrane,
+         * encoded by the peering's Q→P [BridgeEgressCell], decoded and
+         * peer-stamped by P's [BridgeIngressCell], which reconstructs the local
+         * endpoint forwarding every disclosed delta back to [collector].
          *
-         * Returns the endpoint, whose `ref` is the link target the catch-up
-         * unicast addresses.
+         * Nothing here supplies a [civictech.cell.link.PeerId]: the identity the
+         * handshake and the disclosure transform evaluate against is the one
+         * that ingress applied.
          */
-        fun linkQTo(exposure: String, collector: DeltaCollectorCell): FanInlet<Propagate<SetDelta<String>>> {
-            val remote = (HostedCellProxy.create(collector.ref, registryP, DeltaInletProxy::class.java)
-                    as DeltaInletProxy).inlet.call
-            val endpoint = FanInlet.create<Propagate<SetDelta<String>>>()
-            endpoint.serve(object : Propagate<SetDelta<String>> {
-                override fun propagate(value: SetDelta<String>) = remote.propagate(value)
-            })
-            registryP.deliver(
-                HostedPortInvocation(
-                    cellRef = membraneRef,
-                    portName = exposure,
-                    type = HostedPortInvocation.Type.PORT_MANAGEMENT,
-                    invocation = Invocation.of(LINK_TO, arrayOf(endpoint)),
-                    peer = PeerId("q"),
-                )
+        fun linkQTo(exposure: String, collector: DeltaCollectorCell) {
+            RemoteLinkRequests.requestLinkTo(
+                sink = InvocationSink(registryQ::deliver),
+                target = PortAddress(membraneRef, exposure),
+                consumer = PortAddress(collector.ref, "inlet"),
+                api = Propagate::class.java,
             )
             controller.runToIdle()
-            return endpoint
         }
 
         /**
@@ -309,12 +301,6 @@ class BridgeBoundaryPolicyTest {
             controller.runToIdle()
         }
 
-        companion object {
-            /** `LinkTo.linkTo(LinkFrom)` — the handshake-running overload, not the ad-hoc `Use` one. */
-            val LINK_TO = LinkTo::class.java.methods.first {
-                it.name == "linkTo" && it.parameterTypes.singleOrNull() == LinkFrom::class.java
-            }
-        }
     }
 
     @Test
@@ -369,11 +355,11 @@ class BridgeBoundaryPolicyTest {
         }
 
         val collector = run.collectorOnQ()
-        val endpoint = run.linkQTo("deniedOutlet", collector)
+        run.linkQTo("deniedOutlet", collector)
 
         // The link IS established — Deny suppresses disclosure, it does not
         // refuse the peering ([SEC1-18]).
-        run.membrane.deniedOutlet.linking.links.any { it.to == endpoint.ref } shouldBe true
+        run.membrane.deniedOutlet.linking.links.size shouldBe 1
         collector.received.shouldBeEmpty() // no catch-up crossed
 
         run.membrane.denied.inlet.call.add("also-nothing")
