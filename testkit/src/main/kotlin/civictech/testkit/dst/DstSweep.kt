@@ -12,6 +12,54 @@ import java.io.File
  * apart while counting both as failures: a sweep that swallowed a broken experiment and
  * reported the seed green would be worse than one that reported a property failure.
  */
+/**
+ * A sweep's failure, with the *identity* of the failure in [message] and everything that varies
+ * run to run in [detail].
+ *
+ * ## Why the split exists
+ *
+ * A sweep's `assertAllPassed` can be the failure path of a [DstCheck], and [DstRun] records a
+ * failing check as `FailingCheck(throwable.message, ...)`. [FailurePredicate.sameFailingCheck] —
+ * [CHA1-36]'s predicate — then compares exactly that string to decide whether a shrink candidate
+ * still reproduces. So anything in the *message* becomes part of the property's identity.
+ *
+ * A density (`failed on 3 of 17`) and a first-failing seed are the two things that legitimately
+ * move under a shrink: a smaller plan destroys less traffic and fails fewer sub-cases. With them
+ * in the message every honest reduction reads as a *different* failure and is discarded, the
+ * shrinker reports a plan far larger than the real minimum, and it raises no error while doing
+ * it (computenet-umx.4; measured on computenet-umx.3.7 as "only 18 of 30 arrived" against a
+ * recorded "only 12 of 30").
+ *
+ * So the message names the failure **mode** and nothing else, and the density goes in [detail],
+ * which is attached as a **suppressed** throwable. Suppressed throwables are printed by JUnit
+ * and by `Throwable.printStackTrace`, so a human running a plain sweep still reads
+ * [CHA1-39]'s density in the failure output — but `Throwable.message`, the only thing
+ * [FailurePredicate] sees, does not carry it.
+ *
+ * [FailurePredicate.sameOutcome] remains the labelled escape hatch for a check whose message
+ * genuinely must vary; it is not what a sweep needs, because a sweep can say which mode failed.
+ */
+class SweepFailure(
+    identity: String,
+    val detail: String,
+    cause: Throwable?,
+) : AssertionError(identity, cause) {
+    init {
+        addSuppressed(SweepDetail(detail))
+    }
+}
+
+/**
+ * Carrier for [SweepFailure.detail]: a throwable with no stack trace of its own, whose only job
+ * is to be printed under `Suppressed:` so the varying half of a sweep failure stays visible to a
+ * human without entering the check's identity.
+ */
+class SweepDetail(message: String) : Throwable(message) {
+    override fun fillInStackTrace(): Throwable = this
+
+    override fun toString(): String = message ?: ""
+}
+
 data class SweepEntry(
     val seed: Long,
     val report: DstReport?,
@@ -79,10 +127,21 @@ data class DstSweepReport(
     /** [CHA1-40]: true when the driver makes no replay-reproducibility claim. */
     val nonDeterministic: Boolean get() = !driver.deterministic
 
-    /** [CHA1-39]'s density, in `forEachSeed`'s words: `failed on N of M`. */
+    /**
+     * [CHA1-39]'s density, in `forEachSeed`'s words: `failed on N of M`.
+     *
+     * **Reporting only.** This string moves with the run by construction, so it belongs in a
+     * report, an artifact or [SweepFailure.detail] — never in the message of a failing check,
+     * where it would become part of the property's identity and defeat [PlanShrinker]. See
+     * [SweepFailure].
+     */
     val density: String get() = "failed on ${failures.size} of $total"
 
-    /** The whole sweep in one line: density, the executed range, and the exhausted count. */
+    /**
+     * The whole sweep in one line: density, the executed range, and the exhausted count.
+     *
+     * Reporting only, for [density]'s reason: it embeds the density.
+     */
     fun summary(): String = buildString {
         append("DST sweep suite=$suite graph=$graphId driver=$driver seeds=${seedRange.first}..${seedRange.last} ")
         append("(executed $total); $density")
@@ -91,13 +150,22 @@ data class DstSweepReport(
     }
 
     /**
-     * `forEachSeed`'s contract, extended ([CHA1-39]).
+     * `forEachSeed`'s contract, extended ([CHA1-39]) and split in two ([SweepFailure]).
      *
      * `civictech.testkit.forEachSeed` runs every seed, collects failures and rethrows one
      * summary — `failed on N of M seeds; first: seed=K — <message>` — with the **first**
      * failure as [Throwable.cause] so an IDE's jump-to-failure still lands on the real
-     * assertion. This preserves that shape exactly and adds what a sweep knows and a bare loop
-     * does not: the executed seed range and the artifact path for every failing seed.
+     * assertion. That whole line is preserved, plus what a sweep knows and a bare loop does not
+     * (the executed seed range, the artifact path for every failing seed) — but it is carried in
+     * [SweepFailure.detail] and printed as a suppressed throwable rather than in the thrown
+     * message.
+     *
+     * The **message** is the failure mode alone: the suite, the graph, and the first bad entry's
+     * own message. Two runs of the same failure mode under different fault plans therefore
+     * produce byte-identical messages, which is what [CHA1-36]'s shrink predicate needs and what
+     * the old shape denied it (computenet-umx.4). The count, the first failing seed and the
+     * density stayed exactly where a human reads them; they simply stopped being the property's
+     * identity.
      *
      * A `BUDGET_EXHAUSTED` seed fails the sweep as well. It disproved nothing, but a run that
      * never quiesced must not read as a pass.
@@ -109,10 +177,11 @@ data class DstSweepReport(
         val artifacts = artifactPaths.takeIf { it.isNotEmpty() }
             ?.joinToString(prefix = "; artifacts: ", separator = ", ") { it.path }
             ?: ""
-        throw AssertionError(
-            "failed on ${bad.size} of $total seeds; first: seed=${first.seed} — ${first.message} " +
+        throw SweepFailure(
+            identity = "DST sweep suite=$suite graph=$graphId failed: ${first.message}",
+            detail = "failed on ${bad.size} of $total seeds; first: seed=${first.seed} — ${first.message} " +
                 "[${summary()}$artifacts]",
-            first.cause,
+            cause = first.cause,
         )
     }
 }
