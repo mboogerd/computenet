@@ -13,6 +13,8 @@ import civictech.cell.host.SaturationPolicy
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.testkit.dst.JournalMutation
+import civictech.testkit.dst.MutatingJournal
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
@@ -79,12 +81,16 @@ class RecoveryAccountingTest {
         (records.size >= 3).shouldBeTrue()
         val corruptAt = records.size / 2
 
-        val corrupting = object : Journal {
-            override fun append(record: ByteArray) = journal.append(record)
-            override fun replay(): List<ByteArray> =
-                journal.replay().mapIndexed { i, r -> if (i == corruptAt) byteArrayOf(99) else r }
-            override fun reset(records: List<ByteArray>) = journal.reset(records)
-        }
+        // Retrofit onto the DST rig's own journal-mutation mechanism ([CHA1-60],
+        // computenet-umx.3.10): MutatingJournal + JournalMutation.CorruptAt(index) is exactly
+        // the decorator civictech.testkit.dst.JournalFault installs (JournalFault.kt's
+        // `MutatingJournal(inner, mutation, ...)`), used directly here since this test drives a
+        // bare SimulationController rather than the full DstWorld/DstRun rig. The default
+        // corruption (JournalRecords.UNKNOWN, tag byte 99) is byte-identical to the anonymous
+        // journal's hand-written `byteArrayOf(99)` this replaces, so the corrupted record's tag
+        // reaches HostDurability.recoverFrom's `else -> error(...)` branch exactly as before and
+        // the RecoveryIncomplete(recordIndex, total) assertions below are unchanged.
+        val corrupting = MutatingJournal(journal, JournalMutation.CorruptAt(corruptAt))
 
         val controller = SimulationController()
         val host = ManagedHost(scheduler = controller.scheduler())
