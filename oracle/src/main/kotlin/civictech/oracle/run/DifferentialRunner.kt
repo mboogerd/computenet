@@ -180,8 +180,9 @@ object DifferentialRunner {
      * measured coverage; [wavePrefix] holds the cost knob.
      *
      * Two conditions gate it, and both are documented where they are decided:
-     * [WavePrefixOracle.appliesTo] (the case must be single-source, single-host) and
-     * [WavePrefixOption.selects] (the seed must fall in the checked fraction).
+     * [WavePrefixOracle.appliesTo] (the case must be single-host, and its per-source frontier
+     * lattice must fit [WavePrefixOracle.MAX_FRONTIER_LATTICE]) and [WavePrefixOption.selects]
+     * (the seed must fall in the checked fraction).
      *
      * **A substituted [reference] disables prefix checking unless [wavePrefix] asks for it
      * explicitly.** A deliberately divergent reference makes every prefix wrong, so the FIRST
