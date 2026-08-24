@@ -139,7 +139,7 @@ data class ObservedRun(
     val traceEvents: Int,
 )
 
-/** Bounded-shrink bookkeeping (epic §9 risk 7). Filled by the shrinker task; unused here. */
+/** Bounded-shrink bookkeeping (epic §9 risk 7). Filled by [PlanShrinker] via [DstArtifact.withShrunkPlan]. */
 @Serializable
 data class ShrinkRecord(
     val attempts: Int,
@@ -167,9 +167,12 @@ data class ShrinkRecord(
  *    refuses anything else, which is [CHA1-37] as an API rather than a convention.
  *  - **Plans round-trip through [FaultCodecs].** `artifact.plan()` gives a live [FaultPlan];
  *    `FaultPlan.without(id)` is the reduction; the result encodes straight back.
- *  - **[observed] is the same-failure predicate.** [CHA1-36]'s "still fails with the same
- *    failing check" is `DstReplay.grade(...)` against this record, so the shrinker reuses the
- *    replay grader instead of inventing a second notion of "same failure".
+ *  - **[observed] is what a same-failure predicate is graded against** — but *not* through
+ *    `DstReplay.grade`. That grader is the *replay* predicate and compares the step count, the
+ *    trace length and the trace digest, all of which a legitimately reduced plan moves, so it
+ *    reports `DIVERGED` for exactly the reductions a shrinker must accept. [CHA1-36]'s
+ *    predicate is the narrower `FailurePredicate` in `PlanShrinker.kt` (outcome plus
+ *    failing-check message); the two answer different questions and neither weakens the other.
  *
  * @property schema the artifact *format* version, independent of [rig] — the format can be
  *   stable across a rig generation that moves digests, and vice versa.
