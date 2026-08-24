@@ -1,9 +1,11 @@
 package civictech.cell.wire
 
+import civictech.cell.BoundarySeam
 import civictech.cell.Cell
 import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.Consumer
+import civictech.cell.DenialReason
 import civictech.cell.Propagate
 import civictech.cell.control.Attention
 import civictech.cell.host.DeadLetter
@@ -295,6 +297,14 @@ class TrustBoundaryTest {
         val bridgeQ = ManagedHost(scheduler = controller.scheduler(), registry = registryQ)
         val deadLettersP = mutableListOf<DeadLetter>()
         val collector = CollectingCell()
+
+        /**
+         * The remote side's own producer — the address its request names.
+         * computenet-a4ha: it has to be a cell the requesting peer really
+         * hosts, because P now refuses a request naming an address that does
+         * not resolve to a location that peer announced.
+         */
+        val producerOnQ = SourceCell()
         val loopback: Peering.Loopback
 
         init {
@@ -310,6 +320,7 @@ class TrustBoundaryTest {
                 }, PortRef.generate()))
             }
             hostP.managementInlet.call.spawn(collector)
+            hostQ.managementInlet.call.spawn(producerOnQ)
             controller.runToIdle()
         }
 
@@ -324,7 +335,7 @@ class TrustBoundaryTest {
             RemoteLinkRequests.requestLinkFrom(
                 sink = loopback.bToA,
                 target = PortAddress(collector.ref, "inlet"),
-                producer = PortAddress(CellRef(UUID.randomUUID()), "outlet"),
+                producer = PortAddress(producerOnQ.ref, "outlet"),
                 api = Consumer::class.java,
             )
             controller.runToIdle()
@@ -360,5 +371,195 @@ class TrustBoundaryTest {
         admittedRig.collector.inlet.linking.policies += allowPeers(PeerId("good"))
         admittedRig.requestLink()
         admittedRig.collector.inlet.linking.links.size shouldBe 1
+    }
+
+    /**
+     * computenet-a4ha: a plain source port on P. Its outlet is what a
+     * [RemoteLink] request targets, and what emits once a link is established —
+     * so where its emissions land is the observable that separates a link
+     * established for the requesting peer from one redirected elsewhere.
+     */
+    class SourceCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val outlet = registerPort("outlet", FanOutlet.create<Consumer<String>>())
+    }
+
+    /**
+     * computenet-a4ha's rig: **three** peers, because the defect it pins is a
+     * confused deputy across the trust boundary and two peers cannot express it.
+     *
+     * P peers with q and, separately, with r. P hosts the [source] whose outlet
+     * a link request targets, and a [victimOnP] of its own; q and r each host a
+     * consumer. Every request below is sent by **q**, as a real wire frame over
+     * the q→P peering: nothing supplies a [PeerId] to the invocation, so the
+     * only identity in play is the one P's [BridgeIngressCell] stamped.
+     */
+    private class RedirectRig {
+        val controller = SimulationController(0)
+        val registryP = LocationRegistry()
+        val hostP = ManagedHost(scheduler = controller.scheduler(), registry = registryP)
+        val bridgeP = ManagedHost(scheduler = controller.scheduler(), registry = registryP)
+        val registryQ = LocationRegistry()
+        val hostQ = ManagedHost(scheduler = controller.scheduler(), registry = registryQ)
+        val bridgeQ = ManagedHost(scheduler = controller.scheduler(), registry = registryQ)
+        val registryR = LocationRegistry()
+        val hostR = ManagedHost(scheduler = controller.scheduler(), registry = registryR)
+        val bridgeR = ManagedHost(scheduler = controller.scheduler(), registry = registryR)
+
+        val deadLettersP = mutableListOf<DeadLetter>()
+
+        /** P's own producer — the link target. */
+        val source = SourceCell()
+
+        /** P's own cell: the "consumer on the receiver itself" arm's address. */
+        val victimOnP = CollectingCell()
+
+        /** q's cell: the legitimate arm's address. */
+        val consumerOnQ = CollectingCell()
+
+        /** r's cell: the third-peer arm's address — q holds nothing on it. */
+        val consumerOnR = CollectingCell()
+
+        val pq: Peering.Loopback
+        val pr: Peering.Loopback
+
+        init {
+            val p = Peering.Side(registryP, bridgeP, peer = PEER_P)
+            val q = Peering.Side(registryQ, bridgeQ, peer = REQUESTER_Q)
+            val r = Peering.Side(registryR, bridgeR, peer = THIRD_R)
+            listOf(hostP, bridgeP).forEach { h ->
+                h.deadLetterOutlet.subscribe(Use.fixed(object : Propagate<DeadLetter> {
+                    override fun propagate(value: DeadLetter) {
+                        deadLettersP += value
+                    }
+                }, PortRef.generate()))
+            }
+            hostP.managementInlet.call.spawn(source)
+            hostP.managementInlet.call.spawn(victimOnP)
+            hostQ.managementInlet.call.spawn(consumerOnQ)
+            hostR.managementInlet.call.spawn(consumerOnR)
+            pq = Peering.loopback(p, q)
+            pr = Peering.loopback(p, r)
+            controller.runToIdle()
+        }
+
+        /** P's ingress for q's frames — where a refusal of q's request is accounted. */
+        val ingressFromQ: BridgeIngressCell get() = pq.ingressOnA!!
+
+        /**
+         * q asks P's [source] outlet to link to [consumer], as a real frame:
+         * encoded by the peering's q→P [BridgeEgressCell], decoded and
+         * peer-stamped by P's [BridgeIngressCell]. No [PeerId] is supplied here.
+         */
+        fun requestFromQ(consumer: PortAddress) {
+            RemoteLinkRequests.requestLinkTo(
+                sink = pq.bToA,
+                target = PortAddress(source.ref, "outlet"),
+                consumer = consumer,
+                api = Consumer::class.java,
+            )
+            controller.runToIdle()
+        }
+
+        fun emit(value: String) {
+            source.outlet.call.provide(value)
+            controller.runToIdle()
+        }
+
+        companion object {
+            val PEER_P = PeerId("p")
+            val REQUESTER_Q = PeerId("requester-q")
+            val THIRD_R = PeerId("third-party-r")
+        }
+    }
+
+    /**
+     * The refusal accounting all three arms below share: one typed denial on the
+     * ingress's own `"link-request"` sink, naming the refused [PeerId], with a
+     * null `cause` — and no supervision RESTART, which is the BS-14 not-a-fault
+     * property the announcement-admission gate already holds to.
+     */
+    private fun RedirectRig.assertRefused(sinkCountBefore: Long, lettersBefore: Int) {
+        val sink = ingressFromQ.boundaryDenials["link-request"]!!
+        (sink.denialCount - sinkCountBefore) shouldBe 1L
+
+        val letters = deadLettersP.drop(lettersBefore)
+            .filter { it.denial?.reason == DenialReason.LINK_REFUSED }
+        letters.size shouldBe 1
+        val letter = letters.single()
+        val denial = letter.denial!!
+        denial.seam shouldBe BoundarySeam.ADMISSION
+        denial.principal shouldBe RedirectRig.REQUESTER_Q // the refused PeerId is named
+        letter.cause shouldBe null // not a fault
+        letter.description shouldContain "requester-q"
+
+        bridgeP.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    /**
+     * computenet-a4ha arm 1: q names one of **P's own** cells as the consumer.
+     * Measured against the unfixed code as `PROBE victim.received =
+     * [p-internal-secret]` — the link established and P streamed its own
+     * emission into its own cell at a peer's request.
+     */
+    @Test
+    fun `computenet-a4ha - a link request naming a cell on the receiving side is refused`() {
+        val rig = RedirectRig()
+        rig.bridgeP.managementInlet.call.supervise(rig.ingressFromQ.ref, SupervisionPolicy.RESTART)
+        val before = rig.ingressFromQ.boundaryDenials["link-request"]?.denialCount ?: 0L
+        val lettersBefore = rig.deadLettersP.size
+
+        rig.requestFromQ(PortAddress(rig.victimOnP.ref, "inlet"))
+        rig.emit("p-internal-secret")
+
+        rig.victimOnP.received.shouldBeEmpty() // the reviewer's PROBE victim.received
+        rig.source.outlet.linking.links.shouldBeEmpty() // and no link was established at all
+
+        rig.assertRefused(before, lettersBefore)
+    }
+
+    /**
+     * computenet-a4ha arm 2, the confused deputy: q names a consumer belonging
+     * to a **third** peer r. Measured against the unfixed code as
+     * `PROBE third-peer received = [[p-internal-secret]]` — the authorisation
+     * was taken against `Principal = Peer(q)` and the data landed at r.
+     */
+    @Test
+    fun `computenet-a4ha - a link request naming a third peer's cell is refused`() {
+        val rig = RedirectRig()
+        rig.bridgeP.managementInlet.call.supervise(rig.ingressFromQ.ref, SupervisionPolicy.RESTART)
+        // precondition: P really does resolve r's cell, so the arm is about the
+        // binding and not about an unresolvable address.
+        (rig.registryP.location(rig.consumerOnR.ref) is LocationRegistry.Remote).shouldBeTrue()
+        val before = rig.ingressFromQ.boundaryDenials["link-request"]?.denialCount ?: 0L
+        val lettersBefore = rig.deadLettersP.size
+
+        rig.requestFromQ(PortAddress(rig.consumerOnR.ref, "inlet"))
+        rig.emit("p-internal-secret")
+
+        rig.consumerOnR.received.shouldBeEmpty() // the reviewer's PROBE third-peer received
+        rig.source.outlet.linking.links.shouldBeEmpty()
+
+        rig.assertRefused(before, lettersBefore)
+    }
+
+    /**
+     * computenet-a4ha arm 3, and the one that makes this a fix rather than a
+     * mute: the legitimate request — q naming q's own consumer — still links
+     * over a real wire frame, and P's emission reaches it.
+     */
+    @Test
+    fun `computenet-a4ha - a link request naming the requesting peer's own cell still links`() {
+        val rig = RedirectRig()
+        val before = rig.ingressFromQ.boundaryDenials["link-request"]?.denialCount ?: 0L
+        val lettersBefore = rig.deadLettersP.size
+
+        rig.requestFromQ(PortAddress(rig.consumerOnQ.ref, "inlet"))
+
+        rig.source.outlet.linking.links.size shouldBe 1
+        rig.emit("p-internal-secret")
+        rig.consumerOnQ.received shouldBe listOf("p-internal-secret")
+
+        (rig.ingressFromQ.boundaryDenials["link-request"]?.denialCount ?: 0L) shouldBe before
+        rig.deadLettersP.drop(lettersBefore).mapNotNull { it.denial }.shouldBeEmpty()
     }
 }
