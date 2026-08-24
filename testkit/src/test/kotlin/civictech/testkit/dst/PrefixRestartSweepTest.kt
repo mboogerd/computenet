@@ -188,10 +188,14 @@ class PrefixRestartSweepTest {
             "the failing run's own report names its prefix: ${firstFailure.report!!.appliedFaults}",
         )
 
-        val thrown = assertFailsWith<AssertionError> { sweep.assertAllPassed() }
+        val thrown = assertFailsWith<SweepFailure> { sweep.assertAllPassed() }
         assertTrue(
-            thrown.message!!.contains("k=${sweep.failingPrefixes.first()}"),
-            "assertAllPassed must name the first failing prefix: ${thrown.message}",
+            thrown.detail.contains("k=${sweep.failingPrefixes.first()}"),
+            "assertAllPassed must name the first failing prefix: ${thrown.detail}",
+        )
+        assertTrue(
+            "k=" !in thrown.message!!,
+            "…in the detail, not in the check's identity — see SweepFailure (computenet-umx.4): ${thrown.message}",
         )
     }
 

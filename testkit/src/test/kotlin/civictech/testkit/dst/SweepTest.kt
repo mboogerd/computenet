@@ -1,6 +1,12 @@
 package civictech.testkit.dst
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import java.io.File
+import java.util.IdentityHashMap
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -22,18 +28,72 @@ class SweepTest {
 
     private val root = File("build/dst-selftest/sweep")
 
+    /** Configuration for the [dropFrom] fixture faults; only `encode` reads it (as [ShrinkerTest]). */
+    private val configs = IdentityHashMap<Fault, JsonObject>()
+
+    private val codec = FaultCodecs.register(
+        kind = DROP_KIND,
+        owns = { it in configs.keys },
+        encode = { configs.getValue(it) },
+        decode = { id, params ->
+            dropFrom(
+                id = id,
+                edge = params.getValue("edge").jsonPrimitive.content,
+                fromStep = params.getValue("fromStep").jsonPrimitive.int,
+                count = params.getValue("count").jsonPrimitive.int,
+            )
+        },
+    )
+
     @BeforeTest
     fun setUp() {
         root.deleteRecursively()
         GraphRegistry.register(GRAPH)
         CheckRegistry.register(CHECK_ID, CHECK)
+        CheckRegistry.register(SWEEP_BACKED_CHECK_ID, SWEEP_BACKED_CHECK)
     }
 
     @AfterTest
     fun tearDown() {
+        FaultCodecs.unregister(codec.kind)
         GraphRegistry.unregister(GRAPH.id)
         CheckRegistry.unregister(CHECK_ID)
+        CheckRegistry.unregister(SWEEP_BACKED_CHECK_ID)
     }
+
+    /** Drops up to [count] frames on [edge] at or after step [fromStep] — [ShrinkerTest]'s fixture. */
+    private fun dropFrom(id: String, edge: String, fromStep: Int, count: Int): Fault {
+        val fault = ScriptedFault(
+            id = id,
+            targets = listOf(FaultTarget.Edge(edge)),
+            description = "drop up to $count frames on $edge from step $fromStep",
+            onInstall = { world ->
+                var dropped = 0
+                world.edges.intercept(edge) { frame, step ->
+                    if (step >= fromStep && dropped < count) {
+                        dropped++
+                        world.trace.fault(id, port = edge)
+                        emptyList()
+                    } else {
+                        listOf(frame)
+                    }
+                }
+            },
+        )
+        configs[fault] = buildJsonObject {
+            put("edge", edge)
+            put("fromStep", fromStep)
+            put("count", count)
+        }
+        return fault
+    }
+
+    private fun lossPlan(count: Int): FaultPlan =
+        FaultPlan.of(IDENTITY_SEED, dropFrom(ESSENTIAL, "a->b", fromStep = 2, count = count))
+
+    private fun paramOf(plan: FaultPlan, faultId: String, param: String): Int =
+        FaultCodecs.encode(plan.faults.single { it.id == faultId })
+            .params.getValue(param).jsonPrimitive.int
 
     private fun sweep(
         seeds: LongRange = 0L..99L,
@@ -69,13 +129,23 @@ class SweepTest {
             report.artifactPaths.map { it.absolutePath },
         )
 
-        val thrown = assertFailsWith<AssertionError> { report.assertAllPassed() }
+        val thrown = assertFailsWith<SweepFailure> { report.assertAllPassed() }
+        assertEquals(
+            "DST sweep suite=$SUITE graph=${GRAPH.id} failed: synthetic failure on seed 3",
+            thrown.message,
+            "the thrown message is the failure mode alone — see SweepFailure",
+        )
         assertTrue(
-            thrown.message!!.startsWith("failed on 7 of 100 seeds; first: seed=3 — "),
-            "forEachSeed's summary shape is preserved: ${thrown.message}",
+            thrown.detail.startsWith("failed on 7 of 100 seeds; first: seed=3 — "),
+            "forEachSeed's summary shape is preserved, in the detail: ${thrown.detail}",
         )
         assertEquals("synthetic failure on seed 3", thrown.cause!!.message, "first failure is the cause")
-        assertTrue(FAILING_SEEDS.all { "$SUITE/$it.json" in thrown.message!! }, thrown.message!!)
+        assertTrue(FAILING_SEEDS.all { "$SUITE/$it.json" in thrown.detail }, thrown.detail)
+        assertEquals(
+            thrown.detail,
+            thrown.suppressed.single().message,
+            "[CHA1-39]'s density stays visible to a human, as a suppressed throwable",
+        )
     }
 
     /**
@@ -159,8 +229,12 @@ class SweepTest {
         assertTrue("budget exhausted on 3 (no verdict claimed)" in report.summary(), report.summary())
         assertTrue(report.artifactPaths.isEmpty(), "no failure artifact for a run that disproved nothing")
 
-        val thrown = assertFailsWith<AssertionError> { report.assertAllPassed() }
-        assertTrue(thrown.message!!.startsWith("failed on 3 of 3 seeds; first: seed=0 — BUDGET_EXHAUSTED"), thrown.message!!)
+        val thrown = assertFailsWith<SweepFailure> { report.assertAllPassed() }
+        assertEquals(
+            "DST sweep suite=$SUITE graph=${SelfTestGraphs.livelock().id} failed: BUDGET_EXHAUSTED",
+            thrown.message,
+        )
+        assertTrue(thrown.detail.startsWith("failed on 3 of 3 seeds; first: seed=0 — BUDGET_EXHAUSTED"), thrown.detail)
     }
 
     /** [CHA1-54] holds for sweeps too: the artifact root is validated before any seed runs. */
@@ -179,6 +253,84 @@ class SweepTest {
         assertTrue("CHA1-54" in e.message!!, e.message!!)
     }
 
+    // ------------------------------------- the check-identity property (computenet-umx.4)
+
+    /**
+     * The check message a sweep raises is the **identity** of the failure, and it is stable
+     * across two different fault plans that lose different amounts of traffic.
+     *
+     * This is the half of computenet-umx.4 that can be asserted without a shrinker: [CHA1-36]'s
+     * `FailurePredicate.sameFailingCheck` compares `report.failingCheck.message` and nothing
+     * else, so byte-identity of that string across two genuinely different runs is exactly what
+     * the shrinker needs and exactly what the old `failed on N of M seeds; first: seed=K` shape
+     * denied it.
+     *
+     * The delivered-frame assertion is what keeps this from being vacuous: the two plans must
+     * genuinely lose different amounts, or "the messages match" would be trivially true.
+     */
+    @Test
+    fun aSweepBackedCheckMessageIsIdenticalAcrossPlansThatLoseDifferentAmounts() {
+        val heavyRun = DstRun(GRAPH, lossPlan(count = 6), BUDGET, SWEEP_BACKED_CHECK)
+        val heavy = heavyRun.execute()
+        val light = DstRun(GRAPH, lossPlan(count = 1), BUDGET, SWEEP_BACKED_CHECK).execute()
+
+        assertEquals(DstOutcome.FAILED, heavy.outcome, heavy.summary())
+        assertEquals(DstOutcome.FAILED, light.outcome, light.summary())
+
+        val deliveredHeavy = heavy.trace.count { it.port == "recv" }
+        val deliveredLight = light.trace.count { it.port == "recv" }
+        assertTrue(
+            deliveredHeavy != deliveredLight,
+            "the two plans must lose different amounts or this test is vacuous: " +
+                "$deliveredHeavy vs $deliveredLight of $EXPECTED_DELIVERIES",
+        )
+
+        assertEquals(
+            heavy.failingCheck!!.message,
+            light.failingCheck!!.message,
+            "a sweep-backed check must name the failure mode, not the run's density",
+        )
+        val recorded = DstArtifact.of(heavyRun, heavy, suite = SUITE, checkId = SWEEP_BACKED_CHECK_ID).observed
+        assertTrue(
+            FailurePredicate.sameFailingCheck.reproduces(recorded, light),
+            "[CHA1-36]'s predicate must read the lighter plan as the same failure: " +
+                "${heavy.failingCheck!!.message} / ${light.failingCheck!!.message}",
+        )
+    }
+
+    /**
+     * The shrinker half: a legitimate reduction of a sweep-backed failing plan is **accepted**.
+     *
+     * The strategy lowers the number of frames the fault destroys, which is unambiguously less
+     * adversarial and still fails the property. Before computenet-umx.4 every such candidate
+     * failed with a different density line, `sameFailingCheck` read it as a different failure,
+     * and the shrink returned the original plan with zero reductions accepted — silently.
+     */
+    @Test
+    fun aReductionOverASweepBackedCheckIsAcceptedByTheShrinker() {
+        val run = DstRun(GRAPH, lossPlan(count = 6), BUDGET, SWEEP_BACKED_CHECK)
+        val report = run.execute()
+        assertEquals(DstOutcome.FAILED, report.outcome, report.summary())
+        val artifact = DstArtifact.of(run, report, suite = SUITE, checkId = SWEEP_BACKED_CHECK_ID)
+
+        val result = PlanShrinker.shrink(
+            artifact,
+            strategy = ReductionStrategies.numericParamToward(DROP_KIND, "count", target = 1.0),
+        )
+
+        assertTrue(
+            result.record.reductionsAccepted >= 1,
+            "a smaller loss still fails the same property and must be accepted: " +
+                result.trail.joinToString("\n"),
+        )
+        assertEquals(
+            1,
+            paramOf(result.plan, ESSENTIAL, "count"),
+            "the shrink reaches the strategy's extreme — the plan that destroys one frame still " +
+                "fails the same property: ${result.trail.joinToString("\n")}",
+        )
+    }
+
     companion object {
         private const val SUITE = "dst-selftest-sweep"
         private const val CHECK_ID = "dst-selftest-seed-keyed"
@@ -193,5 +345,54 @@ class SweepTest {
         }
 
         private val FAILING_SEEDS = (0L..99L).filter { it % 14 == 3L }
+
+        // --------------------------------- the sweep-backed check fixture (computenet-umx.4)
+
+        private const val DROP_KIND = "dst-selftest-sweep-drop-n"
+        private const val ESSENTIAL = "drop-ab"
+        private const val IDENTITY_SEED = 41L
+        private const val SWEEP_BACKED_CHECK_ID = "dst-selftest-sweep-backed"
+        private const val INNER_SUITE = "dst-selftest-sweep-inner"
+
+        /** `chains * (rounds + 1)` hops in each direction on [GRAPH], with no frame lost. */
+        private const val EXPECTED_DELIVERIES = 2 * 4 * 2
+
+        /**
+         * How many sub-cases the inner sweep report covers.
+         *
+         * Wider than [EXPECTED_DELIVERIES] on purpose: if the range were narrower the derived
+         * failure count would saturate, two genuinely different plans would produce the same
+         * density line by accident, and the tests below would pass against the unfixed code.
+         */
+        private val INNER_SEEDS = 0L..EXPECTED_DELIVERIES.toLong()
+
+        /**
+         * A check whose failure path is [DstSweepReport.assertAllPassed] — the reachability the
+         * whole ticket is about.
+         *
+         * The inner entries are **synthesized** rather than produced by a nested [dstSweep], and
+         * that is the honest instrument: what is under test is the message
+         * `assertAllPassed` raises, which is a pure function of the entries, and a nested sweep
+         * would have cost ten full simulations per candidate to exercise the same one line. How
+         * many entries fail is derived from the outer run's own traffic loss, so a fault plan
+         * that destroys more frames produces a denser inner sweep — which is precisely the
+         * run-varying number that used to leak into the check's identity.
+         */
+        private val SWEEP_BACKED_CHECK = DstCheck { world ->
+            val delivered = world.traceEvents().count { it.port == "recv" }
+            val missing = (EXPECTED_DELIVERIES - delivered).coerceIn(0, INNER_SEEDS.count())
+            if (missing > 0) {
+                val firstBad = INNER_SEEDS.last - missing + 1
+                val entries = INNER_SEEDS.map { seed ->
+                    SweepEntry(
+                        seed = seed,
+                        report = null,
+                        error = if (seed >= firstBad) AssertionError("chain deliveries were lost") else null,
+                        artifact = null,
+                    )
+                }
+                DstSweepReport(INNER_SUITE, INNER_SEEDS, GRAPH.id, DstDriver.IN_PROCESS, entries).assertAllPassed()
+            }
+        }
     }
 }
