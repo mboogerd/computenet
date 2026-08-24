@@ -46,12 +46,24 @@ class FaultCodecRoundTripTest {
 
     private companion object {
 
-        /** The four fault classes landed in `civictech.testkit.dst` and their published kinds. */
+        /**
+         * The four fault classes landed in `civictech.testkit.dst` and their published kinds.
+         *
+         * Read off each class's `CODEC`, deliberately, and **not** off its `KIND`. `KIND` is a
+         * `const val`: the compiler inlines it into this file's constant pool, so naming it
+         * resolves to a string literal and loads nothing. `CODEC` is an ordinary companion
+         * property, so reading it is a real static field access that forces the owning class's
+         * initialiser — which is the registration this suite is about.
+         *
+         * Written with `KIND` here, [everyLandedFaultClassRegistersACodec_CHA1_31] passes only
+         * because some *other* test method in this class constructed a fault first, and fails
+         * when it is run on its own (measured: registry empty, all four kinds reported missing).
+         */
         val LANDED_KINDS: List<String> = listOf(
-            CrashFault.KIND,
-            PartitionFault.KIND,
-            JournalFault.KIND,
-            RestartAtFrontierFault.KIND,
+            CrashFault.CODEC.kind,
+            PartitionFault.CODEC.kind,
+            JournalFault.CODEC.kind,
+            RestartAtFrontierFault.CODEC.kind,
         )
 
         // -------------------------------------------------------------- the shrink fixture
@@ -112,9 +124,13 @@ class FaultCodecRoundTripTest {
     /**
      * Every landed fault class has registered a codec by the time its class is loaded.
      *
-     * Naming the four [KIND] constants is what loads the four classes, which is the mechanism
-     * under test as much as the assertion: a codec registered anywhere a consumer has to *ask*
-     * for would be a codec a consumer forgets.
+     * Reading the four [LANDED_KINDS] entries is what loads the four classes — see that
+     * property for why it must go through `CODEC` and not through the inlined `KIND` constant.
+     * The load is the mechanism under test as much as the assertion is: a codec registered
+     * anywhere a consumer has to *ask* for would be a codec a consumer forgets.
+     *
+     * This test must therefore be able to pass **alone**, with no sibling method having
+     * constructed a fault first. That is the property it is really pinning.
      */
     @Test
     fun everyLandedFaultClassRegistersACodec_CHA1_31() {
