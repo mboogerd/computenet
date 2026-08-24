@@ -17,6 +17,12 @@ import civictech.cell.protocol.ProtocolId
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.InvocationSink
+import civictech.cell.CurrentContext
+import civictech.cell.port.LinkFrom
+import civictech.cell.port.LinkTo
+import civictech.cell.proxy.Invocation
+import civictech.gen.wire.Contract
+import civictech.nature.ContractRegistry
 import java.util.UUID
 
 /**
@@ -216,7 +222,16 @@ class BridgeIngressCell(
                         return
                     }
                 }
-                val decoded = decodedFrame.invocation
+                // computenet-wb6s: a link request crosses as an addressable
+                // [RemoteLink] call and is translated back into the ordinary
+                // linkTo/linkFrom invocation here, BEFORE the peer stamp below —
+                // so the handshake that follows sees the identity this ingress
+                // authenticated, never one a sender supplied.
+                val decoded = if (RemoteLinkRequests.isRequest(decodedFrame.frame)) {
+                    RemoteLinkRequests.translate(decodedFrame.invocation, replySink)
+                } else {
+                    decodedFrame.invocation
+                }
                 val withPeer = if (decoded.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
                     val edge = decoded.protocolLink as WireEdgeLink
                     decoded.copy(protocolLink = edge.withBridge(replySink, protocolCapabilities), peer = peer, peerAuth = peerAuth)
@@ -227,4 +242,193 @@ class BridgeIngressCell(
             }
         })
     }
+}
+
+/**
+ * The wire vocabulary for a link request (computenet-wb6s, spec 41 point 4,
+ * 40/43 seam 1).
+ *
+ * A link request is a `PORT_MANAGEMENT` invocation, and until this contract
+ * existed it could not cross a wire at all: [WireCodec.encode] refuses any
+ * non-`PORT_PROTOCOL` frame whose method carries no `@Contract` ids
+ * ("not wire-capable: 'linkFrom' was not captured from a @Contract
+ * interface"), and [civictech.cell.port.LinkTo.linkTo] /
+ * [civictech.cell.port.LinkFrom.linkFrom] take a **live port object** as their
+ * argument — which no encoding could carry across a machine boundary even with
+ * ids. So the two halves of the seam were verified only up to an injection
+ * point: every cross-boundary link test handed the already-decoded invocation
+ * straight to the target side's registry.
+ *
+ * The fix keeps the model rather than weakening it. `LinkTo`/`LinkFrom` are
+ * untouched: what crosses is this contract's **addressable** form of the same
+ * request — "link your port to mine, which lives at (cell, port) and speaks the
+ * contract with this id" — and the receiving [BridgeIngressCell] translates it
+ * back into exactly the `linkTo`/`linkFrom` invocation an in-process caller
+ * would have made, stamped with the peer that ingress authenticated. The wire
+ * frame is unchanged: ids-only, three already-registered argument types
+ * ([CellRef], `String`, `Long`), no new field, no version bump — additive in
+ * precisely the sense `RegistryAnnounce` already was.
+ *
+ * The api is named by its **contract id**, never by a class name (P9): the
+ * receiver resolves it through its own [ContractRegistry], so an api the
+ * receiver does not know is refused locally rather than believed off the wire.
+ */
+@Contract(management = true)
+interface RemoteLink {
+    /**
+     * Asks the addressed port — a [civictech.cell.port.LinkTo] — to link to the
+     * requesting peer's consumer, which lives at ([cell], [port]) and speaks the
+     * contract identified by [apiContractId].
+     */
+    fun requestLinkTo(cell: CellRef, port: String, apiContractId: Long)
+
+    /**
+     * Asks the addressed port — a [civictech.cell.port.LinkFrom] — to accept a
+     * link from the requesting peer's producer at ([cell], [port]).
+     */
+    fun requestLinkFrom(cell: CellRef, port: String, apiContractId: Long)
+}
+
+/**
+ * Emit and receive sides of a [RemoteLink] request. Kept together so the two
+ * cannot drift into disagreeing about what a link request is — the same
+ * discipline [WireCodec.isAnnouncement] follows for announcements.
+ */
+object RemoteLinkRequests {
+
+    /** `LinkTo.linkTo(LinkFrom)` — the handshake-running overload, not the ad-hoc `Use` one. */
+    private val LINK_TO = LinkTo::class.java.methods.first {
+        it.name == "linkTo" && it.parameterTypes.singleOrNull() == LinkFrom::class.java
+    }
+    private val LINK_FROM = LinkFrom::class.java.methods.first { it.name == "linkFrom" }
+
+    private val REQUEST_LINK_TO = RemoteLink::class.java.methods.first { it.name == "requestLinkTo" }
+    private val REQUEST_LINK_FROM = RemoteLink::class.java.methods.first { it.name == "requestLinkFrom" }
+
+    /**
+     * [RemoteLink]'s generated contract id, resolved lazily for the same reason
+     * [WireCodec]'s announcement id is: `ContractRegistry` is
+     * ServiceLoader-populated and these objects initialize early. Null only if
+     * the generated descriptor is missing, in which case nothing is ever
+     * recognized as a link request — fail *closed*: an unrecognized frame takes
+     * the ordinary delivery path and fails loudly at the target port rather than
+     * being silently translated into a link.
+     */
+    private val contractId: Long? by lazy { ContractRegistry.descriptor(RemoteLink::class.java)?.contractId }
+
+    /** Whether [frame] carries a link request (see [translate]). */
+    internal fun isRequest(frame: WireFrame): Boolean {
+        val id = contractId ?: return false
+        return frame.type == HostedPortInvocation.Type.PORT_MANAGEMENT && frame.contractId == id
+    }
+
+    /**
+     * Rewrites a decoded [RemoteLink] request into the ordinary
+     * `linkTo`/`linkFrom` `PORT_MANAGEMENT` invocation the target port already
+     * understands, with a locally-constructed endpoint standing in for the
+     * requesting peer's port.
+     *
+     * [replySink] is the ingress's reverse path (in practice the receiving
+     * side's `LocationRegistry::deliver`, which resolves the requester's ref as
+     * a `Remote` routed back through the peering's egress), so data the target
+     * pushes into the endpoint reaches the requester exactly as any other remote
+     * send does (spec 41 point 3).
+     */
+    internal fun translate(decoded: HostedPortInvocation, replySink: InvocationSink): HostedPortInvocation {
+        val args = decoded.invocation.args
+        val cell = args[0] as CellRef
+        val port = args[1] as String
+        val api = apiClass(args[2] as Long)
+        return when (decoded.invocation.methodName) {
+            "requestLinkTo" -> {
+                val endpoint = FanInlet(api)
+                endpoint.serve(forwarder(api, cell, port, replySink))
+                decoded.copy(invocation = Invocation.of(LINK_TO, arrayOf<Any?>(endpoint)))
+            }
+
+            "requestLinkFrom" -> decoded.copy(
+                invocation = Invocation.of(LINK_FROM, arrayOf<Any?>(FanOutlet(api))),
+            )
+
+            else -> error("unknown RemoteLink method '${decoded.invocation.methodName}'")
+        }
+    }
+
+    /**
+     * Sends a link request to [target] over [sink] (a [BridgeEgressCell], or a
+     * registry that routes to one), asking it to link to this side's consumer at
+     * [consumer]. [api] must be `@Contract`-annotated: its contract id is what
+     * crosses, never its class name.
+     */
+    fun requestLinkTo(sink: InvocationSink, target: PortAddress, consumer: PortAddress, api: Class<*>) =
+        sink.deliver(request(REQUEST_LINK_TO, target, consumer, api))
+
+    /** [requestLinkTo]'s mirror: asks [target] to accept a link from this side's producer at [producer]. */
+    fun requestLinkFrom(sink: InvocationSink, target: PortAddress, producer: PortAddress, api: Class<*>) =
+        sink.deliver(request(REQUEST_LINK_FROM, target, producer, api))
+
+    private fun request(
+        method: java.lang.reflect.Method,
+        target: PortAddress,
+        own: PortAddress,
+        api: Class<*>,
+    ): HostedPortInvocation {
+        val apiContractId = checkNotNull(ContractRegistry.descriptor(api)?.contractId) {
+            "not wire-capable: ${api.name} carries no @Contract, so a link request cannot name it"
+        }
+        return HostedPortInvocation(
+            cellRef = target.cell,
+            portName = target.port,
+            type = HostedPortInvocation.Type.PORT_MANAGEMENT,
+            invocation = Invocation.of(method, arrayOf<Any?>(own.cell, own.port, apiContractId)),
+        )
+    }
+
+    /**
+     * The api interface named by [apiContractId], resolved through this side's
+     * own [ContractRegistry] — the receiver's knowledge, not the sender's claim.
+     * A contract this side does not know throws, and the throw is a decode-time
+     * fault on the ingress cell, handled like any other malformed frame.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun apiClass(apiContractId: Long): Class<Any> {
+        val fqn = checkNotNull(ContractRegistry.contract(apiContractId)?.fqn) {
+            "link request names contract id $apiContractId, which has no local descriptor"
+        }
+        return (load(fqn) ?: error("contract $fqn has a descriptor but no loadable class")) as Class<Any>
+    }
+
+    /**
+     * `ContractDescriptor.fqn` writes a nested interface's `$` separator as `.`
+     * (see `ContractRegistry.descriptor`), so the name is re-nested one segment
+     * at a time from the right until a class loads.
+     */
+    private fun load(fqn: String): Class<*>? {
+        var candidate = fqn
+        while (true) {
+            runCatching { return Class.forName(candidate) }
+            val dot = candidate.lastIndexOf('.')
+            if (dot < 0) return null
+            candidate = candidate.substring(0, dot) + "$" + candidate.substring(dot + 1)
+        }
+    }
+
+    /**
+     * A stand-in for the requesting peer's consumer: every call on [api] becomes
+     * a `PORT_API` invocation addressed to ([cell], [port]) and handed to
+     * [sink]. The wave context rides it (G-4), exactly as `HostedCellProxy`'s
+     * own api path does.
+     */
+    private fun forwarder(api: Class<Any>, cell: CellRef, port: String, sink: InvocationSink): Any =
+        java.lang.reflect.Proxy.newProxyInstance(api.classLoader, arrayOf(api)) { _, method, args ->
+            sink.deliver(
+                HostedPortInvocation(
+                    cellRef = cell,
+                    portName = port,
+                    type = HostedPortInvocation.Type.PORT_API,
+                    invocation = Invocation.of(method, args, CurrentContext.get()),
+                ),
+            )
+            null
+        }
 }

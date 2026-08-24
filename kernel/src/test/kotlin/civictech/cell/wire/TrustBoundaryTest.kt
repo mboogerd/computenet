@@ -167,43 +167,6 @@ class TrustBoundaryTest {
         run.deadLettersP.shouldBeEmpty()
     }
 
-    @Test
-    fun `link requests carry the delivering peer's identity into policies`() {
-        val controller = SimulationController()
-        val host = ManagedHost(scheduler = controller.scheduler())
-        val deadLetters = mutableListOf<DeadLetter>()
-        host.deadLetterOutlet.subscribe(Use.fixed(object : Propagate<DeadLetter> {
-            override fun propagate(value: DeadLetter) {
-                deadLetters += value
-            }
-        }, PortRef.generate()))
-
-        val target = CollectingCell()
-        host.managementInlet.call.spawn(target)
-        controller.runToIdle()
-        target.inlet.linking.policies += allowPeers(PeerId("good"))
-
-        val linkFrom = LinkFrom::class.java.methods.first { it.name == "linkFrom" }
-        fun requestFrom(peer: PeerId): FanOutlet<Consumer<String>> {
-            val outlet = FanOutlet.create<Consumer<String>>()
-            host.enqueueHostedInvocation(
-                HostedPortInvocation(
-                    target.ref, "inlet", HostedPortInvocation.Type.PORT_MANAGEMENT,
-                    Invocation.of(linkFrom, arrayOf(outlet)), peer = peer,
-                )
-            )
-            controller.runToIdle()
-            return outlet
-        }
-
-        val refused = requestFrom(PeerId("evil"))
-        refused.linking.links.shouldBeEmpty()
-        deadLetters.any { it.description.contains("allowlist") }.shouldBeTrue()
-
-        val admitted = requestFrom(PeerId("good"))
-        admitted.linking.links.size shouldBe 1
-    }
-
     /**
      * Records the ambient [Principal] of every `Attention` assertion it is
      * handed — the same probe [LoopbackPrincipalTest] uses to observe what
@@ -315,5 +278,87 @@ class TrustBoundaryTest {
 
         collector.received shouldBe (0 until 5).map { "q-$it" }
         deadLettersP.size shouldBe lettersBefore // zero new dead letters from the exchange
+    }
+
+    /**
+     * computenet-wb6s: a peering whose remote side announces itself as
+     * [remotePeer], with a [CollectingCell] hosted on the local side — the rig
+     * both real-frame link-request tests below drive.
+     */
+    private class LinkRig(remotePeer: String) {
+        val controller = SimulationController(0)
+        val registryP = LocationRegistry()
+        val hostP = ManagedHost(scheduler = controller.scheduler(), registry = registryP)
+        val bridgeP = ManagedHost(scheduler = controller.scheduler(), registry = registryP)
+        val registryQ = LocationRegistry()
+        val hostQ = ManagedHost(scheduler = controller.scheduler(), registry = registryQ)
+        val bridgeQ = ManagedHost(scheduler = controller.scheduler(), registry = registryQ)
+        val deadLettersP = mutableListOf<DeadLetter>()
+        val collector = CollectingCell()
+        val loopback: Peering.Loopback
+
+        init {
+            loopback = Peering.loopback(
+                Peering.Side(registryP, bridgeP, peer = PeerId("p")),
+                Peering.Side(registryQ, bridgeQ, peer = PeerId(remotePeer)),
+            )
+            listOf(hostP, bridgeP).forEach { h ->
+                h.deadLetterOutlet.subscribe(Use.fixed(object : Propagate<DeadLetter> {
+                    override fun propagate(value: DeadLetter) {
+                        deadLettersP += value
+                    }
+                }, PortRef.generate()))
+            }
+            hostP.managementInlet.call.spawn(collector)
+            controller.runToIdle()
+        }
+
+        /**
+         * The remote side asks P's collector inlet to accept a link from its own
+         * producer — as a **real frame**: encoded by the peering's Q→P
+         * [BridgeEgressCell], decoded and peer-stamped by P's
+         * [BridgeIngressCell]. Nothing here supplies an identity; the one the
+         * handshake sees is the one that ingress applied.
+         */
+        fun requestLink() {
+            RemoteLinkRequests.requestLinkFrom(
+                sink = loopback.bToA,
+                target = PortAddress(collector.ref, "inlet"),
+                producer = PortAddress(CellRef(UUID.randomUUID()), "outlet"),
+                api = Consumer::class.java,
+            )
+            controller.runToIdle()
+        }
+    }
+
+    /**
+     * computenet-wb6s: the link-request half of the identity seam, verified
+     * through a real wire frame rather than up to an injection point.
+     *
+     * Before this bead, the invocation below could not be encoded at all —
+     * `IllegalStateException: not wire-capable: 'linkFrom' was not captured from
+     * a @Contract interface` — so every cross-boundary link test in the
+     * repository handed the already-decoded invocation to the target side's
+     * registry instead.
+     */
+    @Test
+    fun `a link request crosses a real wire frame`() {
+        val rig = LinkRig(remotePeer = "q")
+        rig.requestLink()
+        rig.collector.inlet.linking.links.size shouldBe 1
+    }
+
+    @Test
+    fun `link requests carry the delivering peer's identity into policies`() {
+        val refusedRig = LinkRig(remotePeer = "evil")
+        refusedRig.collector.inlet.linking.policies += allowPeers(PeerId("good"))
+        refusedRig.requestLink()
+        refusedRig.collector.inlet.linking.links.shouldBeEmpty()
+        refusedRig.deadLettersP.any { it.description.contains("allowlist") }.shouldBeTrue()
+
+        val admittedRig = LinkRig(remotePeer = "good")
+        admittedRig.collector.inlet.linking.policies += allowPeers(PeerId("good"))
+        admittedRig.requestLink()
+        admittedRig.collector.inlet.linking.links.size shouldBe 1
     }
 }
