@@ -41,6 +41,7 @@ import io.kotest.matchers.comparables.shouldBeLessThan
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -516,6 +517,158 @@ class WavePrefixTest {
         violation.kind shouldBe RunOutcome.WavePrefixViolation.Kind.REGRESSED
         violation.matchedFloor shouldBe 4
         violation.regressedTo shouldBe 3
+    }
+
+    // ------------------------------ the candidate ANTICHAIN, and why one floor is not enough
+
+    /**
+     * computenet-ast8's shape: **two sources whose arms can contribute the same element**,
+     * reconverging at a `union`.
+     *
+     * ```
+     *   srcA (set) ── fltA (filter: text length even) ──┐
+     *                                                    ├── u (union) ── "united"
+     *   srcB (set) ── fltB (filter: text length even) ──┘
+     * ```
+     *
+     * The two arms are deliberately the SAME operator here, which [twoSourceDiamondCase]'s KDoc
+     * rules out for its own purpose and this one requires. That KDoc's reason is about a *torn*
+     * observation — identical arms carry identical values, so a half-published wave is
+     * indistinguishable from a complete one. This case tests nothing about tearing; it needs the
+     * opposite property, that **one terminal value is produced by two incomparable frontiers**,
+     * and equal arms are the cheapest way to get there (`ab` reaches the union either through
+     * `srcA` or through `srcB`).
+     */
+    private fun sharedElementCase(script: CaseScript, seed: Long = 3L) = GeneratedCase(
+        seed = seed,
+        topology = CaseTopology(
+            nodes = listOf(
+                TopologyNode("srcA", CoreOperators.Ids.SET, emptyList(), sourceA),
+                TopologyNode("srcB", CoreOperators.Ids.SET, emptyList(), sourceB),
+                TopologyNode("fltA", CoreOperators.Ids.FILTER, listOf("srcA"), null),
+                TopologyNode("fltB", CoreOperators.Ids.FILTER, listOf("srcB"), null),
+                TopologyNode("u", CoreOperators.Ids.UNION, listOf("fltA", "fltB"), null),
+            ),
+            terminals = listOf(TerminalSpec("united", "u")),
+            placement = mapOf("srcA" to 0, "srcB" to 0, "fltA" to 0, "fltB" to 0, "u" to 0),
+        ),
+        spec = spec(
+            SpawnStep("srcA", factory(CoreOperators.Ids.SET)),
+            SpawnStep("srcB", factory(CoreOperators.Ids.SET)),
+            SpawnStep("fltA", factory(CoreOperators.Ids.FILTER)),
+            SpawnStep("fltB", factory(CoreOperators.Ids.FILTER)),
+            SpawnStep("u", factory(CoreOperators.Ids.UNION)),
+            ConnectStep("srcA", "outlet", "fltA", "inlet"),
+            ConnectStep("srcB", "outlet", "fltB", "inlet"),
+            ConnectStep("fltA", "outlet", "u", "inlet"),
+            ConnectStep("fltB", "outlet", "u", "inlet"),
+        ),
+        script = script,
+        removeAudit = emptyList(),
+    )
+
+    /**
+     * One Op on `srcA` and three on `srcB`, giving the 2x4 frontier lattice below (`united`, as
+     * the reference model has it at each `(a, b)`):
+     *
+     * | | b=0 | b=1 | b=2 | b=3 |
+     * | --- | --- | --- | --- | --- |
+     * | **a=0** | `{}` | `{}` | `{ab}` | `{}` |
+     * | **a=1** | `{ab}` | `{ab}` | `{ab}` | `{ab}` |
+     *
+     * `q` has odd length, so it never reaches the union — which is what keeps `(0,1)` empty and
+     * pushes `srcB`'s own `ab` out to `b=2`, so the two frontiers carrying `{ab}` have DIFFERENT
+     * absorbed-Op sums (1 and 2) and a single-floor collapse has a determinate answer to pick.
+     * `srcB`'s trailing remove is what breaks monotonicity: without it every state of the `a=0`
+     * row above `(0,2)` would recur on the `a=1` row, and no later observation could ever
+     * distinguish the two branches.
+     */
+    private fun sharedElementScript() = CaseScript(
+        listOf(
+            CaseStep.Op(sourceA, ScriptEvent.Add(writer, "ab")),
+            CaseStep.Op(sourceB, ScriptEvent.Add(writer, "q")),
+            CaseStep.Op(sourceB, ScriptEvent.Add(writer, "ab")),
+            CaseStep.Op(sourceB, ScriptEvent.Remove(writer, "ab")),
+        ),
+    )
+
+    /** `united` as the model has it at frontier ([a], [b]) of [sharedElementScript]. */
+    private fun sharedAt(a: Int, b: Int): ModelState {
+        val case = sharedElementCase(
+            CaseScript(
+                sharedElementScript().steps.filterIsInstance<CaseStep.Op>().let { ops ->
+                    var takenA = 0
+                    var takenB = 0
+                    ops.filter { op ->
+                        if (op.source == sourceA) (takenA < a).also { if (it) takenA++ }
+                        else (takenB < b).also { if (it) takenB++ }
+                    }
+                },
+            ),
+        )
+        return diamondReference(case).evaluate(case.script.toScript()).getValue("united")
+    }
+
+    @Test
+    fun `the candidate antichain keeps every minimal frontier live, and a later observation reachable from only one of them is accepted`() {
+        // computenet-ast8. MAX_FRONTIER_LATTICE's KDoc rejects the cheaper first-match search
+        // because "the run's real frontier is not observable from the terminal's value, so a
+        // search that stopped at the first match could pick a frontier the run was not on and
+        // reject a legal later observation for not being above it." This is that sentence made
+        // falsifiable: collapse `candidates[terminal] = minimalElements(matches)` to
+        // `listOf(minimalElements(matches).minByOrNull { it.sum() }!!)` and the SECOND
+        // observation below is reported as a violation.
+        val case = sharedElementCase(sharedElementScript())
+        val checker = WavePrefixOracle.checker(case, "marker", diamondReference(case))
+
+        withClue("two axes, srcA first — the frontier sums the collapse would compare depend on it") {
+            checker.sourceAxes() shouldBe listOf(sourceA, sourceB)
+        }
+
+        // --- the ambiguity. `{ab}` is produced by (1,0) — srcA's add absorbed, srcB's nothing —
+        // --- and equally by (0,2) — srcB's add absorbed, srcA's nothing. Neither dominates the
+        // --- other, and the terminal's VALUE cannot say which the run is on.
+        val ambiguous = sharedAt(1, 0)
+        withClue("the two frontiers must genuinely carry the same terminal state") {
+            ambiguous shouldBe sharedAt(0, 2)
+            ambiguous shouldBe ModelState.SetState(setOf("ab"))
+        }
+        withClue("and no LOWER frontier may carry it, or the antichain would be a single floor") {
+            sharedAt(0, 0) shouldNotBe ambiguous
+            sharedAt(0, 1) shouldNotBe ambiguous
+        }
+
+        checker.observeTerminal("united", ambiguous).shouldBeNull()
+
+        withClue("both minimal frontiers stay live: (1,0) and (0,2)") {
+            checker.candidateCountOf("united") shouldBe 2
+        }
+        withClue("their greatest lower bound is the zero frontier, which is what incomparable means here") {
+            checker.frontierFloorOf("united") shouldBe listOf(0, 0)
+        }
+
+        // --- the discriminator. srcB's remove retracts `ab` again, so (0,3) is empty; every
+        // --- frontier on the a=1 row still carries srcA's own `ab`, so NO frontier at or above
+        // --- (1,0) produces this state. It is admissible from the (0,2) branch alone.
+        val onlyAboveTheOtherBranch = sharedAt(0, 3)
+        withClue("the discriminator must be unreachable from the (1,0) branch, or it proves nothing") {
+            (0..3).map { b -> sharedAt(1, b) }.contains(onlyAboveTheOtherBranch) shouldBe false
+        }
+        withClue("it must also be a real state of the (0,2) branch, not a torn one") {
+            onlyAboveTheOtherBranch shouldBe ModelState.SetState(emptySet())
+        }
+
+        withClue(
+            "a checker that kept only the lowest-sum frontier (1,0) would search a=1 only and " +
+                "reject this legal observation — that is the antichain's whole job",
+        ) {
+            checker.observeTerminal("united", onlyAboveTheOtherBranch).shouldBeNull()
+        }
+
+        withClue("and the surviving branch is the one the observation identified") {
+            checker.candidateCountOf("united") shouldBe 1
+            checker.frontierFloorOf("united") shouldBe listOf(0, 3)
+        }
     }
 
     @Test
