@@ -135,6 +135,18 @@ data class ChurnPlan(
  *    invented for symmetry would let the shrinker report a "reduction" that made the run
  *    harsher. A suite that knows its own graph's answer supplies one with [atStepToward].
  *
+ *    The *other* direction is unsound too, for a different reason, and it is worth writing
+ *    down because it is the one a later reader will reach for first: toward `0` looks
+ *    monotone — earlier rejoin, shorter absence, milder run — but a rejoin shrunk below the
+ *    departure it answers is not a smaller adversary, it is an incoherent plan (a peer
+ *    returning before it left), and **nothing rejects it**. `RejoinEvent`'s only `require` is
+ *    `atStep >= 0`; the codec has no view of the departure, so `numericParamToward` would
+ *    build the candidate happily and the shrinker would grade whatever the graph does with
+ *    it. So neither `0` nor the horizon is a target this object can state honestly, and the
+ *    absence is the finding rather than a gap in it. What is *not* lost by leaving it
+ *    unbound: [ReductionStrategies.dropFaults] still removes rejoin events whole, so the
+ *    shrinker is never blind to them — it simply cannot move one.
+ *
  * Note what `atStep` bindings cost: `numericParamToward` never proposes a value that leaves
  * the plan unbuildable (the codec's own `require`s reject those and the candidate is skipped),
  * but it *can* propose one past the run's quiesce point. That is fine — the reduction is
