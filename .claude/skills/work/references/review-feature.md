@@ -656,7 +656,7 @@ of these is true:
   checkable by someone else*, never *nobody need read it*: one such repair
   corrected KDoc that contradicted measured exit codes (computenet-h6a),
   another a workflow header naming the wrong surface (computenet-dqy.63).
-  Both were right; both were checked before they shipped;
+  Both were right; both were checked before they shipped.
   One case the count does not govern at all: a repaired file that is itself
   named in the item's acceptance criteria is the deliverable, whatever the
   filter prints — set `metadata.second_reader=<shas>` and certify, so
