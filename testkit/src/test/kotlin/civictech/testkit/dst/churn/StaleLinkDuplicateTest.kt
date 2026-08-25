@@ -13,14 +13,25 @@ import kotlin.test.assertTrue
 /**
  * **BS-6** — [CHA3-22], [CHA3-24]: re-delivery of a delta whose information the receiver already
  * holds changes nothing. A stale link to a departed replica and a CHA1 `DuplicateFault` are the
- * two ways to produce one; both are exercised in the same run, against a duplicate-free control
- * run of the identical plan.
+ * two ways to produce one.
  *
- * ## What is compared, and why it is a comparison rather than a bound
+ * ## WHAT THIS SUITE DOES AND DOES NOT ASSERT TODAY — read before trusting a green run
  *
  * "The duplicate changed nothing" is only a claim if there is a run it changed nothing *from*.
- * So each test runs one plan twice — once bare, once with the fault folded in — and compares
- * the converged folds and the per-replica **effective**-delta counts. Effective, not delivered:
+ * The two-arm comparison that would be that claim is **built but not performed**: [run] takes a
+ * `withDuplicate` flag and [Outcome] carries the folds, the per-replica effective-delta counts
+ * and the injected-duplicate count needed to compare two arms, but **no test in this file runs
+ * the duplicated arm against the bare one**, because on this mesh the duplicated arm injects
+ * nothing — see the [CHA3-24] diagnosis on the first test below. Running the comparison against
+ * an inert adversary would be a green that measured nothing.
+ *
+ * So what is asserted here is the **single-arm departure measurement**: that a permanent
+ * departure leaves a stale outbound subscription on each survivor (a stable, seed-swept count),
+ * and that the survivors go on absorbing effective deltas. [CHA3-22]'s "the effective-delta
+ * count is *unchanged*" half and [CHA3-24] both wait on the same missing piece — an injectable
+ * duplicate on this graph — and neither is discharged by this file.
+ *
+ * When the comparison does become runnable, this is the shape it takes. Effective, not delivered:
  * `Replicable`'s outlet carries only deltas that carried new information (the echo-termination
  * seam), so an absorbed duplicate is invisible there by construction and a *counted* duplicate
  * would show up immediately. See [GossipInstruments] for why the delivered count is not
@@ -44,9 +55,10 @@ import kotlin.test.assertTrue
  * invariant is **one subscription per `(local, remote)` pair ever linked, never growing** —
  * which is bounded by the declared roster, not by live membership.
  *
- * The consequence [CHA3-22] cares about is unaffected and IS asserted here: nothing that stale
- * link re-delivers is ever counted, and the survivors' folds and effective-delta counts are
- * identical to the duplicate-free control's.
+ * What that stale link does NOT give [CHA3-22] is a re-delivery: it points at a replica that has
+ * departed, so whatever it carries reaches a dead sink rather than a live receiver that already
+ * holds the information. The re-delivery [CHA3-22] is about therefore still needs the injected
+ * duplicate [CHA3-24] needs, and the paragraph above says so.
  *
  * ## Corpus candidacy — flagged, not filed
  *
@@ -150,8 +162,11 @@ class StaleLinkDuplicateTest {
     /**
      * The departure half of [CHA3-22], over a seed sweep: the survivors keep a stale outbound
      * subscription to the departed replica at rest (the class KDoc's finding, stable across
-     * seeds) and it costs them nothing — their folds still converge and their effective-delta
-     * counts are still the duplicate-free control's.
+     * seeds) and it costs them nothing — they go on absorbing effective deltas.
+     *
+     * **Single-arm.** There is no duplicate-free control to compare against here: this IS the
+     * bare arm, and the duplicated arm is inert on this mesh (class KDoc). So this asserts the
+     * measured stale count and continued absorption, not "unchanged relative to a control".
      */
     @Test
     fun `BS-6 a departure leaves a stale subscription that costs the survivors nothing`() {
