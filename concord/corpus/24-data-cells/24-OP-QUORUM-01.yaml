@@ -1,11 +1,6 @@
-# Coverage note (W3-2): chapter 24 has no dedicated EARS id for QuorumSetCell's
-# k-of-n admission (a W3-0 catalog refinement — cell-catalog.md note 6). `covers:`
-# falls back to the general accepted-op convergence property (21-PROP-01) rather
-# than inventing an id; minting a `24-OP-QUORUM-01` EARS id is a spec-editing
-# follow-up, not this ticket's call.
 id: 24-OP-QUORUM-01
 title: Quorum-set admits an element once k of n live sources assert it
-covers: [21-PROP-01]
+covers: [24-OP-QUORUM-01]
 profile: core
 kind: example
 narrative:

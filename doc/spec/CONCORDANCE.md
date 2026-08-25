@@ -69,7 +69,7 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 21-CYCLE-01 | 34-CYCLE-01, 34-CYCLE-REJECT-01 | covered |
 | 21-CYCLE-02 | 34-CYCLE-01 | covered |
 | 21-CYCLE-03 | — | gap |
-| 21-PROP-01 | 13-FANIN-01, 13-FANOUT-01, 13-TAP-01, 15-DESPAWN-01, 21-PIPE-01, 24-GEN-01, 24-OP-COMBINE-01, 24-OP-INTERSECT-01, 24-OP-KEYEDSET-01, 24-OP-PRESENCE-01, 24-OP-QUORUM-01, 24-OP-UNION-01, CTL-CONVERGE-01 | covered |
+| 21-PROP-01 | 13-FANIN-01, 13-FANOUT-01, 13-TAP-01, 15-DESPAWN-01, 21-PIPE-01, 24-GEN-01, 24-OP-COMBINE-01, 24-OP-INTERSECT-01, 24-OP-KEYEDSET-01, 24-OP-PRESENCE-01, 24-OP-UNION-01, CTL-CONVERGE-01 | covered |
 | 21-PULL-01 | 21-PULL-01 | covered |
 | 21-PULL-02 | 21-PULL-02 | covered |
 | 21-PULL-03 | — | gap |
@@ -115,6 +115,7 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 24-OP-OUTERJOIN-01 | — | gap |
 | 24-OP-OUTERJOIN-02 | — | gap |
 | 24-OP-PNCOUNTER-01 | 24-OP-PNCOUNTER-01 | covered |
+| 24-OP-QUORUM-01 | 24-OP-QUORUM-01 | covered |
 | 24-OP-SEMIJOIN-01 | 24-OP-SEMIJOIN-01 | covered |
 | 24-OP-SEMIJOIN-02 | 24-OP-SEMIJOIN-01 | covered |
 | 24-OP-SEMIJOIN-03 | 24-OP-SEMIJOIN-01 | covered |

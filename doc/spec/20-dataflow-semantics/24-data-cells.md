@@ -161,7 +161,7 @@ semantics only — neither is a convergent merge under concurrent writers
   signed multiplicities (see the weighted-family deferral below).
   Convergence classes: **freely replicable** duplicates emit identical tag
   info (filter, flatMap, union), **convergent duplicates** agree on
-  membership but mint distinct tags (intersect, semijoin/antijoin,
+  membership but mint distinct tags (intersect, quorum, semijoin/antijoin,
   equi-join), **single-instance** outputs are single-writer streams
   (groupBy, the counters outside the PN form):
   - `FilterCell` — predicate filter over a tagged set stream, tags intact.
@@ -179,6 +179,29 @@ semantics only — neither is a convergent merge under concurrent writers
     minted, cell-owned tag for an element on entry and delete all advertised
     tags on exit, absorbing tag churn that does not flip membership
     (Ubiquitous).
+  - `QuorumSetCell` — dynamic **k-of-n** fan-in (one link per source, each
+    carrying its own tag lane): an element is admitted exactly while the number
+    of distinct live source links asserting it meets a `threshold(n)` evaluated
+    against the current live-source count `n`, so union (`{ 1 }`), intersection
+    (`{ n -> n }`), majority (`{ n -> n / 2 + 1 }`), fixed k-of-n (`{ k }`) and
+    near-miss (`{ n -> n - 1 }`) are one lambda over the same cell. Because the
+    threshold reads `n`, a link opening or closing re-evaluates the whole
+    working set, not only the elements whose own count moved (an empty source
+    joining tightens an intersection). Output tags are **minted per entry** —
+    one freshly minted, cell-owned tag advertised on entry, exactly that tag
+    deleted on exit, tag churn that doesn't flip membership absorbed — per its
+    *convergent duplicates* class above and 21 §Tag hygiene; borrowing is
+    doubly unsound here, because a quorum's flip-ON rides *another* lane's
+    assertion rather than a fresh input add-tag on the flipping element, and
+    because a borrowed tag reaching a consumer twice across a diamond is
+    retracted for both paths at once (measured: `union(A, quorum(A, B))` lost
+    an element live in `A` — computenet-vvre, computenet-s6l2).
+    `[24-OP-QUORUM-01]` `QuorumSetCell` SHALL admit an element exactly while
+    the number of distinct live source links asserting it meets its threshold
+    of the live-source count, advertising a freshly minted, cell-owned tag for
+    the element on entry and deleting exactly that tag on exit (Ubiquitous).
+    A replayed frame flagged as a baseline is a recovery rather than a live
+    wave and is admitted regardless of the threshold (`[24-REPLAY-01]`).
   - `JoinCell` — the **LWW dictionary join**: keyed inner join over two
     single-writer map streams where either side's put *refreshes* the pair —
     value-replacement semantics, inherently arrival-order (`MapDelta`'s
