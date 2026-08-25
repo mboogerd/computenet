@@ -71,6 +71,16 @@ import java.util.WeakHashMap
  * by the real two-JVM `ExchangeScaffoldTest`"). Cross-peer replication (the harder,
  * *not*-yet-established property above) stays intact and unheld-crashed; the partition fault is
  * what exercises it here, exactly as in the exit test's own peer-partition/heal scenario.
+ *
+ * ## The 9-of-10 divergence was a kernel defect, and it is fixed
+ *
+ * computenet-h50w reproduced it and found the cause: `Replication.linked` retained the
+ * *discarded* cell object under the rebuilt replica's `(local, remote)` key, so `maybeLink`
+ * re-fired M10.1 catch-up through a dead outlet and never linked the rebuilt cell.
+ * `Replication.replicate` now supersedes a same-ref local instance first. The paragraph above
+ * still explains why THIS graph keeps a local writer as its crash target — one graph, one
+ * question — but "cross-host gossip re-linking through a crash is not a property this codebase
+ * establishes" is no longer true: [ExchangeReplicatedCrashDstTest], below, establishes it.
  */
 object ExchangeCompositionDstGraph {
 
