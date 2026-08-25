@@ -675,6 +675,39 @@ would instead suppress live post-recovery traffic as already-acted, that opposit
   there rather than re-arguing it. As above, every count here is against the in-process effect
   log the `effect-sink` writes; nothing in this bullet claims end-to-end external
   exactly-once, which stays 93 I-7's ceiling and CON1's territory (`[KFX-24]`).
+- **Rig-gated kernel sweeps (CHA2 evidence lane, `computenet-umx.1.6`, `[CHA2-51]`)**: the
+  same construction is now also swept across *every journal prefix a crash could land on*,
+  in `kernel/src/test/kotlin/civictech/cell/repro/EffectReplaySweepTest.kt`, driven by
+  CHA1's DST rig (`civictech.testkit.dst`, `doc/dst-rig.md`) rather than by hand. Four
+  reproductions, all seeds pinned and none re-rolled (`[CHA2-47]`):
+  `BS-2 a restart from every journal prefix acts on each source counter position at most once`
+  (`[CHA2-11]`, seed 101),
+  `BS-3 rolling the processed frontier back re-delivers and re-fires the invocations past it`
+  (`[CHA2-12]`, seed 202),
+  `BS-6 a torn tail replays clean minus exactly the torn record and fires no effect for it`
+  and
+  `BS-6 a corrupted record aborts replay at its index and fires no effect at or beyond it`
+  (`[CHA2-15]`, seeds 303 and 404), plus
+  `BS-17 a reproduction writes a replayable artifact and a copy-pasteable replay command`
+  (`[CHA1-50]`, `[CHA1-51]`).
+  **BS-2 fails and stands as an `@ExpectedFailure`**, owner **`computenet-xxeo`**: at 6 of
+  17 prefixes — every odd `k` in `[1, 3, 5, 7, 9, 11]` — a single `(sourceId, counter)` is
+  acted on twice. The frame for counter `c` is journaled at record `2(c - 1)` and the
+  `Effectful` frontier advance recording that it was acted on at `2(c - 1) + 1`, so an odd
+  prefix is precisely a crash landing *between* the effect firing and the record saying it
+  fired; recovery reports `recovery-complete@k` in all six, so this is a clean replay, not a
+  damaged one. BS-3's frontier rollback reaches the same state through a different fault and
+  shares the owner, which is what makes it more than an artificial injury. The residual is
+  **not** the journaled-source double-fire this heading retired — that construction is
+  `34892d9`-fixed and passes — but the write-ahead ordering *around* the frontier record;
+  what it bounds is the scope of `[24-DUR-05]`, whose exactly-once effect delivery is exactly
+  as durable as the frontier journal and no stronger. Whether that is the intended guarantee
+  or a defect is `computenet-xxeo`'s decision to make; no kernel change was taken here
+  (`[CHA2-50]`), and no scenario or schema change either (`[CHA2-51]`) — the concord scenario
+  language carries no crash/replay fault verbs at authoring level, which is why these live
+  outside the corpus. BS-6's two halves both hold, unannotated. Sweep transcript, mechanism,
+  pinned seeds and how to regenerate a replay command:
+  `doc/evidence-lane-findings.md` → "`computenet-umx.1.6` — rig-gated C-9 sweeps".
 - **Also not resolved by this entry**: `[24-DUR-04]`'s emission-identity plane is now
   asserted head-on by `DUR-SRCID-01`/`DUR-SRCID-02`; its OR-set tag plane and
   wave-aligned-consumer plane are recorded separately under "Not covered" below.

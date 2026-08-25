@@ -463,6 +463,7 @@ class Journals {
         decorations.getValue(name).fold(bases.getValue(name)) { inner, decorate -> decorate(inner) }
 
     private class DecoratedJournal(private val name: String, private val journals: Journals) : Journal {
+        override val formatVersion: Int get() = journals.resolve(name).formatVersion
         override fun append(record: ByteArray) = journals.resolve(name).append(record)
         override fun replay(): List<ByteArray> = journals.resolve(name).replay()
         override fun reset(records: List<ByteArray>) = journals.resolve(name).reset(records)
