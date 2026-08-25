@@ -236,11 +236,13 @@ class QuorumSetCell<E>(
      * mint counter riding the attributes does not change that, since the lanes
      * can still lower the frontier.
      *
-     * No `[24-OP-*]` requirement id covers this cell; the contract preserved is
-     * its own KDoc — the advertise-on-entry / delete-exactly-those-tags-on-exit
-     * discipline and `[24-REPLAY-01]`'s baseline disposition — and this method
-     * only reads: it evaluates no threshold, opens and closes no lane, and
-     * reaches neither `propagate` nor `absorbAck`.
+     * `[24-OP-QUORUM-01]` is the requirement covering this cell, but it
+     * constrains admission and tag provenance, not reads; the contract this
+     * method preserves is therefore its own KDoc — the advertise-on-entry /
+     * delete-exactly-those-tags-on-exit discipline and `[24-REPLAY-01]`'s
+     * baseline disposition — and this method only reads: it evaluates no
+     * threshold, opens and closes no lane, and reaches neither `propagate` nor
+     * `absorbAck`.
      */
     override fun readBounded(request: StateRead): StatePage = pageOver(
         request,
