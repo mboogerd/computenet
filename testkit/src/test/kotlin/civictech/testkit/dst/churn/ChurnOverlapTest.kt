@@ -190,6 +190,16 @@ class ChurnOverlapTest {
         val overlap = ChurnMesh.overlapOf(world)
 
         assertEquals(DstOutcome.PASSED, report.outcome, report.summary())
+        // The exact set of fired ids, for the same reason every green test in this feature
+        // carries it: `inFlight` is computed from the PLAN's event steps, not from what the
+        // adversary did, so a departure that never fired leaves this test's own claim — that
+        // the writes overlapped a *departure* — false while every number below still holds.
+        // Measured: with `DepartEvent.onStep` silenced this test stayed green without it.
+        assertEquals(
+            plan.events.map { it.id }.toSet(),
+            report.appliedFaults.filter { it.fired > 0 }.map { it.id }.toSet(),
+            report.summary(),
+        )
         // Writes at steps 590..629; the departure's window is [600, 700), so thirty of forty
         // land while the departure is in flight.
         assertEquals(30, overlap.opsDuringChurn, overlap.summary())
