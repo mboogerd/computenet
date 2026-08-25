@@ -1727,3 +1727,431 @@ because this entry and the `DISPUTES.md` extension are part of the change.
 - **`[CHA2-51]`**: `concord/corpus/DISPUTES.md`'s G-59/C-9 boundary entry
   extended with this suite's reproduction ids — an extension of the existing
   entry, not a duplicate entry, and no corpus scenario or schema change.
+
+## `computenet-umx.2.8` — 2026-08-25 — CHA3 churn sweeps, pinned-seed shrink, exclusive accounting under churn, and the bounded-gossip-hop argument written with its numbers (BS-17/BS-18/BS-19)
+
+Recorded by: `computenet-umx.2.8` (feature `computenet-umx.2` — CHA3; epic
+`computenet-umx` — CHA1). The capstone task of CHA3: it consumes every sibling
+(`.2.1` vocabulary, `.2.2` mesh+executor, `.2.3` reconvergence check, `.2.4`
+gossip instruments, `.2.5` departure gates, `.2.6` controls+self-test, `.2.7`
+last-replica/leader-churn probes — all closed and merged into this task's base)
+and writes the sweep-scale evidence and the argument the G-45 ask is actually
+asking for. Realizes `[CHA3-44]`, `[CHA3-45]`, `[CHA3-48]`, `[CHA3-49]`,
+`[CHA3-80]`, the prose half of `[CHA3-25]`, `[CHA3-81]`; asserts feature-wide
+`[CHA3-82]`/`[CHA3-83]` (no kernel `main` edit, no concord scenario, anywhere in
+the feature). Base commit `f1b51c992` ("Merge main into feature/computenet-umx.2").
+New suites:
+`testkit/src/test/kotlin/civictech/testkit/dst/churn/ChurnSweepTest.kt`,
+`ExclusiveChurnTest.kt`, `ChurnShrinkTest.kt`.
+
+### 1. Churn sweeps — BS-1 at sweep scale (`[CHA3-80]`)
+
+Every sibling task's own reconvergence/instrument/departure/control/probe tests
+run ONE hand-built or generated plan per test method (`ReconvergenceCheckTest`,
+`ChurnMeshTest`, `GossipInstrumentsTest`, `DepartureGatesTest`,
+`LastReplicaProbeTest`, `SingleWriterChurnTest` — none of them call `dstSweep`).
+This task adds the sweep-scale run `[CHA3-80]` asks for:
+`ChurnSweepTest.everyLiveReplicaReconvergesAcrossAChurnSweep_BS1` runs
+`ChurnGenerator`-produced churn plans (3-peer `SetCell` mesh, `eventCount=6`,
+`stepBudget=6000`, all four `DepartureMode`s at equal weight) over seeds
+**1..60** through `dstSweep`, wrapped in `MeshConvergences.observing { }`
+(`ReconvergenceCheck` refuses loudly on an unobserved world rather than judging
+an empty fold set). Density is `[CHA3-80]`'s own `N of M`, never first-failure
+abort; **60 of 60 passed**, and every seed's own churn events are asserted to
+have fired (`[CHA3-47]`) — no inert churn event was observed on this range. The
+sweep also asserts every `DepartureMode` was drawn at least once across the 60
+seeds (it was), so this is not a sweep whose adversary happened to draw only
+the gentle modes sixty times running.
+
+**Two rig-composition findings, surfaced only by running at sweep scale rather
+than one plan at a time — neither a kernel defect, both fixed in the harness
+(`ChurnSweepTest.kt`'s own KDoc carries the traces):**
+
+1. **A `PARTITION_SUSPEND` departure the generator never redraws stays
+   suspended forever, and `assertOneMembership` is right to call that a
+   disagreement.** `ChurnGenerator`'s coherence promise (its own class KDoc)
+   is about the *generated sequence* — a peer never departs before it joins,
+   never rejoins while a member — not about every departure resolving before
+   the plan ends. A peer whose LAST drawn event is `PARTITION_SUSPEND` stays
+   suspended through quiescence whenever no later draw redraws it (measured
+   directly: seed 2 of the initial 40-seed range, `peer0` suspended at
+   step 3098, never healed, `ReconvergenceCheck.assertOneMembership` correctly
+   read the disagreement and failed the sweep). `MeshPeer.partitionAway()`
+   never clears `member`, so the peer stays counted as an observer whose
+   registry legitimately never converges. `ChurnGenerator.kt` is not in this
+   task's claim, so the fix lives in `ChurnSweepTest.kt`: `churnPlan(seed)`
+   appends one synthetic `RejoinEvent` (`MeshPeer.rejoin`'s own
+   `if (suspended) heal()` arm) for any peer left suspended, at
+   `lastEventStep + 1`, before feeding the plan to `dstSweep`. This is a test
+   composition fix, not a kernel change and not a weakened assertion — the
+   property `assertOneMembership` checks is unchanged; only the churn plans
+   fed to it are made coherent through to quiescence.
+2. **A write schedule generated for one `stepBudget` does not spread across
+   it.** `ChurnGenerator.writeSchedule`'s own `step` advances by ~1 per
+   non-concurrent write regardless of `stepBudget`, so a 24-write script packs
+   into the first ~20 steps of a 6000-step horizon while membership events
+   (`nextStep`'s `maxGap = horizon / eventCount`, here ~1000) spread across the
+   whole of it. Measured directly (throwaway per-seed `ChurnMesh.overlapOf`
+   read, seeds 1..20, discarded after use): **achieved overlap was 0% on 19 of
+   20 sampled seeds** against a `partitionOverlap`-derived configured target of
+   30% — almost every write landed before any peer had joined. Fixed by
+   hand-building the template's write schedule strided across the horizon
+   (`WRITE_START=300`, `WRITE_STRIDE=200`, mirroring `ReconvergenceCheckTest`'s
+   own `WRITE_STRIDE`/`writes()` precedent) rather than using the generator's
+   packed one — `ChurnPlan.toFaultPlan()` never carries `writeSchedule` at all,
+   so only the graph-construction-time template's schedule was ever going to
+   drive the mesh's actual writes regardless of which seed's plan `planFor`
+   returned. **Re-measured after the fix, same 20 seeds: achieved overlap
+   5%–15% (mean 9.2%) against the same 30% configured target.** This is
+   reported honestly rather than tuned further: `[CHA3-60]`'s own point is
+   that achieved overlap is a measurement, not a knob to satisfy, and this
+   sweep's own check does not gate on it (BS-15's dedicated overlap gate,
+   `ChurnMesh.overlapAtLeast`, is `ChurnOverlapTest.kt`'s job, already landed
+   by a sibling task, and this sweep does not duplicate it).
+
+Measured cost: **60 seeds in 0.45s wall (~7.5ms/seed)**, `:testkit:test
+--tests 'civictech.testkit.dst.churn.ChurnSweepTest' --rerun`, darwin/arm64.
+Well inside "tens of seeds" tolerable for `:testkit:test`.
+
+### 2. Exclusive-payload accounting under churn — BS-17 (`[CHA3-44]`, `[CHA3-45]`)
+
+`ExclusiveChurnTest.kt`'s `ChurnExclusiveBridgeGraph`: the same replicated
+churn mesh (`ChurnMesh`, `MeshPayload.SET`, `peerCount=2..2`, membership
+churning under a `ChurnGenerator`-produced plan) plus an `Owned`-payload bridge between
+two extra hosts (`excl-sender`/`excl-receiver`, CHA1's own
+`ExclusivePayloadAccountingTest`/`ExclusiveBridgeGraph` idiom, reused rather
+than reinvented), one of which departs uncleanly mid-transfer under a folded
+CHA1 `CrashFault.midDrain` (`ChurnPlan.withFaults`, `[CHA3-04]`'s composition).
+The registered check is exactly `ExclusiveLedgers.check` (`[CHA1-53]`) composed
+with `DeadLetterPolicy.strict`'s own check (`[CHA1-52]`) — no bespoke
+assertion, per `[CHA3-44]`'s and `[CHA3-45]`'s own wording.
+
+- **Conforming graph, seeds 1..50: 50 of 50 passed.** Every seed's churn events
+  fired (no inert event on this range), and the fixed-identity bridge
+  adversary (`excl-drop-sr`, `excl-drop-ack`, `excl-dup-sr`,
+  `excl-crash-receiver`) fired at least once across the range — a green sweep
+  whose adversary never fired proves nothing, and this range's adversary did
+  fire.
+- **Diverging control, seeds 1..50: fails on at least one seed** (the same
+  branch that silently lets an exhausted exclusive handle go, rather than
+  discharging it), with the failure attributable to `ExclusivePayloadLost`
+  specifically — the discrimination `[CHA1-62]`/`[CHA1-63]` ask for. *(Measured
+  independently at task review, `computenet-umx.2.8`'s reviewer: the control
+  fails on **all 50 of 50** seeds, not merely one — the test asserts the weaker
+  "at least one" deliberately, since the density is the run-varying half.)*
+
+- **What the mesh's own churn does NOT contribute here, measured at task review
+  and stated rather than left implied.** At `peerCount=2..2`, `eventCount=2` the
+  generator draws, across the whole checked-in range (seeds 1..50), **73
+  `JoinEvent`s, 100 `ReassignEvent`s and ZERO `DepartEvent`s of any
+  `DepartureMode`** — no mesh peer departs, cleanly or uncleanly, on any seed
+  this suite runs. **The unclean departure BS-17's own *Given* names is
+  delivered solely by `CrashFault.midDrain` on `excl-receiver`** (`fired=1` on
+  every seed), never by a churn departure. What BS-17 therefore evidences is
+  **CHA1's exclusive accounting under an unclean HOST departure, in a world that
+  also contains a churning mesh** — not an exclusive payload carried through
+  membership churn. The property itself is real and mutation-proven (flipping
+  `dischargeOnExhaustion` to `false` on the conforming graph turns the sweep red
+  with `ExclusivePayloadLost`, re-confirmed 50-of-50 at the second read); it is
+  the *composition* that is narrower than
+  the prose above originally implied. Widening it is filed as
+  **`computenet-usmw`** (open, under epic `computenet-umx`).
+
+- **Two sub-claims of the paragraph above were themselves wrong and are
+  corrected here** (re-measured at the second, independent read of
+  `computenet-umx.2.8`, darwin/arm64 — the zero-departure finding held exactly,
+  these two did not):
+  - The mesh's joins are **not** disjoint from the payload path. The bridge's
+    last traced activity on `excl-sender`/`excl-receiver` lands at step
+    **56..105** depending on seed — not "step 0 under a crash at step 2", which
+    is only where its *crash* fires — so the joins at step 92 / 26 on seeds 1 / 5
+    fall *inside* the bridge's own window. The finding that stands is the
+    unqualified one: **no `DepartEvent` is drawn at all**, so nothing about
+    concurrency needs to be argued.
+  - Raising `EVENT_COUNT` to 8 does **not** make "every seed refuse". Exactly
+    **one** seed does — seed 8, `peer "peer0" is already a member, so a rejoin
+    cannot be applied to it`, raised from `MeshPeer.rejoin` (`PeerHandles.kt`)
+    after a `DepartEvent@306` on `peer0` — and the **other 49 conforming runs
+    pass**. At 8 the generator draws **107 `DepartEvent`s across all 50 seeds**
+    (26 `CRASH_UNCLEAN`, on 20 seeds), earliest at step **61**, with **14 of 50**
+    seeds placing one inside the 56..105 band. So `computenet-usmw` is a
+    *cheaper* item than its own description implies: the widening is one seed's
+    rejoin-coherence away, not a generator rewrite.
+- **`[CHA3-45]`'s dead-letter half is genuinely exercised, not an untested
+  default**: a crash discards its generation's scheduler outright with no
+  invocation path to dead-letter through — the same rig limit
+  `computenet-umx.2.5`'s `DISPUTES.md` entry traces for the churn mesh's own
+  crash path, confirmed independently here for this graph
+  (`theDeadLetterPolicyIsGenuinelyExercisedAndReadsZero_CHA3_45` reads 0 dead
+  letters on seed 3's conforming run, then forces one classified letter
+  through `DeadLetterAccounting` directly and confirms `UnexplainedDeadLetters`
+  fires) — so `DeadLetterPolicy.strict`'s presence in the composed check is a
+  standing tripwire that would catch a future graph change routing a dead
+  letter through this path, not a check nothing in this suite can make fail.
+
+Measured cost: **101 runs (50 + 50 + 1) in 0.183s wall (~1.8ms/run)** —
+cheap because the mesh carries no application workload
+(`opScriptLength=0`; BS-17's property is exclusive accounting, not
+reconvergence, so the mesh's own writes would be traffic this check never
+reads).
+
+### 3. Pinned-seed shrink, end to end — BS-18 (`[CHA3-48]`)
+
+`ChurnShrinkTest.kt` reuses `ChurnExclusiveBridgeGraph.control` — `[CHA3-48]`'s
+own text permits "use a control-induced failure if no genuine one exists", and
+this control graph already fails without contriving a separate fixture. The
+first failing seed in `1..50` is **seed 1**, failing with
+`"exclusive payload lost ([CHA1-53]): an Owned/Leased payload ended the run
+with no consume, release, discharge or dead letter"`.
+
+Shrinking with `ChurnReductions.strategyFor(stepBudget)` (drop-faults first,
+then the declared churn knobs against the plan's own horizon) ran to a local
+fixpoint: **8 faults → 1 fault in 12 attempts (7 accepted)**, "no further
+reduction reproduced the failure" (not attempt-capped). The original plan's 8
+faults — `churn-0-join-peer0`, `churn-0-reassign-peer0`, `churn-1-join-peer1`,
+`churn-1-reassign-peer1`, `excl-drop-sr`, `excl-drop-ack`, `excl-dup-sr`,
+`excl-crash-receiver` — shrink to the single fault `excl-drop-ack`: dropping
+the ack channel alone is already sufficient to exhaust the sender's retry
+budget and reach the branch the control diverges on. Every membership churn
+event and every other CHA1 fault on the bridge (`excl-drop-sr`, `excl-dup-sr`,
+`excl-crash-receiver`) was inessential to *this* seed's failure and the
+shrinker correctly discarded all of them.
+
+`[CHA3-48]`'s full acceptance is asserted directly, not merely produced:
+
+- **The artifact holds both plans.** `DstArtifact.plan()` (original, 8 faults)
+  and `DstArtifact.shrunkPlan()` (reduced, 1 fault) are both recovered from the
+  SAME artifact `PlanShrinker.shrink` returns.
+- **The shrunk plan still fails, with the identical check message.** Re-run
+  independently of the shrinker's own bookkeeping: `DstOutcome.FAILED`, and
+  `rerunReport.failingCheck.message` equals `artifact.observed.failingCheck`
+  byte for byte.
+- **The seed is byte-identical in both.** `DstArtifact.plan` (`PlanRecord`) has
+  no seed field at all (`[CHA1-35]`, structural) — both plans are reconstructed
+  as `FaultPlan(artifact.seed, ...)`, so "byte-identical" here is the same
+  `Long` read twice from one source, not two values compared for equality.
+- **The shrinker's own seed guard is asserted to fire, not merely trusted.**
+  `theShrinkerRefusesASeedVaryingStrategy_BS18` hands `PlanShrinker.shrink` a
+  deliberately-wrong strategy that drops a fault (so the candidate is not
+  filtered as already-visited before the guard runs — `PlanShrinker`
+  de-duplicates candidates by fault content first) AND changes the seed;
+  `PlanShrinker`'s own `requireSeedHeld` throws `IllegalArgumentException`
+  citing `[CHA1-35]`, both seeds, and "rejected before it was run" — the exact
+  pattern `ShrinkerTest.aSeedVaryingReductionStrategyIsRejected_BS3` pins for
+  CHA1's own fixture, reproduced here against a churn artifact rather than
+  assumed to generalize.
+
+Measured cost: **~0.23s wall for both tests** (each finds seed 1 independently
+and re-runs the shrink or the rejection from scratch — no shared fixture
+across the two methods), `:testkit:test --tests
+'civictech.testkit.dst.churn.ChurnShrinkTest' --rerun`, darwin/arm64.
+
+### 4. The bounded-gossip-hop reconciliation argument, with its numbers (`[CHA3-25]` prose half, `[CHA3-81]`, BS-19)
+
+**The claim** (42-replication.md, 93 I-3, cited as G-45's missing argument):
+*duplicate and stale mesh links are safe by tag idempotence.* Four measurable
+consequences, each with the number that supports it — all measured by sibling
+tasks against the SAME rig this task's own sweeps ran against; cited here
+rather than re-derived (`computenet-umx.2` §3.3's own table names exactly these
+four):
+
+1. **A stale peer's extra link delivers a duplicate that merges to a no-op.**
+   `GossipInstrumentsTest`'s BS-6 (`StaleLinkDuplicateTest`, `.2.4`'s landing):
+   duplicating every frame on a live pair changes neither the converged fold
+   nor the per-replica effective-delta count. On the departed-peer half, the
+   measured invariant is narrower than `[CHA3-20]`'s literal wording (below).
+2. **A late-learned peer catches up in a bounded number of hops, and the bound
+   is decided against measured data, not asserted on faith.** `.2.4`'s own
+   sweep (12 runs, seeds 1–4 × rosters 2–4, non-vacuity guarded — at least one
+   run absorbed a nonzero hop): **`hops` is 0 or 1 in every run and never
+   exceeds `peersThatHadLearned` (1, 2 or 3)**, where a hop is one *effective*
+   delta the joiner absorbed. The asserted bound is `hops <= peersThatHadLearned`
+   ("bounded by the number of peers that had learned the joiner"); the
+   feature's own risk-1 candidate — "one hop per membership-fold generation" —
+   is explicitly NOT asserted, because nothing in the harness observes a fold
+   generation and no test here measures that quantity. **Scope, stated
+   honestly rather than generalized past the data**: proven only for a joiner
+   issuing no write in its own catch-up window; **NOT proven for a joiner
+   arriving into a partitioned mesh** — that combination was not run.
+3. **Link count does not grow with churn — but the literal `[CHA3-20]` wording
+   is FALSE at rest after a permanent departure, and the corrected invariant
+   is the one that holds.** `.2.4`'s own measurement (seed 31, `peer2` evicted
+   cleanly at step 600, stable across seeds 31–33): both survivors read
+   `consumers=2 (gossip=2, stale=1) links=2 liveMembership=1` — not a leak
+   (the gossip `PortRef` is pair-derived, so a re-link REPLACES the map entry
+   rather than adding a sibling), but the entry is never REMOVED on unpublish.
+   **The true, measured invariant is: one subscription per `(local, remote)`
+   pair ever linked, never growing — bounded by the declared roster, not by
+   live membership.** `RejoinSubscriptionTest`'s BS-5 (three depart/rejoin
+   cycles) confirms the non-leak reading directly: count stays at 2 = live
+   membership, `staleLinks == 0` at quiescence — a leak would have grown.
+4. **A replica with no reachable peer suspends rather than evicting, so
+   unique un-gossiped state is never dropped.** `DepartureGatesTest`'s BS-9
+   (`.2.5`'s landing, mutation-proven): `evict` returns `false`, the replica
+   stays a member with its fold intact, its delivered-watermark row reads
+   SUSPENDED and not CLOSED, and on heal it resumes and reconverges with its
+   peer.
+
+**`[CHA3-24]`'s duplicate-absorption half, filed by `.2.4` and since closed**:
+the churn mesh peers over `Peering.loopback`, and declaring an
+`InvocationPoint` for `DuplicatePlane.INVOCATIONS` to resolve was outside
+`.2.4`'s claim (`ChurnMesh.kt`) — filed as `computenet-5pky`, closed and merged
+into this task's base (per the feature bead's own session handoff: "Six units
+merged into the branch: ... and computenet-5pky, the residual that made the
+duplicate adversary real"). `StaleLinkDuplicateTest`'s BS-6 exercises the real
+re-delivery path as of this base, not an inert one.
+
+**Every property left unproven, with its reason — none contrived away:**
+
+- **`[CHA3-23]`'s hop bound is proven only for the no-concurrent-write,
+  no-partition case** (above). A joiner arriving into a partitioned mesh
+  remains an open measurement; extending `GossipInstrumentsTest`'s sweep to
+  that combination is future work, not attempted here (outside this task's
+  claim — `GossipInstrumentsTest.kt` belongs to `.2.4`).
+- **`[CHA3-42]`'s `Stall`-family-notice half of unclean departure is a
+  `kernel-gap`** — filed by `computenet-umx.2.5` as
+  `CHA3-42-stall-notice-unclean-departure` in `concord/corpus/DISPUTES.md`,
+  traced from source (six `StallNotice.Stall` call sites in `kernel` main,
+  none reachable from `HostSlot.crash()`). **Not duplicated here** — this
+  section cites it rather than re-filing it, per this task's own dispatch.
+- **This task's own reconvergence sweep's achieved churn/write overlap
+  (9.2% mean against a 30% configured target, §1 above) is a measurement, not
+  an assertion this sweep gates on.** `[CHA3-60]`'s dedicated overlap gate
+  (`ChurnMesh.overlapAtLeast`) is BS-15's property and `ChurnOverlapTest.kt`'s
+  job, already landed by a sibling task; this task's own sweep reports the
+  number honestly rather than either hiding it or duplicating BS-15's gate.
+- **`[CHA3-51]`'s "duplicated across the transition" is read at the successor
+  only** (below, §5) — filed as `computenet-yqgd`, not re-filed here.
+- **BS-17's exclusive payload never crosses a mesh MEMBERSHIP departure** (§2
+  above, measured at task review): zero `DepartEvent`s of any `DepartureMode`
+  across seeds 1..50. The unclean
+  departure is the bridge host's own `CrashFault.midDrain`. Filed as
+  `computenet-usmw`. This is a *coverage* limit — the composition is reachable
+  in principle, it simply was not run — so it is recorded here rather than in
+  `concord/corpus/DISPUTES.md`, which is for properties that cannot be checked
+  honestly at all.
+- **No new `concord/corpus/DISPUTES.md` entry was needed from this task.**
+  Every churn-reachable property this task's own tests exercise (exclusive
+  accounting under churn, dead-letter accounting under churn, pinned-seed
+  shrink) was checked honestly and passed, or — where it could not be checked
+  (the hop bound's partitioned-joiner case) — is recorded above as an
+  unproven scope limit rather than filed as a dispute, because it is a gap in
+  *measurement coverage*, not a property this task attempted to check and
+  found uncheckable. `[CHA3-49]` is satisfied by there being nothing to file.
+
+### 5. The last-replica probe's recorded observations — the MEM2 hand-off note
+
+Recorded verbatim from `computenet-umx.2.7`'s landing (`LastReplicaProbe.kt`,
+`LastReplicaProbeTest.kt`), as `[CHA3-32]`/`[CHA3-61]`/`[CHA3-62]`'s own text
+requires this task to carry into the written argument — CHA3 **observes and
+reports**; MEM2 **defines and implements** last-replica handoff (G-45's second
+clause):
+
+- **BS-12, down to one replica**: the survivor's `reachablePeers` reads empty,
+  `evict` returns `false`, the replica stays a member with its fold intact,
+  and its own delivered-watermark row reads SUSPENDED and not CLOSED. Durable
+  store is defined structurally: a replica is "at a durable store" when some
+  journal the graph declared through `DstWorld.journals` has appended at least
+  one record; the churn mesh declares none, so the last-replica condition
+  (effective state at no durable store) reads **TRUE** — pinned as a real read
+  by a second test that declares a journal and watches the report flip.
+- **BS-13, down to zero replicas**: what survives is recorded in three
+  independent places — journals (none declared, so nothing), location
+  directories (the crashed peer's own registry survives and still publishes a
+  dangling instance no host serves, recorded not repaired), and
+  delivered-watermark rows (the crashed peer's companion row is discarded with
+  its rebuilt-empty linker; cleanly-departed peers' companions outlive the
+  mesh with closed rows). `NO_HANDOFF_DEFINED` is a `const` both reports render
+  verbatim, pinned by a test asserting it appears in both.
+- **This is MEM2's design input, not a proposal.** `[CHA3-84]`/`[CHA3-52]`:
+  nothing here defines a handoff mechanism, picks an R1 direction, or
+  implements election — the boundary `.2.7`'s own dispatch names as the whole
+  point of that task, held.
+
+### 6. The BS-14 branch taken — a real measured window, not the measured-vacuous branch
+
+Feature §9 risk 5 anticipated that `SingleWriterReplication`'s explicit-only
+failover (no election shipped) might admit no interleaving that produces a
+split-brain window, making the BS-14 measurement vacuous. **It does not — the
+branch taken is a REAL MEASURED WINDOW** (`computenet-umx.2.7`'s landing,
+`SingleWriterChurnTest.kt`), because `designateLeader` folds a `LeaderMark`
+into one peer's own map by a direct, non-gossiped call, so a two-peer failover
+takes two calls and the state between them is a state of the system, not a
+race:
+
+- **Promote-first** (incoming leader designated first): **both instances
+  report `leading == true` for the whole gap — window = 2 orchestration
+  steps.**
+- **Demote-first** (outgoing leader designated first): **window = 0**, and the
+  cost moves to a **1-step gap in which NO instance leads** instead.
+- So the window is a property of **orchestration order**, not of the kernel —
+  the finding — and it chooses no R1 direction and implements no election
+  (`[CHA3-52]`; `LeaderChurnReport` carries no verdict field, pinned by a
+  reflection test over `declaredFields`).
+- **Write accounting across the promote-first transition** (`[CHA3-51]`): 4
+  accepted writes, 4 present at the successor — none lost, none duplicated —
+  even though one write was accepted inside the window (the successor's
+  catch-up raises the outgoing leader's epoch before its in-window write is
+  stamped, so the write lands at the new epoch and is not fenced).
+
+**Two scope limits carried forward, not re-derived, because the second
+reviewer of `.2.7` already stated them precisely and repeating the derivation
+here would risk drifting from the corrected wording:**
+
+- **The interleaving is hand-constructed, not generated.** Only `plan.seed`
+  reaches `SingleWriterChurnTest`'s fixture (a single UUID derivation); the
+  `ChurnPlan`'s own events — its depart events, its ordering — are never read,
+  and the two `designateLeader` calls, their order, and every write site are
+  literal statements in the test bodies. `[CHA3-53]`'s own criterion (the
+  churn seed stream exposed as a documented reusable entry point) is met by
+  `ChurnSeeds` independently of whether BS-14 itself sweeps a generated
+  interleaving — it does not, and this is a stated scope, not a miss dressed
+  as a limit.
+- **The write accounting is read at the successor only.** Both arms call
+  `measurement.report(observedTotal = set.b.total)`; nothing reads the
+  demoted instance's own total after the transition. So `duplicated=0` means
+  **the successor applied nothing twice**, not that no instance did — the
+  demoted instance measurably ends at TWICE the successor's total
+  (promote-first: peerA=6 vs successor=4; demote-first: peerA=4 vs
+  successor=2, per the reviewer's own mutation check). Widening the
+  accounting to read both instances is filed as **`computenet-yqgd`**
+  (task, under epic `computenet-umx`, open) — cited here rather than
+  re-derived or re-filed.
+
+### 7. Verification
+
+```
+./gradlew :testkit:test --tests 'civictech.testkit.dst.churn.*' --rerun
+  16 files, 83 tests, 0 failures, 0 errors, 0 skipped
+./gradlew :testkit:test --rerun
+  34 files, 245 tests, 0 failures, 0 errors, 0 skipped
+./gradlew :kernel:test --rerun
+  BUILD SUCCESSFUL — unchanged (no kernel main edit on this branch)
+./gradlew :concord:test --rerun
+  BUILD SUCCESSFUL — unchanged (no scenario added)
+```
+
+darwin/arm64 only; Linux/CI (the six required checks) not run from this
+worktree. `./gradlew test` (repository-wide) run separately per the task's own
+verification section; see the task's own report for its result.
+
+### Disposition
+
+- **BS-1 at sweep scale**: 60 of 60 seeds pass; two rig-composition findings
+  fixed in the harness, neither a kernel defect.
+- **BS-17**: conforming graph 50 of 50; control diverges correctly; the
+  dead-letter half of the check is genuinely exercised, not untested.
+- **BS-18**: end-to-end pinned-seed shrink on seed 1, 8→1 faults, seed held
+  byte-identical, shrunk plan re-verified against the identical check message,
+  the shrinker's own seed guard asserted to fire.
+- **BS-19**: the bounded-gossip-hop argument stated in prose above with every
+  supporting number, the hop bound's scope limit stated rather than
+  generalized, the MEM2 last-replica hand-off note carried verbatim, the BS-14
+  measured-window branch (not measured-vacuous) reported with its two scope
+  limits.
+- **`[CHA3-49]`**: no new `DISPUTES.md` entry filed by this task; the
+  departure-gates task's Stall-notice entry is cited, not duplicated.
+- **`[CHA3-82]`/`[CHA3-83]`** (feature-wide): no kernel `main` edit and no
+  concord scenario anywhere in the feature, verified against `git diff` on
+  this task's own branch and by citation of every sibling's own landing note
+  above.
