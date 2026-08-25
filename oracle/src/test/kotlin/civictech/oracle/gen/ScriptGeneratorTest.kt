@@ -15,9 +15,9 @@ import kotlin.math.abs
 import kotlin.random.Random
 
 /**
- * [ScriptGenerator]: the observed/unobserved remove bias (`[ORA1-GEN-06]`), the construct-correct
- * single-writer guarantee for order-dependent sources (`[ORA1-MODEL-09]`), per-source-kind event
- * legality, the three script-side `[ORA1-GEN-04]` knobs, and determinism.
+ * [ScriptGenerator]: the observed/unobserved remove bias (`ORA1 §GEN-06`), the construct-correct
+ * single-writer guarantee for order-dependent sources (`ORA1 §MODEL-09`), per-source-kind event
+ * legality, the three script-side `ORA1 §GEN-04` knobs, and determinism.
  *
  * Every fixture here is a hand-built [CaseTopology]: this suite has no dependency on the graph
  * generator, so a failure names the script generator and nothing else. The `OperatorCatalog` is
@@ -66,7 +66,7 @@ class ScriptGeneratorTest {
 
     private fun ops(script: CaseScript): List<CaseStep.Op> = script.steps.filterIsInstance<CaseStep.Op>()
 
-    // --- Ex/unobserved bias [ORA1-GEN-06] -------------------------------------------------
+    // --- Ex/unobserved bias ORA1 §GEN-06 -------------------------------------------------
 
     /**
      * Ex/unobserved bias, the feature's own example: at `unobservedRemoveRatio = 0.3` and
@@ -287,7 +287,7 @@ class ScriptGeneratorTest {
         crossRemoves shouldExceed 0
     }
 
-    // --- Ex/rejection [ORA1-MODEL-09] -----------------------------------------------------
+    // --- Ex/rejection ORA1 §MODEL-09 -----------------------------------------------------
 
     /**
      * Ex/rejection, the feature's own example: with the order-dependent `map` source in the
@@ -331,7 +331,7 @@ class ScriptGeneratorTest {
     /**
      * The consequence that matters: the reference model evaluates a generated map slice without
      * throwing [MapCellSourceModel.MultiWriterMapSliceException] — the exception being the thing
-     * `[ORA1-MODEL-09]`'s generation-time guarantee exists to make unreachable. The same model
+     * `ORA1 §MODEL-09`'s generation-time guarantee exists to make unreachable. The same model
      * does throw on a hand-built two-writer slice, so the green result above is the generator's
      * doing and not a dormant check.
      */
@@ -410,7 +410,7 @@ class ScriptGeneratorTest {
         failure.message!!.contains(CoreOperators.Ids.FILTER) shouldBe true
     }
 
-    // --- knobs [ORA1-GEN-04] --------------------------------------------------------------
+    // --- knobs ORA1 §GEN-04 --------------------------------------------------------------
 
     /** `scriptLength` is the exact number of op steps, and this task emits no barriers. */
     @Test
@@ -513,7 +513,7 @@ class ScriptGeneratorTest {
         }
     }
 
-    /** `[ORA1-GEN-01]`: equal (topology, config, seed) produce structurally equal scripts and audits. */
+    /** `ORA1 §GEN-01`: equal (topology, config, seed) produce structurally equal scripts and audits. */
     @Test
     fun `equal topology config and seed produce equal scripts`() {
         val topology = topologyOf(

@@ -3,21 +3,21 @@ package civictech.oracle.model
 import java.io.Serializable
 
 /**
- * `MapCell` — the last operator computenet-4ru.5.3 adds to `[ORA1-MODEL-02]`'s vocabulary —
- * and the honesty ledger (`[ORA1-HONEST-02]`) for everything the vocabulary deliberately does
+ * `MapCell` — the last operator computenet-4ru.5.3 adds to `ORA1 §MODEL-02`'s vocabulary —
+ * and the honesty ledger (`ORA1 §HONEST-02`) for everything the vocabulary deliberately does
  * NOT cover. Both halves close the model out: computenet-4ru.5.1 built the set-source, unary
  * and fan-in slice, computenet-4ru.5.2 the binary/keyed-join/group-by family, and this file is
  * where the reference model *stops growing* and says why.
  *
- * ## Exclusion ledger (`[ORA1-HONEST-02]`)
+ * ## Exclusion ledger (`ORA1 §HONEST-02`)
  *
  * Every operator named in epic computenet-4ru §3.1's inventory that does **not** appear in
- * `[ORA1-MODEL-02]`'s minimum coverage list, or does appear there but cannot be modelled
+ * `ORA1 §MODEL-02`'s minimum coverage list, or does appear there but cannot be modelled
  * honestly, is listed here with a reason verified against its own kernel source — never an
  * approximation offered so a scenario passes.
  *
  * **This is one half of the honesty ledger; the other half is
- * [civictech.oracle.run.OracleSweep]'s `[ORA1-HONEST-01]` KDoc section**, which states at the
+ * [civictech.oracle.run.OracleSweep]'s `ORA1 §HONEST-01` KDoc section**, which states at the
  * module's entry point that the reference model's own correctness is *defended, not proven*,
  * and names the four defenses (independence, the divergence control, the mutation check, the
  * corpus cross-check) with their landed test classes and their weaknesses. Read that section
@@ -32,7 +32,7 @@ import java.io.Serializable
  *
  * - **Uncheckable by a batch reference** — *this ledger's subject*. The operator's semantics
  *   cannot be honestly expressed as a pure fold over one local [Script], so no reference model
- *   written under `[ORA1-MODEL-03]`'s constraints could certify it at all. Every entry below is
+ *   written under `ORA1 §MODEL-03`'s constraints could certify it at all. Every entry below is
  *   of this kind, and each says which faculty the script vocabulary lacks (a position-
  *   renumbering rule, a replication event, an edge/wave completion signal).
  * - **Checkable by a batch reference but unreachable by shape-typed generation** — *not this
@@ -41,7 +41,7 @@ import java.io.Serializable
  *   generator-coverage defect, not a modelling-honesty one, and it is repaired by changing the
  *   generator rather than by writing a reason down. The known instance — the pair-shaped
  *   `joinSet`/`semiJoin`/`antiJoin`/`groupBy*` family — is **computenet-4ru.16, parked for a
- *   human and undecided**, including the question of whether `[ORA1-HONEST-02]` is even the
+ *   human and undecided**, including the question of whether `ORA1 §HONEST-02` is even the
  *   right home for it. Nothing here decides that; the distinction exists so that recording
  *   4ru.16's eventual outcome is one entry in whichever home is chosen, not a re-design of this
  *   ledger.
@@ -52,7 +52,7 @@ import java.io.Serializable
  *
  * ### `counter` / `pnCounter`: REGISTERED but NOT EXERCISED (computenet-gff7)
  *
- * `[ORA1-HONEST-02]`'s subject is what the vocabulary does not cover, and coverage has two
+ * `ORA1 §HONEST-02`'s subject is what the vocabulary does not cover, and coverage has two
  * separable halves — whether an operator is *bound* and whether it is ever *run*. For every
  * other entry in `civictech.oracle.bind.CoreOperators` the two coincide. For these two they do
  * not, so **"registered" does not imply "exercised" here, and this note is what stops it
@@ -62,7 +62,7 @@ import java.io.Serializable
  * bound and are modelled honestly by `CounterSourceModel`/`PnCounterSourceModel`. But they are
  * the only entries emitting a bare [ElementShape.Scalar], and **no registered operator consumes
  * a bare scalar on any port**. `GraphGenerator.Builder.chooseRootShape` draws a case's root
- * shape only among source shapes something in the vocabulary can consume, and `[ORA1-GEN-03]`
+ * shape only among source shapes something in the vocabulary can consume, and `ORA1 §GEN-03`
  * forbids a source standing as a terminal itself, so no generated case can spawn either one.
  * Every existing completeness test says they are covered; no differential sweep has ever run
  * them. `civictech.oracle.bind.CatalogReachabilityTest` computes that from the registrations
@@ -106,12 +106,12 @@ import java.io.Serializable
  * per-entry conclusion is stated in the entry itself: every exclusion remains honestly checked
  * by some other instrument, so **no exclusion below produced a `DISPUTES.md` filing.**
  *
- * The feature *did* produce one filing, and it is not an exclusion: `[ORA1-DIFF-09]`/BS-12, the
+ * The feature *did* produce one filing, and it is not an exclusion: `ORA1 §DIFF-09`/BS-12, the
  * divergence control that cannot be built against today's kernel because the reference model
  * and the kernel disagree about `[24-SET-03]`'s observer. See the `ORA1 (divergence control)`
  * section of `concord/corpus/DISPUTES.md` and [civictech.oracle.run.DivergenceControlTest].
  *
- * - **`ListCell` / `ListDelta`.** Outside `[ORA1-MODEL-02]`'s minimum list entirely (unlike
+ * - **`ListCell` / `ListDelta`.** Outside `ORA1 §MODEL-02`'s minimum list entirely (unlike
  *   `MapCell`, `ListCell` is not named in the requirement), and excluded rather than
  *   partially modelled for a stronger reason than `MapCell`'s: `ListCell`'s operations
  *   (`kernel/src/main/kotlin/civictech/cell/data/ListCell.kt`) are **index**-addressed
@@ -124,7 +124,7 @@ import java.io.Serializable
  *   the script format has no way to state. `[24-OP-LIST-01]` confirms the kernel treats
  *   `ListDelta`'s index-addressed edits as single-stream semantics only, same as `MapCell`'s
  *   `MapDelta` — the difference is that `MapCell`'s single remaining ambiguity is exactly what
- *   `[ORA1-MODEL-08]`'s single-writer restriction resolves, and `ListCell`'s is not.
+ *   `ORA1 §MODEL-08`'s single-writer restriction resolves, and `ListCell`'s is not.
  *   *DISPUTES audit: no filing.* `[24-OP-LIST-01]` is honestly checked by the hand-authored
  *   scenario `concord/corpus/24-data-cells/24-OP-LIST-01.yaml`, which states the index-addressed
  *   sequence explicitly instead of generating one — the faculty this reference lacks.
@@ -152,7 +152,7 @@ import java.io.Serializable
  *   `GroupByCell` there is no `retract` — a merge cannot be un-applied in general … The
  *   accumulator itself must encode removal (a peer's `MapDelta.removals` on `deltaInlet` drop
  *   a key); element-level retraction on `inlet` belongs to the non-replicated
- *   `GroupByCell`."* `[ORA1-MODEL-06]` requires the reference model to reproduce aggregator
+ *   `GroupByCell`."* `ORA1 §MODEL-06` requires the reference model to reproduce aggregator
  *   retraction exactly, including group-death on last-member retraction — and this cell has
  *   **no local retraction path at all**: the only way a key is ever removed is a peer's
  *   gossiped `MapDelta.removals`, a *replication* mechanism this epic explicitly does not
@@ -160,8 +160,8 @@ import java.io.Serializable
  *   `CHA1`/`CHA3`). A batch reference over one local script therefore cannot honestly express
  *   this cell's removal semantics at all — not "removal is different here", but "removal has
  *   no expression in what this reference is allowed to read." Modelling it as grow-only would
- *   be a silent approximation of exactly the retraction property `[ORA1-MODEL-06]` exists to
- *   check; excluded instead. (It is also not named in `[ORA1-MODEL-02]`'s minimum list.)
+ *   be a silent approximation of exactly the retraction property `ORA1 §MODEL-06` exists to
+ *   check; excluded instead. (It is also not named in `ORA1 §MODEL-02`'s minimum list.)
  *   *DISPUTES audit: no filing.* The removal path is a replication mechanism, and replication
  *   is `CHA1`/`CHA3`'s decided scope (epic §6) — a scope assignment, not an absence of any
  *   honest check.
@@ -171,7 +171,7 @@ import java.io.Serializable
  *   cell's grow/merge-only aggregation, stating non-retraction itself as the specification
  *   rather than approximating a retraction it cannot see. That model does not fix what this
  *   entry found wrong: it does not model the gossiped-`MapDelta.removals` path either — the
- *   ORA1 reasoning above (`[ORA1-MODEL-06]`'s retraction demand, and the replication mechanism
+ *   ORA1 reasoning above (`ORA1 §MODEL-06`'s retraction demand, and the replication mechanism
  *   this epic does not model) stands as stated, it is simply no longer the only requirement in
  *   play. What changed is which requirement governs the cell: ORA1 measured it against exact
  *   retraction and found it unmodellable; ORA2 measures it against grow/merge-only and models
@@ -196,7 +196,7 @@ import java.io.Serializable
  *   `24-OP-WINDOW-01`/`24-OP-WINDOW-02` cover windowing-as-key-derivation, the part that does
  *   exist.
  *
- * - **`CoalescingCombineCell`.** Named in epic §3.1's inventory but not in `[ORA1-MODEL-02]`'s
+ * - **`CoalescingCombineCell`.** Named in epic §3.1's inventory but not in `ORA1 §MODEL-02`'s
  *   minimum list; **excluded**, per the bead's default direction. Verified against its own
  *   KDoc (`kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt`): the cell's
  *   whole reason to exist is a **wave-completion fold** — buffering each in-flight wave's
@@ -256,7 +256,7 @@ import java.io.Serializable
 
 /**
  * `MapCell` — untagged last-writer-wins map ([24-OP-MAP-01]), modelled ONLY for a
- * single-writer FIFO script slice (`[ORA1-MODEL-08]`): the last [ScriptEvent.Put] per key in
+ * single-writer FIFO script slice (`ORA1 §MODEL-08`): the last [ScriptEvent.Put] per key in
  * script order wins, and [ScriptEvent.RemoveKey] deletes the key. `MapCell`'s outlet is
  * `Subscribe<Propagate<MapDelta<K, V>>>`
  * (kernel/src/main/kotlin/civictech/cell/data/MapCell.kt) — an untagged, arrival-order delta
@@ -275,7 +275,7 @@ import java.io.Serializable
  * single writer's own calls are FIFO-ordered along one path. A script with two writer ids
  * therefore states an order this reference has no warrant to treat as the arrival order a
  * live run would actually see, and an "expected" LWW winner picked from it would be a guess
- * dressed as a fact. `[ORA1-MODEL-09]`'s generation-time rejection is the corresponding
+ * dressed as a fact. `ORA1 §MODEL-09`'s generation-time rejection is the corresponding
  * generator-side enforcement (computenet-4ru.6, not built here); this model enforces the same
  * restriction on the evaluation side, so an out-of-band multi-writer slice (hand-built, or a
  * future generator defect) fails loudly rather than returning a plausible-looking guess.
@@ -292,7 +292,7 @@ object MapCellSourceModel : SourceModel, Serializable {
     /**
      * Thrown when a [SourceScript] handed to [evaluate] carries [ScriptEvent.Put] or
      * [ScriptEvent.RemoveKey] events from more than one distinct [WriterId] — the case
-     * `[ORA1-MODEL-08]` says has no defined expected value. Named so a multi-writer slice
+     * `ORA1 §MODEL-08` says has no defined expected value. Named so a multi-writer slice
      * fails as *this*, specifically, rather than surfacing as an unrelated
      * `IllegalStateException` a caller has to read the message of to diagnose.
      */
@@ -309,7 +309,7 @@ object MapCellSourceModel : SourceModel, Serializable {
         if (writers.size > 1) {
             throw MultiWriterMapSliceException(
                 "MapCellSourceModel is defined only for a single-writer FIFO script slice " +
-                    "[ORA1-MODEL-08]; source '${slice.source.id}' carries puts/removes from " +
+                    "ORA1 §MODEL-08; source '${slice.source.id}' carries puts/removes from " +
                     "${writers.size} distinct writers (${writers.map { it.id }.sorted()}), so " +
                     "the expected last-writer-wins value is undefined, not merely unknown.",
             )

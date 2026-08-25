@@ -80,7 +80,7 @@ class MultiWriterGenerationTest {
 
     @Test
     fun `an ORA1 single-instance sweep may still name MapCell under two writers`() {
-        // The rejection is on replication, not on writerCount: [ORA1-MODEL-09] already pins an
+        // The rejection is on replication, not on writerCount: ORA1 §MODEL-09 already pins an
         // order-dependent source to one writer by construction, and that path is untouched.
         val config = GeneratorConfig(
             depthRange = 1..1,

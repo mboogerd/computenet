@@ -1,7 +1,7 @@
 package civictech.oracle.model
 
 /**
- * Observed-remove membership, defined on the **script** (`[ORA1-MODEL-04]`, `[ORA1-MODEL-05]`;
+ * Observed-remove membership, defined on the **script** (`ORA1 §MODEL-04`, `ORA1 §MODEL-05`;
  * spec `[24-SET-01]`, `[24-SET-03]`).
  *
  * ## The rule
@@ -25,7 +25,7 @@ package civictech.oracle.model
  * The kernel gets add-wins by tag-set union: a remove retracts only the tags it observed, so
  * a concurrent add's tag survives (`[24-SET-03]`). This computes the *same* membership from
  * causality alone — no tag, no tag count, no wave id, no `SetDelta` internal appears
- * (`[ORA1-MODEL-03]`). That independence is the point: a model that re-implemented the tag
+ * (`ORA1 §MODEL-03`). That independence is the point: a model that re-implemented the tag
  * algebra would agree with the kernel about a shared bug.
  *
  * Two consequences worth naming because they are exactly BS-2 and BS-3:

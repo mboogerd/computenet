@@ -31,7 +31,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 /**
- * The differential halves of BS-7 (`[ORA1-DIFF-05]`), BS-9 and BS-4 (computenet-4ru.8.6).
+ * The differential halves of BS-7 (`ORA1 §DIFF-05`), BS-9 and BS-4 (computenet-4ru.8.6).
  *
  * BS-7 and BS-9 hand-CONSTRUCT their [GeneratedCase] values, per this feature's own
  * established discipline (`GeneratedCaseExecutionTest`'s KDoc): invoking the generator there
@@ -139,7 +139,7 @@ class LateJoinerAndPlacementTest {
      * test above STILL PASSING, because both terminals name the same node handle and converge
      * to the identical model state regardless of when the late fold joins — the final-state
      * comparison cannot tell "linked early" from "linked at the Barrier, caught up correctly"
-     * apart. What the property actually claims ([ORA1-DIFF-05]) is about WHEN linking happens,
+     * apart. What the property actually claims (ORA1 §DIFF-05) is about WHEN linking happens,
      * not just that it eventually does — so this test observes that moment directly through
      * [DifferentialRunner.run]'s `onAssembled` hook, fired right after
      * [CaseExecution.assemble] builds the graph and BEFORE any script step — including the
@@ -204,7 +204,7 @@ class LateJoinerAndPlacementTest {
      * The SAME case (`[placementCase]`, same seed, same script) run once with `"flt"` on host
      * `0` (single-host) and once with `"flt"` on host `1` (two-host, one shared
      * `LocationRegistry` per run — `[CaseExecution.assemble]`'s KDoc): both must equal the
-     * model's result AND each other, under `[ORA1-GEN-10]`'s runner half.
+     * model's result AND each other, under `ORA1 §GEN-10`'s runner half.
      */
     @Test
     fun `BS-9 single-host and two-host placement agree with the model and each other`() {

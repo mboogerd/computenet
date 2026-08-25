@@ -20,7 +20,7 @@ import java.io.ObjectOutputStream
 
 /**
  * [GeneratedCase] and its companions: serializability across a JVM boundary (D3), and
- * [GeneratedCase.controllerSeed] as a pure function of [GeneratedCase.seed] ([ORA1-GEN-07]).
+ * [GeneratedCase.controllerSeed] as a pure function of [GeneratedCase.seed] (ORA1 §GEN-07).
  */
 class GeneratedCaseTest {
 

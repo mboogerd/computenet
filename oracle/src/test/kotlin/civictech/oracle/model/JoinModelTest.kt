@@ -8,13 +8,13 @@ import org.junit.jupiter.api.Test
 
 /**
  * The batch denotation of the binary set family and the map-shaped join family —
- * computenet-4ru.5.2's half of `[ORA1-MODEL-02]` apart from grouped aggregation, which is
+ * computenet-4ru.5.2's half of `ORA1 §MODEL-02` apart from grouped aggregation, which is
  * `GroupByAggregatorTest`'s, and the antijoin retraction case, which is
  * `SemiJoinRetractionTest`'s.
  *
  * Model-level throughout: input [ModelState]s go in, a [ModelState] comes out, and no kernel
- * cell is executed (`[ORA1-MODEL-01]`). Nothing here names a tag, a tag count or a wave
- * (`[ORA1-MODEL-03]`, `[ORA1-MODEL-07]`) — the point being that a minted-tag operator's
+ * cell is executed (`ORA1 §MODEL-01`). Nothing here names a tag, a tag count or a wave
+ * (`ORA1 §MODEL-03`, `ORA1 §MODEL-07`) — the point being that a minted-tag operator's
  * *observable* answer is a set of live combinations and needs no such notion.
  */
 class JoinModelTest {
@@ -267,7 +267,7 @@ class JoinModelTest {
 
     /**
      * The whole family reached through [ReferenceModel] rather than by calling `evaluate`
-     * directly — `[ORA1-MODEL-01]` is about evaluating a *graph* from a script alone, and a map
+     * directly — `ORA1 §MODEL-01` is about evaluating a *graph* from a script alone, and a map
      * -shaped join can only be reached that way today: no map-shaped SOURCE is in the
      * vocabulary yet (`MapCell` is computenet-4ru.5.3), so its inputs come from two group-by
      * nodes, which is also how a generated case will reach it.

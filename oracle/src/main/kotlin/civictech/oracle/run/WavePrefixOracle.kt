@@ -8,7 +8,7 @@ import civictech.oracle.model.SourceId
 import kotlin.random.Random
 
 /**
- * The wave-prefix glitch-freedom oracle `[ORA1-DIFF-06]` — epic computenet-4ru design **D5**,
+ * The wave-prefix glitch-freedom oracle `ORA1 §DIFF-06` — epic computenet-4ru design **D5**,
  * REQUIRED and never weakened to final-state equality: while a case is driven, **every
  * intermediate observation of a terminal must equal the reference model's result for SOME
  * prefix of the wave sequence, and the matched prefix index must never regress**.
@@ -184,7 +184,7 @@ import kotlin.random.Random
  *   inlet and `ScriptEvent.Observe` injects nothing — so the script's "concurrent writers" are in
  *   fact sequential. Real concurrency in this kernel is across *replicas*
  *   (`SetCell.deltaInlet`/`applyRemote`, spec 40/42), and a generated case builds one replica.
- *   `[ORA1-MODEL-04]`/`[ORA1-MODEL-05]` are therefore sound only for a script whose writers are
+ *   `ORA1 §MODEL-04`/`ORA1 §MODEL-05` are therefore sound only for a script whose writers are
  *   separate replicas; these are not. **No kernel defect is implied by any pinned seed.**
  *
  *   **Relation to computenet-qcm1: same kernel asymmetry, distinct generator path — not a
@@ -234,7 +234,7 @@ object WavePrefixOracle {
     /**
      * The fraction of eligible cases prefix-checked when a caller names no [WavePrefixOption]
      * — **nonzero by construction**, which is D5's floor: prefix checking may be narrowed for
-     * `[ORA1-PERF-01]`, never dropped. Turning it off is an explicit
+     * `ORA1 §PERF-01`, never dropped. Turning it off is an explicit
      * [WavePrefixOption.OFF] at a call site, never a default.
      *
      * Prefix checking costs one model evaluation per Op (the prefix list) plus one terminal
@@ -289,7 +289,7 @@ object WavePrefixOracle {
      * Only the fenced line above was run. Neither figure changes where the line is drawn: a
      * second of checking on the worst admitted case is affordable and the refused shape is not.
      *
-     * It is a **budget knob** `[ORA1-PERF-01]`, not a soundness one — raising it admits more
+     * It is a **budget knob** `ORA1 §PERF-01`, not a soundness one — raising it admits more
      * cases and costs more; it can never make the check accept a torn observation. The cheaper
      * exact algorithm the bead asked about (advancing the frontier incrementally so only
      * frontiers near the run's own trajectory are evaluated) is not what is implemented, and
@@ -360,7 +360,7 @@ object WavePrefixOracle {
             return "the case's frontier lattice is $lattice frontiers " +
                 "(${counts.entries.joinToString(" x ") { "${it.key.id}:${it.value + 1}" }}), " +
                 "above MAX_FRONTIER_LATTICE=$MAX_FRONTIER_LATTICE; that is a COST refusal " +
-                "[ORA1-PERF-01], not a soundness one — the per-source frontier check is exact " +
+                "ORA1 §PERF-01, not a soundness one — the per-source frontier check is exact " +
                 "here, it is the memoized evaluation ceiling that does not fit the module's " +
                 "test budget"
         }
@@ -377,7 +377,7 @@ object WavePrefixOracle {
      *
      * @throws Throwable whatever [reference] throws. The caller ([DifferentialRunner.run])
      *   turns that into [RunOutcome.ModelEvaluationFailure]: a reference that cannot evaluate a
-     *   prefix is a broken oracle, never a broken kernel (D10, `[ORA1-DIFF-08]`).
+     *   prefix is a broken oracle, never a broken kernel (D10, `ORA1 §DIFF-08`).
      */
     fun prefixesOf(script: CaseScript, reference: Reference): List<Map<String, ModelState>> {
         val ops = script.steps.filterIsInstance<CaseStep.Op>()
@@ -452,7 +452,7 @@ object WavePrefixOracle {
 
         /**
          * How many **distinct frontiers** this checker has evaluated the reference on — the cost
-         * measure `[ORA1-PERF-01]` cares about, bounded by [WavePrefixOracle.frontierLatticeSize]
+         * measure `ORA1 §PERF-01` cares about, bounded by [WavePrefixOracle.frontierLatticeSize]
          * however many observations arrive. `opCount + 1` at the moment a single-source checker
          * is constructed, and never more.
          */
@@ -663,13 +663,13 @@ object WavePrefixOracle {
 }
 
 /**
- * The **runner-level** knob `[ORA1-PERF-01]` allows for prefix checking's cost: which fraction
+ * The **runner-level** knob `ORA1 §PERF-01` allows for prefix checking's cost: which fraction
  * of eligible cases get checked.
  *
  * Deliberately a runner option and not a `civictech.oracle.gen.GeneratorConfig` field. Prefix
  * checking changes how a case is *observed*, not what case is generated: the same
  * `(seed, config)` pair must produce the same [civictech.oracle.gen.GeneratedCase] whether or
- * not anybody prefix-checks it (`[ORA1-GEN-01]`), and putting the knob in the config would make
+ * not anybody prefix-checks it (`ORA1 §GEN-01`), and putting the knob in the config would make
  * the corpus depend on the observation policy. `GeneratorConfig` also belongs to
  * computenet-4ru.6, not here.
  *

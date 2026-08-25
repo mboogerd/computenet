@@ -108,12 +108,12 @@ object KeyedReputModel : SourceModel, Serializable {
  * ## Its relation to ORA1's exclusion of the same cell
  *
  * ORA1 **excluded** `MergeableGroupByCell` from its vocabulary (see the ledger in
- * `MapCellModel.kt`), on the ground that `[ORA1-MODEL-06]` demands a reference reproduce
+ * `MapCellModel.kt`), on the ground that `ORA1 §MODEL-06` demands a reference reproduce
  * aggregator *retraction* exactly, and this cell's only removal path is a peer's gossiped
  * `MapDelta.removals` — replication, which ORA1 does not model. Nothing about that reasoning is
  * withdrawn here: ORA2 does not model the gossiped-removal path either (`ORA2 §MODEL-09` asks
  * for grow/merge-only and says so). What changed is which requirement governs. ORA1 measured
- * the cell against `[ORA1-MODEL-06]`'s retraction clause and found it unmodellable; ORA2 states
+ * the cell against `ORA1 §MODEL-06`'s retraction clause and found it unmodellable; ORA2 states
  * non-retraction as the specification and checks *that*, which is a strictly weaker and
  * honestly-labelled claim about a strictly smaller behaviour.
  *
@@ -326,7 +326,7 @@ data class PnCounterState(
  * `civictech.oracle.bind.TaggedOperators.registerAll()` is where this model is bound into
  * `OperatorCatalog`, and that file legitimately imports the concrete kernel cell `OrMapCell` to
  * build the [civictech.cell.graph.CellFactory] side of the registration — the wiring `bind/` is
- * for. This model itself must not: `[ORA1-MODEL-10]`/`ORA2 §MODEL-11` forbid a `ReferenceOp`
+ * for. This model itself must not: `ORA1 §MODEL-10`/`ORA2 §MODEL-11` forbid a `ReferenceOp`
  * from referencing a concrete data-cell class, and `civictech.oracle.model`'s own source set is
  * exactly what `ModelImportBoundaryTest` scans to enforce that. Declaring this model in
  * `civictech.oracle.bind` instead (as it originally was, computenet-4ru.1.2) put a `ReferenceOp`

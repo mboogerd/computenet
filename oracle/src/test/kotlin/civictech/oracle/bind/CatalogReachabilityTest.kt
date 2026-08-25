@@ -111,7 +111,7 @@ class CatalogReachabilityTest {
      * The two registered sources no case can spawn: `counter` and `pnCounter` emit bare
      * [ElementShape.Scalar], and no registered operator consumes a bare scalar on any port, so
      * `Builder.chooseRootShape` — which draws only among source shapes something can consume —
-     * can never select them, and `[ORA1-GEN-03]` forbids them standing as terminals themselves.
+     * can never select them, and `ORA1 §GEN-03` forbids them standing as terminals themselves.
      *
      * They are nonetheless in [reachablePin]: an arity-0 entry has no ports to fill, so the
      * closure rule calls it reachable unconditionally. The two facts are different questions
@@ -126,7 +126,7 @@ class CatalogReachabilityTest {
      * `CoalescingCombineCell` (`kernel/src/main/kotlin/civictech/cell/data/op/`,
      * `inlet: Serve<Propagate<CounterDelta>>`) — every other operator inlet under
      * `civictech.cell.data.op` serves `SetDelta` or `MapDelta`. That one cell is excluded by
-     * name from the vocabulary by the `[ORA1-HONEST-02]` ledger in
+     * name from the vocabulary by the `ORA1 §HONEST-02` ledger in
      * `civictech.oracle.model.MapCellModel`'s file KDoc: its observable is a wave-completion
      * fold the script vocabulary cannot name, so a batch model of it would assume the very
      * completeness condition it cannot check.
@@ -219,7 +219,7 @@ class CatalogReachabilityTest {
     fun `a pair-producing source would keep every entry reachable`() {
         // The other direction: `keyBy` is not privileged as a *unary* entry. Any registration
         // emitting SetOf(Tuple(2)) from nothing keeps the same closure, which is the sense in
-        // which [ORA1-API-03]'s seam is about shapes and not about ids.
+        // which ORA1 §API-03's seam is about shapes and not about ids.
         val fakeId = "syntheticPairSetSource"
         OperatorCatalog.register(
             id = fakeId,
@@ -250,7 +250,7 @@ class CatalogReachabilityTest {
                 "independent coverage hole from the SetOf(Tuple(2)) one computenet-4ru.16 " +
                 "closed. computenet-gff7 DECIDED not to close it: the only kernel cell that " +
                 "serves Propagate<CounterDelta> on an inlet is CoalescingCombineCell, which " +
-                "the [ORA1-HONEST-02] ledger excludes by name. A change here is a change to " +
+                "the ORA1 §HONEST-02 ledger excludes by name. A change here is a change to " +
                 "that decision — read this file's KDoc before moving the pin.",
         ) {
             unconsumableSources shouldBe sourcesNoOperatorConsumes

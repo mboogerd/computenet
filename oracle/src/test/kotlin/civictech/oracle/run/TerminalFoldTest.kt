@@ -15,7 +15,7 @@ import io.kotest.matchers.shouldNotBe
 import org.junit.jupiter.api.Test
 
 /**
- * Width pinning at the comparison boundary (`[ORA1-DIFF-01]`'s fold slice): a scalar fold
+ * Width pinning at the comparison boundary (`ORA1 §DIFF-01`'s fold slice): a scalar fold
  * over `CounterDelta` (`CountCell`) sums to a `Long`, and a map fold over `PresenceCountCell`
  * keeps `Int` values — the mismatch that "looks semantic" the task's own KDoc warns about.
  * Both are driven hosted, with [SimWorld], so the fold is exercised against the real kernel
@@ -48,7 +48,7 @@ class TerminalFoldTest {
         // Documents the negative deliberately: a Long-2 count and an Int-2 count are
         // different ModelState values under structural equality, even though they print the
         // same. A fold that returned Int here would mismatch on every case for a reason that
-        // looks semantic (the task's own KDoc, and [ORA1-DIFF-01]'s fold slice).
+        // looks semantic (the task's own KDoc, and ORA1 §DIFF-01's fold slice).
         (ModelState.ScalarState(2L) == ModelState.ScalarState(2)) shouldBe false
     }
 

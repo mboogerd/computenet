@@ -10,8 +10,8 @@ import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 
 /**
- * [ReferenceModel.eval] as `[ORA1-MODEL-01]`'s carrier — every terminal's state from a
- * complete script alone, executing no kernel cell — and `[ORA1-MODEL-11]`'s purity: two
+ * [ReferenceModel.eval] as `ORA1 §MODEL-01`'s carrier — every terminal's state from a
+ * complete script alone, executing no kernel cell — and `ORA1 §MODEL-11`'s purity: two
  * evaluations of one script produce equal results and the script is structurally unchanged
  * afterwards.
  *
@@ -96,7 +96,7 @@ class ReferenceModelPurityTest {
     }
 
     /**
-     * `[ORA1-MODEL-11]`. Both halves, in one test because they are one requirement: equal
+     * `ORA1 §MODEL-11`. Both halves, in one test because they are one requirement: equal
      * results across two evaluations, and a structurally unchanged script.
      *
      * The script comparison is against an independently constructed twin rather than against
@@ -113,7 +113,7 @@ class ReferenceModelPurityTest {
         val second = model.eval(subject)
 
         first shouldBe second
-        withClue("[ORA1-MODEL-11]: evaluation must not mutate the script") {
+        withClue("ORA1 §MODEL-11: evaluation must not mutate the script") {
             subject shouldBe untouchedTwin
         }
     }
@@ -198,7 +198,7 @@ class ReferenceModelPurityTest {
     // Every registered operator gets a node wired against real
     // OperatorCatalog entries (never a hand-reconstructed model instance),
     // over a single ~200-event script spanning every source shape the
-    // registered operators consume. `[ORA1-MODEL-11]`'s purity is checked
+    // registered operators consume. `ORA1 §MODEL-11`'s purity is checked
     // exactly as the engine-level tests above check it: two evaluations of
     // one script agree, and the script is structurally unchanged.
     // -------------------------------------------------------------------
@@ -263,7 +263,7 @@ class ReferenceModelPurityTest {
     /**
      * Exactly 220 events across ten sources — a plain-scalar pair, a keyed-set source, a
      * pair-shaped pair (feeding the join-set/semi-join/group-by family), a map-shaped pair
-     * (feeding the map-join family, each a single-writer `MapCell` slice per `[ORA1-MODEL-08]`),
+     * (feeding the map-join family, each a single-writer `MapCell` slice per `ORA1 §MODEL-08`),
      * a counter pair, and a single-writer OR-map source (`ORA2 §MODEL-11`'s
      * `SingleInstanceOrMapModel`, delivery-free so the single-instance restriction it enforces
      * does not fire — see [TaggedOperators]' KDoc). `30+30+20+25+25+20+20+15+15+20 = 220`.
@@ -396,7 +396,7 @@ class ReferenceModelPurityTest {
     }
 
     /**
-     * `[ORA1-MODEL-11]`'s purity, at full-vocabulary scale: every operator [CoreOperators] and
+     * `ORA1 §MODEL-11`'s purity, at full-vocabulary scale: every operator [CoreOperators] and
      * [TaggedOperators] register gets a node, wired against the real [OperatorCatalog] entries,
      * over one 220-event script — evaluated twice, with equal results and an unmutated script.
      *
@@ -434,7 +434,7 @@ class ReferenceModelPurityTest {
             val second = model.eval(subject)
 
             first shouldBe second
-            withClue("[ORA1-MODEL-11]: evaluation must not mutate the script") {
+            withClue("ORA1 §MODEL-11: evaluation must not mutate the script") {
                 subject shouldBe untouchedTwin
             }
         } finally {

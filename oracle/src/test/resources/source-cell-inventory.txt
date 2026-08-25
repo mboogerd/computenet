@@ -18,7 +18,7 @@
 #
 # Of the names below, five are registered source cells in OperatorCatalog (via
 # oracle/src/main/kotlin/civictech/oracle/bind/CoreOperators.kt): CounterCell, KeyedSetCell,
-# MapCell, PnCounterCell, SetCell. Three more are named in the [ORA1-HONEST-02] exclusion ledger
+# MapCell, PnCounterCell, SetCell. Three more are named in the ORA1 §HONEST-02 exclusion ledger
 # in oracle/src/main/kotlin/civictech/oracle/model/MapCellModel.kt: ListCell, OrMapCell, and
 # WatermarkCell (computenet-fx5b: replication-settlement scope, epic computenet-4ru §6 — see that
 # ledger entry for the reason). WatermarkCell was, as of this file's creation (computenet-y9p4), a
@@ -32,7 +32,7 @@
 # (computenet-4ru.19, #364).
 #
 # UPDATING THIS FILE IS THE MOMENT to also update civictech.oracle.bind.OperatorCatalog's
-# registration (via CoreOperators.kt), OR the [ORA1-HONEST-02] exclusion ledger in
+# registration (via CoreOperators.kt), OR the ORA1 §HONEST-02 exclusion ledger in
 # MapCellModel.kt, for the changed source cell(s), IN THE SAME CHANGE — that pairing is the whole
 # point of this gate (epic computenet-4ru §9 risk 2), mirroring operator-inventory.txt's own
 # header for civictech.cell.data.op. Not every added/removed name is a cell (some are the

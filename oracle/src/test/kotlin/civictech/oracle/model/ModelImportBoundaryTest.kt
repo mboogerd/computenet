@@ -11,7 +11,7 @@ import java.io.File
 import java.nio.file.Files
 
 /**
- * `[ORA1-MODEL-10]`, BS-18 (epic computenet-4ru §2.1-2.3, D2): `civictech.oracle.model` may
+ * `ORA1 §MODEL-10`, BS-18 (epic computenet-4ru §2.1-2.3, D2): `civictech.oracle.model` may
  * reference value, key and delta types but no `civictech.cell.data.op.*` type and no concrete
  * data-cell class. A source-text import scan, not ArchUnit, per the feature's design field —
  * this is the permanent proof that the rule stated in `ElementShape.kt`'s and `ReferenceOp.kt`'s
@@ -84,12 +84,12 @@ object ModelImportBoundaryScanner {
     fun scanDirectory(dir: File): List<Violation> {
         check(dir.isDirectory) {
             "Model source directory does not exist: ${dir.absolutePath} " +
-                "— cannot verify [ORA1-MODEL-10] against an absent source set."
+                "— cannot verify ORA1 §MODEL-10 against an absent source set."
         }
         val ktFiles = dir.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
         check(ktFiles.isNotEmpty()) {
             "Model source directory has no .kt files: ${dir.absolutePath} " +
-                "— cannot verify [ORA1-MODEL-10] against zero files."
+                "— cannot verify ORA1 §MODEL-10 against zero files."
         }
         return ktFiles.flatMap { scanText(it.path, it.readText()) }
     }
@@ -367,7 +367,7 @@ class ModelImportBoundaryTest {
 
         val violations = ModelImportBoundaryScanner.scanDirectory(modelSourceDir)
 
-        withClue("civictech.oracle.model imports forbidden types $violations [ORA1-MODEL-10]") {
+        withClue("civictech.oracle.model imports forbidden types $violations ORA1 §MODEL-10") {
             violations.shouldBeEmpty()
         }
     }

@@ -5,7 +5,7 @@ import civictech.oracle.gen.GeneratorConfig
 
 /**
  * The checked-in pinned regression corpus (epic computenet-4ru §2.2, design D8,
- * `[ORA1-REPRO-01..03]`) — every entry in [PinnedSeeds.ALL] is executed by
+ * `ORA1 §REPRO-01..03`) — every entry in [PinnedSeeds.ALL] is executed by
  * `PinnedSeedsTest` on every `./gradlew :oracle:test` build.
  *
  * ## Append-only, by policy
@@ -15,7 +15,7 @@ import civictech.oracle.gen.GeneratorConfig
  * seed."* This file is the mechanism that invariant protects. An entry here is added when a
  * seed was discovered to fail AND the defect it exposed was fixed; it is never removed,
  * replaced, narrowed, or reordered to make the suite green
- * (`[ORA1-REPRO-02]`, and see `civictech.oracle.run.WavePrefixTest`'s companion object, the
+ * (`ORA1 §REPRO-02`, and see `civictech.oracle.run.WavePrefixTest`'s companion object, the
  * pinning convention this file follows). If a fix later needs to change a pinned entry's
  * expected outcome, that is a decision for whoever owns this file next to make explicitly, in
  * a commit that says so — never a silent edit.
@@ -42,7 +42,7 @@ import civictech.oracle.gen.GeneratorConfig
  *
  * **Why not (route (a), append anyway): this is not a fixed defect, and appending would say it
  * is.** computenet-eeys (closed 2026-08-20, PR #365; `concord/corpus/DISPUTES.md`'s
- * `[ORA1-DIFF-09]` entry) settled that these nine's disagreement was the **reference model**
+ * `ORA1 §DIFF-09` entry) settled that these nine's disagreement was the **reference model**
  * reading `[24-SET-03]`'s "observed" as writer-scoped, against the kernel's cell-scoped
  * reading — **no kernel defect is implied by any of them**, and `Membership` still carries that
  * reading today: nothing in this system fixed it. `ScriptGenerator`'s post-condition does not
@@ -111,7 +111,7 @@ import civictech.oracle.gen.GeneratorConfig
  * Every entry here replays through [civictech.oracle.gen.CaseGenerator.generate], the SAME
  * single-instance generator `PinnedSeedsTest` calls. `civictech.oracle.bind.TaggedOperators`
  * registers `orMap` as its only id, an arity-0 SOURCE, so a vocabulary naming `orMap` and
- * nothing else is refused outright by `GraphGenerator`'s `[ORA1-GEN-03]` check ("at least one
+ * nothing else is refused outright by `GraphGenerator`'s `ORA1 §GEN-03` check ("at least one
  * operator between every source and every terminal") — which is the case the test named below
  * hands to [replay].
  *
@@ -134,7 +134,7 @@ import civictech.oracle.gen.GeneratorConfig
  * this file's `PinnedSeed` cannot name. `PinnedSeedsTest`'s
  * "computenet-4ru 1 7 the pinned-seed entry form round-trips a tagged config without pinning
  * one" pins this finding as an executable check: a `PinnedSeed` naming `orMap` constructs fine
- * as data and fails LOUDLY at `replay()`'s `[ORA1-REPRO-03]` branch, never silently — the same
+ * as data and fails LOUDLY at `replay()`'s `ORA1 §REPRO-03` branch, never silently — the same
  * outcome a stale shape rule would produce for any other entry.
  */
 data class PinnedSeed(

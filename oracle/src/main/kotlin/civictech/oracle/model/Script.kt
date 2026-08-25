@@ -5,15 +5,15 @@ import java.io.Serializable
 /**
  * The input side of a differential case: what every source cell was told to do, as data.
  *
- * A script is the *only* input `[ORA1-MODEL-01]` allows the reference model — the model
+ * A script is the *only* input `ORA1 §MODEL-01` allows the reference model — the model
  * computes every terminal's state from a script alone, executing no kernel cell. It is also
  * what the generator feature (computenet-4ru.6) emits, which is why these types live in
  * `civictech.oracle.model` and are [Serializable]: a recorded case has to survive a JVM
  * boundary and a shrink loop without the kernel being involved.
  *
- * `[ORA1-MODEL-10]` binds this file: no `civictech.cell.data.op` type and no concrete
+ * `ORA1 §MODEL-10` binds this file: no `civictech.cell.data.op` type and no concrete
  * data-cell class appears here, and — a stronger property the whole package holds — no tag,
- * tag count, wave id or `SetDelta` internal does either (`[ORA1-MODEL-03]`). A script names
+ * tag count, wave id or `SetDelta` internal does either (`ORA1 §MODEL-03`). A script names
  * *what a writer asked for*, never how the kernel represented it.
  *
  * ## Shape
@@ -27,7 +27,7 @@ import java.io.Serializable
  *
  * Every event names the [WriterId] that issued it, and a source's log may carry explicit
  * [ScriptEvent.Observe] events. That pair is what makes observed-remove semantics
- * (`[ORA1-MODEL-04]`, `[24-SET-01]`/`[24-SET-03]`) expressible on the script *without* tags:
+ * (`ORA1 §MODEL-04`, `[24-SET-01]`/`[24-SET-03]`) expressible on the script *without* tags:
  * see [Membership] for the exact rule.
  */
 data class Script(
@@ -155,7 +155,7 @@ data class SourceId(val id: String) : Serializable {
 }
 
 /**
- * Who issued an event. Writers are the *causal* actors of `[ORA1-MODEL-04]`: a remove
+ * Who issued an event. Writers are the *causal* actors of `ORA1 §MODEL-04`: a remove
  * retracts only the adds its writer had observed, so two writers into one source is exactly
  * the BS-2 configuration.
  */
@@ -171,7 +171,7 @@ data class WriterId(val id: String) : Serializable {
  * Element, key and value payloads are `Any?` on purpose, mirroring [ElementShape]'s decision
  * to be structural and untyped in the element domain: a script says "add this value", not
  * "add this `String`". Typing the script would make every registration a type-level
- * negotiation with the generator, which is exactly the generator edit `[ORA1-API-03]` exists
+ * negotiation with the generator, which is exactly the generator edit `ORA1 §API-03` exists
  * to avoid. Payloads must be `equals`/`hashCode`-sound, because membership is set membership.
  */
 sealed interface ScriptEvent : Serializable {
@@ -184,7 +184,7 @@ sealed interface ScriptEvent : Serializable {
 
     /**
      * `SetOps.remove(element)`. Retracts only the adds of [element] this [writer] had
-     * observed at this position; an add it had not observed survives (`[ORA1-MODEL-05]`,
+     * observed at this position; an add it had not observed survives (`ORA1 §MODEL-05`,
      * `[24-SET-03]`), and a remove that observed no add at all is a no-op.
      */
     data class Remove(override val writer: WriterId, val element: Any?) : ScriptEvent
@@ -194,7 +194,7 @@ sealed interface ScriptEvent : Serializable {
      *
      * This is the script-level stand-in for delta delivery, and it is the whole reason the
      * model needs no tags: causality is *stated* rather than reconstructed from tag sets
-     * (`[ORA1-MODEL-03]`). A writer always observes its own adds without one.
+     * (`ORA1 §MODEL-03`). A writer always observes its own adds without one.
      */
     data class Observe(override val writer: WriterId) : ScriptEvent
 

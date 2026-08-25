@@ -13,13 +13,13 @@ import kotlin.random.Random
 /**
  * A seeded, writer-tagged op script over one [CaseTopology]'s source nodes — the script half
  * of a generated case (computenet-4ru.6.3), paired with the audit saying which of its removes
- * were generated *observed* and which *deliberately unobserved* (`[ORA1-GEN-06]`).
+ * were generated *observed* and which *deliberately unobserved* (`ORA1 §GEN-06`).
  *
  * ## What it emits
  *
  * A [CaseScript] of exactly `config.scriptLength` [CaseStep.Op] steps, plus — WHERE
  * `config.lateJoiner` is set — exactly one [CaseStep.Barrier] spliced in at an
- * [rng]-chosen **strictly interior** position (`[ORA1-GEN-09]`): at least one `Op` precedes it
+ * [rng]-chosen **strictly interior** position (`ORA1 §GEN-09`): at least one `Op` precedes it
  * and at least one follows, so it is never before the first step nor after the last. With
  * `lateJoiner` unset, no [CaseStep.Barrier] is ever emitted. [insertBarrier] is the whole of
  * this — it runs once, after every `Op` is generated, and shifts every affected
@@ -41,12 +41,12 @@ import kotlin.random.Random
  * could not execute is never emitted for it — a set source never sees a `Put`, a counter
  * never sees an `Add`. This `when` over ids is the one place the generator knows operator
  * names rather than reading `ShapeRule` data: an operator's *shape* says what flows along its
- * edges, which is all `[ORA1-API-03]` needs for linking, while what a **source** can be
+ * edges, which is all `ORA1 §API-03` needs for linking, while what a **source** can be
  * *driven with* is a property of its ops interface that no shape carries. Adding a sixth
  * source kind is therefore a [SourceKind] entry, and a consumer-registered *operator* still
  * needs no edit here at all.
  *
- * ## The single-writer guarantee, by construction (`[ORA1-MODEL-09]`)
+ * ## The single-writer guarantee, by construction (`ORA1 §MODEL-09`)
  *
  * An order-dependent source — today exactly `map`, whose `MapCellSourceModel` throws
  * `MultiWriterMapSliceException` on a multi-writer slice — is assigned **one** writer for the
@@ -61,11 +61,11 @@ import kotlin.random.Random
  * `config.writerCount` writers, so a set source genuinely exercises the multi-writer
  * (BS-2-shaped) configurations the reference model is checked on.
  *
- * ## Observed and unobserved removes (`[ORA1-GEN-06]`)
+ * ## Observed and unobserved removes (`ORA1 §GEN-06`)
  *
  * `config.unobservedRemoveRatio` of removes name an element the removing writer has neither
  * added nor observed. Under `Membership`'s rule such a remove covers no add and is a model
- * no-op (`[ORA1-MODEL-05]`) — the case that separates an implementation with real
+ * no-op (`ORA1 §MODEL-05`) — the case that separates an implementation with real
  * observed-remove semantics from one that removes by value.
  *
  * The remainder are genuinely observed **at their step position**, which for a cross-writer
@@ -150,7 +150,7 @@ import kotlin.random.Random
  * Emitted `Observe` steps count toward `scriptLength` like any other op but are neither an
  * add nor a remove, so the ratio is a property of the add/remove events, not of every step.
  *
- * ## Determinism (`[ORA1-GEN-01]`)
+ * ## Determinism (`ORA1 §GEN-01`)
  *
  * Every choice comes from [rng]; every collection iterated is a `List` or a `LinkedHash*`;
  * element values come from [ElementDomains]' static tables. Nothing reads a `hashCode`, an
@@ -191,7 +191,7 @@ class ScriptGenerator(
             SourceState(
                 id = node.source!!,
                 kind = kind,
-                // [ORA1-MODEL-09], construct-correct: the single writer is picked here, once,
+                // ORA1 §MODEL-09, construct-correct: the single writer is picked here, once,
                 // before any event exists. Nothing downstream can widen it.
                 writers = if (kind.orderDependent) listOf(writerPool[rng.nextInt(writerPool.size)]) else writerPool,
             )
@@ -444,7 +444,7 @@ class ScriptGenerator(
 
     /**
      * Splices the case's single quiesce [CaseStep.Barrier] into [steps] at an [rng]-chosen
-     * strictly interior position (`[ORA1-GEN-09]`) — never before the first `Op`, never after
+     * strictly interior position (`ORA1 §GEN-09`) — never before the first `Op`, never after
      * the last — and shifts every [RemoveRecord.stepIndex] in [audit] that lands at or past the
      * insertion point by one, so each record keeps naming the same `Op` step after the splice.
      *
@@ -658,7 +658,7 @@ class ScriptGenerator(
     }
 
     /**
-     * The defensive half of `[ORA1-MODEL-09]`: no order-dependent source's slice may carry
+     * The defensive half of `ORA1 §MODEL-09`: no order-dependent source's slice may carry
      * events from two writers. A failure here is a generator bug, not a case to discard —
      * hence a `check`, and no regeneration.
      */
@@ -670,7 +670,7 @@ class ScriptGenerator(
                 .mapTo(LinkedHashSet()) { it.event.writer }
             check(writers.size <= 1) {
                 "Order-dependent source '${source.id.id}' (${source.kind.catalogId}) carries events from " +
-                    "${writers.size} writers (${writers.map { it.id }.sorted()}); [ORA1-MODEL-09] assigns it " +
+                    "${writers.size} writers (${writers.map { it.id }.sorted()}); ORA1 §MODEL-09 assigns it " +
                     "exactly one writer at generation time."
             }
         }
@@ -817,8 +817,8 @@ private data class KeyWrite(val replica: SourceId, val opIndex: Int, val putCoun
  * @property catalogId the `OperatorCatalog` id (`CoreOperators.Ids`) this kind is registered under.
  * @property orderDependent whether the source's reference model is defined only for a
  *   single-writer slice — `map` alone today (`MapCellSourceModel.MultiWriterMapSliceException`,
- *   `[ORA1-MODEL-08]`). `ListCell` is not in the vocabulary at all: it is excluded by
- *   `MapCellModel.kt`'s `[ORA1-HONEST-02]` ledger, because its index-addressed edits cannot be
+ *   `ORA1 §MODEL-08`). `ListCell` is not in the vocabulary at all: it is excluded by
+ *   `MapCellModel.kt`'s `ORA1 §HONEST-02` ledger, because its index-addressed edits cannot be
  *   stated in a script even under a single writer.
  */
 enum class SourceKind(val catalogId: String, val orderDependent: Boolean) {

@@ -36,7 +36,7 @@ data class TopologyNode(
  *   sweep, only within one case.
  * @property handle The [TopologyNode.handle] this terminal reads.
  * @property late `true` for a terminal linked only after a mid-script quiesce [CaseStep.Barrier]
- *   — the late-joiner extension ([ORA1-GEN-09]).
+ *   — the late-joiner extension (ORA1 §GEN-09).
  */
 data class TerminalSpec(
     val name: String,
@@ -51,7 +51,7 @@ data class TerminalSpec(
  * @property nodes Every operator and source node, keyed by [TopologyNode.handle] within the
  *   list (handles are unique within one topology, enforced by the generator, not by this type).
  * @property terminals Every terminal the case observes.
- * @property placement Handle to host ordinal, for a multi-host case ([ORA1-GEN-10]). Every
+ * @property placement Handle to host ordinal, for a multi-host case (ORA1 §GEN-10). Every
  *   handle maps to `0` for a single-host case.
  */
 data class CaseTopology(
@@ -96,7 +96,7 @@ data class RemoveRecord(
  * disk, replayed on a second host, or shrunk — without the generator being involved again.
  *
  * @property seed The case's own seed. `(seed, GeneratorConfig)` deterministically produces this
- *   whole case ([ORA1-GEN-01]) — generation itself is this task's sibling's job
+ *   whole case (ORA1 §GEN-01) — generation itself is this task's sibling's job
  *   (computenet-4ru.6, GraphGenerator/ScriptGenerator), not this type's.
  * @property topology The catalog-id-level shape this case was rendered from.
  * @property spec The lowered, kernel-ready graph (`civictech.cell.graph.GraphSpec`) —
@@ -119,7 +119,7 @@ data class GeneratedCase(
 
     /**
      * The seed a `testkit.SimWorld`/`SimulationController` (or equivalent) replays this case
-     * with — a **pure function of [seed] alone** (`[ORA1-GEN-07]`), so identical (seed, config)
+     * with — a **pure function of [seed] alone** (`ORA1 §GEN-07`), so identical (seed, config)
      * across two JVMs derives an identical controller seed without either JVM sharing state.
      *
      * The mix is a single splitmix64 step (Steele, Lea & Flood 2014) over [seed]: fast, has no

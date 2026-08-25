@@ -5,7 +5,7 @@ import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * What a shrink is allowed to spend (`[ORA1-SHRINK-03]`): a candidate count **and** a wall
+ * What a shrink is allowed to spend (`ORA1 §SHRINK-03`): a candidate count **and** a wall
  * clock, either of which exhausts the budget on its own.
  *
  * ## Why both, rather than either alone

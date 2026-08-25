@@ -6,12 +6,12 @@ import org.junit.jupiter.api.Test
 
 /**
  * **BS-6** — grouped aggregation and the seven `Aggregators` families, model-level
- * (`[ORA1-MODEL-06]`, `[24-OP-GROUPBY-01]`, `[24-OP-GROUPBY-02]`, `[24-AGG-01]`).
+ * (`ORA1 §MODEL-06`, `[24-OP-GROUPBY-01]`, `[24-OP-GROUPBY-02]`, `[24-AGG-01]`).
  *
  * The feature's example mapping fixes the shape: *given `GroupByCell(keyFn = { it.first },
  * Aggregators.maxOf { it.second })` over adds `("g", 3)`, `("g", 7)`, `("h", 1)`; when `("g",
  * 3)` and `("g", 7)` are both retracted, the result map is `{"h" → 1}` — key `"g"` absent, not
- * `"g" → null` and not `"g" → identity`.* `[ORA1-MODEL-06]` widens it to **each** of
+ * `"g" → null` and not `"g" → identity`.* `ORA1 §MODEL-06` widens it to **each** of
  * count/sumOf/avgOf/minOf/maxOf/topK/collectToSet, which is what [everyAggregate] enumerates.
  *
  * Every case is driven through [ReferenceModel.eval] from a [Script], not by handing a
@@ -100,7 +100,7 @@ class GroupByAggregatorTest {
     }
 
     /**
-     * **BS-6 proper** (`[ORA1-MODEL-06]`, `[24-OP-GROUPBY-02]`): retracting every member of a
+     * **BS-6 proper** (`ORA1 §MODEL-06`, `[24-OP-GROUPBY-02]`): retracting every member of a
      * group removes the **key**. Not `"g" -> null`, not `"g" -> 0` / `"g" -> emptyList()` /
      * `"g" -> emptySet()` — the identity value each of these families would have started its
      * accumulator from, and the most plausible wrong answer.

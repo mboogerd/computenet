@@ -15,7 +15,7 @@ import java.io.Serializable
  *
  * ## The honesty cost, stated where it is paid (`ORA2 §HONEST-01`)
  *
- * ORA1's model is membership-only by rule (`[ORA1-MODEL-03]`) precisely so that it cannot
+ * ORA1's model is membership-only by rule (`ORA1 §MODEL-03`) precisely so that it cannot
  * agree with the kernel about a shared bug in the tag algebra. This model **cannot** be
  * membership-only: for an OR-set, membership is decidable from causality alone, but an
  * OR-map's *value* is decided by a total order over dots, and a reference that refuses to
@@ -110,7 +110,7 @@ class DotModel(private val order: DotOrder) : Serializable {
      * `null` when the key is absent. **No wall clock and no arrival order participates**: the
      * comparator reads a counter minted from a script position and a rank supplied by the
      * harness, and nothing else. This is the one place ORA2's relaxation of
-     * `[ORA1-MODEL-03]` is actually spent.
+     * `ORA1 §MODEL-03` is actually spent.
      */
     fun value(state: DotState, key: Any?): Any? {
         val live = state.liveDots(key)

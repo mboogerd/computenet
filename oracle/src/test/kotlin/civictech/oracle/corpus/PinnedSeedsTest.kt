@@ -18,7 +18,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 /**
- * `[ORA1-REPRO-01]` / `[ORA1-REPRO-03]`, BS-15: [PinnedSeeds.ALL] runs on every
+ * `ORA1 §REPRO-01` / `ORA1 §REPRO-03`, BS-15: [PinnedSeeds.ALL] runs on every
  * `./gradlew :oracle:test` build, and an entry that can no longer be constructed fails the
  * build loudly — naming the pinned case and what broke — rather than being skipped.
  *
@@ -57,11 +57,11 @@ class PinnedSeedsTest {
         } else {
             "pinned seed ${pinned.seed} (${pinned.fixedBy}: ${pinned.reason}) was expected to " +
                 "replay Success but replayed as $outcome — a pinned seed is never narrowed, " +
-                "reordered or replaced to make the suite green [ORA1-REPRO-02]"
+                "reordered or replaced to make the suite green ORA1 §REPRO-02"
         }
     } catch (cause: Throwable) {
         "pinned seed ${pinned.seed} (${pinned.fixedBy}: ${pinned.reason}) is no longer " +
-            "constructible: ${cause.message} [ORA1-REPRO-03]"
+            "constructible: ${cause.message} ORA1 §REPRO-03"
     }
 
     @Test
@@ -69,7 +69,7 @@ class PinnedSeedsTest {
         val failures = PinnedSeeds.ALL.mapNotNull(::replay)
         withClue(
             "the append-only pinned regression corpus must construct and run EVERY entry to " +
-                "Success on every build [ORA1-REPRO-01]; failures: $failures",
+                "Success on every build ORA1 §REPRO-01; failures: $failures",
         ) {
             failures.shouldBeEmpty()
         }
@@ -123,7 +123,7 @@ class PinnedSeedsTest {
      *
      * `TaggedOperators.registerAll()` binds exactly one id, `orMap`, as an ARITY-0 source, so the
      * config below — whose vocabulary names `orMap` and nothing else — is refused by
-     * `[ORA1-GEN-03]`/`GraphGenerator`'s `check(operatorEntries.isNotEmpty())`, which is the
+     * `ORA1 §GEN-03`/`GraphGenerator`'s `check(operatorEntries.isNotEmpty())`, which is the
      * throw this test observes.
      *
      * **That is where the claim stops.** It is NOT true that [CaseGenerator] cannot build a
@@ -153,7 +153,7 @@ class PinnedSeedsTest {
      * else it throws on `check(operatorEntries.isNotEmpty())` (the arity-0-only vocabulary
      * above — NOT "no operator can consume `orMap`", which is a kernel-typing bound, not a
      * generator one), so the SAME
-     * `[ORA1-REPRO-03]` "no longer constructible" branch a real pinned case would hit on a stale
+     * `ORA1 §REPRO-03` "no longer constructible" branch a real pinned case would hit on a stale
      * shape rule fires — loudly, naming the seed and the underlying exception, never a silent
      * skip. That is the entry form and its build-time check working exactly as designed, at the
      * one tagged input this test can honestly hand it.
@@ -184,9 +184,9 @@ class PinnedSeedsTest {
             PinnedSeeds.ALL.none { it.seed == taggedShapeCase.seed && it.fixedBy == taggedShapeCase.fixedBy } shouldBe true
         }
         diagnosis.shouldNotBeNull()
-        withClue("must fail LOUDLY, naming the seed and [ORA1-REPRO-03] - never a silent skip: $diagnosis") {
+        withClue("must fail LOUDLY, naming the seed and ORA1 §REPRO-03 - never a silent skip: $diagnosis") {
             diagnosis!! shouldContain "seed ${taggedShapeCase.seed}"
-            diagnosis!! shouldContain "[ORA1-REPRO-03]"
+            diagnosis!! shouldContain "ORA1 §REPRO-03"
         }
     }
 }

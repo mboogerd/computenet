@@ -15,10 +15,10 @@ import java.io.Serializable
  * Payloads are `Any?` for the same reason [ScriptEvent]'s are — see its KDoc. Every variant
  * is a `data class` over an immutable collection, so equality is structural and a state can
  * be compared, hashed, and asserted on directly. That structural equality is also
- * `[ORA1-MODEL-11]`'s instrument: "two evaluations of the same script produce equal results"
+ * `ORA1 §MODEL-11`'s instrument: "two evaluations of the same script produce equal results"
  * is `eval(s) == eval(s)`, and nothing here holds identity.
  *
- * `[ORA1-MODEL-03]` binds: a state records membership and value only. There is no variant
+ * `ORA1 §MODEL-03` binds: a state records membership and value only. There is no variant
  * for a tag set, a tag count, or a wave id, and there deliberately never will be — a model
  * that could name a tag would stop being an independent check of the tag algebra.
  */

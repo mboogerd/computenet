@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
 /**
- * `[ORA1-SHRINK-04]`, unit-level: [Counterexample.renderKotlin] renders from
+ * `ORA1 §SHRINK-04`, unit-level: [Counterexample.renderKotlin] renders from
  * [civictech.oracle.gen.CaseTopology] + [civictech.oracle.gen.CaseScript] via catalog ids —
  * never [GeneratedCase.spec] — and carries the seed, topology and script as literals. The
  * required end-to-end shape (a mutant reference over a 200-op script, shrunk, replayed,

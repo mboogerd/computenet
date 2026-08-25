@@ -14,7 +14,7 @@ import civictech.oracle.model.WriterId
 import civictech.oracle.run.RunOutcome
 
 /**
- * The rendering [Counterexample.renderKotlin] delegates to — `[ORA1-SHRINK-04]`.
+ * The rendering [Counterexample.renderKotlin] delegates to — `ORA1 §SHRINK-04`.
  *
  * ## Render from [CaseTopology] + [CaseScript], never [GeneratedCase.spec]
  *
@@ -117,7 +117,7 @@ internal fun renderCounterexample(counterexample: Counterexample): String {
     val terminal = failureTerminal(counterexample.outcome)
 
     return buildString {
-        appendLine("// Rendered by Counterexample.renderKotlin() (ORA1-SHRINK-04).")
+        appendLine("// Rendered by Counterexample.renderKotlin() (ORA1 §SHRINK-04).")
         appendLine("// Rebuilt from CaseTopology + CaseScript via catalog ids; the lowered GraphSpec is")
         appendLine("// re-derived by GraphGenerator.lower, never printed — see RenderKotlin.kt's KDoc.")
         appendLine("// NOTE: the check() below asserts against the catalog-resolved reference")

@@ -62,7 +62,7 @@ import java.util.UUID
  * completeness condition over an edge set missing its only arm. computenet-xj0v shipped a named
  * refusal at assemble time as an interim tripwire. computenet-vpiz replaces it with the bridged
  * link pair the refusal stood in for (`civictech.cell.wire`'s `bridgeTo`/`bridgeFrom`, which are
- * in `:kernel` and so available here — `[ORA1-API-04]` bars `:wire`, a different module and a
+ * in `:kernel` and so available here — `ORA1 §API-04` bars `:wire`, a different module and a
  * different package), and this file's refusal tests became the positive equality above.
  *
  * Nothing the generator can draw exercises the frontier path today: no registered catalog

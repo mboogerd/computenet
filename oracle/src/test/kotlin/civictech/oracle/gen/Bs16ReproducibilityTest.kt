@@ -11,7 +11,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
- * BS-16 (`[ORA1-GEN-01]`): the fixed `(seed = 42L, config)` case generated **in two separate
+ * BS-16 (`ORA1 §GEN-01`): the fixed `(seed = 42L, config)` case generated **in two separate
  * JVMs** serializes to byte-equal output.
  *
  * ## Why a child process and not two calls
@@ -33,7 +33,7 @@ import java.util.concurrent.TimeUnit
  * structural fingerprint) is not used: byte equality held, and no unstable `serialVersionUID`
  * in a kernel type forced a weaker comparison.
  *
- * One fixed case, one child JVM, once per run — `[ORA1-PERF-01]`'s module budget is a sweep
+ * One fixed case, one child JVM, once per run — `ORA1 §PERF-01`'s module budget is a sweep
  * budget, and this test deliberately does not sweep.
  */
 class Bs16ReproducibilityTest {

@@ -23,10 +23,10 @@ import java.io.ObjectOutputStream
 import java.util.UUID
 
 /**
- * [CoreOperators] as the production half of the paired-registration seam (`[ORA1-API-02]`):
- * every id in this task's slice of `[ORA1-MODEL-02]` is in [OperatorCatalog] as a **full**
+ * [CoreOperators] as the production half of the paired-registration seam (`ORA1 §API-02`):
+ * every id in this task's slice of `ORA1 §MODEL-02` is in [OperatorCatalog] as a **full**
  * entry — kernel factory, reference model, and a [ShapeRule] the generator can read
- * (`[ORA1-API-03]`).
+ * (`ORA1 §API-03`).
  *
  * [OperatorCatalog] is a process-wide mutable singleton, so this class registers per test and
  * resets afterwards, exactly as `OperatorCatalogTest` does.
@@ -192,7 +192,7 @@ class CoreOperatorsTest {
     // -- the binary / keyed / map / group-by family (computenet-4ru.5.2) ----
 
     /**
-     * `[ORA1-MODEL-02]` names the vocabulary operator by operator, so its coverage claim is
+     * `ORA1 §MODEL-02` names the vocabulary operator by operator, so its coverage claim is
      * checked id by id rather than by a count. The seven `Aggregators` families are
      * `GROUP_BY_AGGREGATES`; semijoin and antijoin are separate entries because the
      * requirement names both polarities.
@@ -213,7 +213,7 @@ class CoreOperatorsTest {
         ).plus(CoreOperators.Ids.GROUP_BY_AGGREGATES)
             .forEach { id -> withClue(id) { (id in registered) shouldBe true } }
 
-        withClue("[ORA1-MODEL-02] names all seven Aggregators families") {
+        withClue("ORA1 §MODEL-02 names all seven Aggregators families") {
             CoreOperators.Ids.GROUP_BY_AGGREGATES.size shouldBe 7
         }
     }
@@ -344,7 +344,7 @@ class CoreOperatorsTest {
     /**
      * Group death at the registration site: an empty input yields an empty map for every
      * registered aggregate — never a key carrying the aggregator's identity value
-     * (`[24-OP-GROUPBY-02]`, `[ORA1-MODEL-06]`). `groupByGlobal` included: the constant key
+     * (`[24-OP-GROUPBY-02]`, `ORA1 §MODEL-06`). `groupByGlobal` included: the constant key
      * dies with its last element like any other.
      */
     @Test
