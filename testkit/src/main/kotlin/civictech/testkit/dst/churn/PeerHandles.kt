@@ -1,6 +1,7 @@
 package civictech.testkit.dst.churn
 
 import civictech.cell.CellRef
+import civictech.cell.Propagate
 import civictech.cell.data.PnCounterCell
 import civictech.cell.data.PnCounterOps
 import civictech.cell.data.Replicable
@@ -10,7 +11,10 @@ import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.link.Interest
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.port.streamTo
 import civictech.cell.replication.InstanceSet
 import civictech.cell.replication.Replication
 import civictech.cell.wire.Peering
@@ -270,6 +274,74 @@ class MeshPeer internal constructor(
         if (!suspended) return
         controls.forEach { it.heal() }
         suspended = false
+    }
+
+    // ---------------------------------------------------------------- [CHA3-70]/[CHA3-73] control seams
+
+    /**
+     * [CHA3-70]'s harness-side control seam, BS-3: park **every** invocation this peer's own
+     * [registry] would route to another currently-visible replica, and never release the park —
+     * the harness-layer stand-in for "this departing replica's final push-catch-up is lost",
+     * decided against editing kernel `main` (feature computenet-umx.2 §4.8, umx.2-D5).
+     *
+     * ## Why the whole outbound channel, not only the one `fireLinked` call
+     *
+     * [Replication.evict]'s success arm fires its best-effort catch-up
+     * (`linked.entries.firstOrNull { it.key.first == cell.ref }?.let { ... fireLinked(...) }`)
+     * on **the exact same routed channel** every ordinary per-write gossip emission already
+     * uses: both resolve through `HostedCellProxy.create(other, registry, ...)`, i.e. through
+     * THIS peer's own [registry] (`Replication`'s constructor field is this peer's [registry] —
+     * see [MeshPeer]'s class KDoc), and `LocationRegistry.deliver` decides hold-vs-send at the
+     * moment of the call, synchronously. There is no seam that reaches only the redundant
+     * `fireLinked` re-fire without also reaching the ordinary stream it duplicates — pulling one
+     * out from `:kernel` `internal` state would be the kernel `main` edit this control is
+     * expressly forbidden from making. So the control parks the channel itself, which is honest
+     * about the mechanism it stands in for: **whichever of the two emissions would have carried
+     * a write this peer accepted immediately before departing, neither does.**
+     *
+     * ## Window sizing — call this BEFORE the write it must suppress, not only before [evictClean]
+     *
+     * A caller that suppresses only immediately before evicting, after the interesting write has
+     * already been issued and drained (`world.controller.runToIdle()` already called), suppresses
+     * nothing observable: ordinary per-write gossip already delivered it, `fireLinked`'s re-fire
+     * is idempotent no-op, and the control is **inert** — exactly the CHA1-measured failure mode
+     * the feature bead warns about (a window smaller than the traffic it must catch never fires).
+     * Call this first, then issue the write the control is meant to lose, then evict — see
+     * `ControlSeams.suppressedFinalCatchUp` for the full sequence.
+     *
+     * Never released: this peer despawns immediately after, issuing nothing further on
+     * [registry], so there is nothing left to unpark — the park is permanent by construction,
+     * matching "lost", not "delayed".
+     */
+    fun suppressOutboundDeliveries() {
+        check(member) { "peer \"$name\" is not a member, so its outbound deliveries cannot be suppressed" }
+        (visibleReplicas() - ref).forEach { registry.hold(it) }
+    }
+
+    /**
+     * [CHA3-73]'s harness-side control seam: install a **second**, duplicate outbound gossip
+     * subscription to [other] alongside the properly re-derived one [Replication] already
+     * maintains — the accumulating-rejoin defect T21 fixed (`Replication.gossipRef`'s own KDoc:
+     * "a fresh ref per `streamTo` re-link installs a *second* consumer beside the orphaned
+     * first"), reproduced deliberately here rather than by editing kernel `main`.
+     *
+     * Builds the exact routed proxy `Replication.maybeLink` builds
+     * (`HostedCellProxy.create(other.ref, registry, Replication.ReplicaDeltaInlet::class.java)`)
+     * and subscribes it via the same public [civictech.cell.port.streamTo] extension, but with a
+     * **freshly generated** [PortRef] instead of the derived, stable one `Replication`'s own
+     * `gossipRef` computes — the one difference that turns an idempotent re-link into a second
+     * consumer. `Replication`'s private `linked` map is never touched, so the properly-derived
+     * subscription it already installed is left exactly in place: this call *adds* a duplicate,
+     * it does not replace anything.
+     */
+    fun accumulateDuplicateSubscription(other: MeshPeer) {
+        val cell = replica ?: error("peer \"$name\" holds no replica; accumulate after it has (re)joined")
+        val target = (
+            HostedCellProxy.create(other.ref, registry, Replication.ReplicaDeltaInlet::class.java)
+                as Replication.ReplicaDeltaInlet
+            ).deltaInlet.call
+        @Suppress("UNCHECKED_CAST")
+        (cell.outlet as FanOutlet<Propagate<Any?>>).streamTo(target, at = PortRef.generate())
     }
 
     // ------------------------------------------------------------------------------ workload
