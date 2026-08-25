@@ -116,7 +116,7 @@ class MapCellModelTest {
         }
 
         withClue("the failure names the requirement and the offending source") {
-            failure.message!! shouldContain "ORA1-MODEL-08"
+            failure.message!! shouldContain "ORA1 §MODEL-08"
             failure.message!! shouldContain "s"
         }
     }
