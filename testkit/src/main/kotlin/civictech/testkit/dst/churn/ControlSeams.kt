@@ -310,7 +310,21 @@ object ControlSeams {
      * `PartitionFaultTest`'s [CHA1-63]).
      */
     fun assertAllDiverge(seed: Long) {
-        val results = selfTest(seed)
+        assertNoneInert(seed, selfTest(seed))
+    }
+
+    /**
+     * The self-test's own inertness rule ([CHA3-74]), extracted out of [assertAllDiverge] so a
+     * test can exercise this exact failure path against a **synthetic** result set — a control
+     * this suite has just spent BS-3/BS-4/[CHA3-73] proving does not actually go inert — rather
+     * than reimplementing the rule inline. Review found the reimplementation: with the check body
+     * copy-pasted into the test instead of called, a broken [assertAllDiverge] (e.g. its own
+     * `check` silently weakened to always pass) left every `ChurnControlsTest` test green,
+     * including both BS-20 tests — the exact "aggregator that can only pass" failure mode
+     * `[CHA3-74]` exists to rule out. `ChurnControlsTest`'s negative BS-20 test now calls this
+     * function directly.
+     */
+    internal fun assertNoneInert(seed: Long, results: List<ControlOutcome>) {
         val inert = results.filterNot { it.diverged }
         check(inert.isEmpty()) {
             "churn controls self-test failed at seed $seed: the following controls did NOT diverge, " +

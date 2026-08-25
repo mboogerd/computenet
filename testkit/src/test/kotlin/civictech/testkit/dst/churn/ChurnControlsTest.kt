@@ -113,6 +113,14 @@ class ChurnControlsTest {
      * `PartitionFaultTest`'s `[CHA1-63]` shape ("If this fails, the rig's own self-test fails").
      * A control that does NOT diverge must fail [ControlSeams.assertAllDiverge] loudly, naming
      * itself, rather than being silently absorbed into a passing sweep.
+     *
+     * This calls [ControlSeams.assertNoneInert] — the exact function [ControlSeams.assertAllDiverge]
+     * delegates to — directly, against a synthetic result set, rather than reimplementing its
+     * `check` inline: an inline reimplementation only proves the *rule* is right, not that
+     * production code runs it. A prior version of this test did reimplement it, and review found
+     * that a broken [ControlSeams.assertAllDiverge] (its own `check` weakened to always pass) left
+     * every test in this class green, including both BS-20 tests — an aggregator that can only
+     * pass. This form fails if that regresses.
      */
     @Test
     fun `BS-20 a control that does not diverge fails the harness's self-test`() {
@@ -128,20 +136,9 @@ class ChurnControlsTest {
         )
         val withOneInert = allDiverged + fakeInert
 
-        // The self-test's own inertness rule, exercised directly against a synthetic result set
-        // rather than depending on a real control going inert (which — per BS-3/BS-4/CHA3-73
-        // above — this suite has just spent three tests proving does not happen). This is the
-        // rule [ControlSeams.assertAllDiverge] runs; mirrored here rather than reaching into it,
-        // because that function's own contract is "throws, naming every non-diverging control" —
-        // exactly what is under test.
-        val inert = withOneInert.filterNot { it.diverged }
-        assertTrue(inert.isNotEmpty(), "the synthetic scenario must contain an inert control")
         val message = try {
-            check(inert.isEmpty()) {
-                "churn controls self-test failed: the following controls did NOT diverge, so their " +
-                    "properties are UNPROVEN: ${inert.map { it.name }}; full results: $withOneInert"
-            }
-            fail("expected the self-test rule to fail loudly given an inert control")
+            ControlSeams.assertNoneInert(seed = 9001L, results = withOneInert)
+            fail("expected assertNoneInert to fail loudly given an inert control")
         } catch (e: IllegalStateException) {
             e.message.orEmpty()
         }
@@ -149,5 +146,9 @@ class ChurnControlsTest {
             message.contains(fakeInert.name),
             "the self-test failure must NAME the control that did not diverge: $message",
         )
+
+        // The all-diverging case must NOT throw — otherwise the assertion above would pass for
+        // the wrong reason (assertNoneInert always throwing, inert control or not).
+        ControlSeams.assertNoneInert(seed = 9001L, results = allDiverged)
     }
 }
