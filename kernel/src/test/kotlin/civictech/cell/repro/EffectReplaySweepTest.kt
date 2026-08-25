@@ -455,12 +455,21 @@ class EffectReplaySweepTest {
      * **What this test pins, exactly.** `JournalCensus` carries record counts and a tag histogram,
      * not record *order*, so the assertions below pin the census — one frame and one advance per
      * emission, and nothing else in the log — and cannot pin the interleaving directly. The
-     * alternation itself is corroborated by two independent runs rather than asserted here: BS-2's
-     * sweep re-fires exactly counter `(k + 1) / 2` at each failing odd `k`, and BS-6's corrupted
-     * half asserts that with `corruptIndex = 1` the only re-delivered counter is 1. Both are only
-     * satisfiable under `frame(c) = 2(c - 1)`, `advance(c) = 2(c - 1) + 1`. A layout change that
-     * kept these counts but reordered the records would therefore redden BS-2's per-`k` shape and
-     * BS-6's set equality, not this test — read the three together, never this one alone.
+     * alternation itself is corroborated rather than asserted: BS-2's sweep re-fires exactly
+     * counter `(k + 1) / 2` at each failing odd `k`, and BS-6's corrupted half asserts that with
+     * `corruptIndex = 1` the only re-delivered counter is 1. Both are only satisfiable under
+     * `frame(c) = 2(c - 1)`, `advance(c) = 2(c - 1) + 1`.
+     *
+     * **Which of the two is a tripwire, and which is only a record** (narrowed at second read).
+     * BS-6's `assertEquals(reachable, refired)` IS the assertion: a layout change that kept these
+     * counts but reordered the records moves the set of counters reachable before `corruptIndex`,
+     * and that test goes red. BS-2's per-`k` shape is **not** asserted — the failing-`k` list is
+     * printed in `PrefixRestartSweepReport.summary()`, deliberately kept out of the check's
+     * identity (computenet-umx.4), and `withSignature` matches the token alone, so a reordered
+     * layout that still duplicated *some* position would leave BS-2 green-as-expected-failure with
+     * a different `k` set in its log. So the layout is pinned by this test's counts plus BS-6's set
+     * equality; BS-2 corroborates it in the transcript, not in the gate. Read the three together,
+     * never this one alone.
      */
     @Test
     fun `the durable fixture writes a log worth sweeping, frame and frontier strictly alternating`() {
@@ -662,13 +671,26 @@ class EffectReplaySweepTest {
      * therefore passes; the annotation is a claim that a body still fails, and it fails the build
      * when its body passes (`[CHA2-44]`). BS-2 carries the standing claim for both.
      *
-     * **Which means this test pins today's answer, and a fix flips it too.** BS-2's annotation is
-     * the designed tripwire — remove it, keep the test — but `computenet-xxeo` landing also
-     * reddens *this* body, at `repeats.isNotEmpty()` and at the `DstOutcome.FAILED` assertion,
-     * whose messages read as "the rollback never reached the frontier". That diagnosis will be
-     * wrong at that point: the correct response is to re-record the verdict here against the new
-     * behaviour — the same seed 202, the same two-run comparison — not to re-seed, narrow, or
-     * chase `FrontierRollbackJournal`. Whoever fixes `computenet-xxeo` owns both edits.
+     * **Which means this test pins today's answer, and a fix MAY flip it** (narrowed at second
+     * read — the earlier note asserted flatly that it would). BS-2's annotation is the designed
+     * tripwire; whether *this* body moves depends on how `computenet-xxeo` resolves:
+     *
+     * - A resolution that keeps at-least-once, or that only fixes the **live write-ahead
+     *   ordering** (advance durable before the effect fires, or effect committed atomically with
+     *   its dedupe record), leaves this test passing unchanged. This fault does not race that
+     *   window — it deletes advances the host had already made durable, so on replay
+     *   `alreadyProcessed` says no for counters past the retained ones whatever order the live
+     *   path wrote them in. BS-2 and BS-3 are one finding about `[24-DUR-05]`'s scope, not one
+     *   mechanism.
+     * - Only a resolution that changes **replay-time** delivery — suppressing a re-delivery whose
+     *   frontier advance is absent — reddens this body, at `repeats.isNotEmpty()` and at the
+     *   `DstOutcome.FAILED` assertion, whose messages would then misdiagnose the cause ("the
+     *   rollback never reached the frontier").
+     *
+     * So whoever fixes `computenet-xxeo` owns a re-read of this test, and owns an edit only in the
+     * second case; if it flips, re-record the verdict here against the new behaviour — the same
+     * seed 202, the same two-run comparison — not a re-seed, a narrowed assertion, or a change to
+     * `FrontierRollbackJournal`.
      */
     @Test
     fun `BS-3 rolling the processed frontier back re-delivers and re-fires the invocations past it`() {

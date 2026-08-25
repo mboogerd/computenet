@@ -1647,15 +1647,39 @@ rig's accounting instead of a bespoke assertion, and that is what is delivered �
 it is **not** evidence about exclusive handling under crash and replay, and must
 not be cited as if it were. Recorded here rather than in
 `concord/corpus/DISPUTES.md`, because `[CHA2-26]` is a CHA2 acceptance criterion
-and this file is the evidence lane's own ledger; `DISPUTES.md` is the corpus's
-spec-requirement honesty ledger and carries no `[CHA2-*]` entries.
+and this file is the evidence lane's own ledger, whereas `DISPUTES.md` is the
+corpus's **spec-requirement** honesty ledger: its entries are keyed on spec
+requirements and gap markers (`G-59` / `C-9`, `[24-DUR-05]`), and a `[CHA2-*]` id
+appears there only as *provenance* inside such an entry — as in this task's own
+`[CHA2-51]` extension of the G-59/C-9 boundary entry — never as an entry's
+subject. (Corrected at second read: an earlier draft of this paragraph said
+`DISPUTES.md` "carries no `[CHA2-*]` entries", which a grep contradicts — the
+file cites eleven of them, including the bullet this task added.)
 
-**A second review note, on what a fix will move.** BS-2's `@ExpectedFailure` is
-the designed tripwire, but `computenet-xxeo` landing also reddens BS-3's body —
-`repeats.isNotEmpty()` and its `DstOutcome.FAILED` assertion — with messages that
-will then misdiagnose the cause. The correct response there is to re-record the
-verdict against the new behaviour on the same pinned seed 202, not to re-seed or
-narrow. Both edits belong to whoever fixes `computenet-xxeo`.
+**A second review note, on what a fix might move, and what it will not.** BS-2's
+`@ExpectedFailure` is the designed tripwire — remove it, keep the test. Whether
+`computenet-xxeo` also flips **BS-3** depends on which resolution it takes, and
+that is not knowable from here:
+
+- If it decides `[24-DUR-05]` is at-least-once as written, or fixes only the live
+  write-ahead **ordering** (advance durable before the effect fires, or the
+  effect committed atomically with its dedupe record), **BS-3 keeps passing
+  unchanged.** BS-3's fault does not race that window: it deletes frontier
+  advances the host had already made durable, so on replay `alreadyProcessed` says
+  no for counters 4..6 whatever order the live path wrote them in, and the
+  re-fire BS-3 records survives the fix. BS-2 and BS-3 are one *finding* about
+  `[24-DUR-05]`'s scope, but they are not one *mechanism*, and only BS-2's is an
+  ordering window.
+- Only a resolution that changes **replay-time** delivery — suppressing an
+  `Effectful` re-delivery whose frontier advance is absent, rather than
+  reordering the write — reddens BS-3, at `repeats.isNotEmpty()` and at the
+  `DstOutcome.FAILED` assertion, whose messages would then misdiagnose the cause
+  ("the rollback never reached the frontier").
+
+So: whoever fixes `computenet-xxeo` owns a **re-read** of BS-3, and owns the edit
+only in the second branch. If it does flip, re-record the verdict against the new
+behaviour on the same pinned seed 202 — not a re-seed, not a narrowed assertion,
+and not a change to `FrontierRollbackJournal`.
 
 Consequently this suite **does not** claim to retire the C-11 siblings'
 bespoke-assertion deviation (`computenet-umx.1.4` §"`[CHA2-26]` deviation",
