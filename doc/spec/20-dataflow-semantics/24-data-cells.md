@@ -180,11 +180,17 @@ semantics only — neither is a convergent merge under concurrent writers
     tags on exit, absorbing tag churn that does not flip membership
     (Ubiquitous).
   - `QuorumSetCell` — dynamic **k-of-n** fan-in (one link per source, each
-    carrying its own tag lane): an element is admitted exactly while the number
-    of distinct live source links asserting it meets a `threshold(n)` evaluated
-    against the current live-source count `n`, so union (`{ 1 }`), intersection
+    carrying its own tag lane): an element is admitted exactly while at least
+    one distinct live source link asserts it *and* the number of such links
+    meets a `threshold(n)` evaluated against the current live-source count `n`,
+    so union (`{ 1 }`), intersection
     (`{ n -> n }`), majority (`{ n -> n / 2 + 1 }`), fixed k-of-n (`{ k }`) and
-    near-miss (`{ n -> n - 1 }`) are one lambda over the same cell. Because the
+    near-miss (`{ n -> n - 1 }`) are one lambda over the same cell. The
+    at-least-one floor is not redundant with the threshold: a threshold may
+    evaluate to zero or below — near-miss at `n == 1`, or a fixed `k <= 0` —
+    and an element no live source asserts is still never in the quorum, so an
+    element whose last asserting lane closes exits rather than being re-admitted
+    on a vacuous count. Because the
     threshold reads `n`, a link opening or closing re-evaluates the whole
     working set, not only the elements whose own count moved (an empty source
     joining tightens an intersection). Output tags are **minted per entry** —
@@ -196,10 +202,11 @@ semantics only — neither is a convergent merge under concurrent writers
     because a borrowed tag reaching a consumer twice across a diamond is
     retracted for both paths at once (measured: `union(A, quorum(A, B))` lost
     an element live in `A` — computenet-vvre, computenet-s6l2).
-    `[24-OP-QUORUM-01]` `QuorumSetCell` SHALL admit an element exactly while
-    the number of distinct live source links asserting it meets its threshold
-    of the live-source count, advertising a freshly minted, cell-owned tag for
-    the element on entry and deleting exactly that tag on exit (Ubiquitous).
+    `[24-OP-QUORUM-01]` `QuorumSetCell` SHALL admit an element exactly while at
+    least one distinct live source link asserts it and the number of such links
+    meets its threshold of the live-source count, advertising a freshly minted,
+    cell-owned tag for the element on entry and deleting exactly that tag on
+    exit (Ubiquitous).
     A replayed frame flagged as a baseline is a recovery rather than a live
     wave and is admitted regardless of the threshold (`[24-REPLAY-01]`).
   - `JoinCell` — the **LWW dictionary join**: keyed inner join over two
