@@ -34,11 +34,28 @@ import java.io.File
  * (`96 §E1.5`, `epic computenet-4ru §2.3`), which points at the bead section that actually
  * defines them.
  *
- * A naming decision has no compiler. Nothing stops the next author from typing the bracketed
- * form back in, and nothing would go red — the same silent-deletion path
- * [HonestyLedgerTest] exists to close for prose. So this test reads the module's own sources,
- * the `:kernel` tests and build files ORA1's citations reach, and the ledger, and fails on the
- * old shape.
+ * A naming decision has no compiler. Nothing stops the next author from typing the retired shape
+ * back in, and nothing would go red — the same silent-deletion path [HonestyLedgerTest] exists to
+ * close for prose. So this test reads the module's own sources, the `:kernel` tests and build
+ * files ORA1's citations reach, and the ledger, and fails on the old shape.
+ *
+ * ## Both retired shapes, not just the bracketed one (computenet-os2f)
+ *
+ * The retired shape has two surface forms: bracketed (`[ORA1-SHRINK-01]`, as it read in
+ * `doc/spec`-style EARS ids) and bare (`ORA1-SHRINK-01`). A bracket-only ban is structurally
+ * blind to the bare form's most common home — a Kotlin backticked declaration name — because `[`
+ * is illegal inside one; both computenet-4ru.22's and computenet-gmld's renames actually missed
+ * un-bracketed citations, not bracketed ones (12 backticked test-function names, a header
+ * comment, an inline comment; repaired by hand in 4344a78f6 after the fact, unpinned before this
+ * test). `FORBIDDEN` now matches the bracket as optional, so it catches both.
+ *
+ * That widening would also redden legitimate historical prose that deliberately quotes the
+ * retired bare shape to explain the rename — `DISPUTES.md`'s two "renamed from a
+ * square-bracketed ..." sentences and `OracleSweep.kt`'s "deliberately **not**
+ * square-bracketed ..." sentence, four marker occurrences on three lines total. `HISTORICAL_MENTION`
+ * exempts a line that also contains the word "square-bracketed" — every one of those sentences
+ * uses it to say what shape it is naming, which is also the load-bearing reason none of them read
+ * naturally without it. See `HISTORICAL_MENTION`'s KDoc for the discriminator's known blind spot.
  *
  * ## Scope, and what it deliberately does not check
  *
@@ -58,10 +75,43 @@ class MarkerFormTest {
 
     private companion object {
         /**
-         * The retired shape: a bracketed `ORA1` or `ORA2` id, as in the pre-rename sources.
-         * Written by concatenation so the pattern is not itself a literal occurrence.
+         * The retired shape, bracketed OR bare: `[ORA1-SHRINK-01]` as in the pre-rename
+         * sources, and `ORA1-SHRINK-01` -- the shape a bracket-only ban is structurally blind
+         * to, because `[` is illegal inside a Kotlin backticked declaration name and so never
+         * appeared there even before the rename (computenet-os2f). The leading `[` is now
+         * optional (`\[?`) rather than required; concatenated so the pattern is not itself a
+         * literal occurrence.
          */
-        val FORBIDDEN = Regex("\\" + "[ORA[12]-[A-Z]+-[0-9*]")
+        val FORBIDDEN = Regex("\\" + "[?ORA[12]-[A-Z]+-[0-9*]")
+
+        /**
+         * The phrase every known legitimate mention of the retired *bare* shape uses to say so:
+         * `concord/corpus/DISPUTES.md`'s two "renamed from a square-bracketed ..." / "(a
+         * square-bracketed `ORA2-CONV-01..04`)" sentences, and `OracleSweep.kt`'s "deliberately
+         * **not** square-bracketed ..." sentence. A bare marker near a line that also carries this
+         * phrase is a decision record explaining the retired shape, not a citation left in it by
+         * an incomplete rename -- exactly the four mentions computenet-os2f's bead names.
+         *
+         * Checked over a **window** of the matched line plus its two predecessors, not the single
+         * matched line alone: `DISPUTES.md`'s `ORA2-CONV-01..04` sentence wraps across a markdown
+         * line break, so "square-bracketed" lands on the line *before* the one carrying the marker
+         * (`(a square-bracketed` / `` `ORA2-CONV-01..04`) was also renamed``). A same-line-only
+         * check would misclassify a real historical mention as an offender. See
+         * [isHistoricalMention].
+         *
+         * Chosen over gating by syntactic context (backticked declaration vs. string/comment)
+         * because the legitimate population is small, stable, and self-labels with this exact
+         * word; a proximity content check is simpler to read and to audit than a Kotlin-lexer-
+         * aware scanner, and simple beats clever here (computenet-os2f's dispatch).
+         *
+         * **Known blind spot, stated rather than hidden:** this is a proximity check, not a
+         * grammatical one. A future legitimate exception must co-locate its marker and this
+         * phrase within the window, and nothing stops a genuinely un-renamed marker from landing
+         * within three lines of unrelated prose that happens to discuss "square-bracketed" ids --
+         * that combination would pass. The bracket-only ban this replaces caught neither case at
+         * all; this narrows the blind spot rather than closing it.
+         */
+        val HISTORICAL_MENTION = Regex("square-bracketed")
 
         /** The section form that replaced it, for ORA1. */
         val REQUIRED_ORA1 = Regex("ORA1 §[A-Z]+-[0-9*]")
@@ -100,23 +150,82 @@ class MarkerFormTest {
         return (oracleSources + kernelTestSources + buildFiles + File(root, "concord/corpus/DISPUTES.md")).toList()
     }
 
+    /**
+     * True when [lines]`[index]` (which has already matched [FORBIDDEN]) sits inside a
+     * legitimate historical mention of the retired shape: [HISTORICAL_MENTION] appears on that
+     * line or either of its two predecessors, so a markdown line-wrap between the explanatory
+     * phrase and the marker it explains does not misclassify the marker as an offender. See
+     * [HISTORICAL_MENTION]'s KDoc.
+     */
+    private fun isHistoricalMention(lines: List<String>, index: Int): Boolean {
+        val window = lines.subList(maxOf(0, index - 2), index + 1)
+        return window.any { HISTORICAL_MENTION.containsMatchIn(it) }
+    }
+
     @Test
-    fun `no oracle source, kernel test, build file or ledger entry writes an ORA1 or ORA2 marker in the retired bracketed form`() {
+    fun `no oracle source, kernel test, build file or ledger entry writes an ORA1 or ORA2 marker in the retired bracketed or bare hyphen form`() {
         val root = repoRoot()
         val offenders = governedFiles().flatMap { file ->
-            file.readLines().withIndex()
-                .filter { (_, line) -> FORBIDDEN.containsMatchIn(line) }
+            val lines = file.readLines()
+            lines.withIndex()
+                .filter { (index, line) ->
+                    FORBIDDEN.containsMatchIn(line) && !isHistoricalMention(lines, index)
+                }
                 .map { (index, _) -> "${file.relativeTo(root)}:${index + 1}" }
         }
 
         withClue(
             "These lines write an ORA1 or ORA2 marker in the bracketed shape this repo reserves " +
-                "for EARS requirement ids in doc/spec. Both families are acceptance clauses of the " +
-                "beads items that built the :oracle harness, which have no doc/spec home and are " +
-                "not meant to: write them as \"ORA1 §HONEST-01\" / \"ORA2 §MODEL-12\". See " +
-                "OracleSweep.kt's file KDoc and concord/corpus/DISPUTES.md. Offenders: $offenders",
+                "for EARS requirement ids in doc/spec, or in the bare hyphen shape " +
+                "(\"ORA1-SHRINK-01\") that a Kotlin backticked declaration name is forced into " +
+                "because `[` is illegal there. Both families are acceptance clauses of the beads " +
+                "items that built the :oracle harness, which have no doc/spec home and are not " +
+                "meant to: write them as \"ORA1 §HONEST-01\" / \"ORA2 §MODEL-12\". See " +
+                "OracleSweep.kt's file KDoc and concord/corpus/DISPUTES.md. A line that quotes the " +
+                "retired shape to explain the rename, in a paragraph containing the word " +
+                "\"square-bracketed\" within two lines above it, is exempt -- see " +
+                "HISTORICAL_MENTION's and isHistoricalMention's KDoc for which four mentions that " +
+                "covers and its known blind spot. Offenders: $offenders",
         ) {
             offenders.shouldBeEmpty()
+        }
+    }
+
+    @Test
+    fun `the four legitimate historical mentions of the retired bare shape are recognized as markers and exempted, not merely absent`() {
+        // Each signature below is expected to locate a line that (a) actually matches FORBIDDEN
+        // -- i.e. genuinely carries the retired bare shape, so the exemption is not vacuous -- and
+        // (b) is recognized by isHistoricalMention's window check. If either fails, the offender
+        // scan above is passing on these four for the wrong reason: because they stopped existing,
+        // or moved out of the window, not because the discriminator recognized them.
+        val root = repoRoot()
+        val historicalLineSignatures = listOf(
+            // DISPUTES.md: "ORA2's markers were renamed from a square-bracketed `ORA2-MODEL-12` to ..."
+            // -- phrase and marker on the same line.
+            File(root, "concord/corpus/DISPUTES.md") to "renamed from a square-bracketed `ORA2-MODEL-12`",
+            // DISPUTES.md: "... (a square-bracketed" / "`ORA2-CONV-01..04`) was also renamed ..."
+            // -- the marker's own line, one line below the "square-bracketed" phrase (a markdown wrap).
+            File(root, "concord/corpus/DISPUTES.md") to "`ORA2-CONV-01..04`) was also renamed",
+            // OracleSweep.kt:99 -- two markers, both on the phrase's own line.
+            File(root, "oracle/src/main/kotlin/civictech/oracle/run/OracleSweep.kt") to
+                "deliberately **not** square-bracketed `ORA2-MODEL-12` or `ORA1-HONEST-01`",
+        )
+        historicalLineSignatures.forEach { (file, signature) ->
+            val lines = file.readLines()
+            val index = lines.indexOfFirst { it.contains(signature) }
+            withClue("Expected a line containing \"$signature\" in ${file.relativeTo(root)}; it may have moved or been reworded") {
+                (index >= 0) shouldBe true
+            }
+            val found = lines[index]
+            withClue("This historical-mention line no longer carries an ORA1/ORA2 marker at all: $found") {
+                FORBIDDEN.containsMatchIn(found) shouldBe true
+            }
+            withClue(
+                "This historical-mention line (and its two predecessors) no longer carry " +
+                    "\"square-bracketed\", so isHistoricalMention would no longer exempt it: $found",
+            ) {
+                isHistoricalMention(lines, index) shouldBe true
+            }
         }
     }
 
