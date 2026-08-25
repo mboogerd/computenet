@@ -170,11 +170,67 @@ internal fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
  * emitted for the same reason it was never emitted for a relink before this
  * change: the superseded edge's endpoint pair is still open, now under the new
  * record.
+ *
+ * computenet-4jpd: **the `onUnlinkListeners` multicast IS fired, while the
+ * cell-facing `onUnlink` slot and `EdgeClose` stay suppressed.** The line
+ * between them is what the notification is keyed by, and it is not arbitrary:
+ *
+ * - `EdgeClose` and `LinkSupport.onUnlink` describe the EDGE — "this endpoint
+ *   pair is no longer connected". That is false here, which is the argument
+ *   already made above, and firing them would tell a cell to tear down a
+ *   connection [install] has just re-established.
+ * - `onLinkedListeners`/`onUnlinkListeners` are the infrastructure multicast,
+ *   and their subscribers key their state by [Link.id] — precisely the
+ *   identity that dies in a supersession. `AttentionSupport.wire` holds its
+ *   band frontier in an `AttentionFrontier` slot keyed by `link.id` and GCs
+ *   that slot ONLY from `onUnlinkListeners`
+ *   (`civictech.cell.control.Attention`). A silent removal therefore stranded
+ *   the superseded record's level in the fold for the life of the port while
+ *   the replacement added a second slot through `onLinkedListeners` — one
+ *   immortal slot per relink, and a band that could only ratchet up: the same
+ *   memory shape this function was written to close, displaced from
+ *   `LinkSupport` into the frontier map. Pinned by `LinkSupersessionTest`'s
+ *   two computenet-4jpd cases.
+ *
+ * Firing it is safe in the sense that matters — retraction is what every
+ * id-keyed subscriber wants on a supersession, and `onUnlinkListeners` has
+ * exactly one production subscriber in the repository (the frontier GC above;
+ * `git grep 'onUnlinkListeners +='` finds no other registration in main or
+ * test sources), which is the subscriber this fix is for. No owned/leased
+ * payload, wave or tag state rides this path.
+ *
+ * Two ordering facts, stated as measured rather than as intent
+ * (computenet-4jpd review):
+ *
+ * - Eviction MUST run before [LinkSupport.register] for a reason stronger than
+ *   notification order: the filter below matches on `(from, to, role)` only, so
+ *   once the replacement is registered it matches its own eviction predicate.
+ *   Moving the two `evictSuperseded` calls after `register` evicts the new
+ *   record and reddens all seven `LinkSupersessionTest` cases
+ *   (`expected:<1> but was:<0>`).
+ * - It does NOT avoid a transient empty frontier — it creates one. Between the
+ *   retraction here and the replacement's `onLinkedListeners` report, a port
+ *   whose only downstream link is being relinked folds over zero slots, so
+ *   `recompute` takes the `null` branch and the band flaps to neutral `NORMAL`
+ *   and back. Measured on this code: relinking the sole link of a source
+ *   sitting at HIGH fires `onBandChange` with `[NORMAL, HIGH]` where before
+ *   this change it fired nothing. The flap is synchronous, self-correcting
+ *   inside the same handshake call and touches only control-plane band
+ *   signalling — but it is a spurious `emitUpstream` per relink, and removing
+ *   it means deferring the retraction past the replacement's establishment
+ *   rather than reordering these calls. Not done here; see the follow-up bead.
+ *
+ * Each side fires only its OWN listeners, because this function is called once
+ * per side — matching the coverage `PortLink`'s teardown gives a real unlink,
+ * which multicasts to `support` and `sourceLinking` alike.
  */
 private fun evictSuperseded(support: LinkSupport, from: PortRef, to: PortRef, role: LinkRole) {
     support.links
         .filter { it.from == from && it.to == to && it.role == role }
-        .forEach(support::remove)
+        .forEach { superseded ->
+            support.remove(superseded)
+            support.onUnlinkListeners.forEach { it(superseded) }
+        }
 }
 
 /**

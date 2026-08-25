@@ -303,6 +303,10 @@ class AttentionSupport private constructor(owner: Any) {
             port.linking.onUnlinkListeners += { link ->
                 // retraction (93 I-4 rule 3): slot removal GCs the link's contribution
                 // and re-folds the remainder; inbound links leaving need no action here.
+                // computenet-4jpd: this also fires for a link SUPERSEDED by a relink of
+                // the same edge (`Handshake.evictSuperseded`), which is not an edge
+                // close — but the `link.id` this slot is keyed by does die there, so the
+                // slot must be retracted or the fold keeps one stale level per relink.
                 if (link.fromPort === port && frontier.onUnlink(link.id)) signal()
             }
             // inlet face: a fresh inbound link learns our current band at once —
