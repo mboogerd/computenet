@@ -1385,3 +1385,330 @@ Report, do not edit any other file. This task's diff touches only this file
 commit and the `.mutation-in-progress` marker was removed, never committed. No
 `DISPUTES.md`/corpus/`CONCORDANCE.md` edit — that is `computenet-yh6.1.5.2`'s.
 No tracker item created; no bead other than `computenet-yh6.1.5.1` touched.
+
+---
+
+## `computenet-umx.1.6` — rig-gated C-9 sweeps: BS-2 finds a residual, BS-3 renders the deferred verdict, BS-6 holds
+
+Recorded by: `computenet-umx.1.6` (feature `computenet-umx.1` — CHA2; epic
+`computenet-umx` — CHA1). Realizes `[CHA2-11]`, `[CHA2-12]`, `[CHA2-15]`,
+`[CHA2-47]` and the strict form of `[CHA2-26]`; BS-2, BS-3, BS-6, BS-17. The
+suite is
+`kernel/src/test/kotlin/civictech/cell/repro/EffectReplaySweepTest.kt`.
+
+This entry is what `EffectReplaySweepTest`'s `@ExpectedFailure` names in its
+`filedAs`, and the reasoning `concord/corpus/DISPUTES.md`'s G-59/C-9 boundary
+entry points at for this suite's reproduction ids.
+
+### 0. The rig gate, discharged before anything was written
+
+The bead's own opener — "BLOCKED — DO NOT CLAIM until CHA1's rig exists" — was
+written 2026-08-16 against `origin/main` `46ed020`, and is stale. CHA1
+(`computenet-umx.3`) squash-merged as `67399fc23`. Verified at this task's base
+commit `76acebfa1`, in this order and before any code was written:
+
+- `testkit/src/main/kotlin/civictech/testkit/dst/` is non-empty and carries
+  `RestartAtFrontierFault.kt`, `JournalFault.kt`, `JournalSurgery.kt`,
+  `DstRun.kt`, `DstReplay.kt`, `DstArtifact.kt`, `DstSweep.kt`,
+  `PlanShrinker.kt`, `ExclusiveAccounting.kt`, `FailureReport.kt` and the rest;
+- every requirement id the bead gates on is present in the tree —
+  `[CHA1-19]`..`[CHA1-22]`, `[CHA1-30]`..`[CHA1-40]`, `[CHA1-50]`..`[CHA1-53]`,
+  each cited from at least two files (`git grep -l '\[CHA1-NN\]'`, 2 to 14 files
+  per id);
+- `doc/dst-rig.md` — the CHA1 authors' consumer contract — was read in full
+  first, and this suite follows it: the six seams and nothing else, a fault
+  value with no lambda, and a check message split into a stable identity plus a
+  `DstFailureDetail` (§3, computenet-umx.4).
+
+Nothing here introduces a fault injector, journal decorator, crash harness,
+replay artifact format or shrinker of its own (`[CHA2-04]`). What the suite
+adds is a graph and a property, which is what a rig consumer supplies.
+
+### 1. The fixture, and the record layout every claim rests on
+
+`DurableEffectSweepGraph`: one `Effectful` sink on a journaling `ManagedHost`,
+fed one frame per controller step by a volatile off-host source, restarted
+through `RestartAtFrontierFault`. The external effect log records **wave
+positions** — `(sourceId, counter)` — not values, because `[CHA2-11]` asks
+whether a *position* was acted on twice and two distinct emissions may
+legitimately carry the same value.
+
+The census, pinned by its own test so a later fixture change fails there rather
+than silently weakening every sweep below it:
+
+```
+[census] seed=101 JournalCensus(16 records in 8 steps: frames=8, frontier=8, checkpoints=0, tags={1=8, 3=8})
+```
+
+Frames and frontier advances are the whole log and strictly alternate: the frame
+for counter `c` is at record `2(c - 1)`, its advance at `2(c - 1) + 1`. BS-2's
+finding is stated in terms of that layout, which is why the layout is asserted
+rather than assumed.
+
+### 2. BS-2 (`[CHA2-11]`) — FAILS. A crash between an effect and its dedupe record re-fires it
+
+Seed **101**, pinned. `prefixRestartSweep` over every `k in 0..R`:
+
+```
+[BS-2] DST prefix-restart sweep graph=c9-prefix-restart-sweep host=durable journal=sink-journal
+       seed=101 prefixes=0..16 (executed 17); failed on 6 of 17; failing k=[1, 3, 5, 7, 9, 11]
+```
+
+Every **odd** prefix inside the log the host had written by the restart step
+fails, and every even one passes. Each failure is a single duplicated position,
+always the frame whose frontier advance the prefix cut off — `k=1` re-fires
+`(s,1)`, `k=3` re-fires `(s,2)`, `k=5` → `(s,3)`, `k=7` → `(s,4)`, `k=9` →
+`(s,5)`, `k=11` → `(s,6)`. Recovery reports `recovery-complete@k` in all six:
+this is a clean replay, not a damaged one.
+
+The mechanism follows from §1's layout. `ManagedHost` journals a hosted frame at
+intake (write-ahead), delivers it on a later scheduler task, and journals the
+`Effectful` frontier advance beside the delivery — so the external effect fires
+*between* two journal records, and an odd prefix is exactly a crash inside that
+window. The frame is durable, the "already acted on" advance is not,
+`HostDurability.alreadyProcessed` says no, and the effect fires a second time.
+
+**Disposition**: `@ExpectedFailure(signature = "CHA2-BS-2-prefix-restart-refire",
+owner = "computenet-xxeo")`, no kernel patch (`[CHA2-50]`). Filed as
+**`computenet-xxeo`**, which owns the *decision* as much as the fix: whether
+`[24-DUR-05]` intends at-least-once across this window (today's behaviour),
+at-most-once (journal the advance before invoking the handler), or a
+construction that commits the effect together with its dedupe record. The
+annotation fails the build when its body passes (`[CHA2-44]`), so whichever way
+that lands, this test flips and cannot be missed.
+
+**Nothing was softened to reach that state.** The sweep asserts the unweakened
+`[CHA2-11]` property over the full `0..R` range on the pinned seed;
+`PrefixRestartSweepReport`'s `init` refuses a report that does not cover its
+whole declared range, so narrowing to the passing prefixes is unconstructible.
+Three conditions are asserted *outside* the recorded failure — no broken
+experiment, no budget exhaustion, no inert restart at any `k` — so that a sweep
+which stops being executable reddens the build instead of being absorbed by the
+annotation (`[CHA2-43]`).
+
+### 3. BS-3 (`[CHA2-12]`) — the deferred verdict: the re-delivered invocations DO re-fire
+
+Seed **202**, pinned; two runs differing in exactly one field,
+`keepFrontierAdvances`, with the journal prefix `null` (the whole log) in both —
+which is `[CHA1-22]`'s independence claim exercised directly.
+
+```
+[BS-3 control] counters=[1, 2, 3, 4, 5, 6, 7, 8]                outcome=PASSED
+[BS-3 rolled ] counters=[1, 2, 3, 4, 5, 6, 4, 5, 6, 7, 8]       outcome=FAILED
+```
+
+Recorded answer: **they re-fire.** Positions 4, 5 and 6 — the ones just past the
+three retained advances — are delivered again and acted on again; the control,
+frontier intact, acts on each position exactly once. This is the verdict CHA1's
+BS-11 deferred to CHA2, and it is rendered from the run rather than presumed.
+
+**On the rollback point not being literally `(s, 3)`.** The bead's prose says
+"frontier rolled back to `(s,3)`". `[CHA1-22]` as landed cannot name a
+`(sourceId, counter)`: `HostDurability`'s `FrontierRecord` is a
+`private data class` whose body is Java-serialised, so from `:testkit` only a
+record's tag byte is readable and a rollback selects by *counting* advances
+(`FrontierRollbackJournal`'s KDoc — `computenet-umx.3`'s reported structural
+limit, not a shortcut taken here). Keeping the first three advances is the rig's
+expression of that construction, and the test asserts the consequence it can
+observe (which position re-fires first) rather than a decoded frontier it cannot
+read.
+
+**Interpretation, and how BS-2 changed it.** Read alone, BS-3 could be dismissed
+as an artificial injury: the frontier *is* the exactly-once mechanism, and the
+fault deletes durably-recorded state the kernel wrote and never lost by itself.
+BS-2 removes that escape — an ordinary journal truncation at any odd prefix
+reaches the same state with no frontier surgery at all. So both are the same
+finding seen through two faults, they share the owner `computenet-xxeo`, and the
+honest statement of scope is that `[24-DUR-05]`'s exactly-once effect delivery is
+exactly as durable as the frontier journal and no stronger.
+
+BS-3 carries **no** `@ExpectedFailure`: it asserts the observed behaviour and
+therefore passes, and that annotation fails the build when its body passes
+(`[CHA2-44]`). BS-2 holds the standing claim for both.
+
+### 4. BS-6 (`[CHA2-15]`) — both halves hold
+
+Torn tail, seed **303** pinned:
+
+```
+[BS-6 torn tail] recovery=recovery-complete@12 counters=[1, 2, 3, 4, 5, 6, 8]
+```
+
+Recovery completes, exactly one record fewer is offered than the log held at the
+restart, nothing dead-letters, and **counter 7 — the torn record's own
+invocation, journaled at intake and not yet delivered when the host was
+discarded — never fires.** Counter 8 is a live post-recovery emission and still
+lands. The exact list is asserted rather than a weaker distinctness property,
+because "no effect fired for the torn record" and "some effects are missing" are
+different claims and only the first is `[CHA2-15]`'s.
+
+Corrupted interior record, seed **404** pinned, `CorruptAt(1)`:
+
+```
+[BS-6 corrupt] recovery=recovery-incomplete@1/13 counters=[1, 2, 3, 4, 5, 6, 1, 8]
+```
+
+`RecoveryIncomplete(recordIndex = 1, total = 13)` — index and total both
+asserted, and both re-read off the run report's trace as well as off the
+exception (`[CHA1-20]`). The partial replay is not treated as complete, and the
+corrupted record is dead-lettered rather than swallowed. The effect half: the
+frame for counter `c` sits at record `2(c - 1)`, so exactly one frame — counter
+1, at record 0 — lies before the abort point, and it is the only invocation the
+replay re-delivers. **No effect fires for any record at or beyond record 1**,
+which is `[CHA2-15]`'s second clause, and the assertion is written as a set
+equality against the records the layout says are reachable, so a re-fire that
+crept past the abort point would fail it.
+
+That single re-delivery does re-fire, so the composed run's own check FAILS —
+same mechanism, same owner (`computenet-xxeo`): record 0's frontier advance *is*
+record 1, the corrupted one, so the replay applies the frame and never reaches
+the advance that would have suppressed it. It is recorded here rather than
+double-counted as a separate finding, and BS-6's assertions are written to
+separate the two claims explicitly.
+
+### 5. BS-17 (`[CHA2-47]`, `[CHA1-50]`, `[CHA1-51]`) — pinned seeds, artifacts, replay commands
+
+Every seed is a named constant in the suite's `Seeds` object — 101, 202, 303,
+404 — each recorded once, none replaced, narrowed or reordered. BS-2's seed in
+particular found the residual on its first authoring run and is now
+`computenet-xxeo`'s acceptance seed.
+
+Every failing run writes a `DstArtifact` under `kernel/build/dst/failures/`
+(`[CHA1-54]`, enforced by `DstArtifacts.requireUnderBuildDirectory`) and prints
+a full `FailureReport` — plan with activation steps, dead letters, exclusives,
+artifact path and a copy-pasteable replay command — into the test log. The run
+transcribed above wrote:
+
+```
+kernel/build/dst/failures/c9-prefix-restart-k1/101.json
+kernel/build/dst/failures/c9-prefix-restart-k3/101.json
+kernel/build/dst/failures/c9-prefix-restart-k5/101.json
+kernel/build/dst/failures/c9-prefix-restart-k7/101.json
+kernel/build/dst/failures/c9-prefix-restart-k9/101.json
+kernel/build/dst/failures/c9-prefix-restart-k11/101.json
+kernel/build/dst/failures/c9-frontier-rollback/202.json
+kernel/build/dst/failures/c9-effect-replay-sweep/202.json
+```
+
+**These paths are regenerated, not archived.** They live under `build/` and are
+rewritten by the next run; the replay command printed beside them embeds *that
+JVM's* classpath and is invalidated by the next build. Both are deliberate
+(`ReplayCommands`' own KDoc: "not a portable artifact and does not belong in a
+bead"), which is why this entry records the *shape* of the command and how to
+regenerate it rather than a pasted command line:
+
+```bash
+./gradlew :kernel:test --tests 'civictech.cell.repro.EffectReplaySweepTest' --rerun
+# then copy the `replay` line out of the failure report the run prints, e.g.
+#   "<java>" -cp "<this run's classpath>" civictech.testkit.dst.DstReplayCli \
+#     "<abs path>/kernel/build/dst/failures/c9-frontier-rollback/202.json" \
+#     --register civictech.cell.repro.C9SweepRegistrar
+```
+
+`C9SweepRegistrar` is the `--register` target: it constructs and registers every
+graph and the one check this suite uses, because a graph constructed inside a
+test method would not exist in the replaying JVM and the replay would fail with
+"unknown graph id" instead of reproducing anything. The check is resolved from
+the world (`EffectLogs`, `ExclusiveLedgers`), which is what lets one registered
+check id grade all seven graphs and lets a replay grade against a log the
+replaying JVM actually wrote.
+
+### 6. `[CHA2-26]` — the rig's exclusive accounting is enabled, and what it can reach
+
+Every run in this suite composes `ExclusiveLedgers.check()` with the C-9
+property in one `DstCheck`, and the graph mints one tracked `Owned` per emission
+through the ledger. So `[CHA1-53]`'s accounting is live for every sweep here
+rather than being replaced by a bespoke assertion — which is `[CHA2-26]` in its
+strict form. Composed into one check rather than run as two, because `DstRun`
+grades one check per run and an exclusive lost during a fault-injected run must
+fail the same run the C-9 property is measured on.
+
+**The limit, measured rather than asserted.** The exclusive leg is a *volatile*
+(off-host) sink, not the journaled one. A journaled frame is Java-serialised —
+`kernel/src/main/kotlin/civictech/cell/host/HostDurability.kt:336`,
+`ObjectOutputStream(it).use { out -> out.writeObject(record) }` — and neither
+`Owned` nor the rig's `TrackedExclusive` is `Serializable`, so **an exclusive
+payload cannot ride a write-ahead journal at all**. What the accounting covers
+here is therefore every exclusive this graph mints; what it cannot cover is an
+exclusive crossing a durability boundary, because no such payload is
+constructible. That is a property of the kernel's journal encoding, not a gap in
+the rig.
+
+**And the sharper statement, added at review** (`computenet-umx.1.6` review, so a
+green ledger is not read as evidence it is not): no fault in this suite can
+perturb the exclusive leg at all. `RestartAtFrontierFault` and `JournalFault` act
+on the host and its journal, while the `exclusives` outlet is subscribed by a
+plain off-host consumer that mints and consumes inside one controller step and
+never crosses the host. The accounting here is therefore *enabled and honest*
+rather than *load-bearing*: a standing tripwire that would catch a future graph
+change routing an exclusive through the host, and not a check any fault in this
+file can make fail. `[CHA2-26]`'s strict form asks that these sweeps run under the
+rig's accounting instead of a bespoke assertion, and that is what is delivered —
+it is **not** evidence about exclusive handling under crash and replay, and must
+not be cited as if it were. Recorded here rather than in
+`concord/corpus/DISPUTES.md`, because `[CHA2-26]` is a CHA2 acceptance criterion
+and this file is the evidence lane's own ledger, whereas `DISPUTES.md` is the
+corpus's **spec-requirement** honesty ledger: its entries are keyed on spec
+requirements and gap markers (`G-59` / `C-9`, `[24-DUR-05]`), and a `[CHA2-*]` id
+appears there only as *provenance* inside such an entry — as in this task's own
+`[CHA2-51]` extension of the G-59/C-9 boundary entry — never as an entry's
+subject. (Corrected at second read: an earlier draft of this paragraph said
+`DISPUTES.md` "carries no `[CHA2-*]` entries", which a grep contradicts — the
+file cites eleven of them, including the bullet this task added.)
+
+**A second review note, on what a fix might move, and what it will not.** BS-2's
+`@ExpectedFailure` is the designed tripwire — remove it, keep the test. Whether
+`computenet-xxeo` also flips **BS-3** depends on which resolution it takes, and
+that is not knowable from here:
+
+- If it decides `[24-DUR-05]` is at-least-once as written, or fixes only the live
+  write-ahead **ordering** (advance durable before the effect fires, or the
+  effect committed atomically with its dedupe record), **BS-3 keeps passing
+  unchanged.** BS-3's fault does not race that window: it deletes frontier
+  advances the host had already made durable, so on replay `alreadyProcessed` says
+  no for counters 4..6 whatever order the live path wrote them in, and the
+  re-fire BS-3 records survives the fix. BS-2 and BS-3 are one *finding* about
+  `[24-DUR-05]`'s scope, but they are not one *mechanism*, and only BS-2's is an
+  ordering window.
+- Only a resolution that changes **replay-time** delivery — suppressing an
+  `Effectful` re-delivery whose frontier advance is absent, rather than
+  reordering the write — reddens BS-3, at `repeats.isNotEmpty()` and at the
+  `DstOutcome.FAILED` assertion, whose messages would then misdiagnose the cause
+  ("the rollback never reached the frontier").
+
+So: whoever fixes `computenet-xxeo` owns a **re-read** of BS-3, and owns the edit
+only in the second branch. If it does flip, re-record the verdict against the new
+behaviour on the same pinned seed 202 — not a re-seed, not a narrowed assertion,
+and not a change to `FrontierRollbackJournal`.
+
+Consequently this suite **does not** claim to retire the C-11 siblings'
+bespoke-assertion deviation (`computenet-umx.1.4` §"`[CHA2-26]` deviation",
+`computenet-umx.1.5` likewise) on the durable plane. It retires it *for its own
+runs*, where the rig now covers it. The siblings' reproductions live in their own
+files, which are outside this task's `metadata.files` claim, and amending them
+was not attempted.
+
+### 7. Verification
+
+```
+./gradlew :kernel:test --tests 'civictech.cell.repro.EffectReplaySweepTest' --rerun
+  6 tests completed, 0 failed
+  Standing expected failures (@ExpectedFailure): 1
+    - EffectReplaySweepTest.BS-2 …  [owner computenet-xxeo, signature CHA2-BS-2-prefix-restart-refire]
+```
+
+`:testkit` was not modified, so the rig is unchanged by this task; the
+repository-wide `./gradlew test` and `./gradlew :concord:check` gates were run
+because this entry and the `DISPUTES.md` extension are part of the change.
+
+### Disposition
+
+- **BS-2**: reproduction landed, failing, annotated, owned by
+  `computenet-xxeo`. No kernel change (`[CHA2-50]`).
+- **BS-3**: verdict rendered and recorded; test passes on the observed answer.
+- **BS-6**: both halves hold; test passes.
+- **BS-17**: seeds pinned, artifacts written, replay path documented and
+  regenerable.
+- **`[CHA2-51]`**: `concord/corpus/DISPUTES.md`'s G-59/C-9 boundary entry
+  extended with this suite's reproduction ids — an extension of the existing
+  entry, not a duplicate entry, and no corpus scenario or schema change.
