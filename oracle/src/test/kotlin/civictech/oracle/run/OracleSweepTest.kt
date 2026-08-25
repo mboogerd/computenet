@@ -259,6 +259,12 @@ class OracleSweepTest {
      * cannot go green because the kernel got fixed. Every seed of the range must have been
      * *started* (the progress stream is the witness) and the thrown summary must be
      * `forEachSeed`'s density form, counting all of them.
+     *
+     * `forEachSeed` throws [civictech.testkit.dst.SweepFailure] (computenet-e0to): the density
+     * and first-failing seed live in [civictech.testkit.dst.SweepFailure.detail], not in
+     * `Throwable.message` — the message is the failure mode alone, so that two runs of the same
+     * underlying assertion at different densities compare equal to `PlanShrinker`'s
+     * `FailurePredicate.sameFailingCheck`.
      */
     @Test
     fun `a sweep runs every seed and reports failure density rather than aborting at the first`() {
@@ -273,7 +279,7 @@ class OracleSweepTest {
             )
         }
 
-        val failure = assertThrows<AssertionError> {
+        val failure = assertThrows<civictech.testkit.dst.SweepFailure> {
             OracleSweep.run(
                 config = baselineConfig().copy(scriptLength = 20),
                 seeds = 0L..4L,
@@ -283,10 +289,11 @@ class OracleSweepTest {
         }
 
         started shouldBe listOf(0L, 1L, 2L, 3L, 4L)
-        val message = failure.message ?: error("forEachSeed's density summary carried no message")
-        message shouldContain "failed on 5 of 5 seeds"
-        message shouldContain "first: seed=0"
+        val message = failure.message ?: error("forEachSeed's failure mode carried no message")
         message shouldContain "Mismatch"
+        failure.detail shouldContain "failed on 5 of 5 seeds"
+        failure.detail shouldContain "first: seed=0"
+        failure.detail shouldContain "Mismatch"
     }
 
     /**
