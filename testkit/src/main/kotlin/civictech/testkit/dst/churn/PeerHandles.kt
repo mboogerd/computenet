@@ -94,7 +94,8 @@ class MeshPeer internal constructor(
     private val world: DstWorld,
     private val dataId: UUID,
     private val assignmentId: UUID,
-    private val payload: MeshPayload,
+    /** What this mesh replicates — read by the reconvergence observation to pick its fold. */
+    val payload: MeshPayload,
     private val totalSlots: Int,
 ) : PeerHandle {
 
@@ -279,12 +280,27 @@ class MeshPeer internal constructor(
      * state at each step, so a write aimed at a departed peer is expected rather than an error.
      *
      * Returns true if the write was issued.
+     *
+     * **An issued write is recorded as an [AcceptedOp] here, at the issuing site.** That is what
+     * makes [BatchReference] an independent reference rather than a restatement of the folds it
+     * checks ([CHA3-11]): a reference re-derived from the replicas would agree with them by
+     * construction. "Accepted" means applied to this replica's own state — the replica is a
+     * member, so its intake is open — and says nothing about whether the delta reached anyone
+     * else; which accepted operations the survivors still owe is [ReconvergenceCheck]'s call.
      */
     fun write(ordinal: Int): Boolean {
         if (!member) return false
         when (payload) {
-            MeshPayload.SET -> (proxy() as SetInletProxy).inlet.call.add("$name-$ordinal")
-            MeshPayload.PN_COUNTER -> (proxy() as PnCounterInletProxy).inlet.call.increment(1)
+            MeshPayload.SET -> {
+                val element = "$name-$ordinal"
+                (proxy() as SetInletProxy).inlet.call.add(element)
+                AcceptedOps.record(world, AcceptedOp(peer = name, ordinal = ordinal, element = element))
+            }
+
+            MeshPayload.PN_COUNTER -> {
+                (proxy() as PnCounterInletProxy).inlet.call.increment(1)
+                AcceptedOps.record(world, AcceptedOp(peer = name, ordinal = ordinal, increment = 1L))
+            }
         }
         return true
     }
@@ -347,6 +363,11 @@ class MeshPeer internal constructor(
         }
         replication.replicate(cell, slot.host)
         replica = cell
+        // The reconvergence observation attaches to this replica's OWN delta outlet, here rather
+        // than at build time because a replica only exists once its peer has joined — and again on
+        // every rejoin, which is what lets a late joiner's catch-up stream rebuild a fold from
+        // scratch ([CHA3-14]). A no-op unless the run is wrapped in `MeshConvergences.observing`.
+        MeshConvergences.onSpawn(world, this, cell)
         // The assignment register is spawned once per host *generation*, not once per join: an
         // eviction despawns the data replica and leaves the register (and the delivered-watermark
         // companion `Replication` keeps for the id) in place, so a rejoin that re-created it would
