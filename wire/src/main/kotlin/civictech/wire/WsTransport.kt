@@ -1536,6 +1536,30 @@ object WsTransport {
         private val writeDemandReArmCount = AtomicLong()
 
         /**
+         * A label this listener's [WRITE_REARM_MARKER] lines carry, so a marker
+         * a test provoked ON PURPOSE can be told apart from a real occurrence.
+         *
+         * Empty on every listener the production path builds, and nothing in
+         * `wire`'s main source ever sets it — so **an unlabelled marker line is
+         * a genuine re-arm**, and a labelled one is a test instrumenting itself.
+         * Set it from the test that deliberately strands a frame, before the
+         * strand.
+         *
+         * Why this exists: the `wire-suite-sample` workflow runs the whole
+         * `:wire:` suite per iteration, and
+         * `WsListenerWriteDemandReArmTest`'s first test strands a frame by
+         * construction — so every iteration emitted one marker and two
+         * 500-iteration samples had to be read by subtracting a
+         * one-per-iteration baseline by hand. That subtraction was misread once
+         * (computenet-dqy.70's P1 raise) before computenet-0r4i re-did it. With
+         * the label, a sample is read with a filter and needs no arithmetic.
+         *
+         * `@Volatile` because the sweep thread reads what the test thread wrote.
+         */
+        @Volatile
+        var reArmMarkerLabel: String = ""
+
+        /**
          * Consecutive sweeps in which a connection was seen in the lost-demand
          * state. Keyed by connection, pruned every sweep to the connections that
          * are still in it, so a closed or recovered connection leaves nothing
@@ -1640,6 +1664,7 @@ object WsTransport {
                 // per occurrence; a healthy process prints none.
                 System.err.println(
                     "[WsListener] $WRITE_REARM_MARKER: put back a write demand java-websocket lost on port $port " +
+                        (if (reArmMarkerLabel.isEmpty()) "" else "label=$reArmMarkerLabel ") +
                         "(re-arm #$n; the out-queue held bytes with no OP_WRITE across " +
                         "$LOST_DEMAND_CONFIRMATIONS sweeps ${WRITE_REARM_POLL_MS}ms apart). " +
                         "See WsListener.sweepWriteDemand — computenet-dqy.69.",
@@ -2066,6 +2091,21 @@ object WsTransport {
              * actually fires on, that line **is** the proof the repair fired
              * against a genuinely stalled out-queue, and its absence over a
              * clean 500-iteration sample is proof no announcement was stranded.
+             *
+             * **Filter out the labelled lines when counting occurrences** — a
+             * marker carrying `label=` was provoked on purpose by a test (see
+             * [WsListener.reArmMarkerLabel]); one that does not is real:
+             *
+             * ```
+             * grep -rh 'LOST WRITE DEMAND RE-ARMED' <sample> | grep -vc 'label='
+             * ```
+             *
+             * MEASURED, computenet-0r4i: before the label existed, the two
+             * 500-iteration ubuntu samples (runs 31784338227 and 31791814150)
+             * held 515 and 513 marker lines, of which exactly 500 each were
+             * `WsListenerWriteDemandReArmTest`'s deliberate strand — one per
+             * fresh JVM, never zero, never two. The unattributed remainder was
+             * 15 and 13.
              */
             const val WRITE_REARM_MARKER = "LOST WRITE DEMAND RE-ARMED"
 

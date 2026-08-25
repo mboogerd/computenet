@@ -104,11 +104,20 @@ class WsListenerWriteDemandReArmTest {
      * queue drains, the re-arm is counted (so the drain is attributable to the
      * repair rather than to luck), and the peer receives the exact payload — the
      * frame reached the wire, not just the queue.
+     *
+     * The listener is LABELLED ([WsTransport.WsListener.reArmMarkerLabel]), because
+     * this test's re-arm is deliberate and the `wire-suite-sample` workflow runs
+     * this whole suite once per iteration: without the label every iteration's
+     * marker count starts at one and a sample has to be read by subtracting a
+     * baseline by hand. computenet-0r4i did that subtraction on two 500-iteration
+     * ubuntu samples after computenet-dqy.70 had been raised to P1 on the
+     * unsubtracted count; the label is so the next sample needs no arithmetic.
      */
     @Test
     fun `a frame stranded by a lost write demand is re-armed and delivered`() {
         val server = Stack()
         val listener = WsTransport.listen(0, server.side)
+        listener.reArmMarkerLabel = DELIBERATE_STRAND_LABEL
         val client = CollectingClient(URI("ws://localhost:${listener.port}"))
         try {
             assertTrue(client.connectBlocking(10, TimeUnit.SECONDS), "the probe dialer never connected")
@@ -407,5 +416,20 @@ class WsListenerWriteDemandReArmTest {
 
         /** How long the selector is given to complete a cycle — see [awaitIdleConnection]. */
         const val SETTLE_MS = 250L
+
+        /**
+         * What the deliberately stranded listener stamps on its marker lines, so
+         * a whole-suite sample can drop them with `grep -v 'label='` instead of
+         * subtracting one per iteration.
+         *
+         * NOT asserted by any test in this class, and deliberately so: the
+         * marker is written by the listener's own sweep thread, and capturing it
+         * would mean replacing the process-wide `System.err` from a suite whose
+         * other classes run around it. What checks the label is the sample it
+         * exists for — the next `wire-suite-sample` artifact should show every
+         * iteration's baseline line carrying `label=`, and any line without one
+         * is an occurrence to explain.
+         */
+        const val DELIBERATE_STRAND_LABEL = "WsListenerWriteDemandReArmTest-deliberate-strand"
     }
 }
