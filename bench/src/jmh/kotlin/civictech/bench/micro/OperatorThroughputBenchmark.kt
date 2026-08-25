@@ -75,9 +75,17 @@ import java.util.concurrent.TimeUnit
  *   generated a batch, so live tags grew monotonically and unboundedly across an
  *   iteration: invocation 1's timed body ran against an empty map and invocation 40's
  *   against 40 batches of live membership. That is not the operator property `[BEN1-28]`
- *   asks about — it is a *harness* confound that makes the two directions incomparable,
- *   and the 2026-08-18 REAL-drive entry measured its signature (every INSERT row at
- *   least 3x noisier than every RETRACT row's upper bound). INSERT now carries the mirror
+ *   asks about — it is a *harness* confound that makes the two directions incomparable.
+ *   Two 2026-08-18 findings entries attribute their INSERT/RETRACT dispersion split to
+ *   exactly this mechanism, by name — the SIM entry (`computenet-x9e.4.4`: 5 of 5
+ *   Reportable rows are RETRACT rows) and the REAL entry (`computenet-x9e.4.5`: every
+ *   INSERT row at least 3x noisier than every RETRACT row's upper bound). **Neither is
+ *   evidence that the fix below closes anything**, and the second is a superseded entry:
+ *   the JDK-21 re-measurement that supersedes it (`computenet-am2h`) reports INSERT
+ *   0.00813–0.07387 against RETRACT 0.00771–0.05361 — overlapping ranges with no 3x
+ *   separation — and explicitly declines to re-litigate `[BEN1-28]`. Which of those
+ *   pictures survives a re-measured sweep is computenet-x9e.14's to settle, not this
+ *   change's. INSERT now carries the mirror
  *   of RETRACT's covering insert, an untimed compensating retract of the previous body's
  *   batch, so both directions time one batch against the same live state every
  *   invocation. [InvocationCycle] holds that logic and
