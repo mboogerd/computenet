@@ -1911,3 +1911,103 @@ otherwise reads `[ORA2-DIFF-07]` as covered at the shape BS-9 states, which it i
   as a nonzero-arity catalog entry that consumes a tagged outlet. With either, build BS-9 at its
   stated shape — a tagged map feeding a glitch-free consumer through two paths, reconverging at a
   fan-in — and delete this entry.
+
+## CHA3-42-stall-notice-unclean-departure: an unclean departure's `Stall`-family notice is not observable on any read `testkit`'s churn harness has
+
+Filed by `computenet-umx.2.5` per the decided fallback named on its own bead
+(`computenet-umx.2`'s breakdown comment, "umx.2-D7"): `[CHA3-42]` requires the harness assert
+BOTH halves of an unclean departure's effect — the frontier freezes, AND a `Stall`-family
+notice ([civictech.cell.control.StallNotice]) is observed on the reads. The task's own text
+required the premise to be probed first, honestly, before writing the second half; it was, and
+the negative held. This entry is that probe's record, plus a second, narrower finding measured
+while building the frontier-freeze half itself.
+
+### Half 1 — the `Stall`-family notice: **`kernel-gap`** (no mechanism reaches a churn peer's crash at all)
+
+- **Category**: `kernel-gap`. Nothing here is worked around; `DepartureGatesTest`'s BS-10
+  crash test asserts only the frontier-freeze marker (below) and says explicitly, in its own
+  KDoc, that it does not assert the notice.
+
+- **The clause in dispute**: `[CHA3-42]` / `96 §E3.6 (c)` — "surfaced as a `Stall`-family
+  notice on the reads, not worked around" — for `DepartureMode.CRASH_UNCLEAN`.
+
+- **Why it is not constructible**, traced from source rather than assumed:
+  - `StallNotice.Stall` is constructed at six call sites in `kernel` main, five of them in
+    `kernel/src/main/kotlin/civictech/cell/host/ManagedHost.kt` — `:738` (`SUSPENDED`, on the
+    host-level suspend cascade), `:1096` (`DEAD_LETTERED`, on a dead-lettered invocation under
+    `SupervisionPolicy.PROPAGATE`), `:1101`/`:1138` (`RESTARTING`/`SUSPENDED`, under
+    `SupervisionPolicy.RESTART`/`SUSPEND`) and `:1326` (`SUSPENDED`, from
+    `HostManagementApi.suspend(ref)`) — plus `CompositeCell.kt:455` (`DEAD_LETTERED`, from
+    `stallDeniedEdges` on a `BoundaryPolicy` refusal). Every one of them requires the AFFECTED
+    CELL's OWN HOST to still be alive and routing a suspend, a supervision decision or an
+    invocation through it; `CompositeCell`'s additionally requires the cell to be a composite
+    boundary, which a churn-mesh data replica is not. (Enumeration corrected in review: the
+    original filing said "exactly three ... `:738`, `:1096`, `:1101`/`:1138`" and both omitted
+    `:1326`/`CompositeCell.kt:455` and mislabelled `:738` as the `HostManagementApi.suspend`
+    site. The conclusion is unchanged and the wider enumeration strengthens it — none of the six
+    is reachable from `HostSlot.crash`.)
+  - `MeshPeer.crash()` (`testkit/src/main/kotlin/civictech/testkit/dst/churn/PeerHandles.kt`)
+    calls `HostSlot.crash()` (`testkit/src/main/kotlin/civictech/testkit/dst/DstWorld.kt`),
+    which shuts down the crashed generation's scheduler and rebuilds a fresh `ManagedHost` from
+    the graph's own build lambda. It calls none of `suspend`, `restart`, or any invocation path
+    that could dead-letter — it discards the host outright. `ChurnMeshTest`'s own control
+    confirms this at the churn layer: `peer1.lastEvictDespawned` is `null` after a crash — "no
+    eviction ran: nothing was announced or drained".
+  - Even granting a notice fired somehow, it travels `notifyDownstream` — to cells LINKED
+    downstream of the crashed replica **on its own host**. The churn mesh's replicas are plain
+    data cells with no such downstream consumer wired to them, and — as `ReconvergenceCheck`'s
+    own KDoc already states — "the kernel has no failure detector, so a crashed peer never
+    unpublishes": a SURVIVING peer has no notification path for another peer's crash at all.
+
+- **What was NOT done instead**: no downstream consumer was wired onto a churn replica purely
+  to catch a notice that the crash path never emits; no assertion was written that would pass
+  vacuously against an empty read.
+
+- **Resolves**: either (a) a churn-reachable path that routes an unclean departure through
+  `ManagedHost`'s own suspend/restart/dead-letter machinery instead of discarding the host
+  outright (the "verified-first" premise `computenet-umx.2.2` built `CRASH_UNCLEAN` against
+  explicitly rejected this — see its own bead comment on the crash-and-rebuild design), or (b) a
+  future E3.6 milestone (per the task's own text, "the property becomes checkable when E3.6
+  lands") that gives a departed-peer notice a path independent of the crashed host's own
+  lifecycle. With either, add the notice assertion to `DepartureGatesTest`'s BS-10 crash test
+  and delete this half of the entry.
+
+### Half 2 — the frontier-freeze half itself is honest only for a marker read, not for `stabilityCovers` on a new wave: **`rig-gap`** (synchronous gossip delivery outlives a crashed peer's host)
+
+- **Category**: `rig-gap`. `DepartureGatesTest`'s BS-10 crash test asserts the marker read
+  (`StabilityObservables.rowClosed`/`rowSuspended` stay `false` across a bounded further drain)
+  and does **not** assert `StabilityObservables.stabilityCovers` is `false` for a brand-new
+  post-departure wave — unlike BS-11 (`EVICT_NO_CLOSE`), which asserts exactly that and is
+  genuinely red without a fix.
+
+- **Measured directly, not assumed**: building the crash test's `stabilityCovers` assertion the
+  same way as BS-11's, it did **not** fail — a brand-new wave from a live peer, issued and
+  drained well after the crash, read as COVERED across all three members' rows, including the
+  crashed peer's. Two independent seeds reproduced this.
+
+- **The mechanism, traced from source**: `Replication`'s own KDoc states the rig's delivery
+  ceiling plainly — "link wiring calls streamTo on the local outlet directly (same ceiling as
+  the M5.7 streamTo idiom — fine single-threaded/simulated; production wiring wants a
+  host-queue hop)". Gossip delivery between linked replicas is therefore **synchronous** and
+  does not route through a host's task queue. `MeshPeer.crash()` shuts down only the crashed
+  generation's *scheduler* and discards `MeshPeer`'s own references (`replica = null`, a fresh
+  `Replication`); it does not sever the underlying cell objects' links. `MeshPeer`'s class KDoc
+  says as much: "`registry`, `bridgeHost` and `side` survive" a crash. So a crashed peer's OLD
+  data cell and its delivered-watermark companion stay fully linked and continue to merge and
+  relay inbound deltas — as zombies no `MeshPeer` reaches any more — for as long as the
+  surviving `side`/`bridgeHost` keep them wired, because that relay path never touches the dead
+  scheduler. `Replication.evict`'s `despawn` has no such gap: it explicitly unpublishes the
+  DATA cell (`hostOf.remove`, `linked` pruned), which is exactly why BS-11's row genuinely
+  freezes for the same check.
+
+- **What was NOT done instead**: no assertion was narrowed to make `stabilityCovers` pass by
+  picking a different wave or a different observer; the coverage assertion was dropped for the
+  crash case entirely rather than weakened, and the marker-only assertion that remains is
+  exactly what BS-9/BS-31's own row-state reads already established as honestly checkable.
+
+- **Resolves**: a churn-reachable crash primitive that also drops the crashed replica's wire
+  attachment (not only its scheduler) — at which point `stabilityCovers` would freeze for
+  `CRASH_UNCLEAN` the same way it does for `EVICT_NO_CLOSE`, and the assertion can be added
+  back to `DepartureGatesTest`'s BS-10 crash test and this half deleted. Until then, a suite
+  relying on "a crashed peer's delivered-watermark row stops accepting new coverage" is relying
+  on something this rig does not model.
