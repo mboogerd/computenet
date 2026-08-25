@@ -398,10 +398,16 @@ object OracleSweep {
      * `WavePrefixTest.generatedSweepConfig` at `scriptLength = 30`, seeds `0 until 60`: the
      * `else` branch rendered each of the five `WavePrefixViolation` seeds at ~1.9–2.0 kB with the
      * whole `Script(...)` inline, against ~0.57 kB and no script for the `Mismatch` seeds through
-     * the branch above. Not reachable from the BS-1 sweep — `sourceCount = 4` admits no prefix
-     * checking at all ([WavePrefixOracle.appliesTo]; measured 0 of 200 seeds) — but reachable
-     * from any single-source sweep config, because [run] passes no [WavePrefixOption] and so
-     * inherits [WavePrefixOption.DEFAULT].
+     * the branch above. Not reachable from the BS-1 sweep today, but not for a soundness reason
+     * — since computenet-2hur, [WavePrefixOracle.appliesTo] admits multi-source cases. `BS-1`'s
+     * `sourceCount = 4`, `scriptLength = 200` shape is refused because its frontier lattice —
+     * re-measured against this repo's `OracleSweepTest.baselineConfig()`, seeds `0 until 200`:
+     * every seed lands between 5,734,960 and 6,762,600 frontiers — sits far above
+     * [WavePrefixOracle.MAX_FRONTIER_LATTICE] (50,000), so all 200 seeds hit the **COST**
+     * refusal (`[ORA1-PERF-01]`) in [WavePrefixOracle.notApplicableBecause], not the soundness
+     * exclusion this KDoc previously named — the 0-of-200 count is unchanged, only the reason is.
+     * The branch above is still reachable from any single-source sweep config, because [run]
+     * passes no [WavePrefixOption] and so inherits [WavePrefixOption.DEFAULT].
      *
      * `internal` rather than private so `OracleSweepTest` can assert the rendering directly,
      * without depending on which generated seeds happen to violate.
