@@ -326,8 +326,13 @@ class ChurnMeshTest {
 
     // ----------------------------------------------------------------------- the PN variant
 
+    /**
+     * One mode only, on the PN payload: the four departure modes are each covered above, on the
+     * OR-map mesh. What this adds is that the PN_COUNTER payload reaches the same seam — the name
+     * previously read as four-mode coverage of this payload, which it has never been.
+     */
     @Test
-    fun `the PnCounter mesh runs the same four modes`() {
+    fun `the PnCounter mesh carries an EVICT_NO_CLOSE departure`() {
         val peers = roster(3)
         val plan = ChurnPlan(
             seed = 9L,
