@@ -155,23 +155,39 @@ object ContractRegistry {
     internal fun removeOwner(owner: ModuleId) {
         contractProvenance.drop(owner).forEach { contractId ->
             val descriptor = byId.remove(contractId) ?: return@forEach
+            // computenet-dhgy/computenet-nh51: byFqn/byMethodKey are secondary indexes
+            // keyed on fqn / method-key, not on contractId — stage() validates
+            // contractId only, so a different contractId can legitimately share this
+            // fqn (JAR2's territory, computenet-051 G-49) and commit()'s
+            // last-writer-wins may have pointed byFqn/byMethodKey at the contract that
+            // just departed. Restore each stranded key from the contractIds still
+            // registered under this fqn, in the same last-writer-wins order commit
+            // applies.
+            //
+            // The two tables are restored on SEPARATE gates on purpose. byFqn is
+            // genuinely one-key-one-holder, so "did the departing descriptor hold it"
+            // answers for the whole fqn. byMethodKey is not: its holder and byFqn's
+            // holder DIVERGE the moment contributors sharing one fqn carry different
+            // method sets, because a later contributor lacking method m repoints
+            // byFqn without repointing byMethodKey[fqn#m]. Gating byMethodKey on
+            // wasFqnHolder therefore stranded a live method whenever the departing
+            // contract was byMethodKey's holder but not byFqn's (computenet-nh51), so
+            // each method key is decided on its own removal instead.
             val wasFqnHolder = byFqn.remove(descriptor.fqn, descriptor)
-            descriptor.methods.forEach { method ->
+            val strandedMethods = descriptor.methods.filter { method ->
                 byMethodKey.remove(methodKey(descriptor, method), descriptor to method)
             }
-            // computenet-dhgy: byFqn/byMethodKey are secondary indexes keyed on fqn /
-            // method-key, not on contractId — stage() validates contractId only, so a
-            // different contractId can legitimately share this fqn (JAR2's territory,
-            // computenet-051 G-49) and commit()'s last-writer-wins may have pointed
-            // byFqn/byMethodKey at the contract that just departed. Restore the last
-            // surviving contractId's own descriptor when that happened, same
-            // last-writer-wins ordering commit applies — a harmless no-op write when
-            // the departing contractId was not the fqn's current holder.
-            val survivorId = fqnIndex.remove(descriptor.fqn, contractId)
-            if (wasFqnHolder && survivorId != null) {
-                val survivor = byId[survivorId] ?: return@forEach
-                byFqn[survivor.fqn] = survivor
-                survivor.methods.forEach { method -> byMethodKey[methodKey(survivor, method)] = survivor to method }
+            val remainingIds = fqnIndex.remove(descriptor.fqn, contractId)
+            // Newest first: the same ordering commit's last-writer-wins produces.
+            val survivors = remainingIds.asReversed().mapNotNull { byId[it] }
+            if (wasFqnHolder) {
+                survivors.firstOrNull()?.let { byFqn[it.fqn] = it }
+            }
+            strandedMethods.forEach { departed ->
+                val key = methodKey(descriptor, departed)
+                survivors.firstNotNullOfOrNull { survivor ->
+                    survivor.methods.firstOrNull { methodKey(survivor, it) == key }?.let { survivor to it }
+                }?.let { byMethodKey[key] = it }
             }
         }
         val cellDrop = cellProvenance.drop(owner)

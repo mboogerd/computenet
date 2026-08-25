@@ -322,14 +322,20 @@ internal class ContractFqnIndex {
     }
 
     /**
-     * Remove [contractId] from [fqn]'s contributor list and return the last
-     * remaining contractId, if any — the survivor `byFqn`/`byMethodKey` should
-     * repoint to, mirroring the last-writer-wins order [ContractRegistry.commit]
-     * applies. `null` means [fqn] has no live contractId left at all.
+     * Remove [contractId] from [fqn]'s contributor list and return **every**
+     * remaining contractId, in commit order (newest last) — the candidates
+     * `byFqn`/`byMethodKey` may repoint to, mirroring the last-writer-wins order
+     * [ContractRegistry.commit] applies. An empty list means [fqn] has no live
+     * contractId left at all.
+     *
+     * The whole list rather than just the newest survivor because `byMethodKey`
+     * is repointed per method key, and the newest contributor to an fqn need not
+     * declare every method a still-live older contributor does — the divergence
+     * computenet-nh51 stranded.
      */
-    fun remove(fqn: String, contractId: Long): Long? {
+    fun remove(fqn: String, contractId: Long): List<Long> {
         val remaining = (byFqn[fqn] ?: emptyList()) - contractId
         if (remaining.isEmpty()) byFqn.remove(fqn) else byFqn[fqn] = remaining
-        return remaining.lastOrNull()
+        return remaining
     }
 }

@@ -54,6 +54,33 @@ interface ProbeCellReregister
  */
 interface ProbeContractFqnRepoint { fun repoint(value: Long) }
 
+/**
+ * computenet-nh51: heterogeneous method sets on one fqn — the departing
+ * contributor is `byMethodKey`'s holder while a later, method-less contributor
+ * holds `byFqn`. Own interface per probe so each ordering is independent of the
+ * others' cleanup.
+ */
+interface ProbeMethodSetHolder { fun ord(value: Long) }
+
+/** computenet-nh51 sibling ordering: three contributors, the MIDDLE one departs. */
+interface ProbeMethodSetMiddle { fun ord(value: Long) }
+
+/** computenet-nh51 sibling ordering: the FIRST contributor departs, then the fqn holder. */
+interface ProbeMethodSetFirstThenHolder { fun ord(value: Long) }
+
+/** computenet-nh51 sibling ordering: one module registers the same fqn twice, under two contractIds. */
+interface ProbeMethodSetTwice { fun ord(value: Long) }
+
+/** computenet-nh51 sibling ordering: a second module re-contributes an already-held contractId, then departs. */
+interface ProbeMethodSetRecontributed { fun ord(value: Long) }
+
+/**
+ * computenet-nh51 review: the holder departs leaving TWO live survivors, so
+ * *which* survivor is chosen is observable — the only shape that pins
+ * `removeOwner`'s "newest live survivor" ordering for both tables.
+ */
+interface ProbeMethodSetNewestSurvivor { fun ord(value: Long) }
+
 private fun descriptorOf(iface: Class<*>, contractId: Long = StableHash.of(iface.name)): ContractDescriptor =
     ContractDescriptor(
         contractId = contractId,
@@ -491,6 +518,227 @@ class RegistryProvenanceTest {
             ModuleRegistration.unregister(moduleB)
         }
         assertNull(ContractRegistry.descriptor(ProbeContractFqnRepoint::class.java), "no contributor left: fqn must be gone")
+        assertNull(ContractRegistry.idsOf(method), "no contributor left: method key must be gone")
+    }
+
+    /**
+     * computenet-nh51: `removeOwner` gated the whole `byFqn`/`byMethodKey` restore
+     * on `wasFqnHolder`, which is the wrong gate for `byMethodKey` — its holder and
+     * `byFqn`'s holder DIVERGE as soon as contributors sharing one fqn carry
+     * different method sets. A later contributor that lacks method `m` repoints
+     * `byFqn` without repointing `byMethodKey[fqn#m]`, so the departing contributor
+     * is `byMethodKey`'s holder while not being `byFqn`'s, no restore ran, and
+     * `idsOf(m)` returned null with a still-live contract owning `m` in `byId`.
+     * Against the pre-fix code this failed with
+     * "A still live and owns method m ==> expected: <1111111> but was: <null>".
+     */
+    @Test
+    fun `nh51 a departing byMethodKey holder that is not the fqn holder repoints per method key`() {
+        val a = ModuleId("nh51-a")
+        val b = ModuleId("nh51-b")
+        val c = ModuleId("nh51-c")
+        val iface = ProbeMethodSetHolder::class.java
+        val method = iface.declaredMethods.first()
+        val descriptorA = descriptorOf(iface, contractId = 1_111_111L)
+        val descriptorB = descriptorOf(iface, contractId = 2_222_222L)
+        // The later contributor carries NO methods: it takes byFqn without taking byMethodKey.
+        val descriptorC = descriptorOf(iface, contractId = 9_999_999L).copy(methods = emptyList())
+        try {
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorA)), a)
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorB)), b)
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorC)), c)
+            assertEquals(descriptorC, ContractRegistry.descriptor(iface), "C holds byFqn")
+            assertEquals(
+                descriptorB.contractId to descriptorB.methods.single().methodId,
+                ContractRegistry.idsOf(method),
+                "B holds byMethodKey",
+            )
+
+            ModuleRegistration.unregister(b)
+
+            assertNotNull(ContractRegistry.contract(descriptorA.contractId), "A is still live in byId")
+            assertEquals(
+                descriptorA.contractId to descriptorA.methods.single().methodId,
+                ContractRegistry.idsOf(method),
+                "A still live and owns method m",
+            )
+            assertEquals(descriptorC, ContractRegistry.descriptor(iface), "byFqn holder is untouched by B's departure")
+        } finally {
+            listOf(a, b, c).forEach { ModuleRegistration.unregister(it) }
+        }
+        assertNull(ContractRegistry.descriptor(iface), "no contributor left: fqn must be gone")
+        assertNull(ContractRegistry.idsOf(method), "no contributor left: method key must be gone")
+    }
+
+    /** computenet-nh51 sibling ordering: three contributors, the middle one departs. */
+    @Test
+    fun `nh51 three contributors on one fqn, the middle one departs`() {
+        val a = ModuleId("nh51-mid-a")
+        val b = ModuleId("nh51-mid-b")
+        val c = ModuleId("nh51-mid-c")
+        val iface = ProbeMethodSetMiddle::class.java
+        val method = iface.declaredMethods.first()
+        val descriptorA = descriptorOf(iface, contractId = 1_111_112L)
+        val descriptorB = descriptorOf(iface, contractId = 2_222_223L)
+        val descriptorC = descriptorOf(iface, contractId = 3_333_334L)
+        try {
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorA)), a)
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorB)), b)
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorC)), c)
+
+            ModuleRegistration.unregister(b)
+
+            assertEquals(descriptorC, ContractRegistry.descriptor(iface), "C still holds byFqn")
+            assertEquals(
+                descriptorC.contractId to descriptorC.methods.single().methodId,
+                ContractRegistry.idsOf(method),
+                "C still holds byMethodKey",
+            )
+        } finally {
+            listOf(a, b, c).forEach { ModuleRegistration.unregister(it) }
+        }
+    }
+
+    /** computenet-nh51 sibling ordering: the first contributor departs, then the fqn holder. */
+    @Test
+    fun `nh51 three contributors on one fqn, the first departs then the holder`() {
+        val a = ModuleId("nh51-first-a")
+        val b = ModuleId("nh51-first-b")
+        val c = ModuleId("nh51-first-c")
+        val iface = ProbeMethodSetFirstThenHolder::class.java
+        val method = iface.declaredMethods.first()
+        val descriptorA = descriptorOf(iface, contractId = 1_111_113L)
+        val descriptorB = descriptorOf(iface, contractId = 2_222_224L)
+        val descriptorC = descriptorOf(iface, contractId = 3_333_335L)
+        try {
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorA)), a)
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorB)), b)
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorC)), c)
+
+            ModuleRegistration.unregister(a)
+            assertEquals(descriptorC, ContractRegistry.descriptor(iface), "after A departs")
+            assertEquals(
+                descriptorC.contractId to descriptorC.methods.single().methodId,
+                ContractRegistry.idsOf(method),
+                "after A departs, idsOf",
+            )
+
+            ModuleRegistration.unregister(c)
+            assertEquals(descriptorB, ContractRegistry.descriptor(iface), "after C departs, B survives")
+            assertEquals(
+                descriptorB.contractId to descriptorB.methods.single().methodId,
+                ContractRegistry.idsOf(method),
+                "after C departs, idsOf falls back to B",
+            )
+        } finally {
+            listOf(a, b, c).forEach { ModuleRegistration.unregister(it) }
+        }
+    }
+
+    /** computenet-nh51 sibling ordering: one module registers the same fqn twice, under two contractIds. */
+    @Test
+    fun `nh51 one module registering the same fqn twice drops both on unregister`() {
+        val a = ModuleId("nh51-twice-a")
+        val iface = ProbeMethodSetTwice::class.java
+        val method = iface.declaredMethods.first()
+        val descriptorA = descriptorOf(iface, contractId = 1_111_114L)
+        val descriptorB = descriptorOf(iface, contractId = 2_222_225L)
+        try {
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorA, descriptorB)), a)
+            assertEquals(descriptorB, ContractRegistry.descriptor(iface), "later contribution wins in-module")
+
+            ModuleRegistration.unregister(a)
+
+            assertNull(ContractRegistry.descriptor(iface), "both contributions gone")
+            assertNull(ContractRegistry.idsOf(method), "both contributions gone, idsOf")
+        } finally {
+            ModuleRegistration.unregister(a)
+        }
+    }
+
+    /** computenet-nh51 sibling ordering: a second module re-contributes an already-held contractId, then departs. */
+    @Test
+    fun `nh51 a re-contributed contractId survives its second contributor departing`() {
+        val a = ModuleId("nh51-recon-a")
+        val b = ModuleId("nh51-recon-b")
+        val c = ModuleId("nh51-recon-c")
+        val iface = ProbeMethodSetRecontributed::class.java
+        val method = iface.declaredMethods.first()
+        val descriptorA = descriptorOf(iface, contractId = 1_111_115L)
+        val descriptorB = descriptorOf(iface, contractId = 2_222_226L)
+        try {
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorA)), a)
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorB)), b)
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorA)), c)
+            assertEquals(descriptorA, ContractRegistry.descriptor(iface), "A's descriptor committed last")
+
+            ModuleRegistration.unregister(c)
+            assertEquals(descriptorA, ContractRegistry.descriptor(iface), "A still contributes contractId A")
+            assertEquals(
+                descriptorA.contractId to descriptorA.methods.single().methodId,
+                ContractRegistry.idsOf(method),
+                "A still holds byMethodKey",
+            )
+
+            ModuleRegistration.unregister(a)
+            assertEquals(descriptorB, ContractRegistry.descriptor(iface), "B survives")
+            assertEquals(
+                descriptorB.contractId to descriptorB.methods.single().methodId,
+                ContractRegistry.idsOf(method),
+                "B survives, idsOf",
+            )
+        } finally {
+            listOf(a, b, c).forEach { ModuleRegistration.unregister(it) }
+        }
+    }
+
+    /**
+     * computenet-nh51 (review): `removeOwner` repoints both tables to the **newest**
+     * live survivor — the last-writer-wins order `commit` applies — and the code says
+     * so in two places (`ContractFqnIndex.remove`'s "newest last" KDoc and the
+     * "Newest first" comment on `survivors`). Every other ordering here leaves at most
+     * ONE survivor at the moment a holder departs, so newest and oldest coincide and
+     * the claim is unconstrained: reversing either choice keeps the whole suite green.
+     * This is the shape that separates them — the holder departs with two live
+     * survivors, both declaring the method key — and it pins the fallback chain as
+     * survivors are consumed newest-first.
+     */
+    @Test
+    fun `nh51 the holder departing with two live survivors repoints to the newest`() {
+        val a = ModuleId("nh51-newest-a")
+        val b = ModuleId("nh51-newest-b")
+        val c = ModuleId("nh51-newest-c")
+        val iface = ProbeMethodSetNewestSurvivor::class.java
+        val method = iface.declaredMethods.first()
+        val descriptorA = descriptorOf(iface, contractId = 4_444_441L)
+        val descriptorB = descriptorOf(iface, contractId = 4_444_442L)
+        val descriptorC = descriptorOf(iface, contractId = 4_444_443L)
+        try {
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorA)), a)
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorB)), b)
+            ContractRegistry.register(moduleOf(contracts = listOf(descriptorC)), c)
+
+            // C holds both tables; A and B both remain live and both declare the key.
+            ModuleRegistration.unregister(c)
+            assertEquals(descriptorB, ContractRegistry.descriptor(iface), "byFqn repoints to B, the newest survivor")
+            assertEquals(
+                descriptorB.contractId to descriptorB.methods.single().methodId,
+                ContractRegistry.idsOf(method),
+                "byMethodKey repoints to B, the newest survivor declaring the key",
+            )
+
+            // One survivor left: the chain falls back to A rather than to nothing.
+            ModuleRegistration.unregister(b)
+            assertEquals(descriptorA, ContractRegistry.descriptor(iface), "byFqn falls back to A")
+            assertEquals(
+                descriptorA.contractId to descriptorA.methods.single().methodId,
+                ContractRegistry.idsOf(method),
+                "byMethodKey falls back to A",
+            )
+        } finally {
+            listOf(a, b, c).forEach { ModuleRegistration.unregister(it) }
+        }
+        assertNull(ContractRegistry.descriptor(iface), "no contributor left: fqn must be gone")
         assertNull(ContractRegistry.idsOf(method), "no contributor left: method key must be gone")
     }
 
