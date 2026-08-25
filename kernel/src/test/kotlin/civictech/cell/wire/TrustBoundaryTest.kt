@@ -584,14 +584,15 @@ class TrustBoundaryTest {
      * one copy that does cross lands on the requesting peer's own consumer and
      * nowhere else.
      *
-     * **The one thing this does NOT collapse, asserted rather than glossed:**
-     * `LinkSupport.active` is keyed by a random `Link.id`, so each admitted
-     * request still leaves a link record on the target outlet even though only
-     * one consumer attachment survives — the same orphan T21 had to evict
-     * explicitly in `streamTo`, in a code path outside this seam. Delivery
-     * amplification is closed; link-record accumulation is not, and the count
-     * below pins that honestly instead of asserting a 1 the code does not
-     * deliver.
+     * **The bookkeeping collapses with it** (computenet-lioe). When this test
+     * was written it asserted `links=5`: `LinkSupport.active` is keyed by a
+     * random `Link.id`, so each admitted request left a superseded record on
+     * the target outlet even though only one consumer attachment survived — the
+     * orphan T21 had to evict explicitly in `streamTo`, in a code path outside
+     * this seam. `handshake` now evicts it for every link (`evictSuperseded`,
+     * keyed on the whole `(from, to, role)` triple), so the honest number here
+     * is 1. The general-path pin is `civictech.cell.link.LinkSupersessionTest`;
+     * this count is the wire-facing consequence of it.
      */
     @Test
     fun `computenet-hil6 - repeated identical link requests collapse onto one consumer and one delivery`() {
@@ -610,8 +611,9 @@ class TrustBoundaryTest {
         rig.victimOnP.received.shouldBeEmpty()
         rig.consumerOnR.received.shouldBeEmpty()
 
-        // the stated residual: bookkeeping still accumulates one record per request
-        rig.source.outlet.linking.links.size shouldBe 5
+        // ...and the bookkeeping collapses with it (computenet-lioe): the
+        // repeats supersede each other rather than accumulating records
+        rig.source.outlet.linking.links.size shouldBe 1
     }
 
     /**

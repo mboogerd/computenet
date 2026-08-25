@@ -145,6 +145,54 @@ internal fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
  * A port with no declared policies short-circuits ([LinkSupport.reject] over an
  * empty list is null), so default-open exposures are unaffected.
  */
+/**
+ * computenet-lioe: drop the records a freshly admitted link SUPERSEDES.
+ *
+ * `LinkSupport.active` is keyed by a random [Link.id], so nothing about
+ * registering a link notices that it replaces an earlier one. The attachment
+ * structures underneath do notice: `FanOutlet.consumers` is a
+ * `Map<PortRef, Use<Api>>` and `FanOutlet.taps` is keyed the same way, so
+ * re-linking the same producer to the same consumer ref in the same role
+ * REPLACES the attachment and can only ever have one live counterpart. Without
+ * this the bookkeeping accumulated one corpse per relink while a single
+ * attachment survived — the orphan T21 had to evict by hand in
+ * `FanOutlet.streamTo`'s bypass, generalised here to the path every link runs.
+ *
+ * The corpses are not inert. `Protocols.relay` de-duplicates a traversal by
+ * `link.id`, so two records for one endpoint pair relay the same protocol
+ * message twice; `FanOutlet.absorbAck` sends one `Progress` per record, so
+ * progress accounting double-counts; `Attention`, `IntakeControl`'s saturation
+ * notices, `TopologyWalks` and `CompositeCell`'s stall notices all fan over
+ * `linking.links` and pay per corpse. Nothing found reading `linking.links`
+ * wants the history: `LinkSupport.identityFor` already answers with the most
+ * recent record (unchanged — of one record it IS the last), `Evolution.rebind`
+ * already filters by `to` and detaches every match, and
+ * `InletPolicy`'s ack routing takes the first match by `from`.
+ *
+ * **The key is the whole triple `(from, to, role)`, deliberately, not `to`
+ * alone as `streamTo` uses.** `streamTo` evicts on the SOURCE side only, where
+ * `from` is the outlet's own ref and every link is `Observe`, so `to` alone is
+ * that triple. Here the same call also has to clean the TARGET side, where
+ * `to` is the target's own ref and every link into a fan-in inlet shares it —
+ * evicting by `to` there would delete the records of every OTHER producer
+ * feeding that inlet. `role` is in the key because an outlet can hold a
+ * `Consume` subscription and an `Observe` tap to the same ref at once
+ * (`consumers` and `taps` are separate maps), so the two records are both
+ * live and neither supersedes the other.
+ *
+ * Removal, never [Link.unlink]: the superseded link's teardown would run
+ * `uninstall` and tear down the attachment [install] just put in place — the
+ * same reason `streamTo` removes rather than unlinks. No `EdgeClose` is
+ * emitted for the same reason it was never emitted for a relink before this
+ * change: the superseded edge's endpoint pair is still open, now under the new
+ * record.
+ */
+private fun evictSuperseded(support: LinkSupport, from: PortRef, to: PortRef, role: LinkRole) {
+    support.links
+        .filter { it.from == from && it.to == to && it.role == role }
+        .forEach(support::remove)
+}
+
 internal fun <Api> handshake(
     portOut: LinkTo<Api>,
     target: Linked,
@@ -196,6 +244,15 @@ internal fun <Api> handshake(
     return when (val result = support.onLink(link)) {
         is LinkResult.Connected -> {
             install()
+            // computenet-lioe: this link supersedes any earlier one over the
+            // same `(from, to, role)` — `install` above already replaced the
+            // single attachment those records described. Evict them before
+            // registering, so `linking.links` matches the attachments on both
+            // sides instead of growing one corpse per relink. See
+            // [evictSuperseded]; done after admission, so a refusal never
+            // disturbs the incumbent.
+            evictSuperseded(support, portOut.ref, targetRef, role)
+            sourceLinking?.let { evictSuperseded(it, portOut.ref, targetRef, role) }
             // Both sides retain the identity this link was ESTABLISHED with, so
             // a later rebind re-authorizes the original peer rather than
             // whoever is ambient at rebind time ([SEC1-10]; the source side is

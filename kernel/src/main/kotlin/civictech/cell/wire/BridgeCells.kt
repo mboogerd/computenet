@@ -563,13 +563,25 @@ object RemoteLinkRequests {
      * targeted delivery (`FanOutlet.at`) or a `MessageContext.sourcePort` stamp
      * now names the real remote port rather than an ingress-local accident.
      *
-     * **What it does not de-duplicate**, stated here rather than only on the
-     * bead: the *bookkeeping*. Each admitted request still runs a full
-     * handshake, and `LinkSupport.active` is keyed by a random `Link.id`, so a
-     * repeat leaves the superseded record behind on the target outlet even
-     * though only one consumer attachment survives — the same orphan T21 had
-     * to evict explicitly in `streamTo`, in a code path outside this file.
-     * Delivery amplification is closed; link-record accumulation is not.
+     * **The bookkeeping follows the attachment** (computenet-lioe). Each
+     * admitted request still runs a full handshake, and `LinkSupport.active` is
+     * keyed by a random `Link.id`, so a repeat used to leave the superseded
+     * record behind on the target outlet even though only one consumer
+     * attachment survived — the orphan T21 had to evict explicitly in
+     * `streamTo`. `handshake` now evicts it on the general path
+     * (`civictech.cell.link.evictSuperseded`, keyed on the whole
+     * `(from, to, role)` triple), so N identical requests leave one link record
+     * as well as one consumer and one delivery.
+     *
+     * **What is still not de-duplicated**, stated here rather than only on the
+     * bead: [RemoteLink.requestLinkFrom]'s mirror. Its stand-in producer is an
+     * anonymous `FanOutlet(api)` with a generated ref, so each repeat has a
+     * DISTINCT `from` and is a genuinely new edge by the supersession key —
+     * one link record plus one inert `FanOutlet` per request. Collapsing it
+     * would mean evicting on `to` alone at the target inlet, which is exactly
+     * the rule that would delete the records of every other producer feeding a
+     * fan-in inlet. It is a monotone cost a peer controls, but it drives no
+     * traffic: nothing can send to that outlet.
      */
     private fun standInRef(cell: CellRef, port: String): PortRef = PortRef.of(cell, port)
 
