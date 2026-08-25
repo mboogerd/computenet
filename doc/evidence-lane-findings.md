@@ -1480,8 +1480,8 @@ that lands, this test flips and cannot be missed.
 **Resolved by `computenet-xxeo` (2026-08-25) — as a decision, not a patch.** The
 guarantee is **at-least-once**, now stated normatively as `[24-DUR-09]` (spec 24
 §Effectful) with the resolution recorded on `concord/corpus/DISPUTES.md`'s
-G-59/C-9 entry. It applies a criterion the spec already decides to a
-window the spec does not itself name, rather than picking a fresh one:
+G-59/C-9 entry. It applies a criterion the spec had already decided, to a
+window the spec had not itself named, rather than picking a fresh one:
 `[24-DUR-07]` fixed the criterion for this trade — a duplicate is loud and bounded,
 a suppression is a silent unrecoverable omission — `[24-DUR-08]`'s eviction bound
 re-applies it in the same direction, and 93 I-7's external-effect idempotency

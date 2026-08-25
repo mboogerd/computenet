@@ -630,8 +630,8 @@ class EffectReplaySweepTest {
      * **`computenet-xxeo` decided (2026-08-25) that this is the intended guarantee**, and recorded
      * it normatively as `[24-DUR-09]` (spec 24 §Effectful, "The write-ahead window is
      * at-least-once") plus a resolution on the G-59/C-9 entry in `concord/corpus/DISPUTES.md`. The
-     * decision applies a criterion the spec already decides to a window the spec does not itself
-     * name, rather than choosing a fresh one: `[24-DUR-07]` fixed
+     * decision applies a criterion the spec had already decided, to a window the spec had not
+     * itself named, rather than choosing a fresh one: `[24-DUR-07]` fixed
      * the criterion for this class of trade — a duplicate is loud and bounded, a suppression is a
      * silent unrecoverable omission — `[24-DUR-08]`'s eviction bound re-applies it in the same
      * direction, and 93 I-7's external-effect idempotency ceiling says exactly-once across an
