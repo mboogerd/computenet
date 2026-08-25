@@ -130,22 +130,6 @@ internal fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
 }
 
 /**
- * Runs the handshake shared by the inlet implementations:
- * target policies → source policies → cardinality (checked by the caller) →
- * onLink → install.
- *
- * **Both** endpoints' `linking.policies` are evaluated, in that order (SEC1
- * seam 2, decided 93 I-28 §4.3): the target's first, so every refusal string a
- * caller or test already asserts on is unchanged; then the source's, so a
- * *producing* membrane can refuse a subscriber even though the port being
- * linked *to* is the consumer's own inlet, outside that membrane
- * (`CompositeCell.mediateOutlet`'s producer-side subscribe authority). Both run
- * before `checkPayload`/nature reconciliation/`onLink`/`install`, so a refusal
- * from either side leaves no half-registered port and no subscriber entry.
- * A port with no declared policies short-circuits ([LinkSupport.reject] over an
- * empty list is null), so default-open exposures are unaffected.
- */
-/**
  * computenet-lioe: drop the records a freshly admitted link SUPERSEDES.
  *
  * `LinkSupport.active` is keyed by a random [Link.id], so nothing about
@@ -193,6 +177,22 @@ private fun evictSuperseded(support: LinkSupport, from: PortRef, to: PortRef, ro
         .forEach(support::remove)
 }
 
+/**
+ * Runs the handshake shared by the inlet implementations:
+ * target policies → source policies → cardinality (checked by the caller) →
+ * onLink → install.
+ *
+ * **Both** endpoints' `linking.policies` are evaluated, in that order (SEC1
+ * seam 2, decided 93 I-28 §4.3): the target's first, so every refusal string a
+ * caller or test already asserts on is unchanged; then the source's, so a
+ * *producing* membrane can refuse a subscriber even though the port being
+ * linked *to* is the consumer's own inlet, outside that membrane
+ * (`CompositeCell.mediateOutlet`'s producer-side subscribe authority). Both run
+ * before `checkPayload`/nature reconciliation/`onLink`/`install`, so a refusal
+ * from either side leaves no half-registered port and no subscriber entry.
+ * A port with no declared policies short-circuits ([LinkSupport.reject] over an
+ * empty list is null), so default-open exposures are unaffected.
+ */
 internal fun <Api> handshake(
     portOut: LinkTo<Api>,
     target: Linked,
