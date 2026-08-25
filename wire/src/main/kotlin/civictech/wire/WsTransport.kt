@@ -2097,8 +2097,16 @@ object WsTransport {
              * [WsListener.reArmMarkerLabel]); one that does not is real:
              *
              * ```
-             * grep -rh 'LOST WRITE DEMAND RE-ARMED' <sample> | grep -vc 'label='
+             * grep -rhI 'LOST WRITE DEMAND RE-ARMED' <sample> | grep -vc 'label='
              * ```
+             *
+             * `-I` is load-bearing whenever `<sample>` is a Gradle results
+             * directory rather than a `wire-suite-sample` artifact of `.console`
+             * files: `build/test-results/test/binary/output-events.bin` matches
+             * too, and `grep -r` reports it as a `Binary file … matches` line
+             * that survives the `label=` filter and inflates the count by one
+             * (measured 2026-08-25 — 2 reported where the XML held exactly 1
+             * unlabelled marker).
              *
              * MEASURED, computenet-0r4i: before the label existed, the two
              * 500-iteration ubuntu samples (runs 31784338227 and 31791814150)
