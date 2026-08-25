@@ -15,28 +15,31 @@ import kotlin.test.assertTrue
  * holds changes nothing. A stale link to a departed replica and a CHA1 `DuplicateFault` are the
  * two ways to produce one.
  *
- * ## WHAT THIS SUITE DOES AND DOES NOT ASSERT TODAY — read before trusting a green run
+ * ## WHAT THIS SUITE ASSERTS — read before trusting a green run
  *
- * "The duplicate changed nothing" is only a claim if there is a run it changed nothing *from*.
- * The two-arm comparison that would be that claim is **built but not performed**: [run] takes a
- * `withDuplicate` flag and [Outcome] carries the folds, the per-replica effective-delta counts
- * and the injected-duplicate count needed to compare two arms, but **no test in this file runs
- * the duplicated arm against the bare one**, because on this mesh the duplicated arm injects
- * nothing — see the [CHA3-24] diagnosis on the first test below. Running the comparison against
- * an inert adversary would be a green that measured nothing.
+ * "The duplicate changed nothing" is only a claim if there is a run it changed nothing *from*,
+ * so the [CHA3-24] test below is a **two-arm comparison**: one plan, one seed, run twice — once
+ * bare, once with a `DuplicateFault` folded in — and the converged folds and the per-replica
+ * effective-delta counts are compared between the arms. The comparison is only worth reading
+ * because the duplicated arm demonstrably injects: `duplicatesInjected > 0` is asserted, not
+ * assumed, and the bare arm's is asserted zero. A green off an inert adversary is the vacuity
+ * this feature has been caught by three times.
  *
- * So what is asserted here is the **single-arm departure measurement**: that a permanent
- * departure leaves a stale outbound subscription on each survivor (a stable, seed-swept count),
- * and that the survivors go on absorbing effective deltas. [CHA3-22]'s "the effective-delta
- * count is *unchanged*" half and [CHA3-24] both wait on the same missing piece — an injectable
- * duplicate on this graph — and neither is discharged by this file.
+ * **What made the adversary real.** It was previously inert, and the earlier diagnosis in this
+ * file blamed the loopback for having no frames. That was wrong: a `Peering.loopback` does
+ * encode frames (`BridgeEgressCell`'s outlet carries `ByteArray`; `Peering.hostIngress` decodes
+ * them). What was missing is that `ChurnMesh` declared an edge per pair and never routed the
+ * peering's frames through it — the loopback kept `FrameInterpose.PASS_THROUGH`, so the
+ * interposer a frame-plane fault installs on the named edge saw nothing. `ChurnMesh` now wires
+ * both directions through `world.edges.deliver(edge, frame)`, the idiom `PartitionFaultTest`
+ * and `DuplicateFaultTest` already used, and `DuplicateFault.frames` fires on this mesh.
  *
- * When the comparison does become runnable, this is the shape it takes. Effective, not delivered:
- * `Replicable`'s outlet carries only deltas that carried new information (the echo-termination
- * seam), so an absorbed duplicate is invisible there by construction and a *counted* duplicate
- * would show up immediately. See [GossipInstruments] for why the delivered count is not
- * measurable from outside the kernel without a `main` edit ([CHA3-82] forbids one) and why the
- * fired count of the fault is the injected-duplicate figure instead.
+ * Effective, not delivered: `Replicable`'s outlet carries only deltas that carried new
+ * information (the echo-termination seam), so an absorbed duplicate is invisible there by
+ * construction and a *counted* duplicate would show up immediately. See [GossipInstruments] for
+ * why the delivered count is not measurable from outside the kernel without a `main` edit
+ * ([CHA3-82] forbids one) and why the fired count of the fault is the injected-duplicate figure
+ * instead.
  *
  * ## A MEASURED FINDING that [CHA3-20]'s wording does not survive
  *
@@ -57,8 +60,8 @@ import kotlin.test.assertTrue
  *
  * What that stale link does NOT give [CHA3-22] is a re-delivery: it points at a replica that has
  * departed, so whatever it carries reaches a dead sink rather than a live receiver that already
- * holds the information. The re-delivery [CHA3-22] is about therefore still needs the injected
- * duplicate [CHA3-24] needs, and the paragraph above says so.
+ * holds the information. The re-delivery [CHA3-22] is about is the injected duplicate on the
+ * SURVIVING pair's edge, and that is what the two-arm test asserts.
  *
  * ## Corpus candidacy — flagged, not filed
  *
@@ -119,43 +122,49 @@ class StaleLinkDuplicateTest {
     }
 
     /**
-     * **[CHA3-24] IS NOT DISCHARGED, and this test is why — it is the diagnosis, not the claim.**
+     * **[CHA3-24]**, and [CHA3-22]'s "the effective-delta count is *unchanged*" half: one plan,
+     * one seed, run twice — bare, then with every frame on the surviving pair's edge delivered
+     * twice byte-identically — and the two arms agree on the converged fold of every peer and on
+     * each replica's effective-delta count.
      *
-     * `DuplicateFault.frames` on a churn-mesh edge fires **zero** times: measured here, asserted
-     * here. The churn mesh peers over `Peering.loopback`, which hands invocations across
-     * in-process without ever encoding a frame, so the `DuplicatePlane.FRAMES` interposer
-     * `world.edges.intercept` installs has nothing to duplicate. The fault's own KDoc anticipates
-     * exactly this ("an unbridged, single-process graph has no frames at all") and points at
-     * `DuplicatePlane.INVOCATIONS` — which resolves an `InvocationPoint` the *graph* must
-     * declare, and this churn mesh declares none. Declaring one is an edit to `ChurnMesh.kt`,
-     * another task's claimed file.
+     * **The comparison is only a claim because the adversary demonstrably fired.** The duplicated
+     * arm asserts `duplicatesInjected > 0` and the bare arm asserts it zero, so a run in which
+     * nothing was injected fails here rather than passing as "duplication changed nothing".
+     * [GossipRuns.assertPassed] independently requires the exact set of fired ids, which is the
+     * assertion that caught this adversary being inert in the first place.
      *
-     * So the honest state of [CHA3-24] from this module is: the harness can measure what a
-     * duplicate would have to leave unchanged (`foldsByPeer`, `deltas`), and the survivors' own
-     * stale link to the departed replica IS a real re-delivery path that is exercised and costs
-     * nothing (the test below). What is missing is an *injected* duplicate. Asserting
-     * "duplication changed nothing" off a run in which the duplicate fault fired zero times is
-     * exactly the vacuity this feature has been caught by twice, so it is not asserted.
-     *
-     * This test fails the moment a duplicate DOES become injectable on this graph — which is the
-     * signal to replace it with the comparison it is standing in for.
+     * **What "unchanged" means, precisely.** `Replicable`'s outlet carries only deltas that
+     * carried new information, so a duplicate the receiver absorbs is invisible on it while a
+     * duplicate that was *counted* — applied twice — would move the count. Equal effective
+     * counts across the arms is therefore the statement that re-delivery of a delta the receiver
+     * already holds is a no-op, and equal folds is the statement that it is a no-op on the state
+     * as well as on the accounting. Asserted for this plan and this seed, not swept.
      */
     @Test
-    fun `BS-6 a frame-plane duplicate is inert on the loopback churn mesh, so CHA3-24 is not discharged`() {
-        val p = plan(seed = 31L, withDuplicate = true)
-        val (report, _) = GossipRuns.execute(p, check = DstCheck {})
-        val dup = report.appliedFaults.firstOrNull { it.id == "dup-peer0-peer1" }
-        assertTrue(dup != null, "the duplicate fault must at least be applied: ${report.summary()}")
-        assertEquals(
-            0, dup.fired,
-            "a frame-plane duplicate now fires on this mesh — replace this diagnosis with the " +
-                "control/duplicated comparison it stands in for",
+    fun `BS-6 duplicating every frame on a live pair changes neither the folds nor the effective-delta counts`() {
+        val seed = 31L
+        val bare = run(seed, withDuplicate = false)
+        val duplicated = run(seed, withDuplicate = true)
+        println(
+            "[CHA3-24] seed=$seed injected=${duplicated.duplicatesInjected} " +
+                "bare.effective=${bare.effective} duplicated.effective=${duplicated.effective}",
         )
-        // The other four planned events did fire, so this is a statement about the duplicate
-        // plane and not about a run in which nothing happened.
         assertEquals(
-            setOf("join-peer0", "join-peer1", "join-peer2", "depart-peer2"),
-            GossipRuns.firedIds(report),
+            0, bare.duplicatesInjected,
+            "the control arm must carry no duplicate at all, or it is not a control",
+        )
+        assertTrue(
+            duplicated.duplicatesInjected > 0,
+            "the duplicate fault injected nothing, so this comparison would measure nothing: $duplicated",
+        )
+        assertEquals(
+            bare.folds, duplicated.folds,
+            "a duplicated delta changed a converged fold (seed=$seed)",
+        )
+        assertEquals(
+            bare.effective, duplicated.effective,
+            "a duplicated delta was counted as effective by some replica (seed=$seed): " +
+                "injected=${duplicated.duplicatesInjected}",
         )
     }
 
@@ -164,9 +173,10 @@ class StaleLinkDuplicateTest {
      * subscription to the departed replica at rest (the class KDoc's finding, stable across
      * seeds) and it costs them nothing — they go on absorbing effective deltas.
      *
-     * **Single-arm.** There is no duplicate-free control to compare against here: this IS the
-     * bare arm, and the duplicated arm is inert on this mesh (class KDoc). So this asserts the
-     * measured stale count and continued absorption, not "unchanged relative to a control".
+     * **Single-arm, deliberately.** This is a statement about what a *departure* leaves behind,
+     * so it sweeps seeds rather than pairing arms: it asserts the measured stale count and
+     * continued absorption, not "unchanged relative to a control". The control/duplicated
+     * comparison is the test above, at one seed.
      */
     @Test
     fun `BS-6 a departure leaves a stale subscription that costs the survivors nothing`() {
