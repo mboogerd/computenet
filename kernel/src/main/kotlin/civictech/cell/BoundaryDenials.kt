@@ -88,7 +88,20 @@ enum class DenialReason {
      */
     NOT_ADMITTED,
 
-    /** Seam 2: a `LinkPolicy` in `linkAuthority` rejected the requesting peer. */
+    /**
+     * Seam 2: a `LinkPolicy` in `linkAuthority` rejected the requesting peer.
+     *
+     * **Also a seam-1 reason** (computenet-a4ha): a
+     * `civictech.cell.wire.RemoteLink` request whose named `(cell, port)` is not
+     * a location the requesting peer announced —
+     * `civictech.cell.wire.BridgeIngressCell`'s `"link-request"` sink. One
+     * constant for the two, on the same reasoning [BAD_SIGNATURE] and [REPLAY]
+     * are shared: "this peer may not have this link" is one fact about a
+     * crossing, and [BoundaryDenial.seam] already says which boundary refused
+     * it (`ADMISSION` here, `LINK_AUTHORITY` there). What separates them for a
+     * reader is *when*: seam 1 refuses before the request ever reaches a port,
+     * so no `LinkPolicy` was consulted and no endpoint was constructed.
+     */
     LINK_REFUSED,
 
     /** Seam 3 protocol: the crossing's `Principal` is below `ProtocolAuthority.minAuth`. */

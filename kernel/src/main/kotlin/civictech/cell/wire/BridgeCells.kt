@@ -17,6 +17,13 @@ import civictech.cell.protocol.ProtocolId
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.InvocationSink
+import civictech.cell.CurrentContext
+import civictech.cell.host.LocationRegistry
+import civictech.cell.port.LinkFrom
+import civictech.cell.port.LinkTo
+import civictech.cell.proxy.Invocation
+import civictech.gen.wire.Contract
+import civictech.nature.ContractRegistry
 import java.util.UUID
 
 /**
@@ -144,6 +151,59 @@ class BridgeIngressCell(
      * frame for frame ([DSC1-WIRE-06]).
      */
     private val announcementAdmission: AnnouncementAdmission? = null,
+    /**
+     * Where a named [CellRef] lives, as **this side's own registry** answers it
+     * — the seam that binds a [RemoteLink] request's named address to the peer
+     * this ingress authenticated (computenet-a4ha).
+     *
+     * A link request is the one arriving frame that names an address *other
+     * than its own target*: [RemoteLinkRequests.translate] reconstructs a local
+     * endpoint out of `(cell, port)` values the **sender** supplied, and
+     * `LocationRegistry.deliver` will then route that address wherever it
+     * resolves — a [civictech.cell.host.LocationRegistry.Local] host, or any
+     * other peer's [civictech.cell.host.LocationRegistry.Remote] sink. Without
+     * this seam an admitted peer could make the receiving side stream its own
+     * data into one of the receiver's cells, or to a *third* peer — a confused
+     * deputy, since the link is authorised against `Principal = Peer(sender)`
+     * while the data lands elsewhere.
+     *
+     * That is also the point at which the wire path would be a **weaker model**
+     * than the in-process one: `LinkTo.linkTo(LinkFrom)` takes a live port
+     * object, so an in-process caller must *possess* the endpoint, while over
+     * the wire it need only *name* an address. Requiring the named address to
+     * resolve to a location this peer announced is what restores the symmetry.
+     *
+     * **What this does NOT bound, stated here rather than only on the bead.**
+     * Repeated identical requests are still neither de-duplicated nor capped:
+     * N requests establish N links on one target port, and each fires its own
+     * `onLinked` catch-up and every subsequent delta, so a peer can still
+     * amplify P's outbound traffic N-fold. What the binding takes away is the
+     * *aim*: every one of those links is admitted only against the requesting
+     * peer's own endpoint, so the amplifier cannot be *pointed* at a third
+     * party or at the receiver's own cells by the request itself. A per-peer
+     * cap is a separate decision and is not made here.
+     *
+     * **And the aim is bound at the request, not for the link's lifetime**
+     * (measured in review, computenet-zlm2). This check runs once; the endpoint
+     * [RemoteLinkRequests.translate] builds then re-resolves `(cell, port)`
+     * through `LocationRegistry.deliver` on *every* delivery. Because a
+     * mirrored announcement overwrites `locations[ref]` whoever sent it, a
+     * *different* admitted peer that later announces the same [CellRef]
+     * captures the stream — and, announcing first, can even turn a ref this
+     * side hosts locally into a `Remote` that then passes [namedByPeer]. That
+     * is not specific to this seam: the same announcement captures an ordinary
+     * `HostedCellProxy` link P made itself, with no link request in play, which
+     * is why it is filed as its own defect rather than fixed here. Read this
+     * seam as "a peer may only ask for a link to a ref it has announced", not
+     * as "the data can only ever reach that peer".
+     *
+     * **Defaults to `{ null }`, which refuses every link request** — fail
+     * closed. [Peering.hostIngress] is the only production construction and
+     * supplies `side.registry::location`; the kernel tests that construct this
+     * cell directly exchange no link requests, so the default costs them
+     * nothing.
+     */
+    private val locate: (CellRef) -> LocationRegistry.Location? = { null },
 ) : Cell, BoundaryDenialAccounting {
     val inlet = registerPort("inlet", FanInlet.create<Propagate<ByteArray>>())
 
@@ -168,6 +228,47 @@ class BridgeIngressCell(
      * whether or not one ever fires.
      */
     private val announcementSink = boundaryDenials.sinkFor("announcement-admission")
+
+    /**
+     * Link-request address refusals (computenet-a4ha), accounted **separately**
+     * again — a third boundary, a third counter, for the reason
+     * [announcementSink] gives: "this peer is not welcome here at all", "this
+     * peer's announcement is not believed" and "this peer may not name that
+     * address" are three different facts about a connection, and summing them
+     * would make none of the three rates readable. Allocated at construction
+     * like its siblings, so `boundaryDenials["link-request"]` is non-null on
+     * every ingress whether or not one ever fires.
+     */
+    private val linkRequestSink = boundaryDenials.sinkFor("link-request")
+
+    /**
+     * Does [named] resolve to a location [peer] itself announced?
+     *
+     * The check is deliberately **positive and total**: only a
+     * [civictech.cell.host.LocationRegistry.Remote] whose recorded peer equals
+     * the identity this ingress stamped passes. A [CellRef] this side hosts
+     * itself, one another peer announced, and one nothing has published at all
+     * are refused alike, and so is *every* request on an anonymous peering
+     * ([peer] null) — an unnamed peer announces its locations anonymously too,
+     * so `null == null` would match any other anonymous peer's ref and any
+     * unpublished one, which is precisely the binding this is for. An anonymous
+     * peering therefore cannot establish a remote link; it never had an
+     * identity to bind one to.
+     *
+     * Two measured limits on how much that buys (computenet-zlm2, review of
+     * this change): "a [CellRef] this side hosts itself" is refused only while
+     * no peer has *announced* it — a mirrored announcement overwrites a
+     * [civictech.cell.host.LocationRegistry.Local] location, and the ref then
+     * resolves as that peer's [civictech.cell.host.LocationRegistry.Remote] and
+     * passes here; and only the **cell** half is judged — the `port` half of
+     * the named address is never checked, so a peer may name any port name on
+     * its own cell (deliveries then dead-letter at the requester, on its side
+     * of the boundary, not this one).
+     */
+    private fun namedByPeer(named: CellRef): Boolean {
+        val whose = peer ?: return false
+        return (locate(named) as? LocationRegistry.Remote)?.peer == whose
+    }
 
     init {
         inlet.serve(object : Propagate<ByteArray> {
@@ -216,7 +317,43 @@ class BridgeIngressCell(
                         return
                     }
                 }
-                val decoded = decodedFrame.invocation
+                // computenet-wb6s: a link request crosses as an addressable
+                // [RemoteLink] call and is translated back into the ordinary
+                // linkTo/linkFrom invocation here, BEFORE the peer stamp below —
+                // so the handshake that follows sees the identity this ingress
+                // authenticated, never one a sender supplied.
+                val decoded = if (RemoteLinkRequests.isRequest(decodedFrame.frame)) {
+                    // Seam 1, link-request half (computenet-a4ha): the request
+                    // names an address, and the ONLY address it may name is one
+                    // belonging to the peer this ingress authenticated. Refused
+                    // before `translate` reconstructs any endpoint and before
+                    // anything reaches the local registry, so no link exists
+                    // even momentarily. Like both gates above, nothing is
+                    // thrown — a denial is not a cell fault (BS-14) — so this
+                    // never reaches supervision.
+                    //
+                    // deniedArgs is EMPTY for the reason the announcement gate
+                    // gives: a RemoteLink request's arguments are a CellRef, a
+                    // String and a Long, so no Owned/Leased can reach here and
+                    // there is nothing to discharge.
+                    val named = RemoteLinkRequests.namedAddress(decodedFrame.invocation)
+                    if (!namedByPeer(named.cell)) {
+                        linkRequestSink.deny(
+                            seam = BoundarySeam.ADMISSION,
+                            reason = DenialReason.LINK_REFUSED,
+                            principal = peer,
+                            subject = "RemoteLink.${decodedFrame.invocation.invocation.methodName}",
+                            detail = "link request from $peer named ${named.cell}#${named.port}, " +
+                                "which is not a location $peer announced to this side — a peer may " +
+                                "only name its own endpoint (computenet-a4ha, spec 40/43 seam 1)",
+                            deniedArgs = emptyList(),
+                        )
+                        return
+                    }
+                    RemoteLinkRequests.translate(decodedFrame.invocation, replySink)
+                } else {
+                    decodedFrame.invocation
+                }
                 val withPeer = if (decoded.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
                     val edge = decoded.protocolLink as WireEdgeLink
                     decoded.copy(protocolLink = edge.withBridge(replySink, protocolCapabilities), peer = peer, peerAuth = peerAuth)
@@ -227,4 +364,246 @@ class BridgeIngressCell(
             }
         })
     }
+}
+
+/**
+ * The wire vocabulary for a link request (computenet-wb6s, spec 41 point 4,
+ * 40/43 seam 1).
+ *
+ * A link request is a `PORT_MANAGEMENT` invocation, and until this contract
+ * existed it could not cross a wire at all: [WireCodec.encode] refuses any
+ * non-`PORT_PROTOCOL` frame whose method carries no `@Contract` ids
+ * ("not wire-capable: 'linkFrom' was not captured from a @Contract
+ * interface"), and [civictech.cell.port.LinkTo.linkTo] /
+ * [civictech.cell.port.LinkFrom.linkFrom] take a **live port object** as their
+ * argument — which no encoding could carry across a machine boundary even with
+ * ids. So the two halves of the seam were verified only up to an injection
+ * point: every cross-boundary link test handed the already-decoded invocation
+ * straight to the target side's registry.
+ *
+ * The fix keeps the model rather than weakening it. `LinkTo`/`LinkFrom` are
+ * untouched: what crosses is this contract's **addressable** form of the same
+ * request — "link your port to mine, which lives at (cell, port) and speaks the
+ * contract with this id" — and the receiving [BridgeIngressCell] translates it
+ * back into exactly the `linkTo`/`linkFrom` invocation an in-process caller
+ * would have made, stamped with the peer that ingress authenticated. The wire
+ * frame is unchanged: ids-only, three already-registered argument types
+ * ([CellRef], `String`, `Long`), no new field, no version bump — additive in
+ * precisely the sense `RegistryAnnounce` already was.
+ *
+ * The api is named by its **contract id**, never by a class name (P9): the
+ * receiver resolves it through its own [ContractRegistry], so an api the
+ * receiver does not know is refused locally rather than believed off the wire.
+ */
+@Contract(management = true)
+interface RemoteLink {
+    /**
+     * Asks the addressed port — a [civictech.cell.port.LinkTo] — to link to the
+     * requesting peer's consumer, which lives at ([cell], [port]) and speaks the
+     * contract identified by [apiContractId].
+     *
+     * [cell] is **checked against the requesting peer before it is used**
+     * (computenet-a4ha): the receiving [BridgeIngressCell] refuses the request
+     * unless [cell] resolves, on its own registry, to a location that peer
+     * announced — see [BridgeIngressCell.locate], whose KDoc also states the
+     * two limits of that check ([port] is not bound, and the binding is taken
+     * at the request rather than held for the link's lifetime). Everything the
+     * linked port then emits is forwarded to that address, so the check is what
+     * keeps "the requesting peer's consumer" in the sentence above true at the
+     * moment the link is admitted.
+     */
+    fun requestLinkTo(cell: CellRef, port: String, apiContractId: Long)
+
+    /**
+     * Asks the addressed port — a [civictech.cell.port.LinkFrom] — to accept a
+     * link from the requesting peer's producer at ([cell], [port]).
+     *
+     * **Stated limitation, and it is in the shipped file deliberately**
+     * (computenet-a4ha): ([cell], [port]) is *authorised* but not yet *wired*.
+     * The address is checked against the requesting peer exactly as
+     * [requestLinkTo]'s is — a peer may not name another peer's or the
+     * receiver's address here either — and the link is then established against
+     * a bare [FanOutlet] of the named api, which **nothing drives**. So the
+     * handshake, the policies and the topology edge are all real, and no data
+     * flows from the named producer until an inbound route to that outlet
+     * exists.
+     *
+     * That route is the missing half, not an oversight of this contract: the
+     * reconstructed outlet has no address of its own, so the producing peer has
+     * nowhere to send to. Giving it one is a frame-shape question
+     * ([RemoteLinkRequests] deliberately adds no field and no version bump), and
+     * it is why [requestLinkTo] — where the *receiving* side already knows where
+     * to push — is the direction that carries data today.
+     */
+    fun requestLinkFrom(cell: CellRef, port: String, apiContractId: Long)
+}
+
+/**
+ * Emit and receive sides of a [RemoteLink] request. Kept together so the two
+ * cannot drift into disagreeing about what a link request is — the same
+ * discipline [WireCodec.isAnnouncement] follows for announcements.
+ */
+object RemoteLinkRequests {
+
+    /** `LinkTo.linkTo(LinkFrom)` — the handshake-running overload, not the ad-hoc `Use` one. */
+    private val LINK_TO = LinkTo::class.java.methods.first {
+        it.name == "linkTo" && it.parameterTypes.singleOrNull() == LinkFrom::class.java
+    }
+    private val LINK_FROM = LinkFrom::class.java.methods.first { it.name == "linkFrom" }
+
+    private val REQUEST_LINK_TO = RemoteLink::class.java.methods.first { it.name == "requestLinkTo" }
+    private val REQUEST_LINK_FROM = RemoteLink::class.java.methods.first { it.name == "requestLinkFrom" }
+
+    /**
+     * [RemoteLink]'s generated contract id, resolved lazily for the same reason
+     * [WireCodec]'s announcement id is: `ContractRegistry` is
+     * ServiceLoader-populated and these objects initialize early. Null only if
+     * the generated descriptor is missing, in which case nothing is ever
+     * recognized as a link request — fail *closed*: an unrecognized frame takes
+     * the ordinary delivery path and fails loudly at the target port rather than
+     * being silently translated into a link.
+     */
+    private val contractId: Long? by lazy { ContractRegistry.descriptor(RemoteLink::class.java)?.contractId }
+
+    /** Whether [frame] carries a link request (see [translate]). */
+    internal fun isRequest(frame: WireFrame): Boolean {
+        val id = contractId ?: return false
+        return frame.type == HostedPortInvocation.Type.PORT_MANAGEMENT && frame.contractId == id
+    }
+
+    /**
+     * The endpoint address [decoded] names on the **requesting** side — the
+     * `(cell, port)` pair of [RemoteLink.requestLinkTo] /
+     * [RemoteLink.requestLinkFrom], read without translating anything
+     * (computenet-a4ha).
+     *
+     * Read *before* [translate], because it is what
+     * [BridgeIngressCell.namedByPeer] judges: an address that does not belong
+     * to the authenticated peer must be refused with no endpoint constructed
+     * and nothing handed to the local registry.
+     */
+    internal fun namedAddress(decoded: HostedPortInvocation): PortAddress {
+        val args = decoded.invocation.args
+        return PortAddress(args[0] as CellRef, args[1] as String)
+    }
+
+    /**
+     * Rewrites a decoded [RemoteLink] request into the ordinary
+     * `linkTo`/`linkFrom` `PORT_MANAGEMENT` invocation the target port already
+     * understands, with a locally-constructed endpoint standing in for the
+     * requesting peer's port.
+     *
+     * [replySink] is the ingress's reverse path (in practice the receiving
+     * side's `LocationRegistry::deliver`, which resolves the requester's ref as
+     * a `Remote` routed back through the peering's egress), so data the target
+     * pushes into the endpoint reaches the requester exactly as any other remote
+     * send does (spec 41 point 3).
+     *
+     * **Precondition, enforced by the caller** (computenet-a4ha): the address
+     * [namedAddress] reads out of [decoded] has already been bound to the peer
+     * the ingress authenticated ([BridgeIngressCell.locate]). This function
+     * trusts that binding — it constructs an endpoint that forwards wherever
+     * `(cell, port)` resolves, which is exactly the authority the check grants.
+     */
+    internal fun translate(decoded: HostedPortInvocation, replySink: InvocationSink): HostedPortInvocation {
+        val args = decoded.invocation.args
+        val cell = args[0] as CellRef
+        val port = args[1] as String
+        val api = apiClass(args[2] as Long)
+        return when (decoded.invocation.methodName) {
+            "requestLinkTo" -> {
+                val endpoint = FanInlet(api)
+                endpoint.serve(forwarder(api, cell, port, replySink))
+                decoded.copy(invocation = Invocation.of(LINK_TO, arrayOf<Any?>(endpoint)))
+            }
+
+            // The reconstructed producer is INERT: `cell`/`port` were used to
+            // authorise the request (see [RemoteLink.requestLinkFrom]'s stated
+            // limitation) but nothing drives this outlet, because it has no
+            // address the producing peer could send to.
+            "requestLinkFrom" -> decoded.copy(
+                invocation = Invocation.of(LINK_FROM, arrayOf<Any?>(FanOutlet(api))),
+            )
+
+            else -> error("unknown RemoteLink method '${decoded.invocation.methodName}'")
+        }
+    }
+
+    /**
+     * Sends a link request to [target] over [sink] (a [BridgeEgressCell], or a
+     * registry that routes to one), asking it to link to this side's consumer at
+     * [consumer]. [api] must be `@Contract`-annotated: its contract id is what
+     * crosses, never its class name.
+     */
+    fun requestLinkTo(sink: InvocationSink, target: PortAddress, consumer: PortAddress, api: Class<*>) =
+        sink.deliver(request(REQUEST_LINK_TO, target, consumer, api))
+
+    /** [requestLinkTo]'s mirror: asks [target] to accept a link from this side's producer at [producer]. */
+    fun requestLinkFrom(sink: InvocationSink, target: PortAddress, producer: PortAddress, api: Class<*>) =
+        sink.deliver(request(REQUEST_LINK_FROM, target, producer, api))
+
+    private fun request(
+        method: java.lang.reflect.Method,
+        target: PortAddress,
+        own: PortAddress,
+        api: Class<*>,
+    ): HostedPortInvocation {
+        val apiContractId = checkNotNull(ContractRegistry.descriptor(api)?.contractId) {
+            "not wire-capable: ${api.name} carries no @Contract, so a link request cannot name it"
+        }
+        return HostedPortInvocation(
+            cellRef = target.cell,
+            portName = target.port,
+            type = HostedPortInvocation.Type.PORT_MANAGEMENT,
+            invocation = Invocation.of(method, arrayOf<Any?>(own.cell, own.port, apiContractId)),
+        )
+    }
+
+    /**
+     * The api interface named by [apiContractId], resolved through this side's
+     * own [ContractRegistry] — the receiver's knowledge, not the sender's claim.
+     * A contract this side does not know throws, and the throw is a decode-time
+     * fault on the ingress cell, handled like any other malformed frame.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun apiClass(apiContractId: Long): Class<Any> {
+        val fqn = checkNotNull(ContractRegistry.contract(apiContractId)?.fqn) {
+            "link request names contract id $apiContractId, which has no local descriptor"
+        }
+        return (load(fqn) ?: error("contract $fqn has a descriptor but no loadable class")) as Class<Any>
+    }
+
+    /**
+     * `ContractDescriptor.fqn` writes a nested interface's `$` separator as `.`
+     * (see `ContractRegistry.descriptor`), so the name is re-nested one segment
+     * at a time from the right until a class loads.
+     */
+    private fun load(fqn: String): Class<*>? {
+        var candidate = fqn
+        while (true) {
+            runCatching { return Class.forName(candidate) }
+            val dot = candidate.lastIndexOf('.')
+            if (dot < 0) return null
+            candidate = candidate.substring(0, dot) + "$" + candidate.substring(dot + 1)
+        }
+    }
+
+    /**
+     * A stand-in for the requesting peer's consumer: every call on [api] becomes
+     * a `PORT_API` invocation addressed to ([cell], [port]) and handed to
+     * [sink]. The wave context rides it (G-4), exactly as `HostedCellProxy`'s
+     * own api path does.
+     */
+    private fun forwarder(api: Class<Any>, cell: CellRef, port: String, sink: InvocationSink): Any =
+        java.lang.reflect.Proxy.newProxyInstance(api.classLoader, arrayOf(api)) { _, method, args ->
+            sink.deliver(
+                HostedPortInvocation(
+                    cellRef = cell,
+                    portName = port,
+                    type = HostedPortInvocation.Type.PORT_API,
+                    invocation = Invocation.of(method, args, CurrentContext.get()),
+                ),
+            )
+            null
+        }
 }

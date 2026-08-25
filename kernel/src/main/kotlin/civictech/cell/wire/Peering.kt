@@ -879,6 +879,11 @@ object Peering {
             // ledger ([DSC1-ANN-13]). Null on a side that verifies nothing,
             // which is the pre-feature path.
             announcementAdmission = announcementAdmission,
+            // computenet-a4ha: this side's own registry answers "whose ref is
+            // that?", which is what binds a RemoteLink request's named address
+            // to the peer this ingress authenticated. Read-only — the ingress
+            // never publishes through it.
+            locate = side.registry::location,
         )
         onSpawn(ingress)
         side.bridgeHost.managementInlet.call.spawn(ingress)
