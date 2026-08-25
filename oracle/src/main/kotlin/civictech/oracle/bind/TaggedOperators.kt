@@ -104,7 +104,7 @@ import java.io.Serializable
  * directly.
  *
  * `SingleInstanceOrMapModel` itself lives in `civictech.oracle.model`
- * (`TaggedKeyedModels.kt`), not here beside its registration — `[ORA1-MODEL-10]`/
+ * (`TaggedKeyedModels.kt`), not here beside its registration — `ORA1 §MODEL-10`/
  * `ORA2 §MODEL-11`'s import boundary is enforced by scanning `civictech.oracle.model`'s source
  * set, and this file legitimately imports the concrete kernel cell `OrMapCell` for wiring, which
  * a `ReferenceOp` implementation must never do (computenet-n00e; `ModelImportBoundaryTest`).

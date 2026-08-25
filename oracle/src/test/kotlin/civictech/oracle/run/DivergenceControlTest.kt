@@ -31,7 +31,7 @@ import org.junit.jupiter.api.Test
 import java.io.Serializable
 
 /**
- * BS-12 / `[ORA1-DIFF-09]`, **as measured rather than as originally specified** — the
+ * BS-12 / `ORA1 §DIFF-09`, **as measured rather than as originally specified** — the
  * divergence control that was meant to prove the sweep *can* fail, and the finding that it
  * cannot be built against this kernel with this wrong oracle.
  *
@@ -64,7 +64,7 @@ import java.io.Serializable
  *
  * The human decision of 2026-08-20 (option (a) on this task's comment thread) was to keep the
  * **measurement** rather than weaken the control or build a second wrongness instrument:
- * `[ORA1-DIFF-09]` / BS-12 is **blocked on computenet-eeys**, and the honesty ledger entry
+ * `ORA1 §DIFF-09` / BS-12 is **blocked on computenet-eeys**, and the honesty ledger entry
  * lives in `concord/corpus/DISPUTES.md` (computenet-4ru.10.4). The two tests below are that
  * measurement, and neither is a weakened BS-12:
  *
@@ -441,7 +441,7 @@ class DivergenceControlTest {
             "[divergence-control] $name over ${cases.size} case(s): ${differing.size} differing seeds, " +
                 "naive ${cases.size - naiveFailures.size}/${cases.size} Success, " +
                 "real ${cases.size - realFailures.size}/${cases.size} Success " +
-                "($elapsedMs ms) [ORA1-DIFF-09]",
+                "($elapsedMs ms) ORA1 §DIFF-09",
         )
         return Probe(differing, naiveFailures, realFailures)
     }

@@ -15,7 +15,7 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 
 /**
- * Ex/BYO — the `[ORA1-DIFF-11]` demonstration: a caller hand-builds its graph, hand-writes its
+ * Ex/BYO — the `ORA1 §DIFF-11` demonstration: a caller hand-builds its graph, hand-writes its
  * script, supplies a plain Kotlin fold as its reference, and gets a [RunOutcome] back.
  * Nothing generated is involved, and nothing BYO-only is involved either: the comparison,
  * report and taxonomy exercised here are the ones the generated path reuses.
@@ -123,7 +123,7 @@ class DifferentialRunnerCheckTest {
             buildGraph = ::buildGraph,
         )
 
-        // [ORA1-DIFF-02]'s field list, asserted field by field rather than on a rendered
+        // ORA1 §DIFF-02's field list, asserted field by field rather than on a rendered
         // message: every one of them has to be readable off the value.
         val mismatch = outcome.shouldBeInstanceOf<RunOutcome.Mismatch>()
         mismatch.seed shouldBe 11L

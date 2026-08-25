@@ -10,10 +10,10 @@ plugins {
 
 // Sources live in src/main (the :testkit template) so consumers reach them from their
 // own TEST source sets through a plain `testImplementation(project(":oracle"))` with no
-// further configuration — that plain-dependency consumability is [ORA1-API-01] itself,
+// further configuration — that plain-dependency consumability is ORA1 §API-01 itself,
 // and `kernel/src/test/kotlin/civictech/cell/oracle/OracleConsumerTest.kt` is its proof.
 //
-// [ORA1-API-04]: no dependency on :concord, :wire, :inspect, or any :demo:* module.
+// ORA1 §API-04: no dependency on :concord, :wire, :inspect, or any :demo:* module.
 // :concord is the sharpest of those — AGENTS.md reserves `civictech.cell.*` imports to
 // `civictech.concord.driver.kernel`, and the oracle is kernel-coupled by construction
 // (epic §9 risk 6, decided D1 on computenet-4ru.3: separate module, concord stays
@@ -25,7 +25,7 @@ dependencies {
     api(project(":testkit"))
 }
 
-// [ORA1-PERF-02]: `-Poracle.seeds=N` widens (or narrows) a seed sweep with no source change.
+// ORA1 §PERF-02: `-Poracle.seeds=N` widens (or narrows) a seed sweep with no source change.
 // Forwarded to the test JVM as a system property, following the idiom the concord build file
 // uses, and forwarded ONLY when present so the default count stays in Kotlin —
 // `civictech.oracle.run.OracleSweep.DEFAULT_SEED_COUNT` is where it lives, next to the

@@ -8,7 +8,7 @@ package civictech.oracle.gen
  *
  * Two independent reasons, only one of which is about serializability:
  *
- * - **Determinism** is the one that binds *this* file: `[ORA1-GEN-01]` requires identical
+ * - **Determinism** is the one that binds *this* file: `ORA1 §GEN-01` requires identical
  *   `(seed, config)` to produce an identical case across JVMs and machines, so an element
  *   value may not depend on anything the JVM chooses — no `hashCode`, no identity, no
  *   `UUID`, no iteration order of a `HashSet`. A table indexed by an `Int` cannot.

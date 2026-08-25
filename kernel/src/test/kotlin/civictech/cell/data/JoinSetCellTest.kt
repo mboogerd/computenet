@@ -155,7 +155,7 @@ class JoinSetCellTest {
 
     @Test
     fun `join - incremental result equals batch recompute on every seed`() {
-        // [ORA1-DIFF-11] migration (computenet-4ru.12.5): this test fills GenerativeGraphTest's
+        // ORA1 §DIFF-11 migration (computenet-4ru.12.5): this test fills GenerativeGraphTest's
         // migration slot in the feature's three-fold subsumption clause. GenerativeGraphTest was
         // found unsuitable — its mid-run host migration
         // (currentL.managementInlet.call.migrate(hostL2.managementInlet)) has no expression as a

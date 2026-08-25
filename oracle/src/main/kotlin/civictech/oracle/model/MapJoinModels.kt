@@ -25,7 +25,7 @@ import java.io.Serializable
  * streams where either side's put refreshes the pair under value-replacement (arrival-order)
  * semantics"). That limit belongs to whatever *produces* a map stream, not to these operators:
  * given two settled [ModelState.MapState]s, each of the three is a deterministic, pure
- * function of them, with no order left to depend on. `[ORA1-MODEL-08]`'s single-writer-FIFO
+ * function of them, with no order left to depend on. `ORA1 §MODEL-08`'s single-writer-FIFO
  * restriction is therefore documented at the registration site of the map **source**
  * (`MapCell`, computenet-4ru.5.3) and repeated on these entries in `CoreOperators`, rather
  * than weakening the operator denotations here.

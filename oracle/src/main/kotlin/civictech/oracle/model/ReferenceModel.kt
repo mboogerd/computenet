@@ -2,7 +2,7 @@ package civictech.oracle.model
 
 /**
  * A model-level description of a dataflow graph, and the batch evaluator over it —
- * `[ORA1-MODEL-01]`'s carrier: *"compute, from a complete input script alone, the observable
+ * `ORA1 §MODEL-01`'s carrier: *"compute, from a complete input script alone, the observable
  * state of every terminal in a graph, without executing any kernel cell."*
  *
  * ## What it is not
@@ -24,7 +24,7 @@ package civictech.oracle.model
  * ## Purity
  *
  * [eval] is a pure function of ([ReferenceModel], [Script]): it reads the script, never
- * writes it, and holds no state between calls (`[ORA1-MODEL-11]`). Every intermediate lives
+ * writes it, and holds no state between calls (`ORA1 §MODEL-11`). Every intermediate lives
  * in a local map that dies with the call, so two evaluations of one script are two
  * independent folds that happen to agree.
  */

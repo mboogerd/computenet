@@ -1797,7 +1797,7 @@ genuinely checkable and leaves the rest here.
 
 ## ORA1/ORA2 marker ids are NOT EARS requirements, so their absence from this corpus is not a gap (computenet-4ru.22)
 
-The two entries below cite `[ORA1-DIFF-09]`, `ORA2 §DIFF-07` and their neighbours. Read that
+The two entries below cite `ORA1 §DIFF-09`, `ORA2 §DIFF-07` and their neighbours. Read that
 citation form correctly, because a reviewer already read it wrongly once and it cost a verdict.
 
 `ORA1-…` and `ORA2 §…` are **acceptance clauses of the beads items that built the `:oracle`
@@ -1813,26 +1813,28 @@ Checked, not assumed (2026-08-25, base `3d190aaff`): `git grep 'ORA1-' doc/` and
 family. There is **no asymmetry** between ORA1 and ORA2 — the bead that raised this
 (computenet-4ru.22) warned against assuming one, and there is none to assume.
 
-What changed under computenet-4ru.22, and what deliberately did not:
+What changed under computenet-4ru.22, and under computenet-gmld which finished it:
 
 - ORA2's markers were renamed from a square-bracketed `ORA2-MODEL-12` to `ORA2 §MODEL-12`, the repo's
   `<document> §<section>` idiom (`96 §E1.5`, `epic computenet-4ru §2.3`). The square brackets are
   this repo's mark of an EARS id in `doc/spec` (`[24-TMAP-03]`, `[42-REPL-04]`); dropping them is
   the point. `civictech.oracle.MarkerFormTest` stops the old shape returning.
-- ORA1's markers were **not** renamed, and the surviving difference in shape carries no
-  difference in status. Its 448 citations reach `:kernel` tests, two `build.gradle.kts` files and
-  `.claude/skills/work/SKILL.md`, all outside that item's file claim; computenet-gmld tracks it.
-- One stale ORA2 citation survives at
+- ORA1's markers were renamed the same way, in a follow-up (computenet-gmld) after
+  computenet-4ru.22: its 465 citations reached outside that item's file claim (`:kernel` tests,
+  two `build.gradle.kts` files, `.claude/skills/work/SKILL.md`). The `SKILL.md` occurrence is not
+  a citation — a single illustrative example inside a skill-authoring bullet — and is split out
+  as computenet-yiof rather than renamed here, since a work session must not edit the skill it
+  is executing under.
+- The one stale ORA2 citation at
   `kernel/src/test/kotlin/civictech/cell/data/SetConvergenceTest.kt:31` (a square-bracketed
-  `ORA2-CONV-01..04`),
-  for the same claim reason. It is carried by computenet-gmld too.
+  `ORA2-CONV-01..04`) was also renamed by computenet-gmld.
 
 The rejected alternative was to give ORA2 a home under `doc/spec/` with corpus coverage. It was
 rejected on the merits, not on cost: writing harness obligations into the runtime's normative spec
 would make `doc/spec` describe the tester, and a scenario cannot express an import-boundary or a
 sweep-density claim at all.
 
-## ORA1 (the divergence control): `[ORA1-DIFF-09]`/BS-12 is filed, not built — the reference model and the kernel disagree about `[24-SET-03]`'s observer
+## ORA1 (the divergence control): `ORA1 §DIFF-09`/BS-12 is filed, not built — the reference model and the kernel disagree about `[24-SET-03]`'s observer
 
 Filed by `computenet-4ru.10.4` (feature `computenet-4ru.10`, epic `computenet-4ru`) as the
 honesty-ledger deliverable of that feature, on the human decision of 2026-08-20 (option (a) on
@@ -1841,7 +1843,7 @@ honesty-ledger deliverable of that feature, on the human decision of 2026-08-20 
 here because the epic's rule is that a requirement which cannot be checked honestly is filed,
 never weakened into a passing scenario.
 
-### `[ORA1-DIFF-09]` / BS-12 (the divergence control) — **`oracle-gap`** (reference-model semantics), blocked on the `[24-SET-03]` observer disagreement that `computenet-eeys` settled
+### `ORA1 §DIFF-09` / BS-12 (the divergence control) — **`oracle-gap`** (reference-model semantics), blocked on the `[24-SET-03]` observer disagreement that `computenet-eeys` settled
 
 **Read the blocker as the disagreement, not as the bead.** The human decision of 2026-08-20
 worded this "blocked on `computenet-eeys`" while that bead was still in review; it has since
@@ -1870,7 +1872,7 @@ BS-12 buildable is the **Resolves** bullet at the end of this entry.
     add that reached it.
   - **The oracle's reference model — the observer is the WRITER.**
     `civictech.oracle.model.Membership` (`oracle/src/main/kotlin/civictech/oracle/model/Membership.kt`,
-    `[ORA1-MODEL-04]`/`[ORA1-MODEL-05]`) counts an add as *covered* only if the removing writer
+    `ORA1 §MODEL-04`/`ORA1 §MODEL-05`) counts an add as *covered* only if the removing writer
     had observed it — it issued the add itself, or a `ScriptEvent.Observe` by that writer sits
     between the add and the remove. A remove of an element another writer added, whose add the
     remover never observed, is a no-op in this model.
@@ -1905,7 +1907,7 @@ BS-12 buildable is the **Resolves** bullet at the end of this entry.
     `glitchCandidate` all empty). There is no residual, which is what rules out a second
     independent cause.
 
-- **Why BS-12 cannot be built on top of that.** `[ORA1-DIFF-09]`/BS-12 asks for a *divergence
+- **Why BS-12 cannot be built on top of that.** `ORA1 §DIFF-09`/BS-12 asks for a *divergence
   control*: a deliberately wrong reference — a naive arrival-order fold, membership by last
   add/remove event per element, tag coverage ignored — that **reddens on at least one seed** of
   the fixed range `0..59` while the catalog-resolved real reference stays green on all sixty. The
@@ -1938,8 +1940,8 @@ BS-12 buildable is the **Resolves** bullet at the end of this entry.
   moment a `SetCell` remove becomes writer-scoped — i.e. the moment the naive fold becomes
   genuinely wrong and BS-12 becomes implementable. Do not repair the assertion when that happens;
   implement BS-12 proper. The sweep's remaining discriminating-power evidence is
-  `MutationCheckTest` (`[ORA1-DIFF-10]`/BS-13), which covers the derived-operator half of the
-  vocabulary; `civictech.oracle.run.OracleSweep`'s `[ORA1-HONEST-01]` KDoc says at the module's
+  `MutationCheckTest` (`ORA1 §DIFF-10`/BS-13), which covers the derived-operator half of the
+  vocabulary; `civictech.oracle.run.OracleSweep`'s `ORA1 §HONEST-01` KDoc says at the module's
   entry point that this defense is currently the weakest of the four.
 
 - **Recorded, not resolved.** This entry does not settle what `[24-SET-03]` should say, and does

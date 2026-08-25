@@ -77,7 +77,7 @@ object Bs16Case {
 }
 
 /**
- * BS-16's child half (`[ORA1-GEN-01]`): a `main` the test launches as a **separate JVM** via
+ * BS-16's child half (`ORA1 §GEN-01`): a `main` the test launches as a **separate JVM** via
  * `civictech.testkit.JvmPeer.launch`, which generates [Bs16Case] from scratch in a process that
  * shares nothing with the test JVM but the classpath, and writes the serialized case to the
  * file named by `args[0]`.

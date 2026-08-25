@@ -13,7 +13,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 /**
- * Epic computenet-4ru §4.1's `[ORA1-MODEL-02]` vocabulary, pinned mechanically against
+ * Epic computenet-4ru §4.1's `ORA1 §MODEL-02` vocabulary, pinned mechanically against
  * [OperatorCatalog]'s registrations — the feature's own "checkable by reading the catalog
  * registrations" clause made into a test rather than left as a promise in prose.
  *
@@ -38,7 +38,7 @@ class VocabularyCompletenessTest {
     }
 
     /**
-     * `[ORA1-MODEL-02]`'s full list: `SetCell`, `KeyedSetCell`, `MapCell`, `CounterCell`,
+     * `ORA1 §MODEL-02`'s full list: `SetCell`, `KeyedSetCell`, `MapCell`, `CounterCell`,
      * `PnCounterCell`, `FilterCell`, `FlatMapSetCell`/`mapSet`, `UnionSetCell`,
      * `IntersectSetCell`, `CountCell`, `PresenceCountCell`, `QuorumSetCell`, `GroupByCell`
      * over all seven `Aggregators` families, `JoinSetCell`, `SemiJoinCell` in both polarities,
@@ -90,7 +90,7 @@ class VocabularyCompletenessTest {
      * The mechanical check: every named id is registered as a **full** [OperatorCatalog.Entry]
      * — a non-null kernel [CellFactory] and a non-null, evaluable model
      * ([SourceModel] or [OperatorModel]). [OperatorCatalog.register]'s own paired-registration
-     * guard ([ORA1-API-02]) means an id present at all is already fully bound; what this adds
+     * guard (ORA1 §API-02) means an id present at all is already fully bound; what this adds
      * is that the id is present, and that the bound model is one [ReferenceModel][civictech
      * .oracle.model.ReferenceModel] can actually evaluate.
      */

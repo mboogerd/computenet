@@ -5,7 +5,7 @@ import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 
 /**
- * **BS-5** — the antijoin's non-monotone retraction (`[ORA1-MODEL-07]`, `[24-OP-SEMIJOIN-01]`,
+ * **BS-5** — the antijoin's non-monotone retraction (`ORA1 §MODEL-07`, `[24-OP-SEMIJOIN-01]`,
  * `[24-OP-SEMIJOIN-02]`), model-level.
  *
  * The feature's example mapping states it exactly: *given `SemiJoinCell(negated = true)`
@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test
  * - the model has no tag to borrow or mint, and recomputes a set difference.
  *
  * A differential run that found these disagreeing would be reporting a real non-monotone
- * defect, which is what `[ORA1-MODEL-07]` is protecting.
+ * defect, which is what `ORA1 §MODEL-07` is protecting.
  *
  * Driven through [ReferenceModel.eval] from scripts rather than by handing states to
  * `evaluate` directly, so the retraction is a real one: the left row's liveness comes out of
@@ -111,7 +111,7 @@ class SemiJoinRetractionTest {
 
     /**
      * An **unobserved** right-side remove is a no-op on the right's own membership
-     * (`[ORA1-MODEL-05]`, `[24-SET-03]`), so the key stays live there and the left row stays
+     * (`ORA1 §MODEL-05`, `[24-SET-03]`), so the key stays live there and the left row stays
      * retracted. This is the composition of BS-2 with BS-5: the antijoin sees whatever
      * observed-remove membership says, and never re-derives it.
      */

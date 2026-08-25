@@ -50,7 +50,7 @@ import civictech.testkit.SimWorld
 import java.util.UUID
 
 /**
- * BS-8 / `[ORA1-DIFF-06]` — the wave-prefix glitch-freedom oracle, epic design **D5**: while a
+ * BS-8 / `ORA1 §DIFF-06` — the wave-prefix glitch-freedom oracle, epic design **D5**: while a
  * case is driven, every intermediate observation of every terminal equals the reference model's
  * result for SOME prefix of the wave sequence, and the matched prefix index never regresses per
  * terminal.
@@ -824,7 +824,7 @@ class WavePrefixTest {
 
     @Test
     fun `a reference that throws on a prefix is a broken oracle, not a glitch`() {
-        // [ORA1-DIFF-08] / D10 reaching the prefix path too: prefix evaluation is model
+        // ORA1 §DIFF-08 / D10 reaching the prefix path too: prefix evaluation is model
         // evaluation, so a reference that cannot evaluate one is reported as a broken oracle
         // rather than as evidence about the kernel.
         val outcome = DifferentialRunner.run(
@@ -838,7 +838,7 @@ class WavePrefixTest {
 
     @Test
     fun `the default fraction is nonzero and selects a strict, documented subset of seeds`() {
-        // D5: prefix checking may be NARROWED for [ORA1-PERF-01], never dropped. The default is
+        // D5: prefix checking may be NARROWED for ORA1 §PERF-01, never dropped. The default is
         // therefore a nonzero fraction, and OFF is only reachable as an explicit caller choice.
         WavePrefixOption.DEFAULT.fraction shouldBe WavePrefixOracle.DEFAULT_FRACTION
         WavePrefixOption.DEFAULT.fraction shouldBeGreaterThan 0.0
@@ -1509,7 +1509,7 @@ class WavePrefixTest {
      * Three events, one writer-concurrent add, no seeds, no generator: `w0` adds `ab`, `w1` adds
      * `ab`, `w0` removes `ab`.
      *
-     * - The **model** ([Membership], `[ORA1-MODEL-04]`/`[ORA1-MODEL-05]`) covers only the adds
+     * - The **model** ([Membership], `ORA1 §MODEL-04`/`ORA1 §MODEL-05`) covers only the adds
      *   the removing writer observed. `w0` observed its own add and never observed `w1`'s, so
      *   `w1`'s add is uncovered and `ab` stays live.
      * - The **kernel** (`SetCell.inletHandler.remove`) retracts `liveTags("ab")` — *both* tags,
@@ -1786,7 +1786,7 @@ class WavePrefixTest {
 
         /**
          * Glitch CANDIDATES: reconvergent shapes showing a state that is no prefix, which is
-         * exactly what `[ORA1-DIFF-06]` exists to catch. A seed here is a finding to pin and
+         * exactly what `ORA1 §DIFF-06` exists to catch. A seed here is a finding to pin and
          * file (D10), never a list to widen.
          *
          * **EMPTY as of 2026-08-19, re-pinned by `computenet-qcm1` (commit a3176733), from

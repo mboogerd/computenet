@@ -4,7 +4,7 @@ import java.io.Serializable
 
 /**
  * `GroupByCell(keyFn, aggregator)` and `GroupByCell.global` — grouped aggregation
- * (`[24-OP-GROUPBY-01]`, `[24-OP-GROUPBY-02]`, `[24-AGG-01]`, `[ORA1-MODEL-06]`):
+ * (`[24-OP-GROUPBY-01]`, `[24-OP-GROUPBY-02]`, `[24-AGG-01]`, `ORA1 §MODEL-06`):
  *
  * ```
  * { keyFn(e) -> aggregate(group) | group = { e in liveInput | keyFn(e) == key }, group != {} }
@@ -26,7 +26,7 @@ import java.io.Serializable
  * the key present with a stale value, or with the aggregator's identity (`0` for a count, `0`
  * for a sum), reads as harmless and is not. In the model the failure is unrepresentable — the
  * result's key set is derived from the live elements, so a key with no live element is never
- * created — and `[ORA1-MODEL-06]` is the requirement that this be so. `GroupByAggregatorTest`
+ * created — and `ORA1 §MODEL-06` is the requirement that this be so. `GroupByAggregatorTest`
  * pins it for each of the seven aggregate families, because "unrepresentable" is a claim about
  * *this* implementation that only a test keeps true.
  *

@@ -12,13 +12,13 @@ import java.io.File
  *
  * Two requirements of epic `computenet-4ru` are satisfied by *text*, not by behaviour:
  *
- * - `[ORA1-HONEST-01]` — the module's entry point states that the reference model's correctness
+ * - `ORA1 §HONEST-01` — the module's entry point states that the reference model's correctness
  *   is **defended, not proven**, and names the four defenses with their landed test classes:
- *   independence (`[ORA1-MODEL-10]` / `ModelImportBoundaryTest`), the divergence control
+ *   independence (`ORA1 §MODEL-10` / `ModelImportBoundaryTest`), the divergence control
  *   (`DivergenceControlTest`), the mutation check (`MutationCheckTest`), and the concord corpus
  *   cross-check (`CorpusCrossCheckTest`). It lives in
  *   `civictech.oracle.run.OracleSweep`'s file KDoc.
- * - `[ORA1-HONEST-02]` — every operator the vocabulary deliberately excludes carries a written
+ * - `ORA1 §HONEST-02` — every operator the vocabulary deliberately excludes carries a written
  *   reason at its exclusion site, which is `civictech.oracle.model.MapCellModel`'s file KDoc.
  *
  * Text satisfies a requirement only while it is still there. A KDoc paragraph has no compiler,
@@ -45,7 +45,7 @@ import java.io.File
  * The feature's audit concluded that no *exclusion* leaves a normative requirement unchecked
  * anywhere, so no exclusion produced a `concord/corpus/DISPUTES.md` filing — each entry records
  * that conclusion with the instrument that does check it. One filing exists all the same, and it
- * is not an exclusion: `[ORA1-DIFF-09]`/BS-12, the divergence control that cannot be built while
+ * is not an exclusion: `ORA1 §DIFF-09`/BS-12, the divergence control that cannot be built while
  * `civictech.oracle.model.Membership` and `SetCell` disagree about `[24-SET-03]`'s observer
  * (settled by `computenet-eeys`: the reference model is the wrong side, and no kernel defect is
  * implied). The last tests below pin that entry's own fingerprint, so the filing cannot be
@@ -153,7 +153,7 @@ class HonestyLedgerTest {
      */
     private fun exclusionLedger(): String = firstKdoc(mapCellModelSource(), "MapCellModel.kt")
 
-    /** `OracleSweep`'s file KDoc — where `[ORA1-HONEST-01]`'s statement lives. */
+    /** `OracleSweep`'s file KDoc — where `ORA1 §HONEST-01`'s statement lives. */
     private fun sweepKdoc(): String = firstKdoc(oracleSweepSource(), "OracleSweep.kt")
 
     /**
@@ -169,14 +169,14 @@ class HonestyLedgerTest {
         }
     }
 
-    // -------------------------------------------------- [ORA1-HONEST-01]
+    // -------------------------------------------------- ORA1 §HONEST-01
 
     @Test
     fun `the module entry point states that the reference model is defended, not proven`() {
         val sweep = sweepKdoc().flat()
 
-        withClue("[ORA1-HONEST-01] must be claimed by marker at the entry point, so a reader can find it") {
-            sweep.mustState("[ORA1-HONEST-01]")
+        withClue("ORA1 §HONEST-01 must be claimed by marker at the entry point, so a reader can find it") {
+            sweep.mustState("ORA1 §HONEST-01")
         }
         withClue(
             "The statement itself must be present in as many words. A green sweep says the two " +
@@ -195,7 +195,7 @@ class HonestyLedgerTest {
         // Each pair is (what the defense is, the class that landed it). A defense named without
         // its class is a promise; the class name is what makes it checkable by a reader.
         val defenses = listOf(
-            "independence [ORA1-MODEL-10]" to "ModelImportBoundaryTest",
+            "independence ORA1 §MODEL-10" to "ModelImportBoundaryTest",
             "the divergence control" to "DivergenceControlTest",
             "the mutation check" to "MutationCheckTest",
             "the corpus cross-check" to "CorpusCrossCheckTest",
@@ -203,7 +203,7 @@ class HonestyLedgerTest {
 
         val missing = defenses.filterNot { (_, className) -> sweep.contains(className) }
         withClue(
-            "OracleSweep's [ORA1-HONEST-01] section must name every defense by its landed test " +
+            "OracleSweep's ORA1 §HONEST-01 section must name every defense by its landed test " +
                 "class. Missing: ${missing.map { it.first }}. If a defense was renamed, rename it " +
                 "here too; if one was DELETED, the honest edit is to say so in the KDoc, not to " +
                 "drop the line.",
@@ -212,7 +212,7 @@ class HonestyLedgerTest {
         }
 
         withClue(
-            "The divergence control is currently the weakest of the four ([ORA1-DIFF-09]/BS-12 is " +
+            "The divergence control is currently the weakest of the four (ORA1 §DIFF-09/BS-12 is " +
                 "filed in DISPUTES.md, not built). A ledger that lists it flat alongside the other " +
                 "three overstates what the sweep's green is worth.",
         ) {
@@ -225,7 +225,7 @@ class HonestyLedgerTest {
     fun `the two halves of the ledger cross-reference each other`() {
         withClue("A reader arriving at either half must be able to find the other (the bead's own clause)") {
             sweepKdoc().flat().mustState("civictech.oracle.model.MapCellModel")
-            exclusionLedger().flat().mustState("[ORA1-HONEST-01]")
+            exclusionLedger().flat().mustState("ORA1 §HONEST-01")
             exclusionLedger().flat().mustState("civictech.oracle.run.OracleSweep")
         }
     }
@@ -304,7 +304,7 @@ class HonestyLedgerTest {
         }
     }
 
-    // -------------------------------------------------- [ORA1-HONEST-02]
+    // -------------------------------------------------- ORA1 §HONEST-02
 
     /**
      * The excluded operators, spelled out by hand rather than derived from the ledger itself —
@@ -326,7 +326,7 @@ class HonestyLedgerTest {
         val present = ledgerBullets().map { it.first }
         val missing = excludedOperators.filterNot { expected -> present.any { it.startsWith(expected) } }
         withClue(
-            "[ORA1-HONEST-02]: an operator excluded from the vocabulary must carry its reason at " +
+            "ORA1 §HONEST-02: an operator excluded from the vocabulary must carry its reason at " +
                 "the exclusion site. Missing entries: $missing; entries found: $present. Adding an " +
                 "operator BACK into the vocabulary is a legitimate reason to remove its entry — and " +
                 "then this list changes in the same commit as OperatorCatalog's registration.",
@@ -478,7 +478,7 @@ class HonestyLedgerTest {
 
         val entryStart = disputes.indexOf("## ORA1 (the divergence control)")
         withClue(
-            "The [ORA1-DIFF-09]/BS-12 filing must exist in concord/corpus/DISPUTES.md. The epic's " +
+            "The ORA1 §DIFF-09/BS-12 filing must exist in concord/corpus/DISPUTES.md. The epic's " +
                 "rule is that a requirement which cannot be checked honestly is FILED, never " +
                 "weakened into a passing scenario — deleting this entry without building the " +
                 "control is the weakening.",

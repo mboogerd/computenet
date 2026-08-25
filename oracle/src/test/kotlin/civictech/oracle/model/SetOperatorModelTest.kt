@@ -8,13 +8,13 @@ import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 
 /**
- * The batch denotation of each operator in computenet-4ru.5.1's slice of `[ORA1-MODEL-02]`:
+ * The batch denotation of each operator in computenet-4ru.5.1's slice of `ORA1 §MODEL-02`:
  * `SetCell`, `KeyedSetCell`, `CounterCell`, `PnCounterCell`, `FilterCell`,
  * `FlatMapSetCell`/`mapSet`, `UnionSetCell`, `CountCell`, `PresenceCountCell`,
  * `QuorumSetCell`.
  *
  * Model-level throughout: a script or a set of input states goes in, a [ModelState] comes
- * out, and no kernel cell is executed (`[ORA1-MODEL-01]`).
+ * out, and no kernel cell is executed (`ORA1 §MODEL-01`).
  */
 class SetOperatorModelTest {
 

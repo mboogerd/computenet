@@ -14,7 +14,7 @@ import civictech.oracle.model.WriterId
 import civictech.oracle.run.RunOutcome
 
 /**
- * The rendering [Counterexample.renderKotlin] delegates to — `[ORA1-SHRINK-04]`.
+ * The rendering [Counterexample.renderKotlin] delegates to — `ORA1 §SHRINK-04`.
  *
  * ## Render from [CaseTopology] + [CaseScript], never [GeneratedCase.spec]
  *

@@ -279,7 +279,7 @@ class OperatorInventoryTest {
      * cells rather than `civictech.cell.data.op`'s OPERATOR cells. Before this test,
      * `civictech.cell.data` had no such guard at all: `VocabularyCompletenessTest` enumerates
      * a hand-written list of requirement ids and cannot notice a new cell, and the
-     * `[ORA1-HONEST-02]` exclusion ledger in `MapCellModel.kt` is prose — so a new source cell
+     * `ORA1 §HONEST-02` exclusion ledger in `MapCellModel.kt` is prose — so a new source cell
      * could land absent from both the vocabulary and the ledger with nothing red (epic
      * computenet-4ru §9 risk 2, the exact failure mode this guard family exists to prevent).
      *
@@ -299,7 +299,7 @@ class OperatorInventoryTest {
      * Also present here: `WatermarkCell` / `WatermarkCellPorts`
      * (`kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`) — at the time this test was
      * written, a cell in this package that was neither registered in [OperatorCatalog] nor
-     * listed in the `[ORA1-HONEST-02]` exclusion ledger, closed by computenet-fx5b as an
+     * listed in the `ORA1 §HONEST-02` exclusion ledger, closed by computenet-fx5b as an
      * exclusion (replication-settlement scope, epic computenet-4ru §6; see the `WatermarkCell`
      * entry in `civictech.oracle.model.MapCellModel`'s file KDoc for the reason). The bead's own
      * description names five registered source cells (`SetCell`, `KeyedSetCell`, `MapCell`,
@@ -330,7 +330,7 @@ class OperatorInventoryTest {
                 "own kotlin.Metadata kind, so every name here is real classpath churn — see " +
                 "that function's KDoc.) " +
                 "Update the inventory AND OperatorCatalog's registration (or the " +
-                "[ORA1-HONEST-02] exclusion ledger in MapCellModel.kt) for the changed source " +
+                "ORA1 §HONEST-02 exclusion ledger in MapCellModel.kt) for the changed source " +
                 "cell(s) in the same change, per the inventory file's own header.",
         ) {
             (added + removed).shouldBeEmpty()

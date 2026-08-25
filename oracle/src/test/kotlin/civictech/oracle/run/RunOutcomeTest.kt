@@ -16,14 +16,14 @@ import org.junit.jupiter.api.Test
  * RunOutcome is a sealed hierarchy of exactly the kinds the feature designs name — ORA1's five
  * plus the glitch kind, plus ORA2's two mesh kinds (`ORA2 §CONV-03`) — each
  * matchable on type rather than message text, and [StateDifference.between] computes
- * `[ORA1-DIFF-02]`'s symmetric difference for each `ModelState` shape.
+ * `ORA1 §DIFF-02`'s symmetric difference for each `ModelState` shape.
  */
 class RunOutcomeTest {
 
     /** Exhaustive `when` over every RunOutcome subtype - a branch for a removed kind fails to
      * compile, and a missing branch fails to compile if a kind is added without extending it.
      * [RunOutcome.WavePrefixViolation] is the glitch kind computenet-4ru.8.5 added
-     * (`[ORA1-DIFF-06]`, design D5); extending this function is how that addition became
+     * (`ORA1 §DIFF-06`, design D5); extending this function is how that addition became
      * visible here rather than silent. */
     private fun kindOf(outcome: RunOutcome): String = when (outcome) {
         is RunOutcome.Success -> "Success"
@@ -155,7 +155,7 @@ class RunOutcomeTest {
 
     @Test
     fun `WavePrefixViolation distinguishes a torn state from a regression by kind, not by message`() {
-        // Both halves of [ORA1-DIFF-06]'s property are matchable without reading a string: the
+        // Both halves of ORA1 §DIFF-06's property are matchable without reading a string: the
         // bead's fifth acceptance clause ("matchable by kind from RunOutcome") is what this pins.
         val torn = violation(RunOutcome.WavePrefixViolation.Kind.NO_MATCHING_PREFIX)
         val regressed = violation(RunOutcome.WavePrefixViolation.Kind.REGRESSED)

@@ -9,7 +9,7 @@ import org.junit.jupiter.api.assertThrows
 import java.io.File
 
 /**
- * `[ORA1-API-04]`: `:oracle` depends on `:concord`, `:wire`, `:inspect` and `:demo:*` not at
+ * `ORA1 §API-04`: `:oracle` depends on `:concord`, `:wire`, `:inspect` and `:demo:*` not at
  * all. The epic's design decision D1 (epic §9 risk 6, affirmed on computenet-4ru.3) turns on
  * this: the oracle is a *separate* leaf module precisely so that concord can stay
  * implementation-neutral, and a dependency edge either way is what would collapse that.
@@ -43,7 +43,7 @@ class ModuleDependencyTest {
         fingerprints.forEach { (module, fqn) ->
             assertThrows<ClassNotFoundException>(
                 "$fqn loaded from :oracle's classpath, so $module is reachable from :oracle — " +
-                    "[ORA1-API-04] forbids it. Check oracle/build.gradle.kts and the transitive " +
+                    "ORA1 §API-04 forbids it. Check oracle/build.gradle.kts and the transitive " +
                     "closure of :kernel and :testkit."
             ) {
                 Class.forName(fqn, false, ModuleDependencyTest::class.java.classLoader)
@@ -76,7 +76,7 @@ class ModuleDependencyTest {
         declared shouldContainAll listOf(":kernel", ":testkit")
 
         val forbidden = declared.filter { it in setOf(":concord", ":wire", ":inspect") || it.startsWith(":demo") }
-        withClue("oracle/build.gradle.kts declares forbidden module dependencies $forbidden [ORA1-API-04]") {
+        withClue("oracle/build.gradle.kts declares forbidden module dependencies $forbidden ORA1 §API-04") {
             forbidden.shouldBeEmpty()
         }
     }

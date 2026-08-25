@@ -10,7 +10,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 
 /**
- * `[ORA1-API-01]`: `:oracle` is consumable from another module's test source set through a
+ * `ORA1 §API-01`: `:oracle` is consumable from another module's test source set through a
  * plain `testImplementation(project(":oracle"))` **with no further configuration**.
  *
  * The load-bearing half of this test is that it *compiles* — `:kernel:compileTestKotlin`

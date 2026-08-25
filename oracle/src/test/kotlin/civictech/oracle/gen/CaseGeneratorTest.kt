@@ -15,10 +15,10 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
 /**
- * [CaseGenerator]'s contract: determinism in process (`[ORA1-GEN-01]`'s same-JVM half —
+ * [CaseGenerator]'s contract: determinism in process (`ORA1 §GEN-01`'s same-JVM half —
  * `Bs16ReproducibilityTest` owns the cross-JVM half), the pure controller-seed derivation
- * (`[ORA1-GEN-07]`), the vocabulary knob and the whole-knob-set end-to-end reach
- * (`[ORA1-GEN-04]`), and the facade's loud catalog-validation failure (`[ORA1-GEN-08]`).
+ * (`ORA1 §GEN-07`), the vocabulary knob and the whole-knob-set end-to-end reach
+ * (`ORA1 §GEN-04`), and the facade's loud catalog-validation failure (`ORA1 §GEN-08`).
  *
  * [OperatorCatalog] is a process-wide mutable singleton shared with the sibling generator
  * tests, so every test here registers in `@BeforeEach` and empties it in `@AfterEach`.
@@ -36,7 +36,7 @@ class CaseGeneratorTest {
         OperatorCatalog.reset()
     }
 
-    // -- [ORA1-GEN-01], in-process half --------------------------------------
+    // -- ORA1 §GEN-01, in-process half --------------------------------------
 
     /**
      * The same `(seed, config)` twice is the same case, for a sweep well past the criterion's
@@ -85,7 +85,7 @@ class CaseGeneratorTest {
         }
     }
 
-    // -- [ORA1-GEN-07]: the controller seed is a pure function of the case seed --
+    // -- ORA1 §GEN-07: the controller seed is a pure function of the case seed --
 
     /**
      * `GeneratedCase.controllerSeed` equals the derivation its own KDoc documents — one
@@ -132,7 +132,7 @@ class CaseGeneratorTest {
         }
     }
 
-    // -- [ORA1-GEN-04]: the vocabulary knob ----------------------------------
+    // -- ORA1 §GEN-04: the vocabulary knob ----------------------------------
 
     /**
      * Two **disjoint** vocabulary subsets, each self-sufficient (a source plus operators that
@@ -161,7 +161,7 @@ class CaseGeneratorTest {
         leftIds.intersect(rightIds).shouldBeEmpty()
     }
 
-    // -- [ORA1-GEN-04]: every knob reaches the facade -------------------------
+    // -- ORA1 §GEN-04: every knob reaches the facade -------------------------
 
     /**
      * One case, generated through the front door, carrying a **distinctive** value of every
@@ -254,7 +254,7 @@ class CaseGeneratorTest {
         withClue("writerCount, writers $writers") { writers shouldBe setOf("w0", "w1", "w2") }
     }
 
-    // -- [ORA1-GEN-08]: the facade's loud validation --------------------------
+    // -- ORA1 §GEN-08: the facade's loud validation --------------------------
 
     /**
      * The types task's catalog validation is reachable through the front door, and reports at

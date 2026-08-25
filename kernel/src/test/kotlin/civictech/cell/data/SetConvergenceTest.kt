@@ -28,7 +28,7 @@ import civictech.cell.data.op.UnionSetCell
  * an already-produced [SetDelta] stream — a claim about merge commutativity
  * at a single fold point, not about multi-replica gossip convergence. It
  * predates and sits outside ORA2's remit (the tagged/keyed OR-map, PN-counter
- * family, `[ORA2-CONV-01..04]`): `civictech.oracle.model.DotModel`/
+ * family, `ORA2 §CONV-01..04`): `civictech.oracle.model.DotModel`/
  * `ConvergenceCheck` reason about a *script's* per-replica causal history via
  * `civictech.oracle.gen.CaseDelivery`, never about interleaving orderings of
  * an already-materialized delta list at one view. No test landed under

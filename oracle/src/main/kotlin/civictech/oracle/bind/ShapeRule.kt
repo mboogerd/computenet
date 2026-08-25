@@ -6,7 +6,7 @@ import civictech.oracle.model.ElementShape
  * The machine-readable input/output signature of one catalog entry: what shapes an operator
  * consumes, in port order, and what shape it produces.
  *
- * This is `[ORA1-API-03]`'s carrier. The requirement is that a consumer registering a new
+ * This is `ORA1 §API-03`'s carrier. The requirement is that a consumer registering a new
  * operator is picked up by the generator's shape rules *without edits to the generator
  * itself*, so the rule has to be **data the generator reads**, not a branch the generator
  * has. Hence a plain product of [ElementShape]s rather than a sealed `Source | Unary |

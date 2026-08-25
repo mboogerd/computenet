@@ -30,7 +30,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 /**
- * BS-13 / `[ORA1-DIFF-10]`: **the mutation check** — a deliberately wrong operator model is
+ * BS-13 / `ORA1 §DIFF-10`: **the mutation check** — a deliberately wrong operator model is
  * caught by the differential machinery and *attributed* to the right terminal.
  *
  * This measures the sweep's own discriminating power, not the kernel's correctness. A green
@@ -53,7 +53,7 @@ import org.junit.jupiter.api.Test
  * - **Prong 1** — [`the mutant group-by model is caught and named at the group-by terminal`] and
  *   its control [`the identical case with the real GroupByModel agrees`]: BS-13's literal
  *   mutant, on a hand-built graph with a real `GroupByCell` terminal, through
- *   [DifferentialRunner.check]'s bring-your-own seam (`[ORA1-DIFF-11]`).
+ *   [DifferentialRunner.check]'s bring-your-own seam (`ORA1 §DIFF-11`).
  * - **Prong 2** — [`a mutant model on a generator-reachable operator fails the generated sweep`]
  *   and its control [`the same seed range with the unmutated catalog is green on every seed`]:
  *   the same claim about the **actual generated sweep**, which prong 1 cannot show, using a
@@ -191,13 +191,13 @@ class MutationCheckTest {
     )
 
     /**
-     * BS-13 `[ORA1-DIFF-10]`, prong 1: the mutant group-by model is caught, the report names the
+     * BS-13 `ORA1 §DIFF-10`, prong 1: the mutant group-by model is caught, the report names the
      * group-by terminal, and the difference names the **emptied group's key**.
      *
      * The key is the load-bearing part. "A mismatch occurred" would also be satisfied by a
      * mutant that got group `a`'s sum wrong, which is not the bug BS-13 names; asserting that
      * `b` is present under the mutant expectation and absent from the kernel's actual is what
-     * pins the failure to group death (`[24-OP-GROUPBY-02]`, `[ORA1-MODEL-06]`).
+     * pins the failure to group death (`[24-OP-GROUPBY-02]`, `ORA1 §MODEL-06`).
      *
      * ## The outcome KIND is asserted, not just "not Success"
      *
@@ -266,7 +266,7 @@ class MutationCheckTest {
     // -----------------------------------------------------------------------
 
     /**
-     * Prong 2 `[ORA1-DIFF-10]`: a mutant model substituted for a generator-reachable catalog id
+     * Prong 2 `ORA1 §DIFF-10`: a mutant model substituted for a generator-reachable catalog id
      * makes the **generated** sweep fail, and the failure is *attributable* — the mismatching
      * terminal's upstream closure contains a node of the mutant id.
      *
@@ -363,7 +363,7 @@ class MutationCheckTest {
         println(
             "[mutation-check] '$mutated' mutant: ${attributed.size} of ${MUTATION_SEEDS.count()} " +
                 "seeds mismatched with the mutant node upstream of the reported terminal " +
-                "(seeds ${attributed.map { it.first }}) [ORA1-DIFF-10]",
+                "(seeds ${attributed.map { it.first }}) ORA1 §DIFF-10",
         )
     }
 

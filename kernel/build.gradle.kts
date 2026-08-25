@@ -18,7 +18,7 @@ dependencies {
 
     testImplementation(project(":testkit"))
 
-    // [ORA1-API-01]: the :oracle differential-test module must be consumable from another
+    // ORA1 §API-01: the :oracle differential-test module must be consumable from another
     // module's test source set through a plain project dependency and nothing else. This
     // line plus civictech.cell.oracle.OracleConsumerTest is that requirement's proof — no
     // repositories block, no extra configuration, no source-set wiring. Test-scope only;

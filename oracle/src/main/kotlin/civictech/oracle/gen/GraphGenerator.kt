@@ -32,10 +32,10 @@ data class GeneratedGraph(
 
 /**
  * Seeded, **shape-typed** topology generation over [OperatorCatalog], rendered as a
- * `civictech.cell.graph.GraphSpec` that cannot fail to link (`[ORA1-GEN-02]`, epic decisions
+ * `civictech.cell.graph.GraphSpec` that cannot fail to link (`ORA1 §GEN-02`, epic decisions
  * D3/D4).
  *
- * ## Shape-typed, not generate-then-validate (D4, `[ORA1-GEN-02]`)
+ * ## Shape-typed, not generate-then-validate (D4, `ORA1 §GEN-02`)
  *
  * The builder keeps a frontier of nodes whose output [ElementShape] it knows, and only ever
  * appends an operator whose `ShapeRule.inputs` it can satisfy **by shape equality** against
@@ -45,7 +45,7 @@ data class GeneratedGraph(
  *
  * Every one of those decisions reads `OperatorCatalog.entry(id).shape` — arity, input shapes,
  * output shape, and the port names to connect on. **There is deliberately no branch anywhere
- * in this file over an operator's id.** That is `[ORA1-API-03]` itself: an operator a consumer
+ * in this file over an operator's id.** That is `ORA1 §API-03` itself: an operator a consumer
  * registers (ORA2, QRY1, or a test's synthetic entry) is picked up by naming it in
  * [GeneratorConfig.vocabulary], with zero edits here. A `when (id)` over the catalog's names
  * would make every new registration a generator change, which is the outcome the requirement
@@ -54,7 +54,7 @@ data class GeneratedGraph(
  * ## Vocabulary honesty
  *
  * Operators come exclusively from [OperatorCatalog] registrations named in
- * [GeneratorConfig.vocabulary]. Everything the `[ORA1-HONEST-02]` ledger excludes — `ListCell`,
+ * [GeneratorConfig.vocabulary]. Everything the `ORA1 §HONEST-02` ledger excludes — `ListCell`,
  * `MergeableGroupByCell`, `CoalescingCombineCell`, window close/eviction
  * (`civictech.oracle.model.MapCellModel`'s module KDoc) — is unregistered, and therefore
  * unemittable here by construction rather than by a filter that could be forgotten.
@@ -66,7 +66,7 @@ data class GeneratedGraph(
  * (`civictech.oracle.model.ElementShape.TaggedMapOf`'s own KDoc has the kernel reason), so
  * nothing in [CoreOperators] can ever satisfy a port from an `orMap` source and no downstream
  * edge into `join`/`combineLatest`/`lookupJoin` can be drawn — refused by shape *inequality* at
- * [satisfiedBy] (and, upstream of that, by [Builder.chooseRootShape]'s `[ORA1-GEN-03]` check
+ * [satisfiedBy] (and, upstream of that, by [Builder.chooseRootShape]'s `ORA1 §GEN-03` check
  * when nothing in the vocabulary can consume it at all), the same "unemittable by construction"
  * property the fully-unregistered operators get from never being in the catalog
  * (computenet-880k; before this shape existed, `orMap` was wrongly shape-equal to
@@ -82,7 +82,7 @@ data class GeneratedGraph(
  * dynamic element a case may carry is the late-joiner terminal, which is the sibling task's and
  * attaches to an existing node's output port without changing the graph.
  *
- * ## Determinism (`[ORA1-GEN-01]`)
+ * ## Determinism (`ORA1 §GEN-01`)
  *
  * Every choice is drawn from the passed [Random] and every iteration runs over an ordered list
  * or a `LinkedHash*`. Handles are derived from the topology's own construction order
@@ -91,7 +91,7 @@ data class GeneratedGraph(
  * the emitted factories are the catalog's own `Entry.kernel`, which capture nothing and are
  * `Serializable` (D3).
  *
- * ## `[ORA1-GEN-03]` and `[ORA1-GEN-05]`, by construction
+ * ## `ORA1 §GEN-03` and `ORA1 §GEN-05`, by construction
  *
  * Sources are the only arity-0 nodes and are always consumed at level 1, so a terminal is
  * always an operator node and there is at least one operator between every source and every
@@ -103,7 +103,7 @@ data class GeneratedGraph(
  * consumed* node — which is simultaneously fan-out on that node and, whenever it is an
  * ancestor of the frontier node, a diamond.
  *
- * ## Late joiner and multi-host placement (`[ORA1-GEN-09]`/`[ORA1-GEN-10]`)
+ * ## Late joiner and multi-host placement (`ORA1 §GEN-09`/`ORA1 §GEN-10`)
  *
  * WHERE [GeneratorConfig.lateJoiner] is set, one extra [TerminalSpec] with `late = true` is
  * appended beyond the normal [GeneratorConfig.terminalCount] terminals, naming a uniformly
@@ -117,7 +117,7 @@ data class GeneratedGraph(
  * node handle a host ordinal in `0 until hostCount`, forcing one edge's endpoints onto two
  * distinct ordinals so the emitted placement always carries a genuinely cross-host
  * [ConnectStep] and always uses at least two ordinals — never left to the rng's luck.
- * `[ORA1-GEN-03]` already guarantees at least one edge exists (every source is consumed by an
+ * `ORA1 §GEN-03` already guarantees at least one edge exists (every source is consumed by an
  * operator), so the forced edge is always available. `hostCount == 1` places every handle at
  * ordinal `0`.
  */
@@ -149,7 +149,7 @@ class GraphGenerator(private val config: GeneratorConfig) {
             "vocabulary ${config.vocabulary} holds no arity-0 entry; a case needs at least one source"
         }
         check(operatorEntries.isNotEmpty()) {
-            "vocabulary ${config.vocabulary} holds no operator entry; [ORA1-GEN-03] requires at " +
+            "vocabulary ${config.vocabulary} holds no operator entry; ORA1 §GEN-03 requires at " +
                 "least one operator between every source and every terminal"
         }
 
@@ -164,7 +164,7 @@ class GraphGenerator(private val config: GeneratorConfig) {
          * input port of [rule] could be filled from a graph whose nodes carry the shapes in
          * [available].
          *
-         * This is the shape half of D4/`[ORA1-GEN-02]` — the rule [Builder.fillPorts] enforces
+         * This is the shape half of D4/`ORA1 §GEN-02` — the rule [Builder.fillPorts] enforces
          * port by port, hoisted so it can be *asked* rather than only obeyed. `fillPorts` calls
          * it as its own precondition (a pure fast path: a port whose shape no node carries has
          * an empty pool and returns `null` anyway), so there is exactly one statement of the
@@ -192,7 +192,7 @@ class GraphGenerator(private val config: GeneratorConfig) {
          * `GraphSpec` carries factory *lambdas*, which are opaque — nothing can read a spec back
          * into the topology it came from, so a component that wants to change a topology and get
          * the matching spec has to lower it again. The shrinker
-         * (`civictech.oracle.shrink.Shrinker`, `[ORA1-SHRINK-01]`) is exactly that component: it
+         * (`civictech.oracle.shrink.Shrinker`, `ORA1 §SHRINK-01`) is exactly that component: it
          * reduces at [CaseTopology] + [CaseScript] level and re-lowers every candidate. This
          * function is that seam, and it is the same code the generated path runs — a candidate
          * spec is therefore lowered by the identical rule a generated one is, not by a second
@@ -303,11 +303,11 @@ class GraphGenerator(private val config: GeneratorConfig) {
         }
 
         /**
-         * The `[ORA1-GEN-09]` late terminal: one extra [TerminalSpec] with `late = true`,
+         * The `ORA1 §GEN-09` late terminal: one extra [TerminalSpec] with `late = true`,
          * naming a uniformly chosen **operator** node handle — a node with a null [Node.source]
          * so a source handle can never be picked, and never one of the [chooseTerminals] result
          * itself (though nothing forbids the two from coinciding by chance; both simply name a
-         * node's outlet). `[ORA1-GEN-03]`'s own check already proved at least one operator node
+         * node's outlet). `ORA1 §GEN-03`'s own check already proved at least one operator node
          * exists before this is called.
          */
         private fun chooseLateTerminal(): TerminalSpec {
@@ -321,12 +321,12 @@ class GraphGenerator(private val config: GeneratorConfig) {
         }
 
         /**
-         * `[ORA1-GEN-10]`: every node handle's host ordinal. `hostCount == 1` places
+         * `ORA1 §GEN-10`: every node handle's host ordinal. `hostCount == 1` places
          * everything at ordinal `0`. For `hostCount > 1`, one edge (an (upstream, downstream)
          * handle pair drawn from every node's [Node.inputs]) is chosen first and its two
          * endpoints are forced onto **different** ordinals — guaranteeing both a genuinely
          * cross-host [ConnectStep] and at least two ordinals actually used — before every other
-         * node independently draws an ordinal from [rng]. `[ORA1-GEN-03]` guarantees at least
+         * node independently draws an ordinal from [rng]. `ORA1 §GEN-03` guarantees at least
          * one edge exists (every source is consumed by an operator), so the forced edge is
          * always available; no self-loop can be drawn since an input always names an
          * already-existing, distinct node.
@@ -389,7 +389,7 @@ class GraphGenerator(private val config: GeneratorConfig) {
         /**
          * All sources of one case share an output shape, drawn from the arity-0 entries whose
          * output something in the vocabulary can actually consume. A source whose shape no
-         * operator accepts would be a terminal itself, which `[ORA1-GEN-03]` forbids; a case
+         * operator accepts would be a terminal itself, which `ORA1 §GEN-03` forbids; a case
          * mixing two source shapes could not be converged to a single terminal by any fan-in
          * operator, since fan-in is shape-equal by definition. The shape is drawn per case, so
          * a sweep still covers every consumable source shape the vocabulary offers.
@@ -399,7 +399,7 @@ class GraphGenerator(private val config: GeneratorConfig) {
             check(candidates.isNotEmpty()) {
                 "no source in the vocabulary produces a shape any operator in the vocabulary consumes: " +
                     "sources emit ${sourceEntries.map { it.shape.output }.distinct()}, operators consume " +
-                    "${operators.flatMap { it.shape.inputs }.distinct()} — [ORA1-GEN-03] cannot be satisfied"
+                    "${operators.flatMap { it.shape.inputs }.distinct()} — ORA1 §GEN-03 cannot be satisfied"
             }
             return candidates[rng.nextInt(candidates.size)]
         }
@@ -541,7 +541,7 @@ class GraphGenerator(private val config: GeneratorConfig) {
          * 2026-08-20 (macOS/arm64): 1500 topologies over five core-vocabulary configurations
          * are byte-identical with and without the precondition, while a synthetic *heterogeneous*
          * binary rule (`SetOf(Scalar)` x `MapOf(Scalar, Scalar)`) does generate differently.
-         * A consumer registering such a rule (`[ORA1-API-03]` allows it) gets deterministic
+         * A consumer registering such a rule (`ORA1 §API-03` allows it) gets deterministic
          * output for its own `(seed, config)`, but not the same output this generator would have
          * produced before the precondition existed.
          */
@@ -582,7 +582,7 @@ class GraphGenerator(private val config: GeneratorConfig) {
 
         /**
          * Every node left on the frontier must be a terminal — otherwise it is an island no
-         * script ever observes (`[ORA1-GEN-03]`). If the configuration asks for more terminals
+         * script ever observes (`ORA1 §GEN-03`). If the configuration asks for more terminals
          * than that, the remainder observe interior operator nodes, which is sound: an interior
          * node is on a source-to-terminal path either way.
          */
@@ -592,7 +592,7 @@ class GraphGenerator(private val config: GeneratorConfig) {
             check(stranded.isEmpty()) {
                 "sources $stranded were never consumed: no operator in the vocabulary " +
                     "${config.vocabulary} could take them, so they would be terminals — " +
-                    "[ORA1-GEN-03] requires at least one operator between every source and every terminal"
+                    "ORA1 §GEN-03 requires at least one operator between every source and every terminal"
             }
             check(open.size <= config.terminalCount) {
                 "the generated frontier holds ${open.size} unconsumed nodes but terminalCount is " +

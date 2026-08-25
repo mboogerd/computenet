@@ -19,7 +19,7 @@ import civictech.oracle.run.WavePrefixOption
 
 /**
  * Reduces a failing [GeneratedCase] to a smaller case that still fails the same way
- * (`[ORA1-SHRINK-01]`..`[ORA1-SHRINK-03]`, `[ORA1-SHRINK-05]`; epic computenet-4ru design D7).
+ * (`ORA1 §SHRINK-01`..`ORA1 §SHRINK-03`, `ORA1 §SHRINK-05`; epic computenet-4ru design D7).
  *
  * ## The passes, in this order
  *
@@ -72,7 +72,7 @@ import civictech.oracle.run.WavePrefixOption
  * role is only meaningful to drop once the topology it is inert against has settled. Each pass
  * runs on the smallest case the previous pass left.
  *
- * ## Every candidate is re-executed; nothing is retained on a rule (`[ORA1-SHRINK-02]`)
+ * ## Every candidate is re-executed; nothing is retained on a rule (`ORA1 §SHRINK-02`)
  *
  * A candidate is executed through [DifferentialRunner.run] with the **same** `reference` and
  * `stepBudget` the shrink was given, and retained only if its [FailureSignature] — outcome
@@ -85,7 +85,7 @@ import civictech.oracle.run.WavePrefixOption
  * edited — only lowered again from the topology it describes, by the same code the generated path
  * uses.
  *
- * ## The final result is re-executed before it is reported (`[ORA1-SHRINK-05]`)
+ * ## The final result is re-executed before it is reported (`ORA1 §SHRINK-05`)
  *
  * After the passes, the smallest retained case is executed **once more**. If that execution does
  * not reproduce the signature, the case is not reported: the shrink walks back through every case
@@ -96,7 +96,7 @@ import civictech.oracle.run.WavePrefixOption
  * counterexample, and because a substituted [Reference] is arbitrary caller code that nothing
  * here can assume is a pure function of the script.
  *
- * ## Budget and truncation (`[ORA1-SHRINK-03]`)
+ * ## Budget and truncation (`ORA1 §SHRINK-03`)
  *
  * [ShrinkBudget] bounds candidates and wall clock. On exhaustion the passes stop where they are
  * and the smallest case found so far is reported with [Counterexample.truncated] set — a field, so
@@ -121,7 +121,7 @@ import civictech.oracle.run.WavePrefixOption
  *
  * ## Non-goals
  *
- * Rendering a counterexample as pasteable Kotlin is `[ORA1-SHRINK-04]`, a sibling item that
+ * Rendering a counterexample as pasteable Kotlin is `ORA1 §SHRINK-04`, a sibling item that
  * amends [Counterexample]; nothing here emits source. Fault injection, corpus pinning and any
  * kernel or generator semantic change are elsewhere by design (epic D10).
  */
@@ -170,7 +170,7 @@ object Shrinker {
         reduceTopology(session)
         dropReplicas(session)
 
-        // [ORA1-SHRINK-05]: the reported case is one that failed on ITS OWN last execution,
+        // ORA1 §SHRINK-05: the reported case is one that failed on ITS OWN last execution,
         // never one that was merely retained earlier. Deliberately outside the budget.
         val confirmed = confirm(session, original)
         return Counterexample(
@@ -357,7 +357,7 @@ object Shrinker {
      *
      * - **No terminal reads `n`.** A terminal reading `n` would have to be rewired onto `u`, which
      *   changes what the case *observes* rather than how it computes it — and, for a generated
-     *   case, would drop below `[ORA1-GEN-03]`'s "at least one operator between every source and
+     *   case, would drop below `ORA1 §GEN-03`'s "at least one operator between every source and
      *   every terminal". Terminals shrink by [dropTerminals]; nodes they read shrink once the
      *   terminal has gone.
      * - **Shape-satisfied.** For every consumer `c` reading `n` at port `p`, `u`'s registered
@@ -580,7 +580,7 @@ object Shrinker {
      * covered makes an observed remove unobserved, and remapping elements moves a remove onto a
      * value its writer never touched. Carrying the generator's records forward, shifted, would
      * leave a reduced case whose audit describes a script it no longer has — and the audit's whole
-     * purpose is to say which removes are the `[ORA1-MODEL-05]` no-ops, which is exactly what a
+     * purpose is to say which removes are the `ORA1 §MODEL-05` no-ops, which is exactly what a
      * reader of a counterexample needs to be true.
      *
      * ## The rule, and its one known divergence from the generator's own audit
@@ -656,7 +656,7 @@ object Shrinker {
     // ------------------------------------------------------------------ confirmation
 
     /**
-     * The `[ORA1-SHRINK-05]` gate: re-execute the smallest retained case, and if it no longer
+     * The `ORA1 §SHRINK-05` gate: re-execute the smallest retained case, and if it no longer
      * fails, walk back through every case retained on the way and finally [original], reporting
      * the first that does.
      */
@@ -671,7 +671,7 @@ object Shrinker {
                 "case(s) retained on the way, and the original (seed=${original.case.seed}), and " +
                 "none reproduced ${session.signature}. The failure is not reproducible, so there " +
                 "is no counterexample to report — reporting the smallest one anyway would name a " +
-                "passing case minimal [ORA1-SHRINK-05].",
+                "passing case minimal ORA1 §SHRINK-05.",
         )
     }
 
@@ -691,7 +691,7 @@ object Shrinker {
         /** Every retained candidate, oldest first — [confirm]'s fallback chain. */
         val retained = mutableListOf<Attempt>()
 
-        /** Whether the budget ran out with a reduction still untried (`[ORA1-SHRINK-03]`). */
+        /** Whether the budget ran out with a reduction still untried (`ORA1 §SHRINK-03`). */
         var truncated: Boolean = false
             private set
 

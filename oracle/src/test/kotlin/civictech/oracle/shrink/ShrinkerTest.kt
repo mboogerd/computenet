@@ -33,7 +33,7 @@ import org.junit.jupiter.api.assertThrows
 import kotlin.time.Duration.Companion.nanoseconds
 
 /**
- * `[ORA1-SHRINK-01]`, `[ORA1-SHRINK-02]`, `[ORA1-SHRINK-03]` and `[ORA1-SHRINK-05]`: one named
+ * `ORA1 §SHRINK-01`, `ORA1 §SHRINK-02`, `ORA1 §SHRINK-03` and `ORA1 §SHRINK-05`: one named
  * test per reduction pass, the budget's truncation field, and the final re-execution gate —
  * including the Ex/SHRINK-05 shape the feature's example mapping names (a failure that needs
  * **both** of two ops, so removing either must not be retained).
@@ -207,7 +207,7 @@ class ShrinkerTest {
     }
 
     /**
-     * `[ORA1-SHRINK-05]`, and the proof that the final re-execution is not decoration: the
+     * `ORA1 §SHRINK-05`, and the proof that the final re-execution is not decoration: the
      * reference is honest from the shrink's *last* evaluation onwards, so the reduced case passes
      * when it is re-executed. A shrinker that reported what it had retained without re-running it
      * would return a counterexample here; this one refuses, having found nothing — not the reduced

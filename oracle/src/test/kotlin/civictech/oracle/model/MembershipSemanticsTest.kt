@@ -6,11 +6,11 @@ import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 
 /**
- * Observed-remove membership on the script (`[ORA1-MODEL-04]`, `[ORA1-MODEL-05]`; spec
+ * Observed-remove membership on the script (`ORA1 §MODEL-04`, `ORA1 §MODEL-05`; spec
  * `[24-SET-01]`, `[24-SET-03]`), including the epic's named behaviours BS-2 and BS-3.
  *
  * These are **model-level** tests: script in, membership out, no kernel cell executed
- * (`[ORA1-MODEL-01]`). The differential comparison against a live `SetCell` is the runner
+ * (`ORA1 §MODEL-01`). The differential comparison against a live `SetCell` is the runner
  * feature's (computenet-4ru.8); what is checked here is that the reference itself says the
  * right thing, because a wrong reference makes every later comparison worthless.
  *
@@ -48,7 +48,7 @@ class MembershipSemanticsTest {
     private val source = SourceId("s")
 
     /**
-     * **BS-2 — an unobserved remove is a no-op** (`[ORA1-MODEL-05]`, `[24-SET-03]`).
+     * **BS-2 — an unobserved remove is a no-op** (`ORA1 §MODEL-05`, `[24-SET-03]`).
      *
      * Two writers into one modelled `SetCell`: A adds "x", B — which never observed that add
      * — removes "x". Add-wins is a *consequence*, not a configured bias: B's remove retracts
@@ -64,7 +64,7 @@ class MembershipSemanticsTest {
 
         val live = SetSourceModel.evaluate(script.slice(source))
 
-        withClue("B never observed A's add, so its remove retracts nothing [ORA1-MODEL-05][24-SET-03]") {
+        withClue("B never observed A's add, so its remove retracts nothing ORA1 §MODEL-05[24-SET-03]") {
             live shouldBe ModelState.SetState("x")
         }
     }
@@ -87,7 +87,7 @@ class MembershipSemanticsTest {
     }
 
     /**
-     * **BS-3 — re-add after remove resurrects** (`[ORA1-MODEL-03]`, `[ORA1-MODEL-04]`,
+     * **BS-3 — re-add after remove resurrects** (`ORA1 §MODEL-03`, `ORA1 §MODEL-04`,
      * `[24-SET-01]`).
      *
      * add("x"), an observed remove("x"), add("x") again. The kernel gets this by minting a
@@ -105,7 +105,7 @@ class MembershipSemanticsTest {
 
         val live = SetSourceModel.evaluate(script.slice(source))
 
-        withClue("the remove precedes the second add and so cannot cover it [ORA1-MODEL-04][24-SET-01]") {
+        withClue("the remove precedes the second add and so cannot cover it ORA1 §MODEL-04[24-SET-01]") {
             live shouldBe ModelState.SetState("x")
         }
     }

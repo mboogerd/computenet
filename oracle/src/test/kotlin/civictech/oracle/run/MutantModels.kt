@@ -16,7 +16,7 @@ import civictech.oracle.model.asSet
 import java.io.Serializable
 
 /**
- * The deliberately WRONG reference models BS-13 (`[ORA1-DIFF-10]`) measures the differential
+ * The deliberately WRONG reference models BS-13 (`ORA1 §DIFF-10`) measures the differential
  * machinery's power with — see [MutationCheckTest] for what each one is used to prove.
  *
  * **Everything in this file is test scope and must stay there.** None of it is ever registered
@@ -44,7 +44,7 @@ import java.io.Serializable
  * ## Why this mutant is BINARY when the model it mutates is unary
  *
  * `GroupByModel` is unary: it takes the input node's **live** set and derives the result's key
- * set from it, which is precisely why `[ORA1-MODEL-06]` can say group death is *structurally
+ * set from it, which is precisely why `ORA1 §MODEL-06` can say group death is *structurally
  * unrepresentable* in the model — a key with no live element is never created.
  *
  * That is not a detail to work around; it is the property being exploited. A group that "keeps
@@ -52,7 +52,7 @@ import java.io.Serializable
  * function of the live set **cannot** know that: the information is not in its input. So the
  * mutant is given a second input — a retraction-blind element set, [EverAddedSourceModel] over
  * the same source — and stays pure. The extra port is the mutation's cost of admission, and it
- * is direct evidence for `[ORA1-MODEL-06]`: making this bug expressible at all required
+ * is direct evidence for `ORA1 §MODEL-06`: making this bug expressible at all required
  * widening the operator's interface.
  *
  * Port order (`ShapeRule.inputs` order, which `ReferenceModel` honours):

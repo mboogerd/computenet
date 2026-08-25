@@ -26,8 +26,8 @@ import org.junit.jupiter.api.Test
 import kotlin.random.Random
 
 /**
- * The generative halves of `[ORA1-GEN-09]` (late-joiner terminal + mid-script quiesce barrier)
- * and `[ORA1-GEN-10]` (multi-host placement) — computenet-4ru.6.4.
+ * The generative halves of `ORA1 §GEN-09` (late-joiner terminal + mid-script quiesce barrier)
+ * and `ORA1 §GEN-10` (multi-host placement) — computenet-4ru.6.4.
  *
  * Structural and generative only, exactly like [GraphGeneratorTest]/[ScriptGeneratorTest]: no
  * `ReferenceModel.eval` and no fold comparison anywhere here — the differential halves of BS-7
@@ -54,7 +54,7 @@ class LateJoinerAndPlacementTest {
         OperatorCatalog.reset()
     }
 
-    // -- [ORA1-GEN-09], graph half: the late terminal --------------------------------------
+    // -- ORA1 §GEN-09, graph half: the late terminal --------------------------------------
 
     @Test
     fun `lateJoiner on emits exactly one late terminal attached to an operator node's outlet`() {
@@ -80,7 +80,7 @@ class LateJoinerAndPlacementTest {
         }
     }
 
-    // -- [ORA1-GEN-09], script half: the mid-script Barrier ---------------------------------
+    // -- ORA1 §GEN-09, script half: the mid-script Barrier ---------------------------------
 
     @Test
     fun `lateJoiner on emits exactly one strictly interior Barrier`() {
@@ -128,7 +128,7 @@ class LateJoinerAndPlacementTest {
         }
     }
 
-    // -- [ORA1-GEN-10]: multi-host placement -------------------------------------------------
+    // -- ORA1 §GEN-10: multi-host placement -------------------------------------------------
 
     @Test
     fun `hostCount greater than 1 places every handle, uses at least two ordinals, and crosses a host boundary`() {

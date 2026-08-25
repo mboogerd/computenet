@@ -16,11 +16,11 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 /**
- * `[ORA1-GEN-02]` on a live host: a sweep-sized batch of generated `GraphSpec`s is applied to a
+ * `ORA1 §GEN-02` on a live host: a sweep-sized batch of generated `GraphSpec`s is applied to a
  * simulated `ManagedHost` and run to idle, and **no link is rejected and no dead letter is
  * emitted**.
  *
- * This is the half of `[ORA1-GEN-02]` that structural assertions cannot reach.
+ * This is the half of `ORA1 §GEN-02` that structural assertions cannot reach.
  * `GraphGeneratorTest` checks that the generator only ever drew shape-equal edges; this checks
  * that shape equality as the catalog declares it is the same thing the kernel's linker accepts —
  * a `ShapeRule` claiming a port name or an element shape the cell does not actually have would
@@ -57,7 +57,7 @@ class GraphSpecLinkSweepTest {
     }
 
     /**
-     * `[ORA1-GEN-02]` over the map-rooted slice: `map` sources with the three map-shaped joins.
+     * `ORA1 §GEN-02` over the map-rooted slice: `map` sources with the three map-shaped joins.
      *
      * The slice is generable — it was measured 50/50 clean during the review of
      * computenet-4ru.6.2 — but nothing asserted it until computenet-b9x7, so this is the named
@@ -81,7 +81,7 @@ class GraphSpecLinkSweepTest {
     }
 
     /**
-     * `[ORA1-GEN-02]` over the **whole** core vocabulary — computenet-b9x7's first criterion,
+     * `ORA1 §GEN-02` over the **whole** core vocabulary — computenet-b9x7's first criterion,
      * and the regression test for its fix.
      *
      * Against the unfixed generator this sweep did not reach `applyTo` at all: 7 of these 50

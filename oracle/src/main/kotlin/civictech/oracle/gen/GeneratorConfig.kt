@@ -7,10 +7,10 @@ import java.io.Serializable
 import kotlin.random.Random
 
 /**
- * The knobs a case generation run is configured by ([ORA1-GEN-04]): pipeline depth range,
+ * The knobs a case generation run is configured by (ORA1 §GEN-04): pipeline depth range,
  * source count, operator vocabulary, element domain size, op-script length, add/remove ratio,
  * unobserved-remove ratio, and terminal count — the eight the requirement names — plus
- * [writerCount], [lateJoiner] ([ORA1-GEN-09]) and [hostCount] ([ORA1-GEN-10]) for the
+ * [writerCount], [lateJoiner] (ORA1 §GEN-09) and [hostCount] (ORA1 §GEN-10) for the
  * multi-writer and multi-host extensions the same feature covers.
  *
  * A plain `Serializable` data class rather than a builder: a config is itself part of a
@@ -119,9 +119,9 @@ data class GeneratorConfig(
      *
      * @throws IllegalArgumentException naming **every** vocabulary id absent from the catalog,
      *   not just the first — a config with two bogus ids should not require two failed runs to
-     *   diagnose. This is [ORA1-GEN-08]'s enforcement for the wholly-absent case: a half-bound
+     *   diagnose. This is ORA1 §GEN-08's enforcement for the wholly-absent case: a half-bound
      *   id cannot exist in the catalog at all (`OperatorCatalog`'s own paired-registration
-     *   guarantee, `[ORA1-API-02]`), so what remains for the generator to police is an id that
+     *   guarantee, `ORA1 §API-02`), so what remains for the generator to police is an id that
      *   never made it into the catalog in the first place.
      */
     fun validated(): GeneratorConfig {
@@ -148,7 +148,7 @@ data class GeneratorConfig(
      *
      * The rejection is on [replicaCount], not on [writerCount], and the distinction is the whole
      * content of the rule rather than a technicality. [writerCount] is ORA1's *intra-slice*
-     * writer notion, and `[ORA1-MODEL-09]` already handles an order-dependent source under it by
+     * writer notion, and `ORA1 §MODEL-09` already handles an order-dependent source under it by
      * construction — `ScriptGenerator` pins such a source to one `WriterId` before any event
      * exists, so an ORA1 sweep naming `map` with `writerCount = 2` stays legal and unchanged.
      * What cannot be rescued that way is **replication**: two instances of a `MapCell` accepting
@@ -201,7 +201,7 @@ data class GeneratorConfig(
          * and why it had to go, and why this is a config change rather than a `GraphGenerator`
          * one. Consumed by [replicatedOrMapMeshCase], not by [CaseGenerator] directly: a
          * `depthRange` of `0..0` with an operator-free vocabulary is not something
-         * `GraphGenerator` was ever asked to generate (`[ORA1-GEN-03]` still requires an operator
+         * `GraphGenerator` was ever asked to generate (`ORA1 §GEN-03` still requires an operator
          * for every OTHER config), so a plain `CaseGenerator(replicatedSweep()).generate(seed)`
          * throws — deliberately, since the invariant it enforces is real for every case that
          * actually executes a graph. `terminalCount` is `sourceCount`, reflecting that every
@@ -231,17 +231,17 @@ data class GeneratorConfig(
          * ## Why this exists, and why it is not a `GraphGenerator` relaxation
          *
          * [GraphGenerator] requires at least one operator between every source and terminal
-         * (`[ORA1-GEN-03]`), deliberately and unconditionally: `Builder.chooseTerminals` refuses
+         * (`ORA1 §GEN-03`), deliberately and unconditionally: `Builder.chooseTerminals` refuses
          * to leave a source stranded on the frontier ("no script ever observes... an island"),
          * `Builder.choosePlacement` forces a genuinely cross-host edge for `hostCount > 1`
-         * (`[ORA1-GEN-10]`), and `Builder.chooseLateTerminal` assumes an operator node exists.
+         * (`ORA1 §GEN-10`), and `Builder.chooseLateTerminal` assumes an operator node exists.
          * All three are real guarantees for every OTHER case this generator produces, and a
          * replicated `orMap` mesh cannot supply what they need: `TaggedOperators` registers
          * exactly one id (`Ids.OR_MAP`, no consumer of [civictech.oracle.model.ElementShape.TaggedMapOf]
          * exists anywhere in the catalog — verified against `TaggedOperators`' own KDoc, which
          * explains at length why `KeyedSetCell`/`MergeableGroupByCell`/the PN-counter duplicate
          * are not registrable through this seam either), so there is no operator this config
-         * could legitimately name. Weakening `[ORA1-GEN-03]` globally to admit a source-only case
+         * could legitimately name. Weakening `ORA1 §GEN-03` globally to admit a source-only case
          * would touch all three guarantees above for every consumer of [GraphGenerator], to serve
          * a need only this one dimension has — a bigger and riskier change than the tests that
          * need it actually require.
@@ -273,10 +273,10 @@ data class GeneratorConfig(
          * One `Random(seed)` is threaded through placement, replica-host selection and
          * [ScriptGenerator] in that order, mirroring [CaseGenerator.generate]'s own
          * placement-then-script order so equal `(seed, config)` pairs are still reproducible
-         * (`[ORA1-GEN-01]`) — this is simply a DIFFERENT case than a hypothetical join-consuming
+         * (`ORA1 §GEN-01`) — this is simply a DIFFERENT case than a hypothetical join-consuming
          * one would have produced, not a weaker determinism guarantee. Every node independently
          * draws a host ordinal from `0 until hostCount`: [GraphGenerator]'s forced-cross-host-edge
-         * placement rule (`[ORA1-GEN-10]`) has no analogue here because there are no edges to
+         * placement rule (`ORA1 §GEN-10`) has no analogue here because there are no edges to
          * force one onto, so host diversity for the replicated node comes entirely from
          * [ReplicaPlan.hosts]' own distinctness requirement, which this function still honors.
          *
@@ -343,7 +343,7 @@ data class GeneratorConfig(
         /**
          * The untagged, order-dependent data cells BS-14 names. `map` is `CoreOperators.Ids.MAP`;
          * `list` is spelled literally because `ListCell` is registered nowhere (`MapCellModel.kt`'s
-         * `[ORA1-HONEST-02]` ledger says why) and so has no id constant to reference.
+         * `ORA1 §HONEST-02` ledger says why) and so has no id constant to reference.
          */
         val ORDER_DEPENDENT_UNTAGGED: Set<String> = setOf("map", "list")
     }

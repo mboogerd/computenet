@@ -22,8 +22,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
 /**
- * `[ORA1-DIFF-01]` / `[ORA1-DIFF-03]` / `[ORA1-DIFF-04]` / `[ORA1-PERF-01]` /
- * `[ORA1-PERF-02]` / `[ORA1-PERF-03]`: the seed sweep — the baseline agreement run (BS-1), the
+ * `ORA1 §DIFF-01` / `ORA1 §DIFF-03` / `ORA1 §DIFF-04` / `ORA1 §PERF-01` /
+ * `ORA1 §PERF-02` / `ORA1 §PERF-03`: the seed sweep — the baseline agreement run (BS-1), the
  * density-not-fail-fast behavior, the progress stream, and the `-Poracle.seeds` knob.
  */
 class OracleSweepTest {
@@ -83,7 +83,7 @@ class OracleSweepTest {
     ).validated()
 
     /**
-     * BS-1 `[ORA1-DIFF-01]` `[ORA1-DIFF-04]`: every seed of the default range agrees with the
+     * BS-1 `ORA1 §DIFF-01` `ORA1 §DIFF-04`: every seed of the default range agrees with the
      * batch reference model, with no dead letter and no non-quiescence — a
      * [RunOutcome.DeadLetterFailure] or [RunOutcome.NonQuiescence] is not
      * [RunOutcome.Success], so [OracleSweep.run] fails the sweep on either, naming the seed.
@@ -91,7 +91,7 @@ class OracleSweepTest {
      * The sweep runs the range the `-Poracle.seeds` knob selects
      * ([OracleSweep.defaultSeeds]), defaulting to 200 seeds. It prints the per-seed cost it
      * actually observed, so the figure recorded in [OracleSweep]'s KDoc — the
-     * `[ORA1-PERF-01]` sizing evidence — is checkable on any machine rather than folklore.
+     * `ORA1 §PERF-01` sizing evidence — is checkable on any machine rather than folklore.
      *
      * ## History worth keeping, because it decides how to read a failure here
      *
@@ -116,7 +116,7 @@ class OracleSweepTest {
 
         println(
             "[oracle-sweep] BS-1: $count seeds ($seeds) in $elapsedMs ms " +
-                "(${"%.1f".format(elapsedMs.toDouble() / count)} ms/seed) [ORA1-PERF-01]",
+                "(${"%.1f".format(elapsedMs.toDouble() / count)} ms/seed) ORA1 §PERF-01",
         )
     }
 
@@ -154,7 +154,7 @@ class OracleSweepTest {
     ).validated()
 
     /**
-     * `[ORA1-DIFF-01]` `[ORA1-DIFF-04]` for the **pair-shaped half of the vocabulary**
+     * `ORA1 §DIFF-01` `ORA1 §DIFF-04` for the **pair-shaped half of the vocabulary**
      * (computenet-q21w).
      *
      * ## The hole this closes
@@ -251,7 +251,7 @@ class OracleSweepTest {
     }
 
     /**
-     * `[ORA1-DIFF-03]`: the sweep runs **every** seed and reports the failure *density*, rather
+     * `ORA1 §DIFF-03`: the sweep runs **every** seed and reports the failure *density*, rather
      * than aborting at the first failure.
      *
      * Failures are provoked by substituting a deliberately wrong reference — the divergence
@@ -297,7 +297,7 @@ class OracleSweepTest {
     }
 
     /**
-     * `[ORA1-PERF-03]`: while running, the sweep reports the current seed and the case's index
+     * `ORA1 §PERF-03`: while running, the sweep reports the current seed and the case's index
      * in the sweep — so a hang is attributable to one specific case rather than to "the sweep".
      */
     @Test
@@ -322,7 +322,7 @@ class OracleSweepTest {
     }
 
     /**
-     * `[ORA1-PERF-02]`: `-Poracle.seeds=N` reaches the default range computation with no source
+     * `ORA1 §PERF-02`: `-Poracle.seeds=N` reaches the default range computation with no source
      * change. `oracle/build.gradle.kts` forwards the Gradle property to this system property;
      * this test covers the half of that path that lives in Kotlin, and the widened Gradle
      * invocation is cited on the bead.
