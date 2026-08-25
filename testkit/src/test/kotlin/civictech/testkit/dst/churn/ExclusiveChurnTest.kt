@@ -68,15 +68,22 @@ import kotlin.test.assertTrue
  * [civictech.testkit.dst.DepartureMode]**. No mesh peer ever departs, cleanly or uncleanly, on
  * any seed this suite runs. The unclean departure BS-17's *Given* names is therefore delivered
  * **solely** by [CrashFault.midDrain] on `excl-receiver` (`fired=1` on every seed), never by a
- * churn departure. The mesh's membership events are also not concurrent with the payload path:
- * the earliest join lands at step 92 / 289 / 26 on seeds 1 / 2 / 5, while the bridge's whole
- * transfer runs from step 0 under a crash at step 2.
+ * churn departure. The mesh's membership events are *not* disjoint from the payload path — the
+ * bridge's last traced activity lands somewhere in steps 56..105 depending on seed, and the
+ * earliest joins (step 92 / 289 / 26 on seeds 1 / 2 / 5) fall inside that window on seeds 1 and
+ * 5 — but a join is not the departure BS-17's *Given* asks for, and no departure is drawn at
+ * all.
  *
  * So read this suite as **CHA1's exclusive accounting under an unclean HOST departure, in a
  * world that also contains a churning mesh** — not as an exclusive payload carried through
  * membership churn. Widening it to a real mesh departure overlapping the transfer is
- * `computenet-usmw`; raising `EVENT_COUNT` here is not the fix, because at 8 the generator
- * proposes a rejoin of a peer that is already a member and every seed refuses at run time.
+ * `computenet-usmw`. Raising `EVENT_COUNT` here is not a *free* fix, but it is closer than it
+ * looks: at 8 the generator draws 107 [civictech.testkit.dst.DepartEvent]s across the same 50
+ * seeds (26 of them [civictech.testkit.dst.DepartureMode.CRASH_UNCLEAN], on 20 seeds), the
+ * earliest at step 61, and 14 of 50 seeds place one inside the 56..105 band above — and 49 of
+ * the 50 conforming runs still pass. What blocks it is **one** seed: seed 8 refuses at run time
+ * with `peer "peer0" is already a member, so a rejoin cannot be applied to it`, raised from
+ * `MeshPeer.rejoin`, which is enough to redden the whole sweep.
  *
  * ## Accounting, not a bespoke assertion (`[CHA3-44]`, `[CHA3-45]`)
  *

@@ -1847,21 +1847,36 @@ assertion, per `[CHA3-44]`'s and `[CHA3-45]`'s own wording.
   `DepartureMode`** — no mesh peer departs, cleanly or uncleanly, on any seed
   this suite runs. **The unclean departure BS-17's own *Given* names is
   delivered solely by `CrashFault.midDrain` on `excl-receiver`** (`fired=1` on
-  every seed), never by a churn departure; and the mesh's membership events are
-  not even concurrent with the payload path (earliest join at step 92 / 289 / 26
-  on seeds 1 / 2 / 5, against a bridge transfer that runs from step 0 under a
-  crash at step 2). What BS-17 therefore evidences is **CHA1's exclusive
-  accounting under an unclean HOST departure, in a world that also contains a
-  churning mesh** — not an exclusive payload carried through membership churn.
-  The property itself is real and mutation-proven (flipping
+  every seed), never by a churn departure. What BS-17 therefore evidences is
+  **CHA1's exclusive accounting under an unclean HOST departure, in a world that
+  also contains a churning mesh** — not an exclusive payload carried through
+  membership churn. The property itself is real and mutation-proven (flipping
   `dischargeOnExhaustion` to `false` on the conforming graph turns the sweep red
-  with `ExclusivePayloadLost`); it is the *composition* that is narrower than
+  with `ExclusivePayloadLost`, re-confirmed 50-of-50 at the second read); it is
+  the *composition* that is narrower than
   the prose above originally implied. Widening it is filed as
-  **`computenet-usmw`** (open, under epic `computenet-umx`), which also records
-  the blocker found while attempting the obvious fix: raising `EVENT_COUNT` to 8
-  makes every seed refuse at run time with `peer "peer0" is already a member, so
-  a rejoin cannot be applied to it` — a `ChurnGenerator` coherence limit at a
-  two-peer roster, not a test bug.
+  **`computenet-usmw`** (open, under epic `computenet-umx`).
+
+- **Two sub-claims of the paragraph above were themselves wrong and are
+  corrected here** (re-measured at the second, independent read of
+  `computenet-umx.2.8`, darwin/arm64 — the zero-departure finding held exactly,
+  these two did not):
+  - The mesh's joins are **not** disjoint from the payload path. The bridge's
+    last traced activity on `excl-sender`/`excl-receiver` lands at step
+    **56..105** depending on seed — not "step 0 under a crash at step 2", which
+    is only where its *crash* fires — so the joins at step 92 / 26 on seeds 1 / 5
+    fall *inside* the bridge's own window. The finding that stands is the
+    unqualified one: **no `DepartEvent` is drawn at all**, so nothing about
+    concurrency needs to be argued.
+  - Raising `EVENT_COUNT` to 8 does **not** make "every seed refuse". Exactly
+    **one** seed does — seed 8, `peer "peer0" is already a member, so a rejoin
+    cannot be applied to it`, raised from `MeshPeer.rejoin` (`PeerHandles.kt`)
+    after a `DepartEvent@306` on `peer0` — and the **other 49 conforming runs
+    pass**. At 8 the generator draws **107 `DepartEvent`s across all 50 seeds**
+    (26 `CRASH_UNCLEAN`, on 20 seeds), earliest at step **61**, with **14 of 50**
+    seeds placing one inside the 56..105 band. So `computenet-usmw` is a
+    *cheaper* item than its own description implies: the widening is one seed's
+    rejoin-coherence away, not a generator rewrite.
 - **`[CHA3-45]`'s dead-letter half is genuinely exercised, not an untested
   default**: a crash discards its generation's scheduler outright with no
   invocation path to dead-letter through — the same rig limit
@@ -2008,8 +2023,8 @@ re-delivery path as of this base, not an inert one.
 - **`[CHA3-51]`'s "duplicated across the transition" is read at the successor
   only** (below, §5) — filed as `computenet-yqgd`, not re-filed here.
 - **BS-17's exclusive payload never crosses a mesh MEMBERSHIP departure** (§2
-  above, measured at task review): zero `DepartEvent`s across seeds 1..50, and
-  the mesh's joins are not concurrent with the bridge transfer. The unclean
+  above, measured at task review): zero `DepartEvent`s of any `DepartureMode`
+  across seeds 1..50. The unclean
   departure is the bridge host's own `CrashFault.midDrain`. Filed as
   `computenet-usmw`. This is a *coverage* limit — the composition is reachable
   in principle, it simply was not run — so it is recorded here rather than in
