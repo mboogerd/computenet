@@ -163,6 +163,10 @@ class Replication(
      * known replica of its logical id are installed now, and to future ones
      * as their announcements arrive. The caller owns instance-id uniqueness
      * (distinct per replica, minted without coordination).
+     *
+     * **Re-replicating an existing ref is crash recovery** (computenet-h50w):
+     * see [supersedeLocalInstance] for why the superseded instance's local
+     * bookkeeping has to be dropped here rather than by a cooperative path.
      */
     fun replicate(cell: Replicable<*>, host: ManagedHost) {
         // PN-17 effect-authority formation refusal (spec 31 §Effects on instance
@@ -200,11 +204,52 @@ class Replication(
                 hasAuthority = false,
             )
         }
+        supersedeLocalInstance(cell)
         localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += cell
         hostOf[cell.ref] = host
         host.managementInlet.call.spawn(cell)
         registry.instances.replicasOf(cell.ref.id).forEach { other -> maybeLink(cell, other) }
         trackDeliveries(cell, host)
+    }
+
+    /**
+     * Drop the local bookkeeping of a *superseded* instance at [cell]'s ref —
+     * a different object that was replicated here under the same [CellRef] and
+     * is now gone (computenet-h50w).
+     *
+     * Three cooperative paths already clear [linked]: the [registry] `onUnpublish`
+     * reconciliation (which clears the pair's REMOTE side), [evict] and [rebind]
+     * (both by `it.first == ref`, and both called by whoever is retiring the
+     * replica). **A host discarded by a crash takes none of them.** So a rebuild
+     * at the SAME instance id — the case [maybeLink]'s own M10.1 KDoc claims to
+     * serve, "a re-announced replica may be RECOVERING from a crash" — used to
+     * find `linked[(ownRef, remoteRef)]` still holding the DISCARDED cell:
+     * [maybeLink] took its already-linked branch, re-fired the state-as-delta
+     * catch-up through the dead cell's outlet, and never installed a link from
+     * the rebuilt cell. Every delta the rebuilt replica then produced was
+     * stranded on this peer — measured as 9-of-10-seed divergence by the CHA1
+     * exchange DST rig (`ExchangeReplicatedCrashDstTest`).
+     *
+     * Clearing it here rather than at a crash hook is deliberate: nothing calls
+     * the runtime back when a host is discarded, so the *return* of the ref —
+     * this call — is the only event a crash and a rebuild both reach.
+     *
+     * Like [rebind] and unlike [evict] this does **not** close the
+     * delivered-watermark row: this peer is not departing, the same ref returns,
+     * and the row must keep constraining replica-fed frontier reads. And like
+     * [rebind] it leaves the stale outlet attachment alone — [gossipRef] makes
+     * the re-link *replace* it at the outlet.
+     *
+     * A first replicate of a fresh ref, and [rebind]/[evict] (which already
+     * removed the incumbent), find nothing here: the path is a no-op for every
+     * caller but the crash rebuild.
+     */
+    private fun supersedeLocalInstance(cell: Replicable<*>) {
+        val locals = localReplicas[cell.ref.id] ?: return
+        if (!locals.any { it !== cell && it.ref == cell.ref }) return
+        locals.removeAll { it !== cell && it.ref == cell.ref }
+        linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
+        partitionSuspended.remove(cell.ref)
     }
 
     /**
@@ -423,6 +468,11 @@ class Replication(
             // hook through the existing link: the full state-as-delta unicast
             // is idempotent (tags / pointwise max), so a plain re-announce
             // costs one redundant delta at worst.
+            //
+            // The crash half of that claim only holds because [replicate] drops
+            // a superseded instance's entry first ([supersedeLocalInstance],
+            // computenet-h50w): `cell` here is whatever object was linked, and
+            // re-firing a DISCARDED one's outlet reaches nobody.
             @Suppress("UNCHECKED_CAST")
             (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(link)
             return
