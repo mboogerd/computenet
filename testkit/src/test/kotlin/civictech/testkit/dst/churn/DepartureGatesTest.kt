@@ -64,11 +64,11 @@ import kotlin.test.fail
  *
  *  - `MeshPeer.crash()` → `HostSlot.crash()` (`testkit`'s `DstWorld.kt`) shuts down the crashed
  *    generation's scheduler and rebuilds a fresh `ManagedHost` from the graph's own build lambda.
- *    It calls neither `suspend`, `restart` nor any invocation path — the three, and only three,
- *    call sites that ever construct a `StallNotice.Stall`
- *    (`kernel/src/main/kotlin/civictech/cell/host/ManagedHost.kt:738` `SUSPENDED`, `:1096`
+ *    It calls neither `suspend`, `restart` nor any invocation path — the only kinds of call site
+ *    that ever construct a `StallNotice.Stall` (`ManagedHost.kt:738`/`:1326` `SUSPENDED`, `:1096`
  *    `DEAD_LETTERED` on a dead-lettered invocation, `:1101`/`:1138` `RESTARTING`/`SUSPENDED` under
- *    `SupervisionPolicy`). A crash bypasses `ManagedHost`'s own lifecycle machinery entirely
+ *    `SupervisionPolicy`, and `CompositeCell.kt:455` `DEAD_LETTERED` on a `BoundaryPolicy`
+ *    refusal; enumerated in full in the DISPUTES entry cited below). A crash bypasses `ManagedHost`'s own lifecycle machinery entirely
  *    (`ChurnMeshTest`'s own control: `peer1.lastEvictDespawned` is null after a crash — "no
  *    eviction ran: nothing was announced or drained").
  *  - Even granting a notice fired, it travels `notifyDownstream` — to cells LINKED downstream of

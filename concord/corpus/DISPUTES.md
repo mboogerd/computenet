@@ -1932,12 +1932,20 @@ while building the frontier-freeze half itself.
   notice on the reads, not worked around" — for `DepartureMode.CRASH_UNCLEAN`.
 
 - **Why it is not constructible**, traced from source rather than assumed:
-  - `StallNotice.Stall` is constructed at exactly three call sites in
-    `kernel/src/main/kotlin/civictech/cell/host/ManagedHost.kt`: `:738` (`SUSPENDED`, from
-    `HostManagementApi.suspend`), `:1096` (`DEAD_LETTERED`, on a dead-lettered invocation under
-    `SupervisionPolicy.PROPAGATE`), and `:1101`/`:1138` (`RESTARTING`/`SUSPENDED`, under
-    `SupervisionPolicy.RESTART`/`SUSPEND`). All three require the AFFECTED CELL's OWN HOST to
-    still be alive and routing an invocation through it.
+  - `StallNotice.Stall` is constructed at six call sites in `kernel` main, five of them in
+    `kernel/src/main/kotlin/civictech/cell/host/ManagedHost.kt` — `:738` (`SUSPENDED`, on the
+    host-level suspend cascade), `:1096` (`DEAD_LETTERED`, on a dead-lettered invocation under
+    `SupervisionPolicy.PROPAGATE`), `:1101`/`:1138` (`RESTARTING`/`SUSPENDED`, under
+    `SupervisionPolicy.RESTART`/`SUSPEND`) and `:1326` (`SUSPENDED`, from
+    `HostManagementApi.suspend(ref)`) — plus `CompositeCell.kt:455` (`DEAD_LETTERED`, from
+    `stallDeniedEdges` on a `BoundaryPolicy` refusal). Every one of them requires the AFFECTED
+    CELL's OWN HOST to still be alive and routing a suspend, a supervision decision or an
+    invocation through it; `CompositeCell`'s additionally requires the cell to be a composite
+    boundary, which a churn-mesh data replica is not. (Enumeration corrected in review: the
+    original filing said "exactly three ... `:738`, `:1096`, `:1101`/`:1138`" and both omitted
+    `:1326`/`CompositeCell.kt:455` and mislabelled `:738` as the `HostManagementApi.suspend`
+    site. The conclusion is unchanged and the wider enumeration strengthens it — none of the six
+    is reachable from `HostSlot.crash`.)
   - `MeshPeer.crash()` (`testkit/src/main/kotlin/civictech/testkit/dst/churn/PeerHandles.kt`)
     calls `HostSlot.crash()` (`testkit/src/main/kotlin/civictech/testkit/dst/DstWorld.kt`),
     which shuts down the crashed generation's scheduler and rebuilds a fresh `ManagedHost` from
