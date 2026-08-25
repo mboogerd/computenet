@@ -52,14 +52,31 @@ import kotlin.test.assertTrue
  *
  * ## The mesh is present but idle
  *
- * `ChurnConfig.opScriptLength = 0`: the mesh peers churn (join/depart/rejoin/reassign,
- * `DepartureMode.CRASH_UNCLEAN` included in the default equal weights) but issue no writes of
+ * `ChurnConfig.opScriptLength = 0`: the mesh peers churn but issue no writes of
  * their own. BS-17's property is exclusive-payload accounting, not reconvergence — that is
  * BS-1's job, already covered elsewhere — so the mesh's own workload would be traffic this test
  * does not read. `peerCount = 2..2` fixes the roster so ONE [GraphSpec] (built once, with a
  * template plan whose `writeSchedule` is empty for the identical reason) is valid for every
  * seed `dstSweep` runs it against — a seed-varying roster would need a seed-varying graph,
  * which `dstSweep`'s single `graph:` parameter cannot express.
+ *
+ * ## What the mesh's churn does and does NOT contribute here — measured, not assumed
+ *
+ * At `peerCount = 2..2` and `eventCount = 2` the generator draws, across the WHOLE checked-in
+ * range (seeds 1..50): 73 [civictech.testkit.dst.JoinEvent]s, 100
+ * [civictech.testkit.dst.ReassignEvent]s, and **zero [civictech.testkit.dst.DepartEvent]s of any
+ * [civictech.testkit.dst.DepartureMode]**. No mesh peer ever departs, cleanly or uncleanly, on
+ * any seed this suite runs. The unclean departure BS-17's *Given* names is therefore delivered
+ * **solely** by [CrashFault.midDrain] on `excl-receiver` (`fired=1` on every seed), never by a
+ * churn departure. The mesh's membership events are also not concurrent with the payload path:
+ * the earliest join lands at step 92 / 289 / 26 on seeds 1 / 2 / 5, while the bridge's whole
+ * transfer runs from step 0 under a crash at step 2.
+ *
+ * So read this suite as **CHA1's exclusive accounting under an unclean HOST departure, in a
+ * world that also contains a churning mesh** — not as an exclusive payload carried through
+ * membership churn. Widening it to a real mesh departure overlapping the transfer is
+ * `computenet-usmw`; raising `EVENT_COUNT` here is not the fix, because at 8 the generator
+ * proposes a rejoin of a peer that is already a member and every seed refuses at run time.
  *
  * ## Accounting, not a bespoke assertion (`[CHA3-44]`, `[CHA3-45]`)
  *

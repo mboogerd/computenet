@@ -201,7 +201,7 @@ class ChurnSweepTest {
     }
 
     companion object {
-        /** ~5ms/seed measured locally (see the findings entry) — 40 seeds stays well under a second. */
+        /** ~7.5ms/seed measured locally (see the findings entry) — 60 seeds runs in ~0.45s. */
         private val SEEDS = 1L..60L
         private val root = File("build/dst-churn/reconvergence-sweep")
 

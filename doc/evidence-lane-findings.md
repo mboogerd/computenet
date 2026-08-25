@@ -1817,8 +1817,7 @@ Well inside "tens of seeds" tolerable for `:testkit:test`.
 
 `ExclusiveChurnTest.kt`'s `ChurnExclusiveBridgeGraph`: the same replicated
 churn mesh (`ChurnMesh`, `MeshPayload.SET`, `peerCount=2..2`, membership
-churning under a `ChurnGenerator`-produced plan, `DepartureMode.CRASH_UNCLEAN`
-included at the default equal weight) plus an `Owned`-payload bridge between
+churning under a `ChurnGenerator`-produced plan) plus an `Owned`-payload bridge between
 two extra hosts (`excl-sender`/`excl-receiver`, CHA1's own
 `ExclusivePayloadAccountingTest`/`ExclusiveBridgeGraph` idiom, reused rather
 than reinvented), one of which departs uncleanly mid-transfer under a folded
@@ -1836,7 +1835,33 @@ assertion, per `[CHA3-44]`'s and `[CHA3-45]`'s own wording.
 - **Diverging control, seeds 1..50: fails on at least one seed** (the same
   branch that silently lets an exhausted exclusive handle go, rather than
   discharging it), with the failure attributable to `ExclusivePayloadLost`
-  specifically — the discrimination `[CHA1-62]`/`[CHA1-63]` ask for.
+  specifically — the discrimination `[CHA1-62]`/`[CHA1-63]` ask for. *(Measured
+  independently at task review, `computenet-umx.2.8`'s reviewer: the control
+  fails on **all 50 of 50** seeds, not merely one — the test asserts the weaker
+  "at least one" deliberately, since the density is the run-varying half.)*
+
+- **What the mesh's own churn does NOT contribute here, measured at task review
+  and stated rather than left implied.** At `peerCount=2..2`, `eventCount=2` the
+  generator draws, across the whole checked-in range (seeds 1..50), **73
+  `JoinEvent`s, 100 `ReassignEvent`s and ZERO `DepartEvent`s of any
+  `DepartureMode`** — no mesh peer departs, cleanly or uncleanly, on any seed
+  this suite runs. **The unclean departure BS-17's own *Given* names is
+  delivered solely by `CrashFault.midDrain` on `excl-receiver`** (`fired=1` on
+  every seed), never by a churn departure; and the mesh's membership events are
+  not even concurrent with the payload path (earliest join at step 92 / 289 / 26
+  on seeds 1 / 2 / 5, against a bridge transfer that runs from step 0 under a
+  crash at step 2). What BS-17 therefore evidences is **CHA1's exclusive
+  accounting under an unclean HOST departure, in a world that also contains a
+  churning mesh** — not an exclusive payload carried through membership churn.
+  The property itself is real and mutation-proven (flipping
+  `dischargeOnExhaustion` to `false` on the conforming graph turns the sweep red
+  with `ExclusivePayloadLost`); it is the *composition* that is narrower than
+  the prose above originally implied. Widening it is filed as
+  **`computenet-usmw`** (open, under epic `computenet-umx`), which also records
+  the blocker found while attempting the obvious fix: raising `EVENT_COUNT` to 8
+  makes every seed refuse at run time with `peer "peer0" is already a member, so
+  a rejoin cannot be applied to it` — a `ChurnGenerator` coherence limit at a
+  two-peer roster, not a test bug.
 - **`[CHA3-45]`'s dead-letter half is genuinely exercised, not an untested
   default**: a crash discards its generation's scheduler outright with no
   invocation path to dead-letter through — the same rig limit
@@ -1982,6 +2007,14 @@ re-delivery path as of this base, not an inert one.
   number honestly rather than either hiding it or duplicating BS-15's gate.
 - **`[CHA3-51]`'s "duplicated across the transition" is read at the successor
   only** (below, §5) — filed as `computenet-yqgd`, not re-filed here.
+- **BS-17's exclusive payload never crosses a mesh MEMBERSHIP departure** (§2
+  above, measured at task review): zero `DepartEvent`s across seeds 1..50, and
+  the mesh's joins are not concurrent with the bridge transfer. The unclean
+  departure is the bridge host's own `CrashFault.midDrain`. Filed as
+  `computenet-usmw`. This is a *coverage* limit — the composition is reachable
+  in principle, it simply was not run — so it is recorded here rather than in
+  `concord/corpus/DISPUTES.md`, which is for properties that cannot be checked
+  honestly at all.
 - **No new `concord/corpus/DISPUTES.md` entry was needed from this task.**
   Every churn-reachable property this task's own tests exercise (exclusive
   accounting under churn, dead-letter accounting under churn, pinned-seed
