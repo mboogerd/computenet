@@ -531,6 +531,14 @@ data class AcceptedWrite(val ordinal: Int, val acceptedBy: String, val duringSpl
  * directions, so the report carries [interleaving] — *what the orchestrator did, in order* —
  * and lets R1's own design pass draw the conclusion.
  *
+ * ## The accounting's scope: the successor, and only the successor
+ *
+ * [lostWrites] and [duplicatedWrites] compare [expectedTotal] against [observedTotal], which the
+ * driver supplies from the **post-transition leader**. No other instance's state is read here, so
+ * `duplicated=0` means "the successor applied nothing twice", not "no instance did". A demoted
+ * leader can end a transition holding a different total — see computenet-yqgd — and this type
+ * does not report it.
+ *
  * @property interleaving the ordered orchestration steps that produced this transition, as the
  *   driver named them. [CHA3-51] asks for "the interleaving that produced it" and this is it:
  *   with explicit designation there is no election to blame, so the order of the designation

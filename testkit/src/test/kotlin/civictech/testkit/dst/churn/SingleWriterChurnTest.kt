@@ -60,9 +60,12 @@ import kotlin.test.assertTrue
  * the **cell**, not by [SingleWriterReplication]: it is the `if (value.epoch < currentEpoch)
  * return` in the replicable's own delta inlet. `:testkit`'s main source set ships no
  * [SingleWriterReplicable], so [SwCounterCell] below mirrors `:kernel`'s own
- * `SingleWriterReplicationTest.SwCounterCell` line for line, deliberately, so that the accounting
- * is measured against the reference implementation the kernel tests its fencing rule with rather
- * than against a fixture written to produce a result.
+ * `SingleWriterReplicationTest.SwCounterCell`, deliberately, so that the accounting is measured
+ * against the reference implementation the kernel tests its fencing rule with rather than against
+ * a fixture written to produce a result. The mirror is exact in every part the accounting reads —
+ * the fencing inlet, the `onLinked` catch-up, `becomeLeader`/`becomeFollower`, the write API's
+ * leader check — and drops two things this measurement never exercises: the kernel copy also
+ * implements `Stateful.snapshot()` and a `mark(Leased<String>)` write method.
  *
  * The measured answer for the promote-first transition is **4 accepted, 4 at the successor: no
  * accepted write lost, none duplicated** — despite one of them being accepted inside the window.
@@ -81,10 +84,18 @@ import kotlin.test.assertTrue
  * [ChurnMesh]'s peers replicate a `civictech.cell.data.Replicable` through `Replication` — the
  * symmetric mergeable mesh. A single-writer set is the *asymmetric* engine, a different kernel
  * type with a different membership story, and adding a single-writer [MeshPayload] means editing
- * `PeerHandles.kt`, which is a sibling task's file claim under epic computenet-umx. The seed
- * stream is still consumed: [ChurnSeeds] supplies the plan whose depart events order the
- * designations, so the transition under measurement is the *generated* adversary's, not a
- * hand-picked one.
+ * `PeerHandles.kt`, which is a sibling task's file claim under epic computenet-umx.
+ *
+ * ## The interleaving is CONSTRUCTED, not generated — stated because it reads otherwise
+ *
+ * [ChurnSeeds] appears below, but only its **seed** reaches the fixture: `plans(101L..101L)` is
+ * evaluated and `plan.seed` names the logical id, while the plan's own events are never executed
+ * and never order the designations. The two designation calls, their order, and where each write
+ * is issued are written out in the test body. That is deliberate — the subject is one specific
+ * two-call orchestration and its mirror image, which is a thing to construct rather than to
+ * sample — but it means the numbers below are **not** a generated adversary's, and reading them
+ * as a sweep result would overstate them. A sweep over seeds would be a different measurement:
+ * it needs a single-writer [MeshPayload], which is a sibling task's file.
  */
 class SingleWriterChurnTest {
 
@@ -222,8 +233,8 @@ class SingleWriterChurnTest {
 
     @Test
     fun `BS-14 promote-first designation opens a real split-brain window, and it is measured`() {
-        // The transition under measurement is the generated adversary's: this seed's plan is what
-        // orders the churn ([CHA3-53]'s stream, consumed rather than duplicated).
+        // [CHA3-53]'s stream, consumed rather than duplicated — but only for its seed: the
+        // interleaving below is constructed, not drawn from the plan. See the class KDoc.
         val plan = ChurnSeeds.plans(101L..101L).single()
         val set = SwSet(plan.seed)
         val measurement = LeaderChurnMeasurement(set::believedLeaders)
@@ -371,8 +382,20 @@ class SingleWriterChurnTest {
          *
          * The limit of that result, in the file rather than only in a report: it is **one
          * transition, on a two-instance set, with writes issued only at the outgoing leader**,
-         * against the reference fencing implementation described in the class KDoc. It is not
-         * evidence that the split-brain window is harmless in general — the window itself is
+         * against the reference fencing implementation described in the class KDoc, on a
+         * **constructed** interleaving rather than a generated one (class KDoc again).
+         *
+         * And one more limit, which the phrase "none lost, none duplicated" would otherwise
+         * overstate: the accounting is read **at the successor only** — `observedTotal` is the
+         * post-transition leader's state and nothing here reads or asserts the DEMOTED
+         * instance's. Those two states are not guaranteed to agree after a transition: the
+         * successor's `onLinked` catch-up ships its total as a *from-zero* delta, and on a
+         * failover that delta's target is an already-populated ex-leader rather than a fresh
+         * follower. Whether [CHA3-51]'s "duplicated across the transition" should be accounted
+         * at every instance is filed as computenet-yqgd, with the reviewer's measurements; it is
+         * deliberately not decided here.
+         *
+         * None of this is evidence that the split-brain window is harmless in general — the window itself is
          * real and non-zero, and 95 §R1's "prove or refute ... in every interleaving" is a
          * research-gated question this measurement does not answer.
          */
