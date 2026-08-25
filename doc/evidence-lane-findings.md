@@ -1634,6 +1634,29 @@ exclusive crossing a durability boundary, because no such payload is
 constructible. That is a property of the kernel's journal encoding, not a gap in
 the rig.
 
+**And the sharper statement, added at review** (`computenet-umx.1.6` review, so a
+green ledger is not read as evidence it is not): no fault in this suite can
+perturb the exclusive leg at all. `RestartAtFrontierFault` and `JournalFault` act
+on the host and its journal, while the `exclusives` outlet is subscribed by a
+plain off-host consumer that mints and consumes inside one controller step and
+never crosses the host. The accounting here is therefore *enabled and honest*
+rather than *load-bearing*: a standing tripwire that would catch a future graph
+change routing an exclusive through the host, and not a check any fault in this
+file can make fail. `[CHA2-26]`'s strict form asks that these sweeps run under the
+rig's accounting instead of a bespoke assertion, and that is what is delivered —
+it is **not** evidence about exclusive handling under crash and replay, and must
+not be cited as if it were. Recorded here rather than in
+`concord/corpus/DISPUTES.md`, because `[CHA2-26]` is a CHA2 acceptance criterion
+and this file is the evidence lane's own ledger; `DISPUTES.md` is the corpus's
+spec-requirement honesty ledger and carries no `[CHA2-*]` entries.
+
+**A second review note, on what a fix will move.** BS-2's `@ExpectedFailure` is
+the designed tripwire, but `computenet-xxeo` landing also reddens BS-3's body —
+`repeats.isNotEmpty()` and its `DstOutcome.FAILED` assertion — with messages that
+will then misdiagnose the cause. The correct response there is to re-record the
+verdict against the new behaviour on the same pinned seed 202, not to re-seed or
+narrow. Both edits belong to whoever fixes `computenet-xxeo`.
+
 Consequently this suite **does not** claim to retire the C-11 siblings'
 bespoke-assertion deviation (`computenet-umx.1.4` §"`[CHA2-26]` deviation",
 `computenet-umx.1.5` likewise) on the durable plane. It retires it *for its own

@@ -127,6 +127,17 @@ internal class C9AssertionFailure(
  * rig — and it is why this suite does not claim to retire the C-11 siblings' bespoke-assertion
  * deviation on the durable plane, only to run its own sweeps under the rig's accounting.
  *
+ * **And the sharper statement, so a green ledger is not read as evidence it is not:** no fault in
+ * this suite can perturb the exclusive leg at all. `RestartAtFrontierFault` and `JournalFault` act
+ * on the host and its journal; the `exclusives` outlet is subscribed by a plain off-host consumer
+ * that mints and consumes inside one controller step, never crossing the host. So the accounting
+ * here is *enabled and honest* rather than *load-bearing*: it is a standing tripwire that would
+ * catch a future graph change routing an exclusive through the host, and it is not a check any
+ * fault in this file can make fail. `[CHA2-26]`'s strict form asks that the sweeps run under the
+ * rig's accounting rather than under a bespoke assertion, and that is what is delivered; it is not
+ * evidence about exclusive handling under crash and replay, and nothing here should be cited as if
+ * it were.
+ *
  * ## Registration
  *
  * The [spec] is built **once** and registered in `GraphRegistry` at construction, so a failing
@@ -440,6 +451,16 @@ class EffectReplaySweepTest {
      * frame/frontier alternation is pinned too, because BS-2's finding is stated in terms of it —
      * "odd prefixes fail" is only meaningful while the frame for counter `c` sits at record
      * `2(c - 1)` and its advance at `2(c - 1) + 1`.
+     *
+     * **What this test pins, exactly.** `JournalCensus` carries record counts and a tag histogram,
+     * not record *order*, so the assertions below pin the census — one frame and one advance per
+     * emission, and nothing else in the log — and cannot pin the interleaving directly. The
+     * alternation itself is corroborated by two independent runs rather than asserted here: BS-2's
+     * sweep re-fires exactly counter `(k + 1) / 2` at each failing odd `k`, and BS-6's corrupted
+     * half asserts that with `corruptIndex = 1` the only re-delivered counter is 1. Both are only
+     * satisfiable under `frame(c) = 2(c - 1)`, `advance(c) = 2(c - 1) + 1`. A layout change that
+     * kept these counts but reordered the records would therefore redden BS-2's per-`k` shape and
+     * BS-6's set equality, not this test — read the three together, never this one alone.
      */
     @Test
     fun `the durable fixture writes a log worth sweeping, frame and frontier strictly alternating`() {
@@ -640,6 +661,14 @@ class EffectReplaySweepTest {
      * **No `@ExpectedFailure` here**, because this test asserts the *observed* behaviour and
      * therefore passes; the annotation is a claim that a body still fails, and it fails the build
      * when its body passes (`[CHA2-44]`). BS-2 carries the standing claim for both.
+     *
+     * **Which means this test pins today's answer, and a fix flips it too.** BS-2's annotation is
+     * the designed tripwire — remove it, keep the test — but `computenet-xxeo` landing also
+     * reddens *this* body, at `repeats.isNotEmpty()` and at the `DstOutcome.FAILED` assertion,
+     * whose messages read as "the rollback never reached the frontier". That diagnosis will be
+     * wrong at that point: the correct response is to re-record the verdict here against the new
+     * behaviour — the same seed 202, the same two-run comparison — not to re-seed, narrow, or
+     * chase `FrontierRollbackJournal`. Whoever fixes `computenet-xxeo` owns both edits.
      */
     @Test
     fun `BS-3 rolling the processed frontier back re-delivers and re-fires the invocations past it`() {
