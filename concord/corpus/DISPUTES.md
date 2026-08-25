@@ -708,6 +708,37 @@ would instead suppress live post-recovery traffic as already-acted, that opposit
   outside the corpus. BS-6's two halves both hold, unannotated. Sweep transcript, mechanism,
   pinned seeds and how to regenerate a replay command:
   `doc/evidence-lane-findings.md` → "`computenet-umx.1.6` — rig-gated C-9 sweeps".
+  ***Decided (`computenet-xxeo`, 2026-08-25): it is the intended guarantee — a design
+  ceiling, not a defect.*** The window is **at-least-once**, now stated normatively as
+  `[24-DUR-09]` (spec 24 §Effectful, "The write-ahead window is at-least-once"), and this
+  sub-entry is therefore closed rather than left standing. The decision was read off what
+  the corpus and spec already decide, not chosen: `[24-DUR-07]` fixed the criterion for
+  exactly this trade — a duplicate is loud and bounded, a suppression is a silent
+  unrecoverable omission — and `[24-DUR-08]`'s eviction bound re-applies it in the same
+  direction ("eviction only ever *shrinks* the suppression set"). Journaling the advance
+  first (at-most-once) inverts that criterion: it converts this bounded duplicate into a
+  durable "already acted on" record for an effect that never happened. A two-phase
+  construction needs the external effect and its dedupe record to commit together, which is
+  93 I-7's stated external-effect idempotency ceiling and remains CON1's territory, not the
+  kernel seam's. **No kernel behaviour changed**: `ManagedHost`/`HostDurability` already
+  implement the decided guarantee, and `[24-DUR-05]` was never violated — a position whose
+  advance never became durable is not "at or behind" the restored frontier, so the rule's
+  antecedent does not hold for it. What changed is BS-2, whose `@ExpectedFailure` is removed
+  and whose property is rewritten from at-most-once to the decided one: **no position is
+  lost across any prefix restart, and duplication is bounded to the single delivery the
+  crash caught in flight** (`c9-at-least-once-bounded-refire`), plus a whole-log restart on the
+  same pinned seed asserting that the invocation the crash caught in flight fires **exactly
+  once** when its journal record does survive — the assertion an at-most-once ordering would
+  redden, and the only live guard against that flip. Seed 101 and the full `0..R` range are
+  unchanged. **Residual, stated rather than rounded up**: `[24-DUR-09]` enters
+  `CONCORDANCE.md` as a `gap` row, for the same structural reason `[24-DUR-06]` does — the
+  concord scenario language carries no crash/replay fault verbs at authoring level, so the
+  kernel reproductions carry the assertions and this ledger carries the honesty. BS-3 is re-read and keeps passing unchanged, as
+  `doc/evidence-lane-findings.md` predicted for this branch: its fault deletes advances the
+  host had already made durable, which is a different mechanism from this ordering window,
+  and only a resolution changing *replay-time* delivery would have reddened it. BS-6's
+  corrupted half likewise keeps its recorded behaviour — its single re-delivery re-fires,
+  which is now `[24-DUR-09]` rather than an owned defect.
 - **Also not resolved by this entry**: `[24-DUR-04]`'s emission-identity plane is now
   asserted head-on by `DUR-SRCID-01`/`DUR-SRCID-02`; its OR-set tag plane and
   wave-aligned-consumer plane are recorded separately under "Not covered" below.

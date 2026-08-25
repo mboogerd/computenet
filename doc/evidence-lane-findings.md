@@ -1477,6 +1477,20 @@ construction that commits the effect together with its dedupe record. The
 annotation fails the build when its body passes (`[CHA2-44]`), so whichever way
 that lands, this test flips and cannot be missed.
 
+**Resolved by `computenet-xxeo` (2026-08-25) — as a decision, not a patch.** The
+guarantee is **at-least-once**, now stated normatively as `[24-DUR-09]` (spec 24
+§Effectful) with the resolution recorded on `concord/corpus/DISPUTES.md`'s
+G-59/C-9 entry. It was read off what the spec already decides rather than picked:
+`[24-DUR-07]` fixed the criterion for this trade — a duplicate is loud and bounded,
+a suppression is a silent unrecoverable omission — `[24-DUR-08]`'s eviction bound
+re-applies it in the same direction, and 93 I-7's external-effect idempotency
+ceiling puts exactly-once across an arbitrary external world outside the kernel
+seam. No kernel `main` change was needed: `[24-DUR-05]`'s antecedent never held for
+a position whose advance was not durable. BS-2's `@ExpectedFailure` is removed and
+its property rewritten (seed 101 and `0..R` untouched); BS-3 was re-read and keeps
+passing unchanged, exactly as §3's second review note predicted for this branch.
+The transcript below is the finding as measured, and is left as it stood.
+
 **Nothing was softened to reach that state.** The sweep asserts the unweakened
 `[CHA2-11]` property over the full `0..R` range on the pinned seed;
 `PrefixRestartSweepReport`'s `init` refuses a report that does not cover its
