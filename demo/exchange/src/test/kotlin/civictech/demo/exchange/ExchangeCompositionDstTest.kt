@@ -71,6 +71,16 @@ import java.util.WeakHashMap
  * by the real two-JVM `ExchangeScaffoldTest`"). Cross-peer replication (the harder,
  * *not*-yet-established property above) stays intact and unheld-crashed; the partition fault is
  * what exercises it here, exactly as in the exit test's own peer-partition/heal scenario.
+ *
+ * ## The 9-of-10 divergence was a kernel defect, and it is fixed
+ *
+ * computenet-h50w reproduced it and found the cause: `Replication.linked` retained the
+ * *discarded* cell object under the rebuilt replica's `(local, remote)` key, so `maybeLink`
+ * re-fired M10.1 catch-up through a dead outlet and never linked the rebuilt cell.
+ * `Replication.replicate` now supersedes a same-ref local instance first. The paragraph above
+ * still explains why THIS graph keeps a local writer as its crash target — one graph, one
+ * question — but "cross-host gossip re-linking through a crash is not a property this codebase
+ * establishes" is no longer true: [ExchangeReplicatedCrashDstTest], below, establishes it.
  */
 object ExchangeCompositionDstGraph {
 
@@ -360,6 +370,177 @@ class ExchangeCompositionDstTest {
         fun unregister() {
             GraphRegistry.unregister(ExchangeCompositionDstGraph.GRAPH_ID)
             CheckRegistry.unregister(ExchangeCompositionDstGraph.CHECK_ID)
+        }
+    }
+}
+
+/**
+ * The variant [ExchangeCompositionDstGraph]'s KDoc says it deliberately does NOT drive: peer0's
+ * **replicated** order host is the crash target, rebuilt at the same [CellRef], while the
+ * peer-to-peer bridge is partitioned across the crash window (computenet-h50w).
+ *
+ * Two peers, one [Peering.loopback] bridge, one [Replication]-replicated order [SetCell] each,
+ * and nothing else: the shard meshes and the journaled local writer of the sibling graph are
+ * omitted on purpose, because the property under test is exactly one edge — does a replica
+ * crashed and rebuilt at the *same instance id* re-establish its outbound gossip link, so that
+ * writes it accepts after the rebuild still reach its peer.
+ *
+ * Before the fix this diverged on 9 of 10 seeds: `Replication.linked` still held the DISCARDED
+ * cell object under `(o0.ref, o1.ref)`, so [Replication]'s already-linked branch re-fired M10.1
+ * catch-up through the dead cell's outlet and never installed a link from the rebuilt one.
+ */
+object ExchangeReplicatedCrashDstGraph {
+
+    const val GRAPH_ID = "exchange-replicated-crash-dst"
+    const val CHECK_ID = "exchange-replicated-crash-dst-check"
+    const val PEER_EDGE = "peer0<->peer1"
+    const val CRASH_HOST = "peer0-orders-host"
+    const val JOURNAL = "peer0-orders-journal"
+
+    private const val WRITE_HORIZON = 40
+
+    private val ordersId: UUID = UUID.fromString("00000000-0000-0000-0000-00000000d580")
+    private val orderDomain = listOf("a1", "a2", "b3", "b7", "c4", "d9", "e2", "f6", "g5", "h8", "a5", "c1", "e7")
+
+    private class State {
+        lateinit var o0: SetCell<String>
+        lateinit var o1: SetCell<String>
+    }
+
+    private val states = WeakHashMap<DstWorld, State>()
+
+    val spec: GraphSpec = GraphSpec(GRAPH_ID, GraphBuilder { world -> build(world) })
+
+    private fun build(world: DstWorld) {
+        val state = State()
+        states[world] = state
+
+        val reg0 = LocationRegistry()
+        val reg1 = LocationRegistry()
+
+        val bridge0 = ManagedHost(scheduler = world.controller.scheduler(), registry = reg0)
+        val bridge1 = ManagedHost(scheduler = world.controller.scheduler(), registry = reg1)
+        val loop = Peering.loopback(Peering.Side(reg0, bridge0), Peering.Side(reg1, bridge1))
+
+        world.edges.declare(PEER_EDGE)
+        LinkControls.declare(world, PEER_EDGE, LinkControl.severing(loop))
+
+        val journal = world.journals.declare(JOURNAL)
+        val replication0 = Replication(reg0)
+        val replication1 = Replication(reg1)
+
+        val host1 = ManagedHost(scheduler = world.controller.scheduler(), registry = reg1)
+        val o1 = SetCell<String>(CellRef(ordersId, 1))
+        replication1.replicate(o1, host1)
+        state.o1 = o1
+
+        // The crash target: peer0's REPLICATED order host. The rebuild re-spawns the same
+        // logical replica at the same CellRef and re-replicates it — which is precisely the
+        // "crash-and-rebuild at the same instance id" case Replication's M10.1 re-announce
+        // KDoc claims to cover.
+        world.hosts.declare(CRASH_HOST) { ctx ->
+            val host = ManagedHost(scheduler = ctx.scheduler, registry = reg0, journalFor = { journal })
+            val o0 = SetCell<String>(CellRef(ordersId, 0))
+            replication0.replicate(o0, host)
+            state.o0 = o0
+            host
+        }
+
+        world.controller.runToIdle()
+
+        val ops0 = (
+            HostedCellProxy.create(CellRef(ordersId, 0), reg0, ExchangeCompositionDstGraph.SetInletProxy::class.java)
+                as ExchangeCompositionDstGraph.SetInletProxy
+            ).inlet.call
+        val ops1 = (
+            HostedCellProxy.create(CellRef(ordersId, 1), reg1, ExchangeCompositionDstGraph.SetInletProxy::class.java)
+                as ExchangeCompositionDstGraph.SetInletProxy
+            ).inlet.call
+        val orderOps = listOf(ops0, ops1)
+
+        val rnd = world.rng("workload")
+        val live = mutableSetOf<String>()
+        world.steps.onStep { _, step ->
+            if (step < WRITE_HORIZON) {
+                val e = orderDomain[rnd.nextInt(orderDomain.size)]
+                val w = rnd.nextInt(orderOps.size)
+                if (rnd.nextInt(10) < 6 || e !in live) {
+                    orderOps[w].add(e)
+                    live += e
+                } else {
+                    orderOps[w].remove(e)
+                    live -= e
+                }
+            }
+        }
+    }
+
+    /** The single invariant: the two order replicas converge after the crash and the heal. */
+    fun check(): DstCheck = DstCheck { world ->
+        val state = states[world] ?: error("no ExchangeReplicatedCrashDstGraph state declared for this world")
+        val a = state.o0.membership()
+        val b = state.o1.membership()
+        if (a != b) throw ExchangeCompositionDiverged("replicated-crash order replicas", a, b)
+    }
+
+    /** Partition across the crash window, and a mid-drain crash of the replicated host. */
+    fun plan(seed: Long): FaultPlan = FaultPlan.of(
+        seed,
+        PartitionFault.park("partition-peers", PEER_EDGE, from = 10, until = 22),
+        CrashFault.midDrain("crash-peer0-orders", CRASH_HOST, atStep = 15, journal = JOURNAL),
+    )
+}
+
+/**
+ * computenet-h50w: a replicated host crashed mid-drain and rebuilt at the same instance id must
+ * re-establish its outbound gossip link, so the two replicas still converge.
+ *
+ * This is the bug's named pin. It fails on the unfixed kernel — `Replication.linked` retains the
+ * discarded cell under the rebuilt replica's `(local, remote)` key, so `maybeLink` re-fires
+ * catch-up through the dead outlet instead of installing a link from the rebuilt cell — and the
+ * failure is a real divergence of the two replicas, not a weakened assertion.
+ */
+class ExchangeReplicatedCrashDstTest {
+
+    @Test
+    fun `a replicated host crashed mid-drain re-links and converges`() {
+        val sweep = dstSweep(
+            suite = "exchange-replicated-crash-dst",
+            seeds = 0L..9L,
+            graph = ExchangeReplicatedCrashDstGraph.spec,
+            checkId = ExchangeReplicatedCrashDstGraph.CHECK_ID,
+            artifactRoot = artifactRoot,
+            planFor = ExchangeReplicatedCrashDstGraph::plan,
+        )
+        sweep.assertAllPassed()
+
+        val fired = sweep.entries.flatMap { it.report?.appliedFaults.orEmpty() }
+            .filter { !it.inert }
+            .map { it.id }
+            .toSet()
+        assertEquals(
+            setOf("partition-peers", "crash-peer0-orders"),
+            fired,
+            "a green sweep whose adversary never fired proves nothing: ${sweep.summary()}",
+        )
+    }
+
+    companion object {
+        private val artifactRoot = File("build/dst/exchange-replicated-crash")
+
+        @JvmStatic
+        @BeforeAll
+        fun register() {
+            GraphRegistry.register(ExchangeReplicatedCrashDstGraph.spec)
+            CheckRegistry.register(ExchangeReplicatedCrashDstGraph.CHECK_ID, ExchangeReplicatedCrashDstGraph.check())
+            artifactRoot.deleteRecursively()
+        }
+
+        @JvmStatic
+        @AfterAll
+        fun unregister() {
+            GraphRegistry.unregister(ExchangeReplicatedCrashDstGraph.GRAPH_ID)
+            CheckRegistry.unregister(ExchangeReplicatedCrashDstGraph.CHECK_ID)
         }
     }
 }
