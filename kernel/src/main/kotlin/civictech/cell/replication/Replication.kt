@@ -204,12 +204,12 @@ class Replication(
                 hasAuthority = false,
             )
         }
-        supersedeLocalInstance(cell)
+        val superseded = supersedeLocalInstance(cell)
         localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += cell
         hostOf[cell.ref] = host
         host.managementInlet.call.spawn(cell)
         registry.instances.replicasOf(cell.ref.id).forEach { other -> maybeLink(cell, other) }
-        trackDeliveries(cell, host)
+        trackDeliveries(cell, host, rehome = superseded)
     }
 
     /**
@@ -242,14 +242,36 @@ class Replication(
      *
      * A first replicate of a fresh ref, and [rebind]/[evict] (which already
      * removed the incumbent), find nothing here: the path is a no-op for every
-     * caller but the crash rebuild.
+     * caller but the crash rebuild. Returns whether it superseded anything —
+     * [replicate] passes that on to [trackDeliveries] as the rebuild signal
+     * ([rehomeCompanion]).
+     *
+     * **The PN-19 Stall is retracted with the local marker** (computenet-nf8w).
+     * Dropping `partitionSuspended` alone would have been a latch leak: [evict]
+     * with no reachable peer sets that marker AND raises the companion's odd
+     * suspend epoch, and [linkOut]'s heal branch is the only path that retracts
+     * either — gated on the marker still being present. Clearing the marker here
+     * without the paired `resume()` makes the heal branch unreachable for this
+     * ref forever, and [civictech.cell.data.WatermarkCell.suspend]/`resume` is a
+     * latched per-slot epoch nothing else retracts, so a DEGRADE covering-quorum
+     * read would drop this member permanently. The retraction is right rather
+     * than merely symmetric: the ref RETURNS here, spawned live on the rebuilt
+     * host — it is not parked, so nothing may still read it as parked. (The
+     * reviewer's alternative reading, that a `resume()` on a companion spawned
+     * on the crashed host propagates into nothing, does not hold: the companion
+     * is the same in-process object, its epoch map is plain local state, and
+     * [civictech.cell.consistency.ReplicaQuorum] reads it directly — measured by
+     * `CrashRebuildWatermarkResidencyTest`.) The guard is `it !== cell`, so a
+     * plain re-replicate of the same object never reaches this and no live
+     * partition-suspend is resumed out from under [evict].
      */
-    private fun supersedeLocalInstance(cell: Replicable<*>) {
-        val locals = localReplicas[cell.ref.id] ?: return
-        if (!locals.any { it !== cell && it.ref == cell.ref }) return
+    private fun supersedeLocalInstance(cell: Replicable<*>): Boolean {
+        val locals = localReplicas[cell.ref.id] ?: return false
+        if (!locals.any { it !== cell && it.ref == cell.ref }) return false
         locals.removeAll { it !== cell && it.ref == cell.ref }
         linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
-        partitionSuspended.remove(cell.ref)
+        if (partitionSuspended.remove(cell.ref)) watermarks[cell.ref.id]?.resume()
+        return true
     }
 
     /**
@@ -262,12 +284,26 @@ class Replication(
      * the companions of one logical id find each other by [civictech.cell.host.InstanceIndex.replicasOf] exactly
      * as the data replicas do. A [WatermarkCell] is not itself tracked —
      * that would recurse — its own convergence is the ordinary gossip path.
+     *
+     * **The `getOrPut` memoisation deliberately survives a crash-and-rebuild at
+     * the same instance id, and this path provides no crash recovery of the
+     * delivered frontier** (computenet-2h68). A rebuilt replica reuses the
+     * companion object, so the row it froze at crash time is what a frontier
+     * read still sees — the decided disposition for an unclean departure
+     * (96-incremental-engines-plan E3.6(c); lease-based row eviction is R13,
+     * out of scope). Only the companion's *residency* is re-established, via
+     * [rehomeCompanion] on the [rehome] signal [replicate] passes down from
+     * [supersedeLocalInstance]; read that KDoc before assuming more is offered
+     * here than there is.
      */
-    private fun trackDeliveries(cell: Replicable<*>, host: ManagedHost) {
+    private fun trackDeliveries(cell: Replicable<*>, host: ManagedHost, rehome: Boolean = false) {
         if (cell is WatermarkCell) return
+        var fresh = false
         val companion = watermarks.getOrPut(cell.ref.id) {
+            fresh = true
             WatermarkCell(watermarkRef(cell.ref)).also { replicate(it, host) }
         }
+        if (rehome && !fresh && hostOf[companion.ref] !== host) rehomeCompanion(companion, host)
         // FU-2 converged-membership barrier: announce this covering member's
         // existence on the companion mesh (a transitively-gossiped CRDT), so a
         // settling peer holds keyed waves until its own membership view has caught
@@ -284,6 +320,53 @@ class Replication(
         // the per-origin advances above (both ride the one companion, one mesh).
         @Suppress("UNCHECKED_CAST")
         companion.trackDeliveriesOf(cell.outlet as FanOutlet<Propagate<Any?>>)
+    }
+
+    /**
+     * Move an existing delivered-watermark companion onto [host] after a
+     * crash-and-rebuild at the same instance id (computenet-2h68).
+     *
+     * **The companion object is deliberately reused, and that is not the bug.**
+     * A crash is an *unclean departure*, and the decided disposition for one is
+     * that the delivered-watermark row FREEZES rather than being recovered or
+     * evicted (96-incremental-engines-plan E3.6(c): "unclean departure (crash
+     * without close, mesh churn) leaves the frontier frozen ... not worked
+     * around: lease-based row eviction is R13, explicitly out of scope"). The
+     * same ref returns, so — exactly as in [rebind] — the row must keep
+     * constraining replica-fed frontier reads; minting a *fresh* companion here
+     * would silently discard this peer's `rows`, `closed`, `suspended` and
+     * `members` lattices and read as a member that restarted at bottom. So
+     * [trackDeliveries]'s `getOrPut` memoisation is the correct behaviour.
+     *
+     * What the memoisation left behind is not state but **residency**: the
+     * companion was spawned on the host the crash discarded, so
+     * `registry.locate(watermarkRef(...))` still answered the dead host while
+     * the data replica had moved to the rebuilt one, and inbound companion
+     * gossip resolved to a `Local` host that no longer runs anything. That is a
+     * bookkeeping residue of the same shape [supersedeLocalInstance] repairs for
+     * [linked], and it is repaired the same way — on the *return* of the ref,
+     * the only event a crash and a rebuild both reach.
+     *
+     * Re-spawning the same object republishes the ref at the live host; peers
+     * keep resolving to the ref with no re-link (every mesh identity derives
+     * from the [CellRef]), and inbound gossip that arrives mid-move parks at the
+     * registry and replays on the republish — the same guarantee [rebind]
+     * relies on. The lattice is untouched, so nothing about the frozen-row
+     * disposition above changes.
+     *
+     * **Honest scope.** No measured frontier failure motivated this: the
+     * `ExchangeReplicatedCrashFrontierDstTest` sweep agrees on both peers across
+     * the crash on all ten seeds *without* this repair, because the discarded
+     * host's simulated scheduler keeps draining newly submitted work
+     * (`SimulationController` never deregisters a scheduler and `shutdown()`
+     * only clears its queue). The residue is pinned structurally instead, by
+     * `CrashRebuildWatermarkResidencyTest`, and this is a repair of a stale
+     * registry pointer — not a claim that crash-recovery of the delivered
+     * frontier is now provided. It is not; see E3.6(c) above.
+     */
+    private fun rehomeCompanion(companion: WatermarkCell, host: ManagedHost) {
+        hostOf[companion.ref] = host
+        host.managementInlet.call.spawn(companion)
     }
 
     /**

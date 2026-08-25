@@ -544,3 +544,204 @@ class ExchangeReplicatedCrashDstTest {
         }
     }
 }
+
+/**
+ * The delivered-watermark sibling of [ExchangeReplicatedCrashDstGraph] (computenet-2h68): the
+ * SAME fault plan and the same crash-and-rebuild at the same instance id, but the invariant is a
+ * **frontier read** rather than the data replicas' membership.
+ *
+ * [ExchangeReplicatedCrashDstGraph]'s check reads `SetCell.membership()`, which converges over
+ * the data mesh. It never touches the delivered-watermark companion
+ * ([civictech.cell.data.WatermarkCell]) the replica-fed frontier
+ * ([Replication.replicaFrontier]) is answered off. That companion is memoised by logical id in
+ * `Replication.trackDeliveries`, so a rebuild at the same instance id returns the SAME companion
+ * object — the one whose residency was on the crashed host — and the question this graph asks is
+ * whether that companion still participates in the mesh afterwards.
+ *
+ * The check is deliberately the frontier itself, not the companion's internals: for every
+ * `(source, counter)` either peer's companion holds, the two peers' [ReplicaFrontier] reads must
+ * agree. A companion that can no longer absorb its peer's rows would answer `false` where the
+ * peer answers `true` — a member that can never advance, which is the failure computenet-2h68
+ * predicted.
+ *
+ * ## It does not happen, and this test is the measurement that says so
+ *
+ * **This sweep passes on the UNFIXED kernel, on all ten seeds** (measured 2026-08-25, before
+ * `Replication.rehomeCompanion` existed): the two companions' merged `rows()` are identical
+ * after the crash and the heal, and every frontier probe agrees. computenet-2h68's finding was a
+ * code reading, and its predicted frontier-level consequence is refuted here — so this is a
+ * regression pin for a property that holds, **not** the bug's reproduction. The structural
+ * residue that finding did correctly identify (the companion stayed registered at the discarded
+ * host) is pinned instead by `CrashRebuildWatermarkResidencyTest`, which does fail red without
+ * the repair.
+ *
+ * Why the prediction fails here specifically is worth knowing rather than rediscovering: the
+ * rig's discarded host keeps draining newly submitted work, because `SimulationController` never
+ * deregisters a scheduler and `shutdown()` only clears its queue. So this sweep cannot decide
+ * what a *genuinely* dead host would do to companion gossip — which is why the repair is
+ * justified structurally and the frozen-row disposition (E3.6(c), R13) is left alone.
+ */
+object ExchangeReplicatedCrashFrontierDstGraph {
+
+    const val GRAPH_ID = "exchange-replicated-crash-frontier-dst"
+    const val CHECK_ID = "exchange-replicated-crash-frontier-dst-check"
+    const val PEER_EDGE = "peer0<->peer1"
+    const val CRASH_HOST = "peer0-orders-host"
+    const val JOURNAL = "peer0-orders-journal"
+
+    private const val WRITE_HORIZON = 40
+
+    private val ordersId: UUID = UUID.fromString("00000000-0000-0000-0000-00000000d581")
+    private val orderDomain = listOf("a1", "a2", "b3", "b7", "c4", "d9", "e2", "f6", "g5", "h8", "a5", "c1", "e7")
+
+    private class State {
+        lateinit var replication0: Replication
+        lateinit var replication1: Replication
+    }
+
+    private val states = WeakHashMap<DstWorld, State>()
+
+    val spec: GraphSpec = GraphSpec(GRAPH_ID, GraphBuilder { world -> build(world) })
+
+    private fun build(world: DstWorld) {
+        val state = State()
+        states[world] = state
+
+        val reg0 = LocationRegistry()
+        val reg1 = LocationRegistry()
+
+        val bridge0 = ManagedHost(scheduler = world.controller.scheduler(), registry = reg0)
+        val bridge1 = ManagedHost(scheduler = world.controller.scheduler(), registry = reg1)
+        val loop = Peering.loopback(Peering.Side(reg0, bridge0), Peering.Side(reg1, bridge1))
+
+        world.edges.declare(PEER_EDGE)
+        LinkControls.declare(world, PEER_EDGE, LinkControl.severing(loop))
+
+        val journal = world.journals.declare(JOURNAL)
+        val replication0 = Replication(reg0)
+        val replication1 = Replication(reg1)
+        state.replication0 = replication0
+        state.replication1 = replication1
+
+        val host1 = ManagedHost(scheduler = world.controller.scheduler(), registry = reg1)
+        replication1.replicate(SetCell<String>(CellRef(ordersId, 1)), host1)
+
+        world.hosts.declare(CRASH_HOST) { ctx ->
+            val host = ManagedHost(scheduler = ctx.scheduler, registry = reg0, journalFor = { journal })
+            replication0.replicate(SetCell<String>(CellRef(ordersId, 0)), host)
+            host
+        }
+
+        world.controller.runToIdle()
+
+        val ops0 = (
+            HostedCellProxy.create(CellRef(ordersId, 0), reg0, ExchangeCompositionDstGraph.SetInletProxy::class.java)
+                as ExchangeCompositionDstGraph.SetInletProxy
+            ).inlet.call
+        val ops1 = (
+            HostedCellProxy.create(CellRef(ordersId, 1), reg1, ExchangeCompositionDstGraph.SetInletProxy::class.java)
+                as ExchangeCompositionDstGraph.SetInletProxy
+            ).inlet.call
+        val orderOps = listOf(ops0, ops1)
+
+        val rnd = world.rng("workload")
+        val live = mutableSetOf<String>()
+        world.steps.onStep { _, step ->
+            if (step < WRITE_HORIZON) {
+                val e = orderDomain[rnd.nextInt(orderDomain.size)]
+                val w = rnd.nextInt(orderOps.size)
+                if (rnd.nextInt(10) < 6 || e !in live) {
+                    orderOps[w].add(e)
+                    live += e
+                } else {
+                    orderOps[w].remove(e)
+                    live -= e
+                }
+            }
+        }
+    }
+
+    /** The invariant: the two peers' replica-fed frontier reads agree after the crash and heal. */
+    fun check(): DstCheck = DstCheck { world ->
+        val state = states[world] ?: error("no ExchangeReplicatedCrashFrontierDstGraph state declared for this world")
+        val w0 = state.replication0.watermarkOf(ordersId) ?: error("peer0 has no delivered-watermark companion")
+        val w1 = state.replication1.watermarkOf(ordersId) ?: error("peer1 has no delivered-watermark companion")
+        val f0 = state.replication0.replicaFrontier(ordersId)
+        val f1 = state.replication1.replicaFrontier(ordersId)
+        // every (source, counter) either side has recorded anywhere in its merged lattice
+        val probes = (w0.rows().values + w1.rows().values)
+            .flatMap { it.entries }
+            .groupBy({ it.key }, { it.value })
+            .mapValues { (_, v) -> v.max() }
+        val disagreed = probes.filter { (source, counter) ->
+            f0.completeAt(source, counter, null) != f1.completeAt(source, counter, null)
+        }
+        if (disagreed.isNotEmpty()) {
+            throw ExchangeCompositionDiverged(
+                "replicated-crash frontier reads (probes that disagree: ${disagreed.keys})",
+                disagreed.mapValues { (s, c) -> f0.completeAt(s, c, null) },
+                disagreed.mapValues { (s, c) -> f1.completeAt(s, c, null) },
+            )
+        }
+    }
+
+    /** Partition across the crash window, and a mid-drain crash of the replicated host. */
+    fun plan(seed: Long): FaultPlan = FaultPlan.of(
+        seed,
+        PartitionFault.park("partition-peers", PEER_EDGE, from = 10, until = 22),
+        CrashFault.midDrain("crash-peer0-orders", CRASH_HOST, atStep = 15, journal = JOURNAL),
+    )
+}
+
+/**
+ * computenet-2h68: after a replicated host is crashed and rebuilt at the same instance id, the
+ * delivered-watermark companion the frontier is read off must still be a live member of the
+ * companion mesh, so both peers' frontier reads agree.
+ */
+class ExchangeReplicatedCrashFrontierDstTest {
+
+    @Test
+    fun `a frontier read across a same-instance-id crash agrees on both peers`() {
+        val sweep = dstSweep(
+            suite = "exchange-replicated-crash-frontier-dst",
+            seeds = 0L..9L,
+            graph = ExchangeReplicatedCrashFrontierDstGraph.spec,
+            checkId = ExchangeReplicatedCrashFrontierDstGraph.CHECK_ID,
+            artifactRoot = artifactRoot,
+            planFor = ExchangeReplicatedCrashFrontierDstGraph::plan,
+        )
+        sweep.assertAllPassed()
+
+        val fired = sweep.entries.flatMap { it.report?.appliedFaults.orEmpty() }
+            .filter { !it.inert }
+            .map { it.id }
+            .toSet()
+        assertEquals(
+            setOf("partition-peers", "crash-peer0-orders"),
+            fired,
+            "a green sweep whose adversary never fired proves nothing: ${sweep.summary()}",
+        )
+    }
+
+    companion object {
+        private val artifactRoot = File("build/dst/exchange-replicated-crash-frontier")
+
+        @JvmStatic
+        @BeforeAll
+        fun register() {
+            GraphRegistry.register(ExchangeReplicatedCrashFrontierDstGraph.spec)
+            CheckRegistry.register(
+                ExchangeReplicatedCrashFrontierDstGraph.CHECK_ID,
+                ExchangeReplicatedCrashFrontierDstGraph.check(),
+            )
+            artifactRoot.deleteRecursively()
+        }
+
+        @JvmStatic
+        @AfterAll
+        fun unregister() {
+            GraphRegistry.unregister(ExchangeReplicatedCrashFrontierDstGraph.GRAPH_ID)
+            CheckRegistry.unregister(ExchangeReplicatedCrashFrontierDstGraph.CHECK_ID)
+        }
+    }
+}
