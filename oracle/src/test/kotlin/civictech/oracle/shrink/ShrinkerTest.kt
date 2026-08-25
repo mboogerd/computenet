@@ -440,7 +440,7 @@ class ShrinkerTest {
      * Pass 1a (`dropWriters`): a two-writer script over one non-order-dependent `SET` source
      * collapses to the single writer the failure needs. `chainConfig`'s baseline is
      * `writerCount = 1` for the other tests' sake, so this test opts into `writerCount = 2`
-     * itself — the ORA2 multi-writer dimension (`[ORA2-GEN-01]`).
+     * itself — the ORA2 multi-writer dimension (`ORA2 §GEN-01`).
      *
      * ## Why the injected failure is GROUP-wise, and not simply "w0 wrote"
      *

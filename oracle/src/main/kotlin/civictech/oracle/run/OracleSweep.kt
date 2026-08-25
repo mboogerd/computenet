@@ -75,6 +75,39 @@ import civictech.testkit.forEachSeed
  * edge is not reachable from the default sweep — but a caller who lowers [run]'s `stepBudget`
  * moves into it.
  *
+ * ## What `ORA1-…` and `ORA2 §…` markers ARE — and what they are not (computenet-4ru.22)
+ *
+ * They are **acceptance clauses of the beads items that built this harness**, not EARS
+ * requirement ids. ORA1's are written in epic `computenet-4ru` §4; ORA2's in feature
+ * `computenet-4ru.1` §4. Neither family has, or was ever meant to have, normative text under
+ * `doc/spec/`, and no `concord/corpus` scenario `covers:` one — deliberately. They constrain
+ * this **test harness** (what the reference model may import, how a sweep reports its density,
+ * which controls must redden), not the ComputeNet runtime that `doc/spec` specifies and the
+ * corpus checks. A concord scenario cannot express *"`civictech.oracle.model` imports no
+ * `civictech.cell.data.op` type"*: that is [civictech.oracle.model.ModelImportBoundaryTest]'s
+ * job, and it lives here because the obligation is this module's, not the kernel's.
+ *
+ * That was **checked, not assumed** (2026-08-25, base `3d190aaff`): `git grep 'ORA1-' doc/` and
+ * `git grep 'ORA2-' doc/` are both empty, and `concord/corpus`'s only mention of either family
+ * is `DISPUTES.md`, which is the honesty ledger rather than a scenario. So there is **no
+ * asymmetry** between ORA1 and ORA2 — neither has a `doc/spec` home. A reviewer on
+ * `computenet-9892` who went looking for `ORA2 §MODEL-12` in `doc/spec` was looking for
+ * something nobody ever wrote, and returned NOT VERIFIED for it (computenet-4ru.22).
+ *
+ * The ORA2 family is therefore written `ORA2 §MODEL-12`, in this repo's
+ * `<document> §<section>` idiom (`96 §E1.5`, `epic computenet-4ru §2.3`) — deliberately **not**
+ * a square-bracketed `ORA2-MODEL-12`, whose shape is this repo's mark of an EARS requirement id in
+ * `doc/spec` (`[24-TMAP-03]`, `[42-REPL-04]`). To check one, read the bead section it names;
+ * do not go looking for spec text. [civictech.oracle.MarkerFormTest] stops the bracketed form
+ * from coming back, and `concord/corpus/DISPUTES.md` records the same decision where a reader
+ * arriving from the requirement side lands.
+ *
+ * `ORA1-…` still carries the old bracketed shape, and that difference means **nothing about its
+ * status**: it is the same kind of marker, left alone only because renaming its 448 citations
+ * reaches outside this module (`:kernel` tests, `kernel/build.gradle.kts`,
+ * `oracle/build.gradle.kts`, `.claude/skills/work/SKILL.md`) and outside computenet-4ru.22's
+ * file claim. computenet-gmld tracks giving ORA1 the same form.
+ *
  * ## What a green sweep MEANS: the reference model is DEFENDED, not PROVEN `[ORA1-HONEST-01]`
  *
  * This object is the module's entry point (epic computenet-4ru §2.3), so the load-bearing
@@ -143,7 +176,7 @@ import civictech.testkit.forEachSeed
  * see the file KDoc of `civictech.oracle.model.MapCellModel`. Both halves are pinned by
  * [civictech.oracle.HonestyLedgerTest], so this is build-checked prose, not decoration.
  *
- * ## ORA2's model is LESS independent, and what compensates `[ORA2-HONEST-01]`
+ * ## ORA2's model is LESS independent, and what compensates `ORA2 §HONEST-01`
  *
  * The four defenses above are ORA1's. ORA2 widens the vocabulary with the tagged/keyed family
  * (`civictech.oracle.model.DotModel`), and that widening costs something the first defense —
@@ -160,12 +193,12 @@ import civictech.testkit.forEachSeed
  * `civictech.oracle.tagged.TaggedControlsTest` — **a green ORA2 sweep is not evidence without
  * them**, the same blocking status feature computenet-4ru.1 §4.9 gives them in as many words:
  *
- * - `[ORA2-CTL-01]` — the tagged map's reads replaced by an arrival-order (untagged
+ * - `ORA2 §CTL-01` — the tagged map's reads replaced by an arrival-order (untagged
  *   `MapDelta`/`MapView`) fold must FAIL on at least one seed of a fixed range (BS-13).
- * - `[ORA2-CTL-02]` — an inverted dot order must be detected and attributed to the right key.
- * - `[ORA2-CTL-03]` — reset-remove replaced by remove-all must be detected, naming the key
+ * - `ORA2 §CTL-02` — an inverted dot order must be detected and attributed to the right key.
+ * - `ORA2 §CTL-03` — reset-remove replaced by remove-all must be detected, naming the key
  *   (BS-4) — proving the add-wins boundary is actually exercised.
- * - `[ORA2-CTL-04]` — one replica's withheld gossip must be reported as a divergence naming both
+ * - `ORA2 §CTL-04` — one replica's withheld gossip must be reported as a divergence naming both
  *   replicas and the differing key (BS-8), not passed or silently resolved to one answer.
  *
  * And the same honesty applies to the controls themselves: **not one of them observes state a
@@ -182,9 +215,9 @@ import civictech.testkit.forEachSeed
  * materialises no replicas, so the *replicated* mesh has no runner path even now. Marker by
  * marker, rather than by a count:
  *
- * - `[ORA2-CTL-01]` and `[ORA2-CTL-03]` are **model-vs-model**: a mutant reference compared
+ * - `ORA2 §CTL-01` and `ORA2 §CTL-03` are **model-vs-model**: a mutant reference compared
  *   against `DotModel` directly, with no runner in the loop at all.
- * - `[ORA2-CTL-02]` and `[ORA2-CTL-04]` both drive the real, unmocked `ConvergenceCheck.check` —
+ * - `ORA2 §CTL-02` and `ORA2 §CTL-04` both drive the real, unmocked `ConvergenceCheck.check` —
  *   the same seam, entered the same way, differing only in the mutation site — but each over a
  *   **hand-built** `MeshObservation` whose per-replica folds come from `DotModel`, not from
  *   replicas the kernel ran.
@@ -210,7 +243,7 @@ import civictech.testkit.forEachSeed
  *   three-replica `OrMapCell` meshes in a `SimWorld` — so a generated replicated mesh IS
  *   kernel-driven today, and the "no runner path" clause above is specifically about
  *   `CaseExecution`/`DifferentialRunner`, not about the kernel never running a generated mesh.
- *   Since computenet-9892 that sweep DOES establish the `[ORA2-DIFF-08]` "at scale" clause: it
+ *   Since computenet-9892 that sweep DOES establish the `ORA2 §DIFF-08` "at scale" clause: it
  *   enters `ConvergenceCheck.check()` unchanged, because the mesh is driven under its own
  *   `CaseDelivery` schedule (silenced at spawn by unsubscribing every derived gossip ref, then one
  *   directed `streamTo` edge per stated delivery, retracted again) instead of under a full-sync
@@ -220,15 +253,15 @@ import civictech.testkit.forEachSeed
  *   0.969. The `DOT_ORDER` mutation above now reddens it on 7 of 40 seeds
  *   (`ReplicasAgreeButWrong`, first at seed 5), where before computenet-9892 it left it green.
  *
- * ## What is filed rather than built `[ORA2-HONEST-03]`
+ * ## What is filed rather than built `ORA2 §HONEST-03`
  *
  * The one gap the paragraph above still names is recorded in `concord/corpus/DISPUTES.md`, per the
  * epic's rule — and AGENTS.md's — that a requirement which cannot be checked honestly is **filed**,
- * never weakened into a passing scenario. (`[ORA2-DIFF-08]` "at scale" was filed here too until
+ * never weakened into a passing scenario. (`ORA2 §DIFF-08` "at scale" was filed here too until
  * computenet-9892 built the drive that closes it; its entry was deleted in the same change, which is
  * what that entry's own `Resolves` clause instructed.)
  *
- * - BS-9 / `[ORA2-DIFF-07]` — no operator in the vocabulary consumes a `TaggedMapDelta` outlet, so
+ * - BS-9 / `ORA2 §DIFF-07` — no operator in the vocabulary consumes a `TaggedMapDelta` outlet, so
  *   the two-path diamond BS-9 states is unconstructible and `TaggedWavePrefixTest` exercises a bare
  *   `orMap` source terminal instead. Filed with the `MapDelta`-vs-`TaggedMapDelta` typing bound;
  *   `96 §E1.5`'s `UntagCell`/`TaggedMapView` is what would resolve it.
@@ -239,7 +272,7 @@ import civictech.testkit.forEachSeed
  * Pinned by [civictech.oracle.HonestyLedgerTest] beside `[ORA1-HONEST-01]`, so this statement is
  * build-checked prose too, not a paragraph a refactor can quietly drop.
  *
- * ## What each sweep records about the optional families `[ORA2-HONEST-02]`
+ * ## What each sweep records about the optional families `ORA2 §HONEST-02`
  *
  * ORA2's vocabulary has optional families — the weighted (Z-set) family and the E1.4/E1.5
  * adopters — that may not exist in the kernel at all (`civictech.oracle.bind.OptionalFamilies`).
@@ -305,7 +338,7 @@ object OracleSweep {
     fun defaultSeeds(): LongRange = 0L until defaultSeedCount().toLong()
 
     /**
-     * `[ORA2-HONEST-02]`/BS-15: one line per optional family, recording whether it was active in
+     * `ORA2 §HONEST-02`/BS-15: one line per optional family, recording whether it was active in
      * the kernel this JVM is running against or reported not-applicable with its reason. Called
      * once per [run], before the range starts, and returns the lines it printed so a test can
      * assert on them directly rather than capturing stdout.

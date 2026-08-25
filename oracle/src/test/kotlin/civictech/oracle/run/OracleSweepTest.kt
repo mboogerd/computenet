@@ -474,7 +474,7 @@ class OracleSweepTest {
     }
 
     /**
-     * `[ORA2-HONEST-02]`/BS-15: [OracleSweep.reportOptionalFamilies] consumes
+     * `ORA2 §HONEST-02`/BS-15: [OracleSweep.reportOptionalFamilies] consumes
      * `civictech.oracle.bind.OptionalFamilies.probe()` verbatim — every family it names, in
      * order, each line saying whether it was active or not-applicable with a reason — rather than
      * a second probe of its own.

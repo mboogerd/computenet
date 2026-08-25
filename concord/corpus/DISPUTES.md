@@ -1795,6 +1795,43 @@ genuinely checkable and leaves the rest here.
   combining join, and assert the emitted per-wave value for a denied wave is
   either refused as regime-crossed or carries no pre-denial contribution.
 
+## ORA1/ORA2 marker ids are NOT EARS requirements, so their absence from this corpus is not a gap (computenet-4ru.22)
+
+The two entries below cite `[ORA1-DIFF-09]`, `ORA2 §DIFF-07` and their neighbours. Read that
+citation form correctly, because a reviewer already read it wrongly once and it cost a verdict.
+
+`ORA1-…` and `ORA2 §…` are **acceptance clauses of the beads items that built the `:oracle`
+harness** — ORA1's in epic `computenet-4ru` §4, ORA2's in feature `computenet-4ru.1` §4. They are
+not EARS requirement ids. Neither family has normative text under `doc/spec/`, no scenario
+`covers:` one, and none ever will: they constrain the **tester** (what the reference model may
+import, how a sweep reports density, which controls must redden), not the runtime that `doc/spec`
+specifies and this corpus checks. "No scenario covers `ORA2 §MODEL-12`" is therefore a category
+statement, not a dispute, and does not belong in the body of this file.
+
+Checked, not assumed (2026-08-25, base `3d190aaff`): `git grep 'ORA1-' doc/` and
+`git grep 'ORA2-' doc/` are both empty, and this file is `concord/corpus`'s only mention of either
+family. There is **no asymmetry** between ORA1 and ORA2 — the bead that raised this
+(computenet-4ru.22) warned against assuming one, and there is none to assume.
+
+What changed under computenet-4ru.22, and what deliberately did not:
+
+- ORA2's markers were renamed from a square-bracketed `ORA2-MODEL-12` to `ORA2 §MODEL-12`, the repo's
+  `<document> §<section>` idiom (`96 §E1.5`, `epic computenet-4ru §2.3`). The square brackets are
+  this repo's mark of an EARS id in `doc/spec` (`[24-TMAP-03]`, `[42-REPL-04]`); dropping them is
+  the point. `civictech.oracle.MarkerFormTest` stops the old shape returning.
+- ORA1's markers were **not** renamed, and the surviving difference in shape carries no
+  difference in status. Its 448 citations reach `:kernel` tests, two `build.gradle.kts` files and
+  `.claude/skills/work/SKILL.md`, all outside that item's file claim; computenet-gmld tracks it.
+- One stale ORA2 citation survives at
+  `kernel/src/test/kotlin/civictech/cell/data/SetConvergenceTest.kt:31` (a square-bracketed
+  `ORA2-CONV-01..04`),
+  for the same claim reason. It is carried by computenet-gmld too.
+
+The rejected alternative was to give ORA2 a home under `doc/spec/` with corpus coverage. It was
+rejected on the merits, not on cost: writing harness obligations into the runtime's normative spec
+would make `doc/spec` describe the tester, and a scenario cannot express an import-boundary or a
+sweep-density claim at all.
+
 ## ORA1 (the divergence control): `[ORA1-DIFF-09]`/BS-12 is filed, not built — the reference model and the kernel disagree about `[24-SET-03]`'s observer
 
 Filed by `computenet-4ru.10.4` (feature `computenet-4ru.10`, epic `computenet-4ru`) as the
@@ -1919,19 +1956,19 @@ BS-12 buildable is the **Resolves** bullet at the end of this entry.
   which is the tripwire above. With either, build the control BS-12 specifies and delete this
   entry.
 
-## ORA2 (the wave-prefix diamond): BS-9 / `[ORA2-DIFF-07]` is narrowed, not built — no operator in the vocabulary consumes a `TaggedMapDelta` outlet
+## ORA2 (the wave-prefix diamond): BS-9 / `ORA2 §DIFF-07` is narrowed, not built — no operator in the vocabulary consumes a `TaggedMapDelta` outlet
 
-Filed by `computenet-4ru.1.8` on the same `[ORA2-HONEST-03]` clause, carrying `computenet-valh`'s
+Filed by `computenet-4ru.1.8` on the same `ORA2 §HONEST-03` clause, carrying `computenet-valh`'s
 finding from the review of `computenet-4ru.1.6`. It is recorded here rather than only in a test's
 KDoc because a reader arriving from the requirement side — `doc/spec/CONCORDANCE.md`, or this file —
-otherwise reads `[ORA2-DIFF-07]` as covered at the shape BS-9 states, which it is not.
+otherwise reads `ORA2 §DIFF-07` as covered at the shape BS-9 states, which it is not.
 
-### BS-9 / `[ORA2-DIFF-07]` (the tagged wave-prefix diamond) — **`oracle-gap`** (vocabulary/kernel typing), blocked on `96 §E1.5`'s `UntagCell`/`TaggedMapView`
+### BS-9 / `ORA2 §DIFF-07` (the tagged wave-prefix diamond) — **`oracle-gap`** (vocabulary/kernel typing), blocked on `96 §E1.5`'s `UntagCell`/`TaggedMapView`
 
 - **Category**: `oracle-gap`. No corpus scenario is weakened, renamed or softened by this entry; the
   landed test is green on its own narrower claim and stays exactly as it is.
 
-- **The clause in dispute**: BS-9 / `[ORA2-DIFF-07]`'s `Given` is *"a tagged map feeding a glitch-free
+- **The clause in dispute**: BS-9 / `ORA2 §DIFF-07`'s `Given` is *"a tagged map feeding a glitch-free
   consumer through two paths"* — the `WavePrefixTest` diamond, where a source fans into two operators
   that reconverge at a fan-in. That shape is not constructible for `orMap` against today's kernel.
 

@@ -128,7 +128,7 @@ import civictech.oracle.gen.GeneratorConfig
  * `orMap` + `combineLatest`) — a kernel wiring violation the oracle's shape system does not
  * distinguish, tracked as computenet-valh. So there is no *legitimate* tagged case this corpus's
  * entry form could have pinned a fix against; ORA2's
- * tagged/keyed coverage (`[ORA2-DIFF-01..09]`) runs through
+ * tagged/keyed coverage (`ORA2 §DIFF-01..09`) runs through
  * `civictech.oracle.run.DifferentialRunner`'s bring-your-own seam instead
  * (`civictech.oracle.tagged.TaggedSweepTest`, `ConvergenceSweepTest`), a different entry point
  * this file's `PinnedSeed` cannot name. `PinnedSeedsTest`'s

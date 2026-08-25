@@ -8,8 +8,8 @@ import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 
 /**
- * [KeyedReputModel] (`[ORA2-MODEL-08]`), [MergeableGroupByModel] (`[ORA2-MODEL-09]`) and
- * [PnCounterConvergenceModel] (`[ORA2-MODEL-10]`) at model level.
+ * [KeyedReputModel] (`ORA2 §MODEL-08`), [MergeableGroupByModel] (`ORA2 §MODEL-09`) and
+ * [PnCounterConvergenceModel] (`ORA2 §MODEL-10`) at model level.
  *
  * As in [DotModelTest], these are the *model's* halves of BS-10, BS-11 and BS-12; the kernel
  * halves — the same properties driven through real cells — land with the sweep task.
@@ -23,7 +23,7 @@ class TaggedKeyedModelTest {
     private val v = WriterId("v")
 
     // -----------------------------------------------------------------------
-    // [ORA2-MODEL-08] — KeyedSetCell per-key re-put atomicity
+    // ORA2 §MODEL-08 — KeyedSetCell per-key re-put atomicity
     // -----------------------------------------------------------------------
 
     /**
@@ -101,7 +101,7 @@ class TaggedKeyedModelTest {
     }
 
     // -----------------------------------------------------------------------
-    // [ORA2-MODEL-09] — MergeableGroupByCell grows and never retracts
+    // ORA2 §MODEL-09 — MergeableGroupByCell grows and never retracts
     // -----------------------------------------------------------------------
 
     /** Group by string length; accumulate each element as `1L`; merge by addition. */
@@ -131,7 +131,7 @@ class TaggedKeyedModelTest {
         val prefixes = countingGroupBy.aggregatesAtEachPrefix(slice)
 
         prefixes[2] shouldBe mapOf(2 to 2L)
-        withClue("[ORA2-MODEL-09]: the absence of retraction IS the specification") {
+        withClue("ORA2 §MODEL-09: the absence of retraction IS the specification") {
             prefixes[3] shouldBe mapOf(2 to 2L)
             prefixes[4] shouldBe mapOf(2 to 2L)
         }
@@ -192,7 +192,7 @@ class TaggedKeyedModelTest {
     }
 
     // -----------------------------------------------------------------------
-    // [ORA2-MODEL-10] — PnCounterCell per-source totals, pointwise max
+    // ORA2 §MODEL-10 — PnCounterCell per-source totals, pointwise max
     // -----------------------------------------------------------------------
 
     /**
@@ -266,7 +266,7 @@ class TaggedKeyedModelTest {
     }
 
     // -----------------------------------------------------------------------
-    // [ORA2-MODEL-07] purity, for all three
+    // ORA2 §MODEL-07 purity, for all three
     // -----------------------------------------------------------------------
 
     @Test
@@ -289,7 +289,7 @@ class TaggedKeyedModelTest {
         PnCounterConvergenceModel.evaluate(countedSubject) shouldBe
             PnCounterConvergenceModel.evaluate(countedSubject)
 
-        withClue("[ORA2-MODEL-07]: evaluation must not mutate the script") {
+        withClue("ORA2 §MODEL-07: evaluation must not mutate the script") {
             keyedSubject shouldBe keyed()
             groupedSubject shouldBe grouped()
             countedSubject shouldBe counted()

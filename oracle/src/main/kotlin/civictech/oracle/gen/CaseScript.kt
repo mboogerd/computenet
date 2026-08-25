@@ -30,7 +30,7 @@ data class CaseScript(
     val steps: List<CaseStep>,
     /**
      * The gossip this case's replicas exchange, as **positions in [steps]** rather than as event
-     * counts (`[ORA2-GEN-03]`). Empty for every non-replicated case, which is why it defaults.
+     * counts (`ORA2 §GEN-03`). Empty for every non-replicated case, which is why it defaults.
      *
      * See [CaseDelivery] for why the position-rather-than-count representation is the one that
      * makes a mis-stated causal history unconstructable.

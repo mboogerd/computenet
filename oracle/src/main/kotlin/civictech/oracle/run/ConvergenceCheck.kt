@@ -12,7 +12,7 @@ import civictech.oracle.model.SourceId
 import java.util.UUID
 
 /**
- * The convergence oracle — `[ORA2-CONV-01..04]`, `[ORA2-DIFF-08]`, `[ORA2-DIFF-09]`.
+ * The convergence oracle — `ORA2 §CONV-01..04`, `ORA2 §DIFF-08`, `ORA2 §DIFF-09`.
  *
  * ## The one thing this file exists to make impossible
  *
@@ -20,11 +20,11 @@ import java.util.UUID
  * is wrong in the same way — which is the **normal** shape of a bug in the dot algebra, since
  * every replica runs the same merge over the same dots. So this check never compares replicas to
  * each other as its verdict. It computes **one converged reference answer** from the replica-
- * tagged script ([DotModel.converged], `[ORA2-CONV-01]`) and compares **every** replica against
- * that one answer (`[ORA2-CONV-02]`). Replica-vs-replica agreement is still asserted — it is a
- * real requirement (`[ORA2-DIFF-08]`) — but it is asserted *in addition*, and its failure is a
+ * tagged script ([DotModel.converged], `ORA2 §CONV-01`) and compares **every** replica against
+ * that one answer (`ORA2 §CONV-02`). Replica-vs-replica agreement is still asserted — it is a
+ * real requirement (`ORA2 §DIFF-08`) — but it is asserted *in addition*, and its failure is a
  * different verdict ([RunOutcome.ReplicaDivergence]) from a unanimous wrong answer
- * ([RunOutcome.ReplicasAgreeButWrong], `[ORA2-CONV-03]`).
+ * ([RunOutcome.ReplicasAgreeButWrong], `ORA2 §CONV-03`).
  *
  * ## What it composes with, and what it therefore does not re-implement
  *
@@ -39,7 +39,7 @@ import java.util.UUID
  *   drop that departed-stream rule and false-positive on an eviction.
  * - **The folds come from it** ([ReplicaConvergence.state]), and it builds them by subscribing to
  *   each replica's OWN delta outlet — so what this check compares is a state reconstructed from
- *   gossip, never `OrMapCell.state()`/`membership()`/`value()`. That is `[ORA2-CONV-04]`, and it
+ *   gossip, never `OrMapCell.state()`/`membership()`/`value()`. That is `ORA2 §CONV-04`, and it
  *   is what makes an incompletely-gossiped replica *able* to fail: a check reading the cell's
  *   internal truth would report a converged mesh no matter what the outlet stream carried.
  *
@@ -49,7 +49,7 @@ import java.util.UUID
  *
  * ## Reading a replica-tagged script
  *
- * `[ORA2-CONV-01]`'s "every step names the replica that accepted it" is [Script]'s own shape,
+ * `ORA2 §CONV-01`'s "every step names the replica that accepted it" is [Script]'s own shape,
  * not a new one: a [civictech.oracle.model.SourceScript] *is* one replica's accepted log, and
  * [civictech.oracle.model.Delivery] is the gossip it absorbed. The mesh's [SourceId]s are the
  * script's slice ids, and [MeshObservation] is what binds each of them to the kernel [CellRef]
@@ -59,7 +59,7 @@ import java.util.UUID
  *
  * 1. [RunOutcome.ModelEvaluationFailure] — the reference itself threw (a cyclic delivery script,
  *    an unranked source), so there is no expected value at all. A broken oracle, never a broken
- *    kernel (`[ORA2-DIFF-11]`, D10).
+ *    kernel (`ORA2 §DIFF-11`, D10).
  * 2. [RunOutcome.ReplicaDivergence] — the replicas hold different states. At most one of them can
  *    hold the reference answer, so "they agree but are wrong" is not expressible and this is
  *    strictly the more informative finding.
@@ -74,10 +74,10 @@ import java.util.UUID
  * ## The dot order is supplied, never derived
  *
  * [ConvergenceCheck] is constructed from a [DotOrder] and builds its own [DotModel] from it, so
- * the reference and the order can never drift apart. `[ORA2-MODEL-12]`: the harness sorts the
+ * the reference and the order can never drift apart. `ORA2 §MODEL-12`: the harness sorts the
  * real replicas' kernel dot sources with the kernel's own comparator and hands over the result;
  * nothing here recomputes `UUID.nameUUIDFromBytes("or-map-tags:...")`. Supplying a *wrong* order
- * on purpose is how `[ORA2-CTL-02]`'s control produces a uniformly-wrong reference and therefore
+ * on purpose is how `ORA2 §CTL-02`'s control produces a uniformly-wrong reference and therefore
  * a [RunOutcome.ReplicasAgreeButWrong] — see BS-7.
  */
 class ConvergenceCheck(private val order: DotOrder) {
@@ -150,7 +150,7 @@ class ConvergenceCheck(private val order: DotOrder) {
     }
 
     /**
-     * `[ORA2-CONV-01]`'s third clause: the converged answer is **invariant under the gossip
+     * `ORA2 §CONV-01`'s third clause: the converged answer is **invariant under the gossip
      * interleaving**, checked by driving the same script again under a different seed-derived
      * interleaving and requiring the same verdict.
      *
@@ -198,7 +198,7 @@ class ConvergenceCheck(private val order: DotOrder) {
         }
     }
 
-    /** `[ORA2-DIFF-09]`'s per-key report, naming the accepting replica of the winning dot. */
+    /** `ORA2 §DIFF-09`'s per-key report, naming the accepting replica of the winning dot. */
     private fun keyEvidence(
         referenceState: DotState,
         expected: ModelState.MapState,
@@ -233,7 +233,7 @@ class ConvergenceCheck(private val order: DotOrder) {
  *
  * 1. **The oracle must not be able to peek.** A [ConvergenceCheck] handed live `OrMapCell`s could
  *    read `membership()`/`value()` and satisfy itself about a mesh whose outlet streams carried
- *    nothing — precisely the failure `[ORA2-CONV-04]` forbids. Given only folds, it cannot.
+ *    nothing — precisely the failure `ORA2 §CONV-04` forbids. Given only folds, it cannot.
  * 2. **Mesh construction belongs to whoever owns execution.** A hand-built mesh (BS-1, BS-6,
  *    BS-7) and a generated one differ entirely in how they are wired and not at all in how they
  *    are judged.
@@ -256,7 +256,7 @@ data class MeshObservation(
          *
          * @param replicas the script slice each replica ran, by kernel ref. Both halves are the
          *   caller's: only the harness knows which `CellRef` accepted which slice, and
-         *   `[ORA2-MODEL-12]` says so.
+         *   `ORA2 §MODEL-12` says so.
          * @param stateOf how a fold reads as a comparable state — [TaggedMapTerminalFold.stateOf]
          *   for the tagged family, [PnCounterTerminalFold.stateOf] for the counter one, so the
          *   convergence verdict and a terminal comparison read a delta the same way.
@@ -272,7 +272,7 @@ data class MeshObservation(
                 stateOf(
                     convergence.state(ref) ?: error(
                         "Replica '${source.id}' ($ref) was never attached to the convergence invariant, " +
-                            "so it has no outlet-stream fold to check. [ORA2-CONV-04]: every replica's " +
+                            "so it has no outlet-stream fold to check. ORA2 §CONV-04: every replica's " +
                             "fold is reconstructed from its own delta outlet, never read off the cell.",
                     ),
                 )

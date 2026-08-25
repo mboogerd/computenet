@@ -59,7 +59,7 @@ data class CaseTopology(
     val terminals: List<TerminalSpec>,
     val placement: Map<String, Int>,
     /**
-     * `[ORA2-GEN-03]`: for a replicated logical cell, the host ordinals its replicas sit on —
+     * `ORA2 §GEN-03`: for a replicated logical cell, the host ordinals its replicas sit on —
      * handle to ordinals, in replica rank order, always at least two distinct ordinals.
      *
      * Empty for every non-replicated case, and additive on purpose: [placement] keeps meaning
@@ -143,7 +143,7 @@ data class GeneratedCase(
 
 /**
  * Which replicas a replicated case placed, in **rank order** — the harness half of
- * `[ORA2-MODEL-12]`, supplied at case-construction time.
+ * `ORA2 §MODEL-12`, supplied at case-construction time.
  *
  * `civictech.oracle.model.DotOrder` breaks a counter tie by instance rank and refuses to invent
  * one. This is where the ranks come from: the generator names the replica [SourceId]s and the
@@ -157,7 +157,7 @@ data class GeneratedCase(
  *   **not** the dot order: the kernel's is the natural order of the derived dot-source `UUID`s
  *   and is known only after apply. [DotOrders.of] is what reconciles the two.
  * @property writers the `WriterId` each replica's events carry, positionally aligned with
- *   [replicas] — the writer-to-instance mapping `[ORA2-MODEL-12]` calls order-isomorphic. It is
+ *   [replicas] — the writer-to-instance mapping `ORA2 §MODEL-12` calls order-isomorphic. It is
  *   an isomorphism because it is a bijection built here, one writer per replica, and never
  *   re-derived anywhere else.
  * @property hosts the host ordinal each replica sits on, positionally aligned with [replicas];
@@ -175,14 +175,14 @@ data class ReplicaPlan(
         require(hosts.size == replicas.size) { "One host per replica: ${hosts.size} vs ${replicas.size}" }
         require(replicas.distinct().size == replicas.size) { "Duplicate replica source: ${replicas.map { it.id }}" }
         require(hosts.distinct().size == hosts.size) {
-            "[ORA2-GEN-03] places replicas on DISTINCT ManagedHosts; got hosts $hosts"
+            "ORA2 §GEN-03 places replicas on DISTINCT ManagedHosts; got hosts $hosts"
         }
     }
 }
 
 /**
  * The dot order a replicated case's model must use, derived from the **kernel's own** identity
- * formula — `[ORA2-MODEL-12]`'s harness half, and the checked-in derivation expectation feature
+ * formula — `ORA2 §MODEL-12`'s harness half, and the checked-in derivation expectation feature
  * risk 2 decided belongs here rather than in the model.
  *
  * `civictech.oracle.model.DotOrder`'s KDoc states why the model refuses to compute this: deriving
@@ -216,8 +216,8 @@ object DotOrders {
 }
 
 /**
- * What a replicated case's generation actually **achieved** — `[ORA2-GEN-02]`'s reporting half
- * and `[ORA2-GEN-04]`/BS-2's evidence.
+ * What a replicated case's generation actually **achieved** — `ORA2 §GEN-02`'s reporting half
+ * and `ORA2 §GEN-04`/BS-2's evidence.
  *
  * Every field here is measured off the emitted script, never off the config. That asymmetry is
  * the requirement: a knob says what was asked for, and a sweep that asked for 100% concurrency
@@ -241,7 +241,7 @@ data class ReplicationAudit(
 ) : Serializable
 
 /**
- * Configured versus achieved concurrency for one case (`[ORA2-GEN-02]`, D4).
+ * Configured versus achieved concurrency for one case (`ORA2 §GEN-02`, D4).
  *
  * A write is **concurrent** when, at the moment it is issued, the issuing replica has not
  * absorbed some other replica's earlier write to the same key — the causal-unorderedness the

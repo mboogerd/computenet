@@ -4,21 +4,21 @@ import java.io.Serializable
 
 /**
  * The three reference models ORA2 adds beside [DotModel]: `KeyedSetCell`'s per-key re-put
- * atomicity (`[ORA2-MODEL-08]`), `MergeableGroupByCell`'s grow/merge-only aggregation
- * (`[ORA2-MODEL-09]`), and `PnCounterCell`'s per-source pointwise-max totals
- * (`[ORA2-MODEL-10]`).
+ * atomicity (`ORA2 §MODEL-08`), `MergeableGroupByCell`'s grow/merge-only aggregation
+ * (`ORA2 §MODEL-09`), and `PnCounterCell`'s per-source pointwise-max totals
+ * (`ORA2 §MODEL-10`).
  *
  * Same rules as every other file in this package: pure folds over a [Script], no kernel cell
  * executed, no `civictech.cell.data.op` type and no concrete data-cell class referenced
- * (`[ORA2-MODEL-11]`, enforced by `ModelImportBoundaryTest`).
+ * (`ORA2 §MODEL-11`, enforced by `ModelImportBoundaryTest`).
  */
 
 // ---------------------------------------------------------------------------
-// KeyedSetCell — per-key re-put atomicity `[ORA2-MODEL-08]`
+// KeyedSetCell — per-key re-put atomicity `ORA2 §MODEL-08`
 // ---------------------------------------------------------------------------
 
 /**
- * `KeyedSetCell` at **key** granularity (`[ORA2-MODEL-08]`; `[24-SET-01]`, `[24-SET-03]` lifted
+ * `KeyedSetCell` at **key** granularity (`ORA2 §MODEL-08`; `[24-SET-01]`, `[24-SET-03]` lifted
  * to a key): the key -> element table, and the property that the table is what a downstream
  * fold sees *at every prefix of the script*, never a torn intermediate.
  *
@@ -68,7 +68,7 @@ object KeyedReputModel : SourceModel, Serializable {
 
     /**
      * The table at **every** prefix, from the empty one to the complete one — the instrument
-     * `[ORA2-MODEL-08]`'s "at every script prefix" clause is checked with. `size + 1` entries.
+     * `ORA2 §MODEL-08`'s "at every script prefix" clause is checked with. `size + 1` entries.
      */
     fun bindingsAtEachPrefix(slice: SourceScript): List<Map<Any?, Any?>> =
         (0..slice.events.size).map { bindingsAt(slice, it) }
@@ -80,12 +80,12 @@ object KeyedReputModel : SourceModel, Serializable {
 }
 
 // ---------------------------------------------------------------------------
-// MergeableGroupByCell — grow/merge-only `[ORA2-MODEL-09]`
+// MergeableGroupByCell — grow/merge-only `ORA2 §MODEL-09`
 // ---------------------------------------------------------------------------
 
 /**
  * `MergeableGroupByCell` — grouped aggregation that **grows and merges and never retracts**,
- * with that absence stated here as the modelled specification (`[ORA2-MODEL-09]`,
+ * with that absence stated here as the modelled specification (`ORA2 §MODEL-09`,
  * `[24-OP-GROUPBY-01]`).
  *
  * ## The absence is the specification, not a gap
@@ -111,7 +111,7 @@ object KeyedReputModel : SourceModel, Serializable {
  * `MapCellModel.kt`), on the ground that `[ORA1-MODEL-06]` demands a reference reproduce
  * aggregator *retraction* exactly, and this cell's only removal path is a peer's gossiped
  * `MapDelta.removals` — replication, which ORA1 does not model. Nothing about that reasoning is
- * withdrawn here: ORA2 does not model the gossiped-removal path either (`[ORA2-MODEL-09]` asks
+ * withdrawn here: ORA2 does not model the gossiped-removal path either (`ORA2 §MODEL-09` asks
  * for grow/merge-only and says so). What changed is which requirement governs. ORA1 measured
  * the cell against `[ORA1-MODEL-06]`'s retraction clause and found it unmodellable; ORA2 states
  * non-retraction as the specification and checks *that*, which is a strictly weaker and
@@ -179,11 +179,11 @@ fun interface AccumulatorMerge : Serializable {
 }
 
 // ---------------------------------------------------------------------------
-// PnCounterCell — per-source cumulative totals, pointwise max `[ORA2-MODEL-10]`
+// PnCounterCell — per-source cumulative totals, pointwise max `ORA2 §MODEL-10`
 // ---------------------------------------------------------------------------
 
 /**
- * `PnCounterCell` as a **convergent** reference (`[ORA2-MODEL-10]`, `[42-REPL-04]`): per-source
+ * `PnCounterCell` as a **convergent** reference (`ORA2 §MODEL-10`, `[42-REPL-04]`): per-source
  * cumulative increment and decrement totals, resolved across replicas by pointwise maximum.
  *
  * ## Why this is a different model from [PnCounterSourceModel], not a duplicate
@@ -268,7 +268,7 @@ object PnCounterConvergenceModel : Serializable {
 
 /**
  * Per-source cumulative increment and decrement totals — the PN-counter lattice
- * (`[ORA2-MODEL-10]`).
+ * (`ORA2 §MODEL-10`).
  *
  * Two independent grow-only halves, merged by pointwise max with identity `0L` (an
  * un-incremented source has contributed nothing). Commutative, associative and **idempotent**,
@@ -300,7 +300,7 @@ data class PnCounterState(
 }
 
 // ---------------------------------------------------------------------------
-// OrMapCell — single-instance dot semantics, `[ORA2-MODEL-11]`
+// OrMapCell — single-instance dot semantics, `ORA2 §MODEL-11`
 // ---------------------------------------------------------------------------
 
 /**
@@ -319,14 +319,14 @@ data class PnCounterState(
  * The [DotOrder] is synthesized fresh per call, ranking only [SourceScript.source] itself: with
  * exactly one instance in play there is no tie to break (two dots from the *same* source can
  * never share a counter), so the rank value is inconsequential and does not need to come from a
- * harness the way a genuine multi-instance case's does (`[ORA2-MODEL-12]`).
+ * harness the way a genuine multi-instance case's does (`ORA2 §MODEL-12`).
  *
  * ## Why this file, not beside its registration
  *
  * `civictech.oracle.bind.TaggedOperators.registerAll()` is where this model is bound into
  * `OperatorCatalog`, and that file legitimately imports the concrete kernel cell `OrMapCell` to
  * build the [civictech.cell.graph.CellFactory] side of the registration — the wiring `bind/` is
- * for. This model itself must not: `[ORA1-MODEL-10]`/`[ORA2-MODEL-11]` forbid a `ReferenceOp`
+ * for. This model itself must not: `[ORA1-MODEL-10]`/`ORA2 §MODEL-11` forbid a `ReferenceOp`
  * from referencing a concrete data-cell class, and `civictech.oracle.model`'s own source set is
  * exactly what `ModelImportBoundaryTest` scans to enforce that. Declaring this model in
  * `civictech.oracle.bind` instead (as it originally was, computenet-4ru.1.2) put a `ReferenceOp`

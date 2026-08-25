@@ -68,7 +68,7 @@ import java.io.Serializable
  *   behaviour is not new coverage, it is a second name for the same check, and registering it
  *   would be exactly the "registered but exercises nothing new" outcome `VocabularyCompletenessTest`
  *   and `CatalogReachabilityTest`'s own honesty framing warn against. The convergence property
- *   `[ORA2-DIFF-01..09]` actually wants is a multi-instance property; it belongs to whichever
+ *   `ORA2 §DIFF-01..09` actually wants is a multi-instance property; it belongs to whichever
  *   task builds the mesh differential, calling `PnCounterConvergenceModel.converged`/`fold`
  *   directly over a `Script` it assembles itself, not to a per-node catalog entry.
  *
@@ -100,12 +100,12 @@ import java.io.Serializable
  * slice, and it throws, by name, rather than silently ignoring a delivery it cannot honestly
  * resolve — the same idiom `civictech.oracle.model.MapCellSourceModel.MultiWriterMapSliceException`
  * already uses for the single-writer restriction on `MapCell`. The replicated-mesh differential
- * (`[ORA2-DIFF-01..09]`) stays the sweep/runner task's, driving `DotModel.converged`/`stateOf`
+ * (`ORA2 §DIFF-01..09`) stays the sweep/runner task's, driving `DotModel.converged`/`stateOf`
  * directly.
  *
  * `SingleInstanceOrMapModel` itself lives in `civictech.oracle.model`
  * (`TaggedKeyedModels.kt`), not here beside its registration — `[ORA1-MODEL-10]`/
- * `[ORA2-MODEL-11]`'s import boundary is enforced by scanning `civictech.oracle.model`'s source
+ * `ORA2 §MODEL-11`'s import boundary is enforced by scanning `civictech.oracle.model`'s source
  * set, and this file legitimately imports the concrete kernel cell `OrMapCell` for wiring, which
  * a `ReferenceOp` implementation must never do (computenet-n00e; `ModelImportBoundaryTest`).
  */
@@ -155,8 +155,8 @@ object TaggedOperators {
 }
 
 /**
- * The availability gate for ORA2's optional families (`[ORA2-WGT-06]`/BS-15, the
- * `[ORA2-ADOPT-01..04]` gate) — computenet-4ru.1.2's other half.
+ * The availability gate for ORA2's optional families (`ORA2 §WGT-06`/BS-15, the
+ * `ORA2 §ADOPT-01..04` gate) — computenet-4ru.1.2's other half.
  *
  * These six kernel types are the weighted (Z-set) family and the E1.4/E1.5 adopters `96 §E6`
  * and `96 §E1.4`/`§E1.5` describe: none exists in the kernel today (verified 2026-08-21: no
@@ -171,7 +171,7 @@ object TaggedOperators {
  * family, each carrying `available = false` and a written [Availability.reason] today. That is
  * the honest gate BS-15 asks for — "reported not-applicable with the reason recorded," never
  * silently skipped, never a disabled test, never a stub that passes vacuously. The per-sweep
- * *recording* of this result (`[ORA2-HONEST-02]` in `OracleSweep`) is the controls/honesty
+ * *recording* of this result (`ORA2 §HONEST-02` in `OracleSweep`) is the controls/honesty
  * task's, sequenced after this one; what this object contributes is the probe result itself,
  * on the catalog/entry surface, for that task to read.
  *
@@ -237,7 +237,7 @@ object OptionalFamilies {
                 family = family,
                 available = false,
                 reason = "'$fqcn' is absent from the kernel classpath — the optional family activates " +
-                    "only where 96 §E6/§E1.4/§E1.5 has landed it ([ORA2-WGT-06]/BS-15); until then it " +
+                    "only where 96 §E6/§E1.4/§E1.5 has landed it (ORA2 §WGT-06/BS-15); until then it " +
                     "is reported not-applicable, never skipped or stubbed.",
             )
         }

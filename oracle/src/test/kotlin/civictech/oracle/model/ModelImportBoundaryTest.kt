@@ -36,13 +36,13 @@ object ModelImportBoundaryScanner {
     private val forbiddenPrefixes = listOf("civictech.cell.data.op.")
 
     private val forbiddenExact = setOf(
-        // ORA2 (`[ORA2-MODEL-12]`, computenet-4ru.1.1). The tagged/keyed model must agree with the
+        // ORA2 (`ORA2 §MODEL-12`, computenet-4ru.1.1). The tagged/keyed model must agree with the
         // kernel about dot ORDER, and the one way to get that wrong invisibly is to reach for the
         // kernel's own dot identity: `Timestamp(sourceId, counter)`, whose `sourceId` the kernel
         // derives per instance. `DotModel` mints `ModelDot`s of its own and takes the instance
         // order from the harness as ranks; an import of `Timestamp` here would mean the model had
         // started reading the kernel's identity instead of stating its own, which is exactly the
-        // independence `[ORA2-MODEL-06]`/`[ORA2-MODEL-12]` buy. Not a `civictech.cell.data` type,
+        // independence `ORA2 §MODEL-06`/`ORA2 §MODEL-12` buy. Not a `civictech.cell.data` type,
         // so no prefix above would have caught it.
         "civictech.cell.Timestamp",
         "civictech.cell.data.SetCell",
@@ -95,7 +95,7 @@ object ModelImportBoundaryScanner {
     }
 
     // -----------------------------------------------------------------------------------------
-    // computenet-n00e: `[ORA2-MODEL-11]`'s general form — a `ReferenceOp` implementation is
+    // computenet-n00e: `ORA2 §MODEL-11`'s general form — a `ReferenceOp` implementation is
     // covered wherever it is declared, not only under `civictech.oracle.model`.
     //
     // Whole-FILE, same as [scanDirectory] above — deliberately not scoped to only the text
@@ -265,7 +265,7 @@ object ModelImportBoundaryScanner {
         }
 
     /**
-     * `[ORA2-MODEL-11]`'s general form: every file **anywhere** under [root] that declares a
+     * `ORA2 §MODEL-11`'s general form: every file **anywhere** under [root] that declares a
      * `ReferenceOp` implementation is scanned whole, the same way [scanDirectory] scans a whole
      * file under `civictech.oracle.model` — regardless of what package the file lives in. A file
      * with no `ReferenceOp` declaration is never scanned, so registration/wiring code that
@@ -280,12 +280,12 @@ object ModelImportBoundaryScanner {
     fun scanForReferenceOpDeclarations(root: File): List<Violation> {
         check(root.isDirectory) {
             "Module source directory does not exist: ${root.absolutePath} " +
-                "— cannot verify [ORA2-MODEL-11] against an absent source tree."
+                "— cannot verify ORA2 §MODEL-11 against an absent source tree."
         }
         val ktFiles = root.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
         check(ktFiles.isNotEmpty()) {
             "Module source directory has no .kt files: ${root.absolutePath} " +
-                "— cannot verify [ORA2-MODEL-11] against zero files."
+                "— cannot verify ORA2 §MODEL-11 against zero files."
         }
         return ktFiles
             .map { it to it.readText() }
@@ -373,7 +373,7 @@ class ModelImportBoundaryTest {
     }
 
     /**
-     * `[ORA2-MODEL-11]`: the boundary covers **ORA2's** sources too, and demonstrably so.
+     * `ORA2 §MODEL-11`: the boundary covers **ORA2's** sources too, and demonstrably so.
      *
      * The positive gate above scans a directory, so it would keep passing unchanged if ORA2's
      * files were never written, were written elsewhere, or were renamed — a clean result for the
@@ -382,7 +382,7 @@ class ModelImportBoundaryTest {
      * sources are covered".
      */
     @Test
-    fun `ORA2-MODEL-11 the tagged and keyed model sources are inside the scanned boundary`() {
+    fun `ORA2 §MODEL-11 the tagged and keyed model sources are inside the scanned boundary`() {
         val modelSourceDir = File("src/main/kotlin/civictech/oracle/model")
 
         val scanned = modelSourceDir.walkTopDown().filter { it.isFile && it.extension == "kt" }
@@ -397,10 +397,10 @@ class ModelImportBoundaryTest {
     /**
      * The permanent proof the ORA2 half of the rule CAN fail: a model source reaching for the
      * kernel's own dot identity (`civictech.cell.Timestamp`) is flagged. Without this, the
-     * `Timestamp` entry added for `[ORA2-MODEL-12]` would be an untested line in a set.
+     * `Timestamp` entry added for `ORA2 §MODEL-12` would be an untested line in a set.
      */
     @Test
-    fun `ORA2-MODEL-12 a model source importing the kernel Timestamp is flagged`() {
+    fun `ORA2 §MODEL-12 a model source importing the kernel Timestamp is flagged`() {
         val violations = ModelImportBoundaryScanner.scanText(
             "Synthetic.kt",
             """
@@ -418,7 +418,7 @@ class ModelImportBoundaryTest {
     }
 
     // -------------------------------------------------------------------------------------
-    // computenet-n00e: the `scanForReferenceOpDeclarations` gate — `[ORA2-MODEL-11]` covers a
+    // computenet-n00e: the `scanForReferenceOpDeclarations` gate — `ORA2 §MODEL-11` covers a
     // `ReferenceOp` wherever it is declared, not only under `civictech.oracle.model`.
     // -------------------------------------------------------------------------------------
 
@@ -537,7 +537,7 @@ class ModelImportBoundaryTest {
 
         val violations = ModelImportBoundaryScanner.scanForReferenceOpDeclarations(root)
 
-        withClue("ReferenceOp declarations anywhere in :oracle import forbidden types $violations [ORA2-MODEL-11]") {
+        withClue("ReferenceOp declarations anywhere in :oracle import forbidden types $violations ORA2 §MODEL-11") {
             violations.shouldBeEmpty()
         }
     }

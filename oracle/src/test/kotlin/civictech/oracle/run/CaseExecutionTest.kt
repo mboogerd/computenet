@@ -432,7 +432,7 @@ class CaseExecutionTest {
      * final state: [MapTerminalFold] folds by *arrival order* through
      * [civictech.cell.data.view.MapView], while a tagged map's per-key value is decided by the
      * `(counter, sourceId)` order over the key's live dots. Substituting the arrival-order fold
-     * is `[ORA2-CTL-01]`'s control, and it must not become reachable here by accident — which is
+     * is `ORA2 §CTL-01`'s control, and it must not become reachable here by accident — which is
      * exactly what dispatching on [civictech.oracle.model.ElementShape] alone did, since `orMap`
      * declares a `MapOf` output shape like every untagged map operator.
      *
@@ -451,7 +451,7 @@ class CaseExecutionTest {
         withClue("the tagged terminal resolves to the dot-algebra fold") {
             fold.shouldBeInstanceOf<TaggedMapTerminalFold<*, *>>()
         }
-        withClue("and specifically NOT to the arrival-order MapView fold [ORA2-CTL-01]") {
+        withClue("and specifically NOT to the arrival-order MapView fold ORA2 §CTL-01") {
             (fold is MapTerminalFold<*, *>) shouldBe false
         }
         withClue(

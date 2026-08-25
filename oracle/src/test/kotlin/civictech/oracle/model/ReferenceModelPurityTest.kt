@@ -264,7 +264,7 @@ class ReferenceModelPurityTest {
      * Exactly 220 events across ten sources — a plain-scalar pair, a keyed-set source, a
      * pair-shaped pair (feeding the join-set/semi-join/group-by family), a map-shaped pair
      * (feeding the map-join family, each a single-writer `MapCell` slice per `[ORA1-MODEL-08]`),
-     * a counter pair, and a single-writer OR-map source (`[ORA2-MODEL-11]`'s
+     * a counter pair, and a single-writer OR-map source (`ORA2 §MODEL-11`'s
      * `SingleInstanceOrMapModel`, delivery-free so the single-instance restriction it enforces
      * does not fire — see [TaggedOperators]' KDoc). `30+30+20+25+25+20+20+15+15+20 = 220`.
      */
@@ -443,7 +443,7 @@ class ReferenceModelPurityTest {
     }
 
     // -------------------------------------------------------------------
-    // computenet-4ru.1.1 (ORA2): `[ORA2-MODEL-07]`, the same requirement in
+    // computenet-4ru.1.1 (ORA2): `ORA2 §MODEL-07`, the same requirement in
     // the same idiom, over the tagged/keyed models — which ORA1's
     // full-vocabulary test above cannot reach, because they are not
     // `OperatorCatalog` entries yet (registration is a sibling ORA2 task)
@@ -495,7 +495,7 @@ class ReferenceModelPurityTest {
         val subject = taggedScript()
         val untouchedTwin = taggedScript()
 
-        withClue("[ORA2-MODEL-07]: two evaluations of one script are equal") {
+        withClue("ORA2 §MODEL-07: two evaluations of one script are equal") {
             dots.evaluate(subject) shouldBe dots.evaluate(subject)
             dots.perInstance(subject) shouldBe dots.perInstance(subject)
             KeyedReputModel.evaluate(subject.slice(one)) shouldBe KeyedReputModel.evaluate(subject.slice(one))
@@ -506,7 +506,7 @@ class ReferenceModelPurityTest {
             dots.evaluate(subject) shouldBe ModelState.MapState(mapOf("k" to "v2"))
             PnCounterConvergenceModel.evaluate(subject) shouldBe ModelState.ScalarState(5L)
         }
-        withClue("[ORA2-MODEL-07]: evaluation must not mutate the script") {
+        withClue("ORA2 §MODEL-07: evaluation must not mutate the script") {
             subject shouldBe untouchedTwin
         }
     }
