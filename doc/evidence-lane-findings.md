@@ -1856,6 +1856,12 @@ assertion, per `[CHA3-44]`'s and `[CHA3-45]`'s own wording.
   the *composition* that is narrower than
   the prose above originally implied. Widening it is filed as
   **`computenet-usmw`** (open, under epic `computenet-umx`).
+  *For contrast, measured at feature review on the same generator: the §1
+  reconvergence sweep's own plans (`peerCount=3..3`, `eventCount=6`, seeds
+  1..60) draw **99 `DepartEvent`s across 57 of 60 seeds** — 34 `EVICT_CLEAN`,
+  27 `CRASH_UNCLEAN`, 20 `PARTITION_SUSPEND`, 18 `EVICT_NO_CLOSE`. The
+  zero-departure finding is specific to BS-17's 2-peer, `eventCount=2` bridge
+  fixture; it is not a property of the harness.*
 
 - **Two sub-claims of the paragraph above were themselves wrong and are
   corrected here** (re-measured at the second, independent read of
