@@ -234,6 +234,26 @@ class DstWorldTest {
         assertContentEquals(listOf("roi"), base.replay().map { String(it) })
     }
 
+    /**
+     * [Journal.formatVersion] carries an interface default, so a decorated view that forgets to
+     * forward it compiles and silently reports the build's version regardless of what the base
+     * was declared with (computenet-e2m9). A base pinned away from the build's own version is
+     * the only way to make the omission observable.
+     */
+    @Test
+    fun `seam 3 - the decorated view forwards the base's format version, not the build's`() {
+        val world = DstWorld(seed = 1)
+        val pinned = object : Journal {
+            override val formatVersion: Int = 7
+            override fun append(record: ByteArray) = Unit
+            override fun replay(): List<ByteArray> = emptyList()
+            override fun reset(records: List<ByteArray>) = Unit
+        }
+        val view = world.journals.declare("j", pinned)
+
+        assertEquals(7, view.formatVersion, "the view must report the delegate's pinned version, not the build's")
+    }
+
     // ------------------------------------------------------------------ seam 6
 
     @Test
