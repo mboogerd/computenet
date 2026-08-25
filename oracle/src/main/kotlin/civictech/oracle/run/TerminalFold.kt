@@ -118,21 +118,21 @@ class ScalarTerminalFold(override val ref: CellRef = CellRef(UUID.randomUUID()))
 /**
  * The tagged-map family (`TaggedMapDelta`): merges arriving deltas by the dot algebra and reads
  * `[24-TMAP-02]` membership plus `[24-TMAP-03]` per-key value out of the merge — ORA2's
- * `[ORA2-CONV-04]` fold.
+ * `ORA2 §CONV-04` fold.
  *
  * **Why this is not [MapTerminalFold] with a different delta type.** A `MapDelta` fold is an
  * arrival-order fold: the last write the stream carried wins. A tagged map's value is decided by
  * `(counter, sourceId)` over the key's *live dots*, which is a property of the merged dot set and
  * not of the order the deltas arrived in. Folding a `TaggedMapDelta` stream through [MapView]
  * would therefore produce a replica-dependent answer for exactly the concurrent-put case ORA2
- * exists to check — that substitution is `[ORA2-CTL-01]`'s control, and it must not be reachable
+ * exists to check — that substitution is `ORA2 §CTL-01`'s control, and it must not be reachable
  * by accident here.
  *
  * **What "reachable through the outlet stream" buys.** The state this fold exposes is
  * reconstructed *only* from the deltas the cell emitted; nothing reads `OrMapCell.state()`,
  * `membership()` or `value()`. A replica whose gossip is incomplete therefore folds to an
  * incomplete answer rather than to the cell's internal truth, which is what makes a convergence
- * check over these folds able to fail at all (`[ORA2-CONV-04]`, `[ORA2-CTL-04]`).
+ * check over these folds able to fail at all (`ORA2 §CONV-04`, `ORA2 §CTL-04`).
  */
 class TaggedMapTerminalFold<K, V>(override val ref: CellRef = CellRef(UUID.randomUUID())) : TerminalFold {
     private var merged: TaggedMapDelta<K, V> = TaggedMapDelta()
@@ -176,7 +176,7 @@ class TaggedMapTerminalFold<K, V>(override val ref: CellRef = CellRef(UUID.rando
 /**
  * The PN-counter family (`PnCounterDelta`): merges per-source cumulative totals by pointwise max
  * and reads their difference as a scalar — the second member of the replicable class beside the
- * tagged family (`[ORA2-MODEL-10]`).
+ * tagged family (`ORA2 §MODEL-10`).
  *
  * Distinct from [ScalarTerminalFold] for the same reason [TaggedMapTerminalFold] is distinct from
  * [MapTerminalFold]: [ScalarTerminalFold] *sums* arriving `CounterDelta.amount`s, which is not

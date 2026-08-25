@@ -151,7 +151,7 @@ object ForgetfulUnionModel : OperatorModel, Serializable {
 }
 
 // ---------------------------------------------------------------------------
-// ORA2's tagged-map mutants — `[ORA2-CTL-01]`/BS-13, `[ORA2-CTL-03]`/BS-4
+// ORA2's tagged-map mutants — `ORA2 §CTL-01`/BS-13, `ORA2 §CTL-03`/BS-4
 // ---------------------------------------------------------------------------
 //
 // Used by `civictech.oracle.tagged.TaggedControlsTest`, never registered into
@@ -165,7 +165,7 @@ object ForgetfulUnionModel : OperatorModel, Serializable {
 // differential itself.
 
 /**
- * The `[ORA2-CTL-01]`/BS-13 mutant: an **untagged**, per-replica arrival-order fold over an
+ * The `ORA2 §CTL-01`/BS-13 mutant: an **untagged**, per-replica arrival-order fold over an
  * OR-map script — no dot minted, no reset-remove tombstoning, a plain last-write(-or-delivery)
  * -wins map at each replica. The plausible bug it stands in for: reading `OrMapCell`'s
  * observable as if it were `MapCell`/`MapDelta` replicated verbatim, resolving every put and
@@ -225,7 +225,7 @@ object NaiveArrivalOrderMapModel {
 }
 
 /**
- * The `[ORA2-CTL-03]`/BS-4 mutant: [civictech.oracle.model.DotState.resetRemove] replaced by
+ * The `ORA2 §CTL-03`/BS-4 mutant: [civictech.oracle.model.DotState.resetRemove] replaced by
  * **remove-all**. The real reset-remove tombstones only the dots THIS instance currently holds
  * live at a key — add-wins, `[24-TMAP-04]`: a dot minted concurrently at another instance and
  * merged in later survives. This mutant instead marks the key **permanently wiped** the moment

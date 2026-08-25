@@ -89,7 +89,7 @@ data class Script(
 /**
  * One source cell's ordered event log. Position in [events] is the source's arrival order.
  *
- * [deliveries] is the **second lane** ORA2 adds (`[ORA2-MODEL-06]`): the gossip this instance
+ * [deliveries] is the **second lane** ORA2 adds (`ORA2 §MODEL-06`): the gossip this instance
  * absorbed from its peers, and the only thing that ever advances what it has observed. It is
  * deliberately *not* a [ScriptEvent] variant. A `ScriptEvent` is "one thing a writer asked a
  * source cell to do" — an inlet call — and a delivery is nothing of the kind: it is a
@@ -109,7 +109,7 @@ data class SourceScript(
  * One gossip delivery into the slice that carries it: *"after my first [afterEvents] own
  * events, I absorbed everything [from] had emitted through its first [throughEvents] events."*
  *
- * This is the script-level statement of causality that `[ORA2-MODEL-06]` requires and the
+ * This is the script-level statement of causality that `ORA2 §MODEL-06` requires and the
  * whole reason the dot model can be a *second implementation* rather than a mirror: the model
  * learns what a replica had seen from the script, never by reading a kernel cell, a delta, or
  * a `Timestamp`. It is the cross-instance sibling of [ScriptEvent.Observe], which states
@@ -123,7 +123,7 @@ data class SourceScript(
  *
  * Two deliveries into one slice at one [afterEvents] are unordered with respect to each other,
  * and a conforming model must be indifferent to that: merge is commutative and associative
- * (`[ORA2-MODEL-02]`).
+ * (`ORA2 §MODEL-02`).
  *
  * A delivery may name a prefix that itself contains deliveries, so the relation is transitive
  * — that is exactly a multi-hop mesh. It must not be **cyclic**: two slices that each claim to

@@ -30,7 +30,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 /**
- * BS-9 — `[ORA2-DIFF-07]`: `run/WavePrefixOracle.kt` applied UNCHANGED to a tagged terminal.
+ * BS-9 — `ORA2 §DIFF-07`: `run/WavePrefixOracle.kt` applied UNCHANGED to a tagged terminal.
  *
  * ## Why this is a bare `orMap` source, not a fan-in downstream of one
  *

@@ -33,8 +33,8 @@ import org.junit.jupiter.api.Test
 import java.util.UUID
 
 /**
- * The convergence oracle over **hand-built** OR-map meshes — `[ORA2-CONV-01..04]`,
- * `[ORA2-DIFF-08]`, `[ORA2-DIFF-09]`, BS-1, BS-6, BS-7.
+ * The convergence oracle over **hand-built** OR-map meshes — `ORA2 §CONV-01..04`,
+ * `ORA2 §DIFF-08`, `ORA2 §DIFF-09`, BS-1, BS-6, BS-7.
  *
  * Hand-built rather than generated on purpose (the generator's replica-placement dimension is a
  * sibling task): every mesh here states its own script, so what a test asserts about the model's
@@ -48,13 +48,13 @@ import java.util.UUID
  *
  * - BS-7 hands the check a uniformly wrong reference (an inverted dot order) over a mesh that
  *   really did converge, and requires [RunOutcome.ReplicasAgreeButWrong] — a verdict a
- *   replica-vs-replica check cannot produce at all (`[ORA2-CONV-02]`).
+ *   replica-vs-replica check cannot produce at all (`ORA2 §CONV-02`).
  * - `the checked fold is the replica's own outlet stream` attaches one replica's fold late. Every
  *   *cell* still holds the converged state; only the reconstructed streams differ, so the verdict
  *   flips to [RunOutcome.ReplicaDivergence] exactly when the fold is stream-derived and stays
- *   Success when it is read off the cell (`[ORA2-CONV-04]`).
+ *   Success when it is read off the cell (`ORA2 §CONV-04`).
  * - The two verdicts are asserted **distinct from each other and from [RunOutcome.Mismatch]**
- *   (`[ORA2-CONV-03]`).
+ *   (`ORA2 §CONV-03`).
  */
 class ConvergenceCheckTest {
 
@@ -166,7 +166,7 @@ class ConvergenceCheckTest {
             replication.replicate(cell, world.host)
             cells += cell
             // Attached BEFORE the first drain, deliberately: a replica's fold is its OWN outlet
-            // stream from the instant it exists (`[ORA2-CONV-04]`), and a late joiner's whole state
+            // stream from the instant it exists (`ORA2 §CONV-04`), and a late joiner's whole state
             // arrives as the link-time catch-up it re-emits as novelty. Attaching after the drain
             // would silently skip exactly that emission and make BS-6's late joiner fold to the
             // scraps that happened to arrive afterwards.
@@ -185,7 +185,7 @@ class ConvergenceCheckTest {
         fun sources(): List<SourceId> = cells.indices.map { SourceId("r$it") }
 
         /**
-         * `[ORA2-MODEL-12]`'s harness half: the replicas ranked by the KERNEL's own dot order.
+         * `ORA2 §MODEL-12`'s harness half: the replicas ranked by the KERNEL's own dot order.
          *
          * The kernel derives each instance's dot source as
          * `UUID.nameUUIDFromBytes("or-map-tags:<id>:<instanceId>")` and breaks a counter tie with
@@ -248,8 +248,8 @@ class ConvergenceCheckTest {
 
     // =====================================================================
     // BS-1 — concurrent same-key puts resolve by dot order, everywhere
-    // `[ORA2-DIFF-02]` (with `[ORA2-MODEL-04]`, `[ORA2-CONV-02]`): this is the ONLY site
-    // where `[ORA2-DIFF-02]`'s "two writers put the same key without either having observed
+    // `ORA2 §DIFF-02` (with `ORA2 §MODEL-04`, `ORA2 §CONV-02`): this is the ONLY site
+    // where `ORA2 §DIFF-02`'s "two writers put the same key without either having observed
     // the other" is actually realised. The generated sweep does not reach it —
     // [ConvergenceSweepTest] measures max-live-dots-per-key = 1 across its whole seed range,
     // so a reversed `TaggedMapDelta.DOT_ORDER` tie-break reddens the tests below and nothing
@@ -289,14 +289,14 @@ class ConvergenceCheckTest {
         val script = meshScript.script(mesh.sources())
 
         // The mutant: the kernel's dot order, inverted. Applied uniformly, so every replica still
-        // agrees with every other — only the reference moves. This is [ORA2-CTL-02]'s substitution.
+        // agrees with every other — only the reference moves. This is ORA2 §CTL-02's substitution.
         val inverted = DotOrder.ranked(mesh.sources().sortedBy { source -> -mesh.dotOrder().rankOf(source) })
         val outcome = ConvergenceCheck(inverted)
             .check(seed = 11L, caseMarker = "BS-7", script = script, mesh = mesh.observe())
 
         val wrong = outcome.shouldBeInstanceOf<RunOutcome.ReplicasAgreeButWrong>()
         outcome shouldNotBe RunOutcome.Success
-        // distinct KINDS, matched on type — not on a message and not on a flag ([ORA2-CONV-03])
+        // distinct KINDS, matched on type — not on a message and not on a flag (ORA2 §CONV-03)
         (outcome is RunOutcome.ReplicaDivergence) shouldBe false
         (outcome is RunOutcome.Mismatch) shouldBe false
 
@@ -319,7 +319,7 @@ class ConvergenceCheckTest {
     }
 
     // =====================================================================
-    // [ORA2-CONV-04] — the fold is the replica's own outlet stream
+    // ORA2 §CONV-04 — the fold is the replica's own outlet stream
     // =====================================================================
 
     @Test
@@ -362,7 +362,7 @@ class ConvergenceCheckTest {
         divergence.perReplica.keys shouldBe setOf("r0", "r1", "r2")
         divergence.expected shouldBe ModelState.MapState(mapOf("k" to "v0"))
         divergence.keys shouldHaveSize 1
-        // [ORA2-DIFF-09]: the differing key names the accepting replica of the winning dot
+        // ORA2 §DIFF-09: the differing key names the accepting replica of the winning dot
         divergence.keys[0].key shouldBe "k"
         divergence.keys[0].winningDot.shouldNotBeNull().source shouldBe SourceId("r0")
         divergence.keys[0].actualByReplica shouldBe mapOf("r0" to null, "r1" to "v0", "r2" to "v0")
@@ -375,11 +375,11 @@ class ConvergenceCheckTest {
     }
 
     // =====================================================================
-    // [ORA2-DIFF-08] — quiescent replicas expose equal membership and values
+    // ORA2 §DIFF-08 — quiescent replicas expose equal membership and values
     // =====================================================================
 
     @Test
-    fun `ORA2-DIFF-08 quiescent replicas expose equal membership and equal per-key values, and they are the model's`() {
+    fun `ORA2 §DIFF-08 quiescent replicas expose equal membership and equal per-key values, and they are the model's`() {
         val mesh = Mesh(seed = 17L).join(3)
         val meshScript = MeshScript(3)
             .round(put(0, "milk", "a0"), put(1, "eggs", "b1"))
@@ -440,7 +440,7 @@ class ConvergenceCheckTest {
         }
 
         // and a late CONSUMER of one replica's outlet — linked only now, so its whole fold is the
-        // link-time catch-up — reads the same answer ([ORA2-DIFF-05]'s consumer half)
+        // link-time catch-up — reads the same answer (ORA2 §DIFF-05's consumer half)
         val terminal = TaggedMapTerminalFold<String, String>()
         mesh.world.host.managementInlet.call.spawn(terminal)
         val link = mesh.world.host.managementInlet.call
@@ -451,11 +451,11 @@ class ConvergenceCheckTest {
     }
 
     // =====================================================================
-    // [ORA2-CONV-01] — one reference, invariant under the gossip interleaving
+    // ORA2 §CONV-01 — one reference, invariant under the gossip interleaving
     // =====================================================================
 
     @Test
-    fun `ORA2-CONV-01 the converged answer is invariant under a different seed-derived interleaving`() {
+    fun `ORA2 §CONV-01 the converged answer is invariant under a different seed-derived interleaving`() {
         val reference = concurrentSameKeyPuts(seed = 3L).let { (mesh, script) ->
             ConvergenceCheck(mesh.dotOrder()).reference(script.script(mesh.sources()))
         }
@@ -473,7 +473,7 @@ class ConvergenceCheckTest {
     }
 
     // =====================================================================
-    // [ORA2-DIFF-11] — a broken oracle is never read as a broken kernel
+    // ORA2 §DIFF-11 — a broken oracle is never read as a broken kernel
     // =====================================================================
 
     @Test

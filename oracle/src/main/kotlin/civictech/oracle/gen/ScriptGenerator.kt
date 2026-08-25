@@ -201,7 +201,7 @@ class ScriptGenerator(
      * The replicated node's replicas, in [ReplicaPlan.replicas] order — empty for an ORA1 case.
      *
      * A replicated node must be a *tagged* source: the whole point of the dimension is the dot
-     * algebra, and `[ORA2-GEN-01]`'s convergent-vocabulary gate (`GeneratorConfig.validateReplication`)
+     * algebra, and `ORA2 §GEN-01`'s convergent-vocabulary gate (`GeneratorConfig.validateReplication`)
      * has already excluded the untagged order-dependent families at configuration time. What is
      * checked here is the remaining case the gate cannot see — a convergent but *un-keyed* source
      * (a set or a counter) drawn as the replicated node — and it is checked rather than silently
@@ -211,7 +211,7 @@ class ScriptGenerator(
         val node = topology.nodes.single { it.handle == p.handle }
         require(node.catalogId == TaggedOperators.Ids.OR_MAP) {
             "Replica placement is a tagged-family dimension: handle '${p.handle}' names catalog id " +
-                "'${node.catalogId}', which mints no dots. [ORA2-GEN-01]/[ORA2-GEN-03] replicate " +
+                "'${node.catalogId}', which mints no dots. ORA2 §GEN-01/ORA2 §GEN-03 replicate " +
                 "'${TaggedOperators.Ids.OR_MAP}'."
         }
         p.replicas.indices.map { i -> ReplicaState(p.replicas[i], WriterId(p.writers[i])) }
@@ -267,7 +267,7 @@ class ScriptGenerator(
     }
 
     // ---------------------------------------------------------------------------------------
-    // The replicated dimension ([ORA2-GEN-01]..[ORA2-GEN-05]). Everything below is unreachable
+    // The replicated dimension (ORA2 §GEN-01..ORA2 §GEN-05). Everything below is unreachable
     // for `replicaCount == 1`.
     // ---------------------------------------------------------------------------------------
 
@@ -304,12 +304,12 @@ class ScriptGenerator(
     }
 
     /**
-     * `[ORA2-GEN-05]`: which key a replica writes, biased toward keys that are already populated
+     * `ORA2 §GEN-05`: which key a replica writes, biased toward keys that are already populated
      * — and, when concurrency is being sought, toward a key another replica wrote that this one
      * has NOT absorbed, which is what makes the write causally unordered rather than merely
      * simultaneous-looking.
      *
-     * `[ORA2-GEN-04]`/BS-2's counter tie is targeted *inside* that first branch: among the
+     * `ORA2 §GEN-04`/BS-2's counter tie is targeted *inside* that first branch: among the
      * unabsorbed peer writes, one whose peer minted it at the same 1-based put counter this
      * replica is about to mint at is preferred. Two live dots at one key then share a counter and
      * are separated only by instance rank — the tie-break `[24-TMAP-03]` exists for. It is a bias,
@@ -779,7 +779,7 @@ data class GeneratedScript(
  * One replica's generation state: what it has issued, what it has absorbed from its peers, and
  * the keys it currently believes populated.
  *
- * [view] is a *local* belief, not the converged truth, and that is the point: `[ORA2-GEN-05]`'s
+ * [view] is a *local* belief, not the converged truth, and that is the point: `ORA2 §GEN-05`'s
  * bias toward populated keys has to be biased by what the WRITING replica can see, or a
  * "re-put" would name a key that replica has never heard of.
  */

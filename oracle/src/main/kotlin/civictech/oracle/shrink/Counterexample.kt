@@ -40,7 +40,7 @@ import kotlin.reflect.KClass
  * terminal. A mesh verdict is about the replicas of one logical id, so the field that would
  * discriminate two such findings is the logical id and the differing key set, not a terminal name.
  * They are still told apart from each other and from every other kind by the variant — which is
- * the distinctness `[ORA2-CONV-03]` requires — so a shrink can never walk from a divergence to a
+ * the distinctness `ORA2 §CONV-03` requires — so a shrink can never walk from a divergence to a
  * unanimous-wrong answer and report the wrong defect. Within one variant it matches by kind alone,
  * the same deliberately-weaker discipline the three above have.
  *

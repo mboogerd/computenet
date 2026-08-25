@@ -3,7 +3,7 @@ package civictech.oracle.model
 import java.io.Serializable
 
 /**
- * The tagged-map (OR-map) reference model — ORA2's `[ORA2-MODEL-01]`..`[ORA2-MODEL-06]`, and
+ * The tagged-map (OR-map) reference model — `ORA2 §MODEL-01`..`ORA2 §MODEL-06`, and
  * the one place in `civictech.oracle.model` that reads *modelled* dot order.
  *
  * ## What it computes, and from what
@@ -13,7 +13,7 @@ import java.io.Serializable
  * kernel cell is executed, no kernel delta is read, and **no kernel `Timestamp` is touched**:
  * the model mints its own [ModelDot]s, from the script's own event positions.
  *
- * ## The honesty cost, stated where it is paid (`[ORA2-HONEST-01]`)
+ * ## The honesty cost, stated where it is paid (`ORA2 §HONEST-01`)
  *
  * ORA1's model is membership-only by rule (`[ORA1-MODEL-03]`) precisely so that it cannot
  * agree with the kernel about a shared bug in the tag algebra. This model **cannot** be
@@ -22,14 +22,14 @@ import java.io.Serializable
  * name a dot cannot state which of two concurrent puts wins. So ORA2 relaxes the rule
  * deliberately (feature computenet-4ru.1 §7 risk 1, design D2 option (b)) and is **less
  * independent of the algebra it checks** than ORA1's model is. What compensates is not an
- * argument, it is the controls: `[ORA2-CTL-01]` (the arrival-order fold must fail),
- * `[ORA2-CTL-02]` (an inverted dot order must be caught), `[ORA2-CTL-03]` (reset-remove
- * replaced by remove-all must be caught), `[ORA2-CTL-04]` (missing gossip must be caught).
+ * argument, it is the controls: `ORA2 §CTL-01` (the arrival-order fold must fail),
+ * `ORA2 §CTL-02` (an inverted dot order must be caught), `ORA2 §CTL-03` (reset-remove
+ * replaced by remove-all must be caught), `ORA2 §CTL-04` (missing gossip must be caught).
  * Those live with the sweep/runner task; a green model suite alone is not evidence.
  *
  * The independence that *is* retained is the one this file can keep on its own: the dots are
  * **minted here, from the script**, not read from the kernel, and observation advances **only**
- * from [Delivery] (`[ORA2-MODEL-06]`). A model that recovered either from a live cell would be
+ * from [Delivery] (`ORA2 §MODEL-06`). A model that recovered either from a live cell would be
  * a mirror of the implementation, and would converge with it onto any bug.
  *
  * ## A modelled writer is a source *cell*, not a `WriterId`
@@ -45,7 +45,7 @@ import java.io.Serializable
  * "3-replica mesh" every one of the feature's behaviour specifications describes.
  *
  * So [ModelDot] is keyed by [SourceId], and [WriterId] plays no part in dot identity.
- * `[ORA2-MODEL-12]`'s model half is met by [DotOrder]: an **ordered instance identity supplied
+ * `ORA2 §MODEL-12`'s model half is met by [DotOrder]: an **ordered instance identity supplied
  * from outside**, never recovered from kernel state.
  *
  * ## The fold, precisely
@@ -97,7 +97,7 @@ class DotModel(private val order: DotOrder) : Serializable {
         Fold(script).stateAfter(source, prefix)
 
     /**
-     * The converged key -> value table (`[ORA2-MODEL-01]`): a key is present iff it has a live
+     * The converged key -> value table (`ORA2 §MODEL-01`): a key is present iff it has a live
      * dot, and its value is the live dot maximal under [DotOrder].
      */
     fun evaluate(script: Script): ModelState.MapState = entries(converged(script))
@@ -118,7 +118,7 @@ class DotModel(private val order: DotOrder) : Serializable {
         // Rank every live dot's instance, not only the ones a comparison happens to reach: a key
         // with a single live dot would otherwise return a value without the order ever being
         // consulted, and a harness that forgot to supply the mapping would get a plausible answer
-        // on every uncontended key and a named failure only on a contended one. [ORA2-MODEL-12]'s
+        // on every uncontended key and a named failure only on a contended one. ORA2 §MODEL-12's
         // fail-loud is worth nothing if it fires only where the case is already interesting.
         live.keys.forEach { order.rankOf(it.source) }
         return live.entries.maxWithOrNull(compareBy(order.comparator()) { it.key })?.value
@@ -195,7 +195,7 @@ class DotModel(private val order: DotOrder) : Serializable {
  *
  * Structurally the kernel's `Timestamp(sourceId, counter)` and deliberately **not** that type:
  * a model that imported `civictech.cell.Timestamp` would be reading the kernel's dot identity
- * rather than stating its own, and `[ORA2-MODEL-12]` forbids exactly that. `ModelImportBoundaryTest`
+ * rather than stating its own, and `ORA2 §MODEL-12` forbids exactly that. `ModelImportBoundaryTest`
  * enforces it rather than trusting this paragraph.
  *
  * [counter] is 1-based per [source] — the nth put that instance issues mints counter `n`,
@@ -211,7 +211,7 @@ data class ModelDot(val counter: Long, val source: SourceId) : Serializable {
 }
 
 /**
- * The harness-supplied order over instance identities — `[ORA2-MODEL-12]`'s model half.
+ * The harness-supplied order over instance identities — `ORA2 §MODEL-12`'s model half.
  *
  * `[24-TMAP-03]`'s `DOT_ORDER` breaks a counter tie by `sourceId`, so the model agrees with the
  * kernel about which of two same-counter dots wins **only** if its instance order matches the
@@ -237,9 +237,9 @@ data class ModelDot(val counter: Long, val source: SourceId) : Serializable {
  * `"or-map-tags:${'$'}{ref.id}:${'$'}{ref.instanceId}"` derivation at construction time, so a KE1
  * change to it fails loudly rather than silently mis-ordering every tie. **Decision: yes — a
  * checked-in expectation, in the case builder, owned by the harness task** (feature §3.3 assigns
- * the mapping there, and `[ORA2-MODEL-12]` says so in as many words). It cannot honestly live in
+ * the mapping there, and `ORA2 §MODEL-12` says so in as many words). It cannot honestly live in
  * this file: the model would have to name the derivation string and the kernel type to assert
- * anything about it, which is `[ORA2-MODEL-11]`'s boundary, and an expectation pinned here with
+ * anything about it, which is `ORA2 §MODEL-11`'s boundary, and an expectation pinned here with
  * nothing to compare it against would be assurance about a formula rather than about the kernel.
  *
  * What this file contributes to that decision is the half it *can* enforce: the fail-loud
@@ -260,7 +260,7 @@ data class DotOrder(private val ranks: Map<SourceId, Int>) : Serializable {
     fun rankOf(source: SourceId): Int =
         ranks[source] ?: error(
             "No dot-order rank for source '${source.id}' (ranked: ${ranks.keys.map { it.id }.sorted()}). " +
-                "[ORA2-MODEL-12]: the harness supplies the instance order at case-construction time; " +
+                "ORA2 §MODEL-12: the harness supplies the instance order at case-construction time; " +
                 "the model does not derive it from kernel state.",
         )
 
@@ -298,7 +298,7 @@ data class DotOrder(private val ranks: Map<SourceId, Int>) : Serializable {
  * and order-independent — a tombstone that arrives *before* the put it covers still covers it.
  * Dropping the covered dot instead would let a late-arriving put resurrect a removed key.
  *
- * `[ORA2-MODEL-02]`: [merge] is pointwise union of both halves, and is therefore commutative,
+ * `ORA2 §MODEL-02`: [merge] is pointwise union of both halves, and is therefore commutative,
  * associative and idempotent. `DotModelTest` proves all three rather than asserting them.
  */
 data class DotState(
@@ -318,7 +318,7 @@ data class DotState(
     /** `[24-TMAP-02]`: the keys with at least one live dot. */
     fun membership(): Set<Any?> = puts.keys.filterTo(LinkedHashSet()) { liveDots(it).isNotEmpty() }
 
-    /** `[ORA2-MODEL-02]` — pointwise union of the live and tombstoned halves. */
+    /** `ORA2 §MODEL-02` — pointwise union of the live and tombstoned halves. */
     fun merge(other: DotState): DotState {
         if (other.puts.isEmpty() && other.dels.isEmpty()) return this
         if (puts.isEmpty() && dels.isEmpty()) return other
@@ -367,7 +367,7 @@ data class DotState(
      *
      * A key with no live dot is a no-op, returning `this` unchanged (effective-only, 21). The
      * mutant this method exists to be distinguishable from is *remove-all* — tombstoning the
-     * key's dots at the converged state instead of at this instance's — and `[ORA2-CTL-03]`
+     * key's dots at the converged state instead of at this instance's — and `ORA2 §CTL-03`
      * requires the suite to catch that substitution.
      */
     fun resetRemove(key: Any?): DotState {

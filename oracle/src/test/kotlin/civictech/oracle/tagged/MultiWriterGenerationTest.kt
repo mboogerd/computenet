@@ -28,8 +28,8 @@ import java.util.UUID
 
 /**
  * The multi-writer / multi-replica generator dimensions (computenet-4ru.1.3):
- * `[ORA2-GEN-01]`..`[ORA2-GEN-05]`, `[ORA2-GEN-07]`, `[ORA2-DIFF-12]`, BS-2, BS-14, and the
- * harness half of `[ORA2-MODEL-12]`.
+ * `ORA2 §GEN-01`..`ORA2 §GEN-05`, `ORA2 §GEN-07`, `ORA2 §DIFF-12`, BS-2, BS-14, and the
+ * harness half of `ORA2 §MODEL-12`.
  *
  * Three of these are deliberately *sweep-level* assertions rather than per-case ones, because the
  * requirements are: the achieved concurrency ratio has to be **reported** and non-trivial (D4),
@@ -61,7 +61,7 @@ class MultiWriterGenerationTest {
     private fun sweep(config: GeneratorConfig = GeneratorConfig.replicatedSweep()): List<GeneratedCase> =
         GeneratorConfig.REPLICATED_SWEEP_SEEDS.map { GeneratorConfig.replicatedOrMapMeshCase(config, it) }
 
-    // -- [ORA2-GEN-01] / [ORA2-DIFF-12] / BS-14 ------------------------------------------------
+    // -- ORA2 §GEN-01 / ORA2 §DIFF-12 / BS-14 ------------------------------------------------
 
     @Test
     fun `a replicated sweep naming MapCell is rejected at generation time, naming the cell and the reason`() {
@@ -96,7 +96,7 @@ class MultiWriterGenerationTest {
         CaseGenerator(config).generate(1L).replication shouldBe null
     }
 
-    // -- [ORA2-GEN-03]: replica placement ------------------------------------------------------
+    // -- ORA2 §GEN-03: replica placement ------------------------------------------------------
 
     @Test
     fun `every replicated case places its replicas on distinct hosts and states its writer mapping`() {
@@ -109,7 +109,7 @@ class MultiWriterGenerationTest {
                 plan.replicas.size shouldBe config.replicaCount
                 plan.hosts.distinct().size shouldBe config.replicaCount
                 plan.hosts.forEach { it shouldBeGreaterThan -1 }
-                // [ORA2-MODEL-12]'s harness half: one writer per replica, a bijection, stated here.
+                // ORA2 §MODEL-12's harness half: one writer per replica, a bijection, stated here.
                 plan.writers.distinct().size shouldBe plan.replicas.size
                 case.topology.replicaPlacement[plan.handle] shouldContainExactly plan.hosts
             }
@@ -121,7 +121,7 @@ class MultiWriterGenerationTest {
         }
     }
 
-    // -- [ORA2-GEN-02] + D4: the ACHIEVED ratio, reported ---------------------------------------
+    // -- ORA2 §GEN-02 + D4: the ACHIEVED ratio, reported ---------------------------------------
 
     @Test
     fun `the achieved concurrency ratio is measured and reported, not merely configured`() {
@@ -133,8 +133,8 @@ class MultiWriterGenerationTest {
 
         // Reported, not merely asserted: the achieved ratio is on the test's own output, so a
         // sweep whose concurrency quietly collapsed is visible in a passing log too.
-        println("[ORA2-GEN-02] default replicated sweep over ${GeneratorConfig.REPLICATED_SWEEP_SEEDS}: $aggregate")
-        println("[ORA2-GEN-04] counter ties: " + cases.sumOf { it.replication!!.counterTieKeys.size } + " keys over ${cases.size} cases")
+        println("ORA2 §GEN-02 default replicated sweep over ${GeneratorConfig.REPLICATED_SWEEP_SEEDS}: $aggregate")
+        println("ORA2 §GEN-04 counter ties: " + cases.sumOf { it.replication!!.counterTieKeys.size } + " keys over ${cases.size} cases")
         withClue("default replicated sweep: $aggregate") {
             aggregate.configured shouldBe config.concurrencyRatio
             aggregate.comparableWrites shouldBeGreaterThan ConcurrencyAudit.MIN_COMPARABLE
@@ -162,7 +162,7 @@ class MultiWriterGenerationTest {
         }
     }
 
-    // -- [ORA2-GEN-04] / BS-2: the counter tie, or the configuration fails ----------------------
+    // -- ORA2 §GEN-04 / BS-2: the counter tie, or the configuration fails ----------------------
 
     @Test
     fun `the default sweep range exercises at least one counter tie broken only by instance rank`() {
@@ -192,7 +192,7 @@ class MultiWriterGenerationTest {
         }
     }
 
-    // -- [ORA2-GEN-05]: the re-put / reset-remove bias ------------------------------------------
+    // -- ORA2 §GEN-05: the re-put / reset-remove bias ------------------------------------------
 
     @Test
     fun `writes are biased onto already-populated keys, so re-puts and reset-removes actually occur`() {
@@ -243,7 +243,7 @@ class MultiWriterGenerationTest {
         }
     }
 
-    // -- [ORA2-GEN-07]: determinism -------------------------------------------------------------
+    // -- ORA2 §GEN-07: determinism -------------------------------------------------------------
 
     @Test
     fun `(seed, config) reproduces an identical replicated case`() {
@@ -258,7 +258,7 @@ class MultiWriterGenerationTest {
         }
     }
 
-    // -- [ORA2-MODEL-12]: the derivation expectation, pinned against the kernel ------------------
+    // -- ORA2 §MODEL-12: the derivation expectation, pinned against the kernel ------------------
 
     @Test
     fun `DotOrders derives the kernel's own dot-source identity`() {

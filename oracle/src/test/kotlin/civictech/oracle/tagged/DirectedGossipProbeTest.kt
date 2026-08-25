@@ -31,7 +31,7 @@ import java.util.UUID
  * One level down there is a seam. `Replicable.outlet` is a public `Subscribe`, which declares
  * `unsubscribe(PortRef)`, and since T21 the gossip subscription's `PortRef` is **derived**, not
  * generated: `UUID.nameUUIDFromBytes("gossip:<local.id>:<local.instanceId>:<other.id>:<other.instanceId>")`.
- * Deriving a kernel identity in the harness is the sanctioned pattern here (`[ORA2-MODEL-12]`;
+ * Deriving a kernel identity in the harness is the sanctioned pattern here (`ORA2 §MODEL-12`;
  * `ConvergenceCheckTest.Mesh.dotOrder()` derives `"or-map-tags:..."` the same way).
  *
  * This file asserts the two halves that decide it, on a real two-replica `OrMapCell` mesh:
@@ -51,7 +51,7 @@ class DirectedGossipProbeTest {
         val inlet: Use<MapOps<String, String>>
     }
 
-    /** `Replication.gossipRef`'s derivation, restated in the harness (`[ORA2-MODEL-12]`'s pattern). */
+    /** `Replication.gossipRef`'s derivation, restated in the harness (`ORA2 §MODEL-12`'s pattern). */
     private fun gossipRef(local: CellRef, other: CellRef): PortRef = PortRef(
         UUID.nameUUIDFromBytes(
             "gossip:${local.id}:${local.instanceId}:${other.id}:${other.instanceId}".toByteArray(),

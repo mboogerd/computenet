@@ -450,7 +450,7 @@ object CaseExecution {
      * resolved it to [MapTerminalFold], and two things followed: the fold's inlet could not
      * even accept the stream (a `ClassCastException` per delta, arriving as a dead letter), and
      * had it been able to, [civictech.cell.data.view.MapView] would have folded by **arrival
-     * order** — which is `[ORA2-CTL-01]`'s deliberately-wrong control, not the reading
+     * order** — which is `ORA2 §CTL-01`'s deliberately-wrong control, not the reading
      * `[24-TMAP-03]` defines. So the tagged ids are named here, ahead of the shape dispatch.
      *
      * `pnCounter` (computenet-f5zo) is the same defect one family over: it declares a bare
