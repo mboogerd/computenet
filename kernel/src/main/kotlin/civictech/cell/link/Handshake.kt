@@ -170,11 +170,46 @@ internal fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
  * emitted for the same reason it was never emitted for a relink before this
  * change: the superseded edge's endpoint pair is still open, now under the new
  * record.
+ *
+ * computenet-4jpd: **the `onUnlinkListeners` multicast IS fired, while the
+ * cell-facing `onUnlink` slot and `EdgeClose` stay suppressed.** The line
+ * between them is what the notification is keyed by, and it is not arbitrary:
+ *
+ * - `EdgeClose` and `LinkSupport.onUnlink` describe the EDGE — "this endpoint
+ *   pair is no longer connected". That is false here, which is the argument
+ *   already made above, and firing them would tell a cell to tear down a
+ *   connection [install] has just re-established.
+ * - `onLinkedListeners`/`onUnlinkListeners` are the infrastructure multicast,
+ *   and their subscribers key their state by [Link.id] — precisely the
+ *   identity that dies in a supersession. `AttentionSupport.wire` holds its
+ *   band frontier in an `AttentionFrontier` slot keyed by `link.id` and GCs
+ *   that slot ONLY from `onUnlinkListeners`
+ *   (`civictech.cell.control.Attention`). A silent removal therefore stranded
+ *   the superseded record's level in the fold for the life of the port while
+ *   the replacement added a second slot through `onLinkedListeners` — one
+ *   immortal slot per relink, and a band that could only ratchet up: the same
+ *   memory shape this function was written to close, displaced from
+ *   `LinkSupport` into the frontier map. Pinned by `LinkSupersessionTest`'s
+ *   two computenet-4jpd cases.
+ *
+ * Firing it is safe because retraction is what every id-keyed subscriber wants
+ * on a supersession, and the order here delivers exactly that: eviction runs
+ * BEFORE `register`/`onLinked`/`onLinkedListeners`, so a subscriber sees the
+ * old id retracted and then the new id established, never an empty frontier
+ * mistaken for a closed edge. `onUnlinkListeners` has one production
+ * subscriber (the frontier GC above) and it is the one the fix is for.
+ *
+ * Each side fires only its OWN listeners, because this function is called once
+ * per side — matching the coverage `PortLink`'s teardown gives a real unlink,
+ * which multicasts to `support` and `sourceLinking` alike.
  */
 private fun evictSuperseded(support: LinkSupport, from: PortRef, to: PortRef, role: LinkRole) {
     support.links
         .filter { it.from == from && it.to == to && it.role == role }
-        .forEach(support::remove)
+        .forEach { superseded ->
+            support.remove(superseded)
+            support.onUnlinkListeners.forEach { it(superseded) }
+        }
 }
 
 /**
