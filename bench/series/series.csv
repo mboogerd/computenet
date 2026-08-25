@@ -1,2 +1,3 @@
 runId,runTimestampUtc,benchmark,params,mode,score,scoreError999,unit,hostState,jvmVendor,jvmVersion,heapSettings,cpuModel,coreCount,os,jmhMode,forkCount,warmupIterations,measurementIterations,harnessCommitSha
 2026-08-25T23-18-18Z,2026-08-25T23:18:18Z,civictech.bench.micro.SmokeBenchmark.baseline,,avgt,3.98029,0.044962,ns/op,QUIESCED,Amazon.com Inc. (Corretto-21.0.5.11.1),21.0.5,JVM defaults (VM options: <none>),Apple M3 Max,16,Mac OS X 26.6.2,Average time,5,5,5,44eadacba
+2026-08-25T23-35-50Z,2026-08-25T23:35:50Z,civictech.bench.micro.SmokeBenchmark.baseline,,avgt,3.94201,0.011726,ns/op,QUIESCED,Amazon.com Inc. (Corretto-21.0.5.11.1),21.0.5,JVM defaults (VM options: <none>),Apple M3 Max,16,Mac OS X 26.6.2,Average time,5,5,5,6c9562a35
