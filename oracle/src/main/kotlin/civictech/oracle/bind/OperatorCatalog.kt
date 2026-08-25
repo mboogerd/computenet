@@ -7,13 +7,13 @@ import civictech.oracle.model.ReferenceOp
  * The one place a catalog id binds **both** a kernel cell factory and an independent
  * reference model (epic computenet-4ru §2.3). This is the extension seam ORA2 and QRY1
  * widen: registering an operator here is what puts it in the generator's vocabulary
- * ([ORA1-API-03]) and in the differential runner's reach.
+ * (ORA1 §API-03) and in the differential runner's reach.
  *
  * ## Why registration is paired, and why it fails here
  *
- * `[ORA1-API-02]`: a kernel factory without a reference model, or a model without a factory,
+ * `ORA1 §API-02`: a kernel factory without a reference model, or a model without a factory,
  * is rejected **at registration time**, naming the id, and the id is *not* in the catalog
- * afterwards. This is also `[ORA1-GEN-08]`'s enforcement point — that requirement says a
+ * afterwards. This is also `ORA1 §GEN-08`'s enforcement point — that requirement says a
  * vocabulary naming a half-bound id must fail loudly rather than silently drop the operator,
  * and the cheapest way to make it true is for a half-bound id never to exist. A sweep cannot
  * quietly skip an operator it was configured to exercise; a skipped operator is a green run
@@ -24,7 +24,7 @@ import civictech.oracle.model.ReferenceOp
  *
  * Epic §2.3 sketches `register(id, shape, kernel: CellFactory, model: ReferenceOp)` with
  * non-null parameters, which would make the one-sided call unrepresentable in Kotlin — and
- * therefore make `[ORA1-API-02]`'s failure untestable from Kotlin, leaving the requirement
+ * therefore make `ORA1 §API-02`'s failure untestable from Kotlin, leaving the requirement
  * defended only by the compiler of one of the two languages that can call this. The feature's
  * own example mapping asks for the failing case in as many words ("Ex/BS-17: … `model` =
  * null-equivalent absence"), so absence is expressible on purpose: a Java caller, a
@@ -62,7 +62,7 @@ object OperatorCatalog {
      *
      * **[kernel] and [model] are nullable on purpose, and that is a deliberate divergence from
      * epic computenet-4ru §2.3**, which sketches them non-null. Non-null would make the
-     * one-sided call unrepresentable in Kotlin and therefore make `[ORA1-API-02]`'s failure
+     * one-sided call unrepresentable in Kotlin and therefore make `ORA1 §API-02`'s failure
      * untestable, while a Java caller, a reflective registration or a `Map` lookup that missed
      * would still reach this method with a null and get an unnamed `NullPointerException`.
      * Expressible-and-loud beats unrepresentable-and-silent; see the type's own KDoc for the
@@ -70,7 +70,7 @@ object OperatorCatalog {
      *
      * @throws IllegalArgumentException if [id] is blank, or if exactly one of [kernel] and
      *   [model] is absent — the message names [id], and [id] is not in the catalog afterwards
-     *   ([ORA1-API-02], BS-17).
+     *   (ORA1 §API-02, BS-17).
      * @throws IllegalStateException if [id] is already registered. Silent replacement is the
      *   other way a differential run can end up exercising something other than what it was
      *   configured to exercise, so a second registration is as loud as a half one.
@@ -86,7 +86,7 @@ object OperatorCatalog {
         require(missing.isEmpty()) {
             "Catalog id '$id' cannot be registered: no ${missing.joinToString(" and no ")}. " +
                 "A kernel binding and a reference model are registered together or not at all " +
-                "[ORA1-API-02]; '$id' has not been added to the catalog."
+                "ORA1 §API-02; '$id' has not been added to the catalog."
         }
 
         check(id !in entries) {
@@ -106,7 +106,7 @@ object OperatorCatalog {
 
     /**
      * The [ShapeRule] bound to [id], or `null` if nothing is — the read-back
-     * `[ORA1-API-03]` needs: a generator picks a newly registered operator up by reading its
+     * `ORA1 §API-03` needs: a generator picks a newly registered operator up by reading its
      * shape, never by knowing its name.
      */
     @Synchronized

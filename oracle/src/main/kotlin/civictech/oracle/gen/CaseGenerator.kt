@@ -12,14 +12,14 @@ import kotlin.random.Random
  *
  * 1. **Validate first.** [GeneratorConfig.validateAgainstCatalog] runs in [init], before any
  *    rng exists, so a vocabulary naming an unregistered id fails loudly at *construction*
- *    naming every absent id (`[ORA1-GEN-08]`'s enforcement, reached through the front door)
+ *    naming every absent id (`ORA1 §GEN-08`'s enforcement, reached through the front door)
  *    rather than half-way through a generation.
  * 2. **One rng per case.** [generate] derives exactly one `Random(seed)` and threads that same
  *    instance through [GraphGenerator.generate] and then [ScriptGenerator.generate]. The order
  *    is part of the contract: the script's draws continue the stream the graph left off at, so
  *    moving either call reshuffles every case in the corpus.
  *
- * ## Determinism (`[ORA1-GEN-01]`, epic risk 5)
+ * ## Determinism (`ORA1 §GEN-01`, epic risk 5)
  *
  * Identical `(seed, config)` must yield an identical [GeneratedCase] in another JVM, on another
  * machine, at another time. Epic risk 5 names the four ways that is lost, and none of them is
@@ -42,7 +42,7 @@ import kotlin.random.Random
  * determinism sweep and `Bs16ReproducibilityTest`'s cross-JVM byte comparison both fail if any
  * of the four re-enters, which was demonstrated by mutation rather than asserted in prose.
  *
- * ## Controller seed (`[ORA1-GEN-07]`)
+ * ## Controller seed (`ORA1 §GEN-07`)
  *
  * [GeneratedCase.controllerSeed] is a pure function of the case seed alone — a single
  * splitmix64 step, documented on that property. This facade neither computes nor stores it: one
@@ -66,11 +66,11 @@ class CaseGenerator(private val config: GeneratorConfig) {
      * Generates the case for [seed].
      *
      * Equal `(seed, config)` pairs yield equal [GeneratedCase]s — in this JVM, in a freshly
-     * launched one, and on another machine (`[ORA1-GEN-01]`).
+     * launched one, and on another machine (`ORA1 §GEN-01`).
      *
      * @throws IllegalStateException if the configured vocabulary cannot express the configured
      *   topology (`GraphGenerator.generate`'s own checks) or if a generated script would place
-     *   an order-dependent source under more than one writer (`[ORA1-MODEL-09]`).
+     *   an order-dependent source under more than one writer (`ORA1 §MODEL-09`).
      */
     fun generate(seed: Long): GeneratedCase {
         val rng = Random(seed)

@@ -22,15 +22,15 @@ import java.io.ByteArrayOutputStream
 import java.io.ObjectOutputStream
 
 /**
- * [GraphGenerator]'s structural contract: `[ORA1-GEN-02]`'s shape-typed construction,
- * `[ORA1-GEN-03]`'s "an operator between every source and every terminal, and no islands",
- * `[ORA1-GEN-05]`'s fan-in/fan-out/diamond coverage, `[ORA1-API-03]`'s zero-edit pickup of a
+ * [GraphGenerator]'s structural contract: `ORA1 §GEN-02`'s shape-typed construction,
+ * `ORA1 §GEN-03`'s "an operator between every source and every terminal, and no islands",
+ * `ORA1 §GEN-05`'s fan-in/fan-out/diamond coverage, `ORA1 §API-03`'s zero-edit pickup of a
  * consumer-registered operator, and the D3 rendering rules (catalog factories, deterministic
  * handles, a `Serializable` spec).
  *
  * Structural and generative only. No reference-model evaluation and no differential run happens
  * here — those are the runner feature's (computenet-4ru.8); the live-host half of
- * `[ORA1-GEN-02]` is `GraphSpecLinkSweepTest`.
+ * `ORA1 §GEN-02` is `GraphSpecLinkSweepTest`.
  *
  * [OperatorCatalog] is a process-wide mutable singleton, so every test here registers in
  * [BeforeEach] and empties it in [AfterEach] — the sibling generator tasks' tests share this
@@ -49,7 +49,7 @@ class GraphGeneratorTest {
         OperatorCatalog.reset()
     }
 
-    // -- [ORA1-GEN-05]: fan-in, fan-out and diamonds in a default sweep ------
+    // -- ORA1 §GEN-05: fan-in, fan-out and diamonds in a default sweep ------
 
     /**
      * Ex/diamond, as the feature writes it: depth 3..5, a vocabulary including `union`, 100
@@ -57,7 +57,7 @@ class GraphGeneratorTest {
      * paths — found by reachability over the emitted `ConnectStep`s, not by asking the
      * generator what it thinks it built.
      *
-     * The same population carries the other two `[ORA1-GEN-05]` shapes: a fan-out node (one
+     * The same population carries the other two `ORA1 §GEN-05` shapes: a fan-out node (one
      * node feeding two or more consumers) and a 2-arity fan-in whose two arms are distinct
      * upstream nodes.
      *
@@ -90,7 +90,7 @@ class GraphGeneratorTest {
         }
     }
 
-    // -- [ORA1-GEN-03]: an operator between every source and every terminal --
+    // -- ORA1 §GEN-03: an operator between every source and every terminal --
 
     @Test
     fun `no terminal is a source and every node lies on a source-to-terminal path`() {
@@ -123,7 +123,7 @@ class GraphGeneratorTest {
         }
     }
 
-    // -- [ORA1-GEN-04]: the three topology knobs this task owns --------------
+    // -- ORA1 §GEN-04: the three topology knobs this task owns --------------
 
     @Test
     fun `sourceCount is honoured exactly`() {
@@ -168,7 +168,7 @@ class GraphGeneratorTest {
         }
     }
 
-    // -- D4 / [ORA1-API-03]: a consumer-registered operator, zero edits ------
+    // -- D4 / ORA1 §API-03: a consumer-registered operator, zero edits ------
 
     /**
      * The shape rules the generator links by are **data it reads from the catalog**, so an
@@ -212,7 +212,7 @@ class GraphGeneratorTest {
     /**
      * D4 as a property of the source text: the generator decides linkability from
      * [ShapeRule]s alone, so no catalog id may appear in it. A `when`/`if` over ids is exactly
-     * the generator edit `[ORA1-API-03]` forbids, and grepping is the only way to assert its
+     * the generator edit `ORA1 §API-03` forbids, and grepping is the only way to assert its
      * absence rather than its current unexercised-ness.
      */
     @Test
@@ -414,7 +414,7 @@ class GraphGeneratorTest {
     // -- computenet-880k: orMap's TaggedMapDelta shape must not unify with join/combineLatest/lookupJoin's MapDelta ---
 
     /**
-     * `[ORA1-API-03]`'s soundness bound, pinned by name rather than by an execution-time
+     * `ORA1 §API-03`'s soundness bound, pinned by name rather than by an execution-time
      * `RunOutcome.DeadLetterFailure`: `TaggedOperators`' `orMap` and `CoreOperators`' map-family
      * consumers (`combineLatest`, `join`, `lookupJoin`) both used to advertise
      * `ElementShape.MapOf(Scalar, Scalar)`, so shape equality wrongly declared them
@@ -426,7 +426,7 @@ class GraphGeneratorTest {
      * are no longer shape-equal, and a vocabulary of only `orMap` plus one map-family consumer
      * has no fan-in at all: `orMap`'s output satisfies no port in the vocabulary, so
      * `Builder.chooseRootShape` refuses before any node is even built, by name,
-     * `[ORA1-GEN-03]`-tagged — the same loud-refusal idiom the converge-failure test above pins,
+     * `ORA1 §GEN-03`-tagged — the same loud-refusal idiom the converge-failure test above pins,
      * not a filter bolted onto this specific pair. Covers all three named consumers, at the
      * bead's own seed.
      */
@@ -444,7 +444,7 @@ class GraphGeneratorTest {
             }
 
             withClue("vocabulary=[orMap, $opId]: ${thrown.message}") {
-                thrown.message!! shouldContain "[ORA1-GEN-03] cannot be satisfied"
+                thrown.message!! shouldContain "ORA1 §GEN-03 cannot be satisfied"
                 thrown.message!! shouldContain "no source in the vocabulary produces a shape any operator in the vocabulary consumes"
             }
         }

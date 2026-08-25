@@ -109,7 +109,7 @@ class FailureTaxonomyTest {
 
         // The kind, not the message: a run that never settled is not a disagreement about
         // values, and folding it into a Mismatch would blame the kernel for an unfinished
-        // computation [ORA1-DIFF-07].
+        // computation ORA1 §DIFF-07.
         val nonQuiescence = outcome.shouldBeInstanceOf<RunOutcome.NonQuiescence>()
         nonQuiescence.seed shouldBe 42L
         nonQuiescence.stepBudget shouldBe 10
@@ -140,7 +140,7 @@ class FailureTaxonomyTest {
             buildGraph = ::buildGraph,
         )
 
-        // A broken oracle is never read as a broken kernel (design D10, [ORA1-DIFF-08]).
+        // A broken oracle is never read as a broken kernel (design D10, ORA1 §DIFF-08).
         val failure = outcome.shouldBeInstanceOf<RunOutcome.ModelEvaluationFailure>()
         failure.seed shouldBe 5L
         failure.cause.shouldBeInstanceOf<IllegalStateException>()
@@ -159,7 +159,7 @@ class FailureTaxonomyTest {
 
         // Precedence, tested on the combination the design names: DeadLetterFailure outranks
         // the value comparison, because a run that lost a message did not receive its whole
-        // input — the agreement below is luck, not evidence [ORA1-DIFF-04].
+        // input — the agreement below is luck, not evidence ORA1 §DIFF-04.
         val failure = outcome.shouldBeInstanceOf<RunOutcome.DeadLetterFailure>()
         failure.seed shouldBe 9L
         failure.deadLetters.shouldNotBeEmpty()
@@ -326,7 +326,7 @@ class FailureTaxonomyTest {
             buildGraph = ::buildProxyDrivenDeadLetteringGraph,
         )
 
-        // The kind, not the message [ORA1-DIFF-07]: this run also has a real dead letter (see
+        // The kind, not the message ORA1 §DIFF-07: this run also has a real dead letter (see
         // the control below), so a wrong return order would report DeadLetterFailure instead.
         val nonQuiescence = outcome.shouldBeInstanceOf<RunOutcome.NonQuiescence>()
         nonQuiescence.seed shouldBe 42L
@@ -388,7 +388,7 @@ class FailureTaxonomyTest {
 
         // Reachable only if NonQuiescence's own check precedes reference.evaluate(script)
         // entirely, per execute()'s KDoc: a budget exhaustion is a verdict, never something that
-        // catches an exception as control flow [ORA1-DIFF-07].
+        // catches an exception as control flow ORA1 §DIFF-07.
         val nonQuiescence = outcome.shouldBeInstanceOf<RunOutcome.NonQuiescence>()
         nonQuiescence.seed shouldBe 42L
         nonQuiescence.stepBudget shouldBe 10

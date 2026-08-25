@@ -150,7 +150,7 @@ class OperatorTest {
 
     @Test
     fun `pipeline - incremental result equals batch recompute on every seed`() {
-        // [ORA1-DIFF-11] migration (computenet-4ru.12.4): the same two-writer union-filter-count
+        // ORA1 §DIFF-11 migration (computenet-4ru.12.4): the same two-writer union-filter-count
         // pipeline and the same batch-fold property, now run through DifferentialRunner.check
         // instead of a hand-rolled held-set recompute. Both the filter-set terminal and the
         // count scalar terminal survive as separate CaseGraph terminals, matching the original's
@@ -285,7 +285,7 @@ class OperatorTest {
 
     @Test
     fun `flatMap pipeline - incremental result equals batch recompute on every seed`() {
-        // [ORA1-DIFF-11] migration (computenet-4ru.12.4): same two-writer union-flatMap
+        // ORA1 §DIFF-11 migration (computenet-4ru.12.4): same two-writer union-flatMap
         // pipeline and the same batch-fold property, now a DifferentialRunner.check caller.
         val sourceA = SourceId("w0")
         val sourceB = SourceId("w1")

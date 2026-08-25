@@ -3,7 +3,7 @@ package civictech.oracle.model
 import java.io.Serializable
 
 /**
- * The batch denotations of the **set-shaped binary family** of `[ORA1-MODEL-02]`'s vocabulary:
+ * The batch denotations of the **set-shaped binary family** of `ORA1 §MODEL-02`'s vocabulary:
  * `IntersectSetCell`, `JoinSetCell` and `SemiJoinCell` in both polarities. The map-shaped join
  * family is [JoinModel]/[CombineLatestModel]/[LookupJoinModel] (`MapJoinModels.kt`), and the
  * grouped-aggregation family is [GroupByModel] (`GroupByModel.kt`).
@@ -12,9 +12,9 @@ import java.io.Serializable
  *
  * Every model in this file recomputes its whole output from its inputs' **live sets**. None
  * mirrors the kernel's insert/retract stream, and none has a notion of a tag
- * (`[ORA1-MODEL-03]`) — which matters most precisely in this family, because these are the
+ * (`ORA1 §MODEL-03`) — which matters most precisely in this family, because these are the
  * operators whose kernel implementations *mint* tags rather than forwarding input ones
- * (`[24-OP-JOINSET-01]`, `[24-OP-SEMIJOIN-02]`). `[ORA1-MODEL-07]` states the consequence as a
+ * (`[24-OP-JOINSET-01]`, `[24-OP-SEMIJOIN-02]`). `ORA1 §MODEL-07` states the consequence as a
  * requirement: a minted-tag operator is modelled as **the set of live combinations**, never as
  * tag identity. The kernel needs one minted tag per live pair so that a pair which re-enters
  * after a removed row returns is not left dead under tombstone folding; the model needs
@@ -66,7 +66,7 @@ object IntersectSetModel : OperatorModel, Serializable {
 
 /**
  * `JoinSetCell` / `joinSet` / `crossProduct` — the relational equi-join
- * (`[24-OP-JOINSET-01]`, `[24-OP-JOINSET-02]`, `[ORA1-MODEL-07]`):
+ * (`[24-OP-JOINSET-01]`, `[24-OP-JOINSET-02]`, `ORA1 §MODEL-07`):
  *
  * ```
  * { combine(a, b) | a in liveLeft, b in liveRight, leftKey(a) == rightKey(b) }
@@ -112,7 +112,7 @@ class JoinSetModel(
 
 /**
  * `SemiJoinCell` / `differenceSet` — keyed semijoin (`A ⋉ B`) and antijoin (`A ▷ B`)
- * (`[24-OP-SEMIJOIN-01]`, `[24-OP-SEMIJOIN-03]`, `[ORA1-MODEL-07]`):
+ * (`[24-OP-SEMIJOIN-01]`, `[24-OP-SEMIJOIN-03]`, `ORA1 §MODEL-07`):
  *
  * ```
  * { a | a in liveLeft, (leftKey(a) in liveRightKeys) xor negated }
@@ -131,7 +131,7 @@ class JoinSetModel(
  * disagreed here would be reporting a real non-monotone bug rather than a modelling artefact.
  * `SemiJoinRetractionTest` is its named model-level test.
  *
- * Both polarities are one class and one registration each, because `[ORA1-MODEL-02]` names
+ * Both polarities are one class and one registration each, because `ORA1 §MODEL-02` names
  * semijoin and antijoin separately while the kernel is one cell with a `negated` flag.
  */
 class SemiJoinModel(

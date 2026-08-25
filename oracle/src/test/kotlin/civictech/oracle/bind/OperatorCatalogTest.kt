@@ -11,8 +11,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
 /**
- * The paired-registration seam: BS-17 in both directions ([ORA1-API-02], the enforcement
- * point of `[ORA1-GEN-08]`) and the shape read-back ([ORA1-API-03]).
+ * The paired-registration seam: BS-17 in both directions (ORA1 §API-02, the enforcement
+ * point of `ORA1 §GEN-08`) and the shape read-back (ORA1 §API-03).
  */
 class OperatorCatalogTest {
 
@@ -63,7 +63,7 @@ class OperatorCatalogTest {
         failure.message!! shouldContain "filter"
         failure.message!! shouldContain "reference model"
 
-        // The vocabulary must not contain a half-bound id: [ORA1-GEN-08] is satisfied by a
+        // The vocabulary must not contain a half-bound id: ORA1 §GEN-08 is satisfied by a
         // half binding never existing, not by a later check catching one.
         ("filter" in OperatorCatalog) shouldBe false
         OperatorCatalog.entry("filter") shouldBe null
@@ -118,11 +118,11 @@ class OperatorCatalogTest {
     }
 
     @Test
-    fun `ORA1-API-03 a newly registered entry's ShapeRule reads back through the public API`() {
+    fun `ORA1 §API-03 a newly registered entry's ShapeRule reads back through the public API`() {
         // A ternary operator over a shape no enum in this repo can name: a set of 4-tuples
         // joined with a map to a map of sets. If the catalog can carry this without a code
         // change, a generator reading shapes off the catalog picks up a consumer's operator
-        // without a generator edit — which is what [ORA1-API-03] asks for.
+        // without a generator edit — which is what ORA1 §API-03 asks for.
         val quads = ElementShape.SetOf(ElementShape.Tuple(4))
         val index = ElementShape.MapOf(ElementShape.Scalar, ElementShape.Scalar)
         val grouped = ElementShape.MapOf(ElementShape.Scalar, ElementShape.SetOf(ElementShape.Tuple(4)))

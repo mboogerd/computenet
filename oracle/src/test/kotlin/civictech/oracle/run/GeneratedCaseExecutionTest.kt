@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
 /**
- * `[ORA1-DIFF-01]`'s **generated** path: [DifferentialRunner.run] over hand-CONSTRUCTED
+ * `ORA1 §DIFF-01`'s **generated** path: [DifferentialRunner.run] over hand-CONSTRUCTED
  * [GeneratedCase] values.
  *
  * Hand-constructed on purpose, per the task's own sequencing note: invoking `CaseGenerator`
@@ -301,7 +301,7 @@ class GeneratedCaseExecutionTest {
         mismatch.expected shouldBe ModelState.SetState(setOf("aa"))
         mismatch.actual shouldBe ModelState.SetState(setOf("aa", "cc"))
 
-        // [ORA1-DIFF-02]'s rendered-spec field, on the generated path: the real spec, with
+        // ORA1 §DIFF-02's rendered-spec field, on the generated path: the real spec, with
         // handles and catalog ids visible — not an empty string.
         mismatch.renderedGraphSpec.shouldNotBeEmpty()
         mismatch.renderedGraphSpec shouldContain "spawn src : ${CoreOperators.Ids.SET}"

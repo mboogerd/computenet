@@ -7,11 +7,11 @@ import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 
 /**
- * `MapCell`'s batch denotation (`[ORA1-MODEL-08]`, `[ORA1-MODEL-09]`; spec `[24-OP-MAP-01]`):
+ * `MapCell`'s batch denotation (`ORA1 §MODEL-08`, `ORA1 §MODEL-09`; spec `[24-OP-MAP-01]`):
  * defined only for a single-writer FIFO script slice, last put per key wins in script order,
  * a removal deletes the key, and a multi-writer slice fails loudly rather than guessing.
  *
- * Model-level throughout, per [ORA1-MODEL-01]: a [SourceScript] goes in, a [ModelState] comes
+ * Model-level throughout, per ORA1 §MODEL-01: a [SourceScript] goes in, a [ModelState] comes
  * out, no kernel cell runs.
  */
 class MapCellModelTest {
@@ -84,7 +84,7 @@ class MapCellModelTest {
     }
 
     /**
-     * `[ORA1-MODEL-08]`'s operative clause: a slice with more than one distinct writer id
+     * `ORA1 §MODEL-08`'s operative clause: a slice with more than one distinct writer id
      * among its `Put`/`RemoveKey` events has no defined expected value, so evaluation must
      * fail loudly and by name — never return a plausible-looking guess.
      *
@@ -116,7 +116,7 @@ class MapCellModelTest {
         }
 
         withClue("the failure names the requirement and the offending source") {
-            failure.message!! shouldContain "ORA1-MODEL-08"
+            failure.message!! shouldContain "ORA1 §MODEL-08"
             failure.message!! shouldContain "s"
         }
     }

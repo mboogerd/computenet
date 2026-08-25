@@ -207,7 +207,7 @@ class ShrinkerBs14Test {
 
         // Re-running the shrunk result still yields Mismatch on the same terminal — checked both
         // directly and via the Counterexample's own recorded outcome (Shrinker's confirming
-        // re-execution, ORA1-SHRINK-05).
+        // re-execution, ORA1 §SHRINK-05).
         val replay = DifferentialRunner.run(result.case, reference = reference)
         replay.shouldBeInstanceOf<RunOutcome.Mismatch>().terminal shouldBe terminal
         result.outcome.shouldBeInstanceOf<RunOutcome.Mismatch>().terminal shouldBe terminal

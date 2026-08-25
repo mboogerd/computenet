@@ -16,7 +16,7 @@ import civictech.testkit.SimWorld
 import kotlin.random.Random
 
 /**
- * The bring-your-own entry point `[ORA1-DIFF-11]`: run a **caller-supplied** graph against a
+ * The bring-your-own entry point `ORA1 §DIFF-11`: run a **caller-supplied** graph against a
  * **caller-supplied** [Script] and a **caller-supplied** reference, and report the
  * disagreement — if any — through the shared [RunOutcome] taxonomy.
  *
@@ -41,7 +41,7 @@ import kotlin.random.Random
  * [SimWorld.runToIdle]'s `check(...)`: a budget exhaustion is a *verdict*
  * ([RunOutcome.NonQuiescence]) that the caller matches on, and catching an
  * `IllegalStateException` as control flow would make the taxonomy depend on a message string
- * — the thing [RunOutcome] is sealed to prevent `[ORA1-DIFF-07]`.
+ * — the thing [RunOutcome] is sealed to prevent `ORA1 §DIFF-07`.
  *
  * ## Kind precedence
  *
@@ -51,13 +51,13 @@ import kotlin.random.Random
  *    partial reading of an unfinished computation. Comparing it to the model would report a
  *    "mismatch" that is really an unfinished run.
  * 2. [RunOutcome.DeadLetterFailure] — a message was lost, so the folds are readings of a
- *    graph that did not receive its whole input `[ORA1-DIFF-04]`. Values *may* still agree
+ *    graph that did not receive its whole input `ORA1 §DIFF-04`. Values *may* still agree
  *    (they do in this file's own precedence test), and that agreement is luck, not evidence.
  * 3. [RunOutcome.ModelEvaluationFailure] — the reference itself threw, so there is no
  *    expected value to compare against at all. Reported as a broken *oracle*, never as a
- *    broken kernel (epic design D10, `[ORA1-DIFF-08]`).
+ *    broken kernel (epic design D10, `ORA1 §DIFF-08`).
  * 4. [RunOutcome.WavePrefixViolation] — an intermediate observation was no prefix of the wave
- *    sequence, or regressed (`[ORA1-DIFF-06]`, design D5). Evidence about the kernel, and
+ *    sequence, or regressed (`ORA1 §DIFF-06`, design D5). Evidence about the kernel, and
  *    ranked above [RunOutcome.Mismatch] because it is the *earlier* and more specific finding:
  *    a run that glitched mid-way says something a final-state comparison cannot, whether or not
  *    it also settled wrong.
@@ -136,13 +136,13 @@ object DifferentialRunner {
     }
 
     /**
-     * The **generated** path of `[ORA1-DIFF-01]`: apply [case]'s `GraphSpec`, drive its
+     * The **generated** path of `ORA1 §DIFF-01`: apply [case]'s `GraphSpec`, drive its
      * [civictech.oracle.gen.CaseScript] in TOTAL order honoring every
      * [civictech.oracle.gen.CaseStep.Barrier] as a quiesce point, fold every (non-late)
      * terminal, and compare each fold to the **catalog-resolved** reference model.
      *
      * Everything after driving — dead-letter accounting, the step budget, the kind
-     * precedence, the `[ORA1-DIFF-02]` report — is [check]'s own code, reached through the
+     * precedence, the `ORA1 §DIFF-02` report — is [check]'s own code, reached through the
      * same private core. The only difference between the two entry points is who supplies the
      * graph, the script and the reference.
      *
@@ -170,7 +170,7 @@ object DifferentialRunner {
      *
      * @param case the case to run — hand-built or generated; this runner never invokes the
      *   generator.
-     * ## Wave-prefix checking (`[ORA1-DIFF-06]`, design D5)
+     * ## Wave-prefix checking (`ORA1 §DIFF-06`, design D5)
      *
      * WHILE the case is driven, every intermediate observation of every terminal must equal the
      * reference's answer for some prefix of the wave sequence, non-regressing per terminal. The
@@ -208,7 +208,7 @@ object DifferentialRunner {
      * @param onAssembled called exactly once, right after [CaseExecution.assemble] builds the
      *   graph — before ANY script step is driven and before the first
      *   [civictech.oracle.gen.CaseStep.Barrier], if any, is even reached — with the terminal
-     *   names linked at that instant. This is the BS-7 (`[ORA1-DIFF-05]`) coverage-gap
+     *   names linked at that instant. This is the BS-7 (`ORA1 §DIFF-05`) coverage-gap
      *   instrument: [CaseExecution.assemble] itself never links a [TerminalSpec.late] terminal
      *   (it filters `!it.late`), so the correct set here is always the case's EAGER terminals
      *   only — a late terminal's name appearing already at this callback (rather than only from
@@ -242,7 +242,7 @@ object DifferentialRunner {
                 WavePrefixOracle.checker(case, marker, oracle)
             } catch (cause: Throwable) {
                 // A reference that cannot evaluate a PREFIX is a broken oracle, exactly as one
-                // that cannot evaluate the whole script is (D10, [ORA1-DIFF-08]). Reported before
+                // that cannot evaluate the whole script is (D10, ORA1 §DIFF-08). Reported before
                 // the graph is even built: there is no expected value at any wave, so driving the
                 // case could only produce a verdict nothing justifies.
                 onWavePrefixChecker(null)
@@ -279,7 +279,7 @@ object DifferentialRunner {
                     CaseStep.Barrier -> {
                         driving.drainToIdle()
                         if (!driving.exhausted) {
-                            // BS-7 [ORA1-DIFF-05]: the late terminal links only here, after the
+                            // BS-7 ORA1 §DIFF-05: the late terminal links only here, after the
                             // graph has quiesced — see CaseExecution.linkLateTerminals. This
                             // mutates assembly.terminals, the SAME map instance backing
                             // driving's CaseGraph.terminals, so both readTerminals() below and
@@ -312,7 +312,7 @@ object DifferentialRunner {
 
         // Subscribed before any event is injected, and to EVERY host the case names: a dead
         // letter raised by a host nobody watched is indistinguishable from no dead letter,
-        // which is exactly the silent-loss failure [ORA1-DIFF-04] exists to catch.
+        // which is exactly the silent-loss failure ORA1 §DIFF-04 exists to catch.
         val letters = mutableListOf<DeadLetter>()
         (listOf(world.host) + graph.extraHosts).distinct().forEach { host ->
             host.deadLetterOutlet.subscribe(
@@ -329,7 +329,7 @@ object DifferentialRunner {
 
         val driving = Driving(world, graph, Random(seed), stepBudget)
 
-        // The per-step observer seam [ORA1-DIFF-06]. Installed BEFORE driving so the very first
+        // The per-step observer seam ORA1 §DIFF-06. Installed BEFORE driving so the very first
         // productive step is observed, and it keeps only the FIRST violation: driving continues
         // to completion afterwards, because NonQuiescence and DeadLetterFailure outrank a glitch
         // and both are only decidable once the run has finished.
@@ -393,7 +393,7 @@ object DifferentialRunner {
      * [SimWorld.runToIdle]'s `check(...)`: a budget exhaustion is a *verdict*
      * ([RunOutcome.NonQuiescence]) that the caller matches on, and catching an
      * `IllegalStateException` as control flow would make the taxonomy depend on a message
-     * string `[ORA1-DIFF-07]`.
+     * string `ORA1 §DIFF-07`.
      */
     class Driving internal constructor(
         /**
@@ -413,7 +413,7 @@ object DifferentialRunner {
         val exhausted: Boolean get() = steps >= stepBudget
 
         /**
-         * The **per-step observer** `[ORA1-DIFF-06]` needs: called with [readTerminals]'s reading
+         * The **per-step observer** `ORA1 §DIFF-06` needs: called with [readTerminals]'s reading
          * after every *productive* scheduler step, which is the finest instant the runner can
          * observe at all (an unproductive step changed nothing, so re-reading it would only
          * inflate the observation count).

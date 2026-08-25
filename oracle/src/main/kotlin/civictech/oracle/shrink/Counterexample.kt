@@ -10,7 +10,7 @@ import kotlin.reflect.KClass
 /**
  * What a differential failure is *identified by* while it is being shrunk: the [RunOutcome]
  * variant and, where that variant names one, the terminal it was reported on
- * (`[ORA1-SHRINK-02]`).
+ * (`ORA1 §SHRINK-02`).
  *
  * ## Why the variant and the terminal, and nothing else
  *
@@ -89,7 +89,7 @@ data class FailureSignature(val kind: KClass<out RunOutcome>, val terminal: Stri
  *
  * @property scriptSteps every [CaseStep] of the script, barriers included.
  * @property elementDomain how many *distinct* element payloads the script names — the axis
- *   `[ORA1-SHRINK-01]`'s second pass narrows.
+ *   `ORA1 §SHRINK-01`'s second pass narrows.
  * @property nodes topology nodes, sources included.
  * @property terminals observed terminals, late ones included.
  */
@@ -116,7 +116,7 @@ data class CaseSize(
  * A confirmed, reduced failing case — [Shrinker]'s result.
  *
  * [outcome] is the outcome of the **final re-execution** of [case], not of the run that first
- * retained it (`[ORA1-SHRINK-05]`): a candidate that passes when re-executed is never reported,
+ * retained it (`ORA1 §SHRINK-05`): a candidate that passes when re-executed is never reported,
  * so an outcome here is always one this very case produced on its last run.
  *
  * @property case the reduced case. Replayable as-is: `DifferentialRunner.run(case, reference,
@@ -126,7 +126,7 @@ data class CaseSize(
  * @property originalSize the size of the case the shrink started from, so the reduction is
  *   readable against it.
  * @property truncated `true` if the shrink budget ran out with reductions still untried — the
- *   `[ORA1-SHRINK-03]` statement, as a **matchable field** rather than a message substring, so a
+ *   `ORA1 §SHRINK-03` statement, as a **matchable field** rather than a message substring, so a
  *   caller distinguishes "this is as small as it gets" from "this is as small as the budget
  *   allowed".
  */
@@ -140,7 +140,7 @@ data class Counterexample(
     val size: CaseSize get() = CaseSize.of(case)
 
     /**
-     * Renders this counterexample as pasteable, standalone Kotlin (`[ORA1-SHRINK-04]`) — the
+     * Renders this counterexample as pasteable, standalone Kotlin (`ORA1 §SHRINK-04`) — the
      * seed as a literal, [case]'s topology and script rebuilt through catalog ids, and a replay
      * through `civictech.oracle.run.DifferentialRunner.run` that asserts the same [outcome]
      * kind on the same terminal. See [renderCounterexample] (`RenderKotlin.kt`) for the
@@ -159,7 +159,7 @@ data class Counterexample(
  * elements and `Put` *values*.
  *
  * Keys (`Put.key`, `RemoveKey.key`) and counter amounts are deliberately not included: they are
- * their own domains, and `[ORA1-SHRINK-01]`'s second pass is named for the element one. A
+ * their own domains, and `ORA1 §SHRINK-01`'s second pass is named for the element one. A
  * caller reading [CaseSize.elementDomain] on a keyed or counter case is therefore reading the
  * element axis only, and a narrowing pass leaves those two domains untouched.
  *

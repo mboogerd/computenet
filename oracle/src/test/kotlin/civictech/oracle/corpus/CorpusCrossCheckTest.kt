@@ -52,8 +52,8 @@ import java.io.File
  *     [completeness guard][the completeness test below] cross-references so a case can never
  *     silently lose its citation while staying counted as covering the file; or
  * (b) is named in [OUT_OF_VOCABULARY] with a written reason the scenario is outside what
- *     `[ORA1-MODEL-02]`'s registered vocabulary can honestly model — cross-referencing the
- *     `[ORA1-HONEST-02]` exclusion ledger in
+ *     `ORA1 §MODEL-02`'s registered vocabulary can honestly model — cross-referencing the
+ *     `ORA1 §HONEST-02` exclusion ledger in
  *     `oracle/src/main/kotlin/civictech/oracle/model/MapCellModel.kt` where the exclusion is
  *     already recorded there, and stating the reason directly here where it is not.
  *
@@ -66,7 +66,7 @@ import java.io.File
  * KernelCatalog.kt`'s actual binding, cited at the case.
  *
  * If the model had genuinely disagreed with a corpus scenario, that would be a finding to
- * report and park (`[ORA1-HONEST-02]`'s never-modelled-approximately rule) rather than a
+ * report and park (`ORA1 §HONEST-02`'s never-modelled-approximately rule) rather than a
  * transcription to bend until green — every case below reproduces its yaml's expectation.
  */
 class CorpusCrossCheckTest {
@@ -117,7 +117,7 @@ class CorpusCrossCheckTest {
 
     /**
      * Every `24-data-cells` yaml id NOT cross-checked, with a written reason it is outside
-     * `[ORA1-MODEL-02]`'s registered vocabulary — verified against the cited kernel/ledger
+     * `ORA1 §MODEL-02`'s registered vocabulary — verified against the cited kernel/ledger
      * source, never an approximation offered so this test passes.
      */
     private val OUT_OF_VOCABULARY: Map<String, String> = mapOf(
@@ -152,13 +152,13 @@ class CorpusCrossCheckTest {
             ),
         "24-OP-COMBINE-02" to (
             "The wave-coalescing `glitch-free: true` form binds to `CoalescingCombineCell`, which " +
-                "the [ORA1-HONEST-02] ledger in MapCellModel.kt excludes by name: its whole reason " +
+                "the ORA1 §HONEST-02 ledger in MapCellModel.kt excludes by name: its whole reason " +
                 "to exist is a wave-completion fold over open/closed edges, per-edge watermarks and " +
                 "a restart-observable dropped version buffer that Script/ScriptEvent has no way to " +
                 "name, so a batch reference cannot honestly certify its quiescent total."
             ),
         "24-OP-LIST-01" to (
-            "`ListCell`/`ListDelta` is excluded by the [ORA1-HONEST-02] ledger in MapCellModel.kt: " +
+            "`ListCell`/`ListDelta` is excluded by the ORA1 §HONEST-02 ledger in MapCellModel.kt: " +
                 "its edits are index-addressed, not key-addressed, so even MapCell's single-writer " +
                 "FIFO restriction would leave the script silent on the one thing that decides the " +
                 "result — whether a later index-addressed edit is stated against positions before " +
@@ -185,7 +185,7 @@ class CorpusCrossCheckTest {
     }
 
     /**
-     * The completeness guard [ORA1-MODEL-02]'s cross-check clause needs: every real
+     * The completeness guard ORA1 §MODEL-02's cross-check clause needs: every real
      * `24-data-cells` yaml, enumerated from the repository tree at test time — never a
      * hardcoded count — is either cross-checked by name or excluded with a reason. A future
      * hand-authored yaml over a modelled operator, or a case whose citation is deleted while its
@@ -775,7 +775,7 @@ class CorpusCrossCheckTest {
 
     // =========================================================================================
     // Windows — key derivation, transcribed as flatMapSet (window-key expansion) then groupBy
-    // (sum), per the [ORA1-HONEST-02] ledger's own note in MapCellModel.kt: "windowing-as-
+    // (sum), per the ORA1 §HONEST-02 ledger's own note in MapCellModel.kt: "windowing-as-
     // key-derivation is already fully expressible with the registered flatMapSet/groupBy*
     // entries". Both expansions are transcribed verbatim from
     // `kernel/src/main/kotlin/civictech/cell/data/Windows.kt` (`Tumbling`/`Sliding`), not

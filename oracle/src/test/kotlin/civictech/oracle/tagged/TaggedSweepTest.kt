@@ -52,7 +52,7 @@ import kotlin.random.Random
  * emit a single-instance `orMap` case at all, and [OracleSweep.run] — built on top of it — is
  * not the seam this sweep can reuse.
  *
- * What IS reused, and is the seam this task actually needs, is `[ORA1-DIFF-11]`'s **bring-your-
+ * What IS reused, and is the seam this task actually needs, is `ORA1 §DIFF-11`'s **bring-your-
  * own** entry point, [DifferentialRunner.check]: a caller-supplied graph, script and reference,
  * run through the identical comparison/reporting/taxonomy code the generated path shares. This
  * sweep is such a caller. The density loop is `civictech.testkit.forEachSeed` — the SAME

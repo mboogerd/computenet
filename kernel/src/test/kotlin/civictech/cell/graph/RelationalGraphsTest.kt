@@ -112,7 +112,7 @@ class RelationalGraphsTest {
 
     @Test
     fun `left join - incremental result equals batch recompute on every seed`() {
-        // [ORA1-DIFF-11] migration (computenet-4ru.12.4): the same graph-DSL leftJoin over two
+        // ORA1 §DIFF-11 migration (computenet-4ru.12.4): the same graph-DSL leftJoin over two
         // SetCell sources and the same batch-fold property, now a DifferentialRunner.check
         // caller. DifferentialRunner drives the interleaving and the settling itself, so the
         // original's own SimulationController/runToIdle bookkeeping is no longer needed here.

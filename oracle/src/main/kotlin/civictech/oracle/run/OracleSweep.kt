@@ -10,7 +10,7 @@ import civictech.testkit.forEachSeed
  * [CaseGenerator], execute it with [DifferentialRunner.run], and report what the whole range
  * concluded — never what its first failing seed concluded.
  *
- * ## Every seed runs; the report is a density `[ORA1-DIFF-03]`
+ * ## Every seed runs; the report is a density `ORA1 §DIFF-03`
  *
  * The loop is `civictech.testkit.forEachSeed`, not a hand-rolled `for` with an assertion in
  * it. That is the whole point: `forEachSeed` runs **every** seed regardless of earlier
@@ -26,7 +26,7 @@ import civictech.testkit.forEachSeed
  * failing seeds costs a second sweep with an ad-hoc collector — which is exactly what a prior
  * session on this task had to do.
  *
- * ## Progress `[ORA1-PERF-03]`
+ * ## Progress `ORA1 §PERF-03`
  *
  * [run] calls [onProgress] once per seed, **before** that seed's case is generated or
  * executed, with the seed and its 1-based index in the sweep. The default implementation
@@ -34,7 +34,7 @@ import civictech.testkit.forEachSeed
  * attributable to a specific case, and the last line printed names it. A caller that wants the
  * progress stream as data (a test, a future reporter) passes its own lambda.
  *
- * ## Budget `[ORA1-PERF-01]` / `[ORA1-PERF-02]`
+ * ## Budget `ORA1 §PERF-01` / `ORA1 §PERF-02`
  *
  * The default range is `0 until `[DEFAULT_SEED_COUNT] — **200 seeds** — sized from a
  * measurement, not from a guess. Measured on this repo's BS-1 configuration
@@ -75,7 +75,7 @@ import civictech.testkit.forEachSeed
  * edge is not reachable from the default sweep — but a caller who lowers [run]'s `stepBudget`
  * moves into it.
  *
- * ## What `ORA1-…` and `ORA2 §…` markers ARE — and what they are not (computenet-4ru.22)
+ * ## What `ORA1 §…` and `ORA2 §…` markers ARE — and what they are not (computenet-4ru.22)
  *
  * They are **acceptance clauses of the beads items that built this harness**, not EARS
  * requirement ids. ORA1's are written in epic `computenet-4ru` §4; ORA2's in feature
@@ -94,21 +94,23 @@ import civictech.testkit.forEachSeed
  * `computenet-9892` who went looking for `ORA2 §MODEL-12` in `doc/spec` was looking for
  * something nobody ever wrote, and returned NOT VERIFIED for it (computenet-4ru.22).
  *
- * The ORA2 family is therefore written `ORA2 §MODEL-12`, in this repo's
- * `<document> §<section>` idiom (`96 §E1.5`, `epic computenet-4ru §2.3`) — deliberately **not**
- * a square-bracketed `ORA2-MODEL-12`, whose shape is this repo's mark of an EARS requirement id in
- * `doc/spec` (`[24-TMAP-03]`, `[42-REPL-04]`). To check one, read the bead section it names;
- * do not go looking for spec text. [civictech.oracle.MarkerFormTest] stops the bracketed form
- * from coming back, and `concord/corpus/DISPUTES.md` records the same decision where a reader
- * arriving from the requirement side lands.
+ * Both families are therefore written in the section form — `ORA2 §MODEL-12`, `ORA1 §HONEST-01`
+ * — in this repo's `<document> §<section>` idiom (`96 §E1.5`, `epic computenet-4ru §2.3`) —
+ * deliberately **not** square-bracketed `ORA2-MODEL-12` or `ORA1-HONEST-01`, whose shape is this
+ * repo's mark of an EARS requirement id in `doc/spec` (`[24-TMAP-03]`, `[42-REPL-04]`). To check
+ * one, read the bead section it names; do not go looking for spec text.
+ * [civictech.oracle.MarkerFormTest] stops the bracketed form from coming back for either family,
+ * and `concord/corpus/DISPUTES.md` records the same decision where a reader arriving from the
+ * requirement side lands.
  *
- * `ORA1-…` still carries the old bracketed shape, and that difference means **nothing about its
- * status**: it is the same kind of marker, left alone only because renaming its 448 citations
- * reaches outside this module (`:kernel` tests, `kernel/build.gradle.kts`,
- * `oracle/build.gradle.kts`, `.claude/skills/work/SKILL.md`) and outside computenet-4ru.22's
- * file claim. computenet-gmld tracks giving ORA1 the same form.
+ * ORA2 was renamed first (computenet-4ru.22); ORA1's 465 citations reached outside that item's
+ * file claim (`:kernel` tests, two `build.gradle.kts` files, `.claude/skills/work/SKILL.md`) and
+ * were renamed separately (computenet-gmld). The `.claude/skills/work/SKILL.md` occurrence is
+ * not a citation — it is a single illustrative example of "a bracketed requirement id" inside a
+ * skill-authoring bullet, split out as computenet-yiof — so it still carries the old bracketed
+ * shape and that is not a gap in this decision.
  *
- * ## What a green sweep MEANS: the reference model is DEFENDED, not PROVEN `[ORA1-HONEST-01]`
+ * ## What a green sweep MEANS: the reference model is DEFENDED, not PROVEN `ORA1 §HONEST-01`
  *
  * This object is the module's entry point (epic computenet-4ru §2.3), so the load-bearing
  * caveat belongs here rather than buried beside one model file.
@@ -123,7 +125,7 @@ import civictech.testkit.forEachSeed
  * That is not a theoretical caveat here: **computenet-eeys is a measured instance of the
  * reference model being the wrong side of a disagreement** (`civictech.oracle.model.Membership`
  * scopes observed-remove coverage to the removing *writer*, while `[24-SET-03]`'s observer is
- * the *cell* — see [WavePrefixOracle]'s verdict KDoc and the `[ORA1-DIFF-09]` entry in
+ * the *cell* — see [WavePrefixOracle]'s verdict KDoc and the `ORA1 §DIFF-09` entry in
  * `concord/corpus/DISPUTES.md`). The reference was reviewed, tested and green on the sweep, and
  * still had it wrong.
  *
@@ -131,7 +133,7 @@ import civictech.testkit.forEachSeed
  * named, falsifiable test; none is a proof; and they are listed here with their weaknesses so
  * a reader can price a green sweep rather than trust it:
  *
- * 1. **Independence** — `[ORA1-MODEL-10]`, pinned by
+ * 1. **Independence** — `ORA1 §MODEL-10`, pinned by
  *    [civictech.oracle.model.ModelImportBoundaryTest]. `civictech.oracle.model` may name value,
  *    key and delta types but no `civictech.cell.data.op.*` type and no concrete data-cell
  *    class, enforced by a source-text import scan over the package. This rules out the
@@ -139,7 +141,7 @@ import civictech.testkit.forEachSeed
  *    implementation it checks. It does not rule out two independent readings converging on the
  *    same misreading of the spec, which is exactly what eeys was.
  * 2. **A divergence control** — [DivergenceControlTest], and read its KDoc before quoting this
- *    line: **`[ORA1-DIFF-09]`/BS-12 as specified is NOT satisfiable against today's kernel**,
+ *    line: **`ORA1 §DIFF-09`/BS-12 as specified is NOT satisfiable against today's kernel**,
  *    and that file pins the measurement instead of a control that cannot fire. A naive
  *    arrival-order fold — the deliberately wrong reference BS-12 asked for — is indistinguishable
  *    from the real reference under a single writer, and under multiple writers agrees with the
@@ -155,7 +157,7 @@ import civictech.testkit.forEachSeed
  *    passing control. So this defense is today the **weakest of the four**, and saying so is
  *    the point of this section: the sweep currently has no live demonstration that a wrong
  *    *source* model reddens it.
- * 3. **A mutation check** — [MutationCheckTest] (`[ORA1-DIFF-10]`/BS-13). A deliberately wrong
+ * 3. **A mutation check** — [MutationCheckTest] (`ORA1 §DIFF-10`/BS-13). A deliberately wrong
  *    operator model is caught by the differential machinery and attributed to the right
  *    terminal. This is the surviving demonstration of discriminating power, and it covers the
  *    derived-operator half of the vocabulary that (2) cannot currently reach.
@@ -172,7 +174,7 @@ import civictech.testkit.forEachSeed
  *    test's own KDoc too.
  *
  * The vocabulary the reference deliberately does **not** cover, each exclusion with a written
- * reason verified against kernel source, is the other half of this ledger `[ORA1-HONEST-02]`:
+ * reason verified against kernel source, is the other half of this ledger `ORA1 §HONEST-02`:
  * see the file KDoc of `civictech.oracle.model.MapCellModel`. Both halves are pinned by
  * [civictech.oracle.HonestyLedgerTest], so this is build-checked prose, not decoration.
  *
@@ -180,7 +182,7 @@ import civictech.testkit.forEachSeed
  *
  * The four defenses above are ORA1's. ORA2 widens the vocabulary with the tagged/keyed family
  * (`civictech.oracle.model.DotModel`), and that widening costs something the first defense —
- * independence — cannot fully keep. `[ORA1-MODEL-03]` forbids ORA1's model from reading tag
+ * independence — cannot fully keep. `ORA1 §MODEL-03` forbids ORA1's model from reading tag
  * identity, tag counts or any `SetDelta`/`TaggedMapDelta` internal, precisely so it cannot agree
  * with the kernel about a shared bug in the tag algebra. An OR-map's *value*, unlike an OR-set's
  * *membership*, is decided by a total order over dots — `[24-TMAP-03]` — and no reference that
@@ -266,10 +268,10 @@ import civictech.testkit.forEachSeed
  *   `orMap` source terminal instead. Filed with the `MapDelta`-vs-`TaggedMapDelta` typing bound;
  *   `96 §E1.5`'s `UntagCell`/`TaggedMapView` is what would resolve it.
  *
- * The ORA1 half of the same rule is `[ORA1-DIFF-09]`/BS-12, filed in the same file. Both remaining
+ * The ORA1 half of the same rule is `ORA1 §DIFF-09`/BS-12, filed in the same file. Both remaining
  * filings are pinned by [civictech.oracle.HonestyLedgerTest], so neither can be silently deleted.
  *
- * Pinned by [civictech.oracle.HonestyLedgerTest] beside `[ORA1-HONEST-01]`, so this statement is
+ * Pinned by [civictech.oracle.HonestyLedgerTest] beside `ORA1 §HONEST-01`, so this statement is
  * build-checked prose too, not a paragraph a refactor can quietly drop.
  *
  * ## What each sweep records about the optional families `ORA2 §HONEST-02`
@@ -379,7 +381,7 @@ object OracleSweep {
      *   sweep wants. A non-null value is the divergence-control seam — a deliberately wrong
      *   reference must make the sweep report failures — and is how this file's own
      *   density test provokes failures without needing a broken kernel.
-     * @param onProgress called once per seed before that seed runs `[ORA1-PERF-03]`. Defaults
+     * @param onProgress called once per seed before that seed runs `ORA1 §PERF-03`. Defaults
      *   to printing [Progress] to stdout.
      */
     fun run(
@@ -437,7 +439,7 @@ object OracleSweep {
      * re-measured against this repo's `OracleSweepTest.baselineConfig()`, seeds `0 until 200`:
      * every seed lands between 5,734,960 and 6,762,600 frontiers — sits far above
      * [WavePrefixOracle.MAX_FRONTIER_LATTICE] (50,000), so all 200 seeds hit the **COST**
-     * refusal (`[ORA1-PERF-01]`) in [WavePrefixOracle.notApplicableBecause], not the soundness
+     * refusal (`ORA1 §PERF-01`) in [WavePrefixOracle.notApplicableBecause], not the soundness
      * exclusion this KDoc previously named — the 0-of-200 count is unchanged, only the reason is.
      * The branch above is still reachable from any single-source sweep config, because [run]
      * passes no [WavePrefixOption] and so inherits [WavePrefixOption.DEFAULT].

@@ -3,14 +3,14 @@ package civictech.oracle.model
 import java.io.Serializable
 
 /**
- * The batch denotations of the set-source, unary and fan-in slice of `[ORA1-MODEL-02]`'s
+ * The batch denotations of the set-source, unary and fan-in slice of `ORA1 §MODEL-02`'s
  * vocabulary — the reference answers a differential run checks the kernel's incremental
  * answers against.
  *
  * Every model here is a **total recomputation** over live state; none mirrors the kernel's
  * insert/retract stream. That is the independence epic computenet-4ru's design D2 asks for:
  * a model that reproduced the incremental machinery would agree with the implementation
- * about a shared bug. `[ORA1-MODEL-03]` binds throughout — nothing below reads a tag, a tag
+ * about a shared bug. `ORA1 §MODEL-03` binds throughout — nothing below reads a tag, a tag
  * count, a wave id, or a `SetDelta` internal, because none of those is representable in
  * [Script] or [ModelState] in the first place.
  *
@@ -24,7 +24,7 @@ import java.io.Serializable
 
 /**
  * `SetCell` — observed-remove membership over the source's own slice (`[24-SET-01]`,
- * `[24-SET-03]`, `[ORA1-MODEL-04]`, `[ORA1-MODEL-05]`). The whole semantics is
+ * `[24-SET-03]`, `ORA1 §MODEL-04`, `ORA1 §MODEL-05`). The whole semantics is
  * [Membership.live]; see its KDoc for the rule and for why BS-2 and BS-3 fall out of it.
  */
 object SetSourceModel : SourceModel, Serializable {
@@ -56,7 +56,7 @@ object SetSourceModel : SourceModel, Serializable {
  * Order within the slice is the source cell's own arrival order (a cell is a single
  * serialization point), so this fold is well defined under any number of writers — unlike
  * `MapCell`, whose LWW is defined across *concurrent* writers and is therefore restricted to
- * single-writer FIFO by `[ORA1-MODEL-08]` (computenet-4ru.5.3).
+ * single-writer FIFO by `ORA1 §MODEL-08` (computenet-4ru.5.3).
  */
 object KeyedSetSourceModel : SourceModel, Serializable {
 
@@ -100,7 +100,7 @@ object CounterSourceModel : SourceModel, Serializable {
  * the two cells differ in convergence class (pointwise-max per-source totals vs plain
  * addition), which a *replicated* differential case can distinguish and a single-instance
  * batch fold cannot. Modelling them as one entry would quietly drop `PnCounterCell` from
- * `[ORA1-MODEL-02]`'s coverage list.
+ * `ORA1 §MODEL-02`'s coverage list.
  */
 object PnCounterSourceModel : SourceModel, Serializable {
     override fun evaluate(slice: SourceScript): ModelState = ModelState.ScalarState(netTotal(slice))
@@ -124,7 +124,7 @@ private fun netTotal(slice: SourceScript): Long =
  * `FilterCell` — the live elements satisfying [predicate] (`[24-OP-FILTER-01]`).
  *
  * "with element tags unchanged" is the kernel's half of that requirement and has no model
- * counterpart by construction (`[ORA1-MODEL-03]`): membership is all the model can see, and
+ * counterpart by construction (`ORA1 §MODEL-03`): membership is all the model can see, and
  * the filtered membership is all the requirement constrains observably.
  *
  * [predicate] must be pure and [Serializable] — a registered model rides the same recorded
@@ -150,7 +150,7 @@ class FilterModel(private val predicate: ElementPredicate) : OperatorModel, Seri
  *
  * `mapSet(f)` is `FlatMapSetCell(f = { listOf(f(it)) })` in the kernel
  * (kernel/src/main/kotlin/civictech/cell/data/op/FlatMapSetCell.kt:88), so it is this model
- * with a singleton-image [transform], registered separately because `[ORA1-MODEL-02]` names
+ * with a singleton-image [transform], registered separately because `ORA1 §MODEL-02` names
  * it separately.
  */
 class FlatMapSetModel(private val transform: ElementExpansion) : OperatorModel, Serializable {
@@ -238,7 +238,7 @@ object PresenceCountModel : OperatorModel, Serializable {
  * `{ 1 }`, intersection `{ n -> n }`, majority `{ n -> n / 2 + 1 }`, k-of-n `{ k }` — is one
  * model. Output tag discipline (advertise on entry, delete exactly the advertised tags on
  * exit) is the kernel's means of making membership precise and has no model counterpart
- * (`[ORA1-MODEL-03]`).
+ * (`ORA1 §MODEL-03`).
  *
  * **Where the model is knowingly coarser than the cell**, and why it is still an honest
  * reference: the kernel's `n` is the count of currently *open links*, which a topology event

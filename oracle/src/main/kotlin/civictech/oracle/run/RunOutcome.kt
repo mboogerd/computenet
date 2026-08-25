@@ -15,7 +15,7 @@ import java.io.Serializable
  * two **mesh** kinds ORA2 adds ([ReplicaDivergence], [ReplicasAgreeButWrong], `ORA2 §CONV-03`): a
  * [Mismatch] is a genuine disagreement between the kernel and the reference model at
  * quiescence; a [WavePrefixViolation] is a disagreement *during* the run — an intermediate
- * observation that is no prefix of the wave sequence (`[ORA1-DIFF-06]`); a [DeadLetterFailure]
+ * observation that is no prefix of the wave sequence (`ORA1 §DIFF-06`); a [DeadLetterFailure]
  * or [NonQuiescence] is a run that never reached a comparable state at all; a
  * [ModelEvaluationFailure] is the reference model itself breaking, so a broken oracle is never
  * read as a broken kernel (D10). A [ReplicaDivergence] is the replicas of one logical id ending
@@ -34,7 +34,7 @@ sealed interface RunOutcome {
     data object Success : RunOutcome
 
     /**
-     * A terminal's folded [ModelState] disagreed with the model's — [ORA1-DIFF-02]'s report
+     * A terminal's folded [ModelState] disagreed with the model's — ORA1 §DIFF-02's report
      * fields, defined here as data; the comparison and reporting behavior that produces one is
      * the next task's.
      *
@@ -42,7 +42,7 @@ sealed interface RunOutcome {
      *   for a generated case, or the caller's own name for a bring-your-own one).
      * @property renderedGraphSpec The case's [civictech.cell.graph.GraphSpec] rendered to a
      *   human-readable string for the generated path; the caller's own marker string for the
-     *   bring-your-own path ([ORA1-DIFF-11]).
+     *   bring-your-own path (ORA1 §DIFF-11).
      * @property difference The symmetric difference between [expected] and [actual], shaped by
      *   which [ModelState] variant they share.
      */
@@ -58,7 +58,7 @@ sealed interface RunOutcome {
 
     /**
      * At least one message was dead-lettered during the run — a run that never reached a
-     * state comparable to the model at all, distinct from a [Mismatch] ([ORA1-DIFF-04]).
+     * state comparable to the model at all, distinct from a [Mismatch] (ORA1 §DIFF-04).
      *
      * Not [Serializable]: [DeadLetter] carries a [Throwable] cause and an
      * [civictech.cell.proxy.HostedPortInvocation] that do not round-trip a JVM boundary; a
@@ -72,7 +72,7 @@ sealed interface RunOutcome {
 
     /**
      * The run did not reach quiescence within its step budget — named seed and budget, never
-     * folded into a [Mismatch] report ([ORA1-DIFF-07]).
+     * folded into a [Mismatch] report (ORA1 §DIFF-07).
      */
     data class NonQuiescence(
         val seed: Long,
@@ -81,7 +81,7 @@ sealed interface RunOutcome {
 
     /**
      * The reference model itself threw while evaluating the script — a broken oracle, not a
-     * broken kernel (D10, [ORA1-DIFF-08]).
+     * broken kernel (D10, ORA1 §DIFF-08).
      *
      * Not [Serializable]: an arbitrary thrown [Throwable] is not guaranteed to be.
      */
@@ -169,7 +169,7 @@ sealed interface RunOutcome {
     /**
      * A **glitch**: while the case was driven, an intermediate observation of a terminal
      * equalled no prefix of the wave sequence, or equalled an *earlier* prefix than one that
-     * terminal had already shown (`[ORA1-DIFF-06]`, epic design D5). Produced by
+     * terminal had already shown (`ORA1 §DIFF-06`, epic design D5). Produced by
      * [WavePrefixOracle.Checker]; see that class for the property and its soundness limits.
      *
      * ## Why a dedicated kind rather than a field-extended [Mismatch]
@@ -224,7 +224,7 @@ sealed interface RunOutcome {
         val nearestPrefixes: Map<Int, ModelState>,
     ) : RunOutcome, Serializable {
 
-        /** Which half of `[ORA1-DIFF-06]`'s property the observation broke. */
+        /** Which half of `ORA1 §DIFF-06`'s property the observation broke. */
         enum class Kind {
             /**
              * The observation equals the model's answer for **no** prefix of the wave sequence —

@@ -45,7 +45,7 @@ import civictech.testkit.SimWorld
 /**
  * The three things a *generated* case needs before [DifferentialRunner]'s shared core can run
  * it: the catalog-resolved reference model, the live graph (spec applied, terminals folded,
- * sources bound), and the rendered spec a `[ORA1-DIFF-02]` report carries.
+ * sources bound), and the rendered spec a `ORA1 §DIFF-02` report carries.
  *
  * ## Why catalog resolution lives here and not in the model
  *
@@ -61,13 +61,13 @@ import civictech.testkit.SimWorld
  * An id nothing is registered under, or an id whose registered model is the wrong
  * sub-interface for the arity its topology node uses, throws naming the id. It is never a
  * silent skip: a skipped operator is a green run that checked less than it claims, which is
- * the failure mode the whole epic is built to avoid (`[ORA1-API-02]`/`[ORA1-GEN-08]` make the
+ * the failure mode the whole epic is built to avoid (`ORA1 §API-02`/`ORA1 §GEN-08` make the
  * same argument at registration time).
  *
  * ## Why there IS a `when` over catalog ids here
  *
  * [scriptSourceFor] branches on the source families' ids, and that is not the branch
- * `[ORA1-API-03]` forbids. That requirement is about the *generator*: a consumer registering a
+ * `ORA1 §API-03` forbids. That requirement is about the *generator*: a consumer registering a
  * new operator must be picked up without generator edits, and `GraphGenerator` accordingly has
  * no id branch anywhere. Driving is different in kind — a script event has to become an actual
  * typed kernel call (`SetOps.add`, `CounterOps.increment`), and no shape rule carries that.
@@ -132,7 +132,7 @@ object CaseExecution {
     }
 
     /**
-     * [spec] rendered for a mismatch report `[ORA1-DIFF-02]`: one line per lowered step, in
+     * [spec] rendered for a mismatch report `ORA1 §DIFF-02`: one line per lowered step, in
      * apply order, with handles visible and — where [catalogIds] supplies them — the catalog id
      * each handle instantiates.
      *
@@ -167,7 +167,7 @@ object CaseExecution {
     /**
      * Everything [applyCase] builds, plus the handle → [CellRef] map and the **mutable**
      * terminals map backing [CaseGraph.terminals] — needed by [linkLateTerminals] (BS-7,
-     * `[ORA1-DIFF-05]`) to add a late terminal's fold after the mid-script
+     * `ORA1 §DIFF-05`) to add a late terminal's fold after the mid-script
      * [civictech.oracle.gen.CaseStep.Barrier], without re-applying the spec (which would
      * double-spawn every cell) and without changing [CaseGraph]'s own shape. [hosts] (BS-9) is
      * every host ordinal [assemble] spawned onto — needed by [linkLateTerminals] to spawn a
@@ -187,7 +187,7 @@ object CaseExecution {
     )
 
     /**
-     * [applyCase]'s full build (BS-9, `[ORA1-GEN-10]`'s runner half): one [ManagedHost] per
+     * [applyCase]'s full build (BS-9, `ORA1 §GEN-10`'s runner half): one [ManagedHost] per
      * distinct ordinal [case]'s [CaseTopology.placement] names, all sharing [world]'s single
      * [civictech.cell.host.LocationRegistry] — ordinal `0` is [world]'s own host (so a
      * single-host case, every handle mapping to `0`, runs exactly as it always did), and every
@@ -376,7 +376,7 @@ object CaseExecution {
     /**
      * Links every [TerminalSpec.late] terminal not already linked — the driving loop calls
      * this exactly once, at [case]'s single [civictech.oracle.gen.CaseStep.Barrier], after
-     * [assembly]'s graph has quiesced (BS-7, `[ORA1-DIFF-05]`; `[24-CATCHUP-01]`/
+     * [assembly]'s graph has quiesced (BS-7, `ORA1 §DIFF-05`; `[24-CATCHUP-01]`/
      * `[21-CATCHUP-02]`: a late link plus catch-up converges the late view to the early one).
      *
      * Linking before the barrier would silently turn the late terminal into an early one and
@@ -462,10 +462,10 @@ object CaseExecution {
      * [PnCounterTerminalFold] merges by pointwise max, the reading `[24-OP-PNCOUNTER-01]`
      * defines. So `pnCounter` is named here too, ahead of the shape dispatch.
      *
-     * ## Why an id branch, and why it is not `[ORA1-API-03]`'s forbidden one
+     * ## Why an id branch, and why it is not `ORA1 §API-03`'s forbidden one
      *
      * The same argument [scriptSourceFor] carries, one seam over: a `ShapeRule` states shapes,
-     * and no shape says which delta type an outlet emits. `[ORA1-API-03]` is about the
+     * and no shape says which delta type an outlet emits. `ORA1 §API-03` is about the
      * *generator* — a consumer registering a new operator must be picked up without generator
      * edits, and `GraphGenerator` has no id branch anywhere. Registering a new operator over an
      * existing delta family still needs nothing here; only a new **delta family** does, and

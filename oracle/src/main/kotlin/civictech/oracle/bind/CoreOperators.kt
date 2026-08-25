@@ -52,7 +52,7 @@ import java.io.Serializable
 import java.util.TreeMap
 
 /**
- * The paired registrations for `[ORA1-MODEL-02]`'s vocabulary — the set-source, unary and
+ * The paired registrations for `ORA1 §MODEL-02`'s vocabulary — the set-source, unary and
  * fan-in slice (computenet-4ru.5.1), the binary, keyed-join, map-join and group-by family
  * (computenet-4ru.5.2), and `MapCell` (computenet-4ru.5.3, which also closes the vocabulary's
  * honesty ledger — see `civictech.oracle.model.MapCellModel.kt`'s module KDoc): for each id,
@@ -63,10 +63,10 @@ import java.util.TreeMap
  * ## Why this file is in `bind` and not `model`
  *
  * It imports `civictech.cell.data.op` types by necessity — it is the half of the seam that
- * *names* kernel cells. `[ORA1-MODEL-10]` forbids exactly that in `civictech.oracle.model`,
+ * *names* kernel cells. `ORA1 §MODEL-10` forbids exactly that in `civictech.oracle.model`,
  * and `ModelImportBoundaryTest` enforces it there; keeping the kernel-facing half here is
  * what lets the model stay an independent reference while the catalog still pairs the two
- * (`[ORA1-API-02]`).
+ * (`ORA1 §API-02`).
  *
  * ## Serializability
  *
@@ -84,7 +84,7 @@ import java.util.TreeMap
  * ## One canonical configuration per id
  *
  * `filter` is registered with one predicate, `quorumSet` with one threshold, and so on. That
- * is enough for this feature: the vocabulary's *coverage* is what `[ORA1-MODEL-02]` asks
+ * is enough for this feature: the vocabulary's *coverage* is what `ORA1 §MODEL-02` asks
  * for, while configuration *variety* is the generator's business (computenet-4ru.6), which
  * reads a rule and picks its own instances.
  *
@@ -113,7 +113,7 @@ object CoreOperators {
         const val MAP_SET = "mapSet"
 
         /**
-         * The pair-shaped bootstrap (computenet-4ru.16). Not an `[ORA1-MODEL-02]` operator —
+         * The pair-shaped bootstrap (computenet-4ru.16). Not an `ORA1 §MODEL-02` operator —
          * see the registration below for why it is in the catalog anyway, and
          * `VocabularyCompletenessTest`, whose spelled-out requirement list deliberately does
          * not name it.
@@ -144,7 +144,7 @@ object CoreOperators {
         const val GROUP_BY_GLOBAL = "groupByGlobal"
 
         /**
-         * Every aggregate `GroupByCell` is registered over — `[ORA1-MODEL-02]` names the seven
+         * Every aggregate `GroupByCell` is registered over — `ORA1 §MODEL-02` names the seven
          * `Aggregators` families explicitly, so the coverage claim is a list a test can read
          * rather than a promise in prose.
          */
@@ -187,7 +187,7 @@ object CoreOperators {
      * `UnionSetCell`, `PresenceCountCell` and `QuorumSetCell` are n-ary in the kernel (a
      * dynamic link fan-in) and n-ary in the model (any `inputs` length). A [ShapeRule],
      * though, is a fixed ordered list, because that is what makes the generator's
-     * linkability question answerable uniformly (`[ORA1-API-03]`). Two arms is therefore the
+     * linkability question answerable uniformly (`ORA1 §API-03`). Two arms is therefore the
      * *advertised* arity, not a limit of either half; a generator that wants a three-arm
      * quorum registers a second rule rather than teaching itself about fan-in.
      */
@@ -238,7 +238,7 @@ object CoreOperators {
          * `counter` and `pnCounter` are the only entries here whose output shape is a bare
          * [ElementShape.Scalar], and **no registered operator consumes a bare scalar on any
          * port**. `GraphGenerator.Builder.chooseRootShape` draws a case's root shape only among
-         * source shapes something in the vocabulary can consume, and `[ORA1-GEN-03]` forbids a
+         * source shapes something in the vocabulary can consume, and `ORA1 §GEN-03` forbids a
          * source standing as a terminal itself, so neither entry can appear in ANY generated
          * case: they are registered, paired, and honestly modelled, but never *exercised* by a
          * differential sweep. `CatalogReachabilityTest` computes that from the registrations.
@@ -252,7 +252,7 @@ object CoreOperators {
          * (`kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt`,
          * `inlet: Serve<Propagate<CounterDelta>>`); every other operator inlet under
          * `civictech.cell.data.op` serves `SetDelta` or `MapDelta`. And that one cell is
-         * already **excluded by name** from the vocabulary by the `[ORA1-HONEST-02]` ledger in
+         * already **excluded by name** from the vocabulary by the `ORA1 §HONEST-02` ledger in
          * `civictech.oracle.model.MapCellModel`'s file KDoc, because its observable is a
          * wave-completion fold the script vocabulary cannot name — a batch model of it would
          * silently assume the completeness condition it cannot check.
@@ -268,7 +268,7 @@ object CoreOperators {
          * `counter`/`pnCounter` therefore stay registered — the pairing is real and
          * `CounterSourceModel`/`PnCounterSourceModel` remain the reference a future consumer
          * would use — and this comment, the `CatalogReachabilityTest` pin, and the
-         * `[ORA1-HONEST-02]` ledger record that "registered" does not imply "exercised" for
+         * `ORA1 §HONEST-02` ledger record that "registered" does not imply "exercised" for
          * these two.
          */
 
@@ -296,11 +296,11 @@ object CoreOperators {
 
         /* `MapCell` — untagged last-writer-wins map ([24-OP-MAP-01]).
          *
-         * `[ORA1-MODEL-08]` restricts this entry to a single-writer FIFO script slice: two
+         * `ORA1 §MODEL-08` restricts this entry to a single-writer FIFO script slice: two
          * writers into one `MapCell` resolve concurrent same-key puts by **arrival order**,
          * and `MapDelta` carries no causal tags to recover that order from (G-23) — the
          * script's own event order is not warranted to be the order a live run would
-         * actually deliver once more than one writer is involved. `[ORA1-MODEL-09]`'s
+         * actually deliver once more than one writer is involved. `ORA1 §MODEL-09`'s
          * generation-time rejection of a multi-writer case is the generator's job
          * (computenet-4ru.6, not built here); `MapCellSourceModel.evaluate` enforces the
          * same restriction on the evaluation side, throwing
@@ -308,7 +308,7 @@ object CoreOperators {
          * slice rather than returning a guessed winner. See `MapCellModel.kt`'s KDoc for the
          * full reasoning and for the honesty-ledger exclusions this task also closes out
          * (`ListCell`, `OrMapCell`, `MergeableGroupByCell`, window close/eviction,
-         * `CoalescingCombineCell`; `[ORA1-HONEST-02]`). */
+         * `CoalescingCombineCell`; `ORA1 §HONEST-02`). */
         OperatorCatalog.register(
             id = Ids.MAP,
             shape = ShapeRule.source(SCALAR_MAP),
@@ -340,7 +340,7 @@ object CoreOperators {
         )
 
         /* `mapSet` — `FlatMapSetCell(f = { listOf(f(it)) })` in the kernel
-         * (FlatMapSetCell.kt:88). Registered separately because [ORA1-MODEL-02] names it
+         * (FlatMapSetCell.kt:88). Registered separately because ORA1 §MODEL-02 names it
          * separately, with a singleton-image expansion. */
         OperatorCatalog.register(
             id = Ids.MAP_SET,
@@ -351,13 +351,13 @@ object CoreOperators {
 
         /*
          * `keyBy` — the **pair-shaped bootstrap** (computenet-4ru.16), and the one entry here
-         * that `[ORA1-MODEL-02]` does not name.
+         * that `ORA1 §MODEL-02` does not name.
          *
          * Every pair-shaped entry in this file — the three `PAIR_SET` joins and the whole
          * `groupBy*` family, eleven of the twenty-eight registrations — consumes
          * `SetOf(Tuple(2))`, and until this entry existed the only registrations *producing*
          * that shape were the three joins that also consume it. Shape-typed generation
-         * (`[ORA1-GEN-02]`, D4) starts from arity-0 sources and can only append an operator
+         * (`ORA1 §GEN-02`, D4) starts from arity-0 sources and can only append an operator
          * whose inputs the frontier already carries, so the pair family was cut off from every
          * root: naming those eleven ids in a `GeneratorConfig.vocabulary` was accepted and then
          * emitted nothing. Measured before this entry landed, 600 topologies over
@@ -375,10 +375,10 @@ object CoreOperators {
          * changed.
          *
          * **It is not a claim about a kernel operator, and that is why it is absent from
-         * `VocabularyCompletenessTest`'s spelled-out `[ORA1-MODEL-02]` list.** That list is the
+         * `VocabularyCompletenessTest`'s spelled-out `ORA1 §MODEL-02` list.** That list is the
          * requirement's, checked entry by entry against the requirement text; this entry is
          * generator scaffolding that happens to be expressible as a catalog registration, which
-         * is exactly the extension seam `[ORA1-API-03]` promises — the generator picked it up
+         * is exactly the extension seam `ORA1 §API-03` promises — the generator picked it up
          * with no edit to `GraphGenerator` at all.
          *
          * [Expansions.TO_KEYED_PAIR]'s key is many-to-one on purpose; see its KDoc.
@@ -436,7 +436,7 @@ object CoreOperators {
         /* `IntersectSetCell` ([24-OP-INTERSECT-01]) — the identity join: the elements live on
          * both sides. The requirement's tag discipline (advertise on entry, delete every
          * advertised tag on exit, absorb membership-neutral churn) has no model counterpart
-         * ([ORA1-MODEL-03]); its observable consequence is set intersection. */
+         * (ORA1 §MODEL-03); its observable consequence is set intersection. */
         OperatorCatalog.register(
             id = Ids.INTERSECT,
             shape = ShapeRule.binary(SCALAR_SET, SCALAR_SET, SCALAR_SET),
@@ -467,7 +467,7 @@ object CoreOperators {
             model = JoinSetModel(Keys.FIRST, Keys.FIRST, Combiners.VALUES),
         )
 
-        /* `SemiJoinCell` in both polarities ([24-OP-SEMIJOIN-01]) — [ORA1-MODEL-02] names
+        /* `SemiJoinCell` in both polarities ([24-OP-SEMIJOIN-01]) — ORA1 §MODEL-02 names
          * semijoin and antijoin separately while the kernel is one cell with a `negated` flag,
          * so they are two entries over one class.
          *
@@ -514,7 +514,7 @@ object CoreOperators {
          * [24-OP-JOIN-01] states that of `JoinCell` in the requirement itself, and the other
          * two inherit it from the same delta type.
          *
-         * `[ORA1-MODEL-08]` requires that constraint to be documented at the registration
+         * `ORA1 §MODEL-08` requires that constraint to be documented at the registration
          * site, so: **these entries are defined for single-writer-per-key map inputs.** The
          * restriction is not on the operators — given two settled map states each is a pure,
          * deterministic function of them, which is what the models compute — but on whatever
@@ -574,7 +574,7 @@ object CoreOperators {
         // --- grouped aggregation -------------------------------------------
 
         /*
-         * `GroupByCell` over each of the seven `Aggregators` families ([ORA1-MODEL-02] names
+         * `GroupByCell` over each of the seven `Aggregators` families (ORA1 §MODEL-02 names
          * them individually, so each is its own entry). All seven group on the pair's first
          * component; the five value-projecting ones select the second component as a `Long`.
          *
@@ -754,7 +754,7 @@ object CoreOperators {
          * code, which splits any generated element domain (`ElementDomains` emits `e00`, `e01`,
          * …, and upstream operators may reduce those to single characters) into two groups of
          * comparable size. Parity of a `Char.code` is fixed by the source encoding, so the
-         * projection is deterministic across JVMs, as `[ORA1-GEN-01]` requires of anything a
+         * projection is deterministic across JVMs, as `ORA1 §GEN-01` requires of anything a
          * case's value depends on.
          *
          * Total over `Any?` like [Keys] and [Selectors], and for the same reason: the element
@@ -791,7 +791,7 @@ object CoreOperators {
      *
      * **Every projection here is total over `Any?`**, and that is a deliberate property rather
      * than defensive coding. The element domain of a generated case is the generator's choice
-     * (`[ORA1-GEN-04]`), not the registration's: a projection that threw on an unexpected
+     * (`ORA1 §GEN-04`), not the registration's: a projection that threw on an unexpected
      * domain would make *the registration* the thing that fails a sweep, rather than the
      * operator the sweep was built to exercise. Both halves of an entry take the same object,
      * so kernel and model degrade identically on an unexpected element — which is the only
