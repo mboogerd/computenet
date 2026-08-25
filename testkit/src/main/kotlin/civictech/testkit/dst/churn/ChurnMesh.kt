@@ -311,7 +311,28 @@ object ChurnMesh {
                 val b = peers[j]
                 val edge = "${a.name}<->${b.name}"
                 world.edges.declare(edge, from = a.name, to = b.name)
-                val control = LinkControl.severing(Peering.loopback(a.side, b.side))
+                // Both directions of the peering are routed THROUGH the declared edge, so the
+                // frame plane is actually reachable on this mesh ([CHA3-24]). Declaring the edge
+                // without wiring it is what left `DuplicateFault.frames` firing zero times here:
+                // a loopback does encode frames — `BridgeEgressCell`'s outlet carries `ByteArray`
+                // and `Peering.hostIngress` decodes them — but with the default
+                // `FrameInterpose.PASS_THROUGH` they never pass through `world.edges`, so the
+                // interposer a frame-plane fault installs on the named edge sees nothing. The
+                // idiom is `PartitionFaultTest`'s and `DuplicateFaultTest`'s, applied here.
+                //
+                // ONE edge name for the pair, both directions, which is the scope this mesh
+                // already has: `LinkControl.severing` severs both directions too, so a one-way
+                // partition was never expressible here. A frame-plane fault named on this edge
+                // therefore acts on `a->b` and `b->a` alike; a suite that needs one direction
+                // needs two declared edges, and that is a change to this builder.
+                val control = LinkControl.severing(
+                    Peering.loopback(
+                        a.side,
+                        b.side,
+                        interposeAToB = { frame -> world.edges.deliver(edge, frame) },
+                        interposeBToA = { frame -> world.edges.deliver(edge, frame) },
+                    ),
+                )
                 LinkControls.declare(world, edge, control)
                 a.attach(control)
                 b.attach(control)
