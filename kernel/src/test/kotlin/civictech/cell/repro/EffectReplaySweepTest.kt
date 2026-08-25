@@ -341,15 +341,105 @@ internal object C9SweepRegistrar {
     const val C9_AT_MOST_ONCE_IDENTITY: String =
         "[CHA2-11]: an Effectful sink acted on a (sourceId, counter) more than once across a restart"
 
+    /** The decided property's check id (`[24-DUR-09]`), see [atLeastOnceBoundedRefire]. */
+    const val AT_LEAST_ONCE_CHECK_ID: String = "c9-at-least-once-bounded-refire"
+
+    /**
+     * **`[24-DUR-09]`'s property** — the guarantee the write-ahead window actually makes, composed
+     * with `[CHA1-53]`'s exclusive-payload accounting (`[CHA2-26]`) exactly as
+     * [atMostOncePerPosition] is.
+     *
+     * `computenet-xxeo` decided (2026-08-25) that at-least-once **is** the intended guarantee
+     * across the frame-journaled / effect-fired / advance-journaled window, and recorded it as
+     * `[24-DUR-09]` (spec 24 §Effectful) plus a resolution on the G-59/C-9 entry in
+     * `concord/corpus/DISPUTES.md`. The decision applies `[24-DUR-07]`'s criterion — a
+     * duplicate is loud and bounded, a suppression is a silent unrecoverable omission — and 93
+     * I-7's external-effect idempotency ceiling to a window neither passage itself names, rather
+     * than choosing a fresh one; the kernel already implements it, so
+     * nothing in `:kernel`'s main source set moved.
+     *
+     * So BS-2 asserts the decided property instead of the at-most-once one it was authored
+     * against. Two clauses, each with its own stable identity because they are different failures:
+     *
+     * 1. **No effect is lost.** Every position the host acted on before the crash, and the live
+     *    post-recovery emission, was acted on at least once. This is the direction an at-most-once
+     *    flip would break, and it is the reason that flip was rejected — so it has to be a live
+     *    tripwire, not prose.
+     * 2. **Duplication is bounded to what a crash can catch in flight.** One restart can leave at
+     *    most one delivery inside the window, so at most one position may repeat and it may repeat
+     *    at most twice. A regression that re-fired a whole replayed tail fails here.
+     *
+     * ## Which positions clause 1 can require of *every* prefix, and where the rest are pinned
+     *
+     * A `DstCheck` sees the world, not the prefix `k` the run was cut at, so clause 1 has to be
+     * stated in terms every prefix shares. Two positions are not among them, both measured rather
+     * than reasoned:
+     *
+     * - **The in-flight one, counter `EMITS - 1`.** The restart fires at
+     *   [DurableEffectSweepGraph.restartStep] *after* that step's emission has been journaled at
+     *   intake and *before* its delivery task runs, so its frame is the last record in the log at
+     *   the crash. A prefix below that record discards the write-ahead record itself, and an
+     *   invocation whose journal record did not survive was never durably accepted — `[CHA2-15]`'s
+     *   torn-tail half certifies exactly that as correct. It is required where it *is* required:
+     *   BS-2's whole-log tripwire below asserts it fires exactly once when the log survives, which
+     *   is the assertion an at-most-once ordering would redden.
+     * - **The last one, counter `EMITS`.** At `k = 0` the host comes back with nothing to replay,
+     *   the controller finds no work, and `DstRun` ends *at* the restart step — so the final
+     *   emission never happens. Observed, at 6 steps of 60000: that prefix's log is the six live
+     *   pre-crash effects and nothing else. Requiring it would fail `k = 0` for a reason that is
+     *   about the run ending, not about an effect.
+     *
+     * What remains is required of every prefix: the positions the sink acted on **live, before the
+     * crash**, which no replay may erase.
+     *
+     * [atMostOncePerPosition] is kept and still grades BS-3 and BS-6, whose recorded verdicts are
+     * stated in its terms and are unaffected by this decision.
+     */
+    val atLeastOnceBoundedRefire: DstCheck = CheckRegistry.register(AT_LEAST_ONCE_CHECK_ID) { world ->
+        val log = EffectLogs.require(world)
+
+        val fired = log.mapNotNull { it.counter }.toSet()
+        // Counters are 1-based, and the emissions strictly before `restartStep` are the ones the
+        // sink acted on live before the crash — the two above them are excused for the two
+        // measured reasons in this check's KDoc, and only for those.
+        val required = (1L..(DurableEffectSweepGraph.EMITS - 2).toLong()).toSet()
+        val missing = required - fired
+        if (missing.isNotEmpty()) {
+            throw C9AssertionFailure(
+                identity = C9_EFFECT_LOST_IDENTITY,
+                detail = "counters acted on live before the crash and then never at all: " +
+                    "$missing; whole effect log (${log.size} entries): $log",
+            )
+        }
+
+        val repeated = log.groupingBy { it.position }.eachCount().filter { it.value > 1 }
+        if (repeated.size > 1 || repeated.values.any { it > 2 }) {
+            throw C9AssertionFailure(
+                identity = C9_UNBOUNDED_REFIRE_IDENTITY,
+                detail = "repeated positions: " +
+                    repeated.entries.joinToString { "${it.key} fired ${it.value}x" } +
+                    "; one restart can catch at most one delivery in the window" +
+                    "; whole effect log (${log.size} entries): $log",
+            )
+        }
+
+        ExclusiveLedgers.check().verify(world)
+    }
+
+    /** `[24-DUR-09]`'s loss clause, as a fixed identity the shrinker can compare. */
+    const val C9_EFFECT_LOST_IDENTITY: String =
+        "[24-DUR-09]: an Effectful sink acted on no invocation at all for a position, across a restart"
+
+    /** `[24-DUR-09]`'s bound clause, as a fixed identity the shrinker can compare. */
+    const val C9_UNBOUNDED_REFIRE_IDENTITY: String =
+        "[24-DUR-09]: an Effectful sink re-fired beyond the one delivery a crash can catch in flight"
+
     /** `--register` argument for a rendered replay command (`[CHA1-51]`). */
     val REGISTRARS: List<String> = listOf(C9SweepRegistrar::class.java.name)
 
     /** Forces this object's initialiser from a test that only needs the side effect. */
     fun ensureRegistered() = Unit
 }
-
-/** BS-2's reproduction id, the token `@ExpectedFailure` matches on. Never a formatted message. */
-private const val C9_PREFIX_RESTART_REFIRE = "CHA2-BS-2-prefix-restart-refire"
 
 /**
  * **C-9 effect replay under CHA1's rig: BS-2, BS-3, BS-6 and BS-17** (`[CHA2-11]`, `[CHA2-12]`,
@@ -373,12 +463,15 @@ private const val C9_PREFIX_RESTART_REFIRE = "CHA2-BS-2-prefix-restart-refire"
  * `doc/evidence-lane-findings.md` → "`computenet-umx.1.6` — rig-gated C-9 sweeps" carries the
  * reasoning, the transcripts and the replay instructions. In one line each:
  *
- * - **BS-2 (`[CHA2-11]`) — FAILS, and is annotated as an expected failure.** At seed 101 the
- *   at-most-once property breaks at 6 of 17 prefixes: every odd `k` inside the log the host had
- *   written by the restart step. The frame for counter `c` sits at record `2(c-1)` and its
- *   frontier advance at `2(c-1)+1`, so an odd prefix is precisely a crash landing *between* an
- *   effect firing and the record saying it had fired — and replay re-fires it. Owner
- *   `computenet-xxeo`.
+ * - **BS-2 — the write-ahead window, and the guarantee it makes (`[24-DUR-09]`).** As authored
+ *   (`[CHA2-11]`) it asserted at-most-once and FAILED at seed 101 on 6 of 17 prefixes: every odd
+ *   `k` inside the log the host had written by the restart step. The frame for counter `c` sits at
+ *   record `2(c-1)` and its frontier advance at `2(c-1)+1`, so an odd prefix is precisely a crash
+ *   landing *between* an effect firing and the record saying it had fired — and replay re-fires
+ *   it. `computenet-xxeo` decided that IS the guarantee (spec 24 §Effectful, `[24-DUR-09]`;
+ *   `concord/corpus/DISPUTES.md`'s G-59/C-9 entry), so the `@ExpectedFailure` is gone and the body
+ *   asserts the decided property on the same seed and the same full `0..R` range: **no effect is
+ *   lost, and duplication is bounded to the one delivery a crash can catch in flight.**
  * - **BS-3 (`[CHA2-12]`) — the deferred rollback verdict: the re-delivered invocations DO
  *   re-fire.** Recorded from the run, not assumed, and BS-2 is what makes it more than a
  *   curiosity: an ordinary truncation reaches the same state, so the rollback is not an
@@ -393,10 +486,12 @@ private const val C9_PREFIX_RESTART_REFIRE = "CHA2-BS-2-prefix-restart-refire"
  *
  * ## `[CHA2-50]`, `[CHA2-51]`
  *
- * No kernel `main` change: BS-2's defect is filed as `computenet-xxeo` and left failing under
- * `@ExpectedFailure`, which is the disposition the feature prescribes. No concord scenario and no
- * corpus schema change; `concord/corpus/DISPUTES.md`'s G-59/C-9 boundary entry is **extended**
- * with this suite's reproduction ids and nothing else.
+ * Still no kernel `main` change, and now for a stronger reason than the evidence lane's rule: the
+ * kernel already implements the decided guarantee, so `computenet-xxeo` resolved by *recording*
+ * the boundary (`[24-DUR-09]`, and the G-59/C-9 entry's resolution) rather than by moving code.
+ * No concord scenario and no corpus schema change either — the concord scenario language carries
+ * no crash/replay fault verbs at authoring level, which is why these reproductions live outside
+ * the corpus and `[24-DUR-09]` enters `CONCORDANCE.md` as a gap row.
  */
 class EffectReplaySweepTest {
 
@@ -508,21 +603,22 @@ class EffectReplaySweepTest {
     // ==============================================================================================
 
     /**
-     * **BS-2 — a restart from every journal prefix `k in 0..R` must act on each
-     * `(sourceId, counter)` at most once. IT DOES NOT.**
+     * **BS-2 — a restart from every journal prefix `k in 0..R` loses no effect, and re-fires at
+     * most the one delivery the crash caught in flight (`[24-DUR-09]`).**
      *
      * `k` is where the crash landed in the write-ahead log. `k = R` is the ordinary restart every
      * durability test performs; `k = 0` is a host that comes back with nothing; the interior `k`s
-     * are the cases nobody writes by hand — and they are where the property breaks.
+     * are the cases nobody writes by hand — and they are where the boundary this test now pins
+     * shows itself.
      *
-     * ## The observed finding, at pinned seed [Seeds.PREFIX_SWEEP]
+     * ## What this test asserted before, and why the property changed
      *
-     * `failed on 6 of 17 prefixes; failing k = [1, 3, 5, 7, 9, 11]` — every **odd** prefix inside
-     * the log the host had written by the restart step. Each failure is a single duplicated
-     * position, always the frame whose frontier advance the prefix cut off: `k=1` re-fires
-     * `(s,1)`, `k=3` re-fires `(s,2)`, and so on to `k=11` re-firing `(s,6)`. Every even prefix
-     * passes, and recovery reports `recovery-complete@k` in all six failures — this is a clean
-     * replay, not a damaged one.
+     * As authored (`computenet-umx.1.6`, the CHA2 evidence lane) this body asserted `[CHA2-11]`'s
+     * **at-most-once** property and FAILED at 6 of 17 prefixes on seed [Seeds.PREFIX_SWEEP] — every
+     * **odd** `k` inside the log the host had written by the restart step, each a single duplicated
+     * position, always the frame whose frontier advance the prefix cut off (`k=1` re-fires `(s,1)`,
+     * `k=3` re-fires `(s,2)`, and so on to `k=11` re-firing `(s,6)`). It stood as an
+     * `@ExpectedFailure` owned by `computenet-xxeo`, which owned the *decision* as much as any fix.
      *
      * The mechanism follows from the record layout the census test pins: `ManagedHost` journals a
      * hosted frame at intake, delivers it on a later scheduler task, and journals the `Effectful`
@@ -531,77 +627,124 @@ class EffectReplaySweepTest {
      * "already acted on" advance is not, `HostDurability.alreadyProcessed` says no, and the
      * external effect fires a second time.
      *
-     * ## Why this is an `@ExpectedFailure` and not a fixed kernel
+     * **`computenet-xxeo` decided (2026-08-25) that this is the intended guarantee**, and recorded
+     * it normatively as `[24-DUR-09]` (spec 24 §Effectful, "The write-ahead window is
+     * at-least-once") plus a resolution on the G-59/C-9 entry in `concord/corpus/DISPUTES.md`. The
+     * decision applies a criterion the spec had already decided, to a window the spec had not
+     * itself named, rather than choosing a fresh one: `[24-DUR-07]` fixed
+     * the criterion for this class of trade — a duplicate is loud and bounded, a suppression is a
+     * silent unrecoverable omission — `[24-DUR-08]`'s eviction bound re-applies it in the same
+     * direction, and 93 I-7's external-effect idempotency ceiling says exactly-once across an
+     * arbitrary external world is not the kernel seam's to give. `[24-DUR-05]` was never violated
+     * here: a position whose advance never became durable is not "at or behind" the restored
+     * frontier, so its antecedent does not hold. **No kernel `main` change was needed or made.**
      *
-     * `[CHA2-50]`: this is the evidence lane, and a reproduction's deliverable is the failing test
-     * plus the filed record — the fix belongs to KFX. The record is **`computenet-xxeo`**, which
-     * owns both the decision (is `[24-DUR-05]` at-least-once, at-most-once, or something that
-     * commits the effect with its dedupe record?) and the change. The annotation fails the build
-     * the moment the body passes (`[CHA2-44]`), so the fix landing flips this test red and cannot
-     * be missed.
+     * ## The property now asserted, and why it is not a weakening
      *
-     * Nothing here is softened to reach that state: the sweep asserts the unweakened `[CHA2-11]`
-     * property, over the full `0..R` range on the pinned seed.
-     * `PrefixRestartSweepReport`'s `init` refuses a report that does not cover its whole declared
-     * range, so the sweep cannot be narrowed to the prefixes that passed even by a caller that
+     * The seed and the full `0..R` range are unchanged, and the check is
+     * [C9SweepRegistrar.atLeastOnceBoundedRefire] — `[24-DUR-09]`'s two clauses:
+     *
+     * - **no position is lost**, which is the direction an at-most-once flip would break and is
+     *   therefore the live tripwire against the rejected alternative; the old at-most-once check
+     *   could not see it at all, since a position that fired zero times simply left the grouping;
+     * - **duplication is bounded to one position, firing at most twice**, which is what one crash
+     *   can catch in flight. A regression re-firing a replayed tail fails here.
+     *
+     * `PrefixRestartSweepReport`'s `init` still refuses a report that does not cover its whole
+     * declared range, so the sweep cannot be narrowed to a friendlier subset even by a caller that
      * wanted to, and every `k` runs regardless of earlier failures (`[CHA1-39]`'s reason: "k=7
      * only" and "every k above 3" are different findings a fail-fast loop cannot tell apart).
      */
     @Test
-    @ExpectedFailure(
-        signature = C9_PREFIX_RESTART_REFIRE,
-        reason = "a crash between an Effectful delivery's journaled frame and its frontier advance re-fires the effect on replay",
-        owner = "computenet-xxeo",
-        filedAs = "doc/evidence-lane-findings.md -> computenet-umx.1.6 - rig-gated C-9 sweeps",
-    )
-    fun `BS-2 a restart from every journal prefix acts on each source counter position at most once`() =
-        withSignature(C9_PREFIX_RESTART_REFIRE) {
-            val graph = C9SweepRegistrar.prefixSweep
-            val census = journalRecordCount(
-                graph.spec,
-                seed = Seeds.PREFIX_SWEEP,
-                journal = DurableEffectSweepGraph.JOURNAL,
-            )
+    fun `BS-2 a restart from every journal prefix loses no effect and re-fires at most the frame in flight`() {
+        val graph = C9SweepRegistrar.prefixSweep
+        val census = journalRecordCount(
+            graph.spec,
+            seed = Seeds.PREFIX_SWEEP,
+            journal = DurableEffectSweepGraph.JOURNAL,
+        )
 
-            val sweep = prefixRestartSweep(
-                graph = graph.spec,
-                seed = Seeds.PREFIX_SWEEP,
-                host = DurableEffectSweepGraph.HOST,
-                journal = DurableEffectSweepGraph.JOURNAL,
-                records = census.records,
-                atStep = graph.restartStep,
-                check = C9SweepRegistrar.atMostOncePerPosition,
-            )
+        val sweep = prefixRestartSweep(
+            graph = graph.spec,
+            seed = Seeds.PREFIX_SWEEP,
+            host = DurableEffectSweepGraph.HOST,
+            journal = DurableEffectSweepGraph.JOURNAL,
+            records = census.records,
+            atStep = graph.restartStep,
+            check = C9SweepRegistrar.atLeastOnceBoundedRefire,
+        )
 
-            println("[BS-2] ${sweep.summary()}")
-            assertEquals((0..census.records).toList(), sweep.entries.map { it.k }, "every k in 0..R, in order")
+        println("[BS-2] ${sweep.summary()}")
+        assertEquals((0..census.records).toList(), sweep.entries.map { it.k }, "every k in 0..R, in order")
 
-            // A broken experiment is not a finding, and must not be mistaken for one. These three
-            // are asserted OUTSIDE the recorded failure: if the sweep ever stops being executable,
-            // that is a new defect and must redden the build rather than be absorbed by the
-            // annotation ([CHA2-43]).
-            val broken = sweep.entries.filter { it.error != null }
-            check(broken.isEmpty()) {
-                "a restart must be executable at every prefix; broken experiments at " +
-                    "k=${broken.map { it.k }}: ${broken.firstOrNull()?.message}"
-            }
-            check(sweep.exhausted.isEmpty()) {
-                "no prefix may leave the run unquiesced — an unquiesced run claims nothing: " +
-                    "k=${sweep.exhausted.map { it.k }}"
-            }
-            sweep.entries.forEach { entry ->
-                val report = requireNotNull(entry.report) { "k=${entry.k} produced no report" }
-                check(report.appliedFaults.single().fired > 0) {
-                    "the restart was inert at k=${entry.k}, so nothing was tested there: ${report.summary()}"
-                }
-            }
-
-            // BS-17: every failing k is pinned WITH its own artifact and replay command, written
-            // BEFORE the assertion so the evidence exists whatever the assertion then does.
-            recordPrefixFailures(sweep)
-
-            sweep.assertAllPassed()
+        // A broken experiment is not a finding, and must not be mistaken for one. If the sweep
+        // ever stops being executable, that is a new defect and must redden the build rather than
+        // be absorbed by a green property ([CHA2-43]).
+        val broken = sweep.entries.filter { it.error != null }
+        check(broken.isEmpty()) {
+            "a restart must be executable at every prefix; broken experiments at " +
+                "k=${broken.map { it.k }}: ${broken.firstOrNull()?.message}"
         }
+        check(sweep.exhausted.isEmpty()) {
+            "no prefix may leave the run unquiesced — an unquiesced run claims nothing: " +
+                "k=${sweep.exhausted.map { it.k }}"
+        }
+        sweep.entries.forEach { entry ->
+            val report = requireNotNull(entry.report) { "k=${entry.k} produced no report" }
+            check(report.appliedFaults.single().fired > 0) {
+                "the restart was inert at k=${entry.k}, so nothing was tested there: ${report.summary()}"
+            }
+        }
+
+        // BS-17: any failing k is pinned WITH its own artifact and replay command, written BEFORE
+        // the assertion so the evidence exists whatever the assertion then does.
+        recordPrefixFailures(sweep)
+
+        sweep.assertAllPassed()
+
+        // ------------------------------------------------------------------------------------
+        // [24-DUR-09]'s tripwire against the ordering that was REJECTED.
+        //
+        // The sweep's check cannot require the in-flight position of every prefix (see
+        // C9SweepRegistrar.atLeastOnceBoundedRefire's KDoc: below its own frame's index the
+        // prefix has discarded the write-ahead record itself). Here the whole log survives —
+        // same graph, same pinned seed, prefix = null — so the frame the crash caught in flight
+        // IS durable, and at-least-once says the sink must act on it on replay.
+        //
+        // This is the assertion the rejected at-most-once ordering would redden: journaling the
+        // advance before invoking the handler leaves a durable "already acted on" record for an
+        // effect that never happened, and this position would then fire ZERO times, here and
+        // forever. Removing or weakening it removes the only live guard against that flip.
+        // ------------------------------------------------------------------------------------
+        val wholeLog = RestartAtFrontierFault(
+            id = "restart",
+            host = DurableEffectSweepGraph.HOST,
+            journal = DurableEffectSweepGraph.JOURNAL,
+            atStep = graph.restartStep,
+            prefix = null,
+        )
+        val wholeLogReport = DstRun(
+            graph.spec,
+            FaultPlan.of(Seeds.PREFIX_SWEEP, wholeLog),
+            check = C9SweepRegistrar.atLeastOnceBoundedRefire,
+        ).execute()
+
+        val inFlight = (DurableEffectSweepGraph.EMITS - 1).toLong()
+        println("[BS-2 whole log] counters=${graph.effects.map { it.counter }} outcome=${wholeLogReport.outcome}")
+        assertNotNull(wholeLog.lastRecovery, "the whole-log restart never fired: ${wholeLogReport.summary()}")
+        assertEquals(
+            DstOutcome.PASSED,
+            wholeLogReport.outcome,
+            "[24-DUR-09] must hold when the whole log survives: ${wholeLogReport.summary()}",
+        )
+        assertEquals(
+            1,
+            graph.effects.count { it.counter == inFlight },
+            "[24-DUR-09]: the invocation the crash caught in flight is durable in the whole log, so replay " +
+                "must act on it exactly once — zero here is the silent effect loss an at-most-once ordering " +
+                "would introduce, and is the reason that ordering was rejected: ${graph.effects}",
+        )
+    }
 
     /**
      * BS-17's reporting half for a prefix sweep (`[CHA1-50]`, `[CHA1-51]`).
@@ -615,7 +758,14 @@ class EffectReplaySweepTest {
     private fun recordPrefixFailures(sweep: PrefixRestartSweepReport) {
         sweep.failures.forEach { entry ->
             val report = entry.report ?: return@forEach
-            println("[BS-2 FAILING k=${entry.k}]\n${renderFailure(report, "c9-prefix-restart-k${entry.k}")}")
+            println(
+                "[BS-2 FAILING k=${entry.k}]\n" +
+                    renderFailure(
+                        report,
+                        "c9-prefix-restart-k${entry.k}",
+                        C9SweepRegistrar.AT_LEAST_ONCE_CHECK_ID,
+                    ),
+            )
         }
     }
 
@@ -1072,14 +1222,18 @@ class EffectReplaySweepTest {
      * graph id and the observed outcome all come from [report] — so a report produced inside a
      * sweep can be captured without the sweep exposing the run object that produced it.
      */
-    private fun renderFailure(report: DstReport, suite: String): String {
+    private fun renderFailure(
+        report: DstReport,
+        suite: String,
+        checkId: String = C9SweepRegistrar.CHECK_ID,
+    ): String {
         val artifact: File? = runCatching {
             DstArtifacts.write(
                 DstArtifact.of(
                     DstRun(GraphRegistry.require(report.graphId), report.plan, report.budget),
                     report,
                     suite = suite,
-                    checkId = C9SweepRegistrar.CHECK_ID,
+                    checkId = checkId,
                 ),
             )
         }.getOrNull()

@@ -962,6 +962,47 @@ units-to-tens of baselines a shard fan-out or link-install burst produces, and
 holds the per-inlet checkpoint cost in the low hundreds of kilobytes. No
 workload has been profiled against it.
 
+**The write-ahead window is at-least-once, and that is the decided guarantee**
+*(decided 2026-08-25, `computenet-xxeo`; measured by `computenet-umx.1.6`'s BS-2
+sweep at pinned seed 101)*. A hosted frame is journaled at intake, delivered on a
+later scheduler task, and the frontier advance recording the delivery is journaled
+beside it — so an `Effectful` sink's external act happens *between* two journal
+records, and a crash inside that window leaves the frame durable and the "already
+acted on" advance not. Replay re-delivers the frame, the restored frontier does not
+cover it, and the sink acts a second time. `[24-DUR-05]` is not violated by that: its
+antecedent is "at or behind the processed-frontier", and a position whose advance
+never became durable is not on the restored frontier at all. What the window bounds
+is the rule's *scope* — exactly-once effect delivery is exactly as durable as the
+frontier journal and no stronger — and the boundary is stated here rather than left
+to be rediscovered.
+
+The alternative orderings were considered and rejected on the criterion
+`[24-DUR-07]` already decided this class of trade on: **a duplicate is loud and
+bounded, a suppression is a silent unrecoverable omission**. Journaling the advance
+*before* invoking the handler (at-most-once) trades this re-fire for a crash in the
+mirrored window leaving a durable "already acted on" record for an effect that never
+happened — the sink is then permanently blind to that position with no protocol by
+which it could learn, which is precisely what `[24-DUR-07]` chose firing over and
+what `[24-DUR-08]`'s eviction bound keeps choosing ("eviction only ever *shrinks*
+the suppression set"). A two-phase construction closer to exactly-once needs the
+external effect and its dedupe record to commit together; the kernel seam cannot
+express that for an arbitrary external world, and that is 93 I-7's stated
+external-effect idempotency ceiling — "R8 dedups re-delivery only if the sink holds
+a durable processed-frontier *and* the external world accepts idempotent
+re-delivery" — under which this window sits, alongside the evicted-baseline
+duplicate above. `[24-DUR-09]` IF a host crash lands between an `Effectful` sink
+acting on an invocation and that inlet's frontier advance for it becoming durable,
+THEN the replayed invocation SHALL be delivered to the sink rather than suppressed
+— the effect is at-least-once across that window and the duplicate is bounded to the
+one delivery the crash caught in flight (Unwanted behavior).
+
+Two limits are honest to state beside it. The bound is **per crash, not per run**: a
+host that crashes repeatedly can duplicate one position per crash, each time a
+different in-flight frame. And the window is not closable by narrowing it — shrinking
+the gap between the effect and its advance reduces the probability of landing inside
+it and changes nothing about the guarantee, so no fsync placement, batching change or
+scheduler ordering should be read as retiring `[24-DUR-09]`.
+
 The decided journal classification still diverges from the landed
 tee: 93 I-7 journals only `PORT_API` data plus topology events, while the
 shipped journal appends every intake frame (management included) and does

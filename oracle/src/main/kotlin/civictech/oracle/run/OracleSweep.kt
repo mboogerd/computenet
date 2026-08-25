@@ -14,8 +14,9 @@ import civictech.testkit.forEachSeed
  *
  * The loop is `civictech.testkit.forEachSeed`, not a hand-rolled `for` with an assertion in
  * it. That is the whole point: `forEachSeed` runs **every** seed regardless of earlier
- * failures and rethrows one summary — `"failed on N of M seeds; first: seed=K — ..."` — with
- * the first failure as cause. A fail-fast loop would report "seed 27 disagrees" where the
+ * failures and rethrows a [civictech.testkit.dst.SweepFailure] (computenet-e0to) whose
+ * `detail` carries the density summary — `"failed on N of M seeds; first: seed=K — ..."` —
+ * with the first failure as cause. A fail-fast loop would report "seed 27 disagrees" where the
  * honest reading is "4 of 200 disagree", and those two are different findings: the first looks
  * like a pinned counterexample, the second like a systematic seam. This object does not
  * reimplement that behavior and must not: `forEachSeed` IS the required density form.
