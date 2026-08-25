@@ -12,7 +12,7 @@ import java.io.Serializable
  * **kind**, never on a message string.
  *
  * Sealed to the five kinds the feature design names, the glitch kind design D5 requires, and the
- * two **mesh** kinds ORA2 adds ([ReplicaDivergence], [ReplicasAgreeButWrong], `[ORA2-CONV-03]`): a
+ * two **mesh** kinds ORA2 adds ([ReplicaDivergence], [ReplicasAgreeButWrong], `ORA2 §CONV-03`): a
  * [Mismatch] is a genuine disagreement between the kernel and the reference model at
  * quiescence; a [WavePrefixViolation] is a disagreement *during* the run — an intermediate
  * observation that is no prefix of the wave sequence (`[ORA1-DIFF-06]`); a [DeadLetterFailure]
@@ -20,7 +20,7 @@ import java.io.Serializable
  * [ModelEvaluationFailure] is the reference model itself breaking, so a broken oracle is never
  * read as a broken kernel (D10). A [ReplicaDivergence] is the replicas of one logical id ending
  * quiescent holding different states, and a [ReplicasAgreeButWrong] is all of them holding the
- * SAME state that is not the model's — the distinction `[ORA2-CONV-02]` exists to force, because
+ * SAME state that is not the model's — the distinction `ORA2 §CONV-02` exists to force, because
  * a convergence check that only compared replicas to each other passes the second case silently.
  * Every failure kind carries the [seed] that produced it — the
  * one fact a shrinker (a later feature) always needs to replay the case.
@@ -91,8 +91,8 @@ sealed interface RunOutcome {
     ) : RunOutcome
 
     /**
-     * **The replicas of one logical id do not agree** — ORA2's `[ORA2-CONV-03]` divergence
-     * verdict, and the one `[ORA2-DIFF-09]` requires to be distinct from a [Mismatch].
+     * **The replicas of one logical id do not agree** — `ORA2 §CONV-03` divergence
+     * verdict, and the one `ORA2 §DIFF-09` requires to be distinct from a [Mismatch].
      *
      * ## Why not a [Mismatch]
      *
@@ -114,14 +114,14 @@ sealed interface RunOutcome {
      * @property logicalId the replicated logical id, as text — the mesh this verdict is about.
      * @property caseMarker how the case is identified in a report, as on [Mismatch].
      * @property expected the model's ONE converged reference answer for the whole script
-     *   (`[ORA2-CONV-01]`). Present even here: a divergence report that named only the replicas'
+     *   (`ORA2 §CONV-01`). Present even here: a divergence report that named only the replicas'
      *   disagreement would leave the reader unable to tell which of them — possibly none — is
      *   right.
      * @property perReplica each named replica's fold, keyed by its script `SourceId` text, folded
-     *   from that replica's OWN delta outlet stream (`[ORA2-CONV-04]`).
+     *   from that replica's OWN delta outlet stream (`ORA2 §CONV-04`).
      * @property keys per-key evidence for every key on which the reference and the replicas do not
      *   all agree, each naming the accepting replica of the reference's winning dot
-     *   (`[ORA2-DIFF-09]`).
+     *   (`ORA2 §DIFF-09`).
      */
     data class ReplicaDivergence(
         val seed: Long,
@@ -134,7 +134,7 @@ sealed interface RunOutcome {
     ) : RunOutcome, Serializable
 
     /**
-     * **Every replica agrees, and they are all wrong** — the verdict `[ORA2-CONV-02]` exists for.
+     * **Every replica agrees, and they are all wrong** — the verdict `ORA2 §CONV-02` exists for.
      *
      * A convergence oracle that only asked "do the replicas agree?" passes a uniformly wrong mesh:
      * agreement is exactly what a shared bug in the dot algebra produces, since every replica runs
@@ -247,7 +247,7 @@ sealed interface RunOutcome {
  * Per-key evidence in a mesh verdict: what the reference says the key binds, which dot won it and
  * **which replica accepted that dot**, and what each replica actually exposes.
  *
- * `[ORA2-DIFF-09]` names the accepting replica specifically, and the reason is diagnostic rather
+ * `ORA2 §DIFF-09` names the accepting replica specifically, and the reason is diagnostic rather
  * than decorative: a divergent key is repaired by finding the gossip path that did not carry the
  * winning dot, and the dot's *origin* is where that path starts. `expected` alone says the answer
  * is wrong; [winningDot] says whose write the mesh failed to carry.

@@ -55,7 +55,7 @@ data class GeneratorConfig(
     val hostCount: Int = 1,
     /**
      * How many replicas of ONE logical source cell a generated case places, across
-     * [replicaCount] distinct `ManagedHost`s sharing one `LocationRegistry` (`[ORA2-GEN-03]`).
+     * [replicaCount] distinct `ManagedHost`s sharing one `LocationRegistry` (`ORA2 §GEN-03`).
      *
      * `1` — the default — is ORA1's shape exactly: no replication, no gossip, and a generated
      * case byte-identical to what the same `(seed, config)` produced before this field existed.
@@ -63,14 +63,14 @@ data class GeneratorConfig(
      * Greater than 1 is ORA2's **writer dimension**: in the dot algebra a writer *is* a replica
      * instance (`civictech.oracle.model.ModelDot` is `(counter, SourceId)`, minted per instance,
      * mirroring `OrMapCell`'s per-instance `dotSource`), so "two writers" and "two replicas" are
-     * one knob and not two. `[ORA2-GEN-01]`'s "only where the vocabulary contains only convergent
+     * one knob and not two. `ORA2 §GEN-01`'s "only where the vocabulary contains only convergent
      * cells" is enforced by [validateReplication] below.
      */
     val replicaCount: Int = 1,
     /**
      * The **configured** fraction of writes that should be issued genuinely concurrently —
      * neither replica having absorbed the other's prior write to that key at issue time
-     * (`[ORA2-GEN-02]`).
+     * (`ORA2 §GEN-02`).
      *
      * Configuring it is not achieving it: a script whose gossip happens to precede every write
      * realises none of it. The ACHIEVED ratio is therefore measured per case and carried on
@@ -80,7 +80,7 @@ data class GeneratorConfig(
     val concurrencyRatio: Double = 0.0,
     /**
      * Fraction of keyed writes biased onto an **already-populated** key rather than a fresh one
-     * (`[ORA2-GEN-05]`): the re-put and reset-remove cases, which are where `OrMapCell`'s atomic
+     * (`ORA2 §GEN-05`): the re-put and reset-remove cases, which are where `OrMapCell`'s atomic
      * retract-then-add and its reset-remove tombstoning are actually exercised. A script that
      * only ever puts fresh keys never mints a second dot at one key and never tombstones one.
      */
@@ -106,7 +106,7 @@ data class GeneratorConfig(
         require(populatedKeyBias in 0.0..1.0) { "populatedKeyBias must be in 0.0..1.0: $populatedKeyBias" }
         require(replicaCount == 1 || hostCount >= replicaCount) {
             "replicaCount $replicaCount needs at least that many hosts to place replicas on " +
-                "distinct ManagedHosts ([ORA2-GEN-03]); hostCount is $hostCount"
+                "distinct ManagedHosts (ORA2 §GEN-03); hostCount is $hostCount"
         }
     }
 
@@ -142,7 +142,7 @@ data class GeneratorConfig(
     }
 
     /**
-     * `[ORA2-GEN-01]` / `[ORA2-DIFF-12]` / BS-14: a replicated sweep admits **only convergent**
+     * `ORA2 §GEN-01` / `ORA2 §DIFF-12` / BS-14: a replicated sweep admits **only convergent**
      * cells, and an order-dependent untagged one is rejected here — at configuration time,
      * before a single case is generated — with a message naming the cell and the reason.
      *
@@ -169,7 +169,7 @@ data class GeneratorConfig(
                 "(and ListCell/ListDelta) resolve concurrent writes by arrival order at one " +
                 "instance, not by a convergent merge, so two replicas accepting concurrent " +
                 "writes have no order-independent state to converge on and no generation-time " +
-                "writer pinning can supply one. [ORA2-GEN-01]/[ORA2-DIFF-12] (BS-14): a " +
+                "writer pinning can supply one. ORA2 §GEN-01/ORA2 §DIFF-12 (BS-14): a " +
                 "replicated sweep admits only convergent cells."
         }
     }
@@ -184,7 +184,7 @@ data class GeneratorConfig(
         val REPLICATED_SWEEP_SEEDS: LongRange = 1L..40L
 
         /**
-         * The default replicated sweep configuration (`[ORA2-GEN-01]`..`[ORA2-GEN-05]`): three
+         * The default replicated sweep configuration (`ORA2 §GEN-01`..`ORA2 §GEN-05`): three
          * `orMap` replicas of one logical source on three hosts, joined with a second unreplicated
          * `orMap` source, writing into a deliberately small key domain at high configured
          * concurrency.

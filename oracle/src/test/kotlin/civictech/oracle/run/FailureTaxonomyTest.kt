@@ -626,7 +626,7 @@ class FailureTaxonomyTest {
     }
 
     // =====================================================================
-    // ORA2's mesh verdicts sit in the same taxonomy ([ORA2-CONV-03])
+    // ORA2's mesh verdicts sit in the same taxonomy (ORA2 §CONV-03)
     // =====================================================================
 
     @Test
@@ -634,7 +634,7 @@ class FailureTaxonomyTest {
         // The shrinker identifies a failure by its RunOutcome VARIANT (plus the terminal, where
         // one is named). Adding the two mesh kinds without extending FailureSignature would make a
         // shrink of a divergence retain a unanimous-wrong-answer case as "the same failure" — the
-        // exact confusion [ORA2-CONV-03] exists to prevent, arriving one layer down.
+        // exact confusion ORA2 §CONV-03 exists to prevent, arriving one layer down.
         //
         // Neither names a terminal, and that is structural rather than an omission: a mesh verdict
         // is about the replicas of one logical id, not about a terminal of a graph.

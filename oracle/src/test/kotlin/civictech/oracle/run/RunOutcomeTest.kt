@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test
 
 /**
  * RunOutcome is a sealed hierarchy of exactly the kinds the feature designs name — ORA1's five
- * plus the glitch kind, plus ORA2's two mesh kinds (`[ORA2-CONV-03]`) — each
+ * plus the glitch kind, plus ORA2's two mesh kinds (`ORA2 §CONV-03`) — each
  * matchable on type rather than message text, and [StateDifference.between] computes
  * `[ORA1-DIFF-02]`'s symmetric difference for each `ModelState` shape.
  */
@@ -118,7 +118,7 @@ class RunOutcomeTest {
     }
 
     @Test
-    fun `ORA2-CONV-03 replica divergence and replicas-agree-but-wrong are distinct kinds, and neither is a Mismatch`() {
+    fun `ORA2 §CONV-03 replica divergence and replicas-agree-but-wrong are distinct kinds, and neither is a Mismatch`() {
         // The distinctness is the requirement, not a nicety: a convergence oracle whose two
         // findings arrive as one kind cannot tell "the mesh failed to carry a write" from "every
         // replica computed the same wrong answer", and those are repaired in different files. The
@@ -138,7 +138,7 @@ class RunOutcomeTest {
 
     @Test
     fun `a mesh verdict names the accepting replica of each differing key's winning dot`() {
-        // [ORA2-DIFF-09]: `expected` alone says the answer is wrong; the winning dot's source says
+        // ORA2 §DIFF-09: `expected` alone says the answer is wrong; the winning dot's source says
         // WHOSE write the mesh failed to carry, which is where a divergence is actually diagnosed.
         val diverged = divergence()
 

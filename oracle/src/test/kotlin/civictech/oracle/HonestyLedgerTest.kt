@@ -51,13 +51,13 @@ import java.io.File
  * implied). The last tests below pin that entry's own fingerprint, so the filing cannot be
  * dropped while the disagreement stands.
  *
- * ORA2 adds one more filing of the same shape, `[ORA2-HONEST-03]`'s remaining realising artifact
- * (`computenet-4ru.1.8`): BS-9/`[ORA2-DIFF-07]`, whose two-path diamond is unconstructible because
+ * ORA2 adds one more filing of the same shape, `ORA2 §HONEST-03`'s remaining realising artifact
+ * (`computenet-4ru.1.8`): BS-9/`ORA2 §DIFF-07`, whose two-path diamond is unconstructible because
  * no operator in the vocabulary consumes a `TaggedMapDelta` outlet (`computenet-valh`). It is
  * pinned below the ORA1 one, by the same reasoning: text satisfies a requirement only while it is
  * still there.
  *
- * A second ORA2 filing stood beside it until `computenet-9892`: `[ORA2-DIFF-08]`'s "at scale"
+ * A second ORA2 filing stood beside it until `computenet-9892`: `ORA2 §DIFF-08`'s "at scale"
  * clause, whose generated convergence sweep realised no concurrency and whose quiescent all-to-all
  * mesh was not expressible as a `Delivery` graph (`computenet-9ips`, route (b)). That entry's own
  * `Resolves` clause said to **delete** it, not repair it, once the drive landed with more than one
@@ -230,20 +230,20 @@ class HonestyLedgerTest {
         }
     }
 
-    // -------------------------------------------------- [ORA2-HONEST-01]
+    // -------------------------------------------------- ORA2 §HONEST-01
 
     /**
-     * `[ORA2-HONEST-01]`: the same module entry point states that ORA2's tagged/keyed model is
+     * `ORA2 §HONEST-01`: the same module entry point states that ORA2's tagged/keyed model is
      * LESS independent of the tag algebra than ORA1's membership-only model, and names
-     * `[ORA2-CTL-01]`..`[ORA2-CTL-04]` as the compensating evidence — feature computenet-4ru.1
+     * `ORA2 §CTL-01`..`ORA2 §CTL-04` as the compensating evidence — feature computenet-4ru.1
      * §4.9 and §4.10, computenet-4ru.1.5's own acceptance criteria.
      */
     @Test
     fun `the module entry point states that ORA2's model is LESS independent, and names the four controls`() {
         val sweep = sweepKdoc().flat()
 
-        withClue("[ORA2-HONEST-01] must be claimed by marker, so a reader can find it") {
-            sweep.mustState("[ORA2-HONEST-01]")
+        withClue("ORA2 §HONEST-01 must be claimed by marker, so a reader can find it") {
+            sweep.mustState("ORA2 §HONEST-01")
         }
         withClue(
             "The statement itself: ORA2's model reads MODELLED dot order and is therefore LESS " +
@@ -253,7 +253,7 @@ class HonestyLedgerTest {
             sweep.mustState("modelled dot order")
         }
         withClue("Every one of the four blocking controls must be named by marker, not just counted") {
-            listOf("[ORA2-CTL-01]", "[ORA2-CTL-02]", "[ORA2-CTL-03]", "[ORA2-CTL-04]").forEach { marker ->
+            listOf("ORA2 §CTL-01", "ORA2 §CTL-02", "ORA2 §CTL-03", "ORA2 §CTL-04").forEach { marker ->
                 sweep.mustState(marker)
             }
         }
@@ -271,7 +271,7 @@ class HonestyLedgerTest {
                 "OR-map case reaches the differential runner (computenet-6v7y), so none of the " +
                 "four observes state a kernel replica produced. A ledger that names them as " +
                 "compensating evidence without saying what they cannot discriminate is the exact " +
-                "omission [ORA2-HONEST-*] exists to forbid. " +
+                "omission ORA2 §HONEST-* exists to forbid. " +
                 "These pins are deliberately COUNT-FREE. A first attempt pinned the literal " +
                 "phrase 'three of the four are model-vs-model', which was false on every reading " +
                 "— two of the four drive ConvergenceCheck.check, and by the stricter " +
@@ -288,14 +288,14 @@ class HonestyLedgerTest {
         }
     }
 
-    // -------------------------------------------------- [ORA2-HONEST-02]
+    // -------------------------------------------------- ORA2 §HONEST-02
 
     @Test
     fun `the module entry point states what a sweep records about the optional families`() {
         val sweep = sweepKdoc().flat()
 
-        withClue("[ORA2-HONEST-02] must be claimed by marker") {
-            sweep.mustState("[ORA2-HONEST-02]")
+        withClue("ORA2 §HONEST-02 must be claimed by marker") {
+            sweep.mustState("ORA2 §HONEST-02")
         }
         withClue("It must name the instrument that does the recording, and that it reuses the existing report") {
             sweep.mustState("reportOptionalFamilies")
@@ -512,7 +512,7 @@ class HonestyLedgerTest {
         }
     }
 
-    // ------------------------------------------------ [ORA2-HONEST-03]: the two ORA2 filings
+    // ------------------------------------------------ ORA2 §HONEST-03: the two ORA2 filings
 
     /**
      * One `##` section of `DISPUTES.md`, from its heading up to the next `##` heading (or EOF).
@@ -527,7 +527,7 @@ class HonestyLedgerTest {
         val start = disputes.indexOf(heading)
         withClue(
             "$what must exist in concord/corpus/DISPUTES.md, under a heading starting \"$heading\". " +
-                "It is [ORA2-HONEST-03]'s realising artifact: the epic's rule is that a requirement " +
+                "It is ORA2 §HONEST-03's realising artifact: the epic's rule is that a requirement " +
                 "which cannot be checked honestly is FILED, never weakened into a passing scenario. " +
                 "Deleting the entry without building the instrument IS the weakening.",
         ) {
@@ -539,7 +539,7 @@ class HonestyLedgerTest {
 
     /**
      * The inverse pin of the one this file used to carry (see the file KDoc): the
-     * `[ORA2-DIFF-08]` "at scale" filing must be **gone**, because `computenet-9892` built the
+     * `ORA2 §DIFF-08` "at scale" filing must be **gone**, because `computenet-9892` built the
      * drive the entry's own `Resolves` clause named — and the ledger must carry the closure with
      * the measurements that justify it.
      *
@@ -549,9 +549,9 @@ class HonestyLedgerTest {
      * `doc/spec/CONCORDANCE.md`.
      */
     @Test
-    fun `the ORA2-DIFF-08 at scale filing is deleted, and the ledger carries the closure it was deleted for`() {
+    fun `the ORA2 §DIFF-08 at scale filing is deleted, and the ledger carries the closure it was deleted for`() {
         withClue(
-            "concord/corpus/DISPUTES.md must no longer carry the [ORA2-DIFF-08] \"at scale\" entry: " +
+            "concord/corpus/DISPUTES.md must no longer carry the ORA2 §DIFF-08 \"at scale\" entry: " +
                 "computenet-9892 built the drive, and that entry instructed 'delete this entry — do " +
                 "not repair it'. A surviving entry beside a closed gap is a false filing.",
         ) {
@@ -582,12 +582,12 @@ class HonestyLedgerTest {
     fun `the DISPUTES filing for BS-9 records the typing bound that makes the diamond unconstructible`() {
         val entry = disputesSection(
             "## ORA2 (the wave-prefix diamond)",
-            "The BS-9/[ORA2-DIFF-07] narrowing filing",
+            "The BS-9/ORA2 §DIFF-07 narrowing filing",
         )
 
         withClue("It must be greppable by the requirement marker it realises, and by the id it narrows") {
-            entry.mustState("[ORA2-HONEST-03]")
-            entry.mustState("[ORA2-DIFF-07]")
+            entry.mustState("ORA2 §HONEST-03")
+            entry.mustState("ORA2 §DIFF-07")
         }
         withClue(
             "The bound itself, in kernel types: OrMapCell's outlet is TaggedMapDelta and every " +
@@ -627,8 +627,8 @@ class HonestyLedgerTest {
     fun `the module entry point points at the ORA2 filing, and states what the generated sweep now covers`() {
         val sweep = sweepKdoc().flat()
 
-        withClue("[ORA2-HONEST-03] must be claimed by marker at the entry point too, beside the other two") {
-            sweep.mustState("[ORA2-HONEST-03]")
+        withClue("ORA2 §HONEST-03 must be claimed by marker at the entry point too, beside the other two") {
+            sweep.mustState("ORA2 §HONEST-03")
         }
         withClue(
             "A reader at the ledger must be able to reach the filings: both ids, and the file they " +

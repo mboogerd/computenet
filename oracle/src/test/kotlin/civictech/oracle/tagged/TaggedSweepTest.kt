@@ -37,8 +37,8 @@ import org.junit.jupiter.api.Test
 import kotlin.random.Random
 
 /**
- * The **generated** tagged/keyed differential sweep — `[ORA2-DIFF-01]`, `[ORA2-DIFF-06]`,
- * `[ORA2-DIFF-10]`, `[ORA2-DIFF-11]`, `[ORA2-PERF-01]`, `[ORA2-PERF-02]`.
+ * The **generated** tagged/keyed differential sweep — `ORA2 §DIFF-01`, `ORA2 §DIFF-06`,
+ * `ORA2 §DIFF-10`, `ORA2 §DIFF-11`, `ORA2 §PERF-01`, `ORA2 §PERF-02`.
  *
  * ## Why this drives [DifferentialRunner.check] rather than [OracleSweep.run]
  *
@@ -63,12 +63,12 @@ import kotlin.random.Random
  *
  * A random single-writer `Put`/`RemoveKey` script over a small key/value domain, biased toward
  * already-populated keys so re-puts and reset-removes actually occur — the same bias
- * `[ORA2-GEN-05]`'s generator dimension states, applied here by hand since the case is not a
+ * `ORA2 §GEN-05`'s generator dimension states, applied here by hand since the case is not a
  * `GeneratedCase`. One instance, one writer, no gossip deliveries: exactly what
  * `civictech.oracle.model.SingleInstanceOrMapModel` can honestly evaluate, and exactly what a
  * single `OrMapCell` driven directly is.
  */
-private const val SYNTHETIC_DESCRIPTION = "TaggedSweepTest synthetic dead letter [ORA2-DIFF-10]"
+private const val SYNTHETIC_DESCRIPTION = "TaggedSweepTest synthetic dead letter ORA2 §DIFF-10"
 
 class TaggedSweepTest {
 
@@ -125,14 +125,14 @@ class TaggedSweepTest {
     }
 
     // =====================================================================
-    // [ORA2-DIFF-01] / [ORA2-DIFF-06] / [ORA2-PERF-01] / [ORA2-PERF-02]
+    // ORA2 §DIFF-01 / ORA2 §DIFF-06 / ORA2 §PERF-01 / ORA2 §PERF-02
     // =====================================================================
 
     /**
      * Every seed of the (possibly `-Poracle.seeds`-widened) default range agrees with the
-     * batch reference — `forEachSeed`'s density form, reused verbatim (`[ORA2-DIFF-06]`), over
+     * batch reference — `forEachSeed`'s density form, reused verbatim (`ORA2 §DIFF-06`), over
      * [OracleSweep.defaultSeeds] so `-Poracle.seeds` widens this sweep exactly as it widens
-     * ORA1's, with no source change (`[ORA2-PERF-02]`).
+     * ORA1's, with no source change (`ORA2 §PERF-02`).
      */
     @Test
     fun `every seed of the default range agrees with the batch reference`() {
@@ -155,12 +155,12 @@ class TaggedSweepTest {
         val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
         println(
             "[tagged-sweep] $count seeds in ${elapsedMs}ms " +
-                "(${"%.2f".format(elapsedMs.toDouble() / count)} ms/seed) [ORA2-PERF-01]",
+                "(${"%.2f".format(elapsedMs.toDouble() / count)} ms/seed) ORA2 §PERF-01",
         )
     }
 
     // =====================================================================
-    // [ORA2-DIFF-01]'s report shape, forced with a mutant reference
+    // ORA2 §DIFF-01's report shape, forced with a mutant reference
     // =====================================================================
 
     /**
@@ -171,7 +171,7 @@ class TaggedSweepTest {
      * not merely that the type exists.
      */
     @Test
-    fun `ORA2-DIFF-01 a mutant reference is reported as a Mismatch naming the seed, terminal and per-key difference`() {
+    fun `ORA2 §DIFF-01 a mutant reference is reported as a Mismatch naming the seed, terminal and per-key difference`() {
         val slice = randomScript(seed = 5L)
         val script = Script(listOf(slice))
         val wrong = Reference { mapOf("orMap" to ModelState.MapState(mapOf("k0" to "not-the-real-value"))) }
@@ -194,11 +194,11 @@ class TaggedSweepTest {
     }
 
     // =====================================================================
-    // [ORA2-DIFF-11] — a broken model is a ModelEvaluationFailure, never a Mismatch
+    // ORA2 §DIFF-11 — a broken model is a ModelEvaluationFailure, never a Mismatch
     // =====================================================================
 
     @Test
-    fun `ORA2-DIFF-11 a reference that throws is a ModelEvaluationFailure, reused unchanged for a tagged run`() {
+    fun `ORA2 §DIFF-11 a reference that throws is a ModelEvaluationFailure, reused unchanged for a tagged run`() {
         val slice = randomScript(seed = 9L)
         val script = Script(listOf(slice))
         val broken = Reference { error("the tagged reference is deliberately broken") }
@@ -216,11 +216,11 @@ class TaggedSweepTest {
     }
 
     // =====================================================================
-    // [ORA2-DIFF-10] — a dead letter during a tagged run surfaces as the reused kind
+    // ORA2 §DIFF-10 — a dead letter during a tagged run surfaces as the reused kind
     // =====================================================================
 
     /**
-     * `[ORA2-DIFF-10]`: a dead letter during a tagged run must surface as
+     * `ORA2 §DIFF-10`: a dead letter during a tagged run must surface as
      * [RunOutcome.DeadLetterFailure] — the SAME kind ORA1 already produces, unconditionally of
      * which delta type the graph carries (`DifferentialRunner.execute`'s dead-letter check reads
      * `letters`, not the graph's shape).
@@ -236,7 +236,7 @@ class TaggedSweepTest {
      * is that component, ported to `TaggedMapDelta` from ORA1's `SetDelta` original.
      */
     @Test
-    fun `ORA2-DIFF-10 a dead letter during a tagged run surfaces as DeadLetterFailure`() {
+    fun `ORA2 §DIFF-10 a dead letter during a tagged run surfaces as DeadLetterFailure`() {
         val slice = randomScript(seed = 1L)
         val outcome = DifferentialRunner.check(
             seed = 1L,

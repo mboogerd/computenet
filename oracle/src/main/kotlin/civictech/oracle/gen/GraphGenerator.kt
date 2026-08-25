@@ -25,7 +25,7 @@ data class GeneratedGraph(
     val spec: GraphSpec,
     /**
      * `null` unless `GeneratorConfig.replicaCount > 1`: which source handle is replicated, onto
-     * which hosts, under which replica [SourceId]s (`[ORA2-GEN-03]`).
+     * which hosts, under which replica [SourceId]s (`ORA2 §GEN-03`).
      */
     val replicaPlan: ReplicaPlan? = null,
 ) : Serializable
@@ -353,7 +353,7 @@ class GraphGenerator(private val config: GeneratorConfig) {
         }
 
         /**
-         * `[ORA2-GEN-03]`: the replica-placement dimension. `null` for `replicaCount == 1`, which
+         * `ORA2 §GEN-03`: the replica-placement dimension. `null` for `replicaCount == 1`, which
          * is why an ORA1 case's [rng] stream is untouched by this method existing.
          *
          * One source node is replicated — the first one, deterministically, rather than a drawn

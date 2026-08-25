@@ -111,7 +111,7 @@ class PinnedSeedsTest {
     // mechanism, exercised without pinning a tagged seed
 
     /**
-     * `[ORA2-REPRO-02]`, BS-19: no tagged/OR-map seed was discovered-and-fixed during this
+     * `ORA2 §REPRO-02`, BS-19: no tagged/OR-map seed was discovered-and-fixed during this
      * feature, so [PinnedSeeds.ALL] gains no new entry — the corpus is append-only, and pinning
      * one anyway to exercise the mechanism would be exactly the manufactured failure the bead
      * this test closes forbids. What this test proves instead is that [PinnedSeed]'s entry
@@ -141,7 +141,7 @@ class PinnedSeedsTest {
      * So [PinnedSeeds.ALL] holds no tagged entry because there is no fixed defect to pin AND no
      * legitimate generated tagged case for a fix to have been pinned against — not because the
      * generator structurally refuses one. `TaggedSweepTest`/`ConvergenceSweepTest` cover
-     * `[ORA2-DIFF-01..09]` through `DifferentialRunner`'s bring-your-own seam instead — a
+     * `ORA2 §DIFF-01..09` through `DifferentialRunner`'s bring-your-own seam instead — a
      * different entry point than this corpus replays, and one [PinnedSeed] cannot name.
      *
      * ## What "round-trips" means here, concretely

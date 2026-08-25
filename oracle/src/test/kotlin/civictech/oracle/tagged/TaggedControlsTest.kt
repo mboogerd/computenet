@@ -31,7 +31,7 @@ import java.util.UUID
 
 /**
  * The four BLOCKING discrimination controls feature computenet-4ru.1's §4.9 names —
- * `[ORA2-CTL-01]`..`[ORA2-CTL-04]` — plus the honesty prose's own load-bearing claim: **"a
+ * `ORA2 §CTL-01`..`ORA2 §CTL-04` — plus the honesty prose's own load-bearing claim: **"a
  * green sweep without these is not evidence"**. Mirrors ORA1's idiom
  * ([civictech.oracle.run.DivergenceControlTest], [civictech.oracle.run.MutationCheckTest]):
  * every test here exists to go RED for a specific, named reason, and each is read alongside the
@@ -120,11 +120,11 @@ class TaggedControlsTest {
     }
 
     // =====================================================================
-    // [ORA2-CTL-01] / BS-13 — the arrival-order fold must fail
+    // ORA2 §CTL-01 / BS-13 — the arrival-order fold must fail
     // =====================================================================
 
     /**
-     * `[ORA2-CTL-01]`/BS-13: over [GeneratorConfig.REPLICATED_SWEEP_SEEDS] (the fixed, checked-in
+     * `ORA2 §CTL-01`/BS-13: over [GeneratorConfig.REPLICATED_SWEEP_SEEDS] (the fixed, checked-in
      * range the replicated generator dimension is measured against —
      * `civictech.oracle.tagged.MultiWriterGenerationTest` uses the same range), at least one
      * replica's [NaiveArrivalOrderMapModel] fold must disagree with **that same replica's**
@@ -181,7 +181,7 @@ class TaggedControlsTest {
         }
 
         withClue(
-            "[ORA2-CTL-01]/BS-13: over ${GeneratorConfig.REPLICATED_SWEEP_SEEDS}, the untagged " +
+            "ORA2 §CTL-01/BS-13: over ${GeneratorConfig.REPLICATED_SWEEP_SEEDS}, the untagged " +
                 "arrival-order fold must disagree with the SAME replica's dot-order fold on at " +
                 "least one seed. Zero differing seeds means this control cannot fail and is not evidence " +
                 "(differing seeds observed: $differingSeeds).",
@@ -191,11 +191,11 @@ class TaggedControlsTest {
     }
 
     // =====================================================================
-    // [ORA2-CTL-02] — an inverted dot order must be detected and attributed
+    // ORA2 §CTL-02 — an inverted dot order must be detected and attributed
     // =====================================================================
 
     /**
-     * `[ORA2-CTL-02]`: a mesh that genuinely converged under the KERNEL's dot order (simulated
+     * `ORA2 §CTL-02`: a mesh that genuinely converged under the KERNEL's dot order (simulated
      * here by feeding [ConvergenceCheck] every replica's fold from the CORRECT [DotModel], all
      * agreeing) must be reported wrong when [ConvergenceCheck] itself is constructed with an
      * inverted order — and the report must name the right key. This is
@@ -219,7 +219,7 @@ class TaggedControlsTest {
             referenceState.liveDots("k").keys shouldHaveSize 3
         }
 
-        // [ORA2-CTL-02]'s substitution: the kernel's own order, inverted. Applied uniformly, so
+        // ORA2 §CTL-02's substitution: the kernel's own order, inverted. Applied uniformly, so
         // a mesh that really did converge under the CORRECT order still agrees with itself here
         // — only the reference the check computes moves.
         val invertedOrder = DotOrder.ranked(sources.reversed())
@@ -266,11 +266,11 @@ class TaggedControlsTest {
     }
 
     // =====================================================================
-    // [ORA2-CTL-03] / BS-4 — remove-all must be detected, naming the key
+    // ORA2 §CTL-03 / BS-4 — remove-all must be detected, naming the key
     // =====================================================================
 
     /**
-     * `[ORA2-CTL-03]`/BS-4: BS-3's own setup — writer A puts `k`, writer B removes `k` having
+     * `ORA2 §CTL-03`/BS-4: BS-3's own setup — writer A puts `k`, writer B removes `k` having
      * observed only A's first dot, and A concurrently puts a second, unobserved-by-B dot — with
      * [civictech.oracle.model.DotState.resetRemove] replaced by [RemoveAllDotModel]'s
      * remove-all. The real reference (add-wins) keeps `k = v2`; the mutant wipes `k` outright the
@@ -309,7 +309,7 @@ class TaggedControlsTest {
         val mutantValue = mutant.value(mutantState, "k")
 
         withClue(
-            "[ORA2-CTL-03]/BS-4: the remove-all mutant must disagree with the real reference at " +
+            "ORA2 §CTL-03/BS-4: the remove-all mutant must disagree with the real reference at " +
                 "key 'k' — real=${real.value(realState, "k")} mutant=$mutantValue. Agreement here " +
                 "would mean the add-wins boundary is never exercised by this control. 'k' is the " +
                 "only key this script names, so the disagreement is unambiguously attributable to it.",
@@ -320,11 +320,11 @@ class TaggedControlsTest {
     }
 
     // =====================================================================
-    // [ORA2-CTL-04] / BS-8 — missing gossip must be reported as divergence
+    // ORA2 §CTL-04 / BS-8 — missing gossip must be reported as divergence
     // =====================================================================
 
     /**
-     * `[ORA2-CTL-04]`/BS-8: two replicas each put a different value at the same key, and neither
+     * `ORA2 §CTL-04`/BS-8: two replicas each put a different value at the same key, and neither
      * ever absorbs the other's write — the model-level statement of "one replica's outbound
      * gossip is not applied at the other peer". [ConvergenceCheck] must report
      * [RunOutcome.ReplicaDivergence], naming both replicas and the differing key, rather than

@@ -141,7 +141,7 @@ import java.io.Serializable
  *   instance's own atomic-put/tombstone/dot-minting semantics
  *   ([civictech.oracle.model.SingleInstanceOrMapModel]) — it fails loudly, by
  *   name, on any slice carrying a peer delivery rather than silently approximating one. The
- *   gossiped-delivery convergence half this bullet named (`[ORA2-DIFF-01..09]`, driven by
+ *   gossiped-delivery convergence half this bullet named (`ORA2 §DIFF-01..09`, driven by
  *   `civictech.oracle.model.DotModel` over the whole multi-instance [Script]) remains
  *   unregistered in the per-node catalog and belongs to the mesh differential runner, per
  *   `TaggedOperators`' own KDoc. So this exclusion is no longer accurate as "not modelled here"
@@ -166,7 +166,7 @@ import java.io.Serializable
  *   is `CHA1`/`CHA3`'s decided scope (epic §6) — a scope assignment, not an absence of any
  *   honest check.
  *
- *   **Update (computenet-4ru.1.1): superseded in scope by `[ORA2-MODEL-09]`, not withdrawn.**
+ *   **Update (computenet-4ru.1.1): superseded in scope by `ORA2 §MODEL-09`, not withdrawn.**
  *   `civictech.oracle.model.MergeableGroupByModel` (`TaggedKeyedModels.kt`) now models this
  *   cell's grow/merge-only aggregation, stating non-retraction itself as the specification
  *   rather than approximating a retraction it cannot see. That model does not fix what this

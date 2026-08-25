@@ -27,8 +27,8 @@ import java.io.ObjectOutputStream
 
 /**
  * [TaggedOperators] as the production half of ORA2's tagged/keyed registration seam
- * (`[ORA2-GEN-06]`, BS-18) and [OptionalFamilies] as the honest availability gate
- * (`[ORA2-WGT-06]`, BS-15) — computenet-4ru.1.2.
+ * (`ORA2 §GEN-06`, BS-18) and [OptionalFamilies] as the honest availability gate
+ * (`ORA2 §WGT-06`, BS-15) — computenet-4ru.1.2.
  *
  * [OperatorCatalog] is a process-wide mutable singleton, so this class registers per test and
  * resets afterwards, exactly as `CoreOperatorsTest` does.
@@ -72,7 +72,7 @@ class TaggedOperatorsTest {
     }
 
     // -------------------------------------------------------------------
-    // [ORA2-GEN-06] / BS-18 — pairing failure fires for the tagged family too, via the SAME
+    // ORA2 §GEN-06 / BS-18 — pairing failure fires for the tagged family too, via the SAME
     // mechanism ORA1 already enforces. Nothing new is built here; this proves the reuse.
     // -------------------------------------------------------------------
 
@@ -155,7 +155,7 @@ class TaggedOperatorsTest {
     }
 
     // -------------------------------------------------------------------
-    // [ORA2-WGT-06] / BS-15 — the optional-family availability gate: reported, never skipped.
+    // ORA2 §WGT-06 / BS-15 — the optional-family availability gate: reported, never skipped.
     // -------------------------------------------------------------------
 
     @Test
@@ -176,7 +176,7 @@ class TaggedOperatorsTest {
             }
             withClue("${entry.family}: BS-15 requires a written reason, never a silent skip") {
                 entry.reason.shouldNotBeNull()
-                entry.reason!!.shouldContain("ORA2-WGT-06")
+                entry.reason!!.shouldContain("ORA2 §WGT-06")
             }
         }
     }

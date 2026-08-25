@@ -27,7 +27,7 @@ import civictech.oracle.run.WavePrefixOption
  *    collapses in tens of candidates rather than hundreds.
  * 1a. **Drop a writer.** One [WriterId] at a time, from the last distinct writer named in the
  *    script towards the first: every step that writer issued is removed in **one** candidate (the
- *    multi-writer dimension `[ORA2-GEN-01]` adds — a script step is the unit pass 1 reduces by, a
+ *    multi-writer dimension `ORA2 §GEN-01` adds — a script step is the unit pass 1 reduces by, a
  *    *writer* is the unit this reduces by). Stops once one writer remains — dropping the last
  *    writer would empty the source's own slice.
  *
@@ -47,7 +47,7 @@ import civictech.oracle.run.WavePrefixOption
  *    nodes nothing reads any more, then splice out unary operators whose consumers can take their
  *    input directly, then drop whatever that orphaned.
  * 4. **Drop a replica.** One gossiping [SourceId] at a time — a "replica" here is any source
- *    named on either side of a [CaseDelivery], the ORA2 sense (`[ORA2-GEN-03]`/`[ORA2-MODEL-06]`)
+ *    named on either side of a [CaseDelivery], the ORA2 sense (`ORA2 §GEN-03`/`ORA2 §MODEL-06`)
  *    of a source that participates in a mesh rather than driving in isolation. Every step that
  *    source issued, and every delivery naming it on either side, is removed in one candidate —
  *    dropping the SOURCE's role in the mesh, never a [TopologyNode]: the node stays linked and

@@ -72,7 +72,7 @@ class TerminalFoldTest {
     }
 
     // =====================================================================
-    // ORA2's replicable families ([ORA2-CONV-04], [ORA2-MODEL-10])
+    // ORA2's replicable families (ORA2 §CONV-04, ORA2 §MODEL-10)
     // =====================================================================
 
     /** The inlet a hosted `OrMapCell` exposes. */

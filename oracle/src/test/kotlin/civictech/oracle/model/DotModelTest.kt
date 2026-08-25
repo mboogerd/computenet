@@ -9,7 +9,7 @@ import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 
 /**
- * [DotModel] at model level — `[ORA2-MODEL-01]` .. `[ORA2-MODEL-07]`, `[ORA2-MODEL-12]`.
+ * [DotModel] at model level — `ORA2 §MODEL-01` .. `ORA2 §MODEL-07`, `ORA2 §MODEL-12`.
  *
  * These are **not** the differential tests. BS-1/BS-3/BS-5's kernel halves — a real `OrMapCell`
  * mesh compared against this model — land with the sweep task. What is proven here is that the
@@ -35,7 +35,7 @@ class DotModelTest {
     private fun remove(key: Any?) = ScriptEvent.RemoveKey(w, key)
 
     // -----------------------------------------------------------------------
-    // [ORA2-MODEL-01], [ORA2-MODEL-03], [ORA2-MODEL-04]
+    // ORA2 §MODEL-01, ORA2 §MODEL-03, ORA2 §MODEL-04
     // -----------------------------------------------------------------------
 
     @Test
@@ -66,7 +66,7 @@ class DotModelTest {
     }
 
     /**
-     * `[ORA2-MODEL-04]` / BS-1. Neither instance has observed the other, so both dots are live at
+     * `ORA2 §MODEL-04` / BS-1. Neither instance has observed the other, so both dots are live at
      * the converged state and the **order** decides — not arrival, not slice position.
      */
     @Test
@@ -89,8 +89,8 @@ class DotModelTest {
     }
 
     /**
-     * `[ORA2-MODEL-04]`, BS-2's model half: a genuine counter **tie**, separated only by the
-     * harness-supplied instance rank. This is the case `[ORA2-GEN-04]` requires the generator to
+     * `ORA2 §MODEL-04`, BS-2's model half: a genuine counter **tie**, separated only by the
+     * harness-supplied instance rank. This is the case `ORA2 §GEN-04` requires the generator to
      * produce rather than reach by luck, and the reason the model takes an order at all.
      */
     @Test
@@ -121,7 +121,7 @@ class DotModelTest {
         val oneWay = model.value(model.converged(Script(listOf(fromA, fromB))), "k")
         val otherWay = model.value(model.converged(Script(listOf(fromB, fromA))), "k")
 
-        withClue("[ORA2-MODEL-04]: no arrival order participates") {
+        withClue("ORA2 §MODEL-04: no arrival order participates") {
             oneWay shouldBe "fromB"
             otherWay shouldBe "fromB"
         }
@@ -135,17 +135,17 @@ class DotModelTest {
         val failure = shouldThrow<IllegalStateException> { partial.value(partial.converged(script), "k") }
 
         failure.message!! shouldContain "No dot-order rank for source 'C'"
-        failure.message!! shouldContain "ORA2-MODEL-12"
+        failure.message!! shouldContain "ORA2 §MODEL-12"
     }
 
     // -----------------------------------------------------------------------
-    // [ORA2-MODEL-05] reset-remove vs remove-all
+    // ORA2 §MODEL-05 reset-remove vs remove-all
     // -----------------------------------------------------------------------
 
     /**
      * BS-3, at model level: B removes having observed only A's **first** dot. A's second,
      * unobserved, dot survives — the key is present with `v2`. This is the exact case a
-     * remove-all mutant (`[ORA2-CTL-03]`) gets wrong, and the assertion below is what makes the
+     * remove-all mutant (`ORA2 §CTL-03`) gets wrong, and the assertion below is what makes the
      * difference observable.
      */
     @Test
@@ -218,7 +218,7 @@ class DotModelTest {
     }
 
     // -----------------------------------------------------------------------
-    // [ORA2-MODEL-02] merge is commutative, associative, idempotent
+    // ORA2 §MODEL-02 merge is commutative, associative, idempotent
     // -----------------------------------------------------------------------
 
     private fun sampleStates(): Triple<DotState, DotState, DotState> {
@@ -252,7 +252,7 @@ class DotModelTest {
     }
 
     /**
-     * `[ORA2-MODEL-02]`'s point, not merely its letter: a tombstone that arrives **before** the
+     * `ORA2 §MODEL-02`'s point, not merely its letter: a tombstone that arrives **before** the
      * put it covers still covers it. This is why the state keeps both halves instead of deleting
      * covered dots — deleting would let the late put resurrect the key.
      */
@@ -270,7 +270,7 @@ class DotModelTest {
     }
 
     // -----------------------------------------------------------------------
-    // [ORA2-MODEL-06] observation advances only from deliveries
+    // ORA2 §MODEL-06 observation advances only from deliveries
     // -----------------------------------------------------------------------
 
     @Test
@@ -367,7 +367,7 @@ class DotModelTest {
     }
 
     /**
-     * `[ORA2-CONV-02]`'s model half: an instance that has heard everything reads the **converged**
+     * `ORA2 §CONV-02`'s model half: an instance that has heard everything reads the **converged**
      * table — not merely a table that agrees with some peer. B hears A, C hears B, so both hold
      * every dot; A never hears anyone and is deliberately left behind, which is what makes the
      * assertion about convergence rather than about the script being trivially uniform.
@@ -397,7 +397,7 @@ class DotModelTest {
     }
 
     // -----------------------------------------------------------------------
-    // [ORA2-MODEL-07] purity
+    // ORA2 §MODEL-07 purity
     // -----------------------------------------------------------------------
 
     @Test
@@ -416,7 +416,7 @@ class DotModelTest {
         val second = model.evaluate(subject)
 
         first shouldBe second
-        withClue("[ORA2-MODEL-07]: evaluation must not mutate the script") {
+        withClue("ORA2 §MODEL-07: evaluation must not mutate the script") {
             subject shouldBe untouchedTwin
         }
         withClue("a model with real content, so equality is not trivially satisfied") {

@@ -53,7 +53,7 @@ import java.util.UUID
 class TaggedScenariosTest {
 
     // =====================================================================
-    // BS-3 — add-wins under concurrent put/remove [ORA2-DIFF-03]
+    // BS-3 — add-wins under concurrent put/remove ORA2 §DIFF-03
     // =====================================================================
 
     /** The hosted `OrMapCell` inlet proxy shape. */
@@ -118,7 +118,7 @@ class TaggedScenariosTest {
     }
 
     // =====================================================================
-    // BS-5 — duplicate delivery is absorbed via a topological diamond [ORA2-DIFF-04]
+    // BS-5 — duplicate delivery is absorbed via a topological diamond ORA2 §DIFF-04
     // =====================================================================
 
     @Test
@@ -164,7 +164,7 @@ class TaggedScenariosTest {
     }
 
     // =====================================================================
-    // BS-10 — keyed re-put atomic at every prefix [ORA2-MODEL-08]
+    // BS-10 — keyed re-put atomic at every prefix ORA2 §MODEL-08
     // =====================================================================
 
     @Test
@@ -222,7 +222,7 @@ class TaggedScenariosTest {
     }
 
     // =====================================================================
-    // BS-11 — mergeable group-by is grow-only; GroupByCell's retraction diverges [ORA2-MODEL-09]
+    // BS-11 — mergeable group-by is grow-only; GroupByCell's retraction diverges ORA2 §MODEL-09
     // =====================================================================
 
     @Test
@@ -286,7 +286,7 @@ class TaggedScenariosTest {
     }
 
     // =====================================================================
-    // BS-12 — PnCounter converges to the pointwise max [ORA2-MODEL-10] / [ORA2-CONV-01]
+    // BS-12 — PnCounter converges to the pointwise max ORA2 §MODEL-10 / ORA2 §CONV-01
     // =====================================================================
 
     interface PnCounterInletProxy {

@@ -37,8 +37,8 @@ import org.junit.jupiter.api.Test
 import java.util.UUID
 
 /**
- * The **generated** multi-replica sweep through the convergence check — `[ORA2-DIFF-08]` at
- * scale, `[ORA2-DIFF-05]`'s late-joiner half.
+ * The **generated** multi-replica sweep through the convergence check — `ORA2 §DIFF-08` at
+ * scale, `ORA2 §DIFF-05`'s late-joiner half.
  *
  * The mesh is driven so that **the gossip it exchanges is exactly the gossip its own
  * `civictech.oracle.gen.CaseDelivery` schedule states**, and the reference is that same schedule
@@ -77,7 +77,7 @@ import java.util.UUID
  * declares `unsubscribe(PortRef)`, and since T21 the gossip subscription's `PortRef` is
  * **derived**, not generated: `UUID.nameUUIDFromBytes("gossip:<id>:<inst>:<id>:<inst>")`.
  * Restating a kernel derivation in the harness is the sanctioned pattern here — it is exactly
- * what `[ORA2-MODEL-12]` requires of the dot order, and what `DotOrders.dotSourceOf` already
+ * what `ORA2 §MODEL-12` requires of the dot order, and what `DotOrders.dotSourceOf` already
  * does for `"or-map-tags:..."`. So [silence] unsubscribes every derived gossip ref the instant
  * the mesh is built, and [deliver] re-streams **one** directed edge per [CaseDelivery],
  * `runToIdle`s, and unsubscribes it again. `streamTo`'s `fireLinked` catch-up ships the sender's
@@ -156,7 +156,7 @@ class ConvergenceSweepTest {
     }
 
     /**
-     * `Replication.gossipRef`'s derivation, restated here — `[ORA2-MODEL-12]`'s pattern applied
+     * `Replication.gossipRef`'s derivation, restated here — `ORA2 §MODEL-12`'s pattern applied
      * to the gossip subscription instead of to the dot source. Private in `Replication`, and
      * deliberately *derived* there (its own KDoc: "Derived rather than `PortRef.generate()`d
      * because re-linking is a normal event"), which is what makes restating it stable rather
@@ -173,7 +173,7 @@ class ConvergenceSweepTest {
      * returns the verdict [ConvergenceCheck.check] reaches over it.
      *
      * @param onSettled called once, after the whole script has drained, with every replica's
-     *   ref keyed by its script [SourceId] — the seam [ORA2-DIFF-05]'s late-joiner test below
+     *   ref keyed by its script [SourceId] — the seam ORA2 §DIFF-05's late-joiner test below
      *   uses to link a fresh consumer mid-drive on a SEPARATE run of the same case.
      */
     private fun driveAndCheck(
@@ -290,7 +290,7 @@ class ConvergenceSweepTest {
         // This is not a relaxation of "the mesh delivers exactly what the script states" — it is
         // what the reference already means. `DotModel.converged(script)` is defined as the merge
         // of EVERY instance's final state, i.e. the state a mesh reaches once all gossip has
-        // settled, and `[ORA2-DIFF-08]`'s agreement half asks for exactly that mesh. The reason
+        // settled, and `ORA2 §DIFF-08`'s agreement half asks for exactly that mesh. The reason
         // it costs nothing is that a tombstone is minted only by a put or a remove, and there are
         // none left: from here the mesh does a pure lattice join, which cannot add a tombstone the
         // model does not have. Restoring an edge one step EARLIER would be the over-delivery this
@@ -364,7 +364,7 @@ class ConvergenceSweepTest {
         Script(script.slices.filter { it.source in replicaSet })
 
     // =====================================================================
-    // [ORA2-DIFF-08] at scale: every generated mesh converges to the model's answer
+    // ORA2 §DIFF-08 at scale: every generated mesh converges to the model's answer
     // =====================================================================
 
     @Test
@@ -375,7 +375,7 @@ class ConvergenceSweepTest {
             val (outcome, _) = driveAndCheck(seed)
             withClue("seed=$seed outcome=$outcome") { outcome shouldBe RunOutcome.Success }
         }
-        println("[conv-sweep] $count generated meshes converged over ${GeneratorConfig.REPLICATED_SWEEP_SEEDS} [ORA2-DIFF-08]")
+        println("[conv-sweep] $count generated meshes converged over ${GeneratorConfig.REPLICATED_SWEEP_SEEDS} ORA2 §DIFF-08")
         println(
             "[conv-sweep] REALISED concurrency: max live dots at any key = $maxLiveDotsRealised " +
                 "(1 == none); seeds with a counter tie among live dots = ${seedsWithCounterTie.size} " +
@@ -390,20 +390,20 @@ class ConvergenceSweepTest {
         }
         withClue(
             "reversing TaggedMapDelta.DOT_ORDER's tie-break can only be caught on a key whose live " +
-                "dots share a counter; with none, this sweep says nothing about [ORA2-MODEL-12]",
+                "dots share a counter; with none, this sweep says nothing about ORA2 §MODEL-12",
         ) {
             seedsWithCounterTie.isNotEmpty() shouldBe true
         }
     }
 
     // =====================================================================
-    // [ORA2-DIFF-05] — a late-linked consumer of a generated mesh equals the converged reference
+    // ORA2 §DIFF-05 — a late-linked consumer of a generated mesh equals the converged reference
     // =====================================================================
 
     @Test
-    fun `ORA2-DIFF-05 a consumer linked partway through a generated mesh's drive equals the converged reference`() {
+    fun `ORA2 §DIFF-05 a consumer linked partway through a generated mesh's drive equals the converged reference`() {
         val seed = GeneratorConfig.REPLICATED_SWEEP_SEEDS.first
-        // (seed, config) is deterministic ([ORA2-GEN-07]), so the plan can be re-derived here
+        // (seed, config) is deterministic (ORA2 §GEN-07), so the plan can be re-derived here
         // without threading it out of driveAndCheck.
         val plan = GeneratorConfig.replicatedOrMapMeshCase(config, seed).replication!!.plan
         var lateFold: TaggedMapTerminalFold<Any?, Any?>? = null
