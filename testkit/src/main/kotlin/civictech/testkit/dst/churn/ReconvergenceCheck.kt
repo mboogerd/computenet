@@ -301,9 +301,27 @@ class ReconvergenceCheck internal constructor(
         val DEPARTED_STREAM_RULE: (Set<CellRef>, Set<CellRef>) -> Set<CellRef> =
             { replicasOf, attached -> replicasOf intersect attached }
 
+        /**
+         * [CHA3-71]'s control seam: the departed-stream rule DISABLED. Every attached ref is
+         * judged regardless of current live membership, so a departed replica's frozen final
+         * fold counts as live exactly as a member's does — [42-REPL-06]'s exclusion, switched
+         * off. Constructing [ReconvergenceCheck] with this filter instead of
+         * [DEPARTED_STREAM_RULE] is what `ControlSeams.departedStreamRuleDisabled` exercises to
+         * prove [CHA3-13] is load-bearing rather than vacuous: once a live replica's fold moves
+         * on past a departed peer's frozen snapshot, this filter judges them together and the
+         * two folds provably disagree, where [DEPARTED_STREAM_RULE] would have excluded the
+         * frozen one and passed.
+         */
+        val DEPARTED_COUNTS_AS_LIVE_RULE: (Set<CellRef>, Set<CellRef>) -> Set<CellRef> =
+            { _, attached -> attached }
+
         /** The check as a suite uses it. */
         fun of(payload: MeshPayload = MeshPayload.SET): ReconvergenceCheck =
             ReconvergenceCheck(payload, DEPARTED_STREAM_RULE)
+
+        /** [of], but with [DEPARTED_COUNTS_AS_LIVE_RULE] instead — [CHA3-71]'s control. */
+        fun disablingDepartedStreamRule(payload: MeshPayload = MeshPayload.SET): ReconvergenceCheck =
+            ReconvergenceCheck(payload, DEPARTED_COUNTS_AS_LIVE_RULE)
 
         /** The stable [CheckRegistry] id a `DstArtifact` records for [payload]'s reconvergence check. */
         fun idFor(payload: MeshPayload): String = "churn-reconvergence-${payload.name.lowercase()}"
