@@ -172,6 +172,18 @@ data class PeerTarget(override val name: String) : FaultTarget {
  * only clock, there is no wall-clock field, and [Fault.onStep] is the only place an event can
  * act. An event whose [atStep] the run never reaches never fires, and the report says so
  * ([CHA3-47]) rather than the plan quietly meaning less than it says.
+ *
+ * ## The `fired` latch is per-**run** state, and every implementation resets it in `install`
+ *
+ * [Fault]'s contract is that an implementation is a value with "any mutable per-run state created
+ * in [Fault.install]", and the once-only latch each event below carries is exactly that. It has to
+ * be reset there rather than merely initialised at construction, because one [FaultPlan] is
+ * executed more than once **by design**: `DstRun.assertDeterministic` runs the same plan object
+ * twice and compares trace digests, and `PlanShrinker` re-runs a candidate plan for every
+ * reduction it grades. A latch that survived a run would make the second execution fire
+ * *nothing* — measured as 8 trace events against 0 by `ChurnMeshTest`'s determinism assertion,
+ * `computenet-umx.2.2` — and a shrinker would then grade every candidate against an adversary
+ * that had already spent itself on the first run.
  */
 sealed interface ChurnEvent : Fault {
 
@@ -213,6 +225,11 @@ data class JoinEvent(
     }
 
     private var fired = false
+
+    /** See [ChurnEvent]: the latch is per-run state and is reset here, not only at construction. */
+    override fun install(world: DstWorld) {
+        fired = false
+    }
 
     override fun describe(): String = "churn.join(peer=$peer, step=$atStep)"
 
@@ -266,6 +283,11 @@ data class RejoinEvent(
 
     private var fired = false
 
+    /** See [ChurnEvent]: the latch is per-run state and is reset here, not only at construction. */
+    override fun install(world: DstWorld) {
+        fired = false
+    }
+
     override fun describe(): String = "churn.rejoin(peer=$peer, step=$atStep)"
 
     override fun onStep(world: DstWorld, step: Int) {
@@ -314,6 +336,11 @@ data class DepartEvent(
     }
 
     private var fired = false
+
+    /** See [ChurnEvent]: the latch is per-run state and is reset here, not only at construction. */
+    override fun install(world: DstWorld) {
+        fired = false
+    }
 
     override fun describe(): String = "churn.depart(peer=$peer, $mode, step=$atStep)"
 
@@ -378,6 +405,11 @@ data class ReassignEvent(
     }
 
     private var fired = false
+
+    /** See [ChurnEvent]: the latch is per-run state and is reset here, not only at construction. */
+    override fun install(world: DstWorld) {
+        fired = false
+    }
 
     override fun describe(): String = "churn.reassign(peer=$peer, interest=$interest, epoch=$epoch, step=$atStep)"
 
