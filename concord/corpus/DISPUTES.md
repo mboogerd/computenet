@@ -711,8 +711,9 @@ would instead suppress live post-recovery traffic as already-acted, that opposit
   ***Decided (`computenet-xxeo`, 2026-08-25): it is the intended guarantee — a design
   ceiling, not a defect.*** The window is **at-least-once**, now stated normatively as
   `[24-DUR-09]` (spec 24 §Effectful, "The write-ahead window is at-least-once"), and this
-  sub-entry is therefore closed rather than left standing. The decision was read off what
-  the corpus and spec already decide, not chosen: `[24-DUR-07]` fixed the criterion for
+  sub-entry is therefore closed rather than left standing. The decision applies a criterion the
+  corpus and spec already decide to a window none of them names, rather than choosing a
+  fresh one: `[24-DUR-07]` fixed the criterion for
   exactly this trade — a duplicate is loud and bounded, a suppression is a silent
   unrecoverable omission — and `[24-DUR-08]`'s eviction bound re-applies it in the same
   direction ("eviction only ever *shrinks* the suppression set"). Journaling the advance

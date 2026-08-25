@@ -352,9 +352,10 @@ internal object C9SweepRegistrar {
      * `computenet-xxeo` decided (2026-08-25) that at-least-once **is** the intended guarantee
      * across the frame-journaled / effect-fired / advance-journaled window, and recorded it as
      * `[24-DUR-09]` (spec 24 §Effectful) plus a resolution on the G-59/C-9 entry in
-     * `concord/corpus/DISPUTES.md`. The decision was read off `[24-DUR-07]`'s criterion — a
+     * `concord/corpus/DISPUTES.md`. The decision applies `[24-DUR-07]`'s criterion — a
      * duplicate is loud and bounded, a suppression is a silent unrecoverable omission — and 93
-     * I-7's external-effect idempotency ceiling, not chosen; the kernel already implements it, so
+     * I-7's external-effect idempotency ceiling to a window neither passage itself names, rather
+     * than choosing a fresh one; the kernel already implements it, so
      * nothing in `:kernel`'s main source set moved.
      *
      * So BS-2 asserts the decided property instead of the at-most-once one it was authored
@@ -629,7 +630,8 @@ class EffectReplaySweepTest {
      * **`computenet-xxeo` decided (2026-08-25) that this is the intended guarantee**, and recorded
      * it normatively as `[24-DUR-09]` (spec 24 §Effectful, "The write-ahead window is
      * at-least-once") plus a resolution on the G-59/C-9 entry in `concord/corpus/DISPUTES.md`. The
-     * decision was read off what the spec already decides rather than chosen: `[24-DUR-07]` fixed
+     * decision applies a criterion the spec already decides to a window the spec does not itself
+     * name, rather than choosing a fresh one: `[24-DUR-07]` fixed
      * the criterion for this class of trade — a duplicate is loud and bounded, a suppression is a
      * silent unrecoverable omission — `[24-DUR-08]`'s eviction bound re-applies it in the same
      * direction, and 93 I-7's external-effect idempotency ceiling says exactly-once across an
