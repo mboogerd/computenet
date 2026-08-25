@@ -564,27 +564,82 @@ class TrustBoundaryTest {
     }
 
     /**
-     * computenet-a4ha's fourth probe, `PROBE repeated links = 5`, and what the
-     * binding does to it — pinned rather than left to the bead, because the
-     * honest answer is a *partial* one.
+     * computenet-a4ha's fourth probe, `PROBE repeated links = 5`, closed by
+     * computenet-hil6 — and closed as a **repair, not a policy**: no cap was
+     * chosen and no number appears anywhere in the change.
      *
-     * Repetition is still unbounded: five identical requests make five links,
-     * and P's single emission crosses five times. What the binding takes away
-     * is the aim — every copy lands on the requesting peer's own consumer, so
-     * the amplifier can only be pointed at the peer paying for it. A third
-     * peer's address does not reach this test at all; it is refused one arm up.
+     * The amplifier was an identity accident. `RemoteLinkRequests.translate`
+     * built the stand-in for the requesting peer's port as `FanInlet(api)`,
+     * which mints `PortRef.generate()` — a fresh anonymous ref per request
+     * (`cell=null`). `FanOutlet.consumers` is keyed by [PortRef], so five
+     * identical requests installed five distinct consumers on one outlet.
+     * Measured against the unfixed code: `links=5 consumers=5 delivered=5`,
+     * five refs with `cell=null`. Giving the stand-in the DERIVED ref of the
+     * port it stands for ([PortRef.of], `standInRef`) makes the repeat replace
+     * the attachment instead of adding a sibling — the same mechanism
+     * `FanOutlet.streamTo` (T21) and `GossipLinkIdempotenceTest` already rely
+     * on, where the link ref is likewise derived from the pair it connects.
+     *
+     * The aim property computenet-a4ha established is asserted unchanged: the
+     * one copy that does cross lands on the requesting peer's own consumer and
+     * nowhere else.
+     *
+     * **The one thing this does NOT collapse, asserted rather than glossed:**
+     * `LinkSupport.active` is keyed by a random `Link.id`, so each admitted
+     * request still leaves a link record on the target outlet even though only
+     * one consumer attachment survives — the same orphan T21 had to evict
+     * explicitly in `streamTo`, in a code path outside this seam. Delivery
+     * amplification is closed; link-record accumulation is not, and the count
+     * below pins that honestly instead of asserting a 1 the code does not
+     * deliver.
      */
     @Test
-    fun `computenet-a4ha - repeated link requests are still uncapped, but only ever at the requester itself`() {
+    fun `computenet-hil6 - repeated identical link requests collapse onto one consumer and one delivery`() {
         val rig = RedirectRig()
         repeat(5) { rig.requestFromQ(PortAddress(rig.consumerOnQ.ref, "inlet")) }
 
-        rig.source.outlet.linking.links.size shouldBe 5 // no de-dup, no cap: unchanged
+        // one live attachment, keyed by the derived ref of the peer's own port
+        val consumers = consumerRefs(rig.source.outlet)
+        consumers shouldBe setOf(PortRef.of(rig.consumerOnQ.ref, "inlet"))
+
         rig.emit("p-internal-secret")
 
-        // ...and every copy went to the requester's own consumer, nowhere else.
-        rig.consumerOnQ.received shouldBe List(5) { "p-internal-secret" }
+        // ...so P's single emission crosses ONCE, not five times
+        rig.consumerOnQ.received shouldBe listOf("p-internal-secret")
+        // ...and the aim computenet-a4ha bound is unchanged: nowhere else
         rig.victimOnP.received.shouldBeEmpty()
         rig.consumerOnR.received.shouldBeEmpty()
+
+        // the stated residual: bookkeeping still accumulates one record per request
+        rig.source.outlet.linking.links.size shouldBe 5
+    }
+
+    /**
+     * The discriminator of the test above: a repeat must not be able to pass by
+     * simply never linking. A *distinct* endpoint on the same peer still gets
+     * its own consumer, so the collapse is de-duplication of an identical
+     * address and not a mute of repeated requests.
+     */
+    @Test
+    fun `computenet-hil6 - distinct endpoints on one peer still get their own links`() {
+        val rig = RedirectRig()
+        rig.requestFromQ(PortAddress(rig.consumerOnQ.ref, "inlet"))
+        rig.requestFromQ(PortAddress(rig.consumerOnQ.ref, "other-inlet"))
+
+        consumerRefs(rig.source.outlet) shouldBe setOf(
+            PortRef.of(rig.consumerOnQ.ref, "inlet"),
+            PortRef.of(rig.consumerOnQ.ref, "other-inlet"),
+        )
+    }
+
+    /**
+     * Live consumer attachments on [outlet]. `FanOutlet.consumers` is private —
+     * deliberately, it is the fan-out hot path — so the probe reads it
+     * reflectively rather than widening the port API for one assertion, exactly
+     * as `GossipLinkIdempotenceTest` does for the same field.
+     */
+    private fun consumerRefs(outlet: FanOutlet<*>): Set<PortRef> {
+        val field = FanOutlet::class.java.getDeclaredField("consumers").apply { isAccessible = true }
+        return (field.get(outlet) as Map<*, *>).keys.map { it as PortRef }.toSet()
     }
 }

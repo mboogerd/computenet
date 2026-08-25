@@ -21,6 +21,7 @@ import civictech.cell.CurrentContext
 import civictech.cell.host.LocationRegistry
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.LinkTo
+import civictech.cell.port.PortRef
 import civictech.cell.proxy.Invocation
 import civictech.gen.wire.Contract
 import civictech.nature.ContractRegistry
@@ -174,14 +175,18 @@ class BridgeIngressCell(
      * resolve to a location this peer announced is what restores the symmetry.
      *
      * **What this does NOT bound, stated here rather than only on the bead.**
-     * Repeated identical requests are still neither de-duplicated nor capped:
-     * N requests establish N links on one target port, and each fires its own
-     * `onLinked` catch-up and every subsequent delta, so a peer can still
-     * amplify P's outbound traffic N-fold. What the binding takes away is the
-     * *aim*: every one of those links is admitted only against the requesting
-     * peer's own endpoint, so the amplifier cannot be *pointed* at a third
-     * party or at the receiver's own cells by the request itself. A per-peer
-     * cap is a separate decision and is not made here.
+     * This seam binds the *aim* and nothing else: every admitted link is
+     * admitted only against the requesting peer's own endpoint, so the
+     * amplifier cannot be *pointed* at a third party or at the receiver's own
+     * cells by the request itself. It imposes no per-peer cap, and none is
+     * imposed anywhere: a peer may hold links to as many *distinct* endpoints
+     * as it announces.
+     *
+     * What it no longer leaves open is buying N copies of ONE stream by asking
+     * N times. That was closed by computenet-hil6, at the identity of the
+     * reconstructed endpoint rather than by a cap here — see
+     * [RemoteLinkRequests.standInRef], whose KDoc also states the residual
+     * (link-record accumulation is not collapsed, only delivery).
      *
      * **And the aim is bound at the request, not for the link's lifetime**
      * (measured in review, computenet-zlm2). This check runs once; the endpoint
@@ -512,7 +517,10 @@ object RemoteLinkRequests {
         val api = apiClass(args[2] as Long)
         return when (decoded.invocation.methodName) {
             "requestLinkTo" -> {
-                val endpoint = FanInlet(api)
+                // computenet-hil6: the stand-in carries the DERIVED identity of
+                // the port it stands for, not a fresh anonymous one. See
+                // [standInRef].
+                val endpoint = FanInlet(api, standInRef(cell, port))
                 endpoint.serve(forwarder(api, cell, port, replySink))
                 decoded.copy(invocation = Invocation.of(LINK_TO, arrayOf<Any?>(endpoint)))
             }
@@ -528,6 +536,42 @@ object RemoteLinkRequests {
             else -> error("unknown RemoteLink method '${decoded.invocation.methodName}'")
         }
     }
+
+    /**
+     * The [PortRef] a reconstructed stand-in endpoint carries: the **derived**
+     * identity of the remote port it stands for ([PortRef.of], PN-1), never a
+     * fresh anonymous one (computenet-hil6).
+     *
+     * This is what makes a repeated identical link request idempotent, and it
+     * is a repair rather than a policy: `FanOutlet.consumers` is keyed by
+     * [PortRef], so re-linking a stand-in for the *same* `(cell, port)`
+     * REPLACES the attachment instead of adding a sibling — exactly the
+     * mechanism `FanOutlet.streamTo` relies on (T21) and
+     * `GossipLinkIdempotenceTest` pins for the gossip mesh, where the link's
+     * ref is likewise derived from the pair it connects rather than generated.
+     * Before this, `FanInlet(api)` minted `PortRef.generate()` per request, so
+     * N identical requests installed N distinct consumers on one outlet and
+     * every emission crossed the wire N times (measured: `links=5 consumers=5
+     * delivered=5`, five refs with `cell=null`). No number is chosen here and
+     * no cap is imposed: a peer may still hold links to as many *distinct*
+     * endpoints as it announces — what it can no longer do is buy N copies of
+     * one stream by asking N times for the same one.
+     *
+     * The derivation also makes the stand-in's identity the one the requesting
+     * side actually uses: `(cell, port)` is a hosted port over there, so
+     * [PortRef.of] reproduces the very ref that port derived for itself, and a
+     * targeted delivery (`FanOutlet.at`) or a `MessageContext.sourcePort` stamp
+     * now names the real remote port rather than an ingress-local accident.
+     *
+     * **What it does not de-duplicate**, stated here rather than only on the
+     * bead: the *bookkeeping*. Each admitted request still runs a full
+     * handshake, and `LinkSupport.active` is keyed by a random `Link.id`, so a
+     * repeat leaves the superseded record behind on the target outlet even
+     * though only one consumer attachment survives — the same orphan T21 had
+     * to evict explicitly in `streamTo`, in a code path outside this file.
+     * Delivery amplification is closed; link-record accumulation is not.
+     */
+    private fun standInRef(cell: CellRef, port: String): PortRef = PortRef.of(cell, port)
 
     /**
      * Sends a link request to [target] over [sink] (a [BridgeEgressCell], or a
