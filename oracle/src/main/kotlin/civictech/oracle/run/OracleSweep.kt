@@ -75,7 +75,7 @@ import civictech.testkit.forEachSeed
  * edge is not reachable from the default sweep — but a caller who lowers [run]'s `stepBudget`
  * moves into it.
  *
- * ## What `ORA1-…` and `ORA2 §…` markers ARE — and what they are not (computenet-4ru.22)
+ * ## What `ORA1 §…` and `ORA2 §…` markers ARE — and what they are not (computenet-4ru.22)
  *
  * They are **acceptance clauses of the beads items that built this harness**, not EARS
  * requirement ids. ORA1's are written in epic `computenet-4ru` §4; ORA2's in feature

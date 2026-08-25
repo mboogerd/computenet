@@ -39,7 +39,7 @@ class ModuleDependencyTest {
     )
 
     @Test
-    fun `ORA1-API-04 no forbidden module is on the oracle test runtime classpath`() {
+    fun `ORA1 §API-04 no forbidden module is on the oracle test runtime classpath`() {
         fingerprints.forEach { (module, fqn) ->
             assertThrows<ClassNotFoundException>(
                 "$fqn loaded from :oracle's classpath, so $module is reachable from :oracle — " +
@@ -52,7 +52,7 @@ class ModuleDependencyTest {
     }
 
     @Test
-    fun `ORA1-API-04 oracle build file declares no dependency on concord, wire, inspect or a demo module`() {
+    fun `ORA1 §API-04 oracle build file declares no dependency on concord, wire, inspect or a demo module`() {
         // A Gradle Test task's working directory is the project directory (relied on the same
         // way by kernel/build.gradle.kts's expected-failure ledger), so this resolves to
         // oracle/build.gradle.kts.

@@ -99,7 +99,7 @@ class ShrinkerTest {
     private fun twoBranchConfig() = chainConfig().copy(sourceCount = 2, terminalCount = 2)
 
     @Test
-    fun `ORA1-SHRINK-01 pass 1 deletes op-script steps down to the ones the failure needs`() {
+    fun `ORA1 §SHRINK-01 pass 1 deletes op-script steps down to the ones the failure needs`() {
         val case = generated(chainConfig(), seed = 1L)
         val terminal = case.topology.terminals.single().name
         val reference = failWhenever(case, terminal) { script -> adds(script).isNotEmpty() }
@@ -117,7 +117,7 @@ class ShrinkerTest {
     }
 
     @Test
-    fun `ORA1-SHRINK-01 pass 2 narrows the element domain onto a single element`() {
+    fun `ORA1 §SHRINK-01 pass 2 narrows the element domain onto a single element`() {
         val case = generated(chainConfig(), seed = 2L)
         val terminal = case.topology.terminals.single().name
         // Element-agnostic on purpose: the failure needs three adds, not three *distinct* adds, so
@@ -134,7 +134,7 @@ class ShrinkerTest {
     }
 
     @Test
-    fun `ORA1-SHRINK-01 pass 3 drops the non-failing terminal and the cells only it reached`() {
+    fun `ORA1 §SHRINK-01 pass 3 drops the non-failing terminal and the cells only it reached`() {
         val case = generated(twoBranchConfig(), seed = 3L)
         case.topology.terminals.size shouldBe 2
         val failing = case.topology.terminals.first()
@@ -172,7 +172,7 @@ class ShrinkerTest {
      * reading the reduced script and once by re-executing it with each of the two removed.
      */
     @Test
-    fun `ORA1-SHRINK-02 a reduction that stops the failure is not retained - Ex-SHRINK-05`() {
+    fun `ORA1 §SHRINK-02 a reduction that stops the failure is not retained - Ex-SHRINK-05`() {
         val case = generated(chainConfig(), seed = 4L)
         val terminal = case.topology.terminals.single().name
         val (a, b) = distinctAddedElements(case).let { it[0] to it[1] }
@@ -219,7 +219,7 @@ class ShrinkerTest {
      * candidate.
      */
     @Test
-    fun `ORA1-SHRINK-05 a candidate that passes on re-execution is never reported as minimal`() {
+    fun `ORA1 §SHRINK-05 a candidate that passes on re-execution is never reported as minimal`() {
         val case = generated(chainConfig(), seed = 5L)
         val terminal = case.topology.terminals.single().name
         val model = CaseExecution.referenceModelFor(case.topology)
@@ -250,7 +250,7 @@ class ShrinkerTest {
     }
 
     @Test
-    fun `ORA1-SHRINK-03 an exhausted candidate budget reports the smallest case so far as truncated`() {
+    fun `ORA1 §SHRINK-03 an exhausted candidate budget reports the smallest case so far as truncated`() {
         val case = generated(chainConfig(), seed = 6L)
         val terminal = case.topology.terminals.single().name
         val reference = failWhenever(case, terminal) { script -> adds(script).isNotEmpty() }
@@ -266,7 +266,7 @@ class ShrinkerTest {
     }
 
     @Test
-    fun `ORA1-SHRINK-03 an exhausted wall clock reports the original case as truncated`() {
+    fun `ORA1 §SHRINK-03 an exhausted wall clock reports the original case as truncated`() {
         val case = generated(chainConfig(), seed = 7L)
         val terminal = case.topology.terminals.single().name
         val reference = failWhenever(case, terminal) { script -> adds(script).isNotEmpty() }

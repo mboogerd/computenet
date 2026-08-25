@@ -118,7 +118,7 @@ class OperatorCatalogTest {
     }
 
     @Test
-    fun `ORA1-API-03 a newly registered entry's ShapeRule reads back through the public API`() {
+    fun `ORA1 §API-03 a newly registered entry's ShapeRule reads back through the public API`() {
         // A ternary operator over a shape no enum in this repo can name: a set of 4-tuples
         // joined with a map to a map of sets. If the catalog can carry this without a code
         // change, a generator reading shapes off the catalog picks up a consumer's operator

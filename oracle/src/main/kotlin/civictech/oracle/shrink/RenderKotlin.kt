@@ -117,7 +117,7 @@ internal fun renderCounterexample(counterexample: Counterexample): String {
     val terminal = failureTerminal(counterexample.outcome)
 
     return buildString {
-        appendLine("// Rendered by Counterexample.renderKotlin() (ORA1-SHRINK-04).")
+        appendLine("// Rendered by Counterexample.renderKotlin() (ORA1 §SHRINK-04).")
         appendLine("// Rebuilt from CaseTopology + CaseScript via catalog ids; the lowered GraphSpec is")
         appendLine("// re-derived by GraphGenerator.lower, never printed — see RenderKotlin.kt's KDoc.")
         appendLine("// NOTE: the check() below asserts against the catalog-resolved reference")

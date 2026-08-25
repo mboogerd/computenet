@@ -473,7 +473,7 @@ class HonestyLedgerTest {
     // -------------------------------------------------- the DISPUTES filing
 
     @Test
-    fun `the DISPUTES filing for ORA1-DIFF-09 records the disagreement it names`() {
+    fun `the DISPUTES filing for ORA1 §DIFF-09 records the disagreement it names`() {
         val disputes = disputesSource()
 
         val entryStart = disputes.indexOf("## ORA1 (the divergence control)")

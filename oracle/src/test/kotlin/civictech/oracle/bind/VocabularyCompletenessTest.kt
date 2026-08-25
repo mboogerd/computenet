@@ -95,7 +95,7 @@ class VocabularyCompletenessTest {
      * .oracle.model.ReferenceModel] can actually evaluate.
      */
     @Test
-    fun `every ORA1-MODEL-02 vocabulary entry is a full paired OperatorCatalog entry`() {
+    fun `every ORA1 §MODEL-02 vocabulary entry is a full paired OperatorCatalog entry`() {
         val missing = ora1Model02Vocabulary.filterNot { it in OperatorCatalog }
         withClue("vocabulary entries absent from OperatorCatalog entirely: $missing") {
             missing.shouldBeEmpty()

@@ -1800,7 +1800,7 @@ genuinely checkable and leaves the rest here.
 The two entries below cite `ORA1 §DIFF-09`, `ORA2 §DIFF-07` and their neighbours. Read that
 citation form correctly, because a reviewer already read it wrongly once and it cost a verdict.
 
-`ORA1-…` and `ORA2 §…` are **acceptance clauses of the beads items that built the `:oracle`
+`ORA1 §…` and `ORA2 §…` are **acceptance clauses of the beads items that built the `:oracle`
 harness** — ORA1's in epic `computenet-4ru` §4, ORA2's in feature `computenet-4ru.1` §4. They are
 not EARS requirement ids. Neither family has normative text under `doc/spec/`, no scenario
 `covers:` one, and none ever will: they constrain the **tester** (what the reference model may
