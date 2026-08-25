@@ -39,36 +39,64 @@ import java.util.concurrent.TimeUnit
  * a SIM number and a REAL number differ partly *because* their settling differs. That is
  * the point of measuring both, not a defect to subtract out.
  *
- * ## Retract mechanics, and why the reload is not in the number
+ * ## Invocation mechanics, and why the state-restoring work is not in the number
  *
- * State cannot shrink forever: a retract batch has to have something to retract. The
- * mechanism here is a `Level.Invocation` setup that, for [Direction.RETRACT], applies the
- * covering insert batch and quiesces the graph **before** the timed body starts, then
- * hands the body `Deltas.retract(...)` of exactly that batch. JMH excludes `@Setup` from
- * the measured interval, so the reload cost is paid and not counted.
+ * Neither direction can run open-loop: a retract batch has to have something to retract,
+ * and an insert batch applied to a graph nothing ever drains piles up. Both are handled
+ * by the same `Level.Invocation` setup, which delegates to [InvocationCycle] — the graph
+ * is returned to its per-invocation baseline live state **before** the timed body starts,
+ * by applying the covering insert batch under [Direction.RETRACT] and by retracting the
+ * previous body's batch under [Direction.INSERT]. JMH excludes `@Setup` from the measured
+ * interval, so that cost is paid and not counted.
  *
  * Two consequences a reader of the numbers has to carry:
  *
- * - A retract invocation costs roughly twice the wall clock of an insert invocation, all
- *   of it real work, only half of it measured. A sweep's *duration* is therefore not
- *   proportional to its reported throughput.
+ * - Every invocation, in either direction, costs roughly twice the wall clock its
+ *   reported throughput accounts for: all of it real work, only half of it measured. A
+ *   sweep's *duration* is therefore not proportional to its reported throughput. (Before
+ *   computenet-y7hc this was true of retract invocations only, which is why the two
+ *   directions' sweep durations were as asymmetric as their numbers.)
  * - `Level.Invocation` is JMH's own documented caveat: its per-invocation timestamps are
  *   unreliable for operations shorter than roughly a millisecond.
  *   [ThroughputReport.DELTAS_PER_BATCH] is 512 partly for that reason — 512 deltas
  *   through a hosted graph plus a quiescence fence is comfortably above that floor. A
  *   future task that shrinks the batch has to re-examine this, not just the constant.
  *
- * ## Tag-map growth is observed here, never tuned
+ * ## Live state is bounded per invocation; tombstone growth is observed, never tuned
  *
  * Within one iteration the graph is reused across invocations and the delta stream never
- * repeats an element or a tag, so the operators' `TagState` maps grow monotonically —
- * live tags under insert, tombstones under retract — for the whole iteration.
- * `[BEN1-28]` names exactly that growth as the suspect for dominating the set-shaped
- * subjects' numbers, so it is left in and stated: the graph is rebuilt at
- * `Level.Iteration`, which bounds the growth per iteration and makes iteration-to-
- * iteration drift within a fork observable rather than smoothed away. Nothing here
- * clears, compacts or otherwise tunes that map, and a later result that finds throughput
- * declining across an iteration is reporting a real property of the implementation.
+ * repeats an element or a tag, so the operators' `TagState` maps accumulate for the whole
+ * iteration. Two halves of that accumulation, which this class now treats differently —
+ * a change of decision recorded here rather than quietly made (computenet-y7hc):
+ *
+ * - **Live membership is bounded per invocation.** It was not. Under
+ *   [Direction.RETRACT] the covering-insert-then-retract shape always returned the graph
+ *   to its pre-invocation live state, but under [Direction.INSERT] the setup only
+ *   generated a batch, so live tags grew monotonically and unboundedly across an
+ *   iteration: invocation 1's timed body ran against an empty map and invocation 40's
+ *   against 40 batches of live membership. That is not the operator property `[BEN1-28]`
+ *   asks about — it is a *harness* confound that makes the two directions incomparable,
+ *   and the 2026-08-18 REAL-drive entry measured its signature (every INSERT row at
+ *   least 3x noisier than every RETRACT row's upper bound). INSERT now carries the mirror
+ *   of RETRACT's covering insert, an untimed compensating retract of the previous body's
+ *   batch, so both directions time one batch against the same live state every
+ *   invocation. [InvocationCycle] holds that logic and
+ *   `BoundedInvocationStateTest` pins the bound, so a change that reintroduces the growth
+ *   reddens `:bench:test` instead of silently restoring the old shape.
+ * - **Tombstone growth is still observed and never tuned.** The observed-remove algebra
+ *   keeps a tombstone per retracted tag, so total map size still grows monotonically
+ *   within an iteration — now in both directions, where before it was live tags under
+ *   insert and tombstones under retract. `[BEN1-28]` names that growth as the suspect for
+ *   dominating the set-shaped subjects' numbers, so it is left in and stated: the graph is
+ *   rebuilt at `Level.Iteration`, which bounds it per iteration and makes iteration-to-
+ *   iteration drift within a fork observable rather than smoothed away. Nothing here
+ *   clears, compacts or otherwise tunes that map, and a later result that finds throughput
+ *   declining across an iteration is reporting a real property of the implementation.
+ *
+ * What the change does **not** establish: that `[BEN1-28]`'s dispersion asymmetry is
+ * resolved. That is an empirical claim, it needs a re-measured sweep on a quiesced host,
+ * and it belongs to computenet-x9e.14. Until that lands, the numbers in the findings
+ * corpus are the pre-change ones and nothing here supersedes them.
  *
  * ## Caveats that make naive comparisons invalid
  *
@@ -153,10 +181,13 @@ open class OperatorThroughputBenchmark {
         var direction: Direction = Direction.INSERT
 
         private lateinit var graph: MicroGraph
-        private lateinit var stream: DeltaStream
 
-        /** The batch the next timed invocation applies; prepared by [prepareBatch]. */
-        private lateinit var pending: DeltaBatch
+        /**
+         * The untimed/timed split, and the bounded-live-state invariant that goes with
+         * it. Lives in `src/main` so `:bench:test` can pin it — see [InvocationCycle]'s
+         * own KDoc for why that is not a stylistic choice.
+         */
+        private lateinit var cycle: InvocationCycle
 
         /**
          * Prints this fork's host facts to stdout once per trial — the CPU model, core
@@ -206,7 +237,7 @@ open class OperatorThroughputBenchmark {
         @Setup(Level.Iteration)
         fun openGraph() {
             graph = Graphs.build(subject = subject, drive = drive)
-            stream = DeltaStream(SEED)
+            cycle = InvocationCycle(graph, DeltaStream(SEED), direction)
         }
 
         @TearDown(Level.Iteration)
@@ -215,34 +246,27 @@ open class OperatorThroughputBenchmark {
         }
 
         /**
-         * Generates the next batch — and, under [Direction.RETRACT], pre-loads the state
-         * it retracts — outside the measured interval.
+         * The untimed half of one invocation, delegated to [InvocationCycle.prepare]:
+         * generate the next batch, and restore the graph's per-invocation baseline live
+         * state — a covering insert under [Direction.RETRACT], a compensating retract of
+         * the previous body's batch under [Direction.INSERT].
          *
-         * Generation cannot happen inside the body: `DeltaStream` allocates and shuffles,
-         * and a body that re-applied one cached batch instead would be measuring the
-         * dedup-absorb path (`Deltas.kt`'s "tag churn" note), not the operator's work.
+         * Neither half can move into the body. Generation allocates and shuffles, and a
+         * body that re-applied one cached batch instead would be measuring the
+         * dedup-absorb path (`Deltas.kt`'s "tag churn" note), not the operator's work;
+         * the state-restoring apply is a whole extra batch of real work, and counting it
+         * would put two batches inside a number reported as one batch's throughput. JMH
+         * excludes `@Setup` from the measured interval, so both are paid and not counted.
          */
         @Setup(Level.Invocation)
-        fun prepareBatch() {
-            val inserts = stream.insert(ThroughputReport.DELTAS_PER_BATCH)
-            pending = when (direction) {
-                Direction.INSERT -> inserts
-                Direction.RETRACT -> {
-                    graph.applyAndQuiesce(inserts)
-                    Deltas.retract(inserts)
-                }
-            }
-        }
+        fun prepareBatch() = cycle.prepare()
 
         /**
          * The measured work: apply the prepared batch, drive to quiescence, and return
          * the collector's arrival count so the whole propagation is observably consumed
          * rather than eligible for elimination.
          */
-        fun applyAndQuiesce(): Long {
-            graph.applyAndQuiesce(pending)
-            return graph.arrivals
-        }
+        fun applyAndQuiesce(): Long = cycle.applyPending()
     }
 
     /** [Drive.SIM] state — deterministic single-threaded simulation, drained by `runToIdle`. */
