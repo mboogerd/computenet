@@ -70,7 +70,7 @@ import kotlin.test.assertTrue
  * **solely** by [CrashFault.midDrain] on `excl-receiver` (`fired=1` on every seed), never by a
  * churn departure. The mesh's membership events are *not* disjoint from the payload path — the
  * bridge's last traced activity lands somewhere in steps 56..105 depending on seed, and the
- * earliest joins (step 92 / 289 / 26 on seeds 1 / 2 / 5) fall inside that window on seeds 1 and
+ * earliest joins (step 92 / 289 / 26 on seeds 1 / 2 / 5) fall inside the bridge's own window on seeds 1 and
  * 5 — but a join is not the departure BS-17's *Given* asks for, and no departure is drawn at
  * all.
  *
