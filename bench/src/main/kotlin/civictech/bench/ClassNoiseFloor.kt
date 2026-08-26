@@ -26,7 +26,9 @@ import kotlin.math.ceil
  * ## Status: ONE class derived, three still falling back
  *
  * [CLASS_NOISE_FLOOR_DERIVATIONS] holds exactly one entry —
- * `CellFootprintBenchmark`, derived 2026-08-26 (`computenet-ahn0`). The other three
+ * `CellFootprintBenchmark`, derived 2026-08-26 (`computenet-ahn0`, **re-derived the same
+ * day under the toolchain JDK by `computenet-7v7m`** after the first three runs turned
+ * out to have been measured under JBR 25; see step 1 below). The other three
  * classes the procedure names (`OperatorThroughputBenchmark`, `FanOutScalingBenchmark`,
  * `BoundedReadBenchmark`) have **no** derivation and therefore still fall back to
  * [NOISE_FLOOR]. That is not an oversight and no number may be entered for them that did
@@ -61,6 +63,17 @@ import kotlin.math.ceil
  *    one-directional guard: 1-minute load average at or below 0.25 x core count, plus the
  *    operator's own attestation that no other session, build or scheduled scan is live —
  *    the guard can refuse a wrong claim and can never confirm a right one).
+ *
+ *    **Launch that JDK by absolute path, and read each run log's own `# VM version:`
+ *    banner before trusting its numbers** (`computenet-7v7m`). A bare `java` is not the
+ *    toolchain: on this repository's own host it is JBR 25.0.2 while the toolchain is 21,
+ *    and the first derivation of `CellFootprintBenchmark` was measured under it — three
+ *    runs, all three logs banner-stamped `JDK 25.0.2`, every results row stamped
+ *    `jdkVersion` 25.0.2 — and published as a floor that would be applied to rows
+ *    `run-series.sh` forces to be measured under 21. `run-series.sh` refuses a non-21
+ *    launcher (`PINNED_JDK_MAJOR`); invoking the jar directly bypasses that refusal, so
+ *    the banner check is the derivation's own copy of it. The banner is the artifact:
+ *    `grep -m1 -E '^# VM version' <log>`.
  * 2. Take, across all rows of all three runs, the **maximum** observed relative
  *    dispersion (`scoreError / score`, JMH's 99.9% bar over its own score). Maximum, not
  *    mean: the floor has to sit above the worst quiet-host row, or a quiet host produces
@@ -167,6 +180,17 @@ fun roundUpToThreeDecimals(value: Double): Double {
  * @param hostState the attested host state; must be [QUIESCED_HOST_STATE].
  * @param jmhConfig the class's own annotation configuration, as run — recorded so a later
  *   reader can tell whether a fresh row was measured under the config the floor describes.
+ * @param measuringJvm the JVM the three runs actually MEASURED under, copied from the run
+ *   logs' own `# VM version:` banner and named with its vendor. It is a field, and
+ *   [renderDerivation] prints it, because the alternative was measured: `computenet-ahn0`
+ *   derived this class's first floor under JBR 25.0.2 while the module's toolchain is
+ *   JDK 21, and neither the record nor the rendered block could state which JVM produced
+ *   the number — the defect was legible only in a run log nobody was obliged to keep
+ *   (`computenet-7v7m`). A floor is applied to rows measured under the toolchain JDK, so
+ *   a floor derived under another runtime may be loose or tight and the reader cannot
+ *   tell which unless the entry says what it ran on. This field cannot prove the JVM was
+ *   the right one — nothing in a data class can — but it makes a wrong one visible on the
+ *   page instead of invisible.
  */
 data class ClassNoiseFloor(
     val benchmarkClass: String,
@@ -176,6 +200,7 @@ data class ClassNoiseFloor(
     val harnessCommitSha: String,
     val hostState: String,
     val jmhConfig: String,
+    val measuringJvm: String,
 ) {
     init {
         require(benchmarkClass.isNotBlank()) { "benchmarkClass must not be blank" }
@@ -196,6 +221,10 @@ data class ClassNoiseFloor(
                 "classified against it inherits that"
         }
         require(jmhConfig.isNotBlank()) { "jmhConfig must not be blank" }
+        require(measuringJvm.isNotBlank()) {
+            "measuringJvm must not be blank — a derivation that cannot say which JVM it " +
+                "measured under is the defect computenet-7v7m was filed for"
+        }
     }
 
     /**
@@ -216,34 +245,59 @@ data class ClassNoiseFloor(
  * existed — which is the correct behaviour for a floor that has not been measured.
  *
  * On the size of the one floor that exists: `CellFootprintBenchmark`'s worst quiet-host
- * row was 0.296 relative dispersion, so its floor is 0.593 — two binary orders above the
- * global 0.005. That is the finding, not a defect in it. `realSnapshot` at `N1E5` runs
- * 0.14–0.30 dispersion *reproducibly across all three runs* (KEYED_SET_CELL, SET_CELL,
- * OR_MAP_CELL and LIST_CELL all sit above 0.10 in more than one run), which is precisely
- * the structural spread [ClassFloorDerivation]'s "defect this exists to close" section
- * describes: the global bound fired on those rows every time and so distinguished
- * nothing. A loose floor derived forward from the class's own quiet-host worst case is
- * the honest bound; tightening it by dropping the worst row, or by taking a mean instead
- * of the maximum, would be reverse-engineering it.
+ * row was 0.522 relative dispersion, so its floor is 1.044 — above 1.0, which is to say
+ * this class can produce a JMH error bar the size of its own score without the machine
+ * being busy. That is the finding, not a defect in it. `realSnapshot` at `N1E5` runs high
+ * dispersion *reproducibly*: 12 of the 63 rows exceed 0.10, and OR_MAP_CELL, MAP_CELL,
+ * SET_CELL, LIST_CELL and KEYED_SET_CELL each exceed it in more than one run. That is
+ * precisely the structural spread [ClassFloorDerivation]'s "defect this exists to close"
+ * section describes: the global bound fired on those rows every time and so distinguished
+ * nothing.
+ *
+ * **The limit of this particular number, stated where the number is.** The maximum is
+ * *comparatively* isolated in a way the underlying spread is not: OR_MAP_CELL N1E5
+ * measured 0.522 / 0.119 / 0.199 across runs 1 / 2 / 3, so the row that sets the floor is
+ * about 2.6x its own next-worst observation, and the second-highest row over all 63 is
+ * 0.201. A floor of 1.044 is therefore a *weak* bound — it will refuse very little — and
+ * a reader should not take it as "this class typically disperses 0.5". It is nonetheless
+ * the number the pre-registered procedure yields, and it stands: the procedure says
+ * MAXIMUM, not mean, and dropping the worst row or switching statistic *after seeing that
+ * the maximum came out inconvenient* is exactly the reverse-engineering the forward
+ * discipline exists to prevent. Tightening it needs more runs, decided in advance, not a
+ * different reading of these three.
  */
 val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
     /**
-     * `computenet-ahn0`, 2026-08-26. Three sequential runs of
+     * `computenet-7v7m`, 2026-08-26 — the re-derivation. Three sequential runs of
      * `civictech.bench.micro.CellFootprintBenchmark` (21 rows each: `realSnapshot` over
-     * 7 cell families x 3 scales) from `bench/build/libs/bench-jmh.jar` at
-     * `9d5441985`, each preceded by its own attestation of `run-series.sh`'s gate
-     * (1-minute load average at or below 0.25 x 16 cores = 4.00 on NL-MGD6FQJW91).
-     * Maximum `|scoreError / score|` over all 63 rows: `realSnapshot` KEYED_SET_CELL
-     * N1E5 in run 2.
+     * 7 cell families x 3 scales) from `bench/build/libs/bench-jmh.jar` at `a7c6a0382`,
+     * each preceded by its own attestation of `run-series.sh`'s gate (1-minute load
+     * average at or below 0.25 x 16 cores = 4.00 on NL-MGD6FQJW91), and each verified
+     * after the fact against its own log's `# VM version:` banner. Maximum
+     * `|scoreError / score|` over all 63 rows: `realSnapshot` OR_MAP_CELL N1E5 in run 1.
+     *
+     * **This SUPERSEDES `computenet-ahn0`'s derivation of the same class**, which
+     * observed 0.2961501149112133 and published a floor of 0.593. That measurement is not
+     * retained as a second entry and must not be: all three of its runs were measured
+     * under JBR 25.0.2 (`# VM version: JDK 25.0.2 …` in each log, `jdkVersion` 25.0.2 on
+     * every row), not the module's declared toolchain JDK 21, which step 1 of the
+     * pre-registered procedure requires.
      */
     ClassNoiseFloor(
         benchmarkClass = "CellFootprintBenchmark",
-        observedMaxRelativeDispersion = 0.2961501149112133,
+        observedMaxRelativeDispersion = 0.5217864937179187,
         runs = 3,
         derivedOn = "2026-08-26",
-        harnessCommitSha = "9d5441985",
+        harnessCommitSha = "a7c6a0382",
         hostState = QUIESCED_HOST_STATE,
         jmhConfig = "mode=AverageTime unit=us forks=1 warmup=3x1s measurement=5x1s",
+        // Verbatim from all three run logs' banner, plus the vendor `-version` reports.
+        // Amazon Corretto rather than the Microsoft OpenJDK 21.0.11 earlier BEN1 findings
+        // entries name: this is the JDK 21 Gradle's own toolchain resolution selects for
+        // `:bench` on this host today (`./gradlew javaToolchains`), and the Eclipse
+        // Adoptium 21.0.11 those entries used by absolute path is no longer installed.
+        measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
+            "(Amazon Corretto; :bench's resolved toolchain launcher)",
     ),
 )
 
@@ -375,6 +429,10 @@ fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
             "${derivation.runs} sequential repeat runs"
     )
     appendLine("JMH: ${derivation.jmhConfig} (the class's own annotation configuration)")
+    // The measuring JVM is rendered, not left to prose, because a prose caveat is exactly
+    // what was missing when a floor derived under JBR 25 shipped as if it described the
+    // toolchain JDK (computenet-7v7m). See ClassNoiseFloor.measuringJvm.
+    appendLine("Measured under: ${derivation.measuringJvm}")
     appendLine("| quantity | value |")
     appendLine("| --- | --- |")
     appendLine(
@@ -396,6 +454,7 @@ fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
             "row above ${derivation.floor} is more dispersed than this class is when the " +
             "machine is quiet. What it does NOT establish: anything about another " +
             "benchmark class, about this class under a different annotation " +
-            "configuration, or about this class on another host."
+            "configuration, about this class on another host, or about this class under " +
+            "a JVM other than ${derivation.measuringJvm}."
     )
 }

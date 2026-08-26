@@ -1025,8 +1025,9 @@ class ThroughputReportTest {
 
         // computenet-ahn0: this row is 90.0/1500.0 = 0.06 relative dispersion — twelve
         // times NOISE_FLOOR, and it used to be flagged for exactly that. It is no longer
-        // flagged, because `CellFootprintBenchmark` now carries its own derived floor of
-        // 0.593 and 0.06 is well under it. That change is the whole point of the per-class
+        // flagged, because `CellFootprintBenchmark` now carries its own derived floor
+        // (1.044 since computenet-7v7m re-derived it under the toolchain JDK 21; 0.593
+        // under the superseded JBR 25 runs) and 0.06 is well under either. That change is the whole point of the per-class
         // floor: a bound this class cannot clear on a quiet machine was not detecting
         // interference. The row is still rendered with its error bar either way.
         val mapCell = report.dispersions.single { it.label == "MAP_CELL N1E5" }
@@ -1078,7 +1079,9 @@ class ThroughputReportTest {
      * The `MAP_CELL N1E5` allocation row is deliberately far too dispersed
      * (40000/500000 = 0.08 against `NOISE_FLOOR` 0.005), so the dispersion gate and the
      * omission accounting are exercised on the secondary-metric path too and not only on
-     * the primary one.
+     * the primary one. Since `computenet-ahn0` gave this class a floor of its own, 0.08
+     * no longer trips that gate — what the fixture still exercises here is the
+     * secondary-metric path's *resolution* of the bound, asserted below.
      */
     private val profGcCsv = listOf(
         """"Benchmark","Mode","Threads","Samples","Score","Score Error (99.9%)","Unit",""" +
@@ -1181,7 +1184,7 @@ class ThroughputReportTest {
         // The dispersion note is on the secondary-metric path too (computenet-785b:
         // a note beside the table, not an exclusion from it) — and it resolves its bound
         // through the same per-class table the primary path does (computenet-ahn0), so
-        // `MAP_CELL N1E5` clears `CellFootprintBenchmark`'s derived floor of 0.593 here
+        // `MAP_CELL N1E5` clears `CellFootprintBenchmark`'s derived floor of 1.044 here
         // as well and is no longer flagged against the global bound.
         val mapCell = report.dispersions.single { it.label == "MAP_CELL N1E5" }
         assertEquals("CellFootprintBenchmark", mapCell.benchmarkClass)
