@@ -236,49 +236,6 @@ fun roundUpToThreeDecimals(value: Double): Double {
 }
 
 /**
- * One benchmark class's forward-derived noise floor, with the provenance that makes it
- * checkable (`computenet-cm4w`).
- *
- * The floor itself is **not a field**: [floor] is computed from
- * [observedMaxRelativeDispersion] and [CLASS_FLOOR_MARGIN], so the table can never hold a
- * number that disagrees with its own derivation, and changing the margin moves every
- * derived floor in the same commit. That is the same property
- * `resolveEffect(effect, combinedError)` was extracted to give the series comparator: one
- * definition, no second place to restate it.
- *
- * @param benchmarkClass the benchmark's SIMPLE class name — the key
- *   `ThroughputReport.JmhRow.benchmarkClass` exposes, so a results file names its own
- *   floor and a caller does not have to.
- * @param observedMaxRelativeDispersion the MAXIMUM `|scoreError / score|` observed across
- *   every row of all [runs] runs. Must be finite and strictly positive: a zero would mean
- *   a benchmark with no dispersion at all, which is a broken measurement rather than a
- *   perfect one, and it would derive a floor of zero that every subsequent row exceeds.
- * @param runs how many observations of EVERY row fold into the maximum. At least
- *   [CLASS_FLOOR_MIN_RUNS] — JMH reports a `NaN` error at or below two measurement
- *   samples, and a floor drawn from fewer than three observations per row cannot see
- *   run-to-run variation at all. It does NOT say how those observations were gathered;
- *   [assembly] does (`computenet-71hu`).
- * @param derivedOn the ISO date of the derivation runs.
- * @param harnessCommitSha the harness commit the runs were made at.
- * @param hostState the attested host state; must be [QUIESCED_HOST_STATE].
- * @param jmhConfig the class's own annotation configuration, as run — recorded so a later
- *   reader can tell whether a fresh row was measured under the config the floor describes.
- * @param measuringJvm the JVM the three runs actually MEASURED under, copied from the run
- *   logs' own `# VM version:` banner and named with its vendor. It is a field, and
- *   [renderDerivation] prints it, because the alternative was measured: `computenet-ahn0`
- *   derived this class's first floor under JBR 25.0.2 while the module's toolchain is
- *   JDK 21, and neither the record nor the rendered block could state which JVM produced
- *   the number — the defect was legible only in a run log nobody was obliged to keep
- *   (`computenet-7v7m`). A floor is applied to rows measured under the toolchain JDK, so
- *   a floor derived under another runtime may be loose or tight and the reader cannot
- *   tell which unless the entry says what it ran on. This field cannot prove the JVM was
- *   the right one — nothing in a data class can — but it makes a wrong one visible on the
- *   page instead of invisible.
- * @param assembly how the observations were gathered, when the derivation knows. See
- *   [DerivationAssembly] for why it is separate from [runs] and why its absent value
- *   asserts nothing.
- */
-/**
  * How a derivation's observations were actually GATHERED — provenance about method, never
  * about the number.
  *
@@ -326,6 +283,49 @@ sealed interface DerivationAssembly {
     }
 }
 
+/**
+ * One benchmark class's forward-derived noise floor, with the provenance that makes it
+ * checkable (`computenet-cm4w`).
+ *
+ * The floor itself is **not a field**: [floor] is computed from
+ * [observedMaxRelativeDispersion] and [CLASS_FLOOR_MARGIN], so the table can never hold a
+ * number that disagrees with its own derivation, and changing the margin moves every
+ * derived floor in the same commit. That is the same property
+ * `resolveEffect(effect, combinedError)` was extracted to give the series comparator: one
+ * definition, no second place to restate it.
+ *
+ * @param benchmarkClass the benchmark's SIMPLE class name — the key
+ *   `ThroughputReport.JmhRow.benchmarkClass` exposes, so a results file names its own
+ *   floor and a caller does not have to.
+ * @param observedMaxRelativeDispersion the MAXIMUM `|scoreError / score|` observed across
+ *   every row of all [runs] runs. Must be finite and strictly positive: a zero would mean
+ *   a benchmark with no dispersion at all, which is a broken measurement rather than a
+ *   perfect one, and it would derive a floor of zero that every subsequent row exceeds.
+ * @param runs how many observations of EVERY row fold into the maximum. At least
+ *   [CLASS_FLOOR_MIN_RUNS] — JMH reports a `NaN` error at or below two measurement
+ *   samples, and a floor drawn from fewer than three observations per row cannot see
+ *   run-to-run variation at all. It does NOT say how those observations were gathered;
+ *   [assembly] does (`computenet-71hu`).
+ * @param derivedOn the ISO date of the derivation runs.
+ * @param harnessCommitSha the harness commit the runs were made at.
+ * @param hostState the attested host state; must be [QUIESCED_HOST_STATE].
+ * @param jmhConfig the class's own annotation configuration, as run — recorded so a later
+ *   reader can tell whether a fresh row was measured under the config the floor describes.
+ * @param measuringJvm the JVM the three runs actually MEASURED under, copied from the run
+ *   logs' own `# VM version:` banner and named with its vendor. It is a field, and
+ *   [renderDerivation] prints it, because the alternative was measured: `computenet-ahn0`
+ *   derived this class's first floor under JBR 25.0.2 while the module's toolchain is
+ *   JDK 21, and neither the record nor the rendered block could state which JVM produced
+ *   the number — the defect was legible only in a run log nobody was obliged to keep
+ *   (`computenet-7v7m`). A floor is applied to rows measured under the toolchain JDK, so
+ *   a floor derived under another runtime may be loose or tight and the reader cannot
+ *   tell which unless the entry says what it ran on. This field cannot prove the JVM was
+ *   the right one — nothing in a data class can — but it makes a wrong one visible on the
+ *   page instead of invisible.
+ * @param assembly how the observations were gathered, when the derivation knows. See
+ *   [DerivationAssembly] for why it is separate from [runs] and why its absent value
+ *   asserts nothing.
+ */
 data class ClassNoiseFloor(
     val benchmarkClass: String,
     val observedMaxRelativeDispersion: Double,
