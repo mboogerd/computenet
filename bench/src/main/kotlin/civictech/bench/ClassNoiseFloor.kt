@@ -57,9 +57,10 @@ import kotlin.math.ceil
  * declared `@Fork`/`@Warmup`/`@Measurement`/`@BenchmarkMode`, not a config chosen to make
  * the number smaller):
  *
- * 1. `./gradlew :bench:jmhJar` once, then **three sequential** executions of
- *    `bench/build/libs/bench-jmh.jar` filtered to that class, under the module's declared
- *    toolchain JDK, on a host attested [QUIESCED_HOST_STATE] (`run-series.sh`'s
+ * 1. `./gradlew :bench:jmhJar` once, then **three** executions of
+ *    `bench/build/libs/bench-jmh.jar` covering that class — sequentially, or decomposed
+ *    into row-set units as the "Decomposition" section below permits — under the module's
+ *    declared toolchain JDK, on a host attested [QUIESCED_HOST_STATE] (`run-series.sh`'s
  *    one-directional guard: 1-minute load average at or below 0.25 x core count, plus the
  *    operator's own attestation that no other session, build or scheduled scan is live —
  *    the guard can refuse a wrong claim and can never confirm a right one).
@@ -88,11 +89,91 @@ import kotlin.math.ceil
  * Falling back is the honest state; inventing a class floor by analogy to another class,
  * or by scaling one, is not a derivation and must not enter
  * [CLASS_NOISE_FLOOR_DERIVATIONS].
+ *
+ * ## Decomposition: the unit is the ROW SET (amendment, 2026-08-26, `computenet-3omz`)
+ *
+ * Step 1 above originally read "three **sequential** executions of the jar filtered to
+ * that class", which admits only one shape: a class completed in one uninterrupted
+ * stretch. Sized at the three un-derived classes' own annotation configurations that is
+ * about four hours of continuous gated measurement, and the pinned host is a laptop in
+ * daily interactive use whose owner has stated (2026-08-26) that a four-hour idle block
+ * is marginal. A procedure that only completes as one stretch does not complete at all,
+ * so it is amended here — **in committed source, before any number derived under the
+ * amended form exists**, which is the same forward discipline the margin and the format
+ * were fixed under, and the reason this text lands three dependency edges before the task
+ * that first runs a decomposed derivation.
+ *
+ * **What the amendment permits.** A class's derivation may be completed across MULTIPLE
+ * short quiesced windows. The unit of decomposition is the **ROW SET**: each window
+ * measures a SUBSET of the class's rows, and the class is done when every row of the
+ * class has been measured exactly [CLASS_FLOOR_MIN_RUNS] times in [CLASS_FLOOR_MIN_RUNS]
+ * separate JVM invocations. This is sound because the derived quantity is a MAXIMUM, and
+ * `max` is associative and commutative: folding it over rows measured at different times
+ * yields the same number as folding it over all of them at once. JMH forks per
+ * (benchmark, `@Param`) combination, so a row's own measurement does not depend on which
+ * other rows shared its invocation.
+ *
+ * **What the amendment does NOT permit, stated so it cannot be read as a loophole.**
+ *
+ * - Every row still runs at its class's OWN annotation configuration, three times. Row
+ *   selection — a benchmark regex, or `-p` naming a value the class already declares —
+ *   chooses WHICH rows run, never HOW a row is measured.
+ * - **No threshold, fork count, iteration count, iteration DURATION, thread count,
+ *   benchmark mode or margin may be changed to make a unit fit a window.** Not `-f`, not
+ *   `-wi`, not `-i`, not `-w`, not `-r`, not `-t`, not `-bm`, not [CLASS_FLOOR_MARGIN],
+ *   not [NOISE_FLOOR]. The list is illustrative and the rule is not: the ONLY thing a
+ *   unit may vary is which rows it measures. A unit too long for the available window is
+ *   split into fewer rows, and never into a cheaper configuration — including a
+ *   configuration that keeps the iteration COUNTS and shortens the iterations, which is
+ *   the same shrink wearing a different flag. This amendment is to SCHEDULING and to
+ *   nothing else; it must never become the route by which a configuration is shrunk.
+ * - The estimator is untouched: still the MAXIMUM over all observations, still
+ *   [CLASS_FLOOR_MARGIN] x that, still [roundUpToThreeDecimals]. Whether the maximum is
+ *   the right statistic is a separate, open question (`computenet-3sua`), and it is not
+ *   answered by anything here.
+ *
+ * **What decomposition costs, stated rather than assumed.** Rows measured in windows
+ * hours apart see different ordering and different thermal state than rows measured back
+ * to back. Nothing has measured whether that matters for these classes. It is a known
+ * difference in the measurement, not a defect the amendment repairs.
+ *
+ * **Per-unit obligations.** Everything step 1 requires per run is now required per UNIT:
+ *
+ * - The host gate (`run-series.sh`'s 1-minute load average at or below 0.25 x core count)
+ *   is attested immediately BEFORE each unit. A gate reading taken before the first unit
+ *   says nothing about the host when the fourth ran.
+ * - Each unit's own log's `# VM version:` banner is verified after the fact
+ *   (`grep -m1 -E '^# VM version' <log>`) — the per-unit copy of the check
+ *   `computenet-7v7m` added per run.
+ *
+ * **Two refusals a decomposed derivation must carry**, both implemented by
+ * [FloorDerivationLedger], which is the sanctioned way to accumulate one:
+ *
+ * 1. **A floor may be rendered only from a COMPLETE row set** — every row of the class,
+ *    [CLASS_FLOOR_MIN_RUNS] observations each — and the refusal must NAME the outstanding
+ *    rows and their counts. A maximum over a subset can only be SMALLER than the maximum
+ *    over the whole set, so a floor rendered from a partial row set is systematically too
+ *    LOW, which is the direction that admits rows the floor should have refused.
+ *    Completeness must be checked against a row universe pre-registered independently of
+ *    the enumeration (`EXPECTED_PLAN_ROW_COUNTS`): completeness computed over a filtered
+ *    enumeration is satisfied vacuously.
+ * 2. **A floor may be rendered only from a row set measured under ONE JVM version.** With
+ *    units spread over days the measuring JDK can change between them. That is not
+ *    hypothetical: `computenet-ahn0` derived `CellFootprintBenchmark`'s first floor under
+ *    JBR 25.0.2 rather than the toolchain's JDK 21 — a bare `java` on this host is JBR 25
+ *    and `JAVA_HOME` is unset — and re-deriving under 21 moved the floor from 0.593 to
+ *    1.044.
  */
 object ClassFloorDerivation {
 
     /** Documentation anchor only; see this object's KDoc. */
     const val PROCEDURE_OWNER: String = "computenet-cm4w"
+
+    /**
+     * The work item that amended step 1 to admit row-set decomposition. Documentation
+     * anchor only; see this object's "Decomposition" section.
+     */
+    const val DECOMPOSITION_OWNER: String = "computenet-3omz"
 }
 
 /**
