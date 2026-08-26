@@ -5098,3 +5098,98 @@ MATERIAL_RATIO=0.9 RESOLVABLE_RELATIVE_ERROR=0.1
 verdict=INCONCLUSIVE
 computenet-i61m subject split: UNRESOLVED
 ```
+
+
+---
+
+## 2026-08-26 — per-benchmark-class noise floors: the machinery and the derivation FORMAT, pre-registered with NO derivations yet (computenet-cm4w, half (a))
+
+**This entry publishes no number.** It records a criterion and its format, fixed in
+committed source before the measurement it will be applied to exists — the same
+pre-registration discipline the `NOISE_FLOOR` entry above used (margin fixed on
+`computenet-x9e.3.3` before the first run reported a score) and `computenet-bzwx`'s
+`IterationLengthCriterion` used (`MATERIAL_RATIO`/`RESOLVABLE_RELATIVE_ERROR` fixed
+before the A/B ran). The three sequential quiesced repeat runs per benchmark class that
+would produce actual floors are **pending a dedicated quiesced slot** and were NOT
+attempted here; see "What is outstanding" below.
+
+### What was wrong
+
+`NOISE_FLOOR = 0.005` was derived from `SmokeBenchmark.baseline`, a 4.3 ns branch-free
+bit mixer, and then inherited by every benchmark class in the module. Hosted-graph
+measurements intrinsically run 0.01–0.15 relative dispersion, so the 2026-08-21 findings
+review measured what that inheritance does: **66 of 72** throughput rows and **all 10**
+fan-out rows sat above 0.005. A bound a benchmark class cannot clear even on a silent
+machine is not detecting interference; it is restating that a hosted graph is not a bit
+mixer. A floor derived from a class's *own* repeat-run history restores the signal — a
+row above that class's floor is more dispersed than that same benchmark is when the
+machine is quiet, which is what "interference or a confound" actually means.
+
+### The machinery, as landed
+
+`bench/src/main/kotlin/civictech/bench/ClassNoiseFloor.kt`:
+
+- `CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor>` — **empty**. Nothing may enter it
+  that did not come from the procedure below.
+- `noiseFloorFor(benchmarkClass, floors)` — that class's derived floor where one exists,
+  and `NOISE_FLOOR` where none does. The class floor WINS in both directions: a class
+  quieter than `SmokeBenchmark` would derive a *tighter* floor, and a resolution taking
+  `max(classFloor, NOISE_FLOOR)` would be wrong exactly there while looking right on every
+  hosted-graph class.
+- `classifyAgainst(result, floor)` — the one copy of the classification arithmetic; both
+  `classify` overloads reach it, so the absolute-value and non-finite refusals have a
+  single definition.
+- `ThroughputReport.DispersionNote` resolves its bound from the row's own benchmark class
+  (carried off the JMH results file by `toResults`), and its rendered sentence says WHICH
+  bound it used — "above the harness sanity bound NOISE_FLOOR 0.005" and "above the
+  `<Class>` class floor 0.06 (derived from that class's own quiesced repeat runs)" are
+  different claims about the world and are phrased differently.
+
+While the derivation list is empty every class resolves to `NOISE_FLOOR`, so the harness
+classifies today exactly as it did before this machinery existed. That is the correct
+behaviour for a floor that has not been measured, and `DispersionNoteFloorTest` pins it.
+
+### The margin, fixed before the numbers
+
+**`CLASS_FLOOR_MARGIN = 2.0`.** The same 2x as `NOISE_FLOOR`'s, and deliberately the same
+rather than a fresh choice: a per-class floor and the global bound are the same
+construction over different subjects, so a reader comparing them should be reading a
+difference in the *measurement*, not in the margin. The size carries over unchanged —
+three runs on a deliberately idle host, with error bars that measure dispersion *within* a
+run rather than across runs, is a lower bound three times over, so the floor must sit above
+it or the class fires on itself.
+
+### The derivation procedure, fixed before the runs
+
+Per benchmark class, at **that class's own annotation configuration** (its declared
+`@Fork`/`@Warmup`/`@Measurement`/`@BenchmarkMode`, never a config chosen to make the number
+smaller):
+
+1. `./gradlew :bench:jmhJar` once, then **three sequential** executions of
+   `bench/build/libs/bench-jmh.jar` filtered to that class, under the module's declared
+   toolchain JDK, on a host attested `quiesced` (`scripts/bench-series/run-series.sh`'s
+   one-directional guard: 1-minute load average at or below 0.25 x core count, plus the
+   operator's own attestation that no other session, build or scheduled scan is live).
+2. Across all rows of all three runs, take the **maximum** relative dispersion
+   (`scoreError / score`). Maximum, not mean: the floor has to sit above the worst
+   quiet-host row, or a quiet host produces rows above their own floor.
+3. Floor = `CLASS_FLOOR_MARGIN` x that maximum, rounded UP to three decimals. Computed by
+   `ClassNoiseFloor.floor` — never hand-entered, so the table cannot hold a number that
+   disagrees with its own derivation.
+4. Append the entry rendered by `renderDerivation(...)`, which prints the observation, the
+   pre-fixed margin, the computed floor, the run count, the host state, the JMH config, and
+   both halves of the what-it-does / does-not-establish pair.
+
+`ClassNoiseFloor`'s constructor refuses a `hostState` other than `quiesced` and fewer than
+three runs, so a floor derived through interference cannot be represented at all.
+
+### What is outstanding — half (b)
+
+Nothing here is a floor. The derivations for `OperatorThroughputBenchmark`,
+`FanOutScalingBenchmark`, `CellFootprintBenchmark` and `BoundedReadBenchmark` require a
+host that is actually quiesced; the pinned machine left its quiesced window on 2026-08-26
+around 07:05 local (load above 20 on 16 cores, an endpoint scanner near 80% CPU, a human
+at the keyboard), and a floor derived through that interference would be a floor measuring
+the interference, inherited by every row later classified against it. No number was
+estimated, scaled from another class, or carried over. The runs are routed to a dedicated
+quiesced slot on `computenet-cm4w` (`metadata.compute=dedicated`).

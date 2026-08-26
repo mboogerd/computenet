@@ -1,6 +1,7 @@
 package civictech.bench.micro
 
 import civictech.bench.BenchResult
+import civictech.bench.CLASS_NOISE_FLOOR_TABLE
 import civictech.bench.ComparisonClaim
 import civictech.bench.Drive
 import civictech.bench.Findings
@@ -16,6 +17,8 @@ import civictech.bench.RunKnobs
 import civictech.bench.RunKnobsUnknownException
 import civictech.bench.TriggerClaim
 import civictech.bench.classify
+import civictech.bench.describeFloor
+import civictech.bench.noiseFloorFor
 import java.io.File
 
 /**
@@ -349,8 +352,23 @@ data class RowLabel(
     }
 }
 
-/** A [BenchResult] together with the per-row label [FindingsTable] will carry it under. */
-data class LabelledResult(val label: String, val result: BenchResult)
+/**
+ * A [BenchResult] together with the per-row label [FindingsTable] will carry it under.
+ *
+ * [benchmarkClass] is the row's simple JMH class name where the row came from a results
+ * file ([JmhRow.benchmarkClass]), and `null` where it did not — `Footprint.toResults`
+ * builds rows from a heap walk, which has no benchmark class. It exists so
+ * [DispersionNote] can resolve that class's own derived noise floor
+ * (`civictech.bench.noiseFloorFor`, `computenet-cm4w`) instead of measuring every
+ * hosted-graph row against a bit mixer's. It is defaulted, and `null` resolves to the
+ * global `NOISE_FLOOR`, so a caller that cannot honestly name a class is not made to
+ * invent one.
+ */
+data class LabelledResult(
+    val label: String,
+    val result: BenchResult,
+    val benchmarkClass: String? = null,
+)
 
 /**
  * One row's dispersion, stated beside the table rather than used to exclude it.
@@ -363,24 +381,41 @@ data class LabelledResult(val label: String, val result: BenchResult)
  * note carries what the omission list carried: how noisy each measurement was, so the
  * reader discounts it themselves instead of having it withheld.
  *
- * [aboveHarnessSanityBound] is informational and gates nothing. It says only that this
- * row is more dispersed than `SmokeBenchmark.baseline` on a quiesced host — the
- * quantity `NOISE_FLOOR` was actually derived from — which is the expected state of any
- * hosted-graph measurement.
+ * [aboveHarnessSanityBound] is informational and gates nothing. Which bound it is taken
+ * against depends on [benchmarkClass] (`computenet-cm4w`): a class with a derived
+ * per-class floor is measured against **its own** floor, and every other row falls back
+ * to `NOISE_FLOOR`. On the fallback path the note says only that this row is more
+ * dispersed than `SmokeBenchmark.baseline` on a quiesced host — the quantity
+ * `NOISE_FLOOR` was actually derived from — which is the expected state of any
+ * hosted-graph measurement, and why the per-class floors exist. On the class-floor path
+ * it says the row was noisier than that benchmark is when the machine is quiet, which is
+ * the statement worth reading. [describe] phrases the two differently for that reason.
  */
 data class DispersionNote(
     val label: String,
     val drive: Drive,
     val result: BenchResult,
+    val benchmarkClass: String? = null,
+    /**
+     * The floor table to resolve [benchmarkClass] against. Defaults to the live
+     * `CLASS_NOISE_FLOOR_TABLE`; the parameter exists so the class-floor branch of this
+     * note can be exercised on every `:bench:test` while that table is still empty. No
+     * production caller passes it.
+     */
+    val floors: Map<String, Double> = CLASS_NOISE_FLOOR_TABLE,
 ) {
+    /** The bound this row is classified against — its class's floor, or the global one. */
+    val floor: Double
+        get() = noiseFloorFor(benchmarkClass, floors)
+
     val aboveHarnessSanityBound: Boolean
-        get() = classify(result) == Reportability.Unreportable
+        get() = classify(result, benchmarkClass, floors) == Reportability.Unreportable
 
     fun describe(): String =
         "$label (drive=$drive): ${result.value} ± ${result.dispersion} ${result.unit}, " +
             "relative dispersion ${result.relativeDispersion}" +
             if (aboveHarnessSanityBound) {
-                " — above the harness sanity bound NOISE_FLOOR $NOISE_FLOOR " +
+                " — above ${describeFloor(benchmarkClass, floors)} " +
                     "(informational; the row is reported, and no comparison is drawn " +
                     "from it that its error bar does not support)"
             } else {
@@ -791,6 +826,9 @@ object ThroughputReport {
         rows.map { row ->
             LabelledResult(
                 label = labelOf(row, label ?: RowLabel.forBenchmark(row.benchmark)),
+                // The row's own class, so `DispersionNote` resolves that class's derived
+                // noise floor rather than the bit mixer's (`computenet-cm4w`).
+                benchmarkClass = row.benchmarkClass,
                 result = BenchResult(
                     value = row.score,
                     unit = row.unit,
@@ -1028,7 +1066,9 @@ object ThroughputReport {
             DriveReport(
                 drive = drive,
                 entry = entry,
-                dispersions = rows.map { DispersionNote(it.label, drive, it.result) },
+                dispersions = rows.map {
+                    DispersionNote(it.label, drive, it.result, it.benchmarkClass)
+                },
             )
         }
         val claimed = perDrive.indices.flatMap { i ->
