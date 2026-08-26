@@ -444,7 +444,9 @@ private fun parseFlags(argv: List<String>): Map<String, String> {
  *
  * Exit codes: `0` on success, non-zero on any refusal — the ledger's, or a bad-argument
  * refusal from this file's own flag parsing. Every refusal's text goes to [out] so a
- * runner script can surface it; this object never re-implements or softens one.
+ * runner script can surface it; this object never re-implements or softens one. [main]
+ * routes [out] to stderr whenever this returns non-zero, so a refusal never lands on the
+ * stdout a runner script reads a rendered block from.
  */
 object FloorCli {
 
@@ -637,10 +639,19 @@ none. Not reachable from check, build or test."""
     }
 }
 
-/** Process entry point for the `:bench:floorTool` task. */
+/**
+ * Process entry point for the `:bench:floorTool` task.
+ *
+ * A successful run's output goes to stdout; a refusal's goes to **stderr**, which is what
+ * `computenet-3omz.2` prescribes ("non-zero on any refusal, refusal text on stderr — the
+ * runner script gates on them"). The successor runner script therefore reads a rendered
+ * block off stdout without a refusal's text ever contaminating it, and can log a refusal
+ * separately. The split is by exit code rather than per line because [FloorCli.run]
+ * already returns non-zero for exactly the refusing cases.
+ */
 fun main(argv: Array<String>) {
     val out = StringBuilder()
     val code = FloorCli.run(argv, out)
-    print(out)
+    if (code == 0) print(out) else System.err.print(out)
     exitProcess(code)
 }
