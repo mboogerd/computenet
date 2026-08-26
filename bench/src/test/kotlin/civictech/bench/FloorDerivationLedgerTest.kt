@@ -2,6 +2,7 @@ package civictech.bench
 
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.maps.shouldNotContainKey
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
@@ -130,9 +131,33 @@ class FloorDerivationLedgerTest {
             "FanOutScalingBenchmark" to 30,
             // 2 methods (realDirect, realHostedSnapshotOf) x 3 SetScale
             "BoundedReadBenchmark" to 6,
-            // 1 method (baseline), no @Param
-            "SmokeBenchmark" to 1,
+            // SmokeBenchmark is deliberately absent: it relies on JMH's own @Fork/@Warmup/
+            // @Measurement defaults, so UnitSizing.estimateRowSeconds can never size a unit
+            // for it and `next` can never advance it (computenet-epxt). Pre-registering a
+            // count would let `plan` accept a class `next` can never serve.
         )
+    }
+
+    /**
+     * `computenet-epxt`: `plan` and `next` must agree about which classes the tool
+     * serves. `SmokeBenchmark` relies on JMH's own `@Fork`/`@Warmup`/`@Measurement`
+     * defaults (no annotations of its own), so [UnitSizing.estimateRowSeconds] can never
+     * size a unit for it — `next` would always refuse. Before the fix,
+     * `EXPECTED_PLAN_ROW_COUNTS` still pre-registered it, so `plan` accepted a class `next`
+     * could never advance. Excluding it from the table makes `plan` refuse it too, for the
+     * same reason any other unregistered class is refused.
+     */
+    @Test
+    fun `SmokeBenchmark is excluded from the pre-registered table, so plan refuses it like next would`() {
+        EXPECTED_PLAN_ROW_COUNTS shouldNotContainKey "SmokeBenchmark"
+        val refusal = shouldThrow<FloorLedgerException> {
+            DerivationPlan.of(
+                benchmarkClass = "SmokeBenchmark",
+                rows = listOf(RowKey.of("baseline", emptyMap())),
+                enumerationProvenance = "cmd",
+            )
+        }
+        refusal.message!! shouldContain "no pre-registered row count exists for 'SmokeBenchmark'"
     }
 
     @Test

@@ -57,20 +57,30 @@ const val QUIESCED_LOAD_FACTOR: Double = 0.25
  *   = **30**.
  * - `BoundedReadBenchmark` — 2 methods (`realDirect`, `realHostedSnapshotOf`) x 3
  *   `SetScale` = **6**.
- * - `SmokeBenchmark` — 1 method (`baseline`), no `@Param` = **1**.
  *
  * A count here is a claim about the class's annotation configuration, so **adding a
  * `@Benchmark` method or an enum constant changes it**, and the plan for that class will
  * be refused until this table is updated in the same commit. That refusal is the point:
  * a row universe that grew without anyone noticing is exactly the case where a floor
  * derived from the old universe would be too low.
+ *
+ * **`SmokeBenchmark` is deliberately absent.** It carries only `@State`/`@BenchmarkMode`/
+ * `@OutputTimeUnit` and relies on JMH's own defaults for `@Fork`/`@Warmup`/`@Measurement`
+ * (see `SmokeBenchmark`'s KDoc — it is a discovery sentinel, not a derivation target), so
+ * [UnitSizing.estimateRowSeconds] can never size a unit for it: reading those three
+ * annotations by reflection finds nothing at method or class level and refuses
+ * (`computenet-epxt`). Pre-registering a count for it here would let `plan` accept a class
+ * `next` can never advance — plannable but not actually serviceable. Leaving it out of
+ * this table makes `plan --class SmokeBenchmark` refuse too (`DerivationPlan`'s own "no
+ * pre-registered row count" check), so the two subcommands agree: neither derives a floor
+ * for it. Should `SmokeBenchmark` ever need deriving, the fix is adding its own
+ * `@Fork`/`@Warmup`/`@Measurement` annotations, not registering it here first.
  */
 val EXPECTED_PLAN_ROW_COUNTS: Map<String, Int> = mapOf(
     "CellFootprintBenchmark" to 21,
     "OperatorThroughputBenchmark" to 72,
     "FanOutScalingBenchmark" to 30,
     "BoundedReadBenchmark" to 6,
-    "SmokeBenchmark" to 1,
 )
 
 /**
