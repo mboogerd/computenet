@@ -7,7 +7,9 @@ import civictech.bench.NOISE_FLOOR
 import civictech.bench.QUIESCED_HOST_STATE
 import civictech.bench.RunEnvironment
 import civictech.bench.floorTable
+import civictech.bench.noiseFloorFor
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import org.junit.jupiter.api.Test
@@ -123,18 +125,53 @@ class DispersionNoteFloorTest {
     }
 
     /**
-     * The default is the LIVE table, which is empty today — so the harness classifies
-     * exactly as it did before this machinery existed until a derivation lands. A change
-     * that quietly populated the table would fail here, which is the point.
+     * The default is the LIVE table, and since `computenet-ahn0` it is no longer empty:
+     * `CellFootprintBenchmark` carries a derived floor and everything else falls back.
+     * Both halves are asserted through the DEFAULT parameter — the synthetic `floors`
+     * table the tests above use proves the resolution *rule*, and only this test proves
+     * the rule is wired to the table the harness actually ships. A change that populated
+     * or dropped an entry would fail here, which is the point.
      */
     @Test
-    fun `by default every class resolves to the global bound, because none is derived yet`() {
-        DispersionNote(
+    fun `the live table resolves the derived class to its own floor and the rest globally`() {
+        // Derived: resolves to CellFootprintBenchmark's own floor, not the global bound.
+        val derived = DispersionNote(
+            label = "SET_CELL N1E5",
+            drive = Drive.REAL,
+            result = rowAt(0.02),
+            benchmarkClass = "CellFootprintBenchmark",
+        )
+        derived.floor shouldBe noiseFloorFor("CellFootprintBenchmark")
+        derived.floor shouldNotBe NOISE_FLOOR
+        // 0.02 clears its class's own floor of 0.593 even though it is four times the
+        // global bound — which is exactly the signal the per-class floor restores. A row
+        // under its bound is not flagged, so `describe()` names no floor at all.
+        derived.aboveHarnessSanityBound shouldBe false
+        derived.describe() shouldNotContain "floor"
+
+        // A row that genuinely exceeds the DERIVED floor is flagged, and the sentence
+        // names the class's own floor rather than the global bound — the two are
+        // different claims about the world, and this is the live-table path saying so.
+        val reallyDispersed = DispersionNote(
+            label = "KEYED_SET_CELL N1E5",
+            drive = Drive.REAL,
+            result = rowAt(0.7),
+            benchmarkClass = "CellFootprintBenchmark",
+        )
+        reallyDispersed.aboveHarnessSanityBound shouldBe true
+        reallyDispersed.describe() shouldContain
+            "the CellFootprintBenchmark class floor ${noiseFloorFor("CellFootprintBenchmark")}"
+        reallyDispersed.describe() shouldNotContain "NOISE_FLOOR"
+
+        // Not derived: still the global bound, and still named as the global bound.
+        val fallback = DispersionNote(
             label = "UNION insert",
             drive = Drive.REAL,
             result = rowAt(0.02),
             benchmarkClass = "OperatorThroughputBenchmark",
-        ).floor shouldBe NOISE_FLOOR
+        )
+        fallback.floor shouldBe NOISE_FLOOR
+        fallback.describe() shouldContain "above the harness sanity bound NOISE_FLOOR"
     }
 
     /**

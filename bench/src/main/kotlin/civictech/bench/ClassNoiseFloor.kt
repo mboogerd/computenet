@@ -23,19 +23,31 @@ import kotlin.math.ceil
  * *that* class's floor is more dispersed than the same benchmark was on a quiet machine,
  * which is what "interference or a confound" actually means.
  *
- * ## Status: MACHINERY ONLY — no class floor has been derived yet
+ * ## Status: ONE class derived, three still falling back
  *
- * [CLASS_NOISE_FLOOR_DERIVATIONS] is deliberately **empty**, and everything below
- * therefore falls back to [NOISE_FLOOR] today. That is not an oversight and it is not a
- * placeholder waiting to be filled with a plausible number: deriving a floor requires
- * three sequential repeat runs of the class on a **quiesced** host, and a floor derived
- * through interference would be a floor measuring the interference, silently inherited by
- * every row later classified against it. The derivation runs are routed to a dedicated
- * quiesced slot (`computenet-cm4w`, `metadata.compute=dedicated`); the format, the margin
- * and the resolution rules are fixed HERE, in committed source, **before** the numbers
- * exist, for the same reason [NOISE_FLOOR]'s 2x margin was fixed before its first run
- * reported a number — so neither can be reverse-engineered from the measurement it is
- * applied to.
+ * [CLASS_NOISE_FLOOR_DERIVATIONS] holds exactly one entry —
+ * `CellFootprintBenchmark`, derived 2026-08-26 (`computenet-ahn0`). The other three
+ * classes the procedure names (`OperatorThroughputBenchmark`, `FanOutScalingBenchmark`,
+ * `BoundedReadBenchmark`) have **no** derivation and therefore still fall back to
+ * [NOISE_FLOOR]. That is not an oversight and no number may be entered for them that did
+ * not come from their own three quiesced runs: deriving a floor requires three sequential
+ * repeat runs of the class on a **quiesced** host, and a floor derived through
+ * interference would be a floor measuring the interference, silently inherited by every
+ * row later classified against it.
+ *
+ * The three that remain were not attempted because they do not fit one dedicated slot.
+ * Measured at the classes' own annotation configurations on 2026-08-26:
+ * `OperatorThroughputBenchmark` is 72 rows at `@Fork(2)` x 15s = ~48 min per run (~144
+ * min for three), `FanOutScalingBenchmark` 30 rows at up to `@Fork(5)` (~27 min per run),
+ * `BoundedReadBenchmark` 6 rows at `@Fork(5)` (~7 min per run) — against
+ * `CellFootprintBenchmark`'s measured 177s per run. Shrinking any of those configurations
+ * to fit a slot is exactly the thing the procedure forbids, so they are routed to their
+ * own dedicated slots instead.
+ *
+ * The format, the margin and the resolution rules were fixed HERE, in committed source,
+ * **before** any of these numbers existed, for the same reason [NOISE_FLOOR]'s 2x margin
+ * was fixed before its first run reported a number — so neither can be reverse-engineered
+ * from the measurement it is applied to.
  *
  * ## The derivation procedure, fixed in advance
  *
@@ -197,13 +209,43 @@ data class ClassNoiseFloor(
 /**
  * Every per-class floor this repository has actually derived.
  *
- * **EMPTY, on purpose.** See [ClassFloorDerivation]'s "Status" section: the three
- * sequential quiesced repeat runs per class have not been made, and no number may be
- * entered here that did not come from them. While this list is empty every class falls
- * back to [NOISE_FLOOR] and the harness behaves exactly as it did before this file
+ * **One entry, and only one.** See [ClassFloorDerivation]'s "Status" section: a class
+ * absent from this list has not had its three sequential quiesced repeat runs made, and
+ * no number may be entered here that did not come from them. An absent class falls back
+ * to [NOISE_FLOOR] and the harness behaves for it exactly as it did before this file
  * existed — which is the correct behaviour for a floor that has not been measured.
+ *
+ * On the size of the one floor that exists: `CellFootprintBenchmark`'s worst quiet-host
+ * row was 0.296 relative dispersion, so its floor is 0.593 — two binary orders above the
+ * global 0.005. That is the finding, not a defect in it. `realSnapshot` at `N1E5` runs
+ * 0.14–0.30 dispersion *reproducibly across all three runs* (KEYED_SET_CELL, SET_CELL,
+ * OR_MAP_CELL and LIST_CELL all sit above 0.10 in more than one run), which is precisely
+ * the structural spread [ClassFloorDerivation]'s "defect this exists to close" section
+ * describes: the global bound fired on those rows every time and so distinguished
+ * nothing. A loose floor derived forward from the class's own quiet-host worst case is
+ * the honest bound; tightening it by dropping the worst row, or by taking a mean instead
+ * of the maximum, would be reverse-engineering it.
  */
-val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = emptyList()
+val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
+    /**
+     * `computenet-ahn0`, 2026-08-26. Three sequential runs of
+     * `civictech.bench.micro.CellFootprintBenchmark` (21 rows each: `realSnapshot` over
+     * 7 cell families x 3 scales) from `bench/build/libs/bench-jmh.jar` at
+     * `9d5441985`, each preceded by its own attestation of `run-series.sh`'s gate
+     * (1-minute load average at or below 0.25 x 16 cores = 4.00 on NL-MGD6FQJW91).
+     * Maximum `|scoreError / score|` over all 63 rows: `realSnapshot` KEYED_SET_CELL
+     * N1E5 in run 2.
+     */
+    ClassNoiseFloor(
+        benchmarkClass = "CellFootprintBenchmark",
+        observedMaxRelativeDispersion = 0.2961501149112133,
+        runs = 3,
+        derivedOn = "2026-08-26",
+        harnessCommitSha = "9d5441985",
+        hostState = QUIESCED_HOST_STATE,
+        jmhConfig = "mode=AverageTime unit=us forks=1 warmup=3x1s measurement=5x1s",
+    ),
+)
 
 /**
  * [derivations] indexed by [ClassNoiseFloor.benchmarkClass].

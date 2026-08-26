@@ -17,6 +17,8 @@ import civictech.bench.RunKnobs
 import civictech.bench.RunKnobsUnknownException
 import civictech.bench.TriggerClaim
 import civictech.bench.classify
+import civictech.bench.hasClassFloor
+import civictech.bench.noiseFloorFor
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -240,6 +242,15 @@ class ThroughputReportTest {
         val text = report.text()
         assertTrue(text.contains("above the harness sanity bound NOISE_FLOOR $NOISE_FLOOR"), text)
         assertTrue(text.contains("the row is reported"), text)
+
+        // computenet-ahn0: the bound named above is the GLOBAL one, and it is global
+        // because `OperatorThroughputBenchmark` has no derived class floor — not because
+        // the renderer is hard-wired to NOISE_FLOOR. Stated here so the day that class's
+        // three quiesced runs land, this assertion fails and says why, rather than the
+        // sentence silently changing under a test that never looked at the resolution.
+        assertFalse(hasClassFloor("OperatorThroughputBenchmark"))
+        assertEquals(NOISE_FLOOR, noiseFloorFor("OperatorThroughputBenchmark"))
+        assertEquals(NOISE_FLOOR, noisy.floor)
     }
 
     @Test
@@ -1011,8 +1022,19 @@ class ThroughputReportTest {
         // computenet-785b: the dispersed row is rendered here too, with its error bar,
         // and its dispersion is stated beside the table instead of excluding it.
         assertTrue(entry.contains("| MAP_CELL N1E5 | 1500.0 ± 90.0 us/op |"), entry)
+
+        // computenet-ahn0: this row is 90.0/1500.0 = 0.06 relative dispersion — twelve
+        // times NOISE_FLOOR, and it used to be flagged for exactly that. It is no longer
+        // flagged, because `CellFootprintBenchmark` now carries its own derived floor of
+        // 0.593 and 0.06 is well under it. That change is the whole point of the per-class
+        // floor: a bound this class cannot clear on a quiet machine was not detecting
+        // interference. The row is still rendered with its error bar either way.
+        val mapCell = report.dispersions.single { it.label == "MAP_CELL N1E5" }
+        assertEquals("CellFootprintBenchmark", mapCell.benchmarkClass)
+        assertEquals(noiseFloorFor("CellFootprintBenchmark"), mapCell.floor)
+        assertTrue(hasClassFloor("CellFootprintBenchmark"))
         assertEquals(
-            listOf("MAP_CELL N1E5"),
+            emptyList<String>(),
             report.dispersions.filter { it.aboveHarnessSanityBound }.map { it.label },
         )
         assertTrue(report.text().contains("MAP_CELL N1E5 (drive=REAL)"), report.text())
@@ -1157,9 +1179,15 @@ class ThroughputReportTest {
         assertTrue(entry.contains("Trigger: G-21 phase 3 — INCONCLUSIVE"), entry)
 
         // The dispersion note is on the secondary-metric path too (computenet-785b:
-        // a note beside the table, not an exclusion from it).
+        // a note beside the table, not an exclusion from it) — and it resolves its bound
+        // through the same per-class table the primary path does (computenet-ahn0), so
+        // `MAP_CELL N1E5` clears `CellFootprintBenchmark`'s derived floor of 0.593 here
+        // as well and is no longer flagged against the global bound.
+        val mapCell = report.dispersions.single { it.label == "MAP_CELL N1E5" }
+        assertEquals("CellFootprintBenchmark", mapCell.benchmarkClass)
+        assertEquals(noiseFloorFor("CellFootprintBenchmark"), mapCell.floor)
         assertEquals(
-            listOf("MAP_CELL N1E5"),
+            emptyList<String>(),
             report.dispersions.filter { it.aboveHarnessSanityBound }.map { it.label },
         )
         assertTrue(report.text().contains("MAP_CELL N1E5 (drive=REAL)"), report.text())

@@ -5193,3 +5193,58 @@ at the keyboard), and a floor derived through that interference would be a floor
 the interference, inherited by every row later classified against it. No number was
 estimated, scaled from another class, or carried over. The runs are routed to a dedicated
 quiesced slot on `computenet-cm4w` (`metadata.compute=dedicated`).
+
+## 2026-08-26 — per-class noise floor for `CellFootprintBenchmark`, derived forward from its own quiesced repeat runs
+Harness: 9d5441985 · host state quiesced · 3 sequential repeat runs
+JMH: mode=AverageTime unit=us forks=1 warmup=3x1s measurement=5x1s (the class's own annotation configuration)
+| quantity | value |
+| --- | --- |
+| max observed relative dispersion across all rows of all 3 runs | 0.2961501149112133 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x observed, rounded up to three decimals | 0.593 |
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any per-class number existed; the floor is computed from the observation by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: rows of `CellFootprintBenchmark` measured under this configuration on a quiesced host stayed at or under 0.2961501149112133 relative dispersion, so a later row above 0.593 is more dispersed than this class is when the machine is quiet. What it does NOT establish: anything about another benchmark class, about this class under a different annotation configuration, or about this class on another host.
+
+### Provenance and limits of the entry above (`computenet-ahn0`)
+
+**Host and gate.** NL-MGD6FQJW91, 16 cores, so `run-series.sh`'s gate is a 1-minute
+load average at or below 4.00. Each of the three runs was preceded by its own
+attestation of that gate, taken immediately before the run and recorded here in full:
+run 1 at 11:33:24 local, 1-min 3.26; run 2 at 11:38:24, 1-min 3.76; run 3 at 11:41:49,
+1-min 3.86. Two intervening readings REFUSED the gate and the run was held rather than
+taken — 11:36:33 at 5.13 and 11:41:34 at 4.41, both the preceding run's own load still
+decaying out of the 1-minute average. Wall time per run: 177s.
+
+**What was live on the host during the runs, stated rather than claimed away.** The gate
+is one-directional — it can refuse a wrong claim and can never confirm a right one — so
+the honest attestation is what was actually running, not "an empty machine". An
+orchestrating Claude Code session was live on this host throughout, as was this
+implementing session and a once-a-minute `uptime` load sampler; the corporate security
+stack (Microsoft Defender, ManageEngine appctrl, `trustd`) is resident and never leaves.
+No build, no other benchmark, and no scheduled endpoint scan ran concurrently. The
+baseline this floor is derived against is therefore "this machine with its permanent
+resident load and an idle agent session", which is the quietest state it reaches, not a
+silent machine.
+
+**Why the floor is 0.593 and not something near the global 0.005.** The maximum is not a
+lone outlier to be explained away. `realSnapshot` at scale `N1E5` runs high dispersion
+reproducibly: KEYED_SET_CELL measured 0.296 / 0.228 / 0.184 across runs 2 / 1 / 3,
+SET_CELL 0.236 / 0.151 / 0.138, and OR_MAP_CELL and LIST_CELL also exceed 0.10 in more
+than one run. The median row over all 63 rows is 0.035 — itself seven times the global
+bound. That spread is the structural fact the per-class floor exists to expose: the
+global bound fired on those rows on every quiet-host run and so distinguished nothing.
+The procedure's `maximum, not mean` is what makes the floor sit above the worst quiet-host
+row; taking a mean, or dropping the worst row, would produce a tighter number that a quiet
+host then violates.
+
+**Three of the four classes were NOT derived, and no number was estimated for them.**
+`OperatorThroughputBenchmark`, `FanOutScalingBenchmark` and `BoundedReadBenchmark` still
+fall back to `NOISE_FLOOR`. They were not attempted because their own annotation
+configurations do not fit one dedicated slot: `OperatorThroughputBenchmark` is 72 rows
+(2 benchmarks x 18 subjects x 2 directions) at `@Fork(2)` x (5 warmup + 10 measurement)
+x 1s, about 48 minutes per run and so ~144 minutes for the three required runs;
+`FanOutScalingBenchmark` is 30 rows at up to `@Fork(5)`, about 27 minutes per run;
+`BoundedReadBenchmark` is 6 rows at `@Fork(5)`, about 7 minutes per run — against
+`CellFootprintBenchmark`'s measured 177 seconds. Running any of them at a reduced fork or
+iteration count to fit the slot would derive the floor from a configuration the floor does
+not describe, which the pre-registered procedure forbids. They are routed to their own
+dedicated slots instead.
