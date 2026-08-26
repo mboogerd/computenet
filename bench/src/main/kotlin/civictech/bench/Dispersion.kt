@@ -130,15 +130,17 @@ enum class Reportability {
  * non-finite magnitude (rather than relying on `NaN > x` being `false`) closes the
  * `NaN` case instead of accidentally depending on the same IEEE 754 behavior that
  * caused it.
+ *
+ * **This overload always uses the GLOBAL bound.** A row whose benchmark class is known
+ * should go through `classify(result, benchmarkClass)` instead (`computenet-cm4w`),
+ * which resolves that class's own derived floor where one exists and falls back to
+ * [NOISE_FLOOR] where none does. This overload is what a caller holding no class — a
+ * footprint row built from a heap walk rather than a JMH results file — reaches, and it
+ * is what every class resolves to while `CLASS_NOISE_FLOOR_DERIVATIONS` is empty. The
+ * arithmetic is shared: both overloads reach [classifyAgainst], so the sign and
+ * non-finite refusals documented above have exactly one definition.
  */
-fun classify(result: BenchResult): Reportability {
-    val magnitude = kotlin.math.abs(result.relativeDispersion)
-    return if (!magnitude.isFinite() || magnitude > NOISE_FLOOR) {
-        Reportability.Unreportable
-    } else {
-        Reportability.Reportable
-    }
-}
+fun classify(result: BenchResult): Reportability = classifyAgainst(result, NOISE_FLOOR)
 
 /**
  * How much wider than the combined error bars a claimed effect must be before
