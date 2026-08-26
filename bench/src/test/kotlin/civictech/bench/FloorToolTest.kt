@@ -3,6 +3,7 @@ package civictech.bench
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -344,6 +345,160 @@ class FloorToolTest {
         val record = CLASS_NOISE_FLOOR_DERIVATIONS.first { it.benchmarkClass == "CellFootprintBenchmark" }
         val block = out.substringAfter("--- findings.md block ---\n")
         block shouldBe renderDerivation(record)
+    }
+
+    // -----------------------------------------------------------------------------------
+    // computenet-71hu — the three defects computenet-3omz.4's review found in this
+    // surface, each pinned here.
+    // -----------------------------------------------------------------------------------
+
+    /** Ingests [csvContent] as one more unit, through the CLI, and returns its exit code. */
+    private fun ingestUnit(dir: File, name: String, csvContent: String, banner: String = jdk21): Int {
+        writeLog(dir, "$name.log", banner)
+        writeResults(dir, "$name.csv", csvContent)
+        return run(
+            "ingest", "--ledger", File(dir, "ledger").path,
+            "--results", File(dir, "$name.csv").path,
+            "--log", File(dir, "$name.log").path,
+            "--load", "1.2", "--cores", "16",
+        ).first
+    }
+
+    /**
+     * Three units, each covering every planned row: the shape the original three
+     * sequential whole-class executions produced, and the only shape for which
+     * "N sequential repeat runs" is a true sentence.
+     */
+    private fun completeAsWholeClassRuns(dir: File) {
+        startSyntheticLedger(File(dir, "ledger"))
+        listOf(0.01, 0.02, 0.03).forEachIndexed { index, dispersion ->
+            ingestUnit(dir, "run-${index + 1}", csv(syntheticRows.map { it to dispersion })) shouldBe 0
+        }
+    }
+
+    /**
+     * Six units, each covering one method's three rows — `next`'s own method-then-param
+     * batching, run as six separate processes. The derived numbers are identical to
+     * [completeAsWholeClassRuns]'s; only how they were gathered differs.
+     */
+    private fun completeAsUnitAssembled(dir: File) {
+        startSyntheticLedger(File(dir, "ledger"))
+        var n = 0
+        listOf(0.01, 0.02, 0.03).forEach { dispersion ->
+            listOf("alpha", "beta").forEach { method ->
+                n += 1
+                val rows = syntheticRows.filter { it.method == method }.map { it to dispersion }
+                ingestUnit(dir, "unit-$n", csv(rows)) shouldBe 0
+            }
+        }
+    }
+
+    private fun renderComplete(dir: File): Pair<Int, String> = run(
+        "render", "--ledger", File(dir, "ledger").path,
+        "--derived-on", "2026-08-27",
+        "--harness-sha", "abcdef012",
+        "--jmh-config", "mode=AverageTime forks=1",
+    )
+
+    @Test
+    fun `a set assembled from many units is not described as sequential repeat runs`(
+        @TempDir dir: File,
+    ) {
+        completeAsUnitAssembled(dir)
+
+        val (code, out) = renderComplete(dir)
+        code shouldBe 0
+        // The defect: this set was six invocations in six processes, and the block called
+        // it three sequential repeat runs.
+        out shouldNotContain "sequential repeat runs"
+        out shouldContain "6 measuring units"
+        out shouldContain "3 observations"
+    }
+
+    @Test
+    fun `a set of whole-class runs is still described as sequential repeat runs`(
+        @TempDir dir: File,
+    ) {
+        completeAsWholeClassRuns(dir)
+
+        val (code, out) = renderComplete(dir)
+        code shouldBe 0
+        out shouldContain "3 sequential repeat runs"
+        out shouldNotContain "measuring units"
+    }
+
+    @Test
+    fun `the two assemblies differ only in description, never in a derived number`(
+        @TempDir dir: File,
+    ) {
+        val wholeDir = File(dir, "whole").also { it.mkdirs() }
+        val unitDir = File(dir, "units").also { it.mkdirs() }
+        completeAsWholeClassRuns(wholeDir)
+        completeAsUnitAssembled(unitDir)
+
+        val whole = renderComplete(wholeDir).second
+        val assembled = renderComplete(unitDir).second
+
+        // Every number the block publishes is identical; only the gathering sentence moves.
+        val numbers = { text: String ->
+            Regex("[0-9]+\\.[0-9]+").findAll(text).map { it.value }.toList()
+        }
+        numbers(assembled) shouldBe numbers(whole)
+    }
+
+    @Test
+    fun `a refusal carries exactly one REFUSED prefix`(@TempDir dir: File) {
+        startSyntheticLedger(File(dir, "ledger"))
+        ingestUnit(dir, "run-1", csv(syntheticRows.map { it to 0.02 })) shouldBe 0
+
+        val (code, out) = renderComplete(dir)
+        code shouldBe 1
+        out shouldContain "row set is incomplete"
+        out shouldNotContain "REFUSED: REFUSED:"
+        out.trim().startsWith("REFUSED: ") shouldBe true
+    }
+
+    // splitFloorArgs — the `-PfloorArgs` bridge. Gradle can only deliver ONE string, so
+    // the tokenising happens here, where a quoted value survives.
+
+    @Test
+    fun `splitFloorArgs keeps a quoted value containing spaces in one token`() {
+        splitFloorArgs("render --ledger /tmp/x --jmh-config 'forks=1, warmup 3x1s'") shouldBe
+            listOf("render", "--ledger", "/tmp/x", "--jmh-config", "forks=1, warmup 3x1s")
+    }
+
+    @Test
+    fun `splitFloorArgs handles double quotes, escapes and runs of whitespace`() {
+        splitFloorArgs("  a   \"b c\"  d\\ e ") shouldBe listOf("a", "b c", "d e")
+        splitFloorArgs("'it'\\''s'") shouldBe listOf("it's")
+    }
+
+    @Test
+    fun `splitFloorArgs refuses an unterminated quote rather than guessing`() {
+        val refusal = shouldThrow<IllegalArgumentException> {
+            splitFloorArgs("render --jmh-config 'forks=1, warmup 3x1s")
+        }
+        refusal.message!! shouldContain "unterminated"
+    }
+
+    @Test
+    fun `a single raw argument carries a spaced --jmh-config through to the block`(
+        @TempDir dir: File,
+    ) {
+        completeAsWholeClassRuns(dir)
+        val ledger = File(dir, "ledger").path
+
+        val out = StringBuilder()
+        val code = FloorCli.run(
+            arrayOf(
+                "render --ledger $ledger --derived-on 2026-08-27 --harness-sha abcdef012 " +
+                    "--jmh-config 'forks=1, warmup 3x1s, measurement 5x1s'"
+            ),
+            out,
+        )
+
+        code shouldBe 0
+        out.toString() shouldContain "JMH: forks=1, warmup 3x1s, measurement 5x1s"
     }
 
     @Test

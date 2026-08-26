@@ -253,9 +253,11 @@ fun roundUpToThreeDecimals(value: Double): Double {
  *   every row of all [runs] runs. Must be finite and strictly positive: a zero would mean
  *   a benchmark with no dispersion at all, which is a broken measurement rather than a
  *   perfect one, and it would derive a floor of zero that every subsequent row exceeds.
- * @param runs how many sequential repeat runs were taken. At least [CLASS_FLOOR_MIN_RUNS]
- *   — JMH reports a `NaN` error at or below two measurement samples, and a floor drawn
- *   from fewer than three runs cannot see run-to-run variation at all.
+ * @param runs how many observations of EVERY row fold into the maximum. At least
+ *   [CLASS_FLOOR_MIN_RUNS] — JMH reports a `NaN` error at or below two measurement
+ *   samples, and a floor drawn from fewer than three observations per row cannot see
+ *   run-to-run variation at all. It does NOT say how those observations were gathered;
+ *   [assembly] does (`computenet-71hu`).
  * @param derivedOn the ISO date of the derivation runs.
  * @param harnessCommitSha the harness commit the runs were made at.
  * @param hostState the attested host state; must be [QUIESCED_HOST_STATE].
@@ -272,7 +274,58 @@ fun roundUpToThreeDecimals(value: Double): Double {
  *   tell which unless the entry says what it ran on. This field cannot prove the JVM was
  *   the right one — nothing in a data class can — but it makes a wrong one visible on the
  *   page instead of invisible.
+ * @param assembly how the observations were gathered, when the derivation knows. See
+ *   [DerivationAssembly] for why it is separate from [runs] and why its absent value
+ *   asserts nothing.
  */
+/**
+ * How a derivation's observations were actually GATHERED — provenance about method, never
+ * about the number.
+ *
+ * It exists because the rendered findings block used to describe every derivation as
+ * "`runs` sequential repeat runs" (`computenet-71hu`). That sentence was true while a
+ * derivation WAS three back-to-back whole-class executions, and it became false the moment
+ * `computenet-3omz` made a derivation assemblable from many short units in many separate
+ * processes: `computenet-3omz.4`'s set was 63 observations from nine units across nine
+ * processes and the block still called it three sequential repeat runs. A findings entry
+ * is a published claim about method, so the claim has to follow the ledger rather than a
+ * count whose name outlived its meaning.
+ *
+ * [ClassNoiseFloor.runs] is left alone deliberately: it means, and always meant, how many
+ * observations of EVERY row fold into the maximum, it is [CLASS_FLOOR_MIN_RUNS] under both
+ * assemblies, and re-deriving it would change a published number to fix a sentence. This
+ * type supplements it instead, and nothing here participates in [ClassNoiseFloor.floor].
+ *
+ * A record may leave it unstated (`null`), and then the block says only what is certainly
+ * true — that every row carries `runs` observations. That, and not [WholeClassRuns], is
+ * the absent value on purpose: a default that asserts sequential runs is exactly the lie
+ * this type was added to remove, and it would be re-told by the first construction site
+ * that forgot the field.
+ */
+sealed interface DerivationAssembly {
+
+    /**
+     * [runs] sequential executions of the whole class, each measuring every row once —
+     * the original procedure, and the only shape "N sequential repeat runs" describes.
+     */
+    data class WholeClassRuns(val runs: Int) : DerivationAssembly {
+        init {
+            require(runs >= 1) { "a whole-class-runs assembly needs at least one run, was $runs" }
+        }
+    }
+
+    /**
+     * The row set was assembled from [units] separately-invoked measuring units — one JMH
+     * invocation, in its own process, per unit — as `computenet-3omz`'s checkpointed
+     * derivation produces. Units, not runs: no unit measured the whole class.
+     */
+    data class UnitAssembled(val units: Int) : DerivationAssembly {
+        init {
+            require(units >= 1) { "a unit-assembled derivation needs at least one unit, was $units" }
+        }
+    }
+}
+
 data class ClassNoiseFloor(
     val benchmarkClass: String,
     val observedMaxRelativeDispersion: Double,
@@ -282,6 +335,7 @@ data class ClassNoiseFloor(
     val hostState: String,
     val jmhConfig: String,
     val measuringJvm: String,
+    val assembly: DerivationAssembly? = null,
 ) {
     init {
         require(benchmarkClass.isNotBlank()) { "benchmarkClass must not be blank" }
@@ -290,8 +344,8 @@ data class ClassNoiseFloor(
                 "$observedMaxRelativeDispersion"
         }
         require(runs >= CLASS_FLOOR_MIN_RUNS) {
-            "a per-class floor requires at least $CLASS_FLOOR_MIN_RUNS sequential repeat " +
-                "runs, was $runs"
+            "a per-class floor requires at least $CLASS_FLOOR_MIN_RUNS observations of " +
+                "every row, was $runs"
         }
         require(derivedOn.isNotBlank()) { "derivedOn must not be blank" }
         require(harnessCommitSha.isNotBlank()) { "harnessCommitSha must not be blank" }
@@ -305,6 +359,13 @@ data class ClassNoiseFloor(
         require(measuringJvm.isNotBlank()) {
             "measuringJvm must not be blank — a derivation that cannot say which JVM it " +
                 "measured under is the defect computenet-7v7m was filed for"
+        }
+        // A record that says "three sequential runs" while carrying five observations per
+        // row describes neither, and the rendered block would publish the disagreement.
+        val wholeClass = assembly as? DerivationAssembly.WholeClassRuns
+        require(wholeClass == null || wholeClass.runs == runs) {
+            "a whole-class-runs assembly of ${wholeClass?.runs} runs cannot produce $runs " +
+                "observations of every row; each such run measures every row exactly once"
         }
     }
 
@@ -379,6 +440,12 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
         // Adoptium 21.0.11 those entries used by absolute path is no longer installed.
         measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
             "(Amazon Corretto; :bench's resolved toolchain launcher)",
+        // Stated rather than left to the absent value: this derivation really was three
+        // back-to-back executions of the whole class (see this entry's own KDoc), so the
+        // block's "3 sequential repeat runs" is a claim the runs support. A later entry
+        // derived through `computenet-3omz`'s checkpointed ledger carries
+        // DerivationAssembly.UnitAssembled instead, and `floorTool render` writes it.
+        assembly = DerivationAssembly.WholeClassRuns(runs = 3),
     ),
 )
 
@@ -500,6 +567,22 @@ fun classifyAgainst(result: BenchResult, floor: Double): Reportability {
  * this block; they do not compose one.
  */
 fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
+    // How the observations were GATHERED, said only as far as the record actually knows
+    // (`computenet-71hu`). The unqualified "N sequential repeat runs" this used to print
+    // unconditionally is retained for — and only for — the shape it describes.
+    val gathering = when (val assembly = derivation.assembly) {
+        is DerivationAssembly.WholeClassRuns ->
+            "${assembly.runs} sequential repeat runs"
+        is DerivationAssembly.UnitAssembled ->
+            "${derivation.runs} observations of every row, assembled from " +
+                "${assembly.units} measuring units in ${assembly.units} separate processes"
+        null -> "${derivation.runs} observations of every row"
+    }
+    val maximumOver = if (derivation.assembly is DerivationAssembly.WholeClassRuns) {
+        "across all rows of all ${derivation.runs} runs"
+    } else {
+        "across all rows, ${derivation.runs} observations each"
+    }
     appendLine(
         "## ${derivation.derivedOn} — per-class noise floor for " +
             "`${derivation.benchmarkClass}`, derived forward from its own quiesced " +
@@ -507,7 +590,7 @@ fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
     )
     appendLine(
         "Harness: ${derivation.harnessCommitSha} · host state ${derivation.hostState} · " +
-            "${derivation.runs} sequential repeat runs"
+            "$gathering"
     )
     appendLine("JMH: ${derivation.jmhConfig} (the class's own annotation configuration)")
     // The measuring JVM is rendered, not left to prose, because a prose caveat is exactly
@@ -517,8 +600,8 @@ fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
     appendLine("| quantity | value |")
     appendLine("| --- | --- |")
     appendLine(
-        "| max observed relative dispersion across all rows of all " +
-            "${derivation.runs} runs | ${derivation.observedMaxRelativeDispersion} |"
+        "| max observed relative dispersion $maximumOver | " +
+            "${derivation.observedMaxRelativeDispersion} |"
     )
     appendLine("| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | $CLASS_FLOOR_MARGIN |")
     appendLine(
