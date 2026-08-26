@@ -161,6 +161,10 @@ if [[ ${STATUS_ONLY} -eq 1 ]]; then
     echo
     echo "'${CLASS}' is complete. Render its findings block with:"
     echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --harness-sha <sha> --jmh-config '<text — spaces allowed, keep the quotes>'\""
+  echo "  Both --derived-on and --harness-sha record ONE value for a set that may have"
+  echo "  been gathered over several days and several harness commits: the ledger checks"
+  echo "  the measuring JVM across units and NOTHING checks these two. Read every unit's"
+  echo "  timestamp from ${LEDGER_FILE} and state the actual span in the findings entry."
   fi
   exit 0
 fi
@@ -275,6 +279,10 @@ if printf '%s\n' "${NEXT_OUTPUT}" | grep -q "^'${CLASS}' is complete"; then
   echo
   echo "'${CLASS}' is complete. Render its findings block with:"
   echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --harness-sha <sha> --jmh-config '<text — spaces allowed, keep the quotes>'\""
+  echo "  Both --derived-on and --harness-sha record ONE value for a set that may have"
+  echo "  been gathered over several days and several harness commits: the ledger checks"
+  echo "  the measuring JVM across units and NOTHING checks these two. Read every unit's"
+  echo "  timestamp from ${LEDGER_FILE} and state the actual span in the findings entry."
   exit 0
 fi
 
@@ -370,4 +378,8 @@ if floor_tool render --ledger "${LEDGER_DIR}" \
   echo
   echo "'${CLASS}' is complete. Render its findings block with:"
   echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --harness-sha <sha> --jmh-config '<text — spaces allowed, keep the quotes>'\""
+  echo "  Both --derived-on and --harness-sha record ONE value for a set that may have"
+  echo "  been gathered over several days and several harness commits: the ledger checks"
+  echo "  the measuring JVM across units and NOTHING checks these two. Read every unit's"
+  echo "  timestamp from ${LEDGER_FILE} and state the actual span in the findings entry."
 fi
