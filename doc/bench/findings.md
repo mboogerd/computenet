@@ -5193,3 +5193,126 @@ at the keyboard), and a floor derived through that interference would be a floor
 the interference, inherited by every row later classified against it. No number was
 estimated, scaled from another class, or carried over. The runs are routed to a dedicated
 quiesced slot on `computenet-cm4w` (`metadata.compute=dedicated`).
+
+## 2026-08-26 — per-class noise floor for `CellFootprintBenchmark`, derived forward from its own quiesced repeat runs
+Harness: a7c6a0382 · host state quiesced · 3 sequential repeat runs
+JMH: mode=AverageTime unit=us forks=1 warmup=3x1s measurement=5x1s (the class's own annotation configuration)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| max observed relative dispersion across all rows of all 3 runs | 0.5217864937179187 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x observed, rounded up to three decimals | 1.044 |
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any per-class number existed; the floor is computed from the observation by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: rows of `CellFootprintBenchmark` measured under this configuration on a quiesced host stayed at or under 0.5217864937179187 relative dispersion, so a later row above 1.044 is more dispersed than this class is when the machine is quiet. What it does NOT establish: anything about another benchmark class, about this class under a different annotation configuration, about this class on another host, or about this class under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
+
+### Provenance and limits of the entry above (`computenet-7v7m`, superseding `computenet-ahn0`)
+
+**This entry REPLACES an earlier derivation of the same class published the same day, and
+the replacement is part of the record rather than a quiet overwrite.** `computenet-ahn0`
+derived `CellFootprintBenchmark`'s floor from three quiesced runs and published
+`observedMaxRelativeDispersion` 0.2961501149112133, floor 0.593. All three of those runs
+were measured under the **JetBrains Runtime, JDK 25.0.2** — each retained log banner reads
+`# VM version: JDK 25.0.2, OpenJDK 64-Bit Server VM, 25.0.2+10-b329.111` with
+`# VM invoker: …/jbr-25.0.2/…/bin/java`, and every row of all three results files carries
+`jdkVersion` 25.0.2. The module's declared Gradle toolchain is **JDK 21**, and step 1 of
+the procedure pre-registered in `ClassNoiseFloor.kt` requires the runs be made under it.
+A per-class floor is applied at classification time to rows `run-series.sh` forces to be
+measured under 21, so a floor derived under 25 may be loose or tight against them and
+nothing states which. The earlier number is superseded, not retained as a second entry,
+and no part of it survives in `CLASS_NOISE_FLOOR_DERIVATIONS`.
+
+The trap is worth naming because it is still live: **a bare `java` on this host is JBR
+25.0.2**, and `JAVA_HOME` is unset. `scripts/bench-series/run-series.sh` refuses a
+non-21 launcher for exactly this reason (`PINNED_JDK_MAJOR=21`); invoking the JMH jar
+directly bypasses that refusal, which is how the first derivation was made. The runs
+below mirrored both of its refusals — the load gate and the JDK pin — and additionally
+verified each run's own `# VM version:` banner after the fact.
+
+**The measuring JVM, quoted from the artifact.** All three runs:
+
+    # VM version: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS
+
+launched by absolute path from
+`/Users/merlijn/Library/Java/JavaVirtualMachines/corretto-21.0.5/Contents/Home/bin/java`
+(`openjdk version "21.0.5" 2024-10-15 LTS`, **Amazon Corretto 21.0.5+11-LTS**). That is
+the launcher Gradle's own toolchain resolution selects for `:bench` on this host today
+(`./gradlew javaToolchains`), which is what makes it the module's declared toolchain
+rather than merely some JDK 21. It is a **different vendor** from the Microsoft OpenJDK
+21.0.11 and Eclipse Adoptium 21.0.11 that earlier BEN1 findings entries name: the
+Adoptium build those entries invoked by absolute path under `~/.gradle/jdks/` is no
+longer installed, and this host now offers two JDK 21s (Microsoft 21.0.11 and Corretto
+21.0.5) of which Gradle picks Corretto. The floor is therefore a claim about Corretto
+21.0.5, and the rendered block says so.
+
+**Host and gate.** NL-MGD6FQJW91, 16 cores, so `run-series.sh`'s gate is a 1-minute load
+average at or below 4.00. Each of the three runs was preceded by its own attestation of
+that gate, taken immediately before the run and recorded here in full: run 1 at 12:14:13
+local, 1-min 3.67; run 2 at 12:21:01, 1-min 3.22; run 3 at 12:24:07, 1-min 1.95. One
+intervening reading REFUSED the gate and the run was held rather than taken — 12:17:23 at
+4.21, run 1's own load still decaying out of the 1-minute average — and the hold ran
+another 11 samples (peaking again at 6.04 and 4.97) before the gate opened. Wall time per
+run: 177s / 177s / 178s. The gate was never relaxed to fit the schedule.
+
+**What was live on the host during the runs, stated rather than claimed away.** The gate
+is one-directional — it can refuse a wrong claim and can never confirm a right one — so
+the honest attestation is what was actually running, not "an empty machine". Two Claude
+Code sessions were live on this host throughout: an orchestrating session and this
+implementing one, plus a 20-second `uptime` load sampler between runs. An idle Gradle
+daemon from the `:bench:jmhJar` build remained resident. The corporate security stack
+(Microsoft Defender, ManageEngine appctrl, `trustd`) is resident and never leaves. No
+build, no other benchmark, and no scheduled endpoint scan ran concurrently with a
+measurement. The baseline this floor is derived against is therefore "this machine with
+its permanent resident load and two idle agent sessions", which is the quietest state it
+reaches, not a silent machine.
+
+**Why the floor is 1.044, and the limit of that number.** The maximum over all 63 rows is
+`realSnapshot` OR_MAP_CELL N1E5 in run 1, at 0.5218 — a JMH 99.9% error bar half the size
+of the score itself, on a host that passed the gate. The underlying spread is real and
+reproducible: 12 of the 63 rows exceed 0.10 — OR_MAP_CELL and SET_CELL in all three runs,
+MAP_CELL in two, KEYED_SET_CELL and LIST_CELL in one each; the median row is 0.038,
+itself between seven and eight times the global bound. That spread is the structural fact
+the per-class floor exists to expose — the global 0.005 fired on those rows on every
+quiet-host run and so distinguished nothing.
+
+But the row that *sets* the floor is comparatively isolated in a way the spread is not.
+OR_MAP_CELL N1E5 measured 0.522 / 0.119 / 0.199 across runs 1 / 2 / 3, so the maximum is
+about 2.6x its own next-worst observation, and the second-highest row over all 63 is 0.201
+(MAP_CELL N1E5, run 2). A floor of 1.044 is consequently a **weak bound**: it will refuse
+very little, and it should not be read as "this class typically disperses 0.5". It is
+nonetheless the number the pre-registered procedure yields, and it stands as published.
+The procedure says MAXIMUM, not mean, precisely so that the floor sits above the worst
+quiet-host row; dropping that row, or switching statistic, *after seeing that the maximum
+came out inconvenient* is the reverse-engineering the forward discipline exists to
+prevent. Tightening this floor requires more runs decided in advance, not a different
+reading of these three.
+
+**Comparison with the superseded JBR 25 runs — an observation, not a finding.** Under JBR
+25.0.2 the same class on the same host observed a maximum of 0.296 (KEYED_SET_CELL N1E5);
+under Corretto 21.0.5 it observed 0.522 (OR_MAP_CELL N1E5). Three runs per arm, taken
+hours apart, with no interleaving and no repetition — that is nowhere near enough to
+attribute the difference to the runtime rather than to run-to-run variation in a class
+whose worst rows vary by 2.6x between its own repeats. It is recorded so the next reader
+knows both numbers exist and which one is live; it establishes nothing about JDK 21 versus
+JDK 25 for this benchmark, and a claim in that direction needs its own interleaved A/B.
+
+**Three of the four classes were NOT derived, and no number was estimated for them.**
+`OperatorThroughputBenchmark`, `FanOutScalingBenchmark` and `BoundedReadBenchmark` still
+fall back to `NOISE_FLOOR`. They were not attempted because their own annotation
+configurations do not fit one dedicated slot: `OperatorThroughputBenchmark` is 72 rows
+(2 benchmarks x 18 subjects x 2 directions) at `@Fork(2)` x (5 warmup + 10 measurement)
+x 1s, about 48 minutes per run and so ~144 minutes for the three required runs;
+`FanOutScalingBenchmark` is 30 rows at up to `@Fork(5)`, about 27 minutes per run;
+`BoundedReadBenchmark` is 6 rows at `@Fork(5)`, about 7 minutes per run — against
+`CellFootprintBenchmark`'s measured 177 seconds. Running any of them at a reduced fork or
+iteration count to fit the slot would derive the floor from a configuration the floor does
+not describe, which the pre-registered procedure forbids. They are routed to their own
+dedicated slots instead. **Whoever works them must launch a JDK 21 by absolute path and
+check each run log's `# VM version:` banner before trusting its numbers** — that is what
+went wrong here.
+
+**Run evidence**, outliving the worktree: `$HOME/computenet-runs/computenet-7v7m/` holds
+the three results files (`cellfootprint-{1,2,3}.json`), the three JMH logs whose
+`# VM version:` banner is the load-bearing artifact (`cellfootprint-{1,2,3}.log`), the
+load sampling (`loadwatch.txt`) and the runner that enforced both refusals
+(`derive-run.sh`). The superseded JBR 25 runs remain at
+`$HOME/computenet-runs/computenet-ahn0/`.

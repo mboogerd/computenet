@@ -48,6 +48,7 @@ class ClassNoiseFloorTest {
         observed: Double = 0.03,
         runs: Int = CLASS_FLOOR_MIN_RUNS,
         hostState: String = QUIESCED_HOST_STATE,
+        measuringJvm: String = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS",
     ): ClassNoiseFloor = ClassNoiseFloor(
         benchmarkClass = benchmarkClass,
         observedMaxRelativeDispersion = observed,
@@ -56,6 +57,7 @@ class ClassNoiseFloorTest {
         harnessCommitSha = "deadbeef",
         hostState = hostState,
         jmhConfig = "mode=Throughput forks=2 warmup=5 iters=10",
+        measuringJvm = measuringJvm,
     )
 
     // ---- The pre-registration itself -------------------------------------------------
@@ -72,13 +74,59 @@ class ClassNoiseFloorTest {
         CLASS_FLOOR_MARGIN shouldBe 2.0
     }
 
+    /**
+     * The live table, pinned row by row (`computenet-ahn0`). This replaces the
+     * "nothing is derived yet" tripwire the machinery landed with: that assertion was
+     * true only while [CLASS_NOISE_FLOOR_DERIVATIONS] was empty, and it went red by
+     * design the moment a real derivation landed. What has to stay pinned is not the
+     * emptiness but the *resolution* — which classes carry a floor of their own, what
+     * that floor is, and that every other class still falls back — so a later change
+     * that populated, dropped or altered an entry cannot pass unnoticed.
+     *
+     * The floor is asserted as the arithmetic of the record, never as a hand-typed
+     * literal: `2.0 x 0.5217864937179187 = 1.0435729874…`, rounded UP to 1.044.
+     *
+     * The observation and the floor are `computenet-7v7m`'s re-derivation under the
+     * module's toolchain JDK 21. `computenet-ahn0`'s 0.2961501149112133 / 0.593 was
+     * measured under JBR 25.0.2 and is superseded, not retained as a second entry — so
+     * the pin on the measuring JVM below is part of what this test protects.
+     */
     @Test
-    fun `no per-class floor has been derived yet — every class falls back today`() {
-        CLASS_NOISE_FLOOR_DERIVATIONS.isEmpty() shouldBe true
-        CLASS_NOISE_FLOOR_TABLE.isEmpty() shouldBe true
-        noiseFloorFor("OperatorThroughputBenchmark") shouldBe NOISE_FLOOR
-        noiseFloorFor("FanOutScalingBenchmark") shouldBe NOISE_FLOOR
-        hasClassFloor("OperatorThroughputBenchmark") shouldBe false
+    fun `exactly one class floor is derived, and every other class still falls back`() {
+        CLASS_NOISE_FLOOR_DERIVATIONS.map { it.benchmarkClass } shouldBe
+            listOf("CellFootprintBenchmark")
+        CLASS_NOISE_FLOOR_TABLE.keys shouldBe setOf("CellFootprintBenchmark")
+
+        val derived = CLASS_NOISE_FLOOR_DERIVATIONS.single()
+        derived.runs shouldBe CLASS_FLOOR_MIN_RUNS
+        derived.hostState shouldBe QUIESCED_HOST_STATE
+        derived.observedMaxRelativeDispersion shouldBe 0.5217864937179187
+        derived.floor shouldBe
+            roundUpToThreeDecimals(CLASS_FLOOR_MARGIN * derived.observedMaxRelativeDispersion)
+
+        // The measuring JVM is pinned as JDK 21, the module's declared toolchain major.
+        // This is the assertion `computenet-ahn0` had no way to make: its three runs were
+        // JBR 25.0.2, and neither the record nor the rendered block could say so.
+        derived.measuringJvm shouldContain "21.0.5"
+        derived.measuringJvm shouldContain "Amazon Corretto"
+
+        hasClassFloor("CellFootprintBenchmark") shouldBe true
+        noiseFloorFor("CellFootprintBenchmark") shouldBe derived.floor
+        // Above 1.0, and deliberately so — see CLASS_NOISE_FLOOR_DERIVATIONS' KDoc, which
+        // also states why this is a weak bound. This is a pin on the published number,
+        // not a second definition of it: it must equal the arithmetic asserted above.
+        noiseFloorFor("CellFootprintBenchmark") shouldBe 1.044
+
+        // The three classes the procedure names that have NOT been derived. They fall
+        // back, and the fallback is the honest state, not a gap to fill by analogy.
+        for (undrived in listOf(
+            "OperatorThroughputBenchmark",
+            "FanOutScalingBenchmark",
+            "BoundedReadBenchmark",
+        )) {
+            hasClassFloor(undrived) shouldBe false
+            noiseFloorFor(undrived) shouldBe NOISE_FLOOR
+        }
     }
 
     // ---- The derivation record ---------------------------------------------------------
@@ -140,6 +188,7 @@ class ClassNoiseFloorTest {
                 harnessCommitSha = "abc",
                 hostState = QUIESCED_HOST_STATE,
                 jmhConfig = "c",
+                measuringJvm = "JDK 21.0.5",
             )
         }
         shouldThrow<IllegalArgumentException> {
@@ -151,8 +200,22 @@ class ClassNoiseFloorTest {
                 harnessCommitSha = "abc",
                 hostState = QUIESCED_HOST_STATE,
                 jmhConfig = " ",
+                measuringJvm = "JDK 21.0.5",
             )
         }
+    }
+
+    /**
+     * A derivation that cannot name the JVM it measured under is refused outright, rather
+     * than rendered as a block with a silent gap where the runtime should be. That gap is
+     * the whole mechanism of `computenet-7v7m`: `computenet-ahn0`'s floor was derived
+     * under JBR 25.0.2 against a toolchain of 21, and nothing in the record or the
+     * published entry could have said so.
+     */
+    @Test
+    fun `a derivation that cannot name its measuring JVM is refused`() {
+        val thrown = shouldThrow<IllegalArgumentException> { derivation(measuringJvm = "  ") }
+        thrown.message!! shouldContain "which JVM it measured under"
     }
 
     // ---- The table ---------------------------------------------------------------------
@@ -307,6 +370,31 @@ class ClassNoiseFloorTest {
         text shouldContain "Derivation: forward."
         text shouldContain "What it does NOT establish"
         text shouldContain "another benchmark class"
+    }
+
+    /**
+     * The rendered block names the measuring JVM, in its own line and in the limits
+     * clause. This is the machinery half of `computenet-7v7m`: the first derivation of
+     * `CellFootprintBenchmark` was measured under JBR 25.0.2 against a declared toolchain
+     * of 21, and it shipped invisibly *because the rendered block had nowhere to say
+     * which runtime produced the number* — the evidence existed only in a run log that
+     * nothing obliged anyone to keep. A block that states its JVM makes the next
+     * wrong-JDK derivation legible on the page.
+     */
+    @Test
+    fun `renderDerivation names the JVM the runs measured under`() {
+        val text = renderDerivation(
+            derivation(measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS"),
+        )
+
+        text shouldContain "Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS"
+        // And in the limits clause, so a reader who takes only the caveat sentence still
+        // learns the floor is a claim about ONE runtime.
+        text shouldContain "under a JVM other than JDK 21.0.5"
+
+        // A different JVM renders differently — the field is printed, not a constant.
+        renderDerivation(derivation(measuringJvm = "JDK 25.0.2 (JBR)")) shouldContain
+            "Measured under: JDK 25.0.2 (JBR)"
     }
 
     @Test
