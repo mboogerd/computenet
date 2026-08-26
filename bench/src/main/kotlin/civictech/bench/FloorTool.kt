@@ -415,12 +415,89 @@ fun renderConstructorCall(record: ClassNoiseFloor): String = buildString {
     appendLine("    hostState = QUIESCED_HOST_STATE,")
     appendLine("    jmhConfig = ${kotlinStringLiteral(record.jmhConfig)},")
     appendLine("    measuringJvm = ${kotlinStringLiteral(record.measuringJvm)},")
+    // Emitted so the pasted entry carries its own gathering provenance. Without it a
+    // unit-assembled derivation would be committed with the field absent, and a later
+    // `render --existing` — which has no ledger to consult — could say nothing about how
+    // the observations were taken (`computenet-71hu`).
+    when (val assembly = record.assembly) {
+        is DerivationAssembly.WholeClassRuns ->
+            appendLine("    assembly = DerivationAssembly.WholeClassRuns(runs = ${assembly.runs}),")
+        is DerivationAssembly.UnitAssembled ->
+            appendLine("    assembly = DerivationAssembly.UnitAssembled(units = ${assembly.units}),")
+        null -> {}
+    }
     append(")")
 }
 
 // -----------------------------------------------------------------------------------
 // The command-line face.
 // -----------------------------------------------------------------------------------
+
+/**
+ * Tokenises one raw command line into arguments, honouring single quotes, double quotes
+ * and backslash escapes.
+ *
+ * This exists because Gradle can hand a `JavaExec` task exactly ONE string
+ * (`-PfloorArgs=...`), and `bench/build.gradle.kts` used to split that string on
+ * whitespace before the tool saw it. Any value containing a space was therefore torn in
+ * half: `--jmh-config 'forks=1, warmup 3x1s'` — a config phrased the way `doc/bench/`
+ * `findings.md`'s existing entries phrase that field, and the way this tool's own printed
+ * template shows it — was refused with `expected a --flag, found 'warmup'`, so the
+ * template could not be followed as printed (`computenet-71hu`). Tokenising HERE, from
+ * the raw string, is what lets the quoting the operator already wrote survive.
+ *
+ * The rules are the shell's, restricted to what a command line needs: unquoted whitespace
+ * separates arguments; `\` outside single quotes escapes the next character; `'...'` is
+ * literal; `"..."` is literal except for `\`. An unterminated quote is refused rather
+ * than closed at end of input — a value silently truncated at a missing quote is the
+ * failure this whole function exists to stop being invisible.
+ */
+fun splitFloorArgs(raw: String): List<String> {
+    val tokens = mutableListOf<String>()
+    val current = StringBuilder()
+    var started = false
+    var quote: Char? = null
+    var i = 0
+    while (i < raw.length) {
+        val c = raw[i]
+        when {
+            quote == '\'' -> {
+                if (c == '\'') quote = null else current.append(c)
+                started = true
+            }
+            quote == '"' -> {
+                if (c == '"') {
+                    quote = null
+                } else if (c == '\\' && i + 1 < raw.length) {
+                    current.append(raw[i + 1]); i += 1
+                } else {
+                    current.append(c)
+                }
+                started = true
+            }
+            c == '\'' || c == '"' -> {
+                quote = c; started = true
+            }
+            c == '\\' && i + 1 < raw.length -> {
+                current.append(raw[i + 1]); i += 1; started = true
+            }
+            c.isWhitespace() -> {
+                if (started) { tokens += current.toString(); current.clear(); started = false }
+            }
+            else -> {
+                current.append(c); started = true
+            }
+        }
+        i += 1
+    }
+    require(quote == null) {
+        "unterminated ${if (quote == '\'') "single" else "double"} quote in floorArgs: " +
+            "$raw. A value whose quote is never closed would otherwise be silently " +
+            "truncated, which is the shape of defect this tokeniser exists to prevent"
+    }
+    if (started) tokens += current.toString()
+    return tokens
+}
 
 /**
  * Parses `--flag value` pairs, mirroring `civictech.bench.series.SeriesCli`'s parser.
@@ -430,7 +507,11 @@ private fun parseFlags(argv: List<String>): Map<String, String> {
     var i = 0
     while (i < argv.size) {
         val flag = argv[i]
-        require(flag.startsWith("--")) { "expected a --flag, found '$flag'" }
+        require(flag.startsWith("--")) {
+            "expected a --flag, found '$flag'. If this is part of a value containing " +
+                "spaces, quote it: -PfloorArgs=\"... --jmh-config 'forks=1, warmup " +
+                "3x1s'\" — quotes inside the property are honoured (splitFloorArgs)"
+        }
         require(i + 1 < argv.size) { "flag '$flag' has no value" }
         map[flag.removePrefix("--")] = argv[i + 1]
         i += 2
@@ -465,10 +546,39 @@ finished unit's artifacts to the ledger. status reports per-row completeness and
 measuring JVM(s) seen. render prints the ClassNoiseFloor(...) call and the findings.md
 block for a COMPLETE, single-JVM ledger, or (with --existing) for an already-committed
 CLASS_NOISE_FLOOR_DERIVATIONS entry. Every refusal is the ledger's own; this tool adds
-none. Not reachable from check, build or test."""
+none. Not reachable from check, build or test.
+
+Through Gradle the whole command line is one property and is tokenised by splitFloorArgs,
+which honours quoting, so a value containing spaces must be quoted INSIDE it:
+  ./gradlew :bench:floorTool -PfloorArgs="render --ledger <dir> --derived-on <iso-date> \
+      --harness-sha <sha> --jmh-config 'forks=1, warmup 3x1s, measurement 5x1s'""""
+
+    /**
+     * The prefix every refusal carries, exactly once.
+     *
+     * The ledger's own messages already open with it — they are written to be reprinted
+     * verbatim by `derive-class-floor.sh`, which greps for `^REFUSED:` — so prefixing
+     * unconditionally produced `REFUSED: REFUSED: ...` (`computenet-71hu`). Stripping here
+     * rather than at the throw sites keeps the ledger's messages self-describing for any
+     * caller that does not route through this class.
+     */
+    private const val REFUSAL_PREFIX = "REFUSED: "
+
+    private fun refusal(message: String): String =
+        if (message.startsWith(REFUSAL_PREFIX)) message else "$REFUSAL_PREFIX$message"
 
     fun run(argv: Array<String>, out: Appendable): Int {
-        val command = argv.firstOrNull()
+        // One element is how `-PfloorArgs` arrives: Gradle can only deliver a single
+        // string, so it is tokenised here, where quoting survives (see [splitFloorArgs]).
+        // A single element that is already one token — `--help`, `status` — tokenises to
+        // itself, so nothing about direct invocation changes.
+        val args = try {
+            if (argv.size == 1) splitFloorArgs(argv[0]) else argv.toList()
+        } catch (e: Exception) {
+            out.appendLine(refusal(e.message ?: e.toString()))
+            return 1
+        }
+        val command = args.firstOrNull()
         if (command == null) {
             out.appendLine(USAGE)
             return 1
@@ -477,7 +587,7 @@ none. Not reachable from check, build or test."""
             out.appendLine(USAGE)
             return 0
         }
-        val rest = argv.drop(1)
+        val rest = args.drop(1)
         return try {
             when (command) {
                 "plan" -> runPlan(rest, out)
@@ -492,7 +602,7 @@ none. Not reachable from check, build or test."""
                 }
             }
         } catch (e: Exception) {
-            out.appendLine("REFUSED: ${e.message}")
+            out.appendLine(refusal(e.message ?: e.toString()))
             1
         }
     }
@@ -625,10 +735,27 @@ none. Not reachable from check, build or test."""
                 )
         } else {
             val ledger = FloorDerivationLedger.load(File(required(map, "ledger")))
-            ledger.render(
+            val derived = ledger.render(
                 derivedOn = required(map, "derived-on"),
                 harnessCommitSha = required(map, "harness-sha"),
                 jmhConfig = required(map, "jmh-config"),
+            )
+            // How the observations were gathered, read off the ledger rather than assumed
+            // (`computenet-71hu`). The rule is exact, not a heuristic: `render` has already
+            // refused unless EVERY planned row carries exactly
+            // CLASS_FLOOR_OBSERVATIONS_PER_ROW observations, and `ingest` refuses a unit
+            // that measures one row twice — so a ledger of exactly that many units can
+            // only be one in which every unit measured every row, which is a sequential
+            // whole-class run. Any other count means at least one unit measured a proper
+            // subset, and calling that "N sequential repeat runs" is the false sentence
+            // this replaces.
+            val units = ledger.units.size
+            derived.copy(
+                assembly = if (units == CLASS_FLOOR_OBSERVATIONS_PER_ROW) {
+                    DerivationAssembly.WholeClassRuns(runs = units)
+                } else {
+                    DerivationAssembly.UnitAssembled(units = units)
+                },
             )
         }
         out.appendLine(renderConstructorCall(record))

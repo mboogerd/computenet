@@ -106,11 +106,26 @@ LEDGER_FILE="${LEDGER_DIR}/ledger.txt"   # FloorDerivationLedger.LEDGER_FILE_NAM
 # has no business interpreting — falls back to dumping the whole wall so nothing is
 # hidden.
 floor_tool() {
-  local stdout_file stderr_file code
+  local stdout_file stderr_file code arg quoted sq bs esc
+  # Single-quote every argument before joining. `-PfloorArgs` is ONE Gradle property, so
+  # this join is the only place an argument's boundaries can be recorded; passing "$*"
+  # instead lost them, and a --jmh-config value containing spaces — the shape every
+  # existing doc/bench/findings.md entry uses for that field — arrived at floorTool as
+  # several arguments and was refused with "expected a --flag, found 'warmup'"
+  # (computenet-71hu). floorTool tokenises the property itself, honouring exactly this
+  # quoting, so the boundaries survive.
+  # sq/bs/esc are built from escaped characters rather than written inline: a literal
+  # '\'' sequence inside the double-quoted replacement below is NOT unescaped by bash and
+  # silently over-escapes (verified).
+  sq=\' ; bs=\\ ; esc="${sq}${bs}${sq}${sq}"
+  quoted=""
+  for arg in "$@"; do
+    quoted="${quoted}${quoted:+ }${sq}${arg//${sq}/${esc}}${sq}"
+  done
   stdout_file="$(mktemp)"
   stderr_file="$(mktemp)"
   set +e
-  ( cd "${REPO_ROOT}" && ./gradlew --quiet :bench:floorTool -PfloorArgs="$*" \
+  ( cd "${REPO_ROOT}" && ./gradlew --quiet :bench:floorTool -PfloorArgs="${quoted}" \
       >"${stdout_file}" 2>"${stderr_file}" )
   code=$?
   set -e
@@ -145,7 +160,7 @@ if [[ ${STATUS_ONLY} -eq 1 ]]; then
       --jmh-config "(placeholder — see below)" >/dev/null 2>&1; then
     echo
     echo "'${CLASS}' is complete. Render its findings block with:"
-    echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --harness-sha <sha> --jmh-config <text>\""
+    echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --harness-sha <sha> --jmh-config '<text — spaces allowed, keep the quotes>'\""
   fi
   exit 0
 fi
@@ -259,7 +274,7 @@ echo "${NEXT_OUTPUT}"
 if printf '%s\n' "${NEXT_OUTPUT}" | grep -q "^'${CLASS}' is complete"; then
   echo
   echo "'${CLASS}' is complete. Render its findings block with:"
-  echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --harness-sha <sha> --jmh-config <text>\""
+  echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --harness-sha <sha> --jmh-config '<text — spaces allowed, keep the quotes>'\""
   exit 0
 fi
 
@@ -354,5 +369,5 @@ if floor_tool render --ledger "${LEDGER_DIR}" \
     --jmh-config "(placeholder)" >/dev/null 2>&1; then
   echo
   echo "'${CLASS}' is complete. Render its findings block with:"
-  echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --harness-sha <sha> --jmh-config <text>\""
+  echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --harness-sha <sha> --jmh-config '<text — spaces allowed, keep the quotes>'\""
 fi

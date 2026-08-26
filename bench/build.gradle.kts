@@ -334,9 +334,12 @@ tasks.register<JavaExec>("floorTool") {
     )
 
     val floorArgs = providers.gradleProperty("floorArgs").orElse("--help")
-    argumentProviders.add(
-        CommandLineArgumentProvider {
-            floorArgs.get().split(Regex("\\s+")).filter { it.isNotBlank() }
-        },
-    )
+    // Passed as ONE argument, deliberately. This used to split on whitespace here, which
+    // made a `--jmh-config` value containing spaces impossible to express: the property is
+    // a single string, so any quoting the operator wrote was already gone by the time this
+    // ran, and `--jmh-config 'forks=1, warmup 3x1s'` was refused with
+    // "expected a --flag, found 'warmup'" — while the template `derive-class-floor.sh`
+    // prints shows exactly that field as free text (`computenet-71hu`). `FloorCli.run`
+    // tokenises a single argument itself, honouring quotes, so the quoting survives.
+    argumentProviders.add(CommandLineArgumentProvider { listOf(floorArgs.get()) })
 }
