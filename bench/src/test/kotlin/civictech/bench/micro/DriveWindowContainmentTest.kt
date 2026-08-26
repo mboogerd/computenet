@@ -37,6 +37,21 @@ class DriveWindowContainmentTest {
     /** Nominal budget per guard drive — a fraction of `CONTAINMENT_ADDS`, for speed. */
     private val GUARD_ADDS = 400
 
+    /**
+     * The covering arm's guard budget: **one add**, so containment cannot come from the
+     * budget and can only come from the extension.
+     *
+     * A larger budget made the covering guard vacuous, and it was caught by mutation: with
+     * a 400-add budget at the shared 50 us spacing the nominal window is ~20 ms, which a
+     * 10^3 walk at [GUARD_PAGE_LIMIT] finishes inside anyway — so the test passed with
+     * `extendWhile` neutered to `{ false }` and pinned nothing. At one add the window would
+     * close before the walk's first page without the extension, so the assertion below is
+     * about the knob rather than about this machine. The nominal budget is NOT the quantity
+     * the two arms match on; the arrival rate is, and each arm's real length is set by its
+     * own stop rule.
+     */
+    private val COVERING_GUARD_ADDS = 1
+
     @Test
     fun `classify names contained, walk outlasting the drive, and a walk that precedes it`() {
         val drive = Window(startNanos = 1_000, endNanos = 2_000)
@@ -94,13 +109,15 @@ class DriveWindowContainmentTest {
                 rig = rig,
                 arm = DriveWindowArm.COVERING,
                 pageLimit = GUARD_PAGE_LIMIT,
-                adds = GUARD_ADDS,
+                adds = COVERING_GUARD_ADDS,
             )
 
             trial.containment shouldBe DriveWindowContainment.CONTAINED
             trial.isValidForItsArm.shouldBeTrue()
             trial.driveWindow.contains(trial.walkWindow).shouldBeTrue()
             trial.walk.pages shouldBeGreaterThan 1
+            // The extension is what covered the walk — see COVERING_GUARD_ADDS.
+            trial.driveAdds shouldBeGreaterThan COVERING_GUARD_ADDS
         }
     }
 
@@ -111,7 +128,8 @@ class DriveWindowContainmentTest {
             // Interleaved on the same rig, the pairing a discriminating run uses: the two
             // arms must differ in containment and in nothing the fixture chooses for them.
             val truncated = containmentTrial(rig, DriveWindowArm.TRUNCATED, GUARD_PAGE_LIMIT, GUARD_ADDS)
-            val covering = containmentTrial(rig, DriveWindowArm.COVERING, GUARD_PAGE_LIMIT, GUARD_ADDS)
+            val covering =
+                containmentTrial(rig, DriveWindowArm.COVERING, GUARD_PAGE_LIMIT, COVERING_GUARD_ADDS)
 
             truncated.containment shouldBe DriveWindowContainment.WALK_OUTLASTS_DRIVE
             covering.containment shouldBe DriveWindowContainment.CONTAINED
