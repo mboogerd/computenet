@@ -3915,3 +3915,494 @@ edited.
 ```
 
 plus the three sweeps themselves, whose logs are the committed artifacts.
+
+## 2026-08-26 — computenet-y7hc's bounded-INSERT change, measured: a same-host A/B in which every one of the 18 INSERT rows tightens, and the `[BEN1-28]` direction asymmetry INVERTS
+
+`computenet-x9e.14`, the measurement half of `computenet-y7hc`. The code half landed
+as `314670f1a`; this entry is the separate claim that it worked, and it is answered by
+measurement rather than by reading the diff.
+
+**Headline, stated before the caveats so it cannot be read past.** On this host, at
+this JVM, in two sweeps 20 minutes apart, INSERT relative dispersion moved from
+**0.03130–0.12543 (median 0.08250)** at the pre-fix benchmark to **0.00646–0.02499
+(median 0.01082)** at the post-fix benchmark — a 7.6x reduction in the median and a 5x
+reduction in the ceiling, with **18 of 18 subjects tightening, none widening**. In the
+same pair of runs RETRACT — which `computenet-y7hc` did not touch — moved from
+0.03082–0.09637 (median 0.06687) to 0.01102–0.22146 (median 0.08128), with 10 of 18
+tightening and 8 widening: no net shift and no direction to the scatter. The
+`[BEN1-28]` asymmetry does not merely close; it **inverts**. INSERT was the noisier
+direction before the change and is the tighter one after, by roughly 7x in the median.
+
+**What this entry does NOT claim.** It does not claim RETRACT got worse — see
+"The RETRACT half is not attributed" below. It does not claim any row became
+`Reportable`: **zero of 36 rows clear `NOISE_FLOOR` (0.005) in either arm**, exactly as
+in the entry this supersedes-by-comparison. And it does not claim a like-for-like
+comparison with the 2026-08-18 numbers, which were measured on a different machine —
+see "Why the historical baseline could not settle this".
+
+### Why a same-host A/B, and not a comparison against the 2026-08-18 entry
+
+The bead names its baseline as the 2026-08-18 REAL-drive entry (INSERT 0.0149–0.1526,
+0 of 18 Reportable). Two problems with using it, found before this sweep was rendered:
+
+1. **That entry is superseded for environment purposes by its own re-measurement.**
+   *"2026-08-18 — REAL-drive per-operator delta-application throughput, re-measured on
+   the toolchain JDK"* (`computenet-am2h`) says so in as many words: the figures the
+   bead quotes were measured on Homebrew **JDK 26.0.1** under a `Harness:` line that
+   claimed Adoptium 21.0.11. The JDK-21-controlled figures from that re-measurement are
+   INSERT **0.00813–0.07387** against RETRACT **0.00771–0.05361** — overlapping ranges
+   with no 3x separation, i.e. an entry in which the `[BEN1-28]` asymmetry is already
+   substantially absent. The two candidate baselines therefore disagree about how large
+   the gap was, which on its own makes "did it close" unanswerable from the corpus.
+2. **Both were measured on a different machine from this one.** The re-measured
+   entry's own command block invokes a JDK under `/Users/MerlijnB/`; this host is user
+   `merlijn`, **Apple M3 Max, 16 cores, macOS 26.6.2**. The baseline host's CPU is not
+   recoverable from those entries — their `Harness:` CPU and core count describe the
+   *rendering* host, which is the defect `computenet-yhbd` closed. And this run's JVM is
+   **Microsoft OpenJDK 21.0.11+10-LTS**, not Adoptium: `~/.gradle/jdks/` on this host is
+   empty and no Adoptium 21 is installed, so the toolchain resolves to a locally
+   installed JDK. Same major, same patch, same upstream build number, different vendor
+   packaging.
+
+Dispersion is the quantity most sensitive to host and JVM, which is why this lane pins
+them. A cross-host, cross-vendor dispersion comparison cannot support "the fix worked".
+So the `/work` orchestrator dispatching this item authorized, and this session ran, a
+**same-host A/B**: the identical sweep at the post-fix harness (`ae16cf257`, which
+contains `314670f1a`) and at the pre-fix benchmark source (`9aabe4923`, y7hc's parent),
+on the same machine, the same JVM, the same night, 20 minutes apart. The historical
+figures are kept below as secondary context only.
+
+The pre-fix arm was produced by checking out `bench/src/jmh/kotlin/civictech/bench/micro/OperatorThroughputBenchmark.kt`
+at `9aabe4923` into this worktree, building `:bench:jmhJar`, copying the jar aside, and
+restoring the file — `git status --short` clean afterwards. `computenet-y7hc` touches
+three files, all under `bench/`, and the other two (`InvocationCycle.kt`,
+`BoundedInvocationStateTest.kt`) are in `src/main` and `src/test`, which the pre-fix
+benchmark does not reference; nothing under `kernel/src/main` differs between the two
+arms, so **the subjects measured are byte-identical code and the A/B isolates exactly
+the harness change**.
+
+### The comparison, per subject
+
+Relative dispersion (`error(99.9%) / score`), pre-fix arm against post-fix arm, same
+host, same JVM, same night. `ratio` below 1.00 means the post-fix row is tighter.
+
+**INSERT** — the direction `computenet-y7hc` changed:
+
+| subject | pre-fix (`9aabe4923`) | post-fix (`ae16cf257`) | ratio |
+| --- | --- | --- | --- |
+| `TAGGED_SET` | 0.11245 | 0.01822 | 0.16x |
+| `FILTER` | 0.03130 | 0.02491 | 0.80x |
+| `UNION` | 0.04985 | 0.02499 | 0.50x |
+| `INTERSECT` | 0.06524 | 0.01335 | 0.20x |
+| `COUNT` | 0.07857 | 0.00651 | 0.08x |
+| `FLAT_MAP` | 0.10570 | 0.02375 | 0.22x |
+| `PRESENCE_COUNT` | 0.10385 | 0.00646 | 0.06x |
+| `QUORUM` | 0.09084 | 0.02342 | 0.26x |
+| `JOIN_SET` | 0.10168 | 0.01267 | 0.12x |
+| `SEMI_JOIN` | 0.12543 | 0.00684 | 0.05x |
+| `LOOKUP_JOIN` | 0.09838 | 0.01053 | 0.11x |
+| `GROUP_BY_COUNT` | 0.08072 | 0.00838 | 0.10x |
+| `GROUP_BY_SUM` | 0.07659 | 0.00819 | 0.11x |
+| `GROUP_BY_MIN` | 0.08428 | 0.00854 | 0.10x |
+| `GROUP_BY_MAX` | 0.04902 | 0.01095 | 0.22x |
+| `GROUP_BY_TOP_K` | 0.09213 | 0.01803 | 0.20x |
+| `COMBINE_LATEST` | 0.03310 | 0.01068 | 0.32x |
+| `COALESCING_COMBINE` | 0.07787 | 0.00746 | 0.10x |
+| **median** | **0.08250** | **0.01082** | **0.13x** |
+
+Range 0.03130–0.12543 pre-fix, 0.00646–0.02499 post-fix. 18 of 18 rows tightened, 0 widened.
+
+**RETRACT** — the untreated control — `computenet-y7hc` did not touch this path:
+
+| subject | pre-fix (`9aabe4923`) | post-fix (`ae16cf257`) | ratio |
+| --- | --- | --- | --- |
+| `TAGGED_SET` | 0.03176 | 0.01344 | 0.42x |
+| `FILTER` | 0.09153 | 0.01339 | 0.15x |
+| `UNION` | 0.03082 | 0.01945 | 0.63x |
+| `INTERSECT` | 0.07219 | 0.01102 | 0.15x |
+| `COUNT` | 0.03934 | 0.19713 | 5.01x |
+| `FLAT_MAP` | 0.09637 | 0.01109 | 0.12x |
+| `PRESENCE_COUNT` | 0.05321 | 0.04045 | 0.76x |
+| `QUORUM` | 0.08335 | 0.08073 | 0.97x |
+| `JOIN_SET` | 0.04016 | 0.22146 | 5.51x |
+| `SEMI_JOIN` | 0.05782 | 0.10735 | 1.86x |
+| `LOOKUP_JOIN` | 0.04413 | 0.09924 | 2.25x |
+| `GROUP_BY_COUNT` | 0.07724 | 0.11240 | 1.46x |
+| `GROUP_BY_SUM` | 0.09147 | 0.08182 | 0.89x |
+| `GROUP_BY_MIN` | 0.06579 | 0.04162 | 0.63x |
+| `GROUP_BY_MAX` | 0.06794 | 0.12213 | 1.80x |
+| `GROUP_BY_TOP_K` | 0.07594 | 0.03531 | 0.46x |
+| `COMBINE_LATEST` | 0.08723 | 0.12300 | 1.41x |
+| `COALESCING_COMBINE` | 0.05383 | 0.12906 | 2.40x |
+| **median** | **0.06687** | **0.08128** | **1.22x** |
+
+Range 0.03082–0.09637 pre-fix, 0.01102–0.22146 post-fix. 10 of 18 rows tightened, 8 widened.
+
+### The RETRACT half is not attributed, and the excursions are named
+
+`computenet-y7hc` changed nothing on the RETRACT path, so RETRACT is this A/B's
+control. Its median barely moves (0.06687 → 0.08128) and its rows scatter in both
+directions — which is the expected shape for an untouched path. But its post-fix
+*ceiling* is much higher (0.09637 → 0.22146), and that is not left as a bare number.
+
+Reading the per-fork, per-iteration numbers out of both runs' own JMH logs rather than
+reasoning from arrival order, and flagging any measurement iteration below 0.6x or
+above 1.6x its own block's median:
+
+| arm | excursions in 720 measurement iterations | which |
+| --- | --- | --- |
+| post-fix | 7 | all 7 in RETRACT rows: `JOIN_SET` f2 i7 (0.145x), `COUNT` f2 i7–i10 (0.51–0.53x, four consecutive), `GROUP_BY_COUNT` f1 i1 (0.555x), `JOIN_SET` f1 i5 (0.587x) |
+| pre-fix | 1 | `SEMI_JOIN` INSERT f2 i10 (0.564x) |
+
+`COUNT retract`'s four consecutive depressed iterations and `JOIN_SET retract`'s single
+0.145x point are the two rows that carry the post-fix RETRACT ceiling; both are
+sustained or extreme interference signatures, not operator properties. **Trimming those
+7 iterations out** moves post-fix RETRACT to 0.01102–0.12904, median 0.07652 — so the
+excursions explain the *ceiling* but not the level: RETRACT's post-fix median is still
+7x INSERT's post-fix median with them removed. The INSERT column is unchanged by
+trimming (no INSERT excursions in the post-fix arm at all).
+
+The excursions do not touch the finding. Every one of them is in the control direction,
+so removing them can only make INSERT look *less* favourable relative to RETRACT, and
+INSERT's own 18-of-18 tightening rests on rows with no flagged iterations.
+
+**The direction of the split is not an artefact of run order.** JMH ran all 18 INSERT
+rows first and all 18 RETRACT rows second in *both* arms — the direction is perfectly
+confounded with position-in-sweep within a single run, which is why a single run could
+not settle this. Across the pair the confound cancels: the first half was the noisier
+half pre-fix and the tighter half post-fix, under an identical schedule. That is the
+specific thing the A/B buys, and it is the reason a single post-fix sweep was not
+reported as the answer.
+
+### Host conditions, recorded rather than summarised
+
+Host `NL-MGD6FQJW91`, Apple M3 Max, 16 cores, macOS 26.6.2 — the pinned machine, so
+the quiesced threshold is 4.00 (cores x 0.25). Local times CEST, timestamps UTC. Both
+sweeps were launched by a **polling gate** that sampled `uptime` every 10 s and started
+only on a genuine trough, per the confound the previous entry (`computenet-0nww`)
+established on this same host: the load oscillates on a roughly two-minute cycle with
+the machine idle, so a single reading is weak evidence in both directions.
+
+| moment | 1 / 5 / 15-minute load |
+| --- | --- |
+| post-fix arm, gate polls (00:47:25–00:50:37Z) | 7.93, 7.09, 6.47, 6.24, 5.88, 5.79, 5.29, 4.71, 4.80, 4.53, 4.30, 4.46, 4.53, 4.70, 4.45, 4.84, 4.56, 4.31, 4.34, **3.91** (launch) |
+| post-fix arm pre (00:50:37Z) | 3.91 / 5.09 / 4.75 |
+| post-fix arm post (01:09:10Z) | 4.86 / 4.05 / 4.08 |
+| pre-fix arm, gate polls (01:10:12–01:11:12Z) | 5.31, 5.54, 5.06, 4.53, 4.20, 4.10, **3.85** (launch) |
+| pre-fix arm pre (01:11:12Z) | 3.85 / 4.09 / 4.10 |
+| pre-fix arm post (01:29:47Z) | 5.02 / 4.54 / 4.38 |
+
+A 30-second sampler ran for the whole of each sweep. 1-minute load during the post-fix
+arm: 4.71 4.30 4.70 4.56 3.91 3.81 3.21 3.16 3.38 3.48 3.18 2.98 3.35 3.47 3.25 3.33
+2.94 2.96 2.99 4.25 5.09 3.99 3.38 3.16 2.91 3.03 3.03 3.13 6.05 4.96 4.05 3.42 5.05
+5.37 4.36 3.44 2.98 2.83 2.68 3.51 4.38 4.86. During the pre-fix arm: 5.31 4.53 3.85
+4.81 3.72 3.90 3.33 4.19 3.69 4.21 4.62 4.03 3.74 4.66 4.27 3.79 3.23 4.21 9.62 7.93
+5.83 4.31 4.05 4.01 5.23 3.97 3.37 7.23 6.23 5.37 4.35 3.82 3.13 3.31 3.72 4.65 4.55
+3.45 6.65 5.02.
+
+**Neither arm ran on a machine that stayed under the threshold**, and saying so is the
+point of recording the samples rather than an attestation. The pre-fix arm in fact saw
+the *higher* excursions (9.62, 7.93, 7.23) and still produced only one flagged
+iteration; the post-fix arm stayed lower and produced seven. Load average and
+measurement disturbance did not track each other here, which is a reason to distrust
+`uptime` as the only guard and a reason the per-iteration read above is the instrument
+that actually settled the excursion question.
+
+Top CPU consumers, across both sweeps' samples, were the resident managed-endpoint
+stack — ManageEngine's app-control system extension, Microsoft Defender's
+`wdavdaemon_unprivileged` / `wdavdaemon` / `wdavdaemon_enterprise` / `epsext`, and
+`trustd` — roughly one core in total, sustained, never absent. **Non-resident consumers
+were also present and are named rather than discarded**: `WindowServer`, `FluidVoice`,
+Claude Desktop helpers, IntelliJ IDEA (`idea`) and its `junie` agent, a Brave renderer,
+`mds_stores`/`corespotlightd`, and `mediaanalysisd`. Immediately after the post-fix arm
+exited, `com.microsoft.teams2.teamsswitcher` (61.6%), ManageEngine's `dcpatchscan`
+(33.9%) and `mediaanalysisd` (30.9%) were the top three — a burst that began at or near
+the end of that sweep and is the most likely source of its RETRACT-half excursions.
+
+**The quiesced interpretation is the orchestrator's, not this measuring session's.**
+The `/work` orchestrator that dispatched `computenet-x9e.14` ruled that the resident
+managed-endpoint stack does not disqualify a quiesced attestation on this host, on the
+ground that the lane's own original host evidence was gathered with that stack running
+and the opposite reading makes these beads permanently undischargeable. This session
+executed that ruling; it did not make it. A reader who rejects it is overturning an
+orchestrator's call about what the precondition means, not a measurer's judgement about
+its own work — and the readings above are recorded in full precisely so that reader can
+do it without taking anything here on trust. On the strength of the samples above, a
+reader could reasonably grade both arms SHARED rather than QUIESCED; **the A/B
+comparison survives that grading**, because both arms were measured under the same
+regime and the treated direction is the one that moved uniformly.
+
+### The historical figures, kept as secondary context only
+
+| entry | INSERT dispersion (18 rows) | RETRACT dispersion (18 rows) | rows under NOISE_FLOOR |
+| --- | --- | --- | --- |
+| 2026-08-18 REAL (`computenet-x9e.4.5`, JDK 26, other host) | 0.0149–0.1526 | 0.0048–0.0299 | 1 of 36 |
+| 2026-08-18 REAL re-measured (`computenet-am2h`, JDK 21, other host) | 0.00813–0.07387 | 0.00771–0.05361 | 0 of 36 |
+| 2026-08-26 pre-fix arm (this entry, M3 Max, MS JDK 21.0.11) | 0.03130–0.12543 | 0.03082–0.09637 | 0 of 36 |
+| 2026-08-26 post-fix arm (this entry, same host and JVM) | 0.00646–0.02499 | 0.01102–0.22146 | 0 of 36 |
+
+Read across the rows only with the host and JVM differences in mind. The one thing the
+historical rows do usefully show is that the pre-fix arm measured here reproduces
+`x9e.4.5`'s *qualitative* claim — INSERT the noisier direction, with the higher ceiling
+— on a machine and JDK where `computenet-am2h` had found that claim absent. That makes
+`computenet-am2h`'s non-reproduction most likely a host/JVM effect rather than a
+refutation, but this entry does not settle that and does not need to: its own two arms
+were measured under identical conditions.
+
+**On the bead's stated baseline.** The bead asks for a comparison against
+"0.0149–0.1526 against RETRACT 0.0048–0.0299; 0 of 18 INSERT rows Reportable versus 5
+RETRACT rows". That Reportable count is drawn across both drives and both 2026-08-18
+entries; on the JDK-21 re-measurement the figure is 0 of 36 in both directions, and it
+is 0 of 36 in both directions here too. **The Reportable count did not move and could
+not have**: `NOISE_FLOOR` is 0.005 and the tightest row in either arm is 0.00646. What
+moved is the dispersion band, which is what the bead's own "Done when" clause actually
+asks the entry to state.
+
+### `[BEN1-28]`: the suspect is confirmed as a HARNESS artefact, and the operator question it was asked about is still open
+
+`[BEN1-28]` named `TagState` tag-map growth as the suspect for the INSERT/RETRACT
+dispersion split. This A/B confirms the *mechanism* and relocates the *blame*: the
+split was produced by unbounded live-state growth in the benchmark's own
+`@Setup(Level.Invocation)`, not by a property of the operator implementations. Bounding
+it removes the split. Nothing under `kernel/src/main` differs between the two arms, so
+no operator-level conclusion is available from this pair and none is drawn.
+
+What remains open, and is deliberately **not** answered here: tombstone growth. The
+observed-remove algebra still keeps a tombstone per retracted tag in both directions,
+`OperatorThroughputBenchmark`'s own KDoc says so, and this entry neither measures nor
+tunes it. A later item that wants the operator-level `[BEN1-28]` question — does
+tag-map growth dominate the set-shaped subjects' cost — needs an allocator or GC
+profile, which neither arm attached (no `-Xlog:gc`, no JFR, `# VM options: <none>` in
+both banners).
+
+Nothing in `bench/src` was touched to produce these numbers beyond the deliberate,
+reverted pre-fix checkout described above; `NOISE_FLOOR` (`bench/src/main/kotlin/civictech/bench/Dispersion.kt`)
+is unchanged, and no fork or iteration count was raised toward JMH's defaults. Both
+arms ran the full 18 x 2 cross product at the class's own unraised annotation config
+(`Fork(2)`, `Warmup(5, 1s)`, `Measurement(10, 1s)`), 36 of 36 combinations measured in
+each.
+
+### Trigger (`[BEN1-31]`/`[BEN1-32]`)
+
+`TriggerClaim.None` — MARKED INCOMPLETE in both rendered blocks below, and correctly
+so: no gap trigger question is answered by a harness-artefact result. This entry cites
+neither G-21 nor G-43.
+
+### WAL/journal statement (`[BEN1-29]`)
+
+Unchanged and re-confirmed against the source both arms compiled: `Graphs.kt`'s `Rig`
+for `Drive.REAL` constructs `ManagedHost(scheduler = scheduler)` with no `journal`
+argument, and no `civictech.cell.durability` type appears in `Graphs.kt`, `Deltas.kt`
+or `OperatorThroughputBenchmark.kt`. WAL/journal sync is not in play; KBLK is not named.
+
+### Artifacts
+
+Both arms' raw JMH CSV, teed log, the polling-gate host readings and the 30-second
+samplers are retained at `$HOME/computenet-runs/computenet-x9e.14/` on host
+`NL-MGD6FQJW91` — **outside the repository**, because this item's file claim is
+`doc/bench/` and run artifacts were not committed. They are therefore machine-local and
+not reproducible from this repository alone. A later item that wants them in the corpus
+should commit them under `bench/runs/` the way `computenet-0nww` committed its series
+runs; the rendered blocks below are the part of them that is durable here.
+
+### Commands, exactly
+
+```
+# post-fix arm (harness ae16cf257, contains 314670f1a)
+./gradlew :bench:jmhJar
+/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar 'OperatorThroughputBenchmark.real' \
+     -rf csv -rff /abs/path/real-throughput.csv > /abs/path/real-throughput.log 2>&1
+
+# pre-fix arm (benchmark source at 9aabe4923)
+git checkout 9aabe4923 -- bench/src/jmh/kotlin/civictech/bench/micro/OperatorThroughputBenchmark.kt
+./gradlew :bench:jmhJar          # jar copied aside as bench-jmh-prefix.jar
+git checkout HEAD  -- bench/src/jmh/kotlin/civictech/bench/micro/OperatorThroughputBenchmark.kt
+/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java \
+     -jar /abs/path/bench-jmh-prefix.jar 'OperatorThroughputBenchmark.real' \
+     -rf csv -rff /abs/path/prefix-throughput.csv > /abs/path/prefix-throughput.log 2>&1
+
+# each arm rendered through the module's own entry point
+./gradlew :bench:test -PbenchOnly=true --rerun \
+  --tests 'civictech.bench.micro.ThroughputReportRenderTest' \
+  -Dcivictech.bench.jmhResults=/abs/path/<arm>-throughput.csv \
+  -Dcivictech.bench.harnessSha=<ae16cf257 | 9aabe4923> \
+  -Dcivictech.bench.date=2026-08-26 \
+  -Dcivictech.bench.subject="..."
+```
+
+Bare `java` on this host is JBR 25.0.2 and was deliberately not used; the absolute-path
+launcher above is what both banners record. The rendered blocks below were read back out
+of the JUnit XML `<system-out>` and pasted verbatim, not retyped.
+
+---
+
+Renderer's own output for the **post-fix arm**, pasted verbatim:
+
+## 2026-08-26 — REAL-drive per-operator delta-application throughput, re-measured after computenet-y7hc's bounded-INSERT change (post-fix arm)
+Harness: ae16cf257 · JVM Microsoft (Microsoft-13877178)/21.0.11 · heap JVM defaults (VM options: <none>) · Apple M3 Max, 16 cores, Mac OS X 26.6.2
+JMH: mode=Throughput forks=2 warmup=5 iters=10 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| TAGGED_SET insert | 863780.244544 ± 15734.439349 ops/s | |
+| FILTER insert | 910757.004226 ± 22688.668821 ops/s | |
+| UNION insert | 796726.255679 ± 19908.454999 ops/s | |
+| INTERSECT insert | 377471.491202 ± 5038.526748 ops/s | |
+| COUNT insert | 895093.704902 ± 5826.4613 ops/s | |
+| FLAT_MAP insert | 721423.203594 ± 17137.262078 ops/s | |
+| PRESENCE_COUNT insert | 385601.62828 ± 2489.697828 ops/s | |
+| QUORUM insert | 367064.139557 ± 8597.566438 ops/s | |
+| JOIN_SET insert | 385449.957499 ± 4885.045392 ops/s | |
+| SEMI_JOIN insert | 373292.941368 ± 2551.519377 ops/s | |
+| LOOKUP_JOIN insert | 396898.43811 ± 4179.749053 ops/s | |
+| GROUP_BY_COUNT insert | 819454.484359 ± 6867.511832 ops/s | |
+| GROUP_BY_SUM insert | 823431.581551 ± 6746.67282 ops/s | |
+| GROUP_BY_MIN insert | 779839.706966 ± 6659.947423 ops/s | |
+| GROUP_BY_MAX insert | 790255.925052 ± 8656.044798 ops/s | |
+| GROUP_BY_TOP_K insert | 742914.627136 ± 13392.358958 ops/s | |
+| COMBINE_LATEST insert | 405801.900893 ± 4333.557745 ops/s | |
+| COALESCING_COMBINE insert | 872196.780666 ± 6508.953687 ops/s | |
+| TAGGED_SET retract | 739930.585759 ± 9945.571455 ops/s | |
+| FILTER retract | 826196.536993 ± 11065.211828 ops/s | |
+| UNION retract | 700166.242088 ± 13620.190364 ops/s | |
+| INTERSECT retract | 340920.072583 ± 3755.901267 ops/s | |
+| COUNT retract | 731993.936648 ± 144296.122292 ops/s | |
+| FLAT_MAP retract | 337657.552602 ± 3745.097066 ops/s | |
+| PRESENCE_COUNT retract | 172301.715858 ± 6969.604791 ops/s | |
+| QUORUM retract | 277877.636761 ± 22433.681009 ops/s | |
+| JOIN_SET retract | 236690.183135 ± 52418.291809 ops/s | |
+| SEMI_JOIN retract | 246813.202971 ± 26494.242351 ops/s | |
+| LOOKUP_JOIN retract | 318561.066522 ± 31615.527783 ops/s | |
+| GROUP_BY_COUNT retract | 588784.821062 ± 66180.333933 ops/s | |
+| GROUP_BY_SUM retract | 633651.60399 ± 51844.167117 ops/s | |
+| GROUP_BY_MIN retract | 615875.789252 ± 25631.294332 ops/s | |
+| GROUP_BY_MAX retract | 586256.943534 ± 71599.007993 ops/s | |
+| GROUP_BY_TOP_K retract | 597741.488223 ± 21105.342482 ops/s | |
+| COMBINE_LATEST retract | 296740.903275 ± 36498.131785 ops/s | |
+| COALESCING_COMBINE retract | 640157.900725 ± 82615.729156 ops/s | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+Row dispersion (drive=REAL; informational, nothing excluded):
+- TAGGED_SET insert (drive=REAL): 863780.244544 ± 15734.439349 ops/s, relative dispersion 0.0182157897779966 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- FILTER insert (drive=REAL): 910757.004226 ± 22688.668821 ops/s, relative dispersion 0.024911879585578146 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- UNION insert (drive=REAL): 796726.255679 ± 19908.454999 ops/s, relative dispersion 0.02498782343006039 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- INTERSECT insert (drive=REAL): 377471.491202 ± 5038.526748 ops/s, relative dispersion 0.013348098771527315 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COUNT insert (drive=REAL): 895093.704902 ± 5826.4613 ops/s, relative dispersion 0.006509331110353317 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- FLAT_MAP insert (drive=REAL): 721423.203594 ± 17137.262078 ops/s, relative dispersion 0.023754797451239797 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- PRESENCE_COUNT insert (drive=REAL): 385601.62828 ± 2489.697828 ops/s, relative dispersion 0.006456657973944383 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- QUORUM insert (drive=REAL): 367064.139557 ± 8597.566438 ops/s, relative dispersion 0.02342251806013024 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- JOIN_SET insert (drive=REAL): 385449.957499 ± 4885.045392 ops/s, relative dispersion 0.012673617669325267 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- SEMI_JOIN insert (drive=REAL): 373292.941368 ± 2551.519377 ops/s, relative dispersion 0.006835166418227712 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- LOOKUP_JOIN insert (drive=REAL): 396898.43811 ± 4179.749053 ops/s, relative dispersion 0.01053102922980409 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_COUNT insert (drive=REAL): 819454.484359 ± 6867.511832 ops/s, relative dispersion 0.008380589725336555 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_SUM insert (drive=REAL): 823431.581551 ± 6746.67282 ops/s, relative dispersion 0.008193361745115599 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_MIN insert (drive=REAL): 779839.706966 ± 6659.947423 ops/s, relative dispersion 0.008540149165923869 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_MAX insert (drive=REAL): 790255.925052 ± 8656.044798 ops/s, relative dispersion 0.01095347029183036 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_TOP_K insert (drive=REAL): 742914.627136 ± 13392.358958 ops/s, relative dispersion 0.018026780559737665 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COMBINE_LATEST insert (drive=REAL): 405801.900893 ± 4333.557745 ops/s, relative dispersion 0.010678998140382425 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COALESCING_COMBINE insert (drive=REAL): 872196.780666 ± 6508.953687 ops/s, relative dispersion 0.007462712350336622 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- TAGGED_SET retract (drive=REAL): 739930.585759 ± 9945.571455 ops/s, relative dispersion 0.013441222253028115 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- FILTER retract (drive=REAL): 826196.536993 ± 11065.211828 ops/s, relative dispersion 0.013392953531701562 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- UNION retract (drive=REAL): 700166.242088 ± 13620.190364 ops/s, relative dispersion 0.019452794986777086 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- INTERSECT retract (drive=REAL): 340920.072583 ± 3755.901267 ops/s, relative dispersion 0.011016955495002697 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COUNT retract (drive=REAL): 731993.936648 ± 144296.122292 ops/s, relative dispersion 0.19712748298540736 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- FLAT_MAP retract (drive=REAL): 337657.552602 ± 3745.097066 ops/s, relative dispersion 0.011091406181026192 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- PRESENCE_COUNT retract (drive=REAL): 172301.715858 ± 6969.604791 ops/s, relative dispersion 0.0404500022318054 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- QUORUM retract (drive=REAL): 277877.636761 ± 22433.681009 ops/s, relative dispersion 0.08073222901451046 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- JOIN_SET retract (drive=REAL): 236690.183135 ± 52418.291809 ops/s, relative dispersion 0.22146373421453816 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- SEMI_JOIN retract (drive=REAL): 246813.202971 ± 26494.242351 ops/s, relative dispersion 0.10734532039646605 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- LOOKUP_JOIN retract (drive=REAL): 318561.066522 ± 31615.527783 ops/s, relative dispersion 0.09924479512883792 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_COUNT retract (drive=REAL): 588784.821062 ± 66180.333933 ops/s, relative dispersion 0.11240156261778206 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_SUM retract (drive=REAL): 633651.60399 ± 51844.167117 ops/s, relative dispersion 0.08181809497608118 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_MIN retract (drive=REAL): 615875.789252 ± 25631.294332 ops/s, relative dispersion 0.04161763585987037 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_MAX retract (drive=REAL): 586256.943534 ± 71599.007993 ops/s, relative dispersion 0.12212905754496642 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_TOP_K retract (drive=REAL): 597741.488223 ± 21105.342482 ops/s, relative dispersion 0.035308478494178425 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COMBINE_LATEST retract (drive=REAL): 296740.903275 ± 36498.131785 ops/s, relative dispersion 0.12299663235565447 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COALESCING_COMBINE retract (drive=REAL): 640157.900725 ± 82615.729156 ops/s, relative dispersion 0.1290552363134704 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+
+
+---
+
+Renderer's own output for the **pre-fix arm**, pasted verbatim:
+
+## 2026-08-26 — REAL-drive per-operator delta-application throughput at the pre-y7hc benchmark (pre-fix arm of the same-host A/B)
+Harness: 9aabe4923 · JVM Microsoft (Microsoft-13877178)/21.0.11 · heap JVM defaults (VM options: <none>) · Apple M3 Max, 16 cores, Mac OS X 26.6.2
+JMH: mode=Throughput forks=2 warmup=5 iters=10 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| TAGGED_SET insert | 617673.850984 ± 69457.71433 ops/s | |
+| FILTER insert | 787871.694559 ± 24658.272711 ops/s | |
+| UNION insert | 705697.165283 ± 35176.926433 ops/s | |
+| INTERSECT insert | 336952.971351 ± 21982.840343 ops/s | |
+| COUNT insert | 757941.280317 ± 59553.97694 ops/s | |
+| FLAT_MAP insert | 493458.030174 ± 52158.016334 ops/s | |
+| PRESENCE_COUNT insert | 278325.793449 ± 28904.346267 ops/s | |
+| QUORUM insert | 270733.258534 ± 24592.951086 ops/s | |
+| JOIN_SET insert | 216068.908432 ± 21970.377843 ops/s | |
+| SEMI_JOIN insert | 217011.939464 ± 27219.048398 ops/s | |
+| LOOKUP_JOIN insert | 271846.303331 ± 26743.074275 ops/s | |
+| GROUP_BY_COUNT insert | 524703.714064 ± 42354.572428 ops/s | |
+| GROUP_BY_SUM insert | 543809.403788 ± 41650.818735 ops/s | |
+| GROUP_BY_MIN insert | 480412.174023 ± 40486.855348 ops/s | |
+| GROUP_BY_MAX insert | 499562.981372 ± 24490.938476 ops/s | |
+| GROUP_BY_TOP_K insert | 470708.97399 ± 43367.101772 ops/s | |
+| COMBINE_LATEST insert | 324364.092154 ± 10736.238318 ops/s | |
+| COALESCING_COMBINE insert | 739193.185795 ± 57558.283077 ops/s | |
+| TAGGED_SET retract | 622822.05356 ± 19783.934855 ops/s | |
+| FILTER retract | 643052.912664 ± 58858.623402 ops/s | |
+| UNION retract | 569571.037039 ± 17556.695233 ops/s | |
+| INTERSECT retract | 282440.746979 ± 20389.939425 ops/s | |
+| COUNT retract | 719420.22958 ± 28301.208988 ops/s | |
+| FLAT_MAP retract | 518088.4304 ± 49929.104807 ops/s | |
+| PRESENCE_COUNT retract | 308207.70286 ± 16399.287121 ops/s | |
+| QUORUM retract | 270568.293099 ± 22551.140234 ops/s | |
+| JOIN_SET retract | 289705.378148 ± 11635.629468 ops/s | |
+| SEMI_JOIN retract | 272458.341157 ± 15753.240807 ops/s | |
+| LOOKUP_JOIN retract | 352250.973816 ± 15546.133547 ops/s | |
+| GROUP_BY_COUNT retract | 609628.737069 ± 47086.021177 ops/s | |
+| GROUP_BY_SUM retract | 593806.00227 ± 54317.864673 ops/s | |
+| GROUP_BY_MIN retract | 577443.858398 ± 37991.720923 ops/s | |
+| GROUP_BY_MAX retract | 594388.248625 ± 40383.8141 ops/s | |
+| GROUP_BY_TOP_K retract | 586251.424712 ± 44517.145289 ops/s | |
+| COMBINE_LATEST retract | 320814.171971 ± 27984.233 ops/s | |
+| COALESCING_COMBINE retract | 697718.309809 ± 37561.087828 ops/s | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+Row dispersion (drive=REAL; informational, nothing excluded):
+- TAGGED_SET insert (drive=REAL): 617673.850984 ± 69457.71433 ops/s, relative dispersion 0.11245046915835719 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- FILTER insert (drive=REAL): 787871.694559 ± 24658.272711 ops/s, relative dispersion 0.0312973202125279 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- UNION insert (drive=REAL): 705697.165283 ± 35176.926433 ops/s, relative dispersion 0.04984705644792166 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- INTERSECT insert (drive=REAL): 336952.971351 ± 21982.840343 ops/s, relative dispersion 0.0652400845579745 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COUNT insert (drive=REAL): 757941.280317 ± 59553.97694 ops/s, relative dispersion 0.07857333870915732 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- FLAT_MAP insert (drive=REAL): 493458.030174 ± 52158.016334 ops/s, relative dispersion 0.10569899189928751 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- PRESENCE_COUNT insert (drive=REAL): 278325.793449 ± 28904.346267 ops/s, relative dispersion 0.10385076391526174 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- QUORUM insert (drive=REAL): 270733.258534 ± 24592.951086 ops/s, relative dispersion 0.09083830785759 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- JOIN_SET insert (drive=REAL): 216068.908432 ± 21970.377843 ops/s, relative dispersion 0.10168227350449356 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- SEMI_JOIN insert (drive=REAL): 217011.939464 ± 27219.048398 ops/s, relative dispersion 0.12542650171796355 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- LOOKUP_JOIN insert (drive=REAL): 271846.303331 ± 26743.074275 ops/s, relative dispersion 0.09837571431838689 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_COUNT insert (drive=REAL): 524703.714064 ± 42354.572428 ops/s, relative dispersion 0.08072093124698915 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_SUM insert (drive=REAL): 543809.403788 ± 41650.818735 ops/s, relative dispersion 0.07659083944645662 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_MIN insert (drive=REAL): 480412.174023 ± 40486.855348 ops/s, relative dispersion 0.08427524849955544 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_MAX insert (drive=REAL): 499562.981372 ± 24490.938476 ops/s, relative dispersion 0.049024726389329476 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_TOP_K insert (drive=REAL): 470708.97399 ± 43367.101772 ops/s, relative dispersion 0.09213145312356275 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COMBINE_LATEST insert (drive=REAL): 324364.092154 ± 10736.238318 ops/s, relative dispersion 0.03309934292265218 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COALESCING_COMBINE insert (drive=REAL): 739193.185795 ± 57558.283077 ops/s, relative dispersion 0.0778663604901826 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- TAGGED_SET retract (drive=REAL): 622822.05356 ± 19783.934855 ops/s, relative dispersion 0.031764987674917165 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- FILTER retract (drive=REAL): 643052.912664 ± 58858.623402 ops/s, relative dispersion 0.09152998492482388 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- UNION retract (drive=REAL): 569571.037039 ± 17556.695233 ops/s, relative dispersion 0.030824417133762803 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- INTERSECT retract (drive=REAL): 282440.746979 ± 20389.939425 ops/s, relative dispersion 0.07219191863458721 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COUNT retract (drive=REAL): 719420.22958 ± 28301.208988 ops/s, relative dispersion 0.03933891184088935 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- FLAT_MAP retract (drive=REAL): 518088.4304 ± 49929.104807 ops/s, relative dispersion 0.09637178110395418 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- PRESENCE_COUNT retract (drive=REAL): 308207.70286 ± 16399.287121 ops/s, relative dispersion 0.05320855698551181 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- QUORUM retract (drive=REAL): 270568.293099 ± 22551.140234 ops/s, relative dispersion 0.08334731307836064 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- JOIN_SET retract (drive=REAL): 289705.378148 ± 11635.629468 ops/s, relative dispersion 0.04016366400369612 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- SEMI_JOIN retract (drive=REAL): 272458.341157 ± 15753.240807 ops/s, relative dispersion 0.057818897157281134 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- LOOKUP_JOIN retract (drive=REAL): 352250.973816 ± 15546.133547 ops/s, relative dispersion 0.04413368507852756 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_COUNT retract (drive=REAL): 609628.737069 ± 47086.021177 ops/s, relative dispersion 0.07723720735899403 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_SUM retract (drive=REAL): 593806.00227 ± 54317.864673 ops/s, relative dispersion 0.09147409164837304 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_MIN retract (drive=REAL): 577443.858398 ± 37991.720923 ops/s, relative dispersion 0.06579292578918454 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_MAX retract (drive=REAL): 594388.248625 ± 40383.8141 ops/s, relative dispersion 0.06794181108630595 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- GROUP_BY_TOP_K retract (drive=REAL): 586251.424712 ± 44517.145289 ops/s, relative dispersion 0.07593524452562202 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COMBINE_LATEST retract (drive=REAL): 320814.171971 ± 27984.233 ops/s, relative dispersion 0.08722879300522185 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COALESCING_COMBINE retract (drive=REAL): 697718.309809 ± 37561.087828 ops/s, relative dispersion 0.05383417247324688 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+
