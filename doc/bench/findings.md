@@ -3792,6 +3792,17 @@ resident stack — **not** a machine with an idle security subsystem, which this
 does not have. A reader who rejects that reading should treat the band as SHARED and
 say so in a later entry rather than editing this one.
 
+**Whose interpretation it is, recorded so it can be attributed as well as disputed:
+the orchestrating session's, not the measuring session's.** The `/work` orchestrator
+that dispatched `computenet-0nww` ruled that the resident managed-endpoint stack does
+not disqualify a quiesced attestation, on the ground stated above — the bead's own
+recorded host evidence (the 2026-08-25 comment thread, where the orchestrator itself
+measured the stack at ~1 core with four Brave renderers on top) was gathered with that
+stack running, so the alternative reading makes the bead undischargeable forever. The
+measuring session executed that ruling; it did not make it. A later reader who wants
+to overturn it is overturning an orchestrator's call about what this bead's
+precondition means, not a measurer's judgement about its own work.
+
 ### Two observed confounds, reported as observations
 
 Neither is a mechanism established here. Both are recorded because they will recur
@@ -3823,6 +3834,52 @@ renderer at 37.8% of a core (0.38 of 16). It is recorded rather than passed over
 appeared *after* run 2's sweep had finished, so it cannot have entered run 2's numbers,
 and it is absent from run 3's pre-reading. Run 3's score (3.976441) sits between runs 1
 and 2, which is what one would expect if it affected nothing.
+
+**That timestamp argument is weaker than it reads, and the committed logs settle the
+question better than it does** (added at review). Run 2 started 23:35:50Z and its own
+log records `Total time: 00:08:21`, so it finished ≈23:44:11Z — the same minute as the
+"run 2 post (01:44 CEST)" reading. Ordering alone therefore does *not* establish that
+the renderer post-dates the sweep. What does establish it is run 2's own per-iteration
+record: all 25 measurement iterations across all five forks lie in 3.923–3.982 ns/op,
+with no drift in the final fork, which is where a consumer appearing near 23:44Z would
+have to show. Run 2 is the cleanest of the three runs by both spread (stdev 0.016) and
+stated error (±0.011726). Its number is not contaminated; the reason is the data, not
+the clock.
+
+### Per-fork excursions inside runs 1 and 3 (added at review, `computenet-0nww`)
+
+The prose above records the host readings *between* runs. The committed logs also record
+what happened *inside* them, and two runs contain excursions the account above does not
+mention. Recorded here because the entry's own standard is that a later reader can
+disagree with the attestation, and these are the observations most likely to make one
+want to:
+
+| run | forks | measurement iterations |
+| --- | --- | --- |
+| 1 (`23-18-18Z`) | forks 3 and 4 elevated | 3.963–4.130 against 3.928–3.959 in forks 1, 2, 5 |
+| 2 (`23-35-50Z`) | none | 3.923–3.982 throughout |
+| 3 (`23-49-22Z`) | fork 2, iterations 3–5 | 4.250 / 4.247 / 4.219 against 3.924–3.991 elsewhere |
+
+Two consequences, both in the conservative direction, neither hidden:
+
+- **The half-width is set by an interference episode, not by intrinsic dispersion.**
+  Run 3's ±0.07488 — the term that wins the `max()` and therefore *is* the band's
+  half-width — comes from that one fork. A band widened by observed interference is
+  wide, not narrow, so it cannot manufacture a false `MovedHigher`; it can only fail to
+  resolve a real regression smaller than 0.07488, which §4's `WithinBand` caveat already
+  says.
+- **The centre is biased slightly high for the same reason.** The centre is the median,
+  and the median lands on run 3 (3.976441) because runs 1 and 3 both carry excursions
+  while the clean run (2, 3.94201) is the minimum. Run 3 without its fork-2 excursion
+  would score ≈3.938. So the seeded centre sits ≈0.034 ns/op above the cleanest
+  observation this night produced — inside the band's own half-width, and again in the
+  generous direction.
+
+Nothing here was isolated to a cause; the excursions are consistent with the same bursty
+desktop load the confounds above describe. The operational reading for a fourth run is
+that this band is a *conservative* one: `WithinBand` from it is correspondingly weak
+evidence, and a genuinely quiet future run scoring near 3.94 is expected to report
+`WithinBand`, not `MovedLower`.
 
 ### What this entry does NOT claim
 
