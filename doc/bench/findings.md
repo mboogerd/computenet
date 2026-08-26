@@ -4677,3 +4677,83 @@ this repository alone**; the rendered block above and
   -Dcivictech.bench.harnessSha=$(git rev-parse --short HEAD) \
   -Dcivictech.bench.date=2026-08-26
 ```
+
+### Supplementary, NOT part of the verdict: an underpowered iteration-length probe that points the OTHER way
+
+The `RETIRES` above is stated over allocation, and the section above says why that leaves
+the time channel open. Rather than leave it merely stated, this session spent the
+remaining slot on a cheap direct probe of it, and **the probe is reported here because it
+does not support extending `RETIRES` to time** — reporting only the leg that agreed with
+the verdict would be the dishonest option.
+
+**The idea.** The graph is rebuilt at `@Setup(Level.Iteration)`, so within one measurement
+iteration the tag map grows monotonically and at the iteration boundary it resets.
+Lengthening the iteration therefore grows the map without changing anything else. If
+tag-map growth dominated delta-application *cost*, a 10x longer iteration would report
+materially lower average throughput.
+
+**The arms.** `drive=REAL`, `direction=INSERT`, the same eight set-shaped subjects,
+`-f 1 -wi 5 -w 1s`, differing only in measurement iteration length: `-i 4 -r 1s` against
+`-i 4 -r 10s`. Same JVM (`JDK 21.0.11, OpenJDK 64-Bit Server VM, 21.0.11+10-LTS`, off the
+arm's own banner), same host, run back to back 02:16:02Z–02:17:17Z and
+02:17:17Z–02:23:21Z.
+
+| subject | 1 s iterations (ops/s) | 10 s iterations (ops/s) | ratio | 10 s relative error |
+| --- | --- | --- | --- | --- |
+| TAGGED_SET | 809249.7 | 793201.6 | 0.9802 | 0.15438 |
+| FILTER | 884401.3 | 850361.8 | 0.9615 | 0.11226 |
+| UNION | 783739.1 | 723628.4 | 0.9233 | 0.31994 |
+| INTERSECT | 372335.8 | 357497.7 | 0.9601 | 0.19146 |
+| COUNT | 925676.3 | 440702.1 | 0.4761 | 0.04683 |
+| FLAT_MAP | 771230.8 | 349924.1 | 0.4537 | 0.04900 |
+| PRESENCE_COUNT | 384422.8 | 276473.2 | 0.7192 | 1.93416 |
+| QUORUM | 398964.2 | 280736.6 | 0.7037 | 0.65988 |
+
+**Why this is a probe and not a result, in four counts. Every one of them is a reason to
+distrust it, and it is recorded anyway because the two tight rows are hard to dismiss:**
+
+1. **It is underpowered by construction.** One fork, four measurement iterations, against
+   the sweep above's two forks and ten. Three of the eight 10 s rows carry relative error
+   above `NOISE_FLOOR` by two orders of magnitude — `PRESENCE_COUNT` at **1.93**, i.e. an
+   error bar wider than the score. Nothing may be concluded from those rows at all.
+2. **It is not the annotation config**, so it is not comparable to any other throughput
+   entry in this file, and the acceptance criterion this item was written against is
+   satisfied by the sweep above, not by this.
+3. **The two arms are sequential, not interleaved**, and the host was not re-gated between
+   them. The post-arm reading at 02:23:21Z caught a `Brave Browser Helper (Renderer)` at
+   79.6% and ManageEngine's `dcpatchscan` at 33.6% — non-resident consumers that were
+   absent from the main sweep's window. The 10 s arm is the one that ran last and is the
+   one exposed to them.
+4. **The pattern is internally inconsistent with the simplest growth story.** If the
+   decline tracked how much state an iteration accumulates, the fastest subjects would
+   fall the furthest. `COUNT` (925.7k ops/s, ratio 0.476) and `FLAT_MAP` (771.2k, 0.454)
+   fit that; `TAGGED_SET` (809.2k, 0.980) and `FILTER` (884.4k, 0.962) flatly contradict
+   it at comparable throughput. Something subject-specific is happening that "the map got
+   bigger" does not by itself explain.
+
+**What survives all four.** `COUNT` and `FLAT_MAP` are the two rows with *tight* error
+bars in the 10 s arm (0.047 and 0.049), and both report **less than half** the throughput
+of their 1 s counterparts. That is a large effect measured precisely, and it is the
+signature `[BEN1-28]` predicted — on the channel this entry's own verdict does not cover.
+
+**So the honest joint statement is narrower than either leg alone**: the garbage a
+set-shaped delta produces is overwhelmingly not the tag map growing (measured, 16 of 16
+rows, criterion pre-registered), *and* at least two set-shaped subjects lose more than
+half their throughput when the iteration that accumulates that map is lengthened 10x
+(probed, underpowered, confounded). Those are compatible — a cost that is not allocation
+is still a cost. Resolving the second is filed as `computenet-bzwx`, which needs an
+interleaved, individually host-gated A/B at full fork and iteration counts, and is
+explicitly **not** licence to tune or clear the tag map: `[BEN1-28]`'s standing
+instruction that the growth is observed and never tuned is unchanged by anything here.
+
+Raw CSVs and logs for both arms are at `$HOME/computenet-runs/computenet-i61m/`
+(`iter-1s.csv`/`.log`, `iter-10s.csv`/`.log`) on host `NL-MGD6FQJW91`, machine-local.
+
+```
+/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar 'OperatorThroughputBenchmark.real' \
+     -p subject=TAGGED_SET,FILTER,UNION,INTERSECT,COUNT,FLAT_MAP,PRESENCE_COUNT,QUORUM \
+     -p direction=INSERT -f 1 -wi 5 -w 1s -i 4 -r 1s \
+     -rf csv -rff /abs/path/iter-1s.csv > /abs/path/iter-1s.log 2>&1
+# ... and again with -r 10s
+```
