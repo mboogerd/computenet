@@ -75,6 +75,28 @@ class ClassNoiseFloorTest {
     }
 
     /**
+     * The row-set decomposition amendment (`computenet-3omz`) is anchored in the same
+     * object as the procedure it amends.
+     *
+     * A constant, not prose, for the same reason [ClassFloorDerivation.PROCEDURE_OWNER]
+     * is one: the amendment's whole standing rests on having been committed BEFORE any
+     * number derived under it exists, and a KDoc paragraph alone leaves nothing a diff of
+     * this file's tests can point at. What it pins is that step 1 no longer reads
+     * "three **sequential** executions" as the only admissible shape, and that the thing
+     * decomposed is scheduling — never a fork count, an iteration count, a threshold or
+     * [CLASS_FLOOR_MARGIN], all of which this suite pins unchanged above and below.
+     */
+    @Test
+    fun `the procedure carries the row-set decomposition amendment, anchored to its work item`() {
+        ClassFloorDerivation.PROCEDURE_OWNER shouldBe "computenet-cm4w"
+        ClassFloorDerivation.DECOMPOSITION_OWNER shouldBe "computenet-3omz"
+        // The amendment changes scheduling only: a row is still measured exactly as many
+        // times as an undecomposed derivation measured it.
+        CLASS_FLOOR_OBSERVATIONS_PER_ROW shouldBe CLASS_FLOOR_MIN_RUNS
+        CLASS_FLOOR_MIN_RUNS shouldBe 3
+    }
+
+    /**
      * The live table, pinned row by row (`computenet-ahn0`). This replaces the
      * "nothing is derived yet" tripwire the machinery landed with: that assertion was
      * true only while [CLASS_NOISE_FLOOR_DERIVATIONS] was empty, and it went red by
