@@ -248,8 +248,8 @@ data class ClassNoiseFloor(
  * row was 0.522 relative dispersion, so its floor is 1.044 — above 1.0, which is to say
  * this class can produce a JMH error bar the size of its own score without the machine
  * being busy. That is the finding, not a defect in it. `realSnapshot` at `N1E5` runs high
- * dispersion *reproducibly*: 12 of the 63 rows exceed 0.10, and OR_MAP_CELL, MAP_CELL,
- * SET_CELL, LIST_CELL and KEYED_SET_CELL each exceed it in more than one run. That is
+ * dispersion *reproducibly*: 12 of the 63 rows exceed 0.10 — OR_MAP_CELL and SET_CELL in
+ * all three runs, MAP_CELL in two, KEYED_SET_CELL and LIST_CELL in one each. That is
  * precisely the structural spread [ClassFloorDerivation]'s "defect this exists to close"
  * section describes: the global bound fired on those rows every time and so distinguished
  * nothing.

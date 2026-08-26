@@ -5268,8 +5268,8 @@ reaches, not a silent machine.
 **Why the floor is 1.044, and the limit of that number.** The maximum over all 63 rows is
 `realSnapshot` OR_MAP_CELL N1E5 in run 1, at 0.5218 — a JMH 99.9% error bar half the size
 of the score itself, on a host that passed the gate. The underlying spread is real and
-reproducible: 12 of the 63 rows exceed 0.10, and OR_MAP_CELL, MAP_CELL, SET_CELL,
-LIST_CELL and KEYED_SET_CELL each exceed it in more than one run; the median row is 0.038,
+reproducible: 12 of the 63 rows exceed 0.10 — OR_MAP_CELL and SET_CELL in all three runs,
+MAP_CELL in two, KEYED_SET_CELL and LIST_CELL in one each; the median row is 0.038,
 itself between seven and eight times the global bound. That spread is the structural fact
 the per-class floor exists to expose — the global 0.005 fired on those rows on every
 quiet-host run and so distinguished nothing.
