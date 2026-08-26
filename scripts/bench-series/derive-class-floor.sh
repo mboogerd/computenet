@@ -151,7 +151,10 @@ if [[ ${STATUS_ONLY} -eq 1 ]]; then
 fi
 
 # --------------------------------------------------------------------------------------
-# 1. The load gate, checked FIRST and unconditionally — before planning, before the jar,
+# 1. The load gate, attested TWICE per unit: here first and unconditionally, and again in
+# step 4b immediately before the measurement itself (this script's own ledger builds sit
+# between the two, and it is step 4b's reading that `ingest` records). Here it is checked
+# before planning, before the jar,
 # before the JDK pin — so a busy host is caught before this script does any other work,
 # and a re-run after a refusal always re-attests the gate rather than skipping it because
 # some other prerequisite (a plan, a jar) happened to already be satisfied. run-series.sh's
@@ -273,6 +276,38 @@ while [[ -f "${LEDGER_DIR}/unit-${UNIT_N}.csv" ]]; do
 done
 RESULTS="${LEDGER_DIR}/unit-${UNIT_N}.csv"
 LOG="${LEDGER_DIR}/unit-${UNIT_N}.log"
+
+# --------------------------------------------------------------------------------------
+# 4b. Re-attest the gate IMMEDIATELY before the measurement (review repair on
+# computenet-3omz.3). Step 1's reading is taken before this script does any work of its
+# own, which is what makes a busy host cheap to detect — but `floorTool plan`/`next` are
+# full Gradle invocations, so between step 1 and here this script has itself put load on
+# the measuring host, every invocation, in the same direction each time. Unlike random
+# interference that shows up as variance, a systematic pre-run build biases every unit
+# the same way, so a single reading taken before it is not the reading that describes the
+# measurement. derive-run.sh had nothing between its gate and its jar run; the ledger CLI
+# puts a build there, so the gate is attested twice and it is THIS reading that goes to
+# `ingest` below.
+LOAD_1M="$(uptime | sed -E 's/.*load averages?: ([0-9.]+).*/\1/')"
+echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') class=${CLASS} unit=${UNIT_N} pre-run 1min=${LOAD_1M} threshold=${THRESHOLD}" \
+  | tee -a "${LOADWATCH}"
+if awk -v l="${LOAD_1M}" -v t="${THRESHOLD}" 'BEGIN { exit !(l > t) }'; then
+  cat >&2 <<MSG
+
+REFUSED: 1-minute load average ${LOAD_1M} is above the quiesced threshold ${THRESHOLD}
+(${CORES} cores x 0.25) at the point of measurement. The gate was open when this
+invocation started; the ledger build since then, or something else on the host, closed it.
+
+Not adjustable, no --force. Nothing has been measured or ingested. Wait a few minutes and
+re-run this exact command:
+
+  $0 --class ${CLASS} --ledger ${LEDGER_DIR}
+MSG
+  echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') class=${CLASS} unit=${UNIT_N} REFUSED pre-run 1min=${LOAD_1M}" \
+    >> "${LOADWATCH}"
+  exit 1
+fi
+echo "Gate still open at measurement time: ${LOAD_1M} <= ${THRESHOLD}."
 
 echo
 echo "Running unit ${UNIT_N}: ${SELECTION_ARGS_LINE}"
