@@ -57,9 +57,10 @@ import kotlin.math.ceil
  * declared `@Fork`/`@Warmup`/`@Measurement`/`@BenchmarkMode`, not a config chosen to make
  * the number smaller):
  *
- * 1. `./gradlew :bench:jmhJar` once, then **three sequential** executions of
- *    `bench/build/libs/bench-jmh.jar` filtered to that class, under the module's declared
- *    toolchain JDK, on a host attested [QUIESCED_HOST_STATE] (`run-series.sh`'s
+ * 1. `./gradlew :bench:jmhJar` once, then **three** executions of
+ *    `bench/build/libs/bench-jmh.jar` covering that class — sequentially, or decomposed
+ *    into row-set units as the "Decomposition" section below permits — under the module's
+ *    declared toolchain JDK, on a host attested [QUIESCED_HOST_STATE] (`run-series.sh`'s
  *    one-directional guard: 1-minute load average at or below 0.25 x core count, plus the
  *    operator's own attestation that no other session, build or scheduled scan is live —
  *    the guard can refuse a wrong claim and can never confirm a right one).
@@ -88,11 +89,91 @@ import kotlin.math.ceil
  * Falling back is the honest state; inventing a class floor by analogy to another class,
  * or by scaling one, is not a derivation and must not enter
  * [CLASS_NOISE_FLOOR_DERIVATIONS].
+ *
+ * ## Decomposition: the unit is the ROW SET (amendment, 2026-08-26, `computenet-3omz`)
+ *
+ * Step 1 above originally read "three **sequential** executions of the jar filtered to
+ * that class", which admits only one shape: a class completed in one uninterrupted
+ * stretch. Sized at the three un-derived classes' own annotation configurations that is
+ * about four hours of continuous gated measurement, and the pinned host is a laptop in
+ * daily interactive use whose owner has stated (2026-08-26) that a four-hour idle block
+ * is marginal. A procedure that only completes as one stretch does not complete at all,
+ * so it is amended here — **in committed source, before any number derived under the
+ * amended form exists**, which is the same forward discipline the margin and the format
+ * were fixed under, and the reason this text lands three dependency edges before the task
+ * that first runs a decomposed derivation.
+ *
+ * **What the amendment permits.** A class's derivation may be completed across MULTIPLE
+ * short quiesced windows. The unit of decomposition is the **ROW SET**: each window
+ * measures a SUBSET of the class's rows, and the class is done when every row of the
+ * class has been measured exactly [CLASS_FLOOR_MIN_RUNS] times in [CLASS_FLOOR_MIN_RUNS]
+ * separate JVM invocations. This is sound because the derived quantity is a MAXIMUM, and
+ * `max` is associative and commutative: folding it over rows measured at different times
+ * yields the same number as folding it over all of them at once. JMH forks per
+ * (benchmark, `@Param`) combination, so a row's own measurement does not depend on which
+ * other rows shared its invocation.
+ *
+ * **What the amendment does NOT permit, stated so it cannot be read as a loophole.**
+ *
+ * - Every row still runs at its class's OWN annotation configuration, three times. Row
+ *   selection — a benchmark regex, or `-p` naming a value the class already declares —
+ *   chooses WHICH rows run, never HOW a row is measured.
+ * - **No threshold, fork count, iteration count, iteration DURATION, thread count,
+ *   benchmark mode or margin may be changed to make a unit fit a window.** Not `-f`, not
+ *   `-wi`, not `-i`, not `-w`, not `-r`, not `-t`, not `-bm`, not [CLASS_FLOOR_MARGIN],
+ *   not [NOISE_FLOOR]. The list is illustrative and the rule is not: the ONLY thing a
+ *   unit may vary is which rows it measures. A unit too long for the available window is
+ *   split into fewer rows, and never into a cheaper configuration — including a
+ *   configuration that keeps the iteration COUNTS and shortens the iterations, which is
+ *   the same shrink wearing a different flag. This amendment is to SCHEDULING and to
+ *   nothing else; it must never become the route by which a configuration is shrunk.
+ * - The estimator is untouched: still the MAXIMUM over all observations, still
+ *   [CLASS_FLOOR_MARGIN] x that, still [roundUpToThreeDecimals]. Whether the maximum is
+ *   the right statistic is a separate, open question (`computenet-3sua`), and it is not
+ *   answered by anything here.
+ *
+ * **What decomposition costs, stated rather than assumed.** Rows measured in windows
+ * hours apart see different ordering and different thermal state than rows measured back
+ * to back. Nothing has measured whether that matters for these classes. It is a known
+ * difference in the measurement, not a defect the amendment repairs.
+ *
+ * **Per-unit obligations.** Everything step 1 requires per run is now required per UNIT:
+ *
+ * - The host gate (`run-series.sh`'s 1-minute load average at or below 0.25 x core count)
+ *   is attested immediately BEFORE each unit. A gate reading taken before the first unit
+ *   says nothing about the host when the fourth ran.
+ * - Each unit's own log's `# VM version:` banner is verified after the fact
+ *   (`grep -m1 -E '^# VM version' <log>`) — the per-unit copy of the check
+ *   `computenet-7v7m` added per run.
+ *
+ * **Two refusals a decomposed derivation must carry**, both implemented by
+ * [FloorDerivationLedger], which is the sanctioned way to accumulate one:
+ *
+ * 1. **A floor may be rendered only from a COMPLETE row set** — every row of the class,
+ *    [CLASS_FLOOR_MIN_RUNS] observations each — and the refusal must NAME the outstanding
+ *    rows and their counts. A maximum over a subset can only be SMALLER than the maximum
+ *    over the whole set, so a floor rendered from a partial row set is systematically too
+ *    LOW, which is the direction that admits rows the floor should have refused.
+ *    Completeness must be checked against a row universe pre-registered independently of
+ *    the enumeration (`EXPECTED_PLAN_ROW_COUNTS`): completeness computed over a filtered
+ *    enumeration is satisfied vacuously.
+ * 2. **A floor may be rendered only from a row set measured under ONE JVM version.** With
+ *    units spread over days the measuring JDK can change between them. That is not
+ *    hypothetical: `computenet-ahn0` derived `CellFootprintBenchmark`'s first floor under
+ *    JBR 25.0.2 rather than the toolchain's JDK 21 — a bare `java` on this host is JBR 25
+ *    and `JAVA_HOME` is unset — and re-deriving under 21 moved the floor from 0.593 to
+ *    1.044.
  */
 object ClassFloorDerivation {
 
     /** Documentation anchor only; see this object's KDoc. */
     const val PROCEDURE_OWNER: String = "computenet-cm4w"
+
+    /**
+     * The work item that amended step 1 to admit row-set decomposition. Documentation
+     * anchor only; see this object's "Decomposition" section.
+     */
+    const val DECOMPOSITION_OWNER: String = "computenet-3omz"
 }
 
 /**
@@ -155,6 +236,54 @@ fun roundUpToThreeDecimals(value: Double): Double {
 }
 
 /**
+ * How a derivation's observations were actually GATHERED — provenance about method, never
+ * about the number.
+ *
+ * It exists because the rendered findings block used to describe every derivation as
+ * "`runs` sequential repeat runs" (`computenet-71hu`). That sentence was true while a
+ * derivation WAS three back-to-back whole-class executions, and it became false the moment
+ * `computenet-3omz` made a derivation assemblable from many short units in many separate
+ * processes: `computenet-3omz.4`'s set was 63 observations from nine units across nine
+ * processes and the block still called it three sequential repeat runs. A findings entry
+ * is a published claim about method, so the claim has to follow the ledger rather than a
+ * count whose name outlived its meaning.
+ *
+ * [ClassNoiseFloor.runs] is left alone deliberately: it means, and always meant, how many
+ * observations of EVERY row fold into the maximum, it is [CLASS_FLOOR_MIN_RUNS] under both
+ * assemblies, and re-deriving it would change a published number to fix a sentence. This
+ * type supplements it instead, and nothing here participates in [ClassNoiseFloor.floor].
+ *
+ * A record may leave it unstated (`null`), and then the block says only what is certainly
+ * true — that every row carries `runs` observations. That, and not [WholeClassRuns], is
+ * the absent value on purpose: a default that asserts sequential runs is exactly the lie
+ * this type was added to remove, and it would be re-told by the first construction site
+ * that forgot the field.
+ */
+sealed interface DerivationAssembly {
+
+    /**
+     * [runs] sequential executions of the whole class, each measuring every row once —
+     * the original procedure, and the only shape "N sequential repeat runs" describes.
+     */
+    data class WholeClassRuns(val runs: Int) : DerivationAssembly {
+        init {
+            require(runs >= 1) { "a whole-class-runs assembly needs at least one run, was $runs" }
+        }
+    }
+
+    /**
+     * The row set was assembled from [units] separately-invoked measuring units — one JMH
+     * invocation, in its own process, per unit — as `computenet-3omz`'s checkpointed
+     * derivation produces. Units, not runs: no unit measured the whole class.
+     */
+    data class UnitAssembled(val units: Int) : DerivationAssembly {
+        init {
+            require(units >= 1) { "a unit-assembled derivation needs at least one unit, was $units" }
+        }
+    }
+}
+
+/**
  * One benchmark class's forward-derived noise floor, with the provenance that makes it
  * checkable (`computenet-cm4w`).
  *
@@ -172,9 +301,11 @@ fun roundUpToThreeDecimals(value: Double): Double {
  *   every row of all [runs] runs. Must be finite and strictly positive: a zero would mean
  *   a benchmark with no dispersion at all, which is a broken measurement rather than a
  *   perfect one, and it would derive a floor of zero that every subsequent row exceeds.
- * @param runs how many sequential repeat runs were taken. At least [CLASS_FLOOR_MIN_RUNS]
- *   — JMH reports a `NaN` error at or below two measurement samples, and a floor drawn
- *   from fewer than three runs cannot see run-to-run variation at all.
+ * @param runs how many observations of EVERY row fold into the maximum. At least
+ *   [CLASS_FLOOR_MIN_RUNS] — JMH reports a `NaN` error at or below two measurement
+ *   samples, and a floor drawn from fewer than three observations per row cannot see
+ *   run-to-run variation at all. It does NOT say how those observations were gathered;
+ *   [assembly] does (`computenet-71hu`).
  * @param derivedOn the ISO date of the derivation runs.
  * @param harnessCommitSha the harness commit the runs were made at.
  * @param hostState the attested host state; must be [QUIESCED_HOST_STATE].
@@ -191,6 +322,9 @@ fun roundUpToThreeDecimals(value: Double): Double {
  *   tell which unless the entry says what it ran on. This field cannot prove the JVM was
  *   the right one — nothing in a data class can — but it makes a wrong one visible on the
  *   page instead of invisible.
+ * @param assembly how the observations were gathered, when the derivation knows. See
+ *   [DerivationAssembly] for why it is separate from [runs] and why its absent value
+ *   asserts nothing.
  */
 data class ClassNoiseFloor(
     val benchmarkClass: String,
@@ -201,6 +335,7 @@ data class ClassNoiseFloor(
     val hostState: String,
     val jmhConfig: String,
     val measuringJvm: String,
+    val assembly: DerivationAssembly? = null,
 ) {
     init {
         require(benchmarkClass.isNotBlank()) { "benchmarkClass must not be blank" }
@@ -209,8 +344,8 @@ data class ClassNoiseFloor(
                 "$observedMaxRelativeDispersion"
         }
         require(runs >= CLASS_FLOOR_MIN_RUNS) {
-            "a per-class floor requires at least $CLASS_FLOOR_MIN_RUNS sequential repeat " +
-                "runs, was $runs"
+            "a per-class floor requires at least $CLASS_FLOOR_MIN_RUNS observations of " +
+                "every row, was $runs"
         }
         require(derivedOn.isNotBlank()) { "derivedOn must not be blank" }
         require(harnessCommitSha.isNotBlank()) { "harnessCommitSha must not be blank" }
@@ -224,6 +359,13 @@ data class ClassNoiseFloor(
         require(measuringJvm.isNotBlank()) {
             "measuringJvm must not be blank — a derivation that cannot say which JVM it " +
                 "measured under is the defect computenet-7v7m was filed for"
+        }
+        // A record that says "three sequential runs" while carrying five observations per
+        // row describes neither, and the rendered block would publish the disagreement.
+        val wholeClass = assembly as? DerivationAssembly.WholeClassRuns
+        require(wholeClass == null || wholeClass.runs == runs) {
+            "a whole-class-runs assembly of ${wholeClass?.runs} runs cannot produce $runs " +
+                "observations of every row; each such run measures every row exactly once"
         }
     }
 
@@ -298,6 +440,12 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
         // Adoptium 21.0.11 those entries used by absolute path is no longer installed.
         measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
             "(Amazon Corretto; :bench's resolved toolchain launcher)",
+        // Stated rather than left to the absent value: this derivation really was three
+        // back-to-back executions of the whole class (see this entry's own KDoc), so the
+        // block's "3 sequential repeat runs" is a claim the runs support. A later entry
+        // derived through `computenet-3omz`'s checkpointed ledger carries
+        // DerivationAssembly.UnitAssembled instead, and `floorTool render` writes it.
+        assembly = DerivationAssembly.WholeClassRuns(runs = 3),
     ),
 )
 
@@ -419,6 +567,22 @@ fun classifyAgainst(result: BenchResult, floor: Double): Reportability {
  * this block; they do not compose one.
  */
 fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
+    // How the observations were GATHERED, said only as far as the record actually knows
+    // (`computenet-71hu`). The unqualified "N sequential repeat runs" this used to print
+    // unconditionally is retained for — and only for — the shape it describes.
+    val gathering = when (val assembly = derivation.assembly) {
+        is DerivationAssembly.WholeClassRuns ->
+            "${assembly.runs} sequential repeat runs"
+        is DerivationAssembly.UnitAssembled ->
+            "${derivation.runs} observations of every row, assembled from " +
+                "${assembly.units} measuring units in ${assembly.units} separate processes"
+        null -> "${derivation.runs} observations of every row"
+    }
+    val maximumOver = if (derivation.assembly is DerivationAssembly.WholeClassRuns) {
+        "across all rows of all ${derivation.runs} runs"
+    } else {
+        "across all rows, ${derivation.runs} observations each"
+    }
     appendLine(
         "## ${derivation.derivedOn} — per-class noise floor for " +
             "`${derivation.benchmarkClass}`, derived forward from its own quiesced " +
@@ -426,7 +590,7 @@ fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
     )
     appendLine(
         "Harness: ${derivation.harnessCommitSha} · host state ${derivation.hostState} · " +
-            "${derivation.runs} sequential repeat runs"
+            "$gathering"
     )
     appendLine("JMH: ${derivation.jmhConfig} (the class's own annotation configuration)")
     // The measuring JVM is rendered, not left to prose, because a prose caveat is exactly
@@ -436,8 +600,8 @@ fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
     appendLine("| quantity | value |")
     appendLine("| --- | --- |")
     appendLine(
-        "| max observed relative dispersion across all rows of all " +
-            "${derivation.runs} runs | ${derivation.observedMaxRelativeDispersion} |"
+        "| max observed relative dispersion $maximumOver | " +
+            "${derivation.observedMaxRelativeDispersion} |"
     )
     appendLine("| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | $CLASS_FLOOR_MARGIN |")
     appendLine(

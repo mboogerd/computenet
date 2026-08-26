@@ -3,6 +3,7 @@ package civictech.bench
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import org.junit.jupiter.api.Test
 
 /**
@@ -49,6 +50,7 @@ class ClassNoiseFloorTest {
         runs: Int = CLASS_FLOOR_MIN_RUNS,
         hostState: String = QUIESCED_HOST_STATE,
         measuringJvm: String = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS",
+        assembly: DerivationAssembly? = null,
     ): ClassNoiseFloor = ClassNoiseFloor(
         benchmarkClass = benchmarkClass,
         observedMaxRelativeDispersion = observed,
@@ -58,6 +60,7 @@ class ClassNoiseFloorTest {
         hostState = hostState,
         jmhConfig = "mode=Throughput forks=2 warmup=5 iters=10",
         measuringJvm = measuringJvm,
+        assembly = assembly,
     )
 
     // ---- The pre-registration itself -------------------------------------------------
@@ -72,6 +75,28 @@ class ClassNoiseFloorTest {
     @Test
     fun `the class-floor margin is 2x, fixed before any per-class number exists`() {
         CLASS_FLOOR_MARGIN shouldBe 2.0
+    }
+
+    /**
+     * The row-set decomposition amendment (`computenet-3omz`) is anchored in the same
+     * object as the procedure it amends.
+     *
+     * A constant, not prose, for the same reason [ClassFloorDerivation.PROCEDURE_OWNER]
+     * is one: the amendment's whole standing rests on having been committed BEFORE any
+     * number derived under it exists, and a KDoc paragraph alone leaves nothing a diff of
+     * this file's tests can point at. What it pins is that step 1 no longer reads
+     * "three **sequential** executions" as the only admissible shape, and that the thing
+     * decomposed is scheduling — never a fork count, an iteration count, a threshold or
+     * [CLASS_FLOOR_MARGIN], all of which this suite pins unchanged above and below.
+     */
+    @Test
+    fun `the procedure carries the row-set decomposition amendment, anchored to its work item`() {
+        ClassFloorDerivation.PROCEDURE_OWNER shouldBe "computenet-cm4w"
+        ClassFloorDerivation.DECOMPOSITION_OWNER shouldBe "computenet-3omz"
+        // The amendment changes scheduling only: a row is still measured exactly as many
+        // times as an undecomposed derivation measured it.
+        CLASS_FLOOR_OBSERVATIONS_PER_ROW shouldBe CLASS_FLOOR_MIN_RUNS
+        CLASS_FLOOR_MIN_RUNS shouldBe 3
     }
 
     /**
@@ -350,7 +375,7 @@ class ClassNoiseFloorTest {
     /**
      * The published block is pinned NOW, before any derivation exists, so the entry cannot
      * be composed to suit its numbers later. What is checked is that the block states the
-     * observation, the pre-fixed margin, the derived floor, the run count, the host state,
+     * observation, the pre-fixed margin, the derived floor, the observation count, the host state,
      * and both halves of the "what it does / does not establish" pair — and that the floor
      * it prints is the record's computed one rather than a second, hand-entered copy.
      */
@@ -361,7 +386,10 @@ class ClassNoiseFloorTest {
 
         text shouldContain "## 2026-09-01 — per-class noise floor for `OperatorThroughputBenchmark`"
         text shouldContain "host state quiesced"
-        text shouldContain "3 sequential repeat runs"
+        // This asserted "3 sequential repeat runs" until computenet-71hu. The fixture
+        // states no assembly, and the block no longer claims one on its behalf; the three
+        // assembly cases each have their own test below.
+        text shouldContain "3 observations of every row"
         text shouldContain "the class's own annotation configuration"
         text shouldContain "max observed relative dispersion"
         text shouldContain "0.03"
@@ -395,6 +423,65 @@ class ClassNoiseFloorTest {
         // A different JVM renders differently — the field is printed, not a constant.
         renderDerivation(derivation(measuringJvm = "JDK 25.0.2 (JBR)")) shouldContain
             "Measured under: JDK 25.0.2 (JBR)"
+    }
+
+    // -----------------------------------------------------------------------------------
+    // How the observations were gathered — the sentence, not the number (computenet-71hu).
+    // -----------------------------------------------------------------------------------
+
+    @Test
+    fun `whole-class runs render as sequential repeat runs`() {
+        val text = renderDerivation(
+            derivation(assembly = DerivationAssembly.WholeClassRuns(runs = CLASS_FLOOR_MIN_RUNS)),
+        )
+
+        text shouldContain "3 sequential repeat runs"
+        text shouldContain "across all rows of all 3 runs"
+    }
+
+    @Test
+    fun `a unit-assembled derivation is never called sequential repeat runs`() {
+        val text = renderDerivation(
+            derivation(assembly = DerivationAssembly.UnitAssembled(units = 9)),
+        )
+
+        text shouldNotContain "sequential repeat runs"
+        text shouldContain "3 observations of every row, assembled from 9 measuring units " +
+            "in 9 separate processes"
+        text shouldContain "across all rows, 3 observations each"
+    }
+
+    @Test
+    fun `an unstated assembly claims only what is certainly true`() {
+        val text = renderDerivation(derivation(assembly = null))
+
+        // The absent value must not assert a method. A construction site that forgets the
+        // field says "3 observations of every row" — true under both shapes — rather than
+        // inheriting the sequential-runs claim this vocabulary was added to stop.
+        text shouldNotContain "sequential repeat runs"
+        text shouldNotContain "measuring units"
+        text shouldContain "3 observations of every row"
+    }
+
+    @Test
+    fun `the assembly changes no number the block publishes`() {
+        val numbers = { text: String ->
+            Regex("[0-9]+\\.[0-9]+").findAll(text).map { it.value }.toList()
+        }
+        val unstated = renderDerivation(derivation(assembly = null))
+
+        numbers(renderDerivation(derivation(assembly = DerivationAssembly.UnitAssembled(9)))) shouldBe
+            numbers(unstated)
+        numbers(renderDerivation(derivation(assembly = DerivationAssembly.WholeClassRuns(3)))) shouldBe
+            numbers(unstated)
+    }
+
+    @Test
+    fun `a whole-class-runs assembly disagreeing with the observation count is refused`() {
+        val refusal = shouldThrow<IllegalArgumentException> {
+            derivation(runs = 4, assembly = DerivationAssembly.WholeClassRuns(runs = 3))
+        }
+        refusal.message!! shouldContain "cannot produce 4 observations of every row"
     }
 
     @Test

@@ -122,6 +122,38 @@ class DriveWindowContainmentTest {
     }
 
     @Test
+    fun `the walk is fired READ_DELAY_MS into the drive, not into its own pager thread`() {
+        BoundedReadFixtures.rig(SetScale.N1E3).use { rig ->
+            rig.seed()
+            val trial = containmentTrial(
+                rig = rig,
+                arm = DriveWindowArm.COVERING,
+                pageLimit = GUARD_PAGE_LIMIT,
+                adds = COVERING_GUARD_ADDS,
+            )
+
+            // An arithmetic floor, not a timing guess, in the manner of the paced-shape
+            // guard below: the pager waits for the drive's window to OPEN and only then
+            // sleeps `READ_DELAY_MS`, so the walk cannot begin sooner than that after the
+            // window opened, whatever the machine is doing. No upper bound is asserted — a
+            // loaded host may take arbitrarily longer, and a test that failed for that
+            // would be measuring the machine.
+            //
+            // What this pins is `computenet-ttjs`: before the gate the delay ran from the
+            // pager's own `Thread.start()`, which PRECEDES the drive, so a main thread
+            // descheduled for more than a millisecond let the walk begin before the window
+            // existed and the trial classified WALK_PRECEDES_DRIVE — 1 in 60 COVERING
+            // trials with the CPU oversubscribed 3x, and 1 in 7 whole-suite runs as filed.
+            // It says nothing about `maxGap`, and is a statement about the knob's
+            // construction only.
+            val delayNanos = trial.walkWindow.startNanos - trial.driveWindow.startNanos
+            val floorNanos = BoundedReadFixtures.READ_DELAY_MS * 1_000_000
+            (delayNanos >= floorNanos).shouldBeTrue()
+            trial.containment shouldBe DriveWindowContainment.CONTAINED
+        }
+    }
+
+    @Test
     fun `both arms run on one rig, at one matched rate, and classify oppositely`() {
         BoundedReadFixtures.rig(SetScale.N1E3).use { rig ->
             rig.seed()

@@ -294,3 +294,52 @@ tasks.register<JavaExec>("benchSeries") {
         },
     )
 }
+
+// -----------------------------------------------------------------------------------
+// THE CHECKPOINTED FLOOR DERIVATION'S COMMAND-LINE FACE (computenet-3omz.2).
+//
+// `civictech.bench.FloorTool` is the CLI face of `FloorDerivationLedger`
+// (`computenet-3omz.1`): plan/next/ingest/status/render over a per-class derivation that
+// may be completed across several short quiesced windows instead of one continuous
+// stretch. Mirrors `benchSeries` immediately above for the same reasons — a plain
+// JavaExec over `main`'s runtime classpath rather than the `application` plugin, and
+// DELIBERATELY OUTSIDE `check`, `build` AND `test`: this tool only reads artifacts other
+// invocations produced (a JMH results file, a run log) and launches no benchmark and
+// forks no JVM of its own, except `plan`'s and `next`'s use of the built jar to read its
+// own `-lp` enumeration and its classes' `@Fork`/`@Warmup`/`@Measurement` annotations —
+// neither of which runs a benchmark iteration. Nothing in this file makes it a dependency
+// of any lifecycle task, so it is unreachable from `./gradlew test`, from `:bench:build`,
+// and therefore from every required CI check.
+//
+// Arguments arrive through the `floorArgs` Gradle property, read via `providers` for the
+// same configuration-cache reason `seriesArgs` is (see that task's comment):
+//
+//   ./gradlew :bench:floorTool -PfloorArgs="plan --ledger <dir> --class <Name> --jar <jar>"
+//
+// `-PfloorArgs="--help"` prints usage, and is also the default with no property set.
+tasks.register<JavaExec>("floorTool") {
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+    description =
+        "CLI face of the checkpointed per-class floor derivation ledger (computenet-3omz.2). " +
+            "Not wired into check/build/test."
+    mainClass.set("civictech.bench.FloorToolKt")
+    classpath = sourceSets["main"].runtimeClasspath
+
+    // Pinned to the same toolchain the module compiles and benchmarks under, for the same
+    // reason `benchSeries` pins it: `plan`'s enumeration and `next`'s annotation reads run
+    // this JVM against the built jar, and a JDK drifting underneath that read would be
+    // exactly the defect the derivation's own single-JVM refusal exists to catch.
+    javaLauncher.set(
+        javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(21)) },
+    )
+
+    val floorArgs = providers.gradleProperty("floorArgs").orElse("--help")
+    // Passed as ONE argument, deliberately. This used to split on whitespace here, which
+    // made a `--jmh-config` value containing spaces impossible to express: the property is
+    // a single string, so any quoting the operator wrote was already gone by the time this
+    // ran, and `--jmh-config 'forks=1, warmup 3x1s'` was refused with
+    // "expected a --flag, found 'warmup'" — while the template `derive-class-floor.sh`
+    // prints shows exactly that field as free text (`computenet-71hu`). `FloorCli.run`
+    // tokenises a single argument itself, honouring quotes, so the quoting survives.
+    argumentProviders.add(CommandLineArgumentProvider { listOf(floorArgs.get()) })
+}

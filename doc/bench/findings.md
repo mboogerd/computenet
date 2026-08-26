@@ -5316,3 +5316,91 @@ the three results files (`cellfootprint-{1,2,3}.json`), the three JMH logs whose
 load sampling (`loadwatch.txt`) and the runner that enforced both refusals
 (`derive-run.sh`). The superseded JBR 25 runs remain at
 `$HOME/computenet-runs/computenet-ahn0/`.
+
+## 2026-08-26 — the per-class floor derivation procedure is amended to admit ROW-SET decomposition (no number derived)
+
+**This entry records a change to a pre-registered procedure, not a measurement.** Nothing
+was run for it and no floor moved. It is appended here, and the amended text is committed
+in `ClassNoiseFloor.kt`, **before any number derived under the amended form exists** — the
+same forward discipline under which the margin, the statistic and the rendered format were
+fixed before the first per-class number existed. `computenet-3omz.1`.
+
+**What changed.** Step 1 of `ClassFloorDerivation`'s procedure read "three **sequential**
+executions of `bench/build/libs/bench-jmh.jar` filtered to that class". That admits exactly
+one shape: a class completed in one uninterrupted stretch. The 2026-08-26 entry above sized
+the three un-derived classes at roughly 48, 27 and 7 minutes per run — about four hours of
+continuous gated measurement for the three required runs each — and the pinned host
+NL-MGD6FQJW91 is a laptop in daily interactive use whose owner stated on 2026-08-26 that a
+four-hour idle block is marginal. A procedure that only completes as one stretch does not
+complete at all, which is why those three classes are still falling back to `NOISE_FLOOR`.
+
+The amendment states that **the unit of decomposition is the ROW SET**: a class's
+derivation may be completed across several short quiesced windows, each measuring a SUBSET
+of the class's rows, and the class is done when every row has been measured exactly three
+times in three separate JVM invocations.
+
+**Why that is sound.** The derived quantity is `max |scoreError / score|` over all rows of
+all three runs. `max` is associative and commutative, so folding it over rows measured at
+different times yields the same number — bit for bit — as folding it over all of them at
+once. JMH forks per (benchmark, `@Param`) combination, so a row's own measurement does not
+depend on which other rows shared its invocation: a benchmark regex or a `-p` value selects
+WHICH rows run, never HOW a row is measured.
+
+**What the amendment explicitly does NOT permit.** Every row still runs at its class's own
+annotation configuration, three times. **No threshold, fork count, iteration count,
+iteration duration, thread count, benchmark mode or margin may be changed to make a unit
+fit a window** — not `-f`, not `-wi`, not `-i`, not `-w`, not `-r`, not `-t`, not `-bm`,
+not `CLASS_FLOOR_MARGIN`, not `NOISE_FLOOR`. That list is illustrative and the rule is
+not: the only thing a unit may vary is which rows it measures. A unit too long for the
+available window is split into FEWER ROWS, never into a cheaper configuration — including
+one that keeps the iteration counts and shortens the iterations, which is the same shrink
+wearing a different flag. This is a change to scheduling and to
+nothing else, and it must never become the route by which a configuration is shrunk. The
+estimator is untouched: still the maximum, still 2x, still rounded up to three decimals.
+Whether the maximum is the right statistic — the 2026-08-26 entry above calls the resulting
+1.044 a weak bound — remains open as `computenet-3sua` and is not answered here.
+
+**What decomposition costs, stated rather than assumed.** Rows measured in windows hours
+apart see different ordering and different thermal state than rows measured back to back.
+Nothing has measured whether that matters for these classes. It is a known difference in
+the measurement, not a defect the amendment repairs.
+
+**Per-unit obligations.** Everything the procedure required per run is now required per
+UNIT: the host gate (`run-series.sh`'s 1-minute load average at or below 0.25 x core count)
+is attested immediately before each unit, and each unit's own log's `# VM version:` banner
+is verified afterwards — the per-unit copy of the check `computenet-7v7m` added per run.
+
+**Two refusals make the decomposition safe, and both are implemented rather than asked
+for.** `FloorDerivationLedger` (`bench/src/main/kotlin/civictech/bench/FloorDerivationLedger.kt`)
+is the sanctioned accumulator; it persists one class's partial derivation — per-unit banner,
+gate reading, timestamp, and one observation per row — to a human-readable file outside the
+repository, so a window that ends mid-class loses nothing.
+
+1. **A floor may be rendered only from a COMPLETE row set**, and the refusal names every
+   outstanding row with its own observation count. A maximum over a subset can only be
+   SMALLER than the maximum over the whole set, so a floor rendered from a partial row set
+   is systematically too LOW — the direction that admits rows the floor should have
+   refused. Completeness is checked against a row universe pre-registered in committed
+   source (`EXPECTED_PLAN_ROW_COUNTS`) rather than against the enumeration itself, because
+   completeness computed over a filtered enumeration is satisfied vacuously. The
+   pre-registered counts, verified against the classes' own `@Benchmark` methods and
+   `@Param` enums on 2026-08-26: `CellFootprintBenchmark` 21 (1 x 7 `CellFamily` x 3
+   `Scale`), `OperatorThroughputBenchmark` 72 (2 x 18 `Subject` x 2 `Direction`),
+   `FanOutScalingBenchmark` 30 (6 x 5 `FanDegree`), `BoundedReadBenchmark` 6 (2 x 3
+   `SetScale`), `SmokeBenchmark` 1.
+2. **A floor may be rendered only from a row set measured under ONE JVM version.** With
+   units spread over days the measuring JDK can change between them, and that defect has
+   already happened in compressed form: `computenet-ahn0` derived `CellFootprintBenchmark`
+   under JBR 25.0.2 rather than the toolchain's JDK 21, and the floor moved from 0.593 to
+   1.044 when re-derived. On this host a bare `java` is JBR 25 and `JAVA_HOME` is unset, so
+   the trap is live. A mixed-JVM row set is refused at render and warned about at ingest.
+
+A fourth observation of any row is also refused — exactly three fold into the statistic and
+nothing is dropped to make room — and a ledger file that cannot be parsed in full is
+refused on load rather than partially applied, since a half-loaded ledger is an incomplete
+row set wearing a complete one's face.
+
+**Verification**: `./gradlew :bench:test --rerun`. The fold-equivalence property (a fold
+over an arbitrary partition of a row set into units equals the whole-set maximum) is a
+synthetic property test over generated dispersions from a fixed seed; it needs no
+measurement, and none was taken for this entry.
