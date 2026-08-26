@@ -306,10 +306,16 @@ Consequently **`.github/workflows/` is untouched by this change**, and the
 acceptance criterion "no required CI check runs a benchmark" holds by
 construction rather than by argument. See §9 for how that was verified.
 
-## 8. The series is EMPTY at the commit that introduces it
+## 8. The series was EMPTY at the commit that introduces it — seeded 2026-08-26
 
-`bench/series/series.csv` contains its header and no rows. **This is deliberate,
-and it is the honest state.**
+**Current state: seeded.** `bench/series/series.csv` holds three QUIESCED rows for
+`SmokeBenchmark.baseline` and the comparator reports a band. Jump to §8.1 for the
+band and what a fourth run has to match; the rest of this section is the reasoning
+that kept the file empty until then, retained because it is the argument, not a
+status line.
+
+At the commit that introduced this lane, `bench/series/series.csv` contained its
+header and no rows. **That was deliberate, and it was the honest state.**
 
 The machine available when this lane was built was demonstrably not quiesced. At
 the time of writing: 16 cores, 1-minute load average 4.98 (the script's own check
@@ -338,6 +344,47 @@ Until then, the lane is complete and exercised — the comparator, the codec, th
 refusals and the script's own guard are all covered by tests in
 `bench/src/test/kotlin/civictech/bench/series/` — and the series simply has no
 rows. Seeding it is filed as its own beads item under `computenet-x9e`.
+
+### 8.1 Seeded, 2026-08-26 (`computenet-0nww`)
+
+All three conditions above were met between 01:18 and 02:14 local on the pinned
+host, and the three runs were made. The full account — every host reading before
+and after each run, the attestation and the interpretation it rests on, and two
+observed confounds — is the `doc/bench/findings.md` entry *"the regression-tracking
+series is seeded"*. Only what a later run needs is repeated here.
+
+```
+SmokeBenchmark.baseline (avgt, ns/op)   centre 3.976441   half-width 0.07488   samples 3
+```
+
+The half-width is `max(runToRunHalfWidth, worstWithinRunError)` and here the second
+term wins (0.07488 against 0.01914): the three runs agree more closely than any one
+of them claims to resolve, so the band is the wider, honest one. §4's `WithinBand`
+caveat applies with full force at this width.
+
+**Three things a fourth run must match, or it starts a fresh population rather than
+extending this band** (the failure is silent — it reads as `InsufficientHistory`,
+i.e. a young series, not as a misconfigured one):
+
+- `BENCH_SERIES_JAVA` set to **Amazon Corretto 21.0.5** specifically. Bare `java` on
+  this host is JBR 25.0.2 and is refused outright, which is the safe failure; the
+  unsafe one is a *different* JDK 21 — Microsoft 21.0.11 is also installed here —
+  which passes the script's major-version check and lands in its own population.
+- The same host, `NL-MGD6FQJW91` (Apple M3 Max, 16 cores, Mac OS X 26.6.2).
+- The pinned knobs unchanged: `-f 5 -wi 5 -i 5`. Note that condition 3 above
+  describes the wall clock as `10 iterations × 10 s`; the knobs the lane actually
+  pins are 5 warmup and 5 measurement iterations, so a run is nearer 7 minutes than
+  15. The ~45-minute figure for three runs still held, because the gaps between runs
+  dominate — see the next point.
+
+**Do not launch the next run immediately after the previous one.** The 1-minute load
+average still carries the finished sweep, so the guard reads load the measurement
+itself created and refuses an attestation that is true. On this host the load also
+oscillates between roughly 3.0 and 5.2 on a two-minute cycle while otherwise idle, so
+a single `uptime` reading is weak evidence in either direction; runs 2 and 3 were
+launched by polling for a genuine trough rather than by a one-shot reading. The
+script's guard reads the load **once, at start**, and cannot protect against a spike
+at minute 20 — that limitation is unchanged.
 
 ## 9. What this lane does not do
 

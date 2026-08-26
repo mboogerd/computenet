@@ -1,0 +1,2 @@
+"Benchmark","Mode","Threads","Samples","Score","Score Error (99.9%)","Unit"
+"civictech.bench.micro.SmokeBenchmark.baseline","avgt",1,25,3.976441,0.074880,"ns/op"
