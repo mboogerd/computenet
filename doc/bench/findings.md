@@ -4757,3 +4757,344 @@ Raw CSVs and logs for both arms are at `$HOME/computenet-runs/computenet-i61m/`
      -rf csv -rff /abs/path/iter-1s.csv > /abs/path/iter-1s.log 2>&1
 # ... and again with -r 10s
 ```
+
+## 2026-08-26 — interleaved, per-arm host-gated A/B of MEASUREMENT-ITERATION LENGTH over the set-shaped subjects: `[BEN1-28]`'s TIME channel at full power — INCONCLUSIVE by the pre-registered criterion, and `computenet-i61m`'s halving does NOT reproduce
+
+`computenet-bzwx`. `computenet-i61m` RETIRED `[BEN1-28]` on the **allocation** channel and
+said, next to the number, that the verdict did not reach wall clock. It then spent its
+remaining slot on a cheap direct probe of the time channel and reported — honestly, under
+"Supplementary, NOT part of the verdict" — that two set-shaped subjects appeared to lose
+**more than half** their throughput when the measurement iteration was lengthened 10x. It
+listed four reasons the probe was not a result and filed this item to redo it properly.
+This is that redo.
+
+**Headline, stated before the caveats so it cannot be read past.** At full fork and
+iteration counts, interleaved, with every one of the sixteen arms individually gated on a
+polled load trough, **the halving does not reproduce, and it is not close.** `COUNT`
+reports a long/short throughput ratio of **0.9958** (interval 0.9769–1.0152) against the
+probe's 0.4761; `FLAT_MAP` reports **1.0034** (0.9609–1.0465) against the probe's 0.4537.
+Those are the two rows the probe called "a large effect measured precisely" and explicitly
+said were "hard to dismiss". They are flat. Across all eight subjects **no row loses
+throughput** by the pre-registered criterion, six of eight demonstrably do not, and the
+long/short ratios span 0.9156 to 1.0131.
+
+**What the verdict therefore is, and why it is not `RETIRES`.** The pre-registered
+criterion retires only when *every* row is resolved and *every* row is on the
+does-not-cost side. Two rows — `TAGGED_SET` (0.9156, interval 0.8829–0.9493) and `UNION`
+(0.9414, 0.8972–0.9877) — have intervals that straddle the 0.90 boundary, so they decide
+nothing, and the criterion yields **INCONCLUSIVE**. That is the criterion applied as
+written and it was **not** adjusted after the numbers were seen: `MATERIAL_RATIO = 0.90`,
+`RESOLVABLE_RELATIVE_ERROR = 0.10` and the aggregation were committed as `1f68b10d4`
+before the first arm ran, and `IterationLengthCriterionTest` — an ordinary untagged test,
+so it runs in `:bench:test` on every build — pins all sixteen branches of it. Widening the
+design to two more forks *for those two subjects only*, after seeing which two they were,
+would have been the exact defect pre-registration exists to prevent.
+
+### The A/B, per subject
+
+`ratio` is long-arm score / short-arm score; the interval is propagated from both arms'
+99.9% error bars (long low over short high, long high over short low). `i61m` is the
+underpowered probe's ratio for the same subject, quoted from its own table.
+
+| subject | short arm 1 s (ops/s) | long arm 10 s (ops/s) | ratio | interval | row | `i61m` probe ratio |
+| --- | --- | --- | --- | --- | --- | --- |
+| `TAGGED_SET` | 867384.3 ± 12066.1 | 794175.2 ± 17745.4 | 0.9156 | 0.8829–0.9493 | UNDECIDED | 0.9802 |
+| `FILTER` | 868818.9 ± 8110.3 | 864755.9 ± 9609.1 | 0.9953 | 0.9752–1.0159 | DOES_NOT_COST | 0.9615 |
+| `UNION` | 784508.6 ± 18963.2 | 738521.7 ± 17638.4 | 0.9414 | 0.8972–0.9877 | UNDECIDED | 0.9233 |
+| `INTERSECT` | 375458.2 ± 3361.2 | 367427.4 ± 3251.3 | 0.9786 | 0.9613–0.9962 | DOES_NOT_COST | 0.9601 |
+| `COUNT` | 876605.1 ± 9636.5 | 872955.3 ± 7220.1 | 0.9958 | 0.9769–1.0152 | DOES_NOT_COST | **0.4761** |
+| `FLAT_MAP` | 697725.8 ± 5532.9 | 700089.5 ± 24298.9 | 1.0034 | 0.9609–1.0465 | DOES_NOT_COST | **0.4537** |
+| `PRESENCE_COUNT` | 385535.8 ± 6698.4 | 390592.2 ± 10346.7 | 1.0131 | 0.9694–1.0583 | DOES_NOT_COST | 0.7192 |
+| `QUORUM` | 376677.3 ± 4064.1 | 378884.8 ± 11069.3 | 1.0059 | 0.9661–1.0465 | DOES_NOT_COST | 0.7037 |
+
+`verdict=INCONCLUSIVE`, `split=UNRESOLVED`, `MATERIAL_RATIO=0.9`,
+`RESOLVABLE_RELATIVE_ERROR=0.1`. **Zero of eight rows were unresolved for width of error
+bar** — the failure mode that disqualified three of the probe's eight rows, one of them
+with an error bar wider than its own score, does not occur here at all: the widest
+relative error anywhere in either arm is `FLAT_MAP`'s long arm at 0.0347.
+
+### The `TAGGED_SET`/`FILTER` versus `COUNT`/`FLAT_MAP` split: does it reproduce?
+
+**By the criterion, `UNRESOLVED` — and the reason is not a tie, it is that the split has
+come apart in a way the criterion has no word for.** `splitOf` asks whether `COUNT` and
+`FLAT_MAP` lose throughput while `TAGGED_SET` and `FILTER` do not. `COUNT` and `FLAT_MAP`
+are firmly on the DOES_NOT_COST side, which already refutes the pattern; `TAGGED_SET` is
+UNDECIDED, which is what makes the four-row question formally unresolvable rather than
+answered "no".
+
+Stated without the criterion's vocabulary, so a reader is not left with only the word
+`UNRESOLVED`:
+
+- **The half of the split that carried the probe's entire weight is refuted.** The probe
+  said `COUNT` and `FLAT_MAP` fall by more than half. They do not fall at all. Their
+  intervals exclude any decline larger than 2.3% and 3.9% respectively.
+- **The residual signal has moved to the other two subjects.** The largest declines in
+  this A/B are `TAGGED_SET` (0.916) and `UNION` (0.941) — in the probe, `TAGGED_SET` was
+  the *flattest* row at 0.980. So the split does not merely fail to reproduce; for
+  `TAGGED_SET` the ordering inverts.
+- **Neither residual is resolvable at this power.** Both straddle 0.90. Whether they are a
+  real few-percent decline or the two noisiest subjects in the sweep (they carry the two
+  widest short-arm error bars, 0.0139 and 0.0242) is exactly what these arms cannot say.
+
+**The most economical explanation of the disagreement is the probe's own third caveat.**
+Its two arms ran back to back with no host re-gate between them, and its post-arm reading
+caught a browser renderer at 79.6% and ManageEngine `dcpatchscan` at 33.6% during the 10 s
+arm's window. A host excursion landing inside the longer arm depresses exactly the rows
+that arm measured, and interleaving with a per-arm gate is the design that removes it.
+This run has both, and the effect is gone. That is a reading, not a measurement: nothing
+here re-runs the probe's own configuration to confirm it.
+
+### What this does and does not establish about `[BEN1-28]`'s time channel
+
+**It does not retire it.** The verdict is INCONCLUSIVE and the entry says so. Two subjects
+remain undecided, and this A/B covers `direction=INSERT`, `drive=REAL`, and the eight
+set-shaped subjects only.
+
+**It removes the evidence that had been offered for it.** After `computenet-i61m` the
+corpus held a retired allocation channel plus one precisely-measured, large, contrary
+time-channel effect. That effect is now measured at full power and is absent. What the
+time channel currently rests on is two rows with intervals of 0.88–0.95 and 0.90–0.99 —
+which is a very different thing to carry forward than "two subjects lose more than half
+their throughput".
+
+**The instrument is one-sided and a reader has to carry that.** Iteration length is not a
+*label* on the tag map. A longer iteration accumulates more tag-map state, but it also
+accumulates everything else that grows with time-in-iteration — JIT state, a filling young
+generation, any other internal collection. So a decline here would have established that
+*something* accumulating within the iteration costs wall clock, with the map the named
+candidate; it would not on its own have attributed the cost to the map. The absence of a
+decline is correspondingly the stronger direction for this instrument: it is evidence
+against *any* within-iteration accumulation costing the six DOES_NOT_COST subjects
+measurable wall clock, the tag map included.
+
+### Nothing was tuned
+
+`[BEN1-28]`'s standing instruction — the growth is observed, never tuned — was followed.
+No tag map was cleared, compacted or bounded. Nothing under `kernel/src/main` or
+`bench/src/jmh` was touched at all: the only source this item added is the criterion and
+its render entry point under `bench/src/test`, which no benchmark body reads. Both arms
+ran the class's own declared `Fork(2)`, `Warmup(5, 1s)`, `Measurement(10, 1s)`; the single
+knob that differs between them is JMH's `-r`, the wall-clock length of a measurement
+iteration, and both arms' `# Measurement:` banners are retained in their logs as proof of
+that.
+
+### Host, and the readings actually met — per arm
+
+**The host is the pinned one**: `NL-MGD6FQJW91`, Apple M3 Max, Mac15,9, 16 cores, macOS
+26.6.2, measuring on Microsoft OpenJDK 21.0.11+10-LTS invoked by absolute path (a bare
+`java` here is JBR 25.0.2). CPU/cores/OS in the rendered blocks below come from each
+measuring fork's own `@Setup(Level.Trial)` banner.
+
+**Interleaving.** Sixteen separate JMH invocations, one per (subject, arm), with the arm
+order alternating per subject — `short,long` for subjects 1/3/5/7 and `long,short` for
+2/4/6/8 — so that no host excursion can land wholly inside one arm and no monotone drift
+over the 36-minute window can systematically favour one. Each arm's CSV below is the
+concatenation of its eight per-subject invocations (headers de-duplicated) and each arm's
+log the concatenation of theirs; `MeasuringJvm`, `RunKnobs` and `HostFacts` all collapse
+repeated banners with `distinct()` and **refuse** if the concatenated invocations disagree,
+so a mixed-arm concatenation would have been caught by the differing `# Measurement:`
+line rather than rendered.
+
+**Per-arm gate.** Every one of the sixteen launches polled `load1` every 10 s and started
+only on a reading below the quiesced threshold **4.00** (16 cores x 0.25, the same
+threshold `computenet-i61m` and `computenet-x9e.14` used). **16 of 16 arms met the gate;
+zero were run un-gated.** The `load1` reading at the moment each arm started:
+
+| subject | arm order | short-arm start | long-arm start |
+| --- | --- | --- | --- |
+| `TAGGED_SET` | short, long | 3.85 | 3.25 |
+| `FILTER` | long, short | 3.57 | 3.88 |
+| `UNION` | short, long | 3.32 | 3.07 |
+| `INTERSECT` | long, short | 2.97 | 3.84 |
+| `COUNT` | short, long | 3.55 | 3.51 |
+| `FLAT_MAP` | long, short | 3.89 | 2.88 |
+| `PRESENCE_COUNT` | short, long | 3.27 | 3.07 |
+| `QUORUM` | long, short | 2.66 | 2.16 |
+
+The whole run occupied 04:29:37Z–05:05:36Z. Two gates had to wait for a trough rather than
+finding one immediately — `long FILTER` polled six times over 50 s after the preceding arm
+left `load1` at 4.61, and `short COUNT` polled sixteen times over 2m36s after
+`short INTERSECT` ended at **9.70**. Both then ran on a reading under 4.00.
+
+**Non-resident consumers during the window are recorded rather than discarded.** A 30 s
+sampler ran throughout (72 samples). `load1` ranged **2.21–10.28**, with the measuring JVM
+itself accounting for 137–269% CPU. The excursions worth naming, with what they overlap:
+
+- **04:49:12Z–04:51:45Z — Microsoft Defender.** `wdavdaemon_unprivileged` at **418.1%** and
+  `wdavdaemon_enterprise` at 106.7% in the 04:49:12Z sample, then `wdavdaemon_enterprise`
+  at 107.4%, 99.7% and 51.7% through 04:51:45Z. This overlaps the tail of `short COUNT`
+  (ended 04:49:57Z) and the first half of `long COUNT` (04:49:58Z–04:53:29Z) — i.e. it
+  falls across **both** of `COUNT`'s arms, which is the property interleaving was chosen
+  for. `COUNT` is nonetheless the tightest pair in the sweep (0.0110 and 0.0083 relative
+  error) and its ratio is 0.9958.
+- **04:42:40Z — a Brave Browser helper at 118.8%**, inside `long UNION`
+  (04:39:14Z–04:42:45Z). `UNION` is one of the two undecided rows, and this reading is the
+  strongest single reason not to read its 0.941 as a real decline.
+- **04:33:08Z–04:35:09Z — Spotlight `mds` at 41.1–51.9%**, spanning the end of
+  `long TAGGED_SET` and the start of `long FILTER`. `TAGGED_SET` is the other undecided row.
+- **04:46:41Z — `load1` 10.28**, with `wdavdaemon_unprivileged` at 45.1%, `duetexpertd` at
+  16.5%. This is the sample immediately after `short INTERSECT` finished; the gate then
+  held the next arm off for 2m36s.
+- **04:48:42Z and 04:50:44Z — `fileproviderd` at 63.8% and 95.4%**, the first between arms
+  and the second inside `long COUNT`.
+
+Mean CPU across all samples for the resident managed-endpoint stack: Microsoft Defender's
+processes 24.0%, ManageEngine `com.manageengine.appctrl.driver` 12.3%, `trustd` 9.0%.
+
+**The resident managed-endpoint stack never goes away on this host.** That it does not
+disqualify a quiesced attestation here is a ruling by the orchestrating session recorded
+in `computenet-i61m`'s entry, not a judgement made by this one; this session executed it.
+The readings above are recorded in full so a reader who rejects that ruling can grade this
+run SHARED and re-read the table themselves. Note what such a reader would find: the two
+arms of every subject are minutes apart under one gate, so the ratio — not the absolute
+throughput — is the quantity this entry claims, and it is the quantity least exposed to a
+constant background load.
+
+### Trigger (`[BEN1-31]`/`[BEN1-32]`)
+
+`TriggerClaim.Cited` on `[BEN1-28]`, verdict `INCONCLUSIVE`, with the criterion and the
+measured clause both generated from the same numbers by `IterationLengthCriterion`, so the
+sentence in the rendered block cannot drift from the table beside it. The SHORT arm's block
+carries `TriggerClaim.None` — MARKED INCOMPLETE — and correctly so: the control arm answers
+no trigger question on its own; the A/B does, and the LONG arm's block carries it. This
+entry cites neither G-21 nor G-43.
+
+### WAL/journal statement (`[BEN1-29]`)
+
+Unchanged and re-confirmed against the source both arms compiled: `Graphs.kt`'s `Rig` for
+`Drive.REAL` constructs `ManagedHost(scheduler = scheduler)` with no `journal` argument,
+and no `civictech.cell.durability` type appears in `Graphs.kt`, `Deltas.kt` or
+`OperatorThroughputBenchmark.kt`. WAL/journal sync is not in play; KBLK is not named.
+
+### Coverage, and what this sweep is not
+
+Eight set-shaped subjects x two arms x `direction=INSERT` x `drive=REAL` = **16 of 16
+invocations measured**, no row omitted. It is **not** a sweep of all 18 subjects, not a
+`drive=SIM` measurement, not a RETRACT measurement, and not a statement about the join /
+grouped / combine families — `IterationLengthAbRenderTest` refuses a non-set-shaped or
+non-INSERT row outright rather than averaging one into a criterion stated over the
+set-shaped INSERT family. The narrowing is the one `computenet-bzwx` specified.
+
+**The second instrument the item offered was deliberately not spent.** The bead suggested a
+JFR or async-profiler wall-clock profile of `COUNT` or `FLAT_MAP` at a long iteration as a
+legitimate second instrument, on the premise that those two subjects lose half their
+throughput. They do not, so there is no large time to attribute and the profile would have
+had nothing to name. Profiling the two rows that *are* undecided would be a different item
+against a few-percent effect, and is filed rather than improvised here.
+
+### Artifacts
+
+The sixteen per-arm raw JMH CSVs and logs, the two concatenated per-arm artifacts the
+renderer read, the per-arm polling-gate log, the 30 s sampler log and the driver script are
+retained at `$HOME/computenet-runs/computenet-bzwx/` on host `NL-MGD6FQJW91` — **outside
+the repository**, because run artifacts are not committed in this lane. They are therefore
+machine-local and not reproducible from this repository alone; the rendered blocks below,
+`IterationLengthCriterion` and `IterationLengthCriterionTest` are the durable part.
+
+### Commands, exactly
+
+```
+./gradlew :bench:jmhJar
+
+# one invocation per (subject, arm), arms alternating per subject, each gated on a
+# polled load1 trough below 4.00:
+/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar 'OperatorThroughputBenchmark.real' \
+     -p subject=<one of the eight> -p direction=INSERT -r <1s | 10s> \
+     -rf csv -rff /abs/path/arms/<arm>-<subject>.csv \
+     > /abs/path/arms/<arm>-<subject>.log 2>&1
+
+# concatenated per arm (headers de-duplicated) into iteration-ab.csv/.log (LONG) and
+# iteration-ab.short.csv/.short.log (SHORT), then rendered through the module's own
+# entry point:
+./gradlew :bench:test -PbenchOnly=true --rerun \
+  --tests 'civictech.bench.micro.IterationLengthAbRenderTest' \
+  -Dcivictech.bench.jmhResults=/abs/path/iteration-ab.csv \
+  -Dcivictech.bench.harnessSha=1f68b10d4 \
+  -Dcivictech.bench.date=2026-08-26
+```
+
+The rendered blocks below were read back out of the JUnit XML `<system-out>` and pasted
+verbatim, not retyped.
+
+---
+
+Renderer's own output for the **LONG arm (10 s measurement iterations)**, pasted verbatim:
+
+## 2026-08-26 — iteration-length A/B, LONG arm (10 s measurement iterations): REAL-drive INSERT throughput over the eight set-shaped subjects — the treatment arm of computenet-bzwx's test of [BEN1-28]'s TIME channel
+Harness: 1f68b10d4 · JVM Microsoft (Microsoft-13877178)/21.0.11 · heap JVM defaults (VM options: <none>) · Apple M3 Max, 16 cores, Mac OS X 26.6.2
+JMH: mode=Throughput forks=2 warmup=5 iters=10 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| TAGGED_SET insert | 794175.181787 ± 17745.380301 ops/s | |
+| FILTER insert | 864755.887523 ± 9609.133759 ops/s | |
+| UNION insert | 738521.700916 ± 17638.412536 ops/s | |
+| INTERSECT insert | 367427.420641 ± 3251.348948 ops/s | |
+| COUNT insert | 872955.288862 ± 7220.108972 ops/s | |
+| FLAT_MAP insert | 700089.527186 ± 24298.871769 ops/s | |
+| PRESENCE_COUNT insert | 390592.218743 ± 10346.687589 ops/s | |
+| QUORUM insert | 378884.765548 ± 11069.304255 ops/s | |
+Trigger: [BEN1-28] — INCONCLUSIVE: the criterion applied is that each set-shaped subject's ratio of long-arm to short-arm throughput is taken with its error bars propagated, a row counts as losing throughput only if the whole ratio interval falls below MATERIAL_RATIO=0.90 and as not losing it only if the whole interval falls above it, a row whose relative error exceeds RESOLVABLE_RELATIVE_ERROR=0.10 in either arm is unresolved and votes for nothing, and the question fires only if a strict majority of the set-shaped rows lose throughput, retires only if every row is resolved and every row does not, and is otherwise undecided; measured, across 8 set-shaped rows the long-arm/short-arm throughput ratio ranges 0.915597819264048 (TAGGED_SET) to 1.0131152994940666 (PRESENCE_COUNT), with 0 rows losing throughput, 6 not losing it, 2 straddling the 0.90 boundary and 0 unresolved for width of error bar; the computenet-i61m subject split UNRESOLVED
+
+Row dispersion (drive=REAL; informational, nothing excluded):
+- TAGGED_SET insert (drive=REAL): 794175.181787 ± 17745.380301 ops/s, relative dispersion 0.022344415574748294 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- FILTER insert (drive=REAL): 864755.887523 ± 9609.133759 ops/s, relative dispersion 0.01111196107207125 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- UNION insert (drive=REAL): 738521.700916 ± 17638.412536 ops/s, relative dispersion 0.02388340452842862 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- INTERSECT insert (drive=REAL): 367427.420641 ± 3251.348948 ops/s, relative dispersion 0.008848955644975598 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COUNT insert (drive=REAL): 872955.288862 ± 7220.108972 ops/s, relative dispersion 0.008270880609947689 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- FLAT_MAP insert (drive=REAL): 700089.527186 ± 24298.871769 ops/s, relative dispersion 0.03470823491199615 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- PRESENCE_COUNT insert (drive=REAL): 390592.218743 ± 10346.687589 ops/s, relative dispersion 0.026489743247568028 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- QUORUM insert (drive=REAL): 378884.765548 ± 11069.304255 ops/s, relative dispersion 0.029215490464468558 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+
+---
+
+Renderer's own output for the **SHORT arm (1 s measurement iterations)**, pasted verbatim.
+Its trigger line reads MARKED INCOMPLETE by design — see "Trigger" above:
+
+## 2026-08-26 — iteration-length A/B, SHORT arm (1 s measurement iterations): REAL-drive INSERT throughput over the eight set-shaped subjects — the control arm of computenet-bzwx's test of [BEN1-28]'s TIME channel
+Harness: 1f68b10d4 · JVM Microsoft (Microsoft-13877178)/21.0.11 · heap JVM defaults (VM options: <none>) · Apple M3 Max, 16 cores, Mac OS X 26.6.2
+JMH: mode=Throughput forks=2 warmup=5 iters=10 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| TAGGED_SET insert | 867384.309003 ± 12066.054026 ops/s | |
+| FILTER insert | 868818.859076 ± 8110.335861 ops/s | |
+| UNION insert | 784508.563072 ± 18963.185739 ops/s | |
+| INTERSECT insert | 375458.151458 ± 3361.196983 ops/s | |
+| COUNT insert | 876605.147058 ± 9636.497096 ops/s | |
+| FLAT_MAP insert | 697725.782412 ± 5532.867463 ops/s | |
+| PRESENCE_COUNT insert | 385535.801244 ± 6698.441313 ops/s | |
+| QUORUM insert | 376677.294247 ± 4064.056547 ops/s | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+Row dispersion (drive=REAL; informational, nothing excluded):
+- TAGGED_SET insert (drive=REAL): 867384.309003 ± 12066.054026 ops/s, relative dispersion 0.013910851165695074 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- FILTER insert (drive=REAL): 868818.859076 ± 8110.335861 ops/s, relative dispersion 0.009334898496132376 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- UNION insert (drive=REAL): 784508.563072 ± 18963.185739 ops/s, relative dispersion 0.024172057045169067 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- INTERSECT insert (drive=REAL): 375458.151458 ± 3361.196983 ops/s, relative dispersion 0.008952254651943532 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- COUNT insert (drive=REAL): 876605.147058 ± 9636.497096 ops/s, relative dispersion 0.010992973436605212 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- FLAT_MAP insert (drive=REAL): 697725.782412 ± 5532.867463 ops/s, relative dispersion 0.007929859555817442 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- PRESENCE_COUNT insert (drive=REAL): 385535.801244 ± 6698.441313 ops/s, relative dispersion 0.01737436910239279 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- QUORUM insert (drive=REAL): 376677.294247 ± 4064.056547 ops/s, relative dispersion 0.010789226239729388 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+
+---
+
+The criterion's own inputs and derived interval per row, printed by the same test run
+and pasted verbatim:
+
+```
+A/B criterion inputs (ops/s = DELTAS per second; ratio = long-arm score / short-arm score, interval propagated from both arms' 99.9% error bars):
+| subject | short arm (ops/s) | short rel. err | long arm (ops/s) | long rel. err | ratio | ratio low | ratio high | row |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| COUNT | 876605.147058 | 0.010992973436605212 | 872955.288862 | 0.008270880609947689 | 0.9958363714743754 | 0.97686131722734 | 1.0152332473297379 | DOES_NOT_COST |
+| FILTER | 868818.859076 | 0.009334898496132376 | 864755.887523 | 0.01111196107207125 | 0.995323568876807 | 0.9751605473979402 | 1.0158665770102855 | DOES_NOT_COST |
+| FLAT_MAP | 697725.782412 | 0.007929859555817442 | 700089.527186 | 0.03470823491199615 | 1.0033877847624157 | 0.9609418320515756 | 1.0465122992603473 | DOES_NOT_COST |
+| INTERSECT | 375458.151458 | 0.008952254651943532 | 367427.420641 | 0.008848955644975598 | 0.9786108497423357 | 0.9613449608414586 | 0.996188668386171 | DOES_NOT_COST |
+| PRESENCE_COUNT | 385535.801244 | 0.01737436910239279 | 390592.218743 | 0.026489743247568028 | 1.0131152994940666 | 0.9694348169990341 | 1.0583404614714491 | DOES_NOT_COST |
+| QUORUM | 376677.294247 | 0.010789226239729388 | 378884.765548 | 0.029215490464468558 | 1.0058603779275117 | 0.9660507337223962 | 1.046538422011087 | DOES_NOT_COST |
+| TAGGED_SET | 867384.309003 | 0.013910851165695074 | 794175.181787 | 0.022344415574748294 | 0.915597819264048 | 0.8828580146488577 | 0.949261350805418 | UNDECIDED |
+| UNION | 784508.563072 | 0.024172057045169067 | 738521.700916 | 0.02388340452842862 | 0.9413813126832886 | 0.8972104986227372 | 0.9877404211965901 | UNDECIDED |
+
+MATERIAL_RATIO=0.9 RESOLVABLE_RELATIVE_ERROR=0.1
+verdict=INCONCLUSIVE
+computenet-i61m subject split: UNRESOLVED
+```
