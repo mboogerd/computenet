@@ -4115,9 +4115,15 @@ stack — ManageEngine's app-control system extension, Microsoft Defender's
 were also present and are named rather than discarded**: `WindowServer`, `FluidVoice`,
 Claude Desktop helpers, IntelliJ IDEA (`idea`) and its `junie` agent, a Brave renderer,
 `mds_stores`/`corespotlightd`, and `mediaanalysisd`. Immediately after the post-fix arm
-exited, `com.microsoft.teams2.teamsswitcher` (61.6%), ManageEngine's `dcpatchscan`
-(33.9%) and `mediaanalysisd` (30.9%) were the top three — a burst that began at or near
-the end of that sweep and is the most likely source of its RETRACT-half excursions.
+exited, the `POST-SWEEP` reading's top consumers were `wdavdaemon_enterprise` (89.2%),
+`wdavdaemon_unprivileged` (69.6%), `com.microsoft.teams2.teamsswitcher` (61.6%),
+ManageEngine's `appctrl` extension (58.5%), `dcpatchscan` (33.9%), `mediaanalysisd`
+(30.9%) and `trustd` (26.2%) — i.e. the resident stack spiking well above its usual
+level *together with* three non-resident arrivals (`teamsswitcher`, `dcpatchscan`,
+`mediaanalysisd`), a burst that began at or near the end of that sweep and is the most
+likely source of its RETRACT-half excursions. The pre-fix arm's `POST-SWEEP` reading
+20 minutes later tops out at 9.7%, so the burst is specific to the end of the post-fix
+arm rather than a standing condition of the night.
 
 **The quiesced interpretation is the orchestrator's, not this measuring session's.**
 The `/work` orchestrator that dispatched `computenet-x9e.14` ruled that the resident
