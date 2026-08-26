@@ -4412,3 +4412,348 @@ Row dispersion (drive=REAL; informational, nothing excluded):
 - COMBINE_LATEST retract (drive=REAL): 320814.171971 ± 27984.233 ops/s, relative dispersion 0.08722879300522185 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
 - COALESCING_COMBINE retract (drive=REAL): 697718.309809 ± 37561.087828 ops/s, relative dispersion 0.05383417247324688 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
 
+## 2026-08-26 — allocation per delta (gc.alloc.rate.norm, -prof gc) for the eight set-shaped subjects x both directions under drive=REAL — the operator-level half of [BEN1-28], which computenet-x9e.14 left open because neither of its arms attached a profiler
+Harness: 6b891c328 · JVM Microsoft (Microsoft-13877178)/21.0.11 · heap JVM defaults (VM options: <none>) · Apple M3 Max, 16 cores, Mac OS X 26.6.2
+JMH: mode=Throughput forks=2 warmup=5 iters=10 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| TAGGED_SET insert | 15855.269699 ± 93.03773 B/op | |
+| FILTER insert | 14201.371171 ± 16.072853 B/op | |
+| UNION insert | 15726.330455 ± 42.548226 B/op | |
+| INTERSECT insert | 30478.004752 ± 52.50992 B/op | |
+| COUNT insert | 13012.623581 ± 11.007536 B/op | |
+| FLAT_MAP insert | 18266.291228 ± 14.025506 B/op | |
+| PRESENCE_COUNT insert | 28968.486825 ± 42.516861 B/op | |
+| QUORUM insert | 30561.906026 ± 40.666923 B/op | |
+| TAGGED_SET retract | 15907.931094 ± 34.995631 B/op | |
+| FILTER retract | 14128.779798 ± 43.550433 B/op | |
+| UNION retract | 15687.292574 ± 65.770766 B/op | |
+| INTERSECT retract | 30430.149265 ± 28.259035 B/op | |
+| COUNT retract | 13080.780977 ± 63.84672 B/op | |
+| FLAT_MAP retract | 18279.239518 ± 29.874526 B/op | |
+| PRESENCE_COUNT retract | 28556.475217 ± 68.913171 B/op | |
+| QUORUM retract | 30539.12531 ± 27.498766 B/op | |
+Trigger: [BEN1-28] — RETIRES: the criterion applied is that, with TAG_ENTRY_BUDGET_BYTES=512 a generous derived upper bound on what one delta's TagState map growth can allocate, the bound on growth's share of a row's per-delta allocation is 512/(B/op), and the question fires only if a strict majority of the set-shaped rows put that bound at 0.5 or above, retires only if every row puts it below 0.1, and is otherwise undecided; measured, across 16 set-shaped rows per-delta allocation ranges 13012.623581 B/op (COUNT insert) to 30561.906026 B/op (QUORUM insert), so the upper bound on tag-map growth's share of a delta's allocation ranges 0.01675288182498909-0.03934640826370954, with 0 of 16 rows at or above the 0.5 candidate share
+
+Row dispersion (drive=REAL; informational, nothing excluded):
+- TAGGED_SET insert (drive=REAL): 15855.269699 ± 93.03773 B/op, relative dispersion 0.005867937396603726 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+- FILTER insert (drive=REAL): 14201.371171 ± 16.072853 B/op, relative dispersion 0.0011317817699759633
+- UNION insert (drive=REAL): 15726.330455 ± 42.548226 B/op, relative dispersion 0.0027055406295670393
+- INTERSECT insert (drive=REAL): 30478.004752 ± 52.50992 B/op, relative dispersion 0.0017228791854084294
+- COUNT insert (drive=REAL): 13012.623581 ± 11.007536 B/op, relative dispersion 8.459121199872661E-4
+- FLAT_MAP insert (drive=REAL): 18266.291228 ± 14.025506 B/op, relative dispersion 7.678354530174471E-4
+- PRESENCE_COUNT insert (drive=REAL): 28968.486825 ± 42.516861 B/op, relative dispersion 0.0014676935408068211
+- QUORUM insert (drive=REAL): 30561.906026 ± 40.666923 B/op, relative dispersion 0.0013306409281346305
+- TAGGED_SET retract (drive=REAL): 15907.931094 ± 34.995631 B/op, relative dispersion 0.0021998857546723545
+- FILTER retract (drive=REAL): 14128.779798 ± 43.550433 B/op, relative dispersion 0.0030823916589148613
+- UNION retract (drive=REAL): 15687.292574 ± 65.770766 B/op, relative dispersion 0.0041926142251600485
+- INTERSECT retract (drive=REAL): 30430.149265 ± 28.259035 B/op, relative dispersion 9.286525266079729E-4
+- COUNT retract (drive=REAL): 13080.780977 ± 63.84672 B/op, relative dispersion 0.004880956275643021
+- FLAT_MAP retract (drive=REAL): 18279.239518 ± 29.874526 B/op, relative dispersion 0.0016343418428639686
+- PRESENCE_COUNT retract (drive=REAL): 28556.475217 ± 68.913171 B/op, relative dispersion 0.0024132239877761663
+- QUORUM retract (drive=REAL): 30539.12531 ± 27.498766 B/op, relative dispersion 9.004437985981073E-4
+
+Criterion inputs (bytes allocated per DELTA, gc.alloc.rate.norm; share = TAG_ENTRY_BUDGET_BYTES / B/op, an UPPER BOUND on tag-map growth's share of a delta's allocation):
+| subject direction | B/op | upper-bound growth share |
+| --- | --- | --- |
+| COUNT insert | 13012.623581 | 0.03934640826370954 |
+| COUNT retract | 13080.780977 | 0.03914139384339911 |
+| FILTER insert | 14201.371171 | 0.03605285671608477 |
+| FILTER retract | 14128.779798 | 0.03623809043102761 |
+| FLAT_MAP insert | 18266.291228 | 0.028029773182153495 |
+| FLAT_MAP retract | 18279.239518 | 0.02800991799991578 |
+| INTERSECT insert | 30478.004752 | 0.016798999939994497 |
+| INTERSECT retract | 30430.149265 | 0.016825418618267828 |
+| PRESENCE_COUNT insert | 28968.486825 | 0.017674378475238152 |
+| PRESENCE_COUNT retract | 28556.475217 | 0.017929383654996765 |
+| QUORUM insert | 30561.906026 | 0.01675288182498909 |
+| QUORUM retract | 30539.12531 | 0.016765378667618427 |
+| TAGGED_SET insert | 15855.269699 | 0.03229210286043208 |
+| TAGGED_SET retract | 15907.931094 | 0.03218520352989907 |
+| UNION insert | 15726.330455 | 0.03255686388284024 |
+| UNION retract | 15687.292574 | 0.03263788174949863 |
+
+TAG_ENTRY_BUDGET_BYTES=512.0 CANDIDATE_SHARE=0.5 NEGLIGIBLE_SHARE=0.1
+verdict=RETIRES
+
+### What was measured, and what it is NOT (`computenet-i61m`, the operator half of `[BEN1-28]`)
+
+**The quantity.** Every number in the table above is `gc.alloc.rate.norm` — JMH's
+`-prof gc` secondary metric, **bytes allocated per measured operation**, where the
+operation is **one delta**: `OperatorThroughputBenchmark` declares
+`@OperationsPerInvocation(ThroughputReport.DELTAS_PER_BATCH)` and that constant is 512,
+so an invocation's 512-delta batch is divided out and each row reads per delta. It is
+not retained size, not wall clock, and it does not supersede any throughput entry in
+this file — those measure a different quantity with a different instrument.
+
+**What `[BEN1-28]` asked, and which half this closes.** `[BEN1-28]` named `TagState`
+tag-map growth as the suspect for the set-shaped subjects' cost.
+`computenet-x9e.14`'s same-host A/B (entry of 2026-08-26 above) settled the **harness**
+half: the INSERT/RETRACT dispersion split came from unbounded live state in the
+benchmark's own `@Setup(Level.Invocation)`, not from the operators. Nothing under
+`kernel/src/main` differed between its two arms, so it drew no operator-level
+conclusion, and **neither of its arms attached a profiler** — `# VM options: <none>` in
+both retained banners, no `-Xlog:gc`, no JFR. This entry is the profile that was
+missing.
+
+**The criterion, and that it was fixed before the numbers existed.**
+`bench/src/test/kotlin/civictech/bench/micro/TagMapGrowthAllocRenderTest.kt` holds
+`CRITERION`, `TAG_ENTRY_BUDGET_BYTES`, `CANDIDATE_SHARE`, `NEGLIGIBLE_SHARE` and
+`verdictOf` as committed source; it was written and committed (`6b891c328`) **while the
+sweep that feeds it was still running**, so the thresholds cannot have been chosen to
+fit. Re-running the sweep and re-reading `verdictOf` is a complete audit of how the word
+`RETIRES` was reached.
+
+The bound the criterion turns on is derived, not measured, and it is deliberately
+generous. One delta adds at most an O(1) amount to a `TagState` map — one live tag on
+insert, one tombstone on retract, per source. On 64-bit HotSpot with compressed oops a
+`HashMap.Node` is 32 B and its amortized share of table-array doubling is ~16 B; a tag
+object plus a boxed element plus a per-source duplicate for the two-source subjects is
+still far under `TAG_ENTRY_BUDGET_BYTES = 512`. So `512 / (B/op)` is an **upper bound**
+on tag-map growth's share of a delta's allocation. Overstating the budget can only make
+the criterion harder to retire, never easier.
+
+Measured, that bound lands between **0.0168** (`QUORUM insert`, 30561.9 B/op) and
+**0.0393** (`COUNT insert`, 13012.6 B/op). Every one of the 16 rows is below the 0.1
+`NEGLIGIBLE_SHARE` threshold and none is anywhere near the 0.5 candidate share. At least
+96% of a delta's allocation is something other than tag-map growth.
+
+### The limitation, stated next to the number: this retires the ALLOCATION channel, and only that
+
+Allocation is a proxy for cost, not cost. A `TagState` map that grows without allocating
+— longer rehash probe sequences, cache misses walking a larger table, a larger old
+generation to trace — costs wall clock this instrument cannot see. **A reader must not
+read `RETIRES` as "tag-map size does not affect the set-shaped subjects' throughput".**
+What it establishes is narrower and it is what `[BEN1-28]` named a profiler for: the
+garbage a set-shaped delta produces is overwhelmingly *not* the map growing.
+
+Two further readings from the same run bear on the time channel without being part of
+the criterion, and both point the same way:
+
+- **GC time is a small fraction of measured wall clock in every row.** Each row's
+  `gc.time` is summed over 2 forks x 10 measurement iterations x 1 s = 20 s of measured
+  interval. Fourteen of the sixteen rows sit at 91–114 ms, i.e. **0.46%–0.57%**. The two
+  exceptions are `UNION insert` at 543 ms (**2.7%**) and `UNION retract` at 467 ms
+  (**2.3%**) — and `UNION` is the one subject whose `gc.count` collapses to 57 against
+  the 165–205 of every other row, the signature of fewer, larger, more expensive
+  collections. That is consistent with `UNION` being the retaining
+  (tombstone-keeping) tagged-set operator promoting more state out of the young
+  generation, and it is the loudest tag-map signal anywhere in this sweep. It is still
+  under 3% of wall clock.
+- **The two directions allocate the same amount.** Per-subject, insert against retract
+  agrees to within 1.4% on every one of the eight subjects (largest gap:
+  `PRESENCE_COUNT`, 28968.5 vs 28556.5 B/op = 1.42%). That is a second, independent
+  confirmation of `computenet-x9e.14`'s finding — after `computenet-y7hc` bounded live
+  state, direction is not a differentiator — reached through a metric that run did not
+  collect.
+
+### What the allocation actually tracks: source arity, not accumulated state
+
+The rows separate cleanly into two bands, and the split is `Subject.sources`:
+
+| sources | subjects | B/op band |
+| --- | --- | --- |
+| 1 | COUNT, FILTER, TAGGED_SET, UNION, FLAT_MAP | 13012.6 – 18279.2 |
+| 2 | PRESENCE_COUNT, INTERSECT, QUORUM | 28556.5 – 30561.9 |
+
+`MicroGraph.applyBatch` pushes every delta into *every* source, so a two-source subject
+does twice the host work per delta — and allocates almost exactly twice as much. That is
+per-delta propagation cost (delta objects, emissions, the message envelopes and
+scheduling of the hosted path), which scales with how many times a delta is applied and
+not with how large the map has grown. It is the positive form of the same conclusion:
+the allocation is in the *traffic*, not in the *state*.
+
+Read `TAGGED_SET`'s row only with its own standing caveat: it is a filter-identity
+baseline measured through `FilterCell { true }`, not `TaggedSetOperator` in isolation.
+
+### Nothing was tuned
+
+`[BEN1-28]`'s standing instruction — the growth is observed, never tuned — was followed.
+No tag map was cleared, compacted or bounded for this measurement; `Level.Iteration`
+graph rebuild remains the only bound on tombstone growth, exactly as
+`OperatorThroughputBenchmark`'s KDoc says. Nothing under `kernel/src/main` was touched
+at all, and no fork or iteration count was raised toward JMH's defaults: the run
+resolved the class's own declared `Fork(2)`, `Warmup(5, 1s)`, `Measurement(10, 1s)`,
+which is what the run's own banner states and what the `JMH:` line above reports.
+
+### Host, and the readings actually met
+
+**The host is the pinned one**: `NL-MGD6FQJW91`, Apple M3 Max, Mac15,9, 16 cores, macOS
+26.6.2. The CPU/cores/OS in the `Harness:` line above come from the measuring fork's own
+`@Setup(Level.Trial)` banner, not from the rendering process.
+
+**The measuring JVM is Microsoft OpenJDK 21.0.11**
+(`~/Library/Java/JavaVirtualMachines/ms-21.0.11/`), read off this run's own JMH banner
+and reproduced verbatim in the `Harness:` line. A bare `java` on this host is JBR 25.0.2
+and would have been wrong; there is no Adoptium 21 on this box.
+
+**Quiescence gate.** The launch was gated on a *polled trough*, not a one-shot reading,
+because this host's idle load oscillates roughly 3.0–5.2 on a ~2-minute cycle. The
+sweep script polled `load1` every 10 s and started only when it fell below the quiesced
+threshold 4.00 (16 cores x 0.25):
+
+```
+poll 0 02:05:18Z load1=6.31   poll 4 02:05:58Z load1=4.60
+poll 1 02:05:28Z load1=5.57   poll 5 02:06:08Z load1=4.36
+poll 2 02:05:38Z load1=5.16   poll 6 02:06:18Z load1=4.15
+poll 3 02:05:48Z load1=4.89   poll 7 02:06:28Z load1=3.89  TROUGH FOUND
+```
+
+Sweep ran 02:06:28Z–02:14:45Z (rc=0). A 30-second sampler ran throughout. `load1` over
+the 17 in-sweep samples ranged **3.20–8.92**, with the measuring JVM itself accounting
+for 132–197% CPU (1.3–2.0 cores) of it. Post-sweep `load1` was 2.94.
+
+**Non-resident consumers appeared during the run and are recorded rather than
+discarded.** `mediaanalysisd` at 97.7% for the 02:07:18Z sample; `mdworker_shared`
+(Spotlight) at 4–13% across 02:10:19Z, 02:13:20Z and 02:14:20Z; a JetBrains `junie`
+agent at 5–13% across 02:09:49Z–02:10:19Z. The two `load1` peaks (8.92 at 02:08:49Z,
+8.22 at 02:09:19Z) coincide with `wdavdaemon_enterprise` at 27–99%.
+
+The reason none of that is discarded, and the reason it does not move this result: **the
+metric is bytes allocated per operation, which is a property of the code path and not of
+how much CPU it got.** The dispersions bear it out — the widest relative dispersion in
+the sweep is `TAGGED_SET insert` at 0.00587, and fourteen of sixteen rows are under
+0.005 (`NOISE_FLOOR`). A contended CPU makes a throughput number wrong; it does not make
+a byte count wrong. A reader who nonetheless wants to grade this run SHARED rather than
+QUIESCED has every reading above to do it with, and the verdict survives that grading
+for the reason just given.
+
+**The resident managed-endpoint stack — ManageEngine app-control, the Microsoft Defender
+daemons, `trustd` — consumes roughly a core at all times on this host and never goes
+away.** That it does not disqualify a quiesced attestation here is **a ruling by the
+orchestrating session, not a judgement by the session that measured**, on the ground
+that this lane's own original host evidence was gathered with that stack running and the
+opposite reading makes these beads permanently undischargeable. This session executed
+that ruling; it did not make it. A reader who rejects it is overturning an orchestrator's
+call about what the precondition means, and the readings above are recorded in full
+precisely so that reader can do it without taking anything here on trust.
+
+### Trigger (`[BEN1-31]`/`[BEN1-32]`)
+
+`TriggerClaim.Cited` on `[BEN1-28]`, verdict `RETIRES`, with the criterion and the
+measured clause both generated from the same numbers by
+`TagMapGrowthAllocRenderTest` — so the sentence in the rendered block cannot drift from
+the table beside it. This entry cites neither G-21 nor G-43.
+
+### WAL/journal statement (`[BEN1-29]`)
+
+Unchanged and re-confirmed against the source this run compiled: `Graphs.kt`'s `Rig` for
+`Drive.REAL` constructs `ManagedHost(scheduler = scheduler)` with no `journal` argument,
+and no `civictech.cell.durability` type appears in `Graphs.kt`, `Deltas.kt` or
+`OperatorThroughputBenchmark.kt`. WAL/journal sync is not in play; KBLK is not named.
+
+### Coverage, and what this sweep is not
+
+Eight subjects x two directions x `drive=REAL` = **16 of 16 combinations measured**, no
+row omitted. This is `Subject.setShaped()` exactly — the family `[BEN1-28]` names — and
+it is **not** a sweep of all 18 subjects, not a `drive=SIM` measurement, and not a
+statement about the join / grouped / combine families, which were deliberately excluded
+so that no non-set-shaped row could be averaged into a criterion stated over the
+set-shaped ones (`TagMapGrowthAllocRenderTest.criterionInputs` refuses one outright).
+The narrowing was deliberate and is stated here rather than left to be inferred: the
+task's slot fit one arm, and the set-shaped family is the one the question is about.
+
+### Artifacts
+
+The raw JMH CSV, the teed run log, the polling-gate host readings and the 30-second
+sampler are retained at `$HOME/computenet-runs/computenet-i61m/` on host
+`NL-MGD6FQJW91` — **outside the repository**, because run artifacts are not committed by
+convention in this lane. They are therefore **machine-local and not reproducible from
+this repository alone**; the rendered block above and
+`TagMapGrowthAllocRenderTest` are the durable part.
+
+### Commands, exactly
+
+```
+./gradlew :bench:jmhJar
+/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar 'OperatorThroughputBenchmark.real' \
+     -p subject=TAGGED_SET,FILTER,UNION,INTERSECT,COUNT,FLAT_MAP,PRESENCE_COUNT,QUORUM \
+     -prof gc -rf csv -rff /abs/path/setshaped-gc.csv > /abs/path/setshaped-gc.log 2>&1
+
+./gradlew :bench:test -PbenchOnly=true --rerun \
+  --tests 'civictech.bench.micro.TagMapGrowthAllocRenderTest' \
+  -Dcivictech.bench.jmhResults=/abs/path/setshaped-gc.csv \
+  -Dcivictech.bench.harnessSha=$(git rev-parse --short HEAD) \
+  -Dcivictech.bench.date=2026-08-26
+```
+
+### Supplementary, NOT part of the verdict: an underpowered iteration-length probe that points the OTHER way
+
+The `RETIRES` above is stated over allocation, and the section above says why that leaves
+the time channel open. Rather than leave it merely stated, this session spent the
+remaining slot on a cheap direct probe of it, and **the probe is reported here because it
+does not support extending `RETIRES` to time** — reporting only the leg that agreed with
+the verdict would be the dishonest option.
+
+**The idea.** The graph is rebuilt at `@Setup(Level.Iteration)`, so within one measurement
+iteration the tag map grows monotonically and at the iteration boundary it resets.
+Lengthening the iteration therefore grows the map without changing anything else. If
+tag-map growth dominated delta-application *cost*, a 10x longer iteration would report
+materially lower average throughput.
+
+**The arms.** `drive=REAL`, `direction=INSERT`, the same eight set-shaped subjects,
+`-f 1 -wi 5 -w 1s`, differing only in measurement iteration length: `-i 4 -r 1s` against
+`-i 4 -r 10s`. Same JVM (`JDK 21.0.11, OpenJDK 64-Bit Server VM, 21.0.11+10-LTS`, off the
+arm's own banner), same host, run back to back 02:16:02Z–02:17:17Z and
+02:17:17Z–02:23:21Z.
+
+| subject | 1 s iterations (ops/s) | 10 s iterations (ops/s) | ratio | 10 s relative error |
+| --- | --- | --- | --- | --- |
+| TAGGED_SET | 809249.7 | 793201.6 | 0.9802 | 0.15438 |
+| FILTER | 884401.3 | 850361.8 | 0.9615 | 0.11226 |
+| UNION | 783739.1 | 723628.4 | 0.9233 | 0.31994 |
+| INTERSECT | 372335.8 | 357497.7 | 0.9601 | 0.19146 |
+| COUNT | 925676.3 | 440702.1 | 0.4761 | 0.04683 |
+| FLAT_MAP | 771230.8 | 349924.1 | 0.4537 | 0.04900 |
+| PRESENCE_COUNT | 384422.8 | 276473.2 | 0.7192 | 1.93416 |
+| QUORUM | 398964.2 | 280736.6 | 0.7037 | 0.65988 |
+
+**Why this is a probe and not a result, in four counts. Every one of them is a reason to
+distrust it, and it is recorded anyway because the two tight rows are hard to dismiss:**
+
+1. **It is underpowered by construction.** One fork, four measurement iterations, against
+   the sweep above's two forks and ten. Three of the eight 10 s rows carry relative error
+   above `NOISE_FLOOR` by two orders of magnitude — `PRESENCE_COUNT` at **1.93**, i.e. an
+   error bar wider than the score. Nothing may be concluded from those rows at all.
+2. **It is not the annotation config**, so it is not comparable to any other throughput
+   entry in this file, and the acceptance criterion this item was written against is
+   satisfied by the sweep above, not by this.
+3. **The two arms are sequential, not interleaved**, and the host was not re-gated between
+   them. The post-arm reading at 02:23:21Z caught a `Brave Browser Helper (Renderer)` at
+   79.6% and ManageEngine's `dcpatchscan` at 33.6% — non-resident consumers that were
+   absent from the main sweep's window. The 10 s arm is the one that ran last and is the
+   one exposed to them.
+4. **The pattern is internally inconsistent with the simplest growth story.** If the
+   decline tracked how much state an iteration accumulates, the fastest subjects would
+   fall the furthest. `COUNT` (925.7k ops/s, ratio 0.476) and `FLAT_MAP` (771.2k, 0.454)
+   fit that; `TAGGED_SET` (809.2k, 0.980) and `FILTER` (884.4k, 0.962) flatly contradict
+   it at comparable throughput. Something subject-specific is happening that "the map got
+   bigger" does not by itself explain.
+
+**What survives all four.** `COUNT` and `FLAT_MAP` are the two rows with *tight* error
+bars in the 10 s arm (0.047 and 0.049), and both report **less than half** the throughput
+of their 1 s counterparts. That is a large effect measured precisely, and it is the
+signature `[BEN1-28]` predicted — on the channel this entry's own verdict does not cover.
+
+**So the honest joint statement is narrower than either leg alone**: the garbage a
+set-shaped delta produces is overwhelmingly not the tag map growing (measured, 16 of 16
+rows, criterion pre-registered), *and* at least two set-shaped subjects lose more than
+half their throughput when the iteration that accumulates that map is lengthened 10x
+(probed, underpowered, confounded). Those are compatible — a cost that is not allocation
+is still a cost. Resolving the second is filed as `computenet-bzwx`, which needs an
+interleaved, individually host-gated A/B at full fork and iteration counts, and is
+explicitly **not** licence to tune or clear the tag map: `[BEN1-28]`'s standing
+instruction that the growth is observed and never tuned is unchanged by anything here.
+
+Raw CSVs and logs for both arms are at `$HOME/computenet-runs/computenet-i61m/`
+(`iter-1s.csv`/`.log`, `iter-10s.csv`/`.log`) on host `NL-MGD6FQJW91`, machine-local.
+
+```
+/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar 'OperatorThroughputBenchmark.real' \
+     -p subject=TAGGED_SET,FILTER,UNION,INTERSECT,COUNT,FLAT_MAP,PRESENCE_COUNT,QUORUM \
+     -p direction=INSERT -f 1 -wi 5 -w 1s -i 4 -r 1s \
+     -rf csv -rff /abs/path/iter-1s.csv > /abs/path/iter-1s.log 2>&1
+# ... and again with -r 10s
+```
