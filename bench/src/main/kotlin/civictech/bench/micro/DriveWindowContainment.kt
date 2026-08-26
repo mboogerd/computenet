@@ -1,5 +1,7 @@
 package civictech.bench.micro
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.LockSupport
@@ -310,10 +312,38 @@ fun containmentTrial(
     val walkEnd = AtomicLong(0)
     var walk: PagedWalkOutcome? = null
 
+    /**
+     * Released by the drive's first poll of its stop rule, i.e. after `driveShaped` has
+     * stamped the instant `driveWindow.startNanos` reports. The pager waits on it, so
+     * `walkWindow.startNanos > driveWindow.startNanos` holds by construction and
+     * [DriveWindowContainment.WALK_PRECEDES_DRIVE] cannot be produced by either arm — which
+     * is what this file's KDoc already claims ("Not produced by either arm here"), and what
+     * was in fact only true on an idle machine. Measured before this gate existed: 1 of 60
+     * COVERING trials classified WALK_PRECEDES_DRIVE with the CPU deliberately
+     * oversubscribed 3x (`computenet-ttjs`, filed on a 1-in-7 whole-suite observation).
+     *
+     * The gate does not change either arm's pre-registered definition. It makes the
+     * pre-registration's "the walk fired the same `BoundedReadFixtures.READ_DELAY_MS` into
+     * the drive" literally true: the delay is now measured from the drive's own start
+     * instead of from a thread start that merely tended to precede it.
+     */
+    val driveOpen = CountDownLatch(1)
+
     val pager = Thread {
-        Thread.sleep(BoundedReadFixtures.READ_DELAY_MS)
-        walkStart.set(System.nanoTime())
         try {
+            // Wait for the drive's window to be OPEN before timing anything. Without this,
+            // the only thing keeping the walk inside the window is that `READ_DELAY_MS`
+            // (1 ms) is longer than the main thread takes to get from `Thread.start()` to
+            // `driveShaped`'s `t0` — a wall-clock assumption about an unloaded machine,
+            // not a structural guarantee. On a starved host the main thread loses that
+            // race, `walkStart` predates the drive, and the trial classifies
+            // WALK_PRECEDES_DRIVE. See [driveOpen] for the measured rate.
+            check(driveOpen.await(BoundedReadFixtures.DRAIN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                "the ${arm.name} arm's drive did not open its window within " +
+                    "${BoundedReadFixtures.DRAIN_TIMEOUT_MS}ms"
+            }
+            Thread.sleep(BoundedReadFixtures.READ_DELAY_MS)
+            walkStart.set(System.nanoTime())
             walk = BoundedReadFixtures.pagedWalk(
                 host = rig.host,
                 ref = rig.targetRef,
@@ -324,24 +354,35 @@ fun containmentTrial(
             walkEnd.set(System.nanoTime())
             // Set LAST, and in a finally: the covering arm's drive stops on this flag, so a
             // walk that threw must still release the drive — otherwise a fixture error
-            // surfaces as the extension cap rather than as its own message. Ordering
-            // matters as much as the flag: `walkEnd` is written before `walkDone`, so a
-            // drive that observes the flag observes an end instant that is already final.
+            // surfaces as the extension cap rather than as its own message. The finally
+            // covers the gate above as well, so a trial whose drive never opened releases
+            // the drive too rather than deadlocking against it. Ordering matters as much as
+            // the flag: `walkEnd` is written before `walkDone`, so a drive that observes the
+            // flag observes an end instant that is already final.
             walkDone.set(true)
         }
     }.apply { isDaemon = true; name = "containment-pager-${arm.name}"; start() }
+
+    // Opened from inside the drive loop, which `driveShaped` reaches only after it has
+    // stamped its `t0`; `driveShaped` requires `adds > 0` and evaluates `stopEarly` before
+    // its first add, so this fires exactly once per trial and always. Composed with each
+    // arm's own stop rule rather than replacing it — the arms are unchanged.
+    val openOnFirstPoll: (() -> Boolean) -> () -> Boolean = { stop ->
+        { driveOpen.countDown(); stop() }
+    }
 
     val shape = when (arm) {
         // Cut at the walk's first page: every later page falls outside the window.
         DriveWindowArm.TRUNCATED -> DriveShape.paced(
             adds = adds,
             spacingNanos = spacingNanos,
-            stopEarly = { firstPageReturned.get() },
+            stopEarly = openOnFirstPoll { firstPageReturned.get() },
         )
         // Run until the walk has finished: the window closes after it, by construction.
         DriveWindowArm.COVERING -> DriveShape.paced(
             adds = adds,
             spacingNanos = spacingNanos,
+            stopEarly = openOnFirstPoll { false },
             extendWhile = { !walkDone.get() },
             extensionCapAdds = CONTAINMENT_EXTENSION_CAP_ADDS,
         )
