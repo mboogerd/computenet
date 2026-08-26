@@ -231,11 +231,23 @@ data class RowObservation(
  * @param enumerationProvenance how the row list was obtained, recorded verbatim — the
  *   command whose output it came from, so a later reader can tell an unfiltered
  *   enumeration from a filtered one without re-deriving it.
+ * @param expectedRowCounts the tripwire table this plan is checked against. Defaults to
+ *   [EXPECTED_PLAN_ROW_COUNTS]; the parameter exists for the same reason `noiseFloorFor`'s
+ *   `floors` parameter does — so every branch is exercisable on synthetic classes without
+ *   the live table being a test fixture.
+ *
+ * The count check lives in [init] rather than only in [of] deliberately: a check reachable
+ * only through a factory is not a tripwire but a convention, and the primary constructor
+ * and the generated `copy` are two ways past it. Every route that yields a
+ * `DerivationPlan` — the constructor, `copy`, [of], and the plan [FloorDerivationLedger.load]
+ * rebuilds — passes the same refusal, so no [FloorDerivationLedger] can exist over a row
+ * universe nothing pre-registered.
  */
 data class DerivationPlan(
     val benchmarkClass: String,
     val rows: List<RowKey>,
     val enumerationProvenance: String,
+    val expectedRowCounts: Map<String, Int> = EXPECTED_PLAN_ROW_COUNTS,
 ) {
     init {
         require(benchmarkClass.isNotBlank()) { "benchmarkClass must not be blank" }
@@ -248,6 +260,23 @@ data class DerivationPlan(
             "a plan may not name one row twice, found " +
                 duplicated.keys.map { it.describe() }.sorted()
         }
+        val expected = expectedRowCounts[benchmarkClass] ?: throw FloorLedgerException(
+            "no pre-registered row count exists for '$benchmarkClass'; the classes " +
+                "with one are ${expectedRowCounts.keys.sorted()}. A derivation cannot " +
+                "be checked for completeness against a universe nothing pre-registered"
+        )
+        if (rows.size != expected) {
+            throw FloorLedgerException(
+                "REFUSED: the enumerated plan for '$benchmarkClass' has ${rows.size} " +
+                    "rows, but $expected are pre-registered. Either the enumeration " +
+                    "ran under a row filter — in which case completeness would be " +
+                    "satisfied on a universe too small, and the floor would be a " +
+                    "maximum over a fraction of the class — or the class's methods or " +
+                    "@Param enums changed, in which case EXPECTED_PLAN_ROW_COUNTS is " +
+                    "what has to change first. Enumeration provenance: " +
+                    enumerationProvenance
+            )
+        }
     }
 
     companion object {
@@ -256,36 +285,16 @@ data class DerivationPlan(
          * [rows] as this class's plan, refused unless its size is the count
          * [expectedRowCounts] pre-registers.
          *
-         * @param expectedRowCounts the tripwire table. Defaults to
-         *   [EXPECTED_PLAN_ROW_COUNTS]; the parameter exists for the same reason
-         *   `noiseFloorFor`'s `floors` parameter does — so every branch is exercisable on
-         *   synthetic classes without the live table being a test fixture.
+         * The named entry point, kept because it reads as a checked construction at the
+         * call site; the check itself is the constructor's, so this is not the only way in.
          */
         fun of(
             benchmarkClass: String,
             rows: List<RowKey>,
             enumerationProvenance: String,
             expectedRowCounts: Map<String, Int> = EXPECTED_PLAN_ROW_COUNTS,
-        ): DerivationPlan {
-            val expected = expectedRowCounts[benchmarkClass] ?: throw FloorLedgerException(
-                "no pre-registered row count exists for '$benchmarkClass'; the classes " +
-                    "with one are ${expectedRowCounts.keys.sorted()}. A derivation cannot " +
-                    "be checked for completeness against a universe nothing pre-registered"
-            )
-            if (rows.size != expected) {
-                throw FloorLedgerException(
-                    "REFUSED: the enumerated plan for '$benchmarkClass' has ${rows.size} " +
-                        "rows, but $expected are pre-registered. Either the enumeration " +
-                        "ran under a row filter — in which case completeness would be " +
-                        "satisfied on a universe too small, and the floor would be a " +
-                        "maximum over a fraction of the class — or the class's methods or " +
-                        "@Param enums changed, in which case EXPECTED_PLAN_ROW_COUNTS is " +
-                        "what has to change first. Enumeration provenance: " +
-                        enumerationProvenance
-                )
-            }
-            return DerivationPlan(benchmarkClass, rows, enumerationProvenance)
-        }
+        ): DerivationPlan =
+            DerivationPlan(benchmarkClass, rows, enumerationProvenance, expectedRowCounts)
     }
 }
 

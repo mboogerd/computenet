@@ -5347,10 +5347,14 @@ depend on which other rows shared its invocation: a benchmark regex or a `-p` va
 WHICH rows run, never HOW a row is measured.
 
 **What the amendment explicitly does NOT permit.** Every row still runs at its class's own
-annotation configuration, three times. **No threshold, fork count, iteration count or
-margin may be changed to make a unit fit a window** — not `-f`, not `-wi`, not `-i`, not
-`CLASS_FLOOR_MARGIN`, not `NOISE_FLOOR`. A unit too long for the available window is split
-into FEWER ROWS, never into a cheaper configuration. This is a change to scheduling and to
+annotation configuration, three times. **No threshold, fork count, iteration count,
+iteration duration, thread count, benchmark mode or margin may be changed to make a unit
+fit a window** — not `-f`, not `-wi`, not `-i`, not `-w`, not `-r`, not `-t`, not `-bm`,
+not `CLASS_FLOOR_MARGIN`, not `NOISE_FLOOR`. That list is illustrative and the rule is
+not: the only thing a unit may vary is which rows it measures. A unit too long for the
+available window is split into FEWER ROWS, never into a cheaper configuration — including
+one that keeps the iteration counts and shortens the iterations, which is the same shrink
+wearing a different flag. This is a change to scheduling and to
 nothing else, and it must never become the route by which a configuration is shrunk. The
 estimator is untouched: still the maximum, still 2x, still rounded up to three decimals.
 Whether the maximum is the right statistic — the 2026-08-26 entry above calls the resulting

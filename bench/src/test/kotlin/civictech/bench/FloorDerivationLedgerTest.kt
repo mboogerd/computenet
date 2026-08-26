@@ -655,8 +655,61 @@ class FloorDerivationLedgerTest {
     @Test
     fun `a plan may not name one row twice`() {
         shouldThrow<IllegalArgumentException> {
-            DerivationPlan(syntheticClass, listOf(syntheticRows[0], syntheticRows[0]), "-lp")
+            DerivationPlan(
+                syntheticClass,
+                listOf(syntheticRows[0], syntheticRows[0]),
+                "-lp",
+                syntheticCounts,
+            )
         }.message!! shouldContain "may not name one row twice"
+    }
+
+    /**
+     * The count tripwire is unavoidable, not merely available.
+     *
+     * A check reachable only through [DerivationPlan.of] is a convention: the primary
+     * constructor and the generated `copy` are two ways past it, and either would hand
+     * [FloorDerivationLedger.start] a short plan whose completeness is then satisfied
+     * vacuously — a floor that is a maximum over a fraction of the class, which is the
+     * exact failure this whole file exists to make impossible. So every route is checked.
+     */
+    @Test
+    fun `the raw constructor is checked against the pre-registered count, not only the factory`() {
+        shouldThrow<FloorLedgerException> {
+            DerivationPlan(syntheticClass, syntheticRows.dropLast(1), "-lp", syntheticCounts)
+        }.message!! shouldContain "has 2 rows, but 3 are pre-registered"
+
+        // And a class the table does not name has no checkable universe by either route.
+        shouldThrow<FloorLedgerException> {
+            DerivationPlan("TypoedBenchmarkk", syntheticRows, "-lp", syntheticCounts)
+        }.message!! shouldContain "no pre-registered row count exists"
+    }
+
+    @Test
+    fun `copying a valid plan down to a subset of its rows is refused just as the constructor is`() {
+        val valid = plan()
+        shouldThrow<FloorLedgerException> {
+            valid.copy(rows = valid.rows.dropLast(1))
+        }.message!! shouldContain "has 2 rows, but 3 are pre-registered"
+    }
+
+    /**
+     * The end of the same argument: a plan that never passed the tripwire must not be able
+     * to reach a rendered floor. `start` and `load` are the only two ways to a ledger, and
+     * `load` re-checks; this pins that `start` cannot be handed an unchecked plan, because
+     * an unchecked plan cannot be constructed at all.
+     */
+    @Test
+    fun `a one-row plan for a three-row class cannot be built, so no ledger can render over it`(
+        @TempDir dir: File,
+    ) {
+        shouldThrow<FloorLedgerException> {
+            FloorDerivationLedger.start(
+                dir,
+                DerivationPlan(syntheticClass, syntheticRows.take(1), "-lp", syntheticCounts),
+            )
+        }.message!! shouldContain "maximum over a fraction of the class"
+        File(dir, FloorDerivationLedger.LEDGER_FILE_NAME).exists() shouldBe false
     }
 
     // -----------------------------------------------------------------------------------

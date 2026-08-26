@@ -118,11 +118,15 @@ import kotlin.math.ceil
  * - Every row still runs at its class's OWN annotation configuration, three times. Row
  *   selection — a benchmark regex, or `-p` naming a value the class already declares —
  *   chooses WHICH rows run, never HOW a row is measured.
- * - **No threshold, fork count, iteration count or margin may be changed to make a unit
- *   fit a window.** Not `-f`, not `-wi`, not `-i`, not [CLASS_FLOOR_MARGIN], not
- *   [NOISE_FLOOR]. A unit too long for the available window is split into fewer rows, and
- *   never into a cheaper configuration. This amendment is to SCHEDULING and to nothing
- *   else; it must never become the route by which a configuration is shrunk.
+ * - **No threshold, fork count, iteration count, iteration DURATION, thread count,
+ *   benchmark mode or margin may be changed to make a unit fit a window.** Not `-f`, not
+ *   `-wi`, not `-i`, not `-w`, not `-r`, not `-t`, not `-bm`, not [CLASS_FLOOR_MARGIN],
+ *   not [NOISE_FLOOR]. The list is illustrative and the rule is not: the ONLY thing a
+ *   unit may vary is which rows it measures. A unit too long for the available window is
+ *   split into fewer rows, and never into a cheaper configuration — including a
+ *   configuration that keeps the iteration COUNTS and shortens the iterations, which is
+ *   the same shrink wearing a different flag. This amendment is to SCHEDULING and to
+ *   nothing else; it must never become the route by which a configuration is shrunk.
  * - The estimator is untouched: still the MAXIMUM over all observations, still
  *   [CLASS_FLOOR_MARGIN] x that, still [roundUpToThreeDecimals]. Whether the maximum is
  *   the right statistic is a separate, open question (`computenet-3sua`), and it is not
