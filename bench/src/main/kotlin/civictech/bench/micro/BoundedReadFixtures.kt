@@ -384,13 +384,52 @@ class LiveTrafficRig internal constructor(
      * §4's note on what that does to the meaning of "dip" is reproduced on
      * [DriveOutcome.maxGapMs].
      */
-    fun drive(adds: Int): DriveOutcome {
-        require(adds > 0) { "adds must be positive, was $adds" }
+    fun drive(adds: Int): DriveOutcome = driveShaped(DriveShape.burst(adds)).outcome
+
+    /**
+     * The one drive implementation: enqueue adds through `source` under [shape]'s pacing
+     * and stop rules, measure the target's arrival stream while they drain, and report the
+     * drive's **wall-clock window** alongside the outcome.
+     *
+     * [drive] is `driveShaped(DriveShape.burst(adds))` — the unpaced burst E2 and E3 use —
+     * so there is exactly one place where `maxGap` is computed and exactly one place where
+     * the drain fence is enforced. A second copy of either would be a second definition of
+     * the metric.
+     *
+     * The window is what makes drive-window containment checkable at all: `maxGapMs` is
+     * measured over `[startNanos, endNanos]` and nothing outside it can appear as a gap,
+     * so a walk's position relative to that interval is the difference between a metric
+     * that saw the whole walk and one that saw a fraction of it. See
+     * `DriveWindowContainment`.
+     */
+    fun driveShaped(shape: DriveShape): TimedDrive {
+        require(shape.adds > 0) { "adds must be positive, was ${shape.adds}" }
         val before = collector.total.get()
         collector.arrivalNanos.clear()
         val t0 = System.nanoTime()
         val api = sourceApi.inlet.call
-        repeat(adds) { api.add(nextElement++) }
+        var emitted = 0
+        while (emitted < shape.adds && !shape.stopEarly()) {
+            api.add(nextElement++)
+            emitted++
+            shape.parkUntilDue(t0, emitted)
+        }
+        // The covering arm's extension: keep the arrival stream alive at the SAME spacing
+        // past the nominal budget for as long as `extendWhile` holds, so the drive's window
+        // closes after the subject it is meant to cover rather than at an arbitrary count.
+        // Capped, because a predicate that never goes false must fail as a bounded drive
+        // rather than as a 5-minute per-method timeout.
+        while (shape.extendWhile() && emitted < shape.extensionCapAdds) {
+            api.add(nextElement++)
+            emitted++
+            shape.parkUntilDue(t0, emitted)
+        }
+        check(!shape.extendWhile() || emitted < shape.extensionCapAdds) {
+            "shaped drive hit its extension cap of ${shape.extensionCapAdds} adds with " +
+                "its extendWhile predicate still true (scale=${scale.label}) — the drive " +
+                "cannot be said to cover its subject, so no containment claim is made"
+        }
+        val adds = emitted
 
         val timeoutMs = BoundedReadFixtures.DRAIN_TIMEOUT_MS
         if (wiring == RigWiring.LINKED) {
@@ -418,10 +457,15 @@ class LiveTrafficRig internal constructor(
             maxGap = maxOf(maxGap, times.first() - t0)
             maxGap = maxOf(maxGap, t1 - times.last())
         }
-        return DriveOutcome(
-            durationMs = (t1 - t0) / 1_000_000.0,
-            maxGapMs = maxGap / 1_000_000.0,
-            arrivals = times.size,
+        return TimedDrive(
+            outcome = DriveOutcome(
+                durationMs = (t1 - t0) / 1_000_000.0,
+                maxGapMs = maxGap / 1_000_000.0,
+                arrivals = times.size,
+            ),
+            window = Window(startNanos = t0, endNanos = t1),
+            adds = adds,
+            shape = shape,
         )
     }
 
@@ -787,12 +831,16 @@ object BoundedReadFixtures {
      *
      * @param limit entries per page; [PAGE_LIMIT] unless a caller is deliberately probing
      *   another page size.
+     * @param onPage called with the 1-based page index and that page's wall time as each
+     *   page returns, so a caller can react to the walk's progress while it runs. Purely
+     *   observational: it cannot change what the walk does, and it defaults to a no-op.
      */
     fun pagedWalk(
         host: ManagedHost,
         ref: CellRef,
         limit: Int = PAGE_LIMIT,
         expectedEntries: Int? = null,
+        onPage: (pageIndex: Int, latencyMs: Double) -> Unit = { _, _ -> },
     ): PagedWalkOutcome {
         require(limit > 0) { "limit must be positive, was $limit" }
         val latencies = ArrayList<Double>()
@@ -811,6 +859,11 @@ object BoundedReadFixtures {
             val t0 = System.nanoTime()
             val result = host.readState(ref, StateRead(cursor = cursor, limit = limit)).get()
             latencies += (System.nanoTime() - t0) / 1_000_000.0
+            // Fired before the result is unpacked so a caller that shapes a concurrent
+            // drive off the walk's progress — `DriveWindowContainment`'s truncated arm —
+            // observes the page boundary itself and not a boundary plus the fixture's own
+            // bookkeeping. A no-op for every other caller.
+            onPage(latencies.size, latencies.last())
 
             val page = when (result) {
                 is StateReadResult.Page -> result.page
