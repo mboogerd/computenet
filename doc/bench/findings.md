@@ -3668,3 +3668,193 @@ repository-wide `test` lifecycle were each queried with `--dry-run` and reach
 ways: the ruleset's own list (`build-test-fast`, `build-test-serial`, `concord-full`,
 `ui-test`, `agora-ui-test`, `kernel-test`) still names exactly those six, and no file
 under `.github/` is modified by this change.
+
+## 2026-08-26 — the regression-tracking series is seeded: three QUIESCED entries, and the first band for `SmokeBenchmark.baseline`
+
+`computenet-0nww`. The entry immediately above this one — *"a regression-tracking
+series is stood up, and deliberately starts EMPTY"* — closes by naming what would
+have to be true to seed the series, and files that as its own item. This entry is
+that item discharged. `bench/series/series.csv` now holds **three QUIESCED rows**
+under one environment fingerprint, and the comparator answers with a band instead
+of `InsufficientHistory`.
+
+Nothing above this line is edited. The previous entry's account of *why* the series
+shipped empty stands exactly as published; what changed is the host, not the
+argument.
+
+### The band
+
+```
+SmokeBenchmark.baseline (avgt, ns/op)
+  centre       3.976441
+  half-width   0.07488
+  samples      3 (all QUIESCED)
+```
+
+Read off the comparator, not computed by hand — `HistoricalBand.of` takes the
+**median** of the contributing scores as the centre (so one bad run moves it by at
+most one rank position, never by its magnitude) and `max(runToRunHalfWidth,
+worstWithinRunError)` as the half-width. Here those two terms are:
+
+- run-to-run half-width `(3.98029 − 3.94201) / 2 = 0.01914`
+- worst within-run error `0.07488`, which is run 3's own `± 0.07488`
+
+so the band is **dominated by a single run's own stated precision**, not by
+disagreement between the runs. That is the intended behaviour and worth naming:
+`Band.kt`'s KDoc says taking the run-to-run term alone "would make a band formed
+from three unusually consistent runs narrower than a single run's own stated
+precision, which is a band claiming more resolution than any of its members had".
+These three runs are exactly that case — they agree to within 1% of their own
+error bars — so the band a fourth run is judged against is the wider, honest one.
+
+### The three runs
+
+| # | runId | score (ns/op) | harness sha |
+| --- | --- | --- | --- |
+| 1 | `2026-08-25T23-18-18Z` | 3.98029 ± 0.044962 | `44eadacba` |
+| 2 | `2026-08-25T23-35-50Z` | 3.94201 ± 0.011726 | `6c9562a35` |
+| 3 | `2026-08-25T23-49-22Z` | 3.976441 ± 0.07488 | `b3020f2c9` |
+
+Each run's raw JMH CSV and teed log are committed under
+`bench/series/runs/<runId>/`, in the same commit as the row it produced.
+
+The harness shas differ across the three because each run was committed before the
+next started — that is the lane working as designed (`harnessCommitSha` is
+deliberately excluded from the fingerprint, being the thing the series exists to
+vary), and none of the three commits touched `bench/src`.
+
+**Each run reported `InsufficientHistory` for itself.** That is not a failure and
+not a contradiction of the heading: `SeriesComparator.compare` filters history with
+`it.runId != current.runId`, so a run is never compared against its own row, and
+the third run saw only two predecessors. The band is what the **fourth** run will
+meet. It was confirmed to exist by a non-appending `compare` against the completed
+three-row series under a synthetic run id:
+
+```
+WITHIN BAND (1) — no difference resolved; a regression smaller than the band is not excluded:
+  SmokeBenchmark.baseline: WithinBand — 3.976441 ± 0.07488 ns/op vs band
+  3.976441 ± 0.07488 ns/op over 3 run(s); delta 0.0 vs bar 0.14976
+```
+
+That check wrote nothing (`compare`, not `append`) and its synthetic id is not in
+the series file.
+
+### The environment
+
+```
+Apple M3 Max, 16 cores, Mac OS X 26.6.2 (host NL-MGD6FQJW91)
+Amazon.com Inc. (Corretto-21.0.5.11.1) 21.0.5, heap JVM defaults (VM options: <none>)
+JMH Average time, f=5 wi=5 i=5
+```
+
+`java` on this host is JBR 25.0.2, which `run-series.sh` refuses. All three runs were
+launched with `BENCH_SERIES_JAVA=/Users/merlijn/Library/Java/JavaVirtualMachines/corretto-21.0.5/Contents/Home/bin/java`.
+Corretto 21.0.5 was chosen because it is what this repository's `jvmToolchain(21)`
+already resolved to for the 2026-08-20 entries on this same machine — the point being
+that a *different* JDK 21 (Microsoft 21.0.11 is also installed here) passes the
+script's major-version check and still starts a fresh population. **A fourth run that
+does not set `BENCH_SERIES_JAVA` to this exact launcher will not extend this band.**
+
+### The host conditions, in full, because the band carries them
+
+The bead this entry discharges requires the host readings to be recorded rather than
+summarised, so a later reader can disagree with the attestation rather than take it
+on trust. Local times are CEST; the machine is `NL-MGD6FQJW91`, 16 cores, so the
+script's quiesced threshold is 4.00.
+
+| moment | 1 / 5 / 15-minute load |
+| --- | --- |
+| run 1 pre (01:18) | 3.07 / 4.62 / 4.35 |
+| run 1 — script's own guard reading | 3.07 |
+| run 1 post (01:27) | 4.33 / 3.71 / 3.90 |
+| between runs (01:35) | 2.81 / 3.63 / 3.85 |
+| run 2 pre (01:35) | 2.81 / 3.63 / 3.85 |
+| run 2 — script's own guard reading | 2.81 |
+| run 2 post (01:44) | 5.49 / 4.16 / 3.89 |
+| run 3 pre (01:49) | 3.35 / 4.06 / 3.94 |
+| run 3 — script's own guard reading | 3.35 |
+| run 3 post (02:14) | 2.86 / 3.34 / 3.61 |
+
+Top CPU consumers were, at every one of those moments, the same resident
+managed-endpoint stack: ManageEngine's app-control system extension (21–42% of a
+core), Microsoft Defender's `wdavdaemon_unprivileged` (10–22%), `trustd` (11–25%),
+Defender's `epsext` system extension (8–18%), and `wdavdaemon` / `wdavdaemon_enterprise`
+(5–20% each). Together roughly one core, sustained, never absent.
+
+**The attestation rests on an interpretation, stated so it can be disputed.** The
+bead's precondition reads "no scheduled scan (Defender's included)". The stack above
+is not a scheduled scan; it is this managed endpoint's *steady state*, present in
+every reading taken here and present when the previous entry's own host evidence was
+gathered. Reading its mere presence as disqualifying would make the item permanently
+undischargeable on the only pinned machine there is. So `quiesced` here means: no
+other agent session, no build, no interactive user, no burst consumer beyond the
+resident stack — **not** a machine with an idle security subsystem, which this host
+does not have. A reader who rejects that reading should treat the band as SHARED and
+say so in a later entry rather than editing this one.
+
+### Two observed confounds, reported as observations
+
+Neither is a mechanism established here. Both are recorded because they will recur
+on this host and the next person to extend this series will see them.
+
+1. **The load average oscillates on a roughly two-minute cycle** between about 3.0
+   and 5.2 with the machine otherwise idle, while the 5- and 15-minute averages sit
+   flat near 3.9. Sampled continuously for eight minutes between runs 1 and 2:
+   3.07, 5.23, 4.67, 4.53, 3.89, 5.10, 4.42, 4.17, 3.92, 3.72, 3.18, 3.08, 4.83,
+   5.09, 4.57, 4.01, 3.92, 3.42, 3.83, 3.57, 3.35, 3.42. **A single `uptime` reading
+   on this host is therefore weak evidence in both directions** — which is the same
+   trap two earlier `computenet-0nww` comments recorded from the other side (a 2.50
+   reading that was 9.47 four minutes later). Runs 2 and 3 were consequently launched
+   by a gate that polled for a genuine trough rather than by a one-shot reading. The
+   run script's guard reads the load *once, at start*, so it cannot protect against a
+   spike at minute 20; that limitation is unchanged by this entry.
+2. **Part of the elevation after each run is the run's own decay**, and part may be
+   the endpoint scanner reacting to freshly written files. The post-run-1 and
+   post-run-2 readings (4.33, 5.49) are both above the threshold while the resident
+   consumers are at or below their usual figures, and `fileproviderd` appears at
+   27–31% in two between-run readings where it is otherwise absent. The
+   scanner-reaction half is a **hypothesis, not a finding** — nothing here isolates
+   it — but the operational consequence holds either way: **do not launch the next
+   run immediately after the previous one**, or the guard reads load the measurement
+   itself created and refuses an attestation that is true.
+
+One non-resident consumer did appear, in the post-run-2 reading only: a Brave Browser
+renderer at 37.8% of a core (0.38 of 16). It is recorded rather than passed over. It
+appeared *after* run 2's sweep had finished, so it cannot have entered run 2's numbers,
+and it is absent from run 3's pre-reading. Run 3's score (3.976441) sits between runs 1
+and 2, which is what one would expect if it affected nothing.
+
+### What this entry does NOT claim
+
+- **That `SmokeBenchmark.baseline` measures anything about the runtime.** It does
+  not, and never did. It is the discovery sentinel; the series tracks it because
+  `NOISE_FLOOR`'s KDoc names it as the quantity that would be re-measured to detect
+  drift *in the harness*. A band on it bounds harness drift, not kernel performance.
+- **That the band will hold.** Three runs inside twenty minutes on one night is the
+  minimum the comparator accepts, not a characterisation of the host across days,
+  thermal states or macOS updates. The first genuinely independent test of this band
+  is the fourth run, and a `MovedHigher` from it is at least as likely to be about
+  the host as about the code.
+- **That the machine was idle in any absolute sense.** See the attestation paragraph
+  above: it was idle of everything except a security stack that is never idle.
+- **Anything about `launchd` or a scheduler.** `regression-series.md` §6's plist is
+  still unverified; these three runs were invoked by hand.
+- **Anything about a gap trigger.** This entry cites no `G-*` and answers no trigger
+  question. It is a measurement that seeds a lane, not a finding about the model.
+- **That the selector set grew.** It did not, deliberately — the bead excludes it.
+  One selector, `smoke`, exactly as the lane shipped.
+
+### Scope
+
+`bench/series/series.csv` (three appended rows), `bench/series/runs/` (three run
+directories, raw JMH CSV and teed log each), and this file. No source, script, spec,
+workflow or gap-table change; `scripts/bench-series/run-series.sh` was invoked, not
+edited.
+
+### Verification
+
+```
+./gradlew :bench:test --rerun
+```
+
+plus the three sweeps themselves, whose logs are the committed artifacts.
