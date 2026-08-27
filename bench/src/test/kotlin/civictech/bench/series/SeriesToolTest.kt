@@ -296,6 +296,34 @@ class SeriesToolTest {
         assertTrue(recorded.all { it.env.harnessCommitSha == "stale111" }, recorded.toString())
     }
 
+    /**
+     * The bypass itself, guarded (`computenet-0ado`). The first cut of this change made
+     * `--jar` optional, which left the unattested path reachable by omitting one flag —
+     * the stamp check never runs and `--harness-sha` is recorded verbatim, which is the
+     * whole defect. Requiring the flag is what closes it, so the requirement needs its
+     * own arm: every other case here supplies `--jar`, so nothing above notices if the
+     * flag goes back to being defaulted.
+     */
+    @Test
+    fun `append refuses when --jar is omitted altogether, so the unattested path is unreachable`(
+        @TempDir dir: File,
+    ) {
+        val results = write(dir, "run.csv", CSV)
+        write(dir, "run.log", LOG)
+        val series = write(dir, "series.csv", SeriesCsv.headerLine() + "\n")
+
+        val out = StringBuilder()
+        val code = SeriesCli.run(
+            cli("append", results, series).filterNot { it == "--jar" || it.endsWith("bench-jmh.jar") }
+                .toTypedArray(),
+            out,
+        )
+
+        assertEquals(1, code, out.toString())
+        assertTrue(out.contains("missing required --jar"), out.toString())
+        assertEquals(SeriesCsv.headerLine() + "\n", series.readText())
+    }
+
     private fun cli(
         command: String,
         results: File,
