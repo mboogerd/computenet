@@ -164,7 +164,16 @@ class CrossWorkspaceResolutionTest {
 
         // Captured right after the start-time baseline of both mirrors —
         // R3's "unchanged" assertion below reads against this, not against 0.
+        // Asserted here (not just captured) so the steady-state check below is
+        // paired, through this SAME accessor, with a positive observation that
+        // it actually moved: every fresh BdScratchWorkspace has no persisted
+        // checkpoint, so BeadsMirrorApp.start triggers exactly one
+        // RebaselineReason.FirstStart swap per mirror (Rebaseline.run) before
+        // this line runs. Without this assertion, a wsA wired to never
+        // increment the counter at all would make the later "unchanged" check
+        // pass just as easily as a correct implementation would.
         val rebaselineCountAfterStart = mirrorState(identityA).rebaselineCount
+        rebaselineCountAfterStart shouldBe 1
 
         val resolver = EdgeResolver.forMirrors(app!!.mirrors)
 
