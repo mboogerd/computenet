@@ -108,7 +108,7 @@ object SeriesIngest {
  *
  * ```
  * compare --results <csv> --series <csv> --run-id <id> --timestamp <iso8601>
- *         --host-state quiesced|shared --harness-sha <sha> [--jar <bench-jmh.jar>]
+ *         --host-state quiesced|shared --harness-sha <sha> --jar <bench-jmh.jar>
  *         [--log <log>]
  * append  <same arguments>
  * ```
@@ -119,28 +119,27 @@ object SeriesIngest {
  * single `record` command that appended first would have every run sitting inside its own
  * band.
  *
- * ## `--jar`, when given, is checked against `--harness-sha` and wins the recorded value (`computenet-0ado`)
+ * ## `--jar` is checked against `--harness-sha`, and its OWN stamp wins the recorded value (`computenet-0ado`)
  *
  * `--harness-sha` is the working-tree HEAD the caller (`run-series.sh`) reads immediately
- * before building `--jar` — not necessarily what `--jar` actually measures. When `--jar`
- * is supplied, this mirrors `FloorTool.kt`'s `runIngest` (`computenet-7doz`): it reads the
- * jar's own stamped build provenance via [HarnessJarStamp] and refuses when it disagrees
- * with `--harness-sha` (the stale-jar case: the jar was built from a different checkout
- * than the one now measured) or is absent entirely (a jar that predates the stamp, or was
- * not produced by `:bench:jmhJar`). Only once the two agree is the STAMPED sha — not the
- * working-tree one — recorded on the resulting series entries, so a series row names the
- * commit the jar was actually built from, never merely the commit the caller happened to
- * have checked out at the time. `--jar` is optional so a caller with no jar to attest
- * (there is currently only one: `run-series.sh`, which always passes it) is not forced to
- * invent one; omitting it falls back to recording `--harness-sha` verbatim, exactly as
- * before this change.
+ * before building `--jar` — not necessarily what `--jar` actually measures. Mirroring
+ * `FloorTool.kt`'s `runIngest` (`computenet-7doz`), this reads `--jar`'s own stamped build
+ * provenance via [HarnessJarStamp] and refuses when it disagrees with `--harness-sha` (the
+ * stale-jar case: the jar was built from a different checkout than the one now measured —
+ * e.g. `:bench:jmhJar` reported UP-TO-DATE and kept its old stamp after the checkout moved)
+ * or is absent entirely (a jar that predates the stamp, or was not produced by
+ * `:bench:jmhJar`). Only once the two agree is the STAMPED sha — not the working-tree one
+ * — recorded on the resulting series entries, so a series row always names the commit the
+ * jar was actually built from, never merely the commit the caller happened to have checked
+ * out at the time. `--jar` is REQUIRED, not defaulted or optional: an optional flag would
+ * be the unattested path left reachable by omitting it, which is exactly what this refusal
+ * exists to close (mirroring `runIngest`, which requires `--jar` for the same reason).
  *
  * Exit codes: `0` on success, `1` on a refusal (a missing artifact, a bannerless log, a
- * malformed series file, or — with `--jar` given — a stale or unstamped jar). **Movement
- * is not an error.** A scheduled run that finds a benchmark outside its band has done its
- * job and says so in its report; making that a non-zero exit would turn the lane into a
- * gate, and this ticket's scope explicitly keeps benchmark execution out of anything that
- * gates.
+ * malformed series file, or a stale or unstamped jar). **Movement is not an error.** A
+ * scheduled run that finds a benchmark outside its band has done its job and says so in
+ * its report; making that a non-zero exit would turn the lane into a gate, and this
+ * ticket's scope explicitly keeps benchmark execution out of anything that gates.
  */
 object SeriesCli {
 
@@ -152,24 +151,24 @@ object SeriesCli {
         val timestamp: String,
         val hostState: HostState,
         val harnessSha: String,
-        val jar: File?,
+        val jar: File,
         val log: File?,
     )
 
     private const val USAGE = """usage:
   benchSeries compare --results <jmh.csv> --series <series.csv> --run-id <id>
                       --timestamp <iso8601-utc> --host-state quiesced|shared
-                      --harness-sha <sha> [--jar <bench-jmh.jar>] [--log <run.log>]
+                      --harness-sha <sha> --jar <bench-jmh.jar> [--log <run.log>]
   benchSeries append  <the same arguments>
 
 compare prints the report and writes nothing; append prints it and then appends the
 run's rows. Movement beyond a band is reported, not signalled by the exit code.
 
---jar, when given, is checked against --harness-sha (the working-tree HEAD read before
---jar was built): a disagreement with --jar's own stamped build provenance
-(Harness-Commit-Sha, written by :bench:jmhJar) is the stale-jar case and is refused, as
-is a --jar with no such stamp. The stamped sha, not --harness-sha, is then what gets
-recorded. Omitting --jar records --harness-sha verbatim (computenet-0ado)."""
+--jar is checked against --harness-sha (the working-tree HEAD read before --jar was
+built): a disagreement with --jar's own stamped build provenance (Harness-Commit-Sha,
+written by :bench:jmhJar) is the stale-jar case and is refused, as is a --jar with no
+such stamp. The stamped sha, not --harness-sha, is then what gets recorded
+(computenet-0ado)."""
 
     /**
      * Runs the tool over [argv], writing to [out], and returns the process exit code.
@@ -196,57 +195,47 @@ recorded. Omitting --jar records --harness-sha verbatim (computenet-0ado)."""
         }
 
         return try {
-            // --jar is optional (see SeriesCli's KDoc): when omitted, --harness-sha is
-            // recorded verbatim, unchanged from before this ticket. When given, it is
-            // checked against --harness-sha and its own stamp wins the recorded value.
-            val harnessSha = if (args.jar == null) {
-                args.harnessSha
-            } else {
-                val jar = args.jar
-                require(jar.isFile) { "jar not found: ${jar.absolutePath}" }
+            require(args.jar.isFile) { "jar not found: ${args.jar.absolutePath}" }
 
-                // The jar's own build provenance (`computenet-7doz`) — written by
-                // `:bench:jmhJar` itself, not supplied by any caller. Absent entirely (no
-                // manifest, or a manifest predating this stamp): refused, naming the
-                // rebuild command, so the unattested path can never be reached silently.
-                // Mirrors FloorTool.kt's `runIngest` exactly (`computenet-0ado`).
-                val stampedSha = HarnessJarStamp.read(jar)
-                    ?: throw IllegalArgumentException(
-                        "${jar.absolutePath} carries no " +
-                            "'${HarnessJarStamp.MANIFEST_ATTRIBUTE}' manifest attribute — " +
-                            "either it predates this stamp or was not produced by " +
-                            "':bench:jmhJar'. A jar with no attested build provenance " +
-                            "cannot be recorded as measuring anything. Rebuild it: " +
-                            "./gradlew :bench:jmhJar"
-                    )
+            // The jar's own build provenance (`computenet-7doz`) — written by
+            // `:bench:jmhJar` itself, not supplied by any caller. Absent entirely (no
+            // manifest, or a manifest predating this stamp): refused, naming the rebuild
+            // command, so the unattested path can never be reached silently. Mirrors
+            // FloorTool.kt's `runIngest` exactly (`computenet-0ado`).
+            val stampedSha = HarnessJarStamp.read(args.jar)
+                ?: throw IllegalArgumentException(
+                    "${args.jar.absolutePath} carries no " +
+                        "'${HarnessJarStamp.MANIFEST_ATTRIBUTE}' manifest attribute — " +
+                        "either it predates this stamp or was not produced by " +
+                        "':bench:jmhJar'. A jar with no attested build provenance cannot " +
+                        "be recorded as measuring anything. Rebuild it: " +
+                        "./gradlew :bench:jmhJar"
+                )
 
-                // The stale-jar case (`computenet-7doz`): the jar on disk was built from a
-                // different checkout than the one `run-series.sh` actually measured
-                // against. --harness-sha is the working-tree HEAD read immediately before
-                // the jar was built; a disagreement means the jar was not rebuilt after
-                // the checkout changed, so it measures code from a commit other than the
-                // one now checked out. Mirrors the mixed-harness-sha refusal's specificity
-                // (`computenet-0ado`).
-                if (stampedSha != args.harnessSha) {
-                    throw IllegalArgumentException(
-                        "run '${args.runId}' measured against ${jar.absolutePath}, built " +
-                            "at '$stampedSha', but the working tree HEAD read immediately " +
-                            "before that build was '${args.harnessSha}'. This is the " +
-                            "stale-jar case: the jar was not rebuilt after the checkout " +
-                            "changed, so it measures code from a commit other than the " +
-                            "one now checked out. Rebuild the jar at this checkout " +
-                            "(./gradlew :bench:jmhJar) and re-run this unit, or check out " +
-                            "'$stampedSha' to match what the jar actually measures."
-                    )
-                }
-                // The recorded provenance, in preference to the working-tree sha above:
-                // the jar's own stamp describes what was actually measured, and by this
-                // point the two are known to agree (the mismatch above already refused
-                // otherwise) — spelled out explicitly rather than reusing
-                // args.harnessSha, so a future change to either branch above cannot
-                // silently start recording the wrong one.
-                stampedSha
+            // The stale-jar case (`computenet-7doz`): the jar on disk was built from a
+            // different checkout than the one `run-series.sh` actually measured against.
+            // --harness-sha is the working-tree HEAD read immediately before the jar was
+            // built; a disagreement means the jar was not rebuilt after the checkout
+            // changed, so it measures code from a commit other than the one now checked
+            // out. Mirrors the mixed-harness-sha refusal's specificity (`computenet-0ado`).
+            if (stampedSha != args.harnessSha) {
+                throw IllegalArgumentException(
+                    "run '${args.runId}' measured against ${args.jar.absolutePath}, built " +
+                        "at '$stampedSha', but the working tree HEAD read immediately " +
+                        "before that build was '${args.harnessSha}'. This is the stale-jar " +
+                        "case: the jar was not rebuilt after the checkout changed, so it " +
+                        "measures code from a commit other than the one now checked out. " +
+                        "Rebuild the jar at this checkout (./gradlew :bench:jmhJar) and " +
+                        "re-run this unit, or check out '$stampedSha' to match what the " +
+                        "jar actually measures."
+                )
             }
+            // The recorded provenance, in preference to the working-tree sha above: the
+            // jar's own stamp describes what was actually measured, and by this point the
+            // two are known to agree (the mismatch above already refused otherwise) —
+            // spelled out explicitly rather than reusing args.harnessSha, so a future
+            // change to either branch above cannot silently start recording the wrong one.
+            val harnessSha = stampedSha
 
             val fresh = SeriesIngest.entriesFrom(
                 results = args.results,
@@ -310,7 +299,7 @@ recorded. Omitting --jar records --harness-sha verbatim (computenet-0ado)."""
             timestamp = required("timestamp"),
             hostState = hostState,
             harnessSha = required("harness-sha"),
-            jar = map["jar"]?.let { File(it) },
+            jar = File(required("jar")),
             log = map["log"]?.let { File(it) },
         )
     }
