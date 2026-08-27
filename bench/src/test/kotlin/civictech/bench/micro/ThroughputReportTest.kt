@@ -1026,8 +1026,10 @@ class ThroughputReportTest {
         // computenet-ahn0: this row is 90.0/1500.0 = 0.06 relative dispersion — twelve
         // times NOISE_FLOOR, and it used to be flagged for exactly that. It is no longer
         // flagged, because `CellFootprintBenchmark` now carries its own derived floor
-        // (1.044 since computenet-7v7m re-derived it under the toolchain JDK 21; 0.593
-        // under the superseded JBR 25 runs) and 0.06 is well under either. That change is the whole point of the per-class
+        // (0.398 since computenet-3sua re-derived it under classFloorStatistic; 1.044
+        // under the maximum-over-every-observation estimator that replaced, and 0.593
+        // under the superseded JBR 25 runs) and 0.06 is well under any of the three. That
+        // change is the whole point of the per-class
         // floor: a bound this class cannot clear on a quiet machine was not detecting
         // interference. The row is still rendered with its error bar either way.
         val mapCell = report.dispersions.single { it.label == "MAP_CELL N1E5" }
@@ -1184,7 +1186,7 @@ class ThroughputReportTest {
         // The dispersion note is on the secondary-metric path too (computenet-785b:
         // a note beside the table, not an exclusion from it) — and it resolves its bound
         // through the same per-class table the primary path does (computenet-ahn0), so
-        // `MAP_CELL N1E5` clears `CellFootprintBenchmark`'s derived floor of 1.044 here
+        // `MAP_CELL N1E5` clears `CellFootprintBenchmark`'s derived floor of 0.398 here
         // as well and is no longer flagged against the global bound.
         val mapCell = report.dispersions.single { it.label == "MAP_CELL N1E5" }
         assertEquals("CellFootprintBenchmark", mapCell.benchmarkClass)

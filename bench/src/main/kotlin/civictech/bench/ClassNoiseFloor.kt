@@ -26,9 +26,11 @@ import kotlin.math.ceil
  * ## Status: ONE class derived, three still falling back
  *
  * [CLASS_NOISE_FLOOR_DERIVATIONS] holds exactly one entry —
- * `CellFootprintBenchmark`, derived 2026-08-26 (`computenet-ahn0`, **re-derived the same
- * day under the toolchain JDK by `computenet-7v7m`** after the first three runs turned
- * out to have been measured under JBR 25; see step 1 below). The other three
+ * `CellFootprintBenchmark`, whose runs were made 2026-08-26 (`computenet-ahn0`,
+ * **re-measured the same day under the toolchain JDK by `computenet-7v7m`** after the
+ * first three runs turned out to have been measured under JBR 25; see step 1 below) and
+ * whose floor was **re-derived from those retained runs on 2026-08-27 by
+ * `computenet-3sua`** when [classFloorStatistic] replaced the maximum. The other three
  * classes the procedure names (`OperatorThroughputBenchmark`, `FanOutScalingBenchmark`,
  * `BoundedReadBenchmark`) have **no** derivation and therefore still fall back to
  * [NOISE_FLOOR]. That is not an oversight and no number may be entered for them that did
@@ -75,11 +77,14 @@ import kotlin.math.ceil
  *    launcher (`PINNED_JDK_MAJOR`); invoking the jar directly bypasses that refusal, so
  *    the banner check is the derivation's own copy of it. The banner is the artifact:
  *    `grep -m1 -E '^# VM version' <log>`.
- * 2. Take, across all rows of all three runs, the **maximum** observed relative
- *    dispersion (`scoreError / score`, JMH's 99.9% bar over its own score). Maximum, not
- *    mean: the floor has to sit above the worst quiet-host row, or a quiet host produces
- *    rows above their own floor.
- * 3. The floor is that maximum times [CLASS_FLOOR_MARGIN], rounded UP to three decimals
+ * 2. Compute [classFloorStatistic] over the observations: for each ROW, the **median**
+ *    of that row's relative dispersions (`scoreError / score`, JMH's 99.9% bar over its
+ *    own score) across its [CLASS_FLOOR_MIN_RUNS] observations; then the **maximum** of
+ *    those per-row medians across the class's rows. Robust WITHIN a row, conservative
+ *    ACROSS rows — see [classFloorStatistic] for why the two axes get different
+ *    treatment, and `computenet-3sua` for the decision that replaced the previous
+ *    "maximum over every observation".
+ * 3. The floor is that statistic times [CLASS_FLOOR_MARGIN], rounded UP to three decimals
  *    ([roundUpToThreeDecimals]) — computed by [ClassNoiseFloor.floor], never hand-typed.
  * 4. Append the derivation to `doc/bench/findings.md` as its own entry, rendered by
  *    [renderDerivation] so the entry cannot drift from the constant.
@@ -107,11 +112,15 @@ import kotlin.math.ceil
  * short quiesced windows. The unit of decomposition is the **ROW SET**: each window
  * measures a SUBSET of the class's rows, and the class is done when every row of the
  * class has been measured exactly [CLASS_FLOOR_MIN_RUNS] times in [CLASS_FLOOR_MIN_RUNS]
- * separate JVM invocations. This is sound because the derived quantity is a MAXIMUM, and
- * `max` is associative and commutative: folding it over rows measured at different times
- * yields the same number as folding it over all of them at once. JMH forks per
- * (benchmark, `@Param`) combination, so a row's own measurement does not depend on which
- * other rows shared its invocation.
+ * separate JVM invocations. This is sound because the derived quantity ([classFloorStatistic])
+ * decomposes by row: a row's median depends only on that row's own observations, and the
+ * across-row fold is a `max`, which is associative and commutative — so folding over rows
+ * measured at different times yields the same number as folding over all of them at once.
+ * JMH forks per (benchmark, `@Param`) combination, so a row's own measurement does not
+ * depend on which other rows shared its invocation. (The decomposition argument was
+ * originally written for a plain maximum over every observation; `computenet-3sua`
+ * changed the estimator and the argument survives it unchanged in force, because the new
+ * statistic is still computed per row and still folded across rows by `max`.)
  *
  * **What the amendment does NOT permit, stated so it cannot be read as a loophole.**
  *
@@ -127,10 +136,12 @@ import kotlin.math.ceil
  *   configuration that keeps the iteration COUNTS and shortens the iterations, which is
  *   the same shrink wearing a different flag. This amendment is to SCHEDULING and to
  *   nothing else; it must never become the route by which a configuration is shrunk.
- * - The estimator is untouched: still the MAXIMUM over all observations, still
- *   [CLASS_FLOOR_MARGIN] x that, still [roundUpToThreeDecimals]. Whether the maximum is
- *   the right statistic is a separate, open question (`computenet-3sua`), and it is not
- *   answered by anything here.
+ * - The estimator is untouched BY THIS AMENDMENT: whatever [classFloorStatistic] is, the
+ *   floor is still [CLASS_FLOOR_MARGIN] x it, still [roundUpToThreeDecimals]. Whether the
+ *   maximum-over-every-observation was the right statistic was a separate question
+ *   (`computenet-3sua`); it has since been answered, and the answer changed
+ *   [classFloorStatistic] — but nothing in this scheduling amendment participated in that
+ *   choice, then or now.
  *
  * **What decomposition costs, stated rather than assumed.** Rows measured in windows
  * hours apart see different ordering and different thermal state than rows measured back
@@ -151,9 +162,11 @@ import kotlin.math.ceil
  *
  * 1. **A floor may be rendered only from a COMPLETE row set** — every row of the class,
  *    [CLASS_FLOOR_MIN_RUNS] observations each — and the refusal must NAME the outstanding
- *    rows and their counts. A maximum over a subset can only be SMALLER than the maximum
- *    over the whole set, so a floor rendered from a partial row set is systematically too
- *    LOW, which is the direction that admits rows the floor should have refused.
+ *    rows and their counts. A maximum over a subset of ROWS can only be SMALLER than the
+ *    maximum over the whole set, so a floor rendered from a partial row set is
+ *    systematically too LOW, which is the direction that admits rows the floor should
+ *    have refused; and a SHORT row — fewer than [CLASS_FLOOR_MIN_RUNS] observations — has
+ *    no robustness left in its median, so it can bias [classFloorStatistic] either way.
  *    Completeness must be checked against a row universe pre-registered independently of
  *    the enumeration (`EXPECTED_PLAN_ROW_COUNTS`): completeness computed over a filtered
  *    enumeration is satisfied vacuously.
@@ -162,7 +175,10 @@ import kotlin.math.ceil
  *    hypothetical: `computenet-ahn0` derived `CellFootprintBenchmark`'s first floor under
  *    JBR 25.0.2 rather than the toolchain's JDK 21 — a bare `java` on this host is JBR 25
  *    and `JAVA_HOME` is unset — and re-deriving under 21 moved the floor from 0.593 to
- *    1.044.
+ *    1.044. (Both of those are old-estimator numbers, from before `computenet-3sua`
+ *    replaced the maximum with [classFloorStatistic]; the size of the JVM's effect is the
+ *    point, and it is not re-derived here because a superseded measurement is not
+ *    re-published.)
  */
 object ClassFloorDerivation {
 
@@ -211,6 +227,106 @@ const val QUIESCED_HOST_STATE: String = "quiesced"
 
 /** The fewest sequential repeat runs a derivation may rest on. */
 const val CLASS_FLOOR_MIN_RUNS: Int = 3
+
+/**
+ * The middle value of [values] — the mean of the two middle values at even size.
+ *
+ * The even-size rule is stated here, in committed source, rather than left to whichever
+ * convention a later reader assumes, because [CLASS_FLOOR_MIN_RUNS] is not fixed forever:
+ * a derivation resting on four observations per row must not be able to pick between two
+ * defensible medians after seeing which one it prefers.
+ */
+fun medianOf(values: List<Double>): Double {
+    require(values.isNotEmpty()) { "median of an empty sample is undefined" }
+    require(values.all { it.isFinite() }) {
+        "every observation must be finite, was $values"
+    }
+    val sorted = values.sorted()
+    val mid = sorted.size / 2
+    return if (sorted.size % 2 == 1) sorted[mid] else (sorted[mid - 1] + sorted[mid]) / 2.0
+}
+
+/**
+ * The per-class floor's estimator: the **maximum, over the class's rows, of each row's
+ * MEDIAN relative dispersion across that row's repeat observations** (`computenet-3sua`).
+ *
+ * Pre-registered here, in committed source, **before it was computed over any measurement
+ * whatsoever** — including before it was computed over `CellFootprintBenchmark`'s three
+ * retained runs, whose re-derivation is the same work item. That ordering is the whole
+ * content of the guarantee: an estimator chosen after seeing what each candidate yields is
+ * not a criterion, it is a preference wearing one, and it is the identical move to
+ * reverse-engineering [NOISE_FLOOR]'s 2x margin from the run it is applied to. Nothing
+ * below argues from a value, and nothing below may be amended by an argument from one.
+ *
+ * ## Why the two axes are treated differently
+ *
+ * A derivation's observations form a grid: one axis is the class's ROWS (its `@Benchmark`
+ * x `@Param` combinations), the other is the REPEATS of each row. The previous estimator —
+ * a single maximum over the flattened grid — treated both axes as one, and that is what
+ * this replaces. They are not the same kind of variation.
+ *
+ * **Across REPEATS of one row, variation is transient.** Same benchmark, same parameters,
+ * same configuration, same host, minutes apart. Whatever moves a row between its own
+ * repeats is a property of the moment, not of the class: an interference event the
+ * quiesced-host gate could not see (that gate is one-directional and can only ever refuse
+ * a wrong claim — see [QUIESCED_HOST_STATE]), a compilation decision that went differently
+ * in one fork, a thermal excursion. On that axis a maximum has **breakdown point zero**:
+ * one contaminated observation, anywhere in the grid, sets the floor that every future row
+ * of the class is classified against, forever. The median has breakdown 1/2 — at three
+ * observations it takes TWO of the three to move it, and two of three is no longer an
+ * isolated event but a reproducible property of the row, which is precisely what a floor
+ * should be built from.
+ *
+ * **Across ROWS, variation is structural, and the maximum is KEPT.** Different `@Param`
+ * combinations are genuinely different workloads; a row that disperses heavily disperses
+ * heavily every time, and that is a fact about the class rather than noise in it. The
+ * original step 2's rationale applies unchanged on this axis and is retained verbatim in
+ * force: *the floor has to sit above the worst quiet-host row, or a quiet host produces
+ * rows above their own floor.* A high percentile across rows, or a mean, would discard
+ * honest high-dispersion rows and publish a floor the class exceeds on a silent machine —
+ * exactly the failure the maximum was pre-registered against. So: robust WITHIN a row,
+ * conservative ACROSS rows.
+ *
+ * ## Why the median, and not a high percentile, within a row
+ *
+ * At [CLASS_FLOOR_MIN_RUNS] = 3 observations, every order statistic strictly above the
+ * median IS the maximum (or an interpolation dominated by it), so a "75th percentile"
+ * would be the old estimator under a new name. The median is the only order statistic of
+ * three with a non-zero breakdown point. It also survives a change to
+ * [CLASS_FLOOR_MIN_RUNS] without being re-chosen: at more observations per row it stays
+ * the same definition and its breakdown point stays 1/2, whereas a percentile would have
+ * to be re-picked — and re-picking an estimator is exactly the act this pre-registration
+ * exists to make unavailable.
+ *
+ * ## What this does and does not buy
+ *
+ * It removes the single-contaminated-observation failure mode. It does NOT make a floor
+ * tight: a class whose rows reproducibly disperse heavily still gets a high floor, and
+ * that is the finding rather than a defect in it. Whether any given class's floor comes
+ * out tighter or looser than it did under the old estimator is an OUTCOME of this rule and
+ * never a reason to revisit it.
+ *
+ * @param perRowObservations one entry per ROW, each holding that row's relative
+ *   dispersions across its repeats. Grouping by row is the caller's job because the row
+ *   key is the caller's (`FloorDerivationLedger` has `RowKey`; a caller reading a results
+ *   file has whatever identifies a row there) — but the grouping is not optional. This
+ *   function cannot tell a correctly grouped grid from a flattened one, and a caller that
+ *   passes every observation as a single entry silently gets a plain maximum back, which
+ *   is the old estimator. The refusal that actually protects that is
+ *   `FloorDerivationLedger`'s completeness check, which counts observations PER ROW
+ *   against a pre-registered row universe, so a flattened set cannot reach a render.
+ */
+fun classFloorStatistic(perRowObservations: Collection<List<Double>>): Double {
+    require(perRowObservations.isNotEmpty()) {
+        "a class floor statistic needs at least one row's observations"
+    }
+    require(perRowObservations.none { it.isEmpty() }) {
+        "every row must carry at least one observation; ${
+            perRowObservations.count { it.isEmpty() }
+        } row(s) carried none"
+    }
+    return perRowObservations.maxOf { medianOf(it) }
+}
 
 /**
  * [value] rounded UP to three decimal places — the rounding [NOISE_FLOOR]'s own
@@ -288,7 +404,7 @@ sealed interface DerivationAssembly {
  * checkable (`computenet-cm4w`).
  *
  * The floor itself is **not a field**: [floor] is computed from
- * [observedMaxRelativeDispersion] and [CLASS_FLOOR_MARGIN], so the table can never hold a
+ * [observedRobustDispersion] and [CLASS_FLOOR_MARGIN], so the table can never hold a
  * number that disagrees with its own derivation, and changing the margin moves every
  * derived floor in the same commit. That is the same property
  * `resolveEffect(effect, combinedError)` was extracted to give the series comparator: one
@@ -297,11 +413,17 @@ sealed interface DerivationAssembly {
  * @param benchmarkClass the benchmark's SIMPLE class name — the key
  *   `ThroughputReport.JmhRow.benchmarkClass` exposes, so a results file names its own
  *   floor and a caller does not have to.
- * @param observedMaxRelativeDispersion the MAXIMUM `|scoreError / score|` observed across
- *   every row of all [runs] runs. Must be finite and strictly positive: a zero would mean
- *   a benchmark with no dispersion at all, which is a broken measurement rather than a
- *   perfect one, and it would derive a floor of zero that every subsequent row exceeds.
- * @param runs how many observations of EVERY row fold into the maximum. At least
+ * @param observedRobustDispersion [classFloorStatistic] over the derivation's
+ *   observations — the maximum, over the class's rows, of each row's MEDIAN
+ *   `|scoreError / score|` across its [runs] observations. Must be finite and strictly
+ *   positive: a zero would mean a benchmark with no dispersion at all, which is a broken
+ *   measurement rather than a perfect one, and it would derive a floor of zero that every
+ *   subsequent row exceeds. The field was named `observedMaxRelativeDispersion` while the
+ *   estimator was a plain maximum over every observation; `computenet-3sua` changed the
+ *   estimator and renamed the field with it, because a name that outlives its meaning is
+ *   the same defect `computenet-71hu` removed from the rendered block's "N sequential
+ *   repeat runs".
+ * @param runs how many observations of EVERY row fold into the statistic. At least
  *   [CLASS_FLOOR_MIN_RUNS] — JMH reports a `NaN` error at or below two measurement
  *   samples, and a floor drawn from fewer than three observations per row cannot see
  *   run-to-run variation at all. It does NOT say how those observations were gathered;
@@ -328,7 +450,7 @@ sealed interface DerivationAssembly {
  */
 data class ClassNoiseFloor(
     val benchmarkClass: String,
-    val observedMaxRelativeDispersion: Double,
+    val observedRobustDispersion: Double,
     val runs: Int,
     val derivedOn: String,
     val harnessCommitSha: String,
@@ -339,9 +461,9 @@ data class ClassNoiseFloor(
 ) {
     init {
         require(benchmarkClass.isNotBlank()) { "benchmarkClass must not be blank" }
-        require(observedMaxRelativeDispersion.isFinite() && observedMaxRelativeDispersion > 0.0) {
-            "observedMaxRelativeDispersion must be finite and strictly positive, was " +
-                "$observedMaxRelativeDispersion"
+        require(observedRobustDispersion.isFinite() && observedRobustDispersion > 0.0) {
+            "observedRobustDispersion must be finite and strictly positive, was " +
+                "$observedRobustDispersion"
         }
         require(runs >= CLASS_FLOOR_MIN_RUNS) {
             "a per-class floor requires at least $CLASS_FLOOR_MIN_RUNS observations of " +
@@ -370,11 +492,11 @@ data class ClassNoiseFloor(
     }
 
     /**
-     * The derived floor: [CLASS_FLOOR_MARGIN] x [observedMaxRelativeDispersion], rounded
+     * The derived floor: [CLASS_FLOOR_MARGIN] x [observedRobustDispersion], rounded
      * up to three decimals. Computed, never stored — see this class's KDoc.
      */
     val floor: Double
-        get() = roundUpToThreeDecimals(CLASS_FLOOR_MARGIN * observedMaxRelativeDispersion)
+        get() = roundUpToThreeDecimals(CLASS_FLOOR_MARGIN * observedRobustDispersion)
 }
 
 /**
@@ -386,27 +508,43 @@ data class ClassNoiseFloor(
  * to [NOISE_FLOOR] and the harness behaves for it exactly as it did before this file
  * existed — which is the correct behaviour for a floor that has not been measured.
  *
- * On the size of the one floor that exists: `CellFootprintBenchmark`'s worst quiet-host
- * row was 0.522 relative dispersion, so its floor is 1.044 — above 1.0, which is to say
- * this class can produce a JMH error bar the size of its own score without the machine
- * being busy. That is the finding, not a defect in it. `realSnapshot` at `N1E5` runs high
- * dispersion *reproducibly*: 12 of the 63 rows exceed 0.10 — OR_MAP_CELL and SET_CELL in
- * all three runs, MAP_CELL in two, KEYED_SET_CELL and LIST_CELL in one each. That is
- * precisely the structural spread [ClassFloorDerivation]'s "defect this exists to close"
- * section describes: the global bound fired on those rows every time and so distinguished
- * nothing.
+ * **The one entry is a RE-DERIVATION (`computenet-3sua`, 2026-08-27).** It is the same
+ * three quiesced runs `computenet-7v7m` made — the same 63 retained observations, no new
+ * measurement — recomputed under [classFloorStatistic], which replaced the previous
+ * maximum-over-every-observation. The estimator was committed first, on its own, before
+ * this number was computed under it; the value below is an OUTCOME of that rule and was
+ * not available when it was chosen. No entry is grandfathered: this table carries one
+ * statistic across every row of it.
  *
- * **The limit of this particular number, stated where the number is.** The maximum is
- * *comparatively* isolated in a way the underlying spread is not: OR_MAP_CELL N1E5
- * measured 0.522 / 0.119 / 0.199 across runs 1 / 2 / 3, so the row that sets the floor is
- * about 2.6x its own next-worst observation, and the second-highest row over all 63 is
- * 0.201. A floor of 1.044 is therefore a *weak* bound — it will refuse very little — and
- * a reader should not take it as "this class typically disperses 0.5". It is nonetheless
- * the number the pre-registered procedure yields, and it stands: the procedure says
- * MAXIMUM, not mean, and dropping the worst row or switching statistic *after seeing that
- * the maximum came out inconvenient* is exactly the reverse-engineering the forward
- * discipline exists to prevent. Tightening it needs more runs, decided in advance, not a
- * different reading of these three.
+ * On the size of the one floor that exists: the worst quiet-host row by TYPICAL dispersion
+ * is `realSnapshot` OR_MAP_CELL at `N1E5`, whose three observations were 0.522 / 0.119 /
+ * 0.199 and whose median is therefore 0.199 — so the floor is 0.398. `realSnapshot` at
+ * `N1E5` runs high dispersion *reproducibly*: 12 of the 63 rows exceed 0.10 — OR_MAP_CELL
+ * and SET_CELL in all three runs, MAP_CELL in two, KEYED_SET_CELL and LIST_CELL in one
+ * each. That is precisely the structural spread [ClassFloorDerivation]'s "defect this
+ * exists to close" section describes: the global bound fired on those rows every time and
+ * so distinguished nothing.
+ *
+ * **What changed, and what did not.** Under the old estimator this class's floor was
+ * 1.044, set by OR_MAP_CELL N1E5's single worst repeat (0.522, about 2.6x its own
+ * next-worst observation, against 0.201 as the second-highest row over all 63). The floor
+ * is now 0.398. The row that sets it is the SAME row — the change is not that a different
+ * part of the class was found to be worst, but that the row is now represented by what it
+ * typically does rather than by its most extreme repeat.
+ *
+ * **The limit of this particular number, stated where the number is.** 0.398 is still a
+ * loose bound in absolute terms: a row may carry a JMH 99.9% error bar nearly 40% the size
+ * of its own score and pass. That is the class, not the estimator — `realSnapshot` at
+ * `N1E5` genuinely disperses that much on a silent machine, and a floor that refused it
+ * would be refusing the benchmark rather than detecting interference. A reader should also
+ * not read 0.398 as "no observation here exceeded 0.199": a median does not bound the
+ * sample it is drawn from, and one of these very rows was measured at 0.522.
+ *
+ * **What must not be read into the tightening.** That 0.398 came out below 1.044 is an
+ * outcome, not a justification. The estimator was argued and committed on robustness
+ * grounds alone (see [classFloorStatistic]), and it would have discharged
+ * `computenet-3sua` identically had it produced a LOOSER floor. Nothing here may be
+ * revisited on the ground that some other statistic would yield a number someone prefers.
  */
 val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
     /**
@@ -415,8 +553,15 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
      * 7 cell families x 3 scales) from `bench/build/libs/bench-jmh.jar` at `a7c6a0382`,
      * each preceded by its own attestation of `run-series.sh`'s gate (1-minute load
      * average at or below 0.25 x 16 cores = 4.00 on NL-MGD6FQJW91), and each verified
-     * after the fact against its own log's `# VM version:` banner. Maximum
-     * `|scoreError / score|` over all 63 rows: `realSnapshot` OR_MAP_CELL N1E5 in run 1.
+     * after the fact against its own log's `# VM version:` banner.
+     *
+     * **Re-derived 2026-08-27 by `computenet-3sua`** under [classFloorStatistic], from
+     * those same three runs' retained JSON — arithmetic over kept artifacts, not a fresh
+     * measurement, which is why every provenance field below (date of the RUNS, harness
+     * sha, host state, JMH config, measuring JVM) is unchanged. The per-row median that
+     * sets it is `realSnapshot` OR_MAP_CELL N1E5, whose observations across runs 1 / 2 / 3
+     * were 0.5217864937179187 / 0.11856655814861747 / 0.19864889236475775. Under the previous
+     * estimator this entry read 0.5217864937179187, floor 1.044.
      *
      * **This SUPERSEDES `computenet-ahn0`'s derivation of the same class**, which
      * observed 0.2961501149112133 and published a floor of 0.593. That measurement is not
@@ -427,7 +572,7 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
      */
     ClassNoiseFloor(
         benchmarkClass = "CellFootprintBenchmark",
-        observedMaxRelativeDispersion = 0.5217864937179187,
+        observedRobustDispersion = 0.19864889236475775,
         runs = 3,
         derivedOn = "2026-08-26",
         harnessCommitSha = "a7c6a0382",
@@ -578,10 +723,10 @@ fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
                 "${assembly.units} measuring units in ${assembly.units} separate processes"
         null -> "${derivation.runs} observations of every row"
     }
-    val maximumOver = if (derivation.assembly is DerivationAssembly.WholeClassRuns) {
-        "across all rows of all ${derivation.runs} runs"
+    val statisticOver = if (derivation.assembly is DerivationAssembly.WholeClassRuns) {
+        "over all rows of all ${derivation.runs} runs"
     } else {
-        "across all rows, ${derivation.runs} observations each"
+        "over all rows, ${derivation.runs} observations each"
     }
     appendLine(
         "## ${derivation.derivedOn} — per-class noise floor for " +
@@ -600,23 +745,37 @@ fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
     appendLine("| quantity | value |")
     appendLine("| --- | --- |")
     appendLine(
-        "| max observed relative dispersion $maximumOver | " +
-            "${derivation.observedMaxRelativeDispersion} |"
+        "| statistic (max over rows of the per-row MEDIAN relative dispersion) " +
+            "$statisticOver | ${derivation.observedRobustDispersion} |"
     )
     appendLine("| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | $CLASS_FLOOR_MARGIN |")
     appendLine(
-        "| derived floor = margin x observed, rounded up to three decimals | " +
+        "| derived floor = margin x statistic, rounded up to three decimals | " +
             "${derivation.floor} |"
     )
     appendLine(
+        "Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions " +
+            "across its repeats, then the MAXIMUM of those medians across the class's " +
+            "rows. Robust within a row (one contaminated repeat cannot set a class's " +
+            "floor), conservative across rows (a reproducibly high-dispersion row is a " +
+            "fact about the class, not noise in it). Pre-registered in " +
+            "`ClassNoiseFloor.kt` before it was computed over any measurement — see " +
+            "`classFloorStatistic`'s own documentation for the argument, which is made " +
+            "from robustness and never from the value the statistic yields."
+    )
+    appendLine(
         "Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any " +
-            "per-class number existed; the floor is computed from the observation by " +
-            "`ClassNoiseFloor.floor` and is not hand-entered. What it establishes: rows " +
-            "of `${derivation.benchmarkClass}` measured under this configuration on a " +
-            "quiesced host stayed at or under " +
-            "${derivation.observedMaxRelativeDispersion} relative dispersion, so a later " +
-            "row above ${derivation.floor} is more dispersed than this class is when the " +
-            "machine is quiet. What it does NOT establish: anything about another " +
+            "per-class number existed; the floor is computed from the statistic by " +
+            "`ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a " +
+            "quiesced host, every row of `${derivation.benchmarkClass}` measured under " +
+            "this configuration had a TYPICAL (median) relative dispersion at or under " +
+            "${derivation.observedRobustDispersion}, so a later row above " +
+            "${derivation.floor} is more dispersed than this class typically is when the " +
+            "machine is quiet. What it does NOT establish: that no individual observation " +
+            "in the derivation exceeded ${derivation.observedRobustDispersion} — a median " +
+            "does not bound the sample it is drawn from, and single high repeats are " +
+            "exactly what this estimator declines to build a floor on. Nor anything about " +
+            "another " +
             "benchmark class, about this class under a different annotation " +
             "configuration, about this class on another host, or about this class under " +
             "a JVM other than ${derivation.measuringJvm}."

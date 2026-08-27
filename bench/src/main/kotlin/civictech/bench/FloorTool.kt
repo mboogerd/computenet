@@ -495,7 +495,7 @@ private fun kotlinStringLiteral(value: String): String =
 fun renderConstructorCall(record: ClassNoiseFloor): String = buildString {
     appendLine("ClassNoiseFloor(")
     appendLine("    benchmarkClass = ${kotlinStringLiteral(record.benchmarkClass)},")
-    appendLine("    observedMaxRelativeDispersion = ${record.observedMaxRelativeDispersion},")
+    appendLine("    observedRobustDispersion = ${record.observedRobustDispersion},")
     appendLine("    runs = ${record.runs},")
     appendLine("    derivedOn = ${kotlinStringLiteral(record.derivedOn)},")
     appendLine("    harnessCommitSha = ${kotlinStringLiteral(record.harnessCommitSha)},")
