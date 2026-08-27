@@ -169,7 +169,16 @@ run's rows. Movement beyond a band is reported, not signalled by the exit code.
 built): a disagreement with --jar's own stamped build provenance (Harness-Commit-Sha,
 written by :bench:jmhJar) is the stale-jar case and is refused, as is a --jar with no
 such stamp. The stamped sha, not --harness-sha, is then what gets recorded
-(computenet-0ado)."""
+(computenet-0ado).
+
+A relative --jar is tried against the working directory first, then against the
+repository root (the nearest ancestor with settings.gradle.kts) -- so the repo-root-
+relative bench/build/libs/bench-jmh.jar an operator standing at the repo root would
+type resolves correctly even though :bench:benchSeries' own working directory is
+bench/, not the repo root (computenet-ws4l, mirroring :bench:floorTool per
+computenet-x9e.15). A "jar not found" refusal names every absolute path it tried. An
+absolute --jar bypasses both attempts and is always safest, and is what
+scripts/bench-series/run-series.sh (the intended caller) passes."""
 
     /**
      * Runs the tool over [argv], writing to [out], and returns the process exit code.
