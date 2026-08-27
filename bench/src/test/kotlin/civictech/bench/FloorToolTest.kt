@@ -623,6 +623,49 @@ class FloorToolTest {
         badOut shouldContain "aaaa111"
     }
 
+    /**
+     * `computenet-eo9m` at the operator's surface. [FloorDerivationLedger.renderWarnings]
+     * is only useful if `render` actually prints its warning, and prints it ABOVE the
+     * block the operator pastes — the same place the partial-attestation warning lands, so
+     * an operator who has learned where warnings appear does not have to learn a second
+     * place. That ordering is a property of this command's output and no ledger-level test
+     * can see it.
+     */
+    @Test
+    fun `render warns above the block when the published sha is attested by no unit`(
+        @TempDir dir: File,
+    ) {
+        val ledger = startSyntheticLedger(File(dir, "ledger"))
+        listOf(0.01, 0.02, 0.03).forEachIndexed { index, dispersion ->
+            ingestUnitAt(
+                dir, "run-${index + 1}", csv(syntheticRows.map { it to dispersion }), "aaaa111",
+            ).first shouldBe 0
+        }
+        // Downgraded to the v1 shape: no unit records a sha, so the caller's
+        // --harness-sha is the published provenance and nothing checks it.
+        ledger.file.writeText(
+            ledger.file.readLines().joinToString("\n") { line ->
+                when {
+                    line == "floor-derivation-ledger v2" -> "floor-derivation-ledger v1"
+                    line.startsWith("unit ") -> line.substringBeforeLast('|')
+                    else -> line
+                }
+            } + "\n"
+        )
+
+        val (code, out) = run(
+            "render", "--ledger", File(dir, "ledger").path,
+            "--derived-on", "2026-08-27", "--harness-sha", "deadbeef", "--jmh-config", "x",
+        )
+
+        // A warning, not a refusal — an in-flight v1 derivation still renders at exit 0.
+        code shouldBe 0
+        out shouldContain "WARNING: no unit"
+        out shouldContain "deadbeef"
+        (out.indexOf("WARNING: no unit") < out.indexOf("ClassNoiseFloor(")) shouldBe true
+        (out.indexOf("WARNING: no unit") < out.indexOf("--- findings.md block ---")) shouldBe true
+    }
+
     @Test
     fun `a single-day and a multi-day set render distinguishably`(@TempDir dir: File) {
         val sameDay = File(dir, "same")
