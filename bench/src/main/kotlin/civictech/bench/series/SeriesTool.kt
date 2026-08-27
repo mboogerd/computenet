@@ -2,6 +2,7 @@ package civictech.bench.series
 
 import civictech.bench.HarnessJarStamp
 import civictech.bench.HostFacts
+import civictech.bench.JarPath
 import civictech.bench.MeasuringJvm
 import civictech.bench.RunEnvironment
 import civictech.bench.RunKnobs
@@ -168,14 +169,23 @@ run's rows. Movement beyond a band is reported, not signalled by the exit code.
 built): a disagreement with --jar's own stamped build provenance (Harness-Commit-Sha,
 written by :bench:jmhJar) is the stale-jar case and is refused, as is a --jar with no
 such stamp. The stamped sha, not --harness-sha, is then what gets recorded
-(computenet-0ado)."""
+(computenet-0ado).
+
+A relative --jar is tried against the working directory first, then against the
+repository root (the nearest ancestor with settings.gradle.kts) -- so the repo-root-
+relative bench/build/libs/bench-jmh.jar an operator standing at the repo root would
+type resolves correctly even though :bench:benchSeries' own working directory is
+bench/, not the repo root (computenet-ws4l, mirroring :bench:floorTool per
+computenet-x9e.15). A "jar not found" refusal names every absolute path it tried. An
+absolute --jar bypasses both attempts and is always safest, and is what
+scripts/bench-series/run-series.sh (the intended caller) passes."""
 
     /**
      * Runs the tool over [argv], writing to [out], and returns the process exit code.
      *
      * Separated from [main] so tests can drive it without exiting the test JVM.
      */
-    fun run(argv: Array<String>, out: Appendable): Int {
+    fun run(argv: Array<String>, out: Appendable, cwd: File = File("").absoluteFile): Int {
         val command = argv.firstOrNull()
         if (command == null || command == "--help" || command == "-h") {
             out.appendLine(USAGE)
@@ -187,7 +197,7 @@ such stamp. The stamped sha, not --harness-sha, is then what gets recorded
             return 1
         }
         val args = try {
-            parse(argv.drop(1))
+            parse(argv.drop(1), cwd)
         } catch (e: IllegalArgumentException) {
             out.appendLine("bad arguments: ${e.message}")
             out.appendLine(USAGE)
@@ -272,7 +282,7 @@ such stamp. The stamped sha, not --harness-sha, is then what gets recorded
         }
     }
 
-    private fun parse(argv: List<String>): Args {
+    private fun parse(argv: List<String>, cwd: File): Args {
         val map = mutableMapOf<String, String>()
         var i = 0
         while (i < argv.size) {
@@ -299,7 +309,7 @@ such stamp. The stamped sha, not --harness-sha, is then what gets recorded
             timestamp = required("timestamp"),
             hostState = hostState,
             harnessSha = required("harness-sha"),
-            jar = File(required("jar")),
+            jar = JarPath.resolve(required("jar"), cwd),
             log = map["log"]?.let { File(it) },
         )
     }
