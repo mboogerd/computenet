@@ -75,6 +75,22 @@ import java.util.concurrent.locks.LockSupport
  * two wall-clock intervals on one `System.nanoTime` clock, not about which page a given gap
  * belongs to — that attribution remains impossible for the reason
  * `PagedWalkOutcome.maxSinglePagePosition`'s KDoc gives.
+ *
+ * **(4) The TRUNCATED arm's non-containment is not structural, and cannot be made so here.**
+ * The arm's stop rule is keyed to the walk's first page, which bounds the drive's ADD loops
+ * — `TimedDrive.addsWindow` — against the walk. The window `maxGap` is measured over runs
+ * on past the last add through `driveShaped`'s drain fence, a busy spin on the collector's
+ * arrival count that contends with the pager for the same CPUs. So under CPU starvation a
+ * truncated trial's walk can outlast every add and still finish inside the drain tail,
+ * classifying [DriveWindowContainment.CONTAINED]. Measured at ~3% of TRUNCATED trials under
+ * 3x oversubscription and never seen at ordinary load (`computenet-fvrm`, filed off
+ * `computenet-ttjs`'s measurement). Such a trial is inadmissible for its arm and is
+ * discarded by the rule stated below rather than reinterpreted — see
+ * [admissibleContainmentTrial], which is that rule executed, and
+ * [ContainmentTrial.containmentAgainstDriveAdds], which is how a trial's record says which
+ * of the two intervals its classification turned on. Closing the gap structurally would
+ * mean redefining the measured window, which this file will not do before the mechanism is
+ * confirmed.
  */
 enum class DriveWindowArm {
     /** The matched contained control — the drive outlives the walk by construction. */
@@ -190,13 +206,35 @@ class DriveShape(
 /**
  * One drive's outcome together with the wall-clock [window] `DriveOutcome.maxGapMs` was
  * measured over, and the add count actually realised under [shape].
+ *
+ * @param window the interval `maxGap` is measured over, `[t0, t1]`, where `t1` is taken
+ *   AFTER the drain fence. Unchanged, and deliberately so: redefining it is conditional on
+ *   the containment mechanism being confirmed, which is the discriminating run's job.
+ * @param addsWindow the interval the drive's ADD loops occupied, `[t0, addsEnd]` — i.e. the
+ *   part of [window] a [DriveShape.stopEarly] rule actually governs. Always a prefix of
+ *   [window]; the difference between them is the drain tail. Measured because a stop rule
+ *   keyed to a concurrent subject (the TRUNCATED arm's) bounds this interval and NOT
+ *   [window], and only a fixture that reports both can say which of the two a given trial's
+ *   classification turned on (`computenet-fvrm`).
  */
 data class TimedDrive(
     val outcome: DriveOutcome,
     val window: Window,
+    val addsWindow: Window,
     val adds: Int,
     val shape: DriveShape,
-)
+) {
+    init {
+        require(addsWindow.startNanos == window.startNanos && addsWindow.endNanos <= window.endNanos) {
+            "the add loops' interval must be a prefix of the measured window " +
+                "(adds=[${addsWindow.startNanos}, ${addsWindow.endNanos}] " +
+                "window=[${window.startNanos}, ${window.endNanos}])"
+        }
+    }
+
+    /** How long the drain fence held the window open past the last add, in milliseconds. */
+    val drainTailMs: Double get() = (window.endNanos - addsWindow.endNanos) / 1_000_000.0
+}
 
 /**
  * One containment trial: an arm, its drive, its concurrent walk, and the classification the
@@ -209,9 +247,39 @@ data class ContainmentTrial(
     val driveAdds: Int,
     val walk: PagedWalkOutcome,
     val walkWindow: Window,
+    /**
+     * The prefix of [driveWindow] the drive's ADD loops occupied — `TimedDrive.addsWindow`.
+     *
+     * Defaulted to [driveWindow] so a constructed trial that is only exercising
+     * [classify]/[isValidForItsArm] need not state it; every trial [containmentTrial]
+     * produces states it, because for those the two differ by the drain tail and the
+     * difference is the thing [outlastsDriveAdds] is about.
+     */
+    val driveAddsWindow: Window = driveWindow,
 ) {
     /** How the walk's window sits inside — or outside — the drive's. */
     val containment: DriveWindowContainment get() = classify(driveWindow, walkWindow)
+
+    /**
+     * How the walk's window sits against the drive's ADD loops alone, ignoring the drain
+     * tail — the classification the TRUNCATED arm's stop rule can actually control.
+     *
+     * This is a DIAGNOSTIC, not a second definition of containment, and nothing asserts on
+     * it: `maxGap` is measured over [driveWindow] and [containment] is the fact that bears
+     * on it. It exists because the two can disagree — a TRUNCATED trial whose walk outlasts
+     * the adds but finishes inside the drain tail classifies CONTAINED and is inadmissible
+     * for its arm — and telling that case apart from a stop rule that simply did not fire
+     * is otherwise impossible from a trial's own record (`computenet-fvrm`).
+     */
+    val containmentAgainstDriveAdds: DriveWindowContainment
+        get() = classify(driveAddsWindow, walkWindow)
+
+    /** Whether the walk outlasted the drive's ADD loops, whatever the drain tail did. */
+    val outlastsDriveAdds: Boolean
+        get() = walkWindow.endNanos > driveAddsWindow.endNanos
+
+    /** How long the drain fence held the drive's window open past its last add, in ms. */
+    val drainTailMs: Double get() = (driveWindow.endNanos - driveAddsWindow.endNanos) / 1_000_000.0
 
     /**
      * Whether this trial is admissible as evidence for the arm that produced it, per this
@@ -238,7 +306,79 @@ data class ContainmentTrial(
                 walkWindow.durationMs,
                 driveWindow.durationMs,
                 driveAdds,
-            )
+            ) + " drainTail=%.4f ms vsAdds=%s".format(drainTailMs, containmentAgainstDriveAdds.name)
+}
+
+/**
+ * One trial that is admissible for its arm, and every trial discarded on the way to it.
+ *
+ * @param trial the trial to use as evidence — `trial.isValidForItsArm` holds.
+ * @param discarded the inadmissible trials, in the order they were produced. Reported
+ *   rather than swallowed: the pre-registration requires a discriminating run to say how
+ *   many trials it discarded, and a caller that never sees them cannot.
+ */
+data class AdmissibleContainmentTrial(
+    val trial: ContainmentTrial,
+    val discarded: List<ContainmentTrial>,
+)
+
+/**
+ * Attempts allowed per admissible trial before the fixture gives up and fails.
+ *
+ * Sized against the measured inadmissibility rate rather than picked: `computenet-fvrm`
+ * measured ~3% of TRUNCATED trials inadmissible under 3x CPU oversubscription, so four
+ * independent attempts miss with probability ~1e-6 under starvation and are unreachable on
+ * an idle host. The point of the cap is that a knob which stopped working — a `stopEarly`
+ * rule that never fires, say — fails LOUDLY at exhaustion instead of retrying forever, so
+ * the retry cannot turn a broken arm into a green test.
+ */
+const val CONTAINMENT_TRIAL_ATTEMPTS: Int = 4
+
+/**
+ * Run trials of [arm] until one is admissible for it, and return it with what was discarded.
+ *
+ * **Why a retry is the honest shape here, and not a weakening.** The TRUNCATED arm cuts the
+ * drive at the walk's FIRST page, which bounds `TimedDrive.addsWindow` — the drive's add
+ * loops — against the walk's own progress. It does not bound `TimedDrive.window`, which
+ * runs on to `t1` past `driveShaped`'s drain fence, and the fence is a busy spin on the
+ * collector's arrival count that competes for the same CPUs as the pager. So on a starved
+ * host a truncated trial's walk can outlast every add and still finish inside the drain
+ * tail, classifying [DriveWindowContainment.CONTAINED] — inadmissible for its arm. The arm
+ * therefore guarantees "the walk outlasts the drive's ADD loop"; whether it also outlasts
+ * the WINDOW is a race the arm cannot decide, and no rewriting of the arm makes it
+ * structural without redefining the window `maxGap` is measured over — which this file's
+ * header rules out until the mechanism is confirmed.
+ *
+ * The pre-registration already says what to do with a trial that does not classify as its
+ * arm requires: it is "discarded, never reinterpreted", and a run reports how many it
+ * discarded. This function is that rule, executed. It weakens nothing the arm asserts — the
+ * returned trial's classification is the arm's own, unrelaxed — and it cannot rescue a
+ * broken knob, because a knob that never produces an admissible trial exhausts [attempts]
+ * and fails naming what it saw.
+ *
+ * @param attempts how many trials to run before failing; see [CONTAINMENT_TRIAL_ATTEMPTS].
+ */
+fun admissibleContainmentTrial(
+    rig: LiveTrafficRig,
+    arm: DriveWindowArm,
+    pageLimit: Int = BoundedReadFixtures.PAGE_LIMIT,
+    adds: Int = CONTAINMENT_ADDS,
+    spacingNanos: Long = CONTAINMENT_SPACING_NANOS,
+    attempts: Int = CONTAINMENT_TRIAL_ATTEMPTS,
+): AdmissibleContainmentTrial {
+    require(attempts > 0) { "attempts must be positive, was $attempts" }
+    val discarded = ArrayList<ContainmentTrial>()
+    repeat(attempts) {
+        val trial = containmentTrial(rig, arm, pageLimit, adds, spacingNanos)
+        if (trial.isValidForItsArm) return AdmissibleContainmentTrial(trial, discarded)
+        discarded += trial
+    }
+    error(
+        "the ${arm.name} arm produced no trial admissible for it in $attempts attempts — " +
+            "this is the knob failing, not a scheduling accident, because each attempt is " +
+            "an independent trial. What they classified as: " +
+            discarded.joinToString("; ") { it.describe() },
+    )
 }
 
 /**
@@ -289,6 +429,12 @@ const val CONTAINMENT_EXTENSION_CAP_ADDS: Int = 200_000
 /**
  * Run ONE containment trial of [arm] against [rig], and return the drive, the walk, and how
  * their windows relate.
+ *
+ * Returns whatever the trial classified as, including a classification inadmissible for the
+ * arm — this is the raw instrument, and a caller that needs a trial it can use as evidence
+ * for its arm goes through [admissibleContainmentTrial], which applies the
+ * pre-registration's discard rule. See this file's header, residual (4), for the case where
+ * a TRUNCATED trial comes out CONTAINED.
  *
  * The caller owns the rig, its seeding and its warmup, exactly as `BoundedReadProbeTest`'s
  * E3 does — this runs one trial and measures it, so a probe can interleave arms (the
@@ -402,5 +548,6 @@ fun containmentTrial(
         driveAdds = timed.adds,
         walk = completed,
         walkWindow = Window(startNanos = walkStart.get(), endNanos = walkEnd.get()),
+        driveAddsWindow = timed.addsWindow,
     )
 }
