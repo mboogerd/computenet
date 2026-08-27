@@ -478,9 +478,10 @@ from a run whose console output was not kept (e.g. a scheduled run's captured lo
 without `-PbenchOnly`'s console echo, or a re-read after the fact) — it is not being
 replaced, only no longer the *sole* way to see a tally live.
 
-**Ordering hazard (found validating this workaround, same session, computenet-rd7h's
-first comment): running the ordinary gate AFTER a bench-tagged probe deletes the
-probe's own JUnit XML.** `./gradlew :bench:test --rerun` (no `-PbenchOnly`) removes
+**A consequence of gotcha 2, not a third gotcha: running the ordinary gate AFTER a
+bench-tagged probe deletes the probe's own JUnit XML.** Found validating the
+workaround above, same session, computenet-rd7h's first comment.
+`./gradlew :bench:test --rerun` (no `-PbenchOnly`) removes
 `bench/build/test-results/test/TEST-<bench-tagged class>.xml` as part of re-running
 the default `test` task's output directory, taking the `<system-out>` tally with it
 — the one place it lived before console echo existed, and still the only durable copy
