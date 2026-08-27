@@ -81,20 +81,21 @@ import java.util.concurrent.locks.LockSupport
  * ADD loops — `TimedDrive.addsWindow` — and not the window `maxGap` is measured over, which
  * runs on past the last add through `driveShaped`'s drain fence. Under CPU starvation a
  * TRUNCATED trial can therefore come out [DriveWindowContainment.CONTAINED], which is
- * inadmissible for its arm. Measured at ~3% by `computenet-ttjs`'s sample and at 7 of 157
- * raw trials (4.5%) by `computenet-fvrm`'s, both at 3x oversubscription; never seen at
+ * inadmissible for its arm. Measured at ~3% by `computenet-ttjs`'s sample and at 20 of 320
+ * raw trials (6.3%) by `computenet-fvrm`'s two, all at 3x oversubscription; never seen at
  * ordinary load, where 50 consecutive whole-suite runs were clean.
  *
  * **TWO distinct mechanisms produce it, and the one the bug was filed on is the minority.**
  * `computenet-fvrm` filed a candidate — the drive holding its window open through the drain
  * fence's busy spin while the walk finishes inside the tail — and the sample above bears it
- * out in 1 of its 7 inadmissible trials (`drainTail=17.8 ms`, walk outlasting the adds). The
- * other 6 have `drainTail` under 0.003 ms and a walk contained by the ADD loops themselves,
- * with 1, 1, 1, 2, 18 and 22 adds realised across drive windows of 12 to 64 ms. That is the
+ * out in 3 of their 20 inadmissible trials (`drainTail` 4.7-41.7 ms, walk outlasting the
+ * adds). The other 17 have `drainTail` under 0.003 ms and a walk contained by the ADD loops
+ * themselves, with 1 to 33 adds across drive windows of 3.6 to 55 ms. That is the
  * DRIVE THREAD being descheduled: `DriveShape.stopEarly` is polled only by the thread
  * emitting the adds, so a drive that does not run cannot cut its own window, and the walk
  * completes inside a truncation that has not happened yet. No drain-fence change touches
- * that case, and nothing in a fixture can make a starved thread poll.
+ * that case, and nothing in a fixture can make a starved thread poll. The measurement is
+ * `DriveWindowContainmentStarvedSampleTest`, whose KDoc carries both runs.
  *
  * So the arm's real guarantee is conditional, and stating it plainly: *when the driving
  * thread is scheduled, the walk outlasts the drive's ADD loop.* Neither half of that is
@@ -361,7 +362,7 @@ const val CONTAINMENT_TRIAL_ATTEMPTS: Int = 6
  * `DriveShape.stopEarly`. So the arm can bound `TimedDrive.addsWindow` — and only while
  * that thread is scheduled. Two things follow under CPU starvation, both measured (this
  * file's header, residual 4): the walk can outlast every add and still finish inside
- * `driveShaped`'s drain tail, and — the commoner case, 6 of 7 inadmissible trials — the
+ * `driveShaped`'s drain tail, and — the commoner case, 17 of 20 inadmissible trials — the
  * drive thread can be descheduled clean through the walk, so the truncation has not
  * happened yet when the walk ends. Either way the trial classifies
  * [DriveWindowContainment.CONTAINED] and is inadmissible for its arm. Neither is repairable

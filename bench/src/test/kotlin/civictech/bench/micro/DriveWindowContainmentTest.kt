@@ -90,9 +90,9 @@ class DriveWindowContainmentTest {
      * The arm's stop rule is keyed to the walk's first page and is polled by the drive's
      * own thread, so what it bounds is the drive's ADD loops, and only while that thread is
      * scheduled. Under 3x CPU oversubscription a TRUNCATED trial comes out CONTAINED about
-     * 4% of the time — either because the drive thread was descheduled through the whole
-     * walk so the cut had not happened yet (6 of 7 measured cases), or because the walk
-     * finished inside `driveShaped`'s drain tail (1 of 7). It is never seen at ordinary
+     * 6% of the time — either because the drive thread was descheduled through the whole
+     * walk so the cut had not happened yet (17 of 20 measured cases), or because the walk
+     * finished inside `driveShaped`'s drain tail (3 of 20). It is never seen at ordinary
      * load. See `DriveWindowContainment`'s header, residual (4), for the measurement.
      *
      * Such a trial is inadmissible for its arm by `ContainmentTrial.isValidForItsArm`,
@@ -455,19 +455,25 @@ class DriveWindowContainmentTest {
  * walk, while one with `vsAdds=CONTAINED` and a `drainTail` near zero is the DRIVE THREAD
  * having been descheduled through the walk, so the truncation had not happened yet.
  *
- * **Measured 2026-08-27, M2 Pro, 16 cores, 48 spinners, otherwise idle host** (this file's
- * committed configuration, `admissibleContainmentTrial` at
- * [CONTAINMENT_TRIAL_ATTEMPTS] attempts):
+ * **Measured 2026-08-27, 16 cores, 48 spinners, host otherwise idle** — two independent
+ * runs of this method, the second on this file's committed configuration
+ * ([CONTAINMENT_TRIAL_ATTEMPTS] attempts):
  *
  * ```
- * trials=150 returned={WALK_OUTLASTS_DRIVE=150} discarded=7 of 157 raw (4.5%)
- *   1 of 7: drainTail=17.8 ms, vsAdds=WALK_OUTLASTS_DRIVE   -- the drain fence
- *   6 of 7: drainTail<0.003 ms, vsAdds=CONTAINED, adds realised 1,1,1,2,18,22
- *           across drive windows of 12-64 ms                -- the drive thread descheduled
+ * run 1: trials=150 returned={WALK_OUTLASTS_DRIVE=150} discarded= 7 of 157 raw (4.5%)
+ * run 2: trials=150 returned={WALK_OUTLASTS_DRIVE=150} discarded=13 of 163 raw (8.0%)
+ * pooled discards, 20 of 320 raw (6.3%), by mechanism:
+ *    3 of 20  drainTail 4.7-41.7 ms, vsAdds=WALK_OUTLASTS_DRIVE  -- the drain fence
+ *   17 of 20  drainTail < 0.003 ms,  vsAdds=CONTAINED            -- the drive thread
+ *             1-33 adds realised across drive windows of 3.6-55 ms   descheduled
  * ```
+ *
+ * Zero CONTAINED among the 300 returned trials, which is the acceptance. No trial needed
+ * more than 3 of its [CONTAINMENT_TRIAL_ATTEMPTS] attempts in either run.
  *
  * So `computenet-fvrm`'s filed candidate mechanism (the drain fence) is real but is the
- * MINORITY cause; the dominant one is the drive thread not running.
+ * MINORITY cause at ~15% of inadmissible trials; the dominant one is the drive thread not
+ * running, which no change to the drain fence would touch.
  *
  * A zero result here is a statement about this host under this load and nothing more. It
  * does not bound the rate on other hardware, and the number of trials is the whole content
