@@ -201,22 +201,23 @@ data class GateReading(
  * @param gate the load attestation taken immediately before the unit.
  * @param timestamp when the unit ran, ISO-8601. Recorded so a reader can see how far
  *   apart the units of one derivation actually were.
- * @param harnessSha the repository checkout the unit measured under, recorded at ingest
- *   alongside the banner (`computenet-tdby`). `null` ONLY for a unit read back from a
- *   `v1` ledger, written before this field existed — see
+ * @param harnessSha the commit `bench-jmh.jar` was built from — read back from the jar's
+ *   own `Harness-Commit-Sha` manifest attribute (stamped by `:bench:jmhJar`,
+ *   `computenet-7doz`) at ingest, alongside the banner (`computenet-tdby`). `null` ONLY
+ *   for a unit read back from a `v1` ledger, written before this field existed — see
  *   [FloorDerivationLedger.harnessShas].
  *
- *   **What this field is, exactly, and what it is not.** It is the short commit sha of
- *   the working tree at the moment the unit was measured — what the operator's driver
- *   (`derive-class-floor.sh`) reads with `git rev-parse --short HEAD` immediately before
- *   the JMH invocation. It is NOT proof that `bench-jmh.jar` was built from that commit:
- *   the jar is built once, outside the gate, and nothing in the build stamps its
- *   provenance into it, so a rebuild at the SAME checkout — or a stale jar carried across
- *   a checkout change without rebuilding — is still invisible here. What it does catch is
- *   the case decomposition made likely and the case the published `harnessCommitSha`
- *   field is a claim about: units measured days apart under different checkouts, rendered
- *   under a single sha nobody checked. Closing the residual needs the jar itself to carry
- *   its build provenance, which is a `bench/build.gradle.kts` change (`computenet-7doz`).
+ *   **What this field is, exactly, and what it is not.** It is the jar's own build
+ *   provenance, not a working-tree reading taken on trust: `civictech.bench.FloorCli`'s
+ *   `runIngest` reads the working tree's HEAD from its caller (`derive-class-floor.sh`'s
+ *   `git rev-parse --short HEAD`, taken immediately before the JMH invocation) ONLY to
+ *   check it against the jar's stamp, and refuses the ingest outright on a disagreement —
+ *   the stale-jar case, where the jar on disk was not rebuilt after the checkout changed.
+ *   So by the time this field is set, the two are already known to agree; what it records
+ *   is the stamp, not the working-tree reading, so a future change to that check cannot
+ *   silently start recording the wrong one. This closes the residual the field used to
+ *   carry here: a rebuild at the same checkout, and a stale jar carried across a checkout
+ *   change, are both now visible rather than invisible.
  */
 data class UnitAttestation(
     val unitId: String,
@@ -413,8 +414,10 @@ data class DerivationPlan(
  *   the harness was measured at, and `harnessCommitSha` is published provenance — the
  *   field a later reader uses to re-derive. Each unit records the checkout it measured
  *   under, [render] refuses a set spanning two of them naming both, and [ingest] warns as
- *   soon as the second one arrives (`computenet-tdby`). What that field can and cannot
- *   witness is in [UnitAttestation.harnessSha]; the residual is `computenet-7doz`.
+ *   soon as the second one arrives (`computenet-tdby`). What that field witnesses — the
+ *   jar's own stamped build provenance, checked at ingest against the working tree the
+ *   caller read, not a working-tree reading taken on trust — is in
+ *   [UnitAttestation.harnessSha] (`computenet-7doz`).
  * - **A fourth observation of a row.** Exactly three fold into the statistic; an ingest
  *   that would push a row past three is refused per row, so an operator who re-ran a unit
  *   with too wide a filter is told which rows to narrow rather than having them silently
