@@ -281,13 +281,24 @@ tasks.named<Test>("test") {
 // caller, and `FloorTool.HarnessJarStamp` (FloorTool.kt) reads it back at ingest.
 //
 // The sha is read via `providers.exec`, Gradle's configuration-cache-safe process
-// provider — captured here as a lazy `Provider<String>` and read with `.get()` only
-// inside `doFirst`, at TASK EXECUTION time, matching the "capture a Provider, never reach
-// for `project` at execution time" rule the guard task above documents. This also means
-// the manifest is written with whatever commit is checked out at the moment `jmhJar`
-// actually RUNS: if `jmhJar` is not re-executed after a checkout change (task caching, or
-// simply not re-invoked), the jar on disk keeps its old, still-correct-for-itself stamp —
-// which is exactly the staleness this is meant to make visible, not paper over.
+// provider — captured here as a lazy `Provider<String>` and handed to the manifest AS A
+// PROVIDER, never `.get()`-ed by this script. (`.get()` inside a `doFirst` was the first
+// attempt and is rejected by the configuration cache; the `jmhJar` block below records
+// why, and this paragraph used to describe that rejected form as if it were the landed
+// one — computenet-7doz review.) It still honours the "capture a Provider, never reach
+// for `project` at execution time" rule the guard task above documents, because the
+// Provider — not the script — is what resolves.
+//
+// The value is resolved when `jmhJar` runs, not when the config cache entry was stored,
+// so the manifest carries whatever commit is checked out at the moment `jmhJar` actually
+// RUNS. MEASURED on darwin/arm64, 2026-08-27, with the configuration cache reused rather
+// than rebuilt: stamp `42ebbe59c` at HEAD `42ebbe59c`; HEAD moved to `979832512`;
+// `./gradlew :bench:jmhJar --rerun` printed "Configuration cache entry reused" and the
+// stamp became `979832512`. A plain `./gradlew :bench:jmhJar` at the same moment reported
+// `jmhJar UP-TO-DATE` and the jar kept its existing stamp — so if `jmhJar` is not
+// re-executed after a checkout change (up-to-date, task caching, or simply not
+// re-invoked), the jar on disk keeps its old, still-correct-for-itself stamp, which is
+// exactly the staleness `floorTool ingest` is meant to make visible, not paper over.
 //
 // `Harness-Commit-Sha` is a plain manifest attribute name, not a constant shared with
 // Kotlin source across the build-script/main-source boundary (a build script cannot
