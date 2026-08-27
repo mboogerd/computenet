@@ -404,3 +404,52 @@ at minute 20 — that limitation is unchanged.
   prints a report. Turning a movement into a finding is a human act, and it goes
   through `Findings.entry` like every other entry in that file.
 - **It does not decide whether movement is good.** See §4.
+
+## 10. Two operational gotchas, same shape (`computenet-x9e.15`)
+
+Both of these look like the tool failed. It didn't — it behaved correctly and said
+nothing useful, so the natural reading is "my invocation was wrong" when the real
+problem is somewhere else entirely. Both cost a different agent a full pass of
+misdiagnosis in one session (2026-08-27).
+
+**A relative `--jar` to `:bench:floorTool` is resolved against `bench/` first, then
+against the repo root.** `:bench:floorTool`'s `JavaExec` runs with the `bench/`
+*project* directory as its working directory, not the directory `./gradlew` was
+invoked from. `--jar bench/build/libs/bench-jmh.jar` — exactly what this tooling's
+own usage text and `derive-class-floor.sh`'s echoed commands print, and so exactly
+what anyone will copy — used to resolve straight into a doubled
+`bench/bench/build/libs/bench-jmh.jar` that does not exist. `JarPath.resolve`
+(`FloorTool.kt`) now tries the working directory first and falls back to the repo
+root (found by walking up to the nearest `settings.gradle.kts`) before refusing, so
+the copied command works either way; a genuine miss names every absolute path it
+tried. This matters more than an ordinary path typo because floorTool's refusals
+are the thing under test in several BEN1 items — a wrong `--jar` used to produce a
+refusal that read exactly like the refusal being deliberately triggered, so it
+masked the result instead of announcing the mistake (nine refusals were read as
+findings before the doubled segment was noticed). An absolute `--jar` always
+bypasses both attempts and remains the safest choice for a script.
+
+**A `@Tag("bench")` test's `println` output does not reach the Gradle console.**
+Every BEN1 sampling/rendering test's deliverable is a printed tally or table (see
+`CellFootprintProbeTest`, `ThroughputReportTest`'s render entry points, etc.).
+Gradle's `test` task does not forward a test JVM's stdout to the console by
+default, so running one of these under `-PbenchOnly=true --tests '<Name>'` prints
+only `<Name> PASSED` — the tally is not merely truncated, it never appears at all,
+and the natural conclusion is that the invocation produced nothing. The tally is
+still there: it is captured as `system-out` inside the JUnit XML at
+`bench/build/test-results/test/TEST-<fully.qualified.Name>.xml`, one `<system-out>`
+element per test method, holding the exact text the test printed. Read it with
+```
+python3 -c "import xml.etree.ElementTree as ET; \
+  r = ET.parse('bench/build/test-results/test/TEST-<fully.qualified.Name>.xml').getroot(); \
+  print(next(r.iter('system-out')).text)"
+```
+or any other tool that parses the JUnit XML, rather than re-running the test and
+scrolling the console. A code fix (`testLogging { showStandardStreams = true }` on
+the `Test` task) was considered, but the tag-gating and task configuration for
+every module's `test` task — including `:bench:test` — live in the single shared
+`buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`, not in `bench/build.gradle.kts`;
+turning that on there would echo every test's stdout across every module's default
+`./gradlew test`, not just a deliberately-invoked `@Tag("bench")` run. That is a
+bigger and noisier change than this note, so it is left as a documented workaround
+here rather than made unilaterally.

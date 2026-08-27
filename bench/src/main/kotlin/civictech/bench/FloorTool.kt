@@ -59,6 +59,60 @@ import kotlin.system.exitProcess
 object FloorTool
 
 // -----------------------------------------------------------------------------------
+// `--jar` resolution (`plan`, `next`) — computenet-x9e.15.
+// -----------------------------------------------------------------------------------
+
+/**
+ * Resolves a `--jar` value the way an operator typing it at the repo root expects, not the
+ * way `:bench:floorTool`'s `JavaExec` actually runs.
+ *
+ * `JavaExec`'s working directory defaults to the *project* directory (`bench/`), not the
+ * directory `./gradlew` was invoked from. The tooling's own prose — this file's [FloorCli]
+ * usage block, `doc/bench/regression-series.md`, `derive-class-floor.sh`'s echoed commands —
+ * all print `--jar bench/build/libs/bench-jmh.jar`, which is repo-root-relative and exactly
+ * what an operator standing at the repo root will copy. Resolved naively against the actual
+ * working directory, that path becomes `bench/bench/build/libs/bench-jmh.jar` — a doubled
+ * segment that does not exist, and whose refusal reads exactly like the refusal several BEN1
+ * items deliberately trigger to test (computenet-x9e.15; nine such refusals were read as
+ * findings before the doubled segment was noticed).
+ *
+ * [resolve] tries, in order: the path as given if absolute; the path against [cwd] (so a
+ * caller that already runs with the repo root as its working directory — direct `java`
+ * invocation, a future `workingDir` change — keeps working unchanged); then the path against
+ * the repository root, found by walking up from [cwd] to the nearest ancestor containing
+ * `settings.gradle.kts`. If none of those is a file, the thrown message names every absolute
+ * path it tried, so the next path mistake is self-diagnosing rather than merely documented.
+ */
+object JarPath {
+
+    fun resolve(raw: String, cwd: File = File("").absoluteFile): File {
+        val direct = File(raw)
+        if (direct.isAbsolute) return direct
+        val cwdAttempt = File(cwd, raw)
+        if (cwdAttempt.isFile) return cwdAttempt
+        val repoRoot = findRepoRoot(cwd)
+        val rootAttempt = repoRoot?.let { File(it, raw) }
+        if (rootAttempt != null && rootAttempt.isFile) return rootAttempt
+        val attempts = listOfNotNull(cwdAttempt, rootAttempt).joinToString(" and ") { it.path }
+        throw IllegalArgumentException(
+            "jar not found: tried $attempts (a relative --jar is resolved against the " +
+                "working directory first, then against the repository root; pass an " +
+                "absolute path to bypass both attempts)"
+        )
+    }
+
+    /** Walks up from [start] to the nearest ancestor containing `settings.gradle.kts`. */
+    private fun findRepoRoot(start: File): File? {
+        var dir: File? = start
+        while (dir != null) {
+            if (File(dir, "settings.gradle.kts").isFile) return dir
+            dir = dir.parentFile
+        }
+        return null
+    }
+}
+
+// -----------------------------------------------------------------------------------
 // Enumeration (`plan`).
 // -----------------------------------------------------------------------------------
 
@@ -550,8 +604,15 @@ sha the units themselves attest — a --harness-sha passed to render is CHECKED 
 them, not substituted for them, and is needed only for a v1 ledger whose units recorded
 none. The block carries the units' gathering window, so the single derivedOn date cannot
 be read as the span. Or (with --existing) for an already-committed
-CLASS_NOISE_FLOOR_DERIVATIONS entry. Every refusal is the ledger's own; this tool adds
-none. Not reachable from check, build or test.
+CLASS_NOISE_FLOOR_DERIVATIONS entry. Every refusal is the ledger's own except --jar
+resolution below, which this tool adds itself. Not reachable from check, build or test.
+
+A relative --jar is tried against the working directory first, then against the
+repository root (the nearest ancestor with settings.gradle.kts) -- so the repo-root-
+relative path this usage block and derive-class-floor.sh print (bench/build/libs/
+bench-jmh.jar) resolves correctly even though :bench:floorTool's own working directory
+is bench/, not the repo root (computenet-x9e.15). A "jar not found" refusal names every
+absolute path it tried. An absolute --jar bypasses both attempts and is always safest.
 
 Through Gradle the whole command line is one property and is tokenised by splitFloorArgs,
 which honours quoting, so a value containing spaces must be quoted INSIDE it:
@@ -619,7 +680,7 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
         val map = parseFlags(argv)
         val ledgerDir = File(required(map, "ledger"))
         val benchmarkClass = required(map, "class")
-        val jar = File(required(map, "jar"))
+        val jar = JarPath.resolve(required(map, "jar"))
 
         val enumeration = EnumerationRoute.enumerate(jar, benchmarkClass)
         val plan = DerivationPlan.of(
@@ -638,7 +699,7 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
     private fun runNext(argv: List<String>, out: Appendable): Int {
         val map = parseFlags(argv)
         val ledger = FloorDerivationLedger.load(File(required(map, "ledger")))
-        val jar = File(required(map, "jar"))
+        val jar = JarPath.resolve(required(map, "jar"))
 
         val unit = NextPlanner.next(ledger) { benchmarkClass, method ->
             UnitSizing.estimateRowSeconds(jar, benchmarkClass, method)
