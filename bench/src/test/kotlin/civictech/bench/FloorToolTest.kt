@@ -121,6 +121,9 @@ class FloorToolTest {
         RowKey.of("beta", mapOf("scale" to "N1E5")),
     )
     private val jdk21 = "# VM version: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS"
+
+    /** The harness sha the fixture units are ingested at unless a case varies it. */
+    private val harnessSha = "abcdef012"
     private val jbr25 = "# VM version: JDK 25.0.2, OpenJDK 64-Bit Server VM, 25.0.2+12-b1073.1"
 
     private fun startSyntheticLedger(dir: File): FloorDerivationLedger =
@@ -168,6 +171,12 @@ class FloorToolTest {
                 "$banner (build 21.0.5+11-LTS, mixed mode)\n" +
                 "# Fork: 1 of 1\n"
         )
+        // `ingest` takes a unit's timestamp from its log's mtime, and since
+        // computenet-tdby the rendered block carries the units' gathering window — so an
+        // un-pinned mtime puts the wall-clock time of the test run inside the output.
+        // Pinned here rather than left to the filesystem: a case that wants a span sets
+        // its own stamp, and every other case gets one deterministic instant.
+        log.setLastModified(java.time.Instant.parse("2026-08-27T09:00:00Z").toEpochMilli())
         return log
     }
 
@@ -221,7 +230,7 @@ class FloorToolTest {
             "ingest", "--ledger", ledgerDir.path,
             "--results", File(dir, "run-1.csv").path,
             "--log", File(dir, "run-1.log").path,
-            "--load", "1.2", "--cores", "16",
+            "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012",
         )
         ingestCode shouldBe 0
         ingestOut shouldContain "ingested unit 'run-1'"
@@ -250,7 +259,7 @@ class FloorToolTest {
             "ingest", "--ledger", ledgerDir.path,
             "--results", File(dir, "run-1.csv").path,
             "--log", log.path,
-            "--load", "1.2", "--cores", "16",
+            "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012",
         )
         code shouldBe 1
         out shouldContain "REFUSED"
@@ -274,14 +283,13 @@ class FloorToolTest {
                 "ingest", "--ledger", ledgerDir.path,
                 "--results", File(dir, "run-${index + 1}.csv").path,
                 "--log", File(dir, "run-${index + 1}.log").path,
-                "--load", "1.2", "--cores", "16",
+                "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012",
             )
         }
 
         val (code, out) = run(
             "render", "--ledger", ledgerDir.path,
             "--derived-on", "2026-08-27",
-            "--harness-sha", "abcdef012",
             "--jmh-config", "mode=AverageTime forks=1",
         )
         code shouldBe 0
@@ -301,12 +309,12 @@ class FloorToolTest {
             "ingest", "--ledger", ledgerDir.path,
             "--results", File(dir, "run-1.csv").path,
             "--log", File(dir, "run-1.log").path,
-            "--load", "1.2", "--cores", "16",
+            "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012",
         )
 
         val (code, out) = run(
             "render", "--ledger", ledgerDir.path,
-            "--derived-on", "2026-08-27", "--harness-sha", "abc", "--jmh-config", "x",
+            "--derived-on", "2026-08-27", "--jmh-config", "x",
         )
         code shouldBe 1
         out shouldContain "REFUSED"
@@ -324,13 +332,13 @@ class FloorToolTest {
                 "ingest", "--ledger", ledgerDir.path,
                 "--results", File(dir, "run-${index + 1}.csv").path,
                 "--log", File(dir, "run-${index + 1}.log").path,
-                "--load", "1.2", "--cores", "16",
+                "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012",
             )
         }
 
         val (code, out) = run(
             "render", "--ledger", ledgerDir.path,
-            "--derived-on", "2026-08-27", "--harness-sha", "abc", "--jmh-config", "x",
+            "--derived-on", "2026-08-27", "--jmh-config", "x",
         )
         code shouldBe 1
         out shouldContain "REFUSED"
@@ -360,7 +368,7 @@ class FloorToolTest {
             "ingest", "--ledger", File(dir, "ledger").path,
             "--results", File(dir, "$name.csv").path,
             "--log", File(dir, "$name.log").path,
-            "--load", "1.2", "--cores", "16",
+            "--load", "1.2", "--cores", "16", "--harness-sha", harnessSha,
         ).first
     }
 
@@ -396,7 +404,7 @@ class FloorToolTest {
     private fun renderComplete(dir: File): Pair<Int, String> = run(
         "render", "--ledger", File(dir, "ledger").path,
         "--derived-on", "2026-08-27",
-        "--harness-sha", "abcdef012",
+        // No --harness-sha: the units attest it (`computenet-tdby`).
         "--jmh-config", "mode=AverageTime forks=1",
     )
 
@@ -501,6 +509,184 @@ class FloorToolTest {
         out.toString() shouldContain "JMH: forks=1, warmup 3x1s, measurement 5x1s"
     }
 
+    // -----------------------------------------------------------------------------------
+    // computenet-tdby — harness sha and gathering span, through the CLI.
+    //
+    // The defect this closes, measured against the unfixed tool: three units timestamped
+    // 2026-08-20, -08-23 and -08-26 rendered at exit 0 under
+    // `harnessCommitSha = "deadbeef"` — a sha no unit had measured under, taken straight
+    // from the caller — and the findings block said "Harness: deadbeef · host state
+    // quiesced · 3 sequential repeat runs" with the span stated nowhere.
+    // -----------------------------------------------------------------------------------
+
+    /** Ingests one unit at [sha], with the log stamped [stamp]. */
+    private fun ingestUnitAt(
+        dir: File,
+        name: String,
+        csvContent: String,
+        sha: String,
+        stamp: String? = null,
+    ): Pair<Int, String> {
+        val log = writeLog(dir, "$name.log")
+        if (stamp != null) log.setLastModified(java.time.Instant.parse(stamp).toEpochMilli())
+        writeResults(dir, "$name.csv", csvContent)
+        return run(
+            "ingest", "--ledger", File(dir, "ledger").path,
+            "--results", File(dir, "$name.csv").path,
+            "--log", log.path,
+            "--load", "1.2", "--cores", "16", "--harness-sha", sha,
+        )
+    }
+
+    @Test
+    fun `ingest without --harness-sha is refused, so a unit's provenance cannot go unrecorded`(
+        @TempDir dir: File,
+    ) {
+        startSyntheticLedger(File(dir, "ledger"))
+        writeLog(dir, "run-1.log")
+        writeResults(dir, "run-1.csv", csv(syntheticRows.map { it to 0.02 }))
+
+        val (code, out) = run(
+            "ingest", "--ledger", File(dir, "ledger").path,
+            "--results", File(dir, "run-1.csv").path,
+            "--log", File(dir, "run-1.log").path,
+            "--load", "1.2", "--cores", "16",
+        )
+        code shouldBe 1
+        out shouldContain "harness-sha"
+    }
+
+    @Test
+    fun `render refuses a ledger whose units span two harness shas, naming both`(
+        @TempDir dir: File,
+    ) {
+        startSyntheticLedger(File(dir, "ledger"))
+        listOf("aaaa111", "aaaa111", "bbbb222").forEachIndexed { index, sha ->
+            ingestUnitAt(
+                dir, "run-${index + 1}", csv(syntheticRows.map { it to 0.02 }), sha,
+            ).first shouldBe 0
+        }
+
+        val (code, out) = run(
+            "render", "--ledger", File(dir, "ledger").path,
+            "--derived-on", "2026-08-27", "--jmh-config", "x",
+        )
+        code shouldBe 1
+        out shouldContain "REFUSED"
+        out shouldContain "span 2 harness shas"
+        out shouldContain "aaaa111"
+        out shouldContain "bbbb222"
+        out shouldContain "run-3"
+    }
+
+    @Test
+    fun `the second harness sha is warned about at ingest`(@TempDir dir: File) {
+        startSyntheticLedger(File(dir, "ledger"))
+        ingestUnitAt(dir, "run-1", csv(syntheticRows.map { it to 0.02 }), "aaaa111")
+            .second shouldNotContain "WARNING"
+
+        val (code, out) = ingestUnitAt(
+            dir, "run-2", csv(syntheticRows.map { it to 0.03 }), "bbbb222",
+        )
+        code shouldBe 0
+        out shouldContain "WARNING"
+        out shouldContain "REFUSED at render time"
+    }
+
+    @Test
+    fun `render publishes the sha the units attest and refuses one that disagrees`(
+        @TempDir dir: File,
+    ) {
+        startSyntheticLedger(File(dir, "ledger"))
+        listOf(0.01, 0.02, 0.03).forEachIndexed { index, dispersion ->
+            ingestUnitAt(
+                dir, "run-${index + 1}", csv(syntheticRows.map { it to dispersion }), "aaaa111",
+            ).first shouldBe 0
+        }
+
+        val (code, out) = run(
+            "render", "--ledger", File(dir, "ledger").path,
+            "--derived-on", "2026-08-27", "--jmh-config", "x",
+        )
+        code shouldBe 0
+        out shouldContain "harnessCommitSha = \"aaaa111\""
+        out shouldContain "Harness: aaaa111"
+
+        // The unfixed tool published this unchecked. It is now the refusal.
+        val (badCode, badOut) = run(
+            "render", "--ledger", File(dir, "ledger").path,
+            "--derived-on", "2026-08-27", "--harness-sha", "deadbeef", "--jmh-config", "x",
+        )
+        badCode shouldBe 1
+        badOut shouldContain "REFUSED"
+        badOut shouldContain "deadbeef"
+        badOut shouldContain "aaaa111"
+    }
+
+    @Test
+    fun `a single-day and a multi-day set render distinguishably`(@TempDir dir: File) {
+        val sameDay = File(dir, "same")
+        sameDay.mkdirs()
+        startSyntheticLedger(File(sameDay, "ledger"))
+        listOf("2026-08-27T09:00:00Z", "2026-08-27T13:00:00Z", "2026-08-27T18:00:00Z")
+            .forEachIndexed { index, stamp ->
+                ingestUnitAt(
+                    sameDay, "run-${index + 1}",
+                    csv(syntheticRows.map { it to 0.01 * (index + 1) }), "aaaa111", stamp,
+                ).first shouldBe 0
+            }
+
+        val spread = File(dir, "spread")
+        spread.mkdirs()
+        startSyntheticLedger(File(spread, "ledger"))
+        listOf("2026-08-20T09:00:00Z", "2026-08-23T09:00:00Z", "2026-08-26T09:00:00Z")
+            .forEachIndexed { index, stamp ->
+                ingestUnitAt(
+                    spread, "run-${index + 1}",
+                    csv(syntheticRows.map { it to 0.01 * (index + 1) }), "aaaa111", stamp,
+                ).first shouldBe 0
+            }
+
+        val (sameCode, sameOut) = run(
+            "render", "--ledger", File(sameDay, "ledger").path,
+            "--derived-on", "2026-08-27", "--jmh-config", "x",
+        )
+        val (spreadCode, spreadOut) = run(
+            "render", "--ledger", File(spread, "ledger").path,
+            "--derived-on", "2026-08-26", "--jmh-config", "x",
+        )
+        sameCode shouldBe 0
+        spreadCode shouldBe 0
+
+        sameOut shouldContain "Gathering window: all 3 unit(s) measured on ONE UTC day"
+        sameOut shouldNotContain "is NOT the span"
+
+        spreadOut shouldContain "spread over 3 UTC calendar days"
+        spreadOut shouldContain "2026-08-20T09:00:00Z"
+        spreadOut shouldContain "2026-08-26T09:00:00Z"
+        spreadOut shouldContain "is NOT the span"
+
+        // The span rides INSIDE the block the operator pastes, not beside it — findings.md
+        // is what every later reader consults.
+        spreadOut.substringAfter("--- findings.md block ---") shouldContain "Gathering window:"
+    }
+
+    @Test
+    fun `status reports the harness sha and the window alongside the measuring JVM`(
+        @TempDir dir: File,
+    ) {
+        startSyntheticLedger(File(dir, "ledger"))
+        ingestUnitAt(
+            dir, "run-1", csv(syntheticRows.map { it to 0.02 }), "aaaa111",
+            "2026-08-20T09:00:00Z",
+        ).first shouldBe 0
+
+        val (code, out) = run("status", "--ledger", File(dir, "ledger").path)
+        code shouldBe 0
+        out shouldContain "harness sha(s) seen: aaaa111"
+        out shouldContain "Gathering window:"
+    }
+
     @Test
     fun `render --existing refuses a class with no committed entry`() {
         val (code, out) = run("render", "--existing", "NoSuchBenchmark")
@@ -549,6 +735,7 @@ class FloorToolTest {
                     measuringJvm = jdk21,
                     gate = GateReading(oneMinuteLoad = 1.0, cores = 16, attestedThreshold = 4.0),
                     timestamp = "2026-08-27T09:00:00Z",
+                    harnessSha = harnessSha,
                 ),
                 csv(syntheticRows.map { it to dispersion }),
             )

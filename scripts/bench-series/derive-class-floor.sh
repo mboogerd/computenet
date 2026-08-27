@@ -10,8 +10,9 @@
 # `:bench:floorTool`'s ledger CLI (computenet-3omz.2). The load-gate arithmetic and the
 # JDK pin below are that script's, verbatim, mirroring scripts/bench-series/run-series.sh's
 # house style; this script adds no policy beyond them. Every other refusal — an incomplete
-# row set, a second measuring JVM, a fourth observation, a plan/enumeration mismatch — is
-# `floorTool`'s / the ledger's own; this script only surfaces it.
+# row set, a second measuring JVM, a second harness sha, a fourth observation, a
+# plan/enumeration mismatch — is `floorTool`'s / the ledger's own; this script only
+# surfaces it.
 #
 # USAGE
 #   scripts/bench-series/derive-class-floor.sh --class <SimpleName> [--status-only]
@@ -35,6 +36,13 @@
 #                       own `-version` output before anything runs, and the unit's own
 #                       JMH log banner is re-checked after, so a JDK that changes between
 #                       those two points is still caught.
+#
+# PROVENANCE IS RECORDED PER UNIT, NOT AT RENDER TIME. Each unit is ingested with the
+# working tree's HEAD sha read immediately before its measurement (computenet-tdby), so a
+# derivation assembled across two checkouts is REFUSED at render naming both shas instead
+# of being published under whichever checkout happened to be current last. The rendered
+# findings block states the units' gathering window for the same reason. What is still not
+# witnessed: the jar's own build provenance (computenet-7doz) — see step 4c.
 #
 # ONE INVOCATION, ONE UNIT, THEN EXIT. This script never loops waiting for the load gate
 # and never retries on your behalf: a gate refusal prints the reading and exits non-zero.
@@ -73,7 +81,7 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "--ledger requires a value" >&2; exit 2; }
       LEDGER_DIR="$2"; shift 2 ;;
     -h|--help)
-      sed -n '2,54p' "${BASH_SOURCE[0]}"; exit 0 ;;
+      sed -n '2,61p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *)
       echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -143,6 +151,24 @@ floor_tool() {
 }
 
 # --------------------------------------------------------------------------------------
+# The "it's complete, here's how to render it" hint, printed from the three places that
+# detect completeness. One function rather than three copies because the three copies
+# drifted apart once already, and because what it says changed materially with
+# computenet-tdby: --harness-sha is no longer an argument the operator invents at render
+# time. Each unit records the checkout it measured under (step 6 below), `render`
+# publishes that sha and REFUSES a set spanning two, and the rendered findings block
+# carries the units' own gathering window — so the caveat this used to print, telling a
+# human to go read timestamps out of the ledger file by hand, is now a check.
+print_render_hint() {
+  echo "'${CLASS}' is complete. Render its findings block with:"
+  echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --jmh-config '<text — spaces allowed, keep the quotes>'\""
+  echo "  --harness-sha is NOT passed: the units attest the sha each measured at, render"
+  echo "  publishes it, and a set spanning two shas is refused naming both. --derived-on"
+  echo "  is still ONE date you choose; the block's own 'Gathering window:' line states"
+  echo "  the span, so paste the block whole."
+}
+
+# --------------------------------------------------------------------------------------
 # --status-only: report and exit. No gate, no build, no jar, no JAVA pin.
 if [[ ${STATUS_ONLY} -eq 1 ]]; then
   if [[ ! -f "${LEDGER_FILE}" ]]; then
@@ -156,15 +182,10 @@ if [[ ${STATUS_ONLY} -eq 1 ]]; then
     exit "${code}"
   fi
   if floor_tool render --ledger "${LEDGER_DIR}" \
-      --derived-on "$(date -u '+%Y-%m-%d')" --harness-sha "$(git -C "${REPO_ROOT}" rev-parse --short HEAD)" \
+      --derived-on "$(date -u '+%Y-%m-%d')" \
       --jmh-config "(placeholder — see below)" >/dev/null 2>&1; then
     echo
-    echo "'${CLASS}' is complete. Render its findings block with:"
-    echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --harness-sha <sha> --jmh-config '<text — spaces allowed, keep the quotes>'\""
-  echo "  Both --derived-on and --harness-sha record ONE value for a set that may have"
-  echo "  been gathered over several days and several harness commits: the ledger checks"
-  echo "  the measuring JVM across units and NOTHING checks these two. Read every unit's"
-  echo "  timestamp from ${LEDGER_FILE} and state the actual span in the findings entry."
+    print_render_hint
   fi
   exit 0
 fi
@@ -277,12 +298,7 @@ echo "${NEXT_OUTPUT}"
 
 if printf '%s\n' "${NEXT_OUTPUT}" | grep -q "^'${CLASS}' is complete"; then
   echo
-  echo "'${CLASS}' is complete. Render its findings block with:"
-  echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --harness-sha <sha> --jmh-config '<text — spaces allowed, keep the quotes>'\""
-  echo "  Both --derived-on and --harness-sha record ONE value for a set that may have"
-  echo "  been gathered over several days and several harness commits: the ledger checks"
-  echo "  the measuring JVM across units and NOTHING checks these two. Read every unit's"
-  echo "  timestamp from ${LEDGER_FILE} and state the actual span in the findings entry."
+  print_render_hint
   exit 0
 fi
 
@@ -332,6 +348,24 @@ MSG
 fi
 echo "Gate still open at measurement time: ${LOAD_1M} <= ${THRESHOLD}."
 
+# --------------------------------------------------------------------------------------
+# 4c. The harness sha THIS unit measures under, read here — immediately before the
+# invocation — and not at render time (computenet-tdby). `harnessCommitSha` is published
+# provenance: it is the commit a later reader checks out to re-derive the floor. Read at
+# render time it is the LAST window's checkout, which for a set assembled over days is a
+# commit that may have measured nothing. Per unit, for exactly the reason the banner check
+# in step 5 is per unit.
+#
+# WHAT THIS DOES NOT WITNESS, stated here because it is the residual and not a detail: it
+# is the working tree's HEAD, not the jar's provenance. ${JAR} is built once, outside the
+# gate, and carries no record of the commit it was built from, so a rebuild at the same
+# checkout is invisible, and a STALE jar carried across a checkout change is recorded
+# under a sha its code did not come from. Closing that needs the build to stamp the jar
+# (computenet-7doz).
+HARNESS_SHA="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
+echo "Harness sha for unit ${UNIT_N}: ${HARNESS_SHA} (working tree HEAD; the jar's own"
+echo "  build provenance is not recorded — computenet-7doz)"
+
 echo
 echo "Running unit ${UNIT_N}: ${SELECTION_ARGS_LINE}"
 # shellcheck disable=SC2086
@@ -364,7 +398,7 @@ esac
 echo
 echo "Ingesting unit ${UNIT_N}..."
 floor_tool ingest --ledger "${LEDGER_DIR}" --results "${RESULTS}" --log "${LOG}" \
-  --load "${LOAD_1M}" --cores "${CORES}"
+  --load "${LOAD_1M}" --cores "${CORES}" --harness-sha "${HARNESS_SHA}"
 
 echo
 floor_tool status --ledger "${LEDGER_DIR}"
@@ -373,13 +407,8 @@ echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') class=${CLASS} unit=${UNIT_N} FINISHED" \
   >> "${LOADWATCH}"
 
 if floor_tool render --ledger "${LEDGER_DIR}" \
-    --derived-on "$(date -u '+%Y-%m-%d')" --harness-sha "$(git -C "${REPO_ROOT}" rev-parse --short HEAD)" \
+    --derived-on "$(date -u '+%Y-%m-%d')" \
     --jmh-config "(placeholder)" >/dev/null 2>&1; then
   echo
-  echo "'${CLASS}' is complete. Render its findings block with:"
-  echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --harness-sha <sha> --jmh-config '<text — spaces allowed, keep the quotes>'\""
-  echo "  Both --derived-on and --harness-sha record ONE value for a set that may have"
-  echo "  been gathered over several days and several harness commits: the ledger checks"
-  echo "  the measuring JVM across units and NOTHING checks these two. Read every unit's"
-  echo "  timestamp from ${LEDGER_FILE} and state the actual span in the findings entry."
+  print_render_hint
 fi

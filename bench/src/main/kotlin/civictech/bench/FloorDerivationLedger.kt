@@ -201,12 +201,29 @@ data class GateReading(
  * @param gate the load attestation taken immediately before the unit.
  * @param timestamp when the unit ran, ISO-8601. Recorded so a reader can see how far
  *   apart the units of one derivation actually were.
+ * @param harnessSha the repository checkout the unit measured under, recorded at ingest
+ *   alongside the banner (`computenet-tdby`). `null` ONLY for a unit read back from a
+ *   `v1` ledger, written before this field existed — see
+ *   [FloorDerivationLedger.harnessShas].
+ *
+ *   **What this field is, exactly, and what it is not.** It is the short commit sha of
+ *   the working tree at the moment the unit was measured — what the operator's driver
+ *   (`derive-class-floor.sh`) reads with `git rev-parse --short HEAD` immediately before
+ *   the JMH invocation. It is NOT proof that `bench-jmh.jar` was built from that commit:
+ *   the jar is built once, outside the gate, and nothing in the build stamps its
+ *   provenance into it, so a rebuild at the SAME checkout — or a stale jar carried across
+ *   a checkout change without rebuilding — is still invisible here. What it does catch is
+ *   the case decomposition made likely and the case the published `harnessCommitSha`
+ *   field is a claim about: units measured days apart under different checkouts, rendered
+ *   under a single sha nobody checked. Closing the residual needs the jar itself to carry
+ *   its build provenance, which is a `bench/build.gradle.kts` change (`computenet-7doz`).
  */
 data class UnitAttestation(
     val unitId: String,
     val measuringJvm: String,
     val gate: GateReading,
     val timestamp: String,
+    val harnessSha: String?,
 ) {
     init {
         require(unitId.isNotBlank()) { "unitId must not be blank" }
@@ -215,6 +232,58 @@ data class UnitAttestation(
                 "banner, and the single-JVM refusal has nothing to compare without it"
         }
         require(timestamp.isNotBlank()) { "timestamp must not be blank" }
+        require(harnessSha == null || harnessSha.isNotBlank()) {
+            "harnessSha must be null (a unit read back from a v1 ledger) or a non-blank " +
+                "commit sha; a blank one is an unrecorded provenance wearing a recorded " +
+                "one's face"
+        }
+    }
+}
+
+/**
+ * The span of one derivation's measuring units in time (`computenet-tdby`).
+ *
+ * [ClassNoiseFloor] has ONE `derivedOn` date, and a decomposed derivation's units can be
+ * days apart, so that single date is readable as "the day this set was gathered" when it
+ * is only the day it was rendered. This type is what [FloorDerivationLedger.render]'s
+ * caller prints so the reader is never left to assume.
+ *
+ * @param earliest the earliest unit timestamp, verbatim as the unit recorded it.
+ * @param latest the latest, likewise.
+ * @param units how many units the span covers.
+ * @param calendarDays how many distinct UTC calendar dates the units fall on, or `null`
+ *   when a timestamp could not be parsed as an instant — a hand-edited ledger. A count
+ *   that cannot be computed is reported as unknown rather than guessed, because "1" is
+ *   the reassuring answer and the wrong one to invent.
+ */
+data class GatheringWindow(
+    val earliest: String,
+    val latest: String,
+    val units: Int,
+    val calendarDays: Int?,
+) {
+
+    /** True when every unit provably fell on one UTC calendar date. */
+    val singleDay: Boolean get() = calendarDays == 1
+
+    /**
+     * The sentence `floorTool render` prints, and the one an operator pastes under the
+     * findings entry. Single-day and multi-day sets are deliberately different sentences,
+     * not the same sentence with different numbers: a reader skimming for "was this
+     * gathered at one sitting" must not have to compare two timestamps to find out.
+     */
+    fun describe(): String = when {
+        calendarDays == null ->
+            "Gathering window: $units unit(s) between '$earliest' and '$latest'; their " +
+                "calendar span could not be computed, because a timestamp is not an " +
+                "ISO-8601 instant. The single `derivedOn` date is not this span."
+        singleDay ->
+            "Gathering window: all $units unit(s) measured on ONE UTC day, $earliest to " +
+                "$latest — the single `derivedOn` date describes this set."
+        else ->
+            "Gathering window: $units unit(s) spread over $calendarDays UTC calendar " +
+                "days, $earliest to $latest — the single `derivedOn` date is ONE of " +
+                "those days and is NOT the span these observations were gathered over."
     }
 }
 
@@ -339,6 +408,13 @@ data class DerivationPlan(
  *   ran under JBR 25.0.2 rather than the toolchain's JDK 21, and re-deriving under 21
  *   moved the floor from 0.593 to 1.044. [render] refuses a row set spanning two banner
  *   strings, and [ingest] warns as soon as the second one arrives.
+ * - **More than one harness sha.** The bullet above argues from "with units days apart
+ *   the JDK can change between them"; the same premise holds verbatim for the checkout
+ *   the harness was measured at, and `harnessCommitSha` is published provenance — the
+ *   field a later reader uses to re-derive. Each unit records the checkout it measured
+ *   under, [render] refuses a set spanning two of them naming both, and [ingest] warns as
+ *   soon as the second one arrives (`computenet-tdby`). What that field can and cannot
+ *   witness is in [UnitAttestation.harnessSha]; the residual is `computenet-7doz`.
  * - **A fourth observation of a row.** Exactly three fold into the statistic; an ingest
  *   that would push a row past three is refused per row, so an operator who re-ran a unit
  *   with too wide a filter is told which rows to narrow rather than having them silently
@@ -385,6 +461,51 @@ class FloorDerivationLedger private constructor(
 
     /** The distinct measuring-JVM banners across all ingested units, in ingest order. */
     fun measuringJvms(): List<String> = unitList.map { it.measuringJvm }.distinct()
+
+    /**
+     * The distinct harness shas across all ingested units that recorded one, in ingest
+     * order (`computenet-tdby`).
+     *
+     * Units read back from a `v1` ledger recorded none and are absent from this list;
+     * [unattestedHarnessUnits] names them. The two are kept apart deliberately: "every
+     * unit measured under one sha" and "no unit says what it measured under" are
+     * different states, and collapsing them would let the second render as the first.
+     */
+    fun harnessShas(): List<String> = unitList.mapNotNull { it.harnessSha }.distinct()
+
+    /** The ids of units carrying no harness sha — `v1` ledger units, and only those. */
+    fun unattestedHarnessUnits(): List<String> =
+        unitList.filter { it.harnessSha == null }.map { it.unitId }
+
+    /**
+     * The span of the ingested units in time, or `null` when nothing has been ingested.
+     *
+     * Every unit's timestamp is already recorded; this only reads them. See
+     * [GatheringWindow] for why the single `derivedOn` date needs it.
+     */
+    fun gatheringWindow(): GatheringWindow? {
+        if (unitList.isEmpty()) return null
+        val stamps = unitList.map { it.timestamp }
+        val instants = stamps.map { runCatching { java.time.Instant.parse(it) }.getOrNull() }
+        return if (instants.any { it == null }) {
+            val sorted = stamps.sorted()
+            GatheringWindow(sorted.first(), sorted.last(), unitList.size, calendarDays = null)
+        } else {
+            val parsed = instants.filterNotNull()
+            val earliest = parsed.min()
+            val latest = parsed.max()
+            val days = parsed
+                .map { it.atZone(java.time.ZoneOffset.UTC).toLocalDate() }
+                .distinct()
+                .size
+            GatheringWindow(
+                earliest = stamps[instants.indexOf(earliest)],
+                latest = stamps[instants.indexOf(latest)],
+                units = unitList.size,
+                calendarDays = days,
+            )
+        }
+    }
 
     /**
      * Records one JMH invocation's rows against the plan and persists the result.
@@ -477,6 +598,20 @@ class FloorDerivationLedger private constructor(
                 "set spanning two measuring JVMs will be REFUSED at render time — re-run " +
                 "this unit under the JVM the others used, launched by absolute path."
         }
+        // The harness sha's mirror of the line above, and for the same reason: the
+        // mixed-JVM refusal argues from "with units spread over days the measuring JDK
+        // can change between them", and that premise holds verbatim for the checkout the
+        // harness was measured at (`computenet-tdby`). Warned here, refused at render,
+        // exactly as the JVM is — so an operator hears about it while re-running the unit
+        // is still cheap.
+        val knownShas = harnessShas()
+        if (unit.harnessSha != null && knownShas.isNotEmpty() && unit.harnessSha !in knownShas) {
+            warnings += "unit '${unit.unitId}' measured at harness sha " +
+                "'${unit.harnessSha}', but this derivation's earlier units measured at " +
+                "${knownShas.sorted()}. A row set spanning two harness shas will be " +
+                "REFUSED at render time — check out the sha the others measured at, " +
+                "rebuild the jar, and re-run this unit."
+        }
 
         unitList += unit
         observationList += fresh
@@ -495,11 +630,20 @@ class FloorDerivationLedger private constructor(
      *
      * @param derivedOn the ISO date to record. For a decomposed derivation this is a
      *   choice the operator makes and the findings entry must qualify — the units span
-     *   days, and the record has one date field.
+     *   days, and the record has one date field. [gatheringWindow] is what makes that
+     *   qualification checkable rather than a prompt to a human, and `floorTool render`
+     *   prints it (`computenet-tdby`).
+     * @param harnessCommitSha the sha to record, or `null` to take the one the units
+     *   attest. **Supplying one no longer overrides the ledger**: if the units attest a
+     *   sha and this disagrees with it, the render is REFUSED naming both, because a
+     *   published `Harness: <sha>` line is a claim about the commit the observations were
+     *   measured under and a caller's `git rev-parse HEAD` at render time is the LAST
+     *   window's checkout, not that commit. It is still required — and unchecked, as
+     *   before — for a `v1` ledger whose units recorded no sha at all.
      */
     fun render(
         derivedOn: String,
-        harnessCommitSha: String,
+        harnessCommitSha: String?,
         jmhConfig: String,
     ): ClassNoiseFloor {
         val missing = outstanding()
@@ -532,17 +676,96 @@ class FloorDerivationLedger private constructor(
             )
         }
 
+        val resolvedSha = resolveHarnessSha(harnessCommitSha)
+
         val observed = observationList.maxOf { it.relativeDispersion }
         return ClassNoiseFloor(
             benchmarkClass = plan.benchmarkClass,
             observedMaxRelativeDispersion = observed,
             runs = CLASS_FLOOR_OBSERVATIONS_PER_ROW,
             derivedOn = derivedOn,
-            harnessCommitSha = harnessCommitSha,
+            harnessCommitSha = resolvedSha,
             hostState = QUIESCED_HOST_STATE,
             jmhConfig = jmhConfig,
             measuringJvm = jvms.single(),
         )
+    }
+
+    /**
+     * The harness sha [render] will publish, or a refusal (`computenet-tdby`).
+     *
+     * The refusal for a set spanning two shas is deliberately shaped like the mixed-JVM
+     * one above — it names every sha it saw and says which units to re-run — because it
+     * is argued from the same premise. `harnessCommitSha` is the field a later reader
+     * uses to RE-DERIVE a floor, so a set assembled across two commits published under
+     * one of them sends that reader to a checkout the number does not describe.
+     */
+    private fun resolveHarnessSha(supplied: String?): String {
+        val shas = harnessShas()
+        val unattested = unattestedHarnessUnits()
+        if (shas.size > 1) {
+            throw FloorLedgerException(
+                "REFUSED: '${plan.benchmarkClass}''s units span ${shas.size} harness " +
+                    "shas — ${shas.sorted()}. `harnessCommitSha` is published provenance: " +
+                    "it is the commit a later reader checks out to re-derive this floor, " +
+                    "and a set assembled across two commits describes neither of them. " +
+                    "Units per sha: " +
+                    unitList.filter { it.harnessSha != null }
+                        .groupBy { it.harnessSha }
+                        .entries.sortedBy { it.key }
+                        .joinToString("; ") { (sha, units) ->
+                            "$sha -> ${units.map { it.unitId }.sorted()}"
+                        } +
+                    ". Re-run the units measured at the minority sha, from that same " +
+                    "checkout with the jar rebuilt"
+            )
+        }
+        if (shas.size == 1) {
+            val attested = shas.single()
+            if (supplied != null && supplied != attested) {
+                throw FloorLedgerException(
+                    "REFUSED: --harness-sha '$supplied' is not the sha " +
+                        "'${plan.benchmarkClass}''s units were measured at " +
+                        "('$attested'). A render-time `git rev-parse HEAD` is the LAST " +
+                        "window's checkout, not the one the observations were taken " +
+                        "under. Drop --harness-sha and let the ledger's own attestation " +
+                        "be published, or find out why they differ"
+                )
+            }
+            // A ledger that mixes attested and unattested units is NOT refused: a
+            // resumed v1 derivation legitimately does, and refusing would mean
+            // re-measuring hours of gated work to learn nothing. renderWarnings() says so
+            // instead.
+            return attested
+        }
+        return supplied ?: throw FloorLedgerException(
+            "REFUSED: no unit of '${plan.benchmarkClass}''s derivation recorded a harness " +
+                "sha — every one was ingested into a v1 ledger, before the field existed " +
+                "(${unattested.sorted()}) — so there is nothing to publish and nothing to " +
+                "check. Pass --harness-sha <sha> to record one on the operator's " +
+                "authority, and say in the findings entry that it is unattested"
+        )
+    }
+
+    /**
+     * What [render] would publish that is true but weaker than it looks — today, only the
+     * provenance a `v1` ledger's units cannot supply (`computenet-tdby`).
+     *
+     * Separate from [render]'s return value because a warning is not a refusal and must
+     * not be able to become one by accident; `floorTool render` prints these above the
+     * block so they land in front of the operator pasting it.
+     */
+    fun renderWarnings(): List<String> {
+        val warnings = mutableListOf<String>()
+        val unattested = unattestedHarnessUnits()
+        if (unattested.isNotEmpty() && harnessShas().isNotEmpty()) {
+            warnings += "${unattested.size} of ${unitList.size} unit(s) " +
+                "(${unattested.sorted()}) were ingested into a v1 ledger and record no " +
+                "harness sha, so the published sha is checked across " +
+                "${unitList.size - unattested.size} unit(s) only. Say so in the findings " +
+                "entry, or re-run those units."
+        }
+        return warnings
     }
 
     /** A one-line progress summary, for a driver that reports between windows. */
@@ -580,6 +803,10 @@ class FloorDerivationLedger private constructor(
                     unit.gate.cores.toString(),
                     unit.gate.attestedThreshold.toString(),
                     escapeField(unit.measuringJvm),
+                    // v2's seventh field. EMPTY means "this unit predates the field" —
+                    // it is written empty only for units read back from a v1 ledger,
+                    // because UnitAttestation refuses a blank-but-present sha.
+                    escapeField(unit.harnessSha ?: ""),
                 ).joinToString("|")
             )
         }
@@ -602,7 +829,34 @@ class FloorDerivationLedger private constructor(
         const val LEDGER_FILE_NAME: String = "ledger.txt"
 
         internal const val FORMAT_MARKER: String = "floor-derivation-ledger"
-        internal const val FORMAT_VERSION: String = "v1"
+
+        /**
+         * The version every ledger this class WRITES carries.
+         *
+         * `v2` adds a seventh field to the `unit` line: the harness sha the unit measured
+         * at (`computenet-tdby`). Bumped rather than appended silently because a `v1`
+         * reader given a `v2` line would refuse it as "7 fields, expected 6" with no clue
+         * why, and because "this unit records no sha" and "this file is older than the
+         * field" are different facts a reader has to be able to tell apart.
+         */
+        internal const val FORMAT_VERSION: String = "v2"
+
+        /**
+         * Every version [load] can read, newest first.
+         *
+         * A `v1` ledger LOADS — it is not refused — and its units come back with a null
+         * [UnitAttestation.harnessSha]. That is deliberate and is the whole compatibility
+         * story: the real derivations this format exists for take hours of gated
+         * measurement spread over days, and refusing an in-flight `v1` ledger would throw
+         * that away to gain a field that can only be recorded going forward anyway. The
+         * next `ingest` rewrites the file as `v2`, carrying the old units across with an
+         * empty sha field; [renderWarnings] then says how many units the published sha is
+         * actually checked across, and [render] refuses outright if NO unit attests one.
+         */
+        internal val SUPPORTED_FORMAT_VERSIONS: List<String> = listOf("v2", "v1")
+
+        /** How many `|`-separated fields a `unit` line carries, per format version. */
+        private val UNIT_FIELDS_BY_VERSION: Map<String, Int> = mapOf("v1" to 6, "v2" to 7)
 
         /**
          * Starts a derivation of [plan] in [directory], writing the plan immediately.
@@ -648,12 +902,17 @@ class FloorDerivationLedger private constructor(
                 throw FloorLedgerException("ledger ${target.absolutePath} is empty")
             }
             val header = lines.first()
-            if (header != "$FORMAT_MARKER $FORMAT_VERSION") {
-                throw FloorLedgerException(
+            val version = SUPPORTED_FORMAT_VERSIONS
+                .firstOrNull { header == "$FORMAT_MARKER $it" }
+                ?: throw FloorLedgerException(
                     "ledger ${target.absolutePath} does not start with " +
-                        "'$FORMAT_MARKER $FORMAT_VERSION'; its first line is '$header'"
+                        "'$FORMAT_MARKER' at a version this build reads " +
+                        "($SUPPORTED_FORMAT_VERSIONS, and it writes $FORMAT_VERSION); " +
+                        "its first line is '$header'. A ledger from a NEWER build cannot " +
+                        "be read by an older one — update the checkout, or start the " +
+                        "derivation again in a fresh directory"
                 )
-            }
+            val unitFieldCount = UNIT_FIELDS_BY_VERSION.getValue(version)
 
             var benchmarkClass: String? = null
             var provenance: String? = null
@@ -688,7 +947,12 @@ class FloorDerivationLedger private constructor(
 
                     "unit" -> {
                         val fields = body.split('|')
-                        if (fields.size != 6) malformed("${fields.size} fields, expected 6")
+                        if (fields.size != unitFieldCount) {
+                            malformed(
+                                "${fields.size} fields, expected $unitFieldCount for a " +
+                                    "$version ledger"
+                            )
+                        }
                         val load = fields[2].toDoubleOrNull() ?: malformed("load '${fields[2]}'")
                         val cores = fields[3].toIntOrNull() ?: malformed("cores '${fields[3]}'")
                         val threshold = fields[4].toDoubleOrNull()
@@ -698,6 +962,11 @@ class FloorDerivationLedger private constructor(
                             timestamp = unescapeField(fields[1], line),
                             gate = GateReading(load, cores, threshold),
                             measuringJvm = unescapeField(fields[5], line),
+                            // v1 has no such field; v2 writes it empty for a unit that
+                            // predates it. Both mean "unattested", and neither is a
+                            // parse failure.
+                            harnessSha = if (fields.size < 7) null
+                            else unescapeField(fields[6], line).ifBlank { null },
                         )
                     }
 
