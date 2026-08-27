@@ -5404,3 +5404,45 @@ row set wearing a complete one's face.
 over an arbitrary partition of a row set into units equals the whole-set maximum) is a
 synthetic property test over generated dispersions from a fixed seed; it needs no
 measurement, and none was taken for this entry.
+
+## 2026-08-27 — Correction to the ROW-SET decomposition entry above: `EXPECTED_PLAN_ROW_COUNTS` no longer pre-registers `SmokeBenchmark`
+
+Filed as `computenet-chw2`, from the review of `computenet-epxt` (PR #506, merged as
+`bd6e10c28`). The **"2026-08-26 — the per-class floor derivation procedure is amended to
+admit ROW-SET decomposition"** entry above states the pre-registered counts as —
+
+> `CellFootprintBenchmark` 21 (1 x 7 `CellFamily` x 3 `Scale`), `OperatorThroughputBenchmark`
+> 72 (2 x 18 `Subject` x 2 `Direction`), `FanOutScalingBenchmark` 30 (6 x 5 `FanDegree`),
+> `BoundedReadBenchmark` 6 (2 x 3 `SetScale`), `SmokeBenchmark` 1.
+
+— naming `SmokeBenchmark 1` as a fifth pre-registered class. `computenet-epxt` removed that
+entry from `EXPECTED_PLAN_ROW_COUNTS` (`bench/src/main/kotlin/civictech/bench/FloorDerivationLedger.kt`)
+after the entry above was written, so a reader citing that list today gets a class the table
+no longer serves.
+
+**The mechanism.** `SmokeBenchmark` carries only `@State`/`@BenchmarkMode`/`@OutputTimeUnit`
+and relies on JMH's own defaults for `@Fork`/`@Warmup`/`@Measurement` — it is a discovery
+sentinel, not a derivation target. `UnitSizing.estimateRowSeconds` sizes a unit by reading
+those three annotations at method or class level by reflection; for `SmokeBenchmark` that
+reflection finds nothing at either level, so no unit can ever be sized for it. Pre-registering
+a count let `plan` accept a class `next` could never advance on — plannable but not actually
+serviceable. Removing the entry makes `plan --class SmokeBenchmark` refuse too, on
+`DerivationPlan`'s own "no pre-registered row count" check, so `plan` and `next` now agree in
+refusing the class rather than disagreeing about whether it can be derived.
+
+**The table today**, verified directly against `EXPECTED_PLAN_ROW_COUNTS` at `bd6e10c28`,
+holds four classes, unchanged from the entry above except for the removal:
+`CellFootprintBenchmark` 21, `OperatorThroughputBenchmark` 72, `FanOutScalingBenchmark` 30,
+`BoundedReadBenchmark` 6.
+
+**Not affected**: every other figure in the entry above — the row-set completeness rule, the
+single-JVM-version rule, the decomposition scheduling rules, and the per-unit obligations —
+none of which depended on `SmokeBenchmark` being pre-registered.
+
+**Not repaired here**: the entry above still lists `SmokeBenchmark 1` verbatim, and this file
+is append-only by its own header rule (nothing above the insertion point is edited, reordered
+or deleted). This correction is the only record that the list changed.
+
+**Verification**: none taken for this entry — it corrects prose against committed source
+(`bench/src/main/kotlin/civictech/bench/FloorDerivationLedger.kt` at `bd6e10c28`), not a
+measurement.
