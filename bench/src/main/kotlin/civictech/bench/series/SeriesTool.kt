@@ -2,6 +2,7 @@ package civictech.bench.series
 
 import civictech.bench.HarnessJarStamp
 import civictech.bench.HostFacts
+import civictech.bench.JarPath
 import civictech.bench.MeasuringJvm
 import civictech.bench.RunEnvironment
 import civictech.bench.RunKnobs
@@ -175,7 +176,7 @@ such stamp. The stamped sha, not --harness-sha, is then what gets recorded
      *
      * Separated from [main] so tests can drive it without exiting the test JVM.
      */
-    fun run(argv: Array<String>, out: Appendable): Int {
+    fun run(argv: Array<String>, out: Appendable, cwd: File = File("").absoluteFile): Int {
         val command = argv.firstOrNull()
         if (command == null || command == "--help" || command == "-h") {
             out.appendLine(USAGE)
@@ -187,7 +188,7 @@ such stamp. The stamped sha, not --harness-sha, is then what gets recorded
             return 1
         }
         val args = try {
-            parse(argv.drop(1))
+            parse(argv.drop(1), cwd)
         } catch (e: IllegalArgumentException) {
             out.appendLine("bad arguments: ${e.message}")
             out.appendLine(USAGE)
@@ -272,7 +273,7 @@ such stamp. The stamped sha, not --harness-sha, is then what gets recorded
         }
     }
 
-    private fun parse(argv: List<String>): Args {
+    private fun parse(argv: List<String>, cwd: File): Args {
         val map = mutableMapOf<String, String>()
         var i = 0
         while (i < argv.size) {
@@ -299,7 +300,7 @@ such stamp. The stamped sha, not --harness-sha, is then what gets recorded
             timestamp = required("timestamp"),
             hostState = hostState,
             harnessSha = required("harness-sha"),
-            jar = File(required("jar")),
+            jar = JarPath.resolve(required("jar"), cwd),
             log = map["log"]?.let { File(it) },
         )
     }

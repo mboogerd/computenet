@@ -324,6 +324,90 @@ class SeriesToolTest {
         assertEquals(SeriesCsv.headerLine() + "\n", series.readText())
     }
 
+    // -----------------------------------------------------------------------------------
+    // computenet-ws4l — `--jar` resolves a relative path the way FloorTool's does.
+    //
+    // `:bench:benchSeries` is the same JavaExec shape as `:bench:floorTool`
+    // (working directory is the `bench/` project dir, not the repo root a hand-typed
+    // `--jar bench/build/libs/bench-jmh.jar` is relative to), so it must resolve a
+    // relative --jar the same way (civictech.bench.JarPath.resolve), not as a plain File.
+    // -----------------------------------------------------------------------------------
+
+    @Test
+    fun `append resolves a relative --jar against the repository root when the working directory is one level in`(
+        @TempDir repoRoot: File,
+    ) {
+        // Mirrors the real shape: repoRoot/settings.gradle.kts marks the root,
+        // repoRoot/bench is benchSeries' actual working directory, and the jar the
+        // operator's copied command names lives at repoRoot/bench/build/libs/*.
+        File(repoRoot, "settings.gradle.kts").writeText("")
+        val cwd = File(repoRoot, "bench").apply { mkdirs() }
+        val runDir = File(repoRoot, "rundir").apply { mkdirs() }
+        val results = write(runDir, "run.csv", CSV)
+        write(runDir, "run.log", LOG)
+        val series = write(runDir, "series.csv", SeriesCsv.headerLine() + "\n")
+
+        val jarDir = File(repoRoot, "bench/build/libs").apply { mkdirs() }
+        val jar = stampedJar(jarDir, "ec98411f")
+
+        val out = StringBuilder()
+        val code = SeriesCli.run(
+            arrayOf(
+                "append",
+                "--results", results.path,
+                "--series", series.path,
+                "--run-id", "run",
+                "--timestamp", "2026-08-22T07:00:00Z",
+                "--host-state", "quiesced",
+                "--harness-sha", "ec98411f",
+                // Repo-root-relative, exactly what an operator standing at the repo root
+                // would type, resolved with cwd == repoRoot/bench (NOT the repo root).
+                "--jar", "bench/build/libs/bench-jmh.jar",
+            ),
+            out,
+            cwd,
+        )
+
+        assertEquals(0, code, out.toString())
+        assertTrue(out.contains("Appended 2 row(s)"), out.toString())
+    }
+
+    @Test
+    fun `a --jar not found at either attempt names both absolute paths tried`(
+        @TempDir repoRoot: File,
+    ) {
+        File(repoRoot, "settings.gradle.kts").writeText("")
+        val cwd = File(repoRoot, "bench").apply { mkdirs() }
+        val runDir = File(repoRoot, "rundir").apply { mkdirs() }
+        val results = write(runDir, "run.csv", CSV)
+        write(runDir, "run.log", LOG)
+        val series = write(runDir, "series.csv", SeriesCsv.headerLine() + "\n")
+
+        val cwdAttempt = File(cwd, "bench/build/libs/missing.jar")
+        val rootAttempt = File(repoRoot, "bench/build/libs/missing.jar")
+
+        val out = StringBuilder()
+        val code = SeriesCli.run(
+            arrayOf(
+                "append",
+                "--results", results.path,
+                "--series", series.path,
+                "--run-id", "run",
+                "--timestamp", "2026-08-22T07:00:00Z",
+                "--host-state", "quiesced",
+                "--harness-sha", "ec98411f",
+                "--jar", "bench/build/libs/missing.jar",
+            ),
+            out,
+            cwd,
+        )
+
+        assertEquals(1, code, out.toString())
+        assertTrue(out.contains("bad arguments"), out.toString())
+        assertTrue(out.contains(cwdAttempt.path), out.toString())
+        assertTrue(out.contains(rootAttempt.path), out.toString())
+    }
+
     private fun cli(
         command: String,
         results: File,
