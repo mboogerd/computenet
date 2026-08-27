@@ -23,6 +23,8 @@ absolute floor.
 9. [What this lane does not do](#9-what-this-lane-does-not-do)
 10. [Two operational gotchas: a relative `--jar`, and a bench test's console
     output](#10-two-operational-gotchas-same-shape-computenet-x9e15)
+11. [`--args` is refused, not silently combined
+    (`computenet-qsf8`)](#11-args-is-refused-not-silently-combined-computenet-qsf8)
 
 ---
 
@@ -495,3 +497,31 @@ for a run that did not use `-PbenchOnly`'s new console path. So the sequence
 destroys the first command's XML artifact before anyone reads it. Read the tally (from
 the console, now, or from the XML) **before** running the ordinary gate, or copy the
 XML aside first if both are needed later.
+
+## 11. `--args` is refused, not silently combined (`computenet-qsf8`)
+
+`:bench:benchSeries` and `:bench:floorTool` take their arguments from a Gradle
+property — `-PseriesArgs=` and `-PfloorArgs=` respectively (§5, and `floorTool`'s own
+usage text) — not from JavaExec's `--args`, which is the option anyone reaches for
+first with a `JavaExec` task. Two earlier sessions on the same day (`computenet-7doz`,
+`computenet-0ado`) hit `--args` on `floorTool` and misdiagnosed it as a stale
+configuration-cache entry leaking a previous invocation's arguments.
+
+That diagnosis was wrong, and worth correcting here so it does not resurface: `--args`
+is not ignored and nothing is stale. `--args` populates `JavaExec.getArgs()`, a plain
+task property distinct from the `argumentProviders` these tasks use for the Gradle
+property. JavaExec concatenates the two into one process argument list at execution
+time, `args` first — so `--args="status"` with no `-PfloorArgs` set produced the
+combined argv `["status", "--help"]` (the property's `orElse("--help")` default is
+still appended), and `FloorCli`'s flag parser read the trailing `--help` as a flag
+missing its value, refusing with `REFUSED: flag '--help' has no value` — a flag the
+caller never typed. Confirmed with a `doFirst { println(args) }` probe: it printed
+`[status]`, `--args`'s value alone, before the property's default is spliced in
+downstream of that print.
+
+Both tasks now guard against this in `bench/build.gradle.kts`
+(`guardAgainstJavaExecArgs`): if `--args` was used, the task fails in a `doFirst` —
+before the process is ever launched — with a message naming the actual mechanism and
+the correct property, instead of letting the JVM-side tool refuse on a flag it never
+saw typed. A caller who passes no arguments at all is unaffected: `args` stays empty,
+and the property's own `--help` default still prints usage exactly as before.

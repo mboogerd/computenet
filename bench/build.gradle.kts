@@ -326,6 +326,49 @@ tasks.named<Jar>("jmhJar") {
 }
 
 // -----------------------------------------------------------------------------------
+// THE --args GUARD (computenet-qsf8), shared by `benchSeries` and `floorTool` below.
+//
+// Both tasks read their arguments from a Gradle property (`seriesArgs`/`floorArgs`), not
+// from JavaExec's own `--args` CLI option — that choice, and why, is explained at each
+// task. `--args` is the option anyone reaches for first with a JavaExec task, so it is
+// worth failing loudly rather than mysteriously when it is used here.
+//
+// MEASURED, not assumed (computenet-qsf8 corrects a wrong diagnosis recorded on that
+// bead by two earlier sessions, computenet-7doz and computenet-0ado): `--args` is NOT
+// silently ignored. It populates `JavaExec.getArgs()`, a plain task property distinct
+// from `argumentProviders`, and JavaExec concatenates the two into ONE process argument
+// list at execution time — `args` first, then whatever `argumentProviders` contribute.
+// So `./gradlew :bench:floorTool --args="status"` with no `-PfloorArgs` set produces the
+// combined argv `["status", "--help"]` (the property's `orElse("--help")` default is
+// still appended), and `FloorCli`'s flag parser then reads `--help` as a flag with a
+// missing value, refusing with `REFUSED: flag '--help' has no value` — a flag the caller
+// never typed. Confirmed with a `doFirst { println(args) }` probe on `floorTool`: it
+// printed `[status]`, i.e. `--args`'s value alone, before the property's `--help`
+// default is spliced in downstream. So the earlier "silently ignored" / "stale
+// configuration-cache entry" theories were both wrong; the value is not dropped, it is
+// clobbered by an unconditional default appended after it.
+//
+// The fix is a fail-fast guard, not an attempt to make `--args` work: honouring it would
+// mean special-casing which of `args` or `argumentProviders` wins, for a CLI flag that
+// isn't this tool's documented entry point anyway. `doFirst` runs before the process is
+// ever launched, so a caller who reaches for `--args` gets one clear message naming the
+// real mechanism and the correct property, instead of a JVM-side refusal about a flag
+// they never passed. A caller who passes no arguments at all is unaffected: `args` stays
+// empty, and the property's own `--help` default still prints usage exactly as today.
+fun JavaExec.guardAgainstJavaExecArgs(property: String) {
+    doFirst {
+        check(args.isNullOrEmpty()) {
+            val cliArgs = args?.joinToString(" ")
+            "$path reads arguments from the -P$property Gradle property, not JavaExec's " +
+                "--args. You passed --args=\"$cliArgs\", which this task would otherwise " +
+                "silently combine with -P$property's own value (default \"--help\" when " +
+                "unset) into one corrupted argument list. Re-run as: " +
+                "./gradlew $path -P$property=\"$cliArgs\""
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------------
 // THE REGRESSION-TRACKING SERIES' COMMAND-LINE FACE (computenet-b7k4).
 //
 // `civictech.bench.series.SeriesTool` ingests one JMH run's artifacts and compares its
@@ -376,6 +419,7 @@ tasks.register<JavaExec>("benchSeries") {
     // repository controls, so splitting on whitespace is sufficient and no quoting
     // convention is invented here.
     val seriesArgs = providers.gradleProperty("seriesArgs").orElse("--help")
+    guardAgainstJavaExecArgs("seriesArgs")
     argumentProviders.add(
         CommandLineArgumentProvider {
             seriesArgs.get().split(Regex("\\s+")).filter { it.isNotBlank() }
@@ -422,6 +466,7 @@ tasks.register<JavaExec>("floorTool") {
     )
 
     val floorArgs = providers.gradleProperty("floorArgs").orElse("--help")
+    guardAgainstJavaExecArgs("floorArgs")
     // Passed as ONE argument, deliberately. This used to split on whitespace here, which
     // made a `--jmh-config` value containing spaces impossible to express: the property is
     // a single string, so any quoting the operator wrote was already gone by the time this
