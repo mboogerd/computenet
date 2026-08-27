@@ -21,8 +21,8 @@ absolute floor.
 7. [Why this is not a GitHub Actions workflow](#7-why-this-is-not-a-github-actions-workflow)
 8. [The series is EMPTY at the commit that introduces it](#8-the-series-is-empty-at-the-commit-that-introduces-it)
 9. [What this lane does not do](#9-what-this-lane-does-not-do)
-10. [Two operational gotchas: a relative `--jar`, and a bench test that prints
-    nothing to the console](#10-two-operational-gotchas-same-shape-computenet-x9e15)
+10. [Two operational gotchas: a relative `--jar`, and a bench test's console
+    output](#10-two-operational-gotchas-same-shape-computenet-x9e15)
 
 ---
 
@@ -452,11 +452,45 @@ python3 -c "import xml.etree.ElementTree as ET; \
   print(next(r.iter('system-out')).text)"
 ```
 or any other tool that parses the JUnit XML, rather than re-running the test and
-scrolling the console. A code fix (`testLogging { showStandardStreams = true }` on
-the `Test` task) was considered, but the tag-gating and task configuration for
-every module's `test` task — including `:bench:test` — live in the single shared
-`buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`, not in `bench/build.gradle.kts`;
-turning that on there would echo every test's stdout across every module's default
-`./gradlew test`, not just a deliberately-invoked `@Tag("bench")` run. That is a
-bigger and noisier change than this note, so it is left as a documented workaround
-here rather than made unilaterally.
+scrolling the console.
+
+**Resolved (`computenet-rd7h`, 2026-08-27): both routes now exist.** A code fix —
+`testLogging { showStandardStreams = true }` — was considered against the shared
+`Test` task configuration in `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`, which
+every module's `test` task (including `:bench:test`) inherits; turning it on THERE
+would echo every test's stdout across every module's default `./gradlew test`, which
+is too wide and stays rejected. The narrower alternative — a `:bench`-LOCAL override
+in `bench/build.gradle.kts`, gated on the same `-PbenchOnly` property that already
+selects the `bench` tag — does not have that problem, because it only ever changes
+behavior for a run that already opted in to bench tests, and was added. So:
+
+- `./gradlew :bench:test -PbenchOnly=true --tests '<Name>' --rerun` now echoes the
+  tally straight to the CONSOLE (measured 2026-08-27 with
+  `CellFootprintProbeTest`: the `STANDARD_OUT` block containing the tally appears
+  inline, no XML round-trip needed).
+- a default `./gradlew :bench:test --rerun` (no `-PbenchOnly`) is unaffected — no
+  test's stdout is echoed, exactly as before this change (measured the same day: 0
+  `STANDARD_OUT` occurrences in the console output, and `CellFootprintProbeTest`
+  does not even appear, since it stays excluded by the tag gate).
+
+The JUnit-XML route above still works and is still the only way to recover a tally
+from a run whose console output was not kept (e.g. a scheduled run's captured log
+without `-PbenchOnly`'s console echo, or a re-read after the fact) — it is not being
+replaced, only no longer the *sole* way to see a tally live.
+
+**Ordering hazard (found validating this workaround, same session, computenet-rd7h's
+first comment): running the ordinary gate AFTER a bench-tagged probe deletes the
+probe's own JUnit XML.** `./gradlew :bench:test --rerun` (no `-PbenchOnly`) removes
+`bench/build/test-results/test/TEST-<bench-tagged class>.xml` as part of re-running
+the default `test` task's output directory, taking the `<system-out>` tally with it
+— the one place it lived before console echo existed, and still the only durable copy
+for a run that did not use `-PbenchOnly`'s new console path. So the sequence
+
+```
+./gradlew :bench:test --rerun -PbenchOnly=true    # produce the sampling test's tally
+./gradlew :bench:test --rerun                     # the ordinary gate
+```
+
+destroys the first command's XML artifact before anyone reads it. Read the tally (from
+the console, now, or from the XML) **before** running the ordinary gate, or copy the
+XML aside first if both are needed later.
