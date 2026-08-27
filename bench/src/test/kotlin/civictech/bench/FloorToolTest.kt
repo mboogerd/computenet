@@ -98,6 +98,82 @@ class FloorToolTest {
     }
 
     // -----------------------------------------------------------------------------------
+    // JarPath.resolve — the doubled bench/bench/ path (computenet-x9e.15).
+    //
+    // `:bench:floorTool`'s JavaExec runs with `bench/` as its working directory, so a
+    // relative `--jar bench/build/libs/bench-jmh.jar` typed at the repo root — exactly
+    // what this file's own USAGE block and derive-class-floor.sh print — resolved naively
+    // against that working directory becomes `bench/bench/build/libs/bench-jmh.jar`. These
+    // cases fake the two directories with @TempDir rather than depending on the real repo
+    // layout or a built jar, so they run as fast unit tests.
+    // -----------------------------------------------------------------------------------
+
+    @Test
+    fun `an absolute --jar is returned unchanged, even if it does not exist`(
+        @TempDir cwd: File,
+    ) {
+        val absolute = File(cwd, "somewhere/bench-jmh.jar")
+        JarPath.resolve(absolute.absolutePath, cwd) shouldBe absolute
+    }
+
+    @Test
+    fun `a relative --jar resolves against the working directory when it exists there`(
+        @TempDir cwd: File,
+    ) {
+        val jar = File(cwd, "bench/build/libs/bench-jmh.jar")
+        jar.parentFile.mkdirs()
+        jar.writeText("not a real jar, just needs to exist")
+
+        JarPath.resolve("bench/build/libs/bench-jmh.jar", cwd) shouldBe jar
+    }
+
+    @Test
+    fun `a repo-root-relative --jar resolves against the repo root when the working directory is one level in`(
+        @TempDir repoRoot: File,
+    ) {
+        // Mirrors the real shape: repoRoot/settings.gradle.kts marks the root,
+        // repoRoot/bench is floorTool's actual working directory, and the jar the
+        // operator's copied command names lives at repoRoot/bench/build/libs/*.
+        File(repoRoot, "settings.gradle.kts").writeText("")
+        val cwd = File(repoRoot, "bench").apply { mkdirs() }
+        val jar = File(repoRoot, "bench/build/libs/bench-jmh.jar")
+        jar.parentFile.mkdirs()
+        jar.writeText("not a real jar, just needs to exist")
+
+        // Resolved against cwd (bench/) first: bench/bench/build/libs/bench-jmh.jar does
+        // NOT exist, so this only passes if the repo-root fallback ran.
+        JarPath.resolve("bench/build/libs/bench-jmh.jar", cwd) shouldBe jar
+    }
+
+    @Test
+    fun `a --jar found at neither attempt names both absolute paths it tried`(
+        @TempDir repoRoot: File,
+    ) {
+        File(repoRoot, "settings.gradle.kts").writeText("")
+        val cwd = File(repoRoot, "bench").apply { mkdirs() }
+        val cwdAttempt = File(cwd, "bench/build/libs/missing.jar")
+        val rootAttempt = File(repoRoot, "bench/build/libs/missing.jar")
+
+        val refusal = shouldThrow<IllegalArgumentException> {
+            JarPath.resolve("bench/build/libs/missing.jar", cwd)
+        }
+        refusal.message!! shouldContain cwdAttempt.path
+        refusal.message!! shouldContain rootAttempt.path
+    }
+
+    @Test
+    fun `a --jar with no repo root above the working directory names only the working-directory attempt`(
+        @TempDir cwd: File,
+    ) {
+        // cwd has no settings.gradle.kts anywhere above it up to the filesystem root in
+        // this fake tree, so findRepoRoot has nothing to fall back to.
+        val refusal = shouldThrow<IllegalArgumentException> {
+            JarPath.resolve("build/libs/missing.jar", cwd)
+        }
+        refusal.message!! shouldContain File(cwd, "build/libs/missing.jar").path
+    }
+
+    // -----------------------------------------------------------------------------------
     // Shared CLI fixtures. Mirrors FloorDerivationLedgerTest's own fixtures, kept
     // independent so this file drives the ledger only through FloorCli.
     // -----------------------------------------------------------------------------------

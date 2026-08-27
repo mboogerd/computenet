@@ -62,6 +62,14 @@
 
 set -euo pipefail
 
+# Absolute, deliberately: `:bench:floorTool`'s JavaExec runs with `bench/` as its
+# working directory, not the directory `./gradlew` is invoked from, so a RELATIVE
+# `--jar bench/build/libs/bench-jmh.jar` (this path, typed at the repo root) used to
+# resolve into a doubled `bench/bench/build/libs/bench-jmh.jar` that does not exist.
+# `FloorTool.kt`'s `JarPath.resolve` now falls back to the repo root when a relative
+# path misses the working directory (`computenet-x9e.15`), but this script still
+# passes an absolute path — the fallback exists for a human copying commands by hand,
+# not to make this script's own invocation ambiguous.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 JAR="${REPO_ROOT}/bench/build/libs/bench-jmh.jar"
 PINNED_JDK_MAJOR=21
