@@ -377,6 +377,29 @@ const val CONTAINMENT_TRIAL_ATTEMPTS: Int = 6
  * broken knob, because a knob that never produces an admissible trial exhausts [attempts]
  * and fails naming what it saw.
  *
+ * **The retry is neutral between the two mechanisms above, but it is NOT neutral about
+ * `maxGap`.** The discard rule is [ContainmentTrial.isValidForItsArm] and nothing else, so it
+ * cannot select for drain-fence vs. descheduled-drive-thread — confirmed in
+ * `computenet-fvrm`'s review by checking that both `vsAdds` classes appear among the
+ * discarded trials. But under load the discarded trials ARE disproportionately the
+ * descheduled-drive-thread ones, and those are exactly the trials carrying the large gaps:
+ * `computenet-fvrm`'s review, re-running `DriveWindowContainmentStarvedSampleTest` on
+ * 2026-08-27 (16 cores, 48 spinners), measured 29 discards out of 179 raw trials, with
+ * `maxGap` on the 29 *discarded* trials ranging 3.7-49.7 ms, while the 150 *retained* ones
+ * are by construction the trials where the drive kept running. So a sample of trials drawn
+ * through this function is conditioned on admissibility: the retained population
+ * systematically excludes the large-gap tail that a descheduled drive thread produces.
+ *
+ * This is harmless to every current caller — the existing guards assert a classification
+ * (`containment`, `isValidForItsArm`), never a `maxGap` summary, so nothing here reads a
+ * distribution that admissibility has shaped. It stops being harmless the moment a
+ * MEASURING caller — E3's discriminating run — draws trials through this function rather
+ * than through [containmentTrial] and reports a `maxGap` summary over the retained sample:
+ * that summary is then conditioned on admissibility, and [AdmissibleContainmentTrial.discarded]
+ * is the only thing that says so. Such a caller MUST report the discard tally (and, ideally,
+ * the `vsAdds` / `outlastsDriveAdds` split of the discards) alongside its `maxGap` column, or
+ * it is reporting a filtered distribution as if it were the raw one. (computenet-khal)
+ *
  * @param attempts how many trials to run before failing; see [CONTAINMENT_TRIAL_ATTEMPTS].
  */
 fun admissibleContainmentTrial(
