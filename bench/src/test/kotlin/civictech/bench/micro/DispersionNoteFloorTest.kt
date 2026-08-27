@@ -56,7 +56,7 @@ class DispersionNoteFloorTest {
         listOf(
             ClassNoiseFloor(
                 benchmarkClass = "OperatorThroughputBenchmark",
-                observedMaxRelativeDispersion = 0.03,
+                observedRobustDispersion = 0.03,
                 runs = 3,
                 derivedOn = "2026-09-01",
                 harnessCommitSha = "deadbeef",

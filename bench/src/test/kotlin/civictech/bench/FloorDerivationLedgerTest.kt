@@ -223,13 +223,20 @@ class FloorDerivationLedgerTest {
 
     /**
      * For arbitrary partitions of a synthetic row set into units, the rendered
-     * `observedMaxRelativeDispersion` equals the whole-set maximum, bit for bit.
+     * `observedRobustDispersion` equals the whole-set statistic, bit for bit.
+     *
+     * The statistic is `classFloorStatistic` (`computenet-3sua`): the median of each row's
+     * observations, then the maximum of those medians. Its partition-invariance is a
+     * slightly stronger claim than the plain maximum's was — a row's median needs ALL of
+     * that row's observations, so it is only well defined once the ledger is complete —
+     * and this test drives units that cut across rows and runs both, which is the shape
+     * that would break it if the ledger folded per unit rather than per row.
      *
      * The partitions are generated from a FIXED seed, so a failure is reproducible and is
      * not replaced by a friendlier seed.
      */
     @Test
-    fun `folding over any unit partition yields the whole-set maximum`(@TempDir dir: File) {
+    fun `folding over any unit partition yields the whole-set statistic`(@TempDir dir: File) {
         val random = Random(20260826)
         // One dispersion per (row, run) cell, so the whole-set maximum is known up front.
         repeat(12) { trial ->
@@ -238,7 +245,11 @@ class FloorDerivationLedgerTest {
                     (row to run) to random.nextDouble(0.001, 0.9)
                 }
             }.toMap()
-            val wholeSetMaximum = cells.values.max()
+            val wholeSetStatistic = classFloorStatistic(
+                syntheticRows.map { row ->
+                    (0 until CLASS_FLOOR_OBSERVATIONS_PER_ROW).map { cells.getValue(row to it) }
+                }
+            )
 
             val trialDir = File(dir, "trial-$trial")
             val ledger = FloorDerivationLedger.start(trialDir, plan())
@@ -268,7 +279,7 @@ class FloorDerivationLedgerTest {
                 jmhConfig = "mode=AverageTime forks=1 warmup=3x1s measurement=5x1s",
             )
             // Bit-identical, not approximately equal.
-            rendered.observedMaxRelativeDispersion shouldBe wholeSetMaximum
+            rendered.observedRobustDispersion shouldBe wholeSetStatistic
             rendered.runs shouldBe CLASS_FLOOR_OBSERVATIONS_PER_ROW
             rendered.hostState shouldBe QUIESCED_HOST_STATE
             rendered.measuringJvm shouldBe jdk21
@@ -296,8 +307,11 @@ class FloorDerivationLedgerTest {
         val args = Triple("2026-08-27", "abcdef012", "mode=AverageTime forks=1")
         split.render(args.first, args.second, args.third) shouldBe
             whole.render(args.first, args.second, args.third)
+        // Every row carries {0.011, 0.047, 0.023}; its median is 0.023, and the across-row
+        // maximum of identical medians is that. 0.047 is the row's worst repeat and no
+        // longer sets the floor (`computenet-3sua`).
         split.render(args.first, args.second, args.third).floor shouldBe
-            roundUpToThreeDecimals(CLASS_FLOOR_MARGIN * 0.047)
+            roundUpToThreeDecimals(CLASS_FLOOR_MARGIN * 0.023)
     }
 
     // -----------------------------------------------------------------------------------
@@ -352,7 +366,7 @@ class FloorDerivationLedgerTest {
 
         ledger.ingest(unit("last-final"), csv(listOf(last to 0.01)))
         ledger.isComplete() shouldBe true
-        ledger.render("2026-08-27", "abcdef012", "cfg").observedMaxRelativeDispersion shouldBe 0.01
+        ledger.render("2026-08-27", "abcdef012", "cfg").observedRobustDispersion shouldBe 0.01
     }
 
     @Test
@@ -378,9 +392,12 @@ class FloorDerivationLedgerTest {
         }
         refusal.message!! shouldContain "past 3 observations"
         refusal.message!! shouldContain "alpha[scale=N1E3] (already 3)"
-        // Nothing was taken in: the ledger still renders the pre-refusal maximum.
+        // Nothing was taken in: the ledger still renders the pre-refusal statistic. Every
+        // row carries {0.01, 0.02, 0.03}, so the per-row median is 0.02 — and the refused
+        // fourth observation of 0.9 is absent from it in both senses, having been rejected
+        // AND being the kind of single high value the median would have discarded anyway.
         ledger.render("2026-08-27", "abcdef012", "cfg")
-            .observedMaxRelativeDispersion shouldBe 0.03
+            .observedRobustDispersion shouldBe 0.02
     }
 
     @Test
@@ -1039,16 +1056,22 @@ class FloorDerivationLedgerTest {
     }
 
     // -----------------------------------------------------------------------------------
-    // The rendered record is the ordinary one — the estimator is untouched.
+    // The rendered record is the ordinary one — the ledger adds no estimator of its own.
     // -----------------------------------------------------------------------------------
 
+    /**
+     * The runs are `{0.01, 0.0305, 0.9}` per row deliberately: 0.9 is the largest
+     * observation in the set and does NOT reach the record, because `classFloorStatistic`
+     * takes each row's MEDIAN before folding across rows (`computenet-3sua`). Under the
+     * previous estimator this same fixture would have rendered 0.9.
+     */
     @Test
     fun `the rendered record is an ordinary ClassNoiseFloor, computing its floor the same way`(
         @TempDir dir: File,
     ) {
-        val rendered = completeLedger(dir, listOf(0.0305, 0.01, 0.02))
+        val rendered = completeLedger(dir, listOf(0.01, 0.0305, 0.9))
             .render("2026-08-27", "abcdef012", "mode=AverageTime forks=1")
-        rendered.observedMaxRelativeDispersion shouldBe 0.0305
+        rendered.observedRobustDispersion shouldBe 0.0305
         rendered.floor shouldBe roundUpToThreeDecimals(CLASS_FLOOR_MARGIN * 0.0305)
         renderDerivation(rendered) shouldContain "0.061"
     }
@@ -1057,10 +1080,10 @@ class FloorDerivationLedgerTest {
     fun `an all-zero-dispersion row set is refused by the record it would render, not smuggled through`(
         @TempDir dir: File,
     ) {
-        // parseCsv admits a zero error; ClassNoiseFloor is what refuses a zero maximum, and
+        // parseCsv admits a zero error; ClassNoiseFloor is what refuses a zero statistic, and
         // the ledger must not paper over that with a floor of zero.
         val ledger = completeLedger(dir, listOf(0.0, 0.0, 0.0))
         shouldThrow<IllegalArgumentException> { ledger.render("2026-08-27", "abcdef012", "cfg") }
-            .message!! shouldContain "observedMaxRelativeDispersion must be finite and strictly positive"
+            .message!! shouldContain "observedRobustDispersion must be finite and strictly positive"
     }
 }

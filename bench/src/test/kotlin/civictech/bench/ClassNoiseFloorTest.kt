@@ -53,7 +53,7 @@ class ClassNoiseFloorTest {
         assembly: DerivationAssembly? = null,
     ): ClassNoiseFloor = ClassNoiseFloor(
         benchmarkClass = benchmarkClass,
-        observedMaxRelativeDispersion = observed,
+        observedRobustDispersion = observed,
         runs = runs,
         derivedOn = "2026-09-01",
         harnessCommitSha = "deadbeef",
@@ -62,6 +62,103 @@ class ClassNoiseFloorTest {
         measuringJvm = measuringJvm,
         assembly = assembly,
     )
+
+    // ---- classFloorStatistic: the estimator (computenet-3sua) ------------------------
+
+    /**
+     * The estimator is a MEDIAN within a row and a MAXIMUM across rows, and this pins both
+     * halves at once on a grid where the two answers differ.
+     *
+     * Row A is a quiet row with one contaminated repeat (`9.0`); row B is reproducibly
+     * dispersed. Under the OLD estimator — a plain maximum over every observation — the
+     * class's statistic would be 9.0, set by a single observation. Under
+     * `classFloorStatistic` it is 0.20: row A's median discards its outlier, and the
+     * across-row maximum still picks the genuinely worse row rather than averaging it away.
+     */
+    @Test
+    fun `the statistic is the median within a row and the maximum across rows`() {
+        val rowA = listOf(0.01, 0.02, 9.0)
+        val rowB = listOf(0.19, 0.20, 0.21)
+
+        classFloorStatistic(listOf(rowA, rowB)) shouldBe 0.20
+        // The old estimator, stated explicitly so the difference is the test's subject and
+        // not an accident of the fixture.
+        (rowA + rowB).max() shouldBe 9.0
+    }
+
+    /**
+     * Breakdown point, asserted rather than only argued: at three observations per row,
+     * ONE contaminated repeat cannot move the statistic at all, and TWO can. That is the
+     * property `classFloorStatistic`'s KDoc chooses the median for, and the reason a
+     * two-of-three shift is treated as a real property of the row rather than an event.
+     */
+    @Test
+    fun `one contaminated observation per row cannot move the statistic, two can`() {
+        val clean = listOf(listOf(0.10, 0.11, 0.12))
+        classFloorStatistic(clean) shouldBe 0.11
+
+        classFloorStatistic(listOf(listOf(0.10, 0.11, 50.0))) shouldBe 0.11
+        classFloorStatistic(listOf(listOf(0.10, 50.0, 50.0))) shouldBe 50.0
+    }
+
+    /**
+     * The decomposition claim `ClassFloorDerivation`'s "Decomposition" section rests on:
+     * the statistic is invariant to how the rows were partitioned into measuring units,
+     * because a row's median uses only that row's observations and the across-row fold is
+     * a `max`.
+     */
+    @Test
+    fun `the statistic does not depend on row order or on how rows were partitioned`() {
+        val rows = listOf(
+            listOf(0.30, 0.05, 0.07),
+            listOf(0.12, 0.11, 0.13),
+            listOf(0.02, 0.90, 0.03),
+        )
+        val expected = 0.12
+        classFloorStatistic(rows) shouldBe expected
+        classFloorStatistic(rows.reversed()) shouldBe expected
+        // Two "units", folded separately and combined by the same max the ledger uses.
+        maxOf(
+            classFloorStatistic(rows.take(1)),
+            classFloorStatistic(rows.drop(1)),
+        ) shouldBe expected
+    }
+
+    /**
+     * The even-size median rule is pre-registered, not left to the first caller that hits
+     * an even sample: `CLASS_FLOOR_MIN_RUNS` is not fixed forever, and a derivation resting
+     * on four observations per row must not get to choose between two defensible medians
+     * after seeing which it prefers.
+     */
+    @Test
+    fun `medianOf averages the two middle values at even size`() {
+        medianOf(listOf(0.1, 0.2, 0.3)) shouldBe 0.2
+        medianOf(listOf(0.1, 0.3)) shouldBe 0.2
+        medianOf(listOf(4.0, 1.0, 3.0, 2.0)) shouldBe 2.5
+        medianOf(listOf(0.7)) shouldBe 0.7
+    }
+
+    /**
+     * The refusals. A row carrying no observations has no median, and an empty grid has no
+     * statistic; both are refused rather than folded into a neutral element, because a
+     * neutral element here would publish a floor derived from nothing.
+     */
+    @Test
+    fun `the statistic refuses an empty grid, an empty row, and a non-finite observation`() {
+        shouldThrow<IllegalArgumentException> { classFloorStatistic(emptyList()) }
+            .message!! shouldContain "at least one row"
+
+        shouldThrow<IllegalArgumentException> {
+            classFloorStatistic(listOf(listOf(0.1, 0.2, 0.3), emptyList()))
+        }.message!! shouldContain "at least one observation"
+
+        shouldThrow<IllegalArgumentException> { medianOf(emptyList()) }
+            .message!! shouldContain "empty sample"
+
+        shouldThrow<IllegalArgumentException> {
+            medianOf(listOf(0.1, Double.NaN, 0.3))
+        }.message!! shouldContain "must be finite"
+    }
 
     // ---- The pre-registration itself -------------------------------------------------
 
@@ -125,9 +222,9 @@ class ClassNoiseFloorTest {
         val derived = CLASS_NOISE_FLOOR_DERIVATIONS.single()
         derived.runs shouldBe CLASS_FLOOR_MIN_RUNS
         derived.hostState shouldBe QUIESCED_HOST_STATE
-        derived.observedMaxRelativeDispersion shouldBe 0.5217864937179187
+        derived.observedRobustDispersion shouldBe 0.5217864937179187
         derived.floor shouldBe
-            roundUpToThreeDecimals(CLASS_FLOOR_MARGIN * derived.observedMaxRelativeDispersion)
+            roundUpToThreeDecimals(CLASS_FLOOR_MARGIN * derived.observedRobustDispersion)
 
         // The measuring JVM is pinned as JDK 21, the module's declared toolchain major.
         // This is the assertion `computenet-ahn0` had no way to make: its three runs were
@@ -207,7 +304,7 @@ class ClassNoiseFloorTest {
         shouldThrow<IllegalArgumentException> {
             ClassNoiseFloor(
                 benchmarkClass = "X",
-                observedMaxRelativeDispersion = 0.01,
+                observedRobustDispersion = 0.01,
                 runs = 3,
                 derivedOn = "",
                 harnessCommitSha = "abc",
@@ -219,7 +316,7 @@ class ClassNoiseFloorTest {
         shouldThrow<IllegalArgumentException> {
             ClassNoiseFloor(
                 benchmarkClass = "X",
-                observedMaxRelativeDispersion = 0.01,
+                observedRobustDispersion = 0.01,
                 runs = 3,
                 derivedOn = "2026-09-01",
                 harnessCommitSha = "abc",
@@ -391,11 +488,19 @@ class ClassNoiseFloorTest {
         // assembly cases each have their own test below.
         text shouldContain "3 observations of every row"
         text shouldContain "the class's own annotation configuration"
-        text shouldContain "max observed relative dispersion"
+        // The block NAMES the estimator, both in the table row and in its own paragraph:
+        // a findings table that carries one statistic has to say which one, and a reader
+        // must not have to open the source to find out (`computenet-3sua`).
+        text shouldContain "statistic (max over rows of the per-row MEDIAN relative dispersion)"
         text shouldContain "0.03"
         text shouldContain "margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0"
-        text shouldContain "derived floor = margin x observed, rounded up to three decimals | 0.06"
+        text shouldContain "derived floor = margin x statistic, rounded up to three decimals | 0.06"
+        text shouldContain "Estimator: `classFloorStatistic`"
         text shouldContain "Derivation: forward."
+        // The limits clause states what a median does NOT bound, because the previous
+        // wording ("rows ... stayed at or under X") became false the moment the estimator
+        // stopped being a maximum over every observation.
+        text shouldContain "a median does not bound the sample it is drawn from"
         text shouldContain "What it does NOT establish"
         text shouldContain "another benchmark class"
     }
@@ -436,7 +541,7 @@ class ClassNoiseFloorTest {
         )
 
         text shouldContain "3 sequential repeat runs"
-        text shouldContain "across all rows of all 3 runs"
+        text shouldContain "over all rows of all 3 runs"
     }
 
     @Test
@@ -448,7 +553,7 @@ class ClassNoiseFloorTest {
         text shouldNotContain "sequential repeat runs"
         text shouldContain "3 observations of every row, assembled from 9 measuring units " +
             "in 9 separate processes"
-        text shouldContain "across all rows, 3 observations each"
+        text shouldContain "over all rows, 3 observations each"
     }
 
     @Test

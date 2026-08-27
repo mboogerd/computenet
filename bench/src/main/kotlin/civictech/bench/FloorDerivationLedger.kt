@@ -397,10 +397,13 @@ data class DerivationPlan(
  *
  * - **An incomplete row set.** [render] refuses until every planned row carries exactly
  *   [CLASS_FLOOR_OBSERVATIONS_PER_ROW] observations, and the refusal NAMES each
- *   outstanding row with its current count. A maximum over a subset can only be smaller
- *   than the maximum over the whole, so a floor rendered from a partial row set is
+ *   outstanding row with its current count. A maximum over a subset of ROWS can only be
+ *   smaller than the maximum over the whole, so a floor rendered from a partial row set is
  *   systematically too LOW — the direction that admits rows the floor should have
- *   refused. This is the reason the ledger exists, not a nicety attached to it.
+ *   refused. A SHORT row is a second hazard the same refusal covers: [classFloorStatistic]
+ *   takes each row's MEDIAN, and a median over one or two observations has no robustness
+ *   left in it, so a short row can bias the statistic either way. This is the reason the
+ *   ledger exists, not a nicety attached to it.
  * - **A plan that disagrees with [EXPECTED_PLAN_ROW_COUNTS].** Completeness over a
  *   filtered enumeration is vacuous; see that table.
  * - **More than one measuring JVM.** With units days apart the JDK on `PATH`, or the
@@ -660,10 +663,11 @@ class FloorDerivationLedger private constructor(
      * The completed derivation as a [ClassNoiseFloor], or a refusal naming exactly what
      * stands in the way.
      *
-     * The record's `observedMaxRelativeDispersion` is the maximum over every ingested
-     * observation, which is bit-identical to the maximum a single whole-set computation
-     * over the same numbers yields: `max` is associative and commutative, so no partition
-     * of the row set into units can move it.
+     * The record's `observedRobustDispersion` is [classFloorStatistic] over the ingested
+     * observations GROUPED BY ROW, which is bit-identical to what a single whole-set
+     * computation over the same numbers yields: a row's median depends only on that row's
+     * own observations, and the across-row fold is a `max`, which is associative and
+     * commutative — so no partition of the row set into units can move it.
      *
      * @param derivedOn the ISO date to record. For a decomposed derivation this is a
      *   choice the operator makes and the findings entry must qualify — the units span
@@ -689,9 +693,14 @@ class FloorDerivationLedger private constructor(
                 "REFUSED: '${plan.benchmarkClass}''s row set is incomplete — " +
                     "${missing.size} of ${plan.rows.size} rows are short of " +
                     "$CLASS_FLOOR_OBSERVATIONS_PER_ROW observations. A maximum over a " +
-                    "subset can only be SMALLER than the maximum over the whole set, so a " +
-                    "floor rendered now would be too low, and too low is the direction " +
-                    "that admits rows the floor should refuse. Outstanding rows and their " +
+                    "subset of ROWS can only be SMALLER than the maximum over the whole " +
+                    "set, so a floor rendered now would be too low, and too low is the " +
+                    "direction that admits rows the floor should refuse. A SHORT row is " +
+                    "worse than a missing one: a median over one or two observations has " +
+                    "no robustness left in it — at one observation the median IS that " +
+                    "observation — so a short row can bias the statistic in either " +
+                    "direction and defeats the reason the estimator is a median at all " +
+                    "(computenet-3sua). Outstanding rows and their " +
                     "observation counts: " +
                     missing.entries
                         .map { "${it.key.describe()} = ${it.value}/$CLASS_FLOOR_OBSERVATIONS_PER_ROW" }
@@ -714,10 +723,19 @@ class FloorDerivationLedger private constructor(
         }
 
         val resolvedSha = resolveHarnessSha(harnessCommitSha)
-        val observed = observationList.maxOf { it.relativeDispersion }
+        // Grouped BY ROW before the statistic sees it: `classFloorStatistic` cannot tell a
+        // grouped grid from a flattened one, and a flattened one silently yields the plain
+        // maximum this estimator replaced (`computenet-3sua`). The grouping key is the
+        // RowKey the plan pre-registered, so it partitions the same universe the
+        // completeness check above just verified.
+        val observed = classFloorStatistic(
+            observationList.groupBy { it.row }
+                .values
+                .map { row -> row.map { it.relativeDispersion } }
+        )
         val record = ClassNoiseFloor(
             benchmarkClass = plan.benchmarkClass,
-            observedMaxRelativeDispersion = observed,
+            observedRobustDispersion = observed,
             runs = CLASS_FLOOR_OBSERVATIONS_PER_ROW,
             derivedOn = derivedOn,
             harnessCommitSha = resolvedSha,
