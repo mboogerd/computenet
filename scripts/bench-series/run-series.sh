@@ -187,6 +187,12 @@ fi
 
 RUN_ID="$(date -u '+%Y-%m-%dT%H-%M-%SZ')"
 RUN_TIMESTAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+# The working-tree HEAD, read before the jar below is (re)built. This catches a dirty
+# bench/src (the warning just below) but NOT a stale jar left over from a prior checkout
+# that :bench:jmhJar's own up-to-date check declined to rebuild -- SeriesCli's --jar check
+# (computenet-0ado) is what closes that gap, by comparing this value against the jar's OWN
+# stamped provenance and refusing on disagreement rather than recording this value
+# unconditionally.
 HARNESS_SHA="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
 
 if ! git -C "${REPO_ROOT}" diff --quiet HEAD -- bench/src; then
@@ -263,7 +269,8 @@ ${command} \
 --run-id ${RUN_ID} \
 --timestamp ${RUN_TIMESTAMP} \
 --host-state ${HOST_STATE} \
---harness-sha ${HARNESS_SHA}")
+--harness-sha ${HARNESS_SHA} \
+--jar ${JMH_JAR}")
 done
 
 echo

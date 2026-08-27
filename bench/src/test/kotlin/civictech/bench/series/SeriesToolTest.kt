@@ -1,5 +1,6 @@
 package civictech.bench.series
 
+import civictech.bench.HarnessJarStamp
 import civictech.bench.HostFactsUnknownException
 import civictech.bench.MeasuringJvmUnknownException
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -8,6 +9,9 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.io.FileOutputStream
+import java.util.jar.JarOutputStream
+import java.util.jar.Manifest
 
 /**
  * Ingest and the command-line face.
@@ -201,11 +205,132 @@ class SeriesToolTest {
         assertTrue(out.contains("--host-state must be one of"), out.toString())
     }
 
+    /**
+     * `--jar` defaults to a jar stamped with the same sha as `--harness-sha`, so every
+     * pre-existing case (none of which is about the jar-provenance check at all) passes
+     * that check transparently and exercises whichever refusal or behaviour it actually
+     * targets, unmasked by an unrelated jar mismatch.
+     */
+    // -----------------------------------------------------------------------------------
+    // computenet-0ado — --jar's own build provenance, checked against --harness-sha.
+    //
+    // These three arms are what closed the acceptance clause that could not be reached
+    // from run-series.test.sh's shell harness: that fixture's throwaway git repo has no
+    // Gradle project and no Kotlin sources, so it cannot produce a real bench-jmh.jar or
+    // invoke SeriesCli at all -- the refusal is only reachable through a real
+    // `:bench:jmhJar` + `:bench:benchSeries` build, which the fixture is deliberately
+    // isolated from. Landing the coverage HERE instead is stronger, not weaker: it
+    // exercises SeriesCli.run directly (the actual refusal code, not a shell-level proxy
+    // for it), the same way FloorToolTest.stampedJar already covers the identical check
+    // on FloorTool.kt's runIngest (`computenet-7doz`).
+    // -----------------------------------------------------------------------------------
+
+    @Test
+    fun `append refuses a jar with no stamped harness sha, naming the rebuild command`(@TempDir dir: File) {
+        val results = write(dir, "run.csv", CSV)
+        write(dir, "run.log", LOG)
+        val series = write(dir, "series.csv", SeriesCsv.headerLine() + "\n")
+        // No sha: a jar that predates the stamp, or was not produced by :bench:jmhJar.
+        val jar = stampedJar(dir, sha = null)
+
+        val out = StringBuilder()
+        val code = SeriesCli.run(cli("append", results, series, jar = jar), out)
+
+        assertEquals(1, code, out.toString())
+        assertTrue(out.contains("REFUSED"), out.toString())
+        assertTrue(out.contains("Harness-Commit-Sha"), out.toString())
+        assertTrue(out.contains("./gradlew :bench:jmhJar"), out.toString())
+        // Refused before anything was appended.
+        assertEquals(SeriesCsv.headerLine() + "\n", series.readText())
+    }
+
+    @Test
+    fun `append refuses a jar whose stamped sha disagrees with the working tree, the stale-jar case`(
+        @TempDir dir: File,
+    ) {
+        val results = write(dir, "run.csv", CSV)
+        write(dir, "run.log", LOG)
+        val series = write(dir, "series.csv", SeriesCsv.headerLine() + "\n")
+        // The jar was built at 'stale111' but the working tree HEAD read before this run
+        // (--harness-sha) is 'fresh222' -- the jar was not rebuilt after the checkout
+        // changed (e.g. :bench:jmhJar reported UP-TO-DATE and kept its old stamp).
+        val jar = stampedJar(dir, "stale111")
+
+        val out = StringBuilder()
+        val code = SeriesCli.run(cli("append", results, series, harnessSha = "fresh222", jar = jar), out)
+
+        assertEquals(1, code, out.toString())
+        assertTrue(out.contains("REFUSED"), out.toString())
+        assertTrue(out.contains("stale111"), out.toString())
+        assertTrue(out.contains("fresh222"), out.toString())
+        assertTrue(out.contains("./gradlew :bench:jmhJar"), out.toString())
+        assertEquals(SeriesCsv.headerLine() + "\n", series.readText())
+    }
+
+    @Test
+    fun `append accepts a jar whose stamp agrees with the working tree, and records the STAMPED sha`(
+        @TempDir dir: File,
+    ) {
+        val results = write(dir, "run.csv", CSV)
+        write(dir, "run.log", LOG)
+        val series = write(dir, "series.csv", SeriesCsv.headerLine() + "\n")
+        // Same jar as the stale-jar case above, but paired with the harness-sha it
+        // actually agrees with -- the discriminating half: a stamp mismatch is refused,
+        // and the identical jar with a matching --harness-sha is accepted.
+        val jar = stampedJar(dir, "stale111")
+
+        val out = StringBuilder()
+        val code = SeriesCli.run(cli("append", results, series, harnessSha = "stale111", jar = jar), out)
+
+        assertEquals(0, code, out.toString())
+        assertTrue(out.contains("Appended 2 row(s)"), out.toString())
+        val recorded = SeriesCsv.parse(series.readText(), series.path)
+        assertEquals(2, recorded.size)
+        // The jar's OWN stamp is what lands in the row -- not merely "the value that was
+        // also passed as --harness-sha", which this case cannot tell apart from the
+        // stamp since a passing run requires the two to already agree. What DOES
+        // distinguish them is the refusal above: a caller that mixed up which value to
+        // pass (working-tree sha as --jar's stamp, say) is refused there, so only a jar
+        // whose OWN manifest attribute equals what gets recorded here ever reaches this
+        // assertion at all.
+        assertTrue(recorded.all { it.env.harnessCommitSha == "stale111" }, recorded.toString())
+    }
+
+    /**
+     * The bypass itself, guarded (`computenet-0ado`). The first cut of this change made
+     * `--jar` optional, which left the unattested path reachable by omitting one flag —
+     * the stamp check never runs and `--harness-sha` is recorded verbatim, which is the
+     * whole defect. Requiring the flag is what closes it, so the requirement needs its
+     * own arm: every other case here supplies `--jar`, so nothing above notices if the
+     * flag goes back to being defaulted.
+     */
+    @Test
+    fun `append refuses when --jar is omitted altogether, so the unattested path is unreachable`(
+        @TempDir dir: File,
+    ) {
+        val results = write(dir, "run.csv", CSV)
+        write(dir, "run.log", LOG)
+        val series = write(dir, "series.csv", SeriesCsv.headerLine() + "\n")
+
+        val out = StringBuilder()
+        val code = SeriesCli.run(
+            cli("append", results, series).filterNot { it == "--jar" || it.endsWith("bench-jmh.jar") }
+                .toTypedArray(),
+            out,
+        )
+
+        assertEquals(1, code, out.toString())
+        assertTrue(out.contains("missing required --jar"), out.toString())
+        assertEquals(SeriesCsv.headerLine() + "\n", series.readText())
+    }
+
     private fun cli(
         command: String,
         results: File,
         series: File,
         hostState: String = "quiesced",
+        harnessSha: String = "ec98411f",
+        jar: File = stampedJar(results.parentFile, harnessSha),
     ): Array<String> = arrayOf(
         command,
         "--results", results.path,
@@ -213,11 +338,33 @@ class SeriesToolTest {
         "--run-id", "run",
         "--timestamp", "2026-08-22T07:00:00Z",
         "--host-state", hostState,
-        "--harness-sha", "ec98411f",
+        "--harness-sha", harnessSha,
+        "--jar", jar.path,
     )
 
     private fun write(dir: File, name: String, text: String): File =
         File(dir, name).apply { writeText(text) }
+
+    /**
+     * A minimal jar carrying [sha] as its `Harness-Commit-Sha` manifest attribute
+     * (`computenet-0ado`) — the fixture standing in for `bench/build.gradle.kts`'s
+     * `jmhJar` task, which this module's `test` task never runs. `sha == null` produces a
+     * jar with no such attribute, for the "unstamped jar" refusal. Mirrors
+     * `FloorToolTest.stampedJar` (`computenet-7doz`), the same fixture for the sibling
+     * tool's identical check.
+     */
+    private fun stampedJar(dir: File, sha: String?, name: String = "bench-jmh.jar"): File {
+        val jarFile = File(dir, name)
+        val manifest = Manifest()
+        manifest.mainAttributes.putValue("Manifest-Version", "1.0")
+        if (sha != null) {
+            manifest.mainAttributes.putValue(HarnessJarStamp.MANIFEST_ATTRIBUTE, sha)
+        }
+        FileOutputStream(jarFile).use { fos ->
+            JarOutputStream(fos, manifest).use { }
+        }
+        return jarFile
+    }
 
     private companion object {
         /**
