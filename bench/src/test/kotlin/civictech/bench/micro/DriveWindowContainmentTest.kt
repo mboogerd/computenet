@@ -87,14 +87,17 @@ class DriveWindowContainmentTest {
      * [containmentTrial], and that is a statement about the arm, not a concession to
      * flakiness.
      *
-     * The arm's stop rule is keyed to the walk's first page, so what it bounds is the
-     * drive's ADD loops. The window `maxGap` is measured over runs on past them through
-     * `driveShaped`'s drain fence — a busy spin contending with the pager — so under CPU
-     * starvation a walk can outlast every add and still finish inside the drain tail,
-     * classifying CONTAINED: ~3% of TRUNCATED trials at 3x oversubscription, never seen at
-     * ordinary load (`computenet-fvrm`). That trial is inadmissible for its arm by
-     * `ContainmentTrial.isValidForItsArm`, which is the pre-registration's own rule, and
-     * discarding it is what the pre-registration says to do with it.
+     * The arm's stop rule is keyed to the walk's first page and is polled by the drive's
+     * own thread, so what it bounds is the drive's ADD loops, and only while that thread is
+     * scheduled. Under 3x CPU oversubscription a TRUNCATED trial comes out CONTAINED about
+     * 4% of the time — either because the drive thread was descheduled through the whole
+     * walk so the cut had not happened yet (6 of 7 measured cases), or because the walk
+     * finished inside `driveShaped`'s drain tail (1 of 7). It is never seen at ordinary
+     * load. See `DriveWindowContainment`'s header, residual (4), for the measurement.
+     *
+     * Such a trial is inadmissible for its arm by `ContainmentTrial.isValidForItsArm`,
+     * which is the pre-registration's own rule, and discarding it is what the
+     * pre-registration says to do with it.
      *
      * Nothing below is weakened by the retry. The assertion is still the arm's own
      * unrelaxed classification, and a knob that stopped working — `stopEarly` neutered,
@@ -349,41 +352,71 @@ class DriveWindowContainmentTest {
     }
 
     @Test
-    fun `admissibleContainmentTrial fails at its attempt cap rather than retrying forever`() {
-        BoundedReadFixtures.rig(SetScale.N1E3).use { rig ->
-            rig.seed()
-            // A deterministically inadmissible TRUNCATED configuration: a page limit above
-            // the target's size makes the walk ONE page, so the arm's "stop at the first
-            // page" cut lands at the walk's LAST page and the drive — which still has its
-            // drain fence to run — cannot help but outlast it. This is what a knob that
-            // stopped forcing non-containment looks like, and the point is that it FAILS
-            // here instead of being retried into a pass.
-            val outcome = runCatching {
-                admissibleContainmentTrial(
-                    rig = rig,
-                    arm = DriveWindowArm.TRUNCATED,
-                    pageLimit = 10_000,
-                    adds = GUARD_ADDS,
-                    attempts = 2,
-                )
-            }
+    fun `the discard rule keeps the first admissible trial and reports what it discarded`() {
+        // Classifications chosen rather than raced for, so this asserts the RULE and not a
+        // machine: two inadmissible TRUNCATED trials, then an admissible one.
+        val produced = listOf(containedTruncatedTrial(), containedTruncatedTrial(), outlastingTruncatedTrial())
+        var next = 0
 
-            outcome.isFailure.shouldBeTrue()
-            val message = outcome.exceptionOrNull()?.message.orEmpty()
-            (message.contains("TRUNCATED") && message.contains("2 attempts")).shouldBeTrue()
-            message.contains("CONTAINED").shouldBeTrue()
-        }
+        val admissible = admissibleTrial(DriveWindowArm.TRUNCATED, attempts = 4) { produced[next++] }
+
+        admissible.trial shouldBe produced[2]
+        admissible.trial.isValidForItsArm.shouldBeTrue()
+        admissible.discarded shouldBe produced.take(2)
+        // And it stopped as soon as it had one: the fourth attempt was never taken.
+        next shouldBe 3
     }
 
     @Test
-    fun `admissibleContainmentTrial rejects a non-positive attempt budget`() {
-        BoundedReadFixtures.rig(SetScale.N1E3).use { rig ->
-            val outcome = runCatching {
-                admissibleContainmentTrial(rig, DriveWindowArm.TRUNCATED, GUARD_PAGE_LIMIT, GUARD_ADDS, attempts = 0)
+    fun `the discard rule fails at its attempt cap rather than retrying forever`() {
+        // A knob that stopped forcing non-containment: every trial inadmissible. The point
+        // is that this FAILS, naming what it saw, instead of being retried into a pass.
+        var taken = 0
+        val outcome = runCatching {
+            admissibleTrial(DriveWindowArm.TRUNCATED, attempts = 3) {
+                taken++
+                containedTruncatedTrial()
             }
-            outcome.isFailure.shouldBeTrue()
         }
+
+        outcome.isFailure.shouldBeTrue()
+        taken shouldBe 3
+        val message = outcome.exceptionOrNull()?.message.orEmpty()
+        (message.contains("TRUNCATED") && message.contains("3 attempts")).shouldBeTrue()
+        message.contains("CONTAINED").shouldBeTrue()
     }
+
+    @Test
+    fun `the discard rule rejects a non-positive attempt budget and a mismatched arm`() {
+        runCatching { admissibleTrial(DriveWindowArm.TRUNCATED, attempts = 0) { outlastingTruncatedTrial() } }
+            .isFailure.shouldBeTrue()
+        // A source handing back the other arm's trial is a fixture error, not a discard:
+        // reinterpreting it is exactly what the pre-registration forbids.
+        runCatching { admissibleTrial(DriveWindowArm.COVERING, attempts = 2) { outlastingTruncatedTrial() } }
+            .isFailure.shouldBeTrue()
+    }
+
+    /** A TRUNCATED trial that came out CONTAINED — inadmissible for its arm. */
+    private fun containedTruncatedTrial(): ContainmentTrial = ContainmentTrial(
+        arm = DriveWindowArm.TRUNCATED,
+        drive = DriveOutcome(durationMs = 20.0, maxGapMs = 14.0, arrivals = 47),
+        driveWindow = Window(0, 20_000_000),
+        driveAdds = 47,
+        walk = PagedWalkOutcome(129, 1_000, List(129) { 0.1 }, true, emptySet()),
+        walkWindow = Window(1_000_000, 19_000_000),
+        driveAddsWindow = Window(0, 2_500_000),
+    )
+
+    /** A TRUNCATED trial that came out WALK_OUTLASTS_DRIVE — admissible for its arm. */
+    private fun outlastingTruncatedTrial(): ContainmentTrial = ContainmentTrial(
+        arm = DriveWindowArm.TRUNCATED,
+        drive = DriveOutcome(durationMs = 3.0, maxGapMs = 1.0, arrivals = 40),
+        driveWindow = Window(0, 3_000_000),
+        driveAdds = 40,
+        walk = PagedWalkOutcome(126, 1_000, List(126) { 0.1 }, true, emptySet()),
+        walkWindow = Window(1_000_000, 14_000_000),
+        driveAddsWindow = Window(0, 2_800_000),
+    )
 
     @Test
     fun `the guards stay fast enough to belong in the untagged suite`() {
@@ -413,20 +446,36 @@ class DriveWindowContainmentTest {
  * ```
  *
  * **What it measures, and what it cannot.** It runs [SAMPLE_TRIALS] admissible TRUNCATED
- * trials with [oversubscription] spinner threads at `MAX_PRIORITY` competing for the CPUs,
- * and asserts that none of the trials it returns classifies CONTAINED. It also prints the
- * DISCARD tally — the raw rate at which `containmentTrial` produced an inadmissible
- * TRUNCATED trial — split by whether the discarded trial's walk nonetheless outlasted the
- * drive's ADD loops. That split is the evidence for `computenet-fvrm`'s mechanism: a
- * discard with `vsAdds=WALK_OUTLASTS_DRIVE` is the drain fence covering the walk, while one
- * with `vsAdds=CONTAINED` would mean the stop rule itself failed to fire in time and is a
- * different defect.
+ * trials with [OVERSUBSCRIPTION] spinner threads per core at `MAX_PRIORITY` competing for
+ * the CPUs, and asserts that none of the trials it returns classifies CONTAINED. It also
+ * prints the DISCARD tally — the raw rate at which `containmentTrial` produced an
+ * inadmissible TRUNCATED trial — split by whether the discarded trial's walk nonetheless
+ * outlasted the drive's ADD loops. That split is the whole diagnostic value of the run: a
+ * discard with `vsAdds=WALK_OUTLASTS_DRIVE` is `driveShaped`'s drain fence covering the
+ * walk, while one with `vsAdds=CONTAINED` and a `drainTail` near zero is the DRIVE THREAD
+ * having been descheduled through the walk, so the truncation had not happened yet.
+ *
+ * **Measured 2026-08-27, M2 Pro, 16 cores, 48 spinners, otherwise idle host** (this file's
+ * committed configuration, `admissibleContainmentTrial` at
+ * [CONTAINMENT_TRIAL_ATTEMPTS] attempts):
+ *
+ * ```
+ * trials=150 returned={WALK_OUTLASTS_DRIVE=150} discarded=7 of 157 raw (4.5%)
+ *   1 of 7: drainTail=17.8 ms, vsAdds=WALK_OUTLASTS_DRIVE   -- the drain fence
+ *   6 of 7: drainTail<0.003 ms, vsAdds=CONTAINED, adds realised 1,1,1,2,18,22
+ *           across drive windows of 12-64 ms                -- the drive thread descheduled
+ * ```
+ *
+ * So `computenet-fvrm`'s filed candidate mechanism (the drain fence) is real but is the
+ * MINORITY cause; the dominant one is the drive thread not running.
  *
  * A zero result here is a statement about this host under this load and nothing more. It
  * does not bound the rate on other hardware, and the number of trials is the whole content
- * of the bound: [SAMPLE_TRIALS] returned trials with zero CONTAINED bounds the per-trial
- * rate at roughly 2% with 95% confidence, which is why the raw discard tally — where the
- * ~3% actually lives — is printed rather than only asserted away.
+ * of the bound: [SAMPLE_TRIALS] returned trials with zero CONTAINED bounds the RETURNED
+ * rate at roughly 2% with 95% confidence — a far weaker claim than the arithmetic of the
+ * discard rule, under which a 4.5% raw rate misses [CONTAINMENT_TRIAL_ATTEMPTS] independent
+ * attempts at ~1e-8. The raw discard tally, where the real rate lives, is printed rather
+ * than asserted away for exactly that reason.
  */
 @Tag("bench")
 class DriveWindowContainmentStarvedSampleTest {
@@ -438,15 +487,17 @@ class DriveWindowContainmentStarvedSampleTest {
     private val GUARD_ADDS = 400
 
     /**
-     * Trials in the sample. 150 is `computenet-fvrm`'s own sample size, kept so the two are
-     * directly comparable; overridable for a longer soak.
+     * Trials in the sample. 150 is `computenet-fvrm`'s own sample size, kept so this run and
+     * the one that filed the bead are directly comparable. A literal rather than a system
+     * property on purpose: `:bench:test` forwards only an enumerated list of properties to
+     * the forked test JVM (see bench/build.gradle.kts), so a `-D` here would be set on the
+     * Gradle daemon and silently ignored — the sample size would then be whatever the
+     * default is while the log said otherwise.
      */
-    private val SAMPLE_TRIALS: Int =
-        System.getProperty("civictech.bench.containmentSampleTrials")?.toInt() ?: 150
+    private val SAMPLE_TRIALS: Int = 150
 
     /** Spinner threads per core. 3x is the acceptance's ">= 3x cores". */
-    private val OVERSUBSCRIPTION: Int =
-        System.getProperty("civictech.bench.containmentOversubscription")?.toInt() ?: 3
+    private val OVERSUBSCRIPTION: Int = 3
 
     @Test
     @Timeout(value = 45, unit = TimeUnit.MINUTES)
@@ -468,10 +519,12 @@ class DriveWindowContainmentStarvedSampleTest {
         }
 
         val returned = ArrayList<ContainmentTrial>(SAMPLE_TRIALS)
-        val discarded = ArrayList<ContainmentTrial>()
+        // Indexed by the trial that produced them, so a reader can see whether the
+        // inadmissible ones cluster in the cold opening trials or are spread through the run.
+        val discarded = ArrayList<Pair<Int, ContainmentTrial>>()
         try {
             threads.forEach { it.start() }
-            repeat(SAMPLE_TRIALS) {
+            repeat(SAMPLE_TRIALS) { index ->
                 // A fresh rig per trial, deliberately. `LiveTrafficRig.elementsAdded` drifts
                 // upward across drives on one rig (that file's item 4), so reusing a rig for
                 // 150 trials would grow the target from 10^3 to ~10^4 and the walk from
@@ -486,7 +539,7 @@ class DriveWindowContainmentStarvedSampleTest {
                         adds = GUARD_ADDS,
                     )
                     returned += attempt.trial
-                    discarded += attempt.discarded
+                    attempt.discarded.forEach { discarded += index to it }
                 }
             }
         } finally {
@@ -495,7 +548,7 @@ class DriveWindowContainmentStarvedSampleTest {
         }
 
         val byClass = returned.groupingBy { it.containment }.eachCount()
-        val discardsCoveredByDrain = discarded.count { it.outlastsDriveAdds }
+        val discardsCoveredByDrain = discarded.count { (_, t) -> t.outlastsDriveAdds }
         println(
             "computenet-fvrm starved sample: cores=$cores spinners=$spinners " +
                 "trials=${returned.size} returned=$byClass " +
@@ -505,7 +558,7 @@ class DriveWindowContainmentStarvedSampleTest {
                 "raw inadmissible rate=" +
                 "%.4f".format(discarded.size.toDouble() / (returned.size + discarded.size)),
         )
-        discarded.forEach { println("  DISCARDED ${it.describe()}") }
+        discarded.forEach { (index, t) -> println("  DISCARDED trial#$index ${t.describe()}") }
 
         returned.size shouldBe SAMPLE_TRIALS
         byClass[DriveWindowContainment.CONTAINED] shouldBe null
