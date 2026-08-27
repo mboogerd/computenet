@@ -430,6 +430,14 @@ class LiveTrafficRig internal constructor(
                 "cannot be said to cover its subject, so no containment claim is made"
         }
         val adds = emitted
+        // The instant the ADD loops stopped, i.e. the instant a `stopEarly` rule fired,
+        // BEFORE the drain fence below. Reported alongside the full window because the two
+        // are different facts about a drive and a caller can only tell them apart if both
+        // are measured: the window `maxGap` is computed over runs to `t1`, past the drain,
+        // while what a stop rule such as the TRUNCATED arm's controls is only this instant.
+        // Nothing about `maxGap` or the window changes here — this is an additional
+        // observation, not a redefinition. See `TimedDrive.addsWindow`.
+        val addsEnd = System.nanoTime()
 
         val timeoutMs = BoundedReadFixtures.DRAIN_TIMEOUT_MS
         if (wiring == RigWiring.LINKED) {
@@ -464,6 +472,7 @@ class LiveTrafficRig internal constructor(
                 arrivals = times.size,
             ),
             window = Window(startNanos = t0, endNanos = t1),
+            addsWindow = Window(startNanos = t0, endNanos = addsEnd),
             adds = adds,
             shape = shape,
         )
