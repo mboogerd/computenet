@@ -14,8 +14,8 @@ import kotlin.system.exitProcess
  * from `check`, `build`, `test`, or any required CI check — see `bench/build.gradle.kts`
  * and the same reasoning `:bench:benchSeries` documents there. **This tool owns no
  * policy.** Every refusal it can produce — an incomplete row set, a second measuring JVM,
- * a fourth observation, a plan whose enumeration disagrees with the pre-registered row
- * count — is [FloorLedgerException] thrown by [FloorDerivationLedger] or its collaborator
+ * a second harness sha, a fourth observation, a plan whose enumeration disagrees with the
+ * pre-registered row count — is [FloorLedgerException] thrown by [FloorDerivationLedger] or its collaborator
  * types; this file catches it, prints its message to the caller, and exits non-zero. It
  * never re-implements, softens, or bypasses one.
  *
@@ -534,24 +534,29 @@ object FloorCli {
     private const val USAGE = """usage:
   floorTool plan     --ledger <dir> --class <SimpleName> --jar <bench-jmh.jar>
   floorTool next     --ledger <dir> --jar <bench-jmh.jar>
-  floorTool ingest   --ledger <dir> --results <jmh.csv> --log <run.log> --load <1min-load> --cores <n>
+  floorTool ingest   --ledger <dir> --results <jmh.csv> --log <run.log> --load <1min-load> --cores <n> --harness-sha <sha>
   floorTool status   --ledger <dir>
-  floorTool render   --ledger <dir> --derived-on <iso-date> --harness-sha <sha> --jmh-config <text>
+  floorTool render   --ledger <dir> --derived-on <iso-date> --jmh-config <text> [--harness-sha <sha>]
   floorTool render   --existing <SimpleName>
 
 plan starts a new ledger from the class's own -lp enumeration, refused unless the row
 count matches EXPECTED_PLAN_ROW_COUNTS. next prints the next outstanding unit to measure,
 sized to fit a short quiesced window without altering any JMH knob. ingest feeds one
-finished unit's artifacts to the ledger. status reports per-row completeness and the
-measuring JVM(s) seen. render prints the ClassNoiseFloor(...) call and the findings.md
-block for a COMPLETE, single-JVM ledger, or (with --existing) for an already-committed
+finished unit's artifacts to the ledger; its --harness-sha is the checkout THAT unit
+measured under, recorded per unit. status reports per-row completeness, the measuring
+JVM(s) and the harness sha(s) seen. render prints the ClassNoiseFloor(...) call and the
+findings.md block for a COMPLETE, single-JVM, single-harness-sha ledger, publishing the
+sha the units themselves attest — a --harness-sha passed to render is CHECKED against
+them, not substituted for them, and is needed only for a v1 ledger whose units recorded
+none. The block carries the units' gathering window, so the single derivedOn date cannot
+be read as the span. Or (with --existing) for an already-committed
 CLASS_NOISE_FLOOR_DERIVATIONS entry. Every refusal is the ledger's own; this tool adds
 none. Not reachable from check, build or test.
 
 Through Gradle the whole command line is one property and is tokenised by splitFloorArgs,
 which honours quoting, so a value containing spaces must be quoted INSIDE it:
   ./gradlew :bench:floorTool -PfloorArgs="render --ledger <dir> --derived-on <iso-date> \
-      --harness-sha <sha> --jmh-config 'forks=1, warmup 3x1s, measurement 5x1s'""""
+      --jmh-config 'forks=1, warmup 3x1s, measurement 5x1s'""""
 
     /**
      * The prefix every refusal carries, exactly once.
@@ -690,6 +695,11 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
                     "measuring JVM cannot be established from this log"
             )
 
+        // Required, not defaulted (`computenet-tdby`). A default would be a sha this tool
+        // invented — and the whole defect being closed is a harness sha nobody attested
+        // being published as if a unit had measured under it.
+        val harnessSha = required(map, "harness-sha")
+
         val threshold = Math.round(cores * QUIESCED_LOAD_FACTOR * 100.0) / 100.0
         val unit = UnitAttestation(
             unitId = resultsFile.nameWithoutExtension,
@@ -698,6 +708,7 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
             timestamp = DateTimeFormatter.ISO_INSTANT.format(
                 Instant.ofEpochMilli(logFile.lastModified()).atZone(ZoneOffset.UTC)
             ),
+            harnessSha = harnessSha,
         )
         val warnings = ledger.ingest(unit, resultsFile.readText())
         out.appendLine("ingested unit '${unit.unitId}': ${ledger.describeProgress()}")
@@ -720,12 +731,29 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
         } else {
             out.appendLine("measuring JVM(s) seen: ${jvms.joinToString("; ")}")
         }
+        // Reported beside the JVM(s) because it is refused beside them (`computenet-tdby`).
+        val shas = ledger.harnessShas()
+        val unattested = ledger.unattestedHarnessUnits()
+        out.appendLine(
+            when {
+                shas.isEmpty() && unattested.isEmpty() -> "harness sha(s) seen: none yet"
+                shas.isEmpty() ->
+                    "harness sha(s) seen: none — all ${unattested.size} unit(s) predate " +
+                        "the field (v1 ledger)"
+                unattested.isEmpty() -> "harness sha(s) seen: ${shas.joinToString("; ")}"
+                else ->
+                    "harness sha(s) seen: ${shas.joinToString("; ")} " +
+                        "(plus ${unattested.size} v1 unit(s) recording none)"
+            }
+        )
+        ledger.gatheringWindow()?.let { out.appendLine(it.describe()) }
         return 0
     }
 
     private fun runRender(argv: List<String>, out: Appendable): Int {
         val map = parseFlags(argv)
         val existing = map["existing"]
+        var ledgerRendered: FloorDerivationLedger? = null
         val record = if (existing != null) {
             CLASS_NOISE_FLOOR_DERIVATIONS.firstOrNull { it.benchmarkClass == existing }
                 ?: throw FloorLedgerException(
@@ -735,9 +763,14 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
                 )
         } else {
             val ledger = FloorDerivationLedger.load(File(required(map, "ledger")))
+            ledgerRendered = ledger
             val derived = ledger.render(
                 derivedOn = required(map, "derived-on"),
-                harnessCommitSha = required(map, "harness-sha"),
+                // OPTIONAL now (`computenet-tdby`): the units attest the sha they measured
+                // at, and one supplied here is checked against theirs rather than
+                // overriding it. It remains required for a v1 ledger, whose units record
+                // none — the ledger's own refusal says so.
+                harnessCommitSha = map["harness-sha"],
                 jmhConfig = required(map, "jmh-config"),
             )
             // How the observations were gathered, read off the ledger rather than assumed
@@ -758,10 +791,19 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
                 },
             )
         }
+        // What the record's single fields cannot say, said before the block the operator
+        // pastes rather than left to a caveat somewhere else (`computenet-tdby`).
+        ledgerRendered?.renderWarnings()?.forEach { out.appendLine("WARNING: $it") }
         out.appendLine(renderConstructorCall(record))
         out.appendLine()
         out.appendLine("--- findings.md block ---")
         out.append(renderDerivation(record))
+        // The gathering window goes INSIDE the block, not beside it. `derivedOn` is one
+        // date and a decomposed set spans many; a span printed only on the console is a
+        // span that never reaches findings.md, which is the file every later reader
+        // actually consults. `render --existing` has no ledger and so appends nothing —
+        // which is also what keeps it byte-identical to `renderDerivation`.
+        ledgerRendered?.gatheringWindow()?.let { out.appendLine(it.describe()) }
         return 0
     }
 }

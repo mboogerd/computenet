@@ -4,6 +4,7 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.maps.shouldNotContainKey
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -59,11 +60,26 @@ class FloorDerivationLedgerTest {
     private fun gate(): GateReading =
         GateReading(oneMinuteLoad = 1.2, cores = 16, attestedThreshold = 4.00)
 
-    private fun unit(id: String, jvm: String = jdk21): UnitAttestation = UnitAttestation(
+    /**
+     * The harness sha every fixture unit measures at unless a case varies it.
+     *
+     * Deliberately the same string the render cases pass as `--harness-sha`, so the
+     * default path through this suite is the one the mixed-sha refusal has to leave
+     * alone: a caller naming the sha the units actually attest.
+     */
+    private val harnessSha = "abcdef012"
+
+    private fun unit(
+        id: String,
+        jvm: String = jdk21,
+        harnessSha: String? = this.harnessSha,
+        timestamp: String = "2026-08-27T09:14:02Z",
+    ): UnitAttestation = UnitAttestation(
         unitId = id,
         measuringJvm = jvm,
         gate = gate(),
-        timestamp = "2026-08-27T09:14:02Z",
+        timestamp = timestamp,
+        harnessSha = harnessSha,
     )
 
     /**
@@ -467,6 +483,234 @@ class FloorDerivationLedgerTest {
     }
 
     // -----------------------------------------------------------------------------------
+    // The harness sha — the same refusal, argued from the same premise (`computenet-tdby`).
+    //
+    // Before this, `render` took a sha from its caller and published it unchecked, and
+    // `derive-class-floor.sh` supplied `git rev-parse --short HEAD` taken at RENDER time
+    // — the last window's checkout. Measured against the unfixed code: three units
+    // timestamped 2026-08-20, -08-23 and -08-26 rendered at exit 0 under
+    // `harnessCommitSha = "deadbeef"`, a sha no unit had measured under, with no span
+    // anywhere in the block.
+    // -----------------------------------------------------------------------------------
+
+    /** A complete ledger whose three units measured at the shas given, in order. */
+    private fun ledgerAtShas(dir: File, shas: List<String?>): FloorDerivationLedger {
+        val ledger = FloorDerivationLedger.start(dir, plan())
+        shas.forEachIndexed { index, sha ->
+            ledger.ingest(
+                unit("run-${index + 1}", harnessSha = sha),
+                csv(allRowsAt(0.01 * (index + 1))),
+            )
+        }
+        return ledger
+    }
+
+    @Test
+    fun `a row set spanning two harness shas is refused, and the refusal names both`(
+        @TempDir dir: File,
+    ) {
+        val ledger = ledgerAtShas(dir, listOf("aaaa111", "aaaa111", "bbbb222"))
+
+        val refusal = shouldThrow<FloorLedgerException> { ledger.render("2026-08-27", null, "cfg") }
+        refusal.message!! shouldContain "span 2 harness shas"
+        refusal.message!! shouldContain "aaaa111"
+        refusal.message!! shouldContain "bbbb222"
+        // The same specificity as the mixed-JVM refusal: which units to re-run, not only
+        // that something is wrong.
+        refusal.message!! shouldContain "run-3"
+        refusal.message!! shouldContain "re-derive"
+    }
+
+    @Test
+    fun `a supplied harness sha that no unit measured at is refused rather than published`(
+        @TempDir dir: File,
+    ) {
+        val ledger = ledgerAtShas(dir, listOf("aaaa111", "aaaa111", "aaaa111"))
+
+        val refusal = shouldThrow<FloorLedgerException> {
+            ledger.render("2026-08-27", "deadbeef", "cfg")
+        }
+        refusal.message!! shouldContain "deadbeef"
+        refusal.message!! shouldContain "aaaa111"
+        refusal.message!! shouldContain "LAST window's checkout"
+    }
+
+    @Test
+    fun `a single-sha derivation publishes the sha its units attest, with no caller needed`(
+        @TempDir dir: File,
+    ) {
+        val ledger = ledgerAtShas(dir, listOf("aaaa111", "aaaa111", "aaaa111"))
+
+        ledger.render("2026-08-27", null, "cfg").harnessCommitSha shouldBe "aaaa111"
+        // Agreeing with it is not an error — only disagreeing is.
+        ledger.render("2026-08-27", "aaaa111", "cfg").harnessCommitSha shouldBe "aaaa111"
+        ledger.renderWarnings() shouldBe emptyList()
+    }
+
+    @Test
+    fun `the second harness sha is warned about at ingest, while re-running the unit is cheap`(
+        @TempDir dir: File,
+    ) {
+        val ledger = FloorDerivationLedger.start(dir, plan())
+        ledger.ingest(unit("u1", harnessSha = "aaaa111"), csv(allRowsAt(0.01))) shouldBe emptyList()
+
+        val warnings = ledger.ingest(unit("u2", harnessSha = "bbbb222"), csv(allRowsAt(0.02)))
+        warnings.size shouldBe 1
+        warnings.single() shouldContain "REFUSED at render time"
+        warnings.single() shouldContain "aaaa111"
+        warnings.single() shouldContain "bbbb222"
+    }
+
+    @Test
+    fun `a blank harness sha cannot be represented at all, so an unrecorded one stays visible`() {
+        shouldThrow<IllegalArgumentException> { unit("u1", harnessSha = "") }
+            .message!! shouldContain "must be null"
+    }
+
+    // -----------------------------------------------------------------------------------
+    // Format v1 -> v2: an in-flight derivation must survive the bump.
+    // -----------------------------------------------------------------------------------
+
+    /** Rewrites [ledger]'s file as the v1 format wrote it: no seventh `unit` field. */
+    private fun downgradeToV1(ledger: FloorDerivationLedger) {
+        ledger.file.writeText(
+            ledger.file.readLines().joinToString("\n") { line ->
+                when {
+                    line == "floor-derivation-ledger v2" -> "floor-derivation-ledger v1"
+                    line.startsWith("unit ") -> line.substringBeforeLast('|')
+                    else -> line
+                }
+            } + "\n"
+        )
+    }
+
+    @Test
+    fun `a v1 ledger still loads, with its units carrying no harness sha`(@TempDir dir: File) {
+        val ledger = completeLedger(dir)
+        downgradeToV1(ledger)
+
+        val reloaded = FloorDerivationLedger.load(dir, syntheticCounts)
+        reloaded.units.size shouldBe 3
+        reloaded.units.all { it.harnessSha == null } shouldBe true
+        reloaded.harnessShas() shouldBe emptyList()
+        reloaded.unattestedHarnessUnits() shouldBe listOf("run-1", "run-2", "run-3")
+        // Everything the v1 file DID record survives the downgrade-and-reload verbatim.
+        reloaded.measuringJvms() shouldBe listOf(jdk21)
+        reloaded.isComplete() shouldBe true
+    }
+
+    @Test
+    fun `a v1 ledger renders on the operator's authority, since no unit can attest a sha`(
+        @TempDir dir: File,
+    ) {
+        val ledger = completeLedger(dir)
+        downgradeToV1(ledger)
+        val reloaded = FloorDerivationLedger.load(dir, syntheticCounts)
+
+        reloaded.render("2026-08-27", "abcdef012", "cfg").harnessCommitSha shouldBe "abcdef012"
+        // ... and refuses when the operator supplies nothing, rather than publishing an
+        // empty provenance field.
+        shouldThrow<FloorLedgerException> { reloaded.render("2026-08-27", null, "cfg") }
+            .message!! shouldContain "recorded a harness sha"
+    }
+
+    @Test
+    fun `a v1 ledger resumed under v2 keeps its old units and says how far the check reaches`(
+        @TempDir dir: File,
+    ) {
+        // Two v1 units, then the format bump, then a third measured under v2.
+        val ledger = FloorDerivationLedger.start(dir, plan())
+        ledger.ingest(unit("run-1"), csv(allRowsAt(0.01)))
+        ledger.ingest(unit("run-2"), csv(allRowsAt(0.02)))
+        downgradeToV1(ledger)
+
+        val resumed = FloorDerivationLedger.load(dir, syntheticCounts)
+        resumed.ingest(unit("run-3", harnessSha = "cccc333"), csv(allRowsAt(0.03)))
+
+        // The rewritten file is v2 and carries the two old units with an empty sha field.
+        resumed.file.readLines().first() shouldBe "floor-derivation-ledger v2"
+        FloorDerivationLedger.load(dir, syntheticCounts).unattestedHarnessUnits() shouldBe
+            listOf("run-1", "run-2")
+
+        resumed.render("2026-08-27", null, "cfg").harnessCommitSha shouldBe "cccc333"
+        val warning = resumed.renderWarnings().single()
+        warning shouldContain "2 of 3 unit(s)"
+        warning shouldContain "run-1"
+        warning shouldContain "checked across 1 unit(s) only"
+    }
+
+    @Test
+    fun `a v1 unit line in a v2 file is a parse refusal, not a unit with no sha`(
+        @TempDir dir: File,
+    ) {
+        val ledger = completeLedger(dir)
+        // v2 header, v1 unit lines: the shape a hand-merge of two ledgers leaves.
+        ledger.file.writeText(
+            ledger.file.readLines().joinToString("\n") { line ->
+                if (line.startsWith("unit ")) line.substringBeforeLast('|') else line
+            } + "\n"
+        )
+        shouldThrow<FloorLedgerException> { FloorDerivationLedger.load(dir, syntheticCounts) }
+            .message!! shouldContain "6 fields, expected 7 for a v2 ledger"
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The gathering window — a single derivedOn date cannot pass for the span.
+    // -----------------------------------------------------------------------------------
+
+    @Test
+    fun `a single-day and a multi-day set describe their window differently`(@TempDir dir: File) {
+        val sameDay = FloorDerivationLedger.start(File(dir, "same"), plan())
+        listOf("2026-08-27T09:00:00Z", "2026-08-27T13:30:00Z", "2026-08-27T22:10:00Z")
+            .forEachIndexed { index, stamp ->
+                sameDay.ingest(unit("u$index", timestamp = stamp), csv(allRowsAt(0.01)))
+            }
+
+        val spread = FloorDerivationLedger.start(File(dir, "spread"), plan())
+        listOf("2026-08-20T09:00:00Z", "2026-08-23T09:00:00Z", "2026-08-26T09:00:00Z")
+            .forEachIndexed { index, stamp ->
+                spread.ingest(unit("u$index", timestamp = stamp), csv(allRowsAt(0.01)))
+            }
+
+        val one = sameDay.gatheringWindow()!!
+        one.calendarDays shouldBe 1
+        one.singleDay shouldBe true
+        one.describe() shouldContain "ONE UTC day"
+        one.describe() shouldContain "2026-08-27T09:00:00Z"
+        one.describe() shouldContain "2026-08-27T22:10:00Z"
+
+        val many = spread.gatheringWindow()!!
+        many.calendarDays shouldBe 3
+        many.singleDay shouldBe false
+        many.describe() shouldContain "spread over 3 UTC calendar days"
+        many.describe() shouldContain "2026-08-20T09:00:00Z"
+        many.describe() shouldContain "2026-08-26T09:00:00Z"
+        many.describe() shouldContain "is NOT the span"
+
+        // The two sentences are not the same sentence with different numbers: a reader
+        // skimming for "was this one sitting" must not have to compare timestamps.
+        one.describe() shouldNotBe many.describe()
+    }
+
+    @Test
+    fun `an unparseable timestamp reports the span as uncomputable rather than as one day`(
+        @TempDir dir: File,
+    ) {
+        val ledger = FloorDerivationLedger.start(dir, plan())
+        ledger.ingest(unit("u1", timestamp = "yesterday afternoon"), csv(allRowsAt(0.01)))
+
+        val window = ledger.gatheringWindow()!!
+        window.calendarDays shouldBe null
+        window.singleDay shouldBe false
+        window.describe() shouldContain "could not be computed"
+    }
+
+    @Test
+    fun `an empty ledger has no gathering window at all`(@TempDir dir: File) {
+        FloorDerivationLedger.start(dir, plan()).gatheringWindow() shouldBe null
+    }
+
+    // -----------------------------------------------------------------------------------
     // Persistence.
     // -----------------------------------------------------------------------------------
 
@@ -560,7 +804,11 @@ class FloorDerivationLedgerTest {
     fun `a ledger with the wrong format marker is refused`(@TempDir dir: File) {
         val ledger = completeLedger(dir)
         val lines = ledger.file.readLines()
-        ledger.file.writeText((listOf("floor-derivation-ledger v2") + lines.drop(1)).joinToString("\n"))
+        // FIXTURE UPDATED by computenet-tdby: this case used to write `v2`, which was a
+        // version no build wrote or read. `v2` is now the version this build writes, so
+        // it would be accepted and the case would assert nothing. `v3` is the same shape
+        // of wrongness against the same list — a ledger from a NEWER build.
+        ledger.file.writeText((listOf("floor-derivation-ledger v3") + lines.drop(1)).joinToString("\n"))
         shouldThrow<FloorLedgerException> { FloorDerivationLedger.load(dir, syntheticCounts) }
             .message!! shouldContain "does not start with"
     }
