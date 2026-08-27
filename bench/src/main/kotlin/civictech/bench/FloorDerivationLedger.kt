@@ -437,6 +437,20 @@ class FloorDerivationLedger private constructor(
     private val observationList: MutableList<RowObservation>,
 ) {
 
+    /**
+     * The harness sha the most recent [render] published purely on the caller's authority
+     * — no unit attested it — or `null` if the last [render] had at least one attesting
+     * unit, or if [render] has not been called yet (`computenet-eo9m`).
+     *
+     * [renderWarnings] reads this instead of taking a parameter: [resolveHarnessSha] is the
+     * one place that already knows whether the published sha came from an attesting unit or
+     * from the caller alone, so recording its answer here is cheaper than teaching
+     * `renderWarnings()` — and every one of its callers — to re-derive or re-supply the same
+     * fact. This keeps `floorTool render`'s existing `ledgerRendered?.renderWarnings()` call
+     * (no argument, unchanged) able to see it.
+     */
+    private var lastPublishedUnattestedSha: String? = null
+
     /** The units ingested so far, in ingest order. */
     val units: List<UnitAttestation> get() = unitList.toList()
 
@@ -677,6 +691,10 @@ class FloorDerivationLedger private constructor(
         }
 
         val resolvedSha = resolveHarnessSha(harnessCommitSha)
+        // Recorded for renderWarnings() — see lastPublishedUnattestedSha's KDoc. Set on
+        // every successful render, not only the first, so a ledger re-rendered after
+        // gaining an attesting unit does not keep warning about a state it has left.
+        lastPublishedUnattestedSha = if (harnessShas().isEmpty()) resolvedSha else null
 
         val observed = observationList.maxOf { it.relativeDispersion }
         return ClassNoiseFloor(
@@ -754,6 +772,14 @@ class FloorDerivationLedger private constructor(
      * Separate from [render]'s return value because a warning is not a refusal and must
      * not be able to become one by accident; `floorTool render` prints these above the
      * block so they land in front of the operator pasting it.
+     *
+     * **Also fires when NOTHING attests the published sha** (`computenet-eo9m`): an all-v1
+     * ledger rendered with a supplied `--harness-sha` publishes it on the caller's
+     * authority alone (see [resolveHarnessSha]'s last branch), and that is exactly as
+     * unattested as the partial case above — more so, since not even a majority of units
+     * back it. This is a WARNING, not a refusal, for the same reason the partial case is
+     * one: refusing would undo the deliberate choice to let an in-flight `v1` derivation
+     * finish rather than be thrown away.
      */
     fun renderWarnings(): List<String> {
         val warnings = mutableListOf<String>()
@@ -764,6 +790,13 @@ class FloorDerivationLedger private constructor(
                 "harness sha, so the published sha is checked across " +
                 "${unitList.size - unattested.size} unit(s) only. Say so in the findings " +
                 "entry, or re-run those units."
+        }
+        lastPublishedUnattestedSha?.let { sha ->
+            warnings += "no unit of '${plan.benchmarkClass}''s derivation attests a " +
+                "harness sha — every one of its ${unitList.size} unit(s) was ingested " +
+                "into a v1 ledger — so the published sha '$sha' was recorded on the " +
+                "operator's authority alone and is checked against NOTHING. Say so in " +
+                "the findings entry, or re-run under a build that attests one."
         }
         return warnings
     }

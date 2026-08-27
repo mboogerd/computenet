@@ -614,6 +614,32 @@ class FloorDerivationLedgerTest {
             .message!! shouldContain "recorded a harness sha"
     }
 
+    /**
+     * `computenet-eo9m`: the one path where the published sha is attested by NOTHING. An
+     * all-v1 ledger has no unit to check the caller's `--harness-sha` against, so
+     * [FloorDerivationLedger.render] publishes it unchecked on the operator's authority
+     * alone (the previous test) — but that publication must be flagged, the same way a
+     * PARTIAL attestation already is. Before this fix, [FloorDerivationLedger.renderWarnings]
+     * was guarded by `unattested.isNotEmpty() && harnessShas().isNotEmpty()`, which is
+     * false here because `harnessShas()` is empty when EVERY unit is unattested, so the
+     * block carried no WARNING at all — the pre-tdby defect, surviving on this one narrow
+     * path.
+     */
+    @Test
+    fun `an all-v1 ledger rendered with a supplied harness sha is warned about, not silently published`(
+        @TempDir dir: File,
+    ) {
+        val ledger = completeLedger(dir)
+        downgradeToV1(ledger)
+        val reloaded = FloorDerivationLedger.load(dir, syntheticCounts)
+
+        reloaded.render("2026-08-27", "deadbeef", "cfg").harnessCommitSha shouldBe "deadbeef"
+
+        val warning = reloaded.renderWarnings().single()
+        warning shouldContain "deadbeef"
+        warning shouldContain "no unit"
+    }
+
     @Test
     fun `a v1 ledger resumed under v2 keeps its old units and says how far the check reaches`(
         @TempDir dir: File,
