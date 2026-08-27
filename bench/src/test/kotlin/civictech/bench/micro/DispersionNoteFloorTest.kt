@@ -144,7 +144,7 @@ class DispersionNoteFloorTest {
         )
         derived.floor shouldBe noiseFloorFor("CellFootprintBenchmark")
         derived.floor shouldNotBe NOISE_FLOOR
-        // 0.02 clears its class's own floor of 1.044 even though it is four times the
+        // 0.02 clears its class's own floor of 0.398 even though it is four times the
         // global bound — which is exactly the signal the per-class floor restores. A row
         // under its bound is not flagged, so `describe()` names no floor at all.
         derived.aboveHarnessSanityBound shouldBe false
@@ -156,7 +156,7 @@ class DispersionNoteFloorTest {
         val reallyDispersed = DispersionNote(
             label = "KEYED_SET_CELL N1E5",
             drive = Drive.REAL,
-            // Above the derived floor of 1.044 — see ClassNoiseFloorTest for the pin. The
+            // Above the derived floor of 0.398 — see ClassNoiseFloorTest for the pin. The
             // literal is deliberately well clear of it so this stays a test of which
             // SENTENCE is rendered, not a re-derivation of the boundary.
             result = rowAt(1.5),

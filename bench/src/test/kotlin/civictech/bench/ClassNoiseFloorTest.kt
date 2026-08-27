@@ -206,10 +206,14 @@ class ClassNoiseFloorTest {
      * that populated, dropped or altered an entry cannot pass unnoticed.
      *
      * The floor is asserted as the arithmetic of the record, never as a hand-typed
-     * literal: `2.0 x 0.5217864937179187 = 1.0435729874…`, rounded UP to 1.044.
+     * literal: `2.0 x 0.19864889236475775 = 0.3972977847…`, rounded UP to 0.398.
      *
-     * The observation and the floor are `computenet-7v7m`'s re-derivation under the
-     * module's toolchain JDK 21. `computenet-ahn0`'s 0.2961501149112133 / 0.593 was
+     * The observations are `computenet-7v7m`'s three runs under the module's toolchain
+     * JDK 21; the STATISTIC over them is `computenet-3sua`'s re-derivation under
+     * `classFloorStatistic`, which replaced the previous maximum-over-every-observation
+     * and moved this entry from 0.5217864937179187 / 1.044 to
+     * 0.19864889236475775 / 0.398 with no new measurement — the same 63 retained
+     * observations, read by a different (and pre-registered) estimator. `computenet-ahn0`'s 0.2961501149112133 / 0.593 was
      * measured under JBR 25.0.2 and is superseded, not retained as a second entry — so
      * the pin on the measuring JVM below is part of what this test protects.
      */
@@ -222,7 +226,7 @@ class ClassNoiseFloorTest {
         val derived = CLASS_NOISE_FLOOR_DERIVATIONS.single()
         derived.runs shouldBe CLASS_FLOOR_MIN_RUNS
         derived.hostState shouldBe QUIESCED_HOST_STATE
-        derived.observedRobustDispersion shouldBe 0.5217864937179187
+        derived.observedRobustDispersion shouldBe 0.19864889236475775
         derived.floor shouldBe
             roundUpToThreeDecimals(CLASS_FLOOR_MARGIN * derived.observedRobustDispersion)
 
@@ -234,10 +238,11 @@ class ClassNoiseFloorTest {
 
         hasClassFloor("CellFootprintBenchmark") shouldBe true
         noiseFloorFor("CellFootprintBenchmark") shouldBe derived.floor
-        // Above 1.0, and deliberately so — see CLASS_NOISE_FLOOR_DERIVATIONS' KDoc, which
-        // also states why this is a weak bound. This is a pin on the published number,
-        // not a second definition of it: it must equal the arithmetic asserted above.
-        noiseFloorFor("CellFootprintBenchmark") shouldBe 1.044
+        // A pin on the published number, not a second definition of it: it must equal the
+        // arithmetic asserted above. Still a loose bound — see CLASS_NOISE_FLOOR_DERIVATIONS'
+        // KDoc, which states why, and why the tightening from 1.044 is an OUTCOME of the
+        // estimator rather than a reason it was chosen.
+        noiseFloorFor("CellFootprintBenchmark") shouldBe 0.398
 
         // The three classes the procedure names that have NOT been derived. They fall
         // back, and the fallback is the honest state, not a gap to fill by analogy.

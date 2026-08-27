@@ -5195,6 +5195,7 @@ estimated, scaled from another class, or carried over. The runs are routed to a 
 quiesced slot on `computenet-cm4w` (`metadata.compute=dedicated`).
 
 ## 2026-08-26 — per-class noise floor for `CellFootprintBenchmark`, derived forward from its own quiesced repeat runs
+**SUPERSEDED 2026-08-27 by `computenet-3sua`** — the estimator this block used (the maximum over every observation) was replaced by `classFloorStatistic`, and this class's floor was re-derived from these same three runs to **0.398**. The live entry is the last one in this file; the block below is retained as the record of the runs and of the JBR-25 defect `computenet-7v7m` fixed, and its 1.044 is NOT the floor in force.
 Harness: a7c6a0382 · host state quiesced · 3 sequential repeat runs
 JMH: mode=AverageTime unit=us forks=1 warmup=3x1s measurement=5x1s (the class's own annotation configuration)
 Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
@@ -5795,3 +5796,98 @@ Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
 Row dispersion (drive=REAL; informational, nothing excluded):
 - TAGGED_SET insert (drive=REAL): 818913.778716 ± 4033.083385 ops/s, relative dispersion 0.0049249182146178985
 - UNION insert (drive=REAL): 790147.547327 ± 7503.798354 ops/s, relative dispersion 0.009496705241172606 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+
+## 2026-08-27 — `CellFootprintBenchmark`'s per-class floor RE-DERIVED under a new pre-registered estimator: 1.044 -> 0.398, from the same three retained runs (`computenet-3sua`)
+
+**No new measurement was made.** This is arithmetic over `computenet-7v7m`'s three
+retained quiesced runs — the same 63 observations, the same host, the same harness sha,
+the same JDK — read by a different estimator. Every provenance field is unchanged, which
+is why the machine-rendered block below still carries the runs' own date, 2026-08-26, in
+its heading. It is reproduced verbatim from `renderDerivation`, as step 4 of the procedure
+requires; it is not composed by hand.
+
+**What changed.** `ClassFloorDerivation` step 2 used to read "the **maximum** observed
+relative dispersion ... Maximum, not mean". It now reads `classFloorStatistic`: the
+**MEDIAN** of each row's relative dispersions across its repeats, then the **MAXIMUM** of
+those per-row medians across the class's rows. The maintainer's decision to replace the
+estimator is recorded on `computenet-3sua` (2026-08-27); the concrete statistic and its
+rationale are the implementer's, and both live in `bench/src/main/kotlin/civictech/bench/ClassNoiseFloor.kt`.
+
+**Why, argued from robustness and from nothing else.** A derivation's observations form a
+grid, and its two axes are different kinds of variation:
+
+- **Across REPEATS of one row** — same benchmark, same params, same host, minutes apart —
+  variation is transient: an interference event the one-directional quiesced-host gate
+  could not see, a compilation decision that went differently in one fork, a thermal
+  excursion. A maximum on that axis has **breakdown point zero**. One contaminated
+  observation, anywhere in the grid, sets the bound every future row of the class is
+  classified against, permanently. A median has breakdown 1/2; at three observations it
+  takes two of the three to move it, and two of three is a reproducible property of the
+  row rather than an event.
+- **Across ROWS** variation is structural. A `@Param` combination that disperses heavily
+  disperses heavily every time, and that is a fact about the class rather than noise in
+  it. **The maximum is KEPT there**, and the original step 2's rationale carries over
+  word for word: the floor has to sit above the worst quiet-host row, or a quiet host
+  produces rows above their own floor. A percentile or a mean across rows would discard
+  honest high-dispersion rows and publish a floor the class exceeds on a silent machine —
+  exactly the failure "maximum, not mean" was pre-registered against.
+
+Median rather than a high percentile *within* a row: at three observations per row, every
+order statistic strictly above the median IS the maximum, so a "75th percentile" would be
+the old estimator under a new name. The median is the only order statistic of three with a
+non-zero breakdown point, and it needs no re-picking if `CLASS_FLOOR_MIN_RUNS` ever
+changes.
+
+**The ordering, which is the whole guarantee.** The estimator and its rationale were
+committed on their own, in `b9dc0ba86`, with the `CellFootprintBenchmark` entry explicitly
+marked PENDING RE-DERIVATION and still carrying the old value. Only then was the statistic
+computed over the retained runs. An estimator chosen after seeing what each candidate
+yields is a preference wearing a criterion's clothes, and it is the same move as
+reverse-engineering `NOISE_FLOOR`'s 2x margin from the run it is applied to. The
+re-derivation script is retained at `$HOME/computenet-runs/computenet-3sua/rederive.py`;
+it asserts, as a control, that its own extraction reproduces the previously published
+maximum `0.5217864937179187` bit for bit before computing anything new.
+
+**That the floor got TIGHTER is an outcome, not a justification.** 1.044 -> 0.398 is a
+2.6x tightening, and it must not be read as the reason the statistic was picked. A
+statistic chosen on these grounds that produced a LOOSER floor would have discharged
+`computenet-3sua` identically, and the item's own text says so. Nothing above may be
+revisited on the ground that some other statistic yields a number someone prefers.
+
+**No grandfathering.** `doc/bench/findings.md` and `CLASS_NOISE_FLOOR_DERIVATIONS` now
+carry **one** statistic across the whole per-class floor table. The 2026-08-26 entry above
+is marked superseded in place rather than deleted; its runs are the input to this
+re-derivation and its provenance section remains the record of the JBR-25 defect
+`computenet-7v7m` fixed. `computenet-akfa`'s three remaining classes
+(`OperatorThroughputBenchmark`, `FanOutScalingBenchmark`, `BoundedReadBenchmark`) will be
+derived under this same estimator when they are derived; nothing about them is decided
+here.
+
+**What the number is.** The row that sets the floor is the same one that set it before:
+`realSnapshot` OR_MAP_CELL at `N1E5`, measured 0.5218 / 0.1186 / 0.1986 across runs
+1 / 2 / 3. Under the maximum it contributed 0.5218 — its single worst repeat, about 2.6x
+its own next-worst observation, against 0.201 as the second-highest row over all 63. Under
+`classFloorStatistic` it contributes its median, 0.19864889236475775. The change is not
+that a different part of the class was found to be worst; it is that the same row is now
+represented by what it typically does.
+
+**The limit of 0.398, stated where the number is.** It is still a loose bound: a row may
+carry a JMH 99.9% error bar nearly 40% the size of its own score and pass. That is the
+class rather than the estimator — `realSnapshot` at `N1E5` genuinely disperses that much
+on a silent machine (12 of the 63 rows exceed 0.10: OR_MAP_CELL and SET_CELL in all three
+runs, MAP_CELL in two, KEYED_SET_CELL and LIST_CELL in one each), and a floor that refused
+it would be refusing the benchmark instead of detecting interference. Nor does 0.398 mean
+"no observation here exceeded 0.199" — a median does not bound the sample it is drawn
+from, and one of these very rows was measured at 0.522.
+
+## 2026-08-26 — per-class noise floor for `CellFootprintBenchmark`, derived forward from its own quiesced repeat runs
+Harness: a7c6a0382 · host state quiesced · 3 sequential repeat runs
+JMH: mode=AverageTime unit=us forks=1 warmup=3x1s measurement=5x1s (the class's own annotation configuration)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| statistic (max over rows of the per-row MEDIAN relative dispersion) over all rows of all 3 runs | 0.19864889236475775 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x statistic, rounded up to three decimals | 0.398 |
+Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the class's rows. Robust within a row (one contaminated repeat cannot set a class's floor), conservative across rows (a reproducibly high-dispersion row is a fact about the class, not noise in it). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any per-class number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `CellFootprintBenchmark` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.19864889236475775, so a later row above 0.398 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.19864889236475775 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class, about this class under a different annotation configuration, about this class on another host, or about this class under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).

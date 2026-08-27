@@ -26,9 +26,11 @@ import kotlin.math.ceil
  * ## Status: ONE class derived, three still falling back
  *
  * [CLASS_NOISE_FLOOR_DERIVATIONS] holds exactly one entry —
- * `CellFootprintBenchmark`, derived 2026-08-26 (`computenet-ahn0`, **re-derived the same
- * day under the toolchain JDK by `computenet-7v7m`** after the first three runs turned
- * out to have been measured under JBR 25; see step 1 below). The other three
+ * `CellFootprintBenchmark`, whose runs were made 2026-08-26 (`computenet-ahn0`,
+ * **re-measured the same day under the toolchain JDK by `computenet-7v7m`** after the
+ * first three runs turned out to have been measured under JBR 25; see step 1 below) and
+ * whose floor was **re-derived from those retained runs on 2026-08-27 by
+ * `computenet-3sua`** when [classFloorStatistic] replaced the maximum. The other three
  * classes the procedure names (`OperatorThroughputBenchmark`, `FanOutScalingBenchmark`,
  * `BoundedReadBenchmark`) have **no** derivation and therefore still fall back to
  * [NOISE_FLOOR]. That is not an oversight and no number may be entered for them that did
@@ -173,7 +175,10 @@ import kotlin.math.ceil
  *    hypothetical: `computenet-ahn0` derived `CellFootprintBenchmark`'s first floor under
  *    JBR 25.0.2 rather than the toolchain's JDK 21 — a bare `java` on this host is JBR 25
  *    and `JAVA_HOME` is unset — and re-deriving under 21 moved the floor from 0.593 to
- *    1.044.
+ *    1.044. (Both of those are old-estimator numbers, from before `computenet-3sua`
+ *    replaced the maximum with [classFloorStatistic]; the size of the JVM's effect is the
+ *    point, and it is not re-derived here because a superseded measurement is not
+ *    re-published.)
  */
 object ClassFloorDerivation {
 
@@ -503,34 +508,43 @@ data class ClassNoiseFloor(
  * to [NOISE_FLOOR] and the harness behaves for it exactly as it did before this file
  * existed — which is the correct behaviour for a floor that has not been measured.
  *
- * **PENDING RE-DERIVATION (`computenet-3sua`).** The estimator changed in this same
- * commit — [classFloorStatistic] is now the max over rows of the per-row median, not the
- * max over every observation. The entry below still carries the value the OLD estimator
- * produced, and the paragraphs that follow still describe it. It is re-derived, from the
- * same three retained runs, in this work item's NEXT commit; the two are separate commits
- * on purpose, so that the estimator is on record before any number is computed under it.
+ * **The one entry is a RE-DERIVATION (`computenet-3sua`, 2026-08-27).** It is the same
+ * three quiesced runs `computenet-7v7m` made — the same 63 retained observations, no new
+ * measurement — recomputed under [classFloorStatistic], which replaced the previous
+ * maximum-over-every-observation. The estimator was committed first, on its own, before
+ * this number was computed under it; the value below is an OUTCOME of that rule and was
+ * not available when it was chosen. No entry is grandfathered: this table carries one
+ * statistic across every row of it.
  *
- * On the size of the one floor that exists: `CellFootprintBenchmark`'s worst quiet-host
- * row was 0.522 relative dispersion, so its floor is 1.044 — above 1.0, which is to say
- * this class can produce a JMH error bar the size of its own score without the machine
- * being busy. That is the finding, not a defect in it. `realSnapshot` at `N1E5` runs high
- * dispersion *reproducibly*: 12 of the 63 rows exceed 0.10 — OR_MAP_CELL and SET_CELL in
- * all three runs, MAP_CELL in two, KEYED_SET_CELL and LIST_CELL in one each. That is
- * precisely the structural spread [ClassFloorDerivation]'s "defect this exists to close"
- * section describes: the global bound fired on those rows every time and so distinguished
- * nothing.
+ * On the size of the one floor that exists: the worst quiet-host row by TYPICAL dispersion
+ * is `realSnapshot` OR_MAP_CELL at `N1E5`, whose three observations were 0.522 / 0.119 /
+ * 0.199 and whose median is therefore 0.199 — so the floor is 0.398. `realSnapshot` at
+ * `N1E5` runs high dispersion *reproducibly*: 12 of the 63 rows exceed 0.10 — OR_MAP_CELL
+ * and SET_CELL in all three runs, MAP_CELL in two, KEYED_SET_CELL and LIST_CELL in one
+ * each. That is precisely the structural spread [ClassFloorDerivation]'s "defect this
+ * exists to close" section describes: the global bound fired on those rows every time and
+ * so distinguished nothing.
  *
- * **The limit of this particular number, stated where the number is.** The maximum is
- * *comparatively* isolated in a way the underlying spread is not: OR_MAP_CELL N1E5
- * measured 0.522 / 0.119 / 0.199 across runs 1 / 2 / 3, so the row that sets the floor is
- * about 2.6x its own next-worst observation, and the second-highest row over all 63 is
- * 0.201. A floor of 1.044 is therefore a *weak* bound — it will refuse very little — and
- * a reader should not take it as "this class typically disperses 0.5". It is nonetheless
- * the number the pre-registered procedure yields, and it stands: the procedure says
- * MAXIMUM, not mean, and dropping the worst row or switching statistic *after seeing that
- * the maximum came out inconvenient* is exactly the reverse-engineering the forward
- * discipline exists to prevent. Tightening it needs more runs, decided in advance, not a
- * different reading of these three.
+ * **What changed, and what did not.** Under the old estimator this class's floor was
+ * 1.044, set by OR_MAP_CELL N1E5's single worst repeat (0.522, about 2.6x its own
+ * next-worst observation, against 0.201 as the second-highest row over all 63). The floor
+ * is now 0.398. The row that sets it is the SAME row — the change is not that a different
+ * part of the class was found to be worst, but that the row is now represented by what it
+ * typically does rather than by its most extreme repeat.
+ *
+ * **The limit of this particular number, stated where the number is.** 0.398 is still a
+ * loose bound in absolute terms: a row may carry a JMH 99.9% error bar nearly 40% the size
+ * of its own score and pass. That is the class, not the estimator — `realSnapshot` at
+ * `N1E5` genuinely disperses that much on a silent machine, and a floor that refused it
+ * would be refusing the benchmark rather than detecting interference. A reader should also
+ * not read 0.398 as "no observation here exceeded 0.199": a median does not bound the
+ * sample it is drawn from, and one of these very rows was measured at 0.522.
+ *
+ * **What must not be read into the tightening.** That 0.398 came out below 1.044 is an
+ * outcome, not a justification. The estimator was argued and committed on robustness
+ * grounds alone (see [classFloorStatistic]), and it would have discharged
+ * `computenet-3sua` identically had it produced a LOOSER floor. Nothing here may be
+ * revisited on the ground that some other statistic would yield a number someone prefers.
  */
 val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
     /**
@@ -539,8 +553,15 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
      * 7 cell families x 3 scales) from `bench/build/libs/bench-jmh.jar` at `a7c6a0382`,
      * each preceded by its own attestation of `run-series.sh`'s gate (1-minute load
      * average at or below 0.25 x 16 cores = 4.00 on NL-MGD6FQJW91), and each verified
-     * after the fact against its own log's `# VM version:` banner. Maximum
-     * `|scoreError / score|` over all 63 rows: `realSnapshot` OR_MAP_CELL N1E5 in run 1.
+     * after the fact against its own log's `# VM version:` banner.
+     *
+     * **Re-derived 2026-08-27 by `computenet-3sua`** under [classFloorStatistic], from
+     * those same three runs' retained JSON — arithmetic over kept artifacts, not a fresh
+     * measurement, which is why every provenance field below (date of the RUNS, harness
+     * sha, host state, JMH config, measuring JVM) is unchanged. The per-row median that
+     * sets it is `realSnapshot` OR_MAP_CELL N1E5, whose observations across runs 1 / 2 / 3
+     * were 0.5217864937179187 / 0.11856655814861747 / 0.19864889236475775. Under the previous
+     * estimator this entry read 0.5217864937179187, floor 1.044.
      *
      * **This SUPERSEDES `computenet-ahn0`'s derivation of the same class**, which
      * observed 0.2961501149112133 and published a floor of 0.593. That measurement is not
@@ -551,7 +572,7 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
      */
     ClassNoiseFloor(
         benchmarkClass = "CellFootprintBenchmark",
-        observedRobustDispersion = 0.5217864937179187,
+        observedRobustDispersion = 0.19864889236475775,
         runs = 3,
         derivedOn = "2026-08-26",
         harnessCommitSha = "a7c6a0382",
