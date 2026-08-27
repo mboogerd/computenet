@@ -318,6 +318,30 @@ class FloorToolTest {
     }
 
     @Test
+    fun `ingest refuses a runner that attested a threshold disagreeing with cores x 0_25`(
+        @TempDir dir: File,
+    ) {
+        val ledgerDir = File(dir, "ledger")
+        startSyntheticLedger(ledgerDir)
+
+        writeLog(dir, "run-1.log")
+        writeResults(dir, "run-1.csv", csv(syntheticRows.map { it to 0.02 }))
+
+        // 16 cores x 0.25 = 4.0. A runner that actually gated on 9.0 (e.g. a stale or
+        // hand-edited threshold) must be refused, not silently accepted as if it had
+        // gated on the CLI's own recomputation (computenet-b5xt).
+        val (code, out) = run(
+            "ingest", "--ledger", ledgerDir.path,
+            "--results", File(dir, "run-1.csv").path,
+            "--log", File(dir, "run-1.log").path,
+            "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012",
+            "--threshold", "9.0",
+        )
+        code shouldBe 1
+        out shouldContain "attested gate threshold 9.0"
+    }
+
+    @Test
     fun `ingest refuses a log with no VM version banner`(@TempDir dir: File) {
         val ledgerDir = File(dir, "ledger")
         startSyntheticLedger(ledgerDir)

@@ -588,7 +588,7 @@ object FloorCli {
     private const val USAGE = """usage:
   floorTool plan     --ledger <dir> --class <SimpleName> --jar <bench-jmh.jar>
   floorTool next     --ledger <dir> --jar <bench-jmh.jar>
-  floorTool ingest   --ledger <dir> --results <jmh.csv> --log <run.log> --load <1min-load> --cores <n> --harness-sha <sha>
+  floorTool ingest   --ledger <dir> --results <jmh.csv> --log <run.log> --load <1min-load> --cores <n> --harness-sha <sha> [--threshold <value>]
   floorTool status   --ledger <dir>
   floorTool render   --ledger <dir> --derived-on <iso-date> --jmh-config <text> [--harness-sha <sha>]
   floorTool render   --existing <SimpleName>
@@ -761,7 +761,23 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
         // being published as if a unit had measured under it.
         val harnessSha = required(map, "harness-sha")
 
-        val threshold = Math.round(cores * QUIESCED_LOAD_FACTOR * 100.0) / 100.0
+        // Optional, defaulting to the computed rule (`computenet-b5xt`). The default
+        // exists so a caller with nothing else to attest is not forced to invent a
+        // number, but a caller that DID gate on something -- `derive-class-floor.sh`'s
+        // own THRESHOLD variable -- passes it here, and GateReading's own construction
+        // check (`abs(attestedThreshold - threshold) <= 0.005`) refuses a mismatch. Prior
+        // to this flag, ingest recomputed the threshold from --cores unconditionally, so
+        // that check compared the ledger's rule against a value derived from the same
+        // rule and could never fire.
+        val thresholdText = map["threshold"]
+        val threshold = if (thresholdText != null) {
+            thresholdText.toDoubleOrNull()
+                ?: throw IllegalArgumentException(
+                    "--threshold must be a number, was '$thresholdText'"
+                )
+        } else {
+            Math.round(cores * QUIESCED_LOAD_FACTOR * 100.0) / 100.0
+        }
         val unit = UnitAttestation(
             unitId = resultsFile.nameWithoutExtension,
             measuringJvm = banner,

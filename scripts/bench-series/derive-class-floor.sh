@@ -399,14 +399,15 @@ case "${BANNER}" in
 esac
 
 # --------------------------------------------------------------------------------------
-# 6. Ingest, then report status. floorTool.ingest currently computes its own gate
-# threshold from --cores rather than accepting the one this script actually attested
-# above (computenet-b5xt, filed and open) — --load/--cores is the whole ingest interface
-# floorTool exposes today, so that is what this script passes.
+# 6. Ingest, then report status. --threshold is the number step 4b actually gated on
+# (${THRESHOLD}, cores x 0.25 read once at step 1 and reused unchanged) — passed
+# explicitly rather than left for floorTool to recompute, so a ledger unit whose runner
+# gated on some other number is refused instead of silently accepted (computenet-b5xt).
 echo
 echo "Ingesting unit ${UNIT_N}..."
 floor_tool ingest --ledger "${LEDGER_DIR}" --results "${RESULTS}" --log "${LOG}" \
-  --load "${LOAD_1M}" --cores "${CORES}" --harness-sha "${HARNESS_SHA}"
+  --load "${LOAD_1M}" --cores "${CORES}" --harness-sha "${HARNESS_SHA}" \
+  --threshold "${THRESHOLD}"
 
 echo
 floor_tool status --ledger "${LEDGER_DIR}"
