@@ -148,6 +148,36 @@ tasks.named("check") {
 // wiring — a JMH fork is minutes, and these tests are sub-second by design.
 tasks.named<Test>("test") {
     dependsOn(tasks.named("jmhRunBytecodeGenerator"))
+
+    // Bench-only console echo (computenet-rd7h, follow-up from computenet-x9e.15's
+    // review). A `@Tag("bench")` sampling/rendering test's whole deliverable is a
+    // printed tally (see CellFootprintProbeTest, ThroughputReportTest's render entry
+    // points): by default Gradle's `test` task never forwards a test JVM's stdout to
+    // the console, so `-PbenchOnly=true --tests '<Name>'` prints only `<Name> PASSED`
+    // and the tally is reachable only from `<system-out>` inside the JUnit XML at
+    // `bench/build/test-results/test/TEST-<fully.qualified.Name>.xml`
+    // (doc/bench/regression-series.md §10).
+    //
+    // `testLogging.showStandardStreams` is configured for EVERY module via
+    // `tasks.withType<Test>().configureEach` in
+    // `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts` — turning it on THERE would echo
+    // every module's test stdout on every `./gradlew test`, which is why §10 left this
+    // as a documented XML workaround rather than a code fix. This is the narrower
+    // alternative that §10 did not evaluate: a `:bench`-LOCAL override, gated on the
+    // same `-PbenchOnly` property that already selects the bench tag above, so it only
+    // ever changes behavior for a deliberately-invoked bench run.
+    //
+    // Demonstrated 2026-08-27:
+    //   - `./gradlew :bench:test -PbenchOnly=true --tests
+    //     'civictech.bench.micro.CellFootprintProbeTest' --rerun` echoes the probe's
+    //     printed tally directly to the CONSOLE (not just the JUnit XML).
+    //   - a default `./gradlew :bench:test --rerun` (no `-PbenchOnly`) shows no test
+    //     stdout at all — this override does not touch the ordinary gate.
+    if (project.hasProperty("benchOnly")) {
+        testLogging {
+            showStandardStreams = true
+        }
+    }
     // ProjectGraphTest [BEN1-04, BS-6] parses settings.gradle.kts and every module's
     // build.gradle.kts from the checkout root. A system property set here, at
     // configuration time, is a configuration-cache-safe constant — the same
