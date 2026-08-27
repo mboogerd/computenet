@@ -21,6 +21,8 @@ absolute floor.
 7. [Why this is not a GitHub Actions workflow](#7-why-this-is-not-a-github-actions-workflow)
 8. [The series is EMPTY at the commit that introduces it](#8-the-series-is-empty-at-the-commit-that-introduces-it)
 9. [What this lane does not do](#9-what-this-lane-does-not-do)
+10. [Two operational gotchas: a relative `--jar`, and a bench test that prints
+    nothing to the console](#10-two-operational-gotchas-same-shape-computenet-x9e15)
 
 ---
 
@@ -437,8 +439,13 @@ default, so running one of these under `-PbenchOnly=true --tests '<Name>'` print
 only `<Name> PASSED` — the tally is not merely truncated, it never appears at all,
 and the natural conclusion is that the invocation produced nothing. The tally is
 still there: it is captured as `system-out` inside the JUnit XML at
-`bench/build/test-results/test/TEST-<fully.qualified.Name>.xml`, one `<system-out>`
-element per test method, holding the exact text the test printed. Read it with
+`bench/build/test-results/test/TEST-<fully.qualified.Name>.xml`. Gradle writes a
+**single** `<system-out>` element per XML file — one per test *class*, not one per
+test method — holding everything that class's tests printed, in run order (measured
+2026-08-27: `TEST-civictech.bench.micro.CellFootprintProbeTest.xml`, 2 `<testcase>`
+elements, 1 `<system-out>`). That is why taking the first one below is enough; if you
+need to attribute output to a particular method, the class's own banner text is the
+only separator. Read it with
 ```
 python3 -c "import xml.etree.ElementTree as ET; \
   r = ET.parse('bench/build/test-results/test/TEST-<fully.qualified.Name>.xml').getroot(); \
