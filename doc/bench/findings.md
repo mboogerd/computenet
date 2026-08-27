@@ -5446,3 +5446,352 @@ or deleted). This correction is the only record that the list changed.
 **Verification**: none taken for this entry — it corrects prose against committed source
 (`bench/src/main/kotlin/civictech/bench/FloorDerivationLedger.kt` at `bd6e10c28`), not a
 measurement.
+
+---
+
+## 2026-08-27 — the residual of `computenet-bzwx`'s iteration-length A/B, at 16 forks: `TAGGED_SET` and `UNION` both RESOLVE to the not-material side, and they agree
+
+`computenet-ciz9`. `computenet-bzwx` (the entry above) reached `INCONCLUSIVE` on
+`[BEN1-28]`'s TIME channel for one reason only: exactly two of its eight set-shaped rows had
+ratio intervals straddling the pre-registered `MATERIAL_RATIO = 0.90`. It deliberately did
+**not** add forks for those two after seeing which two they were — adjusting a design to the
+rows that failed to decide, once their identity is known, is the defect pre-registration
+exists to prevent — so the residual was carried here to be measured under its own criterion,
+fixed in committed source before its numbers existed. This is that measurement.
+
+**Headline.** At 16 forks per arm — eight times `computenet-bzwx`'s two — both residual rows
+resolve, both to the **does-not-cost** side of 0.90, and they agree with each other.
+`TAGGED_SET` reports a long/short throughput ratio of **0.9734** (interval 0.9650–0.9820)
+against `bzwx`'s 0.9156 (0.8829–0.9493); `UNION` reports **0.9447** (0.9279–0.9617) against
+`bzwx`'s 0.9414 (0.8972–0.9877). By the criterion committed as `f875ceb7b` before the first
+arm ran, the residual question **RETIRES** — for these two rows and nothing else.
+
+**Read that verdict at exactly its width.** It is a statement about `TAGGED_SET` and `UNION`
+under this instrument. The other six set-shaped rows were **not re-measured here** and are
+not restated: `computenet-bzwx`'s numbers for them stand as its own entry reports them. What
+this entry adds is that the two rows which prevented that entry from deciding no longer
+prevent it.
+
+### The residual A/B, per subject
+
+`ratio` is long-arm score / short-arm score; the interval is propagated worst-case from both
+arms' 99.9% error bars (long low over short high, long high over short low), which is wider
+than a root-sum-square combination would be. `bzwx` is the same subject's 2-fork row from the
+entry above, quoted from its table.
+
+| subject | short arm 1 s (ops/s) | long arm 10 s (ops/s) | ratio | interval | row | `bzwx` ratio (2 forks) | `bzwx` interval |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `TAGGED_SET` | 818913.8 ± 4033.1 | 797154.3 ± 3021.8 | 0.9734 | 0.9650–0.9820 | DOES_NOT_COST | 0.9156 | 0.8829–0.9493 |
+| `UNION` | 790147.5 ± 7503.8 | 746420.3 ± 6275.7 | 0.9447 | 0.9279–0.9617 | DOES_NOT_COST | 0.9414 | 0.8972–0.9877 |
+
+`verdict=RETIRES`, `agreement=AGREE_DOES_NOT_COST`, `MATERIAL_RATIO=0.9`,
+`RESOLVABLE_RELATIVE_ERROR=0.1`, `FORKS=16`. The design bought what it was sized to buy: the
+ratio interval's half-width fell from 0.0332 to **0.0085** for `TAGGED_SET` (3.9x) and from
+0.0453 to **0.0169** for `UNION` (2.7x). Neither row was anywhere near the
+`RESOLVABLE_RELATIVE_ERROR` limit — the widest relative error in either arm is `UNION`'s short
+arm at 0.0095.
+
+### Both rows still show a real, small decline, and the criterion calls it immaterial rather than absent
+
+**This is the part a reader must not compress into the word RETIRES.** `DOES_NOT_COST` means
+*the whole interval sits above 0.90*. It does not mean the ratio is 1. Both intervals here
+**exclude 1.0**:
+
+- `TAGGED_SET` loses between 1.8% and 3.5% of its throughput to the 10x longer iteration.
+- `UNION` loses between 3.8% and 7.2%.
+
+So at this power the honest statement is: **a small within-iteration decline is present in
+both residual subjects and is resolved to a few percent, and the lane's pre-registered
+materiality bar of 10% says that is not a cost.** The bar was fixed by `computenet-bzwx`
+before any of these numbers existed and was deliberately **not** moved by this item in either
+direction; moving it now, with two known point estimates in hand, is the thing this item was
+created to avoid. A later item that wants a *different* question — "is there any decline at
+all, and what is it?" — is asking about the interval's distance from 1.0, not from 0.90, and
+should say so in its own pre-registered criterion rather than reinterpreting this one.
+
+For scale, `computenet-bzwx`'s own six decided rows: `INTERSECT`'s interval (0.9613–0.9962)
+also excluded 1.0, while `FILTER`, `COUNT`, `FLAT_MAP`, `PRESENCE_COUNT` and `QUORUM` all
+spanned it. So the residual pair are not qualitatively different from `INTERSECT`; they are
+the low end of a family in which small sub-material declines are visible once the error bars
+are tight enough to see them.
+
+### Do the two rows agree?
+
+**Yes — `AGREE_DOES_NOT_COST`**, and that is the criterion's own word for it, computed by a
+function deliberately kept separate from the verdict so neither answer depends on the other's
+shape. Both rows resolved, and both to the same side.
+
+They agree in the weaker sense too: their point ratios differ (0.973 vs 0.945) and the
+intervals do not overlap, so the two subjects are not showing the *same size* of decline —
+`UNION`'s is roughly twice `TAGGED_SET`'s. That ordering is worth recording because the bead
+predicted it: `UNION` is the one subject whose `gc.count` collapsed in `computenet-i61m`'s
+allocation sweep (57 against 165–205), the signature of fewer, larger collections, so a real
+`UNION` effect "would not be surprising and would be worth naming". It is named: `UNION` shows
+the larger decline of the pair, resolved and excluding 1.0, and still below the materiality
+bar.
+
+### Which of the bead's two candidate explanations the numbers favour
+
+The bead offered two: (1) a real few-percent decline specific to these two subjects, (2) noise
+— they carried the two widest short-arm error bars in `bzwx`'s sweep, and `bzwx`'s sampler
+caught a Brave helper at 118.8% inside `long UNION` and Spotlight `mds` at 41–52% spanning
+`long TAGGED_SET`.
+
+**The two rows split between the two explanations, and that is the finding.**
+
+- **`UNION`: explanation (1).** Its point ratio barely moved — 0.9414 at 2 forks, 0.9447 at
+  16 — while its interval shrank by 2.7x. A number that stays put as the error bar collapses
+  is the signature of a real effect, not of the excursion `bzwx` flagged. `bzwx`'s reading
+  that the Brave helper was "the strongest single reason not to read its 0.941 as a real
+  decline" is, on this evidence, **wrong**: the decline reproduces at eight times the power on
+  a different day, and is now bounded at 3.8–7.2%.
+- **`TAGGED_SET`: explanation (2), at least in part.** Its point ratio moved from 0.9156 to
+  0.9734 — a shift of 0.058, roughly 1.7x `bzwx`'s own half-width, i.e. a move too large to
+  be comfortable as sampling variation alone and consistent with `bzwx`'s Spotlight `mds`
+  excursion having depressed its long arm. Its underlying decline is real but about half the
+  size `bzwx` measured.
+
+This is a reading of two runs, not a measurement: nothing here re-runs `bzwx`'s configuration
+under a forced excursion to confirm the attribution.
+
+### Why this is a comparison of ratios across two runs, and what makes that legitimate
+
+The absolute levels differ between the two runs — `TAGGED_SET`'s short arm is 818914 here
+against `bzwx`'s 867384 (5.6% lower), `UNION`'s 790148 against 784509 (0.7% higher) — as
+absolute throughput on this host does between days. **The measured code is identical.** Across
+the 23 commits between `bzwx`'s harness commit `1f68b10d4` and this run's `f875ceb7b`, `git
+log 1f68b10d4..f875ceb7b -- kernel/src/main bench/src/jmh` is **empty**: nothing under the
+kernel's main sources or the benchmark bodies changed at all. The only source this item added
+is a criterion and a render entry point under `bench/src/test`, which no benchmark body reads.
+The quantity compared across the two runs is therefore the within-run *ratio*, which is the
+quantity least exposed to a day-to-day shift in absolute level.
+
+### Nothing was tuned
+
+`[BEN1-28]`'s standing instruction — the growth is observed, never tuned — was followed. No
+tag map was cleared, compacted or bounded, and nothing under `kernel/src/main` or
+`bench/src/jmh` was touched. Both arms ran the same warmup (`5 x 1 s`) and the same
+measurement iteration count (`10`); the two knobs that differ from `computenet-bzwx` are `-f
+16` in place of the class's declared 2, and the subject list. The single knob that differs
+*between arms* is JMH's `-r` (`1s` / `10s`), and both arms' `# Measurement:` banners are
+retained in their logs as proof of that.
+
+### The criterion, and that it was fixed before the numbers
+
+`IterationLengthResidualCriterion` (in `bench/src/test/kotlin/civictech/bench/micro/
+IterationLengthCriterion.kt`) was committed as **`f875ceb7b`** — the same sha
+`bench-jmh.jar`'s own `Harness-Commit-Sha` manifest attribute carries, and the same sha the
+rendered blocks below report — **before the first arm ran at 14:51:54Z**. It states:
+
+- the pair (`TAGGED_SET`, `UNION`) and nothing else, with the render entry point REFUSING any
+  other coverage, so the six `DOES_NOT_COST` rows cannot be restated as if re-measured;
+- the fork count **16**, derived from `computenet-bzwx`'s *published error bars* rather than
+  from the time available. `TAGGED_SET` was the binding row: 0.0156 of ratio left to cover
+  against a half-width of 0.0332 needs a 2.13x shrink, i.e. at least `2 x 2.13^2` = 9.1 forks
+  on the `1/sqrt(n)` term alone. 16 buys about 3.3x once `t(0.999, df)`'s own shrink from
+  `df = 19` to `df = 159` is included — margin over the minimum, not exactly the minimum. It
+  cost 65 minutes of measurement, about what `bzwx`'s two forks over eight subjects cost;
+- its **own** copies of `MATERIAL_RATIO = 0.90` and `RESOLVABLE_RELATIVE_ERROR = 0.10` rather
+  than importing the family criterion's, so a later change to those cannot retroactively move
+  the boundary this run was decided against;
+- a two-row aggregation — fires only if BOTH rows lose throughput, retires only if BOTH
+  resolve and neither does, otherwise undecided, including the opposite-sides case — with
+  agreement as a separate function;
+- and, in advance, **what the design could not resolve**: a row whose true ratio sits within
+  roughly 0.01 of 0.90 would have stayed undecided at any affordable fork count, and that
+  outcome was pre-declared a null result rather than a failed run. It did not occur.
+
+`IterationLengthResidualCriterionTest` — untagged, so it runs in `:bench:test` on every build
+— pins 23 cases across all of it, including that the residual thresholds are its own constants
+and that `computenet-bzwx`'s actual `TAGGED_SET` error bars still straddle the boundary while
+the same point ratio at 16-fork error bars does not.
+
+### Host, and the readings actually met — per arm
+
+**The host is the pinned one**: `NL-MGD6FQJW91`, Apple M3 Max, Mac15,9, 16 cores, macOS
+26.6.2, measuring on Microsoft OpenJDK 21.0.11+10-LTS invoked by absolute path (a bare `java`
+here is JBR 25). CPU/cores/OS in the rendered blocks below come from each measuring fork's own
+`@Setup(Level.Trial)` banner.
+
+**Interleaving, and how it differs from `computenet-bzwx`'s — stated because it is coarser.**
+At 2 forks each of `bzwx`'s sixteen arms took a few minutes, so one host excursion could
+swallow an arm whole, and alternating the arm order per subject was the defence. At 16 forks
+one arm is one JMH invocation spanning ~28 minutes of **sixteen separate JVMs**, and JMH's
+99.9% interval is computed over all 160 measurement iterations — so an excursion covering a
+few minutes touches a small share of the forks, is diluted in the mean, and *widens* the
+reported interval rather than silently shifting it. This run therefore alternates at the
+subject level: `TAGGED_SET` ran short-then-long and `UNION` long-then-short, so a monotone
+drift over the 65-minute window biases the two rows' ratios in **opposite** directions and
+cannot make them agree spuriously. They agree anyway. A reader who considers 28 minutes too
+long a block to gate once should read the per-arm excursion table below, which is why it is
+recorded in full.
+
+**Per-arm gate.** Each of the four launches polled `load1` every 10 s and started only on a
+reading below the quiesced threshold **4.00** (16 cores x 0.25, the threshold
+`computenet-i61m`, `computenet-x9e.14` and `computenet-bzwx` all used). **4 of 4 arms met the
+gate; zero were run un-gated.**
+
+| subject | arm order | arm | window (UTC) | `load1` at start | `load1` at end |
+| --- | --- | --- | --- | --- | --- |
+| `TAGGED_SET` | short, long | short (1 s) | 14:51:54–14:56:01 | 3.03 | 3.18 |
+| `TAGGED_SET` | short, long | long (10 s) | 14:56:01–15:24:09 | 3.18 | 3.81 |
+| `UNION` | long, short | long (10 s) | 15:24:09–15:52:17 | 3.81 | 4.50 |
+| `UNION` | long, short | short (1 s) | 15:52:48–15:56:56 | 3.97 | 3.39 |
+
+Three of the four gates found a trough on their first poll. Only `short UNION` had to wait:
+`long UNION` ended with `load1` at 4.50, and the gate polled four times over 31 s (4.19, 4.33,
+then 3.97) before starting. The whole run occupied 14:51:54Z–15:56:56Z.
+
+**Non-resident consumers during the window are recorded rather than discarded.** A 30 s
+sampler ran throughout (130 samples, top 5 processes by CPU each). `load1` ranged
+**2.42–10.64**, with the measuring JVM itself accounting for 133.7–438.9% CPU. Everything
+non-JVM at or above 40%, with the arm it falls inside:
+
+| when (UTC) | process | CPU | inside |
+| --- | --- | --- | --- |
+| 14:59:55 | `fileproviderd` | 94.4% | long `TAGGED_SET` |
+| 15:05:57 | `node` (nvm v25.9.0) | 43.8% | long `TAGGED_SET` |
+| 15:08:58 | Brave Browser Helper (Renderer) | 43.3% | long `TAGGED_SET` |
+| 15:11:28 | Brave Browser Helper (Renderer) | 56.4% | long `TAGGED_SET` |
+| 15:15:29 | `fileproviderd` | 77.5% | long `TAGGED_SET` |
+| 15:21:00 | `wdavdaemon_unprivileged` 169.1%, IntelliJ IDEA 137.9%, `wdavdaemon_enterprise` 72.7%, `com.manageengine.appctrl.driver` 42.1% | — | long `TAGGED_SET` (`load1` peaks 10.64 at 15:21:30) |
+| 15:28:02, 15:29:02 | `mediaanalysisd` | 77.1%, 82.3% | long `UNION` (`load1` 10.29) |
+| 15:30:33 | `PerfPowerServicesSignpostReader` | 87.6% | long `UNION` |
+| 15:36:04 | `corespotlightd` | 125.2% | long `UNION` |
+| 15:42:35 | three Brave renderers | 62.9%, 61.6%, 43.7% | long `UNION` |
+| 15:45:36 | Brave Browser Helper (Renderer) | 124.3% | long `UNION` |
+| 15:47:06 | `photoanalysisd` 86.5%, Spotlight `mds` 72.3% | — | long `UNION` |
+| 15:50:37 | `wdavdaemon_enterprise` | 106.4% | long `UNION` |
+| 15:51:08 | `node` (nvm v25.9.0) | 99.5% | long `UNION` |
+| 15:53:08, 15:54:08, 15:54:38, 15:55:09 | `wdavdaemon_unprivileged` | 62.4%, 64.8%, 44.8%, 41.1% | short `UNION` |
+| 15:54:38 | `fileproviderd` | 52.0% | short `UNION` |
+
+Mean CPU across all 130 samples for the resident managed-endpoint stack, as a **lower bound**
+— the sampler records only the top five processes, so a process below fifth place in a sample
+contributes zero: Microsoft Defender `wdavdaemon_unprivileged` 8.0%, `trustd` 6.0%,
+ManageEngine `com.manageengine.appctrl.driver` 4.4%.
+
+**The excursion pattern makes this entry's conclusion conservative, not fragile, and that is
+worth reading carefully.** Every heavy excursion in the two `TAGGED_SET` arms and all but one
+in the two `UNION` arms fell inside a **LONG** arm. An excursion inside the long arm depresses
+the long arm's score and therefore pushes the ratio **down**, toward `COSTS`. The ratios came
+out at 0.973 and 0.945 anyway, both intervals clear of 0.90. So the direction of the
+contamination is opposite to the direction of the verdict: a cleaner host would move these
+rows further away from the materiality boundary, not toward it. `short UNION` is the one arm
+whose contamination runs the other way — a Defender burst spanning most of its four minutes —
+and it is the arm whose row is nonetheless the *lower* of the two, i.e. a depressed short arm
+would have inflated `UNION`'s ratio, so `UNION`'s true ratio may be marginally lower than
+0.9447. Its ratio would have to fall a further 0.0447 to reach 0.90 — more than 2.6 times its
+whole 99.9% interval half-width.
+
+**The resident managed-endpoint stack never goes away on this host.** That it does not
+disqualify a quiesced attestation here is a ruling recorded in `computenet-i61m`'s entry, not
+a judgement made by this one; this session executed it. IntelliJ IDEA at 137.9% inside `long
+TAGGED_SET` is the one consumer here that is neither resident nor system: it is an idle IDE's
+background activity on the pinned host, recorded rather than discarded, and it falls in the
+long arm — again the conservative direction.
+
+### Trigger (`[BEN1-31]`/`[BEN1-32]`)
+
+`TriggerClaim.Cited` on `[BEN1-28]`, verdict `RETIRES`, with the criterion and the measured
+clause both generated from the same numbers by `IterationLengthResidualCriterion`, so the
+sentence in the rendered block cannot drift from the table beside it. The statement says in
+its own words that it is stated over the two residual subjects only and that the other six
+set-shaped rows are neither re-measured nor re-stated. The SHORT arm's block carries
+`TriggerClaim.None` — MARKED INCOMPLETE — correctly: the control arm answers no trigger
+question on its own. This entry cites neither G-21 nor G-43.
+
+### WAL/journal statement (`[BEN1-29]`)
+
+Unchanged and re-confirmed against the source both arms compiled — which, per the git check
+above, is byte-identical to what `computenet-bzwx` compiled: `Graphs.kt`'s `Rig` for
+`Drive.REAL` constructs `ManagedHost(scheduler = scheduler)` with no `journal` argument, and
+no `civictech.cell.durability` type appears in `Graphs.kt`, `Deltas.kt` or
+`OperatorThroughputBenchmark.kt`. WAL/journal sync is not in play; KBLK is not named.
+
+### Coverage, and what this sweep is not
+
+Two subjects x two arms x `direction=INSERT` x `drive=REAL` = **4 of 4 invocations measured**,
+no row omitted. It is **not** a re-measurement of the other six set-shaped subjects, not a
+sweep of all 18, not a `drive=SIM` measurement, not a RETRACT measurement, and not a statement
+about the join / grouped / combine families. `IterationLengthResidualAbRenderTest` refuses any
+coverage other than exactly `TAGGED_SET` and `UNION` rather than aggregating a wider or
+narrower set into a criterion stated over that pair.
+
+**The instrument is one-sided and a reader has to carry that**, exactly as
+`computenet-bzwx`'s entry says. Iteration length is not a *label* on the tag map: a longer
+iteration accumulates more tag-map state, but also everything else that grows with
+time-in-iteration — JIT state, a filling young generation, any other internal collection. The
+absence of a *material* decline is the stronger direction for this instrument, and it is
+evidence against any within-iteration accumulation costing these two subjects more than a few
+percent of wall clock, the tag map included. The few percent that IS present is likewise not
+attributed to the map by this entry.
+
+### Artifacts
+
+The four per-arm raw JMH CSVs and logs, the two concatenated per-arm artifacts the renderer
+read, the per-arm polling-gate log, the 30 s sampler log and the driver script are retained at
+`$HOME/computenet-runs/computenet-ciz9/` on host `NL-MGD6FQJW91` — **outside the repository**,
+because run artifacts are not committed in this lane. They are therefore machine-local and not
+reproducible from this repository alone; the rendered blocks below,
+`IterationLengthResidualCriterion`, `IterationLengthResidualAbRenderTest` and
+`IterationLengthResidualCriterionTest` are the durable part.
+
+### Commands, exactly
+
+```
+./gradlew :bench:jmhJar          # manifest Harness-Commit-Sha: f875ceb7b
+
+# four invocations, each gated on a polled load1 trough below 4.00, arm order
+# reversed between the two subjects (TAGGED_SET short,long — UNION long,short):
+/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar 'OperatorThroughputBenchmark.real' \
+     -p subject=<TAGGED_SET|UNION> -p direction=INSERT -f 16 -r <1s | 10s> \
+     -rf csv -rff /abs/path/arms/<arm>-<subject>.csv \
+     > /abs/path/arms/<arm>-<subject>.log 2>&1
+
+# concatenated per arm (headers de-duplicated) into residual-ab.csv/.log (LONG) and
+# residual-ab.short.csv/.short.log (SHORT), then rendered through the module's own
+# entry point:
+./gradlew :bench:test -PbenchOnly=true --rerun \
+  --tests 'civictech.bench.micro.IterationLengthResidualAbRenderTest' \
+  -Dcivictech.bench.jmhResults=/abs/path/residual-ab.csv \
+  -Dcivictech.bench.harnessSha=f875ceb7b \
+  -Dcivictech.bench.date=2026-08-27
+```
+
+The rendered blocks below were read back out of the JUnit XML `<system-out>` and pasted
+verbatim, not retyped.
+
+---
+
+Renderer's own output for the **LONG arm (10 s measurement iterations, 16 forks)**, pasted verbatim:
+
+## 2026-08-27 — residual iteration-length A/B, LONG arm (10 s measurement iterations, 16 forks): REAL-drive INSERT throughput over TAGGED_SET and UNION — the treatment arm of computenet-ciz9's resolution of the two rows computenet-bzwx left straddling its materiality boundary
+Harness: f875ceb7b · JVM Microsoft (Microsoft-13877178)/21.0.11 · heap JVM defaults (VM options: <none>) · Apple M3 Max, 16 cores, Mac OS X 26.6.2
+JMH: mode=Throughput forks=16 warmup=5 iters=10 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| TAGGED_SET insert | 797154.289641 ± 3021.760469 ops/s | |
+| UNION insert | 746420.331932 ± 6275.706349 ops/s | |
+Trigger: [BEN1-28] — RETIRES: the criterion applied is stated over the two residual subjects TAGGED_SET and UNION only — the rows computenet-bzwx left straddling its boundary, the other six set-shaped rows being neither re-measured nor re-stated here — and is that each of the two subjects' ratio of long-arm to short-arm throughput is taken with its error bars propagated, a row counts as losing throughput only if the whole ratio interval falls below MATERIAL_RATIO=0.90 and as not losing it only if the whole interval falls above it, a row whose relative error exceeds RESOLVABLE_RELATIVE_ERROR=0.10 in either arm or whose interval straddles the boundary resolves nothing, and the residual question fires only if BOTH rows lose throughput, retires only if BOTH rows are resolved and neither loses it, and is otherwise undecided — which includes the case where the two rows resolve to opposite sides; measured, at 16 forks per arm, TAGGED_SET ratio 0.9734288399578311 (interval 0.9649863991759609 to 0.981954848967152, DOES_NOT_COST); UNION ratio 0.9446594303267468 (interval 0.9279049419155644 to 0.9617351946766355, DOES_NOT_COST); the two rows AGREE-DOES-NOT-COST
+
+Row dispersion (drive=REAL; informational, nothing excluded):
+- TAGGED_SET insert (drive=REAL): 797154.289641 ± 3021.760469 ops/s, relative dispersion 0.00379068457420063
+- UNION insert (drive=REAL): 746420.331932 ± 6275.706349 ops/s, relative dispersion 0.008407737678790515 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
+---
+
+Renderer's own output for the **SHORT arm (1 s measurement iterations, 16 forks)**, pasted verbatim:
+
+## 2026-08-27 — residual iteration-length A/B, SHORT arm (1 s measurement iterations, 16 forks): REAL-drive INSERT throughput over TAGGED_SET and UNION — the control arm of computenet-ciz9's resolution of the two rows computenet-bzwx left straddling its materiality boundary
+Harness: f875ceb7b · JVM Microsoft (Microsoft-13877178)/21.0.11 · heap JVM defaults (VM options: <none>) · Apple M3 Max, 16 cores, Mac OS X 26.6.2
+JMH: mode=Throughput forks=16 warmup=5 iters=10 · drive=REAL
+| subject | value | notes |
+| --- | --- | --- |
+| TAGGED_SET insert | 818913.778716 ± 4033.083385 ops/s | |
+| UNION insert | 790147.547327 ± 7503.798354 ops/s | |
+Trigger: none cited — entry MARKED INCOMPLETE, not presented as a finding
+
+Row dispersion (drive=REAL; informational, nothing excluded):
+- TAGGED_SET insert (drive=REAL): 818913.778716 ± 4033.083385 ops/s, relative dispersion 0.0049249182146178985
+- UNION insert (drive=REAL): 790147.547327 ± 7503.798354 ops/s, relative dispersion 0.009496705241172606 — above the harness sanity bound NOISE_FLOOR 0.005 (informational; the row is reported, and no comparison is drawn from it that its error bar does not support)
