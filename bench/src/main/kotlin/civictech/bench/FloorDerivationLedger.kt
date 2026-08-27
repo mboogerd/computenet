@@ -448,6 +448,26 @@ class FloorDerivationLedger private constructor(
      * `renderWarnings()` — and every one of its callers — to re-derive or re-supply the same
      * fact. This keeps `floorTool render`'s existing `ledgerRendered?.renderWarnings()` call
      * (no argument, unchanged) able to see it.
+     *
+     * A third route was considered and rejected (`computenet-wymi`): `renderWarnings()`
+     * could compute `harnessShas().isEmpty()` itself, with no field and no signature
+     * change. That was NOT taken, for two reasons, not only the cosmetic one. The
+     * cosmetic one: the message below names the published sha, and `harnessShas()` alone
+     * cannot — it only sees what the *units* attest, never what `render` actually
+     * published on the caller's authority. The load-bearing one: `harnessShas().isEmpty()`
+     * is true of an all-`v1` ledger from the moment it is loaded, before [render] has ever
+     * been called — so a stateless `renderWarnings()` would warn about a publication that
+     * has not happened yet, breaking the "`renderWarnings()` before any `render()` returns
+     * `[]`" invariant the `computenet-eo9m` review measured. Guarding that would need its
+     * own "has render run" bit, which is the state this route claims to avoid.
+     *
+     * **Stale-state safety.** This field can only ever describe the ledger's *own* most
+     * recent successful [render] because attestation cannot change underneath it:
+     * [render] refuses to run over an incomplete row set ([outstanding] must be empty),
+     * and [ingest] refuses a further observation once every row already carries
+     * [CLASS_FLOOR_OBSERVATIONS_PER_ROW] — so no unit can be ingested, attested or not,
+     * between a successful [render] and the [renderWarnings] that reads this field
+     * afterwards. There is no window in which the field's answer could go stale.
      */
     private var lastPublishedUnattestedSha: String? = null
 
@@ -691,13 +711,8 @@ class FloorDerivationLedger private constructor(
         }
 
         val resolvedSha = resolveHarnessSha(harnessCommitSha)
-        // Recorded for renderWarnings() — see lastPublishedUnattestedSha's KDoc. Set on
-        // every successful render, not only the first, so a ledger re-rendered after
-        // gaining an attesting unit does not keep warning about a state it has left.
-        lastPublishedUnattestedSha = if (harnessShas().isEmpty()) resolvedSha else null
-
         val observed = observationList.maxOf { it.relativeDispersion }
-        return ClassNoiseFloor(
+        val record = ClassNoiseFloor(
             benchmarkClass = plan.benchmarkClass,
             observedMaxRelativeDispersion = observed,
             runs = CLASS_FLOOR_OBSERVATIONS_PER_ROW,
@@ -707,6 +722,15 @@ class FloorDerivationLedger private constructor(
             jmhConfig = jmhConfig,
             measuringJvm = jvms.single(),
         )
+        // Recorded for renderWarnings() — see lastPublishedUnattestedSha's KDoc — only
+        // AFTER the record above has actually been built. ClassNoiseFloor's own
+        // require() checks (a blank derivedOn, for one) can still refuse here, and a
+        // refused render must leave nothing for renderWarnings() to warn about: nothing
+        // was published (`computenet-wymi`). Set on every successful render, not only
+        // the first, so a ledger re-rendered after gaining an attesting unit does not
+        // keep warning about a state it has left.
+        lastPublishedUnattestedSha = if (harnessShas().isEmpty()) resolvedSha else null
+        return record
     }
 
     /**

@@ -640,6 +640,33 @@ class FloorDerivationLedgerTest {
         warning shouldContain "no unit"
     }
 
+    /**
+     * `computenet-wymi`: the ordering hazard the eo9m review found but did not have a
+     * ticket for yet. [FloorDerivationLedger.render] resolves the sha and would have
+     * recorded [FloorDerivationLedger] state describing it as published *before*
+     * constructing the [ClassNoiseFloor] that actually publishes it — and that
+     * constructor's own `require()` checks can still refuse. A render that throws there
+     * must leave nothing recorded: no [ClassNoiseFloor] exists, so
+     * [FloorDerivationLedger.renderWarnings] must not warn about a sha that was never
+     * published.
+     */
+    @Test
+    fun `a render refused by the record's own require() leaves nothing for renderWarnings to warn about`(
+        @TempDir dir: File,
+    ) {
+        val ledger = completeLedger(dir)
+        downgradeToV1(ledger)
+        val reloaded = FloorDerivationLedger.load(dir, syntheticCounts)
+
+        // A blank derivedOn passes every one of render()'s own checks — the row set is
+        // complete, one JVM, and the sha resolves on the operator's authority — and is
+        // refused only inside ClassNoiseFloor's constructor.
+        shouldThrow<IllegalArgumentException> { reloaded.render("", "deadbeef", "cfg") }
+            .message shouldContain "derivedOn must not be blank"
+
+        reloaded.renderWarnings() shouldBe emptyList()
+    }
+
     @Test
     fun `a v1 ledger resumed under v2 keeps its old units and says how far the check reaches`(
         @TempDir dir: File,
