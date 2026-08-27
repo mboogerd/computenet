@@ -41,8 +41,13 @@
 # working tree's HEAD sha read immediately before its measurement (computenet-tdby), so a
 # derivation assembled across two checkouts is REFUSED at render naming both shas instead
 # of being published under whichever checkout happened to be current last. The rendered
-# findings block states the units' gathering window for the same reason. What is still not
-# witnessed: the jar's own build provenance (computenet-7doz) — see step 4c.
+# findings block states the units' gathering window for the same reason. THE JAR ITSELF is
+# now attested too (computenet-7doz): `:bench:jmhJar` stamps its own build's commit into
+# the jar's manifest, `floorTool ingest` reads that stamp back and records IT (not the
+# working-tree sha above) as the unit's provenance, and refuses outright — before
+# measuring anything more, before this unit is ever ingested — when the two disagree. That
+# disagreement is exactly a stale jar: one built at a different checkout than the one
+# `${HARNESS_SHA}` below reads. See step 4c and step 6.
 #
 # ONE INVOCATION, ONE UNIT, THEN EXIT. This script never loops waiting for the load gate
 # and never retries on your behalf: a gate refusal prints the reading and exits non-zero.
@@ -364,15 +369,17 @@ echo "Gate still open at measurement time: ${LOAD_1M} <= ${THRESHOLD}."
 # commit that may have measured nothing. Per unit, for exactly the reason the banner check
 # in step 5 is per unit.
 #
-# WHAT THIS DOES NOT WITNESS, stated here because it is the residual and not a detail: it
-# is the working tree's HEAD, not the jar's provenance. ${JAR} is built once, outside the
-# gate, and carries no record of the commit it was built from, so a rebuild at the same
-# checkout is invisible, and a STALE jar carried across a checkout change is recorded
-# under a sha its code did not come from. Closing that needs the build to stamp the jar
-# (computenet-7doz).
+# WHAT THIS ALONE DOES NOT WITNESS: it is the working tree's HEAD, not ${JAR}'s own build
+# provenance — a rebuild at the same checkout, or a STALE jar carried across a checkout
+# change without rebuilding, would be invisible to this reading by itself. That is why it
+# is no longer recorded as the unit's harnessSha directly: step 6 passes it to `ingest`
+# alongside `--jar ${JAR}`, and `ingest` reads the jar's OWN stamped commit (written by
+# `:bench:jmhJar`, computenet-7doz) back out, records THAT as the unit's provenance, and
+# refuses outright if the two disagree — which is exactly the stale-jar case this reading
+# alone could not catch.
 HARNESS_SHA="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
-echo "Harness sha for unit ${UNIT_N}: ${HARNESS_SHA} (working tree HEAD; the jar's own"
-echo "  build provenance is not recorded — computenet-7doz)"
+echo "Harness sha for unit ${UNIT_N}: ${HARNESS_SHA} (working tree HEAD; checked against"
+echo "  ${JAR}'s own stamped build provenance at ingest — computenet-7doz)"
 
 echo
 echo "Running unit ${UNIT_N}: ${SELECTION_ARGS_LINE}"
@@ -406,7 +413,7 @@ esac
 echo
 echo "Ingesting unit ${UNIT_N}..."
 floor_tool ingest --ledger "${LEDGER_DIR}" --results "${RESULTS}" --log "${LOG}" \
-  --load "${LOAD_1M}" --cores "${CORES}" --harness-sha "${HARNESS_SHA}" \
+  --load "${LOAD_1M}" --cores "${CORES}" --harness-sha "${HARNESS_SHA}" --jar "${JAR}" \
   --threshold "${THRESHOLD}"
 
 echo

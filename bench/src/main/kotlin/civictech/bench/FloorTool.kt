@@ -5,6 +5,7 @@ import java.net.URLClassLoader
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.util.jar.JarFile
 import kotlin.system.exitProcess
 
 /**
@@ -110,6 +111,38 @@ object JarPath {
         }
         return null
     }
+}
+
+// -----------------------------------------------------------------------------------
+// The jar's own build provenance (`computenet-7doz`), read back at `ingest`.
+// -----------------------------------------------------------------------------------
+
+/**
+ * Reads the commit sha `bench/build.gradle.kts`'s `jmhJar` task stamps into
+ * `bench-jmh.jar`'s manifest at build time — the jar's own build provenance, as opposed to
+ * [UnitAttestation.harnessSha]'s working-tree HEAD read at measurement time.
+ *
+ * The whole point of this type existing separately from a working-tree `git rev-parse` is
+ * that the two can disagree: the jar is built once, outside the gate, and a stale jar
+ * carried across a checkout change without rebuilding would otherwise be recorded under a
+ * sha its code did not come from. `runIngest` refuses exactly that disagreement.
+ */
+object HarnessJarStamp {
+
+    /**
+     * Must match the literal `bench/build.gradle.kts`'s `jmhJar` task writes — a build
+     * script cannot depend on this module's own compiled output, so the two sides are kept
+     * equal by comment rather than by a shared constant.
+     */
+    const val MANIFEST_ATTRIBUTE = "Harness-Commit-Sha"
+
+    /**
+     * The stamped sha, or `null` if [jar] carries no manifest, or a manifest with no such
+     * attribute — a jar that predates this stamp, or was produced by something other than
+     * `:bench:jmhJar`.
+     */
+    fun read(jar: File): String? =
+        JarFile(jar).use { it.manifest?.mainAttributes?.getValue(MANIFEST_ATTRIBUTE) }
 }
 
 // -----------------------------------------------------------------------------------
@@ -588,7 +621,7 @@ object FloorCli {
     private const val USAGE = """usage:
   floorTool plan     --ledger <dir> --class <SimpleName> --jar <bench-jmh.jar>
   floorTool next     --ledger <dir> --jar <bench-jmh.jar>
-  floorTool ingest   --ledger <dir> --results <jmh.csv> --log <run.log> --load <1min-load> --cores <n> --harness-sha <sha> [--threshold <value>]
+  floorTool ingest   --ledger <dir> --results <jmh.csv> --log <run.log> --load <1min-load> --cores <n> --harness-sha <sha> --jar <bench-jmh.jar> [--threshold <value>]
   floorTool status   --ledger <dir>
   floorTool render   --ledger <dir> --derived-on <iso-date> --jmh-config <text> [--harness-sha <sha>]
   floorTool render   --existing <SimpleName>
@@ -596,8 +629,11 @@ object FloorCli {
 plan starts a new ledger from the class's own -lp enumeration, refused unless the row
 count matches EXPECTED_PLAN_ROW_COUNTS. next prints the next outstanding unit to measure,
 sized to fit a short quiesced window without altering any JMH knob. ingest feeds one
-finished unit's artifacts to the ledger; its --harness-sha is the checkout THAT unit
-measured under, recorded per unit. status reports per-row completeness, the measuring
+finished unit's artifacts to the ledger; its --harness-sha is the working tree HEAD read
+immediately before that unit's invocation, checked against --jar's OWN stamped build
+provenance (`Harness-Commit-Sha`, written by :bench:jmhJar) — a disagreement is the
+stale-jar case and is refused, and the stamped sha, not the working-tree one, is what gets
+recorded per unit (computenet-7doz). status reports per-row completeness, the measuring
 JVM(s) and the harness sha(s) seen. render prints the ClassNoiseFloor(...) call and the
 findings.md block for a COMPLETE, single-JVM, single-harness-sha ledger, publishing the
 sha the units themselves attest — a --harness-sha passed to render is CHECKED against
@@ -738,6 +774,7 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
         val logFile = File(required(map, "log"))
         val loadText = required(map, "load")
         val coresText = required(map, "cores")
+        val jar = JarPath.resolve(required(map, "jar"))
 
         val load = loadText.toDoubleOrNull()
             ?: throw IllegalArgumentException("--load must be a number, was '$loadText'")
@@ -746,6 +783,7 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
 
         require(resultsFile.isFile) { "results file not found: ${resultsFile.absolutePath}" }
         require(logFile.isFile) { "log file not found: ${logFile.absolutePath}" }
+        require(jar.isFile) { "jar not found: ${jar.absolutePath}" }
 
         // The prescribed pattern (`computenet-akfa`): '^# VM version', never a looser
         // match — a looser one hits JMH's sun.misc.Unsafe warning line first.
@@ -756,10 +794,53 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
                     "measuring JVM cannot be established from this log"
             )
 
-        // Required, not defaulted (`computenet-tdby`). A default would be a sha this tool
-        // invented — and the whole defect being closed is a harness sha nobody attested
-        // being published as if a unit had measured under it.
-        val harnessSha = required(map, "harness-sha")
+        // Required, not defaulted (`computenet-tdby`). This is the working tree's HEAD,
+        // read by the caller (`derive-class-floor.sh`) immediately before the JMH
+        // invocation — NOT what gets recorded as the unit's harnessSha any more
+        // (`computenet-7doz`). It exists here only to be checked against the jar's own
+        // stamp below: a default would be a sha this tool invented, and the whole defect
+        // being closed is a harness sha nobody attested being published as if a unit had
+        // measured under it.
+        val workingTreeSha = required(map, "harness-sha")
+
+        // The jar's own build provenance (`computenet-7doz`) — written by `:bench:jmhJar`
+        // itself, not supplied by any caller. Absent entirely (no manifest, or a manifest
+        // predating this stamp): refused, naming the rebuild command, so the unattested
+        // path can never be reached silently.
+        val stampedSha = HarnessJarStamp.read(jar)
+            ?: throw FloorLedgerException(
+                "REFUSED: ${jar.absolutePath} carries no " +
+                    "'${HarnessJarStamp.MANIFEST_ATTRIBUTE}' manifest attribute — either it " +
+                    "predates this stamp or was not produced by ':bench:jmhJar'. A jar with " +
+                    "no attested build provenance cannot be recorded as measuring anything. " +
+                    "Rebuild it: ./gradlew :bench:jmhJar"
+            )
+
+        // The stale-jar case (`computenet-7doz`): the jar on disk was built from a
+        // different checkout than the one this unit's invocation actually ran against.
+        // Mirrors the mixed-harness-sha refusal's specificity (FloorDerivationLedger.kt's
+        // `render`) — names both shas and the fix — but fires here, at ingest, rather than
+        // waiting for a later render: a stale jar is not "two units disagree", it is "this
+        // one unit's own provenance is already broken", and there is nothing to gain by
+        // deferring that.
+        if (stampedSha != workingTreeSha) {
+            throw FloorLedgerException(
+                "REFUSED: unit '${resultsFile.nameWithoutExtension}' ran against " +
+                    "${jar.absolutePath}, built at '$stampedSha', but the working tree HEAD " +
+                    "read immediately before the invocation was '$workingTreeSha'. This is " +
+                    "the stale-jar case: the jar was not rebuilt after the checkout changed, " +
+                    "so it measures code from a commit other than the one now checked out. " +
+                    "Rebuild the jar at this checkout (./gradlew :bench:jmhJar) and re-run " +
+                    "this unit, or check out '$stampedSha' to match what the jar actually " +
+                    "measures."
+            )
+        }
+        // The recorded provenance, in preference to the working-tree sha above: the jar's
+        // own stamp describes what was actually measured, and by this point the two are
+        // known to agree (the mismatch above already refused otherwise) — spelled out
+        // explicitly rather than reusing workingTreeSha, so a future change to either
+        // branch above cannot silently start recording the wrong one.
+        val harnessSha = stampedSha
 
         // Optional, defaulting to the computed rule (`computenet-b5xt`). The default
         // exists so a caller with nothing else to attest is not forced to invent a

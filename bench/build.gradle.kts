@@ -268,6 +268,64 @@ tasks.named<Test>("test") {
 // -----------------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------------
+// THE JAR'S OWN BUILD PROVENANCE (`computenet-7doz`).
+//
+// `UnitAttestation.harnessSha` (FloorDerivationLedger.kt) records the working tree's HEAD
+// at the moment a unit was MEASURED — read by `derive-class-floor.sh` immediately before
+// the JMH invocation. What it never witnessed is `bench-jmh.jar` itself: the jar is built
+// ONCE, outside the gate, by `:bench:jmhJar`, and nothing stamped its provenance into it —
+// so a rebuild at the same checkout was invisible, and a STALE jar carried across a
+// checkout change was recorded under the new checkout's sha, attesting a commit the
+// measured code did not come from. This closes that: `jmhJar`'s own manifest now carries
+// the commit it was built from, written by the build itself rather than supplied by a
+// caller, and `FloorTool.HarnessJarStamp` (FloorTool.kt) reads it back at ingest.
+//
+// The sha is read via `providers.exec`, Gradle's configuration-cache-safe process
+// provider — captured here as a lazy `Provider<String>` and handed to the manifest AS A
+// PROVIDER, never `.get()`-ed by this script. (`.get()` inside a `doFirst` was the first
+// attempt and is rejected by the configuration cache; the `jmhJar` block below records
+// why, and this paragraph used to describe that rejected form as if it were the landed
+// one — computenet-7doz review.) It still honours the "capture a Provider, never reach
+// for `project` at execution time" rule the guard task above documents, because the
+// Provider — not the script — is what resolves.
+//
+// The value is resolved when `jmhJar` runs, not when the config cache entry was stored,
+// so the manifest carries whatever commit is checked out at the moment `jmhJar` actually
+// RUNS. MEASURED on darwin/arm64, 2026-08-27, with the configuration cache reused rather
+// than rebuilt: stamp `42ebbe59c` at HEAD `42ebbe59c`; HEAD moved to `979832512`;
+// `./gradlew :bench:jmhJar --rerun` printed "Configuration cache entry reused" and the
+// stamp became `979832512`. A plain `./gradlew :bench:jmhJar` at the same moment reported
+// `jmhJar UP-TO-DATE` and the jar kept its existing stamp — so if `jmhJar` is not
+// re-executed after a checkout change (up-to-date, task caching, or simply not
+// re-invoked), the jar on disk keeps its old, still-correct-for-itself stamp, which is
+// exactly the staleness `floorTool ingest` is meant to make visible, not paper over.
+//
+// `Harness-Commit-Sha` is a plain manifest attribute name, not a constant shared with
+// Kotlin source across the build-script/main-source boundary (a build script cannot
+// depend on `:bench`'s own compiled output) — `FloorTool.HarnessJarStamp.MANIFEST_ATTRIBUTE`
+// on the reading side must be kept equal to the literal here by hand; both sides carry a
+// comment saying so.
+val harnessCommitSha: Provider<String> = providers.exec {
+    commandLine("git", "-C", rootDir.absolutePath, "rev-parse", "--short", "HEAD")
+}.standardOutput.asText.map { it.trim() }
+
+tasks.named<Jar>("jmhJar") {
+    // Passed as the Provider itself, not `.get()` — `Manifest.attributes` accepts a
+    // Provider value and resolves it lazily at execution time, which is what keeps this
+    // configuration-cache safe. A `doFirst { manifest.attributes(... to harnessCommitSha.get()) }`
+    // was tried first and rejected by the configuration cache ("cannot serialize Gradle
+    // script object references"): a lambda literal at this script's top level captures the
+    // enclosing script object even when it only reads a local val, and `Task.doFirst` closures
+    // are exactly where the config-cache serializer inspects for that. Setting the attribute
+    // through the DSL at configuration time, with the Provider as the value, needs no lambda
+    // and avoids the capture entirely.
+    manifest.attributes(
+        // Must match `FloorTool.HarnessJarStamp.MANIFEST_ATTRIBUTE` verbatim.
+        "Harness-Commit-Sha" to harnessCommitSha,
+    )
+}
+
+// -----------------------------------------------------------------------------------
 // THE REGRESSION-TRACKING SERIES' COMMAND-LINE FACE (computenet-b7k4).
 //
 // `civictech.bench.series.SeriesTool` ingests one JMH run's artifacts and compares its

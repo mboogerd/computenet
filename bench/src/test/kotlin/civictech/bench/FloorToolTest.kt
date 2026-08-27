@@ -19,8 +19,11 @@ import java.io.File
  * OUTSIDE `check`/`build`/`test` (`bench/build.gradle.kts`) — making `:bench:test` depend
  * on it would reintroduce exactly the lifecycle reachability that isolation exists to
  * prevent, for a fast unit-test module the module's own header describes as
- * "sub-second". The other subcommands (`next`, `ingest`, `status`, `render`) never touch
- * a jar or a subprocess and are exercised end to end through [FloorCli.run].
+ * "sub-second". The other subcommands (`next`, `status`, `render`) never touch a jar or a
+ * subprocess. `ingest` reads one manifest attribute off a `--jar` (`computenet-7doz`) — a
+ * real file read, but not a subprocess and not `bench-jmh.jar` itself: [stampedJar] builds
+ * a minimal synthetic jar carrying just that attribute, standing in for `:bench:jmhJar`'s
+ * real output. Every subcommand is exercised end to end through [FloorCli.run].
  *
  * **This suite owns no policy either.** Every refusal it asserts is
  * [FloorDerivationLedger]'s own — carried through [FloorCli.run] unchanged — never a
@@ -262,6 +265,26 @@ class FloorToolTest {
         return file
     }
 
+    /**
+     * A minimal jar carrying [sha] as its `Harness-Commit-Sha` manifest attribute
+     * (`computenet-7doz`) — the fixture standing in for `bench/build.gradle.kts`'s
+     * `jmhJar` task, which this module's `test` task never runs (see this class's
+     * KDoc). `sha == null` produces a jar with no such attribute, for the "unstamped
+     * jar" refusal.
+     */
+    private fun stampedJar(dir: File, sha: String? = harnessSha, name: String = "bench-jmh.jar"): File {
+        val jarFile = File(dir, name)
+        val manifest = java.util.jar.Manifest()
+        manifest.mainAttributes.putValue("Manifest-Version", "1.0")
+        if (sha != null) {
+            manifest.mainAttributes.putValue(HarnessJarStamp.MANIFEST_ATTRIBUTE, sha)
+        }
+        java.io.FileOutputStream(jarFile).use { fos ->
+            java.util.jar.JarOutputStream(fos, manifest).use { }
+        }
+        return jarFile
+    }
+
     private fun run(vararg args: String): Pair<Int, String> {
         val out = StringBuilder()
         val code = FloorCli.run(args.toList().toTypedArray(), out)
@@ -301,12 +324,13 @@ class FloorToolTest {
 
         writeLog(dir, "run-1.log")
         writeResults(dir, "run-1.csv", csv(syntheticRows.map { it to 0.02 }))
+        val jar = stampedJar(dir, "abcdef012")
 
         val (ingestCode, ingestOut) = run(
             "ingest", "--ledger", ledgerDir.path,
             "--results", File(dir, "run-1.csv").path,
             "--log", File(dir, "run-1.log").path,
-            "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012",
+            "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012", "--jar", jar.path,
         )
         ingestCode shouldBe 0
         ingestOut shouldContain "ingested unit 'run-1'"
@@ -327,6 +351,8 @@ class FloorToolTest {
         writeLog(dir, "run-1.log")
         writeResults(dir, "run-1.csv", csv(syntheticRows.map { it to 0.02 }))
 
+        val jar = stampedJar(dir, "abcdef012")
+
         // 16 cores x 0.25 = 4.0. A runner that actually gated on 9.0 (e.g. a stale or
         // hand-edited threshold) must be refused, not silently accepted as if it had
         // gated on the CLI's own recomputation (computenet-b5xt).
@@ -334,7 +360,7 @@ class FloorToolTest {
             "ingest", "--ledger", ledgerDir.path,
             "--results", File(dir, "run-1.csv").path,
             "--log", File(dir, "run-1.log").path,
-            "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012",
+            "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012", "--jar", jar.path,
             "--threshold", "9.0",
         )
         code shouldBe 1
@@ -354,16 +380,85 @@ class FloorToolTest {
                 "# JMH version: 1.37\n"
         )
         writeResults(dir, "run-1.csv", csv(syntheticRows.map { it to 0.02 }))
+        val jar = stampedJar(dir, "abcdef012")
 
         val (code, out) = run(
             "ingest", "--ledger", ledgerDir.path,
             "--results", File(dir, "run-1.csv").path,
             "--log", log.path,
-            "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012",
+            "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012", "--jar", jar.path,
         )
         code shouldBe 1
         out shouldContain "REFUSED"
         out shouldContain "no '# VM version' banner"
+    }
+
+    // -----------------------------------------------------------------------------------
+    // computenet-7doz — the jar's own build provenance, read back at ingest.
+    // -----------------------------------------------------------------------------------
+
+    @Test
+    fun `ingest refuses a jar with no stamped harness sha, naming the rebuild command`(
+        @TempDir dir: File,
+    ) {
+        val ledgerDir = File(dir, "ledger")
+        startSyntheticLedger(ledgerDir)
+        writeLog(dir, "run-1.log")
+        writeResults(dir, "run-1.csv", csv(syntheticRows.map { it to 0.02 }))
+        // No sha: a jar that predates the stamp, or was not produced by :bench:jmhJar.
+        val jar = stampedJar(dir, sha = null)
+
+        val (code, out) = run(
+            "ingest", "--ledger", ledgerDir.path,
+            "--results", File(dir, "run-1.csv").path,
+            "--log", File(dir, "run-1.log").path,
+            "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012", "--jar", jar.path,
+        )
+        code shouldBe 1
+        out shouldContain "REFUSED"
+        out shouldContain "Harness-Commit-Sha"
+        out shouldContain "./gradlew :bench:jmhJar"
+    }
+
+    @Test
+    fun `ingest refuses a jar whose stamped sha disagrees with the working tree, the stale-jar case`(
+        @TempDir dir: File,
+    ) {
+        val ledgerDir = File(dir, "ledger")
+        startSyntheticLedger(ledgerDir)
+        writeLog(dir, "run-1.log")
+        writeResults(dir, "run-1.csv", csv(syntheticRows.map { it to 0.02 }))
+        // The jar was built at 'stale111' but the working tree the caller read HEAD from
+        // is now at 'fresh222' — the jar was not rebuilt after the checkout changed.
+        val jar = stampedJar(dir, "stale111")
+
+        val (code, out) = run(
+            "ingest", "--ledger", ledgerDir.path,
+            "--results", File(dir, "run-1.csv").path,
+            "--log", File(dir, "run-1.log").path,
+            "--load", "1.2", "--cores", "16", "--harness-sha", "fresh222", "--jar", jar.path,
+        )
+        code shouldBe 1
+        out shouldContain "REFUSED"
+        out shouldContain "stale111"
+        out shouldContain "fresh222"
+        out shouldContain "./gradlew :bench:jmhJar"
+
+        // The discriminating half: the SAME jar, with the working tree sha it actually
+        // matches, is accepted and its stamp — not the working-tree reading — is what
+        // gets recorded.
+        val (goodCode, goodOut) = run(
+            "ingest", "--ledger", ledgerDir.path,
+            "--results", File(dir, "run-1.csv").path,
+            "--log", File(dir, "run-1.log").path,
+            "--load", "1.2", "--cores", "16", "--harness-sha", "stale111", "--jar", jar.path,
+        )
+        goodCode shouldBe 0
+        goodOut shouldContain "ingested unit 'run-1'"
+
+        val (statusCode, statusOut) = run("status", "--ledger", ledgerDir.path)
+        statusCode shouldBe 0
+        statusOut shouldContain "stale111"
     }
 
     // -----------------------------------------------------------------------------------
@@ -376,6 +471,7 @@ class FloorToolTest {
     ) {
         val ledgerDir = File(dir, "ledger")
         startSyntheticLedger(ledgerDir)
+        val jar = stampedJar(dir, "abcdef012")
         listOf(0.01, 0.02, 0.03).forEachIndexed { index, dispersion ->
             writeLog(dir, "run-${index + 1}.log")
             writeResults(dir, "run-${index + 1}.csv", csv(syntheticRows.map { it to dispersion }))
@@ -383,7 +479,7 @@ class FloorToolTest {
                 "ingest", "--ledger", ledgerDir.path,
                 "--results", File(dir, "run-${index + 1}.csv").path,
                 "--log", File(dir, "run-${index + 1}.log").path,
-                "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012",
+                "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012", "--jar", jar.path,
             )
         }
 
@@ -405,11 +501,12 @@ class FloorToolTest {
         startSyntheticLedger(ledgerDir)
         writeLog(dir, "run-1.log")
         writeResults(dir, "run-1.csv", csv(syntheticRows.map { it to 0.02 }))
+        val jar = stampedJar(dir, "abcdef012")
         run(
             "ingest", "--ledger", ledgerDir.path,
             "--results", File(dir, "run-1.csv").path,
             "--log", File(dir, "run-1.log").path,
-            "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012",
+            "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012", "--jar", jar.path,
         )
 
         val (code, out) = run(
@@ -425,6 +522,7 @@ class FloorToolTest {
     fun `render refuses a ledger spanning two measuring JVMs`(@TempDir dir: File) {
         val ledgerDir = File(dir, "ledger")
         startSyntheticLedger(ledgerDir)
+        val jar = stampedJar(dir, "abcdef012")
         listOf(jdk21, jdk21, jbr25).forEachIndexed { index, banner ->
             writeLog(dir, "run-${index + 1}.log", banner)
             writeResults(dir, "run-${index + 1}.csv", csv(syntheticRows.map { it to 0.02 }))
@@ -432,7 +530,7 @@ class FloorToolTest {
                 "ingest", "--ledger", ledgerDir.path,
                 "--results", File(dir, "run-${index + 1}.csv").path,
                 "--log", File(dir, "run-${index + 1}.log").path,
-                "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012",
+                "--load", "1.2", "--cores", "16", "--harness-sha", "abcdef012", "--jar", jar.path,
             )
         }
 
@@ -464,11 +562,12 @@ class FloorToolTest {
     private fun ingestUnit(dir: File, name: String, csvContent: String, banner: String = jdk21): Int {
         writeLog(dir, "$name.log", banner)
         writeResults(dir, "$name.csv", csvContent)
+        val jar = stampedJar(dir, harnessSha)
         return run(
             "ingest", "--ledger", File(dir, "ledger").path,
             "--results", File(dir, "$name.csv").path,
             "--log", File(dir, "$name.log").path,
-            "--load", "1.2", "--cores", "16", "--harness-sha", harnessSha,
+            "--load", "1.2", "--cores", "16", "--harness-sha", harnessSha, "--jar", jar.path,
         ).first
     }
 
@@ -619,7 +718,13 @@ class FloorToolTest {
     // quiesced · 3 sequential repeat runs" with the span stated nowhere.
     // -----------------------------------------------------------------------------------
 
-    /** Ingests one unit at [sha], with the log stamped [stamp]. */
+    /**
+     * Ingests one unit at [sha], with the log stamped [stamp]. The stamped jar's own
+     * provenance is [sha] too — this helper exercises the SAME-sha path (the mixed-sha
+     * cases these tests are about are a working tree that changes between UNITS, not a
+     * jar that disagrees with its own unit's working tree) — see
+     * `ingest refuses a jar whose stamp disagrees with the working tree` for that case.
+     */
     private fun ingestUnitAt(
         dir: File,
         name: String,
@@ -630,11 +735,12 @@ class FloorToolTest {
         val log = writeLog(dir, "$name.log")
         if (stamp != null) log.setLastModified(java.time.Instant.parse(stamp).toEpochMilli())
         writeResults(dir, "$name.csv", csvContent)
+        val jar = stampedJar(dir, sha, name = "$name-jar.jar")
         return run(
             "ingest", "--ledger", File(dir, "ledger").path,
             "--results", File(dir, "$name.csv").path,
             "--log", log.path,
-            "--load", "1.2", "--cores", "16", "--harness-sha", sha,
+            "--load", "1.2", "--cores", "16", "--harness-sha", sha, "--jar", jar.path,
         )
     }
 
@@ -645,12 +751,13 @@ class FloorToolTest {
         startSyntheticLedger(File(dir, "ledger"))
         writeLog(dir, "run-1.log")
         writeResults(dir, "run-1.csv", csv(syntheticRows.map { it to 0.02 }))
+        val jar = stampedJar(dir, "abcdef012")
 
         val (code, out) = run(
             "ingest", "--ledger", File(dir, "ledger").path,
             "--results", File(dir, "run-1.csv").path,
             "--log", File(dir, "run-1.log").path,
-            "--load", "1.2", "--cores", "16",
+            "--load", "1.2", "--cores", "16", "--jar", jar.path,
         )
         code shouldBe 1
         out shouldContain "harness-sha"
