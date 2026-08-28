@@ -1,5 +1,7 @@
 package civictech.loader
 
+import civictech.cell.CellRef
+import civictech.cell.host.LocationRegistry
 import civictech.cell.wire.WireSerializers
 import civictech.gen.wire.ProxyModule
 import civictech.nature.ContractModule
@@ -11,6 +13,7 @@ import java.nio.file.Path
 import java.util.ServiceConfigurationError
 import java.util.ServiceLoader
 import java.util.jar.JarFile
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -131,6 +134,27 @@ class ModuleHandle internal constructor(
     @Volatile
     var state: ModuleState = ModuleState.LOADED
         internal set
+
+    /**
+     * The refs a [ModuleLoader.track] tracker has attributed to this module —
+     * populated and drained only by [track]'s hooks, never by [load]. `internal`
+     * (not `private`): [track] is a top-level extension function in this same
+     * file/module, not a member of this class, so it needs at least module
+     * visibility to reach this set. A concurrent set because the registry's
+     * publish/unpublish hooks can fire from a scheduler thread that is not the
+     * caller of [track] or of [liveInstances].
+     */
+    internal val liveRefs: MutableSet<CellRef> = ConcurrentHashMap.newKeySet()
+
+    /**
+     * Count of currently live cells attributed to this module by an attached
+     * [ModuleLoader.track] tracker [JAR1-UNL-01].
+     *
+     * Zero until a tracker is attached via [ModuleLoader.track] — see that
+     * method's KDoc for the exact scope (attach-time-forward only, local
+     * publishes only, registry-less hosts excluded).
+     */
+    val liveInstances: Int get() = liveRefs.size
 
     /** The flat `kind:id` view [ModuleLoadRecord] carries. */
     internal fun contributedDescriptorIds(): List<String> =
@@ -535,5 +559,69 @@ class ModuleLoader(
                     record.contributedDescriptorIds.joinToString(", ")
             )
         }
+    }
+}
+
+/**
+ * Live-instance accounting per module [JAR1-UNL-01], resolved by observation
+ * (feature computenet-051.4's risk R3) rather than by inventing a kernel
+ * callback or wrapping [civictech.nature.CellFactory]: `ManagedHost`'s
+ * `LifecycleTransition` KDoc names [LocationRegistry.onPublish] /
+ * [LocationRegistry.onUnpublish] as the deliberate spawn/despawn observation
+ * seam, and [LocationRegistry.publish] already captures the published cell's
+ * concrete class (readable back via [LocationRegistry.describe]) before firing
+ * `onPublish`. This attaches to exactly that seam.
+ *
+ * On every publish this registry announces, [LocationRegistry.describe] is
+ * read for the published ref's class; if the class's own [ClassLoader] is
+ * identical (`===`) to a loaded module's [ModuleHandle.classLoader], the ref is
+ * recorded against that handle — both in the tracker's own ref→handle map and
+ * on the handle's [ModuleHandle.liveInstances] set. On unpublish the ref→handle
+ * map (not a fresh [LocationRegistry.describe] lookup — [LocationRegistry.unpublish]
+ * has already dropped the description by the time `onUnpublish` fires) says
+ * which handle to decrement.
+ *
+ * ## Scope, stated honestly
+ *
+ * - Only publishes this tracker observes **after** [track] is called are
+ *   counted. A cell already live on [registry] when [track] attaches is
+ *   invisible to it until that cell's own next despawn or re-publish.
+ * - Remote publishes ([LocationRegistry.publish] with an `InvocationSink`)
+ *   never carry a description — that capture is a local-publish-only side
+ *   effect — so a remote cell is never attributed to any module. Unload is a
+ *   local concern; this accounting does not reach across the wire.
+ * - A host constructed `ManagedHost(registry = null)` never calls
+ *   [LocationRegistry.publish] at all, so its cells are outside this
+ *   accounting exactly as they are invisible to [LocationRegistry.describe]
+ *   and [LocationRegistry.locate].
+ * - Re-publishing an already-tracked ref (e.g. `resumeHost`'s republish) is
+ *   idempotent: the ref→handle map entry and the handle's live-ref set are
+ *   both plain set/map writes, not counters, so a repeat publish does not
+ *   inflate [ModuleHandle.liveInstances].
+ *
+ * @return a handle whose [AutoCloseable.close] detaches both hook
+ *   registrations and clears this tracker's own ref→handle map. Handles'
+ *   [ModuleHandle.liveInstances] simply stop updating after detach — closing
+ *   the tracker does not reset counts already recorded.
+ */
+fun ModuleLoader.track(registry: LocationRegistry): AutoCloseable {
+    val refToHandle = ConcurrentHashMap<CellRef, ModuleHandle>()
+
+    val onPublish = registry.onPublish { ref ->
+        val clazz = registry.describe(ref)
+        val handle = clazz?.let { published -> loaded().firstOrNull { it.classLoader === published.classLoader } }
+        if (handle != null) {
+            refToHandle[ref] = handle
+            handle.liveRefs += ref
+        }
+    }
+    val onUnpublish = registry.onUnpublish { ref ->
+        refToHandle.remove(ref)?.let { handle -> handle.liveRefs -= ref }
+    }
+
+    return AutoCloseable {
+        onPublish.close()
+        onUnpublish.close()
+        refToHandle.clear()
     }
 }

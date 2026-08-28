@@ -15,8 +15,13 @@ plugins {
 //   into are `:nature` types (`ContractRegistry`, `ContractDescriptor`,
 //   `ContractModule`, `civictech.gen.wire.ProxyRegistry`), and they appear in
 //   `:loader`'s own public surface, so they are `api` rather than `implementation`.
-// - `implementation(:kernel)` — needed to spawn and host what a module carries, but
-//   not re-exported.
+// - `api(:kernel)` — needed to spawn and host what a module carries, AND, since
+//   feature computenet-051.4.2, `ModuleLoader.track(registry: LocationRegistry):
+//   AutoCloseable` puts `civictech.cell.host.LocationRegistry` (a `:kernel` type)
+//   on `:loader`'s own public signature. A caller cannot call `track` without
+//   naming that type, so `implementation` would make `:loader` compile while
+//   quietly breaking every consumer that doesn't also declare `:kernel` itself —
+//   `api` says the truth.
 // - `testImplementation(:testkit)` — test scaffolding only.
 //
 // `:kernel` and `:concord` MUST NOT depend on `:loader` (the loader sits *above* the
@@ -29,7 +34,7 @@ plugins {
 // arriving transitively that nobody declared here.
 dependencies {
     api(project(":nature"))
-    implementation(project(":kernel"))
+    api(project(":kernel"))
 
     testImplementation(project(":testkit"))
 }
