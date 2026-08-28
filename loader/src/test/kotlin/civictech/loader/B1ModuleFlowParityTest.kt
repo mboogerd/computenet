@@ -56,9 +56,14 @@ import java.util.UUID
  * property (see loader/build.gradle.kts), which is what makes "loaded through
  * [ModuleClassLoader]" mean anything at all. So the host-classpath twin cannot
  * *be* `civictech.loader.fixture.flow.FlowSetCell`; it is a behavioural copy of
- * it below. That copy is not maintained by hand-discipline: any behavioural
- * drift between the fixture and the twin fails the parity assertion loudly,
- * which is the same signal this test exists to give.
+ * it below. That copy is not maintained by hand-discipline: behavioural drift
+ * between the fixture and the twin fails the parity assertion loudly, which is
+ * the same signal this test exists to give. Bound on that, stated so nobody
+ * reads it wider than it is: the drift caught is the drift the drive script in
+ * [runFlowGraph] exercises (tag algebra, add/remove/re-add, effective-only
+ * remove, late-join catch-up). A fixture change outside those shapes — a new
+ * port, a new emission trigger — would leave the twin stale with this test
+ * still green.
  *
  * ### Wave/tag/source canonicalization
  *
@@ -73,6 +78,13 @@ import java.util.UUID
  * `sourcePort`, `hop`, catch-up baseline flag, and the full add/del tag sets —
  * compared verbatim. Tags survive verbatim because both the fixture cell and
  * the twin mint them from `(ref, counter)` and both graphs use the same refs.
+ *
+ * Measured shape of what that compares (observed, not assumed): the `catchUpOnLinked`
+ * baseline emission arrives with **no** [civictech.cell.MessageContext] at all, so its
+ * lane/counter/`sourcePort`/`hop` are all `null` and `catchUpBaseline` is `false` on
+ * every emission in this script — that field is compared but never discriminates here.
+ * The three post-link emissions carry the real continuity claim: one lane, `hop = 0`,
+ * the same `sourcePort`, and wave counters 3/4/5 on both sides.
  */
 class B1ModuleFlowParityTest {
 
