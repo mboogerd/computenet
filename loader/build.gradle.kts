@@ -42,18 +42,34 @@ dependencies {
 // `civictech.bench.jmhBenchmarkList` and `:oracle` uses for `oracle.seeds`. Tests read
 // them by these names:
 //
-//   loader.fixture.validBasic — (a) one @Contract, one cell; the well-formed baseline
-//   loader.fixture.utilA      — (d) bundles com.example.Util whose tag() returns "A"
-//   loader.fixture.utilB      — (d) bundles com.example.Util whose tag() returns "B"
-//   loader.fixture.smuggler   — (e) bundles a class named civictech.cell.Cell
+//   loader.fixture.validBasic       — (a) one @Contract, one cell; the well-formed baseline
+//   loader.fixture.noAttrs          — (b) (a)'s shape, but no manifest attributes. ERR-02
+//   loader.fixture.emptyModule      — (c) manifest attributes, zero descriptors. DISC-05;
+//                                      its version string is the DISC-04 verbatim-string fixture
+//   loader.fixture.utilA            — (d) bundles com.example.Util whose tag() returns "A"
+//   loader.fixture.utilB            — (d) bundles com.example.Util whose tag() returns "B"
+//   loader.fixture.smuggler         — (e) bundles a class named civictech.cell.Cell
+//   loader.fixture.throwingProvider — (f) a valid contract PLUS a hand-written WireSerializers
+//                                      provider whose init throws. ERR-03 / atomicity probe
+//   loader.fixture.missingSharedType — (g) a cell extending a type its compileOnly-only
+//                                      dependency (:loader:fixtures:removed-api) supplies at
+//                                      compile time but not on the built jar's classpath. ERR-04/B12
+//   loader.fixture.doctoredNature   — (h) a real generated table, hand-doctored to swap one
+//                                      PortDescriptor's natures for a non-default value. B2
 //
-// Fixtures (b), (c), (f), (g) belong to later features of epic computenet-051 and are
-// deliberately absent here.
+// `:loader:fixtures:removed-api` carries no property: it is a compileOnly-only helper for
+// missing-shared-type, never itself a loadable module (no manifest attributes, no services
+// entry, never on :loader's test runtime classpath).
 val fixtureJarProperties = mapOf(
     "loader.fixture.validBasic" to ":loader:fixtures:valid-basic",
+    "loader.fixture.noAttrs" to ":loader:fixtures:no-attrs",
+    "loader.fixture.emptyModule" to ":loader:fixtures:empty-module",
     "loader.fixture.utilA" to ":loader:fixtures:util-a",
     "loader.fixture.utilB" to ":loader:fixtures:util-b",
     "loader.fixture.smuggler" to ":loader:fixtures:smuggler",
+    "loader.fixture.throwingProvider" to ":loader:fixtures:throwing-provider",
+    "loader.fixture.missingSharedType" to ":loader:fixtures:missing-shared-type",
+    "loader.fixture.doctoredNature" to ":loader:fixtures:doctored-nature",
 )
 
 // Cross-project task access needs the other project evaluated first. These are this
