@@ -1,5 +1,6 @@
 package civictech.nature
 
+import civictech.gen.wire.ProxyConstructor
 import civictech.gen.wire.ProxyModule
 import civictech.gen.wire.ProxyRegistry
 
@@ -288,6 +289,80 @@ internal class CellProvenance {
             }
         }
         return CellProvenanceDrop(orphaned, repointed)
+    }
+}
+
+/**
+ * Outcome of [ProxyProvenance.drop]: which `Class` keys lost their last
+ * contributor entirely ([orphaned]), and which keys still have a live
+ * contributor but must have [civictech.gen.wire.ProxyRegistry]'s `byInterface`
+ * restored to that contributor's own constructor ([repointed]) because the
+ * departing contributor's constructor was the one currently resolving
+ * (computenet-051.4.1, mirroring [CellProvenanceDrop] for the cell table).
+ */
+internal data class ProxyProvenanceDrop(
+    val orphaned: List<Class<*>>,
+    val repointed: Map<Class<*>, ProxyConstructor>,
+)
+
+/**
+ * Contributor multiset for [civictech.gen.wire.ProxyRegistry], specialized
+ * (not built on [Provenance]) for the same reason [CellProvenance] is: [drop]
+ * has to know not just who is left but *which constructor* each survivor
+ * contributed, so [civictech.gen.wire.ProxyRegistry.removeOwner] can restore
+ * one — otherwise a departed contributor's constructor (and the closed
+ * classloader it closes over) outlives it whenever it was not the last
+ * contributor to unregister (computenet-051.4.1).
+ *
+ * Deliberately the OPPOSITE repoint order from [CellProvenance]: cells are
+ * last-writer-wins by design ([CellProvenance.drop] restores the *last*
+ * remaining contributor's descriptor), while proxy constructors are
+ * first-writer-wins by design — [civictech.gen.wire.ProxyRegistry.commit]
+ * uses `putIfAbsent`, so [drop] restores the *first* remaining contributor's
+ * constructor, keeping every table's own convention. Constructors for one
+ * `Class` are functionally identical under JAR1's shared-prefix rule, so an
+ * unconditional repoint write is safe even when the departing contributor's
+ * constructor was not the one currently live.
+ */
+internal class ProxyProvenance {
+    private val contributions =
+        java.util.concurrent.ConcurrentHashMap<Class<*>, List<Pair<ModuleId, ProxyConstructor>>>()
+
+    fun add(clazz: Class<*>, owner: ModuleId, constructor: ProxyConstructor) {
+        contributions[clazz] = (contributions[clazz] ?: emptyList()) + (owner to constructor)
+    }
+
+    fun of(clazz: Class<*>): List<ModuleId> = (contributions[clazz] ?: emptyList()).map { it.first }
+
+    /**
+     * Remove every contribution [owner] made. A `Class` left with no
+     * contributors is dropped entirely and reported in
+     * [ProxyProvenanceDrop.orphaned]. A `Class` that still has contributors
+     * after [owner]'s are removed is reported in [ProxyProvenanceDrop.repointed],
+     * mapped to the *first remaining* contributor's constructor — first-writer-
+     * wins among survivors, mirroring [civictech.gen.wire.ProxyRegistry.commit]'s
+     * own ordering — so the caller can restore it even when it was not the one
+     * currently resolving (a harmless no-op write in that case).
+     */
+    fun drop(owner: ModuleId): ProxyProvenanceDrop {
+        val orphaned = mutableListOf<Class<*>>()
+        val repointed = mutableMapOf<Class<*>, ProxyConstructor>()
+        // concurrentSnapshot, not toList(): same TOCTOU reasoning as Provenance.drop —
+        // every mutation here happens under RegistryMutation.lock.
+        contributions.keys.concurrentSnapshot().forEach { clazz ->
+            val existing = contributions[clazz] ?: emptyList()
+            val remaining = existing.filterNot { it.first == owner }
+            if (remaining.isEmpty()) {
+                contributions.remove(clazz)
+                orphaned += clazz
+            } else {
+                contributions[clazz] = remaining
+                if (remaining.size != existing.size) {
+                    repointed[clazz] = remaining.first().second
+                }
+            }
+        }
+        return ProxyProvenanceDrop(orphaned, repointed)
     }
 }
 

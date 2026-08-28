@@ -302,6 +302,16 @@ class RegistryProvenanceTest {
      * not comparable, so a second contributor of the same `Class` key is recorded as
      * an additional contributor WITHOUT repointing the live entry (first writer wins),
      * and the entry survives until the last contributor leaves.
+     *
+     * computenet-051.4.1: when the FIRST contributor departs and a survivor remains,
+     * `factory` must repoint to the survivor's own constructor rather than keep
+     * pinning the departed contributor's — otherwise the departed module's generated
+     * class (and its closed classloader) stays reachable through `byInterface`
+     * forever, which is the pinning bug this task fixes. Against the unfixed
+     * `removeOwner` (which drops only orphaned keys) this failed with
+     * "the factory did not repoint to the surviving contributor's own constructor
+     * <ctorB> but was <ctorA>" — i.e. `factory(...) === ctorA` remained true after
+     * `a`, the departed contributor, unregistered.
      */
     @Test
     fun `proxy entries are a contributor multiset, not last-writer`() {
@@ -320,8 +330,8 @@ class RegistryProvenanceTest {
 
             ModuleRegistration.unregister(a)
             assertTrue(
-                ProxyRegistry.factory(ProbeShredProxied::class.java) === ctorA,
-                "the factory stopped resolving after one of two contributors left",
+                ProxyRegistry.factory(ProbeShredProxied::class.java) === ctorB,
+                "the factory did not repoint to the surviving contributor's own constructor",
             )
             assertEquals(listOf(b), ProxyRegistry.contributorsOf(ProbeShredProxied::class.java))
         } finally {
@@ -332,6 +342,35 @@ class RegistryProvenanceTest {
             ProxyRegistry.factory(ProbeShredProxied::class.java),
             "the last contributor's exit left the proxy entry behind",
         )
+    }
+
+    /**
+     * computenet-051.4.1 converse: when the SECOND (non-live-pinning) contributor
+     * departs, `factory` must keep resolving to the first contributor's own
+     * constructor — no spurious repoint just because a contribution was removed.
+     */
+    @Test
+    fun `proxy entries do not spuriously repoint when a non-pinning contributor departs`() {
+        val a = ModuleId("proxy-converse-a")
+        val b = ModuleId("proxy-converse-b")
+        val ctorA: ProxyConstructor = { _ -> Any() }
+        val ctorB: ProxyConstructor = { _ -> Any() }
+        ProxyRegistry.register(proxyModuleOf(ProbeProxied::class.java to ctorA), a)
+        try {
+            ProxyRegistry.register(proxyModuleOf(ProbeProxied::class.java to ctorB), b)
+            assertTrue(ProxyRegistry.factory(ProbeProxied::class.java) === ctorA)
+
+            ModuleRegistration.unregister(b)
+            assertTrue(
+                ProxyRegistry.factory(ProbeProxied::class.java) === ctorA,
+                "unregistering the non-live contributor spuriously repointed the factory",
+            )
+            assertEquals(listOf(a), ProxyRegistry.contributorsOf(ProbeProxied::class.java))
+        } finally {
+            ModuleRegistration.unregister(a)
+            ModuleRegistration.unregister(b)
+        }
+        assertNull(ProxyRegistry.factory(ProbeProxied::class.java))
     }
 
     /**

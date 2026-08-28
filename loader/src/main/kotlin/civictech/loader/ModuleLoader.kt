@@ -1,5 +1,7 @@
 package civictech.loader
 
+import civictech.cell.CellRef
+import civictech.cell.host.LocationRegistry
 import civictech.cell.wire.WireSerializers
 import civictech.gen.wire.ProxyModule
 import civictech.nature.ContractModule
@@ -11,6 +13,7 @@ import java.nio.file.Path
 import java.util.ServiceConfigurationError
 import java.util.ServiceLoader
 import java.util.jar.JarFile
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -36,11 +39,19 @@ object ModuleManifest {
 }
 
 /**
- * How far a [ModuleHandle] got. `LOADED -> VALIDATED -> REGISTERED`, and nothing
- * else: this feature never unloads, so `QUIESCING`, `UNREGISTERED` and `CLOSED`
- * are deliberately absent and belong to feature **computenet-051.4**, together
- * with the `unload` entry point that would drive them. A handle that reaches
- * [REGISTERED] stays there for the life of the process.
+ * How far a [ModuleHandle] got.
+ *
+ * The load path (feature computenet-051.3) walks `LOADED -> VALIDATED ->
+ * REGISTERED`. The unload path ([ModuleLoader.unload], feature
+ * computenet-051.4) continues `REGISTERED -> QUIESCING -> UNREGISTERED ->
+ * CLOSED`, and a handle that reaches [CLOSED] never leaves it — reloading the
+ * same jar produces a *new* handle with a new classloader [JAR1-UNL-06], never
+ * a revived one.
+ *
+ * [REGISTERED] is the only state from which an unload may start, and the only
+ * state an unload can fall back to: [JAR1-UNL-07]'s restore returns the handle
+ * to [REGISTERED] with its classloader still open, so a caller cannot tell a
+ * recovered module from one that was never asked to unload.
  */
 enum class ModuleState {
     /** The jar is a module and its classloader is open; nothing is discovered yet. */
@@ -54,6 +65,29 @@ enum class ModuleState {
 
     /** The discovered tables are committed into the host registries [JAR1-REG-01]. */
     REGISTERED,
+
+    /**
+     * An unload has been accepted — the module had no live instances
+     * [JAR1-UNL-02] — and registry removal is under way. Transient: the handle
+     * leaves this state either for [UNREGISTERED] or, if removal failed and the
+     * restore succeeded, back to [REGISTERED] [JAR1-UNL-07].
+     */
+    QUIESCING,
+
+    /**
+     * Exactly this module's contributions have been removed from the host
+     * registries [JAR1-UNL-03] and the handle has been dropped from
+     * [ModuleLoader.loaded]. Transient: the classloader is closed next.
+     */
+    UNREGISTERED,
+
+    /**
+     * Terminal. The module's [ModuleClassLoader] has been closed. What "closed"
+     * does and does not guarantee is [JAR1-UNL-04]'s amended text and the
+     * follow-on task's to state and test; this state records only that
+     * [ModuleClassLoader.close] was called and returned.
+     */
+    CLOSED,
 }
 
 /**
@@ -127,10 +161,50 @@ class ModuleHandle internal constructor(
      * **computenet-051.6** — this feature deliberately does not pre-decide it.
      */
     val wireSerializers: List<WireSerializers>,
+
+    /**
+     * The discovered [ContractModule] services, retained **exactly** as
+     * [ServiceLoader] handed them over — the same objects [ModuleLoader.load]
+     * passed to [ModuleRegistration.register], not a copy and not a
+     * reconstruction. [JAR1-DISC-03]'s "register the generated tables
+     * unmodified" applies to what is retained just as it applies to what is
+     * registered: [ModuleLoader.unload]'s [JAR1-UNL-07] restore re-registers
+     * *these* objects, so anything rebuilt here would silently register
+     * something else on the recovery path.
+     *
+     * `internal` because it is the restore's private substrate, not API: the
+     * public view of what a module contributed is [contractIds] / [protocolIds]
+     * / [cellFqns] / [proxiedClasses].
+     */
+    internal val contractModules: List<ContractModule>,
+
+    /** The discovered [ProxyModule] services, retained verbatim — see [contractModules]. */
+    internal val proxyModules: List<ProxyModule>,
 ) {
     @Volatile
     var state: ModuleState = ModuleState.LOADED
         internal set
+
+    /**
+     * The refs a [ModuleLoader.track] tracker has attributed to this module —
+     * populated and drained only by [track]'s hooks, never by [load]. `internal`
+     * (not `private`): [track] is a top-level extension function in this same
+     * file/module, not a member of this class, so it needs at least module
+     * visibility to reach this set. A concurrent set because the registry's
+     * publish/unpublish hooks can fire from a scheduler thread that is not the
+     * caller of [track] or of [liveInstances].
+     */
+    internal val liveRefs: MutableSet<CellRef> = ConcurrentHashMap.newKeySet()
+
+    /**
+     * Count of currently live cells attributed to this module by an attached
+     * [ModuleLoader.track] tracker [JAR1-UNL-01].
+     *
+     * Zero until a tracker is attached via [ModuleLoader.track] — see that
+     * method's KDoc for the exact scope (attach-time-forward only, local
+     * publishes only, registry-less hosts excluded).
+     */
+    val liveInstances: Int get() = liveRefs.size
 
     /** The flat `kind:id` view [ModuleLoadRecord] carries. */
     internal fun contributedDescriptorIds(): List<String> =
@@ -185,6 +259,63 @@ class NotAModuleException internal constructor(
         "attributes must declare both ${ModuleManifest.MODULE_ID} and " +
         "${ModuleManifest.MODULE_VERSION}; present: " +
         (if (presentAttributes.isEmpty()) "neither" else presentAttributes.sorted().joinToString(", ")) + "."
+)
+
+/**
+ * [JAR1-UNL-02]: an unload was requested while cells spawned from the module are
+ * still live. The module is left exactly as it was — state [ModuleState.REGISTERED],
+ * every registry contribution intact, every live cell running, its classloader
+ * open — and the diagnostic **names the live count**, because "how many, and
+ * therefore what still has to be despawned" is the only thing the caller can act
+ * on.
+ *
+ * An [IllegalStateException] for the same reason [ModuleLoadException] is: a
+ * caller that only wants "the unload did not happen" catches one type. It is
+ * deliberately *not* a [ModuleLoadException] subclass — nothing about a load
+ * failed, and a caller keying on the load hierarchy should not catch this.
+ *
+ * The count is the one [ModuleHandle.liveInstances] reported at the moment of
+ * refusal, and it is only as complete as the accounting behind it: see
+ * [ModuleLoader.track]'s scope KDoc (attach-time-forward, local publishes, no
+ * registry-less hosts). A module whose cells were never tracked reports zero and
+ * is not refused.
+ */
+class ModuleUnloadRefusedException internal constructor(
+    val id: ModuleId,
+    val liveInstances: Int,
+) : IllegalStateException(
+    "Unload of module $id is refused: $liveInstances cell(s) spawned from it are still live. " +
+        "Despawn them and retry — the registries, the live cells and the module's classloader are " +
+        "untouched."
+)
+
+/**
+ * [JAR1-UNL-07]: removal of the module's registrations failed part-way, and the
+ * module's registrations were **restored** from its retained discovered tables.
+ * The module reports [ModuleState.REGISTERED] again, its handle is still listed by
+ * [ModuleLoader.loaded], and its classloader was never closed — a subsequent
+ * unload may be attempted.
+ *
+ * The removal failure is the [cause]; it is never swallowed. If the restore *also*
+ * failed, that failure is attached with [Throwable.addSuppressed] and
+ * [restored] is false — the module is then in a state neither this loader nor the
+ * caller can describe, which is precisely why both throwables travel together.
+ */
+class ModuleUnloadFailedException internal constructor(
+    val id: ModuleId,
+    /** True when the retained tables were re-registered successfully. */
+    val restored: Boolean,
+    cause: Throwable,
+) : IllegalStateException(
+    if (restored) {
+        "Unload of module $id failed during registry removal; its registrations were restored from " +
+            "its retained discovered tables and it is REGISTERED again with its classloader open."
+    } else {
+        "Unload of module $id failed during registry removal AND the restore of its retained " +
+            "discovered tables also failed (attached as a suppressed exception). The module's " +
+            "registrations are in an indeterminate, partially-removed state."
+    },
+    cause,
 )
 
 /**
@@ -247,11 +378,21 @@ class NotAModuleException internal constructor(
  *   default records them on the handle and does nothing else; whether a
  *   non-wire-capable module is refused, or the live codec is rebuilt, is feature
  *   **computenet-051.6**'s decision and is deliberately not made here.
+ * @param unregister **a test seam, not an extension point.** [unload] removes a
+ *   module's contributions through this function; the default is
+ *   [ModuleRegistration.unregister], which is what every production construction
+ *   gets and the only behaviour this class is specified against. It is a
+ *   constructor parameter solely because [ModuleRegistration] is an `object`, so
+ *   [JAR1-UNL-07]'s "removal fails part-way" is otherwise uninjectable — there is
+ *   no seam inside a singleton to fail. Overriding it to do anything other than
+ *   remove exactly [ModuleId]'s contributions puts the registries and this
+ *   loader's bookkeeping out of agreement, and nothing here defends against that.
  */
 class ModuleLoader(
     acceptedLocations: Set<Path>,
     private val observe: (ModuleLoadRecord) -> Unit = ::logLoadRecord,
     private val onWireSerializers: (ModuleHandle, List<WireSerializers>) -> Unit = { _, _ -> },
+    private val unregister: (ModuleId) -> Unit = ModuleRegistration::unregister,
 ) {
     /** Normalized once, at construction — the comparison below must do no I/O. */
     val acceptedLocations: Set<Path> =
@@ -320,6 +461,8 @@ class ModuleLoader(
                 cellFqns = contractModules.flatMap { m -> m.cells.map { it.fqn } },
                 proxiedClasses = proxyModules.flatMap { it.factories.keys },
                 wireSerializers = wireSerializers,
+                contractModules = contractModules,
+                proxyModules = proxyModules,
             )
 
             resolveContributedTypes(contractModules, loader, jar)
@@ -350,6 +493,107 @@ class ModuleLoader(
             loader.close()
             throw t
         }
+    }
+
+    /**
+     * Unload [handle]: refuse while live, else remove exactly this module's
+     * contributions, drop it from [loaded], and close its classloader.
+     *
+     * The steps, in the order the requirements demand:
+     *
+     * 1. **Caller-error checks.** The handle must be one this loader loaded and
+     *    must be in [ModuleState.REGISTERED]. Anything else — a foreign handle,
+     *    an already-unloaded one, an unload racing another unload — is a bug in
+     *    the caller, not a module fault, and raises [IllegalStateException]
+     *    rather than one of the unload exceptions below.
+     * 2. **[JAR1-UNL-02]** — if [ModuleHandle.liveInstances] is greater than
+     *    zero, throw [ModuleUnloadRefusedException] naming the count. Nothing is
+     *    touched: the handle stays [ModuleState.REGISTERED], its registrations
+     *    stay resolvable, its cells keep running and its classloader stays open.
+     *    In-flight work is therefore unaffected by a refused unload — the refusal
+     *    happens before any removal, so there is no window in which a wave could
+     *    find a half-removed descriptor.
+     * 3. **[ModuleState.QUIESCING]**, then removal through the [unregister] seam.
+     * 4. **[JAR1-UNL-03]** — on success the handle goes [ModuleState.UNREGISTERED]
+     *    and is dropped from [loaded], so this loader no longer lists a module
+     *    whose descriptors are gone. Every *other* module's contributions survive,
+     *    because removal is by owner [ModuleId] and the registries' provenance
+     *    multisets keep an entry alive while any other contributor still holds it
+     *    [JAR1-REG-06].
+     * 5. The classloader is closed and the handle goes [ModuleState.CLOSED].
+     * 6. **[JAR1-UNL-07]** — a [Throwable] out of the seam is caught and the
+     *    module's registrations are restored by re-registering its **retained**
+     *    discovered tables ([ModuleHandle.contractModules] /
+     *    [ModuleHandle.proxyModules]) under the same owner. That is sound because
+     *    [ModuleRegistration.register] is validate-then-commit under one lock and
+     *    re-registering *equal* descriptors is idempotent by construction:
+     *    `ContractRegistry.stage` conflicts only on a non-equal descriptor for a
+     *    live id, and `ProxyRegistry.commit` is `putIfAbsent`. So whatever subset
+     *    the partial removal left behind is accepted unchanged, and whatever it
+     *    removed is re-added. Provenance is a multiset and `drop` filters out
+     *    *all* of an owner's entries at once, so the duplicate provenance entries
+     *    a restore may add are harmless. The handle returns to
+     *    [ModuleState.REGISTERED], stays in [loaded], keeps its classloader
+     *    **open**, and the failure is rethrown as [ModuleUnloadFailedException].
+     *    If the restore *itself* fails, the handle is left in
+     *    [ModuleState.QUIESCING] rather than being reported [ModuleState.REGISTERED]
+     *    it is not — the registrations are then genuinely indeterminate, and both
+     *    throwables travel out together (removal as the cause, restore suppressed).
+     *
+     * The classloader is closed only on the success path. A failed unload never
+     * closes it — a module whose descriptors are still (or again) registered must
+     * still be able to load the classes behind them.
+     *
+     * @throws IllegalStateException if [handle] is not this loader's, or not in
+     *   [ModuleState.REGISTERED].
+     * @throws ModuleUnloadRefusedException if any cell from the module is live.
+     * @throws ModuleUnloadFailedException if registry removal failed part-way.
+     */
+    fun unload(handle: ModuleHandle) {
+        check(handles.contains(handle)) {
+            "Module ${handle.id} was not loaded by this loader (or has already been unloaded); " +
+                "this loader currently holds ${handles.map { it.id }}."
+        }
+        check(handle.state == ModuleState.REGISTERED) {
+            "Module ${handle.id} cannot be unloaded from state ${handle.state}: only a REGISTERED " +
+                "module has registrations to remove."
+        }
+
+        // UNL-02, before anything is mutated: a refusal must leave no trace.
+        val live = handle.liveInstances
+        if (live > 0) throw ModuleUnloadRefusedException(handle.id, live)
+
+        handle.state = ModuleState.QUIESCING
+        try {
+            unregister(handle.id)
+        } catch (removal: Throwable) {
+            // UNL-07: restore from the retained tables, and never swallow either
+            // throwable — the removal failure is the cause, a restore failure rides
+            // along suppressed.
+            val restored = try {
+                ModuleRegistration.register(
+                    owner = handle.id,
+                    contractModules = handle.contractModules,
+                    proxyModules = handle.proxyModules,
+                )
+                true
+            } catch (restore: Throwable) {
+                removal.addSuppressed(restore)
+                false
+            }
+            // Only a *successful* restore may claim REGISTERED. If the restore
+            // failed too, the module's registrations are genuinely indeterminate
+            // and the handle stays QUIESCING — saying REGISTERED there would be a
+            // lie the next caller acts on, and there is no state for
+            // "partially removed" because nothing can honestly recover from it.
+            if (restored) handle.state = ModuleState.REGISTERED
+            throw ModuleUnloadFailedException(handle.id, restored, removal)
+        }
+
+        handle.state = ModuleState.UNREGISTERED
+        handles.remove(handle)
+        handle.classLoader.close()
+        handle.state = ModuleState.CLOSED
     }
 
     /**
@@ -535,5 +779,69 @@ class ModuleLoader(
                     record.contributedDescriptorIds.joinToString(", ")
             )
         }
+    }
+}
+
+/**
+ * Live-instance accounting per module [JAR1-UNL-01], resolved by observation
+ * (feature computenet-051.4's risk R3) rather than by inventing a kernel
+ * callback or wrapping [civictech.nature.CellFactory]: `ManagedHost`'s
+ * `LifecycleTransition` KDoc names [LocationRegistry.onPublish] /
+ * [LocationRegistry.onUnpublish] as the deliberate spawn/despawn observation
+ * seam, and [LocationRegistry.publish] already captures the published cell's
+ * concrete class (readable back via [LocationRegistry.describe]) before firing
+ * `onPublish`. This attaches to exactly that seam.
+ *
+ * On every publish this registry announces, [LocationRegistry.describe] is
+ * read for the published ref's class; if the class's own [ClassLoader] is
+ * identical (`===`) to a loaded module's [ModuleHandle.classLoader], the ref is
+ * recorded against that handle — both in the tracker's own ref→handle map and
+ * on the handle's [ModuleHandle.liveInstances] set. On unpublish the ref→handle
+ * map (not a fresh [LocationRegistry.describe] lookup — [LocationRegistry.unpublish]
+ * has already dropped the description by the time `onUnpublish` fires) says
+ * which handle to decrement.
+ *
+ * ## Scope, stated honestly
+ *
+ * - Only publishes this tracker observes **after** [track] is called are
+ *   counted. A cell already live on [registry] when [track] attaches is
+ *   invisible to it until that cell's own next despawn or re-publish.
+ * - Remote publishes ([LocationRegistry.publish] with an `InvocationSink`)
+ *   never carry a description — that capture is a local-publish-only side
+ *   effect — so a remote cell is never attributed to any module. Unload is a
+ *   local concern; this accounting does not reach across the wire.
+ * - A host constructed `ManagedHost(registry = null)` never calls
+ *   [LocationRegistry.publish] at all, so its cells are outside this
+ *   accounting exactly as they are invisible to [LocationRegistry.describe]
+ *   and [LocationRegistry.locate].
+ * - Re-publishing an already-tracked ref (e.g. `resumeHost`'s republish) is
+ *   idempotent: the ref→handle map entry and the handle's live-ref set are
+ *   both plain set/map writes, not counters, so a repeat publish does not
+ *   inflate [ModuleHandle.liveInstances].
+ *
+ * @return a handle whose [AutoCloseable.close] detaches both hook
+ *   registrations and clears this tracker's own ref→handle map. Handles'
+ *   [ModuleHandle.liveInstances] simply stop updating after detach — closing
+ *   the tracker does not reset counts already recorded.
+ */
+fun ModuleLoader.track(registry: LocationRegistry): AutoCloseable {
+    val refToHandle = ConcurrentHashMap<CellRef, ModuleHandle>()
+
+    val onPublish = registry.onPublish { ref ->
+        val clazz = registry.describe(ref)
+        val handle = clazz?.let { published -> loaded().firstOrNull { it.classLoader === published.classLoader } }
+        if (handle != null) {
+            refToHandle[ref] = handle
+            handle.liveRefs += ref
+        }
+    }
+    val onUnpublish = registry.onUnpublish { ref ->
+        refToHandle.remove(ref)?.let { handle -> handle.liveRefs -= ref }
+    }
+
+    return AutoCloseable {
+        onPublish.close()
+        onUnpublish.close()
+        refToHandle.clear()
     }
 }
