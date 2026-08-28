@@ -19,22 +19,25 @@ import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import civictech.cell.data.MapApi
+import civictech.cell.data.OrMapApi
 import civictech.cell.data.SetApi
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.delta.TaggedMapDelta
 import civictech.cell.data.op.FilterSetApi
 import civictech.cell.data.op.GroupByApi
 import civictech.cell.data.op.QuorumSetApi
 import civictech.cell.data.view.MapView
 import civictech.cell.data.view.SetView
 import civictech.cell.data.view.CountView
+import civictech.cell.data.view.TaggedMapView
 
 /**
  * The read/observe dual of the `graph { }` builder (spec
  * `observation-sink-materialized-edge`): a hosted sink that folds one (or more)
  * cell outlets' delta streams back into a materialized value the *app* can read
  * and subscribe to. It is assembly + ergonomics over the read-model folds in
- * `civictech.cell.data` ([SetView] / [MapView] / [CountView]) and the host's
+ * `civictech.cell.data` ([SetView] / [MapView] / [CountView] / [TaggedMapView]) and the host's
  * existing spawn / connect / `onLinked` catch-up — no new dataflow semantics,
  * and transport-neutral: the sink exposes only [current] and [onChange], never
  * SSE/HTTP. It replaces the hand-rolled per-outlet `HubCell` + synchronized
@@ -66,8 +69,8 @@ interface ObservationSink<out S> {
  * The per-outlet fold strategy: a thin adapter over a `civictech.cell.data`
  * read model. `apply` returns the read model's effective-change Boolean so the
  * sink fires [ObservationSink.onChange] only on a real change (tag churn / a
- * restated put folds to no fire). The factory methods name the three shipped
- * folds — `View.set()`, `View.map()`, `View.count()`.
+ * restated put folds to no fire). The factory methods name the four shipped
+ * folds — `View.set()`, `View.map()`, `View.count()`, `View.taggedMap()`.
  */
 interface View<in D, out S> {
     /** Fold one delta in; returns whether the materialized value effectively changed. */
@@ -103,6 +106,15 @@ interface View<in D, out S> {
         fun <K> count(): View<MapDelta<K, Long>, Map<K, Long>> = object : View<MapDelta<K, Long>, Map<K, Long>> {
             private val v = CountView<K>()
             override fun apply(delta: MapDelta<K, Long>) = v.apply(delta)
+            override fun current() = v.current()
+            override fun snapshot() = v.snapshot()
+            override fun restore(state: Serializable) = v.restore(state)
+        }
+
+        /** Fold a [TaggedMapDelta] stream (an `OrMapCell` outlet) into a queryable map. */
+        fun <K, V> taggedMap(): View<TaggedMapDelta<K, V>, Map<K, V>> = object : View<TaggedMapDelta<K, V>, Map<K, V>> {
+            private val v = TaggedMapView<K, V>()
+            override fun apply(delta: TaggedMapDelta<K, V>) = v.apply(delta)
             override fun current() = v.current()
             override fun snapshot() = v.snapshot()
             override fun restore(state: Serializable) = v.restore(state)
@@ -380,7 +392,7 @@ fun <D : Any, S> ManagedHost.observe(
  * a `set` was meant) is a compile error instead of an `Any?` fold that a call
  * site has to re-assert with an unchecked cast. One overload per *shape* this
  * codebase's `civictech.cell.data`/`.data.op` package actually declares
- * (`SetApi`, `QuorumSetApi`, `FilterSetApi`, `MapApi`, `GroupByApi`'s count
+ * (`SetApi`, `QuorumSetApi`, `FilterSetApi`, `MapApi`, `OrMapApi`, `GroupByApi`'s count
  * form) — a JVM signature clash forces distinct `@JvmName`s per overload
  * (`TypedRef<...>`'s generic argument erases the same way regardless of the
  * bound), so each carries one below.
@@ -407,6 +419,10 @@ class ObserveAllBuilder internal constructor(private val mgmt: Use<HostManagemen
     /** Fold a per-key count [MapDelta] outlet into counts under [name]. */
     fun count(name: String, source: CellRef, outletName: String = "outlet") =
         add(name, mgmt.observe(source, View.count<Any?>(), outletName), "count")
+
+    /** Fold a [TaggedMapDelta] outlet (an `OrMapCell`) into a `Map` under [name]. */
+    fun taggedMap(name: String, source: CellRef, outletName: String = "outlet") =
+        add(name, mgmt.observe(source, View.taggedMap<Any?, Any?>(), outletName), "taggedMap")
 
     // ---- T08 finding 2: typed overloads — the element type is compile-checked ----
 
@@ -439,6 +455,11 @@ class ObserveAllBuilder internal constructor(private val mgmt: Use<HostManagemen
     @JvmName("countFromGroupByApi")
     fun <E, K> count(name: String, source: TypedRef<out GroupByApi<E, K, Long>>, outletName: String = "outlet") =
         add(name, mgmt.observe(source.ref, View.count<K>(), outletName), "count")
+
+    /** Typed [taggedMap]: [source]'s key/value types flow from a `TypedRef<OrMapApi<K, V>>`. */
+    @JvmName("taggedMapFromOrMapApi")
+    fun <K, V> taggedMap(name: String, source: TypedRef<out OrMapApi<K, V>>, outletName: String = "outlet") =
+        add(name, mgmt.observe(source.ref, View.taggedMap<K, V>(), outletName), "taggedMap")
 }
 
 /**
