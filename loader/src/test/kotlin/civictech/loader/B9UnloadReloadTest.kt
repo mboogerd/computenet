@@ -30,7 +30,9 @@ import java.util.jar.JarFile
  * will still hand back a `Class` for an as-yet-undefined entry of its own jar
  * (`URLClassPath` caches the jar index at first definition; `close()` releases
  * the handle without invalidating it). **That behaviour did not reproduce here.**
- * Measured 2026-08-28 on JDK 21.0.5 (Temurin, the `:loader` test toolchain),
+ * Measured 2026-08-28 on JDK 21.0.5 (Amazon Corretto — the vendor this machine's
+ * `jvmToolchain(21)` resolves to; the vendor is unpinned, so another machine's
+ * toolchain 21 may differ),
  * against the *unmodified* `loadClass`, over every class entry of `valid-basic`:
  *
  * - after `open` → define `GreetingCell` → `close()`, every one of the four
