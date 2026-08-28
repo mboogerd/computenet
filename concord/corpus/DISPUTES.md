@@ -2124,7 +2124,7 @@ B14's glitch-freedom-across-swap is expressible in the existing corpus vocabular
 If it IS expressible with existing verbs, write the scenario carrying `covers:`
 against the 53 promotion requirement it exercises — never a JAR1-local id. If it is
 NOT, record the gap honestly here — never substitute an easier scenario."* It is
-not. This entry is that evaluation's record, with the three independent blockers
+not. This entry is that evaluation's record, with the four independent blockers
 traced from source rather than assumed.
 
 - **Category**: `schema-gap` (step vocabulary + cell catalog) **and**
