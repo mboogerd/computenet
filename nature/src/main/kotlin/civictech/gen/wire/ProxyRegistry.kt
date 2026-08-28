@@ -4,7 +4,7 @@ package civictech.gen.wire
 
 import civictech.nature.ModuleId
 import civictech.nature.ModuleRegistration
-import civictech.nature.Provenance
+import civictech.nature.ProxyProvenance
 import civictech.nature.RegistryMutation
 import civictech.nature.Staging
 import java.lang.reflect.InvocationHandler
@@ -37,7 +37,7 @@ interface ProxyModule {
  */
 object ProxyRegistry {
     private val byInterface = ConcurrentHashMap<Class<*>, ProxyConstructor>()
-    private val provenance = Provenance<Class<*>>()
+    private val provenance = ProxyProvenance()
 
     init {
         ServiceLoader.load(ProxyModule::class.java, ProxyModule::class.java.classLoader)
@@ -86,12 +86,18 @@ object ProxyRegistry {
             // as an additional contributor without repointing the live constructor,
             // which is what makes removing one contributor leave the other resolvable.
             byInterface.putIfAbsent(clazz, constructor)
-            provenance.add(clazz, owner)
+            provenance.add(clazz, owner, constructor)
         }
     }
 
     internal fun removeOwner(owner: ModuleId) {
-        provenance.drop(owner).forEach { byInterface.remove(it) }
+        val drop = provenance.drop(owner)
+        drop.orphaned.forEach { byInterface.remove(it) }
+        // A Class left with a survivor is repointed to that survivor's own
+        // constructor (first-writer-wins among survivors) — otherwise a departed
+        // module's constructor, and the closed classloader it closes over, would
+        // stay pinned in byInterface forever (computenet-051.4.1).
+        drop.repointed.forEach { (clazz, constructor) -> byInterface[clazz] = constructor }
     }
 
     /** The generated proxy constructor for [clazz], or null when it carries no `@Contract`. */
