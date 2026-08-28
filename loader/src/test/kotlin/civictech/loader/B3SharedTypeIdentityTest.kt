@@ -148,14 +148,24 @@ class B3SharedTypeIdentityTest {
         withClue("a closed loader must no longer count as open") {
             ModuleClassLoader.openLoaders.contains(loader) shouldBe false
         }
-        // `URLClassLoader.close` semantics, asserted at the *resource* level rather than
-        // by trying to load a further class. Measured 2026-08-28 on JDK 21: after `close()`
-        // this loader still returned a Class for an as-yet-undefined entry of the closed
-        // jar — the JDK's `URLClassPath` had already opened and cached the jar's index when
-        // the first class was defined, and `close()` releases the file handle without
-        // invalidating that cache. `findResource` DOES go null immediately, so that is what
-        // the released-jar claim is pinned to here. The stronger "no further class is ever
-        // defined" reading is not asserted because it is not what the platform does.
+        // `URLClassLoader.close` semantics, asserted at the *resource* level. An earlier
+        // version of this comment claimed that, on JDK 21, `loadClass` of an as-yet-undefined
+        // entry could still succeed after `close()` because `URLClassPath` caches the jar's
+        // index at first definition. That claim does NOT reproduce: computenet-0ick records
+        // two independent 2026-08-28 measurements (a ComputeNet-level probe and a from-scratch
+        // plain-`URLClassLoader` rebuild against Amazon Corretto 21.0.5 and Microsoft 21.0.11)
+        // in which loadClass of a genuinely undefined entry threw ClassNotFoundException after
+        // close in every case, including with the index pre-warmed by getResource/getResources/
+        // a cached jar: URLConnection before close. What IS measured and asserted here is
+        // narrower: `findResource` goes null immediately once `close()` returns.
+        //
+        // Separately, and stronger than any platform behaviour either way: ModuleClassLoader's
+        // own `loadClass` (see its KDoc above) refuses every name that is not already defined
+        // once `closed` is set, throwing a ClassNotFoundException that names the loader, its
+        // jar, and the fact that it is closed — added by computenet-051.4.4. So "no new class
+        // is defined through a closed ModuleClassLoader" holds by construction, independent of
+        // whatever `URLClassPath` does with its cached index; this test does not need to pin
+        // that guarantee to the platform's behaviour at all.
         withClue("a closed loader must no longer serve resources from the released jar") {
             loader.findResource("civictech/loader/fixture/validbasic/GreetingApi.class") shouldBe null
         }
