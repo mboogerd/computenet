@@ -61,6 +61,10 @@ dependencies {
 //                                      compile time but not on the built jar's classpath. ERR-04/B12
 //   loader.fixture.doctoredNature   — (h) a real generated table, hand-doctored to swap one
 //                                      PortDescriptor's natures for a non-default value. B2
+//   loader.fixture.collidingContract — (i) reuses valid-basic's GreetingApi FQN (so its
+//                                      generator-derived contractId collides) with a
+//                                      different method shape. ERR-05's registration-
+//                                      refusal arm (computenet-9fqe)
 //
 // `:loader:fixtures:removed-api` carries no property: it is a compileOnly-only helper for
 // missing-shared-type, never itself a loadable module (no manifest attributes, no services
@@ -75,6 +79,7 @@ val fixtureJarProperties = mapOf(
     "loader.fixture.throwingProvider" to ":loader:fixtures:throwing-provider",
     "loader.fixture.missingSharedType" to ":loader:fixtures:missing-shared-type",
     "loader.fixture.doctoredNature" to ":loader:fixtures:doctored-nature",
+    "loader.fixture.collidingContract" to ":loader:fixtures:colliding-contract",
 )
 
 // Cross-project task access needs the other project evaluated first. These are this
