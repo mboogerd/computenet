@@ -41,6 +41,9 @@ include(":loader:fixtures:throwing-provider")
 include(":loader:fixtures:removed-api")
 include(":loader:fixtures:missing-shared-type")
 include(":loader:fixtures:doctored-nature")
+// computenet-9fqe: the ERR-05 registration-refusal arm — a fixture that collides
+// with valid-basic's contractId.
+include(":loader:fixtures:colliding-contract")
 include(":identity")
 include(":inspect")
 include(":iroh")

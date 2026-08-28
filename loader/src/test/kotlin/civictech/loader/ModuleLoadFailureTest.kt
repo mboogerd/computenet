@@ -1,8 +1,10 @@
 package civictech.loader
 
 import civictech.nature.ContractRegistry
+import civictech.nature.ModuleId
 import civictech.nature.Monotonicity
 import civictech.nature.NatureVector
+import civictech.nature.RegistrationRefusedException
 import civictech.nature.StableHash
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
@@ -52,6 +54,9 @@ class ModuleLoadFailureTest {
         const val MISSING_SHARED_TYPE_CELL = "civictech.loader.fixture.missingsharedtype.MissingSharedTypeCell"
 
         const val DOCTORED_CELL = "civictech.loader.fixture.doctorednature.DoctoredCell"
+
+        const val GREETING_API = "civictech.loader.fixture.validbasic.GreetingApi"
+        val COLLIDING_CONTRACT_MODULE = ModuleId("fixture.colliding-contract")
     }
 
     // ------------------------------------------------------------------
@@ -135,6 +140,57 @@ class ModuleLoadFailureTest {
             ModuleClassLoader.openLoaders.toSet() shouldBe before
         }
         loader.loaded().shouldBeEmpty()
+    }
+
+    // ------------------------------------------------------------------
+    // ERR-05, registration-refusal arm — computenet-9fqe
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `a module whose contract collides with an already-registered contractId is refused, registers nothing of its own, and leaks no classloader`() {
+        FixtureJars.withLoadedModule(FixtureJars.validBasic) { baseline ->
+            withClue("precondition: valid-basic registered under its own contractId") {
+                baseline.state shouldBe ModuleState.REGISTERED
+            }
+
+            val before = ModuleClassLoader.openLoaders.toSet()
+            val loader = FixtureJars.loaderAccepting(FixtureJars.collidingContract)
+
+            // ModuleRegistration.register throws RegistrationRefusedException directly
+            // (an IllegalArgumentException, not a ModuleLoadException); ModuleLoader.load's
+            // outer catch(t: Throwable) closes the loader and rethrows it unwrapped, so
+            // the caller-visible type here IS RegistrationRefusedException.
+            val thrown = shouldThrow<RegistrationRefusedException> {
+                loader.load(FixtureJars.collidingContract)
+            }
+
+            withClue("the diagnostic names the colliding contractId's fqn: ${thrown.message}") {
+                thrown.message.orEmpty().contains(GREETING_API) shouldBe true
+            }
+            withClue("the diagnostic names it as a CONTRACT_ID collision: ${thrown.message}") {
+                thrown.message.orEmpty().contains("CONTRACT_ID") shouldBe true
+            }
+            val registered = ContractRegistry.contract(StableHash.of(GREETING_API))
+            withClue("atomicity: valid-basic's own contract is still registered") {
+                registered shouldNotBe null
+            }
+            withClue(
+                "atomicity: the registered descriptor is still valid-basic's single-arg " +
+                    "greet(String), not the colliding fixture's greet(String, Boolean) — " +
+                    "${registered?.methods}"
+            ) {
+                registered!!.methods.size shouldBe 1
+            }
+            withClue("the refused module contributed nothing under the colliding contractId") {
+                ContractRegistry.contributorsOf(
+                    StableHash.of(GREETING_API)
+                ).contains(COLLIDING_CONTRACT_MODULE) shouldBe false
+            }
+            withClue("[JAR1-ERR-05]: the classloader opened for the refused attempt is closed") {
+                ModuleClassLoader.openLoaders.toSet() shouldBe before
+            }
+            loader.loaded().shouldBeEmpty()
+        }
     }
 
     // ------------------------------------------------------------------

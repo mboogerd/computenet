@@ -67,6 +67,7 @@ class FixtureJarsTest {
             "loader.fixture.utilB" to "util-b",
             "loader.fixture.throwingProvider" to "throwing-provider",
             "loader.fixture.missingSharedType" to "missing-shared-type",
+            "loader.fixture.collidingContract" to "colliding-contract",
         )
     }
 
@@ -140,7 +141,7 @@ class FixtureJarsTest {
         val srcRoots = fixtures.listFiles().orEmpty().map { File(it, "src") }.filter { it.isDirectory }
         // Non-vacuity: a renamed fixtures directory or layout would otherwise make this
         // check pass by finding nothing to look at.
-        // KSP_FIXTURES(6) + smuggler + empty-module + removed-api + doctored-nature.
+        // KSP_FIXTURES(7) + smuggler + empty-module + removed-api + doctored-nature.
         withClue("found no fixture src/ tree under ${fixtures.absolutePath}") {
             srcRoots.size shouldBe KSP_FIXTURES.size + 4
         }
