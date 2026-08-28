@@ -79,7 +79,9 @@ class ObservationsCompletenessTest {
         var foldableChecked = 0
 
         cells.forEach { descriptor ->
-            val clazz = runCatching { Class.forName(descriptor.fqn) }.getOrNull() ?: return@forEach
+            val clazz = runCatching {
+                Class.forName(descriptor.fqn, true, ContractRegistry.cellLoader(descriptor.fqn) ?: javaClass.classLoader)
+            }.getOrNull() ?: return@forEach
             val outPorts = descriptor.ports.filter { it.direction == PortDirection.OUT }.map { it.name }
             val outlet = Observations.outletName(outPorts) ?: return@forEach // no unambiguous outlet: unobservable by design
             val shapes = outletRawNames(clazz, outlet)

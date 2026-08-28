@@ -44,6 +44,14 @@ object ContractRegistry {
     private val cellProvenance = CellProvenance()
     private val fqnIndex = ContractFqnIndex()
 
+    /**
+     * Owner-to-classloader map, threaded through provenance rather than onto the
+     * serialized [CellDescriptor] (computenet-051.5.1: descriptors stay
+     * wire-stable). Guarded by [RegistryMutation.lock] like every other mutation
+     * here; [ModuleId.HOST] deliberately never needs an entry — see [loaderFor].
+     */
+    private val moduleLoaders = ConcurrentHashMap<ModuleId, ClassLoader>()
+
     init {
         ServiceLoader.load(ContractModule::class.java, ContractModule::class.java.classLoader)
             .forEach { register(it) }
@@ -97,6 +105,36 @@ object ContractRegistry {
 
     /** Modules that contributed the cell descriptor for [fqn]. */
     fun cellContributorsOf(fqn: String): List<ModuleId> = cellProvenance.of(fqn)
+
+    /**
+     * Record [owner]'s classloader (computenet-051.5.1). Called by
+     * [ModuleRegistration.register] under the same lock as the commit it
+     * follows. A `null` [loader] is a no-op — [ModuleId.HOST] and any pre-051.5.1
+     * caller never supply one, so no entry is ever recorded for them and
+     * [cellLoader] falls back to [loaderFor]'s HOST special-case.
+     */
+    internal fun recordLoader(owner: ModuleId, loader: ClassLoader?) {
+        if (loader != null) moduleLoaders[owner] = loader
+    }
+
+    /** Drop [owner]'s recorded classloader, if any. Mirrors [removeOwner]. */
+    internal fun dropLoader(owner: ModuleId) {
+        moduleLoaders.remove(owner)
+    }
+
+    private fun loaderFor(owner: ModuleId): ClassLoader? =
+        if (owner == ModuleId.HOST) ContractModule::class.java.classLoader else moduleLoaders[owner]
+
+    /**
+     * The classloader that should resolve [fqn]'s cell class — the first
+     * surviving contributor (per [cellContributorsOf]) with a recorded loader,
+     * null when none recorded one. Callers fall back to their own loader on
+     * `null` (computenet-051.5.1): loader-agnostic `Class.forName(fqn)` sites
+     * become unsound once a module-loaded descriptor sits in this registry, and
+     * this is the read surface that makes them sound again.
+     */
+    fun cellLoader(fqn: String): ClassLoader? =
+        cellContributorsOf(fqn).firstNotNullOfOrNull { loaderFor(it) }
 
     internal fun stage(module: ContractModule, staging: Staging) {
         module.contracts.forEach { contract ->

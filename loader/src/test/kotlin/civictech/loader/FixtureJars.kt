@@ -46,6 +46,7 @@ internal object FixtureJars {
     val doctoredNature: File get() = jarFor("loader.fixture.doctoredNature")
     val collidingContract: File get() = jarFor("loader.fixture.collidingContract")
     val wireDelta: File get() = jarFor("loader.fixture.wireDelta")
+    val flow: File get() = jarFor("loader.fixture.flow")
 
     /** A [ModuleLoader] accepting exactly the directory [jars] sit in, and nothing else. */
     fun loaderAccepting(vararg jars: File, observe: (ModuleLoadRecord) -> Unit = {}): ModuleLoader =
