@@ -348,6 +348,41 @@ internal fun <Api> handshake(
  * This is the overload `bridgeTo`/`bridgeFrom` route through so a bridged edge
  * negotiates identically to a local one; transport stays out of `cell.port`
  * (the caller supplies the already-resolved [link] and its `protocolBridge`).
+ *
+ * ## Supersession: a bridged link does NOT supersede (computenet-5nw9)
+ *
+ * The primary overload calls [evictSuperseded] because it MINTS the record, so
+ * `(from, to, role)` is an identity it defines: a relink over that triple names
+ * the one attachment `install` just replaced. **This overload deliberately runs
+ * no eviction, and retains one record per call.** The reason is structural, not
+ * a judgement call left open:
+ *
+ * - The counterpart of a bridged edge has no local [Port], so `bridgeTo` mints
+ *   `to = PortRef.generate(toAddr.cell)` and `bridgeFrom` mints
+ *   `from = PortRef.generate(fromAddr.cell)` — a fresh random surrogate per
+ *   call. **The `(from, to, role)` triple is therefore a per-call nonce on this
+ *   path**, and two bridges over the same `(selfAddr, toAddr)` never present
+ *   the same triple (pinned by `BridgedLinkSupersessionTest`). An
+ *   [evictSuperseded] call added here would match zero records for every caller
+ *   that exists — unreachable code that would read as a fix.
+ * - Because each record carries its own surrogate endpoint and its own `sink`,
+ *   N records relay to N genuinely distinct destinations rather than N times to
+ *   one. computenet-lioe's consequences — double protocol relay, double
+ *   `Progress`, per-corpse walks — do not arise here; the multiplicity is
+ *   fan-out, and `ProtocolBridgeTest` pins it deliberately (one outlet bridged
+ *   to two remote consumers, both live). Evicting on the triple's *address*
+ *   analogue would silently kill one of those live links.
+ *
+ * The residual, stated where it can be found rather than rediscovered: the only
+ * identity under which two bridged records could describe ONE logical edge is
+ * the `PortAddress` pair `(fromAddr, toAddr, role)`, which IS stable across
+ * calls. A reconnect path that re-bridged the same pair without tearing the
+ * first half down would produce real double relay. No such caller exists (the
+ * only production caller is `:oracle`'s `bridgeAcrossCut`, one bridge per
+ * connect step), and the address pair is a `WireEdgeLink` field rather than a
+ * [Link] field, so guarding it here would mean inventing both a caller and a
+ * `civictech.cell.wire` dependency in this file. It belongs in
+ * `bridgeTo`/`bridgeFrom` if a reconnect path ever lands.
  */
 internal fun handshake(
     link: Link,
