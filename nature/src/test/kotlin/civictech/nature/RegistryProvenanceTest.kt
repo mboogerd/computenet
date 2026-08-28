@@ -945,4 +945,51 @@ class RegistryProvenanceTest {
             ModuleRegistration.unregister(first)
         }
     }
+
+    /**
+     * computenet-vq5u review: the two-contributors test above covers both
+     * recording a loader. This covers the case the review flagged as
+     * genuinely ambiguous — the LATER (currently-resolved) contributor
+     * recorded no loader while an EARLIER one did. Per the acceptance
+     * criterion, `cellLoader` must answer the loader of the contributor
+     * `ContractRegistry.cells` currently resolves, not merely *some*
+     * contributor's loader — so the correct answer here is `null`, even
+     * though an earlier contributor's loader is available. Answering the
+     * earlier loader would silently pair it with the later contributor's
+     * descriptor, which is exactly the mismatch this fix removes.
+     */
+    @Test
+    fun `cellLoader answers null when the last-writer contributor recorded none, even if an earlier one did`() {
+        val first = ModuleId("vq5u-mixed-first")
+        val second = ModuleId("vq5u-mixed-second")
+        val firstLoader = object : ClassLoader(ProbeCellLoaderTwoContributors::class.java.classLoader) {}
+        val cell = CellDescriptor(fqn = ProbeCellLoaderTwoContributors::class.java.name, color = CellColor.PURE)
+        ModuleRegistration.register(
+            owner = first,
+            contractModules = listOf(moduleOf(cells = listOf(cell))),
+            loader = firstLoader,
+        )
+        try {
+            // second registers with NO loader, and is the last writer.
+            ModuleRegistration.register(owner = second, contractModules = listOf(moduleOf(cells = listOf(cell))))
+            try {
+                assertNull(
+                    ContractRegistry.cellLoader(cell.fqn),
+                    "the last-writer contributor recorded no loader, so cellLoader must answer null " +
+                        "rather than an earlier contributor's loader that no longer matches the " +
+                        "resolved descriptor",
+                )
+            } finally {
+                ModuleRegistration.unregister(second)
+            }
+            assertEquals(
+                firstLoader,
+                ContractRegistry.cellLoader(cell.fqn),
+                "once the loaderless later contributor unregisters, cellLoader must follow the " +
+                    "descriptor back to the surviving contributor's own loader",
+            )
+        } finally {
+            ModuleRegistration.unregister(first)
+        }
+    }
 }
