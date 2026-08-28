@@ -2,6 +2,7 @@ package civictech.loader
 
 import civictech.nature.ContractRegistry
 import civictech.nature.ModuleId
+import civictech.nature.ModuleRegistration
 import civictech.nature.Monotonicity
 import civictech.nature.NatureVector
 import civictech.nature.RegistrationRefusedException
@@ -9,6 +10,7 @@ import civictech.nature.StableHash
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import org.junit.jupiter.api.Test
@@ -190,6 +192,123 @@ class ModuleLoadFailureTest {
                 ModuleClassLoader.openLoaders.toSet() shouldBe before
             }
             loader.loaded().shouldBeEmpty()
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // computenet-j1mm — a host callback that throws AFTER registration committed
+    // ------------------------------------------------------------------
+
+    /**
+     * Load [FixtureJars.validBasic] with the given post-commit callbacks and
+     * assert, whatever the load threw, that the committed module is intact:
+     * listed in [ModuleLoader.loaded], REGISTERED, its contract in the registry,
+     * and its classloader still open and still able to define its own classes.
+     *
+     * That is the invariant computenet-j1mm is about — "REGISTERED implies the
+     * classloader is open" — stated once so both callbacks are checked against
+     * exactly the same predicate.
+     */
+    private fun assertCommitSurvives(
+        observe: (ModuleLoadRecord) -> Unit = {},
+        onWireSerializers: (ModuleHandle, List<civictech.cell.wire.WireSerializers>) -> Unit = { _, _ -> },
+    ) {
+        val jar = FixtureJars.validBasic
+        val loader = ModuleLoader(
+            acceptedLocations = setOf(jar.toPath().toAbsolutePath().normalize().parent),
+            observe = observe,
+            onWireSerializers = onWireSerializers,
+        )
+
+        val thrown = shouldThrow<IllegalStateException> { loader.load(jar) }
+        withClue("the host callback's own throwable reaches the caller unwrapped: ${thrown.message}") {
+            thrown.message shouldBe "host callback exploded"
+        }
+
+        val handle = loader.loaded().singleOrNull()
+        try {
+            withClue("registration committed, so the handle must still be listed by loaded()") {
+                handle shouldNotBe null
+            }
+            withClue("the committed handle is REGISTERED") {
+                handle!!.state shouldBe ModuleState.REGISTERED
+            }
+            withClue("its contract is published in the registry") {
+                ContractRegistry.contract(StableHash.of(GREETING_API)) shouldNotBe null
+            }
+            withClue("a REGISTERED module's classloader must still be open") {
+                ModuleClassLoader.openLoaders shouldContain handle!!.classLoader
+            }
+            withClue("and must still be able to define the classes behind those descriptors") {
+                handle!!.classLoader.loadClass(GREETING_API) shouldNotBe null
+            }
+        } finally {
+            handle?.let {
+                ModuleRegistration.unregister(it.id)
+                it.classLoader.close()
+            }
+        }
+    }
+
+    @Test
+    fun `an observe callback that throws after registration leaves the module registered with its classloader open`() {
+        assertCommitSurvives(observe = { throw IllegalStateException("host callback exploded") })
+    }
+
+    @Test
+    fun `an onWireSerializers seam that throws after registration leaves the module registered with its classloader open`() {
+        assertCommitSurvives(onWireSerializers = { _, _ -> throw IllegalStateException("host callback exploded") })
+    }
+
+    @Test
+    fun `a throwing onWireSerializers seam does not suppress the JAR1-SEC-04 observation of a committed load`() {
+        val observed = mutableListOf<ModuleLoadRecord>()
+        assertCommitSurvives(
+            observe = { observed += it },
+            onWireSerializers = { _, _ -> throw IllegalStateException("host callback exploded") },
+        )
+        withClue("[JAR1-SEC-04]: the load succeeded, so it is reported even though the wire seam threw") {
+            observed.map { it.id } shouldBe listOf(ModuleId("fixture.valid-basic"))
+        }
+    }
+
+    /**
+     * The KDoc's step 7 states that when *both* post-commit callbacks throw, the
+     * first throwable is rethrown and the second is attached to it with
+     * [Throwable.addSuppressed]. Neither of the tests above reaches that arm —
+     * each leaves the other callback well-behaved — so it is checked here, the
+     * same way [ModuleUnloadTest] checks [JAR1-UNL-07]'s suppressed restore
+     * failure. The expected strings are the literals thrown below; nothing here
+     * recomputes them from production code.
+     */
+    @Test
+    fun `when both post-commit callbacks throw, the first is rethrown and the second rides suppressed`() {
+        val jar = FixtureJars.validBasic
+        val loader = ModuleLoader(
+            acceptedLocations = setOf(jar.toPath().toAbsolutePath().normalize().parent),
+            observe = { throw IllegalStateException("observe exploded") },
+            onWireSerializers = { _, _ -> throw IllegalStateException("onWireSerializers exploded") },
+        )
+
+        val thrown = shouldThrow<IllegalStateException> { loader.load(jar) }
+        val handle = loader.loaded().singleOrNull()
+        try {
+            withClue("onWireSerializers runs first, so its throwable is the one the caller sees") {
+                thrown.message shouldBe "onWireSerializers exploded"
+            }
+            withClue("the observation still ran, and its failure is not lost") {
+                thrown.suppressed.map { it.message } shouldBe listOf("observe exploded")
+            }
+            withClue("and the commit survives both") {
+                handle shouldNotBe null
+                handle!!.state shouldBe ModuleState.REGISTERED
+                ModuleClassLoader.openLoaders shouldContain handle.classLoader
+            }
+        } finally {
+            handle?.let {
+                ModuleRegistration.unregister(it.id)
+                it.classLoader.close()
+            }
         }
     }
 

@@ -417,8 +417,10 @@ class ModuleLoader(
      *    attributes both fail here, and neither creates a classloader — which is
      *    exactly why the manifest is read with `JarFile` rather than by opening a
      *    loader and asking it for the resource.
-     * 3. **[JAR1-ISO-01]** — [ModuleClassLoader.open]. From here on, *every*
-     *    failure path closes that loader before returning [JAR1-ERR-05].
+     * 3. **[JAR1-ISO-01]** — [ModuleClassLoader.open]. From here up to and
+     *    including the commit in step 6, *every* failure path closes that loader
+     *    before returning [JAR1-ERR-05]. That window ends at the commit; step 7
+     *    below says why, and what a failure after it does instead.
      * 4. **[JAR1-DISC-02][JAR1-DISC-03]** — [ServiceLoader] over the module's own
      *    loader for [ContractModule], [ProxyModule] and [WireSerializers],
      *    keeping only providers the module's loader itself defined (see
@@ -427,7 +429,46 @@ class ModuleLoader(
      * 5. **[JAR1-ERR-04]** — resolve every contributed contract and cell fqn
      *    inside the module's loader. Fail at the door, not mid-wave.
      * 6. **[JAR1-REG-01]** — [ModuleRegistration.register] with the discovered
-     *    tables unmodified. A refusal propagates as a load failure.
+     *    tables unmodified. A refusal propagates as a load failure. This is the
+     *    **commit point**: the handle goes [ModuleState.REGISTERED] and joins
+     *    [loaded], and ERR-05's close-on-failure window ends here.
+     * 7. **Post-commit host callbacks** — [onWireSerializers], then [observe].
+     *
+     * ## What happens when a post-commit host callback throws (computenet-j1mm)
+     *
+     * [onWireSerializers] (the [JAR1-REG-08] seam) and [observe] (the
+     * [JAR1-SEC-04] audit hook) are supplied by the host, and step 6 has already
+     * published this module's descriptors into `ContractRegistry`,
+     * `ProtocolRegistry` and `ProxyRegistry` under its owner [ModuleId] by the
+     * time either runs. The decision, recorded here:
+     *
+     * - **The load stays committed.** The module remains [ModuleState.REGISTERED],
+     *   stays in [loaded], and **keeps its classloader open**. This is the same
+     *   invariant [unload] holds on its own failure path — a module whose
+     *   descriptors are registered must still be able to define the classes
+     *   behind them — and it is why these two calls sit outside the `try` rather
+     *   than inside a catch that unwinds.
+     * - **The throwable reaches the caller unwrapped**, so a host that breaks its
+     *   own callback learns about it. [load] therefore has one failure mode that
+     *   is *not* a failed load: a throw with the module present in [loaded]. The
+     *   handle is recoverable from there, and disposing of the module is
+     *   [unload]'s job, not a silent rollback's.
+     * - **Both callbacks are attempted.** A throw from [onWireSerializers] does
+     *   not skip the [JAR1-SEC-04] observation of a load that did succeed. The
+     *   first throwable is rethrown; a second is attached to it with
+     *   [Throwable.addSuppressed].
+     *
+     * The rejected alternative was to keep one `catch` and have it *unwind* the
+     * registration — unregister, drop the handle, then close. It was rejected on
+     * three counts. It is not implementable as an unwind: [onWireSerializers] has
+     * already handed the host its [WireSerializers] and [observe] has already
+     * emitted an audit record, and neither seam has an inverse, so "atomic in
+     * both directions" would be true only of the registries. Removal is itself
+     * fallible — that is the whole subject of [JAR1-UNL-07] — so the unwind would
+     * need its own restore-or-report-indeterminate path, reintroducing inside
+     * [load] the very half-committed state this decision exists to remove. And it
+     * is disproportionate: it would discard a module that registered perfectly
+     * because the host's logger threw.
      *
      * @return a handle in state [ModuleState.REGISTERED].
      * @throws ModuleLocationRefusedException if [jar] is outside [acceptedLocations].
@@ -437,6 +478,9 @@ class ModuleLoader(
      * @throws SmuggledSharedPrefixException if the jar bundles a host-owned class.
      * @throws civictech.nature.RegistrationRefusedException if the contributed
      *   tables collide with what is already registered.
+     * @throws Throwable whatever [onWireSerializers] or [observe] threw, rethrown
+     *   unwrapped **after** the load committed — see the post-commit section
+     *   above. The module is registered and in [loaded] when this happens.
      */
     fun load(jar: File): ModuleHandle {
         requireAcceptedLocation(jar)
@@ -446,7 +490,7 @@ class ModuleLoader(
         // ERR-05 from here down: the loader exists, so every exit that is not a
         // returned handle closes it.
         val loader = ModuleClassLoader.open(jar)
-        try {
+        val handle = try {
             val contractModules = providersDefinedBy(ContractModule::class.java, loader, jar)
             val proxyModules = providersDefinedBy(ProxyModule::class.java, loader, jar)
             val wireSerializers = providersDefinedBy(WireSerializers::class.java, loader, jar)
@@ -477,9 +521,25 @@ class ModuleLoader(
                 proxyModules = proxyModules,
             )
             handle.state = ModuleState.REGISTERED
-
             handles.add(handle)
-            onWireSerializers(handle, wireSerializers)
+            handle
+        } catch (t: Throwable) {
+            loader.close()
+            throw t
+        }
+
+        // Committed. ERR-05's window ended at the line above, so the two
+        // host-supplied callbacks below run OUTSIDE it: neither may close the
+        // classloader of a module whose descriptors are now published. Both are
+        // attempted whatever the other does; the first throwable is rethrown and
+        // the second rides along suppressed. See the KDoc's step 7.
+        var callbackFailure: Throwable? = null
+        try {
+            onWireSerializers(handle, handle.wireSerializers)
+        } catch (t: Throwable) {
+            callbackFailure = t
+        }
+        try {
             observe(
                 ModuleLoadRecord(
                     id = handle.id,
@@ -488,11 +548,12 @@ class ModuleLoader(
                     contributedDescriptorIds = handle.contributedDescriptorIds(),
                 )
             )
-            return handle
         } catch (t: Throwable) {
-            loader.close()
-            throw t
+            callbackFailure?.addSuppressed(t) ?: run { callbackFailure = t }
         }
+        callbackFailure?.let { throw it }
+
+        return handle
     }
 
     /**
