@@ -43,12 +43,18 @@ import java.util.UUID
  * for elements — so no Riak-style deferred-operations list is needed.
  *
  * **Embedded values are restricted to the idempotent-mergeable class**
- * ([MergeablePayload], decided point 3). This type does *not* fold embedded
- * values: concurrent live dots resolve by [DOT_ORDER] here. Folding a
- * `V : MergeablePayload` instead of picking the LWW dot is 96 §E1.4 and is
- * not implemented yet; Riak's embedded-counter anomaly (a non-idempotent
- * embedded CRDT cannot get full reset-remove without a dot per increment) is
- * why the class is restricted rather than open.
+ * ([MergeablePayload], decided point 3, 96 §E1.4). While a key has more than
+ * one live dot and every live dot's value is a [MergeablePayload] (checked at
+ * the value instances — `V` is erased), [value] folds them with `mergeWith`
+ * in ascending [DOT_ORDER] rather than picking the LWW dot, so the fold
+ * itself never depends on wall clock or arrival order. With exactly one live
+ * dot, or any live value not implementing [MergeablePayload], [value] stays
+ * the greatest-dot [DOT_ORDER] pick, byte-identical to the pre-E1.4 behaviour.
+ * [values] exposes every live dot's value for application-side resolution
+ * when the fold does not apply. There is still no admission check refusing a
+ * non-idempotent embedded value (Riak's embedded-counter anomaly — a
+ * non-idempotent embedded CRDT cannot get full reset-remove without a dot per
+ * increment); that refusal is separate follow-on work.
  *
  * **Dot-metadata bloat is a codec-layer concern from day one** (decided point
  * 4): the serialized form groups dots by `sourceId` behind a source
@@ -92,12 +98,39 @@ data class TaggedMapDelta<K, V>(
     fun membership(): Set<K> = puts.keys.filterTo(LinkedHashSet()) { liveDots(it).isNotEmpty() }
 
     /**
-     * `[24-TMAP-03]` the exposed value at [key]: the value of the live dot
-     * with the greatest [DOT_ORDER] — `(counter, sourceId)`, never wall clock.
-     * `null` when the key has no live dot (i.e. it is absent).
+     * `[24-TMAP-03]`/`[KE1-01..03]` the exposed value at [key]. With exactly
+     * one live dot, or any live value that is not a [MergeablePayload], this
+     * is the value of the live dot with the greatest [DOT_ORDER] —
+     * `(counter, sourceId)`, never wall clock. With more than one live dot and
+     * every live value a [MergeablePayload], this is instead their
+     * `mergeWith`-fold taken in ascending [DOT_ORDER] ([KE1-02], [KE1-05]) —
+     * deterministic and independent of both wall clock and the order dots
+     * were folded into [puts]. `null` when the key has no live dot (i.e. it
+     * is absent, [KE1-07]).
      */
-    fun value(key: K): V? =
-        liveDots(key).entries.maxWithOrNull(compareBy(DOT_ORDER) { it.key })?.value
+    fun value(key: K): V? {
+        val dots = liveDots(key)
+        if (dots.isEmpty()) return null
+        val ordered = dots.entries.sortedWith(compareBy(DOT_ORDER) { it.key })
+        if (ordered.size == 1) return ordered[0].value
+        val values = ordered.map { it.value }
+        if (values.all { it is MergeablePayload }) {
+            @Suppress("UNCHECKED_CAST")
+            return values
+                .map { it as MergeablePayload }
+                .reduce { acc, next -> acc.mergeWith(next) } as V
+        }
+        return ordered.last().value
+    }
+
+    /**
+     * `[KE1-06]`/`[KE1-07]` every live dot's value at [key], for
+     * application-side conflict resolution when the [MergeablePayload] fold
+     * does not apply (a non-mergeable `V`, or a caller that wants every
+     * concurrent value rather than the folded/LWW pick). The empty set when
+     * the key has no live dot.
+     */
+    fun values(key: K): Set<V> = liveDots(key).values.toSet()
 
     /** Every key this delta carries information about, live or tombstoned. */
     fun keys(): Set<K> = LinkedHashSet<K>(puts.keys).also { it += dels.keys }
