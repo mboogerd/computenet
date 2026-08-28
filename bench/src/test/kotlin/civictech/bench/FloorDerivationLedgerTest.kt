@@ -664,13 +664,26 @@ class FloorDerivationLedgerTest {
 
     /**
      * `computenet-wymi`: the ordering hazard the eo9m review found but did not have a
-     * ticket for yet. [FloorDerivationLedger.render] resolves the sha and would have
-     * recorded [FloorDerivationLedger] state describing it as published *before*
-     * constructing the [ClassNoiseFloor] that actually publishes it — and that
-     * constructor's own `require()` checks can still refuse. A render that throws there
-     * must leave nothing recorded: no [ClassNoiseFloor] exists, so
-     * [FloorDerivationLedger.renderWarnings] must not warn about a sha that was never
-     * published.
+     * ticket for yet. [FloorDerivationLedger.render] resolved the sha and recorded
+     * [FloorDerivationLedger] state describing it as published *before* constructing the
+     * [ClassNoiseFloor] that actually publishes it — and that constructor's own
+     * `require()` checks can still refuse. A render that throws there must leave nothing
+     * recorded: no [ClassNoiseFloor] exists, so [FloorDerivationLedger.renderWarnings]
+     * must not warn about a sha that was never published.
+     *
+     * **What this test can and cannot still detect (`computenet-8rel`).** The state wymi
+     * guarded — `lastPublishedUnattestedSha`, the only thing [render] ever recorded about
+     * its own outcome — is deleted, and the all-`v1` ledger that reached it is now refused
+     * before [ClassNoiseFloor] is constructed at all. So the scenario needs an ATTESTED
+     * ledger (one whose sha resolves cleanly, leaving `derivedOn` as the only thing left
+     * to refuse on), and on that ledger [FloorDerivationLedger.renderWarnings] is empty
+     * whether or not [render] ran: with no render-recorded state, wymi's invariant now
+     * holds by construction rather than by a guard, and the `renderWarnings()` assertion
+     * below is VACUOUS on today's code. It is kept deliberately, as a tripwire: any future
+     * reintroduction of state that [render] records about its own outcome must keep this
+     * green, and the assertion stops being vacuous the moment such state exists. Do not
+     * read it as evidence that an ordering guard is being exercised — there is none left
+     * to exercise.
      */
     @Test
     fun `a render refused by the record's own require() leaves nothing for renderWarnings to warn about`(
