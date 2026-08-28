@@ -1,0 +1,174 @@
+package civictech.loader
+
+import civictech.nature.ContractRegistry
+import civictech.nature.Monotonicity
+import civictech.nature.NatureVector
+import civictech.nature.StableHash
+import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.withClue
+import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
+import org.junit.jupiter.api.Test
+import java.nio.file.Files
+
+/**
+ * Task computenet-051.3.3: the load path's failure discipline and the B2
+ * anti-reflection tripwire, against real KSP-built fixture jars — never
+ * hand-written `META-INF/services` files.
+ *
+ * `ModuleLoadPathTest` (task computenet-051.3.2) already covers B1's
+ * load/register half, `[JAR1-DISC-04]`, `[JAR1-DISC-05]`, `[JAR1-SEC-02]`,
+ * `[JAR1-SEC-04]`, and one ERR-02 case (`noAttrs`). This file adds the
+ * remaining scenarios the feature's breakdown assigns to this task:
+ *
+ * - **B11** — a non-jar file inside an accepted location [JAR1-ERR-01].
+ * - **B12** — a module compiled against a shared type the host no longer
+ *   supplies [JAR1-ERR-04].
+ * - **ERR-03 atomicity** — an un-instantiable `ServiceLoader` provider fails
+ *   the whole load, including the same jar's otherwise-valid `ContractModule`.
+ * - **ERR-05** — `ModuleClassLoader.openLoaders` shows no leaked loader after
+ *   every failure that opened one.
+ * - **B2** — the registered `PortDescriptor.natures` is whatever the jar's
+ *   `ContractModule` table carries, including a value no source annotation
+ *   would produce. Any implementation that re-derives descriptors from
+ *   annotations/bytecode instead of transporting the generated table
+ *   unmodified [JAR1-DISC-03] fails this test.
+ *
+ * Every failure test asserts three things: the diagnostic content, the
+ * registries unchanged for the fixture's would-be contributions (checked by
+ * `contractId`/cell fqn, computed independently via [StableHash] rather than
+ * by loading the fixture's own classes — the whole point is to check the
+ * registry *without* trusting a classloader the failed load may have already
+ * closed), and [ModuleClassLoader.openLoaders] showing no leaked loader.
+ */
+class ModuleLoadFailureTest {
+
+    private companion object {
+        const val PINGBACK_API = "civictech.loader.fixture.throwingprovider.PingBackApi"
+        const val PINGBACK_CELL = "civictech.loader.fixture.throwingprovider.PingBackCell"
+
+        const val MISSING_SHARED_TYPE_API = "civictech.loader.fixture.missingsharedtype.MissingSharedTypeApi"
+        const val MISSING_SHARED_TYPE_CELL = "civictech.loader.fixture.missingsharedtype.MissingSharedTypeCell"
+
+        const val DOCTORED_CELL = "civictech.loader.fixture.doctorednature.DoctoredCell"
+    }
+
+    // ------------------------------------------------------------------
+    // B11 — malformed input [JAR1-ERR-01]
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `a garbage file that is not a readable jar fails with a diagnostic and creates no classloader`() {
+        val dir = Files.createTempDirectory("loader-b11-malformed")
+        val garbage = dir.resolve("not-a-jar.jar").toFile()
+        garbage.writeBytes(byteArrayOf(0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07))
+
+        val before = ModuleClassLoader.openLoaders.toSet()
+        val loader = ModuleLoader(acceptedLocations = setOf(dir))
+
+        val thrown = shouldThrow<ModuleLoadException> { loader.load(garbage) }
+
+        withClue("the diagnostic names the offending jar: ${thrown.message}") {
+            thrown.message.orEmpty().contains(garbage.absolutePath) shouldBe true
+        }
+        withClue("[JAR1-ERR-01]: an unreadable jar creates no classloader") {
+            ModuleClassLoader.openLoaders.toSet() shouldBe before
+        }
+        loader.loaded().shouldBeEmpty()
+    }
+
+    // ------------------------------------------------------------------
+    // B12 — incompatible module [JAR1-ERR-04]
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `a module compiled against a shared type absent from the host fails at load time naming the missing type`() {
+        val before = ModuleClassLoader.openLoaders.toSet()
+        val loader = FixtureJars.loaderAccepting(FixtureJars.missingSharedType)
+
+        // Assert the failure happens IN load() itself, not deferred to a later
+        // spawn — there is no spawn API in this feature, so "load() throws" is
+        // the whole assertion.
+        val thrown = shouldThrow<ModuleLoadException> { loader.load(FixtureJars.missingSharedType) }
+
+        withClue("the diagnostic names the missing shared type: ${thrown.message}") {
+            // NoClassDefFoundError's own message carries the JVM's slash-separated
+            // binary name, not the dotted fqn form.
+            thrown.message.orEmpty().contains("civictech/nature/removed/RemovedBase") shouldBe true
+        }
+        withClue("nothing was registered for the fixture's contract") {
+            ContractRegistry.contract(StableHash.of(MISSING_SHARED_TYPE_API)) shouldBe null
+        }
+        withClue("nothing was registered for the fixture's cell") {
+            ContractRegistry.cellContributorsOf(MISSING_SHARED_TYPE_CELL).shouldBeEmpty()
+        }
+        withClue("[JAR1-ERR-05]: the classloader opened for the attempt is closed") {
+            ModuleClassLoader.openLoaders.toSet() shouldBe before
+        }
+        loader.loaded().shouldBeEmpty()
+    }
+
+    // ------------------------------------------------------------------
+    // ERR-03 — un-instantiable ServiceLoader provider, and atomicity
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `a provider that cannot be instantiated fails the load naming it, and registers none of the jar's descriptors`() {
+        val before = ModuleClassLoader.openLoaders.toSet()
+        val loader = FixtureJars.loaderAccepting(FixtureJars.throwingProvider)
+
+        val thrown = shouldThrow<ModuleLoadException> { loader.load(FixtureJars.throwingProvider) }
+
+        withClue("the diagnostic names the throwing provider class: ${thrown.message}") {
+            thrown.message.orEmpty().contains(
+                "civictech.loader.fixture.throwingprovider.ThrowingWireSerializers"
+            ) shouldBe true
+        }
+        withClue("atomicity: the jar's own perfectly valid contract must NOT be registered") {
+            ContractRegistry.contract(StableHash.of(PINGBACK_API)) shouldBe null
+        }
+        withClue("atomicity: the jar's own perfectly valid cell must NOT be registered") {
+            ContractRegistry.cellContributorsOf(PINGBACK_CELL).shouldBeEmpty()
+        }
+        withClue("[JAR1-ERR-05]: the classloader opened for the attempt is closed") {
+            ModuleClassLoader.openLoaders.toSet() shouldBe before
+        }
+        loader.loaded().shouldBeEmpty()
+    }
+
+    // ------------------------------------------------------------------
+    // B2 — the anti-reflection tripwire [JAR1-DISC-03]
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `the registered PortDescriptor carries the doctored NatureVector the jar's ContractModule table carries`() {
+        FixtureJars.withLoadedModule(FixtureJars.doctoredNature) { handle ->
+            withClue("the doctored fixture loads successfully") {
+                handle.state shouldBe ModuleState.REGISTERED
+            }
+
+            val cellClass = handle.classLoader.loadClass(DOCTORED_CELL)
+            val descriptor = ContractRegistry.cellDescriptor(cellClass)
+            withClue("the doctored fixture's cell descriptor must resolve") {
+                descriptor shouldNotBe null
+            }
+
+            val port = descriptor!!.ports.singleOrNull { it.name == "trigger" }
+            withClue("the doctored port must be present: ${descriptor.ports}") {
+                port shouldNotBe null
+            }
+
+            // Restated literally rather than imported from the fixture's
+            // DoctoredContractModule, so this test cannot pass vacuously by
+            // comparing the doctored value against itself.
+            val expectedDoctoredNatures = NatureVector.of(Monotonicity.MONOTONE)
+            withClue("the registered natures must equal the jar's doctored value, not a re-derived one") {
+                port!!.natures shouldBe expectedDoctoredNatures
+            }
+            withClue("and the doctored value must not be the KSP-default — otherwise this test would pass vacuously") {
+                port!!.natures shouldNotBe NatureVector.DEFAULT
+            }
+        }
+    }
+}
