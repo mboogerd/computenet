@@ -23,9 +23,13 @@ import kotlin.math.ceil
  * *that* class's floor is more dispersed than the same benchmark was on a quiet machine,
  * which is what "interference or a confound" actually means.
  *
- * ## Status: THREE classes derived, one still falling back
+ * ## Status: ALL FOUR classes the procedure names are derived
  *
- * [CLASS_NOISE_FLOOR_DERIVATIONS] holds three entries.
+ * [CLASS_NOISE_FLOOR_DERIVATIONS] holds four entries, one per benchmark class the
+ * procedure names, and **nothing named by it falls back to [NOISE_FLOOR] any more**. That
+ * is the end state `computenet-cm4w` opened this file for; the fallback path below is not
+ * dead, and still resolves any class with no derivation — `SmokeBenchmark`, or a class
+ * added later — to the global bound.
  *
  * - `CellFootprintBenchmark`, whose runs were made 2026-08-26 (`computenet-ahn0`,
  *   **re-measured the same day under the toolchain JDK by `computenet-7v7m`** after the
@@ -47,28 +51,24 @@ import kotlin.math.ceil
  *   and could still afford the whole-class one: at 14 minutes a run fits a quiesced
  *   window whole, and decomposing a 30-row class into 3-row units would have bought ten
  *   times the gate waits for a scheduling freedom the slot did not need.
+ * - `OperatorThroughputBenchmark`, derived 2026-08-28 by `computenet-x9e.17` on its own
+ *   dedicated slot — the last class to come off the global fallback, and by a wide margin
+ *   the most expensive: 72 rows, three whole-class runs of 00:37:11, 00:37:01 and
+ *   00:37:02. Its first run was taken a slot earlier as a CALIBRATION of the 2026-08-26
+ *   estimate and retained un-ingested, then ingested here as run 1 because this item ran
+ *   from the same harness sha its jar was stamped at; the derivation is still three
+ *   whole-class quiesced runs under [classFloorStatistic], gathered on one UTC day.
  *
- * The one class the procedure names that is still undrived (`OperatorThroughputBenchmark`)
- * has **no** derivation and therefore still falls back to
- * [NOISE_FLOOR]. That is not an oversight and no number may be entered for it that did
- * not come from its own three quiesced runs: deriving a floor requires three sequential
- * repeat runs of the class on a **quiesced** host, and a floor derived through
- * interference would be a floor measuring the interference, silently inherited by every
- * row later classified against it.
- *
- * The one that remains was not attempted here because it does not fit this slot.
- * Measured at the classes' own annotation configurations on 2026-08-26:
- * `OperatorThroughputBenchmark` is 72 rows at `@Fork(2)` x 15s = ~48 min per run (~144
- * min for three) — against `CellFootprintBenchmark`'s measured 177s per run,
- * `BoundedReadBenchmark`'s measured ~5 min per run (6 rows at `@Fork(5)`, estimated ~7
- * min on 2026-08-26 and timed at 00:05:13 by all three runs' own JMH
- * `# Run complete. Total time:` lines), and `FanOutScalingBenchmark`'s measured 14 min
- * per run (estimated ~27 min on 2026-08-26 and timed at 00:14:15, 00:14:14 and 00:14:15
- * by the three runs' own `# Run complete.` lines — the 2026-08-26 estimate was
- * conservative by about a factor of two, which is worth knowing before the remaining
- * class's ~48 min estimate is used to decide whether IT fits a slot). Shrinking any of
- * those configurations to fit a slot is exactly the thing the
- * procedure forbids, so it is routed to its own dedicated slot instead.
+ * The per-run costs, all now MEASURED at the classes' own annotation configurations rather
+ * than estimated: `CellFootprintBenchmark` 177s, `BoundedReadBenchmark` 00:05:13,
+ * `FanOutScalingBenchmark` 00:14:15, `OperatorThroughputBenchmark` ~00:37:05. The
+ * 2026-08-26 estimates were conservative for every class but by very different factors —
+ * `FanOutScalingBenchmark` by about 2x (~27 min estimated), `OperatorThroughputBenchmark`
+ * by only ~23% (~48 min estimated, and its "72 rows x 2 forks x 15s = 36 min of pure
+ * iteration" arithmetic was the better guide) — so a future class's estimate must not be
+ * corrected by analogy to whichever class was measured last. Shrinking any of those
+ * configurations to fit a slot is exactly the thing the procedure forbids; each of the
+ * last three classes was routed to its own dedicated slot instead.
  *
  * The format, the margin and the resolution rules were fixed HERE, in committed source,
  * **before** any of these numbers existed, for the same reason [NOISE_FLOOR]'s 2x margin
@@ -524,12 +524,15 @@ data class ClassNoiseFloor(
 /**
  * Every per-class floor this repository has actually derived.
  *
- * **Three entries.** See [ClassFloorDerivation]'s "Status" section: a class absent from
- * this list has not had its three sequential quiesced repeat runs made, and no number may
- * be entered here that did not come from them. An absent class falls back to
- * [NOISE_FLOOR] and the harness behaves for it exactly as it did before this file
- * existed — which is the correct behaviour for a floor that has not been measured.
- * `OperatorThroughputBenchmark` is the one that is still absent.
+ * **Four entries — every benchmark class the procedure names.** See
+ * [ClassFloorDerivation]'s "Status" section: a class absent from this list has not had its
+ * three sequential quiesced repeat runs made, and no number may be entered here that did
+ * not come from them. An absent class falls back to [NOISE_FLOOR] and the harness behaves
+ * for it exactly as it did before this file existed — which is the correct behaviour for a
+ * floor that has not been measured. Nothing the procedure names is absent any more, so the
+ * only classes still resolving to [NOISE_FLOOR] are `SmokeBenchmark` (from which
+ * [NOISE_FLOOR] itself was derived, and which the procedure deliberately does not name)
+ * and any class added after this table.
  *
  * **The `CellFootprintBenchmark` entry is a RE-DERIVATION (`computenet-3sua`, 2026-08-27).** It is the same
  * three quiesced runs `computenet-7v7m` made — the same 63 retained observations, no new
@@ -541,7 +544,8 @@ data class ClassNoiseFloor(
  * `FanOutScalingBenchmark` entries need no re-derivation for the same reason from the
  * other direction — their observations were gathered on 2026-08-27 and 2026-08-28
  * (`computenet-akfa`), after [classFloorStatistic] was committed, so they have only ever
- * been read by the statistic in force.
+ * been read by the statistic in force, and so was `OperatorThroughputBenchmark`'s
+ * (2026-08-28, `computenet-x9e.17`).
  *
  * On the size of `CellFootprintBenchmark`'s floor: the worst quiet-host row by TYPICAL dispersion
  * is `realSnapshot` OR_MAP_CELL at `N1E5`, whose three observations were 0.522 / 0.119 /
@@ -624,6 +628,34 @@ data class ClassNoiseFloor(
  * the case the median is meant to keep and the maximum-over-observations would have
  * exaggerated. Nor does 0.953 say anything about this class on another host, under
  * `-prof gc`, or under any `@Fork`/iteration count other than the one [jmhConfig] names.
+ *
+ * **On the size of `OperatorThroughputBenchmark`'s floor, 0.103.** The row that sets it is
+ * `sim` at `direction=INSERT`, `subject=LOOKUP_JOIN`, whose three observations were
+ * 0.0514 / 0.0057 / 0.0511 and whose median is therefore 0.0511. In shape this class sits
+ * between the two above: its 72 per-row medians span 0.0052 to 0.0511, a factor of about
+ * ten — wider than `BoundedReadBenchmark`'s, far narrower than `FanOutScalingBenchmark`'s
+ * 36 — and unlike the fan-out class every row is measured under ONE annotation
+ * configuration, so this really is one population. The typical row is much quieter than
+ * the floor, though: the median of the 72 per-row medians is 0.011, and only 10 of the 72
+ * rows have a median above half the statistic. So 0.103 is loose for an ordinary row of
+ * this class by roughly an order of magnitude — the same looseness recorded for
+ * `FanOutScalingBenchmark`, milder, and recorded here for the same reason: it is what the
+ * pre-registered procedure yields, and the fix (if there is one) is a decision about
+ * [classFloorStatistic]'s across-row fold, taken before the numbers rather than after
+ * them. What it is NOT is the previous state: on this class the global [NOISE_FLOOR] of
+ * 0.005 was exceeded by 210 of 216 observations and by all 72 row medians, so it fired
+ * essentially everywhere and separated nothing at all.
+ *
+ * **What 0.103 does NOT say.** As with every entry above, it is not a bound on the
+ * individual observations: the largest single observation in the set is 0.0720 — and it
+ * belongs to a DIFFERENT row (`real`, `RETRACT`, `COALESCING_COMBINE`), whose other two
+ * repeats are 0.0153 and 0.0075. That row's median is 0.0153, so under the estimator in
+ * force it does not come near setting the floor, while under the maximum-over-every-
+ * observation estimator `computenet-3sua` replaced it would have set it at 0.144 single-
+ * handedly. This class is therefore the clearest measured case in the table of what the
+ * change of estimator was for. And 0.103 says nothing about this class on another host,
+ * under `-prof gc`, or under any `@Fork`/iteration count other than the one [jmhConfig]
+ * names.
  */
 val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
     /**
@@ -761,6 +793,64 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
             "opsPerInvocation=200",
         // Verbatim from all three run logs' banner, plus the vendor `-version` report —
         // the same convention, and the same launcher, as the two entries above.
+        measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
+            "(Amazon Corretto; :bench's resolved toolchain launcher)",
+        assembly = DerivationAssembly.WholeClassRuns(runs = 3),
+    ),
+    /**
+     * `computenet-x9e.17`, 2026-08-28 — the LAST class to come off the global fallback.
+     * Three sequential whole-class runs of
+     * `civictech.bench.micro.OperatorThroughputBenchmark` (72 rows each: `sim` and `real`
+     * over 18 `Subject` constants x 2 `Direction` constants) from
+     * `bench/build/libs/bench-jmh.jar` at `551da80f4`, on the pinned host NL-MGD6FQJW91
+     * (16 cores, gate threshold 4.00), each preceded by its own attestation of
+     * `run-series.sh`'s gate — the readings immediately before the three invocations were
+     * 3.98, 3.99 and 3.28 — and each verified after the fact against its own log's
+     * `# VM version:` banner, every one of which read
+     * `JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS`. The runs took 00:37:11,
+     * 00:37:01 and 00:37:02 by their own JMH `# Run complete.` lines.
+     *
+     * **Run 1 was measured in an earlier slot, as a calibration, and retained rather than
+     * ingested.** That slot's dispatch carried a decision gate — time run 1, continue only
+     * if it came in at or under 30 minutes — and 00:37:11 took the stop branch, so nothing
+     * was entered on one run. It is a valid whole-class observation and is ingested here
+     * unchanged because this item ran from the same commit its jar is stamped at, which is
+     * the condition `FloorDerivationLedger` enforces: a derivation may not span two harness
+     * shas. Had `main` moved under this branch first, those artifacts would have BLOCKED
+     * the derivation instead of shortening it, and three fresh runs would have been the
+     * only route.
+     *
+     * Accumulated through [FloorDerivationLedger] (`floorTool plan` / `ingest` / `render`),
+     * which checked the row set COMPLETE against `EXPECTED_PLAN_ROW_COUNTS` (72 rows x 3
+     * observations = 216) and single-JVM / single-harness-sha. Each unit measured the whole
+     * class, so the assembly is [DerivationAssembly.WholeClassRuns]: `computenet-3omz`'s
+     * row-set decomposition was available and, at 72 rows, this class had the strongest
+     * case of the four for using it — `floorTool plan` decomposes it into 18 units of 12
+     * rows — but the slot was dedicated and quiesced, so three whole-class runs cost three
+     * gate attestations instead of eighteen.
+     *
+     * The per-row median that sets the statistic is `sim` at `direction=INSERT`,
+     * `subject=LOOKUP_JOIN`, whose observations across runs 1 / 2 / 3 were
+     * 0.05139115... / 0.005662... / 0.05106599919551368. Two of its three repeats sit at
+     * ~0.051, so the median is a reproducible property of that row rather than one
+     * contaminated repeat — which is what [classFloorStatistic] was chosen to require.
+     * The single LARGEST observation in the set belongs to a different row entirely
+     * (`real`, `RETRACT`, `COALESCING_COMBINE`, 0.07199549750373181, whose other two
+     * repeats are 0.0153 and 0.0075, median 0.0153): under the maximum-over-every-
+     * observation estimator `computenet-3sua` replaced, THAT row would have set the class's
+     * floor at 0.144 on the strength of one repeat.
+     */
+    ClassNoiseFloor(
+        benchmarkClass = "OperatorThroughputBenchmark",
+        observedRobustDispersion = 0.05106599919551368,
+        runs = 3,
+        derivedOn = "2026-08-28",
+        harnessCommitSha = "551da80f4",
+        hostState = QUIESCED_HOST_STATE,
+        jmhConfig = "mode=Throughput unit=ops/s forks=2 warmup=5x1s measurement=10x1s " +
+            "opsPerInvocation=512",
+        // Verbatim from all three run logs' banner, plus the vendor `-version` report —
+        // the same convention, and the same launcher, as the three entries above.
         measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
             "(Amazon Corretto; :bench's resolved toolchain launcher)",
         assembly = DerivationAssembly.WholeClassRuns(runs = 3),

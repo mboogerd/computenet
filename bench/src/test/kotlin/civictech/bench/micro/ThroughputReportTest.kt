@@ -231,8 +231,8 @@ class ThroughputReportTest {
         assertTrue(entry.contains("| FILTER insert | 120000.0 ± 240.0 ops/s |"), entry)
         assertTrue(entry.contains("| GROUP_BY_MIN retract | 90000.0 ± 27000.0 ops/s |"), entry)
 
-        // Its dispersion is stated beside the table, flagged against the harness's own
-        // sanity bound — informational, and gating nothing.
+        // Its dispersion is stated beside the table, flagged against the class's own
+        // floor — informational, and gating nothing.
         val notes = report.dispersions
         assertEquals(2, notes.size)
         val noisy = notes.single { it.label == "GROUP_BY_MIN retract" }
@@ -240,17 +240,28 @@ class ThroughputReportTest {
         assertTrue(noisy.aboveHarnessSanityBound)
         assertFalse(notes.single { it.label == "FILTER insert" }.aboveHarnessSanityBound)
         val text = report.text()
-        assertTrue(text.contains("above the harness sanity bound NOISE_FLOOR $NOISE_FLOOR"), text)
         assertTrue(text.contains("the row is reported"), text)
 
-        // computenet-ahn0: the bound named above is the GLOBAL one, and it is global
-        // because `OperatorThroughputBenchmark` has no derived class floor — not because
-        // the renderer is hard-wired to NOISE_FLOOR. Stated here so the day that class's
-        // three quiesced runs land, this assertion fails and says why, rather than the
-        // sentence silently changing under a test that never looked at the resolution.
-        assertFalse(hasClassFloor("OperatorThroughputBenchmark"))
-        assertEquals(NOISE_FLOOR, noiseFloorFor("OperatorThroughputBenchmark"))
-        assertEquals(NOISE_FLOOR, noisy.floor)
+        // computenet-ahn0 wrote this half as a tripwire: the bound the sentence names is
+        // resolved, not hard-wired, and it said NOISE_FLOOR only because
+        // `OperatorThroughputBenchmark` had no derived class floor. `computenet-x9e.17`
+        // derived one on 2026-08-28 (0.103, from three whole-class quiesced runs), so the
+        // tripwire has now fired and is UPDATED to the new resolution rather than deleted —
+        // which is exactly what it was written to force. The sentence names the class's own
+        // floor and no longer mentions the global bound at all.
+        assertTrue(hasClassFloor("OperatorThroughputBenchmark"))
+        assertEquals(0.103, noiseFloorFor("OperatorThroughputBenchmark"))
+        assertEquals(noiseFloorFor("OperatorThroughputBenchmark"), noisy.floor)
+        assertTrue(
+            text.contains("above the OperatorThroughputBenchmark class floor 0.103"),
+            text,
+        )
+        assertFalse(text.contains("NOISE_FLOOR"), text)
+
+        // The row is still flagged, and it has to be for the rest of this test to mean
+        // anything: 27000/90000 = 0.30, comfortably above the derived 0.103 as it was
+        // above the global 0.005. What changed is which bound the reader is pointed at.
+        assertTrue(noisy.result.relativeDispersion > noiseFloorFor("OperatorThroughputBenchmark"))
     }
 
     @Test

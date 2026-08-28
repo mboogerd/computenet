@@ -6045,7 +6045,9 @@ Splitting a class's floor by `@Benchmark` method or by `@Param` would be a chang
 `classFloorStatistic`'s across-row fold — a decision to take on its own and in advance of
 the numbers it would produce, not one to reach for because this class's number came out
 inconvenient. The observation is recorded here; the redesign, if anyone wants it, is its
-own item.
+own item — filed as `computenet-x9e.18`, named here by `computenet-x9e.17` because that
+item edited this file anyway and the `akfa` reviewer had deliberately skipped a second full
+CI cycle for a one-line prose addition.
 
 **Raw artifacts.** `$HOME/computenet-runs/floor-derivations/FanOutScalingBenchmark/` on
 NL-MGD6FQJW91: `run{1,2,3}.csv` (the JMH results), `run{1,2,3}.log` (the run logs carrying
@@ -6075,3 +6077,131 @@ Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corr
 Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the class's rows. Robust within a row (one contaminated repeat cannot set a class's floor), conservative across rows (a reproducibly high-dispersion row is a fact about the class, not noise in it). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
 Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any per-class number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `FanOutScalingBenchmark` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.4762179191123049, so a later row above 0.953 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.4762179191123049 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class, about this class under a different annotation configuration, about this class on another host, or about this class under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
 Gathering window: all 3 unit(s) measured on ONE UTC day, 2026-08-28T00:01:11.787Z to 2026-08-28T00:31:55.286Z — the single `derivedOn` date describes this set.
+
+## 2026-08-28 — `OperatorThroughputBenchmark` gets its own per-class floor, 0.103 — the LAST class off the global fallback, and the clearest case for the estimator change (`computenet-x9e.17`)
+
+The fourth and final class in `CLASS_NOISE_FLOOR_DERIVATIONS`. With this entry **every
+benchmark class `ClassFloorDerivation`'s procedure names carries a floor derived from its
+own quiesced repeat runs, and nothing it names falls back to `NOISE_FLOOR` any more.** The
+fallback path is not dead — `SmokeBenchmark`, the class `NOISE_FLOOR` itself was derived
+from, still resolves globally, as would any class added later — but the defect this file's
+2026-08-21 review opened (`a bound a benchmark class cannot clear even when the host is
+silent`) is now closed for all four.
+
+**Method, unchanged from the pre-registered procedure.** Three sequential whole-class
+executions of `bench/build/libs/bench-jmh.jar` filtered to
+`civictech\.bench\.micro\.OperatorThroughputBenchmark`, at the class's OWN annotation
+configuration — `@BenchmarkMode(Throughput)`, `ops/s`, `@Fork(2)`, 5 warmup + 10
+measurement iterations of 1 s, `@OperationsPerInvocation(512)` — with no `-f`, `-wi`,
+`-i`, `-w`, `-r`, `-t` or `-bm` passed; the only flags on the command line were `-rf csv`
+and `-rff`. Each run produced the complete 72-row set (2 `@Benchmark` methods x 18
+`Subject` constants x 2 `Direction` constants) and took 00:37:11, 00:37:01 and 00:37:02 by
+its own JMH `# Run complete. Total time:` line. Host NL-MGD6FQJW91, 16 cores,
+`run-series.sh`'s gate threshold 4.00; the 1-minute load average attested immediately
+before the three invocations was 3.98, 3.99 and 3.28. The measuring JVM was launched by
+ABSOLUTE PATH
+(`/Users/merlijn/Library/Java/JavaVirtualMachines/corretto-21.0.5/Contents/Home/bin/java`),
+and each run's own log was checked afterwards with `grep -m1 -E '^# VM version'` — all
+three read `# VM version: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS`.
+
+**Run 1 was measured a slot earlier, as a calibration, and is ingested here unchanged.**
+The 2026-08-26 estimate for this class was ~48 min per run, and its sibling
+`FanOutScalingBenchmark` had just come in at half its own estimate, so the earlier
+dispatch measured one run under a decision gate — continue to runs 2 and 3 only if run 1
+took 30 minutes or less. At 00:37:11 it took the stop branch, nothing was entered on one
+run, and the artifacts were retained un-ingested. **The estimate was conservative by ~23%,
+not by the ~2x the sibling showed**: this class's own arithmetic in the bead (72 rows x 2
+forks x 15 s = 36 minutes of pure iteration) was the better guide and landed within a
+minute. Ingesting that run here was possible only because this item ran from the same
+commit its jar was stamped at (`551da80f4`); `FloorDerivationLedger` refuses a derivation
+spanning two harness shas, so had `main` moved under the branch first those artifacts would
+have BLOCKED the derivation rather than shortened it, and three fresh runs would have been
+the only route. Before ingesting, run 1's retained files were re-checked against the same
+evidence rules as a fresh run: banner, 72-row CSV, gate attestation at 3.98 against the
+4.00 threshold, and the jar stamp — and `calibration-run1.*` was confirmed byte-identical
+to `run1.*`, so no observation was counted twice.
+
+The three runs were accumulated through `FloorDerivationLedger` (`floorTool plan` /
+`ingest` / `render`), which checked the row set was COMPLETE against
+`EXPECTED_PLAN_ROW_COUNTS` — 72 rows x 3 observations = 216, no row short and no row over
+— and that the set spanned exactly one measuring JVM and one harness sha (`551da80f4`,
+read from the jar's own stamped `Harness-Commit-Sha` and checked at each ingest against
+the working tree HEAD). Each unit measured the whole class, so the record carries
+`DerivationAssembly.WholeClassRuns(runs = 3)`. At 72 rows this class had the strongest
+case of the four for `computenet-3omz`'s row-set decomposition — `floorTool plan`
+decomposes it into 18 units of 12 rows — and the decomposition was deliberately not used:
+the slot was dedicated and quiesced, so three whole-class runs cost three gate attestations
+instead of eighteen.
+
+**What the number is.** The statistic is 0.05106599919551368, the maximum over the class's
+72 per-row medians, and `ClassNoiseFloor.floor` computes 2.0 x it rounded up to three
+decimals, 0.103. Nothing in this entry was hand-entered. The ten highest per-row medians,
+which is where the statistic is decided:
+
+| row | observations (runs 1 / 2 / 3) | median |
+| --- | --- | --- |
+| `sim` INSERT LOOKUP_JOIN | 0.0514 / 0.0057 / 0.0511 | 0.05106599919551368 |
+| `sim` RETRACT UNION | 0.0246 / 0.0468 / 0.0509 | 0.04677761337788416 |
+| `real` INSERT UNION | 0.0275 / 0.0467 / 0.0562 | 0.04671765550789494 |
+| `sim` RETRACT LOOKUP_JOIN | 0.0383 / 0.0343 / 0.0085 | 0.03426931979719402 |
+| `real` INSERT QUORUM | 0.0350 / 0.0319 / 0.0328 | 0.032841695258971744 |
+| `real` INSERT FLAT_MAP | 0.0336 / 0.0054 / 0.0312 | 0.031168666437578672 |
+| `real` RETRACT SEMI_JOIN | 0.0308 / 0.0096 / 0.0506 | 0.03077215142532065 |
+| `sim` INSERT UNION | 0.0464 / 0.0191 / 0.0300 | 0.02996672152797996 |
+| `real` INSERT TAGGED_SET | 0.0088 / 0.0350 / 0.0299 | 0.029894963204872695 |
+| `real` RETRACT FLAT_MAP | 0.0263 / 0.0305 / 0.0138 | 0.026311460125371066 |
+
+**This class is the clearest measured case in the table for `computenet-3sua`'s change of
+estimator.** The single largest observation in the whole 216-observation set is 0.0720, and
+it belongs to a row that does not set the floor at all: `real` RETRACT COALESCING_COMBINE,
+whose other two repeats are 0.0153 and 0.0075 and whose median is therefore 0.0153. Under
+the maximum-over-every-observation estimator that one repeat would have set this class's
+floor at 0.144, single-handedly. The row that DOES set it, `sim` INSERT LOOKUP_JOIN, has
+two of its three repeats at ~0.051 — a reproducible property of the row rather than a
+moment — which is exactly the distinction `classFloorStatistic` was argued for, on
+robustness grounds, before any of these numbers existed.
+
+**The limit of 0.103, stated where the number is.** It is not a bound on the observations
+it was drawn from — 3 of the 216 exceed the statistic, the largest being the 0.0720 above —
+because a median does not bound its own sample. And it is LOOSE for an ordinary row of this
+class: the median of the 72 per-row medians is 0.011, only 10 of the 72 rows have a median
+above half the statistic, and no single observation anywhere in the set reaches 0.103. So a
+typical throughput row clears this floor by roughly an order of magnitude, and for such
+rows the floor detects little more than the global bound did — the same looseness recorded
+for `FanOutScalingBenchmark` (0.953) in milder form, and recorded for the same reason: it
+is what the pre-registered procedure yields, and narrowing it would be a change to
+`classFloorStatistic`'s across-row fold, to be decided on its own and in advance of the
+numbers it would produce. The class is at least ONE population, unlike the fan-out class:
+every row here runs under one annotation configuration, and the 72 medians span 0.0052 to
+0.0511, a factor of ten rather than 36. Nothing here says anything about this class under
+`-prof gc`, under a different fork or iteration count, on another host, or under a JVM
+other than the one named.
+
+**Why the global bound had to be replaced for this class too.** 210 of these 216
+observations exceed `NOISE_FLOOR` (0.005), and all 72 per-row medians do — the smallest
+median in the class is 0.0052. On a silent, dedicated machine the global bound therefore
+fired on essentially every row of every run and separated nothing, which is the failure
+`ClassFloorDerivation`'s "defect this exists to close" section predicted for this class
+specifically. It is now measured rather than predicted.
+
+**Raw artifacts.** `$HOME/computenet-runs/floor-derivations/OperatorThroughputBenchmark/`
+on NL-MGD6FQJW91: `run{1,2,3}.csv` (the JMH results), `run{1,2,3}.log` (the run logs
+carrying the `# VM version:` banners), `run{1,2,3}.gate` and `run{1,2,3}.load` (the gate
+poll traces and the attested 1-minute load readings), `ledger.txt` (the derivation ledger),
+`run1-driver.sh` and `run-driver.sh` (the gate-poll-then-invoke drivers), and
+`calibration-run1.{log,csv,gate}` (the earlier slot's byte-identical copies of run 1, kept
+as they were left). They are outside the repository and outside any worktree, so they
+survive this item; they are not backed up anywhere else.
+
+## 2026-08-28 — per-class noise floor for `OperatorThroughputBenchmark`, derived forward from its own quiesced repeat runs
+Harness: 551da80f4 · host state quiesced · 3 sequential repeat runs
+JMH: mode=Throughput unit=ops/s forks=2 warmup=5x1s measurement=10x1s opsPerInvocation=512 (the class's own annotation configuration)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| statistic (max over rows of the per-row MEDIAN relative dispersion) over all rows of all 3 runs | 0.05106599919551368 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x statistic, rounded up to three decimals | 0.103 |
+Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the class's rows. Robust within a row (one contaminated repeat cannot set a class's floor), conservative across rows (a reproducibly high-dispersion row is a fact about the class, not noise in it). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any per-class number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `OperatorThroughputBenchmark` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.05106599919551368, so a later row above 0.103 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.05106599919551368 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class, about this class under a different annotation configuration, about this class on another host, or about this class under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
+Gathering window: all 3 unit(s) measured on ONE UTC day, 2026-08-28T01:53:50.359Z to 2026-08-28T05:36:06.001Z — the single `derivedOn` date describes this set.
