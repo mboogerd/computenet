@@ -47,30 +47,56 @@ import java.util.UUID
  * refused. Arm (2) — refusing a wire-incapable module at load time — was NOT
  * chosen and is NOT implemented or asserted here.
  *
- * ## Honest limitation: `Peering.loopback`, not a live `WsTransport` socket
+ * ## What this proves, what it does not, and why that is the decided position
  *
- * The bead's governing text asks for the round trip "over WsTransport", the
- * literal mechanism `WsLateWireSerializersRoundTripTest` uses. That test lives
- * in `:wire` precisely because `civictech.loader.ModuleDependencyTest` (feature
- * computenet-051.1, already merged) asserts `:loader`'s test classpath carries
- * NO `:wire` fingerprint at all (`civictech.wire.WsTransport` must be
- * `ClassNotFoundException` from this module) and that `loader/build.gradle.kts`
- * declares no dependency on `:wire` — the whole point being that the dynamic
- * loader sits below the transport layer, not beside it. Adding a `:wire` test
- * dependency here to get a literal socket would break that already-merged
- * guardrail test, which sits outside this task's file claim.
+ * This test proves the **provenance** half of B13: a delta type whose `Class`
+ * exists only inside a jar's own [ModuleClassLoader] is encoded and decoded by
+ * the live [WireCodec], and survives a real `WireCodec.encode` → `ByteArray` →
+ * `WireCodec.decode` crossing between two different [ManagedHost]s, via
+ * [Peering.loopback].
  *
- * The available, equally-real substitute is [Peering.loopback]: the exact same
- * `BridgeEgressCell`/`BridgeIngressCell` pair and the exact same
- * [WireCodec.encode]/[WireCodec.decode] calls `WsTransport` itself sits on top
- * of (see `civictech.cell.wire.Peering.loopback`'s own KDoc and its many
- * `:kernel` callers, e.g. `civictech.cell.wire.RemoteAddressingTest`) — minus
- * the literal TCP/WebSocket bytes in between. What B13 is actually probing —
- * that a module's late-contributed delta type survives a real
- * `WireCodec.encode` → bytes → `WireCodec.decode` crossing between two
- * different [ManagedHost]s — holds here exactly as it would over a socket;
- * only the "over an actual live connection" half of "real :wire round-trip" is
- * reduced. Reported on the bead rather than silently substituted.
+ * It does NOT carry those bytes over a TCP/WebSocket hop. The **socket** half
+ * is proved separately by `civictech.wire.WsLateWireSerializersRoundTripTest`
+ * (`:wire`, computenet-051.6.2), where a late-contributed delta type crosses a
+ * live `WsTransport` connection.
+ *
+ * **Decision (bug computenet-06cn): the two halves together satisfy B13, and no
+ * composed jar-plus-socket test is owed.** The reasoning, so a later reader does
+ * not re-open it:
+ *
+ * 1. The two halves meet at a **type-agnostic byte boundary**. `WsTransport`
+ *    encodes and decodes nothing itself: it constructs the very same
+ *    `BridgeEgressCell` / `Peering.hostIngress` pair this test uses
+ *    (`WsTransport.kt:450`, `:1229`), whose `WireCodec.encode` /
+ *    `WireCodec.decodeFrame` calls are `BridgeCells.kt:62` / `:296`. The socket
+ *    carries an already-encoded, opaque `ByteArray`, and cannot discriminate on
+ *    the provenance of the type those bytes came from — so composing
+ *    "jar-sourced type" with "real socket" adds no reachable failure mode that
+ *    either half misses. `ByteArray` in equals `ByteArray` out is already proved
+ *    for arbitrary payloads by every other `:wire` test.
+ * 2. Nothing module-typed crosses the announcement path either. Fixture (h)
+ *    carries no `@Contract` and no `Cell`, and the ports above are erased
+ *    (`Propagate<Any>`), so only `:kernel` types appear in cell announcements.
+ * 3. The composed test has no architecturally sound host today. `:testkit` is
+ *    excluded by construction — it is a `testImplementation` of `:loader`, so a
+ *    `:wire` dependency there would put `civictech.wire.WsTransport` back on
+ *    `:loader`'s own test runtime classpath and redden [ModuleDependencyTest]'s
+ *    classpath check. `:wire` *could* host it (no guardrail forbids
+ *    `:wire -> :loader`), but that inverts the epic's stated dependency shape —
+ *    "applications (the `demo` modules, `inspect/`) add `:loader` when they want dynamic
+ *    loading" — by making the deliberately narrow transport module the loader's
+ *    first consumer in the repo (today it has none), and would couple
+ *    `wire/build.gradle.kts` to JAR1's fixture subprojects. A dedicated
+ *    integration module buys the same near-zero marginal coverage for a
+ *    permanent subproject.
+ *
+ * What genuinely remains uncovered is **two-JVM cross-loader wire identity**:
+ * the same jar loaded into two independent [ModuleClassLoader]s in two
+ * processes, where encode and decode no longer share one process-global
+ * [WireCodec]. That is a different scenario from B13 (which is about a late
+ * contribution reaching the codec at all), and is worth its own item if and when
+ * a demo takes on dynamic loading for real — at which point that demo, already a
+ * `:wire` consumer, is the natural host and the dependency edge costs nothing.
  */
 class B13ModuleWireSerializersTest {
 
