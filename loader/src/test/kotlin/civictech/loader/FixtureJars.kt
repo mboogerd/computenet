@@ -1,7 +1,6 @@
 package civictech.loader
 
 import civictech.nature.ContractModule
-import civictech.nature.ModuleId
 import civictech.nature.ModuleRegistration
 import java.io.File
 import java.util.jar.JarFile
@@ -85,7 +84,4 @@ internal object FixtureJars {
         }
         return Class.forName(fqn, true, classLoader).getDeclaredConstructor().newInstance() as ContractModule
     }
-
-    /** Owner ids the fixtures register under, for a defensive cleanup. */
-    fun unregisterQuietly(id: ModuleId) = runCatching { ModuleRegistration.unregister(id) }
 }
