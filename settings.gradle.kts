@@ -21,6 +21,18 @@ include(":oracle")
 include(":kernel")
 include(":concord")
 include(":wire")
+
+// JAR1 (epic computenet-051): the dynamic-jar loader, plus its fixture modules.
+// The fixtures are ordinary subprojects of THIS build rather than an included build,
+// because `buildsrc.convention.ksp-cell`'s `"ksp"(project(":gen"))` does not resolve
+// across an included-build boundary without dependency substitution — and the epic
+// (risk 051-R7) requires the fixture jars' META-INF/services entries to be real
+// generator output, never hand-assembled.
+include(":loader")
+include(":loader:fixtures:valid-basic")
+include(":loader:fixtures:util-a")
+include(":loader:fixtures:util-b")
+include(":loader:fixtures:smuggler")
 include(":identity")
 include(":inspect")
 include(":iroh")
