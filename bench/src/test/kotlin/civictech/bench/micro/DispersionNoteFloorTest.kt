@@ -135,11 +135,19 @@ class DispersionNoteFloorTest {
 
     /**
      * The default is the LIVE table, and since `computenet-ahn0` it is no longer empty:
-     * `CellFootprintBenchmark` carries a derived floor and everything else falls back.
-     * Both halves are asserted through the DEFAULT parameter — the synthetic `floors`
-     * table the tests above use proves the resolution *rule*, and only this test proves
-     * the rule is wired to the table the harness actually ships. A change that populated
-     * or dropped an entry would fail here, which is the point.
+     * `CellFootprintBenchmark` carries a derived floor and `OperatorThroughputBenchmark`
+     * falls back. Both halves are asserted through the DEFAULT parameter — the synthetic
+     * `floors` table the tests above use proves the resolution *rule*, and only this test
+     * proves the rule is wired to the table the harness actually ships.
+     *
+     * **What it does NOT pin**, stated because the sentence here used to over-claim it: it
+     * fails on a change to the two classes it names, and on nothing else. `computenet-akfa`
+     * added `BoundedReadBenchmark` and `FanOutScalingBenchmark` to the live table on
+     * 2026-08-28 and this test went on passing unchanged, correctly — the wiring it proves
+     * is class-agnostic, and the per-class pins on the live table's contents are
+     * `ClassNoiseFloorTest`'s (`noiseFloorFor("BoundedReadBenchmark") shouldBe 0.058`,
+     * `noiseFloorFor("FanOutScalingBenchmark") shouldBe 0.953`), asserted there over every
+     * entry rather than duplicated here.
      */
     @Test
     fun `the live table resolves the derived class to its own floor and the rest globally`() {
