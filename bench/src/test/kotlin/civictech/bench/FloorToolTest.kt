@@ -831,15 +831,14 @@ class FloorToolTest {
     }
 
     /**
-     * `computenet-eo9m` at the operator's surface. [FloorDerivationLedger.renderWarnings]
-     * is only useful if `render` actually prints its warning, and prints it ABOVE the
-     * block the operator pastes — the same place the partial-attestation warning lands, so
-     * an operator who has learned where warnings appear does not have to learn a second
-     * place. That ordering is a property of this command's output and no ledger-level test
-     * can see it.
+     * `computenet-eo9m` tried a WARNING here, printed above the block the operator pastes.
+     * `computenet-8rel` supersedes it at this same CLI surface: a warning next to a
+     * still-published sha does not stop the sha from being published, so `render` now
+     * refuses an all-v1 ledger outright — the caller never sees a block to paste at all,
+     * regardless of `--harness-sha`.
      */
     @Test
-    fun `render warns above the block when the published sha is attested by no unit`(
+    fun `render refuses an all-v1 ledger outright, naming the remedy, instead of publishing the typed sha`(
         @TempDir dir: File,
     ) {
         val ledger = startSyntheticLedger(File(dir, "ledger"))
@@ -848,8 +847,8 @@ class FloorToolTest {
                 dir, "run-${index + 1}", csv(syntheticRows.map { it to dispersion }), "aaaa111",
             ).first shouldBe 0
         }
-        // Downgraded to the v1 shape: no unit records a sha, so the caller's
-        // --harness-sha is the published provenance and nothing checks it.
+        // Downgraded to the v1 shape: no unit records a sha, so there is nothing to check
+        // a caller's --harness-sha against.
         ledger.file.writeText(
             ledger.file.readLines().joinToString("\n") { line ->
                 when {
@@ -865,12 +864,13 @@ class FloorToolTest {
             "--derived-on", "2026-08-27", "--harness-sha", "deadbeef", "--jmh-config", "x",
         )
 
-        // A warning, not a refusal — an in-flight v1 derivation still renders at exit 0.
-        code shouldBe 0
-        out shouldContain "WARNING: no unit"
-        out shouldContain "deadbeef"
-        (out.indexOf("WARNING: no unit") < out.indexOf("ClassNoiseFloor(")) shouldBe true
-        (out.indexOf("WARNING: no unit") < out.indexOf("--- findings.md block ---")) shouldBe true
+        code shouldBe 1
+        out shouldContain "REFUSED"
+        out shouldContain "recorded a harness sha"
+        out shouldContain "Re-measure"
+        out shouldContain "re-append"
+        out shouldNotContain "ClassNoiseFloor("
+        out shouldNotContain "--- findings.md block ---"
     }
 
     @Test
