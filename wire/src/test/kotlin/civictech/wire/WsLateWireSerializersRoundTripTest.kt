@@ -52,8 +52,29 @@ import java.util.UUID
  * endpoints run in one JVM, so a single process-global [WireCodec] serves
  * both encode and decode. This test proves a LATE contribution crossing a
  * REAL socket; it does not prove per-module isolation across independent
- * classloaders/JVMs — that is the separate fixture-(h) end-to-end task,
- * blocked on features .1/.3.
+ * classloaders/JVMs.
+ *
+ * ## This test is one half of B13; the other half lives in `:loader`
+ *
+ * The delta type here is a **test-source stand-in** for a module's type, not a
+ * type sourced from a real jar. The provenance half — a delta type whose
+ * `Class` exists only inside a loaded jar's own `ModuleClassLoader`, encoded and
+ * decoded by the live [WireCodec] across two `ManagedHost`s — is proved by
+ * `civictech.loader.B13ModuleWireSerializersTest` (`:loader`,
+ * computenet-051.6.4), which cannot live here or reach a socket there:
+ * `civictech.loader.ModuleDependencyTest` asserts `:wire` is absent from
+ * `:loader`'s build file and test runtime classpath.
+ *
+ * **Bug computenet-06cn decided that this decomposition satisfies B13** and that
+ * no composed jar-plus-socket test is owed — the two halves meet at a
+ * type-agnostic byte boundary, since `WsTransport` encodes nothing itself but
+ * constructs the same `BridgeEgressCell` / `Peering.hostIngress` pair
+ * (`WsTransport.kt:450`, `:1229`) whose `WireCodec` calls live in
+ * `BridgeCells.kt:62` / `:296`, and a socket cannot discriminate on the
+ * provenance of the opaque `ByteArray` it carries. The full reasoning, including
+ * why `:testkit` and `:wire` were both rejected as hosts for a composed test, is
+ * in `B13ModuleWireSerializersTest`'s KDoc — read it there before re-opening
+ * this.
  */
 class WsLateWireSerializersRoundTripTest {
 
