@@ -135,10 +135,10 @@ class DispersionNoteFloorTest {
 
     /**
      * The default is the LIVE table, and since `computenet-ahn0` it is no longer empty:
-     * `CellFootprintBenchmark` carries a derived floor and `OperatorThroughputBenchmark`
-     * falls back. Both halves are asserted through the DEFAULT parameter — the synthetic
-     * `floors` table the tests above use proves the resolution *rule*, and only this test
-     * proves the rule is wired to the table the harness actually ships.
+     * `CellFootprintBenchmark` carries a derived floor and `SmokeBenchmark` falls back.
+     * Both halves are asserted through the DEFAULT parameter — the synthetic `floors`
+     * table the tests above use proves the resolution *rule*, and only this test proves the
+     * rule is wired to the table the harness actually ships.
      *
      * **What it does NOT pin**, stated because the sentence here used to over-claim it: it
      * fails on a change to the two classes it names, and on nothing else. `computenet-akfa`
@@ -148,6 +148,13 @@ class DispersionNoteFloorTest {
      * `ClassNoiseFloorTest`'s (`noiseFloorFor("BoundedReadBenchmark") shouldBe 0.058`,
      * `noiseFloorFor("FanOutScalingBenchmark") shouldBe 0.953`), asserted there over every
      * entry rather than duplicated here.
+     *
+     * **The fallback half named `OperatorThroughputBenchmark` until 2026-08-28**, when
+     * `computenet-x9e.17` derived that class's floor and left every class the procedure
+     * names derived. It now names `SmokeBenchmark`, which is not a class awaiting a slot:
+     * `NOISE_FLOOR` was derived from it and `ClassFloorDerivation` deliberately does not
+     * name it, so the fallback branch keeps a live witness instead of one that expires the
+     * next time the table grows.
      */
     @Test
     fun `the live table resolves the derived class to its own floor and the rest globally`() {
@@ -184,11 +191,16 @@ class DispersionNoteFloorTest {
         reallyDispersed.describe() shouldNotContain "NOISE_FLOOR"
 
         // Not derived: still the global bound, and still named as the global bound.
+        // `SmokeBenchmark` rather than `OperatorThroughputBenchmark`, which this half named
+        // until `computenet-x9e.17` derived that class's floor (0.103) on 2026-08-28 and
+        // completed the table. `SmokeBenchmark` is the durable witness: `NOISE_FLOOR` was
+        // derived FROM it, and `ClassFloorDerivation`'s procedure deliberately does not
+        // name it, so it is not a class awaiting a slot.
         val fallback = DispersionNote(
-            label = "UNION insert",
+            label = "baseline",
             drive = Drive.REAL,
             result = rowAt(0.02),
-            benchmarkClass = "OperatorThroughputBenchmark",
+            benchmarkClass = "SmokeBenchmark",
         )
         fallback.floor shouldBe NOISE_FLOOR
         fallback.describe() shouldContain "above the harness sanity bound NOISE_FLOOR"

@@ -232,13 +232,31 @@ class ClassNoiseFloorTest {
      * than repairing it. The pin below therefore protects a number nobody should be
      * tempted to tidy: any change to it has to come from three new quiesced runs or from a
      * deliberate, separately decided change to `classFloorStatistic`'s across-row fold.
+     *
+     * `OperatorThroughputBenchmark` was added by `computenet-x9e.17` (2026-08-28, three
+     * whole-class runs at `551da80f4`) and completes the table: **every class the
+     * procedure names now carries its own floor**, which is why the fallback half of this
+     * test names `SmokeBenchmark` rather than a procedure class. That substitution is the
+     * point of the half, not a weakening of it — the resolution rule has to keep working
+     * for a class with no derivation, and if the only witness were a class the table
+     * happens not to hold yet, the half would evaporate the day the table filled up.
      */
     @Test
-    fun `three class floors are derived, and every other class still falls back`() {
+    fun `four class floors are derived, and every other class still falls back`() {
         CLASS_NOISE_FLOOR_DERIVATIONS.map { it.benchmarkClass } shouldBe
-            listOf("CellFootprintBenchmark", "BoundedReadBenchmark", "FanOutScalingBenchmark")
+            listOf(
+                "CellFootprintBenchmark",
+                "BoundedReadBenchmark",
+                "FanOutScalingBenchmark",
+                "OperatorThroughputBenchmark",
+            )
         CLASS_NOISE_FLOOR_TABLE.keys shouldBe
-            setOf("CellFootprintBenchmark", "BoundedReadBenchmark", "FanOutScalingBenchmark")
+            setOf(
+                "CellFootprintBenchmark",
+                "BoundedReadBenchmark",
+                "FanOutScalingBenchmark",
+                "OperatorThroughputBenchmark",
+            )
 
         // Everything true of EVERY derived entry, asserted over the whole list rather
         // than over one of them: a rule stated about the table must not quietly become a
@@ -284,10 +302,25 @@ class ClassNoiseFloorTest {
         noiseFloorFor("FanOutScalingBenchmark") shouldBe 0.953
         noiseFloorFor("FanOutScalingBenchmark") shouldNotBe NOISE_FLOOR
 
-        // The one class the procedure names that has NOT been derived. It falls
-        // back, and the fallback is the honest state, not a gap to fill by analogy.
+        val throughput =
+            CLASS_NOISE_FLOOR_DERIVATIONS.single {
+                it.benchmarkClass == "OperatorThroughputBenchmark"
+            }
+        throughput.observedRobustDispersion shouldBe 0.05106599919551368
+        // 2 x 0.05106599919551368 = 0.10213199…, rounded UP to 0.103.
+        noiseFloorFor("OperatorThroughputBenchmark") shouldBe 0.103
+        // 210 of this class's 216 observations, and all 72 of its row medians, exceed the
+        // global bound — the "distinguishes nothing" failure at its most pronounced.
+        noiseFloorFor("OperatorThroughputBenchmark") shouldNotBe NOISE_FLOOR
+
+        // The fallback path is NOT dead now that every class the procedure names is
+        // derived: a class outside the table still resolves globally, which is what keeps
+        // `hasClassFloor` a statement about provenance rather than about membership of a
+        // list that happens to be complete today. `SmokeBenchmark` is the real, live
+        // instance — `NOISE_FLOOR` was derived FROM it, and the procedure deliberately
+        // does not name it.
         for (undrived in listOf(
-            "OperatorThroughputBenchmark",
+            "SmokeBenchmark",
         )) {
             hasClassFloor(undrived) shouldBe false
             noiseFloorFor(undrived) shouldBe NOISE_FLOOR
