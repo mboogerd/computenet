@@ -54,8 +54,10 @@ interface OrMapApi<K, V> {
  * - `[24-TMAP-02]` [membership] is add-wins: a key is present iff it has at
  *   least one live dot.
  * - `[24-TMAP-03]` [value] is the value of the live dot with the greatest
- *   `(counter, sourceId)` order. **No wall clock participates**, here or in
- *   the delta.
+ *   `(counter, sourceId)` order, unless every live dot's value is a
+ *   [civictech.cell.MergeablePayload] and there is more than one, in which
+ *   case it is their fold in that same order (96 §E1.4). **No wall clock
+ *   participates**, here or in the delta.
  * - `[24-TMAP-04]` [MapOps.remove] is reset-remove: it tombstones exactly the
  *   dots it observed live at the key, so a concurrent put's dot — which this
  *   remove never observed — survives the merge as the key's remaining value.
@@ -90,9 +92,12 @@ interface OrMapApi<K, V> {
  * source's dots can never resurrect a key. `SetCell` is the element-shaped
  * sibling of every one of those seams; this is the dot-shaped form.
  *
- * Embedded mergeable values (96 §E1.4), `TaggedMapView`/`UntagCell` adapters
- * (§E1.5), multi-value reads, and delivered-watermark tracking
- * ([civictech.cell.data.delta.DeliveryTracking], E3.3) are not here.
+ * Embedded mergeable values fold at [value] and [values] exposes every live
+ * dot for application-side resolution (96 §E1.4) — see [TaggedMapDelta.value]
+ * for the fold rule. Not here: the admission check refusing non-idempotent
+ * embedded values (separate follow-on work), `TaggedMapView`/`UntagCell`
+ * adapters (§E1.5), and delivered-watermark tracking
+ * ([civictech.cell.data.delta.DeliveryTracking], E3.3).
  */
 class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     OrMapCellBase<K, V>(ref), Stateful, Replicable<TaggedMapDelta<K, V>> {
@@ -193,12 +198,23 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     }
 
     /**
-     * `[24-TMAP-03]` the key's exposed value: the live dot with the greatest
-     * `(counter, sourceId)` order ([TaggedMapDelta.DOT_ORDER]) — never wall
-     * clock. `null` when the key is absent.
+     * `[24-TMAP-03]`/`[KE1-01..03,06,07]` the key's exposed value — delegated
+     * to [TaggedMapDelta.value] over a one-key delta view of this cell's live
+     * dots, so the fold/pick logic has exactly one implementation
+     * ([KE1-08], j2x.1-D4) and this cell can never disagree with the delta
+     * type it emits. `null` when the key is absent.
      */
-    fun value(key: K): V? =
-        liveDots(key).entries.maxWithOrNull(compareBy(TaggedMapDelta.DOT_ORDER) { it.key })?.value
+    fun value(key: K): V? {
+        val dots = liveDots(key)
+        if (dots.isEmpty()) return null
+        return TaggedMapDelta(puts = mapOf(key to dots)).value(key)
+    }
+
+    /**
+     * `[KE1-06]`/`[KE1-07]` every live dot's value at [key] — the empty set
+     * when the key is absent. Delegated the same way as [value].
+     */
+    fun values(key: K): Set<V> = liveDots(key).values.toSet()
 
     /**
      * This cell's whole dot state as one delta-from-empty, tombstones
