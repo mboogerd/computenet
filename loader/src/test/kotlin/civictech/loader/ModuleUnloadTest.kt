@@ -11,6 +11,7 @@ import civictech.nature.ContractRegistry
 import civictech.nature.ModuleId
 import civictech.nature.ModuleRegistration
 import civictech.nature.ProtocolRegistry
+import civictech.nature.RegistrationRefusedException
 import civictech.testkit.awaitUntil
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
@@ -19,6 +20,7 @@ import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.util.UUID
@@ -209,7 +211,13 @@ class ModuleUnloadTest {
     // ------------------------------------------------------------------
 
     /**
-     * A genuinely **partial** removal, expressed entirely through public API.
+     * A genuinely **partial** removal, expressed entirely through public API, and
+     * **one-shot**: the first call leaves the registries in exactly the state a
+     * real part-way removal leaves them in and then throws; every call after
+     * that delegates to the real [ModuleRegistration.unregister]. The two-call
+     * shape is what lets a *second* `unload()` on the same loader and the same,
+     * already-restored handle drive the real success path through `unload()`
+     * itself, instead of a hand-rolled bookkeeping helper standing in for it.
      *
      * `ContractRegistry.removeOwner` / `ProtocolRegistry.removeOwner` /
      * `ProxyRegistry.removeOwner` are all `internal` to `:nature`, so a `:loader`
@@ -221,10 +229,18 @@ class ModuleUnloadTest {
      * UNL-07 has to recover from, produced without weakening `:nature`'s
      * visibility.
      */
-    private fun partialRemovalThenThrow(contractModules: List<ContractModule>): (ModuleId) -> Unit = { id ->
-        ModuleRegistration.unregister(id)
-        ModuleRegistration.register(owner = id, contractModules = contractModules, proxyModules = emptyList())
-        throw IllegalStateException("injected: registry removal failed after dropping the proxy table")
+    private fun partialRemovalOnceThenReal(contractModules: List<ContractModule>): (ModuleId) -> Unit {
+        var fired = false
+        return { id ->
+            if (!fired) {
+                fired = true
+                ModuleRegistration.unregister(id)
+                ModuleRegistration.register(owner = id, contractModules = contractModules, proxyModules = emptyList())
+                throw IllegalStateException("injected: registry removal failed after dropping the proxy table")
+            } else {
+                ModuleRegistration.unregister(id)
+            }
+        }
     }
 
     @Test
@@ -241,7 +257,7 @@ class ModuleUnloadTest {
         val loader = ModuleLoader(
             acceptedLocations = setOf(jar.toPath().toAbsolutePath().normalize().parent),
             observe = {},
-            unregister = partialRemovalThenThrow(contractModules),
+            unregister = partialRemovalOnceThenReal(contractModules),
         )
         val handle = loader.load(jar)
         var unloaded = false
@@ -269,17 +285,18 @@ class ModuleUnloadTest {
                 loader.loaded() shouldContain handle
             }
 
-            // A subsequent CLEAN unload succeeds: same loader, real removal seam.
-            val clean = ModuleLoader(acceptedLocations = loader.acceptedLocations, observe = {})
-            // The clean loader must own the handle to unload it, so drive the real
-            // seam through this loader's own path instead: unregister + close, then
-            // re-verify by loading afresh through `clean`.
-            loader.unloadWithRealSeam(handle)
+            // A subsequent CLEAN unload succeeds through unload() itself, on the
+            // SAME loader and the SAME handle that was just restored: the seam
+            // above is one-shot, so this second call delegates to the real
+            // ModuleRegistration.unregister rather than throwing again.
+            loader.unload(handle)
             unloaded = true
 
             handle.state shouldBe ModuleState.CLOSED
             ContractRegistry.descriptor(api) shouldBe null
+            loader.loaded() shouldBe emptyList()
 
+            val clean = ModuleLoader(acceptedLocations = loader.acceptedLocations, observe = {})
             val reloaded = clean.load(jar)
             try {
                 ContractRegistry.descriptor(reloaded.classLoader.loadClass(GREETING_API)) shouldNotBe null
@@ -294,18 +311,84 @@ class ModuleUnloadTest {
         }
     }
 
+    // ------------------------------------------------------------------
+    // [JAR1-UNL-07], AMENDED 2026-08-28 — removal fails AND the restore
+    // itself fails: neither failure is swallowed, and the handle is left
+    // QUIESCING rather than falsely reported REGISTERED.
+    // ------------------------------------------------------------------
+
     /**
-     * The failing-seam loader above cannot perform a clean unload through itself —
-     * its seam always throws. This drives the real removal and the same
-     * bookkeeping the success path does, so the "a subsequent clean unload
-     * succeeds" assertion is about the module's *state*, not about re-plumbing the
-     * loader.
+     * Makes the restore that UNL-07 attempts after a removal failure fail too.
+     *
+     * The seam first performs a genuine, full removal of [id]'s own
+     * registrations (mirroring a real part-way failure: something *was*
+     * removed before the failure). It then registers [conflictingModule] under
+     * a *different* owner, occupying the same [civictech.nature.ContractDescriptor.contractId]
+     * with a non-equal descriptor — as if another registration raced in before
+     * the restore could run. `ContractRegistry.stage` conflicts on exactly
+     * that: a live, non-equal descriptor for the same contract id. So when
+     * `ModuleLoader.unload`'s catch block tries to restore [id]'s retained
+     * tables, `ModuleRegistration.register` throws [RegistrationRefusedException]
+     * — the restore failure UNL-07 must addSuppress rather than swallow.
      */
-    private fun ModuleLoader.unloadWithRealSeam(handle: ModuleHandle) {
-        ModuleRegistration.unregister(handle.id)
-        handle.state = ModuleState.UNREGISTERED
-        handle.classLoader.close()
-        handle.state = ModuleState.CLOSED
+    private fun removalSucceedsButRestoreCollides(
+        conflictingModule: ContractModule,
+        conflictingOwner: ModuleId,
+    ): (ModuleId) -> Unit = { id ->
+        ModuleRegistration.unregister(id)
+        ModuleRegistration.register(owner = conflictingOwner, contractModules = listOf(conflictingModule), proxyModules = emptyList())
+        throw IllegalStateException("injected: registry removal failed part-way")
+    }
+
+    @Test
+    fun `if the restore also fails, the removal failure is rethrown with the restore suppressed and the handle stays QUIESCING`() {
+        val jar: File = FixtureJars.validBasic
+        val probe = FixtureJars.loaderAccepting(jar)
+        val probeHandle = probe.load(jar)
+        val originalModule = FixtureJars.contractModuleIn(jar, probeHandle.classLoader)
+        val originalContract = originalModule.contracts.single()
+        probe.unload(probeHandle)
+
+        // Same contractId, a different fqn: non-equal by `data class` equality,
+        // so re-registering the original under it later conflicts.
+        val conflictingOwner = ModuleId("computenet-051.4.5-conflicting-owner")
+        val conflictingModule = object : ContractModule {
+            override val contracts = listOf(originalContract.copy(fqn = originalContract.fqn + ".Conflicting"))
+        }
+
+        val loader = ModuleLoader(
+            acceptedLocations = setOf(jar.toPath().toAbsolutePath().normalize().parent),
+            observe = {},
+            unregister = removalSucceedsButRestoreCollides(conflictingModule, conflictingOwner),
+        )
+        val handle = loader.load(jar)
+        try {
+            val failure = shouldThrow<ModuleUnloadFailedException> { loader.unload(handle) }
+
+            withClue("neither failure is swallowed: removal is the cause, restore rides suppressed") {
+                failure.restored shouldBe false
+                failure.cause.shouldNotBeNull().message.shouldNotBeNull() shouldContain "injected"
+                val suppressed = failure.cause!!.suppressed
+                suppressed.size shouldBe 1
+                withClue("the suppressed throwable is the restore's own refusal, naming the collision") {
+                    suppressed.single().shouldBeInstanceOf<RegistrationRefusedException>()
+                    suppressed.single().message.shouldNotBeNull() shouldContain "collision"
+                }
+            }
+            withClue("AMENDED UNL-07: a failed restore must NOT claim REGISTERED — the handle stays QUIESCING") {
+                handle.state shouldBe ModuleState.QUIESCING
+            }
+            withClue("and this loader still lists the handle: neither UNREGISTERED nor CLOSED happened") {
+                loader.loaded() shouldContain handle
+            }
+            withClue("the classloader was never closed") {
+                handle.classLoader.loadClass(GREETING_CELL) shouldNotBe null
+            }
+        } finally {
+            runCatching { ModuleRegistration.unregister(conflictingOwner) }
+            runCatching { ModuleRegistration.unregister(handle.id) }
+            handle.classLoader.close()
+        }
     }
 
     // ------------------------------------------------------------------
