@@ -272,6 +272,46 @@ class ModuleLoadFailureTest {
         }
     }
 
+    /**
+     * The KDoc's step 7 states that when *both* post-commit callbacks throw, the
+     * first throwable is rethrown and the second is attached to it with
+     * [Throwable.addSuppressed]. Neither of the tests above reaches that arm —
+     * each leaves the other callback well-behaved — so it is checked here, the
+     * same way [ModuleUnloadTest] checks [JAR1-UNL-07]'s suppressed restore
+     * failure. The expected strings are the literals thrown below; nothing here
+     * recomputes them from production code.
+     */
+    @Test
+    fun `when both post-commit callbacks throw, the first is rethrown and the second rides suppressed`() {
+        val jar = FixtureJars.validBasic
+        val loader = ModuleLoader(
+            acceptedLocations = setOf(jar.toPath().toAbsolutePath().normalize().parent),
+            observe = { throw IllegalStateException("observe exploded") },
+            onWireSerializers = { _, _ -> throw IllegalStateException("onWireSerializers exploded") },
+        )
+
+        val thrown = shouldThrow<IllegalStateException> { loader.load(jar) }
+        val handle = loader.loaded().singleOrNull()
+        try {
+            withClue("onWireSerializers runs first, so its throwable is the one the caller sees") {
+                thrown.message shouldBe "onWireSerializers exploded"
+            }
+            withClue("the observation still ran, and its failure is not lost") {
+                thrown.suppressed.map { it.message } shouldBe listOf("observe exploded")
+            }
+            withClue("and the commit survives both") {
+                handle shouldNotBe null
+                handle!!.state shouldBe ModuleState.REGISTERED
+                ModuleClassLoader.openLoaders shouldContain handle.classLoader
+            }
+        } finally {
+            handle?.let {
+                ModuleRegistration.unregister(it.id)
+                it.classLoader.close()
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // B2 — the anti-reflection tripwire [JAR1-DISC-03]
     // ------------------------------------------------------------------
