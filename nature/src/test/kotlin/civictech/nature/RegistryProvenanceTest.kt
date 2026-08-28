@@ -35,6 +35,15 @@ interface ProbeShredProxied { fun shredProxied(value: Long) }
 /** A real class so its name can back a [CellDescriptor] and be looked up via [ContractRegistry.cellDescriptor]. */
 interface ProbeCellHost
 
+/** computenet-051.5.1: cell fqn contributed with a recorded loader. */
+interface ProbeCellLoaded
+
+/** computenet-051.5.1: cell fqn contributed via the pre-051.5.1 no-loader path. */
+interface ProbeCellNoLoader
+
+/** computenet-051.5.1: HOST-then-module ordering for [ContractRegistry.cellLoader]. */
+interface ProbeCellLoaderHostFallback
+
 /** computenet-b7fr: module-then-module cell repoint probe. */
 interface ProbeCellRepoint
 
@@ -802,5 +811,83 @@ class RegistryProvenanceTest {
         } finally {
             ModuleRegistration.unregister(owner)
         }
+    }
+
+    /**
+     * computenet-051.5.1: [ModuleRegistration.register]'s new `loader` parameter
+     * is threaded through to [ContractRegistry.cellLoader], and [unregister]
+     * drops it again — the read surface the loader-agnostic
+     * `Class.forName(descriptor.fqn)` sites (ObservationsCompletenessTest,
+     * ManifestDriftTest) now resolve through.
+     */
+    @Test
+    fun `cellLoader answers the recorded loader and forgets it on unregister`() {
+        val owner = ModuleId("cell-loader-recorded")
+        val fakeLoader = object : ClassLoader(ProbeCellLoaded::class.java.classLoader) {}
+        val cell = CellDescriptor(fqn = ProbeCellLoaded::class.java.name, color = CellColor.PURE)
+        ModuleRegistration.register(
+            owner = owner,
+            contractModules = listOf(moduleOf(cells = listOf(cell))),
+            loader = fakeLoader,
+        )
+        try {
+            assertEquals(
+                fakeLoader,
+                ContractRegistry.cellLoader(cell.fqn),
+                "the module's recorded loader must resolve for its own cell fqn",
+            )
+        } finally {
+            ModuleRegistration.unregister(owner)
+        }
+        assertNull(
+            ContractRegistry.cellLoader(cell.fqn),
+            "unregister must drop the recorded loader along with the cell contribution",
+        )
+    }
+
+    /**
+     * computenet-051.5.1: `loader` defaults to `null`, so every pre-existing
+     * caller of [ModuleRegistration.register] (and [ContractRegistry.register]
+     * directly, which has no `loader` parameter at all) compiles and behaves
+     * unmodified — `cellLoader` answers `null` and callers fall back to their
+     * own loader.
+     */
+    @Test
+    fun `cellLoader answers null when no contributor recorded a loader`() {
+        val owner = ModuleId("cell-loader-unrecorded")
+        val cell = CellDescriptor(fqn = ProbeCellNoLoader::class.java.name, color = CellColor.PURE)
+        ModuleRegistration.register(owner = owner, contractModules = listOf(moduleOf(cells = listOf(cell))))
+        try {
+            assertNull(
+                ContractRegistry.cellLoader(cell.fqn),
+                "no caller recorded a loader for this contributor — must fall back, not fabricate one",
+            )
+        } finally {
+            ModuleRegistration.unregister(owner)
+        }
+    }
+
+    /**
+     * computenet-051.5.1: [ModuleId.HOST] resolves to
+     * `ContractModule::class.java.classLoader` without ever needing a recorded
+     * entry — the init-time ServiceLoader scan never calls
+     * [ModuleRegistration.register], so nothing records HOST's loader, yet
+     * `cellLoader` must still answer for a HOST-attributed cell fqn.
+     */
+    @Test
+    fun `cellLoader resolves HOST without a recorded entry`() {
+        val cell = CellDescriptor(fqn = ProbeCellLoaderHostFallback::class.java.name, color = CellColor.PURE)
+        // Default owner is HOST, via ContractRegistry's own single-module seam —
+        // the same attribution the init-time scan gets. HOST is deliberately not
+        // unregisterable (see `host attribution is refused unregistration and
+        // survives`), so — like that test and `b7fr host-then-module cell
+        // repoint reverses on unregister` above — this HOST contribution is not
+        // cleaned up; it is permanent by design.
+        ContractRegistry.register(moduleOf(cells = listOf(cell)))
+        assertEquals(
+            ContractModule::class.java.classLoader,
+            ContractRegistry.cellLoader(cell.fqn),
+            "HOST must resolve via ContractModule's own loader, not null",
+        )
     }
 }

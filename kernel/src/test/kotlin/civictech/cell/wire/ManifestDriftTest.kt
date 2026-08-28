@@ -22,7 +22,9 @@ class ManifestDriftTest {
     @Test
     fun `declared manifest equals the installed marker scan for every registered cell`() {
         val checked = ContractRegistry.cells.mapNotNull { descriptor ->
-            val clazz = runCatching { Class.forName(descriptor.fqn) }.getOrNull() ?: return@mapNotNull null
+            val clazz = runCatching {
+                Class.forName(descriptor.fqn, true, ContractRegistry.cellLoader(descriptor.fqn) ?: javaClass.classLoader)
+            }.getOrNull() ?: return@mapNotNull null
             descriptor.fqn to (descriptor.manifest to manifestOf(clazz))
         }
         // sanity: the scan actually reached the durable/replicated/partitioned cells
