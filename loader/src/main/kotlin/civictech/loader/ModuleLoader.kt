@@ -554,6 +554,7 @@ class ModuleLoader(
                 owner = handle.id,
                 contractModules = contractModules,
                 proxyModules = proxyModules,
+                loader = loader,
             )
             handle.state = ModuleState.REGISTERED
 
@@ -654,6 +655,7 @@ class ModuleLoader(
                     owner = handle.id,
                     contractModules = handle.contractModules,
                     proxyModules = handle.proxyModules,
+                    loader = handle.classLoader,
                 )
                 true
             } catch (restore: Throwable) {

@@ -117,10 +117,18 @@ object ModuleRegistration {
      * ProxyRegistry under one lock. Any conflict leaves all three byte-for-byte
      * unchanged and throws [RegistrationRefusedException].
      */
+    /**
+     * [loader] is the owning module's [ClassLoader], recorded against [owner] so
+     * [ContractRegistry.cellLoader] can later answer "which loader resolves this
+     * cell fqn" (computenet-051.5.1). Defaulted `null` so every pre-existing
+     * caller — concord's `KernelAdapters`, kernel tests — compiles and behaves
+     * unmodified; [ModuleId.HOST] never needs one recorded either way.
+     */
     fun register(
         owner: ModuleId,
         contractModules: List<ContractModule> = emptyList(),
         proxyModules: List<ProxyModule> = emptyList(),
+        loader: ClassLoader? = null,
     ): ValidationReport {
         ensureRegistriesInitialized()
         return synchronized(RegistryMutation.lock) {
@@ -131,6 +139,7 @@ object ModuleRegistration {
                 ProtocolRegistry.commit(module.protocols, owner)
             }
             proxyModules.forEach { ProxyRegistry.commit(it, owner) }
+            ContractRegistry.recordLoader(owner, loader)
             report
         }
     }
@@ -149,6 +158,7 @@ object ModuleRegistration {
             ContractRegistry.removeOwner(owner)
             ProtocolRegistry.removeOwner(owner)
             ProxyRegistry.removeOwner(owner)
+            ContractRegistry.dropLoader(owner)
         }
     }
 
