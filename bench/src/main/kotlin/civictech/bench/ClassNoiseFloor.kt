@@ -550,7 +550,12 @@ data class ClassNoiseFloor(
  * **`CellFootprintBenchmark`'s retained observations are `computenet-7v7m`'s
  * `cellfootprint-{1,2,3}.json`, NOT a ledger under `$HOME/computenet-runs/floor-derivations/`
  * (`computenet-xppx`, 2026-08-28).** Unlike the other three classes in this table, this
- * class has no `FloorDerivationLedger` behind its number — see its `assembly` field below.
+ * class has no `FloorDerivationLedger` behind its number. **The `assembly` field does not
+ * say so** — all four entries read `WholeClassRuns(runs = 3)`, because the other three were
+ * *whole-class* runs that happened to be accumulated through a ledger; what distinguishes
+ * this entry is that its own KDoc names JMH JSONs as its inputs, and that its
+ * `doc/bench/findings.md` entry carries no **Raw artifacts** paragraph — where each of the
+ * other three has one naming a `floor-derivations/<Class>/` directory.
  * A directory named `floor-derivations/CellFootprintBenchmark/` may exist on a given
  * machine and even look complete (right row count, single JVM, v1 ledger format), but it
  * is not the input to this entry: it was observed on MacBoo (NL-MGD6FQJW91) on 2026-08-28
