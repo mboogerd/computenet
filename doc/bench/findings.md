@@ -5863,6 +5863,19 @@ re-derivation and its provenance section remains the record of the JBR-25 defect
 derived under this same estimator when they are derived; nothing about them is decided
 here.
 
+**This class has no "Raw artifacts" ledger, unlike the three below (`computenet-xppx`,
+2026-08-28).** `BoundedReadBenchmark`, `FanOutScalingBenchmark` and
+`OperatorThroughputBenchmark` were each accumulated through `FloorDerivationLedger` and
+each names a `$HOME/computenet-runs/floor-derivations/<Class>/` directory as its raw
+artifacts below. `CellFootprintBenchmark` was not: its inputs are `computenet-7v7m`'s
+`cellfootprint-{1,2,3}.json`, named above and in `ClassNoiseFloor.kt`'s own KDoc, and
+nothing under `floor-derivations/`. A `floor-derivations/CellFootprintBenchmark/`
+directory has nonetheless been observed to exist on one machine (MacBoo, NL-MGD6FQJW91,
+2026-08-28), holding `computenet-3omz.4`'s unrelated ledger-machinery exercise (harness
+sha `5a2fdccfd`) — complete, well-formed, and the right row count, but folding to 0.485
+under `classFloorStatistic`, not the 0.398 above. It is not this class's raw artifacts and
+must not be read as such by a future re-derivation.
+
 **What the number is.** The row that sets the floor is the same one that set it before:
 `realSnapshot` OR_MAP_CELL at `N1E5`, measured 0.5218 / 0.1186 / 0.1986 across runs
 1 / 2 / 3. Under the maximum it contributed 0.5218 — its single worst repeat, about 2.6x
