@@ -617,44 +617,49 @@ class FloorDerivationLedgerTest {
     }
 
     @Test
-    fun `a v1 ledger renders on the operator's authority, since no unit can attest a sha`(
+    fun `a v1 ledger's render is refused whether or not the operator supplies a sha`(
         @TempDir dir: File,
     ) {
         val ledger = completeLedger(dir)
         downgradeToV1(ledger)
         val reloaded = FloorDerivationLedger.load(dir, syntheticCounts)
 
-        reloaded.render("2026-08-27", "abcdef012", "cfg").harnessCommitSha shouldBe "abcdef012"
-        // ... and refuses when the operator supplies nothing, rather than publishing an
-        // empty provenance field.
         shouldThrow<FloorLedgerException> { reloaded.render("2026-08-27", null, "cfg") }
             .message!! shouldContain "recorded a harness sha"
+        // Supplying one does not help: this is the computenet-8rel fix. A caller-typed
+        // --harness-sha for an all-v1 ledger is not attestation — nothing in the ledger
+        // corroborates it — so render() refuses outright rather than publish it, naming the
+        // remedy.
+        val refused = shouldThrow<FloorLedgerException> {
+            reloaded.render("2026-08-27", "abcdef012", "cfg")
+        }
+        refused.message!! shouldContain "recorded a harness sha"
+        refused.message!! shouldContain "Re-measure"
+        refused.message!! shouldContain "re-append"
     }
 
     /**
-     * `computenet-eo9m`: the one path where the published sha is attested by NOTHING. An
-     * all-v1 ledger has no unit to check the caller's `--harness-sha` against, so
-     * [FloorDerivationLedger.render] publishes it unchecked on the operator's authority
-     * alone (the previous test) — but that publication must be flagged, the same way a
-     * PARTIAL attestation already is. Before this fix, [FloorDerivationLedger.renderWarnings]
-     * was guarded by `unattested.isNotEmpty() && harnessShas().isNotEmpty()`, which is
-     * false here because `harnessShas()` is empty when EVERY unit is unattested, so the
-     * block carried no WARNING at all — the pre-tdby defect, surviving on this one narrow
-     * path.
+     * `computenet-eo9m` tried a WARNING here — [FloorDerivationLedger.render] published a
+     * caller-typed `--harness-sha` for an all-v1 ledger unchecked, and
+     * [FloorDerivationLedger.renderWarnings] flagged the publication after the fact.
+     * `computenet-8rel` supersedes that: a warning next to a still-published number does not
+     * stop the number from being published, and that is exactly how a superseded
+     * measurement set (`computenet-3omz.4`'s `CellFootprintBenchmark` ledger, folding to
+     * 0.485 against a published 0.398 — `computenet-xppx`) can acquire a current-looking
+     * provenance line. `render` now refuses instead (the previous test), so there is no
+     * successful render left here for `renderWarnings()` to warn about.
      */
     @Test
-    fun `an all-v1 ledger rendered with a supplied harness sha is warned about, not silently published`(
+    fun `an all-v1 ledger leaves nothing for renderWarnings to warn about, because render refused`(
         @TempDir dir: File,
     ) {
         val ledger = completeLedger(dir)
         downgradeToV1(ledger)
         val reloaded = FloorDerivationLedger.load(dir, syntheticCounts)
 
-        reloaded.render("2026-08-27", "deadbeef", "cfg").harnessCommitSha shouldBe "deadbeef"
+        shouldThrow<FloorLedgerException> { reloaded.render("2026-08-27", "deadbeef", "cfg") }
 
-        val warning = reloaded.renderWarnings().single()
-        warning shouldContain "deadbeef"
-        warning shouldContain "no unit"
+        reloaded.renderWarnings() shouldBe emptyList()
     }
 
     /**
@@ -671,14 +676,17 @@ class FloorDerivationLedgerTest {
     fun `a render refused by the record's own require() leaves nothing for renderWarnings to warn about`(
         @TempDir dir: File,
     ) {
+        // A v1 ledger no longer reaches ClassNoiseFloor's own checks at all — render()
+        // refuses at resolveHarnessSha first (computenet-8rel) — so this scenario now needs
+        // an ATTESTED ledger: one whose sha resolves cleanly, leaving derivedOn as the only
+        // thing left to refuse on.
         val ledger = completeLedger(dir)
-        downgradeToV1(ledger)
         val reloaded = FloorDerivationLedger.load(dir, syntheticCounts)
 
         // A blank derivedOn passes every one of render()'s own checks — the row set is
-        // complete, one JVM, and the sha resolves on the operator's authority — and is
+        // complete, one JVM, and the sha resolves to the units' own attestation — and is
         // refused only inside ClassNoiseFloor's constructor.
-        shouldThrow<IllegalArgumentException> { reloaded.render("", "deadbeef", "cfg") }
+        shouldThrow<IllegalArgumentException> { reloaded.render("", null, "cfg") }
             .message shouldContain "derivedOn must not be blank"
 
         reloaded.renderWarnings() shouldBe emptyList()

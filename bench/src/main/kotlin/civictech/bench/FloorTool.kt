@@ -46,6 +46,23 @@ import kotlin.system.exitProcess
  * parse a shape it does not recognise) rather than silently mis-enumerating, so that
  * failure is the signal to revisit this decision, not a corrupted plan.
  *
+ * ## `render` refuses an all-`v1` ledger outright (`computenet-8rel`)
+ *
+ * `render` publishes the harness sha the ledger's own units attest. A `v1` ledger's units
+ * predate that field and attest none, and a `--harness-sha` typed at render time for one is
+ * NOT attestation — nothing in the ledger corroborates it. Earlier this only warned
+ * (`computenet-eo9m`) while still publishing the typed sha, which is exactly how a
+ * superseded measurement set can acquire a current-looking provenance line: a real all-`v1`
+ * ledger at `computenet-3omz.4`'s harness sha, sitting under `CellFootprintBenchmark`,
+ * folds to 0.485 against that class's published floor of 0.398 (`computenet-xppx`). `render`
+ * now REFUSES an all-`v1` ledger outright, regardless of `--harness-sha`, naming the remedy:
+ * re-measure the class's rows under a rebuilt jar so `ingest` attests a sha per unit, or
+ * re-append the same raw JMH results and logs through `ingest` against a rebuilt jar so the
+ * existing observations gain one — either way into a fresh ledger. A ledger that mixes
+ * attested and unattested units (a `v1` derivation resumed under `v2`) is unaffected: that
+ * path still renders and warns, since at least one unit backs the published sha. See
+ * [FloorDerivationLedger.resolveHarnessSha] and [FloorDerivationLedger.renderWarnings].
+ *
  * ## `next`'s unit sizing
  *
  * [UnitSizing] estimates one row's wall time from the class's own `@Fork`/`@Warmup`/
@@ -637,9 +654,11 @@ recorded per unit (computenet-7doz). status reports per-row completeness, the me
 JVM(s) and the harness sha(s) seen. render prints the ClassNoiseFloor(...) call and the
 findings.md block for a COMPLETE, single-JVM, single-harness-sha ledger, publishing the
 sha the units themselves attest — a --harness-sha passed to render is CHECKED against
-them, not substituted for them, and is needed only for a v1 ledger whose units recorded
-none. The block carries the units' gathering window, so the single derivedOn date cannot
-be read as the span. Or (with --existing) for an already-committed
+them, not substituted for them. An all-v1 ledger, whose units recorded no sha at all, is
+REFUSED outright regardless of --harness-sha, naming the re-measure-or-re-append remedy
+(computenet-8rel) — a typed sha with nothing in the ledger to check it against is never
+published. The block carries the units' gathering window, so the single derivedOn date
+cannot be read as the span. Or (with --existing) for an already-committed
 CLASS_NOISE_FLOOR_DERIVATIONS entry. Every refusal is the ledger's own except --jar
 resolution below, which this tool adds itself. Not reachable from check, build or test.
 
@@ -926,8 +945,9 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
                 derivedOn = required(map, "derived-on"),
                 // OPTIONAL now (`computenet-tdby`): the units attest the sha they measured
                 // at, and one supplied here is checked against theirs rather than
-                // overriding it. It remains required for a v1 ledger, whose units record
-                // none — the ledger's own refusal says so.
+                // overriding it. For an all-v1 ledger, whose units record none, this is
+                // never published on its own authority any more — render() REFUSES
+                // outright regardless of what is passed here (`computenet-8rel`).
                 harnessCommitSha = map["harness-sha"],
                 jmhConfig = required(map, "jmh-config"),
             )
