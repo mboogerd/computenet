@@ -11,3 +11,17 @@ plugins {
 dependencies {
     implementation(project(":kernel"))
 }
+
+// Module manifest attributes, decided at feature level (computenet-051.3):
+// `ComputeNet-Module-Id` / `ComputeNet-Module-Version`. Documented for real in
+// :loader's own KDoc (the load-path task); recorded here, next to the fixture
+// jar property map's other reference in loader/build.gradle.kts, so a reader
+// of any one fixture's build file can find the names without cross-referencing.
+tasks.named<Jar>("jar") {
+    manifest {
+        attributes(
+            "ComputeNet-Module-Id" to "fixture.valid-basic",
+            "ComputeNet-Module-Version" to "1.0.0",
+        )
+    }
+}
