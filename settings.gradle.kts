@@ -47,6 +47,10 @@ include(":loader:fixtures:colliding-contract")
 // computenet-051.6.4: fixture (h) — a module contributing WireSerializers for
 // its own delta type, for the jar-loaded B13 end-to-end ([JAR1-REG-08]).
 include(":loader:fixtures:wire-delta")
+// computenet-051.5.2: fixture (j) — the first LINKABLE fixture (every other
+// fixture above is deliberately portless): a real dataflow cell plus a
+// promotion-candidate cell, both built through the real ksp-cell pipeline.
+include(":loader:fixtures:flow")
 include(":identity")
 include(":inspect")
 include(":iroh")

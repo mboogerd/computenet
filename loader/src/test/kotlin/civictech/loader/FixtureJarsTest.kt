@@ -68,6 +68,12 @@ class FixtureJarsTest {
             "loader.fixture.throwingProvider" to "throwing-provider",
             "loader.fixture.missingSharedType" to "missing-shared-type",
             "loader.fixture.collidingContract" to "colliding-contract",
+            // computenet-051.5.2: fixture (j) — carries no @Contract of its own, but IS
+            // ksp-cell-built and DOES carry two local Cell subclasses (FlowSetCell,
+            // FlowPromotionCandidateCell), which is enough for ContractProcessor to emit
+            // a real ContractTable_<hash> (cells.isNotEmpty()), so it belongs here like
+            // every other real generated-table fixture.
+            "loader.fixture.flow" to "flow",
         )
     }
 
@@ -141,7 +147,8 @@ class FixtureJarsTest {
         val srcRoots = fixtures.listFiles().orEmpty().map { File(it, "src") }.filter { it.isDirectory }
         // Non-vacuity: a renamed fixtures directory or layout would otherwise make this
         // check pass by finding nothing to look at.
-        // KSP_FIXTURES(7) + smuggler + empty-module + removed-api + doctored-nature + wire-delta.
+        // KSP_FIXTURES(8, since computenet-051.5.2 added "flow") + smuggler + empty-module
+        // + removed-api + doctored-nature + wire-delta.
         // computenet-051.6.4: wire-delta (fixture (h) of the feature's fixture note) is
         // plain kotlin-jvm like empty-module — no @Contract/Cell, so it is not in
         // KSP_FIXTURES — but it still adds one more `fixtures/*/src` directory, so this
