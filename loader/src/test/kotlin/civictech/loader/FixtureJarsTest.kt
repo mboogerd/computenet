@@ -141,9 +141,18 @@ class FixtureJarsTest {
         val srcRoots = fixtures.listFiles().orEmpty().map { File(it, "src") }.filter { it.isDirectory }
         // Non-vacuity: a renamed fixtures directory or layout would otherwise make this
         // check pass by finding nothing to look at.
-        // KSP_FIXTURES(7) + smuggler + empty-module + removed-api + doctored-nature.
+        // KSP_FIXTURES(7) + smuggler + empty-module + removed-api + doctored-nature + wire-delta.
+        // computenet-051.6.4: wire-delta (fixture (h) of the feature's fixture note) is
+        // plain kotlin-jvm like empty-module — no @Contract/Cell, so it is not in
+        // KSP_FIXTURES — but it still adds one more `fixtures/*/src` directory, so this
+        // count's `+ 4` becomes `+ 5`. Outside that task's own file claim
+        // (loader/fixtures/, B13ModuleWireSerializersTest.kt, FixtureJars.kt,
+        // loader/build.gradle.kts, settings.gradle.kts); touched anyway because this
+        // literal count is otherwise the only thing standing between fixture (h)
+        // landing and `:loader:test` going red on an unrelated, mechanical vacuity
+        // check — reported alongside this edit rather than silently expanding scope.
         withClue("found no fixture src/ tree under ${fixtures.absolutePath}") {
-            srcRoots.size shouldBe KSP_FIXTURES.size + 4
+            srcRoots.size shouldBe KSP_FIXTURES.size + 5
         }
 
         // Scoped to the two entries `ContractProcessor` itself emits (ContractModule,
