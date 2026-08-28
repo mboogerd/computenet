@@ -82,6 +82,26 @@ class ModuleClassLoader private constructor(
      * Step 3's fallback is what lets a module use host types it did not bundle — the
      * ordinary case — while step 2 keeps the types the host *owns* out of the module's
      * reach entirely.
+     *
+     * ### The closed check, and why it sits *after* step 1
+     *
+     * [JAR1-UNL-04] (as amended 2026-08-28, computenet-ykzx) wants "no new load is
+     * routed to a closed loader" to hold **by construction** rather than by whatever
+     * the JDK's `URLClassPath` happens to do with its cached jar index after
+     * [close]. Once [closed] is set, every name that is not *already defined* is
+     * refused with a [ClassNotFoundException] naming this loader, its jar, and the
+     * fact that it is closed — a diagnostic a caller can act on, in place of a bare
+     * "class not found" that looks like a missing dependency.
+     *
+     * Already-defined classes stay returnable through step 1 deliberately. An
+     * instance that outlived its module's unload already holds a reference to its
+     * `Class`; refusing the *lookup* of a class the JVM has by then permanently
+     * defined would add a failure mode without adding any safety.
+     *
+     * Shared-prefix names are refused too once closed. They resolve through the
+     * parent and so would be harmless, but "a closed loader is not a route to load
+     * anything new" is a simpler contract than one with an exception in it, and a
+     * caller that still needs a host type has the host's own loader to ask.
      */
     override fun loadClass(name: String, resolve: Boolean): Class<*> =
         synchronized(getClassLoadingLock(name)) {
@@ -89,6 +109,15 @@ class ModuleClassLoader private constructor(
             if (already != null) {
                 if (resolve) resolveClass(already)
                 return already
+            }
+
+            if (closed) {
+                throw ClassNotFoundException(
+                    "$name cannot be loaded through $this: this ModuleClassLoader for " +
+                        "${jar.absolutePath} is closed. Its module was unloaded, so no further " +
+                        "class is defined from that jar; classes it had already defined remain " +
+                        "resolvable through instances that hold them."
+                )
             }
 
             val loaded = if (isShared(name)) {
