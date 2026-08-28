@@ -312,6 +312,60 @@ class ModuleLoadFailureTest {
         }
     }
 
+    /**
+     * computenet-iifu: a host whose two post-commit callbacks throw the exact
+     * SAME [Throwable] instance (a cached/singleton exception, or a shared stub
+     * in a test double) must not turn into `IllegalArgumentException`("Self-suppression
+     * not permitted") — the host's own throwable must reach the caller unwrapped,
+     * same as the two-distinct-instances case above.
+     *
+     * This is a lock-in test, not a bug reproduction: it PASSES against the code
+     * as it stood before this task (verified by running it before adding any
+     * production change). `t.addSuppressed(u)` in Kotlin resolves to
+     * `kotlin.ExceptionsKt.addSuppressed`, not `java.lang.Throwable.addSuppressed`
+     * — decompiling `ModuleLoader.class`'s `load()` shows
+     * `invokestatic kotlin/ExceptionsKt.addSuppressed`, whose own bytecode does
+     * `if_acmpeq` on the two references and returns without delegating to the JDK
+     * method (which is the one that throws) when they are identical. So the
+     * `IllegalArgumentException("Self-suppression not permitted")` the bead
+     * describes cannot be produced by this call in Kotlin, regardless of instance
+     * identity — see the KDoc on [ModuleLoader.load]'s post-commit section for
+     * the full citation. No production change was made for this case; this test
+     * exists to keep that guarantee from silently regressing (e.g. if the call
+     * site were ever rewritten to force the Java method via an explicit cast).
+     */
+    @Test
+    fun `when both post-commit callbacks throw the same throwable instance, the caller receives it unwrapped`() {
+        val jar = FixtureJars.validBasic
+        val shared = IllegalStateException("shared host failure")
+        val loader = ModuleLoader(
+            acceptedLocations = setOf(jar.toPath().toAbsolutePath().normalize().parent),
+            observe = { throw shared },
+            onWireSerializers = { _, _ -> throw shared },
+        )
+
+        val thrown = shouldThrow<IllegalStateException> { loader.load(jar) }
+        val handle = loader.loaded().singleOrNull()
+        try {
+            withClue("the host's own throwable reaches the caller unwrapped: ${thrown.message}") {
+                thrown shouldBe shared
+            }
+            withClue("no self-suppression: addSuppressed(this) was never attempted for the identical instance") {
+                thrown.suppressed.toList().shouldBeEmpty()
+            }
+            withClue("and the commit survives both") {
+                handle shouldNotBe null
+                handle!!.state shouldBe ModuleState.REGISTERED
+                ModuleClassLoader.openLoaders shouldContain handle.classLoader
+            }
+        } finally {
+            handle?.let {
+                ModuleRegistration.unregister(it.id)
+                it.classLoader.close()
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // B2 — the anti-reflection tripwire [JAR1-DISC-03]
     // ------------------------------------------------------------------
