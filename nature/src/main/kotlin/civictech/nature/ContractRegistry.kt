@@ -126,15 +126,25 @@ object ContractRegistry {
         if (owner == ModuleId.HOST) ContractModule::class.java.classLoader else moduleLoaders[owner]
 
     /**
-     * The classloader that should resolve [fqn]'s cell class — the first
-     * surviving contributor (per [cellContributorsOf]) with a recorded loader,
-     * null when none recorded one. Callers fall back to their own loader on
-     * `null` (computenet-051.5.1): loader-agnostic `Class.forName(fqn)` sites
-     * become unsound once a module-loaded descriptor sits in this registry, and
-     * this is the read surface that makes them sound again.
+     * The classloader that should resolve [fqn]'s cell class — the loader of
+     * the SAME contributor whose [CellDescriptor] [cellsByFqn] currently
+     * resolves, null when that contributor recorded none.
+     *
+     * Cell registration is last-writer-wins ([commit] unconditionally repoints
+     * `cellsByFqn[fqn]` to the newest contributor, and [CellProvenance.drop]
+     * restores `remaining.last()` on removal for exactly that reason), so this
+     * reads the *last* entry of [cellContributorsOf], not the first
+     * loader-bearing one (computenet-vq5u: the original
+     * `firstNotNullOfOrNull` picked an OLDER contributor's loader whenever a
+     * later one had none recorded, silently disagreeing with which descriptor
+     * `cellsByFqn` was actually resolving). Callers fall back to their own
+     * loader on `null` (computenet-051.5.1): loader-agnostic
+     * `Class.forName(fqn)` sites become unsound once a module-loaded
+     * descriptor sits in this registry, and this is the read surface that
+     * makes them sound again.
      */
     fun cellLoader(fqn: String): ClassLoader? =
-        cellContributorsOf(fqn).firstNotNullOfOrNull { loaderFor(it) }
+        cellContributorsOf(fqn).lastOrNull()?.let { loaderFor(it) }
 
     internal fun stage(module: ContractModule, staging: Staging) {
         module.contracts.forEach { contract ->
