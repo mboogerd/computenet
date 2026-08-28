@@ -2,6 +2,7 @@ package civictech.bench
 
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import org.junit.jupiter.api.Test
@@ -208,48 +209,85 @@ class ClassNoiseFloorTest {
      * The floor is asserted as the arithmetic of the record, never as a hand-typed
      * literal: `2.0 x 0.19864889236475775 = 0.3972977847…`, rounded UP to 0.398.
      *
-     * The observations are `computenet-7v7m`'s three runs under the module's toolchain
-     * JDK 21; the STATISTIC over them is `computenet-3sua`'s re-derivation under
-     * `classFloorStatistic`, which replaced the previous maximum-over-every-observation
-     * and moved this entry from 0.5217864937179187 / 1.044 to
-     * 0.19864889236475775 / 0.398 with no new measurement — the same 63 retained
+     * `CellFootprintBenchmark`'s observations are `computenet-7v7m`'s three runs under the
+     * module's toolchain JDK 21; the STATISTIC over them is `computenet-3sua`'s
+     * re-derivation under `classFloorStatistic`, which replaced the previous
+     * maximum-over-every-observation and moved this entry from 0.5217864937179187 / 1.044
+     * to 0.19864889236475775 / 0.398 with no new measurement — the same 63 retained
      * observations, read by a different (and pre-registered) estimator. `computenet-ahn0`'s 0.2961501149112133 / 0.593 was
      * measured under JBR 25.0.2 and is superseded, not retained as a second entry — so
      * the pin on the measuring JVM below is part of what this test protects.
+     *
+     * `BoundedReadBenchmark` was added by `computenet-akfa` (2026-08-27): three sequential
+     * whole-class quiesced runs at `19055b951`, gathered AFTER `classFloorStatistic` was
+     * committed, so it is a first derivation rather than a re-reading and there is no
+     * second statistic in this table. Its assertions below are the same three — the class
+     * list, the floor as the ARITHMETIC of the record, and the measuring JVM — because
+     * what has to stay pinned is the resolution, per class, not the count of entries.
+     *
+     * `FanOutScalingBenchmark` was added by the same item on its own dedicated slot
+     * (2026-08-28, three whole-class runs at `57c860075`), and is pinned the same way. Its
+     * floor is the largest in the table by a wide margin and is LOOSE for two thirds of
+     * its own rows — see `CLASS_NOISE_FLOOR_DERIVATIONS`' KDoc, which records that rather
+     * than repairing it. The pin below therefore protects a number nobody should be
+     * tempted to tidy: any change to it has to come from three new quiesced runs or from a
+     * deliberate, separately decided change to `classFloorStatistic`'s across-row fold.
      */
     @Test
-    fun `exactly one class floor is derived, and every other class still falls back`() {
+    fun `three class floors are derived, and every other class still falls back`() {
         CLASS_NOISE_FLOOR_DERIVATIONS.map { it.benchmarkClass } shouldBe
-            listOf("CellFootprintBenchmark")
-        CLASS_NOISE_FLOOR_TABLE.keys shouldBe setOf("CellFootprintBenchmark")
+            listOf("CellFootprintBenchmark", "BoundedReadBenchmark", "FanOutScalingBenchmark")
+        CLASS_NOISE_FLOOR_TABLE.keys shouldBe
+            setOf("CellFootprintBenchmark", "BoundedReadBenchmark", "FanOutScalingBenchmark")
 
-        val derived = CLASS_NOISE_FLOOR_DERIVATIONS.single()
-        derived.runs shouldBe CLASS_FLOOR_MIN_RUNS
-        derived.hostState shouldBe QUIESCED_HOST_STATE
-        derived.observedRobustDispersion shouldBe 0.19864889236475775
-        derived.floor shouldBe
-            roundUpToThreeDecimals(CLASS_FLOOR_MARGIN * derived.observedRobustDispersion)
+        // Everything true of EVERY derived entry, asserted over the whole list rather
+        // than over one of them: a rule stated about the table must not quietly become a
+        // rule about whichever entry the test happened to name.
+        CLASS_NOISE_FLOOR_DERIVATIONS.forEach { derived ->
+            derived.runs shouldBe CLASS_FLOOR_MIN_RUNS
+            derived.hostState shouldBe QUIESCED_HOST_STATE
+            derived.floor shouldBe
+                roundUpToThreeDecimals(CLASS_FLOOR_MARGIN * derived.observedRobustDispersion)
+            // The measuring JVM is pinned as JDK 21, the module's declared toolchain
+            // major. This is the assertion `computenet-ahn0` had no way to make: its
+            // three runs were JBR 25.0.2, and neither the record nor the rendered block
+            // could say so.
+            derived.measuringJvm shouldContain "21.0.5"
+            derived.measuringJvm shouldContain "Amazon Corretto"
+            hasClassFloor(derived.benchmarkClass) shouldBe true
+            noiseFloorFor(derived.benchmarkClass) shouldBe derived.floor
+        }
 
-        // The measuring JVM is pinned as JDK 21, the module's declared toolchain major.
-        // This is the assertion `computenet-ahn0` had no way to make: its three runs were
-        // JBR 25.0.2, and neither the record nor the rendered block could say so.
-        derived.measuringJvm shouldContain "21.0.5"
-        derived.measuringJvm shouldContain "Amazon Corretto"
-
-        hasClassFloor("CellFootprintBenchmark") shouldBe true
-        noiseFloorFor("CellFootprintBenchmark") shouldBe derived.floor
+        val cellFootprint =
+            CLASS_NOISE_FLOOR_DERIVATIONS.single { it.benchmarkClass == "CellFootprintBenchmark" }
+        cellFootprint.observedRobustDispersion shouldBe 0.19864889236475775
         // A pin on the published number, not a second definition of it: it must equal the
         // arithmetic asserted above. Still a loose bound — see CLASS_NOISE_FLOOR_DERIVATIONS'
         // KDoc, which states why, and why the tightening from 1.044 is an OUTCOME of the
         // estimator rather than a reason it was chosen.
         noiseFloorFor("CellFootprintBenchmark") shouldBe 0.398
 
-        // The three classes the procedure names that have NOT been derived. They fall
+        val boundedRead =
+            CLASS_NOISE_FLOOR_DERIVATIONS.single { it.benchmarkClass == "BoundedReadBenchmark" }
+        boundedRead.observedRobustDispersion shouldBe 0.028527147482145923
+        // 2 x 0.028527147482145923 = 0.057054…, rounded UP to 0.058.
+        noiseFloorFor("BoundedReadBenchmark") shouldBe 0.058
+        // Every one of this class's 18 observations exceeds the global bound, which is
+        // exactly the "distinguishes nothing" failure the per-class floor exists to fix;
+        // the class's own floor is an order of magnitude above it.
+        noiseFloorFor("BoundedReadBenchmark") shouldNotBe NOISE_FLOOR
+
+        val fanOut =
+            CLASS_NOISE_FLOOR_DERIVATIONS.single { it.benchmarkClass == "FanOutScalingBenchmark" }
+        fanOut.observedRobustDispersion shouldBe 0.4762179191123049
+        // 2 x 0.4762179191123049 = 0.9524358…, rounded UP to 0.953.
+        noiseFloorFor("FanOutScalingBenchmark") shouldBe 0.953
+        noiseFloorFor("FanOutScalingBenchmark") shouldNotBe NOISE_FLOOR
+
+        // The one class the procedure names that has NOT been derived. It falls
         // back, and the fallback is the honest state, not a gap to fill by analogy.
         for (undrived in listOf(
             "OperatorThroughputBenchmark",
-            "FanOutScalingBenchmark",
-            "BoundedReadBenchmark",
         )) {
             hasClassFloor(undrived) shouldBe false
             noiseFloorFor(undrived) shouldBe NOISE_FLOOR

@@ -100,6 +100,14 @@ class DispersionNoteFloorTest {
 
     @Test
     fun `a class with no derived floor falls back, and the note still names NOISE_FLOOR`() {
+        // "No derived floor" is relative to the `floors` table PASSED IN, which is the
+        // synthetic one above and holds only `OperatorThroughputBenchmark`. It is not a
+        // claim about `CLASS_NOISE_FLOOR_TABLE`, and it deliberately never was: this
+        // class has in fact carried a live floor of 0.953 since `computenet-akfa` derived
+        // it on 2026-08-28, and this test went on passing unchanged, which is the whole
+        // point of `noiseFloorFor` taking its table as a parameter rather than reading the
+        // tripwire table as a fixture. Stated here because the name alone now reads as a
+        // claim about the live table that it does not make.
         val note = DispersionNote(
             label = "degree=64",
             drive = Drive.REAL,
@@ -127,11 +135,19 @@ class DispersionNoteFloorTest {
 
     /**
      * The default is the LIVE table, and since `computenet-ahn0` it is no longer empty:
-     * `CellFootprintBenchmark` carries a derived floor and everything else falls back.
-     * Both halves are asserted through the DEFAULT parameter — the synthetic `floors`
-     * table the tests above use proves the resolution *rule*, and only this test proves
-     * the rule is wired to the table the harness actually ships. A change that populated
-     * or dropped an entry would fail here, which is the point.
+     * `CellFootprintBenchmark` carries a derived floor and `OperatorThroughputBenchmark`
+     * falls back. Both halves are asserted through the DEFAULT parameter — the synthetic
+     * `floors` table the tests above use proves the resolution *rule*, and only this test
+     * proves the rule is wired to the table the harness actually ships.
+     *
+     * **What it does NOT pin**, stated because the sentence here used to over-claim it: it
+     * fails on a change to the two classes it names, and on nothing else. `computenet-akfa`
+     * added `BoundedReadBenchmark` and `FanOutScalingBenchmark` to the live table on
+     * 2026-08-28 and this test went on passing unchanged, correctly — the wiring it proves
+     * is class-agnostic, and the per-class pins on the live table's contents are
+     * `ClassNoiseFloorTest`'s (`noiseFloorFor("BoundedReadBenchmark") shouldBe 0.058`,
+     * `noiseFloorFor("FanOutScalingBenchmark") shouldBe 0.953`), asserted there over every
+     * entry rather than duplicated here.
      */
     @Test
     fun `the live table resolves the derived class to its own floor and the rest globally`() {
