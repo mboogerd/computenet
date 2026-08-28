@@ -156,13 +156,17 @@ class B3SharedTypeIdentityTest {
         // plain-`URLClassLoader` rebuild against Amazon Corretto 21.0.5 and Microsoft 21.0.11)
         // in which loadClass of a genuinely undefined entry threw ClassNotFoundException after
         // close in every case, including with the index pre-warmed by getResource/getResources/
-        // a cached jar: URLConnection before close. What IS measured and asserted here is
-        // narrower: `findResource` goes null immediately once `close()` returns.
+        // a cached jar: URLConnection before close. Both measurements were taken on
+        // darwin/arm64; Linux was NOT measured, so this records a non-reproduction on that
+        // platform rather than a claim that no JDK anywhere behaves as the old text said.
+        // What IS measured and asserted here is narrower: `findResource` goes null immediately
+        // once `close()` returns.
         //
         // Separately, and stronger than any platform behaviour either way: ModuleClassLoader's
-        // own `loadClass` (see its KDoc above) refuses every name that is not already defined
-        // once `closed` is set, throwing a ClassNotFoundException that names the loader, its
-        // jar, and the fact that it is closed — added by computenet-051.4.4. So "no new class
+        // own `loadClass` (see its KDoc, ModuleClassLoader.kt, § "The closed check") refuses
+        // every name that is not already defined once `closed` is set, throwing a
+        // ClassNotFoundException that names the loader, its jar, and the fact that it is
+        // closed — added by computenet-051.4.4, and asserted in B9UnloadReloadTest. So "no new class
         // is defined through a closed ModuleClassLoader" holds by construction, independent of
         // whatever `URLClassPath` does with its cached index; this test does not need to pin
         // that guarantee to the platform's behaviour at all.
