@@ -44,6 +44,9 @@ include(":loader:fixtures:doctored-nature")
 // computenet-9fqe: the ERR-05 registration-refusal arm — a fixture that collides
 // with valid-basic's contractId.
 include(":loader:fixtures:colliding-contract")
+// computenet-051.6.4: fixture (h) — a module contributing WireSerializers for
+// its own delta type, for the jar-loaded B13 end-to-end ([JAR1-REG-08]).
+include(":loader:fixtures:wire-delta")
 include(":identity")
 include(":inspect")
 include(":iroh")

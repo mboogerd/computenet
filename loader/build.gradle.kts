@@ -65,6 +65,15 @@ dependencies {
 //                                      generator-derived contractId collides) with a
 //                                      different method shape. ERR-05's registration-
 //                                      refusal arm (computenet-9fqe)
+//   loader.fixture.wireDelta        — a module contributing a WireSerializers table for
+//                                      its own @Serializable delta type: no @Contract, no
+//                                      Cell, ksp-cell not even applied. The feature-.6
+//                                      fixture note calls this "fixture (h)", but that
+//                                      letter was already spent on loader.fixture.doctoredNature
+//                                      by feature .3 before this task landed, so this one
+//                                      keeps its descriptive name instead of a reused
+//                                      letter. The jar-loaded B13 end-to-end
+//                                      (computenet-051.6.4, [JAR1-REG-08])
 //
 // `:loader:fixtures:removed-api` carries no property: it is a compileOnly-only helper for
 // missing-shared-type, never itself a loadable module (no manifest attributes, no services
@@ -80,6 +89,7 @@ val fixtureJarProperties = mapOf(
     "loader.fixture.missingSharedType" to ":loader:fixtures:missing-shared-type",
     "loader.fixture.doctoredNature" to ":loader:fixtures:doctored-nature",
     "loader.fixture.collidingContract" to ":loader:fixtures:colliding-contract",
+    "loader.fixture.wireDelta" to ":loader:fixtures:wire-delta",
 )
 
 // Cross-project task access needs the other project evaluated first. These are this
