@@ -74,6 +74,14 @@ dependencies {
 //                                      keeps its descriptive name instead of a reused
 //                                      letter. The jar-loaded B13 end-to-end
 //                                      (computenet-051.6.4, [JAR1-REG-08])
+//   loader.fixture.flow             — fixture (j) (computenet-051.5.2): the first
+//                                      LINKABLE fixture — a FlowSetCell (SPAWN-01/02/03)
+//                                      and a FlowPromotionCandidateCell (SPAWN-04/B14),
+//                                      both extending kernel's own SetCellBase so their
+//                                      ports are contract-identical to
+//                                      civictech.cell.data.SetCell<String>'s. Enabler
+//                                      only: sibling tasks under feature computenet-051.5
+//                                      consume this jar for the actual B1/B14 tests.
 //
 // `:loader:fixtures:removed-api` carries no property: it is a compileOnly-only helper for
 // missing-shared-type, never itself a loadable module (no manifest attributes, no services
@@ -90,6 +98,7 @@ val fixtureJarProperties = mapOf(
     "loader.fixture.doctoredNature" to ":loader:fixtures:doctored-nature",
     "loader.fixture.collidingContract" to ":loader:fixtures:colliding-contract",
     "loader.fixture.wireDelta" to ":loader:fixtures:wire-delta",
+    "loader.fixture.flow" to ":loader:fixtures:flow",
 )
 
 // Cross-project task access needs the other project evaluated first. These are this
