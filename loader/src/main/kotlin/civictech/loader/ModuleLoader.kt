@@ -1,6 +1,8 @@
 package civictech.loader
 
+import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.graph.CellFactory
 import civictech.cell.host.LocationRegistry
 import civictech.cell.wire.WireSerializers
 import civictech.gen.wire.ProxyModule
@@ -213,6 +215,51 @@ class ModuleHandle internal constructor(
             cellFqns.map { "cell:$it" } +
             proxiedClasses.map { "proxy:${it.name}" }
 
+    /**
+     * Returns a [CellFactory] that resolves [fqn] through this module's own
+     * [classLoader] and constructs it via a public constructor accepting
+     * exactly one [CellRef] parameter — the convention every fixture cell (and
+     * the kernel's own cells) follows [JAR1-SPAWN-01]. This is the surface
+     * JAR3's jar-attached `GraphSpec` deploy builds on; it stops here.
+     *
+     * Legal only while this handle is [ModuleState.REGISTERED]: a factory
+     * minted from an unloaded module would resolve against a classloader that
+     * may already be closed, so any other state is refused with a diagnostic
+     * naming the state.
+     *
+     * [JAR1-SPAWN-05]: [fqn] must appear in this handle's own [cellFqns] — the
+     * module's declared `CellDescriptor` table. An fqn absent from that table
+     * is refused with [UndeclaredCellException] naming both the fqn and this
+     * module's [id], even when [classLoader] (or the host's own loader) could
+     * resolve it — the check is against the declared table, never against
+     * what a loader happens to be able to resolve, and there is deliberately
+     * no fallback to raw `Class.forName`.
+     *
+     * The cell class is resolved and checked for the required constructor
+     * eagerly, at this call — a declared cell class without one fails here
+     * with [CellConstructorException], not on the returned factory's first
+     * [CellFactory.create] ("fail at the door").
+     *
+     * The returned factory asserts nothing about `Serializable` round-trips:
+     * `CellFactory` extends `Serializable`, but wire-crossing a module factory
+     * is JAR3's problem.
+     */
+    fun cellFactory(fqn: String): CellFactory {
+        check(state == ModuleState.REGISTERED) {
+            "Module $id cannot produce a cell factory for $fqn from state $state: cellFactory is only " +
+                "legal while REGISTERED, since a factory minted from any other state would resolve " +
+                "against a classloader that may already be closed."
+        }
+        if (fqn !in cellFqns) {
+            throw UndeclaredCellException(id, fqn)
+        }
+        val cellClass = resolve(fqn, classLoader, initialize = true)
+        val ctor = cellClass.constructors.singleOrNull { c ->
+            c.parameterCount == 1 && c.parameterTypes[0] == CellRef::class.java
+        } ?: throw CellConstructorException(id, fqn)
+        return CellFactory { ref -> ctor.newInstance(ref) as Cell }
+    }
+
     override fun toString(): String = "ModuleHandle($id, version=$version, state=$state, jar=${jar.name})"
 }
 
@@ -316,6 +363,38 @@ class ModuleUnloadFailedException internal constructor(
             "registrations are in an indeterminate, partially-removed state."
     },
     cause,
+)
+
+/**
+ * [JAR1-SPAWN-05]: [ModuleHandle.cellFactory] was asked for an fqn absent from
+ * the module's own declared [ModuleHandle.cellFqns] table. Refused even when
+ * the module's classloader — or the host's own — could resolve [fqn]: the
+ * check is against the declared table, never against what a loader happens to
+ * be able to resolve, so a factory can never spawn a cell the module never
+ * declared, including a host-classpath class such as `civictech.cell.data.SetCell`.
+ */
+class UndeclaredCellException internal constructor(
+    val id: ModuleId,
+    val fqn: String,
+) : IllegalArgumentException(
+    "Module $id does not declare a cell named $fqn in its CellDescriptor table; " +
+        "ModuleHandle.cellFactory refuses it without falling back to raw class resolution."
+)
+
+/**
+ * [JAR1-SPAWN-01]: [ModuleHandle.cellFactory] resolved [fqn]'s class through
+ * the module's own classloader, but the class has no public constructor
+ * accepting exactly one [CellRef] parameter — the convention every fixture
+ * cell (and the kernel's own cells) follows. Raised at
+ * [ModuleHandle.cellFactory] call time, never deferred to the returned
+ * factory's first [CellFactory.create].
+ */
+class CellConstructorException internal constructor(
+    val id: ModuleId,
+    val fqn: String,
+) : IllegalStateException(
+    "Module $id's cell $fqn has no public constructor accepting exactly one CellRef parameter; " +
+        "ModuleHandle.cellFactory requires that convention to construct a cell."
 )
 
 /**
@@ -711,7 +790,7 @@ class ModuleLoader(
         val fqns = modules.flatMap { m -> m.contracts.map { it.fqn } + m.cells.map { it.fqn } }.distinct()
         fqns.forEach { fqn ->
             try {
-                resolve(fqn, loader)
+                resolve(fqn, loader, initialize = false)
             } catch (e: ClassNotFoundException) {
                 throw ModuleLoadException(
                     jar,
@@ -727,34 +806,6 @@ class ModuleLoader(
                         "compiled against a type this host does not supply. Nothing was registered.",
                     e,
                 )
-            }
-        }
-    }
-
-    /**
-     * `Class.forName` for a descriptor fqn.
-     *
-     * Descriptor fqns come from KSP's `qualifiedName`, which spells a nested
-     * class `Outer.Inner` while the JVM binary name is `Outer$Inner`. So a
-     * plain [ClassNotFoundException] on the dotted name is retried with each
-     * trailing dot rewritten to `$`, innermost first. A [LinkageError] is
-     * **not** retried: the class was found, it just would not link, and that is
-     * precisely the [JAR1-ERR-04] failure this method exists to surface.
-     */
-    private fun resolve(fqn: String, loader: ModuleClassLoader): Class<*> {
-        try {
-            return Class.forName(fqn, false, loader)
-        } catch (first: ClassNotFoundException) {
-            var candidate = fqn
-            while (true) {
-                val dot = candidate.lastIndexOf('.')
-                if (dot < 0) throw first
-                candidate = candidate.substring(0, dot) + '$' + candidate.substring(dot + 1)
-                try {
-                    return Class.forName(candidate, false, loader)
-                } catch (_: ClassNotFoundException) {
-                    // keep walking outwards
-                }
             }
         }
     }
@@ -778,6 +829,41 @@ class ModuleLoader(
                     "contributing ${record.contributedDescriptorIds.size} descriptor(s): " +
                     record.contributedDescriptorIds.joinToString(", ")
             )
+        }
+    }
+}
+
+/**
+ * `Class.forName` for a descriptor fqn, shared by [ModuleLoader]'s validation
+ * path and [ModuleHandle.cellFactory].
+ *
+ * Descriptor fqns come from KSP's `qualifiedName`, which spells a nested class
+ * `Outer.Inner` while the JVM binary name is `Outer$Inner`. So a plain
+ * [ClassNotFoundException] on the dotted name is retried with each trailing
+ * dot rewritten to `$`, innermost first. A [LinkageError] is **not** retried:
+ * the class was found, it just would not link, and that is precisely the
+ * [JAR1-ERR-04] failure this function exists to surface.
+ *
+ * [initialize] is `false` at validation time (linking is what has to succeed,
+ * not the class's static state — running a module's `<clinit>` during
+ * validation would execute module code before anything was registered) and
+ * `true` at [ModuleHandle.cellFactory] time, where the class is about to be
+ * instantiated anyway.
+ */
+private fun resolve(fqn: String, loader: ModuleClassLoader, initialize: Boolean): Class<*> {
+    try {
+        return Class.forName(fqn, initialize, loader)
+    } catch (first: ClassNotFoundException) {
+        var candidate = fqn
+        while (true) {
+            val dot = candidate.lastIndexOf('.')
+            if (dot < 0) throw first
+            candidate = candidate.substring(0, dot) + '$' + candidate.substring(dot + 1)
+            try {
+                return Class.forName(candidate, initialize, loader)
+            } catch (_: ClassNotFoundException) {
+                // keep walking outwards
+            }
         }
     }
 }
