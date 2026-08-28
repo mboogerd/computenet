@@ -46,11 +46,27 @@ class FixtureJarsTest {
          * The `ksp-cell`-built fixtures, by the system property carrying each one's jar.
          * `:loader:fixtures:smuggler` is deliberately absent: it applies plain
          * `kotlin-jvm` and carries no contract, so it has no services entry to check.
+         *
+         * `:loader:fixtures:empty-module` is also absent: plain `kotlin-jvm`, no KSP,
+         * no `@Contract`/`Cell` — DISC-05's whole point is that it carries no
+         * `ContractModule` services entry at all.
+         *
+         * `:loader:fixtures:doctored-nature` is also absent, for the opposite reason:
+         * it IS ksp-cell-built and DOES carry a generated `ContractTable_<hash>`, but
+         * its jar's services entry is a build-script-generated REPLACEMENT naming
+         * `DoctoredContractModule`, not the generated table — asserted separately
+         * below, in `doctored-nature fixture jar names DoctoredContractModule in its
+         * ContractModule services entry`, precisely because it would fail the
+         * "names a class starting with the generated package prefix" assertion this
+         * test makes for every other ksp-built fixture.
          */
         val KSP_FIXTURES = mapOf(
             "loader.fixture.validBasic" to "valid-basic",
+            "loader.fixture.noAttrs" to "no-attrs",
             "loader.fixture.utilA" to "util-a",
             "loader.fixture.utilB" to "util-b",
+            "loader.fixture.throwingProvider" to "throwing-provider",
+            "loader.fixture.missingSharedType" to "missing-shared-type",
         )
     }
 
@@ -124,20 +140,59 @@ class FixtureJarsTest {
         val srcRoots = fixtures.listFiles().orEmpty().map { File(it, "src") }.filter { it.isDirectory }
         // Non-vacuity: a renamed fixtures directory or layout would otherwise make this
         // check pass by finding nothing to look at.
+        // KSP_FIXTURES(6) + smuggler + empty-module + removed-api + doctored-nature.
         withClue("found no fixture src/ tree under ${fixtures.absolutePath}") {
-            srcRoots.size shouldBe KSP_FIXTURES.size + 1 // + :loader:fixtures:smuggler
+            srcRoots.size shouldBe KSP_FIXTURES.size + 4
         }
 
+        // Scoped to the two entries `ContractProcessor` itself emits (ContractModule,
+        // ProxyModule — computenet-051 risk 051-R7's concern), NOT every
+        // META-INF/services/ file: `:loader:fixtures:throwing-provider` carries a
+        // DELIBERATELY hand-written civictech.cell.wire.WireSerializers entry (see
+        // that module's ThrowingProvider.kt), which ContractProcessor never emits in
+        // the first place, so it is not a stand-in for generator output and this
+        // check must not flag it.
         val checkedIn = srcRoots.flatMap { root ->
             root.walkTopDown().filter { it.isFile }
-                .filter { it.absolutePath.replace(File.separatorChar, '/').contains("/META-INF/services/") }
+                .filter {
+                    val path = it.absolutePath.replace(File.separatorChar, '/')
+                    path.endsWith("/META-INF/services/civictech.nature.ContractModule") ||
+                        path.endsWith("/META-INF/services/civictech.gen.wire.ProxyModule")
+                }
                 .toList()
         }
         withClue(
             "checked-in service registrations found: ${checkedIn.map { it.absolutePath }}. The " +
-                "fixture jars' ContractModule entries must be ContractProcessor output " +
+                "fixture jars' ContractModule/ProxyModule entries must be ContractProcessor output " +
                 "(epic computenet-051 risk 051-R7), and a source-tree copy would be shaded " +
                 "into the jar and pass the entry check above without the generator running."
         ) { checkedIn.shouldBeEmpty() }
+    }
+
+    @Test
+    fun `doctored-nature fixture jar names DoctoredContractModule in its ContractModule services entry`() {
+        // B2's premise: the ContractModule services entry is a build-script-generated
+        // REPLACEMENT (see loader/fixtures/doctored-nature/build.gradle.kts's `jar`
+        // `doLast`), not the generated ContractTable_<hash> every other ksp-built
+        // fixture's entry names — which is exactly why this fixture is excluded from
+        // KSP_FIXTURES and gets its own, narrower assertion here.
+        JarFile(jarAt("loader.fixture.doctoredNature")).use { jar ->
+            val entry = jar.getJarEntry(SERVICES_ENTRY)
+            withClue("doctored-nature's jar has no $SERVICES_ENTRY") { entry shouldNotBe null }
+
+            val named = jar.getInputStream(entry).bufferedReader().readText()
+                .lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+            withClue("doctored-nature's $SERVICES_ENTRY names ${named.size} classes, expected exactly 1") {
+                named.size shouldBe 1
+            }
+            withClue("doctored-nature's services entry names ${named.singleOrNull()}") {
+                named.single() shouldBe "civictech.loader.fixture.doctorednature.DoctoredContractModule"
+            }
+
+            val classEntry = named.single().replace('.', '/') + ".class"
+            withClue(
+                "doctored-nature's services entry names ${named.single()}, but $classEntry is not in the jar"
+            ) { jar.getJarEntry(classEntry) shouldNotBe null }
+        }
     }
 }
