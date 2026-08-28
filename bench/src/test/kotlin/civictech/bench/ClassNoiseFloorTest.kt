@@ -224,13 +224,21 @@ class ClassNoiseFloorTest {
      * second statistic in this table. Its assertions below are the same three — the class
      * list, the floor as the ARITHMETIC of the record, and the measuring JVM — because
      * what has to stay pinned is the resolution, per class, not the count of entries.
+     *
+     * `FanOutScalingBenchmark` was added by the same item on its own dedicated slot
+     * (2026-08-28, three whole-class runs at `57c860075`), and is pinned the same way. Its
+     * floor is the largest in the table by a wide margin and is LOOSE for two thirds of
+     * its own rows — see `CLASS_NOISE_FLOOR_DERIVATIONS`' KDoc, which records that rather
+     * than repairing it. The pin below therefore protects a number nobody should be
+     * tempted to tidy: any change to it has to come from three new quiesced runs or from a
+     * deliberate, separately decided change to `classFloorStatistic`'s across-row fold.
      */
     @Test
-    fun `two class floors are derived, and every other class still falls back`() {
+    fun `three class floors are derived, and every other class still falls back`() {
         CLASS_NOISE_FLOOR_DERIVATIONS.map { it.benchmarkClass } shouldBe
-            listOf("CellFootprintBenchmark", "BoundedReadBenchmark")
+            listOf("CellFootprintBenchmark", "BoundedReadBenchmark", "FanOutScalingBenchmark")
         CLASS_NOISE_FLOOR_TABLE.keys shouldBe
-            setOf("CellFootprintBenchmark", "BoundedReadBenchmark")
+            setOf("CellFootprintBenchmark", "BoundedReadBenchmark", "FanOutScalingBenchmark")
 
         // Everything true of EVERY derived entry, asserted over the whole list rather
         // than over one of them: a rule stated about the table must not quietly become a
@@ -269,11 +277,17 @@ class ClassNoiseFloorTest {
         // the class's own floor is an order of magnitude above it.
         noiseFloorFor("BoundedReadBenchmark") shouldNotBe NOISE_FLOOR
 
-        // The two classes the procedure names that have NOT been derived. They fall
+        val fanOut =
+            CLASS_NOISE_FLOOR_DERIVATIONS.single { it.benchmarkClass == "FanOutScalingBenchmark" }
+        fanOut.observedRobustDispersion shouldBe 0.4762179191123049
+        // 2 x 0.4762179191123049 = 0.9524358…, rounded UP to 0.953.
+        noiseFloorFor("FanOutScalingBenchmark") shouldBe 0.953
+        noiseFloorFor("FanOutScalingBenchmark") shouldNotBe NOISE_FLOOR
+
+        // The one class the procedure names that has NOT been derived. It falls
         // back, and the fallback is the honest state, not a gap to fill by analogy.
         for (undrived in listOf(
             "OperatorThroughputBenchmark",
-            "FanOutScalingBenchmark",
         )) {
             hasClassFloor(undrived) shouldBe false
             noiseFloorFor(undrived) shouldBe NOISE_FLOOR

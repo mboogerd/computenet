@@ -100,6 +100,14 @@ class DispersionNoteFloorTest {
 
     @Test
     fun `a class with no derived floor falls back, and the note still names NOISE_FLOOR`() {
+        // "No derived floor" is relative to the `floors` table PASSED IN, which is the
+        // synthetic one above and holds only `OperatorThroughputBenchmark`. It is not a
+        // claim about `CLASS_NOISE_FLOOR_TABLE`, and it deliberately never was: this
+        // class has in fact carried a live floor of 0.953 since `computenet-akfa` derived
+        // it on 2026-08-28, and this test went on passing unchanged, which is the whole
+        // point of `noiseFloorFor` taking its table as a parameter rather than reading the
+        // tripwire table as a fixture. Stated here because the name alone now reads as a
+        // claim about the live table that it does not make.
         val note = DispersionNote(
             label = "degree=64",
             drive = Drive.REAL,
