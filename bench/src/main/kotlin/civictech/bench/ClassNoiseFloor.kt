@@ -547,6 +547,21 @@ data class ClassNoiseFloor(
  * been read by the statistic in force, and so was `OperatorThroughputBenchmark`'s
  * (2026-08-28, `computenet-x9e.17`).
  *
+ * **`CellFootprintBenchmark`'s retained observations are `computenet-7v7m`'s
+ * `cellfootprint-{1,2,3}.json`, NOT a ledger under `$HOME/computenet-runs/floor-derivations/`
+ * (`computenet-xppx`, 2026-08-28).** Unlike the other three classes in this table, this
+ * class has no `FloorDerivationLedger` behind its number — see its `assembly` field below.
+ * A directory named `floor-derivations/CellFootprintBenchmark/` may exist on a given
+ * machine and even look complete (right row count, single JVM, v1 ledger format), but it
+ * is not the input to this entry: it was observed on MacBoo (NL-MGD6FQJW91) on 2026-08-28
+ * to hold `computenet-3omz.4`'s ledger-machinery exercise instead, measured from a jar at
+ * harness sha `5a2fdccfd` — not this entry's `a7c6a0382` — which folds under
+ * [classFloorStatistic] to 0.485, not 0.398. That directory is machine-local leftover
+ * state, not a repository artifact, so its presence or absence is not asserted here; the
+ * warning is for whoever next re-derives this class and is tempted to fold whatever sits
+ * under that path. The real inputs are named in this entry's own KDoc, above the
+ * constructor call, and nowhere under `floor-derivations/`.
+ *
  * On the size of `CellFootprintBenchmark`'s floor: the worst quiet-host row by TYPICAL dispersion
  * is `realSnapshot` OR_MAP_CELL at `N1E5`, whose three observations were 0.522 / 0.119 /
  * 0.199 and whose median is therefore 0.199 — so the floor is 0.398. `realSnapshot` at
@@ -680,6 +695,15 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
      * under JBR 25.0.2 (`# VM version: JDK 25.0.2 …` in each log, `jdkVersion` 25.0.2 on
      * every row), not the module's declared toolchain JDK 21, which step 1 of the
      * pre-registered procedure requires.
+     *
+     * **The observations behind this entry are `computenet-7v7m`'s `cellfootprint-{1,2,3}.json`
+     * — NOT a ledger under `$HOME/computenet-runs/floor-derivations/CellFootprintBenchmark/`**
+     * (`computenet-xppx`, 2026-08-28). A directory of that name has been seen (MacBoo,
+     * NL-MGD6FQJW91, 2026-08-28) to hold `computenet-3omz.4`'s unrelated ledger-machinery
+     * exercise at harness sha `5a2fdccfd`, which is complete, well-formed and matches this
+     * class's row count, but folds to 0.485 under [classFloorStatistic] — not this entry's
+     * 0.398. A future re-derivation of this class must use the JSONs named above, never
+     * whatever a `floor-derivations/CellFootprintBenchmark/` directory happens to contain.
      */
     ClassNoiseFloor(
         benchmarkClass = "CellFootprintBenchmark",
