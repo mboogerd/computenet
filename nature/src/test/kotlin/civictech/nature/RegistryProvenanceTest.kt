@@ -44,6 +44,9 @@ interface ProbeCellNoLoader
 /** computenet-051.5.1: HOST-then-module ordering for [ContractRegistry.cellLoader]. */
 interface ProbeCellLoaderHostFallback
 
+/** computenet-vq5u: two contributors of one fqn, each recording its own loader. */
+interface ProbeCellLoaderTwoContributors
+
 /** computenet-b7fr: module-then-module cell repoint probe. */
 interface ProbeCellRepoint
 
@@ -889,5 +892,57 @@ class RegistryProvenanceTest {
             ContractRegistry.cellLoader(cell.fqn),
             "HOST must resolve via ContractModule's own loader, not null",
         )
+    }
+
+    /**
+     * computenet-vq5u: `cellLoader` was first-contributor-wins
+     * (`cellContributorsOf(fqn).firstNotNullOfOrNull { loaderFor(it) }`) while the
+     * cell table itself is last-writer-wins (`ContractRegistry.commit` repoints
+     * `cellsByFqn` to the newest contributor, and `CellProvenance.drop` restores
+     * `remaining.last()` on removal for exactly that reason). With two
+     * contributors of the same fqn each recording a distinct loader, the old
+     * behaviour answered the FIRST contributor's loader even though
+     * `ContractRegistry.cells` was already resolving the SECOND's descriptor.
+     * `cellLoader` must track the same contributor the descriptor table
+     * resolves, both while both contributors are live and after the later one
+     * unregisters and the descriptor falls back to the survivor.
+     */
+    @Test
+    fun `cellLoader tracks the last-writer-wins descriptor across two contributors`() {
+        val first = ModuleId("vq5u-first")
+        val second = ModuleId("vq5u-second")
+        val firstLoader = object : ClassLoader(ProbeCellLoaderTwoContributors::class.java.classLoader) {}
+        val secondLoader = object : ClassLoader(ProbeCellLoaderTwoContributors::class.java.classLoader) {}
+        val cell = CellDescriptor(fqn = ProbeCellLoaderTwoContributors::class.java.name, color = CellColor.PURE)
+        ModuleRegistration.register(
+            owner = first,
+            contractModules = listOf(moduleOf(cells = listOf(cell))),
+            loader = firstLoader,
+        )
+        try {
+            ModuleRegistration.register(
+                owner = second,
+                contractModules = listOf(moduleOf(cells = listOf(cell))),
+                loader = secondLoader,
+            )
+            try {
+                assertEquals(
+                    secondLoader,
+                    ContractRegistry.cellLoader(cell.fqn),
+                    "cellLoader must answer the loader of the contributor whose descriptor " +
+                        "ContractRegistry.cells currently resolves (the last writer), not the first",
+                )
+            } finally {
+                ModuleRegistration.unregister(second)
+            }
+            assertEquals(
+                firstLoader,
+                ContractRegistry.cellLoader(cell.fqn),
+                "once the later contributor unregisters, cellLoader must follow the descriptor " +
+                    "back to the surviving contributor's own loader",
+            )
+        } finally {
+            ModuleRegistration.unregister(first)
+        }
     }
 }
