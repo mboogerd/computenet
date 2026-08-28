@@ -2115,3 +2115,91 @@ while building the frontier-freeze half itself.
   back to `DepartureGatesTest`'s BS-10 crash test and this half deleted. Until then, a suite
   relying on "a crashed peer's delivered-watermark row stops accepting new coverage" is relying
   on something this rig does not model.
+
+## B14-promotion-glitch-freedom: the promotion swap has no corpus surface — no step verb, no gate/candidate catalog cell, and no L0 id in chapter 53
+
+Filed by `computenet-051.5.5` (epic `computenet-051` JAR1, feature
+`computenet-051.5`), which owns that feature's concord decision: *"evaluate whether
+B14's glitch-freedom-across-swap is expressible in the existing corpus vocabulary.
+If it IS expressible with existing verbs, write the scenario carrying `covers:`
+against the 53 promotion requirement it exercises — never a JAR1-local id. If it is
+NOT, record the gap honestly here — never substitute an easier scenario."* It is
+not. This entry is that evaluation's record, with the four independent blockers
+traced from source rather than assumed.
+
+- **Category**: `schema-gap` (step vocabulary + cell catalog) **and**
+  `provenance-gap` (chapter 53 carries no L0 id to cover). Nothing was worked
+  around: no weakened scenario was authored, and the property is instead pinned as
+  a kernel/loader test —
+  `loader/src/test/kotlin/civictech/loader/B14ModulePromotionTest.kt`, alongside
+  the host-classpath twin `kernel/src/test/kotlin/civictech/cell/evolve/ShadowPromotionTest.kt`.
+
+- **The clause in dispute**: `doc/spec/50-development-process/53-evolution.md`
+  §"The promotion swap" — PRECHECK → PREPARE → COMMIT → RETIRE, with the buffered
+  window's guarantee that downstream observes no torn, duplicate or missing delta
+  across the swap. Scenario B14 adds that the candidate may come from a **loaded
+  module** (`[JAR1-SPAWN-04]`, `[JAR1-UNL-02]`).
+
+- **Blocker 1 — the closed step vocabulary has no verb that swaps one instance for
+  another.** `concord/schema/scenario.md` §"`script` — the step verbs" enumerates
+  the complete set: `apply`, `quiesce`, `connect`, `disconnect`, `snapshot`,
+  `restore`, `restart`, `despawn`, `read-state`, `retransmit`. None introduces a
+  *second* instance of a cell at run time, and the schema's own header states that
+  "growing the schema, the step/verb set, the check vocabulary, or the catalogs is
+  a deliberate schema-change ticket between waves — not a corpus-authoring
+  convenience". The nearest neighbour, `restart`, is explicitly ruled out by that
+  same document: it "recovers a cell from its freshest available checkpoint" and
+  the scenario "names no blob and no failure" — same class, same code, new epoch.
+  A promotion is the opposite claim: a *different* implementation takes over the
+  logical position, and the whole point of B14 is that downstream sees the
+  behavioural difference without seeing a seam. (`Driver.spawn` does exist in the
+  SPI — `concord/src/main/kotlin/civictech/concord/driver/Driver.kt:28` — but only
+  as graph *construction*, driven from `graph.cells`; no step reaches it, so a
+  scenario cannot name a candidate that was not in the topology from the start.)
+
+- **Blocker 2 — the cell catalog has no membrane gate and no candidate pair.**
+  `concord/schema/cell-catalog.md` carries sources, operators, views, and the
+  specialised controls (`nature-gate`, `exclusive-source`/`-sink`, `feedback`,
+  `journal`, `effect-sink`). There is no traffic-light / buffering membrane, so a
+  scenario cannot express the red-drain-green window at all — and that window *is*
+  the mechanism the requirement is about. Nor is there any pair of catalog ids
+  standing in the incumbent/candidate relation (contract-identical outlet,
+  observably different fold), which is what makes a swap detectable rather than a
+  no-op.
+
+- **Blocker 3 — chapter 53 has no L0 requirement id, so `covers:` would dangle
+  (fatal lint).** `concord/schema/provenance.md` §3 makes a `covers:` id that
+  matches no L0 requirement a build failure, and P6 makes an empty `covers:` an
+  orphan — equally fatal. Measured on this branch:
+  `grep -rnoE '\[5[0-9]-[A-Z]+-[0-9]+\]' doc/spec/` returns **nothing**, and the
+  chapters present in `doc/spec/CONCORDANCE.md` are 12, 13, 15, 21, 22, 24, 33, 41
+  and 42 only. So the bead's own premise — "the 53 promotion requirement it
+  exercises" — does not yet exist: minting one is a W1-C-class spec edit
+  (`provenance.md` §1, including the "checkable through the SPI" L0 gate, which
+  blockers 1 and 2 currently fail), not something a corpus author may do on the
+  way past.
+
+- **Blocker 4, specific to B14's module half.** Even with 1–3 resolved, the
+  *module-supplied* candidate is unreachable from any driver: `:concord` depends on
+  `:kernel` alone (`concord/build.gradle.kts:11`), never on `:loader`, and only
+  `civictech.concord.driver.kernel` may import `civictech.cell.*` at all. A
+  conformance corpus is implementation-neutral by construction, so "the candidate
+  class came from a jar this runtime loaded" is not a neutral claim it can state —
+  which suggests that even a future promotion scenario would cover spec 53's swap,
+  with B14's loader-provenance half staying a `:loader` test.
+
+- **What was NOT done instead.** No easier scenario was substituted for the hard
+  one: nothing was authored that promotes nothing, that swaps a cell for itself, or
+  that reads "restart" as "promotion". No JAR1-local id was minted into `covers:`.
+  No `53-*` id was invented in the spec to make a `covers:` line resolve. No
+  catalog cell or step verb was added under cover of a corpus-authoring task.
+
+- **Resolves**: a schema-change ticket that does all three of (a) mint EARS ids for
+  `53-evolution.md` §"The promotion swap" that pass the L0 "checkable through the
+  SPI" gate, (b) grow the step vocabulary with a promotion verb naming an
+  incumbent, a candidate and the outlet being rebound, and (c) grow the cell
+  catalog with a buffering-membrane gate plus an incumbent/candidate pair whose
+  outlets are contract-identical and whose folds differ observably. With all three,
+  author the scenario over the existing `observations-whole-waves` /
+  `incremental-equals-batch` / `no-dead-letters` checks — which are adequate to the
+  glitch-freedom claim once the swap itself is expressible — and delete this entry.
