@@ -54,7 +54,7 @@ Every demo serves HTTP + SSE; the port is the first argument (default 8080, or
 | exchange | see [multi-node](#multi-node-two-jvms) | Two peers, partitioned + replicated + durable + glitch-free order board |
 | agora | `./gradlew :demo:agora:run` | Argumentation graph; every edge is itself a claim, cycles quiesce |
 | skillmatch | `./gradlew :demo:skillmatch:run --args="8092"` | Relational operators: equi-join, negated semijoin, lookup join, combine-latest |
-| tiering | `./gradlew :demo:tiering:run --args="8093"` | Score fusion: valuations + pairwise preferences → one tier board |
+| tiering | see [multi-node](#multi-node-two-jvms) | Score fusion: valuations + pairwise preferences → one tier board |
 | backlog-triage | `./gradlew :demo:backlog-triage:run --args="8094"` | Collective ranking with pluggable engines (elo, Bradley–Terry, TrueSkill…), JSON agent API |
 
 Durability: `shopping`, `agora`, and `exchange` accept `--journal <dir>` and
@@ -85,6 +85,20 @@ converge on both sides. Start a listener and a dialer:
 Open a tab on each HTTP port and edit — both sides converge. A late-starting
 or reconnecting peer replays history in order and catches up automatically.
 The same flags work on `:demo:exchange`.
+
+`:demo:tiering` peers the same way, plus a manual re-tier lane (an OR-map)
+that converges across both hosts:
+
+```bash
+./gradlew :demo:tiering:run --args="8093 --listen 9091"
+./gradlew :demo:tiering:run --args="8094 --peer ws://localhost:9091"
+```
+
+`--journal <dir>` is also accepted, but unlike `shopping`/`agora`/`exchange`
+it covers only that manual re-tier lane, not the whole demo: the valuation
+and preference payloads are not yet registered in `WireCodec`'s polymorphic
+scope, and the rest of the pipeline's cells get fresh random refs each start,
+so only the manual map survives a `kill -9` restart. See computenet-3san.
 
 ## Inspect a running graph
 
