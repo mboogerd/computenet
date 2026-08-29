@@ -47,6 +47,7 @@ import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestFactory
 import org.junit.jupiter.api.assertThrows
+import org.opentest4j.TestAbortedException
 import java.io.File
 
 /**
@@ -69,7 +70,21 @@ import java.io.File
  * selects which scenarios execute by their `profile:` field; the build passes
  * `concord.profiles` through as a system property. Filtering the corpus to the
  * empty set (e.g. `-Pconcord.profiles=dist` with only `core` pilots) yields zero
- * dynamic tests, not an error.
+ * *executed* scenarios, not an error.
+ *
+ * **A filtered run says what it excluded (computenet-j2x.7).** The filter used to
+ * DROP a non-active scenario before any JUnit node existed for it, so a green
+ * `-Pconcord.profiles=core` run was indistinguishable from a full one: the five
+ * `dist` scenarios of `corpus/42-replication/` produced no test node, no console
+ * line, and no `skipped` count, and a bead citing that run as evidence for
+ * `42-REPL-01` was citing a run that never executed it. Every excluded scenario
+ * now emits a **skipped** dynamic test carrying its id, its directory and the
+ * reason ([excludedScenarioTest]), and the factory always prepends one summary
+ * node naming the active set and the excluded population ([profileFilterSummary]).
+ * Both surface in the two places an agent reads as evidence — the Gradle console
+ * (`TestLogEvent.SKIPPED` and `PASSED` are both enabled in
+ * `buildSrc/.../kotlin-jvm.gradle.kts`) and `CorpusRunner.xml`'s `skipped=` count.
+ * The fast local loop is deliberately still fast: nothing excluded is executed.
  */
 class CorpusRunner {
 
@@ -103,11 +118,29 @@ class CorpusRunner {
     ) : CheckContext
 
     @TestFactory
-    fun `every corpus scenario runs against the kernel driver`(): List<DynamicTest> {
+    fun `every corpus scenario runs against the kernel driver`(): List<DynamicTest> =
+        corpusTests(activeProfiles())
+
+    /**
+     * One scenario the profile filter kept out of this run: enough to identify it
+     * and to say why it did not execute.
+     */
+    internal data class ExcludedScenario(val id: String, val directory: String, val profile: String)
+
+    /**
+     * The dynamic-test list for one [active] profile set: a summary node, then one
+     * node per discovered scenario — executed if its profile is active, **skipped
+     * with a reason** if it is not.
+     *
+     * Taking `active` as a parameter rather than reading the system property inline
+     * is what makes the exclusion reporting testable without mutating JVM-global
+     * state (see `ProfileFilterVisibilityTest`).
+     */
+    internal fun corpusTests(active: Set<String>): List<DynamicTest> {
         val files = CORPUS.walkTopDown().filter { it.isFile && it.extension == "yaml" }.sorted().toList()
         assertTrue(files.isNotEmpty()) { "no corpus scenarios discovered under ${CORPUS.absolutePath}" }
-        val active = activeProfiles()
-        return files.mapNotNull { file ->
+        val excluded = mutableListOf<ExcludedScenario>()
+        val perScenario = files.map { file ->
             val scenario = ConcordYaml.instance.decodeFromString(Scenario.serializer(), file.readText())
             // The `expect-failure:`/`kind:` pairing is a property of the corpus, not of
             // one run, so it is asserted for EVERY discovered file — before the profile
@@ -116,9 +149,65 @@ class CorpusRunner {
             // declaration (or an example carrying a meaningless one) would be invisible
             // to the documented fast loop `-Pconcord.profiles=core`.
             assertExpectFailureMatchesKind(scenario)
-            if (scenario.profile.slug() !in active) return@mapNotNull null
-            DynamicTest.dynamicTest("${scenario.id} (${file.parentFile.name})") { runScenario(scenario) }
+            val profile = scenario.profile.slug()
+            if (profile in active) {
+                DynamicTest.dynamicTest("${scenario.id} (${file.parentFile.name})") { runScenario(scenario) }
+            } else {
+                val entry = ExcludedScenario(scenario.id, file.parentFile.name, profile)
+                excluded += entry
+                excludedScenarioTest(entry, active)
+            }
         }
+        // Prepended, not appended: the summary is the line an agent should meet
+        // first when it reads this run as evidence.
+        return listOf(profileFilterSummary(active, excluded)) + perScenario
+    }
+
+    /**
+     * A node for an excluded scenario that reports as **skipped**, not as absent.
+     *
+     * Its display name repeats the scenario id, so the grep that diagnosed
+     * computenet-j2x.7 (`grep 42-REPL-01 CorpusRunner.xml`) now hits — and the
+     * word `SKIPPED` and the reason travel with the hit, so the same grep cannot
+     * be misread as proof the scenario ran. [TestAbortedException] is what makes
+     * JUnit record it as skipped rather than passed; a passing placeholder would
+     * inflate the green count with scenarios that were never driven.
+     */
+    private fun excludedScenarioTest(entry: ExcludedScenario, active: Set<String>): DynamicTest =
+        DynamicTest.dynamicTest(
+            "${entry.id} (${entry.directory}) SKIPPED — profile '${entry.profile}' not in " +
+                "active set ${active.sorted()}",
+        ) {
+            throw TestAbortedException(
+                "${entry.id} (corpus/${entry.directory}) did NOT run: it declares `profile: ${entry.profile}` " +
+                    "and this run activated ${active.sorted()} via -Pconcord.profiles. Do not cite this run as " +
+                    "evidence for ${entry.id}; re-run without -Pconcord.profiles (default: core,dist,dur).",
+            )
+        }
+
+    /**
+     * The always-present node naming the active profile set and the excluded
+     * population, by count, profile and corpus directory.
+     *
+     * It is emitted even when nothing was excluded, so its absence from a run's
+     * output means the runner itself did not execute — never "nothing was
+     * filtered". It passes; the exclusion lives in its *name*, which is what
+     * `TestLogEvent.PASSED` prints and what `CorpusRunner.xml` records.
+     */
+    internal fun profileFilterSummary(active: Set<String>, excluded: List<ExcludedScenario>): DynamicTest =
+        DynamicTest.dynamicTest(profileFilterSummaryName(active, excluded)) {}
+
+    /** The summary node's display name — the whole payload, hence its own function. */
+    internal fun profileFilterSummaryName(active: Set<String>, excluded: List<ExcludedScenario>): String {
+        if (excluded.isEmpty()) {
+            return "profile filter: active=${active.sorted()}, 0 scenarios excluded — this run covers the whole corpus"
+        }
+        val byProfile = excluded.groupBy { it.profile }.toSortedMap()
+        val detail = byProfile.entries.joinToString("; ") { (profile, entries) ->
+            "$profile x${entries.size} in ${entries.map { it.directory }.distinct().sorted().joinToString(",")}"
+        }
+        return "profile filter: active=${active.sorted()}, ${excluded.size} scenarios EXCLUDED and NOT run " +
+            "($detail) — this run is NOT evidence for them"
     }
 
     /**
