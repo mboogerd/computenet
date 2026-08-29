@@ -151,9 +151,9 @@ after a red suite:
 
   ```bash
   EPIC=$(.claude/skills/work/scripts/epic-of.sh <feature-id>)
-  for parent in "$EPIC" $(bd list --parent="$EPIC" --all --json | sed -n '/^[[{]/,$p' \
+  for parent in "$EPIC" $(bd list --parent="$EPIC" --all --json | sed -n '/^[[{]/,/^[]}]/p' \
         | jq -r '(if type=="array" then . else (.issues // []) end)[].id'); do
-    bd list --parent="$parent" --all --json | sed -n '/^[[{]/,$p' \
+    bd list --parent="$parent" --all --json | sed -n '/^[[{]/,/^[]}]/p' \
       | jq -r '(if type=="array" then . else (.issues // []) end)[]
                | select(.status != "closed")
                | "\(.id)\t\(((.metadata // {}).files // "-")

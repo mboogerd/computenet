@@ -64,7 +64,7 @@ fi
 # subtree after a crash is the honest case).
 if [ "${CLAIM_SKIP_HOT:-}" != 1 ]; then
   cutoff=$(( $(date +%s) - STALE_MIN * 60 ))
-  hot=$(bd list --all --limit 0 --json 2>/dev/null | sed -n '/^[[{]/,$p' \
+  hot=$(bd list --all --limit 0 --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p' \
     | jq -r --arg e "$id" --argjson c "$cutoff" '
         (if type=="array" then . else (.issues // []) end) as $all
         | [$e] as $seed
@@ -92,7 +92,7 @@ fi
 # yurq: re-verify AT THE CLAIM, not at the top of step 3 — and BEFORE the
 # write, so a LIVE/FOREIGN refusal leaves the bead exactly as found; the
 # post-write ordering claimed-then-disowned two epics per run (computenet-hdow).
-recheck=$(bd show "$id" --json | sed -n '/^[[{]/,$p')
+recheck=$(bd show "$id" --json | sed -n '/^[[{]/,/^[]}]/p')
 held=$(jq -r '.[0].metadata.holder // ""' <<<"$recheck")
 if [ -n "$held" ]; then
   verdict=$("$SCRIPT_DIR/session-holder.sh" --check "$held"); hrc=$?
@@ -160,7 +160,7 @@ if grep -qiE "rejected|error" <<<"$push_out"; then
     echo "ESCALATE: pull hit a merge conflict — see .claude/skills/work/references/dolt-conflict.md (an issues-only modify/modify conflict is resolvable here; anything else needs an operator); claim is LOCAL-ONLY" >&2
     exit 2
   fi
-  now_assignee=$(bd show "$id" --json | sed -n '/^[[{]/,$p' | jq -r '.[0].assignee // ""')
+  now_assignee=$(bd show "$id" --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0].assignee // ""')
   if [ "$now_assignee" != "$BEADS_ACTOR" ]; then
     echo "LOST RACE: after the pull, $id is assigned to '$now_assignee' — select another epic" >&2
     exit 1

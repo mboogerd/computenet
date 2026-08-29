@@ -69,7 +69,7 @@ The two that bite hardest, inline because skipping them costs the most:
 
 - **`bd show <id> --json` returns a LIST** — unwrap `.[0]` or every field reads
   `null` — and `bd` prints warnings on stdout **before** the JSON, so slice with
-  `sed -n '/^[[{]/,$p'` before `jq`. An empty `jq` result is never evidence of
+  `sed -n '/^[[{]/,/^[]}]/p'` before `jq`. An empty `jq` result is never evidence of
   an empty query.
 - **`bd create --parent=<shared epic>` is banned** — it mints ids from a
   per-database counter and two machines collide. Use
@@ -719,7 +719,7 @@ selection reads descriptions, never comments — so a prior session's recorded
 from scratch. Check the durable form before claiming:
 
 ```bash
-bd show <candidate> --json | sed -n '/^[[{]/,$p' \
+bd show <candidate> --json | sed -n '/^[[{]/,/^[]}]/p' \
   | jq -r '.[0].labels[]? | select(startswith("needs:")) | ltrimstr("needs:")' \
   | while read -r tool; do
       .claude/skills/work/scripts/have-tool.sh "$tool" || echo "SKIP: needs $tool, absent or not runnable here"
@@ -1001,7 +1001,7 @@ looks exactly like a dead breakdown if you only count children
 `human` label + a `QUESTION:` comment:
 
 ```bash
-bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0] | "\(.status) \(.assignee) \(.labels)"'
+bd show <epic> --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0] | "\(.status) \(.assignee) \(.labels)"'
 bd comments <epic> --json > "$SCRATCH/epic-comments.json"
 ```
 
@@ -1032,7 +1032,7 @@ they rot after their blocker clears (computenet-6i1: 3 of 4 parked items were
 finishable). List them repo-wide and keep the ones under this epic:
 
 ```bash
-bd list --status=blocked --limit 0 --json | sed -n '/^[[{]/,$p' | jq -r '.[] | .id'
+bd list --status=blocked --limit 0 --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[] | .id'
 .claude/skills/work/scripts/epic-of.sh <each id>       # keep those under <epic>
 bd comments <id> --json > "$SCRATCH/parked-<id>.json"  # read the QUESTION
 ```
@@ -1614,7 +1614,7 @@ sibling.
 under one is an acquisition and gets pushed like any other:
 
 ```bash
-bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'    # local read, no network
+bd show <epic> --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0].status'    # local read, no network
 # closed → bd dolt push        (>=300s timeout) right after the claim
 ```
 
@@ -2191,7 +2191,7 @@ Otherwise, in order:
 **1. The epic decision.** One query, three branches:
 
 ```bash
-bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0] | "\(.status) \(.assignee)"'
+bd show <epic> --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0] | "\(.status) \(.assignee)"'
 bd list --parent=<epic> --all --json     # children; must be non-empty to close
 ```
 

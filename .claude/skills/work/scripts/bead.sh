@@ -36,7 +36,7 @@ filter=${1:-.}
 # stdout (bd-traps.md's "malformed mid-document" note is about the tail, which
 # jq surfaces as a parse error rather than silence).
 bd show "$id" --json 2>/dev/null \
-  | sed -n '/^[[{]/,$p' \
+  | sed -n '/^[[{]/,/^[]}]/p' \
   | jq $raw '(if type=="array" then .[0] else . end)
              | { id, title, issue_type, status, priority, assignee, parent,
                  labels, metadata, description, acceptance_criteria, design,

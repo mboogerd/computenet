@@ -57,7 +57,7 @@ dotted=$(bd list --all --created-after "$SINCE" --limit 0 --skip-labels --json 2
 # owner:$BEADS_ACTOR as a label and never removes it. Without this, every
 # breakdown child under a finished epic would flag for two days.
 mine=$(bd list --all --label="owner:$BEADS_ACTOR" --limit 0 --json 2>/dev/null \
-       | sed -n '/^[[{]/,$p' \
+       | sed -n '/^[[{]/,/^[]}]/p' \
        | jq -r "$ROWS | .id" 2>/dev/null)
 
 # Resolve ownership once per PARENT, not once per child: `bd show` is ~0.5s and
@@ -79,7 +79,7 @@ held_by_us() {  # $1 = bead id; sets $owner to the last assignee seen
     # -Fx: whole-line match, or computenet-7em.1 would match the line
     # computenet-7em.1.6 and silently skip a real finding.
     printf '%s\n' "$mine" | grep -Fxq "$id" && return 0
-    row=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,$p')
+    row=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p')
     owner=$(printf '%s' "$row" | jq -r '.[0].assignee // ""' 2>/dev/null)
     [ "$owner" = "$BEADS_ACTOR" ] && return 0
     p=$(printf '%s' "$row" | jq -r '.[0].parent // empty' 2>/dev/null)
@@ -92,7 +92,7 @@ held_by_us() {  # $1 = bead id; sets $owner to the last assignee seen
 flagged=
 for parent in $(for id in $dotted; do echo "${id%.*}"; done | sort -u); do
   held_by_us "$parent" && continue
-  owner=$(bd show "$parent" --json 2>/dev/null | sed -n '/^[[{]/,$p' \
+  owner=$(bd show "$parent" --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p' \
           | jq -r '.[0].assignee // ""' 2>/dev/null)
   for id in $dotted; do
     [ "${id%.*}" = "$parent" ] || continue

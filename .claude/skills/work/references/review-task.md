@@ -549,7 +549,7 @@ right call is genuinely ambiguous, apply the
 
 **Real work you found that is outside this task becomes a bead, and where it
 is parented is a check, not a habit.** Read the epic's status first
-(`bd show <epic-id> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'`): open → file it under the
+(`bd show <epic-id> --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0].status'`): open → file it under the
 epic, which is what schedules it. **Closed** — which happens, because a
 concurrent session can close an epic while its child is still in review — →
 file it **unparented with a `discovered-from` edge onto the item you were

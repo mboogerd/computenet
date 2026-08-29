@@ -109,7 +109,7 @@ bead, using signals that cost nothing and are not the agent's transcript
 (a context hazard, above):
 
 ```bash
-bd show <id> --json | sed -n '/^[[{]/,$p' | jq -r '.[0]|"\(.status) \(.metadata.review // "-") \(.comment_count)"'
+bd show <id> --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0]|"\(.status) \(.metadata.review // "-") \(.comment_count)"'
 git -C <task-worktree> log --oneline -3
 ```
 

@@ -946,7 +946,7 @@ on one query**, run before you file — the answer has changed under a live
 session, since a concurrent session can close the epic mid-review:
 
 ```bash
-bd show <epic-id> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'
+bd show <epic-id> --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0].status'
 .claude/skills/work/scripts/epic-of.sh <feature-id>   # (unparented) is a real answer
 ```
 
@@ -976,7 +976,7 @@ bd create "<the unmet criterion, verbatim>" --type=bug \
   --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet — and, on the closed-epic row: filed UNPARENTED deliberately, epic <epic-id> closed at review time>" \
   --acceptance="<the original criterion, unchanged>" \
   --metadata '{"model":"<sonnet|opus>","files":"<the files a fix touches>"}' \
-  --json | sed -n '/^[[{]/,$p' | jq -r '.id' > "$SCRATCH/residual-id"
+  --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.id' > "$SCRATCH/residual-id"
 cat "$SCRATCH/residual-id"      # must print the new id, not an empty line
 ```
 

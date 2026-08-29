@@ -50,13 +50,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EPIC_OF="$HERE/epic-of.sh"
 [ -x "$EPIC_OF" ] || { echo "ready-in-epic: $EPIC_OF missing; NOTHING was checked" >&2; exit 3; }
 
-raw=$(bd ready --json --limit 0 2>/dev/null | sed -n '/^[[{]/,$p') \
+raw=$(bd ready --json --limit 0 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p') \
   || { echo "ready-in-epic: bd ready failed; NOTHING was checked" >&2; exit 3; }
 [ -n "$raw" ] || { echo "ready-in-epic: bd ready returned nothing parseable; NOTHING was checked" >&2; exit 3; }
 
 # Every bead's id and explicit parent, in ONE call — the parent map the walk
 # needs. `--all` so a closed intermediate ancestor is still resolvable.
-allj=$(bd list --all --limit 0 --json 2>/dev/null | sed -n '/^[[{]/,$p') \
+allj=$(bd list --all --limit 0 --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p') \
   || { echo "ready-in-epic: bd list failed; NOTHING was checked" >&2; exit 3; }
 [ -n "$allj" ] || { echo "ready-in-epic: bd list returned nothing parseable; NOTHING was checked" >&2; exit 3; }
 

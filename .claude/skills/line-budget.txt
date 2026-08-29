@@ -127,7 +127,16 @@
 # computenet-9z8t (+10) — bd update aborts the whole call on one unknown flag,
 # discarding a valid flag's write; --body-file exists, --acceptance-file does
 # not. computenet-l1bb is one inline clause on an existing table row.
-work                8764
+# 8764 -> 8813 on 2026-08-29: computenet-dowo (+19, bd-traps.md) — bd writes a
+# pagination TRAILER after the closing bracket when a listing is capped, and the
+# documented slice ran to end-of-file; the idiom is now terminated
+# (/^[[{]/,/^[]}]/p) at all 34 sites and the "empty jq field is not an unset
+# field" rule is stated. computenet-i4cq + computenet-1z8s (+19, gradle-evidence
+# .md) — six agents across two sessions: the same task twice on one command line
+# runs once under the FIRST --tests filter, and the actionable-task line points
+# the wrong way. computenet-1mjv (+11) — --rerun on a LIFECYCLE task reruns
+# nothing while looking like correct usage.
+work                8813
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

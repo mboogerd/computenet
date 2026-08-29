@@ -60,7 +60,7 @@ found=0
 for id in "$@"; do
   # No `|| continue` here: with pipefail a failing `bd` would take the whole
   # pipeline down silently, and a mistyped id would read as a clean pass.
-  json=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,$p')
+  json=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p')
   [ -n "$json" ] || { echo "check-files-claim: $id unreadable, skipping" >&2; continue; }
 
   # `bd show --json` returns a LIST; metadata.files is a comma-separated string

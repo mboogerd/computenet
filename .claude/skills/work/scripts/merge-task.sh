@@ -56,8 +56,8 @@ pass_gate() { echo "GATE $1: PASS — $2"; }
 # [ or { before jq, and unwrap .[0].
 shown=$(bd show "$task" --json) \
   || { echo "merge-task: bd show $task failed — cannot resolve the task branch" >&2; exit 3; }
-tbr=$(printf '%s\n' "$shown" | sed -n '/^[[{]/,$p' | jq -r '.[0].metadata.branch // empty')
-twt=$(printf '%s\n' "$shown" | sed -n '/^[[{]/,$p' | jq -r '.[0].metadata.worktree // empty')
+tbr=$(printf '%s\n' "$shown" | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0].metadata.branch // empty')
+twt=$(printf '%s\n' "$shown" | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0].metadata.worktree // empty')
 [ -n "$tbr" ] || tbr="task/$task"       # 5b's default when the breakdown omitted it
 
 # The feature worktree is RECOMPUTED locally, the same way feature-branch.sh

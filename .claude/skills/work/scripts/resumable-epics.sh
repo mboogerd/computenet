@@ -18,7 +18,7 @@ set -uo pipefail
 DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 features=$(bd list --type=feature --status=in_progress --limit 0 --json 2>/dev/null \
-             | sed -n '/^[[{]/,$p' \
+             | sed -n '/^[[{]/,/^[]}]/p' \
              | jq -r '(if type=="array" then . else (.issues // []) end)[].id' 2>/dev/null)
 
 epics=""

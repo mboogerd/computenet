@@ -52,7 +52,7 @@ SKILL.md and the other references cite this file as "`bd` traps".
   `jq -r '.[0].description'` into a file and Read it.
 - `bd` prints warnings on stdout **before** the JSON, so `jq` and
   `json.loads` fail on the raw stream; slice from the first line starting
-  `[` or `{` (`sed -n '/^[[{]/,$p'`) before parsing. **Every documented
+  `[` or `{` (`sed -n '/^[[{]/,/^[]}]/p'`) before parsing. **Every documented
   snippet in this skill carries that slice** — it is not decoration, and
   removing it to shorten a line reintroduces the bug (computenet-efhi).
   Setting `beads.role` silences the *role* warning, and this clone has it
@@ -171,7 +171,7 @@ SKILL.md and the other references cite this file as "`bd` traps".
 
   ```bash
   ROWS='(if type=="array" then . else (.issues // []) end)[]'
-  bd list … --json | sed -n '/^[[{]/,$p' | jq -r "$ROWS | .id"
+  bd list … --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r "$ROWS | .id"
   ```
 
 - **Re-parenting a reviewer-filed residual takes two commands.** A
@@ -191,6 +191,27 @@ SKILL.md and the other references cite this file as "`bd` traps".
   unparented (hash id, counter untouched) and then re-parents. Breakdown
   children under an epic or feature YOU claimed are exclusive by that claim
   and keep their dotted ids — `--parent` is correct there.
+- **The `--json` slice must be TERMINATED, not open-ended.** Every idiom in
+  this skill now reads `sed -n '/^[[{]/,/^[]}]/p'` — first line opening the
+  document through the first line closing it at column 0. The old form
+  `,$p` ran to end of file, and bd writes a **pagination trailer to the same
+  stream** when a listing is capped: `Showing 100 of 144 ready issues. Use
+  --limit 0 …` after the closing `]`. jq then reports `parse error: Invalid
+  numeric literal at line 3258, column 8` — column 8 is where `100` begins in
+  the trailer, so it reads as mid-document corruption and is not: the array
+  above it is complete and valid (characterised in computenet-dowo, reproduced
+  2026-08-29 on `bd ready --json`). The slice was designed for a PREFIX
+  problem; this is a SUFFIX problem. It appears and disappears with the size
+  of the result set, which is why it looked intermittent.
+
+  **An empty single-field jq result is never evidence the field is unset.**
+  When the document does fail to parse, a whole-document query fails loudly
+  while `jq -r '.[0].acceptance_criteria'` may still print — jq emits fields
+  it reached before the bad line — and a query for a field AFTER it returns
+  nothing, which reads exactly like an empty field. Where emptiness routes
+  anything (an acceptance list, `metadata.files`, a `cross_bead`
+  authorization), make the read fail loudly first: `jq -e .` the sliced
+  document, or read the whole object and index into it.
 - **`bd update` aborts the WHOLE call on one unknown flag**, discarding the
   writes a valid flag in the same call would have made. Measured 2026-08-29:
   `bd update <id> --nosuchflag --set-metadata probe2=x` → `Error: unknown

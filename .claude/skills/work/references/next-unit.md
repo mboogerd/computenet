@@ -112,7 +112,7 @@ always pushed, a child claim only once its epic closes (5b):
 
 ```bash
 .claude/skills/work/scripts/epic-of.sh <candidate-id>
-bd show <that epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_at)"'
+bd show <that epic> --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_at)"'
 ```
 
 - open or in_progress with the other machine's assignee, or *any* status
