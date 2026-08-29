@@ -230,9 +230,10 @@
 # criterion never discriminates: LinkControl.holding's first test PASSED with
 # the primitive no-op'd, and a sibling case left five tests green with the
 # duplicator neutralised entirely. Both were caught by agents who happened to be
-# thorough; the documented procedure passed both. +9 restate the clause at the
-# three call sites (task.md step 3, review-task.md, review-feature.md) where the
-# verdict is actually recorded.
+# thorough; the documented procedure passed both. +21 in mutation-check.md step
+# 4 and "What to report"; the other +13 restate the clause at the three call
+# sites (task.md step 3, review-task.md, review-feature.md) where the verdict is
+# actually recorded.
 #
 # computenet-a4b7 rode this branch and is being CLOSED NOT-REPRODUCIBLE instead.
 # Its diagnosis — that re-applying an identical mutation leaves compileKotlin

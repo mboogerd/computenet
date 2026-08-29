@@ -394,9 +394,9 @@ Beyond that standard, a reviewer owes the stronger signal:
   actually reverted. Three sessions each got a different one of those wrong.
   Two of its clauses decide whether a green here means anything: name **which
   assertion** went red (an earlier one reddening leaves the criterion's own
-  assertion unverified) and check the class file is **newer than the source**
-  (an identical re-applied mutation leaves `compileKotlin` UP-TO-DATE and the
-  run grades the previous build).
+  assertion unverified), and prove today's source was actually compiled — an
+  *unmarked* `> Task :<module>:compileKotlin` line, which `--rerun-tasks`
+  forces and `touch <source>` does not.
 
   **Leave the marker while it is applied** — the same rule
   [task.md](task.md) step 3 gives implementers, and it matters more here,
