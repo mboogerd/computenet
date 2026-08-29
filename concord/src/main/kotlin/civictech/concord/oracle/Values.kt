@@ -67,9 +67,31 @@ object Values {
      * which now describes both halves as closed. `concord/corpus/DISPUTES.md`'s
      * G-59/C-9 entry still narrates the pre-widening state as computenet-yh6.1.9's
      * scope; it is a historical record of that item and was left alone.
+     *
+     * **`tagged-map-view` joined on the same reasoning (computenet-j2x.4.3).**
+     * `computenet-j2x.4.1` taught [BatchOracle] the OR-map bindings and registered
+     * the id in [BatchOracle.VIEW_TYPES], but left this constant alone, recording
+     * the split as a residual rather than a decision — inert only for as long as no
+     * corpus scenario named the id. `computenet-j2x.4.3` is the item that names it
+     * (`24-TMAP-MERGE-01`/`-PRESENCE-01`/`-LWW-01`/`-RESET-01`), so the residual
+     * became live and was closed the same way `journal-set-view` was. The vacuity
+     * was **measured, not assumed**: a probe scenario whose only views were two
+     * `tagged-map-view`s, carrying `late-join-equals-early` (unnamed views) and
+     * `incremental-equals-batch view: '*'`, failed on 20 of 20 runs with
+     * "could not identify early/late views" — `viewCells` saw none of them — while
+     * the `'*'` check in the *same* scenario passed having compared nothing. That
+     * silent pass is the outcome this corpus does not accept. Widened, both
+     * consumers see the tagged view and the probe passes for having actually
+     * compared. Blast radius, as before: no committed corpus scenario used either
+     * generalising form over a tagged view (the four above name their view in every
+     * check), and `ScenarioGenerator`'s terminal vocabulary is a fixed allowlist
+     * that does not contain the id, so no generated instance can carry one.
+     *
+     * A `tagged-map-view` is deliberately NOT in [SET_VIEW_TYPES]: its payload is a
+     * map, which [Value.MapVal] equality already compares key-order-insensitively.
      */
     val VIEW_TYPES: Set<String> =
-        SET_VIEW_TYPES + setOf("map-view", "count-view", "value-view", "list-view")
+        SET_VIEW_TYPES + setOf("map-view", "count-view", "value-view", "list-view", "tagged-map-view")
 
     /** A stable textual rendering — used for map keys (which must be strings) and as the total-order tiebreak. */
     fun render(v: Value): String = when (v) {

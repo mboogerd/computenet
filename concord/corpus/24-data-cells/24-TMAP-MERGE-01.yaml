@@ -1,0 +1,55 @@
+# Concord corpus scenario (KE1-F4, computenet-j2x.4.3). Canonical schema — see
+# concord/schema/scenario.md.
+#
+# [24-TMAP-01] states merge (pointwise dot union) is commutative, associative and
+# idempotent, "such that a key's presence and value converge to the same result
+# regardless of delivery order". The executable statement of *that* sentence is a
+# convergence property, never a golden: the law is about order-insensitivity, so a
+# scenario that pinned one map would be asserting a trace, not the property (P2).
+#
+# What quantifies the orders: two replicas of one logical OR-map gossip their
+# TaggedMapDeltas over the mesh, and the schedule sweep (default 20 runs) picks a
+# different delivery interleaving each run — every check must hold on every run.
+# Commutativity and associativity are exactly what varying that interleaving
+# probes. Idempotence is exercised rather than separately asserted: the mesh's
+# echo-terminating gossip re-delivers a dot along more than one path, and a merge
+# that were not idempotent would not converge under that re-delivery. The corpus
+# has no verb that re-sends a *replication* delta with the same dot on demand
+# (`retransmit` injects at an inlet under an explicit wave position, which is a
+# different mechanism), so the assertion here is the convergence the law states.
+#
+# k1 is written concurrently on BOTH replicas: which dot's value survives is
+# decided by (counter, sourceId) order over identities no scenario can name
+# ([24-TMAP-03]'s concurrent half — see concord/corpus/DISPUTES.md, KE1-37).
+# That is precisely why nothing here predicts the value; it asserts only that both
+# replicas agree on it. k2 pairs a put on one side with a concurrent remove on the
+# other, so the run also merges a tombstone against a dot the remover may or may
+# not have observed — either outcome converges ([24-TMAP-04]'s reset-remove).
+id: 24-TMAP-MERGE-01
+title: Two OR-map replicas converge under concurrent per-key writes, whatever the delivery order
+covers: [24-TMAP-01]
+profile: dist
+kind: example
+narrative:
+  given: two ormap-source replicas of one logical OR-map, one per host, each observed through its own tagged-map-view
+  when: the same key is put on both replicas and a second key is put on one while removed on the other
+  then: at quiescence both replicas hold equal folds and both views agree — convergence under any delivery order, not a fixed golden
+graph:
+  hosts: [h1, h2]
+  cells:
+    - {id: r1, type: ormap-source, host: h1, replica-of: shared}
+    - {id: r2, type: ormap-source, host: h2, replica-of: shared}
+    - {id: v1, type: tagged-map-view, host: h1}
+    - {id: v2, type: tagged-map-view, host: h2}
+  links:
+    - {from: r1, to: v1}
+    - {from: r2, to: v2}
+script:
+  - {type: apply, on: r1, op: put, value: [k1, from-h1]}
+  - {type: apply, on: r2, op: put, value: [k1, from-h2]}   # concurrent same-key put: dot order picks the survivor
+  - {type: apply, on: r1, op: put, value: [k2, only-h1]}
+  - {type: apply, on: r2, op: remove, value: k2}           # reset-remove covers only the dots THIS replica observed
+checks:
+  - {type: replicas-converge, logical: shared}
+  - {type: views-converge, views: [v1, v2]}
+  - {type: no-dead-letters}
