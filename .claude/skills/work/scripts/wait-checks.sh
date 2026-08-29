@@ -46,6 +46,19 @@
 # 9-12 minute settle time governed by build-test-fast (computenet-678u).
 # A caller with a longer budget passes max-rounds explicitly; one that needs
 # more than ~28 rounds needs a second call, not a bigger number.
+#
+# TWO CALLS IS THE NORMAL COLD START, NOT A FAULT. 28 rounds is ~9m20s and
+# build-test-fast has measured 8m56s-13m25s across a dozen PRs, so a caller
+# that starts waiting when the run starts — every feature reviewer — times out
+# on a perfectly healthy PR as a matter of course (computenet-ymv4 fixed the
+# opposite complaint; the two constraints cannot both be met inside one 600s
+# foreground call). Reported four times before anyone wrote it down
+# (computenet-hil5). So on exhaustion this script says WHICH required checks
+# are still pending and HOW LONG they have been running, and labels the
+# reading ORDINARY (under STUCK_AFTER_MIN, default 15) or STUCK. That is what
+# keeps TIMEOUT-PENDING meaningful: it distinguishes "shorter waiter than
+# check" from "nothing is moving". The verdict token is unchanged either way,
+# so no caller's `tail -1` classification breaks.
 # Stdout: one progress line per round, then the last rows, then the verdict as
 #   the FINAL line — exactly one of SETTLED / TIMEOUT-PENDING / QUERY-FAILED —
 #   so `tail -1` is the reading. SETTLED means present-and-not-pending, which
@@ -70,6 +83,11 @@ req='build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel
 # How many consecutive query-failed rounds before trying the other transport.
 FALLBACK_AFTER=${WAIT_CHECKS_FALLBACK_AFTER:-3}
 
+# Minutes a required check may be running before an exhausted wait is called
+# STUCK rather than ORDINARY. 15 sits above the slowest measured
+# build-test-fast (13m25s) with a little headroom.
+STUCK_AFTER_MIN=${WAIT_CHECKS_STUCK_AFTER_MIN:-15}
+
 # Re-read the same verdict over REST. Prints rows in `gh pr checks`'s own
 # shape (name, status word, conclusion) so every classifier below is unchanged.
 # Silent failure here is not a green: it prints nothing, the caller's row count
@@ -83,6 +101,18 @@ rest_rows() {
                               elif .conclusion == "success" then "pass"
                               elif .conclusion == "skipped" then "skipping"
                               else "fail" end)\t\(.conclusion // "-")"' 2>/dev/null
+}
+
+# "<name> <minutes>" for every still-running check run on the head commit.
+# Read over REST because `gh pr checks` prints elapsed 0 for a pending row —
+# the age is only in check-runs' started_at. Called once, on exhaustion.
+pending_ages() {
+  local sha
+  sha=$(gh api "repos/{owner}/{repo}/pulls/${pr##*/}" --jq .head.sha 2>/dev/null) || return 1
+  [ -n "$sha" ] || return 1
+  gh api "repos/{owner}/{repo}/commits/$sha/check-runs?per_page=100" \
+    --jq '.check_runs[] | select(.status != "completed") | select(.started_at)
+          | "\(.name) \(((now - (.started_at|fromdateiso8601))/60)|floor)"' 2>/dev/null
 }
 
 rows=""
@@ -132,5 +162,23 @@ fi
 # not-reporting at exhaustion is still "checks have not settled": rows exist,
 # the required set never completed — the caller's move (diagnose, re-poll) is
 # the same as for a pending timeout, so both fold into TIMEOUT-PENDING.
+#
+# Before the verdict, say why. A required check younger than STUCK_AFTER_MIN
+# means this waiter is simply shorter than the thing it waits for: re-run the
+# same command. Older, or unchanged across two invocations, is a real signal.
+ages=$(pending_ages | grep -E "^($req) " || true)
+if [ -n "$ages" ]; then
+  oldest=$(printf '%s\n' "$ages" | awk '{print $2}' | sort -rn | head -1)
+  printf '%s\n' "$ages" | while read -r name mins; do
+    echo "wait-checks: $name has been running ${mins}m"
+  done
+  if [ "$oldest" -lt "$STUCK_AFTER_MIN" ]; then
+    echo "wait-checks: ORDINARY — every pending required check is under ${STUCK_AFTER_MIN}m." \
+         "A cold-start settle normally takes TWO invocations; re-run this exact command."
+  else
+    echo "wait-checks: STUCK — a required check has run for ${oldest}m (>= ${STUCK_AFTER_MIN}m)." \
+         "Investigate rather than re-running."
+  fi
+fi
 echo TIMEOUT-PENDING
 exit 4

@@ -496,6 +496,12 @@ So:
   # SETTLED (0) / TIMEOUT-PENDING (4) / QUERY-FAILED (3 — nothing was checked)
   ```
 
+  You start waiting when the run starts, so **two invocations is the ordinary
+  cold start** — the ~9m20s window is smaller than `build-test-fast` and
+  cannot be widened inside the 600000 ms cap (computenet-hil5). Exhaustion
+  prints each pending check's age plus `ORDINARY` (re-run it) or `STUCK`;
+  only `STUCK` is a finding.
+
   A **red** required check is not yours to wave
   through: report it and leave the verdict draft.
 

@@ -371,6 +371,13 @@ Three standing disciplines:
   .claude/skills/work/scripts/wait-checks.sh <pr-url>
   ```
 
+  **A cold start normally takes TWO invocations**: the ~9m20s window is sized
+  to the 600000 ms foreground cap and `build-test-fast` measures 8m56s–13m25s,
+  so waiting from the run's start times out on a healthy PR by construction
+  (computenet-hil5). On exhaustion the script names each pending check with
+  its age and prints `ORDINARY` (re-run it) or `STUCK`; only `STUCK` is a
+  defect.
+
   **That rule covers `gh pr checks`. It applies to EVERY `gh` call, and the
   others were all written bare.** During one 80-minute GraphQL degradation
   roughly one call in three returned 503 — while REST stayed healthy and
