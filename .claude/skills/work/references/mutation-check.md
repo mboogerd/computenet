@@ -133,14 +133,14 @@ run (computenet-a4b7, epic computenet-umx). Every documented step had passed —
 `git status` clean, diff clean, no `e:` lines, named test red, revert verified —
 because all of them look at the SOURCE.
 
-The rule that covers it is the one gradle-evidence.md already gives for test
-tasks, applied one task earlier: **`FROM-CACHE` or `UP-TO-DATE` on
-`:<module>:compileKotlin` means no compilation happened this run**, so the
-classes your test just ran against are whatever some previous run left there.
+The rule that covers it is gradle-evidence.md's, one task earlier: **`FROM-CACHE`
+or `UP-TO-DATE` on `:<module>:compileKotlin` means nothing compiled this run** —
+an unmarked line is your only positive proof the classes came from today's source.
 
 ```bash
 grep -E '^> Task :<module>:compileKotlin' "$SCRATCH/mut.log"
-# unmarked = it compiled from the source on disk. Marked = it did not.
+# unmarked = compiled from the source on disk. Marked = did not compile: the
+# class is the last execution's (UP-TO-DATE) or the cache's for this hash.
 ```
 
 Two corrections to what that bead proposed, both measured on this host
@@ -153,8 +153,8 @@ Two corrections to what that bead proposed, both measured on this host
   is *correct for that hash*. So `--no-build-cache` is not useless here — it is
   simply not the lever, because the lever is reading the state line.
 - **`touch <source>` is not a remedy** — it does not change the content hash, so
-  the task stays `UP-TO-DATE` and nothing recompiles, twice over. If you do need
-  to force it: `rm -rf <module>/build/classes`, or `--rerun-tasks`.
+  the task stays `UP-TO-DATE` and nothing recompiles, twice over. To force a real
+  recompile use `--rerun-tasks`; `rm -rf <module>/build/classes` only re-fetches.
 
 A `find -newer` on the class file was tried and rejected for the same reason: it
 returns empty both when the class is stale AND when the source simply has not
