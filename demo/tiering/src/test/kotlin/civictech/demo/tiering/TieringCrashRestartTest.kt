@@ -20,10 +20,12 @@ import java.nio.file.Files
  *   re-derives its replica ref from [TierPipeline.MANUAL_ID] plus its peering
  *   role, so journal replay re-mints the *exact* dots the mesh already saw. A
  *   key it had put and then released before the crash stays released on both
- *   hosts afterwards, and a **fresh** write made after the restore still
+ *   hosts afterwards, and a post-restore **re-pin of that same key** still
  *   converges — it did not draw a dot the mesh has already spent. Dot-exactness
  *   itself is kernel-tested at M10.1/M10.2; what this test asserts is its two
- *   observable consequences.
+ *   observable consequences. The re-pin is deliberately of the released key
+ *   rather than of a fresh one: see the comment at that assertion for why a
+ *   fresh key cannot discriminate a restored counter from a reset one.
  * - **[KE1-33] demo half — partition and heal.** At the demo level the only
  *   partition primitive a real socket offers is connection death, so the dead
  *   bridge here *is* the crash: writes exist on both sides of it (`q` written
@@ -146,11 +148,7 @@ class TieringCrashRestartTest {
                 pinned(httpB, "q") && pinned(httpB, "p") && pinned(httpB, "y")
             }
 
-            // [KE1-31], the spent-dot half: a FRESH write at the restored host
-            // converges. Without journal replay B's dot counter would restart and
-            // this put would carry a dot the mesh already tombstoned, so A would
-            // swallow it — which is exactly what was observed when this test was
-            // run once with `--journal` omitted from the relaunch.
+            // the session is fully live again in both directions
             retier(httpB, "z", "S")
             awaitUntil("post-restore write converged to A", timeoutMs = 45_000) { pinned(httpA, "z") }
 
@@ -166,6 +164,22 @@ class TieringCrashRestartTest {
             }
             check(board(httpA) == board(httpB)) {
                 "boards diverged after heal: A=${board(httpA)} B=${board(httpB)}"
+            }
+
+            // [KE1-31], the spent-dot half — and it must be a re-put of the
+            // RELEASED key, not of a fresh one. Dot novelty in `OrMapCell` is
+            // per (key, dot): a re-minted dot arriving under a key that never
+            // held it is novel there and lands regardless, so a post-restore
+            // write to a *new* key converges whether or not the counter was
+            // restored, and asserting on one proves nothing about replay. `x`
+            // is the key whose dot `(B, 1)` A tombstoned, so a B that came back
+            // with a reset counter re-mints exactly that dot, A discards it as
+            // already-removed, and this pin never appears there. Measured: with
+            // `--journal` dropped from the relaunch above, this is the
+            // assertion — and the only one — that fails.
+            retier(httpB, "x", "B")
+            awaitUntil("a post-restore re-pin of the released key converged to A", timeoutMs = 45_000) {
+                pinned(httpA, "x")
             }
         } finally {
             JvmPeer.destroy(peerA, peerB)
