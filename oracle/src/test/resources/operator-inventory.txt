@@ -29,7 +29,7 @@
 # facades (EmitKt, FlatMapSetCellKt, JoinSetCellKt, OperatorPagingKt, SemiJoinCellKt) are identified
 # either way in this package today.
 #
-# 75 lines below, each confirmed to have `kind == CLASS_KIND` (not a file facade) via
+# 79 lines below, each confirmed to have `kind == CLASS_KIND` (not a file facade) via
 # isKotlinFileFacade.
 #
 # UPDATING THIS FILE IS THE MOMENT to also update civictech.oracle.bind.OperatorCatalog's
@@ -115,4 +115,8 @@ UnionSetApi
 UnionSetCell
 UnionSetCellBase
 UnionSetCellPorts
+UntagApi
+UntagCell
+UntagCellBase
+UntagCellPorts
 WaveGate
