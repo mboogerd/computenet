@@ -298,6 +298,16 @@ The smallest coherent change, and proof the tests actually executed.
    first, then the affected module's suite. Don't report success on an
    untested claim, and don't let `BUILD SUCCESSFUL` be the claim: Gradle
    replays cached results, so a green build is not evidence a test executed.
+
+   **"The affected module" is the module whose test INPUTS you changed, which
+   is not always the module your diff sits in.** If your diff ADDS or DELETES a
+   file under `concord/corpus/`, also run `./gradlew :oracle:test --rerun`:
+   `:oracle`'s `CorpusCrossCheckTest` enumerates that directory at test time
+   and asserts a non-vacuity count, so a new scenario file changes its input
+   with no import, Gradle dependency or path overlap to point the way. Five
+   green local gates missed exactly this and `build-test-fast` caught it after
+   four merges (computenet-uxr8). Ask what READS the files you add or remove,
+   not what imports them.
    - **Your FIRST Gradle or npm call, and every one after it, passes
      `dangerouslyDisableSandbox`.** The default Bash sandbox fails KSP with
      `Operation not permitted`, and the daemon it starts can stay poisoned
