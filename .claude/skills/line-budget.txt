@@ -178,7 +178,25 @@
 # corroborating signal, name `newest` as the verdict, and put --rerun in the
 # module-gate command task.md step 6 prescribes rather than only in prose
 # elsewhere. AGENTS.md's own paragraph is generalised in the same commit.
-# 8973 -> 9004 on 2026-08-29: computenet-uxr8 (+31, one of them the blank line
+# 8973 -> 9020 on 2026-08-29: computenet-y6zv (recurrence of computenet-m9px)
+# + computenet-os91, one shape. af9q's rule finds the files that observe the
+# INVARIANT a change moves; these close over the SET — a registry's
+# completeness, a package's census — so they never name the entry being added
+# and no grep for it reaches them. Measured: PR #544 added UntagCell.kt to
+# civictech.cell.data.op with a two-file claim, passed check-files-claim.sh
+# CLEAN, was certified by mutation, ran :kernel:test green at 1273 tests, and
+# build-test-fast went red in :inspect and :oracle. 46 lines buy the enumerator
+# walk, the two shapes named with their repo instances, and the explicit
+# statement that neither check-files-claim.sh's CLEAN nor a green module gate
+# can falsify this class. The four new COUPLINGS rows are mechanical and free
+# here — they fire on computenet-j2x.3.1, naming all three enumerators that
+# reddened #544, where the current script prints nothing.
+# (of which +1 on the review round:) the same bead's review round (PR #559). +1 naming
+# OperatorInventoryTest and its inventory file in the completeness-gate list, so
+# all three of computenet-os91's instances are in the prose rather than two of
+# them being one indirection away in the script's table. The add-only narrowing
+# of the couplings is mechanical and free here.
+# 9020 -> 9051 on 2026-08-29: computenet-uxr8 (+31, one of them the blank line
 # that keeps the gradle-evidence.md sentence its own paragraph) — "affected module tests"
 # was read as the module the diff SITS IN, unanimously, by five agents in a row.
 # Feature computenet-j2x.4 added four files to concord/corpus/24-data-cells/;
@@ -189,7 +207,7 @@
 # read. The lines redefine "affected" as the modules whose test INPUTS the diff
 # changes, at both call sites (review-feature.md §3, task.md step 6), with the
 # concord/corpus -> :oracle:test rule stated concretely so it needs no derivation.
-work                9004
+work                9051
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
