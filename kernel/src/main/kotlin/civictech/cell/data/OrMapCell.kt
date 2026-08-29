@@ -2,6 +2,7 @@ package civictech.cell.data
 
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
+import civictech.cell.EmbeddedMergeClass
 import civictech.cell.PendingReBaseline
 import civictech.cell.Propagate
 import civictech.cell.ReBaselineNotice
@@ -54,8 +55,10 @@ interface OrMapApi<K, V> {
  * - `[24-TMAP-02]` [membership] is add-wins: a key is present iff it has at
  *   least one live dot.
  * - `[24-TMAP-03]` [value] is the value of the live dot with the greatest
- *   `(counter, sourceId)` order. **No wall clock participates**, here or in
- *   the delta.
+ *   `(counter, sourceId)` order, unless every live dot's value is a
+ *   [civictech.cell.MergeablePayload] and there is more than one, in which
+ *   case it is their fold in that same order (96 §E1.4). **No wall clock
+ *   participates**, here or in the delta.
  * - `[24-TMAP-04]` [MapOps.remove] is reset-remove: it tombstones exactly the
  *   dots it observed live at the key, so a concurrent put's dot — which this
  *   remove never observed — survives the merge as the key's remaining value.
@@ -90,9 +93,23 @@ interface OrMapApi<K, V> {
  * source's dots can never resurrect a key. `SetCell` is the element-shaped
  * sibling of every one of those seams; this is the dot-shaped form.
  *
- * Embedded mergeable values (96 §E1.4), `TaggedMapView`/`UntagCell` adapters
- * (§E1.5), multi-value reads, and delivered-watermark tracking
- * ([civictech.cell.data.delta.DeliveryTracking], E3.3) are not here.
+ * Embedded mergeable values fold at [value] and [values] exposes every live
+ * dot for application-side resolution (96 §E1.4) — see [TaggedMapDelta.value]
+ * for the fold rule.
+ *
+ * **Admission (`[KE1-04]`).** A value whose merge is *classified*
+ * [civictech.cell.EmbeddedMergeClass] `NON_IDEMPOTENT` — `CounterDelta`'s plain
+ * addition — is refused at the first encounter, on `put` and on [applyRemote]
+ * alike, with a [civictech.cell.NonIdempotentEmbeddedMerge] diagnostic naming
+ * the Riak embedded-counter anomaly; no dot is minted and no fold happens. The
+ * check is a **first-encounter** one, not a link-time one: `V` is erased at the
+ * ports and CP-F2 stamps `MERGE_IDEMPOTENCE` per *cell*, not per type argument,
+ * so `[KE1-10]`'s link-time classification is unreachable here — that shortfall
+ * and the unclassified-value residual are filed in `concord/corpus/DISPUTES.md`.
+ *
+ * Not here: `TaggedMapView`/`UntagCell` adapters (§E1.5) and
+ * delivered-watermark tracking
+ * ([civictech.cell.data.delta.DeliveryTracking], E3.3).
  */
 class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     OrMapCellBase<K, V>(ref), Stateful, Replicable<TaggedMapDelta<K, V>> {
@@ -193,12 +210,27 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     }
 
     /**
-     * `[24-TMAP-03]` the key's exposed value: the live dot with the greatest
-     * `(counter, sourceId)` order ([TaggedMapDelta.DOT_ORDER]) — never wall
-     * clock. `null` when the key is absent.
+     * `[24-TMAP-03]`/`[KE1-01..03,06,07]` the key's exposed value — delegated
+     * to [TaggedMapDelta.value] over a one-key delta view of this cell's live
+     * dots, so the fold/pick logic has exactly one implementation
+     * ([KE1-08], j2x.1-D4) and this cell can never disagree with the delta
+     * type it emits. `null` when the key is absent.
      */
-    fun value(key: K): V? =
-        liveDots(key).entries.maxWithOrNull(compareBy(TaggedMapDelta.DOT_ORDER) { it.key })?.value
+    fun value(key: K): V? {
+        val dots = liveDots(key)
+        if (dots.isEmpty()) return null
+        return TaggedMapDelta(puts = mapOf(key to dots)).value(key)
+    }
+
+    /**
+     * `[KE1-06]`/`[KE1-07]` every live dot's value at [key] — the empty set
+     * when the key is absent. Unlike [value] this is *not* delegated to
+     * [TaggedMapDelta]: there is no fold or pick to single-source here, only
+     * the same `liveDots(key).values.toSet()` the delta's [TaggedMapDelta.values]
+     * computes. `OrMapEmbeddedValueTest` pins the two against each other across
+     * every dot state, so the duplication cannot drift unobserved.
+     */
+    fun values(key: K): Set<V> = liveDots(key).values.toSet()
 
     /**
      * This cell's whole dot state as one delta-from-empty, tombstones
@@ -218,6 +250,10 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // methods read subclass state later, at message time.
     override fun inletHandler(): MapOps<K, V> = object : MapOps<K, V> {
         override fun put(key: K, value: V) {
+            // `[KE1-04]` admission: a classified non-idempotent embedded value
+            // is refused here — before any dot is minted, so the refusal leaves
+            // no state and performs no fold.
+            EmbeddedMergeClass.requireEmbeddable(value, "put")
             // reset-remove's local half: everything this writer currently sees
             // live at the key dies in the SAME delta that carries the fresh dot
             // (KeyedSetCell's atomic retract+add, lifted to dots). The fold
@@ -337,6 +373,14 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * translation [applyReBaseline] documents this cell as NOT making.
      */
     private fun applyRemote(delta: TaggedMapDelta<K, V>) {
+        // `[KE1-04]` admission, remote half — the same refusal the local `put`
+        // raises, applied before novelty/absorb so a refused delta leaves no
+        // dot behind and is never folded. It is raised, not swallowed: the
+        // delta is refused loudly rather than dropped, so nothing this cell
+        // declines can go missing without the diagnostic.
+        delta.puts.values.forEach { dots ->
+            dots.values.forEach { EmbeddedMergeClass.requireEmbeddable(it, "applyRemote") }
+        }
         // read before originating: `originate` clears the current context, so
         // the notice must be taken off the arriving wave first.
         val notice = CurrentContext.get()?.reBaseline

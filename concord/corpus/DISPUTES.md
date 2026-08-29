@@ -2204,6 +2204,76 @@ traced from source rather than assumed.
   `incremental-equals-batch` / `no-dead-letters` checks — which are adequate to the
   glitch-freedom claim once the swap itself is expressible — and delete this entry.
 
+## `[KE1-04]` / `[KE1-10]` — embedded-value merge class is not classifiable at link time, and not classifiable at all for an unnamed payload
+
+Filed by task `computenet-j2x.1.2` (feature `computenet-j2x.1`, 96 §E1.4), under
+decision j2x.1-D3 and the epic's honesty note on `[KE1-04]`. Category:
+`kernel-gap`. **No scenario is authored and no `covers:` id is
+minted** — the requirements this entry concerns live in the epic's `[KE1-nn]`
+namespace, not in an L0 spec chapter, and their check is a kernel test
+(`OrMapEmbeddedValueTest`, BS-2), which the feature states explicitly.
+
+- **The clauses in dispute.** `[KE1-04]`: "IF an embedded value has a
+  non-idempotent `mergeWith` (`CounterDelta`), THEN the cell SHALL refuse it with
+  a diagnostic naming the Riak embedded-counter anomaly, rather than folding it."
+  `[KE1-10]`: "IF the merge-class classification for an embedded value is
+  unavailable at link time, THEN the cell SHALL refuse the link."
+
+- **What was implemented.** `civictech.cell.EmbeddedMergeClass` classifies an
+  embedded value in the existing `civictech.nature.MergeClass` vocabulary
+  (j2x.1-D1 — no second classification mechanism was invented), by a **nominated
+  table** over the repo's own `MergeablePayload` implementations:
+  `CounterDelta` ⇒ `NON_IDEMPOTENT`; `PnCounterDelta`, `SetDelta`,
+  `WatermarkDelta`, `TaggedMapDelta` ⇒ `IDEMPOTENT`. `OrMapCell` refuses a value
+  classified `NON_IDEMPOTENT` at the **first encounter** — on `MapOps.put` and on
+  `applyRemote` — with `civictech.cell.NonIdempotentEmbeddedMerge`, whose message
+  names the Riak embedded-counter anomaly; no dot is minted and no fold happens.
+
+- **Shortfall 1 — `[KE1-10]`'s link-time refusal is unreachable for
+  `OrMapCell`.** The check needs the merge class of the *type argument* `V`, and
+  nothing at a link carries it. (a) `V` is erased: `OrMapCell<K, V>`'s ports are
+  `Use<MapOps<K, V>>` and `Subscribe<Propagate<TaggedMapDelta<K, V>>>`, and at
+  link time a port instance knows only the raw `Propagate`/`MapOps` class. (b)
+  The generated descriptor cannot supply it either: CP-F2's marker scan
+  (`gen/.../ContractProcessor.kt`, `portNatureLevels`) stamps
+  `MERGE_IDEMPOTENCE` from the **cell declaration** — "cell implements
+  `Replicable` ⇒ `IDEMPOTENT`" — so every `OrMapCell` port already offers
+  `IDEMPOTENT` regardless of what `V` is, and KSP sees the generic declaration,
+  never an instantiation. (c) `NatureNegotiation.reconcile`/`reconcileOverlap`
+  therefore compare port-level vectors that are constant in `V`. Making the check
+  link-time would need per-instantiation nature — a type argument's nature
+  reaching a port vector — which is a nature-system capability, not a tagged-map
+  change. **The first-encounter refusal stands in**, per j2x.1-D3.
+
+- **Shortfall 2 — the unclassifiable residual of `[KE1-04]`.** Idempotence of an
+  arbitrary `mergeWith` is not decidable from the type, so the table is
+  *nominated*, not derived. `EmbeddedMergeClass.classify` returns `null` for any
+  `MergeablePayload` it does not name — a kernel implementation added without
+  extending the table, or one written outside the kernel — and an unclassified
+  value is **admitted and folded**. So `[KE1-04]` holds over the **classified
+  set** only. It must not be restated as "the cell rejects all non-idempotent
+  embedded values": that is measurably false, and
+  `OrMapEmbeddedValueTest.\`an unclassified MergeablePayload is admitted …\``
+  pins the admission as observed behaviour rather than leaving the gap implicit.
+
+- **What was NOT done instead.** No second classification mechanism beside
+  `MergeClass` (j2x.1-D1). No weakening of `CounterDelta`/`PnCounterDelta` merge
+  semantics to make the classification easier. No opt-in marker interface on
+  `MergeablePayload` presented as if it closed the residual — a marker only moves
+  the nomination onto the implementer and still admits everything that forgets
+  it. No test asserting the universal guarantee the implementation does not have.
+
+- **Resolves**: (1) for `[KE1-10]`, a nature-system item that carries a type
+  argument's merge class into a port's `NatureVector` at instantiation — with
+  that, `OrMapCell`'s link can be refused when `V`'s class is `NON_IDEMPOTENT` or
+  unavailable, and the first-encounter check becomes a backstop rather than the
+  whole mechanism. (2) For `[KE1-04]`'s residual, either the same
+  per-instantiation nature (which makes an unclassified `V` a link-time refusal —
+  fail-closed) or a decision to make `MergeablePayload` declare its own
+  `MergeClass` and treat an undeclared implementation as `NON_IDEMPOTENT`, which
+  is a breaking change to a published kernel interface and needs its own ticket.
+  With either, delete this entry.
+
 ## KE1-F4 (the OR-map laws): the CONCURRENT halves of `[24-TMAP-03]` and `[24-TMAP-04]` are not scenario-statable (`script-model-gap` + `schema-gap`, `[KE1-37]`)
 
 `computenet-j2x.4.3` authored one scenario per tagged-map law —
