@@ -120,6 +120,37 @@ class TaggedMapViewTest {
     }
 
     @Test
+    fun `computenet-4d8k a null-valued put over an absent key is reported as a change`() {
+        val view = TaggedMapView<String, String?>()
+        val dot = Timestamp(s1, 1)
+        val put = TaggedMapDelta<String, String?>(puts = mapOf("a" to mapOf(dot to null)))
+
+        // key "a" is absent before this delta; the put makes it appear with a
+        // null value. value(k) is null both before (absent) and after (present,
+        // null value), so presence — not just value(k) equality — must drive
+        // the reported change.
+        view.apply(put).shouldBeTrue()
+        view.current() shouldBe mapOf("a" to null)
+        ("a" in view).shouldBeTrue()
+
+        // re-delivered dot: the key was already present with this exact value,
+        // so this is genuinely not a change.
+        view.apply(put).shouldBeFalse()
+        view.current() shouldBe mapOf("a" to null)
+
+        val tombstone = TaggedMapDelta<String, String?>(dels = mapOf("a" to setOf(dot)))
+
+        // tombstoning the last live dot: "a" disappears — an effective change.
+        view.apply(tombstone).shouldBeTrue()
+        view.current().shouldBe(emptyMap())
+        ("a" in view).shouldBeFalse()
+
+        // tombstone of an already-covered dot: no further change.
+        view.apply(tombstone).shouldBeFalse()
+        view.current().shouldBe(emptyMap())
+    }
+
+    @Test
     fun `BS-6 survives snapshot and restore, including subsequent apply behaviour`() {
         val deltas = seededDeltas()
         val original = TaggedMapView<String, String>()
