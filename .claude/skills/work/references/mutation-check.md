@@ -125,6 +125,26 @@ load-bearing run — any mutation check, any before/after comparison — pass
 count and the `timestamp` *attribute inside the file*, not the file's mtime,
 which a cache restore also freshens.
 
+**`touch <source>` does not force a recompile** — it changes no content, so
+`:<module>:compileKotlin` stays `UP-TO-DATE` and nothing rebuilds. `--rerun-tasks`
+is the lever that does; `rm -rf <module>/build/classes` only re-fetches from the
+cache. An *unmarked* `> Task :<module>:compileKotlin` line is your positive proof
+that today's source was compiled (computenet-a4b7's review measured all four).
+
+**And read WHICH assertion went red.** A test with several assertions can be
+reddened by an earlier one while the assertion carrying the criterion never
+discriminates at all — and the later assertion is usually the criterion's real
+content. Measured (computenet-pko4): the first test for `LinkControl.holding`
+PASSED with the primitive replaced by no-ops, because an unrelated scheduler
+starvation made its arrival assertion vacuously true; the single documented
+mutation reddened the *earlier* state assertion, which reads as "the mutation
+was caught" and stops the investigation one step short. A second instance the
+same session: neutralising a duplicator entirely left all five of its tests
+green. **The check is not complete until the assertion under test is shown to
+discriminate on its own** — disable the earlier assertions under the same
+mutation, or choose a mutation only that assertion can catch — and the report
+names the assertion, not just the test.
+
 **5. Revert — and verify it, do not assume it.** Two ways `git checkout` lies:
 
 - **An untracked file cannot be checked out at all**, and *how* you name it
@@ -229,7 +249,8 @@ real mutation itself ("Who mutates what" above) AND checks your substitution.
 
 ## What to report
 
-The mutation you made (file and call site), the test name that went red, and
-its **assertion message**. "I did the mutation check and it failed as
-expected" is the unfalsifiable sentence this whole procedure exists to
-replace.
+The mutation you made (file and call site), the test name that went red,
+**which assertion** in it went red, and its **assertion message**. "I did the
+mutation check and it failed as expected" is the unfalsifiable sentence this
+whole procedure exists to replace — and naming the test without the assertion
+is the same sentence for a multi-assertion test (step 4).

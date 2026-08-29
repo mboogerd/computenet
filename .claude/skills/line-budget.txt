@@ -225,7 +225,28 @@
 # split, and the reason that is safe here is mechanism-specific (5e's hazard is
 # a ready PR merging itself into main; there is no PR, no auto-merge and no CI
 # on this route, and a bead field reverts in one command).
-work                9096
+# 9096 -> 9130 on 2026-08-29: computenet-pko4 (+34). A test with several
+# assertions can be reddened by an EARLIER one while the assertion carrying the
+# criterion never discriminates: LinkControl.holding's first test PASSED with
+# the primitive no-op'd, and a sibling case left five tests green with the
+# duplicator neutralised entirely. Both were caught by agents who happened to be
+# thorough; the documented procedure passed both. +21 in mutation-check.md step
+# 4 and "What to report"; the other +13 restate the clause at the three call
+# sites (task.md step 3, review-task.md, review-feature.md) where the verdict is
+# actually recorded.
+#
+# computenet-a4b7 rode this branch and is being CLOSED NOT-REPRODUCIBLE instead.
+# Its diagnosis — that re-applying an identical mutation leaves compileKotlin
+# UP-TO-DATE with a stale class, uncovered by --no-build-cache — was measured on
+# :nature by two reviewers and is false in every part: a content change always
+# re-executes, the CACHE is the content-keyed half, and a FROM-CACHE restore
+# gives the class that is CORRECT for the source on disk (proven by javap). Its
+# proposed remedies fail too: `touch` recompiles nothing, and `find -newer`
+# returns empty in a healthy tree as well as a stale one, so it separates
+# nothing. 5 lines survive here — the part that measured true and tells an agent
+# something to do. The other ~30 were a refutation with no action in it, which
+# is a bead comment, not a procedure file.
+work                9130
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

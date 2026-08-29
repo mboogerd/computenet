@@ -392,6 +392,11 @@ Beyond that standard, a reviewer owes the stronger signal:
   first), what to do when the Edit tool refuses the strongest mutation, why
   `--rerun` alone can restore a cached XML, and how to verify the revert
   actually reverted. Three sessions each got a different one of those wrong.
+  Two of its clauses decide whether a green here means anything: name **which
+  assertion** went red (an earlier one reddening leaves the criterion's own
+  assertion unverified), and prove today's source was actually compiled — an
+  *unmarked* `> Task :<module>:compileKotlin` line, which `--rerun-tasks`
+  forces and `touch <source>` does not.
 
   **Leave the marker while it is applied** — the same rule
   [task.md](task.md) step 3 gives implementers, and it matters more here,

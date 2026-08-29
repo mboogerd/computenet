@@ -722,7 +722,11 @@ of these is true:
   implementer's tests. **Two conditions on the mutation**, because a red run
   proves less than it looks like:
   - **Mutate the defect the test claims to catch**, not whatever is easiest to
-    break. Deleting the method under test reddens any test that calls it —
+    break — and when the test has several assertions, say which one went red
+    and show that the assertion carrying the criterion discriminates on its
+    own (mutation-check.md step 4; a mutation caught by an earlier assertion
+    reads as a pass and is not one).
+    Deleting the method under test reddens any test that calls it —
     including one that asserts the wrong thing — so it demonstrates that the
     test *runs*, not that it *constrains*. If the test claims to catch an
     off-by-one, the off-by-one is the mutation.
