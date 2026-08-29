@@ -186,4 +186,101 @@ class TieringCrashRestartTest {
             journalB.deleteRecursively()
         }
     }
+
+    /**
+     * The journal's own half of BS-16, isolated — and the reason it needs its
+     * own test.
+     *
+     * **Measured on this branch:** re-running the test above with `--journal`
+     * dropped from B's relaunch changes *nothing*. Every assertion still
+     * passes, the released key still stays released, and the post-restore
+     * re-pin still converges. A surviving peer subsumes the journal: B's
+     * catch-up baseline from A carries the whole OR-map — B's own pre-crash
+     * dots included, tombstones included — and the RESTART re-baseline settles
+     * what A retains of B's superseded source. So while A is alive, **no**
+     * observable at the demo level can tell journal replay from catch-up, and
+     * an assertion in the test above claiming to prove replay would be vacuous.
+     *
+     * What discriminates is removing the peer as a state source: both hosts die,
+     * A comes back **empty** (no `--journal`), and B comes back against its own
+     * journal. Everything the mesh then holds came out of B's journal or out of
+     * nothing. Its pre-crash pin must be back, the key it released must still be
+     * released — replay re-mints the same dots and its replayed release covers
+     * them, `[KE1-31]` — and A must converge to exactly that.
+     *
+     * A relaunches *first*, and as the listener, because
+     * [TierPipeline.manualInstance] derives the replica instance id from the
+     * peering role: B must come back a **dialer** or it would re-derive a
+     * different ref and its journal records — which name the ref they were
+     * written against — would replay into nothing.
+     */
+    @Tag("multi-jvm")
+    @Test
+    fun `a relaunched peer recovers its own pins from the journal when no peer can supply them`() {
+        val journalB = Files.createTempDirectory("computenet-tiering-journal-only").toFile()
+        var peerA = JvmPeer.launch("civictech.demo.tiering.TieringAppKt", "0", "--listen", "0")
+        var httpA = peerA.port("http")
+        var ws = peerA.port("ws")
+        var peerB = JvmPeer.launch(
+            "civictech.demo.tiering.TieringAppKt", "0", "--peer", "ws://localhost:$ws",
+            "--journal", journalB.absolutePath,
+        )
+        var httpB = peerB.port("http")
+        try {
+            JvmPeer.await("both tiering peers serving HTTP", listOf(peerA, peerB), timeoutMs = 45_000) {
+                up(httpA) && up(httpB)
+            }
+
+            // everything written at B, so the journal is the only record of it
+            retier(httpB, "kept", "A")
+            retier(httpB, "released", "S")
+            awaitUntil("both pins converged to A", timeoutMs = 45_000) {
+                pinned(httpA, "kept") && pinned(httpA, "released")
+            }
+            retier(httpB, "released", "none")
+            awaitUntil("the release converged", timeoutMs = 45_000) {
+                !pinned(httpA, "released") && !pinned(httpB, "released")
+            }
+
+            // the whole mesh dies
+            peerA.kill()
+            peerB.kill()
+            awaitUntil("both peers are gone", timeoutMs = 45_000) { down(httpA) && down(httpB) }
+
+            // A comes back EMPTY — no journal, nothing to catch anyone up with
+            peerA = JvmPeer.launch("civictech.demo.tiering.TieringAppKt", "0", "--listen", "0")
+            httpA = peerA.port("http")
+            ws = peerA.port("ws")
+            JvmPeer.await("empty listener back up", listOf(peerA), timeoutMs = 45_000) { up(httpA) }
+            check(manual(httpA) == "{}") { "the relaunched listener was meant to be empty: ${manual(httpA)}" }
+
+            // B comes back against its journal, as a dialer — the same role, so
+            // the same ref, so the same dot source
+            peerB = JvmPeer.launch(
+                "civictech.demo.tiering.TieringAppKt", "0", "--peer", "ws://localhost:$ws",
+                "--journal", journalB.absolutePath,
+            )
+            httpB = peerB.port("http")
+            JvmPeer.await("journal-restored peer back up", listOf(peerB), timeoutMs = 45_000) { up(httpB) }
+
+            // replay restored B's own pin, and its replayed release still covers
+            // the dot its replayed put re-minted ([KE1-31])
+            awaitUntil("journal-recovered pin visible on B", timeoutMs = 45_000) { pinned(httpB, "kept") }
+            check(!pinned(httpB, "released")) {
+                "journal replay resurrected a released key: B=${manual(httpB)}"
+            }
+
+            // and the empty peer converges to exactly the replayed state
+            awaitUntil("the empty peer took the replayed state", timeoutMs = 45_000) { pinned(httpA, "kept") }
+            check(!pinned(httpA, "released")) {
+                "a released key reached the empty peer: A=${manual(httpA)}"
+            }
+            check(manual(httpA) == manual(httpB)) {
+                "the two hosts diverged after journal-only recovery: A=${manual(httpA)} B=${manual(httpB)}"
+            }
+        } finally {
+            JvmPeer.destroy(peerA, peerB)
+            journalB.deleteRecursively()
+        }
+    }
 }
