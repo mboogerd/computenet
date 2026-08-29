@@ -42,4 +42,27 @@ object Tiering {
         }
         return Tiered(score, tierOf(score))
     }
+
+    /**
+     * The [Tiered] a **manually pinned** tier label displays as (feature
+     * computenet-j2x.5, task .1).
+     *
+     * A manual re-tier names a tier, not a score, but the board renders
+     * `{item, score}` chips and sorts within a row by score — so the label has
+     * to carry one. The canonical choice is the label's own absolute
+     * valuation, normalized the same way [fuse] normalizes `tierAvg`:
+     * `SCORE_OF[label] / 6.0`. That is the score a unanimous board of agents
+     * valuing the item at exactly this tier (and no preferences) would have
+     * fused to, so a pin reads as "everyone said this tier" rather than as an
+     * out-of-band number.
+     *
+     * It is also a fixed point of [tierOf]: `tierOf(manualTiered(t).score) == t`
+     * for every `t` in [TIERS] — the displayed score can never contradict the
+     * row the chip sits in. This is presentation logic, deliberately here and
+     * not in the kernel: convergence of the manual map is the OR-map's job.
+     */
+    fun manualTiered(tier: String): Tiered {
+        val score = SCORE_OF.getValue(tier) / 6.0
+        return Tiered(score, tier)
+    }
 }
