@@ -172,21 +172,19 @@ class TaggedOperatorsTest {
      * by a blanket "all of them" — so that landing any one kernel type is a visible, deliberate
      * edit here (see [OptionalFamilies]' KDoc, "why the class names are a best-effort guess").
      *
-     * `UntagCell` is deliberately NOT in this set any more: `96 §E1.5`'s adapter half landed it
-     * at `civictech.cell.data.op.UntagCell` under epic `computenet-j2x`, at exactly the FQN
-     * `OptionalFamilies.CANDIDATES` guessed, so the probe now reports it present. Its positive
-     * pin is the test below.
+     * `UntagCell` is deliberately NOT in this set: `96 §E1.5`'s adapter half landed it at
+     * `civictech.cell.data.op.UntagCell` under epic `computenet-j2x`, at exactly the FQN
+     * `OptionalFamilies.CANDIDATES` guessed, so the probe reports it present. Its positive pin is
+     * the test below.
      *
-     * `TaggedMapView` IS still here, and knowingly reports a false absence: the type exists at
-     * `civictech.cell.data.view.TaggedMapView`, which is not the `civictech.cell.data`
-     * `CANDIDATES` guesses. `computenet-j2x.3.4`'s acceptance scopes it to `UntagCell`'s status
-     * only and requires the other five to keep the availability they already had, so the FQN
-     * correction is a follow-up item, not a change here. [OptionalFamilies]' KDoc carries the
-     * same warning beside the guess itself.
+     * `TaggedMapView` is ALSO deliberately NOT in this set any more (computenet-0e6q): the type
+     * exists at `civictech.cell.data.view.TaggedMapView`, not the stale `civictech.cell.data`
+     * guess `OptionalFamilies.CANDIDATES` used to carry. That guess is now corrected to the real
+     * `.view` FQN, so the probe reports this family present too. Its positive pin is the test
+     * below, beside `UntagCell`'s.
      */
     private val expectedAbsent = setOf(
-        "WeightedSetDelta", "WeightedSetCell", "TagsToWeightsCell",
-        "WeightsToTagsCell", "TaggedMapView",
+        "WeightedSetDelta", "WeightedSetCell", "TagsToWeightsCell", "WeightsToTagsCell",
     )
 
     @Test
@@ -218,6 +216,20 @@ class TaggedOperatorsTest {
         val untag = OptionalFamilies.probe().single { it.family == "UntagCell" }
 
         untag shouldBe OptionalFamilies.Availability("UntagCell", available = true, reason = null)
+    }
+
+    /**
+     * computenet-0e6q: `OptionalFamilies.CANDIDATES` probed `TaggedMapView` at a stale FQN
+     * (`civictech.cell.data.TaggedMapView`) that never existed; the real type landed at
+     * `civictech.cell.data.view.TaggedMapView` (`96 §E1.5`'s view half, epic `computenet-j2x`).
+     * Correcting the FQN flips this family from "absent" to "present" the same way `UntagCell`'s
+     * landing did above — this is that pin's counterpart.
+     */
+    @Test
+    fun `BS-15 TaggedMapView is reported AVAILABLE now that its FQN is corrected to the view subpackage, with no stale absence reason`() {
+        val taggedMapView = OptionalFamilies.probe().single { it.family == "TaggedMapView" }
+
+        taggedMapView shouldBe OptionalFamilies.Availability("TaggedMapView", available = true, reason = null)
     }
 
     /**
