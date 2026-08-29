@@ -44,6 +44,12 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+      # This lane runs a repo-wide `check`, so it runs :demo:beadsmirror's
+      # real-`bd` suites — two of which fail outright without the binaries
+      # (computenet-mgxe, issue #304). The serial lane below needs no such
+      # step: its Gradle tasks are module-qualified and never reach this
+      # module.
+      - uses: ./.github/actions/install-bd-dolt
       - name: Build and check (fast lane — excludes multi-jvm-tagged tests)
         run: ./gradlew build check -PexcludeMultiJvm=true -x :kernel:test --profile
 

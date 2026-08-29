@@ -94,58 +94,16 @@ jobs:
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
-      # computenet-dqj.14: every real-workspace test in :demo:beadsmirror
-      # (BeadsMirrorAppTest, RebaselineTest, BaselineBuilderTest,
-      # MirrorExportEqualityTest, DoltCommitFeedTest, DoltSqlTest,
-      # DivergenceControlTest, ...) guards itself with
-      # `assumeTrue(commandAvailable("bd", ...))` /
-      # `assumeTrue(commandAvailable("dolt", ...))` and is skipped, not run,
-      # whenever those binaries are absent. No job in this workflow installed
-      # either, so every one of those suites had been skipped on every CI run
-      # since the module was created — invisible from a developer machine,
-      # where both are normally already on PATH (`bd gain`/`brew` etc.), so
-      # `0 skipped` there looks like full coverage. build-test-fast already
-      # runs `:demo:beadsmirror:test` as part of the repo-wide `check` below
-      # (the module carries no `multi-jvm` tag), so installing both binaries
-      # here — rather than adding a new job — is what actually turns the
-      # existing required check into real coverage instead of a second gate
-      # nothing enforces.
-      #
-      # Both projects publish a single static Linux/amd64 binary as a GitHub
-      # release asset (this repo already relies on that pattern for the
-      # `gradle/actions/setup-gradle` and `actions/setup-*` actions), so the
-      # install is two `curl`s and untars in well under 10s combined — no
-      # build-from-source path, no package manager, no daemon. `bd` is
-      # fetched as a plain tarball (its own install.sh falls back to `go
-      # install` only when a platform lacks a prebuilt asset, which
-      # linux/amd64 never does) so the version is pinned without depending on
-      # GitHub's unauthenticated API rate limit; `dolt`'s own install.sh is
-      # itself version-pinned by URL and does the platform detection, so it
-      # is used as published rather than reimplemented here. Versions match
-      # what a contributor's `brew install dolt` / `bd --version` currently
-      # resolve to as of computenet-dqj.14 (2026-08-16); bump both together
-      # if that drifts.
-      #
-      # `bd --sandbox init` (what every one of these tests actually drives,
-      # via BdScratchWorkspace) is a throwaway embedded-Dolt workspace under
-      # the test's own temp dir — no DoltHub credentials, no network, no
-      # `bd dolt push/pull` — so nothing beyond the two binaries themselves
-      # is required for these suites to run for real in CI.
-      - name: Install bd and dolt (for :demo:beadsmirror's real-workspace tests)
-        run: |
-          set -euo pipefail
-          BD_VERSION=1.2.2
-          DOLT_VERSION=2.3.0
-
-          curl -fsSL -o /tmp/bd.tar.gz \
-            "https://github.com/gastownhall/beads/releases/download/v${BD_VERSION}/beads_${BD_VERSION}_linux_amd64.tar.gz"
-          tar -xzf /tmp/bd.tar.gz -C /tmp bd
-          sudo install -m 0755 /tmp/bd /usr/local/bin/bd
-
-          curl -fsSL "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/install.sh" | sudo bash
-
-          bd --version
-          dolt version
+      # :demo:beadsmirror's real-workspace suites drive `bd` and `dolt`. Most
+      # `assumeTrue`-guard themselves and SKIP when the binaries are absent
+      # (a lane green having asserted nothing about the mirror); two of them
+      # fail outright. The install lives in one composite action so the four
+      # workflow files that mirror this lane cannot copy everything except
+      # this step — which is how `main` went red for twelve days
+      # (computenet-mgxe, issue #304). Version pins and full rationale are in
+      # the action; `CiProvisionsBdAndDoltTest` is the guard that keeps a new
+      # repo-wide lane from being added without it.
+      - uses: ./.github/actions/install-bd-dolt
 
       # `:kernel:test` is excluded here because it runs in its own required
       # `kernel-test` job below (computenet-dqy.16): it is the repo's largest
@@ -577,39 +535,11 @@ jobs:
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
-      # Byte-identical to build-test-fast's install step above, deliberately —
-      # see that step's comment for why each half is shaped the way it is, and
-      # bump both versions together. This lane needs it for the same reason:
-      # :demo:beadsmirror's only `multi-jvm` class, TwoJvmMirrorTest, is
-      # `assumeTrue`-guarded on both binaries and this image installs neither,
-      # so the lane ran it and it reported SKIPPED while the job passed in
-      # 2m25s (observed, run 32004218853 job 95310345107 — computenet-7em.5).
-      # Duplicated rather than factored into a script because a composite
-      # action or a checked-in shell script is a second file to keep in step
-      # with the two versions pinned here; the assertion step at the end of
-      # this job is what actually catches the two copies drifting apart.
-      #
-      # Evidence that this install works as written: on main run 32034768028
-      # the fast lane's copy printed `bd version 1.2.2 (6c124203e)` /
-      # `dolt version 2.3.0` and its report step then read
-      # `demo:beadsmirror JUnit results: 205 tests, 0 skipped` — no Dolt
-      # identity configuration was needed, because BdScratchWorkspace points
-      # git's config files at /dev/null and drives only `bd --sandbox init`.
-      - name: Install bd and dolt (for :demo:beadsmirror's real-workspace tests)
-        run: |
-          set -euo pipefail
-          BD_VERSION=1.2.2
-          DOLT_VERSION=2.3.0
-
-          curl -fsSL -o /tmp/bd.tar.gz \
-            "https://github.com/gastownhall/beads/releases/download/v${BD_VERSION}/beads_${BD_VERSION}_linux_amd64.tar.gz"
-          tar -xzf /tmp/bd.tar.gz -C /tmp bd
-          sudo install -m 0755 /tmp/bd /usr/local/bin/bd
-
-          curl -fsSL "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/install.sh" | sudo bash
-
-          bd --version
-          dolt version
+      # Same action as build-test-fast above, for the same reason: this lane's
+      # only :demo:beadsmirror class, TwoJvmMirrorTest, is `assumeTrue`-guarded
+      # on both binaries, so without them the lane runs it, reports SKIPPED and
+      # passes (observed, run 32004218853 job 95310345107 — computenet-7em.5).
+      - uses: ./.github/actions/install-bd-dolt
 
       # The multi-jvm classes live only in :demo:exchange, :demo:shopping and
       # :demo:beadsmirror, yet this lane used to run repo-wide `check` under

@@ -416,6 +416,10 @@ jobs:
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
+      # The rebuild steps below run a repo-wide `build check`, which reaches
+      # :demo:beadsmirror's real-`bd` suites (computenet-mgxe, issue #304).
+      - uses: ./.github/actions/install-bd-dolt
+
       - name: Record the requested sample size
         env:
           STRESS: ${{ inputs.stress_iterations }}
