@@ -156,4 +156,3 @@ class TieringPipelineTest {
         assertEquals(Tiered(0.5, "C"), board["pizza"], "removing the pin should restore the computed tier")
     }
 }
-
