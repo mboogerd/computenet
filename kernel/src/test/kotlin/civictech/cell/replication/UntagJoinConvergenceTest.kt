@@ -319,10 +319,38 @@ class UntagJoinConvergenceTest {
     // BS-12 — the acceptance property ([KE1-24], [KE1-33])
     // =====================================================================
 
+    /**
+     * The same gossip, folded **without** the dot algebra: apply each delta by
+     * key alone in a seeded arrival order — a tombstone retracts, a put sets —
+     * then combine. The charitable pre-dot reading (dels before puts, spec
+     * 20/24 §Tagged maps decided point 2), so any difference from
+     * [batchRecompute] comes from arrival order across deltas and not from a
+     * strawman intra-delta rule. Used only to prove the BS-12 subject is
+     * order-*discriminating*.
+     */
+    private fun arrivalOrderJoin(deltas: List<TaggedMapDelta<String, String>>, seed: Long): Map<String, String> {
+        val schedule = ArrayList(deltas)
+        Collections.shuffle(schedule, Random(seed xor 0x5EED))
+        val left = LinkedHashMap<String, String>()
+        schedule.forEach { delta ->
+            delta.dels.keys.forEach { left.remove(it) }
+            delta.puts.forEach { (key, dots) -> dots.values.lastOrNull()?.let { left[key] = it } }
+        }
+        return (left.keys + prices.keys).associateWith { combineOf(left[it], prices[it]) }
+    }
+
     @Test
     fun `BS-12 two peers joining an untagged OR-map agree with each other and with a batch recompute`() {
+        // Non-vacuity of the compared subject: seeds on which an arrival-order
+        // fold of the SAME gossip lands on a different map. Equalling
+        // `batchRecompute` is therefore a real constraint on the chain — not a
+        // property any fold of this traffic would satisfy — so the assertion
+        // below cannot be passing by construction.
+        val orderSensitive = mutableListOf<Long>()
+
         forEachSeed(0L until SEEDS) { seed ->
             val session = runSession(seed, heal = true)
+            if (arrivalOrderJoin(session.gossip, seed) != session.joined[0]) orderSensitive += seed
             withClue("seed $seed") {
                 // the chain's input converged ([KE1-33]) — asserted separately
                 // so a failure names which half broke
@@ -344,6 +372,15 @@ class UntagJoinConvergenceTest {
                 }
             }
         }
+
+        println(
+            "BS-12 subject is order-discriminating on ${orderSensitive.size} of $SEEDS seed(s): " +
+                "${orderSensitive.take(10)}"
+        )
+        // If this ever goes green the traffic has stopped containing anything
+        // arrival order could disagree about, and the equality above would be
+        // satisfied by any fold — widen the schedule rather than weaken it.
+        orderSensitive.isNotEmpty().shouldBeTrue()
     }
 
     // =====================================================================
