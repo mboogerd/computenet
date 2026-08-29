@@ -1,0 +1,106 @@
+name: iroh-sidecar
+
+# What this job measures for computenet-egl.6: Linux x64 native `cargo build`
+# and `cargo test` wall time for the iroh/sidecar crate, cold (no rust-cache
+# hit) and warm (cache hit) — labeled per-step so each figure can be cited
+# naming the run it came from. It is also the first-ever non-macOS execution
+# of the crate's tests; developer machines only cover macOS arm64. There is
+# NO cross-compilation here: this job runs two *native* builds (a direct
+# `cargo build`/`cargo test` pair, then a redundant native rebuild driven by
+# `./gradlew :iroh:check -Piroh.enabled=true` to prove the Gradle flag wiring
+# works) — the residue finding (egl.6) reports that duplication as the
+# measured burden, not a defect of this job.
+#
+# Deliberately non-required: this workflow is not listed in ruleset 20149495's
+# required_status_checks, and this task does not touch the ruleset. Its job
+# name (`iroh-sidecar`) and check name differ from all six required contexts
+# (build-test-fast, build-test-serial, concord-full, ui-test, agora-ui-test,
+# kernel-test), so it cannot be confused with one by name alone.
+#
+# Residual: the beadsmirror iroh convergence suite (bd+dolt+sidecar together)
+# is NOT wired into this job. computenet-egl.4 had not landed on main when
+# this workflow was filed (computenet-egl.5's stated condition for adding
+# it) — re-check that condition before wiring the suite in here.
+on:
+  pull_request:
+    paths:
+      - "iroh/**"
+      - ".github/workflows/iroh-sidecar.yml"
+  workflow_dispatch: {}
+
+# Same idiom as ci.yml: supersede an in-flight run when a newer commit lands
+# on the same ref, except on `main` where a run is left to complete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  iroh-sidecar:
+    runs-on: ubuntu-latest
+    # ESTIMATED (egl.5-D2): under 10 minutes cold. The timed steps below are
+    # what corrects this estimate with a measured figure.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Rust cache
+        id: rust-cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: iroh/sidecar
+
+      - name: cargo build (timed)
+        working-directory: iroh/sidecar
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          cargo build
+          end=$(date +%s)
+          line="iroh-sidecar-timing step=cargo-build seconds=$((end - start)) cache-hit=${{ steps.rust-cache.outputs.cache-hit }}"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: cargo test (timed)
+        working-directory: iroh/sidecar
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          cargo test
+          end=$(date +%s)
+          line="iroh-sidecar-timing step=cargo-test seconds=$((end - start)) cache-hit=${{ steps.rust-cache.outputs.cache-hit }}"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # Same `cache-encryption-key` rationale as ci.yml's lanes: without it,
+      # setup-gradle refuses to save/restore the encrypted configuration-cache
+      # directory. If GRADLE_ENCRYPTION_KEY is unset this is an empty string,
+      # which setup-gradle coerces to undefined and degrades gracefully.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+      # Re-runs cargo build/test under the iroh.enabled flag's Exec tasks.
+      # That is redundant work relative to the two steps above — it exists to
+      # prove the Gradle flag wiring itself works on Linux, not to save time
+      # (iroh/build.gradle.kts's own comment makes the same point about
+      # cargoTest re-building). There is no `:iroh:test` task; `check` is the
+      # correct target because cargoTest is wired into it.
+      - name: iroh Gradle check, flag-enabled (timed)
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          ./gradlew :iroh:check -Piroh.enabled=true
+          end=$(date +%s)
+          line="iroh-sidecar-timing step=gradle-iroh-check seconds=$((end - start)) cache-hit=${{ steps.rust-cache.outputs.cache-hit }}"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
