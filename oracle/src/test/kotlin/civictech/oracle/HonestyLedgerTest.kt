@@ -132,6 +132,17 @@ class HonestyLedgerTest {
         }
     }
 
+    /**
+     * Assert this text does NOT carry [phrase] — the inverse pin, for a claim that was corrected
+     * and must not silently regress back to its false form. Reports the phrase, not the haystack,
+     * for the same reason [mustState] does.
+     */
+    private fun String.mustNotState(phrase: String) {
+        withClue("The text still states the retracted claim: \"$phrase\"") {
+            contains(phrase) shouldBe false
+        }
+    }
+
     /** A file's first KDoc block with the `*` comment markers stripped, whitespace-flattened. */
     private fun firstKdoc(source: String, what: String): String {
         val start = source.indexOf("/**")
@@ -617,9 +628,28 @@ class HonestyLedgerTest {
             entry.mustState("computenet-880k")
             entry.mustState("deliberately NOT filed here")
         }
-        withClue("And what would resolve it: 96 §E1.5's tagged-aware downstream adapters") {
-            entry.mustState("UntagCell")
-            entry.mustState("TaggedMapView")
+        withClue(
+            "It must name 96 §E1.5's tagged-aware downstream adapters by their real FQNs — the " +
+                "types landed under computenet-j2x — and say they now EXIST, not that they are " +
+                "absent: the entry's original 'do not exist' claim went false the moment " +
+                "UntagCell.kt and TaggedMapView.kt landed under kernel/src/main, and a filing " +
+                "that still asserted their absence would be a false honesty-ledger entry, which " +
+                "is worse than an unfiled gap (computenet-shtl).",
+        ) {
+            entry.mustState("civictech.cell.data.op.UntagCell")
+            entry.mustState("civictech.cell.data.view.TaggedMapView")
+            entry.mustState("now exist")
+            entry.mustNotState("do not exist")
+            entry.mustNotState("only file under")
+        }
+        withClue(
+            "It must say what DOES still block the diamond now that the types exist: neither is " +
+                "registered in OperatorCatalog as a nonzero-arity entry consuming a tagged outlet. " +
+                "Without this the entry would read as resolved while the diamond is still " +
+                "unconstructible.",
+        ) {
+            entry.mustState("OperatorCatalog")
+            entry.mustState("Neither closes this entry")
         }
     }
 
