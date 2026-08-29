@@ -559,7 +559,7 @@ jobs:
       # skip red rather than green.
       - name: Guard - multi-jvm tests live only in the scoped modules
         run: |
-          stray=$(grep -rl 'Tag("multi-jvm")' --include='*.kt' --exclude-dir=build . | grep -vE '^\./demo/(shopping|exchange|beadsmirror)/' || true)
+          stray=$(grep -rl 'Tag("multi-jvm")' --include='*.kt' --exclude-dir=build . | grep -vE '^\./demo/(shopping|exchange|beadsmirror|tiering)/' || true)
           if [ -n "$stray" ]; then
             echo "multi-jvm-tagged tests outside the serial lane's scoped modules — widen the module list in this job:"
             echo "$stray"
@@ -571,7 +571,7 @@ jobs:
       # property T13 asked for applies to the process-forking tests themselves,
       # not to compilation.
       - name: Compile the multi-jvm closure (parallel)
-        run: ./gradlew :demo:exchange:testClasses :demo:shopping:testClasses :demo:beadsmirror:testClasses
+        run: ./gradlew :demo:exchange:testClasses :demo:shopping:testClasses :demo:beadsmirror:testClasses :demo:tiering:testClasses
 
       # `--rerun` binds to the task immediately before it, so it applies to
       # :demo:beadsmirror:test alone and exchange/shopping keep their cache.
@@ -585,7 +585,7 @@ jobs:
       # computenet-7em.5 exists to remove, so this lane executes the class every
       # time (~30s locally) rather than trusting a replay of it.
       - name: Multi-JVM serial lane (process-startup + wall-clock timing tests)
-        run: ./gradlew :demo:exchange:test :demo:shopping:test :demo:beadsmirror:test --rerun -PmultiJvmOnly=true --max-workers=1
+        run: ./gradlew :demo:exchange:test :demo:shopping:test :demo:beadsmirror:test :demo:tiering:test --rerun -PmultiJvmOnly=true --max-workers=1
 
       # computenet-7em.5. Same three checks as build-test-fast's copy of this
       # step — read that one for the reasoning — with the named class flipped,
