@@ -15,8 +15,12 @@ This skill collects it, ranks it, and hands it back as questions — and it
 tells the story of the window in functional terms: what shipped and what that
 makes possible, what is being built right now, and what is likely next. The
 reader wrote the epics; id lists tell them nothing. **It reports.
-It does not fix.** The one exception is bookkeeping drift (§6), and even that
-is proposed, not applied.
+It does not fix.** There are exactly two exceptions. Bookkeeping drift (§6) is
+*proposed, not applied*. A coherence finding (§4) is the other way round: the
+warning comment on the affected bead is **written, not proposed**, because
+`/work` never reads this report and the bead is the only place the next agent
+is forced to look. Neither exception touches acceptance criteria, dependencies,
+priorities, branches or PRs.
 
 You end by waiting. No "I'll go ahead and…", no merging, no `gh pr ready`, no
 closing beads. The user's answers are the input to the *next* session.
@@ -124,8 +128,12 @@ The worked example is 2026-08-29, when a decision changed peer identity from a
 key fingerprint to an anchor-vouched stable name. Minutes of reading found that
 the discovery epic (`computenet-aas`) *required* "no second allowlist or trust
 store" — an anchor key **is** a trust store, so the next epic in line forbade
-the design that had just been chosen. Four more findings came out of the same
-pass. None of them was visible anywhere in a sync report.
+the design that had just been chosen. Four more came out of the same pass, and
+one was not textual at all: the federated-social epic keyed moderation verdicts
+on an identity that a key rotation silently invalidated, so a moderated peer
+could rotate and come back a stranger. No test covered it, because no test
+rotated a key. **The audit finds behavioural holes a decision opens, not just
+stale wording.** None of the five was visible anywhere in a sync report.
 
 **Scope — deliberately bounded.** Re-reading ~190 beads every run would make
 this skill too slow to run often, and a report you stop running catches
@@ -220,8 +228,9 @@ Rules that keep it tight:
   the user, say what the agent will do instead — one line, no question.
 - **State the completeness check in one line**: the human list cross-checked
   both ways (§2), open-PR bodies scanned for park phrases, §4's audit set
-  named with what fired, and any discrepancy named. An item whose thread already records the answer is a
-  stale park to propose clearing, not a question to re-ask.
+  named with what fired, and any discrepancy named. An item whose thread
+  already records the answer is a stale park to propose clearing, not a
+  question to re-ask.
 - Bookkeeping drift is **one line**: "N beads still open behind merged PRs
   (ids) — close on your say-so."
 - Anything you could not check (a PR whose checks are still running, an

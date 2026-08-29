@@ -170,5 +170,14 @@ remediate-friction   333
 # epic whose acceptance forbade the design just chosen. 66 lines against an
 # implementation slot spent building the wrong thing; the report had no forward
 # check at all before this.
-sync-report          267
+# 267 -> 276 on 2026-08-29: computenet-d1im review round (PR #547). +9 lines
+# for the reviewer's one substantive find: the top-of-file contract still said
+# bookkeeping drift was THE single exception and that it is "proposed, not
+# applied", which contradicted §4 and, carried forward, would have had an agent
+# PROPOSE the bead comment instead of writing it — defeating the whole reason
+# §4 writes to the bead. The contract now names both exceptions and states that
+# they run in opposite directions. Also restores the SOC2 finding (a moderation
+# verdict a key rotation silently voided) as the example that the audit catches
+# behavioural holes, not only stale wording.
+sync-report          276
 work-unsupervised     59
