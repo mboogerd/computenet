@@ -2383,67 +2383,87 @@ forbids this feature from taking (it is a parked question on epic
   as correct. The neutral vocabulary offers no null map value to state it with in
   any case, so this is a fence, not a limitation being worked around.
 
-## KE1-F4 task 4 (42-replication OR-map duplicate delivery): `retransmit` does not bind to a dist-profile replica (`driver-wiring-gap`, `[KE1-37]`)
+## RESOLVED — KE1-F4 task 4 (42-replication OR-map duplicate delivery): `retransmit` now binds to a dist-profile replica (`driver-wiring-gap`, `[KE1-37]`)
 
-`computenet-j2x.4.4`'s acceptance asks the OR-map replication scenario
-(`42-TMAP-REPL-01.yaml`, `concord/corpus/42-replication/`) to exercise
-duplicate delivery via `retransmit` where the dist driver binds it, and to
-file a `DISPUTES.md` entry with refusal evidence if it does not. It does not,
-and the refusal is structural rather than a missing catalog entry this task
-could close.
+**Retired by `computenet-j2x.4.6`.** This entry recorded that `retransmit` —
+the corpus's only re-delivery verb — delegated only to a `durCells` member, so
+a dist-profile `ormap-source` replica was refused and `[KE1-33]`'s
+duplicate-delivery half had no corpus expression. What it named as the fix is
+what landed: `KernelDriver.retransmit` now also delegates to
+`KernelDriverDist.retransmit` for a `replica-of` target, injecting an
+already-gossiped `TaggedMapDelta` (or `SetDelta`) at that replica's
+`Replicable.deltaInlet` under the original `(source, counter)` position.
 
-**Probe** (run on `task/computenet-j2x.4.4`,
-`42-TMAP-REPL-RETRANSMIT-PROBE.yaml`, deleted after measuring — two
-`ormap-source` replicas `r1`/`r2` on the `dist` profile, one `put k1 a` on
-`r1`, then a `retransmit` at `r1` naming that same `(source: r1, counter: 1)`
-position):
+Two points about *how*, because the entry's own reasoning turned on them:
 
-```
-civictech.concord.driver.kernel.UnsupportedCatalogBinding: retransmit at 'r1':
-this binding injects an explicit wave position only at a durable
-effect-boundary sink (host: dur), where a processed-frontier decides whether
-the duplicate acts again — a core cell has no such decision, so the injection
-would assert nothing
-```
+- **The dist profile does have a decision about a duplicate.** The refusal's
+  premise — "a core cell has no such decision" — was right about a core cell
+  and wrong about a replica. Where the `dur` profile decides with an
+  `Effectful` processed-frontier, a replica decides with the dot algebra:
+  `novelty` keeps only dot information the fold has never held, so a
+  re-delivered dot reduces to nothing and `absorb`/`originate` never run.
+- **No tag identity is fabricated.** `concord/schema/scenario.md`
+  §`retransmit` refuses re-delivery to a tag-algebra fold on the ground that it
+  would need "the original delivery's tag identity — which a scenario does not
+  name and the binding will not fabricate". The binding does not fabricate one:
+  an Observe-role tap on each replica's delta outlet records every emission,
+  each dot is attributed to the replica that *first* emitted it (exact, not
+  heuristic — a dot leaves its minter before any peer can relay it), and a
+  `retransmit` replays that recorded emission verbatim. The step's `(source,
+  counter)` selects which already-minted dot; `op:`/`value:` must describe it.
+  A coordinate the mesh never produced is a loud refusal, not a weaker
+  delivery.
 
-`KernelDriver.retransmit` (`concord/src/main/kotlin/civictech/concord/driver/
-kernel/KernelDriver.kt`) delegates only when the target is a member of
-`durCells` — the dur-profile durable effect-boundary sink `KernelDriverDur`
-registers — and refuses every other target with the message above. A
-dist-profile `ormap-source` replica is never a `durCells` member: it has no
-`Effectful` processed-frontier at all (the driver's own doc comment on this
-method says so — "a core cell has no such decision"), so there is nothing for
-an injected duplicate to be judged against. This is the same driver-capability
-note `concord/schema/scenario.md`'s `#### retransmit` section already states
-("the kernel binding admits an *effect-sink* target only"); the dist replica
-path was simply never in scope for it. Nothing about `ormap-source`,
-`tagged-map-view`, or the replication mesh specifically is missing — the verb
-is durability-shaped by construction, and a replica is not a durability
-target.
+The scenario is `42-TMAP-REPL-01` (two `retransmit` steps after the heal
+barrier); the driver-level pins are in
+`concord/src/test/kotlin/civictech/concord/driver/kernel/RetransmitBindingTest.kt`.
+`concord/schema/scenario.md`'s "One driver-capability note" under
+`#### retransmit` still says the kernel binding "admits an `effect-sink` target
+only" and is now stale by exactly that one sentence; the schema is
+single-writer and schema-change-gated, and `computenet-j2x.4.6` was explicitly
+forbidden from editing it, so the correction is filed as its own item rather
+than made here.
 
-`42-TMAP-REPL-01` does not fake the duplicate with a second `apply` of the
-same value instead: an `apply` mints a **fresh** dot (spec 20/22 §Structural
-changes — dot counters are per-source monotonic, minted by the emitting
-outlet), so a second `apply` is a new write, not a re-delivery of an old one.
-It would exercise ordinary merge idempotence over two *distinct* dots that
-happen to carry equal payloads, not echo-terminating gossip's guard against
-re-processing the *same* dot twice — a different, and already-covered,
-property. `24-TMAP-MERGE-01`'s header (`computenet-j2x.4.3`) makes the same
-point for the same reason: the corpus has no verb that re-sends a replication
-delta under an unchanged dot, `retransmit` being the only re-delivery verb and
-being dur-only, so the honest statement available at the replication mesh
-is the convergence property both scenarios assert (`replicas-converge` /
-`views-converge`), never idempotence-under-literal-duplication.
+## KE1-F4 task 4 residual: the corpus cannot COUNT re-emissions, so echo termination's "re-emits nothing" is pinned at the driver, not in the corpus (`schema-gap`, `[KE1-33]`)
 
-**What would retire this entry**: `retransmit` binding to a `Replicable`
-`deltaInlet` directly — injecting an already-seen `TaggedMapDelta` (or
-`SetDelta`) at a replica's gossip inlet under an explicit `(source, counter)`
-position, the same way it injects at an `Effectful` sink today — so a
-scenario could construct a genuine re-delivery of one dot and check that
-`novelty`/`absorb`'s echo termination re-emits nothing (`no-dead-letters` plus
-an effect-count-style re-emission count). That is a driver-binding widening,
-not a schema change (the verb's shape is unchanged; only the set of catalog
-ids it accepts would grow), but it is still out of this task's scope
-(`j2x.4-D4` forbids scope growth beyond the decided direction, and no
-Kotlin change is authorized here) — filed here as the capability gap rather
-than built.
+`[KE1-33]`'s duplicate-delivery half wants a re-delivered dot to be shown to
+re-emit **nothing**. That is not observable in any state a check can read, and
+the invisibility is structural rather than incidental: the dot algebra is
+idempotent, so re-absorbing a dot the fold already holds changes no fold, no
+view and no replica comparison — and where the dot was later tombstoned, the
+tombstone covers that same dot, so not even a resurrection is available to
+catch. The only observable difference between "echo terminated" and "echo
+re-emitted" is *that an emission happened*.
+
+The closed check vocabulary (`concord/schema/scenario.md` §`checks`) has no
+emission counter. Every candidate was checked and none discriminates:
+
+- `final-view` / `views-converge` / `replicas-converge` read folds, and the
+  fold is identical either way;
+- `observations-monotone` has only ascending/descending orders, so a repeated
+  *equal* observation does not regress and passes;
+- `observations-whole-waves` asks each observation to equal some whole-prefix
+  fold, which a duplicate equal observation does;
+- `effect-count` is an `Effectful` sink's log, which exists only on the `dur`
+  profile;
+- `wave-plane-unchanged` is scoped to what a `read-state` walk did, not to what
+  a preceding step emitted.
+
+So `42-TMAP-REPL-01` asserts what it honestly can about its two `retransmit`
+steps — the duplicate is absorbed with the mesh still converging
+(`replicas-converge`, `views-converge`) and nothing dead-lettered — and the
+**count** is pinned one level down, in `RetransmitBindingTest`'s "a duplicate
+at a replica's gossip inlet re-emits nothing, where a first arrival re-emits
+once", whose control is an `interest: {empty: true}` replica that never
+received the dot and re-emits exactly once under the identical injection. The
+control is what stops a zero count from being read as a dropped injection.
+
+**What would retire this entry**: a check that counts a named cell's outlet
+emissions over a bounded window — the emission-count analogue of `effect-count`
+— e.g. `{type: emission-count, cell: r2, since: <step>, exactly: 0}`. That is a
+`concord/schema/scenario.md` change and therefore schema-change-gated
+(single-writer review of the `checks` table plus the "what a conforming driver
+must observe" argument, since a second implementation would have to be able to
+report it). It is *not* a driver-binding widening: the driver can already
+observe it (`FanOutlet.observe`/`tap` is exactly this), which is why the
+property is statable at the driver and not in the corpus.
