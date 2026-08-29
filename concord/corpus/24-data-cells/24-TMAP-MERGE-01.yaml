@@ -13,10 +13,12 @@
 # Commutativity and associativity are exactly what varying that interleaving
 # probes. Idempotence is exercised rather than separately asserted: the mesh's
 # echo-terminating gossip re-delivers a dot along more than one path, and a merge
-# that were not idempotent would not converge under that re-delivery. The corpus
-# has no verb that re-sends a *replication* delta with the same dot on demand
-# (`retransmit` injects at an inlet under an explicit wave position, which is a
-# different mechanism), so the assertion here is the convergence the law states.
+# that were not idempotent would not converge under that re-delivery. This is
+# still the convergence assertion, not an explicit re-send: `retransmit` now
+# also binds a `replica-of` replica's `deltaInlet` and can re-send a recorded
+# replication delta under its original dot on demand (`42-TMAP-REPL-01`
+# exercises that directly), but doing so here would pin one delivery order
+# instead of sweeping the schedule, which is exactly what P2 rules out.
 #
 # k1 is written concurrently on BOTH replicas: which dot's value survives is
 # decided by (counter, sourceId) order over identities no scenario can name

@@ -807,7 +807,10 @@ original assertion, which ended `world shouldBe listOf(1, 1)`), plus the `Owned`
      with no message context, the shape `HostedCellProxy` produces off the data
      path. `apply` cannot: it drives an op through a cell's own outlet and the
      driver mints the next wave position. `retransmit` cannot: it states a
-     position, and its kernel binding admits an `effect-sink` target only.
+     position, and every target its kernel binding admits is one that *decides*
+     a duplicate (an `effect-sink`'s processed frontier, or — since
+     `computenet-j2x.4.6` — a `replica-of` replica's dot algebra at its gossip
+     inlet), never a bare `PORT_API` inlet driven without one.
      Reaching a contextless delivery by exploiting the fact that the *kernel*
      binding's `apply` happens to enter a source's inlet unstamped would be an
      accident of that binding rather than neutral semantics — another conforming
@@ -2418,11 +2421,13 @@ The scenario is `42-TMAP-REPL-01` (two `retransmit` steps after the heal
 barrier); the driver-level pins are in
 `concord/src/test/kotlin/civictech/concord/driver/kernel/RetransmitBindingTest.kt`.
 `concord/schema/scenario.md`'s "One driver-capability note" under
-`#### retransmit` still says the kernel binding "admits an `effect-sink` target
-only" and is now stale by exactly that one sentence; the schema is
-single-writer and schema-change-gated, and `computenet-j2x.4.6` was explicitly
-forbidden from editing it, so the correction is filed as its own item rather
-than made here.
+`#### retransmit` was left saying the kernel binding "admits an `effect-sink`
+target only" — `computenet-j2x.4.6` was explicitly forbidden from editing the
+schema, so the sentence went stale by design and the correction was filed as
+its own item (`computenet-37zj`) rather than made here. That item has since
+gone through the schema's single-writer review and updated the note to name
+both admitted targets; the sentence quoted above no longer appears in
+`scenario.md`.
 
 ## KE1-F4 task 4 residual: the corpus cannot COUNT re-emissions, so echo termination's "re-emits nothing" is pinned at the driver, not in the corpus (`schema-gap`, `[KE1-33]`)
 
