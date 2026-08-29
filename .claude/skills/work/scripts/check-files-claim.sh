@@ -71,9 +71,9 @@ covered() { # path (reads $claim_entries)
 # a human reading the hits can tell a source-cell add from an operator add
 # where this table cannot. Do not add it here (computenet-y6zv).
 COUPLINGS='settings.gradle.kts=>doc/ARCHITECTURE.md
-civictech/cell/data/op=>oracle/src/test/resources/operator-inventory.txt
-civictech/cell/data/op=>inspect/src/main/kotlin/civictech/inspect/Observations.kt
-civictech/cell/data/op=>oracle/src/main/kotlin/civictech/oracle/bind/TaggedOperators.kt
++civictech/cell/data/op=>oracle/src/test/resources/operator-inventory.txt
++civictech/cell/data/op=>inspect/src/main/kotlin/civictech/inspect/Observations.kt
++civictech/cell/data/op=>oracle/src/main/kotlin/civictech/oracle/bind/TaggedOperators.kt
 oracle/src/main/kotlin/civictech/oracle/bind/OperatorCatalog.kt=>oracle/src/test/kotlin/civictech/oracle/model/ReferenceModelPurityTest.kt'
 
 found=0
@@ -124,12 +124,36 @@ for id in "$@"; do
   while IFS= read -r rule; do
     [ -n "$rule" ] || continue
     trigger=${rule%%=>*}; implied=${rule#*=>}
-    # The trigger has to be in play at all: either the bead names it, or the
-    # claim already covers it. Otherwise the coupling is irrelevant here.
-    case "$mentioned"$'\n'"$claim_entries" in
-      *"$trigger"*) ;;
-      *) continue ;;
-    esac
+    # A `+` prefix means ADD-ONLY: fire only when a CLAIM ENTRY under the
+    # trigger names a path that does not exist on disk yet — i.e. the bead
+    # adds a file to that directory. Without it the census couplings fire on
+    # every bead that merely edits something in the package: measured 11 of 12
+    # sampled beads, ~9 of them false, because a tag-semantics fix to an
+    # existing cell changes no class census. The guardrail line asserts
+    # REQUIRES with none of the MENTION line's hedge, so an all-false stream
+    # here is worse than for those — computenet-0pd6's lesson, applied to the
+    # rows added by computenet-y6zv.
+    #
+    # This reads the working tree, so run it BEFORE dispatch, where "the file
+    # is not there yet" is true. Re-run after the work lands and the rows fall
+    # silent, correctly.
+    addonly=0
+    case "$trigger" in +*) addonly=1; trigger=${trigger#+} ;; esac
+
+    if [ "$addonly" = 1 ]; then
+      inplay=0
+      while IFS= read -r entry; do
+        case "$entry" in *"$trigger"*) [ -e "$entry" ] || inplay=1 ;; esac
+      done <<<"$claim_entries"
+      [ "$inplay" = 1 ] || continue
+    else
+      # The trigger has to be in play at all: either the bead names it, or the
+      # claim already covers it. Otherwise the coupling is irrelevant here.
+      case "$mentioned"$'\n'"$claim_entries" in
+        *"$trigger"*) ;;
+        *) continue ;;
+      esac
+    fi
     covered "$implied" || {
       echo "$id: names $trigger, which REQUIRES $implied (guardrail), not in metadata.files"
       found=1

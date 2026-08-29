@@ -1549,8 +1549,9 @@ verdict. (`parked` is only meaningful on an empty batch.)
   derived faultlessly from the design still comes up short. Two forms:
 
   - a **completeness gate** over a registry (`ReferenceModelPurityTest` needs
-    a node for every `OperatorCatalog` registration; `concordanceGate` lints
-    `covers:` ids against the corpus) — computenet-os91;
+    a node for every `OperatorCatalog` registration; `OperatorInventoryTest`
+    diffs the package against `oracle/src/test/resources/operator-inventory.txt`;
+    `concordanceGate` lints `covers:` ids against the corpus) — computenet-os91;
   - an **enumerator of a package or tag from another module**, source or CI
     config alike — computenet-y6zv. computenet-m9px's "a new Gradle module
     requires `doc/ARCHITECTURE.md`" is this shape with a module as the set.

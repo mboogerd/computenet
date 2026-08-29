@@ -166,7 +166,7 @@
 # templates; and the perl/sed detour is scoped to tool refusals, never to scope
 # limits. Without the reviewer's retry that session would have merged a 461-line
 # convergence test whose central property was never shown to fail.
-# 8938 -> 8985 on 2026-08-29: computenet-y6zv (recurrence of computenet-m9px)
+# 8938 -> 8984 on 2026-08-29: computenet-y6zv (recurrence of computenet-m9px)
 # + computenet-os91, one shape. af9q's rule finds the files that observe the
 # INVARIANT a change moves; these close over the SET — a registry's
 # completeness, a package's census — so they never name the entry being added
@@ -179,6 +179,11 @@
 # can falsify this class. The four new COUPLINGS rows are mechanical and free
 # here — they fire on computenet-j2x.3.1, naming all three enumerators that
 # reddened #544, where the current script prints nothing.
+# 8984 -> 8985 on 2026-08-29: the same bead's review round (PR #559). +1 naming
+# OperatorInventoryTest and its inventory file in the completeness-gate list, so
+# all three of computenet-os91's instances are in the prose rather than two of
+# them being one indirection away in the script's table. The add-only narrowing
+# of the couplings is mechanical and free here.
 work                8985
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
