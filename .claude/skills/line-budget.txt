@@ -179,7 +179,7 @@
 # LinkControl.holding's first test passed with the primitive no-op'd, and a
 # sibling case left five tests green with the duplicator neutralised entirely.
 # Both instances were caught by agents who happened to be thorough; the
-# documented procedure passed both. +5 of the 44 restate the two clauses at the
+# documented procedure passed both. +9 of the 44 restate the two clauses at the
 # two reviewer call sites, where the verdict is actually recorded.
 work                8982
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
