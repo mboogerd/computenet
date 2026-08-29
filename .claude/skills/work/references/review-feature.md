@@ -372,6 +372,27 @@ is the evidence (computenet-61qu).
 The module suites the tasks ran individually may not cover their
 interaction. Run the affected module tests, and the repo-wide gate if the
 feature touched anything cross-cutting — then prove the run happened.
+
+**"Affected module" means the modules whose test INPUTS the diff changes, not
+the module the diff sits in.** Those are usually the same and once were not, at
+a cost of five green local gates in a row (computenet-uxr8). Feature
+computenet-j2x.4 added four scenario files to `concord/corpus/24-data-cells/`,
+taking it from 29 files to 33. Two implementers, two task reviewers and the
+feature reviewer all ran `:concord:test` and `:concord:check` with
+`--rerun-tasks`, all green with fresh JUnit timestamps, and none was negligent:
+no task touched `oracle/`, `:concord:check` does not run `:oracle:test`, and
+there is no import, no Gradle dependency and no path overlap between the changed
+files and the test that broke. `:oracle`'s `CorpusCrossCheckTest` enumerates
+that directory **at test time** and asserts a non-vacuity count, so
+`build-test-fast` went red on `expected:<29> but was:<33>` after four task
+merges. Nothing static can surface a runtime directory read.
+
+Concretely: **a diff that ADDS or DELETES a file under `concord/corpus/` runs
+`./gradlew :oracle:test --rerun` as well.** That directory exists to be
+enumerated by harnesses in more than one module, so this is by construction, not
+a special case. More generally, before you pick the suites, ask what READS the
+files this diff adds or removes — not what imports them.
+
 **[gradle-evidence.md](gradle-evidence.md) is that proof standard**: the
 task-count line, the per-task state line read as an absence, and the JUnit
 XML counts + timestamp via `.claude/skills/work/scripts/junit-count.py`, plus the `--rerun` and
