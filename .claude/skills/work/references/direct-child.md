@@ -95,6 +95,12 @@ review-feature.md §7 becomes one of these.
 - **Record the verification on the parent**, naming what you checked, so the
   choice is auditable by the next session rather than being invisible.
 
+Yes, this collapses 5e's two roles — you certify and you close. 5e keeps them
+apart because *on this repo a ready PR merges itself*: the hazard is
+self-approving an irreversible, CI-gated merge into `main`. None of that exists
+here — no PR, no auto-merge, no CI, and a bead field is revertible in one
+command. What survives is author ≠ judge, which the dispatch above preserves.
+
 ## The idle-lane question
 
 **`ready-in-epic.sh` returning exactly one row is where the idle-lane
