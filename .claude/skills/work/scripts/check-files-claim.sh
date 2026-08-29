@@ -54,7 +54,25 @@ covered() { # path (reads $claim_entries)
 # file their bead never mentioned. Both caught it locally only because their
 # dispatch prompts happened to ask for :kernel:test — luck, not structure
 # (computenet-d7qn, computenet-m9px). Adding an entry costs one line.
-COUPLINGS='settings.gradle.kts=>doc/ARCHITECTURE.md'
+#
+# The rest are the SET shape (computenet-y6zv, computenet-os91): a file
+# elsewhere that enumerates a package, or a test that asserts a registry is
+# exhaustively covered. Neither closes over the thing being added — they close
+# over the SET — so no grep for the new symbol reaches them, and a task-scoped
+# gate in the module being edited structurally cannot fail on them. Measured:
+# PR #544 added UntagCell.kt to civictech.cell.data.op, ran :kernel:test green
+# at 1273 tests, and build-test-fast went red in :inspect and :oracle.
+#
+# Not listed, deliberately: the civictech.cell.data source-cell gate
+# (oracle/src/test/resources/source-cell-inventory.txt). Its trigger directory
+# CONTAINS civictech/cell/data/op, so it would fire on every operator change —
+# a different package, a guaranteed false positive. The prose in SKILL.md 5b
+# names it instead.
+COUPLINGS='settings.gradle.kts=>doc/ARCHITECTURE.md
+civictech/cell/data/op=>oracle/src/test/resources/operator-inventory.txt
+civictech/cell/data/op=>inspect/src/main/kotlin/civictech/inspect/Observations.kt
+civictech/cell/data/op=>oracle/src/main/kotlin/civictech/oracle/bind/TaggedOperators.kt
+oracle/src/main/kotlin/civictech/oracle/bind/OperatorCatalog.kt=>oracle/src/test/kotlin/civictech/oracle/model/ReferenceModelPurityTest.kt'
 
 found=0
 for id in "$@"; do
