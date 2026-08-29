@@ -32,6 +32,27 @@ cache information at all.
 
 ## The three signals to consume, per run
 
+**Signal 3 is the verdict; signals 1 and 2 corroborate it.** The task-count
+line is a weak proxy for "did tests run", and it is misread in BOTH directions
+by agents doing exactly what this file says (computenet-0frx, two agents in one
+session plus three more on the second case):
+
+- **It reads GREEN when nothing ran.** `./gradlew :kernel:test` — the plain,
+  *unfiltered* module gate — printed `BUILD SUCCESSFUL` with `:kernel:test
+  UP-TO-DATE` and zero tests executed. AGENTS.md frames this trap around a
+  `--tests`-filtered invocation, so an agent running the whole module suite
+  reads itself as outside the warning. It is not: **up-to-date checking does
+  not care whether you filtered.**
+- **It reads like a cache replay when the run was real.** `:concord:test
+  --rerun` prints `1 executed, 23 up-to-date`. The one executed task IS
+  `:concord:test`; the other 23 are compilation and resources, legitimately up
+  to date. Against a 24-task graph that looks exactly like the replay this file
+  trains you to fear, and three agents each spent a cross-check resolving it.
+
+Four times out of four, what actually settled it was the JUnit `newest`
+timestamp, which `junit-count.py` already prints. Read that first. Quote the
+task-count line, but never let it be the answer on its own.
+
 **1. The task-count line.** `N actionable tasks: X executed, Y from cache`
 (or `up-to-date`) at the end of the run — the last line under
 `--no-configuration-cache`, second-to-last in the default mode where
