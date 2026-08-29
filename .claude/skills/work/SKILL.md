@@ -104,7 +104,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `file-friction.sh` | Files a friction item collision-free under the SDLC epic, open and unclaimed |
 | `resumable-epics.sh` | Epics holding a feature left `in_progress` — step 3 ranks these above priority |
 | `bead.sh` | projected `bd show` — the bead's own fields as one object, `dependencies` dropped (57KB -> 7KB); no `.[0]` unwrap |
-| `wait-checks.sh` | THE settle loop on `gh pr checks` — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`QUERY-FAILED` |
+| `wait-checks.sh` | THE settle loop, sha-bound over `commits/<sha>/check-runs` (`gh pr checks` is the fallback) — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`QUERY-FAILED` |
 | `verify-branch-sync.sh` | 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
 | `merge-task.sh` | 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
 | `session-holder.sh` | this session's unique holder token, and `--check <token>` → MINE/LIVE/DEAD/UNKNOWN/FOREIGN; what tells a live sibling from a crash leftover, which `assignee` cannot |
@@ -269,17 +269,23 @@ remains.
 Monitor({
   description: "work session budget",
   persistent: true,
-  command: `sleep 11700; echo "BUDGET T-90m ($(( ($(date -u +%s) - $(cat "$SCRATCH/slot-start")) / 60 ))m REAL elapsed): finish the current feature; start no new one"
-sleep 2700;  echo "BUDGET T-45m ($(( ($(date -u +%s) - $(cat "$SCRATCH/slot-start")) / 60 ))m REAL elapsed): no new dispatches; review and merge what is in flight"
-sleep 2700;  echo "BUDGET EXPIRED ($(( ($(date -u +%s) - $(cat "$SCRATCH/slot-start")) / 60 ))m REAL elapsed): go to Finalize now"`
+  command: `S=/absolute/path/to/scratch/slot-start   # LITERAL — see below
+sleep 11700; echo "BUDGET T-90m ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): finish the current feature; start no new one"
+sleep 2700;  echo "BUDGET T-45m ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): no new dispatches; review and merge what is in flight"
+sleep 2700;  echo "BUDGET EXPIRED ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): go to Finalize now"`
 })
 ```
 
-Each tier reports the elapsed it computes at the moment it fires, not the
-sleeps it slept, so a tier that fires late is distinguishable from one that
-fires on time — the suspension case reads as a wrong number rather than as a
-correct one. Write `$SCRATCH`'s absolute path into the command; the variable
-does not survive into the monitor's shell.
+Each tier reports the elapsed it computes when it fires, not the sleeps it
+slept, so a tier that fires late is distinguishable from one that fires on
+time — the suspension case reads as a wrong number rather than a correct one.
+
+**Substitute the LITERAL path, and keep the `|| echo 0`.** `$SCRATCH` does not
+survive into the monitor's shell, and an unreadable file makes the arithmetic
+expansion a FATAL error — `(1787982856 - ) / 60: operand expected` — which
+kills the shell at the first tier, so tiers two and three never fire either.
+A fix for "the monitor went silent" that can silence it completely is worse
+than the silence; the fallback keeps a wrong-but-loud number instead.
 
 **Record the slot start durably, before you arm it** — you have no other
 memory of when this session began, and a resume needs it (below):

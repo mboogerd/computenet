@@ -194,9 +194,11 @@ SKILL.md and the other references cite this file as "`bd` traps".
 - **The `--json` slice must be TERMINATED, not open-ended.** Every idiom in
   this skill now reads `sed -n '/^[[{]/,/^[]}]/p'` — first line opening the
   document through the first line closing it at column 0. The old form
-  `,$p` ran to end of file, and bd writes a **pagination trailer to the same
-  stream** when a listing is capped: `Showing 100 of 144 ready issues. Use
-  --limit 0 …` after the closing `]`. jq then reports `parse error: Invalid
+  `,$p` ran to end of file, and bd writes a **pagination trailer** when a
+  listing is capped: `Showing 100 of 144 ready issues. Use --limit 0 …`. At
+  bd 1.1.2 that trailer goes to **stderr**, so it reaches the slice only under
+  `2>&1` — which every reported instance used, and which most idioms here use
+  to keep bd's leading warnings visible. jq then reports `parse error: Invalid
   numeric literal at line 3258, column 8` — column 8 is where `100` begins in
   the trailer, so it reads as mid-document corruption and is not: the array
   above it is complete and valid (characterised in computenet-dowo, reproduced

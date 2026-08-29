@@ -142,7 +142,10 @@ judged_sha=""
 for i in $(seq 1 "$rounds"); do
   judged_sha=$(head_sha)
   rows=$(rest_rows)                  # sha-bound: computenet-00d8
-  n=$(printf '%s\n' "$rows" | grep -cE "$req")
+  # DISTINCT names, not matching lines: duplicate check-run names on one commit
+  # are real (`auto-merge` appears twice on every recent PR), so a line count
+  # could reach 6 with a required check absent.
+  n=$(printf '%s\n' "$rows" | grep -oE "^($req)" | sort -u | grep -c .)
   # Classify on OUTPUT: REST down, or the check suite not created yet, both
   # leave no recognizable rows.
   if [ "$n" -lt 6 ] && ! printf '%s\n' "$rows" | grep -qE '(pass|fail|pending|skipping)[[:space:]]'; then
@@ -155,7 +158,7 @@ for i in $(seq 1 "$rounds"); do
         echo "round $i/$rounds: REST produced no rows ${consecutive_failed}x — answering over gh pr checks (NOT sha-bound)"
         rows=$graphql
         judged_sha="${judged_sha:-unknown} (gh pr checks answer is not sha-bound)"
-        n=$(printf '%s\n' "$rows" | grep -cE "$req")
+        n=$(printf '%s\n' "$rows" | grep -oE "^($req)" | sort -u | grep -c .)
       fi
     fi
   else

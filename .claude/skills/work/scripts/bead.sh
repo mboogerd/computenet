@@ -23,7 +23,9 @@
 # which is what callers actually use them for; if you genuinely need a
 # dependency's body, read that bead.
 #
-# Exit: jq's — 1 when the id does not exist (the projection is empty).
+# Exit: jq's — 1 when the id does not exist. The output is then a fully
+# null-valued object, NOT nothing: `bead.sh <typo> -r '.status'` prints the
+# string `null`. Read the exit code, not the text.
 set -uo pipefail
 
 id=${1:?usage: bead.sh <id> [-r] [jq-filter]}

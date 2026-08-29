@@ -81,6 +81,14 @@ narrow rerun leaves ~100 files, and a later sweep reports the module as thin
 (computenet-5b34). A sharp drop between two reads is that signature, not a
 shrunken suite. Capture the broad run's numbers into your report first.
 
+**Two different faults produce "fewer JUnit files than I expected", so read
+the count against both.** This one is DELETION by a filtered rerun; the other
+is a broad run that never happened at all, because the same task appeared
+twice on one command line (see `--rerun` semantics below, computenet-i4cq).
+Deletion leaves the narrow run's files fresh and the rest gone; the duplicate
+form leaves exactly the narrow run and no trace that anything else was asked
+for.
+
 (The script is executable and carries a `#!/usr/bin/env python3` shebang, so
 the bare path below runs as written — two reviewers hesitated over that in one
 session, neither having tried it; computenet-s16r.)
@@ -222,8 +230,10 @@ None of the accounting above maps onto the `:iroh` cargo tasks
   this file teaches actively reassures while the evidence is a twentieth of
   what you think. `junit-count.py` cannot catch it either: the XML is fresh and
   green, there is simply less of it, and nobody knows the expected count by
-  heart. Six agents across two sessions hit it (computenet-i4cq four,
-  computenet-1z8s two), and the pressure that produces it is this skill's own:
+  heart — and a low count here is ambiguous with the deletion fault above
+  (computenet-5b34), so distinguish them rather than assuming either. Six
+  agents across two sessions hit it (computenet-i4cq four, computenet-1z8s
+  two), and the pressure that produces it is this skill's own:
   narrow-suite-plus-broad-suite is logically one verification step, and you are
   told to run verification in ONE foreground call. **Use two calls.** The
   non-regression half is the half that silently disappears.

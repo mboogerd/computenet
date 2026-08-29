@@ -553,7 +553,9 @@ is parented is a check, not a habit.** Read the epic's status first
 epic, which is what schedules it. **Closed** — which happens, because a
 concurrent session can close an epic while its child is still in review — →
 file it **unparented with a `discovered-from` edge onto the item you were
-reviewing**, and say in your report that it is unparented and why. Do not
+reviewing** — `bd dep add "$RES" <item-id> --type discovered-from`, the type
+is a FLAG and the positional form fails with `requires 2 arg(s), only received
+3` (computenet-l1bb) — and say in your report that it is unparented and why. Do not
 improvise the choice, and do not read "`bd` let me parent it there" as an
 answer — it does, and the child stays visible; what a closed epic no longer
 does is get *selected*. The reasoning and the exact commands are in
