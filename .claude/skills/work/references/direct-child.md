@@ -64,13 +64,17 @@ the reviewer. A tracker-only item has no route at all unless one is written down
 — a session hitting two of them invented one at the time (computenet-ci1g).
 
 **Recognise it from the bead**, not from judgement: `metadata.files` is empty or
-names only tracker artifacts, *and* the description names bead text as the
+declares itself beads-only, *and* the description names bead text as the
 deliverable ("amend the epic's ISO-03 requirement text", "correct feature
-`<id>`'s acceptance criteria"). Empty `metadata.files` alone is not the signal —
-`files unknowable before diagnosis` is a different shape with a real diff at the
-end. The shape is common rather than exotic: a feature reviewer may write only
-to the item under review and to items it creates, so every cross-bead text
-correction it identifies under review-feature.md §7 becomes one of these.
+`<id>`'s acceptance criteria"). A named repo file does not disqualify it if the
+field marks it optional — `(beads only: computenet-051 description; optionally
+doc/ARCHITECTURE.md)` is computenet-gozv, the motivating case. Empty
+`metadata.files` alone is not the signal: it is also how ordinary CODE beads are
+filed (computenet-w5sm, computenet-3u6x), and `files unknowable before
+diagnosis` is a third shape, with a real diff at the end. The shape is common
+rather than exotic: a feature reviewer may write only to the item under review
+and to items it creates, so every cross-bead text correction it identifies under
+review-feature.md §7 becomes one of these.
 
 **Then:**
 
