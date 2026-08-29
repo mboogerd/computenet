@@ -119,7 +119,15 @@
 # ship-feature.md §4 tests the VALUE. computenet-s16r (+4) — junit-count.py is
 # executable with a shebang, so the bare-path citation runs; say so once.
 # computenet-yiof is a one-word substitution and free.
-work                8730
+# 8730 -> 8764 on 2026-08-29: computenet-7vsj (+11) — review-feature.md gave
+# two opposite parents for a reviewer-filed bead; the distinction (does the
+# feature WAIT for it?) is now named, because an epic-parented blocker blocks
+# nothing. computenet-89jr (+12) — git stash is one repo-wide stack shared by a
+# dozen linked worktrees, and nothing in the references said so.
+# computenet-9z8t (+10) — bd update aborts the whole call on one unknown flag,
+# discarding a valid flag's write; --body-file exists, --acceptance-file does
+# not. computenet-l1bb is one inline clause on an existing table row.
+work                8764
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

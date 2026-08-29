@@ -953,7 +953,7 @@ bd show <epic-id> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'
 | the reviewed item has… | attach the residual by |
 |---|---|
 | an **open** epic ancestor | `bd update "$RES" --parent=<epic-id>` — the epic cannot close while it is open, and the epic's owner is who schedules it |
-| a **closed** epic ancestor | no parent, plus `bd dep add "$RES" <feature-id> --type=discovered-from` — a closed epic schedules nothing (nobody selects it at step 3), and the edge keeps the residual reachable from the work it came out of: `bv --robot-triage --graph-root` traverses it exactly like parentage |
+| a **closed** epic ancestor | no parent, plus `bd dep add "$RES" <feature-id> --type discovered-from` — the type is a FLAG, never positional: `bd dep add <a> <b> discovered-from` fails with `requires 2 arg(s), only received 3`, and the positional shape is a fair guess because `bd create --deps` really does take `discovered-from:<id>` (computenet-l1bb) — a closed epic schedules nothing (nobody selects it at step 3), and the edge keeps the residual reachable from the work it came out of: `bv --robot-triage --graph-root` traverses it exactly like parentage |
 | **no epic at all** (a 5f route-4 item — `(unparented)` is normal, computenet-wpvy.42) | `bd update "$RES" --parent=<item-id>` — parent it to the reviewed item itself, and do **not** also add the `discovered-from` edge (one-slot rule below) |
 
 **If the residual's subject exists only on the feature branch** — a type, a
@@ -1069,9 +1069,21 @@ EOF
 
 Create beads tasks for the remaining work (`bd create --parent=<feature-id>`
 with `model` and `files` metadata, per [feature.md](feature.md)) so the next
-batch picks them up. Attach anything you create by the residual-attachment
-table above — on an unparented route-4 item that means `--parent=<item-id>` —
-and the one-slot rule (parent XOR `discovered-from`, computenet-ofzz) and the
+batch picks them up.
+
+**The residual-attachment table above does NOT apply to these.** The two
+shapes differ by whether the feature waits: a *residual* is follow-on work the
+feature does not wait for, so it attaches where someone will schedule it (the
+epic); a *draft-blocking task* is work the feature DOES wait for, so it is
+parented to the feature it blocks. Parent one of these under the epic and it
+blocks nothing — a later session picks the feature up and ships it with its
+blocker sitting beside it, unenforced. A reviewer hit the contradiction on
+computenet-ahn0, chose the feature parent, and reported it rather than leaving
+it silent; that judgement was right (computenet-7vsj). Only on an unparented
+route-4 item does the table's row apply, because there `--parent=<item-id>`
+IS the feature.
+
+The one-slot rule (parent XOR `discovered-from`, computenet-ofzz) and the
 `base_branch` stamp apply here with MORE force: a draft's subject is by
 construction not on `main` (computenet-4uv1). A feature left in draft with no
 tasks describing what's missing is a dead end. Two drafts legitimately have no tasks, and each is

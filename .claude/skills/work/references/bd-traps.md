@@ -191,6 +191,16 @@ SKILL.md and the other references cite this file as "`bd` traps".
   unparented (hash id, counter untouched) and then re-parents. Breakdown
   children under an epic or feature YOU claimed are exclusive by that claim
   and keep their dotted ids — `--parent` is correct there.
+- **`bd update` aborts the WHOLE call on one unknown flag**, discarding the
+  writes a valid flag in the same call would have made. Measured 2026-08-29:
+  `bd update <id> --nosuchflag --set-metadata probe2=x` → `Error: unknown
+  flag`, and `probe2` was never set. The shape that produces it: `bd update`
+  has `--body-file` but **no `--acceptance-file`** — only `--acceptance
+  <string>` — while `create-ticket.sh` and `file-friction.sh` both expose
+  `--desc-file` AND `--accept-file`, so an agent that has just used those
+  reaches for the pair here and loses the description write too
+  (computenet-9z8t). Set acceptance in its own `bd update` call, and re-read
+  the bead rather than trusting a multi-field update's exit code.
 - **Repeating `-C <main-checkout>` is what tempts the variable that breaks.**
   `BD="bd -C /path"; $BD show x` fails with `no such file or directory: bd -C
   /path` — zsh does not word-split an unquoted expansion — and it reads as bd

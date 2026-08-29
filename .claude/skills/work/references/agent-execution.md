@@ -224,6 +224,18 @@ which is what makes them worth naming rather than leaving to be rediscovered.
   Same shell, loud variant: a word starting with `=` expands to a command
   path, so an unquoted `echo ===` separator dies (`== not found`) — quote it
   (`echo '==='`) or use `printf` (computenet-a49j).
+- **`git stash` is a single REPO-WIDE stack, shared by every linked
+  worktree.** Worktrees isolate HEAD, index and files — that isolation is this
+  skill's whole concurrency model — and the stash is the exception. A session
+  runs a dozen worktrees off one `.git`, so `git stash pop` pops whatever is on
+  top, not necessarily what you pushed. Two implementers reached for
+  stash/run/pop to get a before-and-after in one worktree and got away with it
+  only because their uses did not overlap in time (computenet-89jr). Use a
+  worktree-local before-and-after instead: commit first and compare against the
+  parent commit, `git show <base>:<path> > "$SCRATCH/before.kt"`, or
+  `git worktree add` a throwaway checkout of the base. If you must stash,
+  follow AGENTS.md's tagged form (`git stash push -u -m "<unique-tag>"`,
+  capture the sha, `apply` never `pop`).
 - **A git pathspec ending at a DIRECTORY name matches nothing under it** — it
   matches a path ending there, i.e. a *file* named `main`. Measured:
   `git grep -ln 'FileJournal(' -- '*/src/main'` → 0 hits, exit 1;
