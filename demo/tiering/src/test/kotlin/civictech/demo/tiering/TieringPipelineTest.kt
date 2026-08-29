@@ -95,4 +95,64 @@ class TieringPipelineTest {
             assertEquals(batchFused, fused.toMap(), "seed=$seed fused tiers diverged")
         }
     }
+
+    /**
+     * The manual re-tier lane (feature computenet-j2x.5, task .1), proved
+     * single-host — no JvmPeer, no socket. The chain under test is the one
+     * decision j2x.5-D2 prescribes: `OrMapCell → UntagCell →
+     * CombineLatestCell` override on top of the existing `fused` outlet, with
+     * no demo-private merge anywhere in it.
+     */
+    @Test
+    fun `a manual re-tier overrides the computed tier, and none restores it`() {
+        val controller = SimulationController(7L)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val refs = TierPipeline.build(host)
+
+        // both folds subscribed UP FRONT: a raw `subscribe` is not a host link,
+        // so it gets no catch-up — a sink attached later would see only the
+        // deltas that follow it.
+        val board = mutableMapOf<String, Tiered>()
+        val fused = mutableMapOf<String, Tiered>()
+        fun fold(into: MutableMap<String, Tiered>): Use<Propagate<MapDelta<String, Tiered>>> = Use.fixed(
+            object : Propagate<MapDelta<String, Tiered>> {
+                override fun propagate(value: MapDelta<String, Tiered>) {
+                    into.putAll(value.puts)
+                    value.removals.forEach { into.remove(it) }
+                }
+            },
+            PortRef.generate(),
+        )
+        host.lookup(refs.board)!!.outlet.subscribe(fold(board))
+        host.lookup(refs.fused)!!.outlet.subscribe(fold(fused))
+
+        val valOps = host.lookup(refs.vals)!!.inlet.call
+        val manualOps = host.lookup(refs.manual)!!.inlet.call
+
+        // ada values pizza at S: tierAvg 6 → 1.0 → tier S, tier-only signal.
+        valOps.put("ada" to "pizza", Valuation("ada", "pizza", Tiering.SCORE_OF.getValue("S")))
+        controller.runToIdle()
+        assertEquals(Tiered(1.0, "S"), board["pizza"], "the computed tier should reach the board")
+
+        // a manual pin wins over the computed tier
+        manualOps.put("pizza", "D")
+        controller.runToIdle()
+        assertEquals(Tiering.manualTiered("D"), board["pizza"], "the manual pin should override the computed tier")
+        assertEquals("D", board["pizza"]?.tier)
+
+        // the manual map survives an unrelated valuation change: bo's F drops
+        // the computed tier to (6+0)/2 = 3 → 0.5 → C, and the pin still wins.
+        valOps.put("bo" to "pizza", Valuation("bo", "pizza", Tiering.SCORE_OF.getValue("F")))
+        controller.runToIdle()
+        assertEquals(Tiering.manualTiered("D"), board["pizza"], "an unrelated valuation must not clear the pin")
+
+        // ... and the computed tier underneath really did move, so the
+        // assertion above is about the override and not about a frozen board.
+        assertEquals(Tiered(0.5, "C"), fused["pizza"], "the computed lane should have re-tiered underneath the pin")
+
+        // `retier none` releases the pin and the computed tier comes back
+        manualOps.remove("pizza")
+        controller.runToIdle()
+        assertEquals(Tiered(0.5, "C"), board["pizza"], "removing the pin should restore the computed tier")
+    }
 }

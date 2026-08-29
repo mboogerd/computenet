@@ -559,7 +559,7 @@ jobs:
       # skip red rather than green.
       - name: Guard - multi-jvm tests live only in the scoped modules
         run: |
-          stray=$(grep -rl 'Tag("multi-jvm")' --include='*.kt' --exclude-dir=build . | grep -vE '^\./demo/(shopping|exchange|beadsmirror)/' || true)
+          stray=$(grep -rl 'Tag("multi-jvm")' --include='*.kt' --exclude-dir=build . | grep -vE '^\./demo/(shopping|exchange|beadsmirror|tiering)/' || true)
           if [ -n "$stray" ]; then
             echo "multi-jvm-tagged tests outside the serial lane's scoped modules — widen the module list in this job:"
             echo "$stray"
@@ -571,10 +571,16 @@ jobs:
       # property T13 asked for applies to the process-forking tests themselves,
       # not to compilation.
       - name: Compile the multi-jvm closure (parallel)
-        run: ./gradlew :demo:exchange:testClasses :demo:shopping:testClasses :demo:beadsmirror:testClasses
+        run: ./gradlew :demo:exchange:testClasses :demo:shopping:testClasses :demo:beadsmirror:testClasses :demo:tiering:testClasses
 
-      # `--rerun` binds to the task immediately before it, so it applies to
-      # :demo:beadsmirror:test alone and exchange/shopping keep their cache.
+      # `--rerun` binds to the task immediately before it, so it is repeated
+      # after EACH task that needs it — :demo:beadsmirror:test and
+      # :demo:tiering:test — and exchange/shopping keep their cache. Repeating
+      # it is not hygiene: a single trailing `--rerun` would bind to the LAST
+      # task alone, silently returning :demo:beadsmirror:test to the cached
+      # replay computenet-7em.5 exists to forbid (caught at review of
+      # computenet-j2x.5, where widening this list with `:demo:tiering:test`
+      # moved the flag off beadsmirror).
       # It is load-bearing, not hygiene: whether `bd` is on PATH is NOT a
       # declared input of the test task, so a build-cache entry recorded before
       # the install step above existed replays its SKIPPED report verbatim.
@@ -585,7 +591,7 @@ jobs:
       # computenet-7em.5 exists to remove, so this lane executes the class every
       # time (~30s locally) rather than trusting a replay of it.
       - name: Multi-JVM serial lane (process-startup + wall-clock timing tests)
-        run: ./gradlew :demo:exchange:test :demo:shopping:test :demo:beadsmirror:test --rerun -PmultiJvmOnly=true --max-workers=1
+        run: ./gradlew :demo:exchange:test :demo:shopping:test :demo:beadsmirror:test --rerun :demo:tiering:test --rerun -PmultiJvmOnly=true --max-workers=1
 
       # computenet-7em.5. Same three checks as build-test-fast's copy of this
       # step — read that one for the reasoning — with the named class flipped,

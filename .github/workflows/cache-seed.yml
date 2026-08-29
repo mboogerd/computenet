@@ -85,9 +85,9 @@ jobs:
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
       - name: Compile the multi-jvm closure (parallel)
-        run: ./gradlew :demo:exchange:testClasses :demo:shopping:testClasses
+        run: ./gradlew :demo:exchange:testClasses :demo:shopping:testClasses :demo:tiering:testClasses
       - name: Multi-JVM serial lane (process-startup + wall-clock timing tests)
-        run: ./gradlew :demo:exchange:test :demo:shopping:test -PmultiJvmOnly=true --max-workers=1
+        run: ./gradlew :demo:exchange:test :demo:shopping:test :demo:tiering:test -PmultiJvmOnly=true --max-workers=1
 
   concord-full:
     runs-on: ubuntu-latest
