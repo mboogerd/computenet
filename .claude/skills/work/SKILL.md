@@ -1742,6 +1742,13 @@ the likeliest reason is that it went stale, not that your fix failed, so
 check what landed since the bead was filed, substitute a mutation that
 demonstrably discriminates, and report the substitution on the bead rather
 than making it quietly. ${repoAge}
+Mutate only files inside your metadata.files claim. If the mutation needs a
+production file you were not given — the normal case for a test-only task —
+stop: report the refused or out-of-scope operation verbatim, take
+references/mutation-check.md's substitute routes, and name the property left
+unproven. Do NOT reach for perl/sed/python through Bash to get around a scope
+limit or a permission refusal; the reviewer's dispatch carries the
+authorization to run that mutation and yours does not.
 Run every verification command — Gradle above all — in ONE foreground Bash
 call with an explicit timeout, up to 600000 ms. If you already know the suite
 outruns that 10-minute cap, COMMIT FIRST (do not `git push`, and do not

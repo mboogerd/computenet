@@ -71,6 +71,14 @@ sentence is the explicit grant AGENTS.md's conservative profile and
 multi-agent clause both defer to. Still do
 not push — not even the task branch (your reference says why) — and do not
 merge, rebase, or switch branches.
+The mutation check in references/mutation-check.md is YOUR step rather than the
+implementer's, whose dispatch confines it to this task's metadata.files — and a
+production file its tests merely constrain usually sits outside that. Your
+scope here covers those files for a temporary, reverted mutation; follow
+mutation-check.md exactly (marker first, prove the mutation landed, revert and
+verify the revert). If the permission classifier refuses one anyway, report the
+refused operation verbatim and name the property left unproven rather than
+routing around it.
 Repair what you can within the task's scope. Report pass or fail, what you
 repaired, and — on fail — exactly what is missing.
 If you won't finish within ~45-60 minutes, stop at a clean point and write your
