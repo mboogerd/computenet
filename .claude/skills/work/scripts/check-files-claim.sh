@@ -66,8 +66,10 @@ covered() { # path (reads $claim_entries)
 # Not listed, deliberately: the civictech.cell.data source-cell gate
 # (oracle/src/test/resources/source-cell-inventory.txt). Its trigger directory
 # CONTAINS civictech/cell/data/op, so it would fire on every operator change —
-# a different package, a guaranteed false positive. The prose in SKILL.md 5b
-# names it instead.
+# a different package, a guaranteed false positive. SKILL.md 5b's enumerator
+# walk is what reaches it: `git grep -F 'civictech/cell/data'` returns it, and
+# a human reading the hits can tell a source-cell add from an operator add
+# where this table cannot. Do not add it here (computenet-y6zv).
 COUPLINGS='settings.gradle.kts=>doc/ARCHITECTURE.md
 civictech/cell/data/op=>oracle/src/test/resources/operator-inventory.txt
 civictech/cell/data/op=>inspect/src/main/kotlin/civictech/inspect/Observations.kt
