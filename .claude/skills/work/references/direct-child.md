@@ -56,6 +56,41 @@ apply.
   this item standing in for the feature. The whole still ships as **one**
   PR, the item's own.
 
+## When the deliverable is BEAD TEXT, not a diff
+
+The three mechanics above all assume a diff, and one of them is not merely
+skippable: no commit means no PR, and the PR is a *precondition* of dispatching
+the reviewer. A tracker-only item has no route at all unless one is written down
+— a session hitting two of them invented one at the time (computenet-ci1g).
+
+**Recognise it from the bead**, not from judgement: `metadata.files` is empty or
+names only tracker artifacts, *and* the description names bead text as the
+deliverable ("amend the epic's ISO-03 requirement text", "correct feature
+`<id>`'s acceptance criteria"). Empty `metadata.files` alone is not the signal —
+`files unknowable before diagnosis` is a different shape with a real diff at the
+end. The shape is common rather than exotic: a feature reviewer may write only
+to the item under review and to items it creates, so every cross-bead text
+correction it identifies under review-feature.md §7 becomes one of these.
+
+**Then:**
+
+- **No worktree, no branch, no PR, and no CI.** The three mechanics above are
+  declared not applicable — say so on the bead rather than leaving a reader to
+  wonder which step was skipped. `metadata.pr` stays empty and that is correct.
+- **Still DISPATCH the edit; do not make it yourself.** One agent can carry
+  several such chores in one dispatch, with the cross-bead writes named
+  explicitly. This is the whole reason the route is safe: it keeps the
+  orchestrator out of the seat SKILL.md warns about, where what you write
+  yourself is the one thing nobody reviews.
+- **Your read-back IS the review**, and it is sufficient *because you are not
+  the author*. Read the amended fields back against the bead's acceptance —
+  each clause it required, and that every superseded wording it promised to
+  preserve is still there verbatim. If you nonetheless made the edit yourself,
+  that sufficiency is gone: dispatch a second agent to read it against the
+  acceptance before closing.
+- **Record the verification on the parent**, naming what you checked, so the
+  choice is auditable by the next session rather than being invisible.
+
 ## The idle-lane question
 
 **`ready-in-epic.sh` returning exactly one row is where the idle-lane
