@@ -72,6 +72,28 @@ class BatchOracleTest {
         BatchOracle(sc).view("v") shouldBe map("k1" to i(2))
     }
 
+    @Test
+    fun `ormap-source folds put-remove to the current key-value map`() {
+        // Single-stream projection of the OR-map's dot algebra (BatchOracle's
+        // `ormap-source` arm): one replica observes every dot it minted, so a `put`
+        // covers the key's previous dot and a `remove` covers all of them — file-order
+        // LWW with removal. k2 is written twice before its remove, so a fold that
+        // dropped only the LAST dot would leave k2 present at 9.
+        val sc = scenario(
+            cells = listOf(cell("om", "ormap-source"), cell("v", "tagged-map-view")),
+            links = listOf(link("om", "v")),
+            script = listOf(
+                apply("om", "put", list(s("k1"), i(1))),
+                apply("om", "put", list(s("k1"), i(2))), // overwrites k1
+                apply("om", "put", list(s("k2"), i(9))),
+                apply("om", "put", list(s("k2"), i(10))),
+                apply("om", "remove", s("k2")),
+                apply("om", "put", list(s("k3"), s("z"))),
+            ),
+        )
+        BatchOracle(sc).view("v") shouldBe map("k1" to i(2), "k3" to s("z"))
+    }
+
     // --- operators ----------------------------------------------------------
 
     @Test
