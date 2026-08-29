@@ -339,8 +339,12 @@ value-folding on `OrMapCell`/`TaggedMapDelta`) and §E1.5 (`TaggedMapView` +
 above) have all shipped against this section, as `OrMapCell`/`TaggedMapDelta`
 in `civictech.cell.data`, `TaggedMapView`/`View.taggedMap()` in
 `civictech.cell.data.view`/`civictech.cell.observe`, and `UntagCell` in
-`civictech.cell.data.op`. Only §E1.6 (the two-JVM replicated demo adoption)
-remains with the 96-plan. It is an **additive new delta type**:
+`civictech.cell.data.op`. §E1.6 (the two-JVM replicated demo adoption) has now
+shipped too, as `demo/tiering`'s two-host variant — its manual re-tier lane is
+a replicated `OrMapCell<String, String>` fused into the computed board through
+`UntagCell` — proved by `TwoJvmTieringConvergenceTest`,
+`TieringCrashRestartTest` and `TieringLateJoinerTest`. It is an **additive new
+delta type**:
 `MapDelta` and its single-writer cells (`MapCell`, `JoinCell`, `GroupByCell`)
 are untouched, and `KeyedSetCell` is untouched — this resolves backlog
 `06-or-map-tagged-map-delta.md`'s open choice in favor of addition over
