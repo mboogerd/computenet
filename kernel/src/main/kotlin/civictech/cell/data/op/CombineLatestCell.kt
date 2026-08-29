@@ -71,6 +71,17 @@ interface CombineLatestApi<K, V, W, R> {
  * gossip. Inherits [MapDelta]'s documented convergence limit (G-23) exactly as
  * [JoinCell] does — untagged, so concurrent same-key puts resolve by arrival
  * order; single-writer-per-key or single-stream inputs converge.
+ *
+ * **G-23 discharged for tagged-map-fed inputs (96 §E1.5).** The arrival-order
+ * bias above is a property of *raw* `MapDelta` writers. When an arm's
+ * `MapDelta` instead arrives via `OrMapCell` →
+ * [civictech.cell.data.op.UntagCell] — a converged OR-map projected down to
+ * this untagged vocabulary — that arm is no longer multi-writer-divergent:
+ * `UntagCell` emits only the OR-map's already dot-resolved, replica-stable
+ * exposed value, so two peers each running `OrMapCell → UntagCell →
+ * CombineLatestCell` over the same replicated map converge identically. This
+ * cell is functionally unchanged either way — the discharge is a fact about
+ * the upstream composition, not a code path here.
  */
 class CombineLatestCell<K, V, W, R>(
     ref: CellRef = CellRef(UUID.randomUUID()),

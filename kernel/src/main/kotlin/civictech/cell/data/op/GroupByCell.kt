@@ -37,6 +37,17 @@ interface GroupByApi<E, K, A> {
  * be: an aggregate is a deterministic function of convergent membership, so
  * peers recompute from their replicated inputs and converge with no
  * aggregate-level gossip (42).
+ *
+ * **G-23 note (96 §E1.5) — this cell's INLET is [SetDelta], not [MapDelta].**
+ * Unlike [CombineLatestCell]/[LookupJoinCell]/[JoinCell], this cell was never
+ * the affected edge for the arrival-order-biased-`MapDelta`-input concern
+ * `OrMapCell` → [civictech.cell.data.op.UntagCell] discharges elsewhere: its
+ * input is a *set* membership stream, and its single-writer claim above is
+ * already conditioned on that membership stream itself being convergent (a
+ * plain [civictech.cell.data.SetCell] or an OR-set), not on an untagged
+ * `MapDelta` write race. Only
+ * this cell's *output* speaks `MapDelta`, and nothing here reads it back in —
+ * so there is no G-23 caveat on this cell for `UntagCell` to discharge.
  */
 class GroupByCell<E, K, A, ACC : Serializable>(
     ref: CellRef = CellRef(UUID.randomUUID()),
