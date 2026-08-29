@@ -286,8 +286,12 @@ single-writer review of `concord/schema/scenario.md` itself. The matching
 `civictech.concord.driver.kernel` binding and the `CorpusRunner` dispatch arm
 followed under `concord/src/` in `computenet-yh6.1.8`, per D-C12's rule that a
 step verb's seams move together or the module does not compile. Two corpus
-scenarios drive it: `DUR-LIVE-01` (the live half of `[24-DUR-05]`) and
-`DUR-CKPT-FRONTIER-01` (the checkpoint-frontier half of `[24-DUR-02]`).
+scenarios drove it as landed: `DUR-LIVE-01` (the live half of `[24-DUR-05]`)
+and `DUR-CKPT-FRONTIER-01` (the checkpoint-frontier half of `[24-DUR-02]`). A
+third, `42-TMAP-REPL-01`, followed when `computenet-j2x.4.6` widened the kernel
+binding to a `replica-of` replica's gossip inlet; the verb's shape and semantics
+are unchanged by that widening — only the set of admitted targets grew, and the
+note below is the single-writer review of it (`computenet-37zj`).
 
 **One driver-capability note.** Which cells can receive a duplicate is a driver
 capability like any other. The kernel binding admits two targets. An

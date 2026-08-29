@@ -807,7 +807,10 @@ original assertion, which ended `world shouldBe listOf(1, 1)`), plus the `Owned`
      with no message context, the shape `HostedCellProxy` produces off the data
      path. `apply` cannot: it drives an op through a cell's own outlet and the
      driver mints the next wave position. `retransmit` cannot: it states a
-     position, and its kernel binding admits an `effect-sink` target only.
+     position, and every target its kernel binding admits is one that *decides*
+     a duplicate (an `effect-sink`'s processed frontier, or — since
+     `computenet-j2x.4.6` — a `replica-of` replica's dot algebra at its gossip
+     inlet), never a bare `PORT_API` inlet driven without one.
      Reaching a contextless delivery by exploiting the fact that the *kernel*
      binding's `apply` happens to enter a source's inlet unstamped would be an
      accident of that binding rather than neutral semantics — another conforming
