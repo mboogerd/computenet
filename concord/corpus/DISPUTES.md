@@ -2251,8 +2251,13 @@ what `24-TMAP-MERGE-01` already asserts (`replicas-converge` +
 
 The law: `remove(k)` tombstones every dot *observed live* at `k`, so a concurrent
 put's unobserved dot survives. `24-TMAP-RESET-01` states the sequential form (a
-remove covers both of the key's live dots; a later put's fresh dot is not
-covered). The concurrent form was probed in both issuance orders across two
+remove covers the dot it observed live, so the key vanishes; a later put's fresh
+dot is not covered). That form cannot reach a *multi-dot* cover set at all: on one
+source a `put` already covers the key's prior live dots in the delta that mints
+its own, so exactly one dot is live when the remove runs — verified by mutation
+during this task's review (narrowing `OrMapCell.remove` to the newest live dot
+leaves `24-TMAP-RESET-01` green). One more reason the law's full strength is
+observable only in the multi-writer form below. The concurrent form was probed in both issuance orders across two
 replicas — `remove k1` on `r1` with `put k1 b` on `r2`, once with the remove
 issued first and once with the put issued first, golden `{k1: b}` on both views —
 and **both probes passed on 20 of 20 runs**.

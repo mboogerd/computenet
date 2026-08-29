@@ -576,19 +576,20 @@ class BatchOracle(private val scenario: Scenario) {
          * `map-view` ([renderView]), because the driver's `TaggedMapView` materializes
          * the same `{key -> exposed value}` Map.
          *
-         * **It is NOT in [Values.VIEW_TYPES], and that is a residual, not a decision.**
-         * `oracle/Values.kt` is outside computenet-j2x.4.1's file claim, so this item
-         * could only widen the oracle's own set — the same split computenet-yh6.1.9 hit
-         * with [DURABLE_SET_VIEW] and computenet-yh6.1.10 later closed. The consequence
-         * is precise and bounded: `incremental-equals-batch view: '*'` ([allViewValues])
-         * and `Checks.viewCells` (from which `late-join-equals-early` infers an
-         * early/late pair) both enumerate `Values.VIEW_TYPES`, so they currently **skip**
-         * a `tagged-map-view`. On a scenario whose only view is tagged, `'*'` would
-         * quantify over nothing and pass having read nothing — the vacuous pass
-         * `Values.VIEW_TYPES`' own KDoc argues against. No corpus scenario uses a
-         * `tagged-map-view` yet (the OR-map scenarios are computenet-j2x.4.3/.4), so
-         * nothing is silently passing today; a scenario author must either name the view
-         * explicitly in every check or get `Values.VIEW_TYPES` widened first.
+         * **It is in [Values.VIEW_TYPES] since computenet-j2x.4.3 — the residual this
+         * KDoc used to record is closed.** computenet-j2x.4.1 could only widen the
+         * oracle's own set (`oracle/Values.kt` was outside its file claim), the same
+         * split computenet-yh6.1.9 hit with [DURABLE_SET_VIEW] and computenet-yh6.1.10
+         * later closed. The consequence while it stood was precise: `incremental-
+         * equals-batch view: '*'` ([allViewValues]) and `Checks.viewCells` (from which
+         * `late-join-equals-early` infers an early/late pair) both enumerate
+         * `Values.VIEW_TYPES`, so they **skipped** a `tagged-map-view`, and a scenario
+         * whose only view was tagged quantified over nothing and passed having read
+         * nothing. computenet-j2x.4.3 authored the first scenarios that name the id
+         * (`24-TMAP-MERGE-01`/`-PRESENCE-01`/`-LWW-01`/`-RESET-01`), measured that
+         * vacuous pass on a probe, and widened `Values.VIEW_TYPES` — see its KDoc for
+         * the evidence and the blast-radius argument. Those four name their view in
+         * every check as well, so neither generalising form is load-bearing for them.
          */
         const val TAGGED_MAP_VIEW = "tagged-map-view"
 
