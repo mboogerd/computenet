@@ -1,0 +1,49 @@
+# Concord corpus scenario (KE1-F4, computenet-j2x.4.3). Canonical schema — see
+# concord/schema/scenario.md.
+#
+# [24-TMAP-03]: a key's exposed value is its live dot with the greatest
+# (counter, sourceId) order, and MUST NOT be selected by wall-clock time.
+#
+# Why this file is honest about dot order without naming a dot. On ONE source the
+# dot counter is minted monotonically per put (spec 20/22 §Structural changes:
+# "wave ids are per-source monotonic counters, minted by the emitting outlet"),
+# and steps on the same cell apply in file order (scenario.md §Script semantics).
+# So on a single stream file order IS dot order, and the greatest-dot rule is
+# observable as "the last put in the file wins" — with the sourceId component of
+# the order never consulted, because all dots share one source. That equivalence
+# is the whole reason the golden below is legitimate; it does not generalise.
+#
+# The wall-clock half is negative and structural: nothing in the script mentions
+# time, the steps carry no delay, and the schedule sweep re-runs the same file
+# under different interleavings. A value selected by arrival time rather than dot
+# order could therefore differ between runs on the k1 puts, and a scenario passes
+# only if every check holds on every run.
+#
+# The concurrent half — two writers whose dots must be ordered by the (counter,
+# sourceId) tiebreak — is NOT here: a scenario cannot name an implementation's
+# source identities, so it cannot predict which side wins. Filed in
+# concord/corpus/DISPUTES.md under KE1-37; 24-TMAP-MERGE-01 covers what remains
+# statable about the concurrent shape (both replicas agree on whichever won).
+id: 24-TMAP-LWW-01
+title: An OR-map key exposes its greatest-dot value — on one stream, the last put in file order
+covers: [24-TMAP-03]
+profile: core
+kind: example
+narrative:
+  given: an ormap-source observed through a tagged-map-view
+  when: one key is put twice with different values and a second key is put once
+  then: the first key exposes the later put's value — dot order, which on a single source is file order, and never a wall clock
+graph:
+  cells:
+    - {id: om, type: ormap-source}
+    - {id: v, type: tagged-map-view}
+  links:
+    - {from: om, to: v}
+script:
+  - {type: apply, on: om, op: put, value: [k1, first]}
+  - {type: apply, on: om, op: put, value: [k1, second]}   # greater dot at k1
+  - {type: apply, on: om, op: put, value: [k2, other]}
+checks:
+  - {type: final-view, view: v, equals: {k1: second, k2: other}}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

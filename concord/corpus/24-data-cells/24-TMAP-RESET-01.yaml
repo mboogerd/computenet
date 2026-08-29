@@ -1,0 +1,60 @@
+# Concord corpus scenario (KE1-F4, computenet-j2x.4.3). Canonical schema — see
+# concord/schema/scenario.md.
+#
+# [24-TMAP-04]: `remove(k)` tombstones every dot observed live at k at the time of
+# the remove — reset-remove — such that a dot NOT observed by that remove survives.
+#
+# Two halves, and only one of them is a single-stream property:
+#
+# 1. "every dot observed live" (here), in the only strength one stream can reach.
+#    MEASURED rather than assumed: on a single source a `put` already covers every
+#    dot it observes live at the key, in the same delta that mints its fresh one
+#    (`OrMapCell.put`'s local reset-remove half), so by the time the remove runs
+#    k1 has exactly ONE live dot — the `second` put's. What this file states is
+#    therefore that the remove covers the dot it observed and the key vanishes from
+#    the fold; it does NOT discriminate a remove that covered only the newest dot,
+#    because on one stream there is never more than one to choose from. (Checked by
+#    mutation during review of computenet-j2x.4.3: narrowing `OrMapCell.remove`'s
+#    cover set to the newest live dot leaves this scenario green.) A cover set with
+#    two live dots in it requires two writers, which is the concurrent half filed in
+#    concord/corpus/DISPUTES.md under KE1-37. The re-put afterwards
+#    mints a FRESH dot, which the earlier remove could not have observed, so k1 is
+#    live again at the new value: the same "an unobserved dot survives" clause,
+#    stated in the only form one stream can state it (sequentially unobservable,
+#    not concurrently). k0 is never touched by k1's remove — a reset-remove is
+#    per-key, not a map-wide reset.
+#
+# 2. The concurrent form (remove on one replica against an unobserved put on
+#    another) is NOT authored. It is unstatable here, not merely unwritten: making
+#    the put concurrent with the remove means putting the two steps on different
+#    cells between barriers, and scenario.md §Script semantics then hands the
+#    delivery interleaving to the schedule sweep — which is free to deliver the
+#    put's dot to the removing replica FIRST, whereupon the remove observes it,
+#    covers it, and the key vanishes. "Concurrent" and "the remove provably did
+#    not observe it" are mutually exclusive under this script model. Probed and
+#    filed with the evidence in concord/corpus/DISPUTES.md under KE1-37.
+id: 24-TMAP-RESET-01
+title: An OR-map remove covers every dot it observed at the key, and a later put's fresh dot is not covered
+covers: [24-TMAP-04]
+profile: core
+kind: example
+narrative:
+  given: an ormap-source observed through a tagged-map-view, holding an unrelated key
+  when: a key is put twice, removed, then put again
+  then: the remove covers the dot it observed so the key vanishes, the re-put's fresh dot is not covered so the key returns, and the unrelated key is untouched
+graph:
+  cells:
+    - {id: om, type: ormap-source}
+    - {id: v, type: tagged-map-view}
+  links:
+    - {from: om, to: v}
+script:
+  - {type: apply, on: om, op: put, value: [k0, untouched]}
+  - {type: apply, on: om, op: put, value: [k1, first]}
+  - {type: apply, on: om, op: put, value: [k1, second]}
+  - {type: apply, on: om, op: remove, value: k1}          # covers k1's one live dot (the second put already covered the first)
+  - {type: apply, on: om, op: put, value: [k1, revived]}  # fresh dot, unobserved by the remove above
+checks:
+  - {type: final-view, view: v, equals: {k0: untouched, k1: revived}}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

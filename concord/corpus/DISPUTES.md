@@ -2203,3 +2203,112 @@ traced from source rather than assumed.
   author the scenario over the existing `observations-whole-waves` /
   `incremental-equals-batch` / `no-dead-letters` checks — which are adequate to the
   glitch-freedom claim once the swap itself is expressible — and delete this entry.
+
+## KE1-F4 (the OR-map laws): the CONCURRENT halves of `[24-TMAP-03]` and `[24-TMAP-04]` are not scenario-statable (`script-model-gap` + `schema-gap`, `[KE1-37]`)
+
+`computenet-j2x.4.3` authored one scenario per tagged-map law —
+`24-TMAP-MERGE-01` (`[24-TMAP-01]`, dist convergence), `24-TMAP-PRESENCE-01`
+(`[24-TMAP-02]`), `24-TMAP-LWW-01` (`[24-TMAP-03]`) and `24-TMAP-RESET-01`
+(`[24-TMAP-04]`) — so all four rows of `doc/spec/CONCORDANCE.md` are covered.
+Two of those four cover the law's **single-stream** half only. This entry records
+what the other half would need, with the probe evidence, rather than letting the
+covered rows imply more than they check. Nothing was weakened to make a row go
+green: no golden was relaxed, no check dropped, and no scenario asserts an
+interleaving it did not produce.
+
+### Half A — `[24-TMAP-03]`'s concurrent value: **measured unsatisfiable**
+
+The law: a key's exposed value is its live dot with the greatest `(counter,
+sourceId)` order. On one source that order is file order (dot counters mint
+monotonically per put, steps on one cell apply in file order), which is what
+`24-TMAP-LWW-01` states and why its golden is legitimate. Across two replicas the
+`sourceId` tiebreak decides, and **a scenario cannot name a sourceId** — source
+identities are the implementation's, and `concord/schema/scenario.md` gives the
+author no vocabulary for one (the closest, `retransmit`'s `source:`, names a
+scenario-local *cell id* and is explicitly documented as carrying no claim about
+the identity it resolves to).
+
+Probe (run on `task/computenet-j2x.4.3`, `24-TMAP-LWWCONC-PROBE`, deleted after
+measuring — two `ormap-source` replicas of one logical id, `put k1 from-h1` on
+`r1` and `put k1 from-h2` on `r2` between the same barriers, golden
+`final-view v1 = {k1: from-h1}`):
+
+```
+24-TMAP-LWWCONC-PROBE: check(s) failed on 8 of 20 run(s).
+First failing run (0): final-view(v1): expected {k1=from-h1} but read {k1=from-h2}
+```
+
+Either golden loses on roughly half the schedule sweep. This is not a bug: the
+sweep is quantifying over delivery orders, the dots' `(counter, sourceId)` order
+differs run to run with the seeded driver, and the corpus rule is that a scenario
+passes only if every check holds on **every** run (P2 — properties, never
+traces). So the concurrent half has no expressible golden, and the only
+order-independent statement left over that topology is convergence — which is
+what `24-TMAP-MERGE-01` already asserts (`replicas-converge` +
+`views-converge`, no golden).
+
+### Half B — `[24-TMAP-04]`'s concurrent reset-remove: **passes, and is still a trace**
+
+The law: `remove(k)` tombstones every dot *observed live* at `k`, so a concurrent
+put's unobserved dot survives. `24-TMAP-RESET-01` states the sequential form (a
+remove covers the dot it observed live, so the key vanishes; a later put's fresh
+dot is not covered). That form cannot reach a *multi-dot* cover set at all: on one
+source a `put` already covers the key's prior live dots in the delta that mints
+its own, so exactly one dot is live when the remove runs — verified by mutation
+during this task's review (narrowing `OrMapCell.remove` to the newest live dot
+leaves `24-TMAP-RESET-01` green). One more reason the law's full strength is
+observable only in the multi-writer form below. The concurrent form was probed
+in both issuance orders across two replicas — `remove k1` on `r1` with
+`put k1 b` on `r2`, once with the remove
+issued first and once with the put issued first, golden `{k1: b}` on both views —
+and **both probes passed on 20 of 20 runs**.
+
+It was still **not authored**, and that is the honest call rather than the
+conservative one. What makes the probe pass is a fact about this driver, not
+about the specification: the harness applies a script step into the kernel cell
+before issuing the next, so `r1`'s remove computes its observed set at a moment
+when `b`'s dot either does not exist yet or has not been gossiped in. The
+specification grants an implementation the opposite freedom —
+`concord/schema/scenario.md` §Script semantics puts delivery interleaving between
+barriers entirely in the implementation's hands — and a conforming driver that
+delivered `b`'s dot to `r1` before the remove applied would tombstone it
+*correctly*, whereupon the golden `{k1: b}` is red against a correct
+implementation. A conformance corpus may not ship a file that a second conforming
+implementation can legitimately fail, so the passing probe is evidence about the
+kernel driver's scheduling and not a check. (Same hazard `scenario.md` names for
+`read-state`: a scenario "would be asserting an interleaving it never produced".)
+
+### The missing capability (what would retire this entry)
+
+Both halves need the same thing, which the corpus deliberately does not have: a
+way for a scenario to **pin the observation relation between two replicas'
+writes** — to state "this remove had, or had not, observed that put's dot when it
+applied" — plus, for half A only, a neutral way to state a dot-order tiebreak
+without naming an implementation's source identity. Neither exists in the closed
+step and check vocabulary, and growing either is a deliberate schema-change
+ticket between waves, which `computenet-j2x.4`'s decision **j2x.4-D4** explicitly
+forbids this feature from taking (it is a parked question on epic
+`computenet-j2x`, not a corpus-authoring convenience).
+
+- **Resolves (half A)**: a step or descriptor that fixes replica dot order
+  neutrally — e.g. a scenario-declarable total order over replica write
+  identities that a conforming driver must honour when minting dots — after which
+  the concurrent LWW golden becomes statable and the `24-TMAP-LWWCONC` probe
+  above becomes a scenario.
+- **Resolves (half B)**: a delivery-ordering primitive (a directed barrier:
+  "deliver everything `r2` has emitted to `r1`, then continue", and its negation)
+  so a scenario can construct a provably-unobserved concurrent put rather than
+  relying on the harness's step-at-a-time application. With it, the passing probe
+  above becomes an honest scenario and this half is deleted.
+
+### Not a shortfall of this feature, recorded to stop the question recurring
+
+- **Embedded `MergeablePayload` values** (spec 24 §Tagged maps, decided point 3)
+  are not corpus-expressible at all: the neutral `Value` vocabulary has scalars,
+  lists and maps, and no embedded-mergeable type. Those live as kernel tests under
+  feature `computenet-j2x.1`, not here.
+- **Null map values are avoided on purpose** in all four scenarios.
+  `TaggedMapView.apply` can miss a null-valued put and leave the key present
+  (`computenet-4d8k`), and a scenario using one would be asserting that behaviour
+  as correct. The neutral vocabulary offers no null map value to state it with in
+  any case, so this is a fence, not a limitation being worked around.
