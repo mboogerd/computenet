@@ -26,6 +26,7 @@ import civictech.oracle.model.Script
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SemiJoinModel
 import civictech.oracle.model.SetSourceModel
+import civictech.oracle.model.SingleInstanceOrMapModel
 import civictech.oracle.model.SourceId
 import civictech.oracle.model.SourceScript
 import civictech.oracle.model.UnionSetModel
@@ -44,7 +45,7 @@ import java.io.File
  *
  * ## Shape
  *
- * Each `24-OP-*`/`24-REPLAY-*` id below either:
+ * Each `24-OP-*`/`24-REPLAY-*`/`24-TMAP-*` id below either:
  *
  * (a) has a `@Test` that re-states its yaml's `graph:`/`script:`/`checks:` as a hand-built
  *     [ReferenceModel] and asserts [ReferenceModel.eval] agrees with the yaml's `final-view`
@@ -113,6 +114,9 @@ class CorpusCrossCheckTest {
         "24-OP-UNION-02",
         "24-OP-WINDOW-01",
         "24-OP-WINDOW-02",
+        "24-TMAP-LWW-01",
+        "24-TMAP-PRESENCE-01",
+        "24-TMAP-RESET-01",
     )
 
     /**
@@ -172,6 +176,30 @@ class CorpusCrossCheckTest {
                 "a static-arm-count batch reference defines. Durability/replication/crash-restart " +
                 "is CHA1/CHA3's scope (epic computenet-4ru §6's OrMapCell note), not ORA1's."
             ),
+        "24-TMAP-MERGE-01" to (
+            "`profile: dist`, two `ormap-source` replicas of one logical id gossiping " +
+                "TaggedMapDeltas, with convergence-only checks (`replicas-converge`, " +
+                "`views-converge`) and deliberately NO `final-view` golden. Two independent " +
+                "reasons it is not this file's to transcribe, both verified against source. " +
+                "(1) The catalog binding: `civictech.oracle.bind.TaggedOperators` registers " +
+                "`orMap` as `SingleInstanceOrMapModel`, whose `evaluate` REFUSES BY NAME any " +
+                "SourceScript carrying deliveries (TaggedKeyedModels.kt: DotModel's " +
+                "cross-instance merge needs the peer instance's own event log, which one " +
+                "SourceScript does not carry) — so the registered source model cannot evaluate " +
+                "a two-replica slice at all, and a single-instance transcription would be " +
+                "checking a different scenario. (2) Even reaching past the registration to " +
+                "`DotModel` directly — which IS multi-instance and does define " +
+                "`converged`/`perInstance` — would not restate THIS yaml: DotModel's only " +
+                "causality input is an explicit `Delivery(from, afterEvents, throughEvents)`, " +
+                "and the yaml states no interleaving whatsoever. It hands the delivery order to " +
+                "concord's schedule sweep precisely because [24-TMAP-01]'s law is " +
+                "order-insensitivity; picking one delivery schedule here would be inventing a " +
+                "trace the scenario refuses to pin, i.e. the approximation ORA1 §HONEST-02 " +
+                "forbids. The replicated-mesh differential is the sweep/runner's own " +
+                "(`OracleSweep`, `TaggedControlsTest`'s ORA2 §CTL-04 missing-gossip control), " +
+                "which drives DotModel over a multi-instance Script with stated deliveries — " +
+                "not this yaml-transcription file."
+            ),
     )
 
     /** Walks up from the Gradle Test task's working directory (`:oracle`'s project dir) to the repo root. */
@@ -203,7 +231,7 @@ class CorpusCrossCheckTest {
             ?: error("listFiles returned null for $corpusDir — not a readable directory")
 
         withClue("non-vacuity: a broken directory listing would silently check nothing") {
-            ids.size shouldBe 29
+            ids.size shouldBe 33
         }
 
         val unaccounted = ids - CROSS_CHECKED - OUT_OF_VOCABULARY.keys
@@ -328,6 +356,82 @@ class CorpusCrossCheckTest {
         )
 
         model.eval(script) shouldBe mapOf("v" to ModelState.MapState(mapOf<Any?, Any?>("k1" to 2)))
+    }
+
+    /**
+     * concord/corpus/24-data-cells/24-TMAP-PRESENCE-01.yaml
+     *
+     * `[24-TMAP-02]` add-wins presence, in the half a single stream can state: after a `remove`
+     * covers k1's only live dot, k1 is ABSENT from the folded map — not present carrying null,
+     * not an empty entry. [ModelState.MapState] compares the whole table, so a key that
+     * reappeared under any rendering fails this assertion rather than passing unnoticed, which
+     * is the same instrument the yaml's whole-map `final-view` uses.
+     */
+    @Test
+    fun `24-TMAP-PRESENCE-01_yaml - a removed OR-map key is absent from the fold, not present-with-null`() {
+        val om = SourceId("om")
+        val model = ReferenceModel.terminal("v", ModelNode.Source(NodeId("om"), om, SingleInstanceOrMapModel))
+        val script = Script.of(
+            om,
+            ScriptEvent.Put(writer, "k1", "alpha"),
+            ScriptEvent.Put(writer, "k2", "beta"),
+            ScriptEvent.RemoveKey(writer, "k1"), // covers k1's only live dot ⇒ no live dot ⇒ absent
+        )
+
+        model.eval(script) shouldBe mapOf("v" to ModelState.MapState(mapOf<Any?, Any?>("k2" to "beta")))
+    }
+
+    /**
+     * concord/corpus/24-data-cells/24-TMAP-LWW-01.yaml
+     *
+     * `[24-TMAP-03]`: a key exposes its live dot maximal under `(counter, sourceId)`, never a
+     * wall clock. The model's independence here is the point — [DotModel] mints its own
+     * `ModelDot(counter, source)` from the script position of each put and never reads a kernel
+     * `Timestamp`, and with one source the sourceId component is never consulted, so "the later
+     * put in file order wins" is derived from dot order rather than assumed from arrival order.
+     */
+    @Test
+    fun `24-TMAP-LWW-01_yaml - an OR-map key exposes its greatest-dot value, the later put on one stream`() {
+        val om = SourceId("om")
+        val model = ReferenceModel.terminal("v", ModelNode.Source(NodeId("om"), om, SingleInstanceOrMapModel))
+        val script = Script.of(
+            om,
+            ScriptEvent.Put(writer, "k1", "first"),
+            ScriptEvent.Put(writer, "k1", "second"), // greater dot at k1
+            ScriptEvent.Put(writer, "k2", "other"),
+        )
+
+        model.eval(script) shouldBe mapOf(
+            "v" to ModelState.MapState(mapOf<Any?, Any?>("k1" to "second", "k2" to "other")),
+        )
+    }
+
+    /**
+     * concord/corpus/24-data-cells/24-TMAP-RESET-01.yaml
+     *
+     * `[24-TMAP-04]` reset-remove: `remove(k)` tombstones exactly the dots live at k when it
+     * ran, so the re-put's FRESH dot — minted after the remove and therefore unobserved by it —
+     * survives and k1 is live again, while the unrelated k0 is untouched (a reset-remove is
+     * per-key, not a map-wide reset). The yaml's own header records that on one stream this does
+     * not discriminate a remove that covered only the newest dot; the model reproduces the same
+     * script under the same limitation rather than reaching for a stronger claim.
+     */
+    @Test
+    fun `24-TMAP-RESET-01_yaml - an OR-map remove covers the dots it observed, a later put's fresh dot survives`() {
+        val om = SourceId("om")
+        val model = ReferenceModel.terminal("v", ModelNode.Source(NodeId("om"), om, SingleInstanceOrMapModel))
+        val script = Script.of(
+            om,
+            ScriptEvent.Put(writer, "k0", "untouched"),
+            ScriptEvent.Put(writer, "k1", "first"),
+            ScriptEvent.Put(writer, "k1", "second"), // the put's own local reset-remove covers `first`
+            ScriptEvent.RemoveKey(writer, "k1"), // covers k1's one live dot
+            ScriptEvent.Put(writer, "k1", "revived"), // fresh dot, unobserved by the remove above
+        )
+
+        model.eval(script) shouldBe mapOf(
+            "v" to ModelState.MapState(mapOf<Any?, Any?>("k0" to "untouched", "k1" to "revived")),
+        )
     }
 
     // =========================================================================================
