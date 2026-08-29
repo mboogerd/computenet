@@ -378,10 +378,19 @@ class ReferenceModelPurityTest {
             listOf(mapLeftNode.id, mapRightNode.id),
         )
 
+        // computenet-pez3: `TaggedOperators`' second registration, and the only operator node
+        // whose input is the tagged source — `untag` is the one entry that consumes a
+        // TaggedMapOf port, so `orMapNode` is not a choice among several.
+        val untagNode = ModelNode.Operator(
+            NodeId("untag"),
+            catalogOperator(TaggedOperators.Ids.UNTAG),
+            orMapNode.id,
+        )
+
         val operatorNodes = listOf(
             filterNode, flatMapNode, mapSetNode, keyByNode, countNode, unionNode, presenceNode, quorumNode,
             intersectNode, joinSetNode, semiJoinNode, antiJoinNode, joinNode, combineLatestNode, lookupJoinNode,
-            groupByGlobalNode,
+            groupByGlobalNode, untagNode,
         ) + groupByNodes
 
         val sourceNodes = listOf(

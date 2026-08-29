@@ -10,6 +10,8 @@ import civictech.oracle.model.SourceModel
 import civictech.oracle.model.SourceScript
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContain
+import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -84,6 +86,34 @@ class CatalogReachabilityTest {
     }
 
     // --- the pins ---------------------------------------------------------
+
+    /**
+     * computenet-pez3: `untag` — the tagged/untagged adapter — is reachable, and reachable for a
+     * reason rather than by accident. It is the first nonzero-arity entry that consumes a
+     * `TaggedMapOf` port, and exactly one registered entry produces that shape: `orMap`. So the
+     * closure admits it only while its source is registered, which the second half checks by
+     * removing `orMap` and watching `untag` fall back out.
+     *
+     * [TaggedOperators] is registered inside the test body rather than in [register], because the
+     * pins above are stated over `CoreOperators`' registrations alone and adding a second family
+     * to every test would change what they mean.
+     */
+    @Test
+    fun `the untag adapter is reachable, and solely because orMap produces the shape it consumes`() {
+        TaggedOperators.registerAll()
+
+        val reachable = reachableIds(OperatorCatalog.all())
+        withClue("reachable=$reachable") {
+            reachable shouldContain TaggedOperators.Ids.OR_MAP
+            reachable shouldContain TaggedOperators.Ids.UNTAG
+        }
+
+        OperatorCatalog.unregister(TaggedOperators.Ids.OR_MAP)
+        withClue("nothing else produces TaggedMapOf, so the adapter has no input to fill its port") {
+            reachableIds(OperatorCatalog.all()) shouldNotContain TaggedOperators.Ids.UNTAG
+        }
+    }
+
 
     /**
      * Every entry a shape-typed generation can emit today: all twenty-eight of them. The

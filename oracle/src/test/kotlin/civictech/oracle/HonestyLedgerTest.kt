@@ -52,8 +52,9 @@ import java.io.File
  * dropped while the disagreement stands.
  *
  * ORA2 adds one more filing of the same shape, `ORA2 §HONEST-03`'s remaining realising artifact
- * (`computenet-4ru.1.8`): BS-9/`ORA2 §DIFF-07`, whose two-path diamond is unconstructible because
- * no operator in the vocabulary consumes a `TaggedMapDelta` outlet (`computenet-valh`). It is
+ * (`computenet-4ru.1.8`): BS-9/`ORA2 §DIFF-07`, whose two-path diamond was unconstructible because
+ * no operator in the vocabulary consumed a `TaggedMapDelta` outlet (`computenet-valh`), and which
+ * since `computenet-pez3` registered `untag` is constructible but still unbuilt (`computenet-0zbq`). It is
  * pinned below the ORA1 one, by the same reasoning: text satisfies a requirement only while it is
  * still there.
  *
@@ -643,13 +644,18 @@ class HonestyLedgerTest {
             entry.mustNotState("only file under")
         }
         withClue(
-            "It must say what DOES still block the diamond now that the types exist: neither is " +
-                "registered in OperatorCatalog as a nonzero-arity entry consuming a tagged outlet. " +
-                "Without this the entry would read as resolved while the diamond is still " +
-                "unconstructible.",
+            "It must say what DOES still block the diamond now that UntagCell is not merely landed " +
+                "but REGISTERED in OperatorCatalog under the id untag (computenet-pez3): the typing " +
+                "bound is bridged, and what remains is that nobody has BUILT the diamond, tracked as " +
+                "computenet-0zbq. The retracted reason — that neither type is registered — must be " +
+                "gone, not merely supplemented: leaving it would make this entry assert something " +
+                "the same PR made false, which is worse than an unfiled gap (computenet-shtl).",
         ) {
             entry.mustState("OperatorCatalog")
-            entry.mustState("Neither closes this entry")
+            entry.mustState("untag")
+            entry.mustState("nobody has built the diamond")
+            entry.mustState("computenet-0zbq")
+            entry.mustNotState("Neither closes this entry")
         }
     }
 
