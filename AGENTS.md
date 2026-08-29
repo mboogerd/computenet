@@ -211,8 +211,11 @@ Typical commands:
 ```
 
 `-Pconcord.profiles=core` is a fast loop, not a full corpus run: it executes no
-`dist` or `dur` scenario, so it is **not** evidence for anything under
-`concord/corpus/42-replication/` or `15-durability/`. Since computenet-j2x.7 the
+`dist` or `dur` scenario, so it is **not** evidence for any of them. That is the
+whole of `concord/corpus/42-replication/` and `15-durability/`, **and** single
+files inside otherwise-`core` directories — `24-data-cells/`, `33-mobility/`,
+`41-location/` — so a directory is not core just because most of it is. Since
+computenet-j2x.7 the
 run says so itself — each excluded scenario reports as a named `SKIPPED` node and
 one summary node states the active set and the excluded count — so read the
 `skipped` count before citing a green concord run.
