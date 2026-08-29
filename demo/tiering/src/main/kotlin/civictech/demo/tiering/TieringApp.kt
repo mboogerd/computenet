@@ -1,24 +1,35 @@
 package civictech.demo.tiering
 
+import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
 import civictech.cell.data.KeyedSetApi
 import civictech.cell.data.KeyedSetCell
+import civictech.cell.data.OrMapApi
+import civictech.cell.data.OrMapCell
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
 import civictech.cell.graph.lookup
 import civictech.cell.graph.refAs
+import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.link
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
+import civictech.cell.replication.Replication
+import civictech.cell.wire.Peering
 import civictech.demo.shell.DemoShell
+import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.esc
 import civictech.demo.shell.respond
+import civictech.demo.shell.value
+import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
 import java.io.Serializable
+import java.net.URI
 import java.net.URLDecoder
 import java.util.*
 import civictech.cell.data.delta.MapDelta
@@ -27,6 +38,8 @@ import civictech.cell.data.op.GroupByCell
 import civictech.cell.data.op.GroupByApi
 import civictech.cell.data.op.CombineLatestCell
 import civictech.cell.data.op.CombineLatestApi
+import civictech.cell.data.op.UntagApi
+import civictech.cell.data.op.UntagCell
 
 /**
  * Incremental tiering: agents emit absolute tier valuations (S..F per item)
@@ -54,8 +67,39 @@ data class Contribution(val item: String, val agent: String, val opponent: Strin
  *   vals  (KeyedSetCell<(agent,item), Valuation>) ─► tierAvg (GroupBy item, avg score)  ─► fuse.left
  *   prefs (SetCell<Pref>) ─► contribs (flatMap ±1) ─► prefAvg (GroupBy item, avg sign) ─► fuse.right
  *   fuse (CombineLatestCell, combine = Tiering.fuse) ─► MapDelta<item, Tiered>
+ *
+ * and the manual re-tier lane (feature computenet-j2x.5, E1.6), which is
+ * present in every mode:
+ *
+ *   manual (OrMapCell<item, tier>) ─► manualEffective (UntagCell) ─► board.right
+ *   fused ─► board.left
+ *   board (CombineLatestCell, manual wins) ─► MapDelta<item, Tiered>
+ *
+ * The manual edge converges under concurrent multi-host writes because it is
+ * an OR-map, and it reaches the deterministic join family through [UntagCell]
+ * — decision j2x.5-D2: no demo-private merge, no timestamps, no arrival-order
+ * state anywhere in this file.
  */
 object TierPipeline {
+    /**
+     * The one logical id every host mints its manual-re-tier replica under
+     * ([KE1-31]'s ref-derivation half). Derived from a fixed string, exactly
+     * as `demo/shopping`'s `SHARED_ID` is, so a RESTART re-derives the same
+     * ref and the replica's dotSource is replay-stable.
+     */
+    val MANUAL_ID: UUID = UUID.nameUUIDFromBytes("tiering-replica:manual-retier".toByteArray())
+
+    /**
+     * The manual replica's instance id for a peering role: the dialer takes 1,
+     * the listener and a solo process take 0. Role-derived, so the two sides
+     * need no discovery protocol and no extra flag to end up with distinct
+     * instance ids under one shared logical id — `demo/shopping`'s
+     * `sharedInstance` idiom verbatim.
+     */
+    fun manualInstance(role: String): Long = if (role == "dialer") 1L else 0L
+
+    fun manualRef(role: String): CellRef = CellRef(MANUAL_ID, manualInstance(role))
+
     data class Refs(
         val items: TypedRef<SetApi<String>>,
         val vals: TypedRef<KeyedSetApi<Pair<String, String>, Valuation>>,
@@ -63,10 +107,32 @@ object TierPipeline {
         val tierAvg: TypedRef<GroupByApi<Valuation, String, Double>>,
         val prefAvg: TypedRef<GroupByApi<Contribution, String, Double>>,
         val fused: TypedRef<CombineLatestApi<String, Double, Double, Tiered>>,
+        /** The manual re-tier OR-map: item → tier label, replicated in wire mode. */
+        val manual: TypedRef<OrMapApi<String, String>>,
+        /** [manual]'s converged state, spoken as an untagged `MapDelta`. */
+        val manualEffective: TypedRef<UntagApi<String, String>>,
+        /** What the board renders: [fused] with [manualEffective] overriding it. */
+        val board: TypedRef<CombineLatestApi<String, Tiered, String, Tiered>>,
     )
 
-    fun build(host: ManagedHost): Refs {
+    /**
+     * Wire the pipeline on [host].
+     *
+     * [manual] is passed in (rather than spawned inside the `graph { }` spec)
+     * because in wire mode it is not this host's to spawn: it is a replica,
+     * minted at a role-derived ref and handed to `Replication.replicate`,
+     * which does the spawning itself. [spawnManual] is that seam — the
+     * default is a plain management spawn, which is exactly what solo mode
+     * wants.
+     */
+    fun build(
+        host: ManagedHost,
+        manual: OrMapCell<String, String> = OrMapCell(manualRef("solo")),
+        spawnManual: (OrMapCell<String, String>) -> Unit = { host.managementInlet.call.spawn(it) },
+    ): Refs {
+        spawnManual(manual)
         lateinit var built: Refs
+        var untagCell: UntagCell<String, String>? = null
         graph(host.managementInlet) {
             val items = spawn("items") { SetCell<String>() }
             val vals = spawn("vals") { KeyedSetCell<Pair<String, String>, Valuation>() }
@@ -86,11 +152,26 @@ object TierPipeline {
                 GroupByCell(keyFn = { c: Contribution -> c.item }, aggregator = Aggregators.avgOf { c: Contribution -> c.sign })
             }
             val fused = spawn("fused") { CombineLatestCell<String, Double, Double, Tiered>(combine = { _, t, p -> Tiering.fuse(t, p) }) }
+            // The adoption seam (j2x.5-D2): the tagged map's converged state,
+            // projected down to the untagged MapDelta vocabulary the join
+            // family already speaks. No demo code ever merges dots.
+            val manualEffective = spawn("manualEffective") { UntagCell<String, String>() }
+            // Manual wins where present; otherwise the computed tier; a key
+            // absent from both sides is dropped (CombineLatestCell removes it
+            // regardless, so there are no ghost rows).
+            val board = spawn("board") {
+                CombineLatestCell<String, Tiered, String, Tiered>(
+                    combine = { _, computed, manualTier -> manualTier?.let(Tiering::manualTiered) ?: computed },
+                )
+            }
             link(vals.cell.outlet, tierAvg.cell.inlet)
             link(prefs.cell.outlet, contribs.cell.inlet)
             link(contribs.cell.outlet, prefAvg.cell.inlet)
             link(tierAvg.cell.outlet, fused.cell.left)
             link(prefAvg.cell.outlet, fused.cell.right)
+            link(fused.cell.outlet, board.cell.left)
+            link(manualEffective.cell.outlet, board.cell.right)
+            untagCell = manualEffective.cell
             built = Refs(
                 items = items.refAs(),
                 vals = vals.refAs(),
@@ -98,24 +179,129 @@ object TierPipeline {
                 tierAvg = tierAvg.refAs(),
                 prefAvg = prefAvg.refAs(),
                 fused = fused.refAs(),
+                manual = TypedRef(manual.ref),
+                manualEffective = manualEffective.refAs(),
+                board = board.refAs(),
             )
         }
+        // Linked outside the `graph { }` spec, and deliberately: [manual] was
+        // not spawned by this spec (it may be a Replication-owned replica), so
+        // recording a ConnectStep that names it would make the spec unreplayable
+        // on its own. demo/shopping links its unions into DSL-built cells the
+        // same way.
+        host.managementInlet.call.link(manual.outlet, untagCell!!.inlet)
         return built
     }
 }
 
-class TieringApp(port: Int = 8080) {
+/**
+ * [wire] is the two-host mode (`--listen` / `--peer`), **off by default**
+ * (decision j2x.5-D1). With it absent no bridge host, no listener and no
+ * [Replication] is constructed and this app is byte-identical to the
+ * single-host demo it has always been, save for the additive manual lane —
+ * which exists in every mode.
+ *
+ * [journalDir] is `--journal`: the app host write-ahead journals every
+ * *routed* invocation, and [ManagedHost.recoverFrom] replays it on restart.
+ * That is why every write below goes through a hosted lookup rather than the
+ * cell object.
+ *
+ * **`--journal` covers the MANUAL lane only. Measured 2026-08-29; two
+ * independent reasons, both pre-existing properties of this demo.**
+ *
+ * 1. *Payloads.* The host journal encodes each routed invocation through
+ *    `WireCodec`, whose `polymorphic(Any)` scope registers kernel payload
+ *    types plus whatever a process contributes at start
+ *    (`WireCodec.kt:158-176`). `tier` passes a `Pair<String, String>` key and
+ *    a [Valuation]; `pref`/`unpref` pass a [Pref] — none registered — so with
+ *    `--journal` on those actions throw `SerializationException: Serializer
+ *    for subclass 'Pair' is not found in the polymorphic scope of 'Any'`
+ *    inside the journal write, and the HTTP request dies.
+ *    `item`/`unitem`/`retier` carry only `String`s and encode fine.
+ * 2. *Refs.* [TierPipeline]'s cells are spawned through the `graph { }` DSL,
+ *    whose default `IdentityBinding.FreshLogical` mints a **random** ref per
+ *    process start (`GraphDsl.kt:378-390`). A journal record names the ref it
+ *    was written against, so nothing spawned that way can ever be replayed
+ *    into after a restart — verified: with `--journal` the item set comes back
+ *    empty while the manual map comes back populated.
+ *
+ * The manual OR-map escapes both: `String → String` payloads, and a
+ * [TierPipeline.manualRef] derived from a fixed logical id and the peering
+ * role. That is exactly the lane feature computenet-j2x.5 needs journalled
+ * ([KE1-31]'s ref-derivation half), so `--journal` ships as-is rather than
+ * being withheld — but it is **not** a whole-demo durability mode, and the
+ * flag's help text should not be read as promising one. Closing the gap means
+ * registering the app payload types through the codec's `ServiceLoader` seam
+ * *and* giving the pipeline cells derived identities; both are outside this
+ * task's file claim and its "no kernel changes" non-goal.
+ */
+class TieringApp(
+    port: Int = 8080,
+    private val wire: Wire? = null,
+    journalDir: java.io.File? = null,
+) {
+    /** Peer mode: symmetric peers — one listens, the other dials. */
+    sealed interface Wire {
+        data class Listen(val wsPort: Int) : Wire
+        data class Dial(val uri: String) : Wire
+    }
+
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
-    private val refs = TierPipeline.build(host)
+
+    private val myRole = when (wire) {
+        is Wire.Listen -> "listener"
+        is Wire.Dial -> "dialer"
+        null -> "solo"
+    }
+
+    /**
+     * The replica mesh linker, held for the process lifetime and constructed
+     * **here** — a property initializer, not the tail of [init] — because its
+     * constructor installs the registry publish hooks the whole mesh runs on,
+     * and [init] is where peering is established. Every peer announcement this
+     * JVM will ever see therefore arrives after the hooks are in place.
+     * (`demo/shopping`'s `replication` KDoc states the same ordering.)
+     */
+    private val replication: Replication? = if (wire != null) Replication(registry) else null
+
+    private val journal = KeyedCells.hostJournal(journalDir)
+    private val host = ManagedHost(registry = registry, journal = journal)
+
+    /** The peering bridge's own host; null outside wire mode. */
+    private val bridgeHost: ManagedHost? = wire?.let { ManagedHost(registry = registry) }
+
+    /**
+     * This host's instance of the one shared manual-re-tier logical cell.
+     * Same [TierPipeline.MANUAL_ID] on both sides, instance id derived from
+     * the peering role — so a restart at the same role re-derives the same
+     * ref, which is what makes the dots it mints replay-stable ([KE1-31]).
+     */
+    private val manualCell = OrMapCell<String, String>(TierPipeline.manualRef(myRole))
+
+    private val refs = TierPipeline.build(host, manualCell) { cell ->
+        // In wire mode the replica is spawned by Replication, which also links
+        // it to every already-known replica of the same logical id; in solo
+        // mode it is an ordinary local cell.
+        if (replication != null) replication.replicate(cell, host) else host.managementInlet.call.spawn(cell)
+    }
     private val itemOps = host.lookup(refs.items)!!.inlet.call
     private val valOps = host.lookup(refs.vals)!!.inlet.call
     private val prefOps = host.lookup(refs.prefs)!!.inlet.call
 
+    /**
+     * The manual re-tier write path: a **routed** hosted lookup, never the
+     * cell object. Routed is what makes the invocation write-ahead journaled
+     * and therefore replayable — the whole point of `--journal`.
+     */
+    private val manualOps = host.lookup(refs.manual)!!.inlet.call
+
+    /** The `--listen` listener, kept so [boundWsPort] can report what it bound. */
+    private var wsListener: WsTransport.WsListener? = null
+
     private val state = Object()
     // Read model: each derived outlet materialized by a kernel observation sink,
     // read via current() in stateJson. Constructed WITHOUT an onChange listener
-    // so no broadcast() fires before all six sinks exist; listeners are
+    // so no broadcast() fires before all eight sinks exist; listeners are
     // registered in init once construction is complete.
     private val itemsView = host.observe(refs.items.ref, View.set<String>())
     private val valuationsView = host.observe(refs.vals.ref, View.set<Valuation>())
@@ -123,6 +309,12 @@ class TieringApp(port: Int = 8080) {
     private val tierAvgView = host.observe(refs.tierAvg.ref, View.map<String, Double>())
     private val prefAvgView = host.observe(refs.prefAvg.ref, View.map<String, Double>())
     private val fusedView = host.observe(refs.fused.ref, View.map<String, Tiered>())
+
+    /** The converged manual map, read off the [UntagCell] rather than the OR-map. */
+    private val manualView = host.observe(refs.manualEffective.ref, View.map<String, String>())
+
+    /** What the UI board and `/state`'s `"board"` render: fused, manual-overridden. */
+    private val boardView = host.observe(refs.board.ref, View.map<String, Tiered>())
 
     // KeyedSetCell now owns the retract-old memory (F-3), so the app no longer
     // keeps a Valuation-valued shadow index. This lightweight KEY set exists only
@@ -139,8 +331,20 @@ class TieringApp(port: Int = 8080) {
 
     val boundPort: Int get() = shell.boundPort
 
+    /**
+     * The peering port this JVM is listening on, or null in dial/solo mode.
+     * Distinct from `Wire.Listen.wsPort`, which is what was *asked for*:
+     * `--listen 0` means "any free port" and only the listener knows which one
+     * it got (computenet-dqy.25), so this — not the requested value — is what
+     * `main` announces.
+     */
+    val boundWsPort: Int? get() = wsListener?.port
+
+    /** This host's manual-replica instance id — 0 listener/solo, 1 dialer. */
+    val manualInstanceId: Long get() = manualCell.ref.instanceId
+
     init {
-        // Register one broadcast per sink now that all six exist; registering
+        // Register one broadcast per sink now that all eight exist; registering
         // fires an immediate catch-up (harmless — clients is still empty).
         itemsView.onChange { broadcast() }
         valuationsView.onChange { broadcast() }
@@ -148,6 +352,22 @@ class TieringApp(port: Int = 8080) {
         tierAvgView.onChange { broadcast() }
         prefAvgView.onChange { broadcast() }
         fusedView.onChange { broadcast() }
+        manualView.onChange { broadcast() }
+        boardView.onChange { broadcast() }
+
+        if (wire != null) {
+            val side = Peering.Side(registry, bridgeHost!!)
+            when (wire) {
+                is Wire.Listen -> wsListener = WsTransport.listen(wire.wsPort, side)
+                is Wire.Dial -> WsTransport.connect(URI(wire.uri), side)
+            }
+        }
+
+        // The graph is fixed and fully built by now, so replay is the plain
+        // ManagedHost form (ManagedHost.kt:749, KDoc at :68-75 — rebuild the
+        // graph, THEN recover). Only routed invocations were journaled, which
+        // is why every write path above is a hosted lookup.
+        journal?.let { host.recoverFrom(it) }
 
         shell.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         shell.route("/state") { it.respond(200, stateJson(), "application/json") }
@@ -186,6 +406,12 @@ class TieringApp(port: Int = 8080) {
                         livePrefs -= it; prefOps.remove(it)
                     }
                 }
+                // and the manual pin, which would otherwise hold the removed
+                // item on the board on its own (the override lane is a board
+                // input like any other). Reset-remove: it tombstones only the
+                // dots this host has observed, so a concurrent re-tier at the
+                // peer survives, which is [KE1-30]'s shape.
+                manualOps.remove(item)
             }
 
             "tier" -> {
@@ -202,6 +428,17 @@ class TieringApp(port: Int = 8080) {
                         liveValKeys -= agent to item
                     }
                 }
+            }
+
+            // The manual re-tier lane: a pin that overrides whatever the
+            // signals fused to, and `none` to release it back to the computed
+            // tier. Validated exactly as `tier` above. Written through the
+            // routed [manualOps] proxy, so `--journal` replays it.
+            "retier" -> {
+                val item = name("item") ?: return exchange.respond(400, "missing item")
+                val tier = params["tier"]?.takeIf { it in Tiering.TIERS || it == "none" }
+                    ?: return exchange.respond(400, "tier must be one of ${Tiering.TIERS} or none")
+                if (tier != "none") manualOps.put(item, tier) else manualOps.remove(item)
             }
 
             "pref", "unpref" -> {
@@ -232,14 +469,20 @@ class TieringApp(port: Int = 8080) {
         val tierAvg = tierAvgView.current()
         val prefAvg = prefAvgView.current()
         val fused = fusedView.current()
+        // The board renders the OVERRIDE cell — fused with the converged
+        // manual pins applied. The signals table below still reads `fused`
+        // and the two GroupBy averages, unchanged: it is the *computed*
+        // pipeline's read-out, and a pin is not a computation.
+        val tiered = boardView.current()
+        val manual = manualView.current()
 
         val board = Tiering.TIERS.joinToString(",") { tier ->
-            val entries = fused.filterValues { it.tier == tier }.entries
+            val entries = tiered.filterValues { it.tier == tier }.entries
                 .sortedByDescending { it.value.score }
                 .joinToString(",", "[", "]") { (item, t) -> """{"item":${esc(item)},"score":${num(t.score)}}""" }
             "${esc(tier)}:$entries"
         }
-        val unrated = (items - fused.keys).sorted().joinToString(",", "[", "]") { esc(it) }
+        val unrated = (items - tiered.keys).sorted().joinToString(",", "[", "]") { esc(it) }
         val signals = (fused.keys + items).sorted().joinToString(",", "[", "]") { item ->
             val t = tierAvg[item]?.let { num(it) } ?: "null"
             val p = prefAvg[item]?.let { num(it) } ?: "null"
@@ -256,9 +499,14 @@ class TieringApp(port: Int = 8080) {
                 """{"agent":${esc(it.agent)},"winner":${esc(it.winner)},"loser":${esc(it.loser)}}"""
             }
 
+        // Additive: `"manual"` is appended after every field the existing page
+        // and tests already parse, and none of them changed shape.
+        val manualJson = manual.entries.sortedBy { it.key }
+            .joinToString(",", "{", "}") { (item, tier) -> "${esc(item)}:${esc(tier)}" }
+
         return """{"items":${items.sorted().joinToString(",", "[", "]") { esc(it) }},""" +
                 """"board":{$board,"unrated":$unrated},"signals":$signals,""" +
-                """"valuations":$vals,"prefs":$prefList}"""
+                """"valuations":$vals,"prefs":$prefList,"manual":$manualJson}"""
     }
 
     fun start(): TieringApp = apply { shell.start() }
@@ -267,8 +515,42 @@ class TieringApp(port: Int = 8080) {
 }
 
 fun main(args: Array<String>) {
-    val app = TieringApp(demoPort(args)).start()
+    // `demoPort` reads the first non-`--` token as this demo's port, so every
+    // `--flag value` pair has to be stripped before it or one of their values
+    // is mistaken for the port (demo/shopping's `main`, verbatim).
+    val demoArgs = stripPairs(args, "--listen", "--peer", "--journal")
+    val port = demoPort(demoArgs)
+    val wire = args.value("--listen")?.let { TieringApp.Wire.Listen(it.toInt()) }
+        ?: args.value("--peer")?.let { TieringApp.Wire.Dial(it) }
+    val journalDir = args.value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
+
+    val app = TieringApp(port, wire, journalDir).start()
     println("computenet tiering: http://localhost:${app.boundPort}")
+    // every announcePort here reports a port this process HOLDS, so a
+    // supervising test never has to pick one for it (computenet-dqy.25)
+    announcePort("http", app.boundPort)
+    when (wire) {
+        is TieringApp.Wire.Listen -> {
+            // the BOUND port, not `wire.wsPort`: `--listen 0` asks for any free one
+            val wsPort = checkNotNull(app.boundWsPort) { "a listening peer must have a bound ws port" }
+            println("  awaiting a peer on ws://localhost:$wsPort")
+            announcePort("ws", wsPort)
+        }
+
+        is TieringApp.Wire.Dial -> println("  peered with ${wire.uri}")
+        null -> println("  single-process mode; add --listen <wsPort> or --peer <ws-uri> to span two JVMs")
+    }
+    println("  manual re-tier replica ${TierPipeline.MANUAL_ID}, this JVM's instance ${app.manualInstanceId}")
+}
+
+/** Drop each `--flag value` pair from [args] — see [main]'s use. */
+private fun stripPairs(args: Array<String>, vararg flags: String): Array<String> {
+    val rest = mutableListOf<String>()
+    var i = 0
+    while (i < args.size) {
+        if (args[i] in flags) i += 2 else rest += args[i++]
+    }
+    return rest.toTypedArray()
 }
 
 private val PAGE = """
@@ -300,6 +582,9 @@ private val PAGE = """
   .itemrow b { min-width: 5.5rem; }
   .pick button { width: 1.7rem; height: 1.5rem; border: 1px solid var(--line); background: #fff; cursor: pointer; font-size: .7rem; border-radius: 4px; }
   .pick button.mine { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .pick.pin { margin-left: .5rem; }
+  .pick.pin small { color: var(--dim); margin-right: .25rem; }
+  .pick.pin button.mine { background: #7c3aed; border-color: #7c3aed; }
   .itemrow .del { margin-left: .5rem; border: none; background: none; color: var(--dim); cursor: pointer; font-size: 1rem; line-height: 1; }
   .itemrow .del:hover { color: #dc2626; }
   .prefline { font-size: .85rem; margin: .2rem 0; }
@@ -390,6 +675,19 @@ function render() {
       pick.appendChild(btn);
     }
     div.appendChild(pick);
+    // manual re-tier: a pin that overrides the fused tier on every host
+    // (replicated OR-map → UntagCell → board override). '∅' releases it.
+    const pinned = (state.manual || {})[item];
+    const pin = document.createElement('span'); pin.className = 'pick pin';
+    const pinLabel = document.createElement('small'); pinLabel.textContent = 'pin'; pin.appendChild(pinLabel);
+    for (const t of TIERS.concat(['none'])) {
+      const btn = document.createElement('button');
+      btn.textContent = t === 'none' ? '∅' : t;
+      if (pinned === t) btn.classList.add('mine');
+      btn.onclick = () => op({ action: 'retier', item, tier: t });
+      pin.appendChild(btn);
+    }
+    div.appendChild(pin);
     const del = document.createElement('button');
     del.textContent = '×'; del.className = 'del'; del.title = 'remove item (retracts it and its signals globally)';
     del.onclick = () => op({ action: 'unitem', name: item });
