@@ -1,10 +1,19 @@
 package civictech.cell.data
 
+import civictech.cell.EmbeddedMergeClass
+import civictech.cell.NonIdempotentEmbeddedMerge
 import civictech.cell.Timestamp
+import civictech.cell.data.delta.CounterDelta
 import civictech.cell.data.delta.PnCounterDelta
+import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TaggedMapDelta
+import civictech.cell.data.delta.WatermarkDelta
+import civictech.nature.MergeClass
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.UUID
@@ -27,6 +36,19 @@ import java.util.UUID
  *
  * `membership()` and the non-mergeable/single-dot paths are untouched
  * (j2x.1-D2) — [OrMapCellTest] already covers those and must stay green.
+ *
+ * Task computenet-j2x.1.2 adds the admission half:
+ *
+ * - `[KE1-04]` a *classified* non-idempotent embedded value ([CounterDelta],
+ *   plain addition) is refused with a diagnostic naming the Riak
+ *   embedded-counter anomaly, on `put` and on the remote path alike, and no
+ *   fold happens.
+ * - `[KE1-10]` the classification is a **first-encounter** one: `V` is erased
+ *   at the ports and CP-F2 stamps `MERGE_IDEMPOTENCE` per *cell*, so the
+ *   link-time form of the check is unreachable — the shortfall and the
+ *   unclassified-value residual are recorded in `concord/corpus/DISPUTES.md`
+ *   (j2x.1-D3), never restated here as "the cell rejects all non-idempotent
+ *   values".
  */
 class OrMapEmbeddedValueTest {
 
@@ -204,5 +226,115 @@ class OrMapEmbeddedValueTest {
         val cell = OrMapCell<String, PnCounterDelta>()
         cell.values("k").shouldBeEmpty()
         cell.value("k") shouldBe null
+    }
+
+    // -----------------------------------------------------------------
+    // BS-2 verbatim — a non-idempotent embedded value is refused, not folded
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `BS-2 a CounterDelta value is refused on first put, naming the Riak embedded-counter anomaly`() {
+        val cell = OrMapCell<String, CounterDelta>()
+
+        val refusal = shouldThrow<NonIdempotentEmbeddedMerge> {
+            cell.inlet.call.put("k", CounterDelta(3))
+        }
+        refusal.message!! shouldContain "Riak embedded-counter anomaly"
+        refusal.valueType shouldBe "civictech.cell.data.delta.CounterDelta"
+
+        // no fold, and no state at all: the refusal fired before a dot was minted
+        cell.value("k") shouldBe null
+        cell.values("k").shouldBeEmpty()
+        cell.membership().shouldBeEmpty()
+        cell.state() shouldBe TaggedMapDelta<String, CounterDelta>()
+    }
+
+    @Test
+    fun `BS-2 remote half - a CounterDelta arriving via the delta inlet is refused the same way`() {
+        val peer = UUID(9, 1)
+        val cell = OrMapCell<String, CounterDelta>()
+
+        val refusal = shouldThrow<NonIdempotentEmbeddedMerge> {
+            cell.deltaInlet.call.propagate(
+                TaggedMapDelta(puts = mapOf("k" to mapOf(Timestamp(peer, 1) to CounterDelta(5)))),
+            )
+        }
+        refusal.message!! shouldContain "Riak embedded-counter anomaly"
+
+        // refused loudly, not dropped: nothing of the delta was absorbed, so no
+        // dot and no value went missing without the diagnostic.
+        cell.value("k") shouldBe null
+        cell.values("k").shouldBeEmpty()
+        cell.state() shouldBe TaggedMapDelta<String, CounterDelta>()
+    }
+
+    // -----------------------------------------------------------------
+    // acceptance path — the check must not over-refuse
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `PnCounterDelta values stay admitted and still fold on both the local and remote path`() {
+        val a = UUID(9, 2)
+        val b = UUID(9, 3)
+        val cell = OrMapCell<String, PnCounterDelta>()
+
+        // local put — admitted
+        cell.inlet.call.put("k", PnCounterDelta(incs = mapOf(a to 3L)))
+        cell.value("k") shouldBe PnCounterDelta(incs = mapOf(a to 3L))
+
+        // a concurrent peer dot the local writer never observed — admitted and folded
+        cell.deltaInlet.call.propagate(
+            TaggedMapDelta(puts = mapOf("k" to mapOf(Timestamp(b, 1) to PnCounterDelta(incs = mapOf(b to 5L))))),
+        )
+        val folded = cell.value("k")!!
+        folded.incs.values.sum() shouldBe 8L
+        cell.values("k").size shouldBe 2
+
+        // a plain non-mergeable value is likewise unaffected by the check
+        val strings = OrMapCell<String, String>()
+        strings.inlet.call.put("k", "v")
+        strings.value("k") shouldBe "v"
+    }
+
+    // -----------------------------------------------------------------
+    // the classification itself — MergeClass vocabulary, j2x.1-D1
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `EmbeddedMergeClass classifies the repo's MergeablePayload implementations in MergeClass terms`() {
+        EmbeddedMergeClass.classify(CounterDelta(1)) shouldBe MergeClass.NON_IDEMPOTENT
+        EmbeddedMergeClass.classify(PnCounterDelta()) shouldBe MergeClass.IDEMPOTENT
+        EmbeddedMergeClass.classify(SetDelta<String>()) shouldBe MergeClass.IDEMPOTENT
+        EmbeddedMergeClass.classify(WatermarkDelta()) shouldBe MergeClass.IDEMPOTENT
+        EmbeddedMergeClass.classify(TaggedMapDelta<String, String>()) shouldBe MergeClass.IDEMPOTENT
+
+        // not a MergeablePayload at all — nothing folds it, so no merge class
+        EmbeddedMergeClass.classify("plain") shouldBe null
+        EmbeddedMergeClass.classify(null) shouldBe null
+    }
+
+    /**
+     * The honest limit of `[KE1-04]` (j2x.1-D3): the refusal is stated over the
+     * *classified* set. An unnamed [civictech.cell.MergeablePayload] whose merge
+     * is silently non-idempotent is **admitted**, and this test pins that as the
+     * measured behaviour rather than leaving the guarantee sounding universal.
+     * Recorded in `concord/corpus/DISPUTES.md`.
+     */
+    @Test
+    fun `an unclassified MergeablePayload is admitted - the recorded residual, not a universal refusal`() {
+        val unnamed = UnclassifiedAdditionDelta(1)
+        EmbeddedMergeClass.classify(unnamed) shouldBe null
+
+        val cell = OrMapCell<String, UnclassifiedAdditionDelta>()
+        cell.inlet.call.put("k", unnamed)
+        cell.value("k") shouldBe unnamed
+        // it is genuinely non-idempotent — merging it twice does not fix-point
+        unnamed.mergeWith(unnamed) shouldNotBe unnamed
+    }
+
+    /** A non-idempotent merge the nominated table does not name — the residual. */
+    data class UnclassifiedAdditionDelta(val amount: Long) : civictech.cell.MergeablePayload {
+        override fun mergeWith(other: civictech.cell.MergeablePayload) =
+            UnclassifiedAdditionDelta(amount + (other as UnclassifiedAdditionDelta).amount)
     }
 }

@@ -2,6 +2,7 @@ package civictech.cell.data
 
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
+import civictech.cell.EmbeddedMergeClass
 import civictech.cell.PendingReBaseline
 import civictech.cell.Propagate
 import civictech.cell.ReBaselineNotice
@@ -94,9 +95,20 @@ interface OrMapApi<K, V> {
  *
  * Embedded mergeable values fold at [value] and [values] exposes every live
  * dot for application-side resolution (96 §E1.4) — see [TaggedMapDelta.value]
- * for the fold rule. Not here: the admission check refusing non-idempotent
- * embedded values (separate follow-on work), `TaggedMapView`/`UntagCell`
- * adapters (§E1.5), and delivered-watermark tracking
+ * for the fold rule.
+ *
+ * **Admission (`[KE1-04]`).** A value whose merge is *classified*
+ * [civictech.cell.EmbeddedMergeClass] `NON_IDEMPOTENT` — `CounterDelta`'s plain
+ * addition — is refused at the first encounter, on `put` and on [applyRemote]
+ * alike, with a [civictech.cell.NonIdempotentEmbeddedMerge] diagnostic naming
+ * the Riak embedded-counter anomaly; no dot is minted and no fold happens. The
+ * check is a **first-encounter** one, not a link-time one: `V` is erased at the
+ * ports and CP-F2 stamps `MERGE_IDEMPOTENCE` per *cell*, not per type argument,
+ * so `[KE1-10]`'s link-time classification is unreachable here — that shortfall
+ * and the unclassified-value residual are filed in `concord/corpus/DISPUTES.md`.
+ *
+ * Not here: `TaggedMapView`/`UntagCell` adapters (§E1.5) and
+ * delivered-watermark tracking
  * ([civictech.cell.data.delta.DeliveryTracking], E3.3).
  */
 class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
@@ -234,6 +246,10 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // methods read subclass state later, at message time.
     override fun inletHandler(): MapOps<K, V> = object : MapOps<K, V> {
         override fun put(key: K, value: V) {
+            // `[KE1-04]` admission: a classified non-idempotent embedded value
+            // is refused here — before any dot is minted, so the refusal leaves
+            // no state and performs no fold.
+            EmbeddedMergeClass.requireEmbeddable(value, "put")
             // reset-remove's local half: everything this writer currently sees
             // live at the key dies in the SAME delta that carries the fresh dot
             // (KeyedSetCell's atomic retract+add, lifted to dots). The fold
@@ -353,6 +369,14 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * translation [applyReBaseline] documents this cell as NOT making.
      */
     private fun applyRemote(delta: TaggedMapDelta<K, V>) {
+        // `[KE1-04]` admission, remote half — the same refusal the local `put`
+        // raises, applied before novelty/absorb so a refused delta leaves no
+        // dot behind and is never folded. It is raised, not swallowed: the
+        // delta is refused loudly rather than dropped, so nothing this cell
+        // declines can go missing without the diagnostic.
+        delta.puts.values.forEach { dots ->
+            dots.values.forEach { EmbeddedMergeClass.requireEmbeddable(it, "applyRemote") }
+        }
         // read before originating: `originate` clears the current context, so
         // the notice must be taken off the arriving wave first.
         val notice = CurrentContext.get()?.reBaseline

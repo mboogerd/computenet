@@ -51,10 +51,18 @@ import java.util.UUID
  * dot, or any live value not implementing [MergeablePayload], [value] stays
  * the greatest-dot [DOT_ORDER] pick, byte-identical to the pre-E1.4 behaviour.
  * [values] exposes every live dot's value for application-side resolution
- * when the fold does not apply. There is still no admission check refusing a
- * non-idempotent embedded value (Riak's embedded-counter anomaly — a
- * non-idempotent embedded CRDT cannot get full reset-remove without a dot per
- * increment); that refusal is separate follow-on work.
+ * when the fold does not apply.
+ *
+ * **The admission check lives at the writer, not here** (`[KE1-04]`). A value
+ * classified [civictech.cell.EmbeddedMergeClass] `NON_IDEMPOTENT` — Riak's
+ * embedded-counter anomaly: a non-idempotent embedded CRDT double-counts under
+ * gossip redelivery and cannot get full reset-remove without a dot per
+ * increment — is refused by [civictech.cell.data.OrMapCell] on `put` and on
+ * remote application, before any such dot can reach a delta. [merge] and
+ * [value] stay pure folds over whatever dots they are given, so a delta
+ * constructed directly in a test or by a future writer is not re-validated
+ * here; the classified refusal is the writer's, and the unclassified residual
+ * is filed in `concord/corpus/DISPUTES.md`.
  *
  * **Dot-metadata bloat is a codec-layer concern from day one** (decided point
  * 4): the serialized form groups dots by `sourceId` behind a source
