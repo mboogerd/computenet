@@ -1800,8 +1800,11 @@ genuinely checkable and leaves the rest here.
 
 ## ORA1/ORA2 marker ids are NOT EARS requirements, so their absence from this corpus is not a gap (computenet-4ru.22)
 
-The two entries below cite `ORA1 §DIFF-09`, `ORA2 §DIFF-07` and their neighbours. Read that
-citation form correctly, because a reviewer already read it wrongly once and it cost a verdict.
+The entry below cites `ORA1 §DIFF-09` and its neighbours. Read that citation form correctly,
+because a reviewer already read it wrongly once and it cost a verdict. (Two entries stood here
+until `computenet-0zbq`; the ORA2 one, BS-9 / `ORA2 §DIFF-07`'s wave-prefix diamond, was deleted
+when the diamond was built — see `civictech.oracle.tagged.TaggedWavePrefixTest` and the closure
+recorded in `civictech.oracle.run.OracleSweep`'s ledger KDoc.)
 
 `ORA1 §…` and `ORA2 §…` are **acceptance clauses of the beads items that built the `:oracle`
 harness** — ORA1's in epic `computenet-4ru` §4, ORA2's in feature `computenet-4ru.1` §4. They are
@@ -1960,80 +1963,6 @@ BS-12 buildable is the **Resolves** bullet at the end of this entry.
   kernel genuinely does not share — **or** a kernel in which a `SetCell` remove is writer-scoped,
   which is the tripwire above. With either, build the control BS-12 specifies and delete this
   entry.
-
-## ORA2 (the wave-prefix diamond): BS-9 / `ORA2 §DIFF-07` is narrowed, not built — the bridge operator is now registered, but nobody has built the diamond
-
-Filed by `computenet-4ru.1.8` on the same `ORA2 §HONEST-03` clause, carrying `computenet-valh`'s
-finding from the review of `computenet-4ru.1.6`. It is recorded here rather than only in a test's
-KDoc because a reader arriving from the requirement side — `doc/spec/CONCORDANCE.md`, or this file —
-otherwise reads `ORA2 §DIFF-07` as covered at the shape BS-9 states, which it is not.
-
-### BS-9 / `ORA2 §DIFF-07` (the tagged wave-prefix diamond) — **`oracle-gap`** (case never built), blocked on nobody having constructed the diamond at its stated shape (`computenet-0zbq`)
-
-- **Category**: `oracle-gap`. No corpus scenario is weakened, renamed or softened by this entry; the
-  landed test is green on its own narrower claim and stays exactly as it is.
-
-- **The clause in dispute**: BS-9 / `ORA2 §DIFF-07`'s `Given` is *"a tagged map feeding a glitch-free
-  consumer through two paths"* — the `WavePrefixTest` diamond, where a source fans into two operators
-  that reconverge at a fan-in. That shape has never been built for `orMap`: until
-  `computenet-pez3` it was not even constructible against the registered vocabulary, and now that
-  the bridge is registered nobody has assembled the diamond or a case that observes it.
-
-- **Why it was unconstructible, and what changed** (kernel source read at this entry's base,
-  `0d59d674`; catalog state re-read 2026-08-29):
-  - `OrMapCell`'s outlet is `Subscribe<Propagate<TaggedMapDelta<K, V>>>`
-    (`kernel/src/main/kotlin/civictech/cell/data/OrMapCell.kt`).
-  - every registered `MapOf`-consuming operator is typed to `Propagate<MapDelta<K, V>>` on **every**
-    input port — `CoreOperators`' `join` -> `JoinCell.left`/`right`, `combineLatest` ->
-    `CombineLatestCell.left`/`right`, `lookupJoin` -> `LookupJoinCell.fact`/`dimension`
-    (`kernel/src/main/kotlin/civictech/cell/data/op/{JoinCell,CombineLatestCell,LookupJoinCell}.kt`).
-    Wiring an `OrMapCell` outlet into one is a genuine kernel type violation, not a restriction that
-    could be relaxed by configuration.
-  - `civictech.oracle.bind.TaggedOperators` registers `orMap` as
-    `ShapeRule.source(TaggedMapOf(Scalar, Scalar))` — **arity 0** — so `orMap` can never itself be
-    an interior node, and `GraphGenerator.generate` requires a nonzero-arity entry
-    (`check(operatorEntries.isNotEmpty())`); until `computenet-pez3` no registered entry consumed a
-    tagged outlet, so no generated case could place anything downstream of a tagged terminal either.
-  - the tagged-aware downstream adapters that would bridge the two delta types — `96 §E1.5`'s
-    `UntagCell` / `TaggedMapView` — **now exist**: verified 2026-08-29, at
-    `civictech.cell.data.op.UntagCell` (`kernel/src/main/kotlin/civictech/cell/data/op/UntagCell.kt`)
-    and `civictech.cell.data.view.TaggedMapView`
-    (`kernel/src/main/kotlin/civictech/cell/data/view/TaggedMapView.kt`), landed under epic
-    `computenet-j2x`. And `UntagCell` is now **registered**: `computenet-pez3` bound it into
-    `civictech.oracle.bind.OperatorCatalog` under the id `untag` — `ShapeRule.unary(TaggedMapOf ->
-    MapOf)`, with the independent reference model `civictech.oracle.model.UntagModel` — the first
-    nonzero-arity catalog entry that consumes a tagged outlet, which makes `orMap -> untag ->
-    join`/`combineLatest`/`lookupJoin` a legal edge. `TaggedMapView` stays unregistered (a read
-    surface, not an outlet). That registration does **not** close this entry, and the typing bound
-    is no longer what blocks it: what blocks it now is that **nobody has built the diamond** — a
-    tagged map reaching a glitch-free fan-in through two paths — nor a case observing a wave prefix
-    across it. Building it is `computenet-0zbq`, which also reaches the still-unclaimed diamond half
-    of `civictech.oracle.tagged.TaggedWavePrefixTest`.
-
-- **What is covered instead.** `civictech.oracle.tagged.TaggedWavePrefixTest` applies
-  `civictech.oracle.run.WavePrefixOracle` **unchanged** to a **bare `orMap` source observed as its own
-  terminal**, walking every intermediate observation through `DifferentialRunner`'s real per-step
-  observer, with non-vacuity and discrimination controls so a reader can see how much the case does
-  cover. It is honestly narrower than the diamond: with **no fan-in there is no glitch the case could
-  exhibit**. That was already stated in the test's own KDoc; what this entry adds is the same
-  statement on the requirement side.
-
-- **Adjacent, and deliberately NOT filed here**: `computenet-880k` — the generator's `ElementShape`
-  system cannot tell `TaggedMapDelta` from `MapDelta`, so a vocabulary naming `orMap` alongside
-  `join`/`combineLatest`/`lookupJoin` emits an edge the kernel refuses at run time (a
-  `ClassCastException` surfacing as `RunOutcome.DeadLetterFailure`). That is the same typing bound
-  seen from the generator side, but it is a **soundness defect with a fix pending**, not a behaviour
-  excluded as uncheckable, so it belongs in the tracker until it is fixed rather than in this file. It
-  is named here only so a reader does not take this entry for its filing.
-
-- **What was NOT done instead.** No operator was registered that would type-erase the tagged outlet to
-  make the diamond constructible; no adapter cell was added to the kernel to manufacture a fan-in; and
-  `TaggedWavePrefixTest`'s green is not restated anywhere as coverage of BS-9's stated shape.
-
-- **Resolves**: `computenet-0zbq` — building BS-9 at its stated shape over the now-registered
-  `orMap -> untag` bridge: a tagged map feeding a glitch-free consumer through two paths,
-  reconverging at a fan-in, with the wave-prefix oracle observing that fan-in. With that built and
-  green, delete this entry.
 
 ## CHA3-42-stall-notice-unclean-departure: an unclean departure's `Stall`-family notice is not observable on any read `testkit`'s churn harness has
 
