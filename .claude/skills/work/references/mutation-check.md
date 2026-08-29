@@ -125,41 +125,11 @@ load-bearing run — any mutation check, any before/after comparison — pass
 count and the `timestamp` *attribute inside the file*, not the file's mtime,
 which a cache restore also freshens.
 
-**Read the COMPILE task's state line, not just the test task's.** A reviewer
-once reported "reverted, still green" against a tree whose source was reverted
-and whose `DepartEvent.class` on disk was still the mutated build, timestamped
-8 seconds after its last green run; only decompiling settled which build had
-run (computenet-a4b7, epic computenet-umx). Every documented step had passed —
-`git status` clean, diff clean, no `e:` lines, named test red, revert verified —
-because all of them look at the SOURCE.
-
-The rule that covers it is gradle-evidence.md's, one task earlier: **`FROM-CACHE`
-or `UP-TO-DATE` on `:<module>:compileKotlin` means nothing compiled this run** —
-an unmarked line is your only positive proof the classes came from today's source.
-
-```bash
-grep -E '^> Task :<module>:compileKotlin' "$SCRATCH/mut.log"
-# unmarked = compiled from the source on disk. Marked = did not compile: the
-# class is the last execution's (UP-TO-DATE) or the cache's for this hash.
-```
-
-Two corrections to what that bead proposed, both measured on this host
-(computenet-a4b7's review, `:nature`, both with and without `--no-build-cache`):
-
-- **Re-applying an identical mutation does NOT leave the compile task
-  `UP-TO-DATE` with a stale class.** Up-to-dateness compares against the *last
-  execution*, so any content change re-executes; the build CACHE is what is
-  content-keyed, and a cache hit prints `FROM-CACHE` and restores the class that
-  is *correct for that hash*. So `--no-build-cache` is not useless here — it is
-  simply not the lever, because the lever is reading the state line.
-- **`touch <source>` is not a remedy** — it does not change the content hash, so
-  the task stays `UP-TO-DATE` and nothing recompiles, twice over. To force a real
-  recompile use `--rerun-tasks`; `rm -rf <module>/build/classes` only re-fetches.
-
-A `find -newer` on the class file was tried and rejected for the same reason: it
-returns empty both when the class is stale AND when the source simply has not
-changed since the last compile, so it cannot separate the two states it was
-meant to separate.
+**`touch <source>` does not force a recompile** — it changes no content, so
+`:<module>:compileKotlin` stays `UP-TO-DATE` and nothing rebuilds. `--rerun-tasks`
+is the lever that does; `rm -rf <module>/build/classes` only re-fetches from the
+cache. An *unmarked* `> Task :<module>:compileKotlin` line is your positive proof
+that today's source was compiled (computenet-a4b7's review measured all four).
 
 **And read WHICH assertion went red.** A test with several assertions can be
 reddened by an earlier one while the assertion carrying the criterion never
