@@ -203,12 +203,22 @@ Typical commands:
 ./gradlew :gen:test
 ./gradlew :wire:test
 ./gradlew :concord:test                          # acceptance corpus (core, dist, dur — the default)
-./gradlew :concord:test -Pconcord.profiles=core   # fast local loop, core only
+./gradlew :concord:test -Pconcord.profiles=core   # fast local loop, core only — reports what it skipped
 ./gradlew :demo:shopping:test
 ./gradlew :demo:exchange:test                    # composition exit gate
 ./gradlew :demo:agora:test
 ./gradlew test
 ```
+
+`-Pconcord.profiles=core` is a fast loop, not a full corpus run: it executes no
+`dist` or `dur` scenario, so it is **not** evidence for any of them. That is the
+whole of `concord/corpus/42-replication/` and `15-durability/`, **and** single
+files inside otherwise-`core` directories — `24-data-cells/`, `33-mobility/`,
+`41-location/` — so a directory is not core just because most of it is. Since
+computenet-j2x.7 the
+run says so itself — each excluded scenario reports as a named `SKIPPED` node and
+one summary node states the active set and the excluded count — so read the
+`skipped` count before citing a green concord run.
 
 A filtered invocation like `--tests 'fully.qualified.TestName'` can print
 `BUILD SUCCESSFUL` while running zero tests: Gradle's up-to-date checking

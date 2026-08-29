@@ -35,6 +35,14 @@ runs:      20                      # optional; schedule-sweep run count (default
 
 - **`profile`** gates optional capability (P9). `core` runs in every build; `dist`
   and `dur` are conformance levels a second implementation adopts wholly or not.
+  A run that does **not** activate a scenario's profile still emits a JUnit node
+  for it, reported as **skipped** and naming the scenario id, its corpus
+  directory and the profile that kept it out; the runner also emits one summary
+  node per run stating the active set and the excluded population. So
+  `-Pconcord.profiles=core` is still the fast loop — nothing excluded is
+  executed — but its output says which scenarios it is *not* evidence for.
+  Before computenet-j2x.7 the filter dropped non-active scenarios before any
+  node existed, and a green core-only run was indistinguishable from a full one.
 - **`kind: control`** scenarios carry deliberately wrong expectations and MUST
   fail; the runner asserts their failure (P7), and asserts that it is *the
   declared* failure — see `expect-failure` below.
@@ -286,16 +294,26 @@ single-writer review of `concord/schema/scenario.md` itself. The matching
 `civictech.concord.driver.kernel` binding and the `CorpusRunner` dispatch arm
 followed under `concord/src/` in `computenet-yh6.1.8`, per D-C12's rule that a
 step verb's seams move together or the module does not compile. Two corpus
-scenarios drive it: `DUR-LIVE-01` (the live half of `[24-DUR-05]`) and
-`DUR-CKPT-FRONTIER-01` (the checkpoint-frontier half of `[24-DUR-02]`).
+scenarios drove it as landed: `DUR-LIVE-01` (the live half of `[24-DUR-05]`)
+and `DUR-CKPT-FRONTIER-01` (the checkpoint-frontier half of `[24-DUR-02]`). A
+third, `42-TMAP-REPL-01`, followed when `computenet-j2x.4.6` widened the kernel
+binding to a `replica-of` replica's gossip inlet; the verb's shape and semantics
+are unchanged by that widening — only the set of admitted targets grew, and the
+note below is the single-writer review of it (`computenet-37zj`).
 
 **One driver-capability note.** Which cells can receive a duplicate is a driver
-capability like any other. The kernel binding admits an `effect-sink` target
-only: an effect boundary reads a delta's added *elements* and decides on the
-message context, both of which a `retransmit` states, whereas re-delivering to a
-tag-algebra fold would additionally need the original delivery's tag identity —
-which a scenario does not name and the binding will not fabricate. Every other
-target is a loud refusal, never a silently weaker delivery.
+capability like any other. The kernel binding admits two targets. An
+`effect-sink`: an effect boundary reads a delta's added *elements* and decides
+on the message context, both of which a `retransmit` states. And a
+`replica-of` replica's `deltaInlet` — the gossip port a peer's effective delta
+arrives on — where the dot algebra decides the duplicate instead: a
+re-delivered dot reduces to nothing, so the fold re-emits nothing. Neither
+target fabricates a tag identity. The replica case in particular needs no
+invented one: the binding replays the source replica's own recorded emission
+verbatim — same delta object, same wave position — rather than minting a fresh
+one from the step's `op:`/`value:`, which only has to *describe* the recorded
+dot, not construct it. Every other target is a loud refusal, never a silently
+weaker delivery.
 
 **What it is for.** No other verb in the closed vocabulary re-delivers an
 already-processed invocation to a *running* host — every other path to a
