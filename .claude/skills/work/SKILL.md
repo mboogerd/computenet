@@ -399,6 +399,17 @@ Three standing disciplines:
   .claude/skills/work/scripts/wait-checks.sh <pr-url>
   ```
 
+  **`SETTLED` is not a verdict.** It means no required row is PENDING — a
+  FAILED required check settles exactly like a passing one, exits 0, and
+  prints the same last line (computenet-2jyq). The exit code is no help
+  either: the trailing `gh pr checks` exits 8 on a red check, and through a
+  pipe `$?` reads 0. So the ship gate reads the returned TABLE for a
+  non-`pass` row, and a red row routes to
+  [red-check-attribution.md](references/red-check-attribution.md), never to
+  `gh pr ready` — which on this repo merges itself. The script now names any
+  red required check on its own line above the verdict; that line is a
+  backstop, not a substitute for reading the table.
+
   **A cold start normally takes TWO invocations**: the ~9m20s window is sized
   to the 600000 ms foreground cap and `build-test-fast` measures 8m56s–13m25s,
   so waiting from the run's start times out on a healthy PR by construction

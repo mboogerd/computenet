@@ -136,7 +136,15 @@
 # runs once under the FIRST --tests filter, and the actionable-task line points
 # the wrong way. computenet-1mjv (+11) — --rerun on a LIFECYCLE task reruns
 # nothing while looking like correct usage.
-work                8813
+# 8813 -> 8849 on 2026-08-29: computenet-2jyq (+11) — SETTLED means no row is
+# PENDING; a FAILED required check settles identically and the next move is
+# `gh pr ready`, which merges itself. Stated in step 2, with the script naming
+# red rows above the verdict as a backstop. computenet-umw4 (+16) —
+# create-ticket.sh can be DENIED inside a dispatched subagent, and the obvious
+# workaround is the forbidden destructive one; the manual equivalent and the
+# separate-call rule for body files are now written down. computenet-k5a9 (+9)
+# — the JVM-provenance grep matched JMH's Unsafe warning instead of the banner.
+work                8849
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

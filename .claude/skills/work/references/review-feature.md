@@ -86,8 +86,17 @@ produced — the JMH/Gradle banner in the teed log, or `java -version` from the
 same launcher the run used — and check the diff's claim against *that*:
 
 ```bash
-grep -m1 -iE 'jdk|vm version|java version' "<the run's own log>"
+grep -m1 -iE 'vm version|java version' "<the run's own log>"   # JMH: '^# VM version'
 ```
+
+`jdk` was in that alternation until computenet-k5a9. JMH 1.37 emits a
+`sun.misc.Unsafe` deprecation warning ABOVE its own banner, and that warning
+contains `jdk`, so `-m1` stopped there and returned a line with no JVM version
+in it — output that looks like the check ran and found nothing. Two agents hit
+it in one session, and the run it exists to catch was real: a derivation made
+under JBR 25.0.2 instead of the module's declared JDK 21, caught only by
+reading the banner directly, which moved the published floor from 0.593 to
+1.044.
 
 On computenet-dqy.46 every measured number reproduced exactly and the only
 false statement was the environment claim — two same-size figures from

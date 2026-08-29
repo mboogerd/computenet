@@ -175,6 +175,15 @@ for i in $(seq 1 "$rounds"); do
   else
     printf '%s\n' "$rows"
     echo "wait-checks: verdict is for head $judged_sha"
+    # SETTLED means no row is PENDING. A failed required check settles exactly
+    # like a passing one, and the caller's next move is `gh pr ready`, which on
+    # this repo merges itself — so name the red rows rather than leaving them
+    # six lines above the word (computenet-2jyq).
+    red=$(printf '%s\n' "$rows" | grep -E "^($req)" | grep -E '[[:space:]]fail[[:space:]]' | awk '{print $1}' | tr '\n' ' ')
+    if [ -n "$red" ]; then
+      echo "wait-checks: RED — required check(s) FAILED: ${red% }"
+      echo "wait-checks: SETTLED is not a verdict. Do NOT gh pr ready; go to red-check-attribution.md."
+    fi
     echo SETTLED
     exit 0
   fi
