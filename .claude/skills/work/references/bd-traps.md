@@ -185,6 +185,16 @@ SKILL.md and the other references cite this file as "`bd` traps".
   unparented (hash id, counter untouched) and then re-parents. Breakdown
   children under an epic or feature YOU claimed are exclusive by that claim
   and keep their dotted ids — `--parent` is correct there.
+- **Repeating `-C <main-checkout>` is what tempts the variable that breaks.**
+  `BD="bd -C /path"; $BD show x` fails with `no such file or directory: bd -C
+  /path` — zsh does not word-split an unquoted expansion — and it reads as bd
+  being missing rather than as a quoting fault. Recurred 2026-08-27 after
+  computenet-jobe closed it (computenet-ahg8, and computenet-wahz before
+  that). Define a function once instead, and every later call is bare `bd`:
+
+  ```bash
+  bd() { command bd -C "$WT" "$@"; }
+  ```
 - **An EMPTY database answers every read successfully.** The database `bd`
   opens is chosen by cwd (or `-C`) — *not* by "only the main checkout has
   one", which is false in both directions now measured. A worktree **without**

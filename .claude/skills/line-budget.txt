@@ -103,7 +103,16 @@
 # conditional on pending checks and STOP, and the missing FACT ("you have no
 # inbound wake-up") is stated ahead of the prohibition. computenet-00d8's
 # sha-binding of wait-checks.sh is mechanical and free here.
-work                8662
+# 8662 -> 8713 on 2026-08-29: computenet-ahg8 (+14) — the $BD-in-a-variable zsh
+# trap recurred past computenet-jobe, so the function form now sits where -C is
+# PRESCRIBED (bd-traps.md), not only where the trap is catalogued; and the
+# explicit-timeout rule is stated as a host rule, not a Gradle rule (a bare echo
+# was killed at the 120s default). computenet-ltv9 (+18) — the budget monitor
+# has now gone silent twice by two routes, so the hand subtraction is named THE
+# mechanism and each tier reports the elapsed it computes rather than the sleeps
+# it slept. computenet-geky (+19) — ask where the PINNING TEST will live, and
+# apply the rule to any claim not derived from the code, residual-filed included.
+work                8713
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

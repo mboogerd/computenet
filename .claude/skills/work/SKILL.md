@@ -254,17 +254,32 @@ from the drifting checkout, which is why only the orchestrator needs this.
 
 ## 2. Arm the budget
 
-Don't burn turns polling a clock — arm a timer that tells you:
+**The subtraction below is THE budget mechanism; the monitor is a
+convenience that may or may not fire.** It has now gone permanently silent
+twice by two different routes — once after a host suspension
+(computenet-6664), once with no suspension at all, `uptime` reading "up 7
+days" throughout and the machine busy the whole slot: not one of the three
+tiers ever spoke again after the start confirmation, and the slot was 16
+minutes over before the hand recomputation caught it (computenet-ltv9). Both
+times the hand subtraction was the only thing that noticed. Arm the monitor
+anyway — a tier that does fire is free — but never let its silence mean time
+remains.
 
 ```
 Monitor({
   description: "work session budget",
   persistent: true,
-  command: `sleep 11700; echo "BUDGET T-90m: finish the current feature; start no new one"
-sleep 2700;  echo "BUDGET T-45m: no new dispatches; review and merge what is in flight"
-sleep 2700;  echo "BUDGET EXPIRED: go to Finalize now"`
+  command: `sleep 11700; echo "BUDGET T-90m ($(( ($(date -u +%s) - $(cat "$SCRATCH/slot-start")) / 60 ))m REAL elapsed): finish the current feature; start no new one"
+sleep 2700;  echo "BUDGET T-45m ($(( ($(date -u +%s) - $(cat "$SCRATCH/slot-start")) / 60 ))m REAL elapsed): no new dispatches; review and merge what is in flight"
+sleep 2700;  echo "BUDGET EXPIRED ($(( ($(date -u +%s) - $(cat "$SCRATCH/slot-start")) / 60 ))m REAL elapsed): go to Finalize now"`
 })
 ```
+
+Each tier reports the elapsed it computes at the moment it fires, not the
+sleeps it slept, so a tier that fires late is distinguishable from one that
+fires on time — the suspension case reads as a wrong number rather than as a
+correct one. Write `$SCRATCH`'s absolute path into the command; the variable
+does not survive into the monitor's shell.
 
 **Record the slot start durably, before you arm it** — you have no other
 memory of when this session began, and a resume needs it (below):
@@ -1461,6 +1476,26 @@ verdict. (`parked` is only meaningful on an empty batch.)
   guess was right; the next reached a second file immediately and had to be
   reported out and filed separately. If the residual's prose names its files —
   several do, in a trailing `Files: …` line — use those.
+
+  **Ask WHERE THE PINNING TEST WILL LIVE, before anything else.** In both
+  recurrences that got past the invariant grep below, the omitted file was
+  the same kind: the test that pins the acceptance, in a module or seam the
+  claim did not reach — a general-path assertion whose claim carried only the
+  wire test, and a residency property whose test needed a new kernel file
+  (computenet-geky). An acceptance asserting a general-path property needs a
+  general-path test; if the claim's only test file sits in a different module
+  or seam from the property, the claim cannot satisfy the bead as written.
+  `check-files-claim.sh` cannot catch this — it warns when the bead's TEXT
+  names a path the claim omits, and these files did not exist yet and were
+  named nowhere.
+
+  **This applies to any claim you did not derive from the code, whoever wrote
+  it** — orchestrator-authored, copied from a sibling, or inherited from a
+  residual filed by the implementer of a *different* bead. That last is the
+  one geky found: reporting out rather than reaching is good practice and it
+  produces a claim written by someone reasoning about the mechanism they had
+  just touched, which is precisely this failure mode from an author the rule
+  did not address. Inheriting a claim is not re-deriving it.
 
   **The failure shape of that weakness is specific**: a claim derived from
   the design space covers the MECHANISM's files and misses the files holding

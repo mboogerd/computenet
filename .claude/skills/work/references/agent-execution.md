@@ -46,7 +46,13 @@ call needs it.
 ## Foreground timeouts, and why there is no `timeout` binary
 
 **Run every verification command — Gradle above all — in ONE foreground Bash
-call with an explicit `timeout` argument, up to 600000 ms.** The
+call with an explicit `timeout` argument, up to 600000 ms.** This is **not a
+Gradle rule**: on this host ANY command can outrun the Bash tool's 120s
+default. Measured 2026-08-27 — a bare `echo "$BEADS_ACTOR"` killed at the
+default as a session's first command, and a routine `uptime && git log && git
+fetch` orientation call killed with the fetch mid-flight (computenet-ahg8).
+Pass an explicit timeout on orientation commands too; a killed call looks like
+a hung host, not like a default you did not set. The
 foreground/background choice belongs to the Bash tool's 120s default, not to
 your intent: past the timeout the tool backgrounds the call whatever you
 asked for, and a turn that ends waiting on a background job never resumes —
