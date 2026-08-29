@@ -28,6 +28,16 @@ interface JoinApi<K, V, W> {
  * side's removal retracts it. Inherits [MapDelta]'s documented convergence
  * limit (G-23): untagged, so concurrent same-key puts resolve by arrival
  * order — single-writer-per-key or single-stream inputs converge.
+ *
+ * **G-23 discharged for tagged-map-fed inputs (96 §E1.5).** As for
+ * [CombineLatestCell]/[LookupJoinCell]: when the `left` or `right` arm's
+ * `MapDelta` arrives via `OrMapCell` → [civictech.cell.data.op.UntagCell]
+ * rather than a raw multi-writer `MapDelta` source, that arm is no longer
+ * arrival-order biased — `UntagCell` projects the OR-map's already-converged,
+ * dot-resolved exposed value, so two peers each running `OrMapCell →
+ * UntagCell → JoinCell` over the same replicated map converge identically.
+ * This cell is functionally unchanged either way — the discharge is a fact
+ * about the upstream composition, not a code path here.
  */
 class JoinCell<K, V, W>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is

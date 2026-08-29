@@ -300,6 +300,17 @@ semantics only — neither is a convergent merge under concurrent writers
     phantom-expected-edge caveat. This cell now also absorb-acks a wave it
     silently swallows, closing the last divergence from 20/22 §Completeness
     over silent or stuck edges.)*
+  - `UntagCell` (96 §E1.5) — the G-23 adoption seam, not an incremental
+    algebra of its own: an adapter from `TaggedMapDelta` (§Tagged maps below)
+    to `MapDelta`, so a converged `OrMapCell` can feed the untagged join
+    family above (`CombineLatestCell`/`LookupJoinCell`/`JoinCell`) without
+    reintroducing arrival-order bias. Effective-only: one `MapDelta` per
+    input delta, a put for a key whose exposed value changed, a removal only
+    when the key's last live dot dies, never a removal followed by a put for
+    the same delta. Rides the arriving wave rather than originating one
+    (single-inlet, so no completeness gate is needed). `Stateful`, snapshotting
+    the exposed-value map it diffs against so a restored instance does not
+    replay the whole map as novelty. *(Implemented.)*
   - `FlatMapSetCell` / `mapSet` (M11.1) — element-wise flatMap/map over a
     tagged set stream, input tags passing through. Sound because tag algebra
     is per-(element, tag): colliding outputs **union** their preimages' tag
@@ -321,11 +332,15 @@ semantics only — neither is a convergent merge under concurrent writers
 ## Tagged maps
 
 **Built** (closes G-23 for keyed structures; 96 §E1) — 96 §E1.2 (`OrMapCell`
-core) and §E1.3 (replication: echo-terminating gossip, pull baseline,
-re-origination, dead-source fencing) have shipped against this section as
-`OrMapCell`/`TaggedMapDelta` in `civictech.cell.data`, while §E1.4–E1.6
-(embedded mergeable values, `TaggedMapView`/`UntagCell`, demo adoption) remain
-with the 96-plan. It is an **additive new delta type**:
+core), §E1.3 (replication: echo-terminating gossip, pull baseline,
+re-origination, dead-source fencing), §E1.4 (embedded `MergeablePayload`
+value-folding on `OrMapCell`/`TaggedMapDelta`) and §E1.5 (`TaggedMapView` +
+`View.taggedMap()`, and the `UntagCell` adapter into the untagged join family
+above) have all shipped against this section, as `OrMapCell`/`TaggedMapDelta`
+in `civictech.cell.data`, `TaggedMapView`/`View.taggedMap()` in
+`civictech.cell.data.view`/`civictech.cell.observe`, and `UntagCell` in
+`civictech.cell.data.op`. Only §E1.6 (the two-JVM replicated demo adoption)
+remains with the 96-plan. It is an **additive new delta type**:
 `MapDelta` and its single-writer cells (`MapCell`, `JoinCell`, `GroupByCell`)
 are untouched, and `KeyedSetCell` is untouched — this resolves backlog
 `06-or-map-tagged-map-delta.md`'s open choice in favor of addition over

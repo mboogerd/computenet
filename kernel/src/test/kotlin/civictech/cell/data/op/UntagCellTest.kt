@@ -6,10 +6,13 @@ import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.Timestamp
+import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.OrMapCell
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.cell.data.view.MapView
+import civictech.cell.onEach
+import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.PortRef
@@ -25,8 +28,8 @@ import java.util.*
 
 /**
  * 96 §E1.5 (adapter half): [UntagCell] — the G-23 adoption seam. The
- * behaviour specifications BS-8, BS-9 and BS-11 of feature computenet-j2x.3,
- * plus the wave-continuity assertion [KE1-22] asks for.
+ * behaviour specifications BS-8, BS-9, BS-10 and BS-11 of feature
+ * computenet-j2x.3, plus the wave-continuity assertion [KE1-22] asks for.
  *
  * What is proven here:
  *
@@ -43,8 +46,25 @@ import java.util.*
  *   diff state, so a restored instance fed an unchanged delta emits nothing
  *   rather than replaying the map as novelty.
  * - **Wave continuity** (`[KE1-22]`): the emitted [MapDelta] rides the
- *   arriving wave's [Timestamp] — the adapter originates no wave. (The
- *   downstream single-wave observation, BS-10, is a sibling item.)
+ *   arriving wave's [Timestamp] — the adapter originates no wave.
+ * - **BS-10** (`[KE1-22]`): the same continuity, checked one hop further
+ *   downstream through a real [GlitchFreeCell] wave-completeness fold rather
+ *   than by comparing recorded contexts directly — a single input wave
+ *   crosses the fold as a single release, never two (the CC3/E2-SUITE
+ *   precedent: an ungated binary operator that emitted twice per wave).
+ *   `UntagCell` is single-inlet, so there is no fan-in for that shape to hide
+ *   in, but this proves it rather than assumes it. No `doc/spec/20-dataflow-
+ *   semantics/21-propagation.md` id fits a single-inlet pass-through's wave
+ *   continuity precisely (`[21-PROP-01]` is the general propagation law,
+ *   `[21-REBASE-01]`/`[22-LIVE-01]`/`[22-OBS-02]` are shaped for
+ *   re-baseline/silence/multi-source concerns `UntagCell` doesn't have) — per
+ *   the task, this stays a kernel test under the epic-scoped `[KE1-22]`
+ *   rather than minting a new spec id or a DISPUTES entry.
+ * - **`[KE1-20]` absorb-ack** (residual from computenet-j2x.3.1's review):
+ *   the no-effective-change branch does not just "emit nothing" — it actually
+ *   fires [civictech.cell.control.absorbAck], proven by a fan-in diamond
+ *   where an always-emitting sibling arm can only flush past a
+ *   [GlitchFreeCell] if `UntagCell`'s swallowed wave really acked.
  */
 class UntagCellTest {
 
@@ -367,6 +387,129 @@ class UntagCellTest {
         // and the two puts are genuinely two distinct waves, so the assertion
         // above is not trivially satisfied by a constant.
         (arriving[0]!!.timestamp == arriving[1]!!.timestamp).shouldBeFalse()
+    }
+
+    // -----------------------------------------------------------------
+    // BS-10 — a downstream GlitchFreeCell fold sees one wave, not two
+    // ([KE1-22])
+    // -----------------------------------------------------------------
+
+    @Suppress("UNCHECKED_CAST")
+    private val mapDeltaApi = Propagate::class.java as Class<Propagate<MapDelta<String, String>>>
+
+    @Test
+    fun `BS-10 a downstream glitch-free fold sees one release per input wave, not two`() {
+        val map = OrMapCell<String, String>()
+        val untag = UntagCell<String, String>()
+        @Suppress("UNCHECKED_CAST")
+        map.outlet.linkTo(untag.inlet as LinkFrom<Propagate<TaggedMapDelta<String, String>>>)
+
+        // a real wave-completeness fold downstream of the adapter — not a bare
+        // subscriber. UntagCell has a single inlet, so this fold's frontier
+        // has exactly one edge and completes it trivially; what it proves is
+        // that ONE input wave crosses as ONE released invocation, never two
+        // (the shape the CC3/E2-SUITE double-emission defect took elsewhere).
+        val gf = GlitchFreeCell(mapDeltaApi)
+        @Suppress("UNCHECKED_CAST")
+        untag.outlet.linkTo(gf.inlet as LinkFrom<Propagate<MapDelta<String, String>>>)
+
+        data class Release(val delta: MapDelta<String, String>, val ctx: MessageContext?)
+        val released = mutableListOf<Release>()
+        gf.outlet.subscribe(
+            Use.fixed(
+                Propagate<MapDelta<String, String>> { released += Release(it, CurrentContext.get()) },
+                PortRef.generate(),
+            )
+        )
+
+        val arriving = recordTagged(map.outlet)
+
+        map.inlet.call.put("k", "v1")
+        map.inlet.call.put("k", "v2")
+
+        // two input waves in, exactly two releases out through the fold — a
+        // double-emitting adapter would show four here, or a single release
+        // straddling both waves would show one.
+        arriving.size shouldBe 2
+        released.size shouldBe 2
+        released.map { it.delta } shouldBe listOf(
+            MapDelta(mapOf("k" to "v1"), emptySet()),
+            MapDelta(mapOf("k" to "v2"), emptySet()),
+        )
+
+        // and each release still rides the ORIGINAL arriving wave's context —
+        // continuity survives the extra hop through the completeness fold,
+        // it is not merely "some" wave per release.
+        released.forEachIndexed { i, release ->
+            val inbound = arriving[i]
+            inbound.shouldNotBeNull()
+            val outbound = release.ctx
+            outbound.shouldNotBeNull()
+            outbound.timestamp shouldBe inbound.timestamp
+            outbound.baseline shouldBe inbound.baseline
+            outbound.reBaseline shouldBe inbound.reBaseline
+        }
+        (released[0].ctx!!.timestamp == released[1].ctx!!.timestamp).shouldBeFalse()
+    }
+
+    // -----------------------------------------------------------------
+    // [KE1-20] residual — the swallowed-wave branch really absorb-acks, not
+    // merely "emits nothing" (computenet-j2x.3.1 review residual)
+    // -----------------------------------------------------------------
+
+    /**
+     * The always-real sibling arm of a fan-in diamond: fed the same
+     * [TaggedMapDelta] stream as the [UntagCell] under test, it emits a fresh
+     * marker [MapDelta] for every wave, so the [GlitchFreeCell] downstream
+     * genuinely has two edges to settle rather than trivially completing on
+     * one.
+     */
+    private class AlwaysEmitFromTagged(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        @Suppress("UNCHECKED_CAST")
+        val inlet = registerPort(
+            "inlet",
+            FanInlet(Propagate::class.java as Class<Propagate<TaggedMapDelta<String, String>>>),
+        )
+        val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<String, String>>>())
+        private var n = 0
+
+        init {
+            inlet.onEach { outlet.call.propagate(MapDelta(mapOf("marker-${n++}" to "x"), emptySet())) }
+        }
+    }
+
+    @Test
+    fun `KE1-20 the swallowed branch absorb-acks so a downstream glitch-free join still settles`() {
+        val source = RawTaggedSource()
+        val untag = UntagCell<String, String>()
+        val passArm = AlwaysEmitFromTagged()
+        val gf = GlitchFreeCell(mapDeltaApi)
+        val received = mutableListOf<MapDelta<String, String>>()
+        gf.outlet.subscribe(
+            Use.fixed(Propagate<MapDelta<String, String>> { received += it }, PortRef.generate())
+        )
+
+        link(source, untag)
+        @Suppress("UNCHECKED_CAST")
+        source.outlet.linkTo(passArm.inlet as LinkFrom<Propagate<TaggedMapDelta<String, String>>>)
+        @Suppress("UNCHECKED_CAST")
+        untag.outlet.linkTo(gf.inlet as LinkFrom<Propagate<MapDelta<String, String>>>)
+        @Suppress("UNCHECKED_CAST")
+        passArm.outlet.linkTo(gf.inlet as LinkFrom<Propagate<MapDelta<String, String>>>)
+
+        val dot = Timestamp(UUID(9, 9), 1L)
+        val put = TaggedMapDelta<String, String>(puts = mapOf("k" to mapOf(dot to "v")))
+        source.send(put)
+        // both edges settle: untag's real put and the pass arm's marker.
+        received.size shouldBe 2
+
+        // a re-delivered echo: untag's exposed value is unchanged, so it emits
+        // nothing on this edge — but if it did not absorb-ack, the join could
+        // never complete this wave and the pass arm's marker would be stranded
+        // behind it, undelivered forever.
+        source.send(put)
+        received.size shouldBe 3
+        received.last() shouldBe MapDelta(mapOf("marker-1" to "x"), emptySet())
     }
 
     // -----------------------------------------------------------------
