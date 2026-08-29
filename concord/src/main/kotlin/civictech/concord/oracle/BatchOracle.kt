@@ -234,6 +234,35 @@ class BatchOracle(private val scenario: Scenario) {
                 Fold.SetF(LinkedHashSet(current.values))
             }
 
+            "ormap-source" -> {
+                // Observed-remove per-key map (kernel OrMapCell), folded over ONE
+                // stream. A `put` mints a fresh dot at the key and covers every dot the
+                // writer currently observes live there; a `remove` covers exactly the
+                // dots it observes live. On a single replica the writer observes
+                // everything it ever wrote, so at most one dot per key is ever live and
+                // the fold collapses to file-order last-writer-wins with `remove`
+                // dropping the key. That is the *single-stream* projection of the dot
+                // algebra, not a restatement of it: what makes the two coincide is that
+                // one replica's dot counter increases monotonically in script order, so
+                // dot order IS file order. A concurrent second writer — where a
+                // remove's cover set and a concurrent put's dot genuinely diverge — is
+                // not expressible in a batch-oracle scenario, which has one stream by
+                // construction; the dist/replica halves are pinned by the replication
+                // scenarios instead.
+                val entries = LinkedHashMap<Value, Value>()
+                for (op in ops) {
+                    when (op.op) {
+                        "put" -> {
+                            val (k, v) = keyValue(op.value ?: error("${cell.id}: put needs a value"))
+                            entries[k] = v
+                        }
+                        "remove", "remove-key" -> op.value?.let { entries.remove(it) }
+                        else -> error("${cell.id} (ormap-source): unsupported op '${op.op}' (put/remove(key))")
+                    }
+                }
+                Fold.MapF(entries)
+            }
+
             else -> throw OracleUnsupported("source type '${cell.type}' has no oracle fold")
         }
     }
@@ -404,7 +433,9 @@ class BatchOracle(private val scenario: Scenario) {
             is Fold.ListF -> Value.ListVal(fold.items)
             else -> Value.ListVal(Values.sortedList(asSet(fold)))
         }
-        "map-view" -> mapToValue(asMap(fold))
+        // The tagged twin renders identically: the driver's TaggedMapView materializes
+        // the same `{key -> exposed value}` Map that a plain map-view does.
+        "map-view", TAGGED_MAP_VIEW -> mapToValue(asMap(fold))
         "count-view" -> when (fold) {
             is Fold.MapF -> mapToValue(fold.entries)
             is Fold.ScalarF -> fold.value
@@ -528,16 +559,41 @@ class BatchOracle(private val scenario: Scenario) {
          * View catalog ids this oracle can fold and render — the check layer's terminal
          * views plus the durable binding.
          *
-         * Since computenet-yh6.1.10 put [DURABLE_SET_VIEW] into [Values.VIEW_TYPES] the
-         * union is idempotent and the two sets are **equal**; the `+` is kept because
-         * the two answer different questions ("what does the check layer call a
-         * terminal view?" versus "what can this oracle fold and render?"), and this one
-         * must stay true of the durable binding even if the check layer's catalog were
-         * ever narrowed again. Nothing here changed behaviour when they converged:
+         * Since computenet-yh6.1.10 put [DURABLE_SET_VIEW] into [Values.VIEW_TYPES] that
+         * half of the union is idempotent; [TAGGED_MAP_VIEW] is **not** idempotent, and
+         * this set is deliberately the wider of the two (see its KDoc for the residual
+         * that leaves). The `+` is kept because the two answer different questions
+         * ("what does the check layer call a terminal view?" versus "what can this
+         * oracle fold and render?"), and this one must stay true of the durable binding
+         * even if the check layer's catalog were ever narrowed again. Nothing here
+         * changed behaviour when the durable halves converged:
          * [operatorFold]'s view pass-through already matched `journal-set-view` through
          * this set.
          */
-        val VIEW_TYPES: Set<String> = Values.VIEW_TYPES + DURABLE_SET_VIEW
+        /**
+         * The tagged twin of `map-view` — the only terminal that folds an
+         * `ormap-source`'s TaggedMapDelta stream (KE1-F4). It renders exactly as a
+         * `map-view` ([renderView]), because the driver's `TaggedMapView` materializes
+         * the same `{key -> exposed value}` Map.
+         *
+         * **It is in [Values.VIEW_TYPES] since computenet-j2x.4.3 — the residual this
+         * KDoc used to record is closed.** computenet-j2x.4.1 could only widen the
+         * oracle's own set (`oracle/Values.kt` was outside its file claim), the same
+         * split computenet-yh6.1.9 hit with [DURABLE_SET_VIEW] and computenet-yh6.1.10
+         * later closed. The consequence while it stood was precise: `incremental-
+         * equals-batch view: '*'` ([allViewValues]) and `Checks.viewCells` (from which
+         * `late-join-equals-early` infers an early/late pair) both enumerate
+         * `Values.VIEW_TYPES`, so they **skipped** a `tagged-map-view`, and a scenario
+         * whose only view was tagged quantified over nothing and passed having read
+         * nothing. computenet-j2x.4.3 authored the first scenarios that name the id
+         * (`24-TMAP-MERGE-01`/`-PRESENCE-01`/`-LWW-01`/`-RESET-01`), measured that
+         * vacuous pass on a probe, and widened `Values.VIEW_TYPES` — see its KDoc for
+         * the evidence and the blast-radius argument. Those four name their view in
+         * every check as well, so neither generalising form is load-bearing for them.
+         */
+        const val TAGGED_MAP_VIEW = "tagged-map-view"
+
+        val VIEW_TYPES: Set<String> = Values.VIEW_TYPES + DURABLE_SET_VIEW + TAGGED_MAP_VIEW
     }
 
     /** The oracle's intermediate stream state — a pure fold, one per cell. */

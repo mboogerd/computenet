@@ -2273,3 +2273,177 @@ namespace, not in an L0 spec chapter, and their check is a kernel test
   `MergeClass` and treat an undeclared implementation as `NON_IDEMPOTENT`, which
   is a breaking change to a published kernel interface and needs its own ticket.
   With either, delete this entry.
+
+## KE1-F4 (the OR-map laws): the CONCURRENT halves of `[24-TMAP-03]` and `[24-TMAP-04]` are not scenario-statable (`script-model-gap` + `schema-gap`, `[KE1-37]`)
+
+`computenet-j2x.4.3` authored one scenario per tagged-map law —
+`24-TMAP-MERGE-01` (`[24-TMAP-01]`, dist convergence), `24-TMAP-PRESENCE-01`
+(`[24-TMAP-02]`), `24-TMAP-LWW-01` (`[24-TMAP-03]`) and `24-TMAP-RESET-01`
+(`[24-TMAP-04]`) — so all four rows of `doc/spec/CONCORDANCE.md` are covered.
+Two of those four cover the law's **single-stream** half only. This entry records
+what the other half would need, with the probe evidence, rather than letting the
+covered rows imply more than they check. Nothing was weakened to make a row go
+green: no golden was relaxed, no check dropped, and no scenario asserts an
+interleaving it did not produce.
+
+### Half A — `[24-TMAP-03]`'s concurrent value: **measured unsatisfiable**
+
+The law: a key's exposed value is its live dot with the greatest `(counter,
+sourceId)` order. On one source that order is file order (dot counters mint
+monotonically per put, steps on one cell apply in file order), which is what
+`24-TMAP-LWW-01` states and why its golden is legitimate. Across two replicas the
+`sourceId` tiebreak decides, and **a scenario cannot name a sourceId** — source
+identities are the implementation's, and `concord/schema/scenario.md` gives the
+author no vocabulary for one (the closest, `retransmit`'s `source:`, names a
+scenario-local *cell id* and is explicitly documented as carrying no claim about
+the identity it resolves to).
+
+Probe (run on `task/computenet-j2x.4.3`, `24-TMAP-LWWCONC-PROBE`, deleted after
+measuring — two `ormap-source` replicas of one logical id, `put k1 from-h1` on
+`r1` and `put k1 from-h2` on `r2` between the same barriers, golden
+`final-view v1 = {k1: from-h1}`):
+
+```
+24-TMAP-LWWCONC-PROBE: check(s) failed on 8 of 20 run(s).
+First failing run (0): final-view(v1): expected {k1=from-h1} but read {k1=from-h2}
+```
+
+Either golden loses on roughly half the schedule sweep. This is not a bug: the
+sweep is quantifying over delivery orders, the dots' `(counter, sourceId)` order
+differs run to run with the seeded driver, and the corpus rule is that a scenario
+passes only if every check holds on **every** run (P2 — properties, never
+traces). So the concurrent half has no expressible golden, and the only
+order-independent statement left over that topology is convergence — which is
+what `24-TMAP-MERGE-01` already asserts (`replicas-converge` +
+`views-converge`, no golden).
+
+### Half B — `[24-TMAP-04]`'s concurrent reset-remove: **passes, and is still a trace**
+
+The law: `remove(k)` tombstones every dot *observed live* at `k`, so a concurrent
+put's unobserved dot survives. `24-TMAP-RESET-01` states the sequential form (a
+remove covers the dot it observed live, so the key vanishes; a later put's fresh
+dot is not covered). That form cannot reach a *multi-dot* cover set at all: on one
+source a `put` already covers the key's prior live dots in the delta that mints
+its own, so exactly one dot is live when the remove runs — verified by mutation
+during this task's review (narrowing `OrMapCell.remove` to the newest live dot
+leaves `24-TMAP-RESET-01` green). One more reason the law's full strength is
+observable only in the multi-writer form below. The concurrent form was probed
+in both issuance orders across two replicas — `remove k1` on `r1` with
+`put k1 b` on `r2`, once with the remove
+issued first and once with the put issued first, golden `{k1: b}` on both views —
+and **both probes passed on 20 of 20 runs**.
+
+It was still **not authored**, and that is the honest call rather than the
+conservative one. What makes the probe pass is a fact about this driver, not
+about the specification: the harness applies a script step into the kernel cell
+before issuing the next, so `r1`'s remove computes its observed set at a moment
+when `b`'s dot either does not exist yet or has not been gossiped in. The
+specification grants an implementation the opposite freedom —
+`concord/schema/scenario.md` §Script semantics puts delivery interleaving between
+barriers entirely in the implementation's hands — and a conforming driver that
+delivered `b`'s dot to `r1` before the remove applied would tombstone it
+*correctly*, whereupon the golden `{k1: b}` is red against a correct
+implementation. A conformance corpus may not ship a file that a second conforming
+implementation can legitimately fail, so the passing probe is evidence about the
+kernel driver's scheduling and not a check. (Same hazard `scenario.md` names for
+`read-state`: a scenario "would be asserting an interleaving it never produced".)
+
+### The missing capability (what would retire this entry)
+
+Both halves need the same thing, which the corpus deliberately does not have: a
+way for a scenario to **pin the observation relation between two replicas'
+writes** — to state "this remove had, or had not, observed that put's dot when it
+applied" — plus, for half A only, a neutral way to state a dot-order tiebreak
+without naming an implementation's source identity. Neither exists in the closed
+step and check vocabulary, and growing either is a deliberate schema-change
+ticket between waves, which `computenet-j2x.4`'s decision **j2x.4-D4** explicitly
+forbids this feature from taking (it is a parked question on epic
+`computenet-j2x`, not a corpus-authoring convenience).
+
+- **Resolves (half A)**: a step or descriptor that fixes replica dot order
+  neutrally — e.g. a scenario-declarable total order over replica write
+  identities that a conforming driver must honour when minting dots — after which
+  the concurrent LWW golden becomes statable and the `24-TMAP-LWWCONC` probe
+  above becomes a scenario.
+- **Resolves (half B)**: a delivery-ordering primitive (a directed barrier:
+  "deliver everything `r2` has emitted to `r1`, then continue", and its negation)
+  so a scenario can construct a provably-unobserved concurrent put rather than
+  relying on the harness's step-at-a-time application. With it, the passing probe
+  above becomes an honest scenario and this half is deleted.
+
+### Not a shortfall of this feature, recorded to stop the question recurring
+
+- **Embedded `MergeablePayload` values** (spec 24 §Tagged maps, decided point 3)
+  are not corpus-expressible at all: the neutral `Value` vocabulary has scalars,
+  lists and maps, and no embedded-mergeable type. Those live as kernel tests under
+  feature `computenet-j2x.1`, not here.
+- **Null map values are avoided on purpose** in all four scenarios.
+  `TaggedMapView.apply` can miss a null-valued put and leave the key present
+  (`computenet-4d8k`), and a scenario using one would be asserting that behaviour
+  as correct. The neutral vocabulary offers no null map value to state it with in
+  any case, so this is a fence, not a limitation being worked around.
+
+## KE1-F4 task 4 (42-replication OR-map duplicate delivery): `retransmit` does not bind to a dist-profile replica (`driver-wiring-gap`, `[KE1-37]`)
+
+`computenet-j2x.4.4`'s acceptance asks the OR-map replication scenario
+(`42-TMAP-REPL-01.yaml`, `concord/corpus/42-replication/`) to exercise
+duplicate delivery via `retransmit` where the dist driver binds it, and to
+file a `DISPUTES.md` entry with refusal evidence if it does not. It does not,
+and the refusal is structural rather than a missing catalog entry this task
+could close.
+
+**Probe** (run on `task/computenet-j2x.4.4`,
+`42-TMAP-REPL-RETRANSMIT-PROBE.yaml`, deleted after measuring — two
+`ormap-source` replicas `r1`/`r2` on the `dist` profile, one `put k1 a` on
+`r1`, then a `retransmit` at `r1` naming that same `(source: r1, counter: 1)`
+position):
+
+```
+civictech.concord.driver.kernel.UnsupportedCatalogBinding: retransmit at 'r1':
+this binding injects an explicit wave position only at a durable
+effect-boundary sink (host: dur), where a processed-frontier decides whether
+the duplicate acts again — a core cell has no such decision, so the injection
+would assert nothing
+```
+
+`KernelDriver.retransmit` (`concord/src/main/kotlin/civictech/concord/driver/
+kernel/KernelDriver.kt`) delegates only when the target is a member of
+`durCells` — the dur-profile durable effect-boundary sink `KernelDriverDur`
+registers — and refuses every other target with the message above. A
+dist-profile `ormap-source` replica is never a `durCells` member: it has no
+`Effectful` processed-frontier at all (the driver's own doc comment on this
+method says so — "a core cell has no such decision"), so there is nothing for
+an injected duplicate to be judged against. This is the same driver-capability
+note `concord/schema/scenario.md`'s `#### retransmit` section already states
+("the kernel binding admits an *effect-sink* target only"); the dist replica
+path was simply never in scope for it. Nothing about `ormap-source`,
+`tagged-map-view`, or the replication mesh specifically is missing — the verb
+is durability-shaped by construction, and a replica is not a durability
+target.
+
+`42-TMAP-REPL-01` does not fake the duplicate with a second `apply` of the
+same value instead: an `apply` mints a **fresh** dot (spec 20/22 §Structural
+changes — dot counters are per-source monotonic, minted by the emitting
+outlet), so a second `apply` is a new write, not a re-delivery of an old one.
+It would exercise ordinary merge idempotence over two *distinct* dots that
+happen to carry equal payloads, not echo-terminating gossip's guard against
+re-processing the *same* dot twice — a different, and already-covered,
+property. `24-TMAP-MERGE-01`'s header (`computenet-j2x.4.3`) makes the same
+point for the same reason: the corpus has no verb that re-sends a replication
+delta under an unchanged dot, `retransmit` being the only re-delivery verb and
+being dur-only, so the honest statement available at the replication mesh
+is the convergence property both scenarios assert (`replicas-converge` /
+`views-converge`), never idempotence-under-literal-duplication.
+
+**What would retire this entry**: `retransmit` binding to a `Replicable`
+`deltaInlet` directly — injecting an already-seen `TaggedMapDelta` (or
+`SetDelta`) at a replica's gossip inlet under an explicit `(source, counter)`
+position, the same way it injects at an `Effectful` sink today — so a
+scenario could construct a genuine re-delivery of one dot and check that
+`novelty`/`absorb`'s echo termination re-emits nothing (`no-dead-letters` plus
+an effect-count-style re-emission count). That is a driver-binding widening,
+not a schema change (the verb's shape is unchanged; only the set of catalog
+ids it accepts would grow), but it is still out of this task's scope
+(`j2x.4-D4` forbids scope growth beyond the decided direction, and no
+Kotlin change is authorized here) — filed here as the capability gap rather
+than built.

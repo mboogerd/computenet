@@ -1,0 +1,87 @@
+# Concord corpus scenario (KE1-F4, computenet-j2x.4.4, profile: dist).
+# Canonical schema — see concord/schema/scenario.md.
+#
+# [KE1-33] (corpus half): concord/corpus/42-replication/ gains an OR-map
+# convergence scenario, mirroring 42-REPL-01's idiom (two replicas of one
+# logical cell, concurrent writes on both sides, convergence at quiescence)
+# over `ormap-source` instead of `set-source`. Also honestly covers
+# [42-REPL-04] — "replicas of one logical cell SHALL converge to equal folds
+# at quiescence regardless of which replica accepted each write" is a claim
+# about ANY replicated cell of the concurrent/mergeable class, not a
+# set-specific one, and this scenario demonstrates it for `OrMapCell`.
+#
+# Partition/heal, honestly: `concord/schema/scenario.md` §Script semantics has
+# no literal partition/heal/sever step — verified against the closed step
+# vocabulary (`apply`, `connect`, `disconnect`, `despawn`, `read-state`,
+# `retransmit`, `restart`, `restore`, `snapshot`, `quiesce`). Concurrency
+# between quiesce barriers IS the corpus's partition model, exactly as
+# 42-REPL-01's own header states it: steps on different cells (here, the two
+# replicas r1/r2) between barriers are concurrent, and the schedule sweep
+# (default 20 runs) quantifies over the delivery interleavings that would
+# occur under a real network partition followed by a heal. `quiesce` at the
+# end IS the heal: it is the point at which every in-flight delta has been
+# gossiped and merged, which is what "the partition healed" means
+# observationally.
+#
+# Duplicate delivery, honestly probed and refused: the feature's acceptance
+# asks duplicate delivery to be exercised via `retransmit` where the dist
+# driver binds it. Probed directly (`task/computenet-j2x.4.4`,
+# `42-TMAP-REPL-RETRANSMIT-PROBE`, deleted after measuring — an `ormap-source`
+# dist replica `r1`, one `put`, then a `retransmit` of that same `(source,
+# counter)` at `r1`):
+#
+#   civictech.concord.driver.kernel.UnsupportedCatalogBinding: retransmit at
+#   'r1': this binding injects an explicit wave position only at a durable
+#   effect-boundary sink (host: dur), where a processed-frontier decides
+#   whether the duplicate acts again — a core cell has no such decision, so
+#   the injection would assert nothing
+#
+# `KernelDriver.retransmit` binds only `durCells` (the dur-profile
+# effect-boundary sink) and refuses every other target loudly
+# (`KernelDriver.kt`) — a dist-profile `ormap-source` replica is not a
+# `durCells` member, so the refusal is structural, not a missing catalog
+# entry this task could add. Filed in `concord/corpus/DISPUTES.md` under
+# `[KE1-37]` with this refusal evidence, per the task's decided direction —
+# the duplicate is NOT faked by a second `apply` of the same value (an
+# `apply` mints a *fresh* dot, so it is a new write, not a duplicate delivery
+# of an old one, and would prove nothing about echo-terminating gossip's
+# idempotence).
+#
+# Why this is not the same OR-map scenario as `24-TMAP-MERGE-01`: that
+# scenario's `profile: dist` placement is in service of stating [24-TMAP-01]'s
+# merge law (order-insensitivity) through two replicas as the vehicle: its
+# `covers:` is the tagged-map data-cell law. This scenario's subject is the
+# opposite way round — replication's own convergence guarantee
+# ([42-REPL-04]/[KE1-33]), with the OR-map as the vehicle cell type — which is
+# why it lives in `concord/corpus/42-replication/` rather than
+# `concord/corpus/24-data-cells/`, and why its `covers:` names the replication
+# id instead of a tagged-map law id.
+id: 42-TMAP-REPL-01
+title: Two OR-map replicas converge under concurrent writes on both sides, including a remove racing a re-put
+covers: [42-REPL-04]
+profile: dist
+kind: example
+narrative:
+  given: two ormap-source replicas of one logical OR-map, one per host, each observed through its own tagged-map-view
+  when: puts land on both replicas concurrently and one side removes a key the other side concurrently re-puts
+  then: at quiescence both replicas hold equal folds and both views agree — convergence, not a fixed golden
+graph:
+  hosts: [h1, h2]
+  cells:
+    - {id: r1, type: ormap-source, host: h1, replica-of: shared}
+    - {id: r2, type: ormap-source, host: h2, replica-of: shared}
+    - {id: v1, type: tagged-map-view, host: h1}
+    - {id: v2, type: tagged-map-view, host: h2}
+  links:
+    - {from: r1, to: v1}
+    - {from: r2, to: v2}
+script:
+  - {type: apply, on: r1, op: put, value: [k1, from-h1]}
+  - {type: apply, on: r2, op: put, value: [k2, from-h2]}
+  - {type: apply, on: r1, op: put, value: [k3, seed]}
+  - {type: apply, on: r2, op: remove, value: k3}          # concurrent remove of a key the other side re-puts below
+  - {type: apply, on: r1, op: put, value: [k3, revived]}  # re-put races the remove above; reset-remove decides the outcome
+checks:
+  - {type: replicas-converge, logical: shared}
+  - {type: views-converge, views: [v1, v2]}
+  - {type: no-dead-letters}

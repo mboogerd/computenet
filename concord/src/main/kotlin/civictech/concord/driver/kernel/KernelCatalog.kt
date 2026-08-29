@@ -19,6 +19,7 @@ import civictech.cell.data.MapCell
 import civictech.cell.partition.PartitionedCell
 import civictech.cell.data.PnCounterCell
 import civictech.cell.data.op.PresenceCountCell
+import civictech.cell.data.OrMapCell
 import civictech.cell.data.op.QuorumSetCell
 import civictech.cell.data.op.SemiJoinCell
 import civictech.cell.data.SetCell
@@ -112,6 +113,12 @@ internal object KernelCatalog {
             "list-source" -> Built(ListCell<Any?>())
             "pn-counter" -> Built(PnCounterCell())
             "keyed-set" -> Built(KeyedSetCell<Any?, Any?>())
+            // `ormap-source` (96 §E1.3): the observed-remove per-key map. `put` mints a
+            // fresh dot and covers the dots the writer sees live at that key
+            // (reset-remove); `remove` covers exactly the dots observed live here and
+            // now, so a concurrent put's dot survives the merge. Its outlet carries a
+            // TaggedMapDelta, which only `tagged-map-view` folds.
+            "ormap-source" -> Built(OrMapCell<Any?, Any?>())
             // `rebaseline-source` (D-C12): a tagged set source whose merge tags are
             // minted under its outlet's CURRENT emission epoch, and which re-announces
             // its recovered state on a RESTART (21-REBASE-01). `set-source`'s tag
@@ -207,6 +214,11 @@ internal object KernelCatalog {
             "set-view" -> observeCell(View.set<Any?>(), ViewKind.SET, singleWriter)
             "value-view" -> observeCell(scalarView(), ViewKind.VALUE, singleWriter)
             "map-view" -> observeCell(View.map<Any?, Any?>(), ViewKind.MAP, singleWriter)
+            // The tagged twin of `map-view`: it folds an `OrMapCell`'s TaggedMapDelta
+            // stream (dots + covers) rather than a plain MapDelta, and materializes the
+            // same `{key -> exposed value}` shape — so ViewKind.MAP's existing Value
+            // rendering applies unchanged.
+            "tagged-map-view" -> observeCell(View.taggedMap<Any?, Any?>(), ViewKind.MAP, singleWriter)
             "count-view" -> observeCell(View.count<Any?>(), ViewKind.COUNT, singleWriter)
             "list-view" -> observeCell(listView(), ViewKind.LIST, singleWriter)
 
@@ -391,6 +403,17 @@ internal object KernelCatalog {
             else -> throw UnsupportedCatalogBinding(
                 "keyed-set op '$op' unbound — the kernel KeyedSetCell is a keyed upsert " +
                     "(put(key,element)/remove(key)), NOT an add/remove-by-value set (§5 catalog refinement)",
+            )
+        }
+        "ormap-source" -> when (op) {
+            // OrMapCell's inlet is the same MapOps shape as map-source's: put(key,value)
+            // / remove(key). What differs is the delta it emits (dots + covers), not the
+            // op surface — so the lowering mirrors keyed-set/map-source exactly.
+            "put" -> keyValue(value).let { (kk, vv) -> OpCall("put", OBJECT2, listOf(kk, vv)) }
+            "remove", "remove-key" -> OpCall("remove", OBJECT, listOf(unwrap(value)))
+            else -> throw UnsupportedCatalogBinding(
+                "ormap-source op '$op' unbound — the kernel OrMapCell is an observed-remove " +
+                    "per-key map (put(key,value)/remove(key)); there is no remove-by-value",
             )
         }
         "list-source" -> when (op) {
