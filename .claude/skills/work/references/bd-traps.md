@@ -6,9 +6,15 @@ SKILL.md and the other references cite this file as "`bd` traps".
 
 - `bd ready` hides `in_progress`/`blocked`/`deferred`; `bd list` hides
   *closed* unless `--all`. Every check below uses the one it means.
-- `--parent` scope differs by subcommand — but **not the way this file used to
-  say**. `bd list --parent` is one level deep, and so is
-  `bd ready --parent`: it reaches **direct children only**, not descendants.
+- `--parent` scope differs by subcommand, and the two differ from EACH OTHER.
+  **`bd list --parent` DOES return descendants** — measured 2026-08-29 on bd
+  1.1.2: `bd list --parent=computenet-051 --all` returns the grandchild
+  `computenet-051.6.4` alongside the six features (computenet-yb4s; a
+  breakdown agent and the orchestrator saw it independently on 08-28).
+  `bd ready --parent` reaches **direct children only**, not descendants —
+  measured 2026-08-17 and NOT re-measured at 1.1.2, so treat it as the
+  cautious assumption rather than a current reading. Record bd's version with
+  any new measurement; this is exactly the behaviour that moves under it.
   Measured 2026-08-17 on live data — `bd ready --parent=computenet-dqy.37`
   finds `computenet-dqy.37.2`, while `bd ready --parent=computenet-dqy` does
   **not**, though `epic-of.sh` resolves that item to `computenet-dqy`. An epic

@@ -112,7 +112,14 @@
 # mechanism and each tier reports the elapsed it computes rather than the sleeps
 # it slept. computenet-geky (+19) — ask where the PINNING TEST will live, and
 # apply the rule to any claim not derived from the code, residual-filed included.
-work                8713
+# 8713 -> 8730 on 2026-08-29: computenet-yb4s (+5) — bd list --parent DOES
+# return descendants (measured, bd 1.1.2); bd ready --parent is the one-level
+# subcommand, and the SDLC-exclusion line named the wrong one. computenet-qvrd
+# (+8) — --set-metadata k= stores "" rather than removing the key, so
+# ship-feature.md §4 tests the VALUE. computenet-s16r (+4) — junit-count.py is
+# executable with a shebang, so the bare-path citation runs; say so once.
+# computenet-yiof is a one-word substitution and free.
+work                8730
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

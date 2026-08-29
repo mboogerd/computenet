@@ -81,6 +81,10 @@ narrow rerun leaves ~100 files, and a later sweep reports the module as thin
 (computenet-5b34). A sharp drop between two reads is that signature, not a
 shrunken suite. Capture the broad run's numbers into your report first.
 
+(The script is executable and carries a `#!/usr/bin/env python3` shebang, so
+the bare path below runs as written — two reviewers hesitated over that in one
+session, neither having tried it; computenet-s16r.)
+
 ```bash
 .claude/skills/work/scripts/junit-count.py '<module>/build/test-results'
 # repo-wide: pass every module's build/test-results dir — demo/* included

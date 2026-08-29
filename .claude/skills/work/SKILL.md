@@ -1664,7 +1664,7 @@ applies wherever you author a bead, not only here: 5c's red-check task, 5e's
 residuals, step 7's friction items.
 
 **It is blind to anything that is not a path** — a bracketed requirement id
-(`[ORA1-HONEST-02]`), a marker, a type name — and passes such a bead CLEAN
+(`[24-TMAP-03]`), a marker, a type name — and passes such a bead CLEAN
 (computenet-hws5, then computenet-vjrs). Resolve each one by hand before
 dispatching: `git grep -l -F '[THE-ID]'` lists the files that *cite* it,
 which is usually not where the artifact lives; the pinning test's KDoc says
@@ -2123,7 +2123,7 @@ work has its own lane (`.claude/skills/remediate-friction/SKILL.md`). Step
 is the one sanctioned touch.
 
 The test for an **item** is two-part, both halves load-bearing: its effective
-epic is `computenet-wpvy` (use `epic-of.sh` — `bd list --parent` is one level
+epic is `computenet-wpvy` (use `epic-of.sh` — `bd ready --parent` is one level
 deep and misses grandchildren), **or** it carries the `skill-friction` label
 anywhere (dozens live outside the epic — unparented bugs, children of the WSK
 epics — and each proposes edits to `.claude/skills/work/`). Checking only the
