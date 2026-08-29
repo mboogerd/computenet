@@ -253,9 +253,12 @@ object OptionalFamilies {
 
     /**
      * `internal`, not `private`: computenet-n00e's positive-arm test calls this directly with a
-     * real, present class name to prove [Availability.available] can be `true` — [probe] alone
-     * only ever exercises the [CANDIDATES] list, every entry of which is absent today, so
-     * nothing committed proved the `true` branch without this seam.
+     * real, present class name to prove [Availability.available] can be `true` — when that test
+     * was written every [CANDIDATES] entry was absent, so [probe] alone exercised only the
+     * `false` branch and nothing committed proved the `true` one without this seam. `UntagCell`
+     * has since landed and [probe] does now reach the `true` branch, but this seam stays: it
+     * drives that branch against a class chosen by the test rather than one whose presence
+     * depends on which kernel types happen to exist today.
      */
     internal fun probeOne(family: String, fqcn: String): Availability =
         try {

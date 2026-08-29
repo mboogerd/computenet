@@ -221,13 +221,16 @@ class TaggedOperatorsTest {
     }
 
     /**
-     * The positive arm [probe] itself can never exercise: every [OptionalFamilies.CANDIDATES]
-     * entry is absent today, so nothing committed proved `probe()` can report `available = true`
-     * for a family that IS present — verified during the review by mutation (pointing
-     * `TaggedMapView`'s FQN at `civictech.cell.data.SetCell`, an existing class, reddened the
-     * all-absent test above), but never pinned. [OptionalFamilies.probeOne] is `internal`
-     * exactly so this test can drive the `true` branch directly, against a real class that
-     * genuinely is on the classpath, without touching [OptionalFamilies.CANDIDATES] itself.
+     * The positive arm held against a class of this test's own choosing. When this test was
+     * written every [OptionalFamilies.CANDIDATES] entry was absent, so nothing committed proved
+     * `probe()` could report `available = true` for a family that IS present — verified then by
+     * mutation (pointing `TaggedMapView`'s FQN at `civictech.cell.data.SetCell`, an existing
+     * class, reddened the all-absent test above), but never pinned. `UntagCell` has since landed
+     * and the `BS-15 UntagCell is reported AVAILABLE …` test above now pins the `true` branch
+     * through [OptionalFamilies.probe] itself; this one stays because it does not depend on which
+     * kernel types happen to exist. [OptionalFamilies.probeOne] is `internal` exactly so this
+     * test can drive the `true` branch directly, against a real class that genuinely is on the
+     * classpath, without touching [OptionalFamilies.CANDIDATES] itself.
      */
     @Test
     fun `OptionalFamilies probeOne reports available=true and no reason for a family class that is present on the classpath`() {
