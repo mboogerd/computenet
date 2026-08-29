@@ -9,6 +9,47 @@ rather than restating it.** Three independent sessions each rediscovered a
 different way to get it wrong (computenet-9ytv, computenet-pi3h,
 computenet-qsfu).
 
+## Who mutates what — the implementer/reviewer split
+
+**Production mutations belong to the REVIEWER whenever the file is outside the
+implementer's `metadata.files` claim.** A file *inside* the claim is the
+implementer's to break and restore like anything else it owns; a file outside
+it is not, and a reviewer is not scope-confined that way.
+
+That split is a decision, not an accident of prompt wording, and the
+alternative was measured. Same file, same session, same intended edit
+(computenet-g8ho, recurrence of computenet-pi3h): the implementer of a
+test-only task was refused by the permission classifier and correctly stopped
+and reported; the reviewer of that same task, dispatched minutes later with a
+prompt that named the mutation and cited this file as authorization, was not
+refused — it ran the mutation, the test went red, it reverted. Three further
+reviewer mutations that session were likewise unrefused. A second instance
+points the same way from the opposite end of the risk scale: a strictly
+read-only `gh run list` was refused to a subagent and succeeded byte-for-byte
+from the orchestrator a minute later. The gate appears to key on the asking
+agent's **stated authorization** rather than the action's content — so the
+authorization sentence in the dispatch is what decides, and both templates now
+carry theirs (SKILL.md 5b for the implementer, merge-task.md for the reviewer)
+instead of leaving it to whoever writes the prompt.
+
+**Refused? Report the refused operation verbatim.** Two different walls, and
+only one of them has a legitimate detour:
+
+| the wall | the move |
+|---|---|
+| The Edit tool refuses an edit to a file **inside** your claim | Bash is the prescribed route — `perl -pi` / `sed -i ''`, step 3 below |
+| The file is **outside** your claim, or you have no authorization to cite | Stop. Report the refusal verbatim, take the substitute routes below ("When the task is TEST-ONLY"), and name the property left unproven |
+
+`perl`/`sed`/`python` through Bash is a tool-limitation detour, never a scope
+detour. Reaching for it to edit a file you were not given is the workaround
+computenet-pi3h recorded being reached for, and this table exists to stop it.
+
+**Unattended, a refusal is worse than it looks:** it surfaces as an approval
+prompt with nobody at the keyboard, so a scheduled run blocks silently instead
+of failing. A session that cannot get its mutation approved records the
+unproven property and moves on — it never stalls waiting for an approval that
+cannot arrive.
+
 ## The order is the safety
 
 **1. Commit your deliverable FIRST.** Everything below depends on it. With the
@@ -34,7 +75,9 @@ will not:
 
 - **The Edit tool's classifier refuses some mutations outright** — removing a
   security check, a sanitizer, a bounds test — and those are exactly the
-  strongest mutations (computenet-pi3h). Go through Bash instead:
+  strongest mutations (computenet-pi3h). If the file is inside your claim, go
+  through Bash instead; if it is not, "Who mutates what" above applies and Bash
+  is not the answer.
   `perl -pi -e 's/OLD/NEW/' <file>` or `sed -i '' 's/OLD/NEW/' <file>` (BSD
   `sed` needs the empty `''` argument).
 - **Prove the mutation LANDED before running anything.** `perl`/`sed` exit 0

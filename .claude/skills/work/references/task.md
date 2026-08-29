@@ -186,6 +186,17 @@ A bug's reproduction must fail unfixed; a measurement must be sized before it is
    worktree after a crash can tell a live mutation from finished work. The two
    are indistinguishable from the diff alone.
 
+   **But only for a file inside your `metadata.files` claim.** Mutating a file
+   outside it is not your call, and the permission classifier will usually
+   refuse you anyway — it keys on the authorization your dispatch states, and
+   yours confines you to the claim (computenet-g8ho). So when the mutation
+   needs a production file you were not given — the normal case for a test-only
+   task — do **not** reach for `perl`/`sed`/`python` through Bash to get around
+   it. Report the refused operation verbatim, take mutation-check.md's
+   substitute routes ("When the task is TEST-ONLY"), name the property left
+   unproven, and let the reviewer run the mutation: its dispatch carries the
+   authorization yours does not.
+
    **This covers a mutation to a TEST as well as to production code.** The
    usual shape is breaking production to prove the test fails; the inverse is
    just as real — a *test-instrument* defect (a probe that would pass against
