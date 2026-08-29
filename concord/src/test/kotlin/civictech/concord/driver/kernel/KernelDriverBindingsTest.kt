@@ -219,6 +219,28 @@ class KernelDriverBindingsTest {
         "v", map("k1" to i(2)),
     )
 
+    // `ormap-source` (KE1-F4) folded through its `tagged-map-view`. On ONE stream the
+    // dot algebra's reset-remove collapses to file-order LWW per key with `remove`
+    // dropping the key — exactly the map-source shape above, but reached through
+    // OrMapCell's TaggedMapDelta and TaggedMapView rather than MapDelta/MapView. That
+    // the two agree is the point: the tagged binding must not weaken the uncontended
+    // semantics. `k2` is put twice and removed, so its tombstone must cover BOTH dots.
+    @Test fun `ormap-source folds to the current key-value map through a tagged-map-view`() = bothAgree(
+        sc(
+            listOf(c("om", "ormap-source"), c("v", "tagged-map-view")),
+            listOf(l("om", "v")),
+            listOf(
+                ap("om", "put", list(s("k1"), i(1))),
+                ap("om", "put", list(s("k1"), i(2))), // reset-remove: covers k1's first dot
+                ap("om", "put", list(s("k2"), i(9))),
+                ap("om", "put", list(s("k2"), i(10))),
+                ap("om", "remove", s("k2")), // covers every live dot at k2
+                ap("om", "put", list(s("k3"), s("z"))),
+            ),
+        ),
+        "v", map("k1" to i(2), "k3" to s("z")),
+    )
+
     @Test fun `list-source keeps positional order`() = bothAgree(
         sc(
             listOf(c("ls", "list-source"), c("v", "list-view")),

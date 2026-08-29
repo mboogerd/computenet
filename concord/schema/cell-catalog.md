@@ -19,6 +19,7 @@ no ops (they react to their inlets).
 | `counter-source` | `increment`, `decrement` | A single integer counter; emits counter deltas. |
 | `pn-counter` | `increment`, `decrement` | A replicated increment/decrement counter that converges across replicas. Observed through a `value-view`. |
 | `rebaseline-source` | `add` | An add-only tagged set source whose merge tags are minted under its **current emission epoch**, so a recovery that succeeds that epoch is observable downstream. The restartable source (`restart` step, `21-REBASE-01`); pair it with a `union` — the convergent consumer that folds an inbound re-baseline through its tag algebra. See note 2. |
+| `ormap-source` | `put`, `remove` | An **observed-remove per-key map** (kernel `OrMapCell`): `put(key, value)` mints a fresh dot for the key and covers every dot the writer currently observes live there (reset-remove), `remove(key)` covers exactly the dots observed live here and now, so a concurrent `put`'s dot survives. Presence is add-wins; a key holding several surviving dots exposes one by dot order, which within a single stream is last-writer-wins. Observed through a `tagged-map-view`. |
 | `keyed-set` | `put`, `remove` | A **keyed upsert** to a set (kernel `KeyedSetCell`): `put(key, element)` sets the element under a key (last-writer-wins per key), `remove(key)` drops it; the output is the flat set of currently-held elements, observed through a `set-view`. (W3-0 refinement — this is NOT an add/remove-by-value partitioned set; see note 6.) |
 
 `counter-source`/`pn-counter`: `increment`/`decrement` take an optional `value:` amount
@@ -72,6 +73,7 @@ quantifies over".
 | `count-view` | Folds a per-key count stream into queryable counts. |
 | `value-view` | Folds a scalar stream (`counter-source`/`combine-latest`/`pn-counter`/`feedback` output) into a single value. |
 | `list-view` | Folds a positional list-delta stream (`list-source`) into an ordered list (W3-0). |
+| `tagged-map-view` | Folds a **tagged** map-delta stream (an `ormap-source` outlet) into the current `{key → exposed value}` map: a key is present while it holds at least one uncovered dot, and its exposed value is the one that dot order selects. Rendered like a `map-view`. |
 
 ## Nature / ownership sinks (W4-A followup, `12-NEGOTIATE-01`/`23-SPSC-01`)
 
@@ -126,7 +128,8 @@ scalar/list view folds and the `feedback` head live in the driver's
 
 **Bound directly**: `set-source`→`SetCell`, `counter-source`→`CounterCell`,
 `map-source`→`MapCell`, `list-source`→`ListCell`, `pn-counter`→`PnCounterCell`,
-`keyed-set`→`KeyedSetCell`, `filter`→`FilterCell`, `union`→`UnionSetCell`,
+`keyed-set`→`KeyedSetCell`, `ormap-source`→`OrMapCell`,
+`tagged-map-view`→`View.taggedMap`, `filter`→`FilterCell`, `union`→`UnionSetCell`,
 `intersect`→`IntersectSetCell`, `count`→`CountCell`,
 `presence-count`→`PresenceCountCell`, `group-by`→`GroupByCell`,
 `partition`→`PartitionedCell`, `quorum-set`→`QuorumSetCell`,
