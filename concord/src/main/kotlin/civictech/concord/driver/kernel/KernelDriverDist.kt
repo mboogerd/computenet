@@ -2,6 +2,8 @@ package civictech.concord.driver.kernel
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.data.OrMapCell
+import civictech.cell.data.Replicable
 import civictech.cell.data.SetCell
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.host.HostedCellProxy
@@ -58,16 +60,20 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
     }
 
     /**
-     * Place a `replica-of` cell into the replication mesh (spec 42): construct a
-     * [SetCell] under the group's shared logical id with a fresh instance id,
+     * Place a `replica-of` cell into the replication mesh (spec 42): construct the
+     * mergeable cell its `type:` names under the group's shared logical id with a fresh instance id,
      * hand it to [Replication.replicate] (which spawns it on [hostId] and links
      * it to every peer replica of the same logical id), and give it a co-hosted
      * read companion so `readView`/`replicas-converge` can fold it.
      *
-     * Only the mergeable set family binds honestly here — `SetCell` is the
-     * kernel's `Replicable` OR-set. A non-set `replica-of` type is a real gap
-     * (single-writer/pn-counter replication is decided-but-unbuilt or out of the
-     * corpus's set-shaped checks), surfaced loudly.
+     * Two catalog types bind honestly here, both members of the kernel's
+     * mergeable (`Replicable`) family and each paired with the view that folds
+     * its own delta shape: `set-source` → `SetCell` (OR-set, `SetDelta`) read
+     * through a `set-view`, and `ormap-source` → `OrMapCell` (observed-remove
+     * per-key map, `TaggedMapDelta`, 96 §E1.3) read through a `tagged-map-view`
+     * (KE1-F4). Everything past the two is a real gap — single-writer and
+     * pn-counter replication are decided-but-unbuilt on this seam — and is
+     * surfaced loudly rather than mis-bound.
      *
      * [interest] (42-INTEREST-01, resolving the schema-gap in DISPUTES.md) is the
      * scenario's `interest:` descriptor, still in its neutral [Value] form; parsed
@@ -82,18 +88,26 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
      * keep passing unchanged).
      */
     fun spawnReplica(hostId: HostId, cellId: CellId, type: String, logical: String, interest: Value? = null) {
-        if (type != "set-source") {
-            throw UnsupportedCatalogBinding(
-                "replica-of is only bound for 'set-source' (the kernel's Replicable OR-set SetCell); " +
-                    "type '$type' has no honest replicated binding today (single-writer/pn-counter " +
-                    "replication is decided-but-unbuilt — CONCORD-PLAN §5 / spec 42).",
-            )
-        }
         val host = driver.hostFor(if (hostId == "") null else hostId)
         val logicalId = logicalIds.getOrPut(logical) { UUID.randomUUID() }
         val instanceId = (instanceCounters[logical] ?: 0L).also { instanceCounters[logical] = it + 1 }
+        val ref = CellRef(logicalId, instanceId)
 
-        val replica = SetCell<Any?>(CellRef(logicalId, instanceId))
+        // The replica cell and the catalog id of the companion that folds ITS delta
+        // shape — the two travel together, because a `tagged-map-view` cannot fold a
+        // `SetDelta` stream and a `set-view` cannot fold a `TaggedMapDelta` one.
+        val binding: Pair<Replicable<*>, String> = when (type) {
+            "set-source" -> SetCell<Any?>(ref) to "set-view"
+            "ormap-source" -> OrMapCell<Any?, Any?>(ref) to "tagged-map-view"
+            else -> throw UnsupportedCatalogBinding(
+                "replica-of is bound only for 'set-source' (the kernel's Replicable OR-set SetCell) " +
+                    "and 'ormap-source' (the Replicable observed-remove OrMapCell); type '$type' has no " +
+                    "honest replicated binding today (single-writer/pn-counter replication is " +
+                    "decided-but-unbuilt — CONCORD-PLAN §5 / spec 42).",
+            )
+        }
+        val (replica, companionType) = binding
+
         // 42-INTEREST-01: stage the interest assignment BEFORE replicate — the
         // linker reads it at link time, so it must be recorded first.
         parseInterest(interest)?.let { driver.registry.setInterest(replica.ref, it) }
@@ -103,14 +117,14 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
         replication.replicate(replica, host)
 
         // A co-hosted read companion: the replica re-emits every effective delta
-        // (local writes AND merged gossip, SetCell.applyRemote → outlet.originate)
+        // (local writes AND merged gossip — `applyRemote` → `outlet.originate`)
         // on its `outlet`, so a view cell folding that outlet reflects the
         // replica's converged membership — which is what readView(replicaId) reads.
-        // Built through the catalog's `set-view` id rather than by hand, so the
+        // Built through the catalog (`set-view` / `tagged-map-view`) rather than by hand, so the
         // companion's observation stream is recorded at the fold like every other
         // view's ([RecordedView]) instead of on the sink's own dispatcher thread,
         // which the runner never waits for before reading the log.
-        val built = KernelCatalog.build("set-view", emptyMap())
+        val built = KernelCatalog.build(companionType, emptyMap())
         val companion = built.cell
         host.managementInlet.call.spawn(companion)
         host.managementInlet.call.connect(replica.ref, "outlet", companion.ref, "inlet")
