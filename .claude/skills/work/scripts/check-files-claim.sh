@@ -76,6 +76,14 @@ COUPLINGS='settings.gradle.kts=>doc/ARCHITECTURE.md
 +civictech/cell/data/op=>oracle/src/main/kotlin/civictech/oracle/bind/TaggedOperators.kt
 oracle/src/main/kotlin/civictech/oracle/bind/OperatorCatalog.kt=>oracle/src/test/kotlin/civictech/oracle/model/ReferenceModelPurityTest.kt'
 
+# The add-only arm below asks "does this claimed path exist yet", and a claim
+# entry is repo-root-relative. Resolve the root rather than trusting the CWD:
+# measured, running the script from `<worktree>/kernel` fired all three census
+# rows on a bead whose files all exist (bd itself walks up to the workspace, so
+# nothing else in the run gives the mistake away).
+ROOT_PREFIX=$(git rev-parse --show-toplevel 2>/dev/null)
+[ -n "$ROOT_PREFIX" ] && ROOT_PREFIX="$ROOT_PREFIX/"
+
 found=0
 for id in "$@"; do
   # No `|| continue` here: with pipefail a failing `bd` would take the whole
@@ -143,7 +151,14 @@ for id in "$@"; do
     if [ "$addonly" = 1 ]; then
       inplay=0
       while IFS= read -r entry; do
-        case "$entry" in *"$trigger"*) [ -e "$entry" ] || inplay=1 ;; esac
+        case "$entry" in *"$trigger"*) ;; *) continue ;; esac
+        # Normalise exactly as covered() does. A DIRECTORY or glob entry
+        # (`.../op/**`, `.../op/`) names no new file, and the raw string never
+        # exists on disk — unstripped it fired all three census rows on every
+        # glob claim, a guaranteed false positive (6 live beads claim globs).
+        entry=${entry%/}; entry=${entry%/\*\*}; entry=${entry%/\*}; entry=${entry%/}
+        [ -n "$entry" ] || continue
+        [ -e "$ROOT_PREFIX$entry" ] || inplay=1
       done <<<"$claim_entries"
       [ "$inplay" = 1 ] || continue
     else
