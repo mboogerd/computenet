@@ -2312,3 +2312,68 @@ forbids this feature from taking (it is a parked question on epic
   (`computenet-4d8k`), and a scenario using one would be asserting that behaviour
   as correct. The neutral vocabulary offers no null map value to state it with in
   any case, so this is a fence, not a limitation being worked around.
+
+## KE1-F4 task 4 (42-replication OR-map duplicate delivery): `retransmit` does not bind to a dist-profile replica (`driver-wiring-gap`, `[KE1-37]`)
+
+`computenet-j2x.4.4`'s acceptance asks the OR-map replication scenario
+(`42-TMAP-REPL-01.yaml`, `concord/corpus/42-replication/`) to exercise
+duplicate delivery via `retransmit` where the dist driver binds it, and to
+file a `DISPUTES.md` entry with refusal evidence if it does not. It does not,
+and the refusal is structural rather than a missing catalog entry this task
+could close.
+
+**Probe** (run on `task/computenet-j2x.4.4`,
+`42-TMAP-REPL-RETRANSMIT-PROBE.yaml`, deleted after measuring — two
+`ormap-source` replicas `r1`/`r2` on the `dist` profile, one `put k1 a` on
+`r1`, then a `retransmit` at `r1` naming that same `(source: r1, counter: 1)`
+position):
+
+```
+civictech.concord.driver.kernel.UnsupportedCatalogBinding: retransmit at 'r1':
+this binding injects an explicit wave position only at a durable
+effect-boundary sink (host: dur), where a processed-frontier decides whether
+the duplicate acts again — a core cell has no such decision, so the injection
+would assert nothing
+```
+
+`KernelDriver.retransmit` (`concord/src/main/kotlin/civictech/concord/driver/
+kernel/KernelDriver.kt`) delegates only when the target is a member of
+`durCells` — the dur-profile durable effect-boundary sink `KernelDriverDur`
+registers — and refuses every other target with the message above. A
+dist-profile `ormap-source` replica is never a `durCells` member: it has no
+`Effectful` processed-frontier at all (the driver's own doc comment on this
+method says so — "a core cell has no such decision"), so there is nothing for
+an injected duplicate to be judged against. This is the same driver-capability
+note `concord/schema/scenario.md`'s `#### retransmit` section already states
+("the kernel binding admits an *effect-sink* target only"); the dist replica
+path was simply never in scope for it. Nothing about `ormap-source`,
+`tagged-map-view`, or the replication mesh specifically is missing — the verb
+is durability-shaped by construction, and a replica is not a durability
+target.
+
+`42-TMAP-REPL-01` does not fake the duplicate with a second `apply` of the
+same value instead: an `apply` mints a **fresh** dot (spec 20/22 §Structural
+changes — dot counters are per-source monotonic, minted by the emitting
+outlet), so a second `apply` is a new write, not a re-delivery of an old one.
+It would exercise ordinary merge idempotence over two *distinct* dots that
+happen to carry equal payloads, not echo-terminating gossip's guard against
+re-processing the *same* dot twice — a different, and already-covered,
+property. `24-TMAP-MERGE-01`'s header (`computenet-j2x.4.3`) makes the same
+point for the same reason: the corpus has no verb that re-sends a replication
+delta under an unchanged dot, `retransmit` being the only re-delivery verb and
+being dur-only, so the honest statement available at the replication mesh
+is the convergence property both scenarios assert (`replicas-converge` /
+`views-converge`), never idempotence-under-literal-duplication.
+
+**What would retire this entry**: `retransmit` binding to a `Replicable`
+`deltaInlet` directly — injecting an already-seen `TaggedMapDelta` (or
+`SetDelta`) at a replica's gossip inlet under an explicit `(source, counter)`
+position, the same way it injects at an `Effectful` sink today — so a
+scenario could construct a genuine re-delivery of one dot and check that
+`novelty`/`absorb`'s echo termination re-emits nothing (`no-dead-letters` plus
+an effect-count-style re-emission count). That is a driver-binding widening,
+not a schema change (the verb's shape is unchanged; only the set of catalog
+ids it accepts would grow), but it is still out of this task's scope
+(`j2x.4-D4` forbids scope growth beyond the decided direction, and no
+Kotlin change is authorized here) — filed here as the capability gap rather
+than built.
