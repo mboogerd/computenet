@@ -35,6 +35,14 @@ runs:      20                      # optional; schedule-sweep run count (default
 
 - **`profile`** gates optional capability (P9). `core` runs in every build; `dist`
   and `dur` are conformance levels a second implementation adopts wholly or not.
+  A run that does **not** activate a scenario's profile still emits a JUnit node
+  for it, reported as **skipped** and naming the scenario id, its corpus
+  directory and the profile that kept it out; the runner also emits one summary
+  node per run stating the active set and the excluded population. So
+  `-Pconcord.profiles=core` is still the fast loop — nothing excluded is
+  executed — but its output says which scenarios it is *not* evidence for.
+  Before computenet-j2x.7 the filter dropped non-active scenarios before any
+  node existed, and a green core-only run was indistinguishable from a full one.
 - **`kind: control`** scenarios carry deliberately wrong expectations and MUST
   fail; the runner asserts their failure (P7), and asserts that it is *the
   declared* failure — see `expect-failure` below.
