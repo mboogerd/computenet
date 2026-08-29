@@ -166,7 +166,8 @@
 # templates; and the perl/sed detour is scoped to tool refusals, never to scope
 # limits. Without the reviewer's retry that session would have merged a 461-line
 # convergence test whose central property was never shown to fail.
-# 8938 -> 8968 on 2026-08-29: computenet-uxr8 (+30) — "affected module tests"
+# 8938 -> 8969 on 2026-08-29: computenet-uxr8 (+31, one of them the blank line
+# that keeps the gradle-evidence.md sentence its own paragraph) — "affected module tests"
 # was read as the module the diff SITS IN, unanimously, by five agents in a row.
 # Feature computenet-j2x.4 added four files to concord/corpus/24-data-cells/;
 # :oracle's CorpusCrossCheckTest enumerates that directory at test time and
@@ -176,7 +177,7 @@
 # read. The lines redefine "affected" as the modules whose test INPUTS the diff
 # changes, at both call sites (review-feature.md §3, task.md step 6), with the
 # concord/corpus -> :oracle:test rule stated concretely so it needs no derivation.
-work                8968
+work                8969
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

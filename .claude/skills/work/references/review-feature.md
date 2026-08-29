@@ -392,6 +392,7 @@ Concretely: **a diff that ADDS or DELETES a file under `concord/corpus/` runs
 enumerated by harnesses in more than one module, so this is by construction, not
 a special case. More generally, before you pick the suites, ask what READS the
 files this diff adds or removes — not what imports them.
+
 **[gradle-evidence.md](gradle-evidence.md) is that proof standard**: the
 task-count line, the per-task state line read as an absence, and the JUnit
 XML counts + timestamp via `.claude/skills/work/scripts/junit-count.py`, plus the `--rerun` and
