@@ -21,6 +21,7 @@ import civictech.cell.data.op.PresenceCountApi
 import civictech.cell.data.op.QuorumSetApi
 import civictech.cell.data.op.SemiJoinApi
 import civictech.cell.data.op.UnionSetApi
+import civictech.cell.data.op.UntagApi
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.link.Link
@@ -521,6 +522,7 @@ internal class Observations(
         private val MAP_OUTLETS = listOf(
             MapApi::class.java, JoinApi::class.java, LookupJoinApi::class.java,
             CombineLatestApi::class.java, PresenceCountApi::class.java,
+            UntagApi::class.java,
         )
 
         /**
