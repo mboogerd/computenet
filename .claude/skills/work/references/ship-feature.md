@@ -130,7 +130,14 @@ Two verdicts route here, not one:
 
 - a **DRAFT** hand-back, where the reviewer repaired past §5's authorship
   bound and said so; and
-- a **READY** verdict carrying `metadata.second_reader` — the reviewer
+- a **READY** verdict carrying a NON-EMPTY `metadata.second_reader` — test
+  the value, never the key. `bd update --set-metadata second_reader=` stores
+  an **empty string**; it does not remove the key (measured 2026-08-29, bd
+  1.1.2: after a clear, `has("second_reader")` is still true and the value is
+  `""`). So a properly cleared flag reads as still set to any key-presence
+  test, and the next session — which has none of this one's context —
+  dispatches a second reader for repairs somebody already certified
+  (computenet-qvrd). The reviewer
   certified but flagged its own work (review-feature.md §5). That one is
   ready in every other respect, so it is easy to walk straight into `gh pr
   ready`; don't. Dispatch the reader below **first**, using the flag's value

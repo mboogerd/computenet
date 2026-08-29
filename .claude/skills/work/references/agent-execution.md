@@ -46,7 +46,13 @@ call needs it.
 ## Foreground timeouts, and why there is no `timeout` binary
 
 **Run every verification command — Gradle above all — in ONE foreground Bash
-call with an explicit `timeout` argument, up to 600000 ms.** The
+call with an explicit `timeout` argument, up to 600000 ms.** This is **not a
+Gradle rule**: on this host ANY command can outrun the Bash tool's 120s
+default. Measured 2026-08-27 — a bare `echo "$BEADS_ACTOR"` killed at the
+default as a session's first command, and a routine `uptime && git log && git
+fetch` orientation call killed with the fetch mid-flight (computenet-ahg8).
+Pass an explicit timeout on orientation commands too; a killed call looks like
+a hung host, not like a default you did not set. The
 foreground/background choice belongs to the Bash tool's 120s default, not to
 your intent: past the timeout the tool backgrounds the call whatever you
 asked for, and a turn that ends waiting on a background job never resumes —
@@ -81,6 +87,13 @@ and only then start the long evidence run.
 
 Background the long run (`run_in_background: true`, writing to
 `"$SCRATCH/run.log"`), then wait with a **bounded** until-loop on the log:
+
+**You have no inbound wake-up.** Nothing will notify you, resume you, or report
+back to you. Your turn ending IS your completion. Every version of this defect
+has been an agent inventing a mechanism that does not exist — most recently one
+that "held" for a monitor to report settlement (computenet-kp0y) — so the fact,
+not the prohibition, is what you need: there is no monitor, no scheduler, no
+caller polling on your behalf.
 
 **The wait must live INSIDE a foreground Bash call.** Not a `Monitor`, not a
 backgrounded loop, not any other watcher — a notification is delivered to a
@@ -211,6 +224,18 @@ which is what makes them worth naming rather than leaving to be rediscovered.
   Same shell, loud variant: a word starting with `=` expands to a command
   path, so an unquoted `echo ===` separator dies (`== not found`) — quote it
   (`echo '==='`) or use `printf` (computenet-a49j).
+- **`git stash` is a single REPO-WIDE stack, shared by every linked
+  worktree.** Worktrees isolate HEAD, index and files — that isolation is this
+  skill's whole concurrency model — and the stash is the exception. A session
+  runs a dozen worktrees off one `.git`, so `git stash pop` pops whatever is on
+  top, not necessarily what you pushed. Two implementers reached for
+  stash/run/pop to get a before-and-after in one worktree and got away with it
+  only because their uses did not overlap in time (computenet-89jr). Use a
+  worktree-local before-and-after instead: commit first and compare against the
+  parent commit, `git show <base>:<path> > "$SCRATCH/before.kt"`, or
+  `git worktree add` a throwaway checkout of the base. If you must stash,
+  follow AGENTS.md's tagged form (`git stash push -u -m "<unique-tag>"`,
+  capture the sha, `apply` never `pop`).
 - **A git pathspec ending at a DIRECTORY name matches nothing under it** — it
   matches a path ending there, i.e. a *file* named `main`. Measured:
   `git grep -ln 'FileJournal(' -- '*/src/main'` → 0 hits, exit 1;

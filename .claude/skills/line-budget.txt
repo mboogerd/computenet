@@ -80,7 +80,81 @@
 # rewrite of the wait instruction, 9swr's cargo proof standard, and bgdb's
 # read-tool notes. Six of the 23 are mechanical (scripts), priced separately
 # at zero here.
-work                8577
+# 8577 -> 8590 on 2026-08-29: computenet-hil5 — wait-checks.sh's window is
+# smaller than build-test-fast and cannot be widened inside the 600000 ms
+# foreground cap, so two invocations is the ordinary cold start. 13 lines state
+# that contract at both call sites (SKILL.md step 2, review-feature.md §4);
+# the script-side ORDINARY/STUCK annotation is mechanical and free here.
+# 8590 -> 8630 on 2026-08-29: three more in the same drain. computenet-zwju
+# (+18 in bd-traps.md) — bd show inlines the parent body once PER DEPENDENCY,
+# measured 149KB from one call; the redirect rule it recurred past is now
+# backed by scripts/bead.sh, a projection (57KB -> 7KB) that needs no
+# per-dispatch warning. computenet-g1gf (+7) — --desc-file/--accept-file are
+# the WRAPPERS' flags; bare bd create takes --body-file and has no acceptance
+# file flag, so step 7 now names the safe form for both paths.
+# computenet-jm7k (+15) — a files claim COPIED from a sibling is
+# orchestrator-authored and gets af9q's invariant grep; a sibling's claim is a
+# lower bound, never the answer.
+# 8630 -> 8662 on 2026-08-29: computenet-hs90 (+12, step 2) — never WRITE an
+# elapsed figure not computed that turn; a session drifted ~100m low for two
+# hours by extrapolating. computenet-kp0y (+20, review-feature.md §4 and
+# agent-execution.md) — sixth recurrence of the stalled-turn defect, all six
+# of them a reviewer waiting on gh pr checks: reviewers now state a verdict
+# conditional on pending checks and STOP, and the missing FACT ("you have no
+# inbound wake-up") is stated ahead of the prohibition. computenet-00d8's
+# sha-binding of wait-checks.sh is mechanical and free here.
+# 8662 -> 8713 on 2026-08-29: computenet-ahg8 (+14) — the $BD-in-a-variable zsh
+# trap recurred past computenet-jobe, so the function form now sits where -C is
+# PRESCRIBED (bd-traps.md), not only where the trap is catalogued; and the
+# explicit-timeout rule is stated as a host rule, not a Gradle rule (a bare echo
+# was killed at the 120s default). computenet-ltv9 (+18) — the budget monitor
+# has now gone silent twice by two routes, so the hand subtraction is named THE
+# mechanism and each tier reports the elapsed it computes rather than the sleeps
+# it slept. computenet-geky (+19) — ask where the PINNING TEST will live, and
+# apply the rule to any claim not derived from the code, residual-filed included.
+# 8713 -> 8730 on 2026-08-29: computenet-yb4s (+5) — bd list --parent DOES
+# return descendants (measured, bd 1.1.2); bd ready --parent is the one-level
+# subcommand, and the SDLC-exclusion line named the wrong one. computenet-qvrd
+# (+8) — --set-metadata k= stores "" rather than removing the key, so
+# ship-feature.md §4 tests the VALUE. computenet-s16r (+4) — junit-count.py is
+# executable with a shebang, so the bare-path citation runs; say so once.
+# computenet-yiof is a one-word substitution and free.
+# 8730 -> 8764 on 2026-08-29: computenet-7vsj (+11) — review-feature.md gave
+# two opposite parents for a reviewer-filed bead; the distinction (does the
+# feature WAIT for it?) is now named, because an epic-parented blocker blocks
+# nothing. computenet-89jr (+12) — git stash is one repo-wide stack shared by a
+# dozen linked worktrees, and nothing in the references said so.
+# computenet-9z8t (+10) — bd update aborts the whole call on one unknown flag,
+# discarding a valid flag's write; --body-file exists, --acceptance-file does
+# not. computenet-l1bb is one inline clause on an existing table row.
+# 8764 -> 8813 on 2026-08-29: computenet-dowo (+19, bd-traps.md) — bd writes a
+# pagination TRAILER after the closing bracket when a listing is capped, and the
+# documented slice ran to end-of-file; the idiom is now terminated
+# (/^[[{]/,/^[]}]/p) at all 34 sites and the "empty jq field is not an unset
+# field" rule is stated. computenet-i4cq + computenet-1z8s (+19, gradle-evidence
+# .md) — six agents across two sessions: the same task twice on one command line
+# runs once under the FIRST --tests filter, and the actionable-task line points
+# the wrong way. computenet-1mjv (+11) — --rerun on a LIFECYCLE task reruns
+# nothing while looking like correct usage.
+# 8813 -> 8849 on 2026-08-29: computenet-2jyq (+11) — SETTLED means no row is
+# PENDING; a FAILED required check settles identically and the next move is
+# `gh pr ready`, which merges itself. Stated in step 2, with the script naming
+# red rows above the verdict as a backstop. computenet-umw4 (+16) —
+# create-ticket.sh can be DENIED inside a dispatched subagent, and the obvious
+# workaround is the forbidden destructive one; the manual equivalent and the
+# separate-call rule for body files are now written down. computenet-k5a9 (+9)
+# — the JVM-provenance grep matched JMH's Unsafe warning instead of the banner.
+# 8849 -> 8869 on 2026-08-29: reviewer findings on this same drain. +6 in
+# SKILL.md — the self-checking monitor tiers introduced a way to silence the
+# monitor COMPLETELY (an unreadable slot-start makes the arithmetic expansion a
+# fatal error, killing the shell at tier one), so the block carries a literal
+# path and a `|| echo 0` fallback and says why. +14 in gradle-evidence.md and
+# review-task.md — the two faults that both read as "fewer JUnit files than
+# expected" (computenet-5b34 deletion vs computenet-i4cq duplicate task) now
+# point at each other, and computenet-l1bb's sibling prose site gets the
+# command. The corrections to bd-traps.md's stderr claim, SKILL.md's stale
+# script-table row and bead.sh's header are net zero.
+work                8869
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

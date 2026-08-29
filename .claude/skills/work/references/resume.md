@@ -46,7 +46,7 @@ that is already ≤0 and going straight to the next one.
 Those files survive a host-process exit, so the usual reason to miss them is
 not knowing the path, not deletion. If you genuinely cannot recover it, take
 the start from the epic's claim — `bd show <epic> --json | sed -n
-'/^[[{]/,$p' | jq -r '.[0].started_at'`, set by `--claim` at step 3, minutes
+'/^[[{]/,/^[]}]/p' | jq -r '.[0].started_at'`, set by `--claim` at step 3, minutes
 after the true start — and the slot length from the routine that invoked
 you. (A first bd comment's timestamp works too, but nothing before step 5
 requires one, so on an early resume there may be none.) Failing all of

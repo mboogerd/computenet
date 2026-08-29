@@ -103,7 +103,7 @@ while IFS= read -r line; do
   # Bead ids look like computenet-<slug> or computenet-<slug>.<n>...
   case "$id" in computenet-*) ;; *) continue ;; esac
 
-  status=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,$p' | jq -r '.[0].status // ""' 2>/dev/null)
+  status=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0].status // ""' 2>/dev/null)
   [ "$status" = "closed" ] || continue
   found=1
 

@@ -81,6 +81,18 @@ narrow rerun leaves ~100 files, and a later sweep reports the module as thin
 (computenet-5b34). A sharp drop between two reads is that signature, not a
 shrunken suite. Capture the broad run's numbers into your report first.
 
+**Two different faults produce "fewer JUnit files than I expected", so read
+the count against both.** This one is DELETION by a filtered rerun; the other
+is a broad run that never happened at all, because the same task appeared
+twice on one command line (see `--rerun` semantics below, computenet-i4cq).
+Deletion leaves the narrow run's files fresh and the rest gone; the duplicate
+form leaves exactly the narrow run and no trace that anything else was asked
+for.
+
+(The script is executable and carries a `#!/usr/bin/env python3` shebang, so
+the bare path below runs as written — two reviewers hesitated over that in one
+session, neither having tried it; computenet-s16r.)
+
 ```bash
 .claude/skills/work/scripts/junit-count.py '<module>/build/test-results'
 # repo-wide: pass every module's build/test-results dir — demo/* included
@@ -206,6 +218,36 @@ None of the accounting above maps onto the `:iroh` cargo tasks
   `:kernel:test` came back `UP-TO-DATE`, with both names on screen and
   `BUILD SUCCESSFUL` at the end. It also does not force upstream tasks. One
   `--rerun` per test task; `--rerun-tasks` for a repo-wide run.
+- **The SAME task twice on one command line runs ONCE, under the FIRST
+  invocation's `--tests` filter.** `./gradlew :m:test --tests 'FooTest'
+  --rerun :m:test --rerun` does not run the filtered suite and then the whole
+  suite — it runs the filtered suite, and the bare invocation never happens.
+  Every visible signal says otherwise: `BUILD SUCCESSFUL`, one `> Task :m:test`
+  line, green. Measured on `:testkit:test` — combined form 1 XML file / 5
+  tests, standalone full run seconds later on the same tree 28 files / 226
+  tests — and **the actionable-task line points the wrong way**: 24 actionable
+  for the combined form against 15 for the standalone, so the anti-cache check
+  this file teaches actively reassures while the evidence is a twentieth of
+  what you think. `junit-count.py` cannot catch it either: the XML is fresh and
+  green, there is simply less of it, and nobody knows the expected count by
+  heart — and a low count here is ambiguous with the deletion fault above
+  (computenet-5b34), so distinguish them rather than assuming either. Six
+  agents across two sessions hit it (computenet-i4cq four, computenet-1z8s
+  two), and the pressure that produces it is this skill's own:
+  narrow-suite-plus-broad-suite is logically one verification step, and you are
+  told to run verification in ONE foreground call. **Use two calls.** The
+  non-regression half is the half that silently disappears.
+- **`--rerun` on a LIFECYCLE task is very nearly a no-op**, and it looks
+  exactly like correct usage. `./gradlew :oracle:test --rerun :concord:check
+  --rerun` did not force `:concord:test`: a lifecycle task has no work of its
+  own to rerun, so the `--rerun` binds correctly and reruns nothing. The
+  console read plausibly and the only signal was `:concord`'s newest JUnit
+  timestamp, still from the previous reviewer's run fifteen minutes earlier
+  (computenet-1mjv). This is about the KIND of task, not the position of the
+  flag — the position rule above was followed. `:concord:check` is named
+  directly in several beads' acceptance clauses here, so name the concrete
+  tasks instead: `:concord:test --rerun :concord:concordanceGate --rerun
+  :concord:docLints --rerun :concord:check --no-build-cache`.
 - **`--rerun` alone is not proof of execution.** Measured 2026-08-15 on
   `:concord:test`: an *unmarked* task line and `1 executed`, while the JUnit
   XML still held the previous run's 253 tests with older internal

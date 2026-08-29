@@ -6,9 +6,15 @@ SKILL.md and the other references cite this file as "`bd` traps".
 
 - `bd ready` hides `in_progress`/`blocked`/`deferred`; `bd list` hides
   *closed* unless `--all`. Every check below uses the one it means.
-- `--parent` scope differs by subcommand — but **not the way this file used to
-  say**. `bd list --parent` is one level deep, and so is
-  `bd ready --parent`: it reaches **direct children only**, not descendants.
+- `--parent` scope differs by subcommand, and the two differ from EACH OTHER.
+  **`bd list --parent` DOES return descendants** — measured 2026-08-29 on bd
+  1.1.2: `bd list --parent=computenet-051 --all` returns the grandchild
+  `computenet-051.6.4` alongside the six features (computenet-yb4s; a
+  breakdown agent and the orchestrator saw it independently on 08-28).
+  `bd ready --parent` reaches **direct children only**, not descendants —
+  measured 2026-08-17 and NOT re-measured at 1.1.2, so treat it as the
+  cautious assumption rather than a current reading. Record bd's version with
+  any new measurement; this is exactly the behaviour that moves under it.
   Measured 2026-08-17 on live data — `bd ready --parent=computenet-dqy.37`
   finds `computenet-dqy.37.2`, while `bd ready --parent=computenet-dqy` does
   **not**, though `epic-of.sh` resolves that item to `computenet-dqy`. An epic
@@ -46,7 +52,7 @@ SKILL.md and the other references cite this file as "`bd` traps".
   `jq -r '.[0].description'` into a file and Read it.
 - `bd` prints warnings on stdout **before** the JSON, so `jq` and
   `json.loads` fail on the raw stream; slice from the first line starting
-  `[` or `{` (`sed -n '/^[[{]/,$p'`) before parsing. **Every documented
+  `[` or `{` (`sed -n '/^[[{]/,/^[]}]/p'`) before parsing. **Every documented
   snippet in this skill carries that slice** — it is not decoration, and
   removing it to shorten a line reintroduces the bug (computenet-efhi).
   Setting `beads.role` silences the *role* warning, and this clone has it
@@ -92,12 +98,30 @@ SKILL.md and the other references cite this file as "`bd` traps".
   `bd show computenet-x9e --json` = 43KB. The agent is not reading a big
   issue; it is reading a small one that silently carries a big one inside it,
   and the failure looks like a truncated read whose natural recovery — re-run
-  the command — fails identically (computenet-rram). Redirect and slice:
+  the command — fails identically (computenet-rram). The payload is one copy
+  of the parent body **per dependency entry**, not one per bead, so several
+  dependencies multiply it: 35KB overrun on a task, ~149KB from one call on a
+  feature (computenet-zwju). Read the bead's own fields through the
+  projection, which drops `dependencies` before the output can reach a tool
+  result (57KB -> 7KB on computenet-x9e.3):
+
+  ```bash
+  .claude/skills/work/scripts/bead.sh <id>                  # the whole bead, projected
+  .claude/skills/work/scripts/bead.sh <id> -r '.status'     # one field; no .[0] unwrap
+  ```
+
+  Redirect-and-slice still works and is right when you need a field the
+  projection drops:
 
   ```bash
   bd show <id> --json > "$SCRATCH/<id>.json"
   jq -r '.[0] | "\(.description)\n---\n\(.acceptance_criteria)"' "$SCRATCH/<id>.json"
   ```
+
+  rram was closed on the redirect rule alone, carried by hand in each dispatch
+  prompt — it held for every agent that was warned and failed for the two
+  whose prompt did not carry it for the call they made. That is why the
+  projection is a script.
 
   **A truncated bead read is a truncated ACCEPTANCE LIST**, and nothing in
   the output says it was truncated, so the review proceeds against criteria
@@ -147,7 +171,7 @@ SKILL.md and the other references cite this file as "`bd` traps".
 
   ```bash
   ROWS='(if type=="array" then . else (.issues // []) end)[]'
-  bd list … --json | sed -n '/^[[{]/,$p' | jq -r "$ROWS | .id"
+  bd list … --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r "$ROWS | .id"
   ```
 
 - **Re-parenting a reviewer-filed residual takes two commands.** A
@@ -167,6 +191,65 @@ SKILL.md and the other references cite this file as "`bd` traps".
   unparented (hash id, counter untouched) and then re-parents. Breakdown
   children under an epic or feature YOU claimed are exclusive by that claim
   and keep their dotted ids — `--parent` is correct there.
+- **The `--json` slice must be TERMINATED, not open-ended.** Every idiom in
+  this skill now reads `sed -n '/^[[{]/,/^[]}]/p'` — first line opening the
+  document through the first line closing it at column 0. The old form
+  `,$p` ran to end of file, and bd writes a **pagination trailer** when a
+  listing is capped: `Showing 100 of 144 ready issues. Use --limit 0 …`. At
+  bd 1.1.2 that trailer goes to **stderr**, so it reaches the slice only under
+  `2>&1` — which every reported instance used, and which most idioms here use
+  to keep bd's leading warnings visible. jq then reports `parse error: Invalid
+  numeric literal at line 3258, column 8` — column 8 is where `100` begins in
+  the trailer, so it reads as mid-document corruption and is not: the array
+  above it is complete and valid (characterised in computenet-dowo, reproduced
+  2026-08-29 on `bd ready --json`). The slice was designed for a PREFIX
+  problem; this is a SUFFIX problem. It appears and disappears with the size
+  of the result set, which is why it looked intermittent.
+
+  **An empty single-field jq result is never evidence the field is unset.**
+  When the document does fail to parse, a whole-document query fails loudly
+  while `jq -r '.[0].acceptance_criteria'` may still print — jq emits fields
+  it reached before the bad line — and a query for a field AFTER it returns
+  nothing, which reads exactly like an empty field. Where emptiness routes
+  anything (an acceptance list, `metadata.files`, a `cross_bead`
+  authorization), make the read fail loudly first: `jq -e .` the sliced
+  document, or read the whole object and index into it.
+- **`bd update` aborts the WHOLE call on one unknown flag**, discarding the
+  writes a valid flag in the same call would have made. Measured 2026-08-29:
+  `bd update <id> --nosuchflag --set-metadata probe2=x` → `Error: unknown
+  flag`, and `probe2` was never set. The shape that produces it: `bd update`
+  has `--body-file` but **no `--acceptance-file`** — only `--acceptance
+  <string>` — while `create-ticket.sh` and `file-friction.sh` both expose
+  `--desc-file` AND `--accept-file`, so an agent that has just used those
+  reaches for the pair here and loses the description write too
+  (computenet-9z8t). Set acceptance in its own `bd update` call, and re-read
+  the bead rather than trusting a multi-field update's exit code.
+- **`create-ticket.sh` can be DENIED by the permission classifier inside a
+  dispatched subagent** — not a script error, a refusal of the bash call
+  itself, and not universal: the orchestrator in the same session ran the same
+  invocation successfully twice (computenet-umw4). The denial lands on the one
+  path that exists to prevent the `child_counters` collision, and the obvious
+  workaround is exactly the hand-typed `bd create --parent=<shared epic>`
+  AGENTS.md forbids. **It is not the workaround.** Do by hand what the script
+  does: `bd create` **unparented** (hash id, counter untouched), then
+  `bd update <new-id> --parent=<parent>`.
+
+  Two rules that make the denial cheap when it happens: **write the body files
+  in a SEPARATE bash call from the create**, because a denial discards the
+  heredocs composed in the same invocation — one reviewer's later
+  `--desc "$(cat …)"` read an empty file and produced an empty-bodied bead
+  that had to be backfilled — and **re-read the bead** after any create you
+  did not watch succeed.
+- **Repeating `-C <main-checkout>` is what tempts the variable that breaks.**
+  `BD="bd -C /path"; $BD show x` fails with `no such file or directory: bd -C
+  /path` — zsh does not word-split an unquoted expansion — and it reads as bd
+  being missing rather than as a quoting fault. Recurred 2026-08-27 after
+  computenet-jobe closed it (computenet-ahg8, and computenet-wahz before
+  that). Define a function once instead, and every later call is bare `bd`:
+
+  ```bash
+  bd() { command bd -C "$WT" "$@"; }
+  ```
 - **An EMPTY database answers every read successfully.** The database `bd`
   opens is chosen by cwd (or `-C`) — *not* by "only the main checkout has
   one", which is false in both directions now measured. A worktree **without**

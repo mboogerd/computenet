@@ -96,7 +96,7 @@ script's header carries the full measurement.
 # here now means a session is draining the item rather than that one once
 # reported it.
 bd list --parent=computenet-wpvy --all --json \
-  | sed -n '/^[[{]/,$p' \
+  | sed -n '/^[[{]/,/^[]}]/p' \
   | jq '[ (if type=="array" then . else (.issues // []) end)[]
           | select(.status != "closed") ]'
 ```
@@ -329,7 +329,7 @@ oversight view for the human:
 
 ```bash
 bd list --parent=computenet-wpvy --all --json \
-  | sed -n '/^[[{]/,$p' \
+  | sed -n '/^[[{]/,/^[]}]/p' \
   | jq -r '[ (if type=="array" then . else (.issues // []) end)[]
              | select(.status != "closed") ]
            | sort_by(-.comment_count)[]

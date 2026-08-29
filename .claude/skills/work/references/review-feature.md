@@ -86,8 +86,17 @@ produced — the JMH/Gradle banner in the teed log, or `java -version` from the
 same launcher the run used — and check the diff's claim against *that*:
 
 ```bash
-grep -m1 -iE 'jdk|vm version|java version' "<the run's own log>"
+grep -m1 -iE 'vm version|java version' "<the run's own log>"   # JMH: '^# VM version'
 ```
+
+`jdk` was in that alternation until computenet-k5a9. JMH 1.37 emits a
+`sun.misc.Unsafe` deprecation warning ABOVE its own banner, and that warning
+contains `jdk`, so `-m1` stopped there and returned a line with no JVM version
+in it — output that looks like the check ran and found nothing. Two agents hit
+it in one session, and the run it exists to catch was real: a derivation made
+under JBR 25.0.2 instead of the module's declared JDK 21, caught only by
+reading the banner directly, which moved the published floor from 0.593 to
+1.044.
 
 On computenet-dqy.46 every measured number reproduced exactly and the only
 false statement was the environment claim — two same-size figures from
@@ -495,6 +504,25 @@ So:
   .claude/skills/work/scripts/wait-checks.sh <pr-url>
   # SETTLED (0) / TIMEOUT-PENDING (4) / QUERY-FAILED (3 — nothing was checked)
   ```
+
+  **But do not wait for pending checks — you are the wrong agent for it.**
+  One invocation is your budget. If it comes back `TIMEOUT-PENDING`, say so
+  in your verdict — *"verdict conditional on `build-test-fast`, pending at
+  the time of writing"* — and STOP. The orchestrator settles checks before
+  shipping anyway (SKILL.md 5e), so your wait is duplicated work even when it
+  succeeds, and it is the single situation that produced all six recurrences
+  of the stalled-turn defect (computenet-kp0y): a reviewer's entire result was
+  *"Still waiting — round 19/28. I'll hold here until the monitor reports
+  settlement"* — 515s and 31 tool calls for no deliverable, from an agent whose
+  prompt carried the prohibition verbatim and which, once recovered, diagnosed
+  the trap itself. You have **no inbound wake-up**; your turn ending IS your
+  completion. A conditional verdict terminates, and waiting cannot.
+
+  You could not win the wait in any case: the ~9m20s window is smaller than
+  `build-test-fast` and cannot be widened inside the 600000 ms cap
+  (computenet-hil5), so a cold start needs two invocations. Exhaustion prints
+  each pending check's age plus `ORDINARY` or `STUCK`; only `STUCK` is a
+  finding worth reporting.
 
   A **red** required check is not yours to wave
   through: report it and leave the verdict draft.
@@ -927,14 +955,14 @@ on one query**, run before you file — the answer has changed under a live
 session, since a concurrent session can close the epic mid-review:
 
 ```bash
-bd show <epic-id> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'
+bd show <epic-id> --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0].status'
 .claude/skills/work/scripts/epic-of.sh <feature-id>   # (unparented) is a real answer
 ```
 
 | the reviewed item has… | attach the residual by |
 |---|---|
 | an **open** epic ancestor | `bd update "$RES" --parent=<epic-id>` — the epic cannot close while it is open, and the epic's owner is who schedules it |
-| a **closed** epic ancestor | no parent, plus `bd dep add "$RES" <feature-id> --type=discovered-from` — a closed epic schedules nothing (nobody selects it at step 3), and the edge keeps the residual reachable from the work it came out of: `bv --robot-triage --graph-root` traverses it exactly like parentage |
+| a **closed** epic ancestor | no parent, plus `bd dep add "$RES" <feature-id> --type discovered-from` — the type is a FLAG, never positional: `bd dep add <a> <b> discovered-from` fails with `requires 2 arg(s), only received 3`, and the positional shape is a fair guess because `bd create --deps` really does take `discovered-from:<id>` (computenet-l1bb) — a closed epic schedules nothing (nobody selects it at step 3), and the edge keeps the residual reachable from the work it came out of: `bv --robot-triage --graph-root` traverses it exactly like parentage |
 | **no epic at all** (a 5f route-4 item — `(unparented)` is normal, computenet-wpvy.42) | `bd update "$RES" --parent=<item-id>` — parent it to the reviewed item itself, and do **not** also add the `discovered-from` edge (one-slot rule below) |
 
 **If the residual's subject exists only on the feature branch** — a type, a
@@ -957,7 +985,7 @@ bd create "<the unmet criterion, verbatim>" --type=bug \
   --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet — and, on the closed-epic row: filed UNPARENTED deliberately, epic <epic-id> closed at review time>" \
   --acceptance="<the original criterion, unchanged>" \
   --metadata '{"model":"<sonnet|opus>","files":"<the files a fix touches>"}' \
-  --json | sed -n '/^[[{]/,$p' | jq -r '.id' > "$SCRATCH/residual-id"
+  --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.id' > "$SCRATCH/residual-id"
 cat "$SCRATCH/residual-id"      # must print the new id, not an empty line
 ```
 
@@ -1050,9 +1078,21 @@ EOF
 
 Create beads tasks for the remaining work (`bd create --parent=<feature-id>`
 with `model` and `files` metadata, per [feature.md](feature.md)) so the next
-batch picks them up. Attach anything you create by the residual-attachment
-table above — on an unparented route-4 item that means `--parent=<item-id>` —
-and the one-slot rule (parent XOR `discovered-from`, computenet-ofzz) and the
+batch picks them up.
+
+**The residual-attachment table above does NOT apply to these.** The two
+shapes differ by whether the feature waits: a *residual* is follow-on work the
+feature does not wait for, so it attaches where someone will schedule it (the
+epic); a *draft-blocking task* is work the feature DOES wait for, so it is
+parented to the feature it blocks. Parent one of these under the epic and it
+blocks nothing — a later session picks the feature up and ships it with its
+blocker sitting beside it, unenforced. A reviewer hit the contradiction on
+computenet-ahn0, chose the feature parent, and reported it rather than leaving
+it silent; that judgement was right (computenet-7vsj). Only on an unparented
+route-4 item does the table's row apply, because there `--parent=<item-id>`
+IS the feature.
+
+The one-slot rule (parent XOR `discovered-from`, computenet-ofzz) and the
 `base_branch` stamp apply here with MORE force: a draft's subject is by
 construction not on `main` (computenet-4uv1). A feature left in draft with no
 tasks describing what's missing is a dead end. Two drafts legitimately have no tasks, and each is

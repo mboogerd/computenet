@@ -69,7 +69,7 @@ The two that bite hardest, inline because skipping them costs the most:
 
 - **`bd show <id> --json` returns a LIST** — unwrap `.[0]` or every field reads
   `null` — and `bd` prints warnings on stdout **before** the JSON, so slice with
-  `sed -n '/^[[{]/,$p'` before `jq`. An empty `jq` result is never evidence of
+  `sed -n '/^[[{]/,/^[]}]/p'` before `jq`. An empty `jq` result is never evidence of
   an empty query.
 - **`bd create --parent=<shared epic>` is banned** — it mints ids from a
   per-database counter and two machines collide. Use
@@ -103,7 +103,8 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `create-ticket.sh` | THE create path for a ticket under a shared epic — unparented, then re-parented |
 | `file-friction.sh` | Files a friction item collision-free under the SDLC epic, open and unclaimed |
 | `resumable-epics.sh` | Epics holding a feature left `in_progress` — step 3 ranks these above priority |
-| `wait-checks.sh` | THE settle loop on `gh pr checks` — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`QUERY-FAILED` |
+| `bead.sh` | projected `bd show` — the bead's own fields as one object, `dependencies` dropped (57KB -> 7KB); no `.[0]` unwrap |
+| `wait-checks.sh` | THE settle loop, sha-bound over `commits/<sha>/check-runs` (`gh pr checks` is the fallback) — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`QUERY-FAILED` |
 | `verify-branch-sync.sh` | 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
 | `merge-task.sh` | 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
 | `session-holder.sh` | this session's unique holder token, and `--check <token>` → MINE/LIVE/DEAD/UNKNOWN/FOREIGN; what tells a live sibling from a crash leftover, which `assignee` cannot |
@@ -253,17 +254,38 @@ from the drifting checkout, which is why only the orchestrator needs this.
 
 ## 2. Arm the budget
 
-Don't burn turns polling a clock — arm a timer that tells you:
+**The subtraction below is THE budget mechanism; the monitor is a
+convenience that may or may not fire.** It has now gone permanently silent
+twice by two different routes — once after a host suspension
+(computenet-6664), once with no suspension at all, `uptime` reading "up 7
+days" throughout and the machine busy the whole slot: not one of the three
+tiers ever spoke again after the start confirmation, and the slot was 16
+minutes over before the hand recomputation caught it (computenet-ltv9). Both
+times the hand subtraction was the only thing that noticed. Arm the monitor
+anyway — a tier that does fire is free — but never let its silence mean time
+remains.
 
 ```
 Monitor({
   description: "work session budget",
   persistent: true,
-  command: `sleep 11700; echo "BUDGET T-90m: finish the current feature; start no new one"
-sleep 2700;  echo "BUDGET T-45m: no new dispatches; review and merge what is in flight"
-sleep 2700;  echo "BUDGET EXPIRED: go to Finalize now"`
+  command: `S=/absolute/path/to/scratch/slot-start   # LITERAL — see below
+sleep 11700; echo "BUDGET T-90m ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): finish the current feature; start no new one"
+sleep 2700;  echo "BUDGET T-45m ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): no new dispatches; review and merge what is in flight"
+sleep 2700;  echo "BUDGET EXPIRED ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): go to Finalize now"`
 })
 ```
+
+Each tier reports the elapsed it computes when it fires, not the sleeps it
+slept, so a tier that fires late is distinguishable from one that fires on
+time — the suspension case reads as a wrong number rather than a correct one.
+
+**Substitute the LITERAL path, and keep the `|| echo 0`.** `$SCRATCH` does not
+survive into the monitor's shell, and an unreadable file makes the arithmetic
+expansion a FATAL error — `(1787982856 - ) / 60: operand expected` — which
+kills the shell at the first tier, so tiers two and three never fire either.
+A fix for "the monitor went silent" that can silence it completely is worse
+than the silence; the fallback keeps a wrong-but-loud number instead.
 
 **Record the slot start durably, before you arm it** — you have no other
 memory of when this session began, and a resume needs it (below):
@@ -345,6 +367,18 @@ echo $(( ($(date -u +%s) - $(cat "$SCRATCH/slot-start")) / 60 ))m elapsed \
      of $(( $(cat "$SCRATCH/slot-seconds") / 60 ))m
 ```
 
+**Never WRITE an elapsed figure you did not compute in that same turn.** The
+failure mode is drift, not disagreement: a session recomputes correctly five
+times and then keeps reporting numbers extrapolated from the last real
+reading. Estimating produces no symptom — the session feels identical either
+way — and one that ships every 30 minutes has nothing to make it notice. On
+2026-08-27 a session reported "81m", "88m", "98m" while the real figure was
+195m of 300m: ~100 minutes low for two hours, at which point it believed it
+had a whole wind-down stage in hand that it did not (computenet-hs90,
+recurrence of computenet-776). If you have no reading this turn, write "no
+elapsed reading this turn" — an absent number is visible, a plausible wrong
+one is not.
+
 That is one subtraction, and it is what turned a confusing batch into a
 correct diagnosis the one time this happened. A session that instead trusted
 the tiers in order would "finish the current feature", then "stop
@@ -370,6 +404,24 @@ Three standing disciplines:
   ```bash
   .claude/skills/work/scripts/wait-checks.sh <pr-url>
   ```
+
+  **`SETTLED` is not a verdict.** It means no required row is PENDING — a
+  FAILED required check settles exactly like a passing one, exits 0, and
+  prints the same last line (computenet-2jyq). The exit code is no help
+  either: the trailing `gh pr checks` exits 8 on a red check, and through a
+  pipe `$?` reads 0. So the ship gate reads the returned TABLE for a
+  non-`pass` row, and a red row routes to
+  [red-check-attribution.md](references/red-check-attribution.md), never to
+  `gh pr ready` — which on this repo merges itself. The script now names any
+  red required check on its own line above the verdict; that line is a
+  backstop, not a substitute for reading the table.
+
+  **A cold start normally takes TWO invocations**: the ~9m20s window is sized
+  to the 600000 ms foreground cap and `build-test-fast` measures 8m56s–13m25s,
+  so waiting from the run's start times out on a healthy PR by construction
+  (computenet-hil5). On exhaustion the script names each pending check with
+  its age and prints `ORDINARY` (re-run it) or `STUCK`; only `STUCK` is a
+  defect.
 
   **That rule covers `gh pr checks`. It applies to EVERY `gh` call, and the
   others were all written bare.** During one 80-minute GraphQL degradation
@@ -684,7 +736,7 @@ selection reads descriptions, never comments — so a prior session's recorded
 from scratch. Check the durable form before claiming:
 
 ```bash
-bd show <candidate> --json | sed -n '/^[[{]/,$p' \
+bd show <candidate> --json | sed -n '/^[[{]/,/^[]}]/p' \
   | jq -r '.[0].labels[]? | select(startswith("needs:")) | ltrimstr("needs:")' \
   | while read -r tool; do
       .claude/skills/work/scripts/have-tool.sh "$tool" || echo "SKIP: needs $tool, absent or not runnable here"
@@ -966,7 +1018,7 @@ looks exactly like a dead breakdown if you only count children
 `human` label + a `QUESTION:` comment:
 
 ```bash
-bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0] | "\(.status) \(.assignee) \(.labels)"'
+bd show <epic> --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0] | "\(.status) \(.assignee) \(.labels)"'
 bd comments <epic> --json > "$SCRATCH/epic-comments.json"
 ```
 
@@ -997,7 +1049,7 @@ they rot after their blocker clears (computenet-6i1: 3 of 4 parked items were
 finishable). List them repo-wide and keep the ones under this epic:
 
 ```bash
-bd list --status=blocked --limit 0 --json | sed -n '/^[[{]/,$p' | jq -r '.[] | .id'
+bd list --status=blocked --limit 0 --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[] | .id'
 .claude/skills/work/scripts/epic-of.sh <each id>       # keep those under <epic>
 bd comments <id> --json > "$SCRATCH/parked-<id>.json"  # read the QUESTION
 ```
@@ -1442,6 +1494,26 @@ verdict. (`parked` is only meaningful on an empty batch.)
   reported out and filed separately. If the residual's prose names its files —
   several do, in a trailing `Files: …` line — use those.
 
+  **Ask WHERE THE PINNING TEST WILL LIVE, before anything else.** In both
+  recurrences that got past the invariant grep below, the omitted file was
+  the same kind: the test that pins the acceptance, in a module or seam the
+  claim did not reach — a general-path assertion whose claim carried only the
+  wire test, and a residency property whose test needed a new kernel file
+  (computenet-geky). An acceptance asserting a general-path property needs a
+  general-path test; if the claim's only test file sits in a different module
+  or seam from the property, the claim cannot satisfy the bead as written.
+  `check-files-claim.sh` cannot catch this — it warns when the bead's TEXT
+  names a path the claim omits, and these files did not exist yet and were
+  named nowhere.
+
+  **This applies to any claim you did not derive from the code, whoever wrote
+  it** — orchestrator-authored, copied from a sibling, or inherited from a
+  residual filed by the implementer of a *different* bead. That last is the
+  one geky found: reporting out rather than reaching is good practice and it
+  produces a claim written by someone reasoning about the mechanism they had
+  just touched, which is precisely this failure mode from an author the rule
+  did not address. Inheriting a claim is not re-deriving it.
+
   **The failure shape of that weakness is specific**: a claim derived from
   the design space covers the MECHANISM's files and misses the files holding
   the INVARIANT the change moves — the test pinning a counter's magnitude was
@@ -1455,6 +1527,20 @@ verdict. (`parked` is only meaningful on an empty batch.)
   cannot resolve alone. Keep saying on the bead that the claim is
   orchestrator-authored and how it was derived — that record is what lets
   the next miss be diagnosed.
+
+  **A claim COPIED from a sibling bead is orchestrator-authored too, and gets
+  the same grep.** Copying feels like the conservative move — the claim is
+  evidence-backed and came from a bead that shipped — and that framing is
+  exactly what suppresses the check (computenet-jm7k, a recurrence of af9q).
+  A sibling's claim describes the files THAT item touched, and an item that
+  CHANGES a shared rule touches strictly more than the siblings that APPLY
+  it: three files short here, including the fold every future derivation goes
+  through. A sibling's claim is a lower bound, never the answer. When the
+  acceptance says "uniformly", "everywhere" or "no grandfathering", grep for
+  every call site of the thing being changed instead of trusting any existing
+  claim. Keep telling the implementer to report a short claim the moment it
+  finds one rather than working around it silently — that is what held the
+  cost down both times.
 
   Never let a
   task take a nominal claim over files it merely reads: a claim is a lock, so
@@ -1545,7 +1631,7 @@ sibling.
 under one is an acquisition and gets pushed like any other:
 
 ```bash
-bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'    # local read, no network
+bd show <epic> --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0].status'    # local read, no network
 # closed → bd dolt push        (>=300s timeout) right after the claim
 ```
 
@@ -1595,7 +1681,7 @@ applies wherever you author a bead, not only here: 5c's red-check task, 5e's
 residuals, step 7's friction items.
 
 **It is blind to anything that is not a path** — a bracketed requirement id
-(`[ORA1-HONEST-02]`), a marker, a type name — and passes such a bead CLEAN
+(`[24-TMAP-03]`), a marker, a type name — and passes such a bead CLEAN
 (computenet-hws5, then computenet-vjrs). Resolve each one by hand before
 dispatching: `git grep -l -F '[THE-ID]'` lists the files that *cite* it,
 which is usually not where the artifact lives; the pinning test's KDoc says
@@ -2054,7 +2140,7 @@ work has its own lane (`.claude/skills/remediate-friction/SKILL.md`). Step
 is the one sanctioned touch.
 
 The test for an **item** is two-part, both halves load-bearing: its effective
-epic is `computenet-wpvy` (use `epic-of.sh` — `bd list --parent` is one level
+epic is `computenet-wpvy` (use `epic-of.sh` — `bd ready --parent` is one level
 deep and misses grandchildren), **or** it carries the `skill-friction` label
 anywhere (dozens live outside the epic — unparented bugs, children of the WSK
 epics — and each proposes edits to `.claude/skills/work/`). Checking only the
@@ -2122,7 +2208,7 @@ Otherwise, in order:
 **1. The epic decision.** One query, three branches:
 
 ```bash
-bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0] | "\(.status) \(.assignee)"'
+bd show <epic> --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[0] | "\(.status) \(.assignee)"'
 bd list --parent=<epic> --all --json     # children; must be non-empty to close
 ```
 
@@ -2320,7 +2406,14 @@ recurrence is the appeal. Not found:
 # backticks and $(...) in it are inert (computenet-s5dh). A heredoc
 # interpolated into "--desc" is the trap issue-quality.md names — the shell
 # executes backticks before the script runs, silently deleting the quoted
-# phrases (computenet-9w9):
+# phrases (computenet-9w9). Those two flag names are the WRAPPERS' — bare
+# `bd create`, the sanctioned path for a breakdown child under an epic you
+# have claimed, answers --desc-file with "unknown flag" and has no acceptance
+# file flag at all. There it is --body-file plus
+# --acceptance "$(cat <<'EOF' … EOF)", which is safe for the same reason the
+# file form is: the delimiter is quoted so the shell never expands the body,
+# and command substitution does not re-evaluate what `cat` reads. It looks
+# like the trap above and is not (computenet-g1gf):
 cat > "$SCRATCH/friction-desc.md" <<'EOF'
 <what the skill says, what actually happened, what you did instead, what it cost>
 EOF
