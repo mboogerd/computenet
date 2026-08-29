@@ -44,10 +44,10 @@ session plus three more on the second case):
   reads itself as outside the warning. It is not: **up-to-date checking does
   not care whether you filtered.**
 - **It reads like a cache replay when the run was real.** `:concord:test
-  --rerun` prints `1 executed, 23 up-to-date`. The one executed task IS
-  `:concord:test`; the other 23 are compilation and resources, legitimately up
-  to date. Against a 24-task graph that looks exactly like the replay this file
-  trains you to fear, and three agents each spent a cross-check resolving it.
+  --rerun` prints `1 executed, N up-to-date` — N measured as 23, as 14, and as
+  14 again on re-verification 2026-08-29. It tracks configuration-cache state,
+  not your suite, so don't match on the number. The one executed task IS
+  `:concord:test`; three agents each spent a cross-check establishing that.
 
 Four times out of four, what actually settled it was the JUnit `newest`
 timestamp, which `junit-count.py` already prints. Read that first. Quote the
