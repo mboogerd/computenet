@@ -351,3 +351,161 @@ object SingleInstanceOrMapModel : SourceModel, Serializable {
 
     override fun toString(): String = "SingleInstanceOrMapModel"
 }
+
+// ---------------------------------------------------------------------------
+// The tagged -> untagged adapter — effective-only, presence-aware `ORA2 §MODEL-11`
+// ---------------------------------------------------------------------------
+
+/**
+ * The **untag adapter** as a reference: a converged tagged map, restated in the plain
+ * key -> value vocabulary, and the emission discipline that restatement implies
+ * (`96 §E1.5`, `[KE1-18]`..`[KE1-21]`; registered under the catalog id `untag` by
+ * `civictech.oracle.bind.TaggedOperators`).
+ *
+ * ## Written from the specification, not from the cell
+ *
+ * `ORA1 §MODEL-10`/`ORA2 §MODEL-11` forbid this package from naming a
+ * `civictech.cell.data.op` type, so this model cannot mention the kernel adapter it is
+ * checked against — and that prohibition is the *point*, not an obstacle worked around: a
+ * reference derived by reading the implementation cannot fail where the implementation is
+ * wrong, which is the only reason `:oracle` exists as a separate module at all. What is
+ * modelled here is therefore the **specified** behaviour of an untag adapter, stated in this
+ * package's own terms:
+ *
+ * > *A tagged map's observable is the key -> value table of its live dots ([DotModel.entries]).
+ * > An adapter that republishes that table in an untagged vocabulary must publish, at every
+ * > step, exactly the difference between the table it last published and the table now — no
+ * > more (an unchanged table is not news) and no less (every change to the published table is
+ * > news).*
+ *
+ * Everything below is that one sentence made computable. It is deliberately expressed as a
+ * diff between two whole tables rather than as an incremental fold over the arriving
+ * deltas: an incremental fold would be a second copy of the kernel's machinery, while a
+ * recomputation from the upstream observable is an independent statement of what that
+ * machinery must produce (epic computenet-4ru design D2).
+ *
+ * ## The four properties this shape makes true, by construction
+ *
+ * - **`[KE1-18]` one put per exposed-value change.** A key whose published value differs from
+ *   its value now — including a key that has just appeared — contributes exactly one entry to
+ *   [EffectiveChange.puts]. Once, because a key is one slot in a map.
+ * - **`[KE1-19]` a removal only when the last live dot dies.** [DotModel.entries] holds a key
+ *   iff it has a live dot, so a key leaves the table exactly when its last live dot does. A
+ *   tombstone that leaves *some* live dot behind leaves the key in the table with the surviving
+ *   value, which reaches [diff] as a value change — a put, never a removal.
+ * - **`[KE1-20]` nothing at all for an ineffective step.** Two equal tables diff to an empty
+ *   [EffectiveChange], which [emissions] reports as `null` — *no emission*, distinct from an
+ *   emission that happens to be empty. An equal-value re-put is exactly this case: the tagged
+ *   map always mints a fresh dot, so the upstream state changes, while the *table* it exposes
+ *   does not.
+ * - **`[KE1-21]` one change per step, so a re-put crosses whole.** [emissions] produces at most
+ *   one [EffectiveChange] per upstream step, and a re-put's retract and add both land in the
+ *   same step's table — so the key's old value is never observable as absent between them.
+ *   Representing a step's emission as a single value is what makes the torn intermediate
+ *   unrepresentable here, the same way two-live-elements is unrepresentable in [KeyedReputModel].
+ *
+ * ## Presence and value are compared separately, never value alone
+ *
+ * A key may legitimately expose a `null` value, so `table[key] == null` cannot distinguish
+ * "absent" from "present, holding null" and a value-only comparison would silently drop the
+ * appearance of a null-valued key. Every comparison below therefore asks `containsKey` first
+ * and compares values second.
+ *
+ * ## Shape: an [OperatorModel], and why its batch answer is a restatement
+ *
+ * At quiescence an adapter that adds and drops nothing publishes the upstream table itself, so
+ * [evaluate] answers its input's entries. That is not a vacuous claim: the differential run
+ * computes the model side from the *script* (through [DotModel], independently of any kernel
+ * cell) and the kernel side by folding what the real adapter actually emitted, so a kernel that
+ * dropped a key, published a stale value, or failed to emit a removal disagrees with it. The
+ * emission-level properties above are not visible at quiescence and are checked against the
+ * real cell's delta stream by `TaggedKeyedModelTest`, which drives [emissions] over the same
+ * script.
+ */
+object UntagModel : OperatorModel, Serializable {
+
+    /** This model's catalog id, named in its own failures so a mis-wired graph says which entry it was. */
+    const val CATALOG_ID: String = "untag"
+
+    /**
+     * One step's publication: the keys whose published value changed or appeared, and the keys
+     * whose last live dot died. Never both for one key — a key either has a live dot now or
+     * does not.
+     */
+    data class EffectiveChange(val puts: Map<Any?, Any?>, val removals: Set<Any?>) : Serializable {
+        /** Whether this step publishes nothing — the `[KE1-20]` case [emissions] reports as `null`. */
+        fun isEmpty(): Boolean = puts.isEmpty() && removals.isEmpty()
+    }
+
+    /**
+     * The publication that carries [previous] to [next]: every key whose presence or value
+     * moved, and nothing else.
+     *
+     * Both directions are computed over the union of the two key sets rather than over a
+     * caller-supplied "touched" set. A touched set would be this model mirroring the kernel's
+     * own optimization, and a kernel that computed it wrongly would then be compared against a
+     * reference making the identical mistake.
+     */
+    fun diff(previous: Map<Any?, Any?>, next: Map<Any?, Any?>): EffectiveChange {
+        val puts = LinkedHashMap<Any?, Any?>()
+        val removals = LinkedHashSet<Any?>()
+        next.forEach { (key, value) ->
+            // presence first: a key that has just appeared is news even when its value is null.
+            if (!previous.containsKey(key) || previous[key] != value) puts[key] = value
+        }
+        previous.keys.forEach { key -> if (!next.containsKey(key)) removals += key }
+        return EffectiveChange(puts, removals)
+    }
+
+    /**
+     * What an adapter publishes across [tables], one entry per step from `tables[0]` onwards —
+     * `null` where that step publishes nothing.
+     *
+     * [tables] is the sequence of upstream observables, starting with the table before any step
+     * (ordinarily empty). The result has `tables.size - 1` entries, so the correspondence
+     * "one input step, at most one emission" is structural rather than asserted.
+     */
+    fun emissions(tables: List<Map<Any?, Any?>>): List<EffectiveChange?> {
+        require(tables.isNotEmpty()) { "UntagModel.emissions needs at least the initial table" }
+        return (1 until tables.size).map { step ->
+            diff(tables[step - 1], tables[step]).takeUnless { it.isEmpty() }
+        }
+    }
+
+    /**
+     * [emissions] over the tables a single tagged source exposes as [slice] is applied event by
+     * event — the whole instrument, from a script alone, executing no kernel cell.
+     *
+     * Restricted to a delivery-free slice for exactly [SingleInstanceOrMapModel]'s reason, and
+     * refuses by name rather than folding without the peer logs it would need.
+     */
+    fun emissionsOverSlice(slice: SourceScript): List<EffectiveChange?> {
+        require(slice.deliveries.isEmpty()) {
+            "UntagModel (catalog id '$CATALOG_ID') cannot honestly derive the published tables for " +
+                "'${slice.source.id}' from a slice carrying gossip deliveries: resolving one needs the " +
+                "peer instances' own event logs, which a single SourceScript does not carry. See " +
+                "SingleInstanceOrMapModel for the same restriction on the upstream it adapts."
+        }
+        val script = Script(listOf(slice))
+        val dots = DotModel(DotOrder.ranked(listOf(slice.source)))
+        val tables = (0..slice.events.size).map { prefix ->
+            dots.entries(dots.stateOf(script, slice.source, prefix)).entries
+        }
+        return emissions(tables)
+    }
+
+    /**
+     * The upstream table, restated. See this object's KDoc for why a restatement is the honest
+     * batch claim for an adapter, and where the emission-level properties are checked instead.
+     */
+    override fun evaluate(inputs: List<ModelState>): ModelState {
+        require(inputs.size == 1) {
+            "UntagModel (catalog id '$CATALOG_ID') is unary: it takes the tagged map it adapts and " +
+                "nothing else, got ${inputs.size} inputs"
+        }
+        val upstream = inputs.single().asMap("UntagModel (catalog id '$CATALOG_ID')")
+        return ModelState.MapState(LinkedHashMap(upstream.entries))
+    }
+
+    override fun toString(): String = "UntagModel"
+}

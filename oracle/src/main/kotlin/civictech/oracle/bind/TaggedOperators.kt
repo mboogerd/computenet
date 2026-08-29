@@ -1,9 +1,11 @@
 package civictech.oracle.bind
 
 import civictech.cell.data.OrMapCell
+import civictech.cell.data.op.UntagCell
 import civictech.cell.graph.CellFactory
 import civictech.oracle.model.ElementShape
 import civictech.oracle.model.SingleInstanceOrMapModel
+import civictech.oracle.model.UntagModel
 import java.io.Serializable
 
 /**
@@ -11,7 +13,11 @@ import java.io.Serializable
  * ORA1 slice — the same [OperatorCatalog.register] seam, no second catalog and no second
  * registration path (feature computenet-4ru.1's REUSE clause).
  *
- * ## One family registered, three not — read this before trusting an id's name
+ * ## Two families registered, three not — read this before trusting an id's name
+ *
+ * The `untag` entry (`96 §E1.5`'s adapter, computenet-pez3) is the second, and has its own
+ * section below. The three unregistered families and the restriction on `orMap` are unchanged
+ * by it.
  *
  * The task this file closes set out to register four kernel cells: `OrMapCell`,
  * `KeyedSetCell` "deepened past membership", `MergeableGroupByCell`, and `PnCounterCell`
@@ -103,6 +109,28 @@ import java.io.Serializable
  * (`ORA2 §DIFF-01..09`) stays the sweep/runner task's, driving `DotModel.converged`/`stateOf`
  * directly.
  *
+ * ## `untag` — the first nonzero-arity entry that consumes a tagged outlet
+ *
+ * `UntagCell` (`civictech.cell.data.op.UntagCell`, `96 §E1.5`) is a genuine unary operator:
+ * `inlet` is `Serve<Propagate<TaggedMapDelta<K, V>>>` and `outlet` is
+ * `Subscribe<Propagate<MapDelta<K, V>>>`, so `shape = unary(TaggedMapOf(..), MapOf(..))` is
+ * kernel-honest and it is the only registered entry that can sit downstream of `orMap`. Its
+ * reference model is [civictech.oracle.model.UntagModel], and the *reason that model took a
+ * dedicated item* (computenet-pez3, deferred from computenet-j2x.3.4 rather than rushed) is
+ * `ORA1 §MODEL-10`/`ORA2 §MODEL-11`: the model source set may not name `UntagCell`, so the
+ * model had to be derived from what an untag adapter is *specified* to do — republish the
+ * tagged map's live-dot table, publishing exactly the difference from what it last published —
+ * rather than transcribed from the cell. A model written by reading the implementation cannot
+ * fail where the implementation is wrong, which is the whole premise of `:oracle`. See
+ * [civictech.oracle.model.UntagModel]'s KDoc for the derivation and for which of
+ * `[KE1-18]`..`[KE1-21]` each part of its shape makes true.
+ *
+ * What this does **not** close: BS-9 / `ORA2 §DIFF-07`'s tagged wave-prefix *diamond*
+ * (`concord/corpus/DISPUTES.md`). That entry is blocked on a tagged outlet reaching a
+ * glitch-free fan-in through two paths; this registration supplies the bridge that was missing,
+ * but building and validating the diamond at its stated shape is a separate piece of work and
+ * the entry is deliberately left standing until someone does it.
+ *
  * `SingleInstanceOrMapModel` itself lives in `civictech.oracle.model`
  * (`TaggedKeyedModels.kt`), not here beside its registration — `ORA1 §MODEL-10`/
  * `ORA2 §MODEL-11`'s import boundary is enforced by scanning `civictech.oracle.model`'s source
@@ -115,8 +143,11 @@ object TaggedOperators {
     object Ids {
         const val OR_MAP = "orMap"
 
+        /** `96 §E1.5`'s adapter half — see [UntagModel] and the `untag` section of this file's KDoc. */
+        const val UNTAG = "untag"
+
         /** Every id this file registers, in registration order. */
-        val ALL: List<String> = listOf(OR_MAP)
+        val ALL: List<String> = listOf(OR_MAP, UNTAG)
     }
 
     private val SCALAR = ElementShape.Scalar
@@ -136,6 +167,15 @@ object TaggedOperators {
     private val TAGGED_SCALAR_MAP = ElementShape.TaggedMapOf(SCALAR, SCALAR)
 
     /**
+     * `UntagCell.outlet` carries `Propagate<MapDelta<K, V>>` — the plain map vocabulary the whole
+     * deterministic join family already consumes — so the adapter's output is the ordinary
+     * [ElementShape.MapOf], byte-identical to [CoreOperators]' `SCALAR_MAP`. That equality is the
+     * adapter's entire purpose: it is what makes `orMap -> untag -> join/combineLatest/lookupJoin`
+     * a legal edge where `orMap -> join` is a kernel type violation (computenet-880k).
+     */
+    private val SCALAR_MAP = ElementShape.MapOf(SCALAR, SCALAR)
+
+    /**
      * Binds every id in [Ids.ALL] into [OperatorCatalog].
      *
      * @throws IllegalStateException if any of them is already registered — same contract as
@@ -150,6 +190,14 @@ object TaggedOperators {
             shape = ShapeRule.source(TAGGED_SCALAR_MAP),
             kernel = CellFactory { ref -> OrMapCell<Any?, Any?>(ref) },
             model = SingleInstanceOrMapModel,
+        )
+
+        /* `UntagCell` — the tagged -> untagged adapter. See this file's `untag` KDoc section. */
+        OperatorCatalog.register(
+            id = Ids.UNTAG,
+            shape = ShapeRule.unary(input = TAGGED_SCALAR_MAP, output = SCALAR_MAP),
+            kernel = CellFactory { ref -> UntagCell<Any?, Any?>(ref) },
+            model = UntagModel,
         )
     }
 }
@@ -172,16 +220,13 @@ object TaggedOperators {
  *
  * Availability is not registration. [OperatorCatalog.register] needs a real
  * [CellFactory][civictech.cell.graph.CellFactory] *and* an evaluable model, and for the four
- * still-absent families there is no cell to build a factory from. `UntagCell` and `TaggedMapView`
- * now have the factory half, but registering either would additionally need a
- * `civictech.oracle.model` reference model — for `UntagCell`, a `TaggedMapDelta -> MapDelta`
- * unary; for `TaggedMapView`, whatever shape its own read surface needs — a new file in the model
- * source set, whose import boundary (`ORA1 §MODEL-10`/`ORA2 §MODEL-11`) forbids it from naming the
- * kernel cell it mirrors, i.e. a genuine second implementation of the adapter's effective-only
- * diff. That is real design work, not wiring, and it is deliberately NOT done here — computenet-pez3
- * owns it, sequenced after this correction so it can start from an accurate availability surface.
- * Until it lands, `UntagCell` and `TaggedMapView` are *available and unregistered*, and this
- * comment is the record of why — the same honest-non-registration idiom this file's
+ * still-absent families there is no cell to build a factory from. `UntagCell` has since acquired
+ * both halves: computenet-pez3 wrote the `TaggedMapDelta -> MapDelta` reference model the import
+ * boundary forbids from naming the cell, and [TaggedOperators] registers the pair under the
+ * catalog id `untag` — so for that family availability and registration now coincide.
+ * `TaggedMapView` remains *available and unregistered*: it has the factory half, and a read
+ * surface rather than an outlet, so what a catalog entry for it would even observe is an open
+ * question nobody has answered. That is the honest-non-registration idiom this file's
  * [TaggedOperators] KDoc uses for `KeyedSetCell`, `MergeableGroupByCell` and `PnCounterCell`.
  *
  * So absence — where it still holds — is reported, not registered: [probe] returns one
