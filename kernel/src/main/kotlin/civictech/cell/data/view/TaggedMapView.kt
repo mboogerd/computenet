@@ -35,6 +35,18 @@ class TaggedMapView<K, V> {
      * already held (a re-delivered put) or every tombstone covers a dot
      * already covered; `true` when a tombstone kills a key's last live dot
      * (the key disappears from [current]).
+     *
+     * **Limit — a `null`-valued put is reported as no change.** Change is
+     * detected by comparing [TaggedMapDelta.value] before and after the
+     * merge, and that method answers `null` both for an absent key and for a
+     * key whose winning dot carries a `null` value. So on a `V` that admits
+     * `null` (`TaggedMapView<K, V?>`), a put that makes a key *appear* with a
+     * `null` value returns `false` here even though [current] then contains
+     * it — measured, and unlike [MapView], which guards the same case with
+     * `containsKey`. Harmless for the value class this family is specified
+     * over (`civictech.cell.MergeablePayload`, never `null`); a caller that
+     * genuinely stores nullable values must not guard a broadcast on this
+     * return. Tracked as computenet-4d8k.
      */
     fun apply(delta: TaggedMapDelta<K, V>): Boolean {
         val touched = delta.keys()
