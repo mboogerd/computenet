@@ -224,7 +224,11 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
 
     /**
      * `[KE1-06]`/`[KE1-07]` every live dot's value at [key] — the empty set
-     * when the key is absent. Delegated the same way as [value].
+     * when the key is absent. Unlike [value] this is *not* delegated to
+     * [TaggedMapDelta]: there is no fold or pick to single-source here, only
+     * the same `liveDots(key).values.toSet()` the delta's [TaggedMapDelta.values]
+     * computes. `OrMapEmbeddedValueTest` pins the two against each other across
+     * every dot state, so the duplication cannot drift unobserved.
      */
     fun values(key: K): Set<V> = liveDots(key).values.toSet()
 
