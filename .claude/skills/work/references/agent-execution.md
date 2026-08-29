@@ -82,6 +82,13 @@ and only then start the long evidence run.
 Background the long run (`run_in_background: true`, writing to
 `"$SCRATCH/run.log"`), then wait with a **bounded** until-loop on the log:
 
+**You have no inbound wake-up.** Nothing will notify you, resume you, or report
+back to you. Your turn ending IS your completion. Every version of this defect
+has been an agent inventing a mechanism that does not exist — most recently one
+that "held" for a monitor to report settlement (computenet-kp0y) — so the fact,
+not the prohibition, is what you need: there is no monitor, no scheduler, no
+caller polling on your behalf.
+
 **The wait must live INSIDE a foreground Bash call.** Not a `Monitor`, not a
 backgrounded loop, not any other watcher — a notification is delivered to a
 *turn*, and yours has ended, so the one thing the wait exists to do (keep you

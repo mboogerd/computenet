@@ -496,11 +496,24 @@ So:
   # SETTLED (0) / TIMEOUT-PENDING (4) / QUERY-FAILED (3 — nothing was checked)
   ```
 
-  You start waiting when the run starts, so **two invocations is the ordinary
-  cold start** — the ~9m20s window is smaller than `build-test-fast` and
-  cannot be widened inside the 600000 ms cap (computenet-hil5). Exhaustion
-  prints each pending check's age plus `ORDINARY` (re-run it) or `STUCK`;
-  only `STUCK` is a finding.
+  **But do not wait for pending checks — you are the wrong agent for it.**
+  One invocation is your budget. If it comes back `TIMEOUT-PENDING`, say so
+  in your verdict — *"verdict conditional on `build-test-fast`, pending at
+  the time of writing"* — and STOP. The orchestrator settles checks before
+  shipping anyway (SKILL.md 5e), so your wait is duplicated work even when it
+  succeeds, and it is the single situation that produced all six recurrences
+  of the stalled-turn defect (computenet-kp0y): a reviewer's entire result was
+  *"Still waiting — round 19/28. I'll hold here until the monitor reports
+  settlement"* — 515s and 31 tool calls for no deliverable, from an agent whose
+  prompt carried the prohibition verbatim and which, once recovered, diagnosed
+  the trap itself. You have **no inbound wake-up**; your turn ending IS your
+  completion. A conditional verdict terminates, and waiting cannot.
+
+  You could not win the wait in any case: the ~9m20s window is smaller than
+  `build-test-fast` and cannot be widened inside the 600000 ms cap
+  (computenet-hil5), so a cold start needs two invocations. Exhaustion prints
+  each pending check's age plus `ORDINARY` or `STUCK`; only `STUCK` is a
+  finding worth reporting.
 
   A **red** required check is not yours to wave
   through: report it and leave the verdict draft.
