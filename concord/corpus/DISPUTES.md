@@ -2418,11 +2418,13 @@ The scenario is `42-TMAP-REPL-01` (two `retransmit` steps after the heal
 barrier); the driver-level pins are in
 `concord/src/test/kotlin/civictech/concord/driver/kernel/RetransmitBindingTest.kt`.
 `concord/schema/scenario.md`'s "One driver-capability note" under
-`#### retransmit` still says the kernel binding "admits an `effect-sink` target
-only" and is now stale by exactly that one sentence; the schema is
-single-writer and schema-change-gated, and `computenet-j2x.4.6` was explicitly
-forbidden from editing it, so the correction is filed as its own item rather
-than made here.
+`#### retransmit` was left saying the kernel binding "admits an `effect-sink`
+target only" — `computenet-j2x.4.6` was explicitly forbidden from editing the
+schema, so the sentence went stale by design and the correction was filed as
+its own item (`computenet-37zj`) rather than made here. That item has since
+gone through the schema's single-writer review and updated the note to name
+both admitted targets; the sentence quoted above no longer appears in
+`scenario.md`.
 
 ## KE1-F4 task 4 residual: the corpus cannot COUNT re-emissions, so echo termination's "re-emits nothing" is pinned at the driver, not in the corpus (`schema-gap`, `[KE1-33]`)
 
