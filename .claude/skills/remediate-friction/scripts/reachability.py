@@ -65,6 +65,40 @@ MD = re.compile(r"[\w./-]+\.md")
 # A row of SKILL.md's reference index: `| `references/foo.md` | when to read |`.
 INDEX_ROW = re.compile(r"^\|\s*`references/[\w-]+\.md`\s*\|")
 
+SKILL_OF = re.compile(r"^\.claude/skills/([\w-]+)/")
+
+
+def declined(path):
+    """Why this file is outside the model — or None if the walk can judge it.
+
+    The graph above is /work's reading chain and nothing else's. Two kinds of
+    file are unjudgeable by construction, and a confident NOT-READ on either is
+    a FALSE NEGATIVE that sends a session chasing a placement problem it does
+    not have — the failure this script exists to catch, committed by the script
+    (computenet-z9tu, observed on a sync-report edit where both edited files
+    came back NOT-READ).
+
+    A skill's own SKILL.md is the one reachability fact needing no graph: every
+    invocation of a skill reads it. That is reported SERVED, not declined.
+    """
+    m = SKILL_OF.match(path)
+    if m and m.group(1) != "work":
+        if os.path.basename(path) == "SKILL.md":
+            return None          # handled as trivially served by the caller
+        return (f"under skill '{m.group(1)}'; the role graph models /work only")
+    if not path.endswith(".md"):
+        return ("not a .md file; the walk follows markdown links, so a script "
+                "or data file is unreachable by construction — it takes effect "
+                "by being RUN, which is what a mechanical fix is for")
+    return None
+
+
+def trivially_served(path):
+    """A non-/work skill's own SKILL.md: read by every invocation of it."""
+    m = SKILL_OF.match(path)
+    return bool(m and m.group(1) != "work"
+                and os.path.basename(path) == "SKILL.md")
+
 
 def links(path):
     """In-skill .md files `path` points at, ignoring index-table rows."""
@@ -117,6 +151,14 @@ def main(argv):
             if not os.path.exists(f):
                 print(f"reachability: {f} does not exist", file=sys.stderr)
                 return 2
+            if trivially_served(f):
+                print(f"SERVED    {f} is its own skill's SKILL.md — read by "
+                      "every invocation of that skill")
+                continue
+            why = declined(f)
+            if why is not None:
+                print(f"NO-MODEL  {f}: {why}. Check placement by hand.")
+                continue
             d = per_role[role].get(f)
             if d is not None and d <= 1:
                 print(f"SERVED    {role} reads {f} at {d} hop(s)")
@@ -142,6 +184,16 @@ def main(argv):
         if not os.path.exists(f):
             print(f"reachability: {f} does not exist", file=sys.stderr)
             return 2
+        if trivially_served(f):
+            print(f)
+            print("    read by:   every invocation of its own skill (its "
+                  "SKILL.md)")
+            continue
+        why = declined(f)
+        if why is not None:
+            print(f)
+            print(f"    NO MODEL:  {why}. Check placement by hand.")
+            continue
         near = sorted(r for r in per_role if per_role[r].get(f, 99) <= 1)
         far = sorted(r for r in per_role if per_role[r].get(f, 99) >= 2)
         unreached = sorted(r for r in per_role if f not in per_role[r])

@@ -160,7 +160,16 @@ work                8869
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
 # rationale out of SKILL.md and into the scripts' own headers, where it is read
 # at the point of use instead of loaded into every session.
-remediate-friction   333
+# 333 -> 346 on 2026-08-29: computenet-z9tu (+13) — the lane's scope line named
+# two directories while AGENTS.md gives it all of .claude/skills/, leaving
+# sync-report and work-unsupervised editable by nobody (AGENTS.md forbids
+# editing a skill outside this lane). Both mechanisms already assumed the wider
+# scope, so the prose was the typo. +6 for the reconciliation with the evidence
+# that settles which side was wrong, +7 for the NO-MODEL/SERVED contract at
+# step 4's reachability call, without which the corrected scope hands sessions
+# a tool that returns a false NOT-READ on every non-/work skill file. The
+# reachability.py change itself is mechanical and free here.
+remediate-friction   346
 # 201 -> 267 on 2026-08-29: computenet-d1im — sync-report gains §4, the
 # coherence audit: five named checks over a bounded set (top up-next picks,
 # beads touched by window decisions, epics a merge may have absorbed), ranked

@@ -46,8 +46,14 @@ like a work session to /work's concurrent-run check.
   items. Because this lane never puts an epic `in_progress`, /work's
   concurrent-run check (which lists `in_progress` epics) never sees it, and
   no work-session epic claim is consumed.
-- **Touch only `.claude/skills/work/` and `.claude/skills/remediate-friction/`.**
-  Product code is /work's lane.
+- **Touch only `.claude/skills/`.** All of it — `work/` and this lane's own
+  files above all, but `sync-report/` and `work-unsupervised/` too. Product
+  code is /work's lane, and that half is the real boundary. This used to name
+  two directories, which left the other two skills owned by nobody: AGENTS.md
+  forbids editing a skill outside this lane, so read literally they could not
+  be edited at all (computenet-z9tu). The two mechanisms already assumed the
+  wider scope — `validate-skills.rb` checks every skill, and `line-budget.txt`
+  carries a budget for each — so the narrow line was the typo.
 
 ## 1. Identity and sync
 
@@ -281,6 +287,13 @@ role that hit the wall; pass that role and the files you touched:
 ```bash
 .claude/skills/remediate-friction/scripts/reachability.py --for <role> <edited-file>...
 ```
+
+The role graph models `/work` and nothing else, so outside it the script
+DECLINES rather than guessing: a non-`/work` skill's own `SKILL.md` reports
+`SERVED` (every invocation of a skill reads it — the one reachability fact
+needing no graph), and anything else outside the model reports `NO-MODEL` with
+"check placement by hand". Before computenet-z9tu both came back `NOT-READ`,
+which is the script committing the very defect it exists to catch.
 
 `NOT-READ` means the fix is correct and invisible — computenet-l5rc's glob-trap
 remedy landed in a file the orchestrator never opens, so it recurred twice in a
