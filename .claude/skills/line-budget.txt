@@ -196,7 +196,18 @@
 # all three of computenet-os91's instances are in the prose rather than two of
 # them being one indirection away in the script's table. The add-only narrowing
 # of the couplings is mechanical and free here.
-work                9020
+# 9020 -> 9051 on 2026-08-29: computenet-uxr8 (+31, one of them the blank line
+# that keeps the gradle-evidence.md sentence its own paragraph) — "affected module tests"
+# was read as the module the diff SITS IN, unanimously, by five agents in a row.
+# Feature computenet-j2x.4 added four files to concord/corpus/24-data-cells/;
+# :oracle's CorpusCrossCheckTest enumerates that directory at test time and
+# asserts a non-vacuity count, so build-test-fast went red on
+# `expected:<29> but was:<33>` after four task merges. No import, no Gradle
+# dependency, no path overlap: nothing static can surface a runtime directory
+# read. The lines redefine "affected" as the modules whose test INPUTS the diff
+# changes, at both call sites (review-feature.md §3, task.md step 6), with the
+# concord/corpus -> :oracle:test rule stated concretely so it needs no derivation.
+work                9051
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
