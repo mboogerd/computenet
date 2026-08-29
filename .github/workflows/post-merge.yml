@@ -212,6 +212,14 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # :demo:beadsmirror's suites drive real `bd`/`dolt`, and this lane runs
+      # a repo-wide `check`. Omitting this step is what made this workflow red
+      # for twelve days: the fast lane failed on the two unguarded classes,
+      # and the serial lane passed GREEN with TwoJvmMirrorTest SKIPPED —
+      # mirroring `ci.yml` command-for-command except for the one step that
+      # made its coverage real (computenet-mgxe, issue #304).
+      - uses: ./.github/actions/install-bd-dolt
+
       - name: Build and check (fast lane — excludes multi-jvm-tagged tests)
         run: ./gradlew build check -PexcludeMultiJvm=true
 
@@ -253,6 +261,11 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      # Same as the fast lane above: without it this lane's only
+      # :demo:beadsmirror class, TwoJvmMirrorTest, reports SKIPPED and the job
+      # passes green having asserted nothing (computenet-mgxe, issue #304).
+      - uses: ./.github/actions/install-bd-dolt
 
       - name: Multi-JVM serial lane (process-startup + wall-clock timing tests)
         run: ./gradlew check -PmultiJvmOnly=true --max-workers=1

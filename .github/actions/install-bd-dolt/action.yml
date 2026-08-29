@@ -1,0 +1,78 @@
+name: Install bd and dolt
+description: >-
+  Provisions the `bd` and `dolt` binaries that :demo:beadsmirror's
+  real-workspace suites drive, pinned to the versions a contributor's
+  `brew install dolt` / `bd --version` resolve to.
+
+# Why this file exists, and why it is a composite action rather than the
+# copy-pasted step it replaces (computenet-mgxe).
+#
+# Every one of :demo:beadsmirror's suites drives a real `bd --sandbox init`
+# workspace over a real embedded Dolt database. Most guard themselves with
+# `assumeTrue(commandAvailable("bd", ...))`, so on a runner without the
+# binaries they SKIP — a lane passing green having asserted nothing about the
+# mirror, which is the failure computenet-7em.5 exists to prevent. Two of them
+# (`BdSyncedWorkspacePairTest`, `PullRebaselineTest`, landed by #298) carry no
+# such guard and fail outright instead.
+#
+# `ci.yml` used to hold two byte-identical copies of the steps below, with a
+# comment arguing that a composite action was not worth "a second file to keep
+# in step with the two versions pinned here" — the assertion step at the end of
+# that job being what caught the copies drifting. That reasoning held while
+# both copies lived in one file. It stopped holding when `post-merge.yml` and
+# `cache-seed.yml` mirrored those lanes into two more files and copied
+# everything except this step: nothing compared them, and `main` was red for
+# twelve days (2026-08-18 .. 2026-08-29, issue #304) with the serial lane green
+# and `TwoJvmMirrorTest` SKIPPED. One file, one pin, six call sites.
+#
+# A composite ACTION, not a reusable `workflow_call` workflow: the latter
+# renames the calling job's check runs, and branch protection matches the six
+# required checks by exact name. Composite steps inline into the calling job
+# and change no names.
+#
+# `CiProvisionsBdAndDoltTest` is the guard that keeps a new lane from being
+# added without this step.
+#
+# Both projects publish a single static linux/amd64 binary as a release asset,
+# so this is two curls in well under 10s combined — no build-from-source path,
+# no package manager, no daemon. `bd` is fetched as a plain tarball (its own
+# install.sh falls back to `go install` only where no prebuilt asset exists,
+# which linux/amd64 never lacks) so the version is pinned without depending on
+# GitHub's unauthenticated API rate limit; `dolt`'s install.sh is itself
+# version-pinned by URL and does the platform detection, so it is used as
+# published rather than reimplemented here. Bump the two versions together.
+#
+# Nothing beyond the binaries is required: `bd --sandbox init` is a throwaway
+# embedded-Dolt workspace under the test's own temp dir — no DoltHub
+# credentials, no network, no `bd dolt push/pull`, and no Dolt identity
+# configuration, because BdScratchWorkspace points git's config files at
+# /dev/null.
+
+inputs:
+  bd-version:
+    description: bd release to install
+    default: "1.2.2"
+  dolt-version:
+    description: dolt release to install
+    default: "2.3.0"
+
+runs:
+  using: composite
+  steps:
+    - name: Install bd and dolt (for :demo:beadsmirror's real-workspace tests)
+      shell: bash
+      env:
+        BD_VERSION: ${{ inputs.bd-version }}
+        DOLT_VERSION: ${{ inputs.dolt-version }}
+      run: |
+        set -euo pipefail
+
+        curl -fsSL -o /tmp/bd.tar.gz \
+          "https://github.com/gastownhall/beads/releases/download/v${BD_VERSION}/beads_${BD_VERSION}_linux_amd64.tar.gz"
+        tar -xzf /tmp/bd.tar.gz -C /tmp bd
+        sudo install -m 0755 /tmp/bd /usr/local/bin/bd
+
+        curl -fsSL "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/install.sh" | sudo bash
+
+        bd --version
+        dolt version
