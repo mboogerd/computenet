@@ -31,6 +31,9 @@ Usage: reachability.py <file> [<file>...]           (who reads each file)
        reachability.py --for <role> <file>...       (GATE: is THAT role served?)
        reachability.py --roles                       (per role, every file + distance)
 Exit: 0 = served; 1 = not served; 2 = bad usage / no such file or role.
+A DECLINED file (`NO-MODEL`, see `declined()`) also exits 0 — it is not a
+failure, but it is not a pass either, so read the output, never just the
+status: a `--for` run whose files ALL decline exits 0 having asserted nothing.
 
 `--for` is the form the lane runs. A friction bead names the role that hit the
 wall ("MY OWN defect as orchestrator", "the .2.1 REVIEWER reported it"); pass
