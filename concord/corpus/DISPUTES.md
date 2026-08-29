@@ -1968,7 +1968,7 @@ finding from the review of `computenet-4ru.1.6`. It is recorded here rather than
 KDoc because a reader arriving from the requirement side — `doc/spec/CONCORDANCE.md`, or this file —
 otherwise reads `ORA2 §DIFF-07` as covered at the shape BS-9 states, which it is not.
 
-### BS-9 / `ORA2 §DIFF-07` (the tagged wave-prefix diamond) — **`oracle-gap`** (vocabulary/kernel typing), blocked on `96 §E1.5`'s `UntagCell`/`TaggedMapView`
+### BS-9 / `ORA2 §DIFF-07` (the tagged wave-prefix diamond) — **`oracle-gap`** (vocabulary/kernel typing), blocked on `96 §E1.5`'s `UntagCell`/`TaggedMapView` being registered in `OperatorCatalog`
 
 - **Category**: `oracle-gap`. No corpus scenario is weakened, renamed or softened by this entry; the
   landed test is green on its own narrower claim and stays exactly as it is.
@@ -1991,8 +1991,13 @@ otherwise reads `ORA2 §DIFF-07` as covered at the shape BS-9 states, which it i
     (`check(operatorEntries.isNotEmpty())`), so no generated case can place anything downstream of a
     tagged terminal either.
   - the tagged-aware downstream adapters that would bridge the two delta types — `96 §E1.5`'s
-    `UntagCell` / `TaggedMapView` — **do not exist**: verified 2026-08-21, the only file under
-    `kernel/src/main` naming either is `OrMapCell.kt`'s own prose.
+    `UntagCell` / `TaggedMapView` — **now exist**: verified 2026-08-29, at
+    `civictech.cell.data.op.UntagCell` (`kernel/src/main/kotlin/civictech/cell/data/op/UntagCell.kt`)
+    and `civictech.cell.data.view.TaggedMapView`
+    (`kernel/src/main/kotlin/civictech/cell/data/view/TaggedMapView.kt`), landed under epic
+    `computenet-j2x`. Neither closes this entry: neither type is registered in
+    `civictech.oracle.bind.OperatorCatalog` as a nonzero-arity entry that consumes a tagged outlet,
+    so the diamond stays unconstructible for that reason — registration, not existence.
 
 - **What is covered instead.** `civictech.oracle.tagged.TaggedWavePrefixTest` applies
   `civictech.oracle.run.WavePrefixOracle` **unchanged** to a **bare `orMap` source observed as its own
