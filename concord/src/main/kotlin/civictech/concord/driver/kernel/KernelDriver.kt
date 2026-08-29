@@ -96,6 +96,13 @@ class KernelDriver(seed: Long? = null) : Driver {
     /** Cell ids delegated to [dur] (durable-host members + `journal` controllers). */
     private val durCells = mutableSetOf<CellId>()
 
+    /**
+     * Cell ids placed into a replication mesh by [dist] (`replica-of`). Held HERE
+     * rather than read back out of [dist] so a pure `core` run never forces the
+     * lazy dist capability just to answer "is this a replica?".
+     */
+    private val distReplicas = mutableSetOf<CellId>()
+
     /** The implicit host single-host (non-`dist`) scenarios spawn onto. */
     private val defaultHostId: HostId = "\u0000default"
 
@@ -168,6 +175,7 @@ class KernelDriver(seed: Long? = null) : Driver {
         // the registry before the replica joins the mesh.
         (params["replica-of"] as? Value.StrVal)?.value?.let { logical ->
             dist.spawnReplica(hostId, cellId, type, logical, params["interest"])
+            distReplicas += cellId
             return
         }
         val host = hostFor(if (hostId == "" ) defaultHostId else hostId)
@@ -435,16 +443,25 @@ class KernelDriver(seed: Long? = null) : Driver {
     }
 
     /**
-     * The kernel binding of the retransmit verb: a **durability** capability,
-     * delegated wholesale to [KernelDriverDur.retransmit].
+     * The kernel binding of the retransmit verb, delegated to whichever capability
+     * owns a **decision about a duplicate**.
      *
-     * A duplicate live delivery is only observable where something decides
-     * whether to act on it twice, and in this driver that decision — the
-     * `Effectful` processed-frontier — exists on the `dur` profile alone (the
-     * same reason [effectLog] is empty on core). Rather than inject an
-     * unobserved delivery at a core cell, a core target fails loudly here: an
-     * injection nothing can assert on is exactly the scenario-shaped hole this
-     * verb was added to close.
+     * A duplicate live delivery is only observable where something decides whether
+     * to act on it twice, and this driver has exactly two such decisions:
+     *
+     * - the `dur` profile's `Effectful` **processed-frontier**
+     *   ([KernelDriverDur.retransmit]) — the same reason [effectLog] is empty on
+     *   core; and
+     * - the `dist` profile's **dot algebra** at a replica's gossip inlet
+     *   ([KernelDriverDist.retransmit], `computenet-j2x.4.6`) — `novelty` keeps
+     *   only dot information the fold has never held, so a re-delivered dot
+     *   re-emits nothing (echo termination, spec 40/42).
+     *
+     * Everything else fails loudly here. A plain core cell — including a
+     * `Replicable` one that was never placed in a replication mesh — has neither
+     * decision and no already-gossiped delta to re-deliver, so the injection would
+     * assert nothing: exactly the scenario-shaped hole this verb was added to
+     * close.
      */
     override fun retransmit(
         cellId: CellId,
@@ -456,10 +473,12 @@ class KernelDriver(seed: Long? = null) : Driver {
         baseline: Map<CellId, Long>?,
     ) {
         if (cellId in durCells) return dur.retransmit(cellId, inlet, source, counter, op, value, baseline)
+        if (cellId in distReplicas) return dist.retransmit(cellId, inlet, source, counter, op, value, baseline)
         throw UnsupportedCatalogBinding(
-            "retransmit at '$cellId': this binding injects an explicit wave position only at a durable " +
+            "retransmit at '$cellId': this binding injects an explicit wave position at a durable " +
                 "effect-boundary sink (host: dur), where a processed-frontier decides whether the duplicate " +
-                "acts again — a core cell has no such decision, so the injection would assert nothing",
+                "acts again, or at a `replica-of` replica's gossip inlet (profile: dist), where the dot " +
+                "algebra does — a core cell has neither decision, so the injection would assert nothing",
         )
     }
 
