@@ -184,7 +184,11 @@ A bug's reproduction must fail unfixed; a measurement must be sized before it is
    the Edit tool refuses), `--rerun --no-build-cache`, verify the revert, then
    the confirming run. **Leave the marker first**, so an agent that inherits your
    worktree after a crash can tell a live mutation from finished work. The two
-   are indistinguishable from the diff alone.
+   are indistinguishable from the diff alone. **A red run is only evidence if
+   you say WHICH assertion went red**: in a test with several assertions an
+   earlier one can catch the mutation while the assertion carrying the
+   criterion never discriminates at all, which reads as "caught" and stops the
+   investigation one step short (mutation-check.md step 4, computenet-pko4).
 
    **But only for a file inside your `metadata.files` claim.** Mutating a file
    outside it is not your call, and the permission classifier will usually

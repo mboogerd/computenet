@@ -166,22 +166,31 @@
 # templates; and the perl/sed detour is scoped to tool refusals, never to scope
 # limits. Without the reviewer's retry that session would have merged a 461-line
 # convergence test whose central property was never shown to fail.
-# 8938 -> 8982 on 2026-08-29: computenet-a4b7 + computenet-pko4 (+44), two ways
+# 8938 -> 9002 on 2026-08-29: computenet-a4b7 + computenet-pko4 (+64), two ways
 # a mutation check returns a PASS that means nothing — the failure direction
-# this whole procedure exists to remove. a4b7: re-applying an IDENTICAL mutation
-# leaves compileKotlin UP-TO-DATE, so the mutated .class survives the revert and
-# the confirming run grades it; a reviewer's "reverted, still green" was measured
-# against a class timestamped 8s after its last green run, and only decompiling
-# settled it. --no-build-cache does not cover this (the trap is task
-# up-to-dateness), so the file now carries a `find -newer` discriminator anyone
-# can run. pko4: a test with several assertions can be reddened by an EARLIER
-# one while the assertion carrying the criterion never discriminates —
-# LinkControl.holding's first test passed with the primitive no-op'd, and a
-# sibling case left five tests green with the duplicator neutralised entirely.
-# Both instances were caught by agents who happened to be thorough; the
-# documented procedure passed both. +9 of the 44 restate the two clauses at the
-# two reviewer call sites, where the verdict is actually recorded.
-work                8982
+# this whole procedure exists to remove.
+#
+# a4b7: a reviewer's "reverted, still green" was measured against a class file
+# that was still the mutated build, and only decompiling settled which build had
+# run; every documented step passed, because every documented step looks at the
+# SOURCE. The rule that covers it is gradle-evidence.md's, applied one task
+# earlier: FROM-CACHE/UP-TO-DATE on compileKotlin means nothing compiled this
+# run. 20 of the 64 lines are the reviewer's measurement REFUTING the bead's own
+# proposed mechanism (an identical re-applied mutation re-executes; the cache is
+# what is content-keyed, and it restores the CORRECT class) and killing its
+# proposed remedies (`touch` cannot work; `find -newer` returns empty in both
+# states it was meant to separate). That refutation is worth its lines: the
+# first cut of this fix shipped the bead's hypothesis as fact into the one file
+# whose job is to stop agents believing false build evidence.
+#
+# pko4: a test with several assertions can be reddened by an EARLIER one while
+# the assertion carrying the criterion never discriminates — LinkControl.holding
+# 's first test passed with the primitive no-op'd, and a sibling case left five
+# tests green with the duplicator neutralised entirely. Both instances were
+# caught by agents who happened to be thorough; the documented procedure passed
+# both. +9 restate the two clauses at the three call sites (task.md step 3,
+# review-task.md, review-feature.md) where the verdict is actually recorded.
+work                9002
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

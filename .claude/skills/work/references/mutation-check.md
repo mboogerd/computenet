@@ -125,25 +125,41 @@ load-bearing run — any mutation check, any before/after comparison — pass
 count and the `timestamp` *attribute inside the file*, not the file's mtime,
 which a cache restore also freshens.
 
-**A COMPILE task can be UP-TO-DATE with the PREVIOUS build's classes, and
-`--no-build-cache` does not cover it.** Re-applying an *identical* mutation
-gives Gradle a source hash it has already seen, so `:<module>:compileKotlin`
-reports `UP-TO-DATE` and the mutated `.class` stays in `build/` — including on
-the run *after* you revert. Measured (computenet-a4b7, epic computenet-umx): a
-reviewer reported "reverted, still green" against a tree whose source was
-reverted and whose `DepartEvent.class` was still the mutated build, timestamped
-8 seconds after its last green run. Source discipline cannot see this — `git
-status` was clean, the diff was clean, and Gradle's `UP-TO-DATE` reads as
-reassurance. gradle-evidence.md teaches that `UP-TO-DATE` on a **test** task
-means the tests did not run; this is the same word on a **compile** task,
-meaning the classes are not from the source on disk. The cheap discriminator,
-no decompiling: assert the class is newer than the source you just touched.
+**Read the COMPILE task's state line, not just the test task's.** A reviewer
+once reported "reverted, still green" against a tree whose source was reverted
+and whose `DepartEvent.class` on disk was still the mutated build, timestamped
+8 seconds after its last green run; only decompiling settled which build had
+run (computenet-a4b7, epic computenet-umx). Every documented step had passed —
+`git status` clean, diff clean, no `e:` lines, named test red, revert verified —
+because all of them look at the SOURCE.
+
+The rule that covers it is the one gradle-evidence.md already gives for test
+tasks, applied one task earlier: **`FROM-CACHE` or `UP-TO-DATE` on
+`:<module>:compileKotlin` means no compilation happened this run**, so the
+classes your test just ran against are whatever some previous run left there.
 
 ```bash
-find <module>/build/classes -name '<Class>*.class' -newer <the-source-file>
-# expect a HIT. Empty = you are grading a stale build. `touch <source>` and
-# re-run, or drop that module's classes, before you believe any result.
+grep -E '^> Task :<module>:compileKotlin' "$SCRATCH/mut.log"
+# unmarked = it compiled from the source on disk. Marked = it did not.
 ```
+
+Two corrections to what that bead proposed, both measured on this host
+(computenet-a4b7's review, `:nature`, both with and without `--no-build-cache`):
+
+- **Re-applying an identical mutation does NOT leave the compile task
+  `UP-TO-DATE` with a stale class.** Up-to-dateness compares against the *last
+  execution*, so any content change re-executes; the build CACHE is what is
+  content-keyed, and a cache hit prints `FROM-CACHE` and restores the class that
+  is *correct for that hash*. So `--no-build-cache` is not useless here — it is
+  simply not the lever, because the lever is reading the state line.
+- **`touch <source>` is not a remedy** — it does not change the content hash, so
+  the task stays `UP-TO-DATE` and nothing recompiles, twice over. If you do need
+  to force it: `rm -rf <module>/build/classes`, or `--rerun-tasks`.
+
+A `find -newer` on the class file was tried and rejected for the same reason: it
+returns empty both when the class is stale AND when the source simply has not
+changed since the last compile, so it cannot separate the two states it was
+meant to separate.
 
 **And read WHICH assertion went red.** A test with several assertions can be
 reddened by an earlier one while the assertion carrying the criterion never
