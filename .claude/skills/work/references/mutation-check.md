@@ -125,6 +125,40 @@ load-bearing run — any mutation check, any before/after comparison — pass
 count and the `timestamp` *attribute inside the file*, not the file's mtime,
 which a cache restore also freshens.
 
+**A COMPILE task can be UP-TO-DATE with the PREVIOUS build's classes, and
+`--no-build-cache` does not cover it.** Re-applying an *identical* mutation
+gives Gradle a source hash it has already seen, so `:<module>:compileKotlin`
+reports `UP-TO-DATE` and the mutated `.class` stays in `build/` — including on
+the run *after* you revert. Measured (computenet-a4b7, epic computenet-umx): a
+reviewer reported "reverted, still green" against a tree whose source was
+reverted and whose `DepartEvent.class` was still the mutated build, timestamped
+8 seconds after its last green run. Source discipline cannot see this — `git
+status` was clean, the diff was clean, and Gradle's `UP-TO-DATE` reads as
+reassurance. gradle-evidence.md teaches that `UP-TO-DATE` on a **test** task
+means the tests did not run; this is the same word on a **compile** task,
+meaning the classes are not from the source on disk. The cheap discriminator,
+no decompiling: assert the class is newer than the source you just touched.
+
+```bash
+find <module>/build/classes -name '<Class>*.class' -newer <the-source-file>
+# expect a HIT. Empty = you are grading a stale build. `touch <source>` and
+# re-run, or drop that module's classes, before you believe any result.
+```
+
+**And read WHICH assertion went red.** A test with several assertions can be
+reddened by an earlier one while the assertion carrying the criterion never
+discriminates at all — and the later assertion is usually the criterion's real
+content. Measured (computenet-pko4): the first test for `LinkControl.holding`
+PASSED with the primitive replaced by no-ops, because an unrelated scheduler
+starvation made its arrival assertion vacuously true; the single documented
+mutation reddened the *earlier* state assertion, which reads as "the mutation
+was caught" and stops the investigation one step short. A second instance the
+same session: neutralising a duplicator entirely left all five of its tests
+green. **The check is not complete until the assertion under test is shown to
+discriminate on its own** — disable the earlier assertions under the same
+mutation, or choose a mutation only that assertion can catch — and the report
+names the assertion, not just the test.
+
 **5. Revert — and verify it, do not assume it.** Two ways `git checkout` lies:
 
 - **An untracked file cannot be checked out at all**, and *how* you name it
@@ -229,7 +263,8 @@ real mutation itself ("Who mutates what" above) AND checks your substitution.
 
 ## What to report
 
-The mutation you made (file and call site), the test name that went red, and
-its **assertion message**. "I did the mutation check and it failed as
-expected" is the unfalsifiable sentence this whole procedure exists to
-replace.
+The mutation you made (file and call site), the test name that went red,
+**which assertion** in it went red, and its **assertion message**. "I did the
+mutation check and it failed as expected" is the unfalsifiable sentence this
+whole procedure exists to replace — and naming the test without the assertion
+is the same sentence for a multi-assertion test (step 4).
