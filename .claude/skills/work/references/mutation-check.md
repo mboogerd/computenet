@@ -27,10 +27,10 @@ reviewer mutations that session were likewise unrefused. A second instance
 points the same way from the opposite end of the risk scale: a strictly
 read-only `gh run list` was refused to a subagent and succeeded byte-for-byte
 from the orchestrator a minute later. The gate appears to key on the asking
-agent's **stated authorization** rather than the action's content — so the
-authorization sentence in the dispatch is what decides, and both templates now
-carry theirs (SKILL.md 5b for the implementer, merge-task.md for the reviewer)
-instead of leaving it to whoever writes the prompt.
+agent's **stated authorization** rather than the action's content — so what the
+dispatch states is what decides, and both templates now state it rather than
+leaving it to whoever writes the prompt: merge-task.md GRANTS the reviewer's,
+SKILL.md 5b WITHHOLDS the implementer's and says where the mutation goes.
 
 **Refused? Report the refused operation verbatim.** Two different walls, and
 only one of them has a legitimate detour:
@@ -224,8 +224,8 @@ asserts on**, and say that is what you did.
 
 **Neither is equivalent to a self-run mutation**, and a reader must be able to
 tell which strength of evidence it is looking at — which is the whole reason to
-name the route rather than quietly substitute one. A reviewer's job here is to
-check the substitution was adequate, not to accept it because it was offered.
+name the route rather than quietly substitute one. The reviewer then runs the
+real mutation itself ("Who mutates what" above) AND checks your substitution.
 
 ## What to report
 
