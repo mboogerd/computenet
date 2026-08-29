@@ -1542,6 +1542,53 @@ verdict. (`parked` is only meaningful on an empty batch.)
   finds one rather than working around it silently — that is what held the
   cost down both times.
 
+  **A third shape, and no grep for the new symbol reaches it: ADDING TO A
+  SET.** af9q's rule aims at the files that observe the INVARIANT the change
+  moves. These close over the **set** instead — a registry's completeness, a
+  package's census — so they never name the thing being added, and a claim
+  derived faultlessly from the design still comes up short. Two forms:
+
+  - a **completeness gate** over a registry (`ReferenceModelPurityTest` needs
+    a node for every `OperatorCatalog` registration; `OperatorInventoryTest`
+    diffs the package against `oracle/src/test/resources/operator-inventory.txt`;
+    `concordanceGate` lints `covers:` ids against the corpus) — computenet-os91;
+  - an **enumerator of a package or tag from another module**, source or CI
+    config alike — computenet-y6zv. computenet-m9px's "a new Gradle module
+    requires `doc/ARCHITECTURE.md`" is this shape with a module as the set.
+
+  It is measured, not hypothetical. PR #544 added `UntagCell.kt` to
+  `civictech.cell.data.op` with a two-file claim, passed `check-files-claim.sh`
+  CLEAN, was certified by mutation, and ran `:kernel:test` green at 1273
+  tests — then `build-test-fast` went red in `:inspect` and `:oracle` on three
+  enumerators the bead never named. Cost: a P1 repair task and two full CI
+  cycles. In the same session, an agent *told to look* found the identical trap
+  in `.github/workflows/ci.yml`, which hard-enumerates the multi-jvm modules in
+  three places (plus `cache-seed.yml` in two), only one of them guarded. Told,
+  an agent finds these; not told, it does not.
+
+  So when a bead ADDS an entry to something — a type to a package, a module to
+  the build, an operator to a catalog, a `@Tag` to a suite — take the
+  identifier of the **set**, not of the entry, and walk it:
+
+  ```bash
+  git grep -ln -F 'civictech/cell/data/op' -- ':!kernel/*'   # the package's path
+  git grep -ln -F 'civictech.cell.data.op' -- '.github' 'concord' 'oracle' 'inspect'
+  ```
+
+  Everything outside the task's own module is a claim candidate. The dotted
+  form and the slash form find different files, and `.github/` is not optional.
+  Expect noise — an import is not an enumeration — so read the hits rather than
+  claiming them all; what you are looking for is a file that would have to
+  CHANGE for the set to stay correct.
+
+  **Two things cannot falsify this and must not be read as clearing it.**
+  `check-files-claim.sh` greps the bead's TEXT: a coupling the bead never names
+  is invisible to it by construction, so CLEAN is not an all-clear here (it
+  knows the couplings listed in its own `COUPLINGS` table and nothing else —
+  when you find a new one, add the line). And the task-scoped Gradle gate
+  cannot see other modules at all, so a green module suite is not evidence the
+  claim is complete. The walk above is the only pre-CI check there is.
+
   Never let a
   task take a nominal claim over files it merely reads: a claim is a lock, so
   a read-only lock blocks a sibling for no benefit. A *descriptive string*

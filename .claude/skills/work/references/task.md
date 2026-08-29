@@ -312,6 +312,16 @@ The smallest coherent change, and proof the tests actually executed.
    timestamp from `junit-count.py`, which is what actually proves the run
    happened; the task-count line corroborates and does not settle it
    ([gradle-evidence.md](gradle-evidence.md)).
+
+   **"The affected module" is the module whose test INPUTS you changed, which
+   is not always the module your diff sits in.** If your diff ADDS or DELETES a
+   file under `concord/corpus/`, also run `./gradlew :oracle:test --rerun`:
+   `:oracle`'s `CorpusCrossCheckTest` enumerates that directory at test time
+   and asserts a non-vacuity count, so a new scenario file changes its input
+   with no import, Gradle dependency or path overlap to point the way. Five
+   green local gates missed exactly this and `build-test-fast` caught it after
+   four merges (computenet-uxr8). Ask what READS the files you add or remove,
+   not what imports them.
    - **Your FIRST Gradle or npm call, and every one after it, passes
      `dangerouslyDisableSandbox`.** The default Bash sandbox fails KSP with
      `Operation not permitted`, and the daemon it starts can stay poisoned

@@ -54,7 +54,35 @@ covered() { # path (reads $claim_entries)
 # file their bead never mentioned. Both caught it locally only because their
 # dispatch prompts happened to ask for :kernel:test — luck, not structure
 # (computenet-d7qn, computenet-m9px). Adding an entry costs one line.
-COUPLINGS='settings.gradle.kts=>doc/ARCHITECTURE.md'
+#
+# The rest are the SET shape (computenet-y6zv, computenet-os91): a file
+# elsewhere that enumerates a package, or a test that asserts a registry is
+# exhaustively covered. Neither closes over the thing being added — they close
+# over the SET — so no grep for the new symbol reaches them, and a task-scoped
+# gate in the module being edited structurally cannot fail on them. Measured:
+# PR #544 added UntagCell.kt to civictech.cell.data.op, ran :kernel:test green
+# at 1273 tests, and build-test-fast went red in :inspect and :oracle.
+#
+# Not listed, deliberately: the civictech.cell.data source-cell gate
+# (oracle/src/test/resources/source-cell-inventory.txt). Its trigger directory
+# CONTAINS civictech/cell/data/op, so it would fire on every operator change —
+# a different package, a guaranteed false positive. SKILL.md 5b's enumerator
+# walk is what reaches it: `git grep -F 'civictech/cell/data'` returns it, and
+# a human reading the hits can tell a source-cell add from an operator add
+# where this table cannot. Do not add it here (computenet-y6zv).
+COUPLINGS='settings.gradle.kts=>doc/ARCHITECTURE.md
++civictech/cell/data/op=>oracle/src/test/resources/operator-inventory.txt
++civictech/cell/data/op=>inspect/src/main/kotlin/civictech/inspect/Observations.kt
++civictech/cell/data/op=>oracle/src/main/kotlin/civictech/oracle/bind/TaggedOperators.kt
+oracle/src/main/kotlin/civictech/oracle/bind/OperatorCatalog.kt=>oracle/src/test/kotlin/civictech/oracle/model/ReferenceModelPurityTest.kt'
+
+# The add-only arm below asks "does this claimed path exist yet", and a claim
+# entry is repo-root-relative. Resolve the root rather than trusting the CWD:
+# measured, running the script from `<worktree>/kernel` fired all three census
+# rows on a bead whose files all exist (bd itself walks up to the workspace, so
+# nothing else in the run gives the mistake away).
+ROOT_PREFIX=$(git rev-parse --show-toplevel 2>/dev/null)
+[ -n "$ROOT_PREFIX" ] && ROOT_PREFIX="$ROOT_PREFIX/"
 
 found=0
 for id in "$@"; do
@@ -104,12 +132,43 @@ for id in "$@"; do
   while IFS= read -r rule; do
     [ -n "$rule" ] || continue
     trigger=${rule%%=>*}; implied=${rule#*=>}
-    # The trigger has to be in play at all: either the bead names it, or the
-    # claim already covers it. Otherwise the coupling is irrelevant here.
-    case "$mentioned"$'\n'"$claim_entries" in
-      *"$trigger"*) ;;
-      *) continue ;;
-    esac
+    # A `+` prefix means ADD-ONLY: fire only when a CLAIM ENTRY under the
+    # trigger names a path that does not exist on disk yet — i.e. the bead
+    # adds a file to that directory. Without it the census couplings fire on
+    # every bead that merely edits something in the package: measured 11 of 12
+    # sampled beads, ~9 of them false, because a tag-semantics fix to an
+    # existing cell changes no class census. The guardrail line asserts
+    # REQUIRES with none of the MENTION line's hedge, so an all-false stream
+    # here is worse than for those — computenet-0pd6's lesson, applied to the
+    # rows added by computenet-y6zv.
+    #
+    # This reads the working tree, so run it BEFORE dispatch, where "the file
+    # is not there yet" is true. Re-run after the work lands and the rows fall
+    # silent, correctly.
+    addonly=0
+    case "$trigger" in +*) addonly=1; trigger=${trigger#+} ;; esac
+
+    if [ "$addonly" = 1 ]; then
+      inplay=0
+      while IFS= read -r entry; do
+        case "$entry" in *"$trigger"*) ;; *) continue ;; esac
+        # Normalise exactly as covered() does. A DIRECTORY or glob entry
+        # (`.../op/**`, `.../op/`) names no new file, and the raw string never
+        # exists on disk — unstripped it fired all three census rows on every
+        # glob claim, a guaranteed false positive (6 live beads claim globs).
+        entry=${entry%/}; entry=${entry%/\*\*}; entry=${entry%/\*}; entry=${entry%/}
+        [ -n "$entry" ] || continue
+        [ -e "$ROOT_PREFIX$entry" ] || inplay=1
+      done <<<"$claim_entries"
+      [ "$inplay" = 1 ] || continue
+    else
+      # The trigger has to be in play at all: either the bead names it, or the
+      # claim already covers it. Otherwise the coupling is irrelevant here.
+      case "$mentioned"$'\n'"$claim_entries" in
+        *"$trigger"*) ;;
+        *) continue ;;
+      esac
+    fi
     covered "$implied" || {
       echo "$id: names $trigger, which REQUIRES $implied (guardrail), not in metadata.files"
       found=1
