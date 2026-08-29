@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "20 passed, 0 failed".
+# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "28 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-files-claim.sh"}
@@ -99,6 +99,47 @@ check "glob claim covers a file beneath it" 0 ""
 
 bead "change a/b/evolve/Evolution.kt" "" "a/b/other/**"
 check "glob claim elsewhere still reports" 1 "names a/b/evolve/Evolution.kt"
+
+# ADD-ONLY couplings (`+` prefix). The census rows over civictech/cell/data/op
+# fire only when a claim entry under that package names a path that is not on
+# disk yet — an ADD. Without the narrowing they fired on 11 of 12 sampled beads,
+# ~9 falsely, and the guardrail line asserts REQUIRES with none of the MENTION
+# line's hedge (computenet-y6zv review; computenet-0pd6's lesson).
+OPDIR=kernel/src/main/kotlin/civictech/cell/data/op
+bead "add a new operator" "" "$OPDIR/BrandNewCell.kt"
+check "add-only fires on a claimed file that does not exist yet" 1 "REQUIRES oracle/src/test/resources/operator-inventory.txt"
+
+bead "fix tag semantics" "" "$OPDIR/UntagCell.kt"
+check "add-only silent when the claimed file already exists" 0 ""
+
+# A DIRECTORY or glob entry names no new file. Unstripped, the raw string never
+# passes `test -e`, so every glob claim fired all three rows.
+bead "rework the operators" "" "$OPDIR/**"
+check "add-only silent on a glob claim" 0 ""
+
+bead "rework the operators" "" "$OPDIR/"
+check "add-only silent on a directory claim" 0 ""
+
+# The existence test is repo-root-relative, not CWD-relative: run from a
+# subdirectory it must give the same answer (bd walks up on its own, so a
+# CWD-relative check misfires with nothing else in the run to show it).
+bead "fix tag semantics" "" "$OPDIR/UntagCell.kt"
+sub_out=$(cd "$(git rev-parse --show-toplevel)/kernel" && "$SCRIPT" computenet-x 2>/dev/null); sub_rc=$?
+if [ "$sub_rc" = 0 ]; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: add-only must be CWD-independent (rc=$sub_rc) out=<$sub_out>"
+fi
+
+# A new file in a DIFFERENT package must not trigger the op-package rows.
+bead "add a source cell" "" "kernel/src/main/kotlin/civictech/cell/data/BrandNewSource.kt"
+check "add-only does not fire outside the trigger package" 0 ""
+
+# The OperatorCatalog row is deliberately NOT add-only: registering an operator
+# is an edit to an existing file, so a mention/claim of it is the trigger.
+bead "register the operator in OperatorCatalog" "" "oracle/src/main/kotlin/civictech/oracle/bind/OperatorCatalog.kt"
+check "OperatorCatalog implies ReferenceModelPurityTest" 1 "REQUIRES oracle/src/test/kotlin/civictech/oracle/model/ReferenceModelPurityTest.kt"
+
+bead "register the operator in OperatorCatalog" "" "oracle/src/main/kotlin/civictech/oracle/bind/OperatorCatalog.kt,oracle/src/test/kotlin/civictech/oracle/model/ReferenceModelPurityTest.kt"
+check "OperatorCatalog coupling satisfied -> silent" 0 ""
 
 # A few beads store metadata.files as a JSON array, which jq -r renders as
 # pretty-printed JSON rather than a comma-separated string.
