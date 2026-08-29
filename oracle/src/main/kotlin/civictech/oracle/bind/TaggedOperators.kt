@@ -161,24 +161,28 @@ object TaggedOperators {
  * These six kernel types are the weighted (Z-set) family and the E1.4/E1.5 adopters `96 §E6`
  * and `96 §E1.4`/`§E1.5` describe. When this object was written (2026-08-21) none of them
  * existed under `kernel/src/main`, so every family reported `available = false`. **That is no
- * longer true of `UntagCell`**: `96 §E1.5`'s adapter half landed it at
- * `civictech.cell.data.op.UntagCell` (epic `computenet-j2x`, feature `computenet-j2x.3`), the
- * FQN [CANDIDATES] already guessed, so [probe] now reports that one family `available = true`
- * with a `null` reason. The other five still report absent — see the caveat below for why
- * `TaggedMapView`'s absence is a *stale guess* rather than a genuinely missing type.
+ * longer true of `UntagCell` or `TaggedMapView`**: `96 §E1.5`'s adapter half landed `UntagCell`
+ * at `civictech.cell.data.op.UntagCell` (epic `computenet-j2x`, feature `computenet-j2x.3`), the
+ * FQN [CANDIDATES] already guessed, so [probe] reports that family `available = true` with a
+ * `null` reason. `96 §E1.5`'s view half landed `TaggedMapView` too, at
+ * `civictech.cell.data.view.TaggedMapView` — a `.view` subpackage [CANDIDATES] did NOT originally
+ * guess (computenet-0e6q corrected the FQN; see the caveat below) — so [probe] now reports that
+ * family `available = true` as well. The other four still report absent, each with a written
+ * reason.
  *
  * Availability is not registration. [OperatorCatalog.register] needs a real
- * [CellFactory][civictech.cell.graph.CellFactory] *and* an evaluable model, and for the five
- * still-absent families there is no cell to build a factory from. `UntagCell` now has the
- * factory half, but registering it would additionally need a `civictech.oracle.model`
- * reference model for a `TaggedMapDelta -> MapDelta` unary — a new file in the model source
- * set, whose import boundary (`ORA1 §MODEL-10`/`ORA2 §MODEL-11`) forbids it from naming the
+ * [CellFactory][civictech.cell.graph.CellFactory] *and* an evaluable model, and for the four
+ * still-absent families there is no cell to build a factory from. `UntagCell` and `TaggedMapView`
+ * now have the factory half, but registering either would additionally need a
+ * `civictech.oracle.model` reference model — for `UntagCell`, a `TaggedMapDelta -> MapDelta`
+ * unary; for `TaggedMapView`, whatever shape its own read surface needs — a new file in the model
+ * source set, whose import boundary (`ORA1 §MODEL-10`/`ORA2 §MODEL-11`) forbids it from naming the
  * kernel cell it mirrors, i.e. a genuine second implementation of the adapter's effective-only
- * diff. That is real design work, not wiring, and it is deliberately NOT done in
- * `computenet-j2x.3.4` (whose acceptance is the three cross-module registrations only). Until
- * it lands, `UntagCell` is *available and unregistered*, and this comment is the record of why
- * — the same honest-non-registration idiom this file's [TaggedOperators] KDoc uses for
- * `KeyedSetCell`, `MergeableGroupByCell` and `PnCounterCell`.
+ * diff. That is real design work, not wiring, and it is deliberately NOT done here — computenet-pez3
+ * owns it, sequenced after this correction so it can start from an accurate availability surface.
+ * Until it lands, `UntagCell` and `TaggedMapView` are *available and unregistered*, and this
+ * comment is the record of why — the same honest-non-registration idiom this file's
+ * [TaggedOperators] KDoc uses for `KeyedSetCell`, `MergeableGroupByCell` and `PnCounterCell`.
  *
  * So absence — where it still holds — is reported, not registered: [probe] returns one
  * [Availability] per optional family, each absent one carrying `available = false` and a
@@ -200,30 +204,33 @@ object TaggedOperators {
  * will land these types — cells beside their siblings in `civictech.cell.data`
  * (`WeightedSetCell`, mirroring `SetCell`/`OrMapCell`) or `civictech.cell.data.op`
  * (`TagsToWeightsCell`, `WeightsToTagsCell`, `UntagCell`, mirroring the rest of that package),
- * deltas in `civictech.cell.data.delta` (`WeightedSetDelta`, mirroring `SetDelta`/`TaggedMapDelta`),
- * and `TaggedMapView` beside `OrMapCell` in `civictech.cell.data`. **If `96 §E6` lands any of
- * these under a different package**, [probe] keeps reporting that family `available = false`
+ * deltas in `civictech.cell.data.delta` (`WeightedSetDelta`, mirroring `SetDelta`/`TaggedMapDelta`).
+ * `TaggedMapView`'s guess was originally `civictech.cell.data` too, beside `OrMapCell` — it landed
+ * in a `.view` subpackage instead, and the "vindicated/corrected" section below is the record of
+ * that miss and its fix. **If `96 §E6` lands any of the remaining still-absent families under a
+ * different package than guessed here**, [probe] keeps reporting that family `available = false`
  * with today's reason even after the class exists — a guessed FQN that turns out wrong fails
  * toward "absent," never toward a false "present," but it does mean the guess has to be
  * corrected in the same change that lands the kernel type, not discovered later by a sweep
  * silently staying dark. `TaggedOperatorsTest` pins each family's expected availability
  * one by one, so every such correction is a visible, deliberate edit rather than a silent one.
  *
- * ### `UntagCell` vindicated the guess; `TaggedMapView` did not — and its entry is knowingly stale
+ * ### `UntagCell` vindicated the guess; `TaggedMapView`'s guess was wrong and is now corrected
  *
  * `UntagCell` landed at exactly the guessed `civictech.cell.data.op.UntagCell`, so the probe
  * flipped to `available = true` with no edit to [CANDIDATES] at all — the mechanism above
  * working as designed.
  *
- * `TaggedMapView` is the counter-case this section predicted. It **exists** as of
- * `96 §E1.5`'s view half, but at `civictech.cell.data.view.TaggedMapView` — a `.view`
- * subpackage, not `civictech.cell.data` — so [CANDIDATES]' guess misses it and [probe] still
- * reports it absent. That report is *false*, in the fail-toward-absent direction this section
- * calls out. It is left uncorrected here only because `computenet-j2x.3.4`'s acceptance scopes
- * that task to `UntagCell`'s status alone and requires the other five families to keep the
- * availability they already had; the correction (one FQN, plus flipping its pin in
- * `TaggedOperatorsTest`) belongs to its own item, filed as a follow-up. **Do not read
- * `TaggedMapView: available = false` as evidence the type is missing.**
+ * `TaggedMapView` is the counter-case this section predicted. It **exists** as of `96 §E1.5`'s
+ * view half, but landed at `civictech.cell.data.view.TaggedMapView` — a `.view` subpackage, not
+ * `civictech.cell.data` — so the original [CANDIDATES] guess (`civictech.cell.data.TaggedMapView`)
+ * missed it and [probe] falsely reported the family absent. `computenet-j2x.3.4`'s acceptance
+ * scoped that task to `UntagCell`'s status alone and required the other five families — including
+ * `TaggedMapView` — to keep the availability they already had, so the false report was left
+ * standing there, on record, rather than silently fixed by a task that had not looked at it.
+ * computenet-0e6q is that dedicated correction: [CANDIDATES]' `TaggedMapView` entry now points at
+ * the real `.view` FQN, [probe] reports it `available = true`, and `TaggedOperatorsTest` pins the
+ * new answer the same way it pins `UntagCell`'s.
  */
 object OptionalFamilies {
 
@@ -233,6 +240,7 @@ object OptionalFamilies {
     private const val DATA_PKG = "civictech.cell.data"
     private const val DELTA_PKG = "civictech.cell.data.delta"
     private const val OP_PKG = "civictech.cell.data.op"
+    private const val VIEW_PKG = "civictech.cell.data.view"
 
     /** `family name -> best-effort fully-qualified class name`, in the order [probe] reports them. */
     private val CANDIDATES: List<Pair<String, String>> = listOf(
@@ -241,7 +249,7 @@ object OptionalFamilies {
         "TagsToWeightsCell" to "$OP_PKG.TagsToWeightsCell",
         "WeightsToTagsCell" to "$OP_PKG.WeightsToTagsCell",
         "UntagCell" to "$OP_PKG.UntagCell",
-        "TaggedMapView" to "$DATA_PKG.TaggedMapView",
+        "TaggedMapView" to "$VIEW_PKG.TaggedMapView",
     )
 
     /**
