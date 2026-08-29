@@ -257,19 +257,30 @@ import civictech.testkit.forEachSeed
  *
  * ## What is filed rather than built `ORA2 §HONEST-03`
  *
- * The one gap the paragraph above still names is recorded in `concord/corpus/DISPUTES.md`, per the
- * epic's rule — and AGENTS.md's — that a requirement which cannot be checked honestly is **filed**,
- * never weakened into a passing scenario. (`ORA2 §DIFF-08` "at scale" was filed here too until
- * computenet-9892 built the drive that closes it; its entry was deleted in the same change, which is
- * what that entry's own `Resolves` clause instructed.)
+ * What remains filed is recorded in `concord/corpus/DISPUTES.md`, per the epic's rule — and
+ * AGENTS.md's — that a requirement which cannot be checked honestly is **filed**, never weakened
+ * into a passing scenario. Two ORA2 filings stood there and both are now closed and deleted, each
+ * by the change that built what its own `Resolves` clause named:
  *
- * - BS-9 / `ORA2 §DIFF-07` — no operator in the vocabulary consumes a `TaggedMapDelta` outlet, so
- *   the two-path diamond BS-9 states is unconstructible and `TaggedWavePrefixTest` exercises a bare
- *   `orMap` source terminal instead. Filed with the `MapDelta`-vs-`TaggedMapDelta` typing bound;
- *   `96 §E1.5`'s `UntagCell`/`TaggedMapView` is what would resolve it.
+ * - `ORA2 §DIFF-08` "at scale" — filed until computenet-9892 built the drive that closes it; its
+ *   entry was deleted in the same change.
+ * - BS-9 / `ORA2 §DIFF-07` — the two-path wave-prefix diamond, filed while it was
+ *   **unconstructible**: `OrMapCell`'s outlet is a `TaggedMapDelta` and every registered
+ *   `MapOf`-consuming operator is typed to `MapDelta`, so no registered entry could sit downstream
+ *   of a tagged terminal and `TaggedWavePrefixTest` exercised a bare `orMap` source instead.
+ *   computenet-pez3 registered `96 §E1.5`'s `UntagCell` under the catalog id `untag`
+ *   (`ShapeRule.unary(TaggedMapOf -> MapOf)`, reference model `civictech.oracle.model.UntagModel`),
+ *   which bridged the typing bound; computenet-0zbq then **built the diamond over that bridge** —
+ *   `orMap` fanning out through two `untag` arms into a `join` fan-in, observed by
+ *   [WavePrefixOracle] unchanged, in `civictech.oracle.tagged.TaggedWavePrefixTest`, with a
+ *   discrimination control showing a torn composite at that fan-in is rejected as
+ *   `NO_MATCHING_PREFIX`. That entry was deleted in the same change, as its own `Resolves` clause
+ *   instructed. `TaggedMapView` stays available-and-unregistered (a read surface, not an outlet).
  *
- * The ORA1 half of the same rule is `ORA1 §DIFF-09`/BS-12, filed in the same file. Both remaining
- * filings are pinned by [civictech.oracle.HonestyLedgerTest], so neither can be silently deleted.
+ * The ORA1 half of the same rule is `ORA1 §DIFF-09`/BS-12, still filed in that file and pinned by
+ * [civictech.oracle.HonestyLedgerTest], so it cannot be silently deleted — and neither deletion
+ * above can be silent either: the same test now asserts each closed entry is GONE and that this
+ * ledger carries the closure it was deleted for.
  *
  * Pinned by [civictech.oracle.HonestyLedgerTest] beside `ORA1 §HONEST-01`, so this statement is
  * build-checked prose too, not a paragraph a refactor can quietly drop.

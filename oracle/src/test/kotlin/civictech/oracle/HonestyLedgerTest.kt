@@ -51,28 +51,32 @@ import java.io.File
  * implied). The last tests below pin that entry's own fingerprint, so the filing cannot be
  * dropped while the disagreement stands.
  *
- * ORA2 adds one more filing of the same shape, `ORA2 §HONEST-03`'s remaining realising artifact
- * (`computenet-4ru.1.8`): BS-9/`ORA2 §DIFF-07`, whose two-path diamond was unconstructible because
- * no operator in the vocabulary consumed a `TaggedMapDelta` outlet (`computenet-valh`), and which
- * since `computenet-pez3` registered `untag` is constructible but still unbuilt (`computenet-0zbq`). It is
- * pinned below the ORA1 one, by the same reasoning: text satisfies a requirement only while it is
- * still there.
+ * ORA2 filed two of the same shape under `ORA2 §HONEST-03`, and **both are now closed and
+ * deleted** — so the two pins below are *inverted*: each asserts its entry is GONE and that the
+ * ledger (`civictech.oracle.run.OracleSweep`'s file KDoc) carries the closure it was deleted for.
+ * That is what stops a deletion from being silent and stops the instrument it was traded for from
+ * quietly disappearing again.
  *
- * A second ORA2 filing stood beside it until `computenet-9892`: `ORA2 §DIFF-08`'s "at scale"
- * clause, whose generated convergence sweep realised no concurrency and whose quiescent all-to-all
- * mesh was not expressible as a `Delivery` graph (`computenet-9ips`, route (b)). That entry's own
- * `Resolves` clause said to **delete** it, not repair it, once the drive landed with more than one
- * live dot at some key and a reversed `DOT_ORDER` reddening the sweep — both of which
- * `computenet-9892` measured. So the pin below inverts: it now asserts the entry is GONE **and**
- * that the ledger carries the closure with its numbers, which is what stops the deletion from being
- * a silent one and stops the sweep from quietly regressing to the state that justified the filing.
+ * - `ORA2 §DIFF-08`'s "at scale" clause, whose generated convergence sweep realised no concurrency
+ *   and whose quiescent all-to-all mesh was not expressible as a `Delivery` graph
+ *   (`computenet-9ips`, route (b)). Its `Resolves` clause said to **delete** it, not repair it,
+ *   once the drive landed with more than one live dot at some key and a reversed `DOT_ORDER`
+ *   reddening the sweep — both of which `computenet-9892` measured.
+ * - BS-9/`ORA2 §DIFF-07` (`computenet-4ru.1.8`), whose two-path wave-prefix diamond was
+ *   unconstructible because no operator in the vocabulary consumed a `TaggedMapDelta` outlet
+ *   (`computenet-valh`). `computenet-pez3` registered `untag`, which bridged that typing bound;
+ *   `computenet-0zbq` then built the diamond over the bridge and deleted the entry, exactly as its
+ *   `Resolves` clause instructed.
  *
- * What is deliberately NOT pinned, and deliberately not filed: `computenet-880k` — the generator's
- * shape system cannot tell `TaggedMapDelta` from `MapDelta`, so it can emit a kernel-illegal
- * `orMap` edge. That is a soundness DEFECT with a fix pending, not a behaviour excluded as
- * uncheckable, and the two are different classes. The BS-9 entry names it as adjacent so a reader
- * does not mistake that entry for its filing; this test pins that cross-reference, not a verdict
- * on 880k.
+ * The ORA1 filing is the one that still stands, and its pin is the ordinary, non-inverted kind:
+ * text satisfies a requirement only while it is still there.
+ *
+ * `computenet-880k` — the generator's shape system could not tell `TaggedMapDelta` from `MapDelta`,
+ * so it could emit a kernel-illegal `orMap` edge — used to be named as ADJACENT inside the BS-9
+ * entry, so a reader would not mistake that entry for 880k's filing, and this test pinned that
+ * cross-reference. Both are gone: 880k is closed (its fix is `TaggedOperators`'
+ * `ElementShape.TaggedMapOf` registration), and with the entry deleted there is nothing left to
+ * mistake it for. It was never a verdict on 880k and is not one now.
  *
  * Every phrase assertion runs against **whitespace-flattened** text, so re-wrapping a
  * KDoc paragraph or a Markdown bullet never reddens this test — only deleting or rewriting the
@@ -590,72 +594,69 @@ class HonestyLedgerTest {
         }
     }
 
+    /**
+     * The BS-9 pin, inverted the same way the `ORA2 §DIFF-08` one above was, and for the same
+     * reason: `computenet-0zbq` built the diamond that entry's own `Resolves` clause named — a
+     * tagged map reaching a fan-in through two paths, with the wave-prefix oracle observing that
+     * fan-in — so the entry had to go with it. What replaces the pin on its text is a pin on its
+     * **absence** plus a pin on the closure the ledger now carries, which is what stops the
+     * deletion from being a silent one and stops the diamond from quietly disappearing again.
+     *
+     * `computenet-880k`'s cross-reference went with the entry, deliberately: the entry named it as
+     * adjacent-and-not-filed so a reader would not mistake the entry for 880k's filing, and with no
+     * entry there is nothing to mistake. 880k is itself closed (its fix is
+     * `TaggedOperators`' `ElementShape.TaggedMapOf` registration, which is what makes the
+     * `orMap -> untag -> join` edge the diamond needs the only legal one).
+     */
     @Test
-    fun `the DISPUTES filing for BS-9 records the typing bound that makes the diamond unconstructible`() {
-        val entry = disputesSection(
-            "## ORA2 (the wave-prefix diamond)",
-            "The BS-9/ORA2 §DIFF-07 narrowing filing",
-        )
+    fun `the BS-9 wave-prefix diamond filing is deleted, and the ledger carries the closure it was deleted for`() {
+        withClue(
+            "concord/corpus/DISPUTES.md must no longer carry the BS-9/ORA2 §DIFF-07 wave-prefix " +
+                "diamond entry: computenet-0zbq built the diamond, and that entry's own Resolves " +
+                "clause said 'with that built and green, delete this entry'. A surviving entry " +
+                "beside a closed gap is a false filing (the same inversion as ORA2 §DIFF-08 above).",
+        ) {
+            disputesSource().contains("## ORA2 (the wave-prefix diamond)") shouldBe false
+        }
 
-        withClue("It must be greppable by the requirement marker it realises, and by the id it narrows") {
-            entry.mustState("ORA2 §HONEST-03")
-            entry.mustState("ORA2 §DIFF-07")
+        val sweep = sweepKdoc().flat()
+        withClue(
+            "The ledger must still be greppable by the clause it realises and the id it closed, or " +
+                "a reader arriving from doc/spec/CONCORDANCE.md cannot find out what happened to it.",
+        ) {
+            sweep.mustState("ORA2 §HONEST-03")
+            sweep.mustState("ORA2 §DIFF-07")
         }
         withClue(
-            "The bound itself, in kernel types: OrMapCell's outlet is TaggedMapDelta and every " +
-                "registered MapOf-consuming operator is typed to MapDelta. A filing that says " +
-                "'unconstructible' without the two type names is an assertion, not a reason.",
+            "It must record BOTH halves of the closure, in order: computenet-pez3 registered the " +
+                "untag bridge that lifted the MapDelta-vs-TaggedMapDelta typing bound, and " +
+                "computenet-0zbq built the diamond over it. Naming only the bridge would leave a " +
+                "reader thinking the diamond is still unbuilt; naming only the build would drop the " +
+                "reason it was ever unconstructible.",
         ) {
-            entry.mustState("TaggedMapDelta")
-            entry.mustState("MapDelta")
-            entry.mustState("OrMapCell")
-        }
-        withClue("And the generator half of the same bound: orMap is registered arity-0, source only") {
-            entry.mustState("ShapeRule.source")
-        }
-        withClue(
-            "It must say what IS covered instead — a bare orMap source terminal with no fan-in, so " +
-                "no glitch the case could exhibit — or a reader takes the green for the diamond.",
-        ) {
-            entry.mustState("TaggedWavePrefixTest")
-            entry.mustState("no fan-in")
+            sweep.mustState("computenet-pez3")
+            sweep.mustState("untag")
+            sweep.mustState("TaggedMapDelta")
+            sweep.mustState("MapDelta")
+            sweep.mustState("computenet-0zbq")
+            sweep.mustState("built the diamond over that bridge")
         }
         withClue(
-            "It must keep computenet-880k on the right side of the line: named as ADJACENT and " +
-                "deliberately not filed, because a soundness defect with a fix pending is not a " +
-                "behaviour excluded as uncheckable. Dropping that sentence lets a later reader " +
-                "read this entry as 880k's filing and close the bead against it.",
+            "And it must name the instrument and the control, not merely assert the closure: the " +
+                "test that holds the diamond, and the discrimination control proving the fan-in " +
+                "can exhibit a tear the oracle rejects. Prose without them restates the claim the " +
+                "filing existed to refuse.",
         ) {
-            entry.mustState("computenet-880k")
-            entry.mustState("deliberately NOT filed here")
+            sweep.mustState("civictech.oracle.tagged.TaggedWavePrefixTest")
+            sweep.mustState("join")
+            sweep.mustState("NO_MATCHING_PREFIX")
         }
         withClue(
-            "It must name 96 §E1.5's tagged-aware downstream adapters by their real FQNs — the " +
-                "types landed under computenet-j2x — and say they now EXIST, not that they are " +
-                "absent: the entry's original 'do not exist' claim went false the moment " +
-                "UntagCell.kt and TaggedMapView.kt landed under kernel/src/main, and a filing " +
-                "that still asserted their absence would be a false honesty-ledger entry, which " +
-                "is worse than an unfiled gap (computenet-shtl).",
+            "The retracted reason must be stated as HISTORY, never as the current state: an entry " +
+                "or a ledger still asserting the diamond is unconstructible would be a false " +
+                "honesty-ledger claim, which is worse than an unfiled gap (computenet-shtl).",
         ) {
-            entry.mustState("civictech.cell.data.op.UntagCell")
-            entry.mustState("civictech.cell.data.view.TaggedMapView")
-            entry.mustState("now exist")
-            entry.mustNotState("do not exist")
-            entry.mustNotState("only file under")
-        }
-        withClue(
-            "It must say what DOES still block the diamond now that UntagCell is not merely landed " +
-                "but REGISTERED in OperatorCatalog under the id untag (computenet-pez3): the typing " +
-                "bound is bridged, and what remains is that nobody has BUILT the diamond, tracked as " +
-                "computenet-0zbq. The retracted reason — that neither type is registered — must be " +
-                "gone, not merely supplemented: leaving it would make this entry assert something " +
-                "the same PR made false, which is worse than an unfiled gap (computenet-shtl).",
-        ) {
-            entry.mustState("OperatorCatalog")
-            entry.mustState("untag")
-            entry.mustState("nobody has built the diamond")
-            entry.mustState("computenet-0zbq")
-            entry.mustNotState("Neither closes this entry")
+            sweep.mustNotState("the two-path diamond BS-9 states is unconstructible")
         }
     }
 
