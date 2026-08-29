@@ -31,6 +31,9 @@ Usage: reachability.py <file> [<file>...]           (who reads each file)
        reachability.py --for <role> <file>...       (GATE: is THAT role served?)
        reachability.py --roles                       (per role, every file + distance)
 Exit: 0 = served; 1 = not served; 2 = bad usage / no such file or role.
+A DECLINED file (`NO-MODEL`, see `declined()`) also exits 0 — it is not a
+failure, but it is not a pass either, so read the output, never just the
+status: a `--for` run whose files ALL decline exits 0 having asserted nothing.
 
 `--for` is the form the lane runs. A friction bead names the role that hit the
 wall ("MY OWN defect as orchestrator", "the .2.1 REVIEWER reported it"); pass
@@ -64,6 +67,44 @@ ROLES = {
 MD = re.compile(r"[\w./-]+\.md")
 # A row of SKILL.md's reference index: `| `references/foo.md` | when to read |`.
 INDEX_ROW = re.compile(r"^\|\s*`references/[\w-]+\.md`\s*\|")
+
+SKILL_OF = re.compile(r"^\.claude/skills/([\w-]+)/")
+
+
+def declined(path):
+    """Why this file is outside the model — or None if the walk can judge it.
+
+    The graph above is /work's reading chain and nothing else's. Two kinds of
+    file are unjudgeable by construction, and a confident NOT-READ on either is
+    a FALSE NEGATIVE that sends a session chasing a placement problem it does
+    not have — the failure this script exists to catch, committed by the script
+    (computenet-z9tu, observed on a sync-report edit where both edited files
+    came back NOT-READ).
+
+    A skill's own SKILL.md is the one reachability fact needing no graph: every
+    invocation of a skill reads it — but that is a fact about THAT skill's
+    reader, not about any /work role, so only the bare form reports it
+    (`trivially_served`). Under `--for` it declines like everything else.
+
+    An absolute path matches nothing here and falls through to the graph, which
+    is relative-only (`SKILLDIR`) and will answer `unreached`. Pass paths
+    relative to the repo root; a `./` prefix is fine (normpath strips it).
+    """
+    m = SKILL_OF.match(path)
+    if m and m.group(1) != "work":
+        return (f"under skill '{m.group(1)}'; the role graph models /work only")
+    if not path.endswith(".md"):
+        return ("not a .md file; the walk follows markdown links, so a script "
+                "or data file is unreachable by construction — it takes effect "
+                "by being RUN, which is what a mechanical fix is for")
+    return None
+
+
+def trivially_served(path):
+    """A non-/work skill's own SKILL.md: read by every invocation of it."""
+    m = SKILL_OF.match(path)
+    return bool(m and m.group(1) != "work"
+                and os.path.basename(path) == "SKILL.md")
 
 
 def links(path):
@@ -117,6 +158,17 @@ def main(argv):
             if not os.path.exists(f):
                 print(f"reachability: {f} does not exist", file=sys.stderr)
                 return 2
+            # No trivially_served shortcut HERE. `--for` asserts something
+            # about a ROLE, and every modelled role is a /work role: answering
+            # SERVED because the file is some other skill's SKILL.md would say
+            # "the /work implementer that reported this reads it", which is
+            # false and is precisely the computenet-l5rc shape this gate
+            # exists to catch. The bare form, which asserts nothing about a
+            # role, still reports it (computenet-z9tu review).
+            why = declined(f)
+            if why is not None:
+                print(f"NO-MODEL  {f}: {why}. Check placement by hand.")
+                continue
             d = per_role[role].get(f)
             if d is not None and d <= 1:
                 print(f"SERVED    {role} reads {f} at {d} hop(s)")
@@ -142,6 +194,16 @@ def main(argv):
         if not os.path.exists(f):
             print(f"reachability: {f} does not exist", file=sys.stderr)
             return 2
+        if trivially_served(f):
+            print(f)
+            print("    read by:   every invocation of its own skill (its "
+                  "SKILL.md)")
+            continue
+        why = declined(f)
+        if why is not None:
+            print(f)
+            print(f"    NO MODEL:  {why}. Check placement by hand.")
+            continue
         near = sorted(r for r in per_role if per_role[r].get(f, 99) <= 1)
         far = sorted(r for r in per_role if per_role[r].get(f, 99) >= 2)
         unreached = sorted(r for r in per_role if f not in per_role[r])
