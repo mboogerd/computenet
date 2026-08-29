@@ -28,9 +28,27 @@ echo "reachability.py"
 if $S/reachability.py --for orchestrator .claude/skills/work/SKILL.md >/dev/null 2>&1
   then ok "orchestrator is served by its own entry document"
   else bad "orchestrator not served by SKILL.md — the graph is broken"; fi
-$S/reachability.py --for implementer .claude/skills/remediate-friction/SKILL.md >/dev/null 2>&1 && rc=0 || rc=$?
-[ "${rc:-0}" = 1 ] && ok "exit 1 for a file no work role reads" \
-                   || bad "a work implementer appears to read this lane's SKILL.md"
+# A /work file the named role does NOT reach: task.md is the implementer's own
+# entry document and sits 2 hops from the orchestrator. This is the l5rc
+# discrimination and it must stay exit 1. (It used to be this lane's own
+# SKILL.md, which now declines instead — computenet-z9tu.)
+$S/reachability.py --for orchestrator .claude/skills/work/references/task.md >/dev/null 2>&1 && rc=0 || rc=$?
+[ "${rc:-0}" = 1 ] && ok "exit 1 for a work file the named role does not read" \
+                   || bad "the orchestrator appears to read the implementer's task.md"
+# Outside /work the graph has no model, and a confident NOT-READ there is a
+# false negative — the script committing the defect it exists to catch.
+$S/reachability.py --for implementer .claude/skills/remediate-friction/SKILL.md 2>/dev/null \
+  | grep -q '^NO-MODEL' \
+  && ok "declines (NO-MODEL) for a skill the role graph does not model" \
+  || bad "asserted a /work-role verdict on a non-/work skill file"
+$S/reachability.py --for orchestrator .claude/skills/work/scripts/check-files-claim.sh 2>/dev/null \
+  | grep -q '^NO-MODEL' \
+  && ok "declines for a non-.md file, which no markdown walk can reach" \
+  || bad "gave a reading-chain verdict on a file that is RUN, not read"
+$S/reachability.py .claude/skills/sync-report/SKILL.md 2>/dev/null \
+  | grep -q "every invocation of its own skill" \
+  && ok "bare form still credits a skill's own SKILL.md to its own readers" \
+  || bad "bare form lost the one reachability fact that needs no graph"
 
 echo "twin-scan.py (work skill)"
 T=.claude/skills/work/scripts/twin-scan.py

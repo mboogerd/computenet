@@ -299,6 +299,20 @@ The smallest coherent change, and proof the tests actually executed.
    untested claim, and don't let `BUILD SUCCESSFUL` be the claim: Gradle
    replays cached results, so a green build is not evidence a test executed.
 
+   **Carry `--rerun` in the module gate itself**, not only in the narrow run:
+
+   ```bash
+   ./gradlew :<module>:test --rerun            # the module gate
+   ```
+
+   The unfiltered gate is skipped as `UP-TO-DATE` exactly as a `--tests`-
+   filtered one is — `./gradlew :kernel:test` came back green having run zero
+   tests, and this step's old wording ("the affected module's suite") carried
+   no flag to stop it (computenet-0frx). Then read the JUnit `newest`
+   timestamp from `junit-count.py`, which is what actually proves the run
+   happened; the task-count line corroborates and does not settle it
+   ([gradle-evidence.md](gradle-evidence.md)).
+
    **"The affected module" is the module whose test INPUTS you changed, which
    is not always the module your diff sits in.** If your diff ADDS or DELETES a
    file under `concord/corpus/`, also run `./gradlew :oracle:test --rerun`:

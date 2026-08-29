@@ -166,7 +166,19 @@
 # templates; and the perl/sed detour is scoped to tool refusals, never to scope
 # limits. Without the reviewer's retry that session would have merged a 461-line
 # convergence test whose central property was never shown to fail.
-# 8938 -> 8969 on 2026-08-29: computenet-uxr8 (+31, one of them the blank line
+# 8938 -> 8973 on 2026-08-29: computenet-0frx (+35) — the "N actionable tasks"
+# line misled two agents in OPPOSITE directions in one session. False green:
+# the plain unfiltered `./gradlew :kernel:test` came back UP-TO-DATE with zero
+# tests run, while AGENTS.md framed the trap around a --tests-FILTERED
+# invocation, so the agent read itself as outside the warning. False alarm:
+# `:concord:test --rerun` prints `1 executed, 23 up-to-date`, which reads like
+# a cache replay against a 24-task graph, and three more agents each spent a
+# cross-check on it. All four were settled by the JUnit `newest` timestamp
+# junit-count.py already prints. The lines demote the task count to a
+# corroborating signal, name `newest` as the verdict, and put --rerun in the
+# module-gate command task.md step 6 prescribes rather than only in prose
+# elsewhere. AGENTS.md's own paragraph is generalised in the same commit.
+# 8973 -> 9004 on 2026-08-29: computenet-uxr8 (+31, one of them the blank line
 # that keeps the gradle-evidence.md sentence its own paragraph) — "affected module tests"
 # was read as the module the diff SITS IN, unanimously, by five agents in a row.
 # Feature computenet-j2x.4 added four files to concord/corpus/24-data-cells/;
@@ -177,13 +189,30 @@
 # read. The lines redefine "affected" as the modules whose test INPUTS the diff
 # changes, at both call sites (review-feature.md §3, task.md step 6), with the
 # concord/corpus -> :oracle:test rule stated concretely so it needs no derivation.
-work                8969
+work                9004
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
 # rationale out of SKILL.md and into the scripts' own headers, where it is read
 # at the point of use instead of loaded into every session.
-remediate-friction   333
+# 333 -> 346 on 2026-08-29: computenet-z9tu (+13) — the lane's scope line named
+# two directories while AGENTS.md gives it all of .claude/skills/, leaving
+# sync-report and work-unsupervised editable by nobody (AGENTS.md forbids
+# editing a skill outside this lane). Both mechanisms already assumed the wider
+# scope, so the prose was the typo. +6 for the reconciliation with the evidence
+# that settles which side was wrong, +7 for the NO-MODEL/SERVED contract at
+# step 4's reachability call, without which the corrected scope hands sessions
+# a tool that returns a false NOT-READ on every non-/work skill file. The
+# reachability.py change itself is mechanical and free here.
+# 346 -> 353 on 2026-08-29: the same bead's review round (PR #560). The first
+# cut had --for answer SERVED for another skill's SKILL.md, which asserts that
+# the /work role named on the command line reads it — false, and the l5rc shape
+# the gate exists to catch. --for now declines outside /work in every case and
+# only the bare form credits a skill's own SKILL.md. +4 to state that split and
+# the non-.md decline; +3 for the sentence that would have caught this: the
+# scripts have a sibling self-check (feedback.test.sh), it is wired into no
+# gate, and this change shipped red for want of running it.
+remediate-friction   353
 # 201 -> 267 on 2026-08-29: computenet-d1im — sync-report gains §4, the
 # coherence audit: five named checks over a bounded set (top up-next picks,
 # beads touched by window decisions, epics a merge may have absorbed), ranked
