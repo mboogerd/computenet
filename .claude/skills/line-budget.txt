@@ -161,5 +161,23 @@ work                8869
 # rationale out of SKILL.md and into the scripts' own headers, where it is read
 # at the point of use instead of loaded into every session.
 remediate-friction   333
-sync-report          201
+# 201 -> 267 on 2026-08-29: computenet-d1im — sync-report gains §4, the
+# coherence audit: five named checks over a bounded set (top up-next picks,
+# beads touched by window decisions, epics a merge may have absorbed), ranked
+# into Decisions and recorded as a warning comment on the affected bead. Bought
+# with the 2026-08-29 worked example, where reading the backlog against one
+# decision found five conflicts in work about to start — including a discovery
+# epic whose acceptance forbade the design just chosen. 66 lines against an
+# implementation slot spent building the wrong thing; the report had no forward
+# check at all before this.
+# 267 -> 276 on 2026-08-29: computenet-d1im review round (PR #547). +9 lines
+# for the reviewer's one substantive find: the top-of-file contract still said
+# bookkeeping drift was THE single exception and that it is "proposed, not
+# applied", which contradicted §4 and, carried forward, would have had an agent
+# PROPOSE the bead comment instead of writing it — defeating the whole reason
+# §4 writes to the bead. The contract now names both exceptions and states that
+# they run in opposite directions. Also restores the SOC2 finding (a moderation
+# verdict a key rotation silently voided) as the example that the audit catches
+# behavioural holes, not only stale wording.
+sync-report          276
 work-unsupervised     59

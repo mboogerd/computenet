@@ -15,8 +15,12 @@ This skill collects it, ranks it, and hands it back as questions — and it
 tells the story of the window in functional terms: what shipped and what that
 makes possible, what is being built right now, and what is likely next. The
 reader wrote the epics; id lists tell them nothing. **It reports.
-It does not fix.** The one exception is bookkeeping drift (§5), and even that
-is proposed, not applied.
+It does not fix.** There are exactly two exceptions. Bookkeeping drift (§6) is
+*proposed, not applied*. A coherence finding (§4) is the other way round: the
+warning comment on the affected bead is **written, not proposed**, because
+`/work` never reads this report and the bead is the only place the next agent
+is forced to look. Neither exception touches acceptance criteria, dependencies,
+priorities, branches or PRs.
 
 You end by waiting. No "I'll go ahead and…", no merging, no `gh pr ready`, no
 closing beads. The user's answers are the input to the *next* session.
@@ -78,6 +82,10 @@ Everything is joined on the branch name: `work` names branches
 bead id. Use `bd show <id> --json` (`.metadata.pr`, `.metadata.review`) only
 for the handful of items you actually report on — not for all 190.
 
+The audit in §4 needs no query of its own — its set is these results plus
+`bd show` on the handful of beads they name. Build that set as you gather;
+a run that reaches the report without it has skipped §4.
+
 Beware the two query traps `work` warns about: `bd ready` hides
 `in_progress`/`blocked`/`deferred`, and `bd list` hides closed items without
 `--all`. A report built on the wrong one under-counts silently.
@@ -110,7 +118,69 @@ Two structural facts to check for explicitly, because they hide:
   `assignee` machine is gone, only reassignment frees it — report it, don't
   wait for it to resolve itself.
 
-## 4. Rank
+## 4. Does the upcoming work still make sense?
+
+The other sections look backwards or predict. This one is the only place the
+report can stop a mistake **before** an implementation slot pays for it, and
+the mistakes it catches are cheap to find and expensive to discover late.
+
+The worked example is 2026-08-29, when a decision changed peer identity from a
+key fingerprint to an anchor-vouched stable name. Minutes of reading found that
+the discovery epic (`computenet-aas`) *required* "no second allowlist or trust
+store" — an anchor key **is** a trust store, so the next epic in line forbade
+the design that had just been chosen. Four more came out of the same pass, and
+one was not textual at all: the federated-social epic keyed moderation verdicts
+on an identity that a key rotation silently invalidated, so a moderated peer
+could rotate and come back a stranger. No test covered it, because no test
+rotated a key. **The audit finds behavioural holes a decision opens, not just
+stale wording.** None of the five was visible anywhere in a sync report.
+
+**Scope — deliberately bounded.** Re-reading ~190 beads every run would make
+this skill too slow to run often, and a report you stop running catches
+nothing. Audit only:
+
+- the top ~3 up-next picks §6 already computes;
+- every bead touched by a decision recorded in this window;
+- any epic whose scope a merged PR may have absorbed.
+
+**The five checks.** Each one has fired; they are listed in the order they are
+cheapest to run.
+
+| Check | The question | What firing looked like |
+|---|---|---|
+| **Superseded premise** | Does its acceptance assert something a decision reversed? | ECO1 priced identity minting as a local act, after minting became issuance |
+| **Forbidding clause** | Does it *prohibit* what the new design requires? | DSC2's "no trust store" — a block, not drift |
+| **Absorption** | Did something that landed make this smaller or unnecessary? | DSC0's iroh adoption already delivers most of DSC3 |
+| **Gate freshness** | Are its blocking edges still the real dependencies? | DSC2 gated on the old identity epic, not the one replacing it |
+| **Priority inversion** | Is a lower-priority item gating a higher one? | DSC4 at P2 gating a P1 epic's close |
+
+**Forbidding clause is the one to look hardest for.** A stale premise costs a
+rewrite; a forbidding clause means implementing this item correctly makes the
+decided design unbuildable, and it reads as ordinary acceptance text right up
+until someone tries.
+
+**What to do with a finding — both halves, and the second is the load-bearing
+one.**
+
+1. Rank it as a question in Decisions (§5 places it).
+2. **Record a warning comment on the affected bead**, naming the check that
+   fired, the decision it conflicts with, and what the implementer must
+   reconcile before building.
+
+The comment is not bookkeeping. **`/work` never reads sync reports** — a
+finding that lives only in the report protects nothing between the report and
+the human acting on it, and an unattended slot can fire in that gap. The bead
+is the only place the next agent is forced to look.
+
+**Do not edit acceptance criteria, dependencies or priorities.** Those are the
+user's call and stay in the report as questions. Writing the warning comment is
+this skill's one widening of "it reports, it does not fix", and it is deliberate
+for the reason above.
+
+A clean pass is one line: what was audited and that nothing fired. Silence is
+not a pass — say the check ran.
+
+## 5. Rank
 
 Order by **how many things the answer unblocks**, then by **cost of being
 wrong**, then by CI state. Concretely, top to bottom:
@@ -119,17 +189,21 @@ wrong**, then by CI state. Concretely, top to bottom:
    releases four green PRs outranks four separate PR reviews. Find these by
    reading the parked questions *against* the pending list — the link is
    usually in the PR body, not in a dependency edge.
-2. **Green drafts waiting on a ready call** — done work, one word from
+2. **A conflict in work about to start** (§4). Ranks here, above finished
+   work, because the cost of being wrong is an implementation slot spent
+   building the wrong thing — and unlike a green draft it gets *more*
+   expensive the longer it waits.
+3. **Green drafts waiting on a ready call** — done work, one word from
    landing, and it rots into conflicts while it waits.
-3. **Red CI on a PR that carries real work** — needs a fix, but the fix is an
+4. **Red CI on a PR that carries real work** — needs a fix, but the fix is an
    agent's job; you only decide whether it's still worth the attempt.
-4. **Deliberate residuals** awaiting accept-or-refile.
-5. **Bookkeeping and hygiene** — bundled into one line, never itemized.
+5. **Deliberate residuals** awaiting accept-or-refile.
+6. **Bookkeeping and hygiene** — bundled into one line, never itemized.
 
 This order is the report's order and the questions' order. Do not re-sort by
 PR number, date, or epic.
 
-## 5. The report
+## 6. The report
 
 One message, four parts, in this order: **decisions**, **shipped**,
 **in flight**, **up next**. Decisions stay first — they are why the user is
@@ -137,7 +211,7 @@ reading — and everything after them is narrative, not tables.
 
 ### Decisions
 
-Ranked per §4. Per item at most four lines:
+Ranked per §5. Per item at most four lines:
 
 ```
 1. PR #26 — conservative-profile carve-out for the ready call     [decision]
@@ -153,9 +227,10 @@ Rules that keep it tight:
   question, answerable without opening the PR. If nothing is required from
   the user, say what the agent will do instead — one line, no question.
 - **State the completeness check in one line**: the human list cross-checked
-  both ways (§2), open-PR bodies scanned for park phrases, and any
-  discrepancy named. An item whose thread already records the answer is a
-  stale park to propose clearing, not a question to re-ask.
+  both ways (§2), open-PR bodies scanned for park phrases, §4's audit set
+  named with what fired, and any discrepancy named. An item whose thread
+  already records the answer is a stale park to propose clearing, not a
+  question to re-ask.
 - Bookkeeping drift is **one line**: "N beads still open behind merged PRs
   (ids) — close on your say-so."
 - Anything you could not check (a PR whose checks are still running, an
@@ -194,7 +269,7 @@ absent. Label it a prediction — the next run decides, not this report.
 Close the report with the questions restated as a numbered list in the same
 order — so the user can answer "1: yes, 2: skip, 3: …".
 
-## 6. Stop
+## 7. Stop
 
 Deliver the report and **wait**. Do not start on item 1. Do not "prepare" the
 merge. Do not open a branch. The user's reply decides what happens next, and
