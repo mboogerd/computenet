@@ -167,11 +167,37 @@ class TaggedOperatorsTest {
         )
     }
 
+    /**
+     * The families [OptionalFamilies.probe] must report absent, each pinned by name rather than
+     * by a blanket "all of them" — so that landing any one kernel type is a visible, deliberate
+     * edit here (see [OptionalFamilies]' KDoc, "why the class names are a best-effort guess").
+     *
+     * `UntagCell` is deliberately NOT in this set any more: `96 §E1.5`'s adapter half landed it
+     * at `civictech.cell.data.op.UntagCell` under epic `computenet-j2x`, at exactly the FQN
+     * `OptionalFamilies.CANDIDATES` guessed, so the probe now reports it present. Its positive
+     * pin is the test below.
+     *
+     * `TaggedMapView` IS still here, and knowingly reports a false absence: the type exists at
+     * `civictech.cell.data.view.TaggedMapView`, which is not the `civictech.cell.data`
+     * `CANDIDATES` guesses. `computenet-j2x.3.4`'s acceptance scopes it to `UntagCell`'s status
+     * only and requires the other five to keep the availability they already had, so the FQN
+     * correction is a follow-up item, not a change here. [OptionalFamilies]' KDoc carries the
+     * same warning beside the guess itself.
+     */
+    private val expectedAbsent = setOf(
+        "WeightedSetDelta", "WeightedSetCell", "TagsToWeightsCell",
+        "WeightsToTagsCell", "TaggedMapView",
+    )
+
     @Test
     fun `BS-15 every currently-absent optional family is reported not-applicable with a written reason, not skipped`() {
-        val availability = OptionalFamilies.probe()
+        val availability = OptionalFamilies.probe().filter { it.family in expectedAbsent }
+
+        withClue("every pinned-absent family must actually appear in the probe's report") {
+            availability.map { it.family }.toSet() shouldBe expectedAbsent
+        }
         availability.forEach { entry ->
-            withClue("${entry.family}: verified absent from kernel/src/main 2026-08-21") {
+            withClue("${entry.family}: pinned absent from kernel/src/main at the CANDIDATES FQN") {
                 entry.available shouldBe false
             }
             withClue("${entry.family}: BS-15 requires a written reason, never a silent skip") {
@@ -179,6 +205,19 @@ class TaggedOperatorsTest {
                 entry.reason!!.shouldContain("ORA2 §WGT-06")
             }
         }
+    }
+
+    /**
+     * The other half of the same pin, and the reason this file is in `computenet-j2x.3.4`'s
+     * claim at all: `UntagCell` is no longer a *currently-absent* family, so asserting it
+     * not-applicable would now be asserting something false. The gate is satisfied by the
+     * family flipping to available — never by relaxing the absence rule for the rest.
+     */
+    @Test
+    fun `BS-15 UntagCell is reported AVAILABLE now that 96 E1_5's adapter half has landed, with no stale absence reason`() {
+        val untag = OptionalFamilies.probe().single { it.family == "UntagCell" }
+
+        untag shouldBe OptionalFamilies.Availability("UntagCell", available = true, reason = null)
     }
 
     /**

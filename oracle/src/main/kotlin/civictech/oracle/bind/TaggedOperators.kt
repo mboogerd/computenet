@@ -159,21 +159,34 @@ object TaggedOperators {
  * `ORA2 §ADOPT-01..04` gate) — computenet-4ru.1.2's other half.
  *
  * These six kernel types are the weighted (Z-set) family and the E1.4/E1.5 adopters `96 §E6`
- * and `96 §E1.4`/`§E1.5` describe: none exists in the kernel today (verified 2026-08-21: no
- * `WeightedSetDelta`, `WeightedSetCell`, `TagsToWeightsCell`, `WeightsToTagsCell`, `UntagCell`,
- * `TaggedMapView` anywhere under `kernel/src/main`). Registering a catalog entry for any of
- * them is impossible — [OperatorCatalog.register] needs a real [CellFactory][civictech.cell.graph.CellFactory],
- * and there is no cell to build one from — and building one here to make registration possible
- * would be exactly the kernel edit this task's NON-GOALS forbid, for a cell this task cannot
- * even design (that is `96 §E6`'s job, gated on landing there first).
+ * and `96 §E1.4`/`§E1.5` describe. When this object was written (2026-08-21) none of them
+ * existed under `kernel/src/main`, so every family reported `available = false`. **That is no
+ * longer true of `UntagCell`**: `96 §E1.5`'s adapter half landed it at
+ * `civictech.cell.data.op.UntagCell` (epic `computenet-j2x`, feature `computenet-j2x.3`), the
+ * FQN [CANDIDATES] already guessed, so [probe] now reports that one family `available = true`
+ * with a `null` reason. The other five still report absent — see the caveat below for why
+ * `TaggedMapView`'s absence is a *stale guess* rather than a genuinely missing type.
  *
- * So absence is reported, not registered: [probe] returns one [Availability] per optional
- * family, each carrying `available = false` and a written [Availability.reason] today. That is
- * the honest gate BS-15 asks for — "reported not-applicable with the reason recorded," never
- * silently skipped, never a disabled test, never a stub that passes vacuously. The per-sweep
- * *recording* of this result (`ORA2 §HONEST-02` in `OracleSweep`) is the controls/honesty
- * task's, sequenced after this one; what this object contributes is the probe result itself,
- * on the catalog/entry surface, for that task to read.
+ * Availability is not registration. [OperatorCatalog.register] needs a real
+ * [CellFactory][civictech.cell.graph.CellFactory] *and* an evaluable model, and for the five
+ * still-absent families there is no cell to build a factory from. `UntagCell` now has the
+ * factory half, but registering it would additionally need a `civictech.oracle.model`
+ * reference model for a `TaggedMapDelta -> MapDelta` unary — a new file in the model source
+ * set, whose import boundary (`ORA1 §MODEL-10`/`ORA2 §MODEL-11`) forbids it from naming the
+ * kernel cell it mirrors, i.e. a genuine second implementation of the adapter's effective-only
+ * diff. That is real design work, not wiring, and it is deliberately NOT done in
+ * `computenet-j2x.3.4` (whose acceptance is the three cross-module registrations only). Until
+ * it lands, `UntagCell` is *available and unregistered*, and this comment is the record of why
+ * — the same honest-non-registration idiom this file's [TaggedOperators] KDoc uses for
+ * `KeyedSetCell`, `MergeableGroupByCell` and `PnCounterCell`.
+ *
+ * So absence — where it still holds — is reported, not registered: [probe] returns one
+ * [Availability] per optional family, each absent one carrying `available = false` and a
+ * written [Availability.reason]. That is the honest gate BS-15 asks for — "reported
+ * not-applicable with the reason recorded," never silently skipped, never a disabled test,
+ * never a stub that passes vacuously. The per-sweep *recording* of this result
+ * (`ORA2 §HONEST-02` in `OracleSweep`) is the controls/honesty task's; what this object
+ * contributes is the probe result itself, on the catalog/entry surface, for that task to read.
  *
  * ## Why reflection, and why the class names below are a best-effort guess
  *
@@ -193,8 +206,24 @@ object TaggedOperators {
  * with today's reason even after the class exists — a guessed FQN that turns out wrong fails
  * toward "absent," never toward a false "present," but it does mean the guess has to be
  * corrected in the same change that lands the kernel type, not discovered later by a sweep
- * silently staying dark. `TaggedOperatorsTest` pins today's all-absent result so that
- * correction is a visible, deliberate edit rather than a silent one.
+ * silently staying dark. `TaggedOperatorsTest` pins each family's expected availability
+ * one by one, so every such correction is a visible, deliberate edit rather than a silent one.
+ *
+ * ### `UntagCell` vindicated the guess; `TaggedMapView` did not — and its entry is knowingly stale
+ *
+ * `UntagCell` landed at exactly the guessed `civictech.cell.data.op.UntagCell`, so the probe
+ * flipped to `available = true` with no edit to [CANDIDATES] at all — the mechanism above
+ * working as designed.
+ *
+ * `TaggedMapView` is the counter-case this section predicted. It **exists** as of
+ * `96 §E1.5`'s view half, but at `civictech.cell.data.view.TaggedMapView` — a `.view`
+ * subpackage, not `civictech.cell.data` — so [CANDIDATES]' guess misses it and [probe] still
+ * reports it absent. That report is *false*, in the fail-toward-absent direction this section
+ * calls out. It is left uncorrected here only because `computenet-j2x.3.4`'s acceptance scopes
+ * that task to `UntagCell`'s status alone and requires the other five families to keep the
+ * availability they already had; the correction (one FQN, plus flipping its pin in
+ * `TaggedOperatorsTest`) belongs to its own item, filed as a follow-up. **Do not read
+ * `TaggedMapView: available = false` as evidence the type is missing.**
  */
 object OptionalFamilies {
 
