@@ -2208,7 +2208,7 @@ traced from source rather than assumed.
 
 Filed by task `computenet-j2x.1.2` (feature `computenet-j2x.1`, 96 §E1.4), under
 decision j2x.1-D3 and the epic's honesty note on `[KE1-04]`. Category:
-`kernel-capability-gap`. **No scenario is authored and no `covers:` id is
+`kernel-gap`. **No scenario is authored and no `covers:` id is
 minted** — the requirements this entry concerns live in the epic's `[KE1-nn]`
 namespace, not in an L0 spec chapter, and their check is a kernel test
 (`OrMapEmbeddedValueTest`, BS-2), which the feature states explicitly.
