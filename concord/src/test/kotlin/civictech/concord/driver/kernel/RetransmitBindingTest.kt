@@ -1,5 +1,11 @@
 package civictech.concord.driver.kernel
 
+import civictech.cell.Propagate
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.PortRef
+import civictech.cell.port.PortRegistry
+import civictech.cell.port.Use
+import civictech.concord.driver.CellId
 import civictech.concord.value.Value
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -132,6 +138,18 @@ class RetransmitBindingTest {
         refused.message!! shouldContain "no per-source identity a merge-tag frontier could be anchored on"
     }
 
+    /**
+     * The refusal `computenet-j2x.4.6` **narrowed** rather than removed. A duplicate
+     * needs something that decides whether to act on it twice, and a core cell has
+     * no such decision — neither an `Effectful` processed-frontier (dur) nor a
+     * replication mesh's dot algebra (dist). Both halves are pinned here:
+     *
+     * - a `set-view`, which has no [civictech.cell.data.Replicable.deltaInlet] at
+     *   all, and
+     * - a `set-source`, which HAS one and is still refused, because a cell that was
+     *   never placed in a mesh (`replica-of`) has no already-gossiped delta for a
+     *   re-delivery to duplicate. "Replicable" is not the gate; "replica" is.
+     */
     @Test
     fun `a retransmit at a core cell fails loudly rather than injecting an unobserved delivery`() {
         val d = KernelDriver(0L)
@@ -143,6 +161,132 @@ class RetransmitBindingTest {
             d.retransmit("v", null, "a", 1, "add", s("x"))
         }
         refused.message!! shouldContain "would assert nothing"
+
+        // the Replicable-but-unreplicated half: a deltaInlet is not enough
+        val atSource = assertThrows<UnsupportedCatalogBinding> {
+            d.retransmit("a", null, "a", 1, "add", s("x"))
+        }
+        atSource.message!! shouldContain "would assert nothing"
+    }
+
+    // ------------------------------------------------------------------
+    // dist profile: a duplicate at a replica's gossip inlet (computenet-j2x.4.6,
+    // retiring `[KE1-37]`). The corpus half is `42-TMAP-REPL-01`; the
+    // **re-emission count** lives here, because the corpus's closed check
+    // vocabulary has no emission counter (see concord/corpus/DISPUTES.md).
+    // ------------------------------------------------------------------
+
+    private fun kv(key: String, value: String): Value = Value.ListVal(listOf(s(key), s(value)))
+
+    /** Two `ormap-source` replicas of one logical map, one per host — `42-TMAP-REPL-01`'s shape. */
+    private fun mesh(interest: Value? = null): KernelDriver = KernelDriver(0L).also { d ->
+        d.spawn("h1", "r1", "ormap-source", mapOf("replica-of" to Value.StrVal("shared")))
+        d.spawn(
+            "h2", "r2", "ormap-source",
+            buildMap {
+                put("replica-of", Value.StrVal("shared"))
+                interest?.let { put("interest", it) }
+            },
+        )
+    }
+
+    /** Count [cellId]'s outlet emissions from now on — an Observe-role tap, so it gates nothing. */
+    private fun KernelDriver.countEmissions(cellId: CellId): () -> Int {
+        @Suppress("UNCHECKED_CAST")
+        val outlet = PortRegistry.of(cells.getValue(cellId).cell)["outlet"] as FanOutlet<Propagate<Any>>
+        var n = 0
+        outlet.tap(Use.fixed(Propagate<Any> { n++ }, PortRef.generate()), negotiated = false)
+        return { n }
+    }
+
+    /**
+     * The property `[KE1-33]`'s duplicate-delivery half asks for, stated as a
+     * **count**: re-delivering a dot the receiving replica already holds re-emits
+     * NOTHING (`novelty` reduces it to null, so `absorb`/`originate` never run).
+     *
+     * The control is the same call at a replica that has *not* seen the dot — an
+     * `interest: {empty: true}` replica the gossip linker never ships to — where
+     * the identical injection DOES re-emit exactly once. Without it, a zero count
+     * would be equally consistent with the injection never arriving at all.
+     */
+    @Test
+    fun `a duplicate at a replica's gossip inlet re-emits nothing, where a first arrival re-emits once`() {
+        val d = mesh()
+        d.apply("r1", "put", kv("k1", "v1"))
+        d.quiesce(budget)
+        // the dot really did cross the mesh: both replicas fold it
+        d.readView("r2") shouldBe d.readView("r1")
+
+        val reEmissions = d.countEmissions("r2")
+        d.retransmit("r2", null, "r1", 1, "put", kv("k1", "v1"))
+        d.quiesce(budget)
+
+        reEmissions() shouldBe 0
+        d.deadLetters() shouldBe emptyList()
+        d.readView("r2") shouldBe d.readView("r1")
+
+        // control: the same dot, the same coordinates, at a replica that never
+        // received it — echo termination has nothing to terminate, so it re-emits.
+        val unseen = mesh(Value.MapVal(mapOf("empty" to Value.BoolVal(true))))
+        unseen.apply("r1", "put", kv("k1", "v1"))
+        unseen.quiesce(budget)
+        val controlEmissions = unseen.countEmissions("r2")
+        unseen.retransmit("r2", null, "r1", 1, "put", kv("k1", "v1"))
+        unseen.quiesce(budget)
+        controlEmissions() shouldBe 1
+    }
+
+    @Test
+    fun `a retransmit naming a position the source never minted is refused`() {
+        val d = mesh()
+        d.apply("r1", "put", kv("k1", "v1"))
+        d.quiesce(budget)
+
+        val refused = assertThrows<UnsupportedCatalogBinding> {
+            d.retransmit("r2", null, "r1", 7, "put", kv("k1", "v1"))
+        }
+        refused.message!! shouldContain "has minted no such dot"
+    }
+
+    @Test
+    fun `a retransmit whose op-value does not describe the recorded dot is refused`() {
+        val d = mesh()
+        d.apply("r1", "put", kv("k1", "v1"))
+        d.quiesce(budget)
+
+        val refused = assertThrows<UnsupportedCatalogBinding> {
+            d.retransmit("r2", null, "r1", 1, "put", kv("k1", "wrong"))
+        }
+        refused.message!! shouldContain "does not describe the dot"
+    }
+
+    @Test
+    fun `a retransmit at a replica naming itself as source is refused`() {
+        val d = mesh()
+        d.apply("r1", "put", kv("k1", "v1"))
+        d.quiesce(budget)
+
+        val refused = assertThrows<UnsupportedCatalogBinding> {
+            d.retransmit("r1", null, "r1", 1, "put", kv("k1", "v1"))
+        }
+        refused.message!! shouldContain "names itself as source"
+    }
+
+    @Test
+    fun `a retransmit at a replica naming the write inlet, or a baseline anchor, is refused`() {
+        val d = mesh()
+        d.apply("r1", "put", kv("k1", "v1"))
+        d.quiesce(budget)
+
+        val wrongInlet = assertThrows<UnsupportedCatalogBinding> {
+            d.retransmit("r2", "inlet", "r1", 1, "put", kv("k1", "v1"))
+        }
+        wrongInlet.message!! shouldContain "deltaInlet"
+
+        val anchored = assertThrows<UnsupportedCatalogBinding> {
+            d.retransmit("r2", null, "r1", 1, "put", kv("k1", "v1"), mapOf("r1" to 1L))
+        }
+        anchored.message!! shouldContain "nothing consults"
     }
 
     @Test
