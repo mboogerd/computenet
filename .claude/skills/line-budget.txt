@@ -169,7 +169,15 @@ work                8869
 # step 4's reachability call, without which the corrected scope hands sessions
 # a tool that returns a false NOT-READ on every non-/work skill file. The
 # reachability.py change itself is mechanical and free here.
-remediate-friction   346
+# 346 -> 353 on 2026-08-29: the same bead's review round (PR #560). The first
+# cut had --for answer SERVED for another skill's SKILL.md, which asserts that
+# the /work role named on the command line reads it — false, and the l5rc shape
+# the gate exists to catch. --for now declines outside /work in every case and
+# only the bare form credits a skill's own SKILL.md. +4 to state that split and
+# the non-.md decline; +3 for the sentence that would have caught this: the
+# scripts have a sibling self-check (feedback.test.sh), it is wired into no
+# gate, and this change shipped red for want of running it.
+remediate-friction   353
 # 201 -> 267 on 2026-08-29: computenet-d1im — sync-report gains §4, the
 # coherence audit: five named checks over a bounded set (top up-next picks,
 # beads touched by window decisions, epics a merge may have absorbed), ranked

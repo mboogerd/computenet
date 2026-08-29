@@ -288,12 +288,19 @@ role that hit the wall; pass that role and the files you touched:
 .claude/skills/remediate-friction/scripts/reachability.py --for <role> <edited-file>...
 ```
 
-The role graph models `/work` and nothing else, so outside it the script
-DECLINES rather than guessing: a non-`/work` skill's own `SKILL.md` reports
-`SERVED` (every invocation of a skill reads it — the one reachability fact
-needing no graph), and anything else outside the model reports `NO-MODEL` with
-"check placement by hand". Before computenet-z9tu both came back `NOT-READ`,
-which is the script committing the very defect it exists to catch.
+The role graph models `/work` and nothing else, so where it has no model the
+script DECLINES rather than guessing: `--for` reports `NO-MODEL … check
+placement by hand` for a file under another skill, and for any non-`.md` file
+(a script takes effect by being RUN, so no markdown walk can reach it — that is
+the whole point of a mechanical fix). Before computenet-z9tu those came back
+`NOT-READ`, the script committing the very defect it exists to catch. `--for`
+never answers `SERVED` outside `/work`: every modelled role is a `/work` role,
+so that would assert something false. The bare form, which claims nothing about
+a role, does credit a skill's own `SKILL.md` to its own readers.
+
+**Editing a script here? Run its sibling test** — `bash
+.claude/skills/remediate-friction/scripts/feedback.test.sh`. It is manual-only,
+wired into no gate, and this paragraph's own change went out red without it.
 
 `NOT-READ` means the fix is correct and invisible — computenet-l5rc's glob-trap
 remedy landed in a file the orchestrator never opens, so it recurred twice in a

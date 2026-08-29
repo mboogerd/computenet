@@ -79,12 +79,16 @@ def declined(path):
     came back NOT-READ).
 
     A skill's own SKILL.md is the one reachability fact needing no graph: every
-    invocation of a skill reads it. That is reported SERVED, not declined.
+    invocation of a skill reads it — but that is a fact about THAT skill's
+    reader, not about any /work role, so only the bare form reports it
+    (`trivially_served`). Under `--for` it declines like everything else.
+
+    An absolute path matches nothing here and falls through to the graph, which
+    is relative-only (`SKILLDIR`) and will answer `unreached`. Pass paths
+    relative to the repo root; a `./` prefix is fine (normpath strips it).
     """
     m = SKILL_OF.match(path)
     if m and m.group(1) != "work":
-        if os.path.basename(path) == "SKILL.md":
-            return None          # handled as trivially served by the caller
         return (f"under skill '{m.group(1)}'; the role graph models /work only")
     if not path.endswith(".md"):
         return ("not a .md file; the walk follows markdown links, so a script "
@@ -151,10 +155,13 @@ def main(argv):
             if not os.path.exists(f):
                 print(f"reachability: {f} does not exist", file=sys.stderr)
                 return 2
-            if trivially_served(f):
-                print(f"SERVED    {f} is its own skill's SKILL.md — read by "
-                      "every invocation of that skill")
-                continue
+            # No trivially_served shortcut HERE. `--for` asserts something
+            # about a ROLE, and every modelled role is a /work role: answering
+            # SERVED because the file is some other skill's SKILL.md would say
+            # "the /work implementer that reported this reads it", which is
+            # false and is precisely the computenet-l5rc shape this gate
+            # exists to catch. The bare form, which asserts nothing about a
+            # role, still reports it (computenet-z9tu review).
             why = declined(f)
             if why is not None:
                 print(f"NO-MODEL  {f}: {why}. Check placement by hand.")
