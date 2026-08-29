@@ -103,6 +103,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `create-ticket.sh` | THE create path for a ticket under a shared epic — unparented, then re-parented |
 | `file-friction.sh` | Files a friction item collision-free under the SDLC epic, open and unclaimed |
 | `resumable-epics.sh` | Epics holding a feature left `in_progress` — step 3 ranks these above priority |
+| `bead.sh` | projected `bd show` — the bead's own fields as one object, `dependencies` dropped (57KB -> 7KB); no `.[0]` unwrap |
 | `wait-checks.sh` | THE settle loop on `gh pr checks` — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`QUERY-FAILED` |
 | `verify-branch-sync.sh` | 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
 | `merge-task.sh` | 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
@@ -1463,6 +1464,20 @@ verdict. (`parked` is only meaningful on an empty batch.)
   orchestrator-authored and how it was derived — that record is what lets
   the next miss be diagnosed.
 
+  **A claim COPIED from a sibling bead is orchestrator-authored too, and gets
+  the same grep.** Copying feels like the conservative move — the claim is
+  evidence-backed and came from a bead that shipped — and that framing is
+  exactly what suppresses the check (computenet-jm7k, a recurrence of af9q).
+  A sibling's claim describes the files THAT item touched, and an item that
+  CHANGES a shared rule touches strictly more than the siblings that APPLY
+  it: three files short here, including the fold every future derivation goes
+  through. A sibling's claim is a lower bound, never the answer. When the
+  acceptance says "uniformly", "everywhere" or "no grandfathering", grep for
+  every call site of the thing being changed instead of trusting any existing
+  claim. Keep telling the implementer to report a short claim the moment it
+  finds one rather than working around it silently — that is what held the
+  cost down both times.
+
   Never let a
   task take a nominal claim over files it merely reads: a claim is a lock, so
   a read-only lock blocks a sibling for no benefit. A *descriptive string*
@@ -2327,7 +2342,14 @@ recurrence is the appeal. Not found:
 # backticks and $(...) in it are inert (computenet-s5dh). A heredoc
 # interpolated into "--desc" is the trap issue-quality.md names — the shell
 # executes backticks before the script runs, silently deleting the quoted
-# phrases (computenet-9w9):
+# phrases (computenet-9w9). Those two flag names are the WRAPPERS' — bare
+# `bd create`, the sanctioned path for a breakdown child under an epic you
+# have claimed, answers --desc-file with "unknown flag" and has no acceptance
+# file flag at all. There it is --body-file plus
+# --acceptance "$(cat <<'EOF' … EOF)", which is safe for the same reason the
+# file form is: the delimiter is quoted so the shell never expands the body,
+# and command substitution does not re-evaluate what `cat` reads. It looks
+# like the trap above and is not (computenet-g1gf):
 cat > "$SCRATCH/friction-desc.md" <<'EOF'
 <what the skill says, what actually happened, what you did instead, what it cost>
 EOF

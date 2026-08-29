@@ -85,7 +85,17 @@
 # foreground cap, so two invocations is the ordinary cold start. 13 lines state
 # that contract at both call sites (SKILL.md step 2, review-feature.md §4);
 # the script-side ORDINARY/STUCK annotation is mechanical and free here.
-work                8590
+# 8590 -> 8630 on 2026-08-29: three more in the same drain. computenet-zwju
+# (+18 in bd-traps.md) — bd show inlines the parent body once PER DEPENDENCY,
+# measured 149KB from one call; the redirect rule it recurred past is now
+# backed by scripts/bead.sh, a projection (57KB -> 7KB) that needs no
+# per-dispatch warning. computenet-g1gf (+7) — --desc-file/--accept-file are
+# the WRAPPERS' flags; bare bd create takes --body-file and has no acceptance
+# file flag, so step 7 now names the safe form for both paths.
+# computenet-jm7k (+15) — a files claim COPIED from a sibling is
+# orchestrator-authored and gets af9q's invariant grep; a sibling's claim is a
+# lower bound, never the answer.
+work                8630
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

@@ -92,12 +92,30 @@ SKILL.md and the other references cite this file as "`bd` traps".
   `bd show computenet-x9e --json` = 43KB. The agent is not reading a big
   issue; it is reading a small one that silently carries a big one inside it,
   and the failure looks like a truncated read whose natural recovery — re-run
-  the command — fails identically (computenet-rram). Redirect and slice:
+  the command — fails identically (computenet-rram). The payload is one copy
+  of the parent body **per dependency entry**, not one per bead, so several
+  dependencies multiply it: 35KB overrun on a task, ~149KB from one call on a
+  feature (computenet-zwju). Read the bead's own fields through the
+  projection, which drops `dependencies` before the output can reach a tool
+  result (57KB -> 7KB on computenet-x9e.3):
+
+  ```bash
+  .claude/skills/work/scripts/bead.sh <id>                  # the whole bead, projected
+  .claude/skills/work/scripts/bead.sh <id> -r '.status'     # one field; no .[0] unwrap
+  ```
+
+  Redirect-and-slice still works and is right when you need a field the
+  projection drops:
 
   ```bash
   bd show <id> --json > "$SCRATCH/<id>.json"
   jq -r '.[0] | "\(.description)\n---\n\(.acceptance_criteria)"' "$SCRATCH/<id>.json"
   ```
+
+  rram was closed on the redirect rule alone, carried by hand in each dispatch
+  prompt — it held for every agent that was warned and failed for the two
+  whose prompt did not carry it for the call they made. That is why the
+  projection is a script.
 
   **A truncated bead read is a truncated ACCEPTANCE LIST**, and nothing in
   the output says it was truncated, so the review proceeds against criteria
