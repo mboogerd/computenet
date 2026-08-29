@@ -110,13 +110,28 @@ object TierPipeline {
      * Derived logical ids for the three cells [handleOp][TieringApp.handleOp]
      * writes to through a **routed** hosted lookup (`items`, `vals`, `prefs`),
      * exactly the [MANUAL_ID] treatment — a `--journal` record names the ref
-     * it was written against, so a cell replay must find has to carry the
+     * it was written against, so a cell a replay must find has to carry the
      * SAME ref across a restart, not the `graph { }` DSL's default
-     * `IdentityBinding.FreshLogical` random mint. One instance each (`0`):
-     * unlike [MANUAL_ID] these cells are never [Replication]-replicated, so
-     * there is no peering role to distinguish and no wire-collision risk in
-     * reusing the same ref across two hosts in one JVM (each `ManagedHost`
-     * keeps its own registry).
+     * `IdentityBinding.FreshLogical` random mint.
+     *
+     * **The instance id is [manualInstance]'s, role-derived, for the same
+     * reason [MANUAL_ID]'s is — and it is NOT optional (computenet-3san,
+     * caught in review).** These cells are not [Replication]-replicated, but
+     * `Peering.announceTo` announces *every* local ref its registry holds and
+     * `LocationRegistry.publish(ref, sink)` installs the announced `Remote`
+     * unconditionally — it does not defer to an existing `Local`. So two
+     * peers holding one ref overwrite each other's local location, and once
+     * the announcements have been applied every routed write to that ref
+     * leaves for the wire and is lost at the far end, which is holding the
+     * same ref as `Remote` right back. Measured on the fixed-instance-`0`
+     * version of this change: after the mesh had settled, neither peer's
+     * `/state` ever showed an item it posted itself. A role-derived instance
+     * keeps the two sides distinct while staying stable across a restart at
+     * the same role, which is exactly what `--journal` needs.
+     * [TieringWirePerPeerStateTest][civictech.demo.tiering.TieringWirePerPeerStateTest]
+     * pins it, and only after driving the manual lane both ways first: before
+     * the announcements land the local location still wins and the defect is
+     * invisible.
      *
      * The remaining pipeline cells (`contribs`, `tierAvg`, `prefAvg`,
      * `fused`, `manualEffective`, `board`) stay `FreshLogical`: nothing
@@ -159,16 +174,22 @@ object TierPipeline {
         spawnManual: (OrMapCell<String, String>) -> Unit = { host.managementInlet.call.spawn(it) },
     ): Refs {
         spawnManual(manual)
+        // The peering role slot, read off the manual replica's own ref rather
+        // than taken as a parameter: [manual] is already minted at
+        // [manualRef], so its instance id IS this host's role. Keeping the
+        // routed pipeline cells on the same slot is what stops two peers
+        // minting one ref (see [ITEMS_ID]'s KDoc).
+        val instance = manual.ref.instanceId
         lateinit var built: Refs
         var untagCell: UntagCell<String, String>? = null
         graph(host.managementInlet) {
-            val items = spawn("items", identity = IdentityBinding.Exact(CellRef(ITEMS_ID))) { ref ->
+            val items = spawn("items", identity = IdentityBinding.Exact(CellRef(ITEMS_ID, instance))) { ref ->
                 SetCell<String>(ref)
             }
-            val vals = spawn("vals", identity = IdentityBinding.Exact(CellRef(VALS_ID))) { ref ->
+            val vals = spawn("vals", identity = IdentityBinding.Exact(CellRef(VALS_ID, instance))) { ref ->
                 KeyedSetCell<Pair<String, String>, Valuation>(ref)
             }
-            val prefs = spawn("prefs", identity = IdentityBinding.Exact(CellRef(PREFS_ID))) { ref ->
+            val prefs = spawn("prefs", identity = IdentityBinding.Exact(CellRef(PREFS_ID, instance))) { ref ->
                 SetCell<Pref>(ref)
             }
             val contribs = spawn("contribs") {
@@ -260,8 +281,10 @@ object TierPipeline {
  *    record names the ref it was written against. The three cells a routed
  *    invocation actually reaches — `items`, `vals`, `prefs` — now spawn at
  *    fixed, derived refs ([TierPipeline.ITEMS_ID]/[TierPipeline.VALS_ID]/
- *    [TierPipeline.PREFS_ID]), the same treatment [TierPipeline.MANUAL_ID]
- *    already gave the manual lane. The remaining pipeline cells stay
+ *    [TierPipeline.PREFS_ID] over a role-derived instance id), the same
+ *    treatment [TierPipeline.MANUAL_ID] already gave the manual lane — the
+ *    role included, because two peers on one ref lose every routed write to
+ *    it (see [TierPipeline.ITEMS_ID]'s KDoc). The remaining pipeline cells stay
  *    `FreshLogical`: nothing writes to them directly, so replaying
  *    `items`/`vals`/`prefs`/`manual` and re-linking the rebuilt graph is
  *    enough to recompute them.
