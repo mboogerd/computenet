@@ -66,9 +66,23 @@
 # `#### restart`. `refusal-count(sink, exactly: 0)` is what states the relevant
 # half of it — at a named cell, as an exact number.
 #
-# DISCRIMINATION (the perturbation was run; the quoted output is verbatim, not
-# predicted). See the ticket report and `computenet-8ohq` for the mutation and
-# its result.
+# DISCRIMINATION (the perturbation was run, and what follows is its verbatim
+# observed result — the evidence for the `covers:` line). Neuter the frontier
+# suppression itself: in `ManagedHost.deliver`'s `Effectful` branch, make
+# `hostDurability.alreadyProcessed(cellRef, portName, timestamp)` read `false`,
+# so a replayed frame the sink already acted on is delivered again. That is the
+# shape of a second implementation which ADMITS an externally-driven frame — as
+# this verb's frames are admitted — without recording a position its replay can
+# be judged by. This scenario then fails 20 of 20 runs with
+#
+#   effect-count(sink, key=g1): expected 1 but observed 2;
+#   effect-count(sink, key=k1): expected 1 but observed 2
+#
+# — and the FIRST line is the one that matters, because it is the one no other
+# corpus scenario can produce: `g1` entered from OUTSIDE the graph, on an actor
+# lane, and re-fired on replay. The second line is the graph path, which the
+# existing `DUR-SRCID-*`/`DUR-REPLAY-01` scenarios also catch; without this file
+# the externally-driven arm moves under that perturbation unobserved.
 id: DUR-STAMPED-01
 title: An externally-driven frame on an actor lane is admitted, fires exactly once across replay, and once more when the lane delivers again live
 covers: [24-DUR-05]
