@@ -247,13 +247,17 @@ class ThroughputReportTest {
         // `OperatorThroughputBenchmark` had no derived class floor. `computenet-x9e.17`
         // derived one on 2026-08-28 (0.103, from three whole-class quiesced runs), so the
         // tripwire has now fired and is UPDATED to the new resolution rather than deleted —
-        // which is exactly what it was written to force. The sentence names the class's own
-        // floor and no longer mentions the global bound at all.
-        assertTrue(hasClassFloor("OperatorThroughputBenchmark"))
-        assertEquals(0.103, noiseFloorFor("OperatorThroughputBenchmark"))
-        assertEquals(noiseFloorFor("OperatorThroughputBenchmark"), noisy.floor)
+        // which is exactly what it was written to force. The sentence names the row's own
+        // @Benchmark METHOD's floor (`computenet-x9e.18` moved the grain from the class to
+        // the method, and re-derived `sim`'s floor to the same 0.103 the retired class
+        // floor carried, because `sim` held the row that set it) and no longer mentions the
+        // global bound at all.
+        assertEquals("sim", noisy.benchmarkMethod)
+        assertTrue(hasClassFloor("OperatorThroughputBenchmark", "sim"))
+        assertEquals(0.103, noiseFloorFor("OperatorThroughputBenchmark", "sim"))
+        assertEquals(noiseFloorFor("OperatorThroughputBenchmark", "sim"), noisy.floor)
         assertTrue(
-            text.contains("above the OperatorThroughputBenchmark class floor 0.103"),
+            text.contains("above the OperatorThroughputBenchmark.sim method floor 0.103"),
             text,
         )
         assertFalse(text.contains("NOISE_FLOOR"), text)
@@ -261,7 +265,9 @@ class ThroughputReportTest {
         // The row is still flagged, and it has to be for the rest of this test to mean
         // anything: 27000/90000 = 0.30, comfortably above the derived 0.103 as it was
         // above the global 0.005. What changed is which bound the reader is pointed at.
-        assertTrue(noisy.result.relativeDispersion > noiseFloorFor("OperatorThroughputBenchmark"))
+        assertTrue(
+            noisy.result.relativeDispersion > noiseFloorFor("OperatorThroughputBenchmark", "sim")
+        )
     }
 
     @Test
@@ -1045,8 +1051,9 @@ class ThroughputReportTest {
         // interference. The row is still rendered with its error bar either way.
         val mapCell = report.dispersions.single { it.label == "MAP_CELL N1E5" }
         assertEquals("CellFootprintBenchmark", mapCell.benchmarkClass)
-        assertEquals(noiseFloorFor("CellFootprintBenchmark"), mapCell.floor)
-        assertTrue(hasClassFloor("CellFootprintBenchmark"))
+        assertEquals("realSnapshot", mapCell.benchmarkMethod)
+        assertEquals(noiseFloorFor("CellFootprintBenchmark", "realSnapshot"), mapCell.floor)
+        assertTrue(hasClassFloor("CellFootprintBenchmark", "realSnapshot"))
         assertEquals(
             emptyList<String>(),
             report.dispersions.filter { it.aboveHarnessSanityBound }.map { it.label },
@@ -1201,7 +1208,8 @@ class ThroughputReportTest {
         // as well and is no longer flagged against the global bound.
         val mapCell = report.dispersions.single { it.label == "MAP_CELL N1E5" }
         assertEquals("CellFootprintBenchmark", mapCell.benchmarkClass)
-        assertEquals(noiseFloorFor("CellFootprintBenchmark"), mapCell.floor)
+        assertEquals("realSnapshot", mapCell.benchmarkMethod)
+        assertEquals(noiseFloorFor("CellFootprintBenchmark", "realSnapshot"), mapCell.floor)
         assertEquals(
             emptyList<String>(),
             report.dispersions.filter { it.aboveHarnessSanityBound }.map { it.label },

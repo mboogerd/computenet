@@ -492,7 +492,14 @@ class FloorToolTest {
         out shouldContain "ClassNoiseFloor("
         out shouldContain "benchmarkClass = \"BoundedReadBenchmark\""
         out shouldContain "--- findings.md block ---"
-        out shouldContain "per-class noise floor for `BoundedReadBenchmark`"
+        // ONE constructor call and ONE findings block per @Benchmark METHOD
+        // (`computenet-x9e.18`). The synthetic plan declares two methods — `alpha` (two
+        // @Param rows) and `beta` (one) — so a complete render prints both, each naming
+        // its own method. A single block covering the class is the retired grain.
+        out shouldContain "benchmarkMethod = \"alpha\""
+        out shouldContain "benchmarkMethod = \"beta\""
+        out shouldContain "per-method noise floor for `BoundedReadBenchmark.alpha`"
+        out shouldContain "per-method noise floor for `BoundedReadBenchmark.beta`"
     }
 
     @Test

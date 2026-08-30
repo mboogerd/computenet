@@ -56,6 +56,7 @@ class DispersionNoteFloorTest {
         listOf(
             ClassNoiseFloor(
                 benchmarkClass = "OperatorThroughputBenchmark",
+                benchmarkMethod = "sim",
                 observedRobustDispersion = 0.03,
                 runs = 3,
                 derivedOn = "2026-09-01",
@@ -68,34 +69,61 @@ class DispersionNoteFloorTest {
     )
 
     @Test
-    fun `a row of a class with a derived floor is measured against that floor`() {
+    fun `a row of a method with a derived floor is measured against that floor`() {
         val note = DispersionNote(
             label = "UNION insert",
             drive = Drive.REAL,
             result = rowAt(0.02),
             benchmarkClass = "OperatorThroughputBenchmark",
+            benchmarkMethod = "sim",
             floors = floors,
         )
         note.floor shouldBe 0.06
-        // 0.02 is four times the global bound and comfortably under its own class's.
+        // 0.02 is four times the global bound and comfortably under its own method's.
         note.aboveHarnessSanityBound shouldBe false
         note.describe() shouldNotContain "above"
     }
 
     @Test
-    fun `a row above its own class's floor says WHICH floor it exceeded`() {
+    fun `a row above its own method's floor says WHICH floor it exceeded`() {
         val note = DispersionNote(
             label = "UNION insert",
             drive = Drive.REAL,
             result = rowAt(0.09),
             benchmarkClass = "OperatorThroughputBenchmark",
+            benchmarkMethod = "sim",
             floors = floors,
         )
         note.aboveHarnessSanityBound shouldBe true
         note.describe() shouldContain
-            "above the OperatorThroughputBenchmark class floor 0.06 (derived from that " +
-            "class's own quiesced repeat runs)"
+            "above the OperatorThroughputBenchmark.sim method floor 0.06 (derived from " +
+            "that method's own quiesced repeat runs)"
         note.describe() shouldNotContain "NOISE_FLOOR"
+    }
+
+    /**
+     * The sibling method of a DERIVED class falls back (`computenet-x9e.18`).
+     *
+     * The synthetic table holds a floor for `OperatorThroughputBenchmark.sim` and none for
+     * `.real`. Under the retired per-class key a `.real` row would have resolved to
+     * `sim`'s 0.06 — a bound derived from a different `@Benchmark` method — and been
+     * silently cleared. It falls back to the global bound instead, which is the
+     * conservative and honest answer for a quantity nobody has measured.
+     */
+    @Test
+    fun `a sibling method with no floor of its own falls back, not to its class's other floor`() {
+        val note = DispersionNote(
+            label = "UNION insert",
+            drive = Drive.REAL,
+            result = rowAt(0.02),
+            benchmarkClass = "OperatorThroughputBenchmark",
+            benchmarkMethod = "real",
+            floors = floors,
+        )
+        note.floor shouldBe NOISE_FLOOR
+        note.floor shouldNotBe 0.06
+        note.aboveHarnessSanityBound shouldBe true
+        note.describe() shouldContain "NOISE_FLOOR"
     }
 
     @Test
@@ -164,8 +192,9 @@ class DispersionNoteFloorTest {
             drive = Drive.REAL,
             result = rowAt(0.02),
             benchmarkClass = "CellFootprintBenchmark",
+            benchmarkMethod = "realSnapshot",
         )
-        derived.floor shouldBe noiseFloorFor("CellFootprintBenchmark")
+        derived.floor shouldBe noiseFloorFor("CellFootprintBenchmark", "realSnapshot")
         derived.floor shouldNotBe NOISE_FLOOR
         // 0.02 clears its class's own floor of 0.398 even though it is four times the
         // global bound — which is exactly the signal the per-class floor restores. A row
@@ -184,10 +213,12 @@ class DispersionNoteFloorTest {
             // SENTENCE is rendered, not a re-derivation of the boundary.
             result = rowAt(1.5),
             benchmarkClass = "CellFootprintBenchmark",
+            benchmarkMethod = "realSnapshot",
         )
         reallyDispersed.aboveHarnessSanityBound shouldBe true
         reallyDispersed.describe() shouldContain
-            "the CellFootprintBenchmark class floor ${noiseFloorFor("CellFootprintBenchmark")}"
+            "the CellFootprintBenchmark.realSnapshot method floor " +
+            "${noiseFloorFor("CellFootprintBenchmark", "realSnapshot")}"
         reallyDispersed.describe() shouldNotContain "NOISE_FLOOR"
 
         // Not derived: still the global bound, and still named as the global bound.
