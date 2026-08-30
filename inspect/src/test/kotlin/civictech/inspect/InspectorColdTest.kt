@@ -14,6 +14,7 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -26,7 +27,10 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 /**
  * M5-COLD — cold graphs: list without waking, wake explicitly
@@ -74,14 +78,53 @@ class InspectorColdTest {
     private lateinit var probe: HttpProbe
     private var tap: SseTap? = null
 
+    /**
+     * Where an SSE body is read — see [readAsync]. One virtual thread per tap,
+     * shut down here rather than left to the collector, exactly as
+     * computenet-4vh required of the tap's own `HttpClient`.
+     */
+    private val readers: ExecutorService = Executors.newVirtualThreadPerTaskExecutor()
+
     @AfterEach
     fun tearDown() {
         tap?.close()
         server?.close()
         if (::probe.isInitialized) probe.close()
+        readers.shutdownNow()
         hostScheduler.shutdown()
         otherScheduler.shutdown()
     }
+
+    /**
+     * The instrument test for [readAsync], and the discriminator for
+     * computenet-i45n: an already-complete future is the state `sendAsync`'s
+     * future is in whenever the response headers won the race, and it is
+     * precisely the state in which `thenAccept` would run the body inline on
+     * the caller. Restoring `thenAccept` in [readAsync] turns this red on the
+     * `shouldNotBe` below, deterministically and in milliseconds — no load, no
+     * repetition, and no five-minute timeout needed to see it.
+     */
+    @Test
+    fun `an already-complete response future is never read on the thread that attached it`() {
+        val caller = Thread.currentThread()
+        val ranOn = CompletableFuture<Thread>()
+
+        readAsync(CompletableFuture.completedFuture(Unit)) { ranOn.complete(Thread.currentThread()) }
+
+        ranOn.get(5, TimeUnit.SECONDS) shouldNotBe caller
+    }
+
+    /**
+     * Run [body] on [readers] once [future] completes — **never** on the thread
+     * that attached it (computenet-i45n). See `InspectorGraphsTest.readAsync`
+     * for the full mechanism writeup: `thenAccept` runs inline on the caller
+     * when the future is already complete at attach time, which is exactly
+     * what happens when `sendAsync`'s headers-only completion beats attachment
+     * while `BodyHandlers.ofLines()` leaves an endless SSE body to read.
+     * `thenAcceptAsync` with an explicit executor has no such case.
+     */
+    private fun <T> readAsync(future: CompletableFuture<T>, body: (T) -> Unit): CompletableFuture<Void> =
+        future.thenAcceptAsync(body, readers)
 
     // ------------------------------------------------------------- predicate
 
@@ -509,13 +552,13 @@ class InspectorColdTest {
          * executor pool; cancelling [reader] alone left all of that alive.
          */
         private val client: HttpClient = boundedHttpClient()
-        private val reader: CompletableFuture<Void> = client
-            .sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines())
-            .thenAccept { response ->
-                response.body().forEach { line ->
-                    if (line.startsWith(DATA)) frames += json.decodeFromString<Event>(line.removePrefix(DATA))
-                }
+        private val reader: CompletableFuture<Void> = readAsync(
+            client.sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines()),
+        ) { response ->
+            response.body().forEach { line ->
+                if (line.startsWith(DATA)) frames += json.decodeFromString<Event>(line.removePrefix(DATA))
             }
+        }
 
         fun countOfKind(kind: String): Int = frames.count { it.kind == kind }
 
