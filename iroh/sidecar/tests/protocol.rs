@@ -26,6 +26,12 @@ use tokio::{
 /// run.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long a *responsive* sidecar is given to answer. Far shorter than
+/// [`TIMEOUT`], because the assertion it carries is "the connection is still
+/// answering at all" — a wedge must fail the test in seconds, not stall the run
+/// for half a minute.
+const RESPONSIVE: Duration = Duration::from_secs(5);
+
 /// Smaller than the length prefix itself, and past 64 KiB: the two sizes that
 /// catch a receiver which lost message boundaries.
 const SMALL: usize = 3;
@@ -88,6 +94,56 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Host<R, W> {
             String::from_utf8_lossy(&msg.payload)
         );
         msg.payload
+    }
+
+    /// Reads until a message of `kind` on `link` arrives or `bound` elapses,
+    /// returning it alongside every message skipped on the way.
+    ///
+    /// Unlike [`Self::expect`] this does not assert order: it is for the case
+    /// where the answer being looked for is interleaved with per-link `ERROR`s
+    /// whose count is a function of queue depth rather than of the contract.
+    /// `None` means the sidecar did not answer within `bound` — the wedge.
+    async fn answer_within(
+        &mut self,
+        bound: Duration,
+        kind: u8,
+        link: u64,
+    ) -> (Option<Vec<u8>>, Vec<Message>) {
+        let deadline = tokio::time::Instant::now() + bound;
+        let mut skipped = Vec::new();
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if left.is_zero() {
+                return (None, skipped);
+            }
+            match tokio::time::timeout(left, read_message(&mut self.reader)).await {
+                Err(_) => return (None, skipped),
+                Ok(Ok(Some(msg))) if (msg.kind, msg.link) == (kind, link) => {
+                    return (Some(msg.payload), skipped)
+                }
+                Ok(Ok(Some(msg))) => skipped.push(msg),
+                Ok(Ok(None)) => panic!("{}: the sidecar closed the socket", self.name),
+                Ok(Err(e)) => panic!("{}: reading the next message failed: {e}", self.name),
+            }
+        }
+    }
+
+    /// Whether the sidecar ends the connection within `bound` — how a host
+    /// observes `SHUTDOWN`, which is answered with nothing.
+    async fn closed_within(&mut self, bound: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + bound;
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            match tokio::time::timeout(left, read_message(&mut self.reader)).await {
+                Err(_) => return false,
+                Ok(Ok(None)) => return true,
+                Ok(Ok(Some(_))) => continue,
+                Ok(Err(_)) => return true,
+            }
+        }
     }
 
     async fn node_id(&mut self) -> Vec<u8> {
@@ -337,4 +393,210 @@ async fn the_binary_announces_its_port_and_node_id_on_one_stdout_line() {
         .expect("the binary exited")
         .expect("waiting on the binary");
     assert!(status.success(), "SHUTDOWN ends the process cleanly");
+}
+
+/// More `DATA` than one link's send queue can hold (`QUEUE_DEPTH` is 256), so
+/// the flood is guaranteed to run past the bound rather than merely reach it.
+const FLOOD: usize = 400;
+
+/// computenet-3gij: an accepted link whose dialler never speaks used to wedge
+/// the *whole* host connection.
+///
+/// QUIC reveals an accepted bi-directional stream only when its opener first
+/// writes, so a freshly accepted link's send queue has no consumer at all until
+/// the dialler speaks. The serve loop dispatched `DATA` by awaiting that queue,
+/// so the 257th `DATA` blocked the single message loop and with it every later
+/// message on that socket — `GET_ID`, `CLOSE_LINK` and `SHUTDOWN`, on *every*
+/// link. This asserts the contract that replaces it: `DATA` past the bound is
+/// refused with `ERROR` on its own link and the connection keeps answering.
+#[tokio::test]
+async fn a_flood_on_an_unadopted_inbound_link_leaves_the_host_connection_answering() {
+    let a = spawn_sidecar().await;
+    let b = spawn_sidecar().await;
+    let mut host_a = Host::connect("A", a).await;
+    let mut host_b = Host::connect("B", b).await;
+
+    let a_id = host_a.node_id().await;
+    host_a
+        .send(Message::control(kind::LISTEN, Vec::new()))
+        .await;
+    let a_addrs = host_a.expect(kind::LISTENING, CONTROL_LINK).await;
+
+    let mut add_peer = a_id.clone();
+    add_peer.extend_from_slice(&a_addrs);
+    host_b
+        .send(Message::control(kind::ADD_PEER, add_peer))
+        .await;
+    host_b.expect(kind::PEER_ADDED, CONTROL_LINK).await;
+
+    // B dials and then says nothing at all: no DATA, so A never sees the
+    // stream and never adopts it.
+    const OUT: u64 = 1;
+    host_b
+        .send(Message::new(kind::DIAL, OUT, a_id.clone()))
+        .await;
+    host_b.expect(kind::LINK_UP, OUT).await;
+
+    let inbound = host_a.recv().await;
+    assert_eq!(inbound.kind, kind::LINK_UP, "A sees the link come up");
+    let inn = inbound.link;
+
+    // A's host floods the unadopted link. Every one of these socket writes
+    // succeeds even against the unfixed sidecar — the OS buffer absorbs them —
+    // which is why the wedge shows up only in what comes back.
+    for i in 0..FLOOD {
+        host_a
+            .send(Message::new(kind::DATA, inn, vec![i as u8; 8]))
+            .await;
+    }
+
+    // 1. CONTROL_LINK is still answered.
+    host_a
+        .send(Message::control(kind::GET_ID, Vec::new()))
+        .await;
+    let (id, skipped) = host_a
+        .answer_within(RESPONSIVE, kind::ID, CONTROL_LINK)
+        .await;
+    assert_eq!(
+        id.as_deref(),
+        Some(&a_id[..]),
+        "GET_ID went unanswered for {RESPONSIVE:?} after {FLOOD} DATA on an unadopted inbound link \
+         (the whole host connection is wedged behind one link's send queue)"
+    );
+
+    // The frames past the bound were refused, on their own link, with notice —
+    // not dropped in silence and not queued without limit.
+    let refusals: Vec<&Message> = skipped
+        .iter()
+        .filter(|m| m.kind == kind::ERROR && m.link == inn)
+        .collect();
+    assert!(
+        !refusals.is_empty(),
+        "DATA past the queue bound is refused with ERROR on its own link; \
+         got only {:?}",
+        skipped.iter().map(|m| (m.kind, m.link)).collect::<Vec<_>>()
+    );
+    assert!(
+        refusals
+            .iter()
+            .all(|m| String::from_utf8_lossy(&m.payload).contains("send queue is full")),
+        "the refusal names the full send queue, got {:?}",
+        refusals
+            .iter()
+            .map(|m| String::from_utf8_lossy(&m.payload).into_owned())
+            .collect::<Vec<_>>()
+    );
+
+    // 2. CLOSE_LINK still works — on the flooded link itself...
+    host_a
+        .send(Message::new(kind::CLOSE_LINK, inn, Vec::new()))
+        .await;
+    assert!(
+        host_a
+            .answer_within(RESPONSIVE, kind::LINK_DOWN, inn)
+            .await
+            .0
+            .is_some(),
+        "CLOSE_LINK on the flooded link went unanswered for {RESPONSIVE:?}"
+    );
+
+    // ...and, from the other sidecar, on a link that was never flooded.
+    host_b
+        .send(Message::new(kind::CLOSE_LINK, OUT, Vec::new()))
+        .await;
+    assert!(
+        host_b
+            .answer_within(RESPONSIVE, kind::LINK_DOWN, OUT)
+            .await
+            .0
+            .is_some(),
+        "CLOSE_LINK on the dialling side went unanswered for {RESPONSIVE:?}"
+    );
+
+    // 3. SHUTDOWN is answered by the connection ending.
+    host_a
+        .send(Message::control(kind::SHUTDOWN, Vec::new()))
+        .await;
+    assert!(
+        host_a.closed_within(RESPONSIVE).await,
+        "SHUTDOWN did not end the connection within {RESPONSIVE:?}"
+    );
+    host_b
+        .send(Message::control(kind::SHUTDOWN, Vec::new()))
+        .await;
+}
+
+/// The other half of computenet-3gij's criterion: `CLOSE_LINK` on **any** link,
+/// not merely on the flooded one.
+///
+/// The test above closes the link it flooded, which the fix could satisfy by
+/// special-casing that link. This one floods link X and closes link Y — a
+/// second inbound link on the *same* host connection, never flooded — and
+/// asserts nothing else, so it goes red on its own when the single message loop
+/// is blocked rather than being pre-empted by an earlier responsiveness
+/// assertion.
+#[tokio::test]
+async fn close_link_on_an_unflooded_sibling_link_is_answered_while_another_is_flooded() {
+    let a = spawn_sidecar().await;
+    let b = spawn_sidecar().await;
+    let mut host_a = Host::connect("A", a).await;
+    let mut host_b = Host::connect("B", b).await;
+
+    let a_id = host_a.node_id().await;
+    host_a
+        .send(Message::control(kind::LISTEN, Vec::new()))
+        .await;
+    let a_addrs = host_a.expect(kind::LISTENING, CONTROL_LINK).await;
+
+    let mut add_peer = a_id.clone();
+    add_peer.extend_from_slice(&a_addrs);
+    host_b
+        .send(Message::control(kind::ADD_PEER, add_peer))
+        .await;
+    host_b.expect(kind::PEER_ADDED, CONTROL_LINK).await;
+
+    // Two dials, neither followed by any DATA: A accepts two links and adopts
+    // neither stream, so both send queues are consumerless.
+    for out in [1u64, 3u64] {
+        host_b
+            .send(Message::new(kind::DIAL, out, a_id.clone()))
+            .await;
+        host_b.expect(kind::LINK_UP, out).await;
+    }
+
+    let mut inbound = Vec::new();
+    while inbound.len() < 2 {
+        let msg = host_a.recv().await;
+        if msg.kind == kind::LINK_UP {
+            inbound.push(msg.link);
+        }
+    }
+    let (flooded, sibling) = (inbound[0], inbound[1]);
+
+    for i in 0..FLOOD {
+        host_a
+            .send(Message::new(kind::DATA, flooded, vec![i as u8; 8]))
+            .await;
+    }
+
+    // The only assertion: a link the flood never touched can still be closed.
+    host_a
+        .send(Message::new(kind::CLOSE_LINK, sibling, Vec::new()))
+        .await;
+    assert!(
+        host_a
+            .answer_within(RESPONSIVE, kind::LINK_DOWN, sibling)
+            .await
+            .0
+            .is_some(),
+        "CLOSE_LINK on link {sibling}, which was never flooded, went unanswered for \
+         {RESPONSIVE:?} while link {flooded} carried {FLOOD} DATA on an unadopted stream"
+    );
+
+    host_a
+        .send(Message::control(kind::SHUTDOWN, Vec::new()))
+        .await;
+    host_b
+        .send(Message::control(kind::SHUTDOWN, Vec::new()))
+        .await;
 }
