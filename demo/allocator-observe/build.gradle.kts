@@ -17,6 +17,7 @@ plugins {
 dependencies {
     implementation(project(":kernel"))
     implementation(project(":demo:shell"))
+    implementation(libs.kaml)
     implementation(libs.kotlinx.serialization)
 
     testImplementation(project(":testkit"))
