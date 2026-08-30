@@ -332,7 +332,7 @@ Repeat from step 2 while budget remains; this lane is cheap per item, so
 several items per session is normal — **but keep at most ~2 PRs open against
 any one file, and the sharper unit here is the BUDGET ENTRY**: every PR that
 moves a budget touches `.claude/skills/line-budget.txt`, and two PRs raising
-the *same entry* always conflict while two raising *different* entries do not.
+the *same entry* always conflict; two raising different, non-adjacent ones do not.
 The ~2-per-file bound and its reason live in `work/references/direct-child.md`
 (computenet-nxac); restated here because an agent in this lane has no reason to
 open that file, and this is the lane that shares a file on most PRs. Measured
