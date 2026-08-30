@@ -49,20 +49,21 @@
 # the write inlet rather than the gossip one, or when a `baseline:` anchor is
 # stated. A typo here fails the run rather than passing over it.
 #
-# What this scenario can and cannot assert about the duplicate. Echo termination
-# is invisible in STATE by construction: the dot algebra is idempotent, so
-# re-absorbing an already-held dot changes no fold, and a tombstone already
-# covers the very dot being re-delivered. The one observable difference is
-# whether anything is RE-EMITTED — and the corpus's closed check vocabulary
-# (`concord/schema/scenario.md` §`checks`) has no emission counter. So the
-# corpus asserts what it honestly can — the duplicate is absorbed with the mesh
-# still converging and nothing dead-lettered — and the re-emission COUNT is
-# pinned one level down, in
+# What this scenario asserts about the duplicate. Echo termination is invisible
+# in STATE by construction: the dot algebra is idempotent, so re-absorbing an
+# already-held dot changes no fold, and a tombstone already covers the very dot
+# being re-delivered. The one observable difference is whether anything is
+# RE-EMITTED, which is what the two `emission-count` checks below assert
+# directly (`concord/schema/scenario.md` §`checks`): from just before the first
+# `retransmit` (step 7, itself barrier-separated from every earlier step by the
+# `quiesce` at step 6) to check time, neither replica's outlet emits anything —
+# step 7 duplicates at r2's gossip inlet, step 8 at r1's, and both must
+# echo-terminate. The driver-level pin stays as a second, lower-level witness:
 # `concord/src/test/kotlin/civictech/concord/driver/kernel/RetransmitBindingTest.kt`
 # ("a duplicate at a replica's gossip inlet re-emits nothing, where a first
-# arrival re-emits once"), with an interest-empty replica as the control that a
-# zero count is termination and not a dropped injection. That residual — a
-# corpus check that counts re-emissions — is filed in `concord/corpus/DISPUTES.md`.
+# arrival re-emits once") keeps its interest-empty replica as the control that a
+# zero count is termination and not a dropped injection — the corpus check and
+# the driver test answer different layers.
 #
 # Why this is not the same OR-map scenario as `24-TMAP-MERGE-01`: that
 # scenario's `profile: dist` placement is in service of stating [24-TMAP-01]'s
@@ -107,3 +108,5 @@ checks:
   - {type: replicas-converge, logical: shared}
   - {type: views-converge, views: [v1, v2]}
   - {type: no-dead-letters}
+  - {type: emission-count, cell: r2, since: 7, exactly: 0}
+  - {type: emission-count, cell: r1, since: 7, exactly: 0}
