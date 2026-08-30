@@ -15,6 +15,7 @@ import java.net.InetAddress
 import java.security.SecureRandom
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -106,16 +107,23 @@ class IrohReconnectTest {
                 val severedMirror = connection.mirrorCell ?: fail("the first link minted no mirror")
 
                 // ---- sever: CLOSE_LINK, one LINK_DOWN per side ---------------
+                //
+                // The assertion order matters. `!peered` is NOT awaited first:
+                // with the planned-close guard removed the re-dial takes ~10ms
+                // on this schedule, so the down state can pass by unobserved and
+                // the failure would land on a wait for a transient rather than on
+                // the property. The schedule-consultation count cannot pass by:
+                // it only ever grows, so an absence held over an interval is a
+                // real absence, and it is the FIRST thing checked.
                 connection.sever()
-                await("the severed link is down") { !connection.peered }
                 assertTrue(
-                    neverWithin { connection.peered },
-                    "a close THIS side asked for must not be re-dialled (WsTransport's planned-close discipline)",
+                    neverWithin { connection.backoffConsultations > 0L },
+                    "a close THIS side asked for consulted the re-dial schedule; a requested close must " +
+                        "not be re-dialled at all (WsTransport's planned-close discipline)",
                 )
-                assertEquals(
-                    0L,
-                    connection.backoffConsultations,
-                    "a requested close consulted the re-dial schedule; it must not reconnect at all",
+                assertFalse(
+                    connection.peered,
+                    "a severed peering came back on its own",
                 )
                 assertTrue(
                     b.registry.location(shared.ref) !is LocationRegistry.Remote,
