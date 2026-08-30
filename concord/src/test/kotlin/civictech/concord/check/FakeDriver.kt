@@ -26,6 +26,7 @@ class FakeDriver(
     private val deadLetters: List<DeadLetter> = emptyList(),
     private val effects: Map<CellId, List<Effect>> = emptyMap(),
     private val emissions: Map<CellId, Long> = emptyMap(),
+    private val refusals: Map<CellId, Long> = emptyMap(),
 ) : Driver {
     override fun createHost(hostId: HostId) {}
     override fun spawn(hostId: HostId, cellId: CellId, type: String, params: Map<String, Value>) {}
@@ -59,6 +60,7 @@ class FakeDriver(
         baseline: Map<CellId, Long>?,
     ) {
     }
+    override fun driveContextless(cellId: CellId, inlet: String?, op: String, value: Value?) {}
     override fun despawn(cellId: CellId) {}
     override fun deadLetters(): List<DeadLetter> = deadLetters
     override fun effectLog(cellId: CellId): List<Effect> = effects[cellId].orEmpty()
@@ -68,6 +70,12 @@ class FakeDriver(
     // for a cell no fixture names would hide the refusal path rather than test it.
     override fun emissionCount(cellId: CellId): Long =
         emissions[cellId] ?: error("FakeDriver: no emission-count fixture for '$cellId'")
+
+    // Loud for the same reason emissionCount is: a fake that answered 0 for an
+    // unfixtured cell would make `refusal-count … exactly: 0` pass without ever
+    // exercising the driver-refusal arm the check is built to report.
+    override fun refusalCount(cellId: CellId): Long =
+        refusals[cellId] ?: error("FakeDriver: no refusal-count fixture for '$cellId'")
 }
 
 /**

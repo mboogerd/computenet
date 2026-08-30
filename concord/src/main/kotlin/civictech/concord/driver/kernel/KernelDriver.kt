@@ -482,6 +482,30 @@ class KernelDriver(seed: Long? = null) : Driver {
         )
     }
 
+    /**
+     * The kernel binding of the `drive-contextless` verb, delegated to the one
+     * profile where a contextless delivery is *decided* rather than merely
+     * accepted: the `dur` profile's `Effectful` admission guard
+     * ([KernelDriverDur.driveContextless]).
+     *
+     * Everything else refuses loudly, for the same reason [retransmit] does. A
+     * core or `dist` cell has no admission rule keyed on the message context —
+     * a contextless delivery there is ordinary, legitimate traffic — so the
+     * injection would assert nothing at all, and a scenario resting on it would
+     * read as coverage of `[24-DUR-06]` that it does not have. Widening the
+     * binding to a non-`Effectful` control target is deliberate future scope,
+     * not something to approximate here.
+     */
+    override fun driveContextless(cellId: CellId, inlet: String?, op: String, value: Value?) {
+        if (cellId in durCells) return dur.driveContextless(cellId, inlet, op, value)
+        throw UnsupportedCatalogBinding(
+            "drive-contextless at '$cellId': this binding drives a contextless PORT_API delivery only at a " +
+                "durable effect-boundary sink (host: dur), where an `Effectful` admission guard decides a " +
+                "frame carrying no MessageContext (spec 24 §Effectful [24-DUR-06]) — every other cell admits " +
+                "one as ordinary traffic, so the delivery would assert nothing",
+        )
+    }
+
     override fun despawn(cellId: CellId) {
         if (cellId in durCells) return dur.despawn(cellId)
         val bound = cells.remove(cellId) ?: return
@@ -524,6 +548,26 @@ class KernelDriver(seed: Long? = null) : Driver {
                 "replica (profile: dist), where an Observe-role tap records every delta the replica emits; " +
                 "no other cell's outlet is observed, and answering 0 for one would make an `exactly: 0` " +
                 "check pass on an outlet nothing was watching",
+        )
+    }
+
+    /**
+     * The kernel binding of the refusal-count observation, delegated to the
+     * profile that owns the refusal: the `dur` host's dead-letter outlet, which
+     * [KernelDriverDur] subscribes to and classifies per cell.
+     *
+     * Every other cell **refuses loudly**, and the refusal is the point: a
+     * `refusal-count` is compared to an `exactly:`, so answering `0` for a cell
+     * whose refusals this binding never observes would let `exactly: 0` pass on
+     * an unwatched cell — a vacuous green, not a conservative one.
+     */
+    override fun refusalCount(cellId: CellId): Long {
+        if (cellId in durCells) return dur.refusalCount(cellId)
+        throw UnsupportedCatalogBinding(
+            "refusal-count at '$cellId': this binding observes refused deliveries only on the durable host " +
+                "(host: dur), whose dead-letter outlet it subscribes to; no other host's refusals are " +
+                "observed, and answering 0 for one would make an `exactly: 0` check pass on a cell nothing " +
+                "was watching",
         )
     }
 

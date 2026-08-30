@@ -23,6 +23,7 @@ import civictech.concord.schema.ObservationsMonotone
 import civictech.concord.schema.ObservationsWholeWaves
 import civictech.concord.schema.PagesEqualView
 import civictech.concord.schema.QuiesceStep
+import civictech.concord.schema.RefusalCount
 import civictech.concord.schema.ReplicasConverge
 import civictech.concord.schema.RestartStep
 import civictech.concord.schema.RestoreStep
@@ -61,6 +62,7 @@ object Checks {
         is WavePlaneUnchanged -> wavePlaneUnchanged(check, ctx)
         is PagesEqualView -> pagesEqualView(check, ctx)
         is EmissionCount -> emissionCount(check, ctx)
+        is RefusalCount -> refusalCount(check, ctx)
     }
 
     /** At quiescence, `readView(view)` equals the golden value. */
@@ -734,6 +736,48 @@ object Checks {
             CheckResult.Passed
         } else {
             CheckResult.Failed("$where: expected exactly ${check.exactly} emission(s) but observed $observed")
+        }
+    }
+
+    /**
+     * **A cell refused exactly N undeliverable frames** (spec 24 §Effectful
+     * `[24-DUR-06]`), counted over the whole run.
+     *
+     * Two failure routes, both loud, because `exactly: 0` is satisfied by
+     * having nothing to count:
+     *
+     * - the driver **refuses to observe** the named cell — reported as this
+     *   check's failure rather than thrown, so the run names the check that
+     *   could not be evaluated instead of dying with a stack trace;
+     * - a **negative** count, which no ascending tally can produce and so means
+     *   the reading is not of what it claims to be.
+     *
+     * Nothing else is read: not the refusal's reason, not the channel it was
+     * reported on, not its position in the run. See [RefusalCount] for why the
+     * observable is a count at a named cell rather than a count of dead
+     * letters.
+     */
+    fun refusalCount(check: RefusalCount, ctx: CheckContext): CheckResult {
+        val where = "refusal-count(${check.cell})"
+        val observed = try {
+            ctx.driver.refusalCount(check.cell)
+        } catch (e: Exception) {
+            return CheckResult.Failed(
+                "$where: the driver refused to observe refusals at '${check.cell}' — ${e.message}. " +
+                    "A count of 0 would have been a passing answer for `exactly: 0`, so an unobserved cell " +
+                    "is reported here rather than counted as zero",
+            )
+        }
+        if (observed < 0L) {
+            return CheckResult.Failed(
+                "$where: the driver reported $observed refusals — a refusal tally only ascends, so this " +
+                    "reading is not a count of refusals at all",
+            )
+        }
+        return if (observed == check.exactly.toLong()) {
+            CheckResult.Passed
+        } else {
+            CheckResult.Failed("$where: expected exactly ${check.exactly} refusal(s) but observed $observed")
         }
     }
 

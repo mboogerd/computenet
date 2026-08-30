@@ -192,6 +192,31 @@ interface Driver {
         baseline: Map<CellId, Long>? = null,
     )
 
+    /**
+     * Deliver [op] (with optional [value]) to [cellId]'s [inlet] carrying **no
+     * message context at all** — no wave position, no source identity, no
+     * catch-up baseline. The externally-driven root shape spec 24 §Effectful
+     * `[24-DUR-06]` is written about.
+     *
+     * This is not [apply] and not [retransmit], and the distinction is the
+     * verb's entire content. [apply] drives an op through the cell's own outlet
+     * along the graph's links and the driver **mints** the next wave position
+     * for that outlet; an `apply` that happened to arrive unstamped would be a
+     * defect of that binding, not this case, and a scenario resting on it would
+     * assert nothing about a driver that stamps. [retransmit] **states** a
+     * position, so it cannot express a frame defined by having none.
+     *
+     * A conforming driver therefore **must not** implement this by any route
+     * that stamps: the delivery reaches the named inlet through the same
+     * intake as ordinary traffic (so the implementation's admission decision,
+     * journalling and accounting all see it), carrying nothing the receiver
+     * could take a frontier position from. A driver that cannot produce such a
+     * delivery at the named cell **fails loudly** rather than delivering a
+     * stamped one — a stamped delivery is admitted, so the substitution would
+     * turn a refusal scenario green while testing the opposite path.
+     */
+    fun driveContextless(cellId: CellId, inlet: String?, op: String, value: Value? = null)
+
     /** Gracefully retire [cellId], unlinking it. */
     fun despawn(cellId: CellId)
 
@@ -229,6 +254,36 @@ interface Driver {
      * added to prevent, and invisible in a green run.
      */
     fun emissionCount(cellId: CellId): Long
+
+    /**
+     * **How many deliveries [cellId] has refused as undeliverable so far this
+     * run** — frames the implementation would not admit because they carry no
+     * position it could judge them by, each discharged rather than acted on
+     * (the `refusal-count` check reads this; spec 24 §Effectful `[24-DUR-06]`).
+     *
+     * A count, and only a count. Not a reason string, not a report record, not
+     * a channel: `[24-DUR-06]` requires the refusal to be **accounted**, and
+     * accounting it is what this reports. How an implementation *surfaces* the
+     * refusal beside that — a dead letter, a denial channel of its own, a
+     * metric — is deliberately not observed here, because the requirement does
+     * not fix it and a check that read one channel would fail an implementation
+     * that chose another.
+     *
+     * Every implementation of this model already keeps this bookkeeping,
+     * because the specification requires the refusal to be observable rather
+     * than silent: an exclusive payload leaving the happy path must be
+     * discharged *and* accounted (spec 23 §Ownership). Reporting the number is
+     * therefore not a kernel-specific capability, and nothing about the
+     * refused frame's identity, timing or reason leaks into a check.
+     *
+     * A driver that does not observe refusals at the named cell **fails
+     * loudly** rather than answering `0`, by the same rule as [emissionCount]
+     * and [retransmit]: `0` is a perfectly plausible *passing* answer for an
+     * `exactly: 0` assertion, so a silent 0 turns an unobserved cell into a
+     * green check — invisible in a passing run, and the one failure this
+     * observation exists to prevent.
+     */
+    fun refusalCount(cellId: CellId): Long
 }
 
 /** Opaque scenario-local cell handle. */

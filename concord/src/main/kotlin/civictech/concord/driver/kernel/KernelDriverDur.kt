@@ -30,6 +30,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import civictech.cell.proxy.HostedPortInvocation
 import civictech.concord.driver.CellId
 import civictech.concord.driver.DeadLetter
 import civictech.concord.driver.Effect
@@ -196,6 +197,27 @@ internal class KernelDriverDur(
     /** External effect logs (outside any cell instance, so a true double-fire is catchable). */
     private val effectLogs = LinkedHashMap<CellId, MutableList<Effect>>()
 
+    /**
+     * Per-cell refusal tallies (the `refusal-count` check's observation): how
+     * many deliveries this host declined as undeliverable at each scenario cell.
+     *
+     * Kept here, outside the host, for the same reason [effectLogs] is: the host
+     * is discarded and rebuilt by [crashAndRecover], and a count that reset with
+     * it would silently under-report every refusal a scenario drove before its
+     * crash.
+     */
+    private val refusals = LinkedHashMap<CellId, Long>()
+
+    /**
+     * The driver-local identity and counter the `drive-contextless` verb mints
+     * its delta's **add-tag** from. Deliberately not a wave position and never
+     * stamped on the frame: it lives inside the payload, so the delivery a
+     * scenario drives is reproducible without the frame carrying anything a
+     * processed-frontier could judge it by.
+     */
+    private val contextlessDriveLane: UUID = UUID.randomUUID()
+    private var contextlessDrives: Long = 1L
+
     private var host: ManagedHost = newHost()
 
     private fun newHost(): ManagedHost =
@@ -207,7 +229,11 @@ internal class KernelDriverDur(
             h.deadLetterOutlet.subscribe(
                 Use.fixed(
                     Propagate<civictech.cell.host.DeadLetter> { dl ->
-                        onDeadLetter(DeadLetter(host = DUR_HOST, cell = null, reason = dl.description))
+                        val at = cellIdOf(dl.invocation?.cellRef)
+                        if (at != null && isUndeliverableForWantOfAPosition(dl)) {
+                            refusals[at] = (refusals[at] ?: 0L) + 1L
+                        }
+                        onDeadLetter(DeadLetter(host = DUR_HOST, cell = at, reason = dl.description))
                     },
                     PortRef.generate(),
                 ),
@@ -477,6 +503,123 @@ internal class KernelDriverDur(
         CurrentContext.with(MessageContext(position, outlet.ref, baseline = anchor(baseline))) {
             sinkInlet.propagate(delta)
         }
+    }
+
+    /**
+     * The kernel binding of the `drive-contextless` verb (`computenet-em9i`, the
+     * driver half of the gated schema change the same ticket wrote into
+     * `concord/schema/scenario.md`): a `PORT_API` delivery at [cellId]'s inlet
+     * carrying **no** `MessageContext`.
+     *
+     * The construction is `EffectfulInletGuardTest`'s (`kernel/src/test/kotlin/
+     * civictech/cell/durability/EffectfulInletGuardTest.kt`, `[24-DUR-06]`)
+     * lifted into the driver, and it is [retransmit]'s construction with the one
+     * thing removed that the verb is about: the same [HostedCellProxy] call
+     * through the same host intake, but wrapped in `CurrentContext.with(null)`
+     * instead of a `MessageContext`. [HostedCellProxy] stamps
+     * `CurrentContext.get()` into the `Invocation` it enqueues, so the frame
+     * arrives at the intake with `context == null` — exactly what an outside
+     * caller off the data path produces, and exactly what `ManagedHost`'s
+     * `Effectful` guard refuses.
+     *
+     * **`with(null)` rather than relying on an unset thread-local.** The
+     * ambient context happens to be null on the harness thread today, so the
+     * bare call would behave identically — which is the point: the verb's
+     * meaning must not rest on that accident (the same accident the schema
+     * subsection rules out for `apply`). Clearing it explicitly makes the
+     * absence of the context a stated property of this binding rather than a
+     * property of who happened to call it.
+     *
+     * It rides the ordinary intake, so the journal tee, the admission guard and
+     * the refusal accounting all see it; nothing here reaches around them.
+     *
+     * **Two deliberate refusals**, both loud, and both [retransmit]'s:
+     *
+     * 1. **Target must be an `effect-sink`.** The delivered delta carries an
+     *    add-tag, because a scenario names an element and never a tag identity.
+     *    For an effect boundary that is faithful — `EffectSinkCell` reads a
+     *    delta's added *elements*, and the admission guard reads the message
+     *    context, neither of which is the tag. For a tag-algebra fold it would
+     *    not be, and this binding will not fabricate a tag identity and call it
+     *    an arrival.
+     * 2. **Inlet must be the default `inlet`.** Every durable sink's delta port
+     *    is named `inlet` ([DeltaSink]); delivering to the default while the
+     *    step named another would make the step's own `inlet:` a lie.
+     *
+     * The tag itself is minted from a **driver-local, per-drive** position. That
+     * is not a wave position the frame carries — it is inside the payload, where
+     * `[24-DUR-06]` does not look. What the requirement is about is the *frame's*
+     * `MessageContext`, and this delivery has none.
+     */
+    fun driveContextless(cellId: CellId, inlet: String?, op: String, value: Value?) {
+        val target = cells[cellId]
+            ?: throw UnsupportedCatalogBinding("drive-contextless target '$cellId' is not a durable-host cell")
+        if (target.type != EFFECT_SINK) {
+            throw UnsupportedCatalogBinding(
+                "drive-contextless target '$cellId' is a '${target.type}': this binding drives a contextless " +
+                    "PORT_API delivery only at an '$EFFECT_SINK', whose inlet carries the admission decision " +
+                    "`[24-DUR-06]` is about and whose contract reads a delta's added elements. A tag-algebra " +
+                    "fold would additionally read the delta's tag, which no scenario names",
+            )
+        }
+        val inletName = inlet ?: DEFAULT_INLET
+        if (inletName != DEFAULT_INLET) {
+            throw UnsupportedCatalogBinding(
+                "drive-contextless at '$cellId' names inlet '$inletName'; the durable delta port is " +
+                    "'$DEFAULT_INLET'",
+            )
+        }
+        val tag = Timestamp(contextlessDriveLane, contextlessDrives++)
+        val delta = retransmittedDelta(op, value, tag)
+        val sinkInlet = (HostedCellProxy.create(target.ref, host, DeltaSink::class.java) as DeltaSink).inlet.call
+        // The verb IS the absence of the context: clear it rather than assume it.
+        CurrentContext.with(null) { sinkInlet.propagate(delta) }
+    }
+
+    /**
+     * The `refusal-count` observation: how many deliveries this host declined at
+     * [cellId] as undeliverable for want of a frontier position.
+     *
+     * Answered for any cell this driver holds — 0 is an honest reading there,
+     * because the tally is fed by a subscription to the host's whole
+     * dead-letter outlet, so a cell that refused nothing is *observed* to have
+     * refused nothing. A cell it does not hold is a **loud refusal**: 0 would be
+     * a passing answer for `exactly: 0`, and answering it for a cell nothing was
+     * watching is the vacuous green this observation exists to prevent.
+     */
+    fun refusalCount(cellId: CellId): Long {
+        if (cellId !in cells) {
+            throw UnsupportedCatalogBinding(
+                "refusal-count at '$cellId': this binding observes refusals only at cells on the durable host " +
+                    "(host: dur), whose dead-letter outlet it subscribes to; answering 0 for a cell nothing " +
+                    "was watching would make an `exactly: 0` check pass vacuously",
+            )
+        }
+        return refusals[cellId] ?: 0L
+    }
+
+    /** The scenario-local id of [ref], or null when this driver holds no such cell. */
+    private fun cellIdOf(ref: CellRef?): CellId? =
+        if (ref == null) null else cells.entries.firstOrNull { it.value.ref == ref }?.key
+
+    /**
+     * Whether a host dead letter reports a delivery **refused for want of a
+     * frontier position** (`[24-DUR-06]`) rather than any other undeliverable.
+     *
+     * Classified structurally, never by parsing the report's prose: a refused
+     * frame is a `PORT_API` invocation whose `context` is null, reported with
+     * **no** `cause` — a thrown fault carries one, and every admitted frame at
+     * an `Effectful` inlet carries a context by the time it is judged. The
+     * captured invocation survives dead-letter sanitization with both fields
+     * intact (`DeadLetters.sanitizeForDeadLetter` retypes exclusive *arguments*
+     * only), so this reads the record the host published rather than a second
+     * copy of the host's own decision.
+     */
+    private fun isUndeliverableForWantOfAPosition(dl: civictech.cell.host.DeadLetter): Boolean {
+        val invocation = dl.invocation ?: return false
+        return dl.cause == null &&
+            invocation.type == HostedPortInvocation.Type.PORT_API &&
+            invocation.invocation.context == null
     }
 
     /**

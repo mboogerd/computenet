@@ -27,6 +27,7 @@ import civictech.concord.schema.ObservationsMonotone
 import civictech.concord.schema.ObservationsWholeWaves
 import civictech.concord.schema.PagesEqualView
 import civictech.concord.schema.QuiesceStep
+import civictech.concord.schema.RefusalCount
 import civictech.concord.schema.ReplicasConverge
 import civictech.concord.schema.RestartStep
 import civictech.concord.schema.RestoreStep
@@ -1300,5 +1301,62 @@ class ChecksTest {
         val ctx = emissionCtx(now = 4L, baselines = listOf(EmissionBaseline("r1", 3, count = 5L)))
         fail(Checks.emissionCount(EmissionCount("r1", since = 3, exactly = 0), ctx))
             .message shouldContain "went backwards"
+    }
+
+    // --- refusal-count (computenet-em9i) -------------------------------------
+    //
+    // The observable `[24-DUR-06]` requires: a refusal HAPPENED at a named cell
+    // and was accounted. `exactly: 0` is satisfied by having nothing to count, so
+    // a driver that does not observe the cell must be reported as a failure here,
+    // never counted as zero.
+
+    private val refusalScenario = scenario(
+        cells = listOf(cell("r1", "set-source"), cell("v", "set-view")),
+        links = listOf(link("r1", "v")),
+        script = listOf(apply("r1", "add", s("apple"))),
+    )
+
+    private fun refusalCtx(observed: Long?) = FakeContext(
+        FakeDriver(refusals = if (observed == null) emptyMap() else mapOf("r1" to observed)),
+        refusalScenario,
+    )
+
+    @Test
+    fun `refusal-count holds when the cell refused exactly the stated number`() {
+        pass(Checks.refusalCount(RefusalCount("r1", exactly = 2), refusalCtx(observed = 2L)))
+    }
+
+    @Test
+    fun `refusal-count holds at zero when the cell is observed and refused nothing`() {
+        pass(Checks.refusalCount(RefusalCount("r1", exactly = 0), refusalCtx(observed = 0L)))
+    }
+
+    @Test
+    fun `refusal-count fails when a refusal was asserted and none happened`() {
+        fail(Checks.refusalCount(RefusalCount("r1", exactly = 1), refusalCtx(observed = 0L)))
+            .message shouldContain "expected exactly 1 refusal(s) but observed 0"
+    }
+
+    @Test
+    fun `refusal-count fails when the frame was admitted instead of refused`() {
+        // The direction the discriminating mutation produces: the admission rule
+        // is neutered, so nothing is refused while the scenario asserts one was.
+        fail(Checks.refusalCount(RefusalCount("r1", exactly = 2), refusalCtx(observed = 0L)))
+            .message shouldContain "but observed 0"
+    }
+
+    @Test
+    fun `refusal-count fails when the driver does not observe the cell rather than answering zero`() {
+        // No fixture: FakeDriver refuses, as a real binding must for a cell whose
+        // refusals it does not watch. A silent 0 here would PASS `exactly: 0` —
+        // the vacuous green this check exists to prevent.
+        fail(Checks.refusalCount(RefusalCount("r1", exactly = 0), refusalCtx(observed = null)))
+            .message shouldContain "refused to observe refusals"
+    }
+
+    @Test
+    fun `refusal-count fails on a negative reading, which no ascending tally can produce`() {
+        fail(Checks.refusalCount(RefusalCount("r1", exactly = 0), refusalCtx(observed = -1L)))
+            .message shouldContain "only ascends"
     }
 }

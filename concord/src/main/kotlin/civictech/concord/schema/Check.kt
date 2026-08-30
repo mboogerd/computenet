@@ -207,3 +207,57 @@ data class EmissionCount(
     val since: Int,
     val exactly: Int,
 ) : Check
+
+/**
+ * **An undeliverable frame was refused at this cell, and the refusal was
+ * accounted** (spec 24 §Effectful `[24-DUR-06]`): over the whole run, [cell]
+ * refused exactly [exactly] deliveries as undeliverable-for-want-of-a-position
+ * — discharging what each carried rather than acting on it.
+ *
+ * `[24-DUR-06]` has three conjuncts: the frame is refused, its exclusive
+ * payloads are discharged, and the refusal is **accounted**. The existing
+ * vocabulary can state none of them.
+ *
+ * - [NoDeadLetters] is the only dead-letter surface, and it is **sense-
+ *   inverted** here: it asserts *zero* across all hosts, while a scenario for
+ *   this requirement has to assert that a refusal HAPPENED. It is not merely
+ *   the wrong polarity — it quantifies over every host with no way to name a
+ *   cell, so even a "some dead letter exists" reading of it would not say
+ *   *this* cell refused *this* delivery.
+ * - `{type: effect-count, sink: s, exactly: 0}` states only the other half —
+ *   the effect did not fire — and **alone it is satisfied by a silent drop**,
+ *   which is precisely the failure `[24-DUR-06]` forbids. A kernel that lost
+ *   the frame on the floor and one that refused and accounted it are
+ *   indistinguishable to it.
+ *
+ * **Why a dedicated check rather than a counted dead-letter one.** A
+ * `dead-letter-count` would bind the requirement to one *reporting channel*.
+ * The spec requires the refusal to be **accounted**; it does not require it to
+ * be a dead letter, and an implementation that accounts refusals on their own
+ * channel (as this model's own `BoundaryPolicy` denials already do, deliberately
+ * kept off the fault counter) would fail a conformance check it actually
+ * satisfies. It would also overload the corpus's most common assertion — the
+ * meaning of the `no-dead-letters` surface is "zero everywhere", and giving the
+ * same surface a second, counted reading makes every existing use ambiguous.
+ * A refusal count names the quantity the requirement names, at the cell the
+ * requirement names it at.
+ *
+ * **No window.** Unlike [EmissionCount], this is a whole-run total, and
+ * deliberately so: legitimate traffic produces emissions continuously, so an
+ * emission count is only meaningful over a stated window, whereas a *refusal*
+ * is produced by nothing a correct scenario does except the drive under test.
+ * The run total is therefore already the quantity of interest, and a `since:`
+ * would buy nothing while importing the unbarriered-window hazard that one has
+ * to carry.
+ *
+ * **Nothing passes vacuously.** `exactly: 0` is satisfied by having nothing to
+ * count, so a driver that does not observe refusals at [cell] MUST fail loudly
+ * rather than answer `0` — see [civictech.concord.driver.Driver.refusalCount].
+ * The evaluator reports that refusal as this check's failure.
+ */
+@Serializable
+@SerialName("refusal-count")
+data class RefusalCount(
+    val cell: String,
+    val exactly: Int,
+) : Check

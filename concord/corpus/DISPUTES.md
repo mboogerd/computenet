@@ -784,8 +784,32 @@ original assertion, which ended `world shouldBe listOf(1, 1)`), plus the `Owned`
 
 **Three residuals, stated because retiring an entry is not a licence to round up**:
 
-1. **No corpus scenario covers the externally-driven case** (`coverage-gap`, still
-   open — re-diagnosed 2026-08-15 on `computenet-109f`). `[24-DUR-06]` enters
+1. **No corpus scenario covers the externally-driven case** — **RESOLVED**
+   (`coverage-gap`, by `computenet-em9i`, 2026-08-30). The two gated
+   `concord/schema` additions this residual asked for landed together:
+   the **`drive-contextless` step verb** and the **`refusal-count` check**
+   (`concord/schema/scenario.md`, each with its own single-writer review
+   subsection, and their `concord/src/` seams per D-C12). `DUR-CONTEXTLESS-01`
+   (`concord/corpus/15-durability/`) is the scenario: it drives a contextless
+   `PORT_API` delivery at an `Effectful` inlet, asserts the sink never acted on
+   it (`effect-count … key: ghost, exactly: 0`), asserts the refusal was
+   **accounted** rather than the frame silently dropped (`refusal-count … cell:
+   sink, exactly: 2` — once at delivery, once when replay presents it again),
+   and pins the stamped path as untouched across the crash. `[24-DUR-06]` and
+   the externally-driven arm of `[24-DUR-05]` are `covered` in
+   `CONCORDANCE.md`; the `dur` profile now asserts both. The chosen shape of
+   each addition, and the rejected alternative for the check (a counted
+   dead-letter check, refused because it binds the requirement to one reporting
+   channel and overloads `no-dead-letters`'s "zero everywhere" meaning), are
+   argued in `scenario.md` rather than repeated here. The **stamped-lane half**
+   named at the end of this residual stays open and is filed separately —
+   no verb creates an actor lane, so `ActorIngress` is still unreachable from a
+   scenario.
+
+   *The residual as filed follows, unedited, because its argument is what made
+   the two additions necessary and is cited from `scenario.md`.*
+
+   `[24-DUR-06]` enters
    `CONCORDANCE.md` as a `gap` row, and the `dur` profile asserts nothing about
    it. As filed, this residual named the retransmit / duplicate-delivery verb
    gated in `computenet-yh6.1.3.3` as the missing capability. **That verb has
@@ -829,7 +853,8 @@ original assertion, which ended `world shouldBe listOf(1, 1)`), plus the `Owned`
    when re-delivered live) is blocked on the same absence: no verb creates an
    actor lane. Until those land, the kernel `EffectfulInletGuardTest` carries the
    assertions and this ledger carries the honesty — deliberately no scenario,
-   per the same rule that governed the entry as filed. KFX-17's prohibition is
+   per the same rule that governed the entry as filed. *(Still true of the
+   stamped-lane half alone, as of the resolution above.)* KFX-17's prohibition is
    discharged either way: what it forbade was a scenario asserting the *weaker*
    rule, and there is no longer a weaker rule to assert.
 2. **The per-actor durable identity is not implemented here.** The kernel enforces
@@ -924,12 +949,14 @@ the honesty.
   which reaches "every frame reaching an `Effectful` inlet has a frontier
   position" by refusing the ones that do not, and is therefore not waiting on
   CON1. See the retirement note at the head of this entry.
-- **Follow-up**: the corpus scenario for the externally-driven `[24-DUR-05]` /
-  `[24-DUR-06]` case — filed as `computenet-109f`, which established (2026-08-15)
-  that the `computenet-yh6.1.3.3` retransmit verb it was gated on cannot express
-  the case, and re-filed the real capability as `computenet-em9i` (a
-  contextless-drive step verb plus a refusal-accounting check). See residual 1
-  above for the argument.
+- **Follow-up** — **DONE**: the corpus scenario for the externally-driven
+  `[24-DUR-05]` / `[24-DUR-06]` case — filed as `computenet-109f`, which
+  established (2026-08-15) that the `computenet-yh6.1.3.3` retransmit verb it
+  was gated on cannot express the case, and re-filed the real capability as
+  `computenet-em9i` (a contextless-drive step verb plus a refusal-accounting
+  check). Both landed 2026-08-30 and `DUR-CONTEXTLESS-01` is the scenario; see
+  residual 1 above. What remains is the stamped-lane (`ActorIngress`) half
+  only, which needs a verb that creates an actor lane.
 
 ### The third boundary (`coverage-gap`, `[24-DUR-02]`, KFX BS-12) — the checkpoint's *frontier* half asserts nothing — RETIRED by `DUR-CKPT-FRONTIER-01` (`computenet-yh6.1.8`)
 

@@ -1,0 +1,137 @@
+# Concord corpus scenario (`computenet-em9i`): the EXTERNALLY-DRIVEN case —
+# a frame that reaches an `Effectful` inlet carrying no `MessageContext` at all.
+#
+# `[24-DUR-06]` says such a frame SHALL be refused as undeliverable, its
+# exclusive payloads discharged, and the refusal ACCOUNTED. It is what makes
+# `[24-DUR-05]` hold unconditionally: past the refusal there is no frame at an
+# `Effectful` inlet without a position for the processed-frontier to judge it
+# by, so the guard's antecedent is evaluable for everything it ever sees.
+#
+# Until this file, `[24-DUR-06]` had NO corpus scenario and entered
+# `doc/spec/CONCORDANCE.md` as a `gap` row — a second implementation of this
+# model could pass the whole corpus while silently admitting the frame, or
+# while dropping it on the floor without accounting for it. Two schema
+# additions were needed and are documented in `concord/schema/scenario.md`
+# (single-writer, schema-change-gated): the `drive-contextless` step verb and
+# the `refusal-count` check. `computenet-109f` established (2026-08-15) why the
+# `retransmit` verb does not unblock this: a retransmit STATES a position, and
+# the case here is defined by having none.
+#
+# THE CONSTRUCTION. A journaled source feeds an `Effectful` sink. One ordinary
+# element (`k1`) is driven through the graph, so the sink's happy path and its
+# journalled frontier are live. Then `ghost` is delivered straight at the
+# sink's inlet with no message context — the shape `HostedCellProxy` produces
+# off the data path, which no other verb in the closed vocabulary can express.
+# Finally the host crashes and recovers from its journal, so the refusal is
+# observed to be a standing admission rule rather than a one-shot check made
+# once at first delivery.
+#
+# WHY EACH CHECK IS THE ONE THAT CATCHES ITS DIRECTION.
+#   * `refusal-count(sink, exactly: 2)` — the ACCOUNTING half. This is the
+#     conjunct nothing else in the vocabulary can state: `no-dead-letters` is
+#     sense-inverted (it asserts ZERO, across all hosts, and names no cell),
+#     and an effect count says nothing about whether the frame was refused or
+#     merely lost. A kernel that dropped `ghost` on the floor reads exactly like
+#     a conforming one to every other check in this file.
+#   * `effect-count(sink, key: ghost, exactly: 0)` — the REFUSAL half: the sink
+#     never acted on the contextless frame. On its own this is satisfied by a
+#     silent drop, which is why it is paired with the count above rather than
+#     used alone.
+#   * `effect-count(sink, exactly: 1)` — the converse pin, and the reason the
+#     refusal is not simply a way of losing traffic: the ordinary stamped
+#     element still fired, and fired EXACTLY once across the crash
+#     (`[24-DUR-05]`'s replay half, judged at a frontier the refused frame never
+#     got to touch). Unkeyed, so it quantifies over the keys the script FED the
+#     sink — `k1`, the only `apply` on its upstream — and reads the silent-loss
+#     direction too. `ghost` is not among them: it was never applied to the
+#     source, which is exactly what makes it the externally-driven case.
+#
+# WHY `refusal-count` IS 2 AND NOT 1. The contextless drive rides the ordinary
+# host intake, so the frame is journaled before it is judged; the crash's replay
+# meets it again and refuses it again. That is the property, not an artefact:
+# the refusal is a standing admission rule re-applied to every arrival, not a
+# one-shot admission check (kernel `EffectfulInletGuardTest` states the same
+# thing per-host — "the refusal is idempotent, not a one-shot admission check").
+# Written as an exact count rather than a floor so that a guard which stopped
+# refusing on replay — re-opening `[24-DUR-05]`'s hole for exactly the traffic
+# it was closed for — fails here.
+#
+# NO `no-dead-letters`. A refusal IS a failure event and is reported as one, so
+# this scenario cannot assert that check, for the same reason a `restart`
+# scenario cannot (`concord/schema/scenario.md`, `#### restart`). The `refusal-
+# count` check is what states the report's shape instead, and it states it more
+# precisely: at a named cell, as an exact number.
+#
+# DISCRIMINATION (the perturbation was run, and what follows is its verbatim
+# observed result — the evidence for the `covers:` line): neuter the admission
+# rule itself, replacing the `cell is Effectful && timestamp == null` condition
+# in `ManagedHost.deliver` with `false`, so a contextless frame falls through to
+# ordinary delivery. This scenario then fails 20 of 20 runs with
+#
+#   refusal-count(sink): expected exactly 2 refusal(s) but observed 0;
+#   effect-count(sink, key=ghost): expected 0 but observed 2;
+#   effect-count(sink, key=ghost): expected 1 but observed 2
+#
+# — and note the FIRST line, which is the one that matters: the accounting
+# conjunct goes red on its own account, not merely as collateral of the effect
+# firing. (The third line is the unkeyed `effect-count` finding `ghost` in the
+# produced-key set it did not expect.) No other corpus scenario moves under this
+# perturbation: nothing else drives a contextless frame at all, which is
+# precisely the gap this file closes.
+id: DUR-CONTEXTLESS-01
+title: A contextless PORT_API delivery at an Effectful inlet is refused and accounted, and the stamped path is untouched
+covers: [24-DUR-05, 24-DUR-06]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying a JOURNALED source feeding an Effectful sink, plus a
+    journal controller. The sink's inlet admits a frame only when it carries a
+    (sourceId, counter) position its processed-frontier can judge
+  when: >
+    one element is added through the graph and settles, and then a second
+    element is delivered STRAIGHT at the sink's inlet carrying no message
+    context at all — the shape an outside caller produces off the data path,
+    which has no position on that frontier — after which the host crashes and
+    recovers from its journal
+  then: >
+    the contextless delivery was refused as undeliverable rather than acted on,
+    and the refusal was accounted rather than the frame being silently dropped —
+    at first delivery and again when replay presented it a second time, since
+    the refusal is a standing admission rule and not a one-shot check. The
+    element driven through the graph was unaffected: it fired exactly once
+    across the crash, at a frontier the refused frame never reached
+graph:
+  cells:
+    # the journaled source: its accepted ops tee to the WAL, so the ordinary
+    # element survives the crash as a replayable frame
+    - {id: source, type: journal-set-source, host: dur}
+    # the effect boundary: one externally-recorded effect per added element
+    - {id: sink, type: effect-sink, host: dur}
+    # the crash/restart handle: despawning it crashes and recovers the durable host
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: source, to: sink}
+script:
+  # ordinary, stamped traffic: driven through the graph, so the source's outlet
+  # mints the wave position and the sink's frontier records it
+  - {type: apply, on: source, op: add, value: k1}
+  - {type: quiesce}
+  # THE EXTERNALLY-DRIVEN FRAME: delivered at the sink's inlet with NO message
+  # context. Not an `apply` (which mints a position and routes through the
+  # graph) and not a `retransmit` (which states one) — the case is defined by
+  # carrying none.
+  - {type: drive-contextless, on: sink, op: add, value: ghost}
+  - {type: quiesce}
+  # CRASH + journal replay: the stamped frame is suppressed at the restored
+  # frontier, and the contextless one is met — and refused — a second time
+  - {type: despawn, on: ctl}
+  - {type: quiesce}
+checks:
+  # the accounting conjunct of [24-DUR-06]: nothing else in the vocabulary can
+  # say a refusal HAPPENED at a named cell
+  - {type: refusal-count, cell: sink, exactly: 2}
+  # the refusal conjunct: the sink never acted on the contextless frame
+  - {type: effect-count, sink: sink, key: ghost, exactly: 0}
+  # and the stamped path is untouched — k1 fired exactly once across the crash
+  - {type: effect-count, sink: sink, exactly: 1}

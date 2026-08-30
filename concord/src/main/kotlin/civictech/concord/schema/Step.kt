@@ -223,3 +223,56 @@ enum class Expect {
     @SerialName("connected") CONNECTED,
     @SerialName("rejected") REJECTED,
 }
+
+/**
+ * Deliver [op] (with optional [value]) to cell [on]'s [inlet] **with no message
+ * context at all** — the shape `HostedCellProxy` produces off the data path,
+ * and the only shape spec 24 §Effectful `[24-DUR-06]` is written about. Added
+ * as the deliberate between-waves, single-writer schema change
+ * `computenet-em9i` (`concord/schema/scenario.md`, `#### drive-contextless`).
+ *
+ * **The absence of the context is the whole verb.** `[24-DUR-06]` says a
+ * `PORT_API` invocation arriving at an `Effectful` inlet with no
+ * `MessageContext` SHALL be refused as undeliverable, its exclusive payloads
+ * discharged and the refusal accounted. A frame with no context has no position
+ * on that inlet's processed-frontier, so the case is *defined* by what the
+ * delivery does not carry.
+ *
+ * No existing verb reaches it, and the reason is structural rather than
+ * incidental:
+ *
+ * - [ApplyStep] drives an op through the cell's own outlet along the graph's
+ *   links, and the driver mints the next wave position for that outlet — an
+ *   `apply` that arrived unstamped would be a *defect* of the implementation,
+ *   not the case under test. That a particular binding's `apply` happens to
+ *   enter a source's inlet unstamped is an accident of that binding: another
+ *   conforming driver may stamp, so a scenario built on it would assert nothing
+ *   (`concord/corpus/DISPUTES.md`, "the second boundary", residual 1).
+ * - [RetransmitStep] **states** an explicit `(source, counter)` position. A verb
+ *   that names a position cannot drive the path whose defining property is the
+ *   absence of one.
+ *
+ * [on] names the cell under test, exactly as [RestartStep]/[DespawnStep]/
+ * [SnapshotStep] do; [inlet] selects the receiving inlet (default `"inlet"`,
+ * the same default `connect`/`disconnect` use); [op]/[value] are [ApplyStep]'s
+ * own fields — the payload the delivery carries.
+ *
+ * There is no `source:`, no `counter:` and no `baseline:` **by construction**: a
+ * scenario that could name any of them would be describing a different frame.
+ * There is no `times:` either — a repeated contextless drive is another step,
+ * and each is judged on its own.
+ *
+ * A drive that is refused **is** a failure event: the refusal is reported, so a
+ * scenario using this verb against an effect boundary cannot also assert
+ * `no-dead-letters` (see `concord/schema/scenario.md`). It asserts
+ * `refusal-count` instead, which is the observable [24-DUR-06] actually
+ * requires.
+ */
+@Serializable
+@SerialName("drive-contextless")
+data class DriveContextlessStep(
+    val on: String,
+    val inlet: String? = null,
+    val op: String,
+    @Contextual val value: Value? = null,
+) : Step

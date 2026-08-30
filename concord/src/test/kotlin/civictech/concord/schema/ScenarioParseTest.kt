@@ -45,6 +45,13 @@ class ScenarioParseTest {
         // still reading as coverage of the live frontier.
         "corpus/15-durability/DUR-LIVE-01.yaml",
         "corpus/15-durability/DUR-CKPT-FRONTIER-01.yaml",
+        // computenet-em9i: the contextless-drive scenario, carrying the schema's
+        // newest step verb. Same reason again, and sharper here — the whole
+        // content of a `drive-contextless` step is what it does NOT carry, so a
+        // mistyped `on:` or `value:` is ignored by the lenient parser and the
+        // step silently drives the default while the file still reads as
+        // coverage of [24-DUR-06].
+        "corpus/15-durability/DUR-CONTEXTLESS-01.yaml",
     )
 
     @TestFactory
