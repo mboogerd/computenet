@@ -109,14 +109,16 @@ class TieringServerTest {
      * about dot re-minting across a mesh — that is [KE1-31]'s crash-restart
      * proof and belongs to a sibling two-JVM task.
      *
-     * **Scope, and why it is this narrow — the MANUAL lane only.** Two
-     * independent properties of this demo stop `--journal` covering the rest,
-     * both stated in [TieringApp]'s KDoc and both measured 2026-08-29:
-     * `tier`/`pref` payloads are unencodable by `WireCodec`, and every
-     * pipeline cell except the manual OR-map is spawned at a *fresh random*
-     * ref, so no journal record can find it after a restart. So this test
-     * asserts the manual lane replays and asserts nothing whatever about the
-     * items set or the signal lanes under a journal.
+     * **Whole-demo scope (computenet-3san).** Drives every routed action —
+     * `item`, `tier`, `pref`, `retier` — before the restart and asserts the
+     * whole `/state` payload survives it: the items set, the valuations, the
+     * preferences AND the manual pin, not only the manual lane the previous,
+     * narrower version of this test covered (it asserted `"items":[]` as
+     * *expected*, back when `tier`/`pref` payloads were unencodable by
+     * `WireCodec` and every pipeline cell but the manual OR-map spawned at a
+     * fresh random ref every process start — both closed by
+     * [TieringWireSerializers][civictech.demo.tiering.wire.TieringWireSerializers]
+     * and [TierPipeline]'s derived `items`/`vals`/`prefs` identities).
      */
     @Test
     fun `a journalled re-tier replays on restart`() {
@@ -126,8 +128,15 @@ class TieringServerTest {
             try {
                 val probe = HttpProbe("http://localhost:${first.boundPort}")
                 probe.post("action=item&name=pizza")
+                probe.post("action=item&name=sushi")
+                probe.post("action=tier&agent=ada&item=pizza&tier=S")
+                probe.post("action=pref&agent=cy&winner=sushi&loser=pizza")
                 probe.post("action=retier&item=pizza&tier=B")
-                probe.await { """"manual":{"pizza":"B"}""" in it }
+                probe.await {
+                    """"manual":{"pizza":"B"}""" in it &&
+                        """{"agent":"ada","item":"pizza","tier":"S"}""" in it &&
+                        """{"agent":"cy","winner":"sushi","loser":"pizza"}""" in it
+                }
             } finally {
                 first.stop()
             }
@@ -137,11 +146,29 @@ class TieringServerTest {
             try {
                 val probe = HttpProbe("http://localhost:${second.boundPort}")
                 val json = probe.await { """"manual":{"pizza":"B"}""" in it }
+                // the items set: a routed SetCell at a derived, replay-stable ref
+                assertTrue(""""items":["pizza","sushi"]""" in json, "the items set should replay: $json")
+                // the valuation: a routed KeyedSetCell entry, Pair-keyed
+                assertTrue(
+                    """{"agent":"ada","item":"pizza","tier":"S"}""" in json,
+                    "the valuation should replay: $json",
+                )
+                // the preference
+                assertTrue(
+                    """{"agent":"cy","winner":"sushi","loser":"pizza"}""" in json,
+                    "the preference should replay: $json",
+                )
+                // the manual pin, and the board it drives
                 assertTrue(""""manual":{"pizza":"B"}""" in json, "the pin should replay: $json")
                 assertTrue(""""B":[{"item":"pizza","score":0.6667}]""" in json, "and hold the board: $json")
-                // `"items":[]` here is expected, not a bug in the replay: the
-                // items SetCell is a graph-DSL cell at a fresh random ref.
-                assertTrue(""""items":[]""" in json, "graph-DSL cells do not replay — see this test's KDoc: $json")
+                // sushi has only a pairwise signal (no manual pin): its fused
+                // tier should also recompute from the replayed pref, proving
+                // the derived-identity replay feeds the whole pipeline, not
+                // just the routed cells themselves.
+                assertTrue(
+                    """"S":[{"item":"sushi","score":1.0000}]""" in json,
+                    "the computed pipeline should re-derive from the replayed pref: $json",
+                )
             } finally {
                 second.stop()
             }
