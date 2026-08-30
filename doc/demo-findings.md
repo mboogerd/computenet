@@ -145,7 +145,16 @@ inlets.
 declaration-only KSP scanning (`doc/ksp-dx-catalog.md`'s "KSP is
 declaration-only" constraint), not a defect to fix.
 
-## F-9 — No operator consumes a `TaggedMapDelta`, so an `OrMapCell` cannot feed the operator suite
+## F-9 — The `TaggedMapDelta` adapter landed; the per-issue regroup still has no operator — **PARTIALLY CLOSED**
+
+**Partially closed**: the first bullet below — "the OR-map side has no consumer at all" — is
+closed. `TaggedMapView`/`UntagCell` (96 §E1.5) landed under epic `computenet-j2x`, at
+`civictech.cell.data.view.TaggedMapView` and `civictech.cell.data.op.UntagCell`, and `UntagCell`
+is registered in `civictech.oracle.bind.OperatorCatalog` under the id `untag` (computenet-pez3).
+A `TaggedMapDelta` is no longer a terminal in the graph. The second bullet — the per-issue
+regroup — survives untouched: `GroupByCell`'s inlet is still `Serve<Propagate<SetDelta<E>>>`,
+not a keyed map stream, so proposed shape (b) below is still an open gap. Verified against
+origin/main d990148ae, computenet-sx0o.
 
 **Observation**: `:demo:beadsmirror`'s ready-set derivation (computenet-98u.1.2,
 `civictech.demo.beadsmirror.ready.ReadySetCell`) joins the mirror's issue-field
@@ -155,21 +164,27 @@ incrementally. The join it needs is expressible in operator terms —
 `edges ⋉ openIssues` on the edge's target id gives the blocked set, and
 `candidates ▷ blocked` gives the ready set, which is exactly `SemiJoinCell`
 twice (once matched, once `negated`). It is nevertheless hand-written as an
-app-level cell, because neither input can reach `SemiJoinCell`:
+app-level cell, because neither input could originally reach `SemiJoinCell`:
 
-- **The OR-map side has no consumer at all.** Every operator in
+- **The OR-map side now has a consumer: `UntagCell`.** ~~Every operator in
   `civictech.cell.data.op` takes `SetDelta` or `MapDelta`;
   `grep -rn 'Serve<Propagate<TaggedMapDelta'` over `kernel/src/main` returns
   nothing. `OrMapCell` emits `TaggedMapDelta` and the `TaggedMapView`/`UntagCell`
   adapters its own KDoc names (96 §E1.5) are not implemented, so a tagged map
   is a terminal in the graph: something can materialize it, nothing can derive
-  from it.
+  from it.~~ That grep now returns
+  `kernel/src/main/kotlin/civictech/cell/data/op/UntagCell.kt:24`'s
+  `inlet: Serve<Propagate<TaggedMapDelta<K, V>>>`. `OrMapCell` emits
+  `TaggedMapDelta`, and `UntagCell`/`TaggedMapView` are exactly the adapters this
+  section's own KDoc named, now implemented and reachable — see "Partially closed"
+  above.
 - **Even untagged, the per-issue record is not reachable.** The predicate
   (`ReadyPredicate.isReady`) is a function of *all* of one issue's fields at
   once, so the composite-keyed stream must first be regrouped
   `(issue, field) -> issue -> Map<field, value>`. `GroupByCell` does exactly
   that shape of fold but consumes a `SetDelta<E>`, not a keyed map stream, so
-  the regroup has no operator either.
+  the regroup has no operator either. **Still true** — unaffected by the
+  `UntagCell`/`TaggedMapView` landing; see "Partially closed" above.
 
 **Why it's a gap**: the demo's most operator-shaped requirement — a two-input
 incremental join with a reverse index, which `SemiJoinCell` and
@@ -178,16 +193,18 @@ hand, including a private re-fold of `OrMapCell`'s own dot algebra
 (`putDots`/`deadDots`, `[24-TMAP-03]` value resolution) purely to read a value
 out of the delta stream the cell publishes. That re-fold is a copy of kernel
 logic living in a demo, and it is the *second* consumer to need it after the
-mirror's own HTTP fold.
+mirror's own HTTP fold. The gap remaining after this finding narrows is
+entirely the second bullet: the per-issue regroup.
 **Proposed shape**: two pieces, either of which unblocks composition —
-(a) the deferred `TaggedMapView`/`UntagCell` adapter (96 §E1.5): a cell taking
+~~(a) the deferred `TaggedMapView`/`UntagCell` adapter (96 §E1.5): a cell taking
 `TaggedMapDelta<K, V>` and emitting the untagged `MapDelta<K, V>` of resolved
 per-key values, effective-only, so the whole existing operator suite becomes
-reachable from an `OrMapCell`; and (b) a keyed *regroup* operator over a map
+reachable from an `OrMapCell`~~ — **(a) landed**, see "Partially closed" above;
+and (b) a keyed *regroup* operator over a map
 stream (`MapDelta<K, V>` with `keyFn: K -> G` emitting
 `MapDelta<G, Map<K, V>>`), the `MapDelta`-shaped sibling of `GroupByCell`,
 which is what turns a composite-keyed entity-attribute map into per-entity
-records.
+records — **still open**.
 
 ## F-10 — A hand-wired `SetCell` consumer has no way to catch up on attach
 
