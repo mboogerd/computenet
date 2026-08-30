@@ -90,12 +90,25 @@ unconditionally accepted.
 What that costs a host:
 
 * An `ERROR` on a link id in reply to `DATA` means **that frame was not sent**.
-  Nothing is discarded without naming it; the frame is the host's to resend.
-* **A resend reorders the link unless the host stops sending on it.** The
-  sidecar preserves the order of the frames it accepted, so if the host kept
-  sending after a refusal and those frames were accepted, the resent frame
-  arrives behind them. A host that needs its link strictly ordered sends no
-  further `DATA` on that link until a resend is accepted.
+  Every `ERROR` in reply to a `DATA` means that, whatever its reason — a full
+  queue, a closed link, an unknown link id — so a host never has to distinguish
+  "refused" from "sent" on the strength of the reason text.
+* **What the `ERROR` names is the link, not the frame.** It carries a kind byte,
+  a link id and a human-readable reason, and no sequence number (§2, framing);
+  an *accepted* `DATA` is answered with nothing at all. A host with more than one
+  `DATA` outstanding on a link therefore learns that **one** frame on that link
+  was refused, not which one — and when the link's consumer is draining
+  concurrently, acceptances and refusals interleave, so the refusals are not even
+  the last frames sent.
+* **So this section does not yet tell a host how to recover**, and it should not
+  be read as if it did: a resend reorders the link (the sidecar preserves the
+  order of the frames it accepted, so a frame re-sent after later frames were
+  accepted arrives behind them), and the host cannot identify the frame to resend
+  in any case. What a host can do today is **avoid the refusal**: on an inbound
+  link, wait for the peer's first frame before sending (§3, `LINK_UP`), and keep
+  its own outstanding `DATA` on a link within the bound. Settling the recovery
+  contract properly — a terminating rule, or a frame identifier the `ERROR` can
+  echo — is `computenet-ey4v`, and it is open at the time of writing.
 * The one remaining way to make the host connection stop answering is for the
   host to stop reading its own socket — a stall it can end at will, and not one
   a peer or a link can inflict on it.
