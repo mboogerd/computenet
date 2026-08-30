@@ -110,12 +110,16 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
 
     /**
      * Replica -> how many times its delta outlet has emitted, counted by the same
-     * Observe-role tap [mintedDots] is filled from ([recordEmissionsOf]). One
-     * increment per outlet emission, whatever the frame carries: an emission that
-     * relays a peer's dot, or one whose dots are all already attributed, is still
-     * an emission, and the `emission-count` check asserts THAT an emission
-     * happened rather than what was in it. Counted before the frame is inspected,
-     * so a frame that carries no wave context at all is not silently uncounted.
+     * Observe-role tap [mintedDots] is filled from ([recordEmissionsOf]). The
+     * counting unit is fixed by `concord/schema/scenario.md`'s "What a conforming
+     * driver must observe" § `emission-count` (the `computenet-f94x` paragraph):
+     * one increment per outlet emission event, whatever the frame carries — an
+     * emission that relays a peer's dot, or one whose dots are all already
+     * attributed, is still one emission, never zero and never one-per-delta. This
+     * binding implements that unit rather than defining it; the `emission-count`
+     * check asserts THAT an emission happened rather than what was in it. Counted
+     * before the frame is inspected, so a frame that carries no wave context at
+     * all is not silently uncounted.
      */
     private val emissionCounts = LinkedHashMap<CellId, Long>()
 
