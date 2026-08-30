@@ -508,7 +508,7 @@ class LocationRegistry {
      *
      * **Neither of those is what a "local wins" guard would block, and the
      * measurement says so**: inserting `if (locations[ref] is Local && location
-     * is Remote) return` here leaves `:kernel:test` (1271 tests) and
+     * is Remote) return` here leaves `:kernel:test` (1281 tests on this branch) and
      * `:wire:test` (91) entirely green except the one test that pins this
      * behaviour. So the case for the current shape is *not* "a guard would
      * break repartition or mobility" — nothing in either suite exercises

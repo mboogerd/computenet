@@ -45,7 +45,7 @@ import java.util.UUID
  * **Measured, not argued**: inserting a naive local-wins guard
  * (`if (locations[ref] is Local && location is Remote) return`) into
  * [LocationRegistry.install] turns the first test below red and leaves
- * `:kernel:test` (1271 tests) and `:wire:test` (91) otherwise entirely green.
+ * `:kernel:test` (1281 tests on this branch) and `:wire:test` (91) otherwise entirely green.
  * So the two "dependent transition" tests here do **not** discriminate against
  * that guard, and nobody should cite them as if they did — they pin transitions
  * the registry relies on, not a reason the guard is impossible. The reason is
