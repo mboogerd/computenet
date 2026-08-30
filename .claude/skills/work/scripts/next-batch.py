@@ -221,7 +221,8 @@ def capacity_limit(cores, siblings=0):
     derivation's predicted direction, not a surprise, and the "if anything
     optimistic" caveat below covers it. The 10-core record is not an arm at
     all — it is three whole IMPLEMENTER lanes, whose gates at that date were
-    repo-wide — so it cannot corroborate this either way.
+    repo-wide (per qmjd, which postdates it) — so it cannot corroborate this
+    either way.
 
     The criterion is per-run inflation, not throughput: a bounded wait sized on
     a quiet box is what breaks. Under 2x it holds; the recorded catastrophes are
