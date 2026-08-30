@@ -62,16 +62,22 @@
 # count` check is what states the report's shape instead, and it states it more
 # precisely: at a named cell, as an exact number.
 #
-# DISCRIMINATION (the perturbation was run, and this is its observed result —
-# the evidence for the `covers:` line): neuter the admission rule itself — drop
-# the `cell is Effectful && timestamp == null` branch in `ManagedHost.deliver`
-# so a contextless frame falls through to ordinary delivery. This scenario then
-# fails on `effect-count(sink, key=ghost): expected 0 but observed 2` (the
-# refused frame is admitted at first delivery and again on replay), with
-# `refusal-count(sink): expected exactly 2 refusal(s) but observed 0` reporting
-# the accounting half independently. No other corpus scenario moves: nothing
-# else drives a contextless frame at all, which is precisely the gap this file
-# closes.
+# DISCRIMINATION (the perturbation was run, and what follows is its verbatim
+# observed result — the evidence for the `covers:` line): neuter the admission
+# rule itself, replacing the `cell is Effectful && timestamp == null` condition
+# in `ManagedHost.deliver` with `false`, so a contextless frame falls through to
+# ordinary delivery. This scenario then fails 20 of 20 runs with
+#
+#   refusal-count(sink): expected exactly 2 refusal(s) but observed 0;
+#   effect-count(sink, key=ghost): expected 0 but observed 2;
+#   effect-count(sink, key=ghost): expected 1 but observed 2
+#
+# — and note the FIRST line, which is the one that matters: the accounting
+# conjunct goes red on its own account, not merely as collateral of the effect
+# firing. (The third line is the unkeyed `effect-count` finding `ghost` in the
+# produced-key set it did not expect.) No other corpus scenario moves under this
+# perturbation: nothing else drives a contextless frame at all, which is
+# precisely the gap this file closes.
 id: DUR-CONTEXTLESS-01
 title: A contextless PORT_API delivery at an Effectful inlet is refused and accounted, and the stamped path is untouched
 covers: [24-DUR-05, 24-DUR-06]
