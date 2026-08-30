@@ -254,7 +254,18 @@
 # exactly and still reached load 204 on 16 cores. The mechanical half —
 # capacity.load1/advice from next-batch.py's load_advice() — costs no budget
 # lines, being script, and carries its own derivation in its docstring.
-work                9150
+# 9150 -> 9160 on 2026-08-30: computenet-1lbs (+10) — bought the hookup for
+# slot-elapsed.sh, which prints the AGE of the previous elapsed reading (the
+# script itself is not counted here). Third report of this friction
+# (computenet-776 -> hs90 -> 1lbs); the first two fixes were prose that made
+# each reading true and said nothing about how fast a true reading goes stale.
+# ~24 lines of prose rationale were compressed out of step 2 to hold the growth
+# down; 3 of the 10 are the review's must-fixes (the "largest in busy sessions"
+# clause the acceptance requires, and a sample output that had been wrong).
+# Recomputed against 2r22's LANDED 9150 rather than merged with the 9140 this
+# branch carried — two PRs raising the same number always conflict and the
+# second depends on the first's landed value (computenet-x69c).
+work                9160
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

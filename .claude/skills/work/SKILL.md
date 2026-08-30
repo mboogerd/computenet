@@ -350,40 +350,49 @@ The signature is **two or more budget notifications arriving together**, or
 any budget notification arriving with "stream ended" right behind it.
 
 **On ANY budget notification — not only at budget-gated decisions — recompute
-elapsed from `$SCRATCH/slot-start` before acting on it, and act on the number
-rather than on which tier fired — and recompute it anyway at every dispatch
-and at the moment you READ any
-completion notification, notification or not. A notification's `duration_ms`
-is the agent's own runtime, NOT the slot's wall clock: one reporting 7m15s
-arrived after 148 minutes of wall clock, and a session trusting it ran 54m
-over slot (computenet-vzhs).** After a second host suspension the
-monitor went permanently silent and no tier ever fired; the slot had expired
-~20 minutes before an accidental check noticed (computenet-6664). A rule keyed
-on a notification cannot see the case where none arrives; the subtraction is
-one line and costs nothing:
+elapsed before acting on it, and act on the number rather than on which tier
+fired — and recompute it anyway at every dispatch and at the moment you READ
+any completion notification, notification or not. A notification's
+`duration_ms` is the agent's own runtime, NOT the slot's wall clock: one
+reporting 7m15s arrived after 148 minutes of wall clock, and a session trusting
+it ran 54m over slot (computenet-vzhs).** After a second host suspension the
+monitor went permanently silent and no tier fired; the slot had expired ~20
+minutes before an accidental check noticed (computenet-6664). A rule keyed on a
+notification cannot see the case where none arrives, and the reading is one
+command:
 
 ```bash
-echo $(( ($(date -u +%s) - $(cat "$SCRATCH/slot-start")) / 60 ))m elapsed \
-     of $(( $(cat "$SCRATCH/slot-seconds") / 60 ))m
+.claude/skills/work/scripts/slot-elapsed.sh "$SCRATCH"
+# 144m of 300m elapsed, 156m left — rung: OPEN — new units allowed — previous
+# reading 50m ago — 50m of wall clock passed between turns
 ```
+
+**Run it as the FIRST tool call of any turn that decides whether to start a new
+unit** — dispatch, claim, or 5f route selection — not merely "at budget-gated
+decisions", which reads as satisfied by a reading several turns old. Its last
+field is the age of your previous reading: a true reading decays unperceived —
+a turn's own latency is invisible from inside, and the turn after a 50-minute
+stall looks identical to the turn after a 30-second one. Measured on
+MacBoo 2026-08-29/30 under `computenet-j2x`: honest readings of 117m and 144m,
+real 195m — ~78m and ~50m of between-turn wall clock each perceived as ~2m
+across ~5 turns of ship-gate and bookkeeping, enough to carry the session over
+the T-90m rung as it reasoned about which side of it it was on
+(computenet-1lbs). The decay is LARGEST IN BUSY SESSIONS, growing with how much
+subagent output you have digested — where the budget matters most. The rung the
+script names binds, whatever the last tier fired.
 
 **Never WRITE an elapsed figure you did not compute in that same turn.** The
 failure mode is drift, not disagreement: a session recomputes correctly five
-times and then keeps reporting numbers extrapolated from the last real
-reading. Estimating produces no symptom — the session feels identical either
-way — and one that ships every 30 minutes has nothing to make it notice. On
-2026-08-27 a session reported "81m", "88m", "98m" while the real figure was
-195m of 300m: ~100 minutes low for two hours, at which point it believed it
-had a whole wind-down stage in hand that it did not (computenet-hs90,
-recurrence of computenet-776). If you have no reading this turn, write "no
-elapsed reading this turn" — an absent number is visible, a plausible wrong
-one is not.
+times, then keeps extrapolating from the last real reading. Estimating produces
+no symptom. On 2026-08-27 one reported "81m", "88m", "98m" against a real 195m
+of 300m, believing it had a whole wind-down stage in hand (computenet-hs90,
+recurrence of computenet-776). No reading this turn → write "no elapsed reading
+this turn": an absent number is visible, a plausible wrong one is not.
 
-That is one subtraction, and it is what turned a confusing batch into a
-correct diagnosis the one time this happened. A session that instead trusted
-the tiers in order would "finish the current feature", then "stop
-dispatching", then "finalize" in three consecutive turns with no time between
-them.
+That one reading is what turned a confusing batch into a correct diagnosis the
+one time this happened. A session trusting the tiers in order would instead
+"finish the current feature", "stop dispatching" and "finalize" in three
+consecutive turns with no time between them.
 
 Three standing disciplines:
 
@@ -467,8 +476,9 @@ Three standing disciplines:
   echo "<Monitor|shell|loop> <id or pid> <what it waits for>" >> "$SCRATCH/jobs"
   ```
 - **Between notifications you have no sense of elapsed time.** Run
-  `date -u +%H:%M` before any budget-gated decision — one session misread
-  1h31m as ~3h20m and nearly idled a third of its slot (computenet-776).
+  `slot-elapsed.sh` (above) before any budget-gated decision — one session
+  misread 1h31m as ~3h20m and nearly idled a third of its slot
+  (computenet-776).
 
 ### Resuming after the host process died
 
