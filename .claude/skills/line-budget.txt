@@ -285,7 +285,14 @@
 # skipped, and the correction that there is no workflow to re-run — ci.yml has
 # no workflow_dispatch, so a push is the only remedy.
 # The mechanical half is in wait-checks.sh and costs no budget lines.
-work                9173
+# 9173 -> 9180 on 2026-08-30: computenet-f38z (+7) — bought review-feature.md
+# saying that lint-workflow.rb now walks composite actions too, and that a
+# NOTHING CHECKED line is never coverage. It walked only jobs.*.steps[], so on
+# .github/actions/** it printed "0 run-blocks checked" and exited 0 — a vacuous
+# lint cited as coverage over a CI safety net that had just been factored INTO
+# a composite action, i.e. the assertion itself was the unlinted script.
+# The mechanical half is in lint-workflow.rb and costs no budget lines.
+work                9180
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

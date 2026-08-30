@@ -111,12 +111,19 @@ there is no `actionlint` here and `pip3 install pyyaml` is PEP-668 blocked, so
 do not hand-roll it per review:
 
 ```bash
-ruby .claude/skills/work/scripts/lint-workflow.rb .github/workflows/<file>.yml
+ruby .claude/skills/work/scripts/lint-workflow.rb \
+  .github/workflows/<file>.yml .github/actions/<name>/action.yml
 ```
 
 It parses the YAML and runs every `run:` block through `bash -n`, exiting
-non-zero on either failure. It does **not** know the Actions schema, so a
-misspelled key or a bad `uses:` ref still passes — say so rather than
+non-zero on either failure. **Pass composite actions too** — it walks a
+workflow's `jobs.*.steps[]` and an action's `runs.steps[]`. Until 2026-08-30 it
+walked only the first, so on `.github/actions/**` it printed `0 run-blocks
+checked` and exited 0: a vacuous lint that reads as a clean one, cited as
+coverage over a CI safety net that had just been factored INTO a composite
+action (computenet-f38z). It now says `NOTHING CHECKED` on any file it found no
+bash in, and that line is never coverage. It still does **not** know the Actions
+schema, so a misspelled key or a bad `uses:` ref passes — say so rather than
 implying the workflow is fully validated. (Host quirk that costs a retry:
 `YAML.unsafe_load_file` does not exist in this Ruby's Psych;
 `YAML.load(File.read(...))` is the form that works.)
