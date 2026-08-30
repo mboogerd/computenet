@@ -449,7 +449,41 @@ if "merged_into_feature" not in nb._entry({"id": "t"}, False, []):
     failed += 1
     print("FAIL: every entry must carry merged_into_feature for the 5b inspect rule")
 
-total = (merged_cases + len(cases) + len(branch_cases) + entry_resume_cases + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
+# load_advice: advisory only, and it must never fire when the cap is already 1
+# (computenet-2r22). getloadavg is stubbed so the thresholds are deterministic.
+load_cases = [
+    #  load1, cores, cap, expect-advice
+    (1.0,  16, 3, False),   # quiet box: nothing to say
+    (15.9, 16, 3, False),   # just under core count
+    (16.0, 16, 3, True),    # meets core count: go under the cap
+    (204.71, 16, 3, True),  # the measured near miss
+    (204.71, 16, 1, False), # cap already 1: no room to go under
+]
+_real_getloadavg = nb.os.getloadavg
+for load1, cores, cap, want in load_cases:
+    nb.os.getloadavg = lambda l=load1: (l, l, l)
+    try:
+        got_load, got_advice = nb.load_advice(cores, cap)
+    finally:
+        nb.os.getloadavg = _real_getloadavg
+    if got_load != round(load1, 2):
+        failed += 1
+        print(f"FAIL: load_advice must report load1 {load1}, got {got_load}")
+    if (got_advice is not None) is not want:
+        failed += 1
+        print(f"FAIL: load1={load1} cores={cores} cap={cap} advice={got_advice!r}, wanted advice={want}")
+# a 2x-core reading must name ONE agent, not merely 'go under'
+nb.os.getloadavg = lambda: (204.71, 0, 0)
+try:
+    _, strong = nb.load_advice(16, 3)
+finally:
+    nb.os.getloadavg = _real_getloadavg
+if "ONE" not in (strong or ""):
+    failed += 1
+    print(f"FAIL: a >=2x-core load must say dispatch ONE agent, got {strong!r}")
+load_advice_cases = len(load_cases) * 2 + 1
+
+total = (load_advice_cases + merged_cases + len(cases) + len(branch_cases) + entry_resume_cases + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
          + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
          + len(capacity_cases) + len(cap_cases) + capacity_reason_cases
          + len(claim_shape_cases) + len(claim_error_cases))

@@ -12,14 +12,17 @@ finish.
 Usage: next-batch.py <feature-id> [--actor NAME]
 Prints JSON: {"batch": [{id, model, files, worktree, branch, resumed}],
               "skipped": [{id, reason}], "verdict": str, "parked": [id],
-              "capacity": {"cores": int, "max_parallel": int}}
+              "capacity": {"cores": int, "max_parallel": int,
+                           "load1": float|null, "advice": str|null}}
 
 The batch is bounded on two axes, not one. Disjoint `files` claims prove it
 will not merge into a conflict; `capacity_limit()` bounds how many of those
 agents this machine can actually run without their Gradle builds starving each
 other into wall-clock timeouts (computenet-k9d.2). `capacity` reports the
 machine's core count and the cap that was applied, so the caller can quote a
-number it did not have to guess.
+number it did not have to guess — plus `load1`/`advice` from `load_advice()`,
+which is what the machine is doing RIGHT NOW. `max_parallel` is an upper bound
+the orchestrator may go under, not a target to fill.
 
 `verdict` explains an *empty* batch, which the caller cannot infer from
 `batch`/`skipped` alone and must not guess: "all-closed" (feature is ready for
@@ -136,6 +139,48 @@ def overlaps(files, taken):
 LANE_CORES = 5
 
 
+def load_advice(cores, cap):
+    """Advisory only: is this box ALREADY too busy to fill `cap`?
+
+    capacity_limit() sizes a lane from a quiet box, and deliberately does not
+    use load average to do it (see its docstring: over a ~25s workload the
+    1-minute figure lags in both directions). This is a different question,
+    asked at a different moment. The cap answers "how many lanes fit on an idle
+    machine"; this answers "what is on the machine right now, before I
+    dispatch" — the one signal the orchestrator lacked at the moment of the
+    decision, and the reason the cap must be read as an UPPER BOUND it may go
+    under rather than a target to fill.
+
+    Why the cap alone is not enough (computenet-2r22, recurrence of
+    computenet-qmjd): qmjd's remedy assumed the repo-wide `./gradlew test` was
+    the contention unit, so scoping each agent's gate would remove it. Scoping
+    the TASK LIST does not scope the WORKERS — two scoped Gradle invocations
+    still share one daemon pool, one build cache and one buildLogic.lock, and
+    each spawns its own test-worker fan-out. Measured 2026-08-30 on MacBoo,
+    16 cores, cap 3: two implementers, file-disjoint, BOTH gates scoped, load
+    average 204.71 / 92.73 / 44.00 — a 1-minute figure ~13x core count. Nothing
+    timed out, so it was a near miss, not a loss; the margin was luck.
+
+    Reading is one syscall and it is advisory, never subtractive: it does not
+    lower `cap`, because a lagging instrument must not silently serialize a
+    slot. It puts a number in front of the orchestrator at dispatch time.
+    """
+    try:
+        load1 = os.getloadavg()[0]
+    except (OSError, AttributeError):      # not available on this platform
+        return None, None
+    load1 = round(load1, 2)
+    if cap <= 1:
+        return load1, None
+    if load1 >= 2 * cores:
+        return load1, (f"load1 {load1} is >=2x the {cores} cores: dispatch ONE "
+                       f"agent, not {cap}, and wait for it")
+    if load1 >= cores:
+        return load1, (f"load1 {load1} already meets the {cores} cores: go "
+                       f"under the cap of {cap}")
+    return load1, None
+
+
 def capacity_limit(cores, siblings=0):
     """How many agents THIS session may dispatch at once, given `siblings` other
     live /work sessions sharing the same `cores`.
@@ -164,6 +209,10 @@ def capacity_limit(cores, siblings=0):
         N=2   24.7s, 25.4s                              1.22x
         N=3   34.0s, 34.8s, 35.0s                       1.70x
         N=6   89.9s 93.1s 95.6s 96.6s 97.2s 97.8s      4.4x-4.8x
+
+    Both machines were measured with agents running REPO-WIDE gates. Scoped
+    gates are not equivalent and do not make the cap safer to fill — see
+    load_advice() for the 204-on-16-cores case (computenet-2r22).
 
     The criterion is per-run inflation, not throughput: a bounded wait sized on
     a quiet box is what breaks. Under 2x it holds; the recorded catastrophes are
@@ -361,12 +410,14 @@ def main():
             sys.exit("next-batch: WORK_SIBLINGS must be a non-negative integer")
     cap = capacity_limit(cores, siblings)
     batch, skipped = cap_batch(batch, skipped, cap)
+    load1, advice = load_advice(cores, cap)
 
     verdict, parked = _assess(feature, batch)
     print(json.dumps({"batch": batch, "skipped": skipped,
                       "verdict": verdict, "parked": parked,
                       "capacity": {"cores": cores, "siblings": siblings,
-                                   "max_parallel": cap}},
+                                   "max_parallel": cap,
+                                   "load1": load1, "advice": advice}},
                      indent=2))
 
 
