@@ -330,23 +330,33 @@ git worktree remove "$PWD/../computenet-worktrees/<id>"
 
 Repeat from step 2 while budget remains; this lane is cheap per item, so
 several items per session is normal — **but keep at most ~2 PRs open against
-any one file, and every PR that moves a budget touches
-`.claude/skills/line-budget.txt` by construction**, since the ratchet requires
-the number to move in the same diff. The bound and its reason live in
-`work/references/direct-child.md` (computenet-nxac); restated here because an
-agent in this lane has no reason to open that file, and this is the lane that
-shares a file on most PRs. Measured 2026-08-29: six items, five PRs open, and
-one merge turned the other four `DIRTY` in the same minute — four hand-resolved
-rebases of an append-only ledger, each restarting the six required checks
-(~9-12 min), two needing three `rebase --continue` rounds (computenet-x69c).
+any one file, and the sharper unit here is the BUDGET ENTRY**: every PR that
+moves a budget touches `.claude/skills/line-budget.txt`, and two PRs raising
+the *same entry* always conflict while two raising *different* entries do not.
+The ~2-per-file bound and its reason live in `work/references/direct-child.md`
+(computenet-nxac); restated here because an agent in this lane has no reason to
+open that file, and this is the lane that shares a file on most PRs. Measured
+2026-08-29: six items, five PRs open when one merged, and the four raising the
+`work` entry all went `DIRTY` in that minute while the fifth, raising
+`remediate-friction`, did not — four hand-resolved rebases of an append-only
+ledger, each restarting the six required checks (~9-12m wall), two needing
+three `rebase --continue` rounds (computenet-x69c).
 
-**Hold the third item rather than opening its PR; holding is not idleness.**
+**Hold the next item rather than opening its PR; holding is not idleness.**
 Verdicts that close an item (superseded, rejected, needs-evidence) need no PR,
 and neither does verifying the next claim or drafting its diff in a worktree.
-A script-only PR is exempt — the ratchet does not price scripts, so its diff
-never touches the ledger.
+**A hold is only good within this session** — step 2's `--claim` set assignee
+*and* `in_progress`, so a session that ends still holding strands the item
+behind step 2's 12h stale-claim window. Either land it, or release it the way
+step 3 releases a park: `bd update <id> --assignee="" --status=open`.
 
-**When two PRs do raise the same number, the conflict is unavoidable and the
+A script-only PR does not touch the ledger — the ratchet prices only `SKILL.md`
+and `references/*.md` — so it is exempt from the *entry* conflict, **not** from
+the ~2-per-file bound, which still applies to two PRs editing one script. The
+exception to even that: a change to `validate-skills.rb`'s counting method has
+to move every budget number in the same diff.
+
+**When two PRs do raise the same entry, the conflict is unavoidable and the
 resolution is a RECOMPUTE, not a merge**: the second number depends on the
 first's LANDED value, so neither side of the conflict is right. Take the landed
 number, re-measure, write the total. Picking a side mis-prices the growth

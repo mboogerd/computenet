@@ -274,7 +274,11 @@
 # RECOMPUTED against 1lbs's landed 9160, not merged with the 9156 this branch
 # carried — the second number depends on the first's landed value
 # (computenet-x69c, whose fix for this is PR #594).
-work                9166
+# 9166 -> 9167 on 2026-08-30: computenet-x69c (+1) — direct-child.md's
+# "~4 min" per-merge check cost predated the current six-check set and is now
+# ~9-12m wall (measured 2026-08-30). Corrected in the same diff as the lane
+# text that cites it, so the cite and the citee cannot drift apart.
+work                9167
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
@@ -297,13 +301,18 @@ work                9166
 # the non-.md decline; +3 for the sentence that would have caught this: the
 # scripts have a sibling self-check (feedback.test.sh), it is wired into no
 # gate, and this change shipped red for want of running it.
-# 353 -> 374 on 2026-08-30: computenet-x69c (+21) — bought step 4's PR-
+# 353 -> 384 on 2026-08-30: computenet-x69c (+31) — bought step 4's PR-
 # concurrency bound. Every PR this lane ships that moves a budget touches this
 # very file, so the bound in work/references/direct-child.md (which this lane
 # never opens) bites here hardest: six items on 2026-08-29 left five PRs open
-# and one merge turned four of them DIRTY at once. Includes the recompute rule
-# for the conflict, which is not mechanically resolvable.
-remediate-friction   374
+# when one merged, and the four raising the same ENTRY went DIRTY while the
+# fifth did not. Includes the recompute rule for the conflict, which is not
+# mechanically resolvable. +10 of the 31 are the review's: the entry-vs-file
+# discriminator the evidence actually shows, the release rule for a hold that
+# outlives the session (a claim left in_progress strands the item for 12h),
+# and narrowing the script exemption, which is from the ENTRY conflict and not
+# from the ~2-per-file bound.
+remediate-friction   384
 # 201 -> 267 on 2026-08-29: computenet-d1im — sync-report gains §4, the
 # coherence audit: five named checks over a bounded set (top up-next picks,
 # beads touched by window decisions, epics a merge may have absorbed), ranked

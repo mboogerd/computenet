@@ -120,7 +120,8 @@ disjoint `metadata.files` cannot help — items on a friction epic *share* the
 file by construction. Beyond ~2, sequence: hold the next item until one
 lands. Each landing forces every sibling PR on that file to merge
 `origin/main`, and every such merge restarts all six required checks
-(~4 min) — which the next sibling landing can invalidate before it finishes,
+(~9-12 min wall, measured 2026-08-30 — the ~4 min figure here predated the
+current six-check set) — which the next sibling landing can invalidate first,
 so the churn grows faster than the PR count (computenet-nxac: three such
 cycles on one PR). 5e has the cheaper re-check tier for the merges you do
 still pay.
