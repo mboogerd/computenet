@@ -17,6 +17,37 @@ name: iroh-sidecar
 # (build-test-fast, build-test-serial, concord-full, ui-test, agora-ui-test,
 # kernel-test), so it cannot be confused with one by name alone.
 #
+# computenet-eys1 (2026-08-30) re-confirmed this is still the case and chose
+# to leave it that way rather than promote the lane. Re-run evidence (the
+# AGENTS.md ruleset query):
+#
+#   GH_PAGER=cat gh api repos/mboogerd/computenet/rulesets/20149495 \
+#     | jq -r '.rules[]|select(.type=="required_status_checks")
+#              |.parameters.required_status_checks[].context'
+#   -> build-test-fast
+#      build-test-serial
+#      concord-full
+#      agora-ui-test
+#      ui-test
+#      kernel-test
+#
+# `iroh-sidecar` is absent, confirming this lane is still advisory. It is
+# currently the ONLY place the sidecar-backed JVM tests (23 total, run below
+# under `:iroh:check -Piroh.enabled=true`) execute at all: none of the six
+# required lanes above passes `-Piroh.enabled`, so they build/run only
+# :iroh's flag-independent sources — SidecarCodecTest (12) and
+# IrohSessionHelloTest (4), 16 of the 23. Consequence: a Linux regression in
+# IrohTransport, SidecarClient or SidecarProcess turns this check red and
+# blocks nothing, because auto-merge lands a PR on the six required checks
+# regardless of this job's result.
+#
+# Promoting this lane into the required set is a repo-policy call, not a
+# mechanical follow-up: it would gate every PR touching `iroh/**` (not just
+# this workflow) on a lane whose pole is a cold cargo build, and it trades
+# off a transport nothing else yet depends on against everyone's merge
+# latency. That decision is deferred to a human and parked under
+# computenet-eys1 rather than decided here.
+#
 # Residual: the beadsmirror iroh convergence suite (bd+dolt+sidecar together)
 # is NOT wired into this job. computenet-egl.4 had not landed on main when
 # this workflow was filed (computenet-egl.5's stated condition for adding
@@ -104,8 +135,15 @@ jobs:
       # That is redundant work relative to the two steps above — it exists to
       # prove the Gradle flag wiring itself works on Linux, not to save time
       # (iroh/build.gradle.kts's own comment makes the same point about
-      # cargoTest re-building). There is no `:iroh:test` task; `check` is the
-      # correct target because cargoTest is wired into it.
+      # cargoTest re-building). Since computenet-egl.2, :iroh applies
+      # buildsrc.convention.kotlin-jvm, so `:iroh:check` now also runs
+      # `:iroh:test` — the module's 23 JVM tests, including IrohPeeringTest,
+      # IrohReconnectTest, SidecarExchangeTest and SidecarHandshakeTest.
+      # `check` is still the right target (it subsumes `test` plus the
+      # cargoTest wiring), not a substitute for a missing `:iroh:test` task.
+      # See the workflow header (computenet-eys1) for the coverage and
+      # required-check consequences of that, and the parked promotion
+      # decision.
       - name: iroh Gradle check, flag-enabled (timed)
         run: |
           set -euo pipefail
