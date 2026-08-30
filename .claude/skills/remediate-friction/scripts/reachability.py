@@ -70,10 +70,14 @@ INDEX_ROW = re.compile(r"^\|\s*`references/[\w-]+\.md`\s*\|")
 
 SKILL_OF = re.compile(r"^\.claude/skills/([\w-]+)/")
 
-# The repo root, from this script's own location — not from the cwd, so an
-# absolute path resolves the same wherever the caller invoked it from.
+# The repo root, from this script's own location rather than the cwd, so it is
+# the same wherever the caller invoked it from. realpath, not abspath: abspath
+# does not resolve symlinks, and a symlinked invocation would derive a root
+# that refuses every valid in-repo path. (Only the ROOT is cwd-independent —
+# the existence check and the graph walk below are still relative to the cwd,
+# so this script is still run from the repo root.)
 REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), *[os.pardir] * 4))
+    os.path.join(os.path.dirname(os.path.realpath(__file__)), *[os.pardir] * 4))
 
 
 def to_repo_relative(f):
@@ -89,9 +93,11 @@ def to_repo_relative(f):
     so documenting "pass relative paths" was a prose mitigation for a
     mechanical problem. It is normalised here instead.
     """
-    if not os.path.isabs(f):
-        return os.path.normpath(f)
-    rel = os.path.relpath(f, REPO_ROOT)
+    # abspath() FIRST, so a relative path that escapes the repo
+    # (`../sibling-worktree/.claude/skills/...`) is caught by the same guard.
+    # Handling only the absolute form left exactly this defect standing one
+    # shape over — which is how the family got to four beads.
+    rel = os.path.relpath(os.path.abspath(f), REPO_ROOT)
     return None if rel.split(os.sep)[0] == os.pardir else os.path.normpath(rel)
 
 

@@ -61,6 +61,13 @@ $S/reachability.py --for orchestrator /etc/hosts >/dev/null 2>&1 && rc=0 || rc=$
 [ "$rc" = 2 ] \
   && ok "a path outside the repo is refused, not answered" \
   || bad "judged a path outside the repo (rc=$rc)"
+# A RELATIVE path can escape the repo too (../sibling-worktree/...), and a
+# guard that only covers the absolute form leaves the defect standing one
+# shape over — which is how this family got to four beads.
+$S/reachability.py --for orchestrator ../.claude/skills/work/SKILL.md >/dev/null 2>&1 && rc=0 || rc=$?
+[ "$rc" = 2 ] \
+  && ok "a relative path escaping the repo is refused too" \
+  || bad "judged a relative path outside the repo (rc=$rc)"
 
 echo "twin-scan.py (work skill)"
 T=.claude/skills/work/scripts/twin-scan.py
