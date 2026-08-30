@@ -8,6 +8,7 @@ import civictech.cell.data.OrMapApi
 import civictech.cell.data.OrMapCell
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
+import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
 import civictech.cell.graph.lookup
@@ -40,6 +41,7 @@ import civictech.cell.data.op.CombineLatestCell
 import civictech.cell.data.op.CombineLatestApi
 import civictech.cell.data.op.UntagApi
 import civictech.cell.data.op.UntagCell
+import kotlinx.serialization.SerialName
 
 /**
  * Incremental tiering: agents emit absolute tier valuations (S..F per item)
@@ -50,8 +52,12 @@ import civictech.cell.data.op.UntagCell
  * [CombineLatestCell] — the outer per-key combine this demo prototyped
  * (F-1/F-2), wired with `combine = Tiering.fuse`.
  */
+@kotlinx.serialization.Serializable
+@SerialName("tiering.Valuation")
 data class Valuation(val agent: String, val item: String, val score: Long) : Serializable
 
+@kotlinx.serialization.Serializable
+@SerialName("tiering.Pref")
 data class Pref(val agent: String, val winner: String, val loser: String) : Serializable
 
 /**
@@ -100,6 +106,43 @@ object TierPipeline {
 
     fun manualRef(role: String): CellRef = CellRef(MANUAL_ID, manualInstance(role))
 
+    /**
+     * Derived logical ids for the three cells [handleOp][TieringApp.handleOp]
+     * writes to through a **routed** hosted lookup (`items`, `vals`, `prefs`),
+     * exactly the [MANUAL_ID] treatment — a `--journal` record names the ref
+     * it was written against, so a cell a replay must find has to carry the
+     * SAME ref across a restart, not the `graph { }` DSL's default
+     * `IdentityBinding.FreshLogical` random mint.
+     *
+     * **The instance id is [manualInstance]'s, role-derived, for the same
+     * reason [MANUAL_ID]'s is — and it is NOT optional (computenet-3san,
+     * caught in review).** These cells are not [Replication]-replicated, but
+     * `Peering.announceTo` announces *every* local ref its registry holds and
+     * `LocationRegistry.publish(ref, sink)` installs the announced `Remote`
+     * unconditionally — it does not defer to an existing `Local`. So two
+     * peers holding one ref overwrite each other's local location, and once
+     * the announcements have been applied every routed write to that ref
+     * leaves for the wire and is lost at the far end, which is holding the
+     * same ref as `Remote` right back. Measured on the fixed-instance-`0`
+     * version of this change: after the mesh had settled, neither peer's
+     * `/state` ever showed an item it posted itself. A role-derived instance
+     * keeps the two sides distinct while staying stable across a restart at
+     * the same role, which is exactly what `--journal` needs.
+     * [TieringWirePerPeerStateTest][civictech.demo.tiering.TieringWirePerPeerStateTest]
+     * pins it, and only after driving the manual lane both ways first: before
+     * the announcements land the local location still wins and the defect is
+     * invisible.
+     *
+     * The remaining pipeline cells (`contribs`, `tierAvg`, `prefAvg`,
+     * `fused`, `manualEffective`, `board`) stay `FreshLogical`: nothing
+     * writes to them directly, so nothing journals a ref for them to match —
+     * they recompute from the replayed `items`/`vals`/`prefs`/`manual` deltas
+     * once the graph is rebuilt and linked, whatever ref they mint.
+     */
+    val ITEMS_ID: UUID = UUID.nameUUIDFromBytes("tiering-pipeline:items".toByteArray())
+    val VALS_ID: UUID = UUID.nameUUIDFromBytes("tiering-pipeline:vals".toByteArray())
+    val PREFS_ID: UUID = UUID.nameUUIDFromBytes("tiering-pipeline:prefs".toByteArray())
+
     data class Refs(
         val items: TypedRef<SetApi<String>>,
         val vals: TypedRef<KeyedSetApi<Pair<String, String>, Valuation>>,
@@ -131,12 +174,24 @@ object TierPipeline {
         spawnManual: (OrMapCell<String, String>) -> Unit = { host.managementInlet.call.spawn(it) },
     ): Refs {
         spawnManual(manual)
+        // The peering role slot, read off the manual replica's own ref rather
+        // than taken as a parameter: [manual] is already minted at
+        // [manualRef], so its instance id IS this host's role. Keeping the
+        // routed pipeline cells on the same slot is what stops two peers
+        // minting one ref (see [ITEMS_ID]'s KDoc).
+        val instance = manual.ref.instanceId
         lateinit var built: Refs
         var untagCell: UntagCell<String, String>? = null
         graph(host.managementInlet) {
-            val items = spawn("items") { SetCell<String>() }
-            val vals = spawn("vals") { KeyedSetCell<Pair<String, String>, Valuation>() }
-            val prefs = spawn("prefs") { SetCell<Pref>() }
+            val items = spawn("items", identity = IdentityBinding.Exact(CellRef(ITEMS_ID, instance))) { ref ->
+                SetCell<String>(ref)
+            }
+            val vals = spawn("vals", identity = IdentityBinding.Exact(CellRef(VALS_ID, instance))) { ref ->
+                KeyedSetCell<Pair<String, String>, Valuation>(ref)
+            }
+            val prefs = spawn("prefs", identity = IdentityBinding.Exact(CellRef(PREFS_ID, instance))) { ref ->
+                SetCell<Pref>(ref)
+            }
             val contribs = spawn("contribs") {
                 FlatMapSetCell(f = { p: Pref ->
                     listOf(
@@ -206,34 +261,37 @@ object TierPipeline {
  * That is why every write below goes through a hosted lookup rather than the
  * cell object.
  *
- * **`--journal` covers the MANUAL lane only. Measured 2026-08-29; two
- * independent reasons, both pre-existing properties of this demo.**
+ * **`--journal` covers the whole demo (computenet-3san), not only the manual
+ * lane it originally shipped for.** Two independent gaps, both measured
+ * 2026-08-29 and now closed:
  *
  * 1. *Payloads.* The host journal encodes each routed invocation through
  *    `WireCodec`, whose `polymorphic(Any)` scope registers kernel payload
  *    types plus whatever a process contributes at start
  *    (`WireCodec.kt:158-176`). `tier` passes a `Pair<String, String>` key and
- *    a [Valuation]; `pref`/`unpref` pass a [Pref] — none registered — so with
- *    `--journal` on those actions throw `SerializationException: Serializer
- *    for subclass 'Pair' is not found in the polymorphic scope of 'Any'`
- *    inside the journal write, and the HTTP request dies.
- *    `item`/`unitem`/`retier` carry only `String`s and encode fine.
- * 2. *Refs.* [TierPipeline]'s cells are spawned through the `graph { }` DSL,
- *    whose default `IdentityBinding.FreshLogical` mints a **random** ref per
- *    process start (`GraphDsl.kt:378-390`). A journal record names the ref it
- *    was written against, so nothing spawned that way can ever be replayed
- *    into after a restart — verified: with `--journal` the item set comes back
- *    empty while the manual map comes back populated.
+ *    a [Valuation]; `pref`/`unpref` pass a [Pref]. [TieringWireSerializers],
+ *    discovered through `META-INF/services/civictech.cell.wire.WireSerializers`,
+ *    registers all three — `Pref`/`Valuation` as `@Serializable` types, the
+ *    `Pair<String, String>` key via kotlinx's `PairSerializer` — so every
+ *    action's payload now encodes. `item`/`unitem`/`retier` carried only
+ *    `String`s and always encoded fine.
+ * 2. *Refs.* [TierPipeline]'s cells were spawned through the `graph { }` DSL's
+ *    default `IdentityBinding.FreshLogical`, which mints a random ref per
+ *    process start (`GraphDsl.kt:378-390`) — unreplayable, because a journal
+ *    record names the ref it was written against. The three cells a routed
+ *    invocation actually reaches — `items`, `vals`, `prefs` — now spawn at
+ *    fixed, derived refs ([TierPipeline.ITEMS_ID]/[TierPipeline.VALS_ID]/
+ *    [TierPipeline.PREFS_ID] over a role-derived instance id), the same
+ *    treatment [TierPipeline.MANUAL_ID] already gave the manual lane — the
+ *    role included, because two peers on one ref lose every routed write to
+ *    it (see [TierPipeline.ITEMS_ID]'s KDoc). The remaining pipeline cells stay
+ *    `FreshLogical`: nothing writes to them directly, so replaying
+ *    `items`/`vals`/`prefs`/`manual` and re-linking the rebuilt graph is
+ *    enough to recompute them.
  *
- * The manual OR-map escapes both: `String → String` payloads, and a
- * [TierPipeline.manualRef] derived from a fixed logical id and the peering
- * role. That is exactly the lane feature computenet-j2x.5 needs journalled
- * ([KE1-31]'s ref-derivation half), so `--journal` ships as-is rather than
- * being withheld — but it is **not** a whole-demo durability mode, and the
- * flag's help text should not be read as promising one. Closing the gap means
- * registering the app payload types through the codec's `ServiceLoader` seam
- * *and* giving the pipeline cells derived identities; both are outside this
- * task's file claim and its "no kernel changes" non-goal.
+ * So a restart over the same `--journal <dir>` now replays the full
+ * `/state` payload — items, valuations, preferences and the manual pins —
+ * not only the manual OR-map.
  */
 class TieringApp(
     port: Int = 8080,
