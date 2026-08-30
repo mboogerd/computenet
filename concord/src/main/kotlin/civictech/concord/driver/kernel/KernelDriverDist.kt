@@ -109,6 +109,17 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
     private val mintedDots = LinkedHashMap<Pair<CellId, Long>, Emission>()
 
     /**
+     * Replica -> how many times its delta outlet has emitted, counted by the same
+     * Observe-role tap [mintedDots] is filled from ([recordEmissionsOf]). One
+     * increment per outlet emission, whatever the frame carries: an emission that
+     * relays a peer's dot, or one whose dots are all already attributed, is still
+     * an emission, and the `emission-count` check asserts THAT an emission
+     * happened rather than what was in it. Counted before the frame is inspected,
+     * so a frame that carries no wave context at all is not silently uncounted.
+     */
+    private val emissionCounts = LinkedHashMap<CellId, Long>()
+
+    /**
      * Place a `replica-of` cell into the replication mesh (spec 42): construct the
      * mergeable cell its `type:` names under the group's shared logical id with a fresh instance id,
      * hand it to [Replication.replicate] (which spawns it on [hostId] and links
@@ -407,6 +418,9 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
 
     /** Attribute every dot in one emission, and index the minter's own dots by counter. */
     private fun record(cellId: CellId, delta: Any) {
+        // The count first, and unconditionally: an emission is an emission whether
+        // or not this recorder can attribute a dot in it.
+        emissionCounts[cellId] = (emissionCounts[cellId] ?: 0L) + 1L
         val ctx = CurrentContext.get() ?: return
         val emission = Emission(ctx.timestamp, ctx.sourcePort, delta)
         dotsOf(delta).forEach { dot ->
@@ -417,6 +431,28 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
                 mintedDots.putIfAbsent(cellId to dot.counter, emission)
             }
         }
+    }
+
+    /**
+     * How many times [cellId]'s delta outlet has emitted so far this run
+     * ([emissionCounts]).
+     *
+     * A replica that has emitted nothing yet answers `0` **honestly**: the tap is
+     * installed by [spawnReplica] before the replica joins the mesh, so a mesh
+     * member is observed from its very first frame and an absent entry means "the
+     * tap saw nothing", never "there is no tap". A cell this binding never placed
+     * in a mesh has no tap at all and is refused loudly rather than answering 0 —
+     * that 0 would be indistinguishable from a real quiet outlet.
+     */
+    fun emissionCount(cellId: CellId): Long {
+        if (cellId !in logicalOf) {
+            throw UnsupportedCatalogBinding(
+                "emission-count at '$cellId': no Observe-role emission tap is installed on it — only a " +
+                    "`replica-of` replica placed in a replication mesh by this binding is tapped, and " +
+                    "answering 0 for an untapped outlet would be a vacuous pass",
+            )
+        }
+        return emissionCounts[cellId] ?: 0L
     }
 
     /** The dot namespace [cellId] mints under, learned by first emission ([dotOwner]). */

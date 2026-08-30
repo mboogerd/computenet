@@ -13,6 +13,7 @@ import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.DespawnStep
 import civictech.concord.schema.DisconnectStep
 import civictech.concord.schema.EffectCount
+import civictech.concord.schema.EmissionCount
 import civictech.concord.schema.FinalView
 import civictech.concord.schema.IncrementalEqualsBatch
 import civictech.concord.schema.LateJoinEqualsEarly
@@ -21,6 +22,7 @@ import civictech.concord.schema.ObservationsAllSatisfy
 import civictech.concord.schema.ObservationsMonotone
 import civictech.concord.schema.ObservationsWholeWaves
 import civictech.concord.schema.PagesEqualView
+import civictech.concord.schema.QuiesceStep
 import civictech.concord.schema.ReplicasConverge
 import civictech.concord.schema.RestartStep
 import civictech.concord.schema.RestoreStep
@@ -58,6 +60,7 @@ object Checks {
         is EffectCount -> effectCount(check, ctx)
         is WavePlaneUnchanged -> wavePlaneUnchanged(check, ctx)
         is PagesEqualView -> pagesEqualView(check, ctx)
+        is EmissionCount -> emissionCount(check, ctx)
     }
 
     /** At quiescence, `readView(view)` equals the golden value. */
@@ -657,6 +660,84 @@ object Checks {
     }
 
     /**
+     * The named cell's outlet emitted exactly `exactly` times over the window
+     * `[just before script step since, check time]` (spec 40/42 §echo
+     * termination).
+     *
+     * The window's lower edge is gone by check time — a count is a *difference*
+     * of two readings, and only the runner is present at the earlier one — so
+     * the baseline is carried on [CheckContext.emissionBaselines] rather than
+     * re-derived from the driver here, exactly as [ReadWalk] carries a bounded
+     * read's "before" (V1C-CONCORD).
+     *
+     * **Every degenerate case fails; none passes.** An `exactly: 0` assertion is
+     * satisfied by "nothing was counted", so every way of ending up with nothing
+     * to count has to be a failure or the check disarms itself silently:
+     *
+     * - `since` is outside the script;
+     * - the script does not put a `quiesce` barrier between step `since` and
+     *   everything before it, so §Script semantics leaves the interleaving —
+     *   and therefore the count — to the implementation;
+     * - the runner recorded no baseline for this `(cell, since)` pair;
+     * - the driver refused the cell, at baseline time or now (a driver that
+     *   cannot observe an outlet must refuse rather than answer 0);
+     * - the current reading is *below* the baseline, which no monotonic count
+     *   can be.
+     */
+    fun emissionCount(check: EmissionCount, ctx: CheckContext): CheckResult {
+        val where = "emission-count(${check.cell}, since ${check.since})"
+        val script = ctx.scenario.script
+        if (check.since < 1 || check.since > script.size) {
+            return CheckResult.Failed(
+                "$where: 'since' is a 1-based index into the ${script.size}-step script and ${check.since} " +
+                    "is outside it — the window has no lower edge, so nothing is asserted",
+            )
+        }
+        // Well-definedness: a barrier immediately before step `since` separates it
+        // and every later step from every earlier one. `since: 1` needs none —
+        // there is no earlier step to be concurrent with.
+        if (check.since > 1 && script[check.since - 2] !is QuiesceStep) {
+            return CheckResult.Failed(
+                "$where: the window is not barriered — script step ${check.since - 1} is not a 'quiesce', so " +
+                    "steps before ${check.since} may still be in flight when the baseline is taken. §Script " +
+                    "semantics leaves that interleaving to the implementation, so the count would assert " +
+                    "something the schema does not fix; put a 'quiesce' immediately before step ${check.since}",
+            )
+        }
+        val baseline = ctx.emissionBaselines.firstOrNull { it.cell == check.cell && it.since == check.since }
+            ?: return CheckResult.Failed(
+                "$where: the runner recorded no emission baseline for this (cell, since) pair — the window's " +
+                    "lower edge only exists if it was sampled before the step ran, and it was not",
+            )
+        baseline.refusal?.let {
+            return CheckResult.Failed(
+                "$where: the driver refused to observe '${check.cell}' when the baseline was taken — $it",
+            )
+        }
+        val before = baseline.count
+            ?: return CheckResult.Failed("$where: the recorded baseline carries neither a count nor a refusal")
+        val now = try {
+            ctx.driver.emissionCount(check.cell)
+        } catch (e: Exception) {
+            return CheckResult.Failed(
+                "$where: the driver refused to observe '${check.cell}' at check time — ${e.message}",
+            )
+        }
+        if (now < before) {
+            return CheckResult.Failed(
+                "$where: the emission count went backwards ($before at the baseline, $now now) — a count of " +
+                    "emissions can only ascend, so the two readings are not of the same outlet",
+            )
+        }
+        val observed = now - before
+        return if (observed == check.exactly.toLong()) {
+            CheckResult.Passed
+        } else {
+            CheckResult.Failed("$where: expected exactly ${check.exactly} emission(s) but observed $observed")
+        }
+    }
+
+    /**
      * The union of a walk's **live** entries in the neutral value model. A
      * convergent family pages entries its own algebra has retracted (a
      * tombstoned set element is a real entry with a real tag set), so an entry
@@ -736,7 +817,42 @@ interface CheckContext {
 
     /** The bounded-read walks this run's `read-state` steps performed, in script order. */
     val reads: List<ReadWalk> get() = emptyList()
+
+    /**
+     * The emission baselines this run's script sampled, one per
+     * `emission-count` check the scenario declares.
+     *
+     * Here for the same reason [reads] is: a count over a window is a
+     * *difference*, its earlier reading is taken before a particular script step
+     * runs, and by check time that moment is gone. Asking the driver SPI to
+     * remember its own past counts would push harness bookkeeping into the
+     * per-implementation surface, where a second binding would have to
+     * reimplement it identically for no conformance reason.
+     */
+    val emissionBaselines: List<EmissionBaseline> get() = emptyList()
 }
+
+/**
+ * One `emission-count` check's window lower edge: `driver.emissionCount([cell])`
+ * as read immediately before the script step at [since] (1-based).
+ *
+ * Exactly one of [count] and [refusal] is set. A driver that cannot observe the
+ * cell fails loudly rather than answering 0, and that refusal is *recorded*
+ * rather than thrown through the run, so the evaluator reports it as the check
+ * failure it is instead of the whole scenario dying with a stack trace that
+ * names no check.
+ *
+ * @property cell the cell whose outlet is counted (a scenario-local id).
+ * @property since the 1-based script index the baseline was taken just before.
+ * @property count the reading, when the driver served it.
+ * @property refusal the driver's refusal message, when it did not.
+ */
+data class EmissionBaseline(
+    val cell: String,
+    val since: Int,
+    val count: Long? = null,
+    val refusal: String? = null,
+)
 
 /**
  * One `read-state` step's whole walk, as observed by the harness
