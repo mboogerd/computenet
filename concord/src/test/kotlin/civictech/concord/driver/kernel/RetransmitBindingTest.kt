@@ -171,9 +171,12 @@ class RetransmitBindingTest {
 
     // ------------------------------------------------------------------
     // dist profile: a duplicate at a replica's gossip inlet (computenet-j2x.4.6,
-    // retiring `[KE1-37]`). The corpus half is `42-TMAP-REPL-01`; the
-    // **re-emission count** lives here, because the corpus's closed check
-    // vocabulary has no emission counter (see concord/corpus/DISPUTES.md).
+    // retiring `[KE1-37]`). The corpus half is `42-TMAP-REPL-01`, which asserts
+    // the re-emission count directly via its two `emission-count` checks
+    // (`concord/schema/scenario.md` §checks). This driver-level pin stays as a
+    // second, lower-level witness alongside those checks — it keeps its
+    // interest-empty replica as the control that a zero count is termination
+    // and not a dropped injection.
     // ------------------------------------------------------------------
 
     private fun kv(key: String, value: String): Value = Value.ListVal(listOf(s(key), s(value)))
