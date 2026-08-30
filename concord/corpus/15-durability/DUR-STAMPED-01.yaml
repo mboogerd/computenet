@@ -1,0 +1,151 @@
+# Concord corpus scenario (`computenet-8ohq`): the ADMITTED half of the
+# externally-driven case — a frame that reaches an `Effectful` inlet from
+# OUTSIDE the graph carrying a position on an external actor's own lane.
+#
+# `DUR-CONTEXTLESS-01` (`computenet-em9i`) covers the refusal: a frame with no
+# `MessageContext` at all is undeliverable at an `Effectful` inlet
+# (`[24-DUR-06]`). This file covers what the refusal exists to protect. Once the
+# external driver carries a lane position, the frame IS admitted, and from that
+# point `[24-DUR-05]` governs it exactly as it governs graph traffic: it fires
+# **exactly once across a crash and its replay**, and **once more** for a
+# further arrival on the lane that the restored frontier has not seen.
+#
+# WHY THIS WAS UNREACHABLE UNTIL NOW, AND WHAT IT LETS THROUGH. No verb in the
+# closed vocabulary created an actor lane, so no scenario could deliver at an
+# `Effectful` inlet from outside the graph and be admitted. The consequence is
+# the exact hole the refusal rule was built to make impossible: a second
+# conforming implementation could pass the entire corpus — `DUR-CONTEXTLESS-01`
+# included — while admitting an externally-driven frame and then RE-FIRING its
+# effect on replay, because nothing in the corpus ever presented it with one.
+# The `drive-stamped` verb (a gated `concord/schema/scenario.md` addition under
+# the single-writer contract, `#### drive-stamped`) is what closes that.
+#
+# THE CONSTRUCTION. A journaled source feeds an `Effectful` sink, the same
+# subgraph `DUR-CONTEXTLESS-01` uses. One ordinary element (`k1`) is driven
+# through the graph, so the sink's journalled frontier is live for graph
+# traffic. Then `a1` — an external actor, not a cell — drives `g1` straight at
+# the sink's inlet on its own lane. The host crashes and recovers from its
+# journal, which re-presents `g1`. Finally the same actor drives `g2`, live,
+# after the recovery.
+#
+# WHY EACH CHECK IS THE ONE THAT CATCHES ITS DIRECTION.
+#   * `effect-count(sink, key: g1, exactly: 1)` — THE CLAIM. `g1` was delivered
+#     once and journaled, and the crash's replay presents it a second time. One
+#     effect, not two: the position the actor's lane stamped rode the journaled
+#     frame, the frontier advance was journaled beside it, and the restored
+#     frontier recognises the replayed frame as already-acted. An implementation
+#     that admits an externally-driven frame without recording a judgeable
+#     position fires twice here and nowhere else in the corpus.
+#   * `effect-count(sink, key: g2, exactly: 1)` — the converse, and the reason
+#     the first check is not satisfiable by simply refusing everything from
+#     outside: a FURTHER arrival on the same lane after the recovery is ahead of
+#     the restored frontier and does fire. Exactly once, so a live post-recovery
+#     external drive is not double-counted either.
+#   * `effect-count(sink, key: k1, exactly: 1)` — the graph path is untouched by
+#     the presence of an external lane. It still fires exactly once across the
+#     crash, at a frontier the actor's lane shares with it.
+#   * `refusal-count(sink, exactly: 0)` — the frames were ADMITTED, and this is
+#     what states the boundary against `DUR-CONTEXTLESS-01` in the vocabulary
+#     rather than only in prose: the very same delivery route, at the very same
+#     inlet, differing ONLY in whether the frame carries a lane position, is
+#     counted `exactly: 2` there and `exactly: 0` here. It also reads a failure
+#     the effect counts cannot: an implementation that refused these frames and
+#     nonetheless recorded an effect for them satisfies every `exactly: 1` above
+#     and fails here.
+#
+# WHY THE KEYS ARE NAMED RATHER THAN DERIVED. The unkeyed `effect-count` form
+# derives the key set from the script's `add`s on the sink's direct upstreams.
+# A `drive-stamped` is admitted and names an element no `add` names, so that
+# derivation is incomplete by construction and refuses (`Checks.
+# expectedEffectKeys`, the `DriveStampedStep` arm). Naming the keys is not a
+# weaker assertion here: each of the three counts is exact, and the two the
+# scenario is about are the ones a re-firing implementation gets wrong.
+#
+# NO `no-dead-letters`. The scenario crashes and recovers a host, so it cannot
+# assert that check, for the reason `concord/schema/scenario.md` gives under
+# `#### restart`. `refusal-count(sink, exactly: 0)` is what states the relevant
+# half of it — at a named cell, as an exact number.
+#
+# DISCRIMINATION (the perturbation was run, and what follows is its verbatim
+# observed result — the evidence for the `covers:` line). Neuter the frontier
+# suppression itself: in `ManagedHost.deliver`'s `Effectful` branch, make
+# `hostDurability.alreadyProcessed(cellRef, portName, timestamp)` read `false`,
+# so a replayed frame the sink already acted on is delivered again. That is the
+# shape of a second implementation which ADMITS an externally-driven frame — as
+# this verb's frames are admitted — without recording a position its replay can
+# be judged by. This scenario then fails 20 of 20 runs with
+#
+#   effect-count(sink, key=g1): expected 1 but observed 2;
+#   effect-count(sink, key=k1): expected 1 but observed 2
+#
+# — and the FIRST line is the one that matters, because it is the one no other
+# corpus scenario can produce: `g1` entered from OUTSIDE the graph, on an actor
+# lane, and re-fired on replay. The second line is the graph path, which the
+# existing `DUR-SRCID-*`/`DUR-REPLAY-01` scenarios also catch; without this file
+# the externally-driven arm moves under that perturbation unobserved.
+id: DUR-STAMPED-01
+title: An externally-driven frame on an actor lane is admitted, fires exactly once across replay, and once more when the lane delivers again live
+covers: [24-DUR-05]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying a JOURNALED source feeding an Effectful sink, plus a
+    journal controller, and an external actor that is not part of the graph at
+    all — it drives the sink's inlet directly, on a lane of its own whose
+    positions the sink's processed-frontier can judge
+  when: >
+    one element is driven through the graph and settles, the external actor
+    drives a second element straight at the sink's inlet on its lane, the host
+    then crashes and recovers from its journal, and finally the same actor
+    drives a third element on the same lane after the recovery
+  then: >
+    the externally-driven element fired exactly once across the crash — the
+    replayed frame was recognised at the restored frontier and suppressed rather
+    than acted on a second time — and the actor's next arrival, ahead of that
+    frontier, fired exactly once more. The element driven through the graph was
+    unaffected, and nothing was refused: unlike a contextless drive, a frame on
+    an actor lane carries a position and is admitted
+graph:
+  cells:
+    # the journaled source: its accepted ops tee to the WAL, so the ordinary
+    # element survives the crash as a replayable frame
+    - {id: source, type: journal-set-source, host: dur}
+    # the effect boundary: one externally-recorded effect per added element
+    - {id: sink, type: effect-sink, host: dur}
+    # the crash/restart handle: despawning it crashes and recovers the durable host
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: source, to: sink}
+script:
+  # ordinary, stamped traffic through the graph: the source's outlet mints the
+  # wave position and the sink's frontier records it
+  - {type: apply, on: source, op: add, value: k1}
+  - {type: quiesce}
+  # THE EXTERNALLY-DRIVEN FRAME, ADMITTED. Delivered at the sink's inlet by an
+  # actor that is not a cell, on a lane named only by the scenario-local handle
+  # `a1` — the scenario never states the lane's identity or its counter, which
+  # are the driver's (the same rule `retransmit`'s `source:` follows). Not an
+  # `apply` (that is the graph's own position) and not a `drive-contextless`
+  # (that is the refused case, carrying nothing at all).
+  - {type: drive-stamped, on: sink, actor: a1, op: add, value: g1}
+  - {type: quiesce}
+  # CRASH + journal replay: both journaled frames — the graph's and the actor's —
+  # are re-presented at the restored frontier and must be recognised
+  - {type: despawn, on: ctl}
+  - {type: quiesce}
+  # THE SAME ACTOR, LIVE AFTER RECOVERY. A further arrival on the same lane: its
+  # position is ahead of the restored frontier, so it fires — once.
+  - {type: drive-stamped, on: sink, actor: a1, op: add, value: g2}
+  - {type: quiesce}
+checks:
+  # exactly once across the crash: the property no other corpus scenario states
+  # for a frame that entered from outside the graph
+  - {type: effect-count, sink: sink, key: g1, exactly: 1}
+  # and exactly once more for the lane's next live arrival
+  - {type: effect-count, sink: sink, key: g2, exactly: 1}
+  # the graph path is untouched by the external lane
+  - {type: effect-count, sink: sink, key: k1, exactly: 1}
+  # ADMITTED, not refused — the boundary against DUR-CONTEXTLESS-01, which
+  # counts 2 refusals on the same delivery route without a lane position
+  - {type: refusal-count, cell: sink, exactly: 0}

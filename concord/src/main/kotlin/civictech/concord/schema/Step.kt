@@ -276,3 +276,63 @@ data class DriveContextlessStep(
     val op: String,
     @Contextual val value: Value? = null,
 ) : Step
+
+/**
+ * Deliver [op] (with optional [value]) to cell [on]'s [inlet] through the
+ * scenario-local **actor lane** [actor] — a delivery that carries a wave
+ * position the *driver's own external-ingress seam* stamps, on a lane that is
+ * stable across the run and across a crash. Added as the deliberate
+ * between-waves, single-writer schema change `computenet-8ohq`
+ * (`concord/schema/scenario.md`, `#### drive-stamped`).
+ *
+ * **The lane is the whole verb, and it is the admitted twin of
+ * [DriveContextlessStep].** `[24-DUR-06]` refuses a `PORT_API` frame at an
+ * `Effectful` inlet that carries no `MessageContext`; the corollary the
+ * refusal exists to protect is that the *same* external drive, once it carries
+ * a position on a lane the driver owns, is **admitted** and then falls under
+ * `[24-DUR-05]` like any other frame — it fires exactly once across a
+ * crash/replay, and once more for each further arrival the frontier has not
+ * seen. Until this verb, no scenario could reach that arm at all: the corpus
+ * could be passed in full by an implementation that admitted an externally
+ * driven frame and then re-fired its effect on replay.
+ *
+ * No existing verb reaches it, and the reason is structural:
+ *
+ * - [ApplyStep] drives an op through the cell's own outlet along the graph's
+ *   links; the position it carries is the *graph's*, minted for that outlet.
+ *   It cannot express a frame that entered from outside the graph.
+ * - [RetransmitStep] states an explicit `(source, counter)` position, where
+ *   `source` must name a **cell in the scenario** whose outlet owns that wave
+ *   identity. An external actor is not a cell and owns no outlet, so a
+ *   retransmit cannot name its lane — and a retransmit's purpose is a
+ *   *duplicate* of a delivery the graph already made, which is the opposite of
+ *   a first arrival from outside.
+ * - [DriveContextlessStep] is this verb with the lane removed, which is the
+ *   refused case rather than the admitted one.
+ *
+ * [on] names the cell under test, exactly as [DriveContextlessStep] does;
+ * [inlet] selects the receiving inlet (default `"inlet"`); [op]/[value] are
+ * [ApplyStep]'s own fields.
+ *
+ * [actor] is a **scenario-local handle**, never an implementation identifier —
+ * the same rule [RetransmitStep]'s `source:` follows. The scenario says *which*
+ * lane, and repeating the handle means "the same external actor again"; what
+ * that lane's identity actually is, and how a position is minted on it, is the
+ * driver's business and is never written into a corpus file. There is no
+ * `counter:` for the same reason there is no `source:`: a scenario that could
+ * state the position would be describing the graph's frame, not an external
+ * actor's.
+ *
+ * There is no `times:` — each arrival on a lane is its own step and its own
+ * position, and a repeated drive is a different assertion from a repeated
+ * delivery of one frame (that is [RetransmitStep]'s job).
+ */
+@Serializable
+@SerialName("drive-stamped")
+data class DriveStampedStep(
+    val on: String,
+    val actor: String,
+    val inlet: String? = null,
+    val op: String,
+    @Contextual val value: Value? = null,
+) : Step

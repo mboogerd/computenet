@@ -217,6 +217,39 @@ interface Driver {
      */
     fun driveContextless(cellId: CellId, inlet: String?, op: String, value: Value? = null)
 
+    /**
+     * Deliver [op] (with optional [value]) to [cellId]'s [inlet] on the
+     * external **actor lane** [actor] — the admitted twin of
+     * [driveContextless], and the arm of spec 24 §Effectful `[24-DUR-05]` that
+     * covers traffic entering from *outside* the graph.
+     *
+     * [actor] is a **scenario-local handle and nothing more**, exactly as
+     * [retransmit]'s `source` is: the scenario says which lane and how many
+     * times, never what the lane's identity is or how a position on it is
+     * minted. That is the driver's, and a corpus file that could name it would
+     * be pinning one implementation's ingress representation.
+     *
+     * **What a conforming driver must do.** Deliver at the named inlet through
+     * the same intake as ordinary traffic — so the implementation's admission
+     * decision, its journalling and its accounting all see the frame — carrying
+     * a wave position minted on a lane that is (a) **stable** for the whole run,
+     * so two drives naming the same [actor] are two arrivals on one lane rather
+     * than two unrelated lanes, and (b) **survives whatever crash/recovery the
+     * scenario performs**, so a drive after a crash continues the lane rather
+     * than restarting it. Those two properties are what make the frame's
+     * position judgeable by the receiver's processed frontier, which is the
+     * entire content of the admitted arm.
+     *
+     * A driver that cannot produce such a delivery at the named cell **fails
+     * loudly** rather than substituting one that stamps differently. The
+     * substitutions both fail silently in the dangerous direction: a
+     * *contextless* delivery would be refused, so a scenario asserting the
+     * effect fired would go red for the wrong reason; a *per-call minted* lane
+     * would be admitted and would pass an exactly-once assertion while never
+     * exercising lane continuity at all.
+     */
+    fun driveStamped(cellId: CellId, inlet: String?, actor: String, op: String, value: Value? = null)
+
     /** Gracefully retire [cellId], unlinking it. */
     fun despawn(cellId: CellId)
 

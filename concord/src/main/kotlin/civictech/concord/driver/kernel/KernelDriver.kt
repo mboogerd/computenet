@@ -506,6 +506,29 @@ class KernelDriver(seed: Long? = null) : Driver {
         )
     }
 
+    /**
+     * The kernel binding of the `drive-stamped` verb, delegated to the same
+     * profile [driveContextless] is, and for the mirrored reason: the `dur`
+     * profile's `Effectful` admission guard is the only place where a frame's
+     * message context is *decided* rather than merely carried
+     * ([KernelDriverDur.driveStamped]).
+     *
+     * Everything else refuses loudly. A core or `dist` cell keeps no
+     * processed-frontier, so an externally-stamped delivery there is
+     * indistinguishable from ordinary traffic and would assert nothing about
+     * `[24-DUR-05]`'s externally-driven arm — while reading, in the corpus, as
+     * coverage of it.
+     */
+    override fun driveStamped(cellId: CellId, inlet: String?, actor: String, op: String, value: Value?) {
+        if (cellId in durCells) return dur.driveStamped(cellId, inlet, actor, op, value)
+        throw UnsupportedCatalogBinding(
+            "drive-stamped at '$cellId': this binding drives an externally-stamped PORT_API delivery only at a " +
+                "durable effect-boundary sink (host: dur), whose `Effectful` processed frontier is what judges " +
+                "the actor lane's position (spec 24 §Effectful [24-DUR-05]) — every other cell keeps no such " +
+                "frontier, so the delivery would assert nothing",
+        )
+    }
+
     override fun despawn(cellId: CellId) {
         if (cellId in durCells) return dur.despawn(cellId)
         val bound = cells.remove(cellId) ?: return

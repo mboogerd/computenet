@@ -801,10 +801,24 @@ original assertion, which ended `world shouldBe listOf(1, 1)`), plus the `Owned`
    each addition, and the rejected alternative for the check (a counted
    dead-letter check, refused because it binds the requirement to one reporting
    channel and overloads `no-dead-letters`'s "zero everywhere" meaning), are
-   argued in `scenario.md` rather than repeated here. The **stamped-lane half**
-   named at the end of this residual stays open and is filed separately —
-   no verb creates an actor lane, so `ActorIngress` is still unreachable from a
-   scenario.
+   argued in `scenario.md` rather than repeated here.
+
+   The **stamped-lane half** named at the end of this residual — open when
+   `computenet-em9i` landed, because no verb created an actor lane and
+   `ActorIngress` was therefore unreachable from a scenario — is **also
+   RESOLVED** (by `computenet-8ohq`, 2026-08-30), and with it this residual has
+   no outstanding sentence left. A third gated `concord/schema` addition, the
+   **`drive-stamped` step verb** (`scenario.md`, `#### drive-stamped`, with its
+   `concord/src/` seams per D-C12), delivers at an `Effectful` inlet on a
+   scenario-local external actor lane whose identity and counter stay the
+   driver's. `DUR-STAMPED-01` (`concord/corpus/15-durability/`) is the scenario:
+   the externally-driven frame is **admitted** (`refusal-count … cell: sink,
+   exactly: 0`, the exact boundary against `DUR-CONTEXTLESS-01`'s `exactly: 2`
+   on the same route), fires **exactly once across the crash and its replay**,
+   and fires **once more** for the lane's next live arrival after recovery. That
+   closes the hole the refusal rule was built for and which the corpus could not
+   see: a second conforming implementation admitting an externally-driven frame
+   and re-firing its effect on replay used to pass the whole corpus.
 
    *The residual as filed follows, unedited, because its argument is what made
    the two additions necessary and is cited from `scenario.md`.*
