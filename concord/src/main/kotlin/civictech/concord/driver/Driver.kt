@@ -215,6 +215,12 @@ interface Driver {
      * kernel-specific capability, and nothing about an implementation's
      * scheduling or identifiers leaks into a check.
      *
+     * The counting *unit* is normative, not a binding's private choice:
+     * `concord/schema/scenario.md`'s "What a conforming driver must observe" §
+     * `emission-count` fixes one increment as one outlet emission event,
+     * independent of how many deltas or values the emitted frame carries —
+     * every implementation, this one included, reports by that unit.
+     *
      * A driver that cannot observe the named cell's outlet **fails loudly**
      * rather than answering `0`, by the same rule as [retransmit] and
      * [effectLog]'s binding: `0` is a perfectly plausible *passing* answer for
