@@ -84,18 +84,31 @@ class IrohReconnectTest {
     /** A schedule that costs nothing to consult — the T12 seam, driven to ~0. */
     private val nearZeroBackoff: (attempt: Int) -> Long = { 10L }
 
+    /**
+     * Streams a labelled sidecar's stderr into this test's own captured output
+     * (JUnit's `system-out`, printed by Gradle on failure and always present in
+     * the XML report), so a dial timeout (`SidecarException`) can be attributed
+     * to a named cause instead of to load speculation (computenet-yn7e). Runs on
+     * [SidecarProcess]'s dedicated stderr-pump thread, so lines from both sides
+     * can interleave — the label is what keeps them attributable.
+     */
+    private fun stderrSink(label: String): (String) -> Unit = { line ->
+        println("[iroh-stderr $label] $line")
+    }
+
     @Test
     fun `a heal mints a fresh mirror, the severed one stays detached, and a requested close never re-dials`() {
         val binary = SidecarBinary.orSkip()
         val a = Stack(name = "alice")
         val b = Stack(name = "bob")
 
-        IrohTransport.listen(a.side, binary).use { listener ->
+        IrohTransport.listen(a.side, binary, stderrSink = stderrSink("alice-listener")).use { listener ->
             IrohTransport.connect(
                 b.side,
                 listener.nodeId,
                 listener.addresses,
                 binary,
+                stderrSink = stderrSink("bob-dialler"),
                 backoff = nearZeroBackoff,
             ).use { connection ->
                 val shared = SetCell<String>()
@@ -197,7 +210,12 @@ class IrohReconnectTest {
         val a = Stack(name = "alice")
         val b = Stack(name = "bob")
 
-        var listener = IrohTransport.listen(a.side, binary, sidecarArgs = listenerArgs)
+        var listener = IrohTransport.listen(
+            a.side,
+            binary,
+            stderrSink = stderrSink("alice-listener-1"),
+            sidecarArgs = listenerArgs,
+        )
         try {
             val peerNodeId = listener.nodeId
             val peerAddresses = listener.addresses
@@ -206,6 +224,7 @@ class IrohReconnectTest {
                 peerNodeId,
                 peerAddresses,
                 binary,
+                stderrSink = stderrSink("bob-dialler"),
                 backoff = nearZeroBackoff,
                 // Each failed re-dial costs at most this; the loop retries
                 // forever, so the value bounds an attempt, not the test.
@@ -230,7 +249,12 @@ class IrohReconnectTest {
                 }
 
                 // ---- the same endpoint comes back ---------------------------
-                listener = IrohTransport.listen(a.side, binary, sidecarArgs = listenerArgs)
+                listener = IrohTransport.listen(
+                    a.side,
+                    binary,
+                    stderrSink = stderrSink("alice-listener-2"),
+                    sidecarArgs = listenerArgs,
+                )
                 assertEquals(
                     peerNodeId.toList(),
                     listener.nodeId.toList(),
