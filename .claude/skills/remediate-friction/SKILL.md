@@ -329,7 +329,28 @@ git worktree remove "$PWD/../computenet-worktrees/<id>"
 ```
 
 Repeat from step 2 while budget remains; this lane is cheap per item, so
-several items per session is normal.
+several items per session is normal — **but keep at most ~2 PRs open against
+any one file, and every PR that moves a budget touches
+`.claude/skills/line-budget.txt` by construction**, since the ratchet requires
+the number to move in the same diff. The bound and its reason live in
+`work/references/direct-child.md` (computenet-nxac); restated here because an
+agent in this lane has no reason to open that file, and this is the lane that
+shares a file on most PRs. Measured 2026-08-29: six items, five PRs open, and
+one merge turned the other four `DIRTY` in the same minute — four hand-resolved
+rebases of an append-only ledger, each restarting the six required checks
+(~9-12 min), two needing three `rebase --continue` rounds (computenet-x69c).
+
+**Hold the third item rather than opening its PR; holding is not idleness.**
+Verdicts that close an item (superseded, rejected, needs-evidence) need no PR,
+and neither does verifying the next claim or drafting its diff in a worktree.
+A script-only PR is exempt — the ratchet does not price scripts, so its diff
+never touches the ledger.
+
+**When two PRs do raise the same number, the conflict is unavoidable and the
+resolution is a RECOMPUTE, not a merge**: the second number depends on the
+first's LANDED value, so neither side of the conflict is right. Take the landed
+number, re-measure, write the total. Picking a side mis-prices the growth
+silently — the validator only errors ABOVE budget, so an under-count passes.
 
 ## 5. Finalize
 

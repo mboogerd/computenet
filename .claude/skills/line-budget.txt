@@ -297,7 +297,13 @@ work                9166
 # the non-.md decline; +3 for the sentence that would have caught this: the
 # scripts have a sibling self-check (feedback.test.sh), it is wired into no
 # gate, and this change shipped red for want of running it.
-remediate-friction   353
+# 353 -> 374 on 2026-08-30: computenet-x69c (+21) — bought step 4's PR-
+# concurrency bound. Every PR this lane ships that moves a budget touches this
+# very file, so the bound in work/references/direct-child.md (which this lane
+# never opens) bites here hardest: six items on 2026-08-29 left five PRs open
+# and one merge turned four of them DIRTY at once. Includes the recompute rule
+# for the conflict, which is not mechanically resolvable.
+remediate-friction   374
 # 201 -> 267 on 2026-08-29: computenet-d1im — sync-report gains §4, the
 # coherence audit: five named checks over a bounded set (top up-next picks,
 # beads touched by window decisions, epics a merge may have absorbed), ranked
