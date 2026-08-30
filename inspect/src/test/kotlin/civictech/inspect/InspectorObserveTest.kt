@@ -14,10 +14,9 @@ import civictech.cell.host.lookup
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
 import civictech.testkit.HttpProbe
+import civictech.testkit.SseTap
 import civictech.testkit.awaitUntil
-import civictech.testkit.boundedHttpClient
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.shouldNotBe
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -26,15 +25,6 @@ import kotlinx.serialization.json.long
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.io.Serializable
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.TimeUnit
 
 /**
  * The M1 state vertical end to end: the explicit subscription
@@ -76,54 +66,15 @@ class InspectorObserveTest {
      */
     private val server = InspectorServer(registry, mapOf("test-host" to host), port = 0).start()
     private val probe = HttpProbe("http://localhost:${server.boundPort}")
-    private var tap: SseTap? = null
-
-    /**
-     * Where an SSE body is read — see [readAsync]. One virtual thread per tap,
-     * shut down here rather than left to the collector, exactly as
-     * computenet-4vh required of the tap's own `HttpClient`.
-     */
-    private val readers: ExecutorService = Executors.newVirtualThreadPerTaskExecutor()
+    private var tap: SseTap<Frame>? = null
 
     @AfterEach
     fun tearDown() {
         tap?.close()
         server.close()
         probe.close()
-        readers.shutdownNow()
         hostScheduler.shutdown()
     }
-
-    /**
-     * The instrument test for [readAsync], and the discriminator for
-     * computenet-i45n: an already-complete future is the state `sendAsync`'s
-     * future is in whenever the response headers won the race, and it is
-     * precisely the state in which `thenAccept` would run the body inline on
-     * the caller. Restoring `thenAccept` in [readAsync] turns this red on the
-     * `shouldNotBe` below, deterministically and in milliseconds — no load, no
-     * repetition, and no five-minute timeout needed to see it.
-     */
-    @Test
-    fun `an already-complete response future is never read on the thread that attached it`() {
-        val caller = Thread.currentThread()
-        val ranOn = CompletableFuture<Thread>()
-
-        readAsync(CompletableFuture.completedFuture(Unit)) { ranOn.complete(Thread.currentThread()) }
-
-        ranOn.get(5, TimeUnit.SECONDS) shouldNotBe caller
-    }
-
-    /**
-     * Run [body] on [readers] once [future] completes — **never** on the thread
-     * that attached it (computenet-i45n). See `InspectorGraphsTest.readAsync`
-     * for the full mechanism writeup: `thenAccept` runs inline on the caller
-     * when the future is already complete at attach time, which is exactly
-     * what happens when `sendAsync`'s headers-only completion beats attachment
-     * while `BodyHandlers.ofLines()` leaves an endless SSE body to read.
-     * `thenAcceptAsync` with an explicit executor has no such case.
-     */
-    private fun <T> readAsync(future: CompletableFuture<T>, body: (T) -> Unit): CompletableFuture<Void> =
-        future.thenAcceptAsync(body, readers)
 
     private fun observePath(ref: CellRef) = "${InspectorServer.CELL_PATH}/${InspectorServer.encodeRef(ref)}/observe"
     private fun statePath(ref: CellRef) = "${InspectorServer.CELL_PATH}/${InspectorServer.encodeRef(ref)}/state"
@@ -545,8 +496,8 @@ class InspectorObserveTest {
         return sinks(ref).single()
     }
 
-    private fun listen(): SseTap {
-        val opened = SseTap("http://localhost:${server.boundPort}${InspectorServer.EVENTS_PATH}")
+    private fun listen(): SseTap<Frame> {
+        val opened = SseTap("http://localhost:${server.boundPort}${InspectorServer.EVENTS_PATH}", ::frame)
         tap = opened
         awaitUntil("sse client attached", timeoutMs = 5_000) { server.attachedClients > 0 }
         return opened
@@ -554,60 +505,22 @@ class InspectorObserveTest {
 
     private data class Frame(val seq: Long, val kind: String, val payload: JsonObject)
 
-    private inner class SseTap(url: String) : AutoCloseable {
-        private val frames = LinkedBlockingQueue<Frame>()
-
-        /**
-         * Held so [close] can release it (computenet-4vh): one client per
-         * `listen()`, i.e. per test method, each with its own selector thread and
-         * executor pool; cancelling [reader] alone left all of that alive.
-         */
-        private val client: HttpClient = boundedHttpClient()
-        private val reader: CompletableFuture<Void> = readAsync(
-            client.sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines()),
-        ) { response ->
-            response.body().forEach { line ->
-                if (line.startsWith(DATA)) {
-                    val event = json.parseToJsonElement(line.removePrefix(DATA)).jsonObject
-                    frames += Frame(
-                        seq = event["seq"]!!.jsonPrimitive.content.toLong(),
-                        kind = event["kind"]!!.jsonPrimitive.content,
-                        payload = event["payload"]!!.jsonObject,
-                    )
-                }
-            }
-        }
-
-        fun awaitAtLeast(count: Int): List<Frame> {
-            awaitUntil("$count sse frames (saw ${frames.size})", timeoutMs = 10_000) { frames.size >= count }
-            return frames.toList()
-        }
-
-        fun countOfKind(kind: String): Int = frames.count { it.kind == kind }
-
-        /** Every payload of [kind] received so far, in arrival order — no waiting. */
-        fun payloadsOf(kind: String): List<JsonObject> = frames.filter { it.kind == kind }.map { it.payload }
-
-        fun awaitKind(kind: String, count: Int): List<JsonObject> {
-            awaitUntil("$count '$kind' frames", timeoutMs = 10_000) {
-                frames.count { it.kind == kind } >= count
-            }
-            return frames.filter { it.kind == kind }.map { it.payload }
-        }
-
-        /**
-         * `shutdownNow()`, never `close()`: this client is deliberately parked on
-         * an SSE response that never ends, so `close()` — which awaits
-         * termination of in-flight exchanges — would turn this teardown into the
-         * unbounded wait the suite is being audited for.
-         */
-        override fun close() {
-            reader.cancel(true)
-            client.shutdownNow()
-        }
+    /** One `data:` payload as this class asserts on it. */
+    private fun frame(data: String): Frame {
+        val event = json.parseToJsonElement(data).jsonObject
+        return Frame(
+            seq = event["seq"]!!.jsonPrimitive.content.toLong(),
+            kind = event["kind"]!!.jsonPrimitive.content,
+            payload = event["payload"]!!.jsonObject,
+        )
     }
 
-    private companion object {
-        const val DATA = "data: "
-    }
+    private fun SseTap<Frame>.countOfKind(kind: String): Int = count { it.kind == kind }
+
+    /** Every payload of [kind] received so far, in arrival order — no waiting. */
+    private fun SseTap<Frame>.payloadsOf(kind: String): List<JsonObject> =
+        matching { it.kind == kind }.map { it.payload }
+
+    private fun SseTap<Frame>.awaitKind(kind: String, count: Int): List<JsonObject> =
+        awaitMatching("$count '$kind' frames", count) { it.kind == kind }.map { it.payload }
 }

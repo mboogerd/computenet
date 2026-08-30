@@ -18,6 +18,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.testkit.HttpProbe
+import civictech.testkit.SseTap
 import civictech.testkit.awaitUntil
 import civictech.testkit.bounded
 import civictech.testkit.boundedHttpClient
@@ -25,21 +26,15 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.longs.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.shouldNotBe
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.net.URI
-import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.UUID
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
@@ -103,55 +98,16 @@ class InspectorActivityTest {
 
     private val server = InspectorServer(registry, mapOf("h" to host, "attentive" to attentive), port = 0).startUnscheduled()
     private val probe = HttpProbe("http://localhost:${server.boundPort}")
-    private var tap: SseTap? = null
-
-    /**
-     * Where an SSE body is read — see [readAsync]. One virtual thread per tap,
-     * shut down here rather than left to the collector, exactly as
-     * computenet-4vh required of the tap's own `HttpClient`.
-     */
-    private val readers: ExecutorService = Executors.newVirtualThreadPerTaskExecutor()
+    private var tap: SseTap<Event>? = null
 
     @AfterEach
     fun tearDown() {
         tap?.close()
         server.close()
         probe.close()
-        readers.shutdownNow()
         hostScheduler.shutdown()
         attentiveScheduler.shutdown()
     }
-
-    /**
-     * The instrument test for [readAsync], and the discriminator for
-     * computenet-i45n: an already-complete future is the state `sendAsync`'s
-     * future is in whenever the response headers won the race, and it is
-     * precisely the state in which `thenAccept` would run the body inline on
-     * the caller. Restoring `thenAccept` in [readAsync] turns this red on the
-     * `shouldNotBe` below, deterministically and in milliseconds — no load, no
-     * repetition, and no five-minute timeout needed to see it.
-     */
-    @Test
-    fun `an already-complete response future is never read on the thread that attached it`() {
-        val caller = Thread.currentThread()
-        val ranOn = CompletableFuture<Thread>()
-
-        readAsync(CompletableFuture.completedFuture(Unit)) { ranOn.complete(Thread.currentThread()) }
-
-        ranOn.get(5, TimeUnit.SECONDS) shouldNotBe caller
-    }
-
-    /**
-     * Run [body] on [readers] once [future] completes — **never** on the thread
-     * that attached it (computenet-i45n). See `InspectorGraphsTest.readAsync`
-     * for the full mechanism writeup: `thenAccept` runs inline on the caller
-     * when the future is already complete at attach time, which is exactly
-     * what happens when `sendAsync`'s headers-only completion beats attachment
-     * while `BodyHandlers.ofLines()` leaves an endless SSE body to read.
-     * `thenAcceptAsync` with an explicit executor has no such case.
-     */
-    private fun <T> readAsync(future: CompletableFuture<T>, body: (T) -> Unit): CompletableFuture<Void> =
-        future.thenAcceptAsync(body, readers)
 
     // ------------------------------------------------------------- five kinds
 
@@ -606,55 +562,23 @@ class InspectorActivityTest {
 
     private fun encoded(ref: CellRef): String = InspectorServer.encodeRef(ref)
 
-    private fun listen(on: InspectorServer = server): SseTap {
-        val opened = SseTap("http://localhost:${on.boundPort}${InspectorServer.EVENTS_PATH}")
+    private fun listen(on: InspectorServer = server): SseTap<Event> {
+        val opened = SseTap("http://localhost:${on.boundPort}${InspectorServer.EVENTS_PATH}") {
+            json.decodeFromString<Event>(it)
+        }
         tap = opened
         awaitUntil("sse client attached", timeoutMs = 5_000) { on.attachedClients > 0 }
         return opened
     }
 
-    /** A live `text/event-stream` reader, retaining each frame's kind and payload. */
-    private inner class SseTap(url: String) : AutoCloseable {
-        private val frames = LinkedBlockingQueue<Event>()
+    private fun SseTap<Event>.countOfKind(kind: String): Int = count { it.kind == kind }
 
-        /**
-         * Held so [close] can release it (computenet-4vh): one client per
-         * `listen()`, i.e. per test method, each with its own selector thread and
-         * executor pool; cancelling [reader] alone left all of that alive.
-         */
-        private val client: HttpClient = boundedHttpClient()
-        private val reader: CompletableFuture<Void> = readAsync(
-            client.sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines()),
-        ) { response ->
-            response.body().forEach { line ->
-                if (line.startsWith(DATA)) frames += json.decodeFromString<Event>(line.removePrefix(DATA))
-            }
-        }
-
-        fun countOfKind(kind: String): Int = frames.count { it.kind == kind }
-
-        fun lifecyclesOf(ref: String): List<String> = frames
-            .filter { it.kind == Event.LIFECYCLE && it.payload["ref"]?.jsonPrimitive?.content == ref }
+    private fun SseTap<Event>.lifecyclesOf(ref: String): List<String> =
+        matching { it.kind == Event.LIFECYCLE && it.payload["ref"]?.jsonPrimitive?.content == ref }
             .map { it.payload["lifecycle"]!!.jsonPrimitive.content }
 
-        fun awaitKind(kind: String, count: Int): List<kotlinx.serialization.json.JsonObject> {
-            awaitUntil("$count '$kind' frames (saw ${countOfKind(kind)})", timeoutMs = 10_000) {
-                countOfKind(kind) >= count
-            }
-            return frames.filter { it.kind == kind }.map { it.payload }
-        }
-
-        /**
-         * `shutdownNow()`, never `close()`: this client is deliberately parked on
-         * an SSE response that never ends, so `close()` — which awaits
-         * termination of in-flight exchanges — would turn this teardown into the
-         * unbounded wait the suite is being audited for.
-         */
-        override fun close() {
-            reader.cancel(true)
-            client.shutdownNow()
-        }
-    }
+    private fun SseTap<Event>.awaitKind(kind: String, count: Int): List<kotlinx.serialization.json.JsonObject> =
+        awaitMatching("$count '$kind' frames", count) { it.kind == kind }.map { it.payload }
 
     private interface CounterProxy {
         val inlet: Use<Consumer<Int>>
@@ -678,8 +602,6 @@ class InspectorActivityTest {
     }
 
     private companion object {
-        const val DATA = "data: "
-
         // fixed and ordered: A < B < C lexicographically, so "g-$A" names the
         // component every `pair` builds
         const val A = "0a000000-0000-4000-8000-000000000000"
