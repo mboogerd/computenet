@@ -90,8 +90,8 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 24-DUR-02 | DUR-ATOMIC-01, DUR-CKPT-FRONTIER-01, DUR-GF-01, DUR-REPLAY-01, DUR-SNAPTAIL-01 | covered |
 | 24-DUR-03 | DUR-SNAPTAIL-01 | covered |
 | 24-DUR-04 | DUR-SRCID-01, DUR-SRCID-02 | covered |
-| 24-DUR-05 | DUR-ATOMIC-01, DUR-CKPT-FRONTIER-01, DUR-LIVE-01, DUR-REPLAY-01, DUR-SRCID-01, DUR-SRCID-02 | covered |
-| 24-DUR-06 | — | gap |
+| 24-DUR-05 | DUR-ATOMIC-01, DUR-CKPT-FRONTIER-01, DUR-CONTEXTLESS-01, DUR-LIVE-01, DUR-REPLAY-01, DUR-SRCID-01, DUR-SRCID-02 | covered |
+| 24-DUR-06 | DUR-CONTEXTLESS-01 | covered |
 | 24-DUR-07 | DUR-BASELINE-01 | covered |
 | 24-DUR-08 | DUR-BASELINE-02 | covered |
 | 24-DUR-09 | — | gap |
@@ -186,7 +186,6 @@ None.
 - Coverage gap: requirement '22-OBS-01' (20-dataflow-semantics/22-consistency.md) has no covering scenario
 - Coverage gap: requirement '22-OBS-02' (20-dataflow-semantics/22-consistency.md) has no covering scenario
 - Coverage gap: requirement '22-REC-01' (20-dataflow-semantics/22-consistency.md) has no covering scenario
-- Coverage gap: requirement '24-DUR-06' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-DUR-09' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-OP-GROUPBY-03' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-OP-GROUPBY-04' (20-dataflow-semantics/24-data-cells.md) has no covering scenario

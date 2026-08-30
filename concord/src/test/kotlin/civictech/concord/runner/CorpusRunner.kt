@@ -35,6 +35,8 @@ import civictech.concord.schema.ReadStateStep
 import civictech.concord.schema.ReplicasConverge
 import civictech.concord.schema.RestartStep
 import civictech.concord.schema.RestoreStep
+import civictech.concord.schema.DriveContextlessStep
+import civictech.concord.schema.RefusalCount
 import civictech.concord.schema.RetransmitStep
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.SnapshotStep
@@ -394,6 +396,7 @@ class CorpusRunner {
         is WavePlaneUnchanged -> "wave-plane-unchanged"
         is PagesEqualView -> "pages-equal-view"
         is EmissionCount -> "emission-count"
+        is RefusalCount -> "refusal-count"
     }
 
     // ------------------------------------------------------------------------
@@ -666,6 +669,11 @@ class CorpusRunner {
                     driver.retransmit(
                         step.on, step.inlet, step.source, step.counter, step.op, step.value, step.baseline,
                     )
+                // The contextless-drive verb: the step states no position, and
+                // the runner invents none — the absence is what the delivery
+                // asserts (schema/scenario.md, `#### drive-contextless`).
+                is DriveContextlessStep ->
+                    driver.driveContextless(step.on, step.inlet, step.op, step.value)
                 is DespawnStep -> driver.despawn(step.on)
             }
         }

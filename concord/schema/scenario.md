@@ -209,6 +209,7 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
 | despawn | `{type: despawn, on: c}` | `despawn(cell)` |
 | read-state | `{type: read-state, on: s, limit: 2}` | `readState(cell, cursor, limit)`, looped to completion |
 | retransmit | `{type: retransmit, on: c, inlet?: in, source: s, counter: N, op: add, value?: apple, baseline?: {s: N}}` | `retransmit(cell, inlet, source, counter, op, value?, baseline?)` |
+| drive-contextless | `{type: drive-contextless, on: c, inlet?: in, op: add, value?: apple}` | `driveContextless(cell, inlet, op, value?)` |
 
 - **`op`** is a neutral op verb the cell catalog defines (`add`, `remove`, `put`,
   `remove-key`, `increment`, `decrement`, …).
@@ -225,6 +226,8 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
   wave position the injected delivery carries — see below.
 - **`retransmit … baseline:`** is optional; present, it makes the delivery a
   **catch-up baseline** rather than an ordinary live frame — see below.
+- **`drive-contextless`** names no position at all — no `source:`, no
+  `counter:`, no `baseline:`. The absence is the verb; see below.
 
 #### `restart` (D-C12, spec 21 §RESTART re-baselines / spec 30/31 rule 5)
 
@@ -449,6 +452,82 @@ the invocation's payload and counts the suppression, without dead-lettering it
 (`ManagedHost.kt:848-865`, KFX-20). A scenario built on `retransmit` needs no
 schema growth beyond the step itself.
 
+#### `drive-contextless` (`computenet-em9i`, spec 24 §Effectful `[24-DUR-06]`)
+
+**Status.** Landed. This subsection is the single-writer, schema-change-gated
+review of the extension; the matching `@SerialName("drive-contextless")` `Step`,
+the `Driver` SPI verb, the `civictech.concord.driver.kernel` binding and the
+`CorpusRunner` dispatch arm moved with it in the same ticket, per D-C12's rule
+that a step verb's seams move together or the module does not compile. The
+gated change was approved by the maintainer on 2026-08-19 (recorded on
+`computenet-em9i`), with the concrete shape left to the author and stated here.
+One corpus scenario drives it as landed: `DUR-CONTEXTLESS-01`.
+
+**What it is.** A `PORT_API` delivery at a named cell's inlet carrying **no
+message context at all** — no wave position, no source identity, no catch-up
+baseline. The shape a `HostedCellProxy` produces off the data path, and the
+shape an external caller (a connector, an operator tool, a test harness)
+presents when it drives a cell directly rather than through a link.
+
+**Why the vocabulary needed it.** `[24-DUR-06]` (spec 24 §Effectful) is written
+about exactly this frame: a `PORT_API` invocation arriving at an `Effectful`
+inlet with no `MessageContext` SHALL be refused as undeliverable, its exclusive
+payloads discharged and the refusal accounted. The case is **defined by what the
+delivery does not carry** — with no position, that inlet's processed-frontier
+has nothing to judge it by, which is why `[24-DUR-05]`'s antecedent could not be
+evaluated for it at all until the refusal closed the hole.
+
+No existing verb reaches it, and the reason is structural rather than a matter
+of nobody having written the scenario:
+
+- **`apply` mints.** It drives an op through the cell's own outlet along the
+  graph's links, and the driver mints the next wave position for that outlet in
+  sequence. An `apply` that arrived unstamped would be a *defect* of that
+  driver, not the case under test.
+- **`retransmit` states.** Its whole content is an explicit `(source, counter)`
+  position. A verb that names a position cannot drive the path whose defining
+  property is the absence of one — `concord/corpus/DISPUTES.md`'s "second
+  boundary" residual 1 records the diagnosis (`computenet-109f`, 2026-08-15),
+  and the `retransmit` subsection above says the same in its own words.
+- **The tempting shortcut is excluded.** One binding's `apply` happens to enter
+  a source's inlet unstamped, so a scenario *could* be written to exploit that.
+  It would be an accident of that binding rather than neutral semantics —
+  another conforming driver may stamp — and a scenario resting on it would
+  assert nothing while reading as coverage. `computenet-yh6.1.3.5` and
+  `computenet-109f` both drew this exclusion; it is restated here because this
+  verb is what replaces the shortcut.
+
+**Shape.**
+
+- **`on`** is the target cell — the one whose inlet receives the delivery. Same
+  convention as `restart`/`despawn`/`snapshot`/`retransmit`: it names the cell
+  under test, not a producer.
+- **`inlet`** selects which inlet receives it; optional, default `"inlet"` (the
+  same default `connect`/`disconnect`/`retransmit` use).
+- **`op`** / **`value`** are exactly `apply`'s fields: the payload the delivery
+  carries. `value` is omittable for value-less ops.
+
+There is deliberately **no `source:`, no `counter:` and no `baseline:`** — a
+step that could name any of them would be describing a different frame — and no
+`times:`: a repeated contextless drive is another step, each judged on its own.
+
+**What a conforming driver must do.** Deliver at the named inlet through the
+same intake as ordinary traffic, so the implementation's admission decision, its
+journalling and its accounting all see the frame, carrying nothing the receiver
+could take a frontier position from. A driver that **cannot** produce such a
+delivery at the named cell fails loudly rather than delivering a stamped one:
+a stamped delivery is admitted, so the substitution would turn a refusal
+scenario green while exercising the opposite path. Which cells can receive one
+is a driver capability like any other, exactly as with `retransmit`.
+
+**`drive-contextless` and `no-dead-letters`.** A refused delivery **is** a
+failure event and is reported as one, so a scenario driving this verb at an
+`Effectful` inlet cannot also assert `no-dead-letters` — the report is required,
+not a defect. Unlike the `restart` case, though, the check vocabulary no longer
+has to fall silent about it: `refusal-count` states the report's shape at a
+named cell, as an exact number. Say in a header comment why `no-dead-letters` is
+absent, as `restart` scenarios do.
+
 ### Script semantics (normative, all drivers)
 
 Steps targeting the **same** cell apply in file order. Steps on **different**
@@ -477,6 +556,7 @@ executable evaluators in `civictech.concord.check` (§1.4).
 | wave-plane-unchanged | `{type: wave-plane-unchanged, cell: s}` | every `read-state` walk on `s` left `s`'s wave plane exactly where it found it |
 | pages-equal-view | `{type: pages-equal-view, cell: s, view: v}` | every `read-state` walk on `s` was stamped, non-duplicating, and unions to `v`'s fold |
 | emission-count | `{type: emission-count, cell: r2, since: 7, exactly: 0}` | `r2`'s outlet emitted exactly N times from just before script step `since` to check time (window must be `quiesce`-barriered) |
+| refusal-count | `{type: refusal-count, cell: s, exactly: 1}` | `s` refused exactly N deliveries as undeliverable-for-want-of-a-position, over the whole run |
 
 Inline construction-time expectations use `expect:` on the `connect`/`disconnect`
 step, not a check entry.
@@ -611,13 +691,79 @@ walk's "before": asking the driver SPI to remember its own past counts would put
 harness bookkeeping into the per-implementation surface, where a second binding
 would have to reimplement it identically for no conformance reason.
 
-### What a conforming driver must observe (the three checks that need one)
+### `refusal-count`: the shape chosen, and why not a counted dead letter
+
+**Status.** Landed (`computenet-em9i`). This subsection is the single-writer,
+schema-change-gated review of the extension; the matching
+`@SerialName("refusal-count")` `Check`, the `civictech.concord.check` evaluator,
+the `Driver` SPI observation, the `civictech.concord.driver.kernel` binding and
+the `CorpusRunner` `checkId` arm moved with it in the same ticket, per D-C12.
+The gated change was approved on 2026-08-19 with the shape left to the author;
+this section is that choice and its argument.
+
+**What it asserts.** `{type: refusal-count, cell: s, exactly: 1}` asserts that
+`s` refused exactly `exactly` deliveries, over the whole run, as
+**undeliverable for want of a position** — declined and discharged rather than
+acted on. A count is the whole observation: not a reason, not a report record,
+not a channel, not an ordering.
+
+**Why no existing check reaches it.** `[24-DUR-06]` has three conjuncts — the
+frame is refused, its exclusive payloads are discharged, and the refusal is
+**accounted**. The vocabulary could state none of them.
+
+- **`no-dead-letters` is sense-inverted.** It asserts *zero* dead letters
+  across all hosts, while a scenario for this requirement has to assert that a
+  refusal HAPPENED. It is not only the wrong polarity: it quantifies over every
+  host and names no cell, so even a hypothetical "some dead letter exists"
+  reading would not say *this* cell refused *this* delivery.
+- **`effect-count … exactly: 0` covers only the other half.** It says the
+  effect did not fire, and on its own it is satisfied by a **silent drop** —
+  precisely the failure `[24-DUR-06]` forbids, and the one the AGENTS.md
+  no-silent-drop invariant exists for. An implementation that lost the frame on
+  the floor and one that refused and accounted it are indistinguishable to it.
+
+**Why a dedicated check and not a counted dead-letter one.** Both were offered;
+this is the argument for the choice.
+
+1. **It would bind the requirement to one reporting channel.** The spec requires
+   the refusal to be *accounted*. It does not require it to be a dead letter,
+   and this model itself already keeps a second refusal channel deliberately off
+   the dead-letter fault counter (`BoundaryPolicy` denials — see
+   `DeadLetters.boundaryDenial`, where the separation is argued at length and
+   called load-bearing). A conformance check that read the dead-letter channel
+   would therefore fail an implementation that satisfies the requirement on
+   another channel, which is the definition of a check testing an
+   implementation rather than a specification.
+2. **It would overload the corpus's most common assertion.** The meaning of the
+   dead-letter surface today is "zero, everywhere". Giving the same surface a
+   second, counted reading makes every existing `no-dead-letters` ambiguous —
+   the same objection the `restart` subsection already records against growing
+   one for its case.
+3. **A refusal count names the quantity the requirement names, where it names
+   it.** `[24-DUR-06]` is about one inlet's admission decision; `cell:` says so,
+   and an exact integer says how many times.
+
+**No window, deliberately.** Unlike `emission-count` this is a whole-run total.
+Legitimate traffic emits continuously, so an emission count is only meaningful
+over a stated window — hence that check's `since:` and its barrier requirement.
+A *refusal* is produced by nothing a correct scenario does except the drive
+under test, so the run total is already the quantity of interest, and a `since:`
+would buy nothing while importing the unbarriered-window hazard.
+
+**Nothing passes vacuously.** `exactly: 0` is satisfied by having nothing to
+count, so a driver that does not observe refusals at the named cell MUST fail
+loudly rather than answer `0` — see the next section — and the evaluator reports
+that as this check's failure. A negative reading fails for the same reason: a
+tally that only ascends cannot produce one, so it is not a count of refusals.
+
+### What a conforming driver must observe (the four checks that need one)
 
 A check is only a conformance check if a **second, non-kernel** implementation
-could evaluate it from the specification alone. Three checks require an
+could evaluate it from the specification alone. Four checks require an
 observation beyond the existing verbs — the two added with `read-state`
-(V1C-CONCORD) and `emission-count` (`computenet-dvim`) — and each is stated here
-in the spec's vocabulary, not any implementation's.
+(V1C-CONCORD), `emission-count` (`computenet-dvim`) and `refusal-count`
+(`computenet-em9i`) — and each is stated here in the spec's vocabulary, not any
+implementation's.
 
 **`wave-plane-unchanged`** requires the driver to report, for a named cell, the
 **wave plane that cell has reached**: for every wave source visible at that
@@ -695,6 +841,32 @@ unobservable cell into a green check — the one failure this observation exists
 prevent, and the one that leaves no trace in a passing run. Which cells it can
 observe is a driver capability like any other, and an unobservable target named
 by a scenario is an authoring error to report, never a weaker answer.
+
+**`refusal-count`** requires the driver to report, for a named cell, **how many
+deliveries it has refused as undeliverable so far in this run** — a single
+ascending count, nothing else. Any implementation of this specification already
+keeps the bookkeeping: `[24-DUR-06]` requires the refusal to be *accounted*, and
+spec 23 §Ownership requires an exclusive payload leaving the happy path to be
+discharged **and** made observable rather than silently dropped — an
+implementation that could not say how many frames it had refused would not be
+satisfying the requirement in the first place. So the count is not a
+kernel-specific capability, and nothing about the refused frame's identity,
+reason, timing or reporting channel is observed.
+
+What is deliberately **not** observed is *how* the refusal is surfaced. A dead
+letter, a denial channel of its own, a metric — the requirement fixes the
+accounting, not the channel, and a check that read one channel would fail a
+conforming implementation that chose another. (This model reports the refusal on
+its dead-letter outlet, which is why a scenario driving one cannot also assert
+`no-dead-letters`; that is this implementation's choice, not the schema's.)
+
+The count is **per run**, and only a run total is ever compared, so where a
+driver starts counting is its own business. A driver that does not observe
+refusals at the named cell MUST **fail loudly** rather than answer `0`, by the
+same rule as `emission-count` and `retransmit`: `0` is exactly what an
+`exactly: 0` check accepts, so a silent 0 converts an unwatched cell into a
+green check — the one failure this observation exists to prevent, and the one
+that leaves no trace in a passing run.
 
 ## `generator` (kind: generative)
 
