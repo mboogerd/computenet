@@ -633,14 +633,26 @@ class FloorDerivationLedger private constructor(
     }
 
     /**
-     * The completed derivation as a [ClassNoiseFloor], or a refusal naming exactly what
-     * stands in the way.
+     * The completed derivation as **one [ClassNoiseFloor] per `@Benchmark` METHOD**,
+     * ordered by method name, or a refusal naming exactly what stands in the way.
      *
-     * The record's `observedRobustDispersion` is [classFloorStatistic] over the ingested
+     * **This returned a single record until `computenet-x9e.18`.** The fold's grain is
+     * the method now (see [classFloorStatistic]), so a ledger over a class of several
+     * `@Benchmark` methods renders several entries. The partition is by
+     * [RowKey.method] — the field the plan pre-registered and `ingest` keyed every
+     * observation under — so it cannot be got wrong by parsing after the fact, and a
+     * ledger whose rows all name one method still renders exactly one record.
+     *
+     * Each record's `observedRobustDispersion` is [classFloorStatistic] over that
+     * method's ingested
      * observations GROUPED BY ROW, which is bit-identical to what a single whole-set
      * computation over the same numbers yields: a row's median depends only on that row's
      * own observations, and the across-row fold is a `max`, which is associative and
-     * commutative — so no partition of the row set into units can move it.
+     * commutative — so no partition of the row set into units can move it. (Nor can the
+     * partition into methods: a `max` over a partition's maxima is the whole set's `max`,
+     * which is why the retired per-class statistic is recoverable from these records as
+     * the largest of them — the check `computenet-x9e.18` used to confirm, per class,
+     * that it was re-folding the measurement set the published entry came from.)
      *
      * @param derivedOn the ISO date to record. For a decomposed derivation this is a
      *   choice the operator makes and the findings entry must qualify — the units span
@@ -661,7 +673,7 @@ class FloorDerivationLedger private constructor(
         derivedOn: String,
         harnessCommitSha: String?,
         jmhConfig: String,
-    ): ClassNoiseFloor {
+    ): List<ClassNoiseFloor> {
         val missing = outstanding()
         if (missing.isNotEmpty()) {
             throw FloorLedgerException(
@@ -703,22 +715,42 @@ class FloorDerivationLedger private constructor(
         // maximum this estimator replaced (`computenet-3sua`). The grouping key is the
         // RowKey the plan pre-registered, so it partitions the same universe the
         // completeness check above just verified.
-        val observed = classFloorStatistic(
-            observationList.groupBy { it.row }
-                .values
-                .map { row -> row.map { it.relativeDispersion } }
-        )
-        val record = ClassNoiseFloor(
-            benchmarkClass = plan.benchmarkClass,
-            observedRobustDispersion = observed,
-            runs = CLASS_FLOOR_OBSERVATIONS_PER_ROW,
-            derivedOn = derivedOn,
-            harnessCommitSha = resolvedSha,
-            hostState = QUIESCED_HOST_STATE,
-            jmhConfig = jmhConfig,
-            measuringJvm = jvms.single(),
-        )
-        return record
+        //
+        // Partitioned BY METHOD first (`computenet-x9e.18`), then grouped BY ROW within
+        // each method. The row grouping is what stops `classFloorStatistic` seeing a
+        // flattened grid and silently returning the plain maximum `computenet-3sua`
+        // replaced; the method partition is what stops it seeing a whole class and
+        // silently returning the per-class statistic `computenet-x9e.18` replaced. Both
+        // keys are the RowKey the plan pre-registered, so they partition the same
+        // universe the completeness check above just verified.
+        return observationList.groupBy { it.row.method }
+            .toSortedMap()
+            .map { (method, forMethod) ->
+                val observed = classFloorStatistic(
+                    forMethod.groupBy { it.row }
+                        .values
+                        .map { row -> row.map { it.relativeDispersion } }
+                )
+                ClassNoiseFloor(
+                    benchmarkClass = plan.benchmarkClass,
+                    benchmarkMethod = method,
+                    observedRobustDispersion = observed,
+                    runs = CLASS_FLOOR_OBSERVATIONS_PER_ROW,
+                    derivedOn = derivedOn,
+                    harnessCommitSha = resolvedSha,
+                    hostState = QUIESCED_HOST_STATE,
+                    // One config for every method the ledger renders. A class whose
+                    // methods declare their OWN @BenchmarkMode/@Fork/@Warmup/@Measurement
+                    // overrides — FanOutScalingBenchmark declares three distinct
+                    // configurations across six methods — has more than one honest answer
+                    // here, and this ledger has no access to the annotations to tell them
+                    // apart. The operator corrects the field per entry before committing,
+                    // and `renderConstructorCall` prints it as a plain string literal so
+                    // the correction is a visible edit rather than a hidden default.
+                    jmhConfig = jmhConfig,
+                    measuringJvm = jvms.single(),
+                )
+            }
     }
 
     /**

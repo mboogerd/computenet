@@ -4,8 +4,25 @@ import kotlin.math.abs
 import kotlin.math.ceil
 
 /**
- * Per-benchmark-class noise floors, and the machinery that resolves one
- * (`computenet-cm4w`).
+ * Per-`@Benchmark`-METHOD noise floors, and the machinery that resolves one
+ * (`computenet-cm4w`; the grain moved from the class to the method in
+ * `computenet-x9e.18`).
+ *
+ * ## The grain: one floor per `@Benchmark` method
+ *
+ * A floor is keyed by [FloorKey] — the (class, `@Benchmark` method) pair — and folded by
+ * [classFloorStatistic] over that method's rows alone. **A class whose methods carry
+ * unlike measurement regimes therefore carries several floors.** The argument is in
+ * [classFloorStatistic]'s own "grain" section and is made from the structure of JMH's
+ * annotations: `@BenchmarkMode`, `@Fork`, `@Warmup` and `@Measurement` are method-level,
+ * so the method is the unit that carries one regime. It was decided (mlboogerd,
+ * 2026-08-29) ahead of every number it produces, and no number may be used to revisit it.
+ *
+ * The previous grain — one floor per class — is retired, not deprecated: nothing resolves
+ * by class alone any more, and [noiseFloorFor] refuses to answer a caller that supplies
+ * only a class. What that grain cost is recorded on the `FanOutScalingBenchmark` entries
+ * in [CLASS_NOISE_FLOOR_DERIVATIONS], where a single floor of 0.953 was applied to a
+ * `Mode.AverageTime` sub-family whose own floors are 0.148 and 0.107.
  *
  * ## The defect this exists to close
  *
@@ -25,8 +42,9 @@ import kotlin.math.ceil
  *
  * ## Status: ALL FOUR classes the procedure names are derived
  *
- * [CLASS_NOISE_FLOOR_DERIVATIONS] holds four entries, one per benchmark class the
- * procedure names, and **nothing named by it falls back to [NOISE_FLOOR] any more**. That
+ * [CLASS_NOISE_FLOOR_DERIVATIONS] holds ELEVEN entries — one per `@Benchmark` METHOD of
+ * the four benchmark classes the
+ * procedure names — and **nothing named by it falls back to [NOISE_FLOOR] any more**. That
  * is the end state `computenet-cm4w` opened this file for; the fallback path below is not
  * dead, and still resolves any class with no derivation — `SmokeBenchmark`, or a class
  * added later — to the global bound.
@@ -215,17 +233,17 @@ object ClassFloorDerivation {
 }
 
 /**
- * How much headroom a derived per-class floor carries over the worst relative dispersion
+ * How much headroom a derived floor carries over the worst relative dispersion
  * its three quiesced runs actually observed.
  *
- * **The margin is 2x, and it is fixed here before any per-class number exists** — the
+ * **The margin is 2x, and it is fixed here before any derived number exists** — the
  * condition [NOISE_FLOOR]'s KDoc states for any amendment to this file's family of
  * criteria, and the same discipline `computenet-bzwx` used for
  * `IterationLengthCriterion`'s thresholds.
  *
  * Why 2x, and why the *same* 2x as the global bound rather than a fresh choice: the
- * per-class floor and [NOISE_FLOOR] are the same construction applied to different
- * subjects, and a reader comparing a class floor to the global one should be reading a
+ * derived floor and [NOISE_FLOOR] are the same construction applied to different
+ * subjects, and a reader comparing a derived floor to the global one should be reading a
  * difference in the *measurement*, not a difference in the margin. Changing the base and
  * the margin together would make that comparison uninterpretable. The justification for
  * the size carries over unchanged: three runs on a deliberately idle host, with error
@@ -237,7 +255,7 @@ object ClassFloorDerivation {
 const val CLASS_FLOOR_MARGIN: Double = 2.0
 
 /**
- * The one host state under which a per-class floor may be derived.
+ * The one host state under which a floor may be derived.
  *
  * [ClassNoiseFloor] refuses to be constructed with any other value, so a floor derived on
  * a shared host cannot be represented at all — the refusal is structural rather than a
@@ -269,8 +287,34 @@ fun medianOf(values: List<Double>): Double {
 }
 
 /**
- * The per-class floor's estimator: the **maximum, over the class's rows, of each row's
- * MEDIAN relative dispersion across that row's repeat observations** (`computenet-3sua`).
+ * The floor's estimator: the **maximum, over one `@Benchmark` METHOD's rows, of each
+ * row's MEDIAN relative dispersion across that row's repeat observations**
+ * (`computenet-3sua` for the median; `computenet-x9e.18` for the method grain).
+ *
+ * ## The fold's GRAIN is one `@Benchmark` method, not one class
+ *
+ * The maintainer decision of 2026-08-29 (`computenet-x9e.18`) moved the across-row fold
+ * from "every row of the class" to "the rows of one `@Benchmark` method". **A floor must
+ * span ONE MEASUREMENT REGIME, and in JMH the annotation configuration that defines a
+ * regime is per-method:** `@BenchmarkMode`, `@Fork`, `@Warmup` and `@Measurement` are all
+ * method-level, and a method-level one overrides the class-level default for that method
+ * alone. Folding per method therefore folds within a regime instead of across several.
+ * `@Param` variation WITHIN a method is the workload sweep the class exists to draw, and
+ * those rows are meant to be comparable against one bound — which is why the fold stops
+ * at the method and does **not** go on to `@Param`. A per-`@Param` grain was considered
+ * and REJECTED: on a 30-row class it approaches one floor per row, and a row cannot
+ * detect its own interference against a bound derived from itself.
+ *
+ * The reasoning is stated from the structure of JMH's annotations and would have been
+ * adopted had every class come out uniform; see [CLASS_NOISE_FLOOR_DERIVATIONS] for what
+ * the re-derived numbers turned out to be, which is an OUTCOME of the rule and never an
+ * argument for it.
+ *
+ * **This function itself is unchanged.** The grain lives entirely in the CALLER's
+ * grouping: `perRowObservations` is now one `@Benchmark` method's rows rather than a whole
+ * class's. That is deliberate — the estimator `computenet-3sua` pre-registered (median
+ * within a row, maximum across rows) is not amended by the grain change, only applied to
+ * a narrower row set.
  *
  * Pre-registered here, in committed source, **before it was computed over any measurement
  * whatsoever** — including before it was computed over `CellFootprintBenchmark`'s three
@@ -282,10 +326,12 @@ fun medianOf(values: List<Double>): Double {
  *
  * ## Why the two axes are treated differently
  *
- * A derivation's observations form a grid: one axis is the class's ROWS (its `@Benchmark`
- * x `@Param` combinations), the other is the REPEATS of each row. The previous estimator —
+ * A derivation's observations form a grid: one axis is the method's ROWS (its `@Param`
+ * combinations), the other is the REPEATS of each row. The previous estimator —
  * a single maximum over the flattened grid — treated both axes as one, and that is what
- * this replaces. They are not the same kind of variation.
+ * this replaces. They are not the same kind of variation. (The third axis, the
+ * `@Benchmark` METHOD, is not folded over at all any more: it partitions the derivation
+ * into separate floors — see this function's "grain" section above.)
  *
  * **Across REPEATS of one row, variation is transient.** Same benchmark, same parameters,
  * same configuration, same host, minutes apart. Whatever moves a row between its own
@@ -301,7 +347,7 @@ fun medianOf(values: List<Double>): Double {
  *
  * **Across ROWS, variation is structural, and the maximum is KEPT.** Different `@Param`
  * combinations are genuinely different workloads; a row that disperses heavily disperses
- * heavily every time, and that is a fact about the class rather than noise in it. The
+ * heavily every time, and that is a fact about the method rather than noise in it. The
  * original step 2's rationale applies unchanged on this axis and is retained verbatim in
  * force: *the floor has to sit above the worst quiet-host row, or a quiet host produces
  * rows above their own floor.* A high percentile across rows, or a mean, would discard
@@ -328,10 +374,16 @@ fun medianOf(values: List<Double>): Double {
  * out tighter or looser than it did under the old estimator is an OUTCOME of this rule and
  * never a reason to revisit it.
  *
- * @param perRowObservations one entry per ROW, each holding that row's relative
+ * @param perRowObservations one entry per ROW **of a single `@Benchmark` method**, each
+ *   holding that row's relative
  *   dispersions across its repeats. Grouping by row is the caller's job because the row
  *   key is the caller's (`FloorDerivationLedger` has `RowKey`; a caller reading a results
- *   file has whatever identifies a row there) — but the grouping is not optional. This
+ *   file has whatever identifies a row there) — but the grouping is not optional, and
+ *   nor is the PARTITION BY METHOD that precedes it: passing a whole class's rows here
+ *   silently computes the retired per-class statistic, which this function cannot detect
+ *   any more than it can detect a flattened grid. `FloorDerivationLedger.render()`
+ *   partitions by `RowKey.method` before calling in, and that is where the grain is
+ *   enforced. This
  *   function cannot tell a correctly grouped grid from a flattened one, and a caller that
  *   passes every observation as a single entry silently gets a plain maximum back, which
  *   is the old estimator. The refusal that actually protects that is
@@ -422,8 +474,33 @@ sealed interface DerivationAssembly {
 }
 
 /**
- * One benchmark class's forward-derived noise floor, with the provenance that makes it
- * checkable (`computenet-cm4w`).
+ * What a derived floor is keyed by: one `@Benchmark` METHOD of one benchmark class
+ * (`computenet-x9e.18`).
+ *
+ * The key used to be the class alone. It is a pair now because the fold's grain is the
+ * method — see [classFloorStatistic]'s "grain" section — so a class that declares several
+ * `@Benchmark` methods carries several floors, and resolving one of them by class alone
+ * would have to pick between them.
+ *
+ * [benchmarkMethod] is the SIMPLE method name, the last dot-separated segment of JMH's
+ * `pkg.Class.method` benchmark name — the same form `RowKey.method` and
+ * `ThroughputReport.JmhRow.method` carry, so a ledger row and a results-file row name
+ * their floor identically without either having to translate.
+ */
+data class FloorKey(val benchmarkClass: String, val benchmarkMethod: String) {
+
+    init {
+        require(benchmarkClass.isNotBlank()) { "benchmarkClass must not be blank" }
+        require(benchmarkMethod.isNotBlank()) { "benchmarkMethod must not be blank" }
+    }
+
+    /** `Class.method` — how a refusal, a rendered note and a findings heading name it. */
+    fun describe(): String = "$benchmarkClass.$benchmarkMethod"
+}
+
+/**
+ * One `@Benchmark` METHOD's forward-derived noise floor, with the provenance that makes it
+ * checkable (`computenet-cm4w`; per-method since `computenet-x9e.18`).
  *
  * The floor itself is **not a field**: [floor] is computed from
  * [observedRobustDispersion] and [CLASS_FLOOR_MARGIN], so the table can never hold a
@@ -435,8 +512,14 @@ sealed interface DerivationAssembly {
  * @param benchmarkClass the benchmark's SIMPLE class name — the key
  *   `ThroughputReport.JmhRow.benchmarkClass` exposes, so a results file names its own
  *   floor and a caller does not have to.
- * @param observedRobustDispersion [classFloorStatistic] over the derivation's
- *   observations — the maximum, over the class's rows, of each row's MEDIAN
+ * @param benchmarkMethod the `@Benchmark` method this floor covers — its simple name, as
+ *   `ThroughputReport.JmhRow.method` and `FloorDerivationLedger.RowKey.method` carry it.
+ *   With [benchmarkClass] it forms this record's [key]. It has no default: a record that
+ *   did not say which method it describes would be a per-class floor wearing the new
+ *   type's name, and the whole content of `computenet-x9e.18` is that those are different
+ *   quantities.
+ * @param observedRobustDispersion [classFloorStatistic] over this METHOD's
+ *   observations — the maximum, over the method's rows, of each row's MEDIAN
  *   `|scoreError / score|` across its [runs] observations. Must be finite and strictly
  *   positive: a zero would mean a benchmark with no dispersion at all, which is a broken
  *   measurement rather than a perfect one, and it would derive a floor of zero that every
@@ -472,6 +555,7 @@ sealed interface DerivationAssembly {
  */
 data class ClassNoiseFloor(
     val benchmarkClass: String,
+    val benchmarkMethod: String,
     val observedRobustDispersion: Double,
     val runs: Int,
     val derivedOn: String,
@@ -483,18 +567,23 @@ data class ClassNoiseFloor(
 ) {
     init {
         require(benchmarkClass.isNotBlank()) { "benchmarkClass must not be blank" }
+        require(benchmarkMethod.isNotBlank()) {
+            "benchmarkMethod must not be blank — a floor covers one @Benchmark method " +
+                "since computenet-x9e.18, and a record that cannot name its method is a " +
+                "retired per-class floor in the current type's clothing"
+        }
         require(observedRobustDispersion.isFinite() && observedRobustDispersion > 0.0) {
             "observedRobustDispersion must be finite and strictly positive, was " +
                 "$observedRobustDispersion"
         }
         require(runs >= CLASS_FLOOR_MIN_RUNS) {
-            "a per-class floor requires at least $CLASS_FLOOR_MIN_RUNS observations of " +
+            "a derived floor requires at least $CLASS_FLOOR_MIN_RUNS observations of " +
                 "every row, was $runs"
         }
         require(derivedOn.isNotBlank()) { "derivedOn must not be blank" }
         require(harnessCommitSha.isNotBlank()) { "harnessCommitSha must not be blank" }
         require(hostState == QUIESCED_HOST_STATE) {
-            "a per-class floor may only be derived on a host attested " +
+            "a derived floor may only be derived on a host attested " +
                 "'$QUIESCED_HOST_STATE', was '$hostState'. A floor derived through " +
                 "interference is a floor measuring the interference, and every row later " +
                 "classified against it inherits that"
@@ -513,6 +602,9 @@ data class ClassNoiseFloor(
         }
     }
 
+    /** What this record is resolved by: its (class, method) pair. */
+    val key: FloorKey get() = FloorKey(benchmarkClass, benchmarkMethod)
+
     /**
      * The derived floor: [CLASS_FLOOR_MARGIN] x [observedRobustDispersion], rounded
      * up to three decimals. Computed, never stored — see this class's KDoc.
@@ -522,177 +614,123 @@ data class ClassNoiseFloor(
 }
 
 /**
- * Every per-class floor this repository has actually derived.
+ * Every derived floor this repository holds — **one per `@Benchmark` METHOD**, eleven
+ * across the four classes the procedure names (`computenet-x9e.18`).
  *
- * **Four entries — every benchmark class the procedure names.** See
- * [ClassFloorDerivation]'s "Status" section: a class absent from this list has not had its
- * three sequential quiesced repeat runs made, and no number may be entered here that did
- * not come from them. An absent class falls back to [NOISE_FLOOR] and the harness behaves
- * for it exactly as it did before this file existed — which is the correct behaviour for a
- * floor that has not been measured. Nothing the procedure names is absent any more, so the
- * only classes still resolving to [NOISE_FLOOR] are `SmokeBenchmark` (from which
- * [NOISE_FLOOR] itself was derived, and which the procedure deliberately does not name)
- * and any class added after this table.
+ * **The table was keyed by CLASS until 2026-08-30 and is keyed by (class, method) now.**
+ * The grain change is [classFloorStatistic]'s, argued there from the structure of JMH's
+ * annotations — `@BenchmarkMode`, `@Fork`, `@Warmup` and `@Measurement` are method-level,
+ * so a method is the unit that carries one measurement regime — and decided ahead of
+ * every number below. Everything in this KDoc that reports what a number came out to is
+ * an OUTCOME of that rule and may not be used to revisit it.
  *
- * **The `CellFootprintBenchmark` entry is a RE-DERIVATION (`computenet-3sua`, 2026-08-27).** It is the same
- * three quiesced runs `computenet-7v7m` made — the same 63 retained observations, no new
- * measurement — recomputed under [classFloorStatistic], which replaced the previous
- * maximum-over-every-observation. The estimator was committed first, on its own, before
- * this number was computed under it; the value below is an OUTCOME of that rule and was
- * not available when it was chosen. No entry is grandfathered: this table carries one
- * statistic across every row of it. The `BoundedReadBenchmark` and
- * `FanOutScalingBenchmark` entries need no re-derivation for the same reason from the
- * other direction — their observations were gathered on 2026-08-27 and 2026-08-28
- * (`computenet-akfa`), after [classFloorStatistic] was committed, so they have only ever
- * been read by the statistic in force, and so was `OperatorThroughputBenchmark`'s
- * (2026-08-28, `computenet-x9e.17`).
+ * **Every entry was RE-DERIVED under the new grain. Nothing is grandfathered**, because
+ * the table carries one statistic across all of it. The re-derivation was pure
+ * RECOMPUTATION from the retained observations of the very same runs the superseded
+ * per-class entries were derived from — no benchmark was re-measured, so every provenance
+ * field (date of the runs, harness sha, host state, measuring JVM, assembly) is carried
+ * across unchanged, and only [ClassNoiseFloor.benchmarkMethod], the row set folded, and
+ * the resulting statistic are new.
  *
- * **`CellFootprintBenchmark`'s retained observations are `computenet-7v7m`'s
+ * **How each class's input set was confirmed to be the one its published entry came
+ * from.** The check is arithmetic and it is the reason `computenet-x9e.18`'s trap did not
+ * fire: folding each retained set at the OLD whole-class grain reproduces that class's
+ * superseded published statistic **bit for bit** —
+ * `CellFootprintBenchmark` 0.19864889236475775 (floor 0.398),
+ * `BoundedReadBenchmark` 0.028527147482145923 (0.058),
+ * `FanOutScalingBenchmark` 0.4762179191123049 (0.953),
+ * `OperatorThroughputBenchmark` 0.05106599919551368 (0.103). A set that folded to
+ * anything else would be a different measurement set, which is exactly what the
+ * `floor-derivations/CellFootprintBenchmark/` directory turns out to be (below).
+ *
+ * **The `CellFootprintBenchmark` inputs are `computenet-7v7m`'s
  * `cellfootprint-{1,2,3}.json`, NOT a ledger under `$HOME/computenet-runs/floor-derivations/`
- * (`computenet-xppx`, 2026-08-28).** Unlike the other three classes in this table, this
- * class has no `FloorDerivationLedger` behind its number. **The `assembly` field does not
- * say so** — all four entries read `WholeClassRuns(runs = 3)`, because the other three were
- * *whole-class* runs that happened to be accumulated through a ledger; what distinguishes
- * this entry is that its own KDoc names JMH JSONs as its inputs, and that its
- * `doc/bench/findings.md` entry carries no **Raw artifacts** paragraph — where each of the
- * other three has one naming a `floor-derivations/<Class>/` directory.
- * A directory named `floor-derivations/CellFootprintBenchmark/` may exist on a given
- * machine and even look complete (right row count, single JVM, v1 ledger format), but it
- * is not the input to this entry: it was observed on MacBoo (NL-MGD6FQJW91) on 2026-08-28
- * to hold `computenet-3omz.4`'s ledger-machinery exercise instead, measured from a jar at
- * harness sha `5a2fdccfd` — not this entry's `a7c6a0382` — which folds under
+ * (`computenet-xppx`, 2026-08-28).** Unlike the other three classes this one has no
+ * `FloorDerivationLedger` behind its number. A directory named
+ * `floor-derivations/CellFootprintBenchmark/` may exist on a given machine and even look
+ * complete (right row count, single JVM, v1 ledger format), but it is not the input to
+ * this entry: it was observed on MacBoo (NL-MGD6FQJW91) on 2026-08-28 to hold
+ * `computenet-3omz.4`'s ledger-machinery exercise instead, measured from a jar at harness
+ * sha `5a2fdccfd` — not this entry's `a7c6a0382` — which folds under
  * [classFloorStatistic] to 0.485, not 0.398. That directory is machine-local leftover
  * state, not a repository artifact, so its presence or absence is not asserted here; the
  * warning is for whoever next re-derives this class and is tempted to fold whatever sits
  * under that path. The real inputs are named in this entry's own KDoc, above the
  * constructor call, and nowhere under `floor-derivations/`.
  *
- * On the size of `CellFootprintBenchmark`'s floor: the worst quiet-host row by TYPICAL dispersion
- * is `realSnapshot` OR_MAP_CELL at `N1E5`, whose three observations were 0.522 / 0.119 /
- * 0.199 and whose median is therefore 0.199 — so the floor is 0.398. `realSnapshot` at
- * `N1E5` runs high dispersion *reproducibly*: 12 of the 63 rows exceed 0.10 — OR_MAP_CELL
- * and SET_CELL in all three runs, MAP_CELL in two, KEYED_SET_CELL and LIST_CELL in one
- * each. That is precisely the structural spread [ClassFloorDerivation]'s "defect this
- * exists to close" section describes: the global bound fired on those rows every time and
- * so distinguished nothing.
+ * ## What the finer grain actually changed, per class
  *
- * **What changed, and what did not.** Under the old estimator this class's floor was
- * 1.044, set by OR_MAP_CELL N1E5's single worst repeat (0.522, about 2.6x its own
- * next-worst observation, against 0.201 as the second-highest row over all 63). The floor
- * is now 0.398. The row that sets it is the SAME row — the change is not that a different
- * part of the class was found to be worst, but that the row is now represented by what it
- * typically does rather than by its most extreme repeat.
+ * **`CellFootprintBenchmark` — one method, one floor, number UNCHANGED at 0.398.** The
+ * class declares a single `@Benchmark`, `realSnapshot`, so its 21 rows were already one
+ * regime and the per-method fold is the per-class fold on this class. That is an outcome
+ * of the rule rather than a special case, and it is the cleanest evidence that the grain
+ * change is a partition and not a re-estimation: where there is nothing to partition,
+ * nothing moves. The worst row by typical dispersion is still `realSnapshot` OR_MAP_CELL
+ * at `N1E5`, whose three observations were 0.522 / 0.119 / 0.199 and whose median is
+ * therefore 0.199.
  *
- * **The limit of this particular number, stated where the number is.** 0.398 is still a
- * loose bound in absolute terms: a row may carry a JMH 99.9% error bar nearly 40% the size
- * of its own score and pass. That is the class, not the estimator — `realSnapshot` at
- * `N1E5` genuinely disperses that much on a silent machine, and a floor that refused it
- * would be refusing the benchmark rather than detecting interference. A reader should also
- * not read 0.398 as "no observation here exceeded 0.199": a median does not bound the
- * sample it is drawn from, and one of these very rows was measured at 0.522.
+ * **`BoundedReadBenchmark` — two methods, 0.058 splits into 0.052 and 0.058.** Barely a
+ * change, and that is the finding: this class was already uniform (all six per-row
+ * medians between 0.0167 and 0.0285), so its two methods are two samples of much the same
+ * regime. `realHostedSnapshotOf` keeps the old number because it held the row that set
+ * it; `realDirect` gains a floor of its own that is about 10% tighter.
  *
- * **What must not be read into the tightening.** That 0.398 came out below 1.044 is an
- * outcome, not a justification. The estimator was argued and committed on robustness
- * grounds alone (see [classFloorStatistic]), and it would have discharged
- * `computenet-3sua` identically had it produced a LOOSER floor. Nothing here may be
- * revisited on the ground that some other statistic would yield a number someone prefers.
+ * **`FanOutScalingBenchmark` — six methods, and this is the class the grain change was
+ * noticed on.** Its single floor was 0.953, the largest in the table, set by
+ * `simBatchFixedState[degree=D256]`, while the `Mode.AverageTime` `sim`/`real` rows — the
+ * fan-out curve the class exists to draw — all sat at or under 0.074 and so were measured
+ * against a bound more than an order of magnitude looser than themselves. Under the
+ * method grain those two methods get 0.148 and 0.107, and the three sub-families separate
+ * exactly along the annotation boundaries that define them: `sim`/`real` at
+ * `Mode.AverageTime` `@Fork(5)`, `simFixedState`/`realFixedState` at
+ * `Mode.SingleShotTime` `@Fork(3)` (0.617 and 0.472), and the two
+ * `@OperationsPerInvocation(200)` batch methods (0.953 and 0.694). Nothing here was
+ * arranged: the partition is by `@Benchmark` method and the regimes fell out of it.
  *
- * **On the size of `BoundedReadBenchmark`'s floor, 0.058.** The row that sets it is
- * `realHostedSnapshotOf` at `N1E4`, whose three observations were 0.0285 / 0.0274 /
- * 0.0313 and whose median is therefore 0.0285. The class is tight and uniform in a way
- * `CellFootprintBenchmark` is not: all six per-row medians fall between 0.0167 and 0.0285,
- * a spread of well under a factor of two, and the row that sets the floor does so by a
- * margin of about 12% over the next-highest row rather than by being an outlier. So this
- * floor is one an ordinary row of the class clears comfortably, which is what a per-class
- * floor is supposed to look like — unlike the global [NOISE_FLOOR] of 0.005, which every
- * one of these 18 observations exceeds and which therefore distinguished nothing for this
- * class either.
+ * **`OperatorThroughputBenchmark` — two methods, 0.103 and 0.094.** The mildest case,
+ * as expected: every row of this class is measured under ONE annotation configuration, so
+ * its two methods really are one regime and the split is small. Its 72 per-row medians
+ * still span a factor of about ten WITHIN each method, and the typical row is still
+ * roughly an order of magnitude below its floor. **The grain change does not fix that,
+ * and is not claimed to**: `@Param` spread inside one method is the workload sweep the
+ * class exists to draw, and folding it away is the per-`@Param` grain that was considered
+ * and rejected ([classFloorStatistic]).
  *
- * **What 0.058 does NOT say.** It is not a bound on the individual observations it was
- * drawn from: the largest single observation in the set is 0.0408 (`realDirect` at
- * `N1E5`), above the 0.0285 statistic, because a median does not bound its own sample.
- * That is the estimator working as documented in [classFloorStatistic] rather than a
- * discrepancy. Nor does it say anything about `BoundedReadBenchmark` under `-prof gc`,
- * under a different `@Fork`/iteration count, or on another host — the entry's [jmhConfig]
- * and [ClassNoiseFloor.measuringJvm] fields state the configuration it describes, and
- * only that one.
+ * ## What these numbers do NOT say
  *
- * **On the size of `FanOutScalingBenchmark`'s floor, 0.953 — the largest in this table,
- * and by some way.** The row that sets it is `simBatchFixedState` at `degree=D256`, whose
- * three observations were 0.0588 / 0.4762 / 0.4901 and whose median is therefore 0.4762.
- * This class is the opposite of `BoundedReadBenchmark` in shape: its 30 per-row medians
- * span 0.013 (`real` at `D16`) to 0.476, a factor of about 36, so it is not one
- * population with a floor but three sub-families measured under three different
- * annotation configurations that happen to share a class. Ranked, the top twelve rows are
- * every `SingleShotTime` `simFixedState`/`realFixedState` row plus the two `D256` batch
- * rows; the `Mode.AverageTime` `sim`/`real` rows — the fan-out curve the class exists to
- * draw — all sit at or under 0.074.
+ * As under every previous grain, a floor is not a bound on the individual observations it
+ * was drawn from — a median does not bound its own sample, and several of these rows were
+ * measured above their own method's statistic (`realSnapshot` OR_MAP_CELL N1E5 at 0.522
+ * against 0.199; `simBatchFixedState` D256 at 0.490 against 0.476; `realDirect` N1E5 at
+ * 0.0408 against 0.0255). And no entry says anything about its method on another host,
+ * under `-prof gc`, or under any `@Fork`/iteration count other than the one its own
+ * [ClassNoiseFloor.jmhConfig] names.
  *
- * **That heterogeneity is stated rather than corrected, and the consequence is stated
- * with it.** A single per-class floor of 0.953 is loose for the `sim`/`real` rows by more
- * than an order of magnitude: those rows cannot realistically exceed it, so for them this
- * floor distinguishes about as little as [NOISE_FLOOR] did — the same defect this file
- * opens by describing, arriving from the other end. It is nonetheless the floor the
- * pre-registered procedure yields, and it is entered unaltered. Splitting a class's floor
- * by `@Benchmark` method or by `@Param` would be a change to [classFloorStatistic]'s
- * across-row fold, decided on its own and in advance of the numbers it would produce —
- * not something to reach for because this class's number came out inconvenient. The
- * observation belongs in the record; the redesign, if anyone wants it, belongs in its own
- * item.
- *
- * **What 0.953 does NOT say.** As above, it is not a bound on the individual observations:
- * the largest single observation in the set is 0.4901 (`simBatchFixedState` at `D256`,
- * the run-3 repeat), above the 0.4762 statistic, because a median does not bound its own
- * sample. And the row that sets the floor is genuinely typical of itself rather than an
- * outlier — two of its three repeats are near 0.48 and only one is low — which is exactly
- * the case the median is meant to keep and the maximum-over-observations would have
- * exaggerated. Nor does 0.953 say anything about this class on another host, under
- * `-prof gc`, or under any `@Fork`/iteration count other than the one [jmhConfig] names.
- *
- * **On the size of `OperatorThroughputBenchmark`'s floor, 0.103.** The row that sets it is
- * `sim` at `direction=INSERT`, `subject=LOOKUP_JOIN`, whose three observations were
- * 0.0514 / 0.0057 / 0.0511 and whose median is therefore 0.0511. In shape this class sits
- * between the two above: its 72 per-row medians span 0.0052 to 0.0511, a factor of about
- * ten — wider than `BoundedReadBenchmark`'s, far narrower than `FanOutScalingBenchmark`'s
- * 36 — and unlike the fan-out class every row is measured under ONE annotation
- * configuration, so this really is one population. The typical row is much quieter than
- * the floor, though: the median of the 72 per-row medians is 0.011, and only 10 of the 72
- * rows have a median above half the statistic. So 0.103 is loose for an ordinary row of
- * this class by roughly an order of magnitude — the same looseness recorded for
- * `FanOutScalingBenchmark`, milder, and recorded here for the same reason: it is what the
- * pre-registered procedure yields, and the fix (if there is one) is a decision about
- * [classFloorStatistic]'s across-row fold, taken before the numbers rather than after
- * them. What it is NOT is the previous state: on this class the global [NOISE_FLOOR] of
- * 0.005 was exceeded by 210 of 216 observations and by all 72 row medians, so it fired
- * essentially everywhere and separated nothing at all.
- *
- * **What 0.103 does NOT say.** As with every entry above, it is not a bound on the
- * individual observations: the largest single observation in the set is 0.0720 — and it
- * belongs to a DIFFERENT row (`real`, `RETRACT`, `COALESCING_COMBINE`), whose other two
- * repeats are 0.0153 and 0.0075. That row's median is 0.0153, so under the estimator in
- * force it does not come near setting the floor, while under the maximum-over-every-
- * observation estimator `computenet-3sua` replaced it would have set it at 0.144 single-
- * handedly. This class is therefore the clearest measured case in the table of what the
- * change of estimator was for. And 0.103 says nothing about this class on another host,
- * under `-prof gc`, or under any `@Fork`/iteration count other than the one [jmhConfig]
- * names.
+ * A class absent from this list has not had its quiesced repeat runs made, and no number
+ * may be entered here that did not come from them. An absent class — or an absent METHOD
+ * of a present class, which is now equally possible — falls back to [NOISE_FLOOR] and the
+ * harness behaves for it exactly as it did before this file existed. The only classes
+ * still resolving to [NOISE_FLOOR] are `SmokeBenchmark` (from which [NOISE_FLOOR] itself
+ * was derived, and which the procedure deliberately does not name) and any class added
+ * after this table.
  */
 val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
     /**
-     * `computenet-7v7m`, 2026-08-26 — the re-derivation. Three sequential runs of
+     * `computenet-7v7m`, 2026-08-26 — the runs. Three sequential runs of
      * `civictech.bench.micro.CellFootprintBenchmark` (21 rows each: `realSnapshot` over
      * 7 cell families x 3 scales) from `bench/build/libs/bench-jmh.jar` at `a7c6a0382`,
      * each preceded by its own attestation of `run-series.sh`'s gate (1-minute load
      * average at or below 0.25 x 16 cores = 4.00 on NL-MGD6FQJW91), and each verified
      * after the fact against its own log's `# VM version:` banner.
      *
-     * **Re-derived 2026-08-27 by `computenet-3sua`** under [classFloorStatistic], from
-     * those same three runs' retained JSON — arithmetic over kept artifacts, not a fresh
-     * measurement, which is why every provenance field below (date of the RUNS, harness
-     * sha, host state, JMH config, measuring JVM) is unchanged. The per-row median that
-     * sets it is `realSnapshot` OR_MAP_CELL N1E5, whose observations across runs 1 / 2 / 3
-     * were 0.5217864937179187 / 0.11856655814861747 / 0.19864889236475775. Under the previous
-     * estimator this entry read 0.5217864937179187, floor 1.044.
+     * **Re-folded 2026-08-30 by `computenet-x9e.18`** at the per-`@Benchmark`-method
+     * grain, from those same three runs' retained JSON — arithmetic over kept artifacts,
+     * not a fresh measurement, which is why every provenance field below is unchanged.
+     * The class declares ONE `@Benchmark`, so the method's row set IS the class's and the
+     * statistic is unmoved from `computenet-3sua`'s 2026-08-27 re-derivation: still
+     * 0.19864889236475775, still floor 0.398. The per-row median that sets it is
+     * `realSnapshot` OR_MAP_CELL `N1E5`, whose observations across runs 1 / 2 / 3 were
+     * 0.5217864937179187 / 0.11856655814861747 / 0.19864889236475775.
      *
      * **This SUPERSEDES `computenet-ahn0`'s derivation of the same class**, which
      * observed 0.2961501149112133 and published a floor of 0.593. That measurement is not
@@ -703,15 +741,14 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
      *
      * **The observations behind this entry are `computenet-7v7m`'s `cellfootprint-{1,2,3}.json`
      * — NOT a ledger under `$HOME/computenet-runs/floor-derivations/CellFootprintBenchmark/`**
-     * (`computenet-xppx`, 2026-08-28). A directory of that name has been seen (MacBoo,
-     * NL-MGD6FQJW91, 2026-08-28) to hold `computenet-3omz.4`'s unrelated ledger-machinery
-     * exercise at harness sha `5a2fdccfd`, which is complete, well-formed and matches this
-     * class's row count, but folds to 0.485 under [classFloorStatistic] — not this entry's
-     * 0.398. A future re-derivation of this class must use the JSONs named above, never
-     * whatever a `floor-derivations/CellFootprintBenchmark/` directory happens to contain.
+     * (`computenet-xppx`). Confirmed for this re-fold by folding the JSONs at the old
+     * whole-class grain and reproducing the superseded 0.19864889236475775 exactly; the
+     * directory of that name folds to 0.485 and would not have. A future re-derivation of
+     * this class must use the JSONs named above, never whatever that directory contains.
      */
     ClassNoiseFloor(
         benchmarkClass = "CellFootprintBenchmark",
+        benchmarkMethod = "realSnapshot",
         observedRobustDispersion = 0.19864889236475775,
         runs = 3,
         derivedOn = "2026-08-26",
@@ -727,13 +764,12 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
             "(Amazon Corretto; :bench's resolved toolchain launcher)",
         // Stated rather than left to the absent value: this derivation really was three
         // back-to-back executions of the whole class (see this entry's own KDoc), so the
-        // block's "3 sequential repeat runs" is a claim the runs support. A later entry
-        // derived through `computenet-3omz`'s checkpointed ledger carries
-        // DerivationAssembly.UnitAssembled instead, and `floorTool render` writes it.
+        // block's "3 sequential repeat runs" is a claim the runs support.
         assembly = DerivationAssembly.WholeClassRuns(runs = 3),
     ),
     /**
-     * `computenet-akfa`, 2026-08-27. Three sequential runs of
+     * `computenet-akfa`, 2026-08-27; re-folded per method 2026-08-30 by
+     * `computenet-x9e.18`. Three sequential runs of
      * `civictech.bench.micro.BoundedReadBenchmark` (6 rows each: `realDirect` and
      * `realHostedSnapshotOf` over 3 `SetScale` constants) from
      * `bench/build/libs/bench-jmh.jar` at `19055b951`, on the pinned host NL-MGD6FQJW91
@@ -746,131 +782,310 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
      * Accumulated through [FloorDerivationLedger] (`floorTool plan` / `ingest` /
      * `render`), which is what checks the row set is COMPLETE against
      * `EXPECTED_PLAN_ROW_COUNTS` (6 rows x 3 observations = 18) and that it spans one
-     * measuring JVM and one harness sha. Each of the three units happened to measure the
-     * whole class, so the assembly below is [DerivationAssembly.WholeClassRuns] and not
-     * [DerivationAssembly.UnitAssembled]: `computenet-3omz`'s decomposition was available
-     * and was not needed, because one whole-class run is 00:05:13 and fits a quiesced
-     * window whole.
+     * measuring JVM and one harness sha. Raw artifacts:
+     * `$HOME/computenet-runs/floor-derivations/BoundedReadBenchmark/`. Re-folding that
+     * ledger at the old whole-class grain reproduces the superseded 0.028527147482145923
+     * exactly, which is how it was confirmed to be this class's published input set.
      *
-     * The per-row median that sets the statistic is `realHostedSnapshotOf` at `N1E4`,
-     * whose observations across runs 1 / 2 / 3 were 0.028527147482145923 /
-     * 0.02740650775589135 / 0.031330611761921666. Unlike the entry above, this one is not
-     * a re-derivation of anything: the observations were gathered after
-     * [classFloorStatistic] was committed, so no earlier number for this class exists and
-     * none is superseded.
+     * This method's three `@Param` rows are `scale` = `N1E3` / `N1E4` / `N1E5`, whose
+     * medians are 0.02389 / 0.02553 / 0.02456; the row that sets the statistic is
+     * `realDirect[scale=N1E4]`, observed at 0.024338591249818783 / 0.02552534622609911 /
+     * 0.038565703815156345. Under the retired per-class grain this method shared
+     * `realHostedSnapshotOf`'s 0.058; its own floor is 0.052.
      */
     ClassNoiseFloor(
         benchmarkClass = "BoundedReadBenchmark",
+        benchmarkMethod = "realDirect",
+        observedRobustDispersion = 0.02552534622609911,
+        runs = 3,
+        derivedOn = "2026-08-27",
+        harnessCommitSha = "19055b951",
+        hostState = QUIESCED_HOST_STATE,
+        // The class-level annotations, which this method does not override.
+        jmhConfig = "mode=AverageTime unit=ms forks=5 warmup=5x1s measurement=5x1s",
+        measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
+            "(Amazon Corretto; :bench's resolved toolchain launcher)",
+        assembly = DerivationAssembly.WholeClassRuns(runs = 3),
+    ),
+    /**
+     * The second method of the same `computenet-akfa` derivation — see the `realDirect`
+     * entry above for the runs, the gate readings, the ledger and how the input set was
+     * confirmed. Nothing about the measurement differs; only the row set folded does.
+     *
+     * The row that sets the statistic is `realHostedSnapshotOf[scale=N1E4]`, whose three
+     * observations were 0.028527147482145923 / 0.02740650775589135 /
+     * 0.031330611761921666. This is the row that set the RETIRED per-class floor as well,
+     * so this method's 0.058 is numerically the old class floor — an outcome of the
+     * partition, not a carry-over: the number was recomputed from the ledger and happens
+     * to be the same because the maximum-setting row is inside this method.
+     *
+     * The largest single observation in the class is 0.0408 (`realDirect` at `N1E5`),
+     * above this method's statistic and belonging to the OTHER method, which is why a
+     * floor is not a bound on the observations it was drawn from.
+     */
+    ClassNoiseFloor(
+        benchmarkClass = "BoundedReadBenchmark",
+        benchmarkMethod = "realHostedSnapshotOf",
         observedRobustDispersion = 0.028527147482145923,
         runs = 3,
         derivedOn = "2026-08-27",
         harnessCommitSha = "19055b951",
         hostState = QUIESCED_HOST_STATE,
         jmhConfig = "mode=AverageTime unit=ms forks=5 warmup=5x1s measurement=5x1s",
-        // Verbatim from all three run logs' banner, plus the vendor `-version` reports —
-        // the same convention (and, as it happens, the same launcher) as the entry above.
         measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
             "(Amazon Corretto; :bench's resolved toolchain launcher)",
         assembly = DerivationAssembly.WholeClassRuns(runs = 3),
     ),
     /**
-     * `computenet-akfa`, 2026-08-28. Three sequential runs of
-     * `civictech.bench.micro.FanOutScalingBenchmark` (30 rows each: `sim`, `real`,
-     * `simFixedState`, `realFixedState`, `simBatchFixedState`, `realBatchFixedState` over
-     * `FanDegree`'s five constants) from `bench/build/libs/bench-jmh.jar` at `57c860075`,
-     * on the pinned host NL-MGD6FQJW91 (16 cores, gate threshold 4.00), each preceded by
-     * its own attestation of `run-series.sh`'s gate — the readings immediately before the
-     * three invocations were 3.21, 2.74 and 2.61 — and each verified after the fact
-     * against its own log's `# VM version:` banner, every one of which read
+     * `computenet-akfa`, 2026-08-28; re-folded per method 2026-08-30 by
+     * `computenet-x9e.18` — **the class the grain change was noticed on**. Three
+     * sequential runs of `civictech.bench.micro.FanOutScalingBenchmark` (30 rows each:
+     * `sim`, `real`, `simFixedState`, `realFixedState`, `simBatchFixedState`,
+     * `realBatchFixedState` over `FanDegree`'s five constants) from
+     * `bench/build/libs/bench-jmh.jar` at `57c860075`, on the pinned host NL-MGD6FQJW91
+     * (16 cores, gate threshold 4.00), each preceded by its own attestation of
+     * `run-series.sh`'s gate — the readings immediately before the three invocations were
+     * 3.21, 2.74 and 2.61 — and each verified after the fact against its own log's
+     * `# VM version:` banner, every one of which read
      * `JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS`.
      *
-     * Accumulated through [FloorDerivationLedger] (`floorTool plan` / `ingest` /
-     * `render`), which checked the row set COMPLETE against `EXPECTED_PLAN_ROW_COUNTS`
-     * (30 rows x 3 observations = 90) and single-JVM / single-harness-sha. Each unit
-     * measured the whole class, so the assembly is [DerivationAssembly.WholeClassRuns]:
-     * one run is 00:14:15 and fits a quiesced window whole, so `computenet-3omz`'s
-     * decomposition was available and deliberately not used — ten 3-row units would have
-     * cost ten gate attestations and nine inter-run load decays to buy scheduling
-     * freedom this slot did not need.
+     * Accumulated through [FloorDerivationLedger], which checked the row set COMPLETE
+     * against `EXPECTED_PLAN_ROW_COUNTS` (30 rows x 3 observations = 90) and
+     * single-JVM / single-harness-sha. Raw artifacts:
+     * `$HOME/computenet-runs/floor-derivations/FanOutScalingBenchmark/`. Re-folding that
+     * ledger at the old whole-class grain reproduces the superseded 0.4762179191123049
+     * exactly, which is how it was confirmed to be this class's published input set.
      *
-     * [jmhConfig] below names three configurations rather than one because the class
-     * declares three: the class-level `@BenchmarkMode(AverageTime)` `@Fork(5)` 5+5 x 1s
-     * that `sim`/`real` inherit, the `@BenchmarkMode(SingleShotTime)` `@Fork(3)` 5+10
-     * override on `simFixedState`/`realFixedState`, and the `@Fork(3)` 3+6 x 1s
-     * `@OperationsPerInvocation(200)` override on the two batch methods. All three are
-     * the class's OWN declared annotations, read off the source and not chosen here; the
-     * field states them all because a single summary line would have described only a
-     * third of the rows the floor covers.
+     * **The six entries that follow are where the retired single floor of 0.953 went.**
+     * Each carries its OWN [ClassNoiseFloor.jmhConfig] — read off the class's source
+     * annotations, not chosen here — and the three distinct configurations are precisely
+     * the three sub-families the single floor was averaging over. That is the grain
+     * argument made visible: the class declares `@BenchmarkMode`/`@Fork`/`@Warmup`/
+     * `@Measurement` overrides at the METHOD, so a per-method floor is a per-regime floor.
      *
-     * The per-row median that sets the statistic is `simBatchFixedState` at
-     * `degree=D256`, whose observations across runs 1 / 2 / 3 were 0.05878809... /
-     * 0.4762179191123049 / 0.49014104... See [CLASS_NOISE_FLOOR_DERIVATIONS]' KDoc for
-     * why this class's single floor is loose for two thirds of its rows, and why that is
-     * recorded rather than repaired here.
+     * `real` is one of the two `Mode.AverageTime` methods that draw the fan-out curve. Its
+     * five `degree` rows have medians 0.02 to 0.053 and the row that sets its statistic is
+     * `real[degree=D256]`, observed at 0.05344856341208027 / 0.04898584474755644 /
+     * 0.07354653878023955. Its floor is 0.107 against the retired 0.953 — a bound about
+     * nine times tighter, and the concrete measure of what the per-class grain cost this
+     * sub-family.
      */
     ClassNoiseFloor(
         benchmarkClass = "FanOutScalingBenchmark",
+        benchmarkMethod = "real",
+        observedRobustDispersion = 0.05344856341208027,
+        runs = 3,
+        derivedOn = "2026-08-28",
+        harnessCommitSha = "57c860075",
+        hostState = QUIESCED_HOST_STATE,
+        // The class-level `@BenchmarkMode(AverageTime)` `@Fork(5)` 5+5 x 1s that `sim`
+        // and `real` inherit — this method declares no override.
+        jmhConfig = "mode=AverageTime unit=us forks=5 warmup=5x1s measurement=5x1s",
+        measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
+            "(Amazon Corretto; :bench's resolved toolchain launcher)",
+        assembly = DerivationAssembly.WholeClassRuns(runs = 3),
+    ),
+    /**
+     * The `@OperationsPerInvocation(200)` batch method paired with `simBatchFixedState` —
+     * see the `real` entry above for the runs, the ledger and the confirmation. The row
+     * that sets its statistic is `realBatchFixedState[degree=D256]`, observed at
+     * 0.3465268573449362 / 0.4448126689446901 / 0.06600571487591653: two of three repeats
+     * near 0.4, so the median is a reproducible property of the row rather than one
+     * contaminated repeat, which is what [classFloorStatistic] requires. Floor 0.694.
+     *
+     * This sub-family is genuinely the noisiest in the class, and under the method grain
+     * it says so on its own account instead of setting a bound for the fan-out curve.
+     */
+    ClassNoiseFloor(
+        benchmarkClass = "FanOutScalingBenchmark",
+        benchmarkMethod = "realBatchFixedState",
+        observedRobustDispersion = 0.3465268573449362,
+        runs = 3,
+        derivedOn = "2026-08-28",
+        harnessCommitSha = "57c860075",
+        hostState = QUIESCED_HOST_STATE,
+        jmhConfig = "mode=AverageTime unit=us forks=3 warmup=3x1s measurement=6x1s " +
+            "opsPerInvocation=200",
+        measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
+            "(Amazon Corretto; :bench's resolved toolchain launcher)",
+        assembly = DerivationAssembly.WholeClassRuns(runs = 3),
+    ),
+    /**
+     * One of the two `Mode.SingleShotTime` `@Fork(3)` methods — a regime the class-level
+     * annotations do not describe at all, which is the clearest case in the table for
+     * folding at the method. See the `real` entry above for the runs and the ledger.
+     *
+     * The row that sets its statistic is `realFixedState[degree=D16]`, observed at
+     * 0.1776885372889194 / 0.23553487816595828 / 0.2810243813213844. Floor 0.472. Note
+     * that it is the SMALLEST `degree` that sets this sub-family's floor, the opposite of
+     * the `AverageTime` methods above: a single shot at low fan-out is dominated by
+     * fixed costs it cannot amortise, and that is a property of the regime rather than
+     * interference in it.
+     */
+    ClassNoiseFloor(
+        benchmarkClass = "FanOutScalingBenchmark",
+        benchmarkMethod = "realFixedState",
+        observedRobustDispersion = 0.23553487816595828,
+        runs = 3,
+        derivedOn = "2026-08-28",
+        harnessCommitSha = "57c860075",
+        hostState = QUIESCED_HOST_STATE,
+        jmhConfig = "mode=SingleShotTime forks=3 warmup=5 measurement=10",
+        measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
+            "(Amazon Corretto; :bench's resolved toolchain launcher)",
+        assembly = DerivationAssembly.WholeClassRuns(runs = 3),
+    ),
+    /**
+     * The simulated half of the `Mode.AverageTime` fan-out curve — see the `real` entry
+     * above for the runs and the ledger. The row that sets its statistic is
+     * `sim[degree=D64]`, observed at 0.07567183802470076 / 0.05998789587833256 /
+     * 0.07360411934818362. Floor 0.148.
+     *
+     * 0.0736 is the largest per-row median anywhere in this class's `AverageTime`
+     * sub-family, and it is the number `computenet-x9e.18`'s "at or under 0.074" refers
+     * to: under the retired per-class floor of 0.953 these rows were measured against a
+     * bound they could not reach even under heavy interference, so for them the per-class
+     * floor distinguished about as little as the global [NOISE_FLOOR] it replaced. That
+     * is the defect this file opens by describing, arriving from the other end, and it is
+     * what the method grain removes.
+     */
+    ClassNoiseFloor(
+        benchmarkClass = "FanOutScalingBenchmark",
+        benchmarkMethod = "sim",
+        observedRobustDispersion = 0.07360411934818362,
+        runs = 3,
+        derivedOn = "2026-08-28",
+        harnessCommitSha = "57c860075",
+        hostState = QUIESCED_HOST_STATE,
+        jmhConfig = "mode=AverageTime unit=us forks=5 warmup=5x1s measurement=5x1s",
+        measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
+            "(Amazon Corretto; :bench's resolved toolchain launcher)",
+        assembly = DerivationAssembly.WholeClassRuns(runs = 3),
+    ),
+    /**
+     * **The method that set the retired per-class floor of 0.953**, and now the only one
+     * that carries it. See the `real` entry above for the runs and the ledger.
+     *
+     * The row is `simBatchFixedState[degree=D256]`, observed at 0.05878770597834225 /
+     * 0.4762179191123049 / 0.4901410407490696 — two of three repeats near 0.48, so the
+     * row is typical of itself rather than an outlier, which is exactly the case
+     * [classFloorStatistic]'s median is meant to keep and the retired
+     * maximum-over-observations would have exaggerated. Floor 0.953.
+     *
+     * That this number is unchanged is the point of the partition: the class's worst
+     * regime keeps the bound its own measurement supports, and the other five methods
+     * stop being measured against it.
+     */
+    ClassNoiseFloor(
+        benchmarkClass = "FanOutScalingBenchmark",
+        benchmarkMethod = "simBatchFixedState",
         observedRobustDispersion = 0.4762179191123049,
         runs = 3,
         derivedOn = "2026-08-28",
         harnessCommitSha = "57c860075",
         hostState = QUIESCED_HOST_STATE,
-        jmhConfig = "sim/real: mode=AverageTime unit=us forks=5 warmup=5x1s " +
-            "measurement=5x1s; simFixedState/realFixedState: mode=SingleShotTime forks=3 " +
-            "warmup=5 measurement=10; simBatchFixedState/realBatchFixedState: " +
-            "mode=AverageTime unit=us forks=3 warmup=3x1s measurement=6x1s " +
+        jmhConfig = "mode=AverageTime unit=us forks=3 warmup=3x1s measurement=6x1s " +
             "opsPerInvocation=200",
-        // Verbatim from all three run logs' banner, plus the vendor `-version` report —
-        // the same convention, and the same launcher, as the two entries above.
         measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
             "(Amazon Corretto; :bench's resolved toolchain launcher)",
         assembly = DerivationAssembly.WholeClassRuns(runs = 3),
     ),
     /**
-     * `computenet-x9e.17`, 2026-08-28 — the LAST class to come off the global fallback.
-     * Three sequential whole-class runs of
-     * `civictech.bench.micro.OperatorThroughputBenchmark` (72 rows each: `sim` and `real`
-     * over 18 `Subject` constants x 2 `Direction` constants) from
+     * The simulated `Mode.SingleShotTime` method — see `realFixedState` above for why
+     * this regime's floors are high and why the smallest `degree` sets them. The row is
+     * `simFixedState[degree=D16]`, observed at 0.2949310405621919 / 0.3288383063811838 /
+     * 0.3082968565114873, a tight cluster: this is a reproducibly dispersed row, not a
+     * contaminated one. Floor 0.617.
+     */
+    ClassNoiseFloor(
+        benchmarkClass = "FanOutScalingBenchmark",
+        benchmarkMethod = "simFixedState",
+        observedRobustDispersion = 0.3082968565114873,
+        runs = 3,
+        derivedOn = "2026-08-28",
+        harnessCommitSha = "57c860075",
+        hostState = QUIESCED_HOST_STATE,
+        jmhConfig = "mode=SingleShotTime forks=3 warmup=5 measurement=10",
+        measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
+            "(Amazon Corretto; :bench's resolved toolchain launcher)",
+        assembly = DerivationAssembly.WholeClassRuns(runs = 3),
+    ),
+    /**
+     * `computenet-x9e.17`, 2026-08-28 — the last class to come off the global fallback;
+     * re-folded per method 2026-08-30 by `computenet-x9e.18`. Three sequential
+     * whole-class runs of `civictech.bench.micro.OperatorThroughputBenchmark` (72 rows
+     * each: `sim` and `real` over 18 `Subject` constants x 2 `Direction` constants) from
      * `bench/build/libs/bench-jmh.jar` at `551da80f4`, on the pinned host NL-MGD6FQJW91
      * (16 cores, gate threshold 4.00), each preceded by its own attestation of
      * `run-series.sh`'s gate — the readings immediately before the three invocations were
      * 3.98, 3.99 and 3.28 — and each verified after the fact against its own log's
      * `# VM version:` banner, every one of which read
      * `JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS`. The runs took 00:37:11,
-     * 00:37:01 and 00:37:02 by their own JMH `# Run complete.` lines.
+     * 00:37:01 and 00:37:02 by their own JMH `# Run complete.` lines — which is the
+     * quiesced slot the recompute-don't-re-measure decision was weighed against.
      *
      * **Run 1 was measured in an earlier slot, as a calibration, and retained rather than
      * ingested.** That slot's dispatch carried a decision gate — time run 1, continue only
      * if it came in at or under 30 minutes — and 00:37:11 took the stop branch, so nothing
-     * was entered on one run. It is a valid whole-class observation and is ingested here
-     * unchanged because this item ran from the same commit its jar is stamped at, which is
-     * the condition `FloorDerivationLedger` enforces: a derivation may not span two harness
-     * shas. Had `main` moved under this branch first, those artifacts would have BLOCKED
-     * the derivation instead of shortening it, and three fresh runs would have been the
-     * only route.
+     * was entered on one run. It is a valid whole-class observation and was ingested
+     * unchanged because `computenet-x9e.17` ran from the same commit its jar is stamped
+     * at, which is the condition [FloorDerivationLedger] enforces.
      *
-     * Accumulated through [FloorDerivationLedger] (`floorTool plan` / `ingest` / `render`),
-     * which checked the row set COMPLETE against `EXPECTED_PLAN_ROW_COUNTS` (72 rows x 3
-     * observations = 216) and single-JVM / single-harness-sha. Each unit measured the whole
-     * class, so the assembly is [DerivationAssembly.WholeClassRuns]: `computenet-3omz`'s
-     * row-set decomposition was available and, at 72 rows, this class had the strongest
-     * case of the four for using it — `floorTool plan` decomposes it into 18 units of 12
-     * rows — but the slot was dedicated and quiesced, so three whole-class runs cost three
-     * gate attestations instead of eighteen.
+     * Accumulated through [FloorDerivationLedger], which checked the row set COMPLETE
+     * against `EXPECTED_PLAN_ROW_COUNTS` (72 rows x 3 observations = 216) and
+     * single-JVM / single-harness-sha. Raw artifacts:
+     * `$HOME/computenet-runs/floor-derivations/OperatorThroughputBenchmark/`. Re-folding
+     * that ledger at the old whole-class grain reproduces the superseded
+     * 0.05106599919551368 exactly, which is how it was confirmed to be this class's
+     * published input set.
      *
-     * The per-row median that sets the statistic is `sim` at `direction=INSERT`,
-     * `subject=LOOKUP_JOIN`, whose observations across runs 1 / 2 / 3 were
-     * 0.05139115... / 0.005662... / 0.05106599919551368. Two of its three repeats sit at
-     * ~0.051, so the median is a reproducible property of that row rather than one
-     * contaminated repeat — which is what [classFloorStatistic] was chosen to require.
-     * The single LARGEST observation in the set belongs to a different row entirely
-     * (`real`, `RETRACT`, `COALESCING_COMBINE`, 0.07199549750373181, whose other two
-     * repeats are 0.0153 and 0.0075, median 0.0153): under the maximum-over-every-
-     * observation estimator `computenet-3sua` replaced, THAT row would have set the class's
-     * floor at 0.144 on the strength of one repeat.
+     * `real`'s 36 rows are set by `real[direction=INSERT, subject=UNION]`, observed at
+     * 0.027521119935862228 / 0.04671765550789494 / 0.05615832981889777. Floor 0.094
+     * against the retired class floor of 0.103 — a small move, as expected for a class
+     * whose every row is measured under ONE annotation configuration. Note that the
+     * class's largest single observation, 0.07199549750373181 (`real`, `RETRACT`,
+     * `COALESCING_COMBINE`), belongs to this method and does NOT set its floor: that
+     * row's other two repeats are 0.0153 and 0.0075, so its median is 0.0153. Under the
+     * maximum-over-every-observation estimator `computenet-3sua` replaced it would have
+     * set the floor at 0.144 single-handedly.
      */
     ClassNoiseFloor(
         benchmarkClass = "OperatorThroughputBenchmark",
+        benchmarkMethod = "real",
+        observedRobustDispersion = 0.04671765550789494,
+        runs = 3,
+        derivedOn = "2026-08-28",
+        harnessCommitSha = "551da80f4",
+        hostState = QUIESCED_HOST_STATE,
+        jmhConfig = "mode=Throughput unit=ops/s forks=2 warmup=5x1s measurement=10x1s " +
+            "opsPerInvocation=512",
+        measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
+            "(Amazon Corretto; :bench's resolved toolchain launcher)",
+        assembly = DerivationAssembly.WholeClassRuns(runs = 3),
+    ),
+    /**
+     * The simulated half of the same `computenet-x9e.17` derivation — see the `real`
+     * entry above for the runs, the calibration run, the ledger and the confirmation.
+     *
+     * The row that sets its statistic is `sim[direction=INSERT, subject=LOOKUP_JOIN]`,
+     * observed at 0.05139149274325982 / 0.005662117024059593 / 0.05106599919551368. Two
+     * of its three repeats sit at ~0.051, so the median is a reproducible property of
+     * that row. This is the row that set the RETIRED per-class floor, so this method's
+     * 0.103 is numerically the old class floor — recomputed from the ledger, not carried
+     * over.
+     *
+     * **The looseness recorded for this class is NOT repaired by the method grain, and
+     * that is stated rather than corrected.** The median of this method's 36 per-row
+     * medians is about 0.011, roughly an order of magnitude below its own floor. The
+     * spread is `@Param` spread inside one regime — the workload sweep the class exists
+     * to draw — and folding it away is the per-`@Param` grain that was considered and
+     * rejected in [classFloorStatistic]. What the floor is NOT is the previous state: the
+     * global [NOISE_FLOOR] of 0.005 was exceeded by 210 of this class's 216 observations
+     * and by all 72 row medians, so it fired essentially everywhere and separated nothing.
+     */
+    ClassNoiseFloor(
+        benchmarkClass = "OperatorThroughputBenchmark",
+        benchmarkMethod = "sim",
         observedRobustDispersion = 0.05106599919551368,
         runs = 3,
         derivedOn = "2026-08-28",
@@ -878,8 +1093,6 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
         hostState = QUIESCED_HOST_STATE,
         jmhConfig = "mode=Throughput unit=ops/s forks=2 warmup=5x1s measurement=10x1s " +
             "opsPerInvocation=512",
-        // Verbatim from all three run logs' banner, plus the vendor `-version` report —
-        // the same convention, and the same launcher, as the three entries above.
         measuringJvm = "JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS " +
             "(Amazon Corretto; :bench's resolved toolchain launcher)",
         assembly = DerivationAssembly.WholeClassRuns(runs = 3),
@@ -887,87 +1100,113 @@ val CLASS_NOISE_FLOOR_DERIVATIONS: List<ClassNoiseFloor> = listOf(
 )
 
 /**
- * [derivations] indexed by [ClassNoiseFloor.benchmarkClass].
+ * [derivations] indexed by their [ClassNoiseFloor.key] — the (class, `@Benchmark` method)
+ * pair (`computenet-x9e.18`; keyed by class alone until 2026-08-30).
  *
- * Refuses two derivations naming one class: a class with two floors has no floor, and
- * silently keeping the last one would make the resolved bound depend on list order.
+ * Refuses two derivations naming one KEY: a method with two floors has no floor, and
+ * silently keeping the last one would make the resolved bound depend on list order. Two
+ * derivations naming one CLASS are now ordinary and expected — that is what a class of
+ * several `@Benchmark` methods looks like.
  */
-fun floorTable(derivations: List<ClassNoiseFloor>): Map<String, Double> {
-    val duplicated = derivations.groupingBy { it.benchmarkClass }.eachCount()
-        .filterValues { it > 1 }
+fun floorTable(derivations: List<ClassNoiseFloor>): Map<FloorKey, Double> {
+    val duplicated = derivations.groupingBy { it.key }.eachCount().filterValues { it > 1 }
     require(duplicated.isEmpty()) {
-        "each benchmark class may carry at most one derived floor, found " +
-            duplicated.entries.sortedBy { it.key }.joinToString { "'${it.key}' x ${it.value}" }
+        "each (benchmark class, @Benchmark method) pair may carry at most one derived " +
+            "floor, found " +
+            duplicated.entries.sortedBy { it.key.describe() }
+                .joinToString { "'${it.key.describe()}' x ${it.value}" }
     }
-    return derivations.associate { it.benchmarkClass to it.floor }
+    return derivations.associate { it.key to it.floor }
 }
 
 /**
- * The live table, derived from [CLASS_NOISE_FLOOR_DERIVATIONS]. Three classes today —
- * `CellFootprintBenchmark`, `BoundedReadBenchmark` and `FanOutScalingBenchmark`;
- * everything else falls back, `OperatorThroughputBenchmark` included.
+ * The live table, derived from [CLASS_NOISE_FLOOR_DERIVATIONS]: eleven `@Benchmark`
+ * methods across the four classes the procedure names. Everything else falls back to
+ * [NOISE_FLOOR].
  */
-val CLASS_NOISE_FLOOR_TABLE: Map<String, Double> = floorTable(CLASS_NOISE_FLOOR_DERIVATIONS)
+val CLASS_NOISE_FLOOR_TABLE: Map<FloorKey, Double> = floorTable(CLASS_NOISE_FLOOR_DERIVATIONS)
 
 /**
- * The relative-dispersion bound [benchmarkClass]'s rows are classified against: that
- * class's own derived floor where one exists, and [NOISE_FLOOR] where none does.
+ * The relative-dispersion bound a row of [benchmarkClass]'s [benchmarkMethod] is
+ * classified against: that METHOD's own derived floor where one exists, and [NOISE_FLOOR]
+ * where none does.
+ *
+ * **The resolution takes the method as well as the class since `computenet-x9e.18`.** A
+ * caller that knows only the class can no longer be answered honestly: a class of several
+ * `@Benchmark` methods holds several floors, and picking one of them — or folding them
+ * together with a `max` — would restore exactly the per-class bound the grain change
+ * retired. So a `null` or blank [benchmarkMethod] resolves to [NOISE_FLOOR] on the same
+ * footing as a `null` class, rather than to some summary of the class's floors.
  *
  * A `null` or blank [benchmarkClass] is a row whose class is not known to the caller —
  * `Footprint.toResults` builds rows from a walk rather than from a JMH results file, for
  * instance — and resolves to [NOISE_FLOOR]. It is not an error: an unknown class has no
- * class floor by definition, which is exactly the fallback case.
+ * derived floor by definition, which is exactly the fallback case.
  *
  * @param floors the table to resolve against. Defaults to [CLASS_NOISE_FLOOR_TABLE]; the
  *   parameter exists so every branch of the resolution can be exercised on every
- *   `:bench:test` run while the live table is empty — a criterion that executes once in
- *   its life is not pinned.
+ *   `:bench:test` run without depending on what the live table happens to hold — a
+ *   criterion that executes once in its life is not pinned.
  */
 fun noiseFloorFor(
     benchmarkClass: String?,
-    floors: Map<String, Double> = CLASS_NOISE_FLOOR_TABLE,
+    benchmarkMethod: String?,
+    floors: Map<FloorKey, Double> = CLASS_NOISE_FLOOR_TABLE,
 ): Double {
-    if (benchmarkClass.isNullOrBlank()) return NOISE_FLOOR
-    return floors[benchmarkClass] ?: NOISE_FLOOR
+    if (benchmarkClass.isNullOrBlank() || benchmarkMethod.isNullOrBlank()) return NOISE_FLOOR
+    return floors[FloorKey(benchmarkClass, benchmarkMethod)] ?: NOISE_FLOOR
 }
 
 /**
- * Whether [benchmarkClass] resolves to a floor of its own, as opposed to falling back to
- * the global [NOISE_FLOOR].
+ * Whether (`benchmarkClass`, `benchmarkMethod`) resolves to a floor of its own, as
+ * opposed to falling back to the global [NOISE_FLOOR].
  *
- * Distinct from `noiseFloorFor(...) != NOISE_FLOOR`, and deliberately so: a class whose
+ * Distinct from `noiseFloorFor(...) != NOISE_FLOOR`, and deliberately so: a method whose
  * derived floor happens to equal 0.005 has a floor of its own, and a message that called
  * it a fallback would be wrong about where the bound came from.
+ *
+ * The name is kept from the per-class era on purpose — it is the same question asked at
+ * the finer grain, and renaming it would churn every call site and every test name for a
+ * word.
  */
 fun hasClassFloor(
     benchmarkClass: String?,
-    floors: Map<String, Double> = CLASS_NOISE_FLOOR_TABLE,
-): Boolean = !benchmarkClass.isNullOrBlank() && floors.containsKey(benchmarkClass)
+    benchmarkMethod: String?,
+    floors: Map<FloorKey, Double> = CLASS_NOISE_FLOOR_TABLE,
+): Boolean = !benchmarkClass.isNullOrBlank() && !benchmarkMethod.isNullOrBlank() &&
+    floors.containsKey(FloorKey(benchmarkClass, benchmarkMethod))
 
 /**
  * How a rendered note names the bound a row was classified against — which floor, and
- * whether it is the class's own or the global fallback.
+ * whether it is the row's own method's or the global fallback.
  *
  * The two phrasings are different on purpose. `NOISE_FLOOR` is a bit mixer's dispersion
  * on an idle host, so a hosted-graph row above it means almost nothing; a row above its
- * own class's floor means that class was noisier than it is when the machine is quiet.
- * A reader must be able to tell the two statements apart from the text alone.
+ * own method's floor means that benchmark was noisier than it is when the machine is
+ * quiet. A reader must be able to tell the two statements apart from the text alone.
+ *
+ * The derived phrasing names `Class.method`, not the class: two methods of one class can
+ * carry floors an order of magnitude apart (`FanOutScalingBenchmark.sim` at 0.148 against
+ * `.simBatchFixedState` at 0.953), so a note that said only "the FanOutScalingBenchmark
+ * class floor" would not identify the bound it was talking about.
  */
 fun describeFloor(
     benchmarkClass: String?,
-    floors: Map<String, Double> = CLASS_NOISE_FLOOR_TABLE,
+    benchmarkMethod: String?,
+    floors: Map<FloorKey, Double> = CLASS_NOISE_FLOOR_TABLE,
 ): String {
-    val floor = noiseFloorFor(benchmarkClass, floors)
-    return if (hasClassFloor(benchmarkClass, floors)) {
-        "the $benchmarkClass class floor $floor (derived from that class's own quiesced " +
-            "repeat runs)"
+    val floor = noiseFloorFor(benchmarkClass, benchmarkMethod, floors)
+    return if (hasClassFloor(benchmarkClass, benchmarkMethod, floors)) {
+        "the $benchmarkClass.$benchmarkMethod method floor $floor (derived from that " +
+            "method's own quiesced repeat runs)"
     } else {
         "the harness sanity bound NOISE_FLOOR $floor"
     }
 }
 
 /**
- * Classifies [result] against the bound [benchmarkClass] resolves to (`computenet-cm4w`).
+ * Classifies [result] against the bound (`benchmarkClass`, `benchmarkMethod`) resolves to
+ * (`computenet-cm4w`; per-method since `computenet-x9e.18`).
  *
  * The arithmetic is [classifyAgainst]'s and is unchanged from the single-argument
  * [classify]: magnitude of the relative dispersion, non-finite refused explicitly,
@@ -976,8 +1215,10 @@ fun describeFloor(
 fun classify(
     result: BenchResult,
     benchmarkClass: String?,
-    floors: Map<String, Double> = CLASS_NOISE_FLOOR_TABLE,
-): Reportability = classifyAgainst(result, noiseFloorFor(benchmarkClass, floors))
+    benchmarkMethod: String?,
+    floors: Map<FloorKey, Double> = CLASS_NOISE_FLOOR_TABLE,
+): Reportability =
+    classifyAgainst(result, noiseFloorFor(benchmarkClass, benchmarkMethod, floors))
 
 /**
  * The classification arithmetic over an explicit [floor] — the one definition both
@@ -1025,15 +1266,18 @@ fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
         "over all rows, ${derivation.runs} observations each"
     }
     appendLine(
-        "## ${derivation.derivedOn} — per-class noise floor for " +
-            "`${derivation.benchmarkClass}`, derived forward from its own quiesced " +
-            "repeat runs"
+        "## ${derivation.derivedOn} — per-method noise floor for " +
+            "`${derivation.benchmarkClass}.${derivation.benchmarkMethod}`, derived " +
+            "forward from its own quiesced repeat runs"
     )
     appendLine(
         "Harness: ${derivation.harnessCommitSha} · host state ${derivation.hostState} · " +
             "$gathering"
     )
-    appendLine("JMH: ${derivation.jmhConfig} (the class's own annotation configuration)")
+    appendLine(
+        "JMH: ${derivation.jmhConfig} (this @Benchmark method's own annotation " +
+            "configuration, class-level defaults included)"
+    )
     // The measuring JVM is rendered, not left to prose, because a prose caveat is exactly
     // what was missing when a floor derived under JBR 25 shipped as if it described the
     // toolchain JDK (computenet-7v7m). See ClassNoiseFloor.measuringJvm.
@@ -1041,8 +1285,8 @@ fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
     appendLine("| quantity | value |")
     appendLine("| --- | --- |")
     appendLine(
-        "| statistic (max over rows of the per-row MEDIAN relative dispersion) " +
-            "$statisticOver | ${derivation.observedRobustDispersion} |"
+        "| statistic (max over this METHOD's rows of the per-row MEDIAN relative " +
+            "dispersion) $statisticOver | ${derivation.observedRobustDispersion} |"
     )
     appendLine("| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | $CLASS_FLOOR_MARGIN |")
     appendLine(
@@ -1051,19 +1295,23 @@ fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
     )
     appendLine(
         "Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions " +
-            "across its repeats, then the MAXIMUM of those medians across the class's " +
-            "rows. Robust within a row (one contaminated repeat cannot set a class's " +
-            "floor), conservative across rows (a reproducibly high-dispersion row is a " +
-            "fact about the class, not noise in it). Pre-registered in " +
+            "across its repeats, then the MAXIMUM of those medians across the rows of " +
+            "ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat " +
+            "cannot set a floor), conservative across rows (a reproducibly " +
+            "high-dispersion row is a fact about the method, not noise in it), and " +
+            "partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/" +
+            "`@Measurement` are method-level, so a method is the unit that carries one " +
+            "measurement regime (`computenet-x9e.18`). Pre-registered in " +
             "`ClassNoiseFloor.kt` before it was computed over any measurement — see " +
             "`classFloorStatistic`'s own documentation for the argument, which is made " +
             "from robustness and never from the value the statistic yields."
     )
     appendLine(
         "Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any " +
-            "per-class number existed; the floor is computed from the statistic by " +
+            "derived number existed; the floor is computed from the statistic by " +
             "`ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a " +
-            "quiesced host, every row of `${derivation.benchmarkClass}` measured under " +
+            "quiesced host, every row of " +
+            "`${derivation.benchmarkClass}.${derivation.benchmarkMethod}` measured under " +
             "this configuration had a TYPICAL (median) relative dispersion at or under " +
             "${derivation.observedRobustDispersion}, so a later row above " +
             "${derivation.floor} is more dispersed than this class typically is when the " +
@@ -1072,8 +1320,10 @@ fun renderDerivation(derivation: ClassNoiseFloor): String = buildString {
             "does not bound the sample it is drawn from, and single high repeats are " +
             "exactly what this estimator declines to build a floor on. Nor anything about " +
             "another " +
-            "benchmark class, about this class under a different annotation " +
-            "configuration, about this class on another host, or about this class under " +
+            "benchmark class or another `@Benchmark` method of this one — including a " +
+            "sibling method of the same class, whose floor is derived separately and " +
+            "may differ by an order of magnitude — about this method under a different " +
+            "annotation configuration, about it on another host, or about it under " +
             "a JVM other than ${derivation.measuringJvm}."
     )
 }

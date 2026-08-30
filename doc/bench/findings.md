@@ -6218,3 +6218,270 @@ Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corr
 Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the class's rows. Robust within a row (one contaminated repeat cannot set a class's floor), conservative across rows (a reproducibly high-dispersion row is a fact about the class, not noise in it). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
 Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any per-class number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `OperatorThroughputBenchmark` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.05106599919551368, so a later row above 0.103 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.05106599919551368 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class, about this class under a different annotation configuration, about this class on another host, or about this class under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
 Gathering window: all 3 unit(s) measured on ONE UTC day, 2026-08-28T01:53:50.359Z to 2026-08-28T05:36:06.001Z — the single `derivedOn` date describes this set.
+
+## 2026-08-30 — `classFloorStatistic` folds per `@Benchmark` METHOD, and the whole floor table is re-derived (`computenet-x9e.18`)
+
+**What changed.** The floor's across-row fold moves from "every row of the benchmark
+class" to "the rows of one `@Benchmark` method". A class that declares several
+`@Benchmark` methods now carries several floors, and the resolution key is the pair
+`(class, method)` — `FloorKey` — rather than the class alone. The four-entry per-class
+table becomes an eleven-entry per-method one.
+
+**The ground for it, stated as a principle rather than as a response to a number.** A
+floor must span ONE MEASUREMENT REGIME, and in JMH the annotation configuration that
+defines a regime is per-method: `@BenchmarkMode`, `@Fork`, `@Warmup` and `@Measurement`
+are method-level, and a method-level one overrides the class-level default for that method
+alone. Folding per method therefore folds within a regime instead of across several.
+`@Param` variation WITHIN a method is the workload sweep the class exists to draw, and
+those rows are meant to be comparable against one bound, which is why the fold stops at the
+method and does not go on to `@Param`.
+
+**Per-`@Param` was considered and REJECTED.** On a 30-row class a per-`@Param` fold
+approaches one floor per row, and a row cannot detect its own interference against a bound
+derived from itself. At that grain the quantity stops being an estimate and becomes
+per-row self-calibration.
+
+**The ordering, which is the whole guarantee — the same one `computenet-3sua` rests on.**
+The grain was decided by the maintainer on 2026-08-29 and recorded on `computenet-x9e.18`
+before any number under any candidate finer grain had been computed. The session that
+raised the question deliberately did not compute one and did not recommend a grain, on the
+ground that a recommendation from whoever is holding the numbers is exactly the influence
+the pre-registration exists to exclude. Everything below that reports what a floor came out
+to is an OUTCOME of the rule and may not be used to revisit it.
+
+**No fresh measurement: this is arithmetic over retained artifacts.** Every published
+floor's per-observation data was retained and carries its `@Benchmark` method and `@Param`
+values as separate structured fields, which is exactly the structure a per-method fold
+needs. Re-measuring the four classes would have cost many hours of dedicated quiesced slot
+(`OperatorThroughputBenchmark` alone is 3 x ~37 minutes by its own JMH `# Run complete.`
+lines) and buys nothing a recomputation does not already have. Consequently every
+provenance field on every entry — the date of the RUNS, the harness sha, the host state,
+the measuring JVM, the assembly — is carried across unchanged; only the method, the row set
+folded, and the resulting statistic are new.
+
+**No grandfathering.** The table carries ONE statistic across all of it. Every entry was
+re-derived, including `CellFootprintBenchmark`'s, whose number did not move.
+
+### Which input set each class was re-derived from, and how that was confirmed
+
+The confirmation is arithmetic, not attestation. A method partition of a class's rows
+cannot move a `max`-across-rows fold, so **the largest per-method statistic within a class
+must reproduce that class's superseded per-class statistic bit for bit.** It does, for all
+four, and a wrong input set would not satisfy it. This check is committed as a test
+(`ClassNoiseFloorTest.eleven per-method floors are derived, and everything else still falls
+back`), so it cannot rot into a claim nobody re-runs.
+
+| class | input set | old whole-class statistic reproduced |
+| --- | --- | --- |
+| `CellFootprintBenchmark` | `$HOME/computenet-runs/computenet-7v7m/cellfootprint-{1,2,3}.json` (JMH JSON, jar at `a7c6a0382`) | 0.19864889236475775 |
+| `BoundedReadBenchmark` | `$HOME/computenet-runs/floor-derivations/BoundedReadBenchmark/ledger.txt` (v2, 6 rows x 3, sha `19055b951`) | 0.028527147482145923 |
+| `FanOutScalingBenchmark` | `$HOME/computenet-runs/floor-derivations/FanOutScalingBenchmark/ledger.txt` (v2, 30 rows x 3, sha `57c860075`) | 0.4762179191123049 |
+| `OperatorThroughputBenchmark` | `$HOME/computenet-runs/floor-derivations/OperatorThroughputBenchmark/ledger.txt` (v2, 72 rows x 3, sha `551da80f4`) | 0.05106599919551368 |
+
+Each of the three ledgers was additionally checked to be format v2, complete at exactly
+3 observations for every planned row, and single-harness-sha, with its observed row set
+equal to its planned row set.
+
+**The trap, and that it did not fire.** `$HOME/computenet-runs/floor-derivations/CellFootprintBenchmark/`
+is **NOT** the derivation the committed 0.398 comes from (`computenet-xppx`). It holds
+`computenet-3omz.4`'s ledger-machinery exercise — v1 format, measured 2026-08-26 from a jar
+at harness sha `5a2fdccfd`, under the estimator `computenet-3sua` later replaced. It is
+complete, well-formed, internally consistent and row-count-matching, so **nothing refuses
+it**; folded under `classFloorStatistic` it yields 0.485, not 0.398. Its observations differ
+row by row from the published ones (OR_MAP_CELL at `N1E5` reads 0.2425 / 0.1002 / 0.2843
+there against the published 0.5218 / 0.1186 / 0.1986). This re-derivation used
+`computenet-7v7m`'s JSONs instead, and the 0.19864889236475775 control above is what proves
+it: had that directory been folded, the control would have read 0.2425.
+
+### What the finer grain actually changed, per class
+
+| class | retired class floor | per-method floors |
+| --- | --- | --- |
+| `CellFootprintBenchmark` | 0.398 | `realSnapshot` 0.398 |
+| `BoundedReadBenchmark` | 0.058 | `realDirect` 0.052 · `realHostedSnapshotOf` 0.058 |
+| `FanOutScalingBenchmark` | 0.953 | `sim` 0.148 · `real` 0.107 · `simFixedState` 0.617 · `realFixedState` 0.472 · `simBatchFixedState` 0.953 · `realBatchFixedState` 0.694 |
+| `OperatorThroughputBenchmark` | 0.103 | `sim` 0.103 · `real` 0.094 |
+
+**`CellFootprintBenchmark` did not move, and that is the cleanest evidence the change is a
+partition rather than a re-estimation.** The class declares one `@Benchmark`, so its 21 rows
+were already one regime and there was nothing to partition. A class of one method keeping a
+single unchanged floor is an outcome of the rule, not a special case exempted from it.
+
+**`FanOutScalingBenchmark` is the class the defect was noticed on, and the numbers say what
+the retired grain cost.** Its single floor of 0.953 was set by
+`simBatchFixedState[degree=D256]`, while the `Mode.AverageTime` `sim`/`real` rows — the
+fan-out curve the class exists to draw — sat at or under 0.074 and so were measured against
+a bound roughly nine times looser than themselves, distinguishing about as little as the
+global `NOISE_FLOOR` it replaced. Under the method grain those two get 0.148 and 0.107, and
+the three sub-families separate exactly along the annotation boundaries that define them:
+`@BenchmarkMode(AverageTime)` `@Fork(5)`; `@BenchmarkMode(SingleShotTime)` `@Fork(3)`; and
+`@OperationsPerInvocation(200)` `@Fork(3)`. Nothing was arranged — the partition is by
+`@Benchmark` method and the regimes fell out of it, which is the grain argument made
+visible.
+
+**`OperatorThroughputBenchmark`'s looseness is NOT repaired by this change, and is not
+claimed to be.** Every row of that class is measured under one annotation configuration, so
+its two methods really are one regime and the split is small. Its 72 per-row medians still
+span a factor of about ten WITHIN each method, and the typical row still sits roughly an
+order of magnitude below its floor. That spread is `@Param` spread inside a regime — the
+workload sweep — and folding it away is the per-`@Param` grain rejected above.
+
+### What these floors do NOT say
+
+As under every previous grain, a floor is **not a bound on the individual observations it
+was drawn from** — a median does not bound its own sample, and several of these rows were
+measured above their own method's statistic (`realSnapshot` OR_MAP_CELL `N1E5` at 0.522
+against 0.199; `simBatchFixedState` `D256` at 0.490 against 0.476; `realDirect` `N1E5` at
+0.0408 against 0.0255). And an entry now says nothing about a **sibling method of its own
+class**: `FanOutScalingBenchmark.sim` at 0.148 and `.simBatchFixedState` at 0.953 are
+separately derived quantities an order of magnitude apart, and reading either as covering
+the class would be wrong by that factor. Nor does any entry say anything about its method on
+another host, under `-prof gc`, or under any `@Fork`/iteration count other than the one its
+own `jmhConfig` names.
+
+**A method with no derived floor falls back to `NOISE_FLOOR`, including a method of a
+DERIVED class.** That fallback case did not exist under the per-class key and is deliberate:
+resolving an unmeasured method to a sibling method's floor would apply a bound derived from a
+different measurement regime, which is the whole defect this change removes. `noiseFloorFor`
+likewise refuses a caller that names only a class — it returns the global bound rather than
+picking or folding the class's floors.
+
+### The eleven entries, rendered from the records
+
+The blocks below are reproduced verbatim from `renderDerivation`, as step 4 of the procedure
+in `ClassNoiseFloor.kt` requires, so a published floor is arithmetically its record's
+`ClassNoiseFloor.floor` and the two cannot drift. Every earlier per-class block in this file
+is left in place and is superseded by these; none was edited.
+
+## 2026-08-26 — per-method noise floor for `CellFootprintBenchmark.realSnapshot`, derived forward from its own quiesced repeat runs
+Harness: a7c6a0382 · host state quiesced · 3 sequential repeat runs
+JMH: mode=AverageTime unit=us forks=1 warmup=3x1s measurement=5x1s (this @Benchmark method's own annotation configuration, class-level defaults included)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| statistic (max over this METHOD's rows of the per-row MEDIAN relative dispersion) over all rows of all 3 runs | 0.19864889236475775 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x statistic, rounded up to three decimals | 0.398 |
+Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the rows of ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat cannot set a floor), conservative across rows (a reproducibly high-dispersion row is a fact about the method, not noise in it), and partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` are method-level, so a method is the unit that carries one measurement regime (`computenet-x9e.18`). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `CellFootprintBenchmark.realSnapshot` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.19864889236475775, so a later row above 0.398 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.19864889236475775 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
+
+## 2026-08-27 — per-method noise floor for `BoundedReadBenchmark.realDirect`, derived forward from its own quiesced repeat runs
+Harness: 19055b951 · host state quiesced · 3 sequential repeat runs
+JMH: mode=AverageTime unit=ms forks=5 warmup=5x1s measurement=5x1s (this @Benchmark method's own annotation configuration, class-level defaults included)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| statistic (max over this METHOD's rows of the per-row MEDIAN relative dispersion) over all rows of all 3 runs | 0.02552534622609911 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x statistic, rounded up to three decimals | 0.052 |
+Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the rows of ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat cannot set a floor), conservative across rows (a reproducibly high-dispersion row is a fact about the method, not noise in it), and partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` are method-level, so a method is the unit that carries one measurement regime (`computenet-x9e.18`). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `BoundedReadBenchmark.realDirect` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.02552534622609911, so a later row above 0.052 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.02552534622609911 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
+
+## 2026-08-27 — per-method noise floor for `BoundedReadBenchmark.realHostedSnapshotOf`, derived forward from its own quiesced repeat runs
+Harness: 19055b951 · host state quiesced · 3 sequential repeat runs
+JMH: mode=AverageTime unit=ms forks=5 warmup=5x1s measurement=5x1s (this @Benchmark method's own annotation configuration, class-level defaults included)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| statistic (max over this METHOD's rows of the per-row MEDIAN relative dispersion) over all rows of all 3 runs | 0.028527147482145923 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x statistic, rounded up to three decimals | 0.058 |
+Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the rows of ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat cannot set a floor), conservative across rows (a reproducibly high-dispersion row is a fact about the method, not noise in it), and partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` are method-level, so a method is the unit that carries one measurement regime (`computenet-x9e.18`). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `BoundedReadBenchmark.realHostedSnapshotOf` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.028527147482145923, so a later row above 0.058 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.028527147482145923 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
+
+## 2026-08-28 — per-method noise floor for `FanOutScalingBenchmark.real`, derived forward from its own quiesced repeat runs
+Harness: 57c860075 · host state quiesced · 3 sequential repeat runs
+JMH: mode=AverageTime unit=us forks=5 warmup=5x1s measurement=5x1s (this @Benchmark method's own annotation configuration, class-level defaults included)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| statistic (max over this METHOD's rows of the per-row MEDIAN relative dispersion) over all rows of all 3 runs | 0.05344856341208027 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x statistic, rounded up to three decimals | 0.107 |
+Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the rows of ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat cannot set a floor), conservative across rows (a reproducibly high-dispersion row is a fact about the method, not noise in it), and partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` are method-level, so a method is the unit that carries one measurement regime (`computenet-x9e.18`). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `FanOutScalingBenchmark.real` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.05344856341208027, so a later row above 0.107 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.05344856341208027 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
+
+## 2026-08-28 — per-method noise floor for `FanOutScalingBenchmark.realBatchFixedState`, derived forward from its own quiesced repeat runs
+Harness: 57c860075 · host state quiesced · 3 sequential repeat runs
+JMH: mode=AverageTime unit=us forks=3 warmup=3x1s measurement=6x1s opsPerInvocation=200 (this @Benchmark method's own annotation configuration, class-level defaults included)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| statistic (max over this METHOD's rows of the per-row MEDIAN relative dispersion) over all rows of all 3 runs | 0.3465268573449362 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x statistic, rounded up to three decimals | 0.694 |
+Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the rows of ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat cannot set a floor), conservative across rows (a reproducibly high-dispersion row is a fact about the method, not noise in it), and partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` are method-level, so a method is the unit that carries one measurement regime (`computenet-x9e.18`). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `FanOutScalingBenchmark.realBatchFixedState` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.3465268573449362, so a later row above 0.694 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.3465268573449362 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
+
+## 2026-08-28 — per-method noise floor for `FanOutScalingBenchmark.realFixedState`, derived forward from its own quiesced repeat runs
+Harness: 57c860075 · host state quiesced · 3 sequential repeat runs
+JMH: mode=SingleShotTime forks=3 warmup=5 measurement=10 (this @Benchmark method's own annotation configuration, class-level defaults included)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| statistic (max over this METHOD's rows of the per-row MEDIAN relative dispersion) over all rows of all 3 runs | 0.23553487816595828 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x statistic, rounded up to three decimals | 0.472 |
+Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the rows of ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat cannot set a floor), conservative across rows (a reproducibly high-dispersion row is a fact about the method, not noise in it), and partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` are method-level, so a method is the unit that carries one measurement regime (`computenet-x9e.18`). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `FanOutScalingBenchmark.realFixedState` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.23553487816595828, so a later row above 0.472 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.23553487816595828 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
+
+## 2026-08-28 — per-method noise floor for `FanOutScalingBenchmark.sim`, derived forward from its own quiesced repeat runs
+Harness: 57c860075 · host state quiesced · 3 sequential repeat runs
+JMH: mode=AverageTime unit=us forks=5 warmup=5x1s measurement=5x1s (this @Benchmark method's own annotation configuration, class-level defaults included)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| statistic (max over this METHOD's rows of the per-row MEDIAN relative dispersion) over all rows of all 3 runs | 0.07360411934818362 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x statistic, rounded up to three decimals | 0.148 |
+Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the rows of ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat cannot set a floor), conservative across rows (a reproducibly high-dispersion row is a fact about the method, not noise in it), and partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` are method-level, so a method is the unit that carries one measurement regime (`computenet-x9e.18`). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `FanOutScalingBenchmark.sim` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.07360411934818362, so a later row above 0.148 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.07360411934818362 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
+
+## 2026-08-28 — per-method noise floor for `FanOutScalingBenchmark.simBatchFixedState`, derived forward from its own quiesced repeat runs
+Harness: 57c860075 · host state quiesced · 3 sequential repeat runs
+JMH: mode=AverageTime unit=us forks=3 warmup=3x1s measurement=6x1s opsPerInvocation=200 (this @Benchmark method's own annotation configuration, class-level defaults included)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| statistic (max over this METHOD's rows of the per-row MEDIAN relative dispersion) over all rows of all 3 runs | 0.4762179191123049 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x statistic, rounded up to three decimals | 0.953 |
+Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the rows of ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat cannot set a floor), conservative across rows (a reproducibly high-dispersion row is a fact about the method, not noise in it), and partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` are method-level, so a method is the unit that carries one measurement regime (`computenet-x9e.18`). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `FanOutScalingBenchmark.simBatchFixedState` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.4762179191123049, so a later row above 0.953 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.4762179191123049 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
+
+## 2026-08-28 — per-method noise floor for `FanOutScalingBenchmark.simFixedState`, derived forward from its own quiesced repeat runs
+Harness: 57c860075 · host state quiesced · 3 sequential repeat runs
+JMH: mode=SingleShotTime forks=3 warmup=5 measurement=10 (this @Benchmark method's own annotation configuration, class-level defaults included)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| statistic (max over this METHOD's rows of the per-row MEDIAN relative dispersion) over all rows of all 3 runs | 0.3082968565114873 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x statistic, rounded up to three decimals | 0.617 |
+Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the rows of ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat cannot set a floor), conservative across rows (a reproducibly high-dispersion row is a fact about the method, not noise in it), and partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` are method-level, so a method is the unit that carries one measurement regime (`computenet-x9e.18`). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `FanOutScalingBenchmark.simFixedState` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.3082968565114873, so a later row above 0.617 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.3082968565114873 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
+
+## 2026-08-28 — per-method noise floor for `OperatorThroughputBenchmark.real`, derived forward from its own quiesced repeat runs
+Harness: 551da80f4 · host state quiesced · 3 sequential repeat runs
+JMH: mode=Throughput unit=ops/s forks=2 warmup=5x1s measurement=10x1s opsPerInvocation=512 (this @Benchmark method's own annotation configuration, class-level defaults included)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| statistic (max over this METHOD's rows of the per-row MEDIAN relative dispersion) over all rows of all 3 runs | 0.04671765550789494 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x statistic, rounded up to three decimals | 0.094 |
+Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the rows of ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat cannot set a floor), conservative across rows (a reproducibly high-dispersion row is a fact about the method, not noise in it), and partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` are method-level, so a method is the unit that carries one measurement regime (`computenet-x9e.18`). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `OperatorThroughputBenchmark.real` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.04671765550789494, so a later row above 0.094 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.04671765550789494 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
+
+## 2026-08-28 — per-method noise floor for `OperatorThroughputBenchmark.sim`, derived forward from its own quiesced repeat runs
+Harness: 551da80f4 · host state quiesced · 3 sequential repeat runs
+JMH: mode=Throughput unit=ops/s forks=2 warmup=5x1s measurement=10x1s opsPerInvocation=512 (this @Benchmark method's own annotation configuration, class-level defaults included)
+Measured under: JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher)
+| quantity | value |
+| --- | --- |
+| statistic (max over this METHOD's rows of the per-row MEDIAN relative dispersion) over all rows of all 3 runs | 0.05106599919551368 |
+| margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0 |
+| derived floor = margin x statistic, rounded up to three decimals | 0.103 |
+Estimator: `classFloorStatistic` — the MEDIAN of each row's relative dispersions across its repeats, then the MAXIMUM of those medians across the rows of ONE `@Benchmark` METHOD. Robust within a row (one contaminated repeat cannot set a floor), conservative across rows (a reproducibly high-dispersion row is a fact about the method, not noise in it), and partitioned by method because `@BenchmarkMode`/`@Fork`/`@Warmup`/`@Measurement` are method-level, so a method is the unit that carries one measurement regime (`computenet-x9e.18`). Pre-registered in `ClassNoiseFloor.kt` before it was computed over any measurement — see `classFloorStatistic`'s own documentation for the argument, which is made from robustness and never from the value the statistic yields.
+Derivation: forward. The margin was fixed in `ClassNoiseFloor.kt` before any derived number existed; the floor is computed from the statistic by `ClassNoiseFloor.floor` and is not hand-entered. What it establishes: on a quiesced host, every row of `OperatorThroughputBenchmark.sim` measured under this configuration had a TYPICAL (median) relative dispersion at or under 0.05106599919551368, so a later row above 0.103 is more dispersed than this class typically is when the machine is quiet. What it does NOT establish: that no individual observation in the derivation exceeded 0.05106599919551368 — a median does not bound the sample it is drawn from, and single high repeats are exactly what this estimator declines to build a floor on. Nor anything about another benchmark class or another `@Benchmark` method of this one — including a sibling method of the same class, whose floor is derived separately and may differ by an order of magnitude — about this method under a different annotation configuration, about it on another host, or about it under a JVM other than JDK 21.0.5, OpenJDK 64-Bit Server VM, 21.0.5+11-LTS (Amazon Corretto; :bench's resolved toolchain launcher).
+

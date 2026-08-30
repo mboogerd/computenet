@@ -512,6 +512,7 @@ private fun kotlinStringLiteral(value: String): String =
 fun renderConstructorCall(record: ClassNoiseFloor): String = buildString {
     appendLine("ClassNoiseFloor(")
     appendLine("    benchmarkClass = ${kotlinStringLiteral(record.benchmarkClass)},")
+    appendLine("    benchmarkMethod = ${kotlinStringLiteral(record.benchmarkMethod)},")
     appendLine("    observedRobustDispersion = ${record.observedRobustDispersion},")
     appendLine("    runs = ${record.runs},")
     appendLine("    derivedOn = ${kotlinStringLiteral(record.derivedOn)},")
@@ -931,13 +932,21 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
         val map = parseFlags(argv)
         val existing = map["existing"]
         var ledgerRendered: FloorDerivationLedger? = null
-        val record = if (existing != null) {
-            CLASS_NOISE_FLOOR_DERIVATIONS.firstOrNull { it.benchmarkClass == existing }
-                ?: throw FloorLedgerException(
+        val records = if (existing != null) {
+            // `--existing` names either a whole class — every one of its methods' entries,
+            // which is what a class of several @Benchmark methods now holds — or a single
+            // `Class.method`. Both forms are accepted because both are things a reader
+            // wants to reproduce, and the dotted one is the only way to ask for one entry
+            // of a multi-method class (`computenet-x9e.18`).
+            CLASS_NOISE_FLOOR_DERIVATIONS.filter {
+                it.benchmarkClass == existing || it.key.describe() == existing
+            }.ifEmpty {
+                throw FloorLedgerException(
                     "no entry for '$existing' in CLASS_NOISE_FLOOR_DERIVATIONS; the " +
-                        "classes with one are " +
-                        CLASS_NOISE_FLOOR_DERIVATIONS.map { it.benchmarkClass }.sorted()
+                        "derived floors are " +
+                        CLASS_NOISE_FLOOR_DERIVATIONS.map { it.key.describe() }.sorted()
                 )
+            }
         } else {
             val ledger = FloorDerivationLedger.load(File(required(map, "ledger")))
             ledgerRendered = ledger
@@ -961,21 +970,29 @@ which honours quoting, so a value containing spaces must be quoted INSIDE it:
             // subset, and calling that "N sequential repeat runs" is the false sentence
             // this replaces.
             val units = ledger.units.size
-            derived.copy(
-                assembly = if (units == CLASS_FLOOR_OBSERVATIONS_PER_ROW) {
-                    DerivationAssembly.WholeClassRuns(runs = units)
-                } else {
-                    DerivationAssembly.UnitAssembled(units = units)
-                },
-            )
+            derived.map { record ->
+                record.copy(
+                    assembly = if (units == CLASS_FLOOR_OBSERVATIONS_PER_ROW) {
+                        DerivationAssembly.WholeClassRuns(runs = units)
+                    } else {
+                        DerivationAssembly.UnitAssembled(units = units)
+                    },
+                )
+            }
         }
         // What the record's single fields cannot say, said before the block the operator
         // pastes rather than left to a caveat somewhere else (`computenet-tdby`).
         ledgerRendered?.renderWarnings()?.forEach { out.appendLine("WARNING: $it") }
-        out.appendLine(renderConstructorCall(record))
+        // One constructor call and one findings block PER @Benchmark METHOD. A ledger over
+        // a multi-method class renders several of each, and they are printed in the order
+        // `render` returns them (by method name) so a re-run is byte-identical.
+        records.forEach { out.appendLine(renderConstructorCall(it)) }
         out.appendLine()
         out.appendLine("--- findings.md block ---")
-        out.append(renderDerivation(record))
+        records.forEachIndexed { index, record ->
+            if (index > 0) out.appendLine()
+            out.append(renderDerivation(record))
+        }
         // The gathering window goes INSIDE the block, not beside it. `derivedOn` is one
         // date and a decomposed set spans many; a span printed only on the console is a
         // span that never reaches findings.md, which is the file every later reader

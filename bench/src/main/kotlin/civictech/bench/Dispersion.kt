@@ -131,12 +131,15 @@ enum class Reportability {
  * `NaN` case instead of accidentally depending on the same IEEE 754 behavior that
  * caused it.
  *
- * **This overload always uses the GLOBAL bound.** A row whose benchmark class is known
- * should go through `classify(result, benchmarkClass)` instead (`computenet-cm4w`),
- * which resolves that class's own derived floor where one exists and falls back to
- * [NOISE_FLOOR] where none does. This overload is what a caller holding no class — a
+ * **This overload always uses the GLOBAL bound.** A row whose benchmark class AND
+ * `@Benchmark` method are known
+ * should go through `classify(result, benchmarkClass, benchmarkMethod)` instead
+ * (`computenet-cm4w`; per-method since `computenet-x9e.18`),
+ * which resolves that METHOD's own derived floor where one exists and falls back to
+ * [NOISE_FLOOR] where none does. This overload is what a caller holding no benchmark — a
  * footprint row built from a heap walk rather than a JMH results file — reaches, and it
- * is what every class resolves to while `CLASS_NOISE_FLOOR_DERIVATIONS` is empty. The
+ * is also what the three-argument form returns for any method not in the table, including
+ * an unmeasured method of a class whose SIBLING methods are derived. The
  * arithmetic is shared: both overloads reach [classifyAgainst], so the sign and
  * non-finite refusals documented above have exactly one definition.
  */

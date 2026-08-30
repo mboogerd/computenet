@@ -1,6 +1,8 @@
 package civictech.bench
 
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.matchers.comparables.shouldBeGreaterThan
+import io.kotest.matchers.doubles.shouldBeLessThanOrEqual
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
@@ -8,13 +10,14 @@ import io.kotest.matchers.string.shouldNotContain
 import org.junit.jupiter.api.Test
 
 /**
- * Every branch of the per-class noise-floor machinery (`computenet-cm4w`).
+ * Every branch of the per-`@Benchmark`-method noise-floor machinery (`computenet-cm4w`;
+ * the fold's grain moved from the class to the method in `computenet-x9e.18`).
  *
  * **Deliberately untagged**, so it runs on every `:bench:test` — the same reason
  * `IterationLengthCriterionTest` (computenet-bzwx) is untagged. A resolution rule that
  * only executes when someone runs a sweep is auditable but not tested: nothing in the six
  * required checks would catch a refactor that inverted the fallback, and the live table
- * being empty means the class-floor branch would otherwise never execute at all. The
+ * being empty means the derived-floor branch would otherwise never execute at all. The
  * resolution functions take their floor table as a defaulted parameter precisely so this
  * suite can drive both branches against synthetic tables today.
  */
@@ -47,6 +50,7 @@ class ClassNoiseFloorTest {
 
     private fun derivation(
         benchmarkClass: String = "OperatorThroughputBenchmark",
+        benchmarkMethod: String = "m",
         observed: Double = 0.03,
         runs: Int = CLASS_FLOOR_MIN_RUNS,
         hostState: String = QUIESCED_HOST_STATE,
@@ -54,6 +58,7 @@ class ClassNoiseFloorTest {
         assembly: DerivationAssembly? = null,
     ): ClassNoiseFloor = ClassNoiseFloor(
         benchmarkClass = benchmarkClass,
+        benchmarkMethod = benchmarkMethod,
         observedRobustDispersion = observed,
         runs = runs,
         derivedOn = "2026-09-01",
@@ -198,65 +203,66 @@ class ClassNoiseFloorTest {
     }
 
     /**
-     * The live table, pinned row by row (`computenet-ahn0`). This replaces the
+     * The live table, pinned entry by entry (`computenet-ahn0`, re-grained by
+     * `computenet-x9e.18`). This replaces the
      * "nothing is derived yet" tripwire the machinery landed with: that assertion was
      * true only while [CLASS_NOISE_FLOOR_DERIVATIONS] was empty, and it went red by
      * design the moment a real derivation landed. What has to stay pinned is not the
-     * emptiness but the *resolution* — which classes carry a floor of their own, what
-     * that floor is, and that every other class still falls back — so a later change
+     * emptiness but the *resolution* — which BENCHMARK METHODS carry a floor of their own,
+     * what that floor is, and that everything else still falls back — so a later change
      * that populated, dropped or altered an entry cannot pass unnoticed.
      *
-     * The floor is asserted as the arithmetic of the record, never as a hand-typed
+     * Every floor is asserted as the arithmetic of its record, never as a hand-typed
      * literal: `2.0 x 0.19864889236475775 = 0.3972977847…`, rounded UP to 0.398.
      *
-     * `CellFootprintBenchmark`'s observations are `computenet-7v7m`'s three runs under the
-     * module's toolchain JDK 21; the STATISTIC over them is `computenet-3sua`'s
-     * re-derivation under `classFloorStatistic`, which replaced the previous
-     * maximum-over-every-observation and moved this entry from 0.5217864937179187 / 1.044
-     * to 0.19864889236475775 / 0.398 with no new measurement — the same 63 retained
-     * observations, read by a different (and pre-registered) estimator. `computenet-ahn0`'s 0.2961501149112133 / 0.593 was
-     * measured under JBR 25.0.2 and is superseded, not retained as a second entry — so
-     * the pin on the measuring JVM below is part of what this test protects.
+     * **The table is keyed by (class, `@Benchmark` method) since 2026-08-30.** Its eleven
+     * entries were RE-DERIVED under that grain by recomputation from the same retained
+     * observations the superseded per-class entries came from — no benchmark was
+     * re-measured. The confirmation that each class's input set was the right one is
+     * arithmetic and is asserted below in the shape it was actually performed: the LARGEST
+     * per-method statistic within a class reconstructs that class's retired per-class
+     * statistic exactly, because the method partition is a partition and the across-row
+     * fold is a `max`. A wrong input set — such as `computenet-3omz.4`'s ledger exercise
+     * sitting under `floor-derivations/CellFootprintBenchmark/`, which folds to 0.485 —
+     * would not satisfy it.
      *
-     * `BoundedReadBenchmark` was added by `computenet-akfa` (2026-08-27): three sequential
-     * whole-class quiesced runs at `19055b951`, gathered AFTER `classFloorStatistic` was
-     * committed, so it is a first derivation rather than a re-reading and there is no
-     * second statistic in this table. Its assertions below are the same three — the class
-     * list, the floor as the ARITHMETIC of the record, and the measuring JVM — because
-     * what has to stay pinned is the resolution, per class, not the count of entries.
+     * `CellFootprintBenchmark` declares one `@Benchmark`, `realSnapshot`, so the grain
+     * change moved nothing on it: still 0.19864889236475775 / 0.398 from
+     * `computenet-7v7m`'s three toolchain-JDK-21 runs, as `computenet-3sua` re-derived it.
+     * `computenet-ahn0`'s 0.2961501149112133 / 0.593 was measured under JBR 25.0.2 and is
+     * superseded, not retained as a second entry — so the pin on the measuring JVM below
+     * is part of what this test protects.
      *
-     * `FanOutScalingBenchmark` was added by the same item on its own dedicated slot
-     * (2026-08-28, three whole-class runs at `57c860075`), and is pinned the same way. Its
-     * floor is the largest in the table by a wide margin and is LOOSE for two thirds of
-     * its own rows — see `CLASS_NOISE_FLOOR_DERIVATIONS`' KDoc, which records that rather
-     * than repairing it. The pin below therefore protects a number nobody should be
-     * tempted to tidy: any change to it has to come from three new quiesced runs or from a
-     * deliberate, separately decided change to `classFloorStatistic`'s across-row fold.
+     * `FanOutScalingBenchmark` is the class the grain change was noticed on, and the pins
+     * on its six methods are the ones nobody should be tempted to tidy. Its retired single
+     * floor of 0.953 now belongs to `simBatchFixedState` alone, while the
+     * `Mode.AverageTime` fan-out curve the class exists to draw — `sim` and `real` — sits
+     * at 0.148 and 0.107, roughly nine times tighter than the bound those rows used to be
+     * measured against.
      *
-     * `OperatorThroughputBenchmark` was added by `computenet-x9e.17` (2026-08-28, three
-     * whole-class runs at `551da80f4`) and completes the table: **every class the
-     * procedure names now carries its own floor**, which is why the fallback half of this
-     * test names `SmokeBenchmark` rather than a procedure class. That substitution is the
-     * point of the half, not a weakening of it — the resolution rule has to keep working
-     * for a class with no derivation, and if the only witness were a class the table
-     * happens not to hold yet, the half would evaporate the day the table filled up.
+     * The fallback half names `SmokeBenchmark` — the real, live instance, from which
+     * `NOISE_FLOOR` was derived and which the procedure deliberately does not name — plus
+     * an UNDERIVED METHOD of a derived class, which is a fallback case the per-class grain
+     * could not express at all.
      */
     @Test
-    fun `four class floors are derived, and every other class still falls back`() {
-        CLASS_NOISE_FLOOR_DERIVATIONS.map { it.benchmarkClass } shouldBe
+    fun `eleven per-method floors are derived, and everything else still falls back`() {
+        CLASS_NOISE_FLOOR_DERIVATIONS.map { it.key.describe() } shouldBe
             listOf(
-                "CellFootprintBenchmark",
-                "BoundedReadBenchmark",
-                "FanOutScalingBenchmark",
-                "OperatorThroughputBenchmark",
+                "CellFootprintBenchmark.realSnapshot",
+                "BoundedReadBenchmark.realDirect",
+                "BoundedReadBenchmark.realHostedSnapshotOf",
+                "FanOutScalingBenchmark.real",
+                "FanOutScalingBenchmark.realBatchFixedState",
+                "FanOutScalingBenchmark.realFixedState",
+                "FanOutScalingBenchmark.sim",
+                "FanOutScalingBenchmark.simBatchFixedState",
+                "FanOutScalingBenchmark.simFixedState",
+                "OperatorThroughputBenchmark.real",
+                "OperatorThroughputBenchmark.sim",
             )
         CLASS_NOISE_FLOOR_TABLE.keys shouldBe
-            setOf(
-                "CellFootprintBenchmark",
-                "BoundedReadBenchmark",
-                "FanOutScalingBenchmark",
-                "OperatorThroughputBenchmark",
-            )
+            CLASS_NOISE_FLOOR_DERIVATIONS.map { it.key }.toSet()
 
         // Everything true of EVERY derived entry, asserted over the whole list rather
         // than over one of them: a rule stated about the table must not quietly become a
@@ -272,59 +278,95 @@ class ClassNoiseFloorTest {
             // could say so.
             derived.measuringJvm shouldContain "21.0.5"
             derived.measuringJvm shouldContain "Amazon Corretto"
-            hasClassFloor(derived.benchmarkClass) shouldBe true
-            noiseFloorFor(derived.benchmarkClass) shouldBe derived.floor
+            hasClassFloor(derived.benchmarkClass, derived.benchmarkMethod) shouldBe true
+            noiseFloorFor(derived.benchmarkClass, derived.benchmarkMethod) shouldBe derived.floor
         }
 
-        val cellFootprint =
-            CLASS_NOISE_FLOOR_DERIVATIONS.single { it.benchmarkClass == "CellFootprintBenchmark" }
-        cellFootprint.observedRobustDispersion shouldBe 0.19864889236475775
-        // A pin on the published number, not a second definition of it: it must equal the
-        // arithmetic asserted above. Still a loose bound — see CLASS_NOISE_FLOOR_DERIVATIONS'
-        // KDoc, which states why, and why the tightening from 1.044 is an OUTCOME of the
-        // estimator rather than a reason it was chosen.
-        noiseFloorFor("CellFootprintBenchmark") shouldBe 0.398
+        // --- The eleven statistics and floors, per method.
+        val expected = mapOf(
+            FloorKey("CellFootprintBenchmark", "realSnapshot") to
+                (0.19864889236475775 to 0.398),
+            FloorKey("BoundedReadBenchmark", "realDirect") to
+                (0.02552534622609911 to 0.052),
+            FloorKey("BoundedReadBenchmark", "realHostedSnapshotOf") to
+                (0.028527147482145923 to 0.058),
+            FloorKey("FanOutScalingBenchmark", "real") to
+                (0.05344856341208027 to 0.107),
+            FloorKey("FanOutScalingBenchmark", "realBatchFixedState") to
+                (0.3465268573449362 to 0.694),
+            FloorKey("FanOutScalingBenchmark", "realFixedState") to
+                (0.23553487816595828 to 0.472),
+            FloorKey("FanOutScalingBenchmark", "sim") to
+                (0.07360411934818362 to 0.148),
+            FloorKey("FanOutScalingBenchmark", "simBatchFixedState") to
+                (0.4762179191123049 to 0.953),
+            FloorKey("FanOutScalingBenchmark", "simFixedState") to
+                (0.3082968565114873 to 0.617),
+            FloorKey("OperatorThroughputBenchmark", "real") to
+                (0.04671765550789494 to 0.094),
+            FloorKey("OperatorThroughputBenchmark", "sim") to
+                (0.05106599919551368 to 0.103),
+        )
+        CLASS_NOISE_FLOOR_DERIVATIONS.forEach { derived ->
+            val (statistic, floor) = expected.getValue(derived.key)
+            derived.observedRobustDispersion shouldBe statistic
+            noiseFloorFor(derived.benchmarkClass, derived.benchmarkMethod) shouldBe floor
+            // Every one of these floors is an order of magnitude or more above the global
+            // bound, which is exactly the "distinguishes nothing" failure the derived
+            // floors exist to fix.
+            noiseFloorFor(derived.benchmarkClass, derived.benchmarkMethod) shouldNotBe NOISE_FLOOR
+        }
 
-        val boundedRead =
-            CLASS_NOISE_FLOOR_DERIVATIONS.single { it.benchmarkClass == "BoundedReadBenchmark" }
-        boundedRead.observedRobustDispersion shouldBe 0.028527147482145923
-        // 2 x 0.028527147482145923 = 0.057054…, rounded UP to 0.058.
-        noiseFloorFor("BoundedReadBenchmark") shouldBe 0.058
-        // Every one of this class's 18 observations exceeds the global bound, which is
-        // exactly the "distinguishes nothing" failure the per-class floor exists to fix;
-        // the class's own floor is an order of magnitude above it.
-        noiseFloorFor("BoundedReadBenchmark") shouldNotBe NOISE_FLOOR
+        // --- The re-derivation's own confirmation, asserted rather than described.
+        //
+        // A method partition of a class's rows cannot move a `max`-across-rows fold, so
+        // the largest per-method statistic within a class IS that class's retired
+        // per-class statistic. Each of these four numbers is the one the superseded entry
+        // published, which is how the input set behind each class was confirmed to be the
+        // one its published entry came from — and, for CellFootprintBenchmark, how the
+        // `floor-derivations/CellFootprintBenchmark/` trap (which folds to 0.485) was
+        // shown NOT to be the set used.
+        mapOf(
+            "CellFootprintBenchmark" to 0.19864889236475775,
+            "BoundedReadBenchmark" to 0.028527147482145923,
+            "FanOutScalingBenchmark" to 0.4762179191123049,
+            "OperatorThroughputBenchmark" to 0.05106599919551368,
+        ).forEach { (benchmarkClass, retiredStatistic) ->
+            CLASS_NOISE_FLOOR_DERIVATIONS
+                .filter { it.benchmarkClass == benchmarkClass }
+                .maxOf { it.observedRobustDispersion } shouldBe retiredStatistic
+        }
 
-        val fanOut =
-            CLASS_NOISE_FLOOR_DERIVATIONS.single { it.benchmarkClass == "FanOutScalingBenchmark" }
-        fanOut.observedRobustDispersion shouldBe 0.4762179191123049
-        // 2 x 0.4762179191123049 = 0.9524358…, rounded UP to 0.953.
-        noiseFloorFor("FanOutScalingBenchmark") shouldBe 0.953
-        noiseFloorFor("FanOutScalingBenchmark") shouldNotBe NOISE_FLOOR
-
-        val throughput =
-            CLASS_NOISE_FLOOR_DERIVATIONS.single {
-                it.benchmarkClass == "OperatorThroughputBenchmark"
-            }
-        throughput.observedRobustDispersion shouldBe 0.05106599919551368
-        // 2 x 0.05106599919551368 = 0.10213199…, rounded UP to 0.103.
-        noiseFloorFor("OperatorThroughputBenchmark") shouldBe 0.103
-        // 210 of this class's 216 observations, and all 72 of its row medians, exceed the
-        // global bound — the "distinguishes nothing" failure at its most pronounced.
-        noiseFloorFor("OperatorThroughputBenchmark") shouldNotBe NOISE_FLOOR
+        // --- The finer grain, stated as the property it was adopted for.
+        //
+        // FanOutScalingBenchmark's `Mode.AverageTime` sub-family and its
+        // `@OperationsPerInvocation` batch sub-family no longer share one floor. This is
+        // the shape `computenet-x9e.18`'s acceptance names: an AverageTime sub-family
+        // whose statistics sit at or under 0.074 alongside a simBatchFixedState row near
+        // 0.476.
+        val fanOut = CLASS_NOISE_FLOOR_DERIVATIONS.filter {
+            it.benchmarkClass == "FanOutScalingBenchmark"
+        }
+        fanOut.size shouldBe 6
+        val averageTime = fanOut.filter { it.benchmarkMethod in setOf("sim", "real") }
+        averageTime.forEach { it.observedRobustDispersion shouldBeLessThanOrEqual 0.074 }
+        val batch = fanOut.single { it.benchmarkMethod == "simBatchFixedState" }
+        batch.observedRobustDispersion shouldBe 0.4762179191123049
+        averageTime.forEach { it.floor shouldNotBe batch.floor }
+        // And the tightening is real, not cosmetic: every AverageTime row is measured
+        // against a bound at least six times tighter than the retired class floor.
+        averageTime.forEach { (batch.floor / it.floor) shouldBeGreaterThan 6.0 }
 
         // The fallback path is NOT dead now that every class the procedure names is
-        // derived: a class outside the table still resolves globally, which is what keeps
-        // `hasClassFloor` a statement about provenance rather than about membership of a
-        // list that happens to be complete today. `SmokeBenchmark` is the real, live
-        // instance — `NOISE_FLOOR` was derived FROM it, and the procedure deliberately
-        // does not name it.
-        for (undrived in listOf(
-            "SmokeBenchmark",
-        )) {
-            hasClassFloor(undrived) shouldBe false
-            noiseFloorFor(undrived) shouldBe NOISE_FLOOR
-        }
+        // derived: something outside the table still resolves globally, which is what
+        // keeps `hasClassFloor` a statement about provenance rather than about membership
+        // of a list that happens to be complete today.
+        hasClassFloor("SmokeBenchmark", "baseline") shouldBe false
+        noiseFloorFor("SmokeBenchmark", "baseline") shouldBe NOISE_FLOOR
+        // A DERIVED class, and a method of it that carries no floor — a fallback case the
+        // retired per-class key could not express at all.
+        hasClassFloor("FanOutScalingBenchmark", "notAMethodOfThisClass") shouldBe false
+        noiseFloorFor("FanOutScalingBenchmark", "notAMethodOfThisClass") shouldBe NOISE_FLOOR
     }
 
     // ---- The derivation record ---------------------------------------------------------
@@ -380,6 +422,7 @@ class ClassNoiseFloorTest {
         shouldThrow<IllegalArgumentException> {
             ClassNoiseFloor(
                 benchmarkClass = "X",
+                benchmarkMethod = "m",
                 observedRobustDispersion = 0.01,
                 runs = 3,
                 derivedOn = "",
@@ -392,6 +435,7 @@ class ClassNoiseFloorTest {
         shouldThrow<IllegalArgumentException> {
             ClassNoiseFloor(
                 benchmarkClass = "X",
+                benchmarkMethod = "m",
                 observedRobustDispersion = 0.01,
                 runs = 3,
                 derivedOn = "2026-09-01",
@@ -419,53 +463,107 @@ class ClassNoiseFloorTest {
     // ---- The table ---------------------------------------------------------------------
 
     @Test
-    fun `floorTable indexes derivations by class`() {
+    fun `floorTable indexes derivations by class AND @Benchmark method`() {
         val table = floorTable(
             listOf(
-                derivation(benchmarkClass = "A", observed = 0.03),
-                derivation(benchmarkClass = "B", observed = 0.075),
+                derivation(benchmarkClass = "A", benchmarkMethod = "one", observed = 0.03),
+                derivation(benchmarkClass = "B", benchmarkMethod = "one", observed = 0.075),
             )
         )
-        table shouldBe mapOf("A" to 0.06, "B" to 0.15)
+        table shouldBe mapOf(
+            FloorKey("A", "one") to 0.06,
+            FloorKey("B", "one") to 0.15,
+        )
+    }
+
+    /**
+     * Two methods of ONE class are ordinary since `computenet-x9e.18` — that is what a
+     * class of several `@Benchmark` methods looks like — and they keep separate floors
+     * rather than collapsing into one entry.
+     */
+    @Test
+    fun `floorTable admits two methods of one class and keeps their floors apart`() {
+        val table = floorTable(
+            listOf(
+                derivation(benchmarkClass = "A", benchmarkMethod = "quiet", observed = 0.03),
+                derivation(benchmarkClass = "A", benchmarkMethod = "noisy", observed = 0.4),
+            )
+        )
+        table shouldBe mapOf(
+            FloorKey("A", "quiet") to 0.06,
+            FloorKey("A", "noisy") to 0.8,
+        )
     }
 
     @Test
-    fun `floorTable refuses two derivations naming one class`() {
+    fun `floorTable refuses two derivations naming one class AND method`() {
         val thrown = shouldThrow<IllegalArgumentException> {
             floorTable(
                 listOf(
-                    derivation(benchmarkClass = "A", observed = 0.03),
-                    derivation(benchmarkClass = "A", observed = 0.09),
+                    derivation(benchmarkClass = "A", benchmarkMethod = "one", observed = 0.03),
+                    derivation(benchmarkClass = "A", benchmarkMethod = "one", observed = 0.09),
                 )
             )
         }
-        thrown.message!! shouldContain "'A' x 2"
+        thrown.message!! shouldContain "'A.one' x 2"
+    }
+
+    @Test
+    fun `a record cannot be built without naming its @Benchmark method`() {
+        val thrown = shouldThrow<IllegalArgumentException> { derivation(benchmarkMethod = "  ") }
+        thrown.message!! shouldContain "benchmarkMethod must not be blank"
     }
 
     // ---- Resolution: the class floor, and the fallback ----------------------------------
 
     @Test
-    fun `a class with a derived floor resolves to it, not to the global bound`() {
+    fun `a method with a derived floor resolves to it, not to the global bound`() {
         val floors = floorTable(listOf(derivation(benchmarkClass = "Hosted", observed = 0.03)))
-        noiseFloorFor("Hosted", floors) shouldBe 0.06
-        hasClassFloor("Hosted", floors) shouldBe true
+        noiseFloorFor("Hosted", "m", floors) shouldBe 0.06
+        hasClassFloor("Hosted", "m", floors) shouldBe true
     }
 
     @Test
-    fun `a class with no derived floor falls back to the global bound`() {
+    fun `a method with no derived floor falls back to the global bound`() {
         val floors = floorTable(listOf(derivation(benchmarkClass = "Hosted", observed = 0.03)))
-        noiseFloorFor("Unlisted", floors) shouldBe NOISE_FLOOR
-        hasClassFloor("Unlisted", floors) shouldBe false
+        noiseFloorFor("Unlisted", "m", floors) shouldBe NOISE_FLOOR
+        hasClassFloor("Unlisted", "m", floors) shouldBe false
+        // A DERIVED class, but a method of it that carries no floor: the class half of
+        // the key matching is not enough, which is the whole content of the finer grain.
+        noiseFloorFor("Hosted", "unmeasured", floors) shouldBe NOISE_FLOOR
+        hasClassFloor("Hosted", "unmeasured", floors) shouldBe false
     }
 
+    /**
+     * A caller that knows only the class gets the FALLBACK, never a summary of the
+     * class's floors (`computenet-x9e.18`).
+     *
+     * This is the refusal that keeps the grain change real. A class of several methods
+     * holds several floors, and answering a class-only caller with the largest of them —
+     * or with any of them — would silently restore the retired per-class bound at exactly
+     * the call sites the change was made for.
+     */
     @Test
-    fun `a null or blank class is the fallback case, not an error`() {
-        val floors = floorTable(listOf(derivation(benchmarkClass = "Hosted", observed = 0.03)))
-        noiseFloorFor(null, floors) shouldBe NOISE_FLOOR
-        noiseFloorFor("", floors) shouldBe NOISE_FLOOR
-        noiseFloorFor("   ", floors) shouldBe NOISE_FLOOR
-        hasClassFloor(null, floors) shouldBe false
-        hasClassFloor("", floors) shouldBe false
+    fun `a null or blank class OR method is the fallback case, not an error`() {
+        val floors = floorTable(
+            listOf(
+                derivation(benchmarkClass = "Hosted", benchmarkMethod = "quiet", observed = 0.03),
+                derivation(benchmarkClass = "Hosted", benchmarkMethod = "noisy", observed = 0.4),
+            )
+        )
+        noiseFloorFor(null, "quiet", floors) shouldBe NOISE_FLOOR
+        noiseFloorFor("", "quiet", floors) shouldBe NOISE_FLOOR
+        noiseFloorFor("   ", "quiet", floors) shouldBe NOISE_FLOOR
+        // The class is derived and carries two floors; naming no method resolves to
+        // neither of them and to no fold of them.
+        noiseFloorFor("Hosted", null, floors) shouldBe NOISE_FLOOR
+        noiseFloorFor("Hosted", "", floors) shouldBe NOISE_FLOOR
+        noiseFloorFor("Hosted", "  ", floors) shouldBe NOISE_FLOOR
+        noiseFloorFor("Hosted", null, floors) shouldNotBe 0.8
+        hasClassFloor(null, "quiet", floors) shouldBe false
+        hasClassFloor("", "quiet", floors) shouldBe false
+        hasClassFloor("Hosted", null, floors) shouldBe false
+        hasClassFloor("Hosted", "", floors) shouldBe false
     }
 
     /**
@@ -477,7 +575,7 @@ class ClassNoiseFloorTest {
      * looking correct on every hosted-graph class. The class floor WINS, both ways.
      */
     @Test
-    fun `where the class floor and the global bound disagree, the class floor decides`() {
+    fun `where the derived floor and the global bound disagree, the derived floor decides`() {
         val looser = floorTable(listOf(derivation(benchmarkClass = "Hosted", observed = 0.03)))
         val tighter = floorTable(listOf(derivation(benchmarkClass = "Quiet", observed = 0.001)))
 
@@ -485,13 +583,13 @@ class ClassNoiseFloorTest {
         // own class's floor. Global bound says Unreportable, class floor says Reportable.
         val dispersed = rowAt(0.03)
         classify(dispersed) shouldBe Reportability.Unreportable
-        classify(dispersed, "Hosted", looser) shouldBe Reportability.Reportable
+        classify(dispersed, "Hosted", "m", looser) shouldBe Reportability.Reportable
 
         // Tighter class floor (0.002): a row at 0.004 is under the global 0.005 and above
         // its own class's floor. The verdicts swap sides.
         val tight = rowAt(0.004)
         classify(tight) shouldBe Reportability.Reportable
-        classify(tight, "Quiet", tighter) shouldBe Reportability.Unreportable
+        classify(tight, "Quiet", "m", tighter) shouldBe Reportability.Unreportable
     }
 
     @Test
@@ -499,10 +597,27 @@ class ClassNoiseFloorTest {
         // 2 x 0.0025 = 0.005, exactly NOISE_FLOOR — yet this class HAS a floor of its own,
         // and a message calling it a fallback would misstate where the bound came from.
         val floors = floorTable(listOf(derivation(benchmarkClass = "Coincident", observed = 0.0025)))
-        noiseFloorFor("Coincident", floors) shouldBe NOISE_FLOOR
-        hasClassFloor("Coincident", floors) shouldBe true
-        describeFloor("Coincident", floors) shouldContain "Coincident class floor"
-        describeFloor("Elsewhere", floors) shouldContain "NOISE_FLOOR"
+        noiseFloorFor("Coincident", "m", floors) shouldBe NOISE_FLOOR
+        hasClassFloor("Coincident", "m", floors) shouldBe true
+        describeFloor("Coincident", "m", floors) shouldContain "Coincident.m method floor"
+        describeFloor("Elsewhere", "m", floors) shouldContain "NOISE_FLOOR"
+    }
+
+    /**
+     * The rendered note names `Class.method`, because the class alone does not identify
+     * the bound any more: `FanOutScalingBenchmark.sim` and
+     * `FanOutScalingBenchmark.simBatchFixedState` sit at 0.148 and 0.953.
+     */
+    @Test
+    fun `describeFloor names the method, so two floors of one class cannot be confused`() {
+        val floors = floorTable(
+            listOf(
+                derivation(benchmarkClass = "Fan", benchmarkMethod = "sim", observed = 0.03),
+                derivation(benchmarkClass = "Fan", benchmarkMethod = "batch", observed = 0.4),
+            )
+        )
+        describeFloor("Fan", "sim", floors) shouldContain "Fan.sim method floor 0.06"
+        describeFloor("Fan", "batch", floors) shouldContain "Fan.batch method floor 0.8"
     }
 
     // ---- The shared arithmetic ---------------------------------------------------------
@@ -512,7 +627,7 @@ class ClassNoiseFloorTest {
         // relativeDispersion == -0.5; "-0.5 > floor" is false, which would pass it.
         val negative = result(value = -100.0, dispersion = 50.0)
         classifyAgainst(negative, NOISE_FLOOR) shouldBe Reportability.Unreportable
-        classify(negative, "Anything") shouldBe Reportability.Unreportable
+        classify(negative, "Anything", "m") shouldBe Reportability.Unreportable
     }
 
     @Test
@@ -520,14 +635,14 @@ class ClassNoiseFloorTest {
         // value == 0.0 and dispersion == 0.0 make the ratio NaN, and "NaN > floor" is false.
         val nan = result(value = 0.0, dispersion = 0.0)
         classifyAgainst(nan, NOISE_FLOOR) shouldBe Reportability.Unreportable
-        classify(nan, "Anything") shouldBe Reportability.Unreportable
+        classify(nan, "Anything", "m") shouldBe Reportability.Unreportable
     }
 
     @Test
     fun `a row exactly AT its floor is Reportable, strictly above is not`() {
         val floors = floorTable(listOf(derivation(benchmarkClass = "Hosted", observed = 0.03)))
-        classify(rowAt(0.06), "Hosted", floors) shouldBe Reportability.Reportable
-        classify(rowAt(0.0600001), "Hosted", floors) shouldBe Reportability.Unreportable
+        classify(rowAt(0.06), "Hosted", "m", floors) shouldBe Reportability.Reportable
+        classify(rowAt(0.0600001), "Hosted", "m", floors) shouldBe Reportability.Unreportable
     }
 
     @Test
@@ -557,17 +672,19 @@ class ClassNoiseFloorTest {
         val d = derivation(benchmarkClass = "OperatorThroughputBenchmark", observed = 0.03)
         val text = renderDerivation(d)
 
-        text shouldContain "## 2026-09-01 — per-class noise floor for `OperatorThroughputBenchmark`"
+        text shouldContain
+            "## 2026-09-01 — per-method noise floor for `OperatorThroughputBenchmark.m`"
         text shouldContain "host state quiesced"
         // This asserted "3 sequential repeat runs" until computenet-71hu. The fixture
         // states no assembly, and the block no longer claims one on its behalf; the three
         // assembly cases each have their own test below.
         text shouldContain "3 observations of every row"
-        text shouldContain "the class's own annotation configuration"
+        text shouldContain "this @Benchmark method's own annotation configuration"
         // The block NAMES the estimator, both in the table row and in its own paragraph:
         // a findings table that carries one statistic has to say which one, and a reader
         // must not have to open the source to find out (`computenet-3sua`).
-        text shouldContain "statistic (max over rows of the per-row MEDIAN relative dispersion)"
+        text shouldContain
+            "statistic (max over this METHOD's rows of the per-row MEDIAN relative dispersion)"
         text shouldContain "0.03"
         text shouldContain "margin, fixed before the runs (CLASS_FLOOR_MARGIN) | 2.0"
         text shouldContain "derived floor = margin x statistic, rounded up to three decimals | 0.06"
@@ -578,7 +695,12 @@ class ClassNoiseFloorTest {
         // stopped being a maximum over every observation.
         text shouldContain "a median does not bound the sample it is drawn from"
         text shouldContain "What it does NOT establish"
-        text shouldContain "another benchmark class"
+        text shouldContain "another benchmark class or another `@Benchmark` method of this one"
+        // The limits clause names the SIBLING-METHOD case explicitly: since
+        // `computenet-x9e.18` two methods of one class carry separately derived floors,
+        // and a reader who took one entry as covering its whole class would be wrong by
+        // an order of magnitude on `FanOutScalingBenchmark`.
+        text shouldContain "sibling method of the same class"
     }
 
     /**

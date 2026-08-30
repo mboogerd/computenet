@@ -273,7 +273,7 @@ class FloorDerivationLedgerTest {
                 }
             }
 
-            val rendered = ledger.render(
+            val rendered = ledger.renderAcrossMethods(
                 derivedOn = "2026-08-27",
                 harnessCommitSha = "abcdef012",
                 jmhConfig = "mode=AverageTime forks=1 warmup=3x1s measurement=5x1s",
@@ -305,12 +305,12 @@ class FloorDerivationLedgerTest {
         }
 
         val args = Triple("2026-08-27", "abcdef012", "mode=AverageTime forks=1")
-        split.render(args.first, args.second, args.third) shouldBe
-            whole.render(args.first, args.second, args.third)
+        split.renderAcrossMethods(args.first, args.second, args.third) shouldBe
+            whole.renderAcrossMethods(args.first, args.second, args.third)
         // Every row carries {0.011, 0.047, 0.023}; its median is 0.023, and the across-row
         // maximum of identical medians is that. 0.047 is the row's worst repeat and no
         // longer sets the floor (`computenet-3sua`).
-        split.render(args.first, args.second, args.third).floor shouldBe
+        split.renderAcrossMethods(args.first, args.second, args.third).floor shouldBe
             roundUpToThreeDecimals(CLASS_FLOOR_MARGIN * 0.023)
     }
 
@@ -329,7 +329,7 @@ class FloorDerivationLedgerTest {
         ledger.ingest(unit("u3"), csv(listOf(syntheticRows.first() to 0.03)))
 
         val refusal = shouldThrow<FloorLedgerException> {
-            ledger.render("2026-08-27", "abcdef012", "mode=AverageTime forks=1")
+            ledger.renderAcrossMethods("2026-08-27", "abcdef012", "mode=AverageTime forks=1")
         }
         // Each outstanding row NAMED, with its own count — not "incomplete".
         refusal.message!! shouldContain "alpha[scale=N1E4] = 2/3"
@@ -360,13 +360,13 @@ class FloorDerivationLedgerTest {
             ledger.ingest(unit("last-$run"), csv(listOf(last to 0.01)))
             ledger.isComplete() shouldBe false
             shouldThrow<FloorLedgerException> {
-                ledger.render("2026-08-27", "abcdef012", "cfg")
+                ledger.renderAcrossMethods("2026-08-27", "abcdef012", "cfg")
             }
         }
 
         ledger.ingest(unit("last-final"), csv(listOf(last to 0.01)))
         ledger.isComplete() shouldBe true
-        ledger.render("2026-08-27", "abcdef012", "cfg").observedRobustDispersion shouldBe 0.01
+        ledger.renderAcrossMethods("2026-08-27", "abcdef012", "cfg").observedRobustDispersion shouldBe 0.01
     }
 
     @Test
@@ -375,7 +375,7 @@ class FloorDerivationLedgerTest {
         ledger.ingest(unit("u1"), csv(syntheticRows.dropLast(1).map { it to 0.01 }))
 
         val refusal = shouldThrow<FloorLedgerException> {
-            ledger.render("2026-08-27", "abcdef012", "cfg")
+            ledger.renderAcrossMethods("2026-08-27", "abcdef012", "cfg")
         }
         refusal.message!! shouldContain "beta[scale=N1E3] = 0/3"
     }
@@ -396,7 +396,7 @@ class FloorDerivationLedgerTest {
         // row carries {0.01, 0.02, 0.03}, so the per-row median is 0.02 — and the refused
         // fourth observation of 0.9 is absent from it in both senses, having been rejected
         // AND being the kind of single high value the median would have discarded anyway.
-        ledger.render("2026-08-27", "abcdef012", "cfg")
+        ledger.renderAcrossMethods("2026-08-27", "abcdef012", "cfg")
             .observedRobustDispersion shouldBe 0.02
     }
 
@@ -471,7 +471,7 @@ class FloorDerivationLedgerTest {
 
         ledger.isComplete() shouldBe true
         val refusal = shouldThrow<FloorLedgerException> {
-            ledger.render("2026-08-27", "abcdef012", "cfg")
+            ledger.renderAcrossMethods("2026-08-27", "abcdef012", "cfg")
         }
         refusal.message!! shouldContain "span 2 measuring JVMs"
         refusal.message!! shouldContain "25.0.2"
@@ -496,7 +496,7 @@ class FloorDerivationLedgerTest {
 
     @Test
     fun `a derivation whose every unit names one JVM renders that JVM verbatim`(@TempDir dir: File) {
-        completeLedger(dir).render("2026-08-27", "abcdef012", "cfg").measuringJvm shouldBe jdk21
+        completeLedger(dir).renderAcrossMethods("2026-08-27", "abcdef012", "cfg").measuringJvm shouldBe jdk21
     }
 
     // -----------------------------------------------------------------------------------
@@ -528,7 +528,7 @@ class FloorDerivationLedgerTest {
     ) {
         val ledger = ledgerAtShas(dir, listOf("aaaa111", "aaaa111", "bbbb222"))
 
-        val refusal = shouldThrow<FloorLedgerException> { ledger.render("2026-08-27", null, "cfg") }
+        val refusal = shouldThrow<FloorLedgerException> { ledger.renderAcrossMethods("2026-08-27", null, "cfg") }
         refusal.message!! shouldContain "span 2 harness shas"
         refusal.message!! shouldContain "aaaa111"
         refusal.message!! shouldContain "bbbb222"
@@ -545,7 +545,7 @@ class FloorDerivationLedgerTest {
         val ledger = ledgerAtShas(dir, listOf("aaaa111", "aaaa111", "aaaa111"))
 
         val refusal = shouldThrow<FloorLedgerException> {
-            ledger.render("2026-08-27", "deadbeef", "cfg")
+            ledger.renderAcrossMethods("2026-08-27", "deadbeef", "cfg")
         }
         refusal.message!! shouldContain "deadbeef"
         refusal.message!! shouldContain "aaaa111"
@@ -558,9 +558,9 @@ class FloorDerivationLedgerTest {
     ) {
         val ledger = ledgerAtShas(dir, listOf("aaaa111", "aaaa111", "aaaa111"))
 
-        ledger.render("2026-08-27", null, "cfg").harnessCommitSha shouldBe "aaaa111"
+        ledger.renderAcrossMethods("2026-08-27", null, "cfg").harnessCommitSha shouldBe "aaaa111"
         // Agreeing with it is not an error — only disagreeing is.
-        ledger.render("2026-08-27", "aaaa111", "cfg").harnessCommitSha shouldBe "aaaa111"
+        ledger.renderAcrossMethods("2026-08-27", "aaaa111", "cfg").harnessCommitSha shouldBe "aaaa111"
         ledger.renderWarnings() shouldBe emptyList()
     }
 
@@ -624,14 +624,14 @@ class FloorDerivationLedgerTest {
         downgradeToV1(ledger)
         val reloaded = FloorDerivationLedger.load(dir, syntheticCounts)
 
-        shouldThrow<FloorLedgerException> { reloaded.render("2026-08-27", null, "cfg") }
+        shouldThrow<FloorLedgerException> { reloaded.renderAcrossMethods("2026-08-27", null, "cfg") }
             .message!! shouldContain "recorded a harness sha"
         // Supplying one does not help: this is the computenet-8rel fix. A caller-typed
         // --harness-sha for an all-v1 ledger is not attestation — nothing in the ledger
         // corroborates it — so render() refuses outright rather than publish it, naming the
         // remedy.
         val refused = shouldThrow<FloorLedgerException> {
-            reloaded.render("2026-08-27", "abcdef012", "cfg")
+            reloaded.renderAcrossMethods("2026-08-27", "abcdef012", "cfg")
         }
         refused.message!! shouldContain "recorded a harness sha"
         refused.message!! shouldContain "Re-measure"
@@ -657,7 +657,7 @@ class FloorDerivationLedgerTest {
         downgradeToV1(ledger)
         val reloaded = FloorDerivationLedger.load(dir, syntheticCounts)
 
-        shouldThrow<FloorLedgerException> { reloaded.render("2026-08-27", "deadbeef", "cfg") }
+        shouldThrow<FloorLedgerException> { reloaded.renderAcrossMethods("2026-08-27", "deadbeef", "cfg") }
 
         reloaded.renderWarnings() shouldBe emptyList()
     }
@@ -699,7 +699,7 @@ class FloorDerivationLedgerTest {
         // A blank derivedOn passes every one of render()'s own checks — the row set is
         // complete, one JVM, and the sha resolves to the units' own attestation — and is
         // refused only inside ClassNoiseFloor's constructor.
-        shouldThrow<IllegalArgumentException> { reloaded.render("", null, "cfg") }
+        shouldThrow<IllegalArgumentException> { reloaded.renderAcrossMethods("", null, "cfg") }
             .message shouldContain "derivedOn must not be blank"
 
         reloaded.renderWarnings() shouldBe emptyList()
@@ -723,7 +723,7 @@ class FloorDerivationLedgerTest {
         FloorDerivationLedger.load(dir, syntheticCounts).unattestedHarnessUnits() shouldBe
             listOf("run-1", "run-2")
 
-        resumed.render("2026-08-27", null, "cfg").harnessCommitSha shouldBe "cccc333"
+        resumed.renderAcrossMethods("2026-08-27", null, "cfg").harnessCommitSha shouldBe "cccc333"
         val warning = resumed.renderWarnings().single()
         warning shouldContain "2 of 3 unit(s)"
         warning shouldContain "run-1"
@@ -833,8 +833,8 @@ class FloorDerivationLedgerTest {
         third.ingest(unit("u3"), csv(allRowsAt(0.07)))
 
         val straight = completeLedger(File(dir, "straight"), listOf(0.31, 0.12, 0.07))
-        third.render("2026-08-27", "abcdef012", "cfg") shouldBe
-            straight.render("2026-08-27", "abcdef012", "cfg")
+        third.renderAcrossMethods("2026-08-27", "abcdef012", "cfg") shouldBe
+            straight.renderAcrossMethods("2026-08-27", "abcdef012", "cfg")
     }
 
     @Test
@@ -879,7 +879,7 @@ class FloorDerivationLedgerTest {
 
         val reloaded = FloorDerivationLedger.load(dir, syntheticCounts)
         reloaded.isComplete() shouldBe false
-        shouldThrow<FloorLedgerException> { reloaded.render("2026-08-27", "abcdef012", "cfg") }
+        shouldThrow<FloorLedgerException> { reloaded.renderAcrossMethods("2026-08-27", "abcdef012", "cfg") }
             .message!! shouldContain "= 0/3"
     }
 
@@ -1091,7 +1091,7 @@ class FloorDerivationLedgerTest {
         @TempDir dir: File,
     ) {
         val rendered = completeLedger(dir, listOf(0.01, 0.0305, 0.9))
-            .render("2026-08-27", "abcdef012", "mode=AverageTime forks=1")
+            .renderAcrossMethods("2026-08-27", "abcdef012", "mode=AverageTime forks=1")
         rendered.observedRobustDispersion shouldBe 0.0305
         rendered.floor shouldBe roundUpToThreeDecimals(CLASS_FLOOR_MARGIN * 0.0305)
         renderDerivation(rendered) shouldContain "0.061"
@@ -1104,7 +1104,30 @@ class FloorDerivationLedgerTest {
         // parseCsv admits a zero error; ClassNoiseFloor is what refuses a zero statistic, and
         // the ledger must not paper over that with a floor of zero.
         val ledger = completeLedger(dir, listOf(0.0, 0.0, 0.0))
-        shouldThrow<IllegalArgumentException> { ledger.render("2026-08-27", "abcdef012", "cfg") }
+        shouldThrow<IllegalArgumentException> { ledger.renderAcrossMethods("2026-08-27", "abcdef012", "cfg") }
             .message!! shouldContain "observedRobustDispersion must be finite and strictly positive"
     }
 }
+
+/**
+ * `render`'s records folded back to ONE, by taking the highest statistic across the
+ * ledger's `@Benchmark` methods.
+ *
+ * `FloorDerivationLedger.render` returns one record per method since `computenet-x9e.18`,
+ * and the synthetic plan these tests share declares two (`alpha` and `beta`). Most tests
+ * in this file are about the ledger's PLUMBING — completeness refusals, harness-sha
+ * resolution, the mixed-JVM refusal, escaping, persistence — not about the fold's grain,
+ * and re-writing each of them to name a method would obscure what they check.
+ *
+ * The fold is a `max` over a partition of the same row set, so this reconstructs exactly
+ * the RETIRED per-class statistic. That is deliberate and is why the helper is named for
+ * it rather than called `single()`: it lets the plumbing tests keep asserting the numbers
+ * they were written against, while the grain itself is asserted by the tests that name it
+ * (`render returns one record per @Benchmark method`, and `ClassNoiseFloorTest`).
+ */
+private fun FloorDerivationLedger.renderAcrossMethods(
+    derivedOn: String,
+    harnessCommitSha: String?,
+    jmhConfig: String,
+): ClassNoiseFloor =
+    render(derivedOn, harnessCommitSha, jmhConfig).maxBy { it.observedRobustDispersion }
