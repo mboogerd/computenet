@@ -502,6 +502,31 @@ class KernelDriver(seed: Long? = null) : Driver {
     override fun effectLog(cellId: CellId): List<Effect> =
         if (cellId in durCells) dur.effectLog(cellId) else emptyList()
 
+    /**
+     * The kernel binding of the emission-count verb, delegated to the one
+     * capability that already observes an outlet: the `dist` profile's
+     * Observe-role tap on a `replica-of` replica's delta outlet
+     * ([KernelDriverDist.emissionCount], installed by `recordEmissionsOf` at
+     * spawn — the very observation `retransmit` replays a recorded emission
+     * from).
+     *
+     * Every other cell **refuses loudly**, and the refusal is the point:
+     * `emissionCount` is differenced against a baseline and compared to an
+     * `exactly:`, so answering `0` for a cell this binding never taps would let
+     * `exactly: 0` pass on an unobserved outlet — a vacuous green, not a
+     * conservative one. Widening the tap to `dur`/`core` outlets is deliberate
+     * future scope, not something to approximate here.
+     */
+    override fun emissionCount(cellId: CellId): Long {
+        if (cellId in distReplicas) return dist.emissionCount(cellId)
+        throw UnsupportedCatalogBinding(
+            "emission-count at '$cellId': this binding counts outlet emissions only at a `replica-of` " +
+                "replica (profile: dist), where an Observe-role tap records every delta the replica emits; " +
+                "no other cell's outlet is observed, and answering 0 for one would make an `exactly: 0` " +
+                "check pass on an outlet nothing was watching",
+        )
+    }
+
     private companion object {
         /** Scheduler steps one page of a bounded read may take before it is declared wedged. */
         const val READ_STEP_BUDGET = 100_000

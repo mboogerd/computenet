@@ -1,6 +1,7 @@
 package civictech.concord.runner
 
 import civictech.concord.check.CheckContext
+import civictech.concord.check.EmissionBaseline
 import civictech.concord.check.CheckResult
 import civictech.concord.check.Checks
 import civictech.concord.check.ReadWalk
@@ -16,6 +17,7 @@ import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.DespawnStep
 import civictech.concord.schema.DisconnectStep
 import civictech.concord.schema.EffectCount
+import civictech.concord.schema.EmissionCount
 import civictech.concord.schema.Expect
 import civictech.concord.schema.ExpectFailure
 import civictech.concord.schema.FinalView
@@ -115,6 +117,7 @@ class CorpusRunner {
         override val driver: Driver,
         override val scenario: Scenario,
         override val reads: List<ReadWalk>,
+        override val emissionBaselines: List<EmissionBaseline> = emptyList(),
     ) : CheckContext
 
     @TestFactory
@@ -274,9 +277,11 @@ class CorpusRunner {
         for (run in 0 until runs) {
             val driver = KernelDriver(run.toLong())
             buildGraph(driver, scenario)
-            val reads = runScript(driver, scenario)
+            val record = runScript(driver, scenario)
             driver.quiesce(QUIESCE_BUDGET)
-            val failures = evaluateChecks(RunContext(driver, scenario, reads), scenario.checks)
+            val failures = evaluateChecks(
+                RunContext(driver, scenario, record.reads, record.emissionBaselines), scenario.checks,
+            )
             if (failures.isNotEmpty()) failuresByRun[run] = failures
         }
 
@@ -388,6 +393,7 @@ class CorpusRunner {
         is EffectCount -> "effect-count"
         is WavePlaneUnchanged -> "wave-plane-unchanged"
         is PagesEqualView -> "pages-equal-view"
+        is EmissionCount -> "emission-count"
     }
 
     // ------------------------------------------------------------------------
@@ -576,9 +582,11 @@ class CorpusRunner {
             val concrete = ScenarioGenerator.generate(scenario, i)
             val driver = KernelDriver(i.toLong())
             buildGraph(driver, concrete)
-            val reads = runScript(driver, concrete)
+            val record = runScript(driver, concrete)
             driver.quiesce(QUIESCE_BUDGET)
-            val failures = evaluateChecks(RunContext(driver, concrete, reads), concrete.checks)
+            val failures = evaluateChecks(
+                RunContext(driver, concrete, record.reads, record.emissionBaselines), concrete.checks,
+            )
             if (failures.isNotEmpty()) failuresByInstance[i] = failures
         }
 
@@ -601,12 +609,38 @@ class CorpusRunner {
     }
 
     /**
-     * Replay one run's script, returning the bounded-read walks it performed
-     * (V1C-CONCORD). Every other step is side-effecting only.
+     * What one run's script observed that a check cannot re-derive afterwards:
+     * the bounded-read walks it performed (V1C-CONCORD) and the emission
+     * baselines it sampled. Both are events with a "before" that is gone by
+     * check time, and only the runner is present for it.
      */
-    private fun runScript(driver: Driver, scenario: Scenario): List<ReadWalk> {
+    private data class ScriptRecord(
+        val reads: List<ReadWalk>,
+        val emissionBaselines: List<EmissionBaseline>,
+    )
+
+    /**
+     * Replay one run's script, returning what it observed ([ScriptRecord]).
+     * Every step other than `read-state` is side-effecting only; the emission
+     * baselines are sampled *between* steps, immediately before the step each
+     * declared `emission-count` check names as its window's lower edge.
+     */
+    private fun runScript(driver: Driver, scenario: Scenario): ScriptRecord {
         val reads = mutableListOf<ReadWalk>()
-        scenario.script.forEach { step ->
+        val baselines = mutableListOf<EmissionBaseline>()
+        val wanted = scenario.checks.filterIsInstance<EmissionCount>()
+        scenario.script.forEachIndexed { index, step ->
+            // The window's lower edge: read the count immediately BEFORE step
+            // `since` executes. A driver refusal is recorded rather than thrown, so
+            // the evaluator can report it as this check's failure instead of the
+            // scenario dying with a stack trace that names no check.
+            wanted.filter { it.since == index + 1 }.forEach { check ->
+                baselines += try {
+                    EmissionBaseline(check.cell, check.since, count = driver.emissionCount(check.cell))
+                } catch (e: Exception) {
+                    EmissionBaseline(check.cell, check.since, refusal = e.message ?: e::class.simpleName)
+                }
+            }
             when (step) {
                 is ReadStateStep -> reads += walk(driver, step)
                 is ApplyStep -> repeat(step.times ?: 1) { driver.apply(step.on, step.op, step.value) }
@@ -635,7 +669,7 @@ class CorpusRunner {
                 is DespawnStep -> driver.despawn(step.on)
             }
         }
-        return reads
+        return ScriptRecord(reads, baselines)
     }
 
     /**

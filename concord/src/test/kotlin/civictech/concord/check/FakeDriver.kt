@@ -25,6 +25,7 @@ class FakeDriver(
     private val observations: Map<CellId, List<Value>> = emptyMap(),
     private val deadLetters: List<DeadLetter> = emptyList(),
     private val effects: Map<CellId, List<Effect>> = emptyMap(),
+    private val emissions: Map<CellId, Long> = emptyMap(),
 ) : Driver {
     override fun createHost(hostId: HostId) {}
     override fun spawn(hostId: HostId, cellId: CellId, type: String, params: Map<String, Value>) {}
@@ -61,6 +62,12 @@ class FakeDriver(
     override fun despawn(cellId: CellId) {}
     override fun deadLetters(): List<DeadLetter> = deadLetters
     override fun effectLog(cellId: CellId): List<Effect> = effects[cellId].orEmpty()
+
+    // Loud on an unfixtured cell, exactly as the SPI requires of a real binding:
+    // 0 is a plausible PASSING answer for `exactly: 0`, so a fake that answered it
+    // for a cell no fixture names would hide the refusal path rather than test it.
+    override fun emissionCount(cellId: CellId): Long =
+        emissions[cellId] ?: error("FakeDriver: no emission-count fixture for '$cellId'")
 }
 
 /**
@@ -72,4 +79,5 @@ class FakeContext(
     override val driver: Driver,
     override val scenario: Scenario,
     override val reads: List<ReadWalk> = emptyList(),
+    override val emissionBaselines: List<EmissionBaseline> = emptyList(),
 ) : CheckContext

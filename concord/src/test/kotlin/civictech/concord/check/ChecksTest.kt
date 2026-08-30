@@ -17,6 +17,7 @@ import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.DespawnStep
 import civictech.concord.schema.DisconnectStep
 import civictech.concord.schema.EffectCount
+import civictech.concord.schema.EmissionCount
 import civictech.concord.schema.FinalView
 import civictech.concord.schema.IncrementalEqualsBatch
 import civictech.concord.schema.LateJoinEqualsEarly
@@ -25,6 +26,7 @@ import civictech.concord.schema.ObservationsAllSatisfy
 import civictech.concord.schema.ObservationsMonotone
 import civictech.concord.schema.ObservationsWholeWaves
 import civictech.concord.schema.PagesEqualView
+import civictech.concord.schema.QuiesceStep
 import civictech.concord.schema.ReplicasConverge
 import civictech.concord.schema.RestartStep
 import civictech.concord.schema.RestoreStep
@@ -1168,9 +1170,135 @@ class ChecksTest {
             EffectCount(sink = "s", exactly = 1),
             WavePlaneUnchanged("s"),
             PagesEqualView("s", "v"),
+            EmissionCount("a", since = 1, exactly = 0),
         )
         checks.forEach { c ->
             (Checks.evaluate(c, ctx) is CheckResult.NotImplemented) shouldBe false
         }
+    }
+
+    // --- emission-count (computenet-dvim) ------------------------------------
+    //
+    // The window is `[just before script step since, check time]`, and every one
+    // of its degenerate cases must FAIL: `exactly: 0` is satisfied by having
+    // nothing to count, so a check that passed on "nothing was observed" would be
+    // the vacuous pass this whole check was added to prevent, invisible in a
+    // green run.
+
+    /** `r1`'s second add is barriered off the first: `since: 3` is well-defined. */
+    private val barrieredScenario = scenario(
+        cells = listOf(cell("r1", "set-source"), cell("v", "set-view")),
+        links = listOf(link("r1", "v")),
+        script = listOf(apply("r1", "add", s("apple")), QuiesceStep(), apply("r1", "add", s("plum"))),
+    )
+
+    /** The same script with the barrier removed: `since: 3` is NOT well-defined. */
+    private val unbarrieredScenario = scenario(
+        cells = listOf(cell("r1", "set-source"), cell("v", "set-view")),
+        links = listOf(link("r1", "v")),
+        script = listOf(
+            apply("r1", "add", s("apple")),
+            apply("r1", "add", s("pear")),
+            apply("r1", "add", s("plum")),
+        ),
+    )
+
+    private fun emissionCtx(
+        now: Long?,
+        baselines: List<EmissionBaseline>,
+        scenario: civictech.concord.schema.Scenario = barrieredScenario,
+    ) = FakeContext(
+        FakeDriver(emissions = if (now == null) emptyMap() else mapOf("r1" to now)),
+        scenario,
+        emissionBaselines = baselines,
+    )
+
+    @Test
+    fun `emission-count holds when the outlet emitted exactly the stated count over the window`() {
+        val ctx = emissionCtx(now = 5L, baselines = listOf(EmissionBaseline("r1", 3, count = 5L)))
+        pass(Checks.emissionCount(EmissionCount("r1", since = 3, exactly = 0), ctx))
+    }
+
+    @Test
+    fun `emission-count holds for a non-zero count`() {
+        val ctx = emissionCtx(now = 7L, baselines = listOf(EmissionBaseline("r1", 3, count = 5L)))
+        pass(Checks.emissionCount(EmissionCount("r1", since = 3, exactly = 2), ctx))
+    }
+
+    @Test
+    fun `emission-count fails when one emission happened against exactly zero`() {
+        // The non-vacuousness case: baseline 5, now 6 — one emission inside the
+        // window, asserted to be none.
+        val ctx = emissionCtx(now = 6L, baselines = listOf(EmissionBaseline("r1", 3, count = 5L)))
+        val r = Checks.emissionCount(EmissionCount("r1", since = 3, exactly = 0), ctx)
+        fail(r).message shouldContain "expected exactly 0 emission(s) but observed 1"
+    }
+
+    @Test
+    fun `emission-count needs no barrier when the window starts at step 1`() {
+        val ctx = emissionCtx(now = 0L, baselines = listOf(EmissionBaseline("r1", 1, count = 0L)))
+        pass(Checks.emissionCount(EmissionCount("r1", since = 1, exactly = 0), ctx))
+    }
+
+    @Test
+    fun `emission-count fails when since is outside the script`() {
+        val ctx = emissionCtx(now = 5L, baselines = listOf(EmissionBaseline("r1", 9, count = 5L)))
+        fail(Checks.emissionCount(EmissionCount("r1", since = 9, exactly = 0), ctx)).message shouldContain "outside it"
+    }
+
+    @Test
+    fun `emission-count fails when since is not positive`() {
+        val ctx = emissionCtx(now = 5L, baselines = listOf(EmissionBaseline("r1", 0, count = 5L)))
+        fail(Checks.emissionCount(EmissionCount("r1", since = 0, exactly = 0), ctx)).message shouldContain "1-based"
+    }
+
+    @Test
+    fun `emission-count fails when the window is not separated by a quiesce barrier`() {
+        val ctx = emissionCtx(
+            now = 5L,
+            baselines = listOf(EmissionBaseline("r1", 3, count = 5L)),
+            scenario = unbarrieredScenario,
+        )
+        fail(Checks.emissionCount(EmissionCount("r1", since = 3, exactly = 0), ctx)).message shouldContain "not barriered"
+    }
+
+    @Test
+    fun `emission-count fails when the runner recorded no baseline for the pair`() {
+        // A baseline for a DIFFERENT step is not this window's lower edge.
+        val ctx = emissionCtx(now = 5L, baselines = listOf(EmissionBaseline("r1", 1, count = 5L)))
+        fail(Checks.emissionCount(EmissionCount("r1", since = 3, exactly = 0), ctx)).message shouldContain "no emission baseline"
+    }
+
+    @Test
+    fun `emission-count fails when the driver refused the cell at baseline time`() {
+        val ctx = emissionCtx(
+            now = 5L,
+            baselines = listOf(EmissionBaseline("r1", 3, refusal = "no tap on 'r1'")),
+        )
+        fail(Checks.emissionCount(EmissionCount("r1", since = 3, exactly = 0), ctx))
+            .message shouldContain "no tap on 'r1'"
+    }
+
+    @Test
+    fun `emission-count fails when the driver refuses the cell at check time`() {
+        // No fixture at all: FakeDriver refuses, exactly as a real binding must for
+        // a cell whose outlet it does not observe. A 0 here would PASS.
+        val ctx = emissionCtx(now = null, baselines = listOf(EmissionBaseline("r1", 3, count = 5L)))
+        fail(Checks.emissionCount(EmissionCount("r1", since = 3, exactly = 0), ctx))
+            .message shouldContain "refused to observe"
+    }
+
+    @Test
+    fun `emission-count fails when a baseline carries neither a count nor a refusal`() {
+        val ctx = emissionCtx(now = 5L, baselines = listOf(EmissionBaseline("r1", 3)))
+        fail(Checks.emissionCount(EmissionCount("r1", since = 3, exactly = 0), ctx))
+            .message shouldContain "neither a count nor a refusal"
+    }
+
+    @Test
+    fun `emission-count fails when the count went backwards`() {
+        val ctx = emissionCtx(now = 4L, baselines = listOf(EmissionBaseline("r1", 3, count = 5L)))
+        fail(Checks.emissionCount(EmissionCount("r1", since = 3, exactly = 0), ctx))
+            .message shouldContain "went backwards"
     }
 }

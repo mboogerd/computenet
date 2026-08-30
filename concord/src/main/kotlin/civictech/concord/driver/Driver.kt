@@ -200,6 +200,29 @@ interface Driver {
 
     /** The effect log an effectful [cellId] produced (the `effect-count` check reads this). */
     fun effectLog(cellId: CellId): List<Effect>
+
+    /**
+     * **How many times [cellId]'s outlet has emitted so far this run** (the
+     * `emission-count` check reads this, differencing two readings to bound a
+     * window).
+     *
+     * A count, and only a count: not a log, not an identity, not an ordering,
+     * not a frame. Any implementation of this model already keeps the
+     * bookkeeping this needs — every delivery carries a fresh per-source wave
+     * position minted by the emitting outlet (spec 20/22 §Structural changes),
+     * so an outlet that cannot say how many positions it has minted cannot
+     * stamp its next one. Reporting the count is therefore not a
+     * kernel-specific capability, and nothing about an implementation's
+     * scheduling or identifiers leaks into a check.
+     *
+     * A driver that cannot observe the named cell's outlet **fails loudly**
+     * rather than answering `0`, by the same rule as [retransmit] and
+     * [effectLog]'s binding: `0` is a perfectly plausible *passing* answer for
+     * an `exactly: 0` assertion, so a silent 0 would turn an unobservable cell
+     * into a green check — precisely the vacuous pass this observation was
+     * added to prevent, and invisible in a green run.
+     */
+    fun emissionCount(cellId: CellId): Long
 }
 
 /** Opaque scenario-local cell handle. */

@@ -159,3 +159,51 @@ data class PagesEqualView(
     val cell: String,
     val view: String,
 ) : Check
+
+/**
+ * **A cell's outlet emitted exactly N times over a bounded window** (spec 40/42
+ * §echo termination; `[KE1-33]`'s duplicate-delivery half): counted from
+ * immediately before script step [since] (1-based into the scenario's `script:`
+ * list) to check time, [cell]'s outlet produced exactly [exactly] emissions.
+ *
+ * No existing check can express it, and the reason is structural rather than
+ * incidental: every other check reads *state*. `final-view`,
+ * `views-converge`, `replicas-converge` and `incremental-equals-batch` read a
+ * fold; `observations-*` read a stream whose events are folds;
+ * `pages-equal-view` reads a walk over a cell's own state. Echo termination is
+ * invisible in all of them **by construction** — the dot algebra is idempotent,
+ * so re-absorbing an already-held dot changes no fold, no view and no replica
+ * comparison, and a re-emission of exactly that dot is therefore
+ * state-indistinguishable from no emission at all.
+ *
+ * The two checks that do not read a fold are no closer. `effect-count` reads an
+ * *effect* log, which exists only at a durable effect boundary (`dur`), not at
+ * a replica's gossip outlet. `wave-plane-unchanged` does observe emission, and
+ * observes it only *around a `read-state` walk* — it quantifies over the walks
+ * recorded in `CheckContext.reads`, so a scenario with no bounded read has
+ * nothing for it to assert, and its assertion is "zero, across a read" rather
+ * than "exactly N, across a stated window".
+ *
+ * What is asserted is a **count over a bounded window**, and nothing else: no
+ * emission identity, no ordering, no scheduling, no frame content. The window's
+ * lower edge is a script position rather than a wall-clock or step count so
+ * that it is stated in the scenario's own vocabulary; its upper edge is check
+ * time, i.e. after the run's final quiescence.
+ *
+ * **Well-definedness.** The window is only meaningful when the step at [since]
+ * and every later step are separated from all earlier steps by a `quiesce`
+ * barrier — §Script semantics leaves delivery interleaving between barriers to
+ * the implementation, so without the barrier the count would assert an
+ * interleaving the schema deliberately does not fix. The evaluator **fails
+ * loudly** on a scenario that violates it, exactly as it fails on an
+ * out-of-range [since], a missing runner baseline, or a driver that cannot
+ * observe [cell] — a silent 0 would be the vacuous pass this check exists to
+ * prevent.
+ */
+@Serializable
+@SerialName("emission-count")
+data class EmissionCount(
+    val cell: String,
+    val since: Int,
+    val exactly: Int,
+) : Check
