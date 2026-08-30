@@ -211,13 +211,17 @@ def capacity_limit(cores, siblings=0):
         N=6   89.9s 93.1s 95.6s 96.6s 97.2s 97.8s      4.4x-4.8x
 
     WHAT THE ARMS ABOVE WERE, since it decides how far the cap can be trusted
-    (computenet-2r22 asked, and the first answer given here was the opposite of
-    the truth): every arm is a SCOPED, single-module `:wire:test --rerun`, on
-    both machines. The cap was never derived from a repo-wide gate. So scoping
-    each agent's gate does not buy headroom the cap has not already spent — the
-    204-on-16-cores reading in load_advice() is this derivation's predicted
-    direction, not a surprise, and the "if anything optimistic" caveat below
-    covers it.
+    (computenet-2r22 asked; the first two answers written here were wrong in
+    turn, so read this against the HONEST LIMITS paragraph below rather than
+    on its own): on the 16-core machine — the only one with arms, and the one
+    that pins LANE_CORES — every arm is a SCOPED, single-module
+    `:wire:test --rerun`. The cap is therefore not derived from a repo-wide
+    gate, and scoping each agent's gate buys no headroom the cap has not
+    already spent: the 204-on-16-cores reading in load_advice() is this
+    derivation's predicted direction, not a surprise, and the "if anything
+    optimistic" caveat below covers it. The 10-core record is not an arm at
+    all — it is three whole IMPLEMENTER lanes, whose gates at that date were
+    repo-wide — so it cannot corroborate this either way.
 
     The criterion is per-run inflation, not throughput: a bounded wait sized on
     a quiet box is what breaks. Under 2x it holds; the recorded catastrophes are
@@ -226,11 +230,10 @@ def capacity_limit(cores, siblings=0):
     Load average is deliberately NOT the instrument HERE (load_advice() uses it
     for a different question — what the box is doing now — and says why that is
     sound; do not delete that advisory on this paragraph's authority). Over a
-    ~25s workload the 1-minute average is still climbing when the build ends
-    and still decaying
-    when the next arm starts (N=3's pre-arm reading was 17.31, inherited from
-    N=2), so it lags in both directions. Wall clock per run is measured
-    directly.
+    ~25s workload the 1-minute average is still climbing when the build ends and
+    still decaying when the next arm starts (N=3's pre-arm reading was 17.31,
+    inherited from N=2), so it lags in both directions. Wall clock per run is
+    measured directly.
 
     WHY cores/5 AND NOT cores/3. `cores/3` was the value floated in
     computenet-avs's thread, and this bead's own evidence contradicts it: on the
