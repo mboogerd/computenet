@@ -1,0 +1,159 @@
+name: Assert :demo:beadsmirror's e2e evidence ran
+description: >-
+  Reddens the calling job when :demo:beadsmirror's required e2e classes
+  produced no JUnit XML, or reported themselves skipped, instead of letting
+  the lane pass green having asserted nothing about the mirror.
+
+# Why this file exists (computenet-q4qt). `ci.yml` carried this exact script
+# twice — once per lane, byte-identical except the class name and a label —
+# with a comment arguing a shared file was not worth it because the two
+# copies lived next to each other where drift would be visible. That
+# argument stopped holding the moment `post-merge.yml` mirrored both lanes
+# and omitted the step entirely: nothing compared the two files, and
+# `post-merge.yml` could report green on a skipped mirror suite for any
+# reason other than the missing-binary case computenet-mgxe fixed (that fix
+# is `install-bd-dolt`, the composite-action precedent this file follows —
+# same reasoning, same "one file, one script, N call sites" shape).
+#
+# Three checks, in widening order of specificity — read against whichever
+# JUnit report `report-dir` names for the calling job:
+#
+#  1. no JUnit XML at all — the module's test task did not run in this job
+#     (computenet-dqj.14's original hard failure, kept verbatim).
+#  2. any test skipped with `is not on PATH` in its message — the exact
+#     signature of a missing `bd`/`dolt` toolchain (the `install-bd-dolt`
+#     step having been removed, reordered after the build, or silently
+#     failed). Deliberately narrow: it does NOT fire on skips from this
+#     module's other assumptions (a read-only-dir probe skipping when
+#     running as root; a refusal test skipping with no `.beads` above the
+#     cwd), which are environment facts rather than lost coverage.
+#
+#     **This check can be structurally inert for a given `required-classes`
+#     entry.** Whether it fires depends on where that test class guards
+#     itself: a class that guards in `@BeforeEach` writes a `<skipped
+#     message="...bd is not on PATH...">` per test, which this check greps
+#     for; a class that guards in `@BeforeAll` aborts the whole container on
+#     a failed assumption, which JUnit records as a bare `<skipped/>` with no
+#     message — invisible to this check. Measured 2026-08-18 (darwin/arm64,
+#     `/opt/homebrew/bin` off PATH): `TwoNodeRigTest` (guards in
+#     `@BeforeAll`) produced five bare `<skipped/>` and zero occurrences of
+#     "is not on PATH"; `CheckpointResumeTest` (same module, guards in
+#     `@BeforeEach`) produced five `<skipped message="...bd is not on PATH —
+#     skipping"...>`. When check (2) is inert for a lane, check (3) below is
+#     what actually reddens it on a toolchain-absent report — document that
+#     fact at the call site, because it depends on which class the job names
+#     and how that class guards, not on anything in this file.
+#  3. every class in `required-classes` produced XML with tests>0 and
+#     skipped=0 — the substantive e2e evidence, asserted by name, so that a
+#     filter/tag/module-scoping change that quietly stops running it reddens
+#     the lane instead of passing green having asserted nothing.
+#
+# Nothing here weakens the module's own `assumeTrue` guards — the same
+# missing binaries still make a class skip on a developer machine, as
+# computenet-7em.5's third criterion requires. The gate is on CI's
+# environment, not the test.
+#
+# NOT handled here: a Gradle build-cache replay can hand a job a JUnit report
+# from an earlier run without re-executing the class at all — in the
+# dangerous direction, a cached GOOD report replayed into a job that ran
+# nothing still reads as "ok" to every check above. `ci.yml`'s two call sites
+# defend against that themselves (a dedicated `--rerun` invocation in the
+# fast lane, `--rerun` inlined into the serial lane's test command,
+# computenet-3g6n) — a *different* ticket from the one that added this
+# assertion (computenet-7em.5), because the two are independent failure
+# modes. `post-merge.yml`'s call sites do not yet carry that defense; see
+# computenet-q4qt's bead thread for the follow-up this leaves.
+
+inputs:
+  required-classes:
+    description: >-
+      Space-separated fully-qualified :demo:beadsmirror e2e class names that
+      must have produced JUnit XML with tests>0 and skipped=0 in this job.
+    required: true
+  report-dir:
+    description: Directory holding :demo:beadsmirror's JUnit XML for this job.
+    default: demo/beadsmirror/build/test-results/test
+  result-label:
+    description: >-
+      Optional suffix on the aggregate-results summary line, to tell one
+      lane's results apart from another's in a shared log (e.g. " (serial
+      lane)"). Empty by default.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Assert :demo:beadsmirror's e2e evidence ran
+      shell: bash
+      env:
+        REQUIRED_CLASSES: ${{ inputs.required-classes }}
+        REPORT_DIR: ${{ inputs.report-dir }}
+        RESULT_LABEL: ${{ inputs.result-label }}
+      run: |
+        set -uo pipefail
+        failed=0
+
+        if ! ls "$REPORT_DIR"/TEST-*.xml >/dev/null 2>&1; then
+          echo "FAIL: no :demo:beadsmirror JUnit XML in $REPORT_DIR — :demo:beadsmirror:test did not run in this build" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
+
+        total=$(grep -oh 'tests="[0-9]*"' "$REPORT_DIR"/TEST-*.xml | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+        skipped=$(grep -oh 'skipped="[0-9]*"' "$REPORT_DIR"/TEST-*.xml | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+        {
+          echo "demo:beadsmirror JUnit results${RESULT_LABEL}: ${total} tests, ${skipped} skipped"
+          if [ "$skipped" -gt 0 ]; then
+            # `|| true`: `set -o pipefail` is on, so a grep chain that matches
+            # nothing would otherwise be this step's exit status and redden a
+            # required job over the shape of a diagnostic. Measured 2026-08-16
+            # against fixtures: with the attribute order Gradle actually emits
+            # (`<testcase name=... classname=...>`, `<skipped/>` either on its
+            # own line or inlined) the chain matches; with `classname` before
+            # `name` it matches nothing and the step exited 1 on an
+            # otherwise-fine report. The order, not the line breaking, is what
+            # decides it.
+            grep -B1 '<skipped' "$REPORT_DIR"/TEST-*.xml | grep -E 'testcase name|message=' || true
+          fi
+        } | tee -a "$GITHUB_STEP_SUMMARY"
+
+        # (2) the toolchain-absence signature. Matched on the ASCII substring
+        # only: the assumption message is `bd is not on PATH — skipping` with a
+        # literal em dash, which is not worth putting in a grep pattern.
+        # Verified 2026-08-17 against a real Gradle-emitted report produced by
+        # running this module's serial-lane invocation with /opt/homebrew/bin
+        # off PATH. May be structurally inert for the class(es) this job
+        # names — see this file's header — in which case check (3) below is
+        # what reddens the lane on that report.
+        onpath=$(grep -l 'is not on PATH' "$REPORT_DIR"/TEST-*.xml || true)
+        if [ -n "$onpath" ]; then
+          {
+            echo "FAIL: a :demo:beadsmirror test skipped itself because bd or dolt was not on PATH."
+            echo "The 'Install bd and dolt' step in this job is what provisions them (computenet-7em.5)."
+            echo "Without it this lane passes green having asserted nothing about the mirror. Reports affected:"
+            echo "$onpath"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          failed=1
+        fi
+
+        # (3) the named e2e classes must have executed, not merely been reported on.
+        for cls in $REQUIRED_CLASSES; do
+          xml="$REPORT_DIR/TEST-${cls}.xml"
+          if [ ! -f "$xml" ]; then
+            echo "FAIL: ${cls} produced no JUnit XML — it did not run in this lane." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            failed=1
+            continue
+          fi
+          t=$(grep -o 'tests="[0-9]*"' "$xml" | head -1 | grep -oE '[0-9]+')
+          s=$(grep -o 'skipped="[0-9]*"' "$xml" | head -1 | grep -oE '[0-9]+')
+          if [ "${t:-0}" -eq 0 ] || [ "${s:-0}" -gt 0 ]; then
+            echo "FAIL: ${cls} reports ${t:-0} test(s), ${s:-0} skipped — this lane's substantive e2e evidence did not execute." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            failed=1
+          else
+            echo "ok: ${cls} executed ${t} test(s), 0 skipped" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+        done
+
+        exit "$failed"

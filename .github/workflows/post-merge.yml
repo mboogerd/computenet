@@ -223,6 +223,29 @@ jobs:
       - name: Build and check (fast lane — excludes multi-jvm-tagged tests)
         run: ./gradlew build check -PexcludeMultiJvm=true
 
+      # `ci.yml`'s build-test-fast carries this assertion (computenet-7em.5,
+      # computenet-dqj.14); this lane omitted it, which is exactly how `main`
+      # went red for twelve days silently — see `install-bd-dolt` above. Same
+      # composite action as `ci.yml`'s two call sites
+      # (`.github/actions/assert-beadsmirror-e2e`, computenet-q4qt), same
+      # required class (`-PexcludeMultiJvm=true` owns TwoNodeRigTest here
+      # too).
+      #
+      # UNLIKE `ci.yml`'s fast lane, this job has no dedicated `--rerun`
+      # invocation isolating TwoNodeRigTest, so a Gradle build-cache replay of
+      # `:demo:beadsmirror:test` could in principle hand this assertion a
+      # report from an earlier run rather than one this job produced
+      # (computenet-3g6n documents the mechanism against `ci.yml`). That gap
+      # is left for a follow-up rather than fixed here — see this bead's
+      # thread — because it is a distinct failure mode from the missing
+      # assertion this step exists to close, and closing it means touching
+      # the test-invocation shape rather than adding the assertion.
+      - name: "Assert :demo:beadsmirror's e2e evidence ran (computenet-7em.5, computenet-dqj.14)"
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/assert-beadsmirror-e2e
+        with:
+          required-classes: civictech.demo.beadsmirror.e2e.TwoNodeRigTest
+
       # Clean-clone guard, as in `ci.yml`: a load-bearing file that was never
       # committed shows up here as an untracked file and fails the build.
       - name: Fail on unexpected untracked files
@@ -269,6 +292,22 @@ jobs:
 
       - name: Multi-JVM serial lane (process-startup + wall-clock timing tests)
         run: ./gradlew check -PmultiJvmOnly=true --max-workers=1
+
+      # `ci.yml`'s build-test-serial carries this assertion (computenet-7em.5);
+      # this lane omitted it — same gap and same fix as the fast lane above.
+      # `-PmultiJvmOnly=true` owns TwoJvmMirrorTest here too, and it guards
+      # per test (`@BeforeEach`), so check (2) in the composite action is live
+      # for this call site the same way it is in `ci.yml`'s serial lane.
+      #
+      # Same build-cache-replay caveat as the fast lane above applies here too
+      # (no dedicated `--rerun` isolating this class); left to the same
+      # follow-up.
+      - name: "Assert :demo:beadsmirror's e2e evidence ran (computenet-7em.5)"
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/assert-beadsmirror-e2e
+        with:
+          required-classes: civictech.demo.beadsmirror.e2e.TwoJvmMirrorTest
+          result-label: " (serial lane)"
 
       - name: Upload test results (diagnostics for failed or hung runs)
         if: ${{ failure() || cancelled() }}
