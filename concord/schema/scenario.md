@@ -673,6 +673,19 @@ differences two readings of that count and compares the difference to an integer
 so nothing about an emission's identity, ordering, payload, routing, scheduling
 or frame layout is observed, and no implementation identifier leaks into a check.
 
+**Status.** Landed (`computenet-f94x`). This paragraph closes a gap the
+`computenet-dvim` review left: that pass fixed the observation's *shape* — a
+count, nothing else — but not its *unit*, so a second, non-kernel
+implementation had no normative text saying whether one outlet emission
+carrying several deltas is one increment or several. The **counting unit is
+normative: one increment is one outlet emission event**, independent of how
+many deltas or values the emitted frame carries — an emission that relays a
+peer's dot, or one whose dots are all already attributed, is still one
+emission, never zero and never one-per-delta. A driver MUST NOT count by delta
+or value multiplicity. `civictech.concord.driver.kernel.KernelDriverDist`'s
+`emissionCounts` binding already implements this unit; its KDoc cites this
+paragraph rather than being the only place the unit is fixed.
+
 The count is **per run**; only differences within one run are ever compared, so
 where a driver starts counting is its own business. A driver that cannot observe
 the named cell's outlet MUST **fail loudly** rather than answer `0`, by the same
