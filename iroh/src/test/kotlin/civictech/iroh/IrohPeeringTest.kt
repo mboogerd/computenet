@@ -92,6 +92,32 @@ class IrohPeeringTest {
         return !condition()
     }
 
+    /**
+     * Reads [value] only once it has stopped changing for [settleMillis] —
+     * closes the window where a re-dial already in flight when a refused
+     * peer's connection is closed can still land its denial on the
+     * listener's own reader thread a moment after a naive read of the
+     * counter (computenet-6lam). No fixed sleep: this polls for an absence
+     * of change, the same discipline [neverWithin] uses for presence.
+     */
+    private fun quiesced(settleMillis: Long = 1_500, timeoutMs: Long = 30_000, value: () -> Long): Long {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var last = value()
+        var lastChangedAt = System.currentTimeMillis()
+        while (true) {
+            Thread.sleep(50)
+            val now = value()
+            val time = System.currentTimeMillis()
+            if (now != last) {
+                last = now
+                lastChangedAt = time
+            } else if (time - lastChangedAt >= settleMillis) {
+                return last
+            }
+            if (time > deadline) fail("timed out waiting for value to quiesce (stuck at $last)")
+        }
+    }
+
     @Test
     fun `a ref published on the listening side is invoked from the dialling side and the effect comes back`() {
         val binary = SidecarBinary.orSkip()
@@ -187,7 +213,7 @@ class IrohPeeringTest {
             // while mallory is up, and only its DELTA across the admitted
             // peering below is stable. (mallory's connection is closed by the
             // `use` above, which stops its loop.)
-            val afterMallory = listener.admissionDenialCount
+            val afterMallory = quiesced { listener.admissionDenialCount }
 
             // ---- good: on the allowlist, same listener --------------------
             val good = Stack(name = "good")
