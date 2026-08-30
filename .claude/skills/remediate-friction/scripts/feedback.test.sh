@@ -50,6 +50,18 @@ $S/reachability.py .claude/skills/sync-report/SKILL.md 2>/dev/null \
   && ok "bare form still credits a skill's own SKILL.md to its own readers" \
   || bad "bare form lost the one reachability fact that needs no graph"
 
+# An ABSOLUTE path is what an agent produces when it has just been handed a
+# worktree path. It used to match neither the decline nor the graph and came
+# back a confident NOT-READ (computenet-k58k).
+$S/reachability.py --for orchestrator "$PWD/.claude/skills/sync-report/SKILL.md" 2>/dev/null \
+  | grep -q '^NO-MODEL' \
+  && ok "an absolute path gets the same verdict as its relative form" \
+  || bad "absolute path answered from a graph that cannot contain it"
+$S/reachability.py --for orchestrator /etc/hosts >/dev/null 2>&1 && rc=0 || rc=$?
+[ "$rc" = 2 ] \
+  && ok "a path outside the repo is refused, not answered" \
+  || bad "judged a path outside the repo (rc=$rc)"
+
 echo "twin-scan.py (work skill)"
 T=.claude/skills/work/scripts/twin-scan.py
 n=$($T computenet-4ru 2>/dev/null | grep -c '^TWIN?' || true)
