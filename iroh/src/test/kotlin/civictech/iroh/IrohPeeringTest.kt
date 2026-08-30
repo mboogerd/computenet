@@ -180,6 +180,15 @@ class IrohPeeringTest {
                 )
             }
 
+            // A refused dialler is not told it was refused — it sees a plain
+            // LINK_DOWN — so since computenet-egl.2.3 it re-dials on its backoff
+            // and is refused again, exactly as a refused `:wire` client
+            // reconnects forever. The listener's denial count therefore grows
+            // while mallory is up, and only its DELTA across the admitted
+            // peering below is stable. (mallory's connection is closed by the
+            // `use` above, which stops its loop.)
+            val afterMallory = listener.admissionDenialCount
+
             // ---- good: on the allowlist, same listener --------------------
             val good = Stack(name = "good")
             IrohTransport.connect(good.side, listener.nodeId, listener.addresses, binary).use { admitted ->
@@ -187,7 +196,7 @@ class IrohPeeringTest {
                     good.registry.location(published.ref) is LocationRegistry.Remote
                 }
                 assertTrue(admitted.peered)
-                assertEquals(1L, listener.admissionDenialCount, "admitting one peer adds no denial")
+                assertEquals(afterMallory, listener.admissionDenialCount, "admitting one peer adds no denial")
             }
         }
     }

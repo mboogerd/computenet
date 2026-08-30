@@ -87,6 +87,15 @@ class SidecarProcess private constructor(
          *
          * @param stderrSink each stderr line of the child, for a test or a host
          *   that wants the diagnostics; the default discards them.
+         * @param args extra command-line arguments for the child, passed through
+         *   verbatim — the binary's own contract (`iroh/sidecar/src/main.rs`):
+         *   `--offline`, `--secret-key <64 hex>`, `--bind-addr <ip:port>`,
+         *   `--socket-port <port>`. Empty by default, which is a fresh key on an
+         *   ephemeral UDP port: an endpoint whose id changes every run. A caller
+         *   that must bring the SAME endpoint back after its process died — the
+         *   far side of a reconnect test — pins both with `--secret-key` and
+         *   `--bind-addr`, so the NodeId a dialler was given and the addresses it
+         *   was taught still name this endpoint after the restart.
          * @throws SidecarException when the binary does not exist, exits before
          *   the handshake, or writes a line that is not `PROTOCOL.md` §1's.
          */
@@ -94,11 +103,12 @@ class SidecarProcess private constructor(
             binary: Path,
             handshakeTimeout: Duration = 60.seconds,
             stderrSink: (String) -> Unit = {},
+            args: List<String> = emptyList(),
         ): SidecarProcess {
             val file: File = binary.toFile()
             if (!file.isFile) throw SidecarException("sidecar binary $binary does not exist")
 
-            val process = ProcessBuilder(file.absolutePath)
+            val process = ProcessBuilder(listOf(file.absolutePath) + args)
                 .redirectErrorStream(false)
                 .start()
 
