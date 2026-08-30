@@ -63,8 +63,12 @@ $S/reachability.py --for orchestrator /etc/hosts >/dev/null 2>&1 && rc=0 || rc=$
   || bad "judged a path outside the repo (rc=$rc)"
 # A RELATIVE path can escape the repo too (../sibling-worktree/...), and a
 # guard that only covers the absolute form leaves the defect standing one
-# shape over — which is how this family got to four beads.
-$S/reachability.py --for orchestrator ../.claude/skills/work/SKILL.md >/dev/null 2>&1 && rc=0 || rc=$?
+# shape over — which is how this family got to four beads. The path must
+# EXIST outside the repo: a merely-missing one takes the pre-existing "does not
+# exist" branch, which also exits 2, so the case would pass against the very
+# defect it pins. Computed, not hard-coded, so it stays cwd-portable.
+REL_ESCAPE=$(python3 -c "import os;print(os.path.relpath('/etc/hosts', os.getcwd()))")
+$S/reachability.py --for orchestrator "$REL_ESCAPE" >/dev/null 2>&1 && rc=0 || rc=$?
 [ "$rc" = 2 ] \
   && ok "a relative path escaping the repo is refused too" \
   || bad "judged a relative path outside the repo (rc=$rc)"
