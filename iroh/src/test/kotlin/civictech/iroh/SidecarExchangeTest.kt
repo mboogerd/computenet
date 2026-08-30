@@ -6,9 +6,12 @@ import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * `PROTOCOL.md` §4's complete exchange, driven end to end through
@@ -96,6 +99,77 @@ class SidecarExchangeTest {
                         // The host connection is still answering after the link went down.
                         assertContentEquals(sidecarA.nodeId, hostA.getId())
                         assertContentEquals(sidecarB.nodeId, hostB.getId())
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * The avoidance path itself, asserted so that removing it turns this red.
+     *
+     * `PROTOCOL.md` §3's `LINK_UP` entry: on the accepting side `LINK_UP` is out
+     * before the link's QUIC stream exists, and until the dialler's first frame
+     * adopts that stream the link's send queue has no consumer at all, so §2's
+     * 256-frame bound is an absolute count there. [SidecarLink.send] on an
+     * INBOUND link therefore waits for the peer's first frame rather than
+     * queueing against an unadopted stream — the one route `PROTOCOL.md`
+     * sanctions while `computenet-ey4v` is open.
+     *
+     * The sibling test above exercises the wait only where it is already
+     * satisfied (the dialler has spoken by the time the accepting side sends),
+     * so it passes whether or not the wait exists. This one is the
+     * discriminating case: it sends on the accepting side while the dialler is
+     * still silent, where the wait is the ONLY thing that stops the frame going
+     * out. Measured 2026-08-30: with the wait disabled the send succeeds and
+     * this test fails at [assertFailsWith].
+     */
+    @Test
+    fun `sending on an accepted link before the dialler speaks refuses rather than queueing`() {
+        val binary = SidecarBinary.orSkip()
+
+        SidecarProcess.spawn(binary).use { sidecarA ->
+            SidecarProcess.spawn(binary).use { sidecarB ->
+                sidecarA.connect().use { hostA ->
+                    sidecarB.connect().use { hostB ->
+                        val inboundLinks = LinkedBlockingQueue<Pair<SidecarLink, RecordingLinkListener>>()
+                        hostA.onInboundLink { link ->
+                            RecordingLinkListener("A/link${link.id}").also { inboundLinks.put(link to it) }
+                        }
+                        val addresses = hostA.listen()
+                        val listenerB = RecordingLinkListener("B")
+                        val linkB = hostB.let {
+                            it.addPeer(sidecarA.nodeId, addresses)
+                            it.dial(sidecarA.nodeId, listenerB)
+                        }
+
+                        val (linkA, listenerA) = inboundLinks.poll(30, TimeUnit.SECONDS)
+                            ?: fail("A never saw LINK_UP for the inbound connection")
+                        assertEquals(LinkDirection.INBOUND, linkA.direction)
+
+                        // B has sent nothing, so A's side of the stream is not
+                        // adopted and its send queue has no consumer.
+                        assertFalse(linkA.peerHasSpoken, "the dialler spoke before the test could send")
+                        val refused = assertFailsWith<SidecarException>(
+                            "send on an unadopted inbound link returned instead of refusing",
+                        ) {
+                            linkA.send(byteArrayOf(7), awaitPeerFirstFrame = 300.milliseconds)
+                        }
+                        assertTrue(
+                            refused.message!!.contains("has not spoken"),
+                            "refused for the wrong reason: ${refused.message}",
+                        )
+
+                        // Once the dialler speaks the same send goes through, so
+                        // the refusal above was the wait and not a dead link.
+                        linkB.send(byteArrayOf(1))
+                        assertContentEquals(byteArrayOf(1), listenerA.nextData())
+                        assertTrue(linkA.peerHasSpoken)
+                        linkA.send(byteArrayOf(7))
+                        assertContentEquals(byteArrayOf(7), listenerB.nextData())
+
+                        assertEquals(emptyList(), listenerA.errors.toList())
+                        assertEquals(emptyList(), listenerB.errors.toList())
                     }
                 }
             }
