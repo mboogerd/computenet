@@ -419,6 +419,11 @@ class LocationRegistry {
      * what every caller got before this parameter existed, and what an unnamed
      * `Peering.Side` still gets. It is recorded, never consulted by routing:
      * [deliver] resolves through [Remote.sink] alone, as before.
+     *
+     * **This overrides an existing [Local] binding for the same ref**, silently
+     * and by design — see [install]'s location-precedence note (computenet-mx6p)
+     * for why, and for the one thing about it that is still open
+     * (computenet-rfbt: the overwrite is not counted).
      */
     fun publish(ref: CellRef, sink: InvocationSink, peer: PeerId? = null) {
         install(ref, Remote(sink, peer))
@@ -482,6 +487,58 @@ class LocationRegistry {
      * comment); this is the missing analogue: re-register once [locations]
      * is assigned, so the immediate and the deferred wake-up alike find
      * [replay]'s `locations[ref] == expected` guard satisfied.
+     *
+     * **Location precedence: last writer wins, unconditionally, in every
+     * direction** — a peer-announced [Remote] replaces this host's own [Local]
+     * binding for the same ref, after which sends for a cell this host is
+     * itself serving leave for the wire and the local instance never hears
+     * from its own process again. That is *deliberate* (computenet-mx6p),
+     * decided after two peered `demo/tiering` nodes lost every routed write;
+     * `LocationRegistryLocationPrecedenceTest` pins each transition and this
+     * paragraph is the answer to the question it re-opens.
+     *
+     * Two transitions actually depend on the overwrite, both pinned by that
+     * test: **Remote → Local**, inbound mobility — a ref mirrored here becomes
+     * local the moment [ManagedHost] spawns it here, with no intervening
+     * [unpublish] on *this* registry (the retraction is the departing host's
+     * own announcement, a separate message); and **Remote → Remote**, the
+     * reconnect/heal catch-up — every re-announcement is a full [localRefs]
+     * sweep through a *fresh* mirror, so landing on a ref this registry already
+     * has a location for is the normal case, not the exception.
+     *
+     * **Neither of those is what a "local wins" guard would block, and the
+     * measurement says so**: inserting `if (locations[ref] is Local && location
+     * is Remote) return` here leaves `:kernel:test` (1281 tests on this branch) and
+     * `:wire:test` (91) entirely green except the one test that pins this
+     * behaviour. So the case for the current shape is *not* "a guard would
+     * break repartition or mobility" — nothing in either suite exercises
+     * Remote-replacing-Local at all.
+     *
+     * The case is that the state a guard would arbitrate cannot legitimately
+     * exist. [CellRef] is a globally unique identity — "instance ids must be
+     * minted collision-free without coordination" (G-8/M7.1), and replicas of
+     * one logical cell are distinct instances (spec 42) — so two `Local`
+     * bindings for one ref on two peers is a violated precondition, and its
+     * *unenforcedness* is already filed as spec gap **G-57**
+     * (`doc/spec/40-distribution/41-location-transparency.md`: "instanceId
+     * minting has no stated collision discipline across hosts"), not as
+     * registry behaviour. A guard would not repair that collision — two
+     * distinct cells still share one identity, and links, replication
+     * membership and quorum are wrong regardless; it would only mask G-57.
+     *
+     * And it would cost one recovery, by *argument, not measurement* (nothing
+     * in-tree exercises it): announcements are the only channel by which a host
+     * learns where a ref lives, so a host holding a stale `Local` for a ref the
+     * cluster has since placed elsewhere would refuse every catch-up that could
+     * tell it otherwise — a permanent, silent split with no repair path.
+     * Spec 42 models registry state as an "eventually-consistent local fold of
+     * announcements"; last-writer-wins is what makes that fold converge.
+     *
+     * What the incident did expose and this note does not fix is the
+     * **silence**: the overwrite is neither logged nor counted, which is what
+     * made it expensive to diagnose. Making it observable — the
+     * `RegistryMirrorCell.refusedAnnouncements` treatment — is computenet-rfbt,
+     * open.
      */
     private fun install(ref: CellRef, location: Location) {
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }

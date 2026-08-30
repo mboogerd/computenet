@@ -915,6 +915,19 @@ object Peering {
      * peer with several remotes at once; each peer only ever hears about
      * *local* refs, so nothing loops or forwards second-hand locations.
      *
+     * **The catch-up sweep's scope is `localRefs()` — every ref this registry
+     * serves locally, with no replication filter of any kind** (computenet-mx6p,
+     * asserted by `LocationRegistryLocationPrecedenceTest`'s "announceTo's
+     * catch-up announces every Local ref"). Plain cells, replicas, shards and
+     * the bridge's own retired mirror cells are announced alike, because an
+     * announcement says "ref X lives here", which is true of every local ref;
+     * replication is a property of the *cell*, not of whether its location is
+     * worth knowing. What keeps two hosts from announcing the same X is the
+     * uniqueness of [civictech.cell.CellRef] (G-8/M7.1), and the fact that
+     * nothing enforces it is spec gap G-57 — see
+     * [LocationRegistry.install]'s location-precedence note for what happens
+     * when an application breaks that precondition anyway.
+     *
      * **The catch-up sweep is failure-isolated per ref** (computenet-dqy.40),
      * for the reason [LocationRegistry.publish]'s own hook notification already
      * is: *hooks are notifications, not participants*. Until this item the
