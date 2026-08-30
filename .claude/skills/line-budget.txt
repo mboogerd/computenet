@@ -278,7 +278,11 @@
 # "~4 min" per-merge check cost predated the current six-check set and is now
 # ~9-12m wall (measured 2026-08-30). Corrected in the same diff as the lane
 # text that cites it, so the cite and the citee cannot drift apart.
-work                9167
+# 9167 -> 9170 on 2026-08-30: computenet-a5in (+3) — bought 5e naming the
+# fourth check state: NO-RUN (exit 5) is never waited out, because GitHub
+# started no run for this head and the last green belongs to an earlier one.
+# The mechanical half is in wait-checks.sh and costs no budget lines.
+work                9170
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

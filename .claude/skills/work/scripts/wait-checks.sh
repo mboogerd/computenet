@@ -80,8 +80,27 @@
 #   TIMEOUT-PENDING / QUERY-FAILED — so `tail -1` is the reading. SETTLED means present-and-not-pending, which
 #   includes failed checks: read the rows above it for red.
 # Exit: 0 = SETTLED; 4 = TIMEOUT-PENDING (rounds exhausted, checks exist but
-#   have not settled); 3 = QUERY-FAILED (the last round produced no
+#   have not settled); 5 = NO-RUN (GitHub never started a workflow run for this
+#   head — see below); 3 = QUERY-FAILED (the last round produced no
 #   recognizable rows — nothing was read); 2 = bad usage.
+#
+# THE FOURTH STATE: GITHUB NEVER BUILT THIS HEAD (computenet-a5in). Zero rows
+# has two causes that demand OPPOSITE responses — checks not created yet, which
+# is waited out, and no run existing for this commit at all, which must never
+# be. Both look identical: `total_count: 0`, `gh pr checks` saying "no checks
+# reported". Measured 2026-08-26 on PR #504: head 5d1177f07 had zero check runs
+# because no run was ever started for it, the last green belonged to an earlier
+# head, and a session reading "no checks" as "not yet" would have waited and
+# then shipped on a green that predated the code. What made it visible was
+# mapping `gh run list --json headSha` against the PR head — which nothing in
+# this skill prescribed. It does now: after COLD_ROUNDS with no rows, this asks
+# whether a run exists for the head, and if none does it stops rather than
+# spending the rest of its budget.
+#
+# COLD START IS NOT A QUERY FAILURE. Registering the first check row took ~4.5
+# minutes on that same PR, so the first 13 rounds all printed QUERY FAILED —
+# 13 lines that mean nothing is wrong, which is how an agent learns to ignore
+# the one line that does. Rounds inside COLD_ROUNDS say COLD START instead.
 set -uo pipefail
 
 pr=${1:?usage: wait-checks.sh <pr-url> [max-rounds]}
@@ -98,6 +117,11 @@ req='build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel
 
 # How many consecutive query-failed rounds before trying the other transport.
 FALLBACK_AFTER=${WAIT_CHECKS_FALLBACK_AFTER:-3}
+
+# Rounds (20s each) in which zero rows is ORDINARY rather than a query failure.
+# 15 is ~5m, above the 4.5m cold start measured in computenet-a5in. After this,
+# zero rows is interrogated: a head with no workflow run is NO-RUN, terminal.
+COLD_ROUNDS=${WAIT_CHECKS_COLD_ROUNDS:-15}
 
 # Minutes a required check may be running before an exhausted wait is called
 # STUCK rather than ORDINARY. 15 sits above the slowest measured
@@ -135,6 +159,17 @@ pending_ages() {
           | "\(.name) \(((now - (.started_at|fromdateiso8601))/60)|floor)"' 2>/dev/null
 }
 
+# Does ANY workflow run exist for this head? Distinguishes "not created yet"
+# from "never built" — the two causes of zero rows (computenet-a5in). Empty
+# output means no run; a failed query also prints nothing, so the caller only
+# treats it as NO-RUN after the cold-start window AND with rows still absent.
+runs_for_head() {
+  local sha=$1
+  [ -n "$sha" ] || return 1
+  gh run list --limit 100 --json headSha --jq \
+    "[.[] | select(.headSha == \"$sha\")] | length" 2>/dev/null
+}
+
 rows=""
 state=query-failed
 consecutive_failed=0
@@ -168,8 +203,29 @@ for i in $(seq 1 "$rounds"); do
     if printf '%s\n' "$rows" | grep -qE '(pass|fail|pending|skipping)[[:space:]]'; then
       state=not-reporting               # normal early state (computenet-1zhu)
       echo "round $i/$rounds: only $n of 6 required rows reporting"
-    else
+    elif [ "$i" -le "$COLD_ROUNDS" ]; then
       state=query-failed                # no recognizable status rows at all
+      # The text is ANNOTATED, not replaced: a real transport error prints here
+      # too, and hiding it for 15 rounds to make cold start quiet would trade
+      # one ignorable line for one invisible one.
+      echo "round $i/$rounds: QUERY FAILED: $rows" \
+           "[COLD START — ordinary for the first ${COLD_ROUNDS} rounds]"
+    else
+      state=query-failed
+      # Past the cold-start window, zero rows is interrogated once rather than
+      # waited out: a head GitHub never built never acquires rows, and every
+      # remaining round is spent confirming that (computenet-a5in).
+      nruns=$(runs_for_head "$judged_sha")
+      if [ "${nruns:-x}" = 0 ]; then
+        printf '%s\n' "$rows"
+        echo "wait-checks: verdict is for head ${judged_sha:-unknown}"
+        echo "wait-checks: NO workflow run exists for this head after $i rounds." \
+             "This is NOT 'not yet' — waiting cannot fix it. Push again (an empty" \
+             "commit is enough) or re-run the workflow; never ship on a green that" \
+             "belongs to an earlier head."
+        echo NO-RUN
+        exit 5
+      fi
       echo "round $i/$rounds: QUERY FAILED: $rows"
     fi
   elif printf '%s\n' "$rows" | grep -q pending; then
