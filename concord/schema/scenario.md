@@ -476,6 +476,7 @@ executable evaluators in `civictech.concord.check` (§1.4).
 | observations-whole-waves | `{type: observations-whole-waves, view: v, source: a}` | every observation equals the source's fold at some whole op prefix (no torn fork-join) |
 | wave-plane-unchanged | `{type: wave-plane-unchanged, cell: s}` | every `read-state` walk on `s` left `s`'s wave plane exactly where it found it |
 | pages-equal-view | `{type: pages-equal-view, cell: s, view: v}` | every `read-state` walk on `s` was stamped, non-duplicating, and unions to `v`'s fold |
+| emission-count | `{type: emission-count, cell: r2, since: 7, exactly: 0}` | `r2`'s outlet emitted exactly N times from just before script step `since` to check time (window must be `quiesce`-barriered) |
 
 Inline construction-time expectations use `expect:` on the `connect`/`disconnect`
 step, not a check entry.
@@ -548,13 +549,75 @@ sink: s, key: k4, exactly: 1}` fails with `observed 0` when `k4` never fired. Us
 for any sink shape the derivation gives up on, and for the specific elements a
 scenario's narrative singles out.
 
-### What a conforming driver must observe (the two read-side checks)
+### `emission-count`: the window, and why it must be barriered
+
+**Status.** Landed (`computenet-dvim`). This subsection is the single-writer,
+schema-change-gated review of the extension; the matching
+`@SerialName("emission-count")` `Check`, the `civictech.concord.check` evaluator,
+the `Driver` SPI observation, the `civictech.concord.driver.kernel` binding and
+the `CorpusRunner` baseline capture moved with it in the same ticket, per D-C12's
+rule that a check's seams move together or the module does not compile.
+
+**What it asserts.** `{type: emission-count, cell: r2, since: 7, exactly: 0}`
+asserts that `r2`'s outlet produced **exactly** `exactly` emissions over the
+window `[immediately before script step 7, check time]`. `since` is a **1-based
+index into this scenario's `script:` list** — the window's lower edge is stated
+in the scenario's own vocabulary, not in wall-clock or scheduler steps — and the
+upper edge is check time, i.e. after the run's final quiescence.
+
+A **count** is the whole observation. Not a log, not an emission's identity, not
+its ordering, not its payload, not which link carried it. `exactly: 0` is the
+form the vocabulary was missing: "this outlet stayed silent across these steps."
+
+**Why no existing check reaches it.** Every other check reads *state*.
+`final-view`, `views-converge`, `replicas-converge` and
+`incremental-equals-batch` read a fold; the `observations-*` family reads a
+stream whose events are folds; `pages-equal-view` reads a walk over a cell's own
+state. Echo termination at a replica's gossip inlet is invisible in all of them
+**by construction**: the dot algebra is idempotent, so re-absorbing an
+already-held dot changes no fold, no view and no replica comparison — a
+re-emission of exactly that dot is state-indistinguishable from no emission at
+all. `effect-count` reads an *effect* log, which exists only at a durable effect
+boundary. `wave-plane-unchanged` does observe emission, and only *around a
+`read-state` walk*: it quantifies over the recorded walks, so a scenario with no
+bounded read gives it nothing to assert, and what it asserts is "zero, across a
+read" rather than "exactly N, across a stated window."
+
+**Well-definedness (normative).** The step at `since` and every later step MUST
+be separated from all earlier steps by a `quiesce` barrier — in practice, the
+step immediately before `since` is a `quiesce`, or `since` is `1` (there is no
+earlier step for the window to race). §Script semantics deliberately leaves
+delivery interleaving *between* barriers to the implementation, so an unbarriered
+window would make the count assert an interleaving the schema does not fix, and
+the same scenario could honestly report different counts on different runs of the
+schedule sweep. This is the hazard the schema already names for `read-state`, in
+the same form. **A scenario that violates the condition fails loudly**; it is
+never evaluated on a best-effort reading of its window.
+
+**Everything degenerate fails; nothing passes vacuously.** `exactly: 0` is
+satisfied by having nothing to count, so every route to "nothing to count" is a
+failure: a `since` outside the script, an unbarriered window, a missing runner
+baseline for the `(cell, since)` pair, a driver that refuses the named cell
+(either when the baseline is taken or at check time), and a second reading below
+the first. In particular a driver MUST NOT answer `0` for a cell whose outlet it
+cannot observe — see the next section — because that `0` is a perfectly
+plausible *passing* answer and would be invisible in a green run.
+
+**Where the baseline comes from.** The window's lower edge is gone by check time,
+so the *runner* samples it — reading the count immediately before executing step
+`since`, for each `emission-count` the scenario declares — and carries it on the
+check context. This is the same argument `read-state` makes for recording a
+walk's "before": asking the driver SPI to remember its own past counts would put
+harness bookkeeping into the per-implementation surface, where a second binding
+would have to reimplement it identically for no conformance reason.
+
+### What a conforming driver must observe (the three checks that need one)
 
 A check is only a conformance check if a **second, non-kernel** implementation
-could evaluate it from the specification alone. The two checks added with
-`read-state` (V1C-CONCORD) each require one observation beyond the existing
-verbs, and both are stated here in the spec's vocabulary, not any
-implementation's.
+could evaluate it from the specification alone. Three checks require an
+observation beyond the existing verbs — the two added with `read-state`
+(V1C-CONCORD) and `emission-count` (`computenet-dvim`) — and each is stated here
+in the spec's vocabulary, not any implementation's.
 
 **`wave-plane-unchanged`** requires the driver to report, for a named cell, the
 **wave plane that cell has reached**: for every wave source visible at that
@@ -599,6 +662,26 @@ Both checks **fail** when the scenario recorded no `read-state` walk on the
 named cell, or when a recorded walk returned no page. "Nothing was observed"
 must never read as "the property held" — these are the two checks in the
 vocabulary that are trivially satisfiable by not doing anything.
+
+**`emission-count`** requires the driver to report, for a named cell, **how many
+times that cell's outlet has emitted so far in this run** — a single ascending
+count, nothing else. Any implementation of this specification already keeps the
+bookkeeping: spec 20/22 §Structural changes makes every delivery carry a fresh
+per-source wave position *minted by the emitting outlet*, so an outlet that could
+not say how many positions it has minted could not stamp its next one. The check
+differences two readings of that count and compares the difference to an integer,
+so nothing about an emission's identity, ordering, payload, routing, scheduling
+or frame layout is observed, and no implementation identifier leaks into a check.
+
+The count is **per run**; only differences within one run are ever compared, so
+where a driver starts counting is its own business. A driver that cannot observe
+the named cell's outlet MUST **fail loudly** rather than answer `0`, by the same
+rule as `retransmit`'s refusals: the difference of two zeroes is zero, which is
+exactly what an `exactly: 0` check accepts, so a silent `0` converts an
+unobservable cell into a green check — the one failure this observation exists to
+prevent, and the one that leaves no trace in a passing run. Which cells it can
+observe is a driver capability like any other, and an unobservable target named
+by a scenario is an authoring error to report, never a weaker answer.
 
 ## `generator` (kind: generative)
 
