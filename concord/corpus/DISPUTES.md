@@ -2374,7 +2374,29 @@ gone through the schema's single-writer review and updated the note to name
 both admitted targets; the sentence quoted above no longer appears in
 `scenario.md`.
 
-## KE1-F4 task 4 residual: the corpus cannot COUNT re-emissions, so echo termination's "re-emits nothing" is pinned at the driver, not in the corpus (`schema-gap`, `[KE1-33]`)
+## RESOLVED — KE1-F4 task 4 residual: the corpus cannot COUNT re-emissions, so echo termination's "re-emits nothing" is pinned at the driver, not in the corpus (`schema-gap`, `[KE1-33]`)
+
+**Retired by `computenet-dvim`.** This entry recorded that the closed check
+vocabulary had no way to count a cell's outlet emissions, so `42-TMAP-REPL-01`
+could not state "a duplicate delivery re-emits nothing" itself and the count
+was pinned one level down, at `RetransmitBindingTest`. What it named as the
+fix is what landed: `concord/schema/scenario.md` §`checks` gained
+`emission-count` (`{type: emission-count, cell: <id>, since: <1-based script
+step>, exactly: N}`), asserting an outlet's emission count over the window
+`[immediately before step since, check time]`, well-defined only when that
+window is `quiesce`-barriered from every earlier step, and refusing loudly —
+never passing vacuously — on an out-of-range `since`, an unbarriered window, a
+missing runner baseline, or a driver that cannot observe the named cell. The
+matching `Check` subtype, `civictech.concord.check` evaluator, `Driver` SPI
+verb and `civictech.concord.driver.kernel` binding moved with it in the same
+ticket (`computenet-dvim.1`), and `42-TMAP-REPL-01` now asserts the count
+directly: `{type: emission-count, cell: r2, since: 7, exactly: 0}` and
+`{type: emission-count, cell: r1, since: 7, exactly: 0}` on its two
+`retransmit` steps (`computenet-dvim.2`). `RetransmitBindingTest`'s
+driver-level pin and its interest-empty control are unchanged — the corpus
+check and the driver test answer different layers.
+
+The original reasoning below is kept for its history.
 
 `[KE1-33]`'s duplicate-delivery half wants a re-delivered dot to be shown to
 re-emit **nothing**. That is not observable in any state a check can read, and
