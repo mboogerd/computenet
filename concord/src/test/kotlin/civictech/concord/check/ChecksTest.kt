@@ -16,6 +16,7 @@ import civictech.concord.oracle.Fx.scenario
 import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.DespawnStep
 import civictech.concord.schema.DisconnectStep
+import civictech.concord.schema.DriveContextlessStep
 import civictech.concord.schema.EffectCount
 import civictech.concord.schema.EmissionCount
 import civictech.concord.schema.FinalView
@@ -928,6 +929,23 @@ class ChecksTest {
                     RetransmitStep(on = "sink", source = "src", counter = 1, op = "add", value = null),
                 ),
             ),
+            // computenet-cuqz — `drive-contextless` is the second verb that injects a
+            // delivery at an inlet directly. It is admitted at the sink, where the
+            // delivery is refused by construction ([24-DUR-06]) and so names nothing;
+            // anywhere else in the cone the delivery is ordinary admitted traffic that
+            // would feed the sink an element no `add` names, which is the vacuous pass
+            // again. Today's kernel binding refuses a non-effect-sink target, so this
+            // row is a unit shape rather than a corpus scenario — the refusal is what
+            // makes a widened binding (`KernelDriver.driveContextless` calls that
+            // "deliberate future scope") revisit the arm instead of inheriting it.
+            "a drive-contextless into an upstream rather than the sink itself" to scenario(
+                cells = listOf(jsrc, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(
+                    apply("src", "add", s("k1")),
+                    DriveContextlessStep(on = "src", op = "add", value = s("ghost")),
+                ),
+            ),
         )
         // Collected rather than fail-fast on purpose: when a refusal rule is removed
         // this names *every* shape that starts resolving again, which is what makes
@@ -1018,6 +1036,40 @@ class ChecksTest {
             ),
         )
         derived(duplicateBeforeItsAdd) shouldBe setOf("k1")
+
+        // computenet-cuqz, DUR-CONTEXTLESS-01's own shape: a contextless delivery
+        // driven straight at the sink names an element (`ghost`) no `add` names, and
+        // the derived set must NOT grow to include it. At an `effect-sink` — an
+        // `Effectful` boundary — a delivery carrying no message context is refused as
+        // undeliverable ([24-DUR-06]), so it acts on nothing; naming it would make the
+        // unkeyed form demand that a refused element fired `exactly:` N times, which
+        // is the derivation inverted. Refusing outright is equally wrong: it would
+        // leave the corpus scenario that covers [24-DUR-06] unable to state the
+        // stamped path's own count. The set is `{k1}`, and the crash handle out of
+        // cone changes nothing, exactly as in the corpus file.
+        val contextlessDriveAtTheSink = scenario(
+            cells = listOf(jsrc, esink, cell("ctl", "journal")),
+            links = listOf(link("src", "sink")),
+            script = listOf(
+                apply("src", "add", s("k1")),
+                DriveContextlessStep(on = "sink", op = "add", value = s("ghost")),
+                DespawnStep(on = "ctl"),
+            ),
+        )
+        derived(contextlessDriveAtTheSink) shouldBe setOf("k1")
+
+        // The same drive on a cell with no path to the sink: outside the cone it
+        // cannot feed the sink at all, so it is ignored rather than refused — the
+        // guard must refuse by mechanism, not by breadth.
+        val contextlessDriveOutsideTheCone = scenario(
+            cells = listOf(jsrc, esink, cell("other", "set-source")),
+            links = listOf(link("src", "sink")),
+            script = listOf(
+                apply("src", "add", s("k1")),
+                DriveContextlessStep(on = "other", op = "add", value = s("ghost")),
+            ),
+        )
+        derived(contextlessDriveOutsideTheCone) shouldBe setOf("k1")
     }
 
     // --- wave-plane-unchanged / pages-equal-view (V1C-CONCORD) ---------------

@@ -12,6 +12,7 @@ import civictech.concord.schema.Check
 import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.DespawnStep
 import civictech.concord.schema.DisconnectStep
+import civictech.concord.schema.DriveContextlessStep
 import civictech.concord.schema.EffectCount
 import civictech.concord.schema.EmissionCount
 import civictech.concord.schema.FinalView
@@ -394,17 +395,19 @@ object Checks {
      * derived set is **complete**: nothing can reach [sink] that is not a scripted
      * add on one of its direct upstreams. That is one step rather than an induction
      * over the cone, because the shape gate leaves the cone exactly `{sink} ∪
-     * upstream`. Stated exhaustively over the `Step` hierarchy's ten verbs plus the
-     * declared graph — because a summary of this argument is what was wrong twice —
-     * an element can enter a direct upstream only through an `add` on it (the derived
-     * set), a declared link into it, a mid-script `connect` into it, a `restore` of
-     * it, or a `restart` of it, and every route but the first is a refusal below. One
-     * verb reaches [sink] without passing through an upstream at all: `retransmit`
-     * injects a delivery at an inlet directly, so it is admitted only where it
-     * re-delivers an element the derived set already names and refused otherwise (see
-     * its arm). The other five verbs cannot introduce one: `remove`, `quiesce`,
-     * `snapshot` and `read-state` do not feed a cell, `disconnect` only removes an
-     * edge, and a `despawn` only stops traffic (and refuses anyway).
+     * upstream`. Stated exhaustively over the `Step` hierarchy's eleven verbs plus
+     * the declared graph — because a summary of this argument is what was wrong twice
+     * — an element can enter a direct upstream only through an `add` on it (the
+     * derived set), a declared link into it, a mid-script `connect` into it, a
+     * `restore` of it, or a `restart` of it, and every route but the first is a
+     * refusal below. **Two** verbs reach [sink] without passing through an upstream at
+     * all, because each injects a delivery at an inlet directly: `retransmit`, which
+     * is admitted only where it re-delivers an element the derived set already names,
+     * and `drive-contextless`, which is admitted only at [sink] itself, where the
+     * delivery is refused by construction and so names nothing. Both refuse otherwise
+     * (see their arms). The other five verbs cannot introduce one: `remove`,
+     * `quiesce`, `snapshot` and `read-state` do not feed a cell, `disconnect` only
+     * removes an edge, and a `despawn` only stops traffic (and refuses anyway).
      *
      * One route in would be outside the *script*: a **replicated** upstream merging a
      * peer's delta (`SetCell.applyRemote`), which no `add` names, so its elements
@@ -561,6 +564,53 @@ object Checks {
                     if (step.on != sink) return null
                     if (step.op != "add") return null
                     retransmitted += Values.render(step.value ?: return null)
+                }
+                // The second verb that puts an element in front of a cell without a
+                // link carrying it (`computenet-em9i` added it; this arm is
+                // `computenet-cuqz`, which is what it fell through to `else` for).
+                // It is admitted at [sink] on a *schema*-level fact rather than a
+                // property of one binding: [sink] is an `effect-sink` — the shape
+                // gate above has already established that — so its inlet is an
+                // `Effectful` boundary, and a `PORT_API` delivery arriving there with
+                // no `MessageContext` SHALL be refused as undeliverable (spec 24
+                // §Effectful `[24-DUR-06]`). A refused delivery acts on nothing, so it
+                // contributes no key, and the element it names is rightly absent from
+                // the derived set. That is `DUR-CONTEXTLESS-01`'s shape exactly: it
+                // drives `ghost`, which no `add` names, and its unkeyed
+                // `effect-count(sink, exactly: 1)` quantifies over `{k1}` alone.
+                //
+                // Both naive arms are wrong, and wrong on that scenario:
+                // - *naming* the driven element (adding it to `keys`, or to
+                //   `retransmitted`, which must be contained in `keys`) inverts the
+                //   derivation. The derived set is what the unkeyed form demands fired
+                //   `exactly:` N times, and a refused element must fire **zero**;
+                // - `return null` refuses the derivation, which makes the *stamped*
+                //   path's own count unstatable in the one scenario that covers
+                //   `[24-DUR-06]` — the check would report "the keys cannot be
+                //   derived" and the scenario would have to name k1 by hand, losing
+                //   the silent-loss reading on the very arm it exists to protect.
+                //
+                // Anywhere ELSE in the cone is a refusal, and the guard is the point.
+                // `KernelDriver.driveContextless` binds only an effect-sink target
+                // today and calls widening it "deliberate future scope"; a widened
+                // binding could drive a contextless delivery at a non-`Effectful`
+                // cell, where it is ordinary admitted traffic that WOULD feed [sink]
+                // an element no `add` names — an element free to fire zero times
+                // invisibly, the vacuous pass this whole derivation exists to close.
+                // Such a widening then meets a refusal here and has to revisit this
+                // arm, rather than silently inheriting an admission argued for a case
+                // it is no longer in.
+                //
+                // `op` is deliberately not examined, unlike the retransmit arm's: the
+                // refusal is decided by the absent context before the payload is read,
+                // so no op can make the delivery contribute a key. And a *non*-
+                // conforming kernel that acted on the frame anyway is caught by the
+                // keyed `effect-count(sink, key: ghost, exactly: 0)` that
+                // `DUR-CONTEXTLESS-01` pairs with this one, not here — effect
+                // *fabrication* is outside the unkeyed form's reading (see the KDoc).
+                is DriveContextlessStep -> {
+                    if (step.on !in cone) continue
+                    if (step.on != sink) return null
                 }
                 else -> Unit
             }

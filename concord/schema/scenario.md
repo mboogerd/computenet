@@ -607,6 +607,10 @@ effect per delivered added element, keyed by the element). Anything else refuses
   in the cone);
 - any cell in the cone is `despawn`ed, `restart`ed or `restore`d;
 - an `apply` targets a cell in the cone that is *not* a direct upstream;
+- a `drive-contextless` targets a cell in the cone that is *not* the sink itself.
+  At the sink it is admitted and names nothing (see below); at any other cone cell
+  the delivery is ordinary admitted traffic, which would feed the sink an element
+  no `add` names (computenet-cuqz);
 - a direct upstream takes an op outside `add`/`remove`, an `add` with no `value:`, an
   `add` with `times:`, or an `add` of an element **already added** (including a
   re-add after a `remove`). Each of those fires once *per add*, and one `exactly:`
@@ -623,6 +627,20 @@ mid-script and keep resolving. A `restart` re-baselines and re-announces, and a
 can therefore feed the sink an element that no `add` on a direct upstream ever
 named, which is a vacuous pass, not merely an imprecise one (measured in
 computenet-61w.1). Both refuse anywhere in the cone.
+
+**A `drive-contextless` at the sink itself contributes no key, and that is a
+statement about the schema, not about a binding.** The sink is declared
+`effect-sink`, so its inlet is an `Effectful` boundary, and a delivery arriving
+there with no message context is refused as undeliverable (`[24-DUR-06]`) — it
+acts on nothing. So the element it names stays *out* of the derived set:
+`DUR-CONTEXTLESS-01` drives `ghost`, which no `add` names, and its unkeyed
+`effect-count(sink, exactly: 1)` still quantifies over `{k1}` alone. Naming the
+driven element would invert the derivation (the derived set is what must have
+fired `exactly:` N times, and a refused element fires zero); refusing outright
+would leave that scenario unable to state the stamped path's own count. Pair the
+verb with a keyed `effect-count(sink, key: <driven>, exactly: 0)` — an
+implementation that acted on the frame anyway is caught there, not by the unkeyed
+form, whose reading excludes effect *fabrication* (computenet-cuqz).
 
 A keyed `effect-count` is unconditional and always available: `{type: effect-count,
 sink: s, key: k4, exactly: 1}` fails with `observed 0` when `k4` never fired. Use it
