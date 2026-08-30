@@ -250,8 +250,8 @@ echo deadbeef > "$CTRL/api-sha.out"
 echo 0 > "$CTRL/run-list.out"
 out=$(WAIT_CHECKS_COLD_ROUNDS=9 run 3); rc=$?
 [ "$rc" -eq 3 ] && ok "inside the cold window, zero rows is still QUERY-FAILED" || bad "exits $rc, wanted 3"
-has "$out" "COLD START — ordinary" "early empty rounds are labelled, not silently repeated"
-has "$out" "[COLD START" "the empty rounds are annotated, so none of them is a line to ignore"
+has "$out" "COLD START — no rows yet" "early empty rounds are labelled, not silently repeated"
+hasnt "$out" "QUERY FAILED" "the cold rounds do not LEAD with the words an agent learns to skip"
 hasnt "$out" "NO-RUN" "it does not call NO-RUN before the cold window is over"
 
 echo

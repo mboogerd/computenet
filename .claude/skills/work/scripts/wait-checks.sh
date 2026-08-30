@@ -205,24 +205,33 @@ for i in $(seq 1 "$rounds"); do
       echo "round $i/$rounds: only $n of 6 required rows reporting"
     elif [ "$i" -le "$COLD_ROUNDS" ]; then
       state=query-failed                # no recognizable status rows at all
-      # The text is ANNOTATED, not replaced: a real transport error prints here
-      # too, and hiding it for 15 rounds to make cold start quiet would trade
-      # one ignorable line for one invisible one.
-      echo "round $i/$rounds: QUERY FAILED: $rows" \
-           "[COLD START — ordinary for the first ${COLD_ROUNDS} rounds]"
+      # The LEADING WORDS are what an agent skims, so inside the window they
+      # are not "QUERY FAILED" — 13 of those in a row during a ~4.5m cold
+      # start is how the one line that matters gets skipped. `$rows` is still
+      # printed: it is empty today (rest_rows discards stderr, and the
+      # fallback only assigns rows that already contain status words), but
+      # printing it costs nothing and stops this line from lying if that
+      # changes.
+      echo "round $i/$rounds: COLD START — no rows yet, ordinary for the" \
+           "first ${COLD_ROUNDS} rounds: $rows"
     else
       state=query-failed
-      # Past the cold-start window, zero rows is interrogated once rather than
-      # waited out: a head GitHub never built never acquires rows, and every
-      # remaining round is spent confirming that (computenet-a5in).
+      # Past the cold-start window, zero rows is INTERROGATED EACH ROUND rather
+      # than waited out: a head GitHub never built never acquires rows, and
+      # every remaining round would be spent confirming that (computenet-a5in).
+      # SCOPE: this asks whether a RUN EXISTS, which is narrower than whether
+      # the head was BUILT — `cancel-in-progress` can leave a run record with
+      # no check-runs, and that diagnoses as TIMEOUT-PENDING. Safe either way:
+      # neither is SETTLED, so nothing ships on it.
       nruns=$(runs_for_head "$judged_sha")
       if [ "${nruns:-x}" = 0 ]; then
         printf '%s\n' "$rows"
         echo "wait-checks: verdict is for head ${judged_sha:-unknown}"
         echo "wait-checks: NO workflow run exists for this head after $i rounds." \
-             "This is NOT 'not yet' — waiting cannot fix it. Push again (an empty" \
-             "commit is enough) or re-run the workflow; never ship on a green that" \
-             "belongs to an earlier head."
+             "This is NOT 'not yet' — waiting cannot fix it. PUSH AGAIN (an empty" \
+             "commit is enough); ci.yml has no workflow_dispatch, so there is no" \
+             "run to re-run and no trigger to fire. Never ship on a green that" \
+             "belongs to a different head."
         echo NO-RUN
         exit 5
       fi

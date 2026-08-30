@@ -2170,8 +2170,10 @@ Red required check → red-check-attribution.md; pending → wait with
 `.claude/skills/work/scripts/wait-checks.sh <pr-url>` (step 2's rules: classify on output, never
 `$?`; computenet-luhx, computenet-15it, computenet-1zhu). **`NO-RUN` (exit 5)
 is never waited out**: GitHub started no workflow run for this head, so no
-amount of polling produces one and the last green belongs to an EARLIER head —
-push again or re-run the workflow, and never ship on it (computenet-a5in). A verdict
+amount of polling produces one and any green on the PR belongs to a DIFFERENT
+head — push again (an empty commit is enough; `ci.yml` has no
+`workflow_dispatch`, so there is nothing to re-run), and never ship on it
+(computenet-a5in). A verdict
 carrying a **§6 hand-back** is yours to complete, and it is the **normal**
 path, not an exception: review-feature.md §6 assigns the merge to you
 outright, because the classifier refuses reviewers `git merge`
