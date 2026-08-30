@@ -21,6 +21,17 @@ name: iroh-sidecar
 # is NOT wired into this job. computenet-egl.4 had not landed on main when
 # this workflow was filed (computenet-egl.5's stated condition for adding
 # it) — re-check that condition before wiring the suite in here.
+#
+# Where a warm (cache-hit=true) figure comes from (computenet-jtvd): this
+# workflow only triggers on pull_request, so it never writes a main-scoped
+# rust-cache entry itself, and a PR's first run here is cold by construction.
+# cache-seed.yml runs an `iroh-sidecar` job under the same job id, toolchain
+# and `workspaces: iroh/sidecar` on a daily schedule from main, so its saved
+# Swatinem/rust-cache entry is the one this job's cache-hit lookup restores
+# from — the same pattern this file's own cache-seed.yml header describes for
+# the Gradle lanes. A warm figure therefore requires either a PR run after
+# cache-seed.yml has run at least once post-merge, or a second run on the
+# same PR ref (which restores the first run's own PR-scoped cache entry).
 on:
   pull_request:
     paths:

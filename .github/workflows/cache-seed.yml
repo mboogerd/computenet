@@ -105,3 +105,30 @@ jobs:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
       - name: Run full concord corpus (core, dist, dur)
         run: ./gradlew :concord:test -Pconcord.profiles=core,dist,dur
+
+  # Same rationale as the lanes above, applied to iroh-sidecar.yml's rust
+  # cache (computenet-jtvd, residual from computenet-egl.5/.6): that workflow
+  # only triggers on pull_request, so it never writes a main-scoped
+  # Swatinem/rust-cache entry, and every PR's first run is cold. This job
+  # reuses the SAME job id (`iroh-sidecar`) and the same workspace/toolchain
+  # so its saved cache entry carries the key iroh-sidecar.yml's PR runs look
+  # up. Not timed and not asserting anything — cache-seed.yml is a seeding
+  # lane, not a validation lane (see the file header); the timed, labeled
+  # measurement lives in iroh-sidecar.yml itself.
+  iroh-sidecar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: iroh/sidecar
+      - name: cargo build
+        working-directory: iroh/sidecar
+        run: cargo build
+      - name: cargo test
+        working-directory: iroh/sidecar
+        run: cargo test
