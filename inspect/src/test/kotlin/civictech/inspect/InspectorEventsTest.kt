@@ -10,6 +10,7 @@ import civictech.testkit.awaitUntil
 import civictech.testkit.bounded
 import civictech.testkit.boundedHttpClient
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -21,7 +22,10 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 /**
  * `GET /api/inspect/events`: the delta stream that keeps a fetched snapshot
@@ -45,12 +49,51 @@ class InspectorEventsTest {
     private val server = InspectorServer(registry, host, port = 0).startUnscheduled()
     private var tap: SseTap? = null
 
+    /**
+     * Where an SSE body is read — see [readAsync]. One virtual thread per tap,
+     * shut down here rather than left to the collector, exactly as
+     * computenet-4vh required of the tap's own `HttpClient`.
+     */
+    private val readers: ExecutorService = Executors.newVirtualThreadPerTaskExecutor()
+
     @AfterEach
     fun tearDown() {
         tap?.close()
         server.close()
+        readers.shutdownNow()
         hostScheduler.shutdown()
     }
+
+    /**
+     * The instrument test for [readAsync], and the discriminator for
+     * computenet-i45n: an already-complete future is the state `sendAsync`'s
+     * future is in whenever the response headers won the race, and it is
+     * precisely the state in which `thenAccept` would run the body inline on
+     * the caller. Restoring `thenAccept` in [readAsync] turns this red on the
+     * `shouldNotBe` below, deterministically and in milliseconds — no load, no
+     * repetition, and no five-minute timeout needed to see it.
+     */
+    @Test
+    fun `an already-complete response future is never read on the thread that attached it`() {
+        val caller = Thread.currentThread()
+        val ranOn = CompletableFuture<Thread>()
+
+        readAsync(CompletableFuture.completedFuture(Unit)) { ranOn.complete(Thread.currentThread()) }
+
+        ranOn.get(5, TimeUnit.SECONDS) shouldNotBe caller
+    }
+
+    /**
+     * Run [body] on [readers] once [future] completes — **never** on the thread
+     * that attached it (computenet-i45n). See `InspectorGraphsTest.readAsync`
+     * for the full mechanism writeup: `thenAccept` runs inline on the caller
+     * when the future is already complete at attach time, which is exactly
+     * what happens when `sendAsync`'s headers-only completion beats attachment
+     * while `BodyHandlers.ofLines()` leaves an endless SSE body to read.
+     * `thenAcceptAsync` with an explicit executor has no such case.
+     */
+    private fun <T> readAsync(future: CompletableFuture<T>, body: (T) -> Unit): CompletableFuture<Void> =
+        future.thenAcceptAsync(body, readers)
 
     private fun listen(): SseTap {
         val opened = SseTap("http://localhost:${server.boundPort}${InspectorServer.EVENTS_PATH}")
@@ -147,20 +190,20 @@ class InspectorEventsTest {
          * executor pool; cancelling [reader] alone left all of that alive.
          */
         private val client: HttpClient = boundedHttpClient()
-        private val reader: CompletableFuture<Void> = client
-            .sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines())
-            .thenAccept { response ->
-                response.body().forEach { line ->
-                    if (line.startsWith(DATA)) {
-                        val event = json.parseToJsonElement(line.removePrefix(DATA)).jsonObject
-                        frames += Frame(
-                            seq = event["seq"]!!.jsonPrimitive.content.toLong(),
-                            kind = event["kind"]!!.jsonPrimitive.content,
-                            payload = event["payload"]!!.jsonObject,
-                        )
-                    }
+        private val reader: CompletableFuture<Void> = readAsync(
+            client.sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines()),
+        ) { response ->
+            response.body().forEach { line ->
+                if (line.startsWith(DATA)) {
+                    val event = json.parseToJsonElement(line.removePrefix(DATA)).jsonObject
+                    frames += Frame(
+                        seq = event["seq"]!!.jsonPrimitive.content.toLong(),
+                        kind = event["kind"]!!.jsonPrimitive.content,
+                        payload = event["payload"]!!.jsonObject,
+                    )
                 }
             }
+        }
 
         /** Block (bounded) until [count] frames have arrived, then return them. */
         fun await(count: Int): List<Frame> {
