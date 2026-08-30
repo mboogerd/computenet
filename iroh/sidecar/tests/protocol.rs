@@ -525,3 +525,78 @@ async fn a_flood_on_an_unadopted_inbound_link_leaves_the_host_connection_answeri
         .send(Message::control(kind::SHUTDOWN, Vec::new()))
         .await;
 }
+
+/// The other half of computenet-3gij's criterion: `CLOSE_LINK` on **any** link,
+/// not merely on the flooded one.
+///
+/// The test above closes the link it flooded, which the fix could satisfy by
+/// special-casing that link. This one floods link X and closes link Y — a
+/// second inbound link on the *same* host connection, never flooded — and
+/// asserts nothing else, so it goes red on its own when the single message loop
+/// is blocked rather than being pre-empted by an earlier responsiveness
+/// assertion.
+#[tokio::test]
+async fn close_link_on_an_unflooded_sibling_link_is_answered_while_another_is_flooded() {
+    let a = spawn_sidecar().await;
+    let b = spawn_sidecar().await;
+    let mut host_a = Host::connect("A", a).await;
+    let mut host_b = Host::connect("B", b).await;
+
+    let a_id = host_a.node_id().await;
+    host_a
+        .send(Message::control(kind::LISTEN, Vec::new()))
+        .await;
+    let a_addrs = host_a.expect(kind::LISTENING, CONTROL_LINK).await;
+
+    let mut add_peer = a_id.clone();
+    add_peer.extend_from_slice(&a_addrs);
+    host_b
+        .send(Message::control(kind::ADD_PEER, add_peer))
+        .await;
+    host_b.expect(kind::PEER_ADDED, CONTROL_LINK).await;
+
+    // Two dials, neither followed by any DATA: A accepts two links and adopts
+    // neither stream, so both send queues are consumerless.
+    for out in [1u64, 3u64] {
+        host_b
+            .send(Message::new(kind::DIAL, out, a_id.clone()))
+            .await;
+        host_b.expect(kind::LINK_UP, out).await;
+    }
+
+    let mut inbound = Vec::new();
+    while inbound.len() < 2 {
+        let msg = host_a.recv().await;
+        if msg.kind == kind::LINK_UP {
+            inbound.push(msg.link);
+        }
+    }
+    let (flooded, sibling) = (inbound[0], inbound[1]);
+
+    for i in 0..FLOOD {
+        host_a
+            .send(Message::new(kind::DATA, flooded, vec![i as u8; 8]))
+            .await;
+    }
+
+    // The only assertion: a link the flood never touched can still be closed.
+    host_a
+        .send(Message::new(kind::CLOSE_LINK, sibling, Vec::new()))
+        .await;
+    assert!(
+        host_a
+            .answer_within(RESPONSIVE, kind::LINK_DOWN, sibling)
+            .await
+            .0
+            .is_some(),
+        "CLOSE_LINK on link {sibling}, which was never flooded, went unanswered for \
+         {RESPONSIVE:?} while link {flooded} carried {FLOOD} DATA on an unadopted stream"
+    );
+
+    host_a
+        .send(Message::control(kind::SHUTDOWN, Vec::new()))
+        .await;
+    host_b
+        .send(Message::control(kind::SHUTDOWN, Vec::new()))
+        .await;
+}
