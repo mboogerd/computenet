@@ -10,25 +10,14 @@ import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.Link
 import civictech.cell.link.LinkResult
 import civictech.testkit.HttpProbe
+import civictech.testkit.SseTap
 import civictech.testkit.awaitUntil
-import civictech.testkit.boundedHttpClient
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.shouldNotBe
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.util.UUID
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * M4 — the multi-graph navigator's backend: connected components over the
@@ -63,41 +52,14 @@ class InspectorGraphsTest {
     private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
     private val server = InspectorServer(registry, mapOf("test-host" to host), port = 0).startUnscheduled()
     private val probe = HttpProbe("http://localhost:${server.boundPort}")
-    private var tap: SseTap? = null
-
-    /**
-     * Where an SSE body is read — see [readAsync]. One virtual thread per tap,
-     * shut down here rather than left to the collector, exactly as
-     * computenet-4vh required of the tap's own `HttpClient`.
-     */
-    private val readers: ExecutorService = Executors.newVirtualThreadPerTaskExecutor()
+    private var tap: SseTap<Event>? = null
 
     @AfterEach
     fun tearDown() {
         tap?.close()
         server.close()
         probe.close()
-        readers.shutdownNow()
         hostScheduler.shutdown()
-    }
-
-    /**
-     * The instrument test for [readAsync], and the discriminator for
-     * computenet-i45n: an already-complete future is the state `sendAsync`'s
-     * future is in whenever the response headers won the race, and it is
-     * precisely the state in which `thenAccept` would run the body inline on
-     * the caller. Restoring `thenAccept` in [readAsync] turns this red on the
-     * `shouldNotBe` below, deterministically and in milliseconds — no load, no
-     * repetition, and no five-minute timeout needed to see it.
-     */
-    @Test
-    fun `an already-complete response future is never read on the thread that attached it`() {
-        val caller = Thread.currentThread()
-        val ranOn = CompletableFuture<Thread>()
-
-        readAsync(CompletableFuture.completedFuture(Unit)) { ranOn.complete(Thread.currentThread()) }
-
-        ranOn.get(5, TimeUnit.SECONDS) shouldNotBe caller
     }
 
     // ------------------------------------------------------------ components
@@ -450,131 +412,59 @@ class InspectorGraphsTest {
 
     private fun encoded(ref: CellRef): String = InspectorServer.encodeRef(ref)
 
-    /**
-     * Run [body] on [readers] once [future] completes — **never** on the thread
-     * that attached it (computenet-i45n).
-     *
-     * `CompletableFuture.thenAccept` is the trap this method exists to close.
-     * It runs the dependent action on the completing thread, and when the
-     * future is *already* complete at attach time it runs it inline on the
-     * **calling** thread (`CompletableFuture.uniAcceptNow`). `sendAsync`'s
-     * future completes as soon as the response *headers* arrive, while
-     * `BodyHandlers.ofLines()` leaves the body to be pulled lazily — so on a
-     * loaded machine the loopback headers can beat the `thenAccept` call, and
-     * the never-ending `text/event-stream` body is then read to exhaustion on
-     * the JUnit `Test worker` thread. The test never returns from `listen()`
-     * and dies on JUnit's 5-minute method timeout, whose console stack is the
-     * uninformative pair of `ArrayList.forEach` frames.
-     *
-     * That is not a hypothesis: it is the thread dump CI captured for run
-     * 32247784663 (job 96051983983, head 92ad387a, 2026-08-19), preserved in
-     * that run's `test-results-fast` artifact by
-     * `junit.jupiter.execution.timeout.threaddump.enabled` (see
-     * `src/test/resources/junit-platform.properties`). `Test worker` was
-     * WAITING in
-     * `ArrayBlockingQueue.take <- HttpResponseInputStream.read <-
-     * BufferedReader.readLine <- ReferencePipeline$Head.forEach <-
-     * SseTap.reader$lambda <- CompletableFuture.uniAcceptNow <-
-     * CompletableFuture.thenAccept <- SseTap.<init> <- listen()`.
-     *
-     * `thenAcceptAsync` with an **explicit** executor is the fix: it has no
-     * inline-on-the-caller case at all. The executor is explicit rather than
-     * the default `ForkJoinPool.commonPool()` because this body blocks for the
-     * lifetime of the test, and the common pool is shared with the rest of the
-     * JVM.
-     */
-    private fun <T> readAsync(future: CompletableFuture<T>, body: (T) -> Unit): CompletableFuture<Void> =
-        future.thenAcceptAsync(body, readers)
-
-    private fun listen(): SseTap {
-        val opened = SseTap("http://localhost:${server.boundPort}${InspectorServer.EVENTS_PATH}")
+    private fun listen(): SseTap<Event> {
+        val opened = SseTap("http://localhost:${server.boundPort}${InspectorServer.EVENTS_PATH}") {
+            json.decodeFromString<Event>(it)
+        }
         tap = opened
         awaitUntil("sse client attached", timeoutMs = 5_000) { server.attachedClients > 0 }
         return opened
     }
 
-    /** A live `text/event-stream` reader counting `data:` frames by kind. */
-    private inner class SseTap(url: String) : AutoCloseable {
-        private val kinds = LinkedBlockingQueue<String>()
+    private fun SseTap<Event>.countOfKind(kind: String): Int = count { it.kind == kind }
 
-        /** The highest `Event.seq` this reader has actually delivered — see [drained]. */
-        private val readSeq = AtomicLong(-1)
+    private fun SseTap<Event>.awaitKind(kind: String, count: Int) =
+        awaitMatching("$count '$kind' frames", count) { it.kind == kind }
 
-        /**
-         * Held so [close] can release it (computenet-4vh): one client per
-         * `listen()`, i.e. per test method, each with its own selector thread and
-         * executor pool; cancelling [reader] alone left all of that alive.
-         */
-        private val client: HttpClient = boundedHttpClient()
-        private val reader: CompletableFuture<Void> = readAsync(
-            client.sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines()),
-        ) { response ->
-            response.body().forEach { line ->
-                if (line.startsWith(DATA)) {
-                    val event = json.decodeFromString<Event>(line.removePrefix(DATA))
-                    kinds += event.kind
-                    readSeq.accumulateAndGet(event.seq, ::maxOf)
-                }
-            }
-        }
+    /** The highest [Event.seq] this tap has actually delivered — see [drained]. */
+    private fun SseTap<Event>.readSeq(): Long = frames().maxOfOrNull { it.seq } ?: -1L
 
-        fun countOfKind(kind: String): Int = kinds.count { it == kind }
-
-        /**
-         * A read barrier for the *absence* assertions (computenet-rzq0). Frames
-         * are delivered on [reader]'s own thread, so counting a kind straight
-         * after the tick that could have emitted it asserts nothing: a frame
-         * still in flight reads as a frame never sent, and the test passes for
-         * the wrong reason until a loaded machine slows the count down enough
-         * to see it.
-         *
-         * Barriered on [Event.seq] rather than on a frame count, so that a
-         * *scheduled* tick cannot satisfy it. `seq` advances on every emitted
-         * event and a snapshot reports the current value, so once this reader
-         * has delivered a frame at or past the server's post-tick `seq`, every
-         * frame emitted up to that tick has been counted — whoever emitted it.
-         * A heartbeat carries the current `seq` without advancing it, and
-         * `tickAll()` always emits one, so the barrier always has a frame to
-         * ride even when the tick announced nothing.
-         *
-         * **Still load-bearing after computenet-5swb unscheduled this server.**
-         * The race it closes is between the *test* thread reading a count and
-         * the *reader* thread delivering a frame, which no amount of
-         * disarming the scheduler removes: `tickAll()` returning means the
-         * event was emitted, not that it was received. Disarming only removes
-         * the second emitter, so the "a scheduled tick cannot satisfy it"
-         * property above is now unexercised rather than untrue — it is kept
-         * because it costs nothing and is the strictly stronger form: a frame
-         * count would resynchronise on any frame, this resynchronises only on
-         * one at or past the seq the server had after the tick under test.
-         */
-        fun drained() {
-            val target = snapshot(null).seq
-            awaitUntil("sse reader at seq $target (read ${readSeq.get()})", timeoutMs = 10_000) {
-                readSeq.get() >= target
-            }
-        }
-
-        fun awaitKind(kind: String, count: Int) =
-            awaitUntil("$count '$kind' frames (saw ${countOfKind(kind)})", timeoutMs = 10_000) {
-                countOfKind(kind) >= count
-            }
-
-        /**
-         * `shutdownNow()`, never `close()`: this client is deliberately parked on
-         * an SSE response that never ends, so `close()` — which awaits
-         * termination of in-flight exchanges — would turn this teardown into the
-         * unbounded wait the suite is being audited for.
-         */
-        override fun close() {
-            reader.cancel(true)
-            client.shutdownNow()
+    /**
+     * A read barrier for the *absence* assertions (computenet-rzq0). Frames
+     * are delivered on the tap's own reader thread, so counting a kind straight
+     * after the tick that could have emitted it asserts nothing: a frame
+     * still in flight reads as a frame never sent, and the test passes for
+     * the wrong reason until a loaded machine slows the count down enough
+     * to see it.
+     *
+     * Barriered on [Event.seq] rather than on a frame count, so that a
+     * *scheduled* tick cannot satisfy it. `seq` advances on every emitted
+     * event and a snapshot reports the current value, so once this reader
+     * has delivered a frame at or past the server's post-tick `seq`, every
+     * frame emitted up to that tick has been counted — whoever emitted it.
+     * A heartbeat carries the current `seq` without advancing it, and
+     * `tickAll()` always emits one, so the barrier always has a frame to
+     * ride even when the tick announced nothing.
+     *
+     * **Still load-bearing after computenet-5swb unscheduled this server.**
+     * The race it closes is between the *test* thread reading a count and
+     * the *reader* thread delivering a frame, which no amount of
+     * disarming the scheduler removes: `tickAll()` returning means the
+     * event was emitted, not that it was received. Disarming only removes
+     * the second emitter, so the "a scheduled tick cannot satisfy it"
+     * property above is now unexercised rather than untrue — it is kept
+     * because it costs nothing and is the strictly stronger form: a frame
+     * count would resynchronise on any frame, this resynchronises only on
+     * one at or past the seq the server had after the tick under test.
+     */
+    private fun SseTap<Event>.drained() {
+        val target = snapshot(null).seq
+        awaitUntil("sse reader at seq $target (read ${readSeq()})", timeoutMs = 10_000) {
+            readSeq() >= target
         }
     }
 
     private companion object {
-        const val DATA = "data: "
-
         // fixed and ordered: A < B < C < D lexicographically
         const val A = "0a000000-0000-4000-8000-000000000000"
         const val B = "0b000000-0000-4000-8000-000000000000"
