@@ -73,20 +73,37 @@ framings share the 4-byte big-endian length prefix and nothing else.
 ### Backpressure
 
 Both queues — the socket writer's and each link's send queue — are bounded (256
-messages). A host that stops reading eventually stalls the QUIC read loop
-feeding it; a peer that stops reading eventually stalls the host's `DATA`
-dispatch. Nothing buffers without limit and nothing is dropped.
+messages), and they answer a full buffer **differently**.
 
-A stall is **head-of-line for the whole host connection**, not for one link: the
-sidecar reads and dispatches host messages one at a time, so once a queue is full
-every later message on that socket waits behind it — `CLOSE_LINK` and `SHUTDOWN`
-included. A host that must stay responsive while one link is congested keeps its
-own outstanding `DATA` on that link within the 256-message bound rather than
-relying on the socket to absorb it.
+The socket writer's queue **waits**. A host that stops reading its own socket
+eventually stalls the QUIC read loop that feeds it; nothing buffers without
+limit.
 
-The sharpest case of this is a **freshly accepted link whose dialler has not yet
-spoken**, where that queue has no consumer at all; §3's `LINK_UP` entry states
-it, and a host author who reads only this section will not have joined the two.
+A link's send queue **refuses**. A `DATA` that arrives while that link already
+has 256 frames outstanding is answered with `ERROR` on that link and is **not
+sent**. The sidecar reads and dispatches host messages one at a time, so awaiting
+a congested link's queue would make every later message on that socket wait
+behind it — `CLOSE_LINK` and `SHUTDOWN`, on *every* link. Refusing keeps the
+single message loop free; the price is that `DATA` is refusable rather than
+unconditionally accepted.
+
+What that costs a host:
+
+* An `ERROR` on a link id in reply to `DATA` means **that frame was not sent**.
+  Nothing is discarded without naming it; the frame is the host's to resend.
+* **A resend reorders the link unless the host stops sending on it.** The
+  sidecar preserves the order of the frames it accepted, so if the host kept
+  sending after a refusal and those frames were accepted, the resent frame
+  arrives behind them. A host that needs its link strictly ordered sends no
+  further `DATA` on that link until a resend is accepted.
+* The one remaining way to make the host connection stop answering is for the
+  host to stop reading its own socket — a stall it can end at will, and not one
+  a peer or a link can inflict on it.
+
+The case that made this the contract is a **freshly accepted link whose dialler
+has not yet spoken**, where that queue has no consumer at all: refusals there
+begin at the 257th `DATA` and continue until the dialler speaks. §3's `LINK_UP`
+entry states it in full.
 
 ## 3. Message kinds
 
@@ -125,7 +142,10 @@ established is answered with `ERROR`, not queued.
 
 **`DATA`** — send one frame to the peer on that link. The payload is the frame
 body; the sidecar adds the QUIC-side length prefix. A payload larger than
-`MAX_FRAME_LEN` (16 MiB) is refused at the codec.
+`MAX_FRAME_LEN` (16 MiB) is refused at the codec. A frame that arrives while the
+link already has 256 frames outstanding is refused with `ERROR` on that link and
+**not sent** (§2, Backpressure) — an `ERROR` in reply to `DATA` never means the
+frame went out.
 
 **`CLOSE_LINK`** — take the link down locally. The `LINK_DOWN` that follows comes
 from the link's own observer, so a host close and a peer close produce the same
@@ -160,16 +180,16 @@ adopts the stream when the dialler's first frame arrives. Two consequences the
 host has to know:
 
 * `DATA` sent on a freshly accepted link is *queued* until the stream is
-  adopted, not refused. It is delivered in order once the dialler speaks.
-  **Until adoption that queue has no consumer at all**, so §2's 256-message
-  bound is an absolute count here, not a rate the link drains: the 257th `DATA`
-  on an unadopted link blocks the sidecar's single message loop, and with it
-  every later message on that socket — `GET_ID`, `CLOSE_LINK` and `SHUTDOWN`,
-  on *every* link — until the dialler finally speaks or the connection drops.
-  (Measured 2026-08-23 at review: 400 `DATA` on an unadopted inbound link left
-  both a following `GET_ID` and a following `SHUTDOWN` unanswered.) A host that
-  cannot bound its own outstanding `DATA` waits for the peer's first frame
-  before sending on an inbound link.
+  adopted, up to §2's bound. It is delivered in order once the dialler speaks.
+  **Until adoption that queue has no consumer at all**, so the bound is an
+  absolute count here, not a rate the link drains: the 257th `DATA` on an
+  unadopted link, and every `DATA` after it, is answered with `ERROR` on that
+  link and not sent, until the dialler finally speaks. The host connection keeps
+  answering throughout — `GET_ID`, `CLOSE_LINK` and `SHUTDOWN` on every link,
+  the flooded one included (`tests/protocol.rs`,
+  `a_flood_on_an_unadopted_inbound_link_leaves_the_host_connection_answering`).
+  A host that would rather not have `DATA` refused waits for the peer's first
+  frame before sending on an inbound link.
 * The accepting side's `LINK_UP` itself does **not** wait for adoption; it is
   already out. What waits is that side's outbound traffic. A dialling host that
   wants the accepting side's queued `DATA` moving immediately sends an **empty

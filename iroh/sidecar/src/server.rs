@@ -44,11 +44,17 @@ pub enum ServeOutcome {
 }
 
 /// How many messages may sit in the socket writer's queue, and how many frames
-/// in one link's send queue, before the producer is made to wait.
+/// in one link's send queue.
 ///
-/// This is the sidecar's entire backpressure story: bounded channels, so a slow
-/// host socket eventually stalls the QUIC read loop that feeds it rather than
-/// buffering without limit, and a slow peer stalls the host's `DATA` dispatch.
+/// This is the sidecar's entire backpressure story, and the two queues answer a
+/// full buffer differently on purpose:
+///
+/// * the socket writer's queue **waits** — a host that stops reading its socket
+///   eventually stalls the QUIC read loop that feeds it, rather than buffering
+///   without limit;
+/// * a link's send queue **refuses** — host `DATA` past the bound is answered
+///   with `ERROR` on that link and not sent, because waiting on it would block
+///   the single host message loop for every link at once (computenet-3gij).
 const QUEUE_DEPTH: usize = 256;
 
 struct LinkHandle {
@@ -232,8 +238,32 @@ where
                     .get(&msg.link)
                     .map(|h| h.frames.clone());
                 match frames {
-                    Some(frames) => {
-                        if frames.send(msg.payload).await.is_err() {
+                    // `try_send`, never `send().await`: awaiting a link's queue
+                    // here blocks the ONE message loop, and with it every later
+                    // message on this socket — CLOSE_LINK and SHUTDOWN on every
+                    // link. A freshly accepted link makes that unavoidable
+                    // rather than unlikely, because its queue has no consumer at
+                    // all until the dialler first writes (computenet-3gij). So a
+                    // frame past the bound is refused with notice on its own
+                    // link instead, and the loop stays free.
+                    Some(frames) => match frames.try_send(msg.payload) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            send(
+                                &out,
+                                Message::new(
+                                    kind::ERROR,
+                                    msg.link,
+                                    format!(
+                                        "link {}'s send queue is full ({QUEUE_DEPTH} frames outstanding); the frame was not sent",
+                                        msg.link
+                                    )
+                                    .into_bytes(),
+                                ),
+                            )
+                            .await;
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
                             send(
                                 &out,
                                 Message::new(
@@ -244,7 +274,7 @@ where
                             )
                             .await;
                         }
-                    }
+                    },
                     None => {
                         send(
                             &out,
