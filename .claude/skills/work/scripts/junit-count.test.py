@@ -9,6 +9,7 @@ reads, so the tests exercise them the way a shell would.
 
 Run: python3 .claude/skills/work/scripts/junit-count.test.py
 """
+import os
 import pathlib
 import subprocess
 import sys
@@ -37,9 +38,9 @@ def xml(path, tests=1, failures=0, errors=0, skipped=0, ts=""):
         f'errors="{errors}" skipped="{skipped}"{ts_attr}></testsuite>\n')
 
 
-def run(*args):
+def run(*args, cwd=None):
     r = subprocess.run([sys.executable, str(SCRIPT), *map(str, args)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, cwd=cwd)
     return r.returncode, r.stdout, r.stderr
 
 
@@ -100,10 +101,15 @@ with tempfile.TemporaryDirectory() as tmp:
     check("no results: exit 4", rc == 4, f"rc={rc}")
     check("no results: prints NO-RESULTS", "NO-RESULTS" in out, out)
 
-    # a directory that does not exist at all is the same zero
+    # A directory that does not exist is NOT the same zero. This pair asserted
+    # the opposite until computenet-dh5x: NO-RESULTS reads as "the suite did
+    # not run", and for a path that never resolved that is a claim the tool
+    # cannot make. Kept as an inversion rather than deleted, so the old
+    # contract cannot quietly come back.
     rc, out, err = run(tmp / "never-created")
-    check("missing dir: exit 4", rc == 4, f"rc={rc}")
-    check("missing dir: prints NO-RESULTS", "NO-RESULTS" in out, out)
+    check("missing dir: exit 2, not NO-RESULTS' 4", rc == 2, f"rc={rc}")
+    check("missing dir: does not print NO-RESULTS",
+          "NO-RESULTS" not in out + err, f"out={out} err={err}")
 
     # non-xml files do not count as results
     junk = tmp / "results-junk"
@@ -142,6 +148,45 @@ with tempfile.TemporaryDirectory() as tmp:
     rc, out, err = run(d1)
     check("results dir still counts after file support",
           rc == 0 and "2 files: 10 tests" in out, f"rc={rc} out={out}")
+
+    # --- a path that does not resolve (computenet-dh5x) --------------------
+    # NO-RESULTS must mean "this resolved and holds nothing", never "this did
+    # not resolve" — the second reads as "the suite did not run".
+    rc, out, err = run(os.path.join(d1, "..", "..", "no-such-worktree", "test"))
+    check("missing path: not NO-RESULTS", "NO-RESULTS" not in out + err,
+          f"out={out} err={err}")
+    check("missing path: exit 2, distinct from NO-RESULTS' 4", rc == 2, f"rc={rc}")
+    check("missing path: names the path and the cwd",
+          "NO-SUCH-PATH" in err and os.getcwd() in err, err)
+    # one bad path among good ones must not be counted past
+    rc, out, err = run(d1, os.path.join(d1, "nope"))
+    check("one missing path poisons the whole count", rc == 2, f"rc={rc} out={out}")
+
+    # an unreadable directory resolves but cannot be read — also not NO-RESULTS
+    locked = tmp / "locked"
+    locked.mkdir()
+    os.chmod(locked, 0o000)
+    try:
+        rc, out, err = run(locked)
+        check("unreadable dir: not NO-RESULTS", "NO-RESULTS" not in out + err,
+              f"out={out} err={err}")
+        check("unreadable dir: exit 2 and says which", rc == 2 and "not readable" in err,
+              f"rc={rc} err={err}")
+    finally:
+        os.chmod(locked, 0o755)
+
+    # POSITIVE: a relative path traversing OUT of the cwd into a sibling tree
+    # still counts. This is the shape computenet-dh5x reported as broken; it
+    # was never broken, and nothing pinned that until now.
+    sib = tmp / "sib" / "build" / "test-results" / "test"
+    sib.mkdir(parents=True)
+    xml(sib / "TEST-a.xml", tests=7)
+    here = tmp / "here"
+    here.mkdir()
+    rc, out, err = run(os.path.join("..", "sib", "build", "test-results", "test"),
+                       cwd=here)
+    check("sibling-tree relative path still counts",
+          rc == 0 and "1 files: 7 tests" in out, f"rc={rc} out={out}")
 
     # --- usage ------------------------------------------------------------
     rc, out, err = run()
