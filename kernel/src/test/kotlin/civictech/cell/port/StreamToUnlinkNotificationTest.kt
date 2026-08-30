@@ -103,11 +103,20 @@ class StreamToUnlinkNotificationTest {
      *   record to send over in the first place.
      *
      * So the multicast the first two tests restore is, today, a latent trap for
-     * a future `onUnlinkListeners` subscriber — not a live attention leak. The
-     * assertion that the band is neutral **while the link is live** is the load-
-     * bearing half: it is what goes red if the bypass link ever gains real
-     * endpoints, at which point the bead's original premise becomes true and the
-     * teardown notification restored above is what keeps it from leaking.
+     * a future `onUnlinkListeners` subscriber — not a live attention leak.
+     *
+     * **This test RECORDS that finding; it does not GUARD it, and no assertion
+     * here discriminates.** Measured in review (computenet-9wpa, feature
+     * review): building the bypass link as
+     * `PortLink(ref, at, fromPort = this as? Port)` — giving it exactly the
+     * "real endpoint" whose absence the finding rests on — leaves all three
+     * tests green. A frontier slot needs an inbound `Attention` *message* as
+     * well as the guard passing, and a bypass target is a bare `Api` with no
+     * `AttentionSupport` to send one, so the band stays neutral either way.
+     * A test that would go red is one with an attention-wired consumer actually
+     * attached to the link; that is filed as this item's residual and is not
+     * reachable on the bypass path at all. Read the assertions below as the
+     * measurement the finding was taken from, not as a regression guard.
      */
     @Test
     fun `the attention frontier holds no contribution for a streamTo link, live or closed`() {
@@ -117,9 +126,9 @@ class StreamToUnlinkNotificationTest {
         // all would lift it off the no-slots neutral NORMAL.
         attention.aggregator = AttentionAggregator.Sum
 
-        val consumer = Source()
-        AttentionSupport.of(consumer).attend(1f) // a consumer sitting at HIGH, reporting upstream
-
+        // (No consumer is wired here on purpose: a bypass target is a bare `Api`,
+        // so there is no far end that could report a band up this link. An
+        // unattached attention-wired cell would only look like one.)
         val link: Link = source.outlet.streamTo(sink())
         source.outlet.linking.links.map { it.id } shouldContainExactly listOf(link.id)
 

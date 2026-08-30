@@ -104,8 +104,11 @@ fun <Api : Any> FanOutlet<Api>.streamTo(
     // only `onUnlinkListeners` subscriber is `AttentionSupport.wire`'s frontier
     // GC, guarded on `link.fromPort === port`, and the two-argument `PortLink`
     // below leaves `fromPort` null — so no attention slot is ever created for
-    // one of these links, and none was being stranded. Measured and pinned by
-    // `StreamToUnlinkNotificationTest`.
+    // one of these links, and none was being stranded. Measured in
+    // `StreamToUnlinkNotificationTest`, whose third case RECORDS that finding
+    // rather than guarding it — see its doc comment: no assertion there
+    // discriminates, because a bare-`Api` target has no `AttentionSupport` to
+    // report a band up the link even if the link did carry a `fromPort`.
     val link = PortLink(ref, at) { superseded ->
         unsubscribe(at)
         linking.remove(superseded)
