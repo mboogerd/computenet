@@ -64,9 +64,17 @@ import kotlin.time.Duration.Companion.seconds
  * ## Scope
  *
  * One sidecar child process per transport instance (egl.2-D2): [listen] and
- * [connect] each spawn their own and own its lifetime. Partition/heal and
- * reconnect are the next task's; a link that goes down here stays down, and its
- * mirror stays detached.
+ * [connect] each spawn their own and own its lifetime.
+ *
+ * A peering **survives its link**. A dialled [IrohConnection] holds a
+ * *succession* of [Session]s, one per link instance: a link that goes down
+ * unplanned is re-dialled on an injectable backoff schedule
+ * ([DEFAULT_RECONNECT_BACKOFF]), and the link that replaces it gets a fresh
+ * Session with a fresh mirror. The Session that went down stays down — its
+ * mirror is detached for good, and nothing re-opens it (computenet-dqy.14; see
+ * [Session]). A close this side *asked* for ([IrohConnection.sever],
+ * [IrohConnection.close]) is never re-dialled, which is `WsTransport`'s
+ * planned-close discipline.
  */
 object IrohTransport {
 
@@ -83,19 +91,43 @@ object IrohTransport {
     const val HELLO_PREFIX: String = "IROH-HELLO1 "
 
     /**
+     * The production re-dial backoff: fixed doubling from 1s, capped at 30s,
+     * retrying forever. `attempt` is 0-based — the delay *before* the
+     * (attempt+1)-th re-dial.
+     *
+     * The values are `WsTransport.DEFAULT_RECONNECT_BACKOFF`'s (M10.3), and the
+     * seam is the same T12 seam: a test injects a near-zero schedule instead of
+     * paying wall-clock delays. The *type* is declared here rather than imported
+     * from `:wire` deliberately — this module's whole dependency claim is
+     * `:iroh -> :kernel` (feature rule 2), and taking a `:wire` dependency for
+     * one lambda type would couple two transports that have no business on each
+     * other's classpath. The cost is one duplicated four-line lambda; the price
+     * of the alternative is a module edge.
+     */
+    val DEFAULT_RECONNECT_BACKOFF: (attempt: Int) -> Long = { attempt ->
+        // guard overflow on a long-lived failing connection: cap the shift itself
+        (1_000L shl attempt.coerceAtMost(20)).coerceAtMost(30_000L)
+    }
+
+    /**
      * Serve peerings on a fresh sidecar. Returns once the sidecar is listening;
      * [IrohListener.nodeId] and [IrohListener.addresses] are what a dialler
      * needs ([connect]'s two first arguments).
      *
      * [binary] is the sidecar executable — in tests, `SidecarBinary.orSkip()`.
+     * [sidecarArgs] are passed to the child verbatim (see [SidecarProcess.spawn]):
+     * pinning `--secret-key` and `--bind-addr` is what lets a listener come back
+     * at the same endpoint after its process died, which is how an *unplanned*
+     * drop is staged.
      */
     fun listen(
         side: Peering.Side,
         binary: Path,
         timeout: Duration = 30.seconds,
         stderrSink: (String) -> Unit = {},
+        sidecarArgs: List<String> = emptyList(),
     ): IrohListener {
-        val process = SidecarProcess.spawn(binary, stderrSink = stderrSink)
+        val process = SidecarProcess.spawn(binary, stderrSink = stderrSink, args = sidecarArgs)
         val listener = try {
             IrohListener(process, process.connect(timeout), side)
         } catch (e: Throwable) {
@@ -119,6 +151,11 @@ object IrohTransport {
      * Returns once the link is up and this side's hello has been sent; the
      * peer's hello, admission and announcements follow asynchronously on the
      * sidecar's reader thread.
+     *
+     * The returned connection **outlives its link**: an unplanned `LINK_DOWN`
+     * re-dials [peerNodeId] on [backoff], each re-dial bounded by
+     * [redialTimeout]. Both are seams for tests — a near-zero schedule and a
+     * short dial timeout make reconnect observable without wall-clock waits.
      */
     fun connect(
         side: Peering.Side,
@@ -127,12 +164,16 @@ object IrohTransport {
         binary: Path,
         timeout: Duration = 30.seconds,
         stderrSink: (String) -> Unit = {},
+        backoff: (attempt: Int) -> Long = DEFAULT_RECONNECT_BACKOFF,
+        redialTimeout: Duration = timeout,
+        sidecarArgs: List<String> = emptyList(),
     ): IrohConnection {
-        val process = SidecarProcess.spawn(binary, stderrSink = stderrSink)
+        val process = SidecarProcess.spawn(binary, stderrSink = stderrSink, args = sidecarArgs)
         return try {
             val client = process.connect(timeout)
             client.addPeer(peerNodeId, peerAddresses, timeout)
-            IrohConnection(process, client, side).also { it.dial(peerNodeId, timeout) }
+            IrohConnection(process, client, side, peerNodeId, backoff, redialTimeout)
+                .also { it.openLink(timeout) }
         } catch (e: Throwable) {
             process.close()
             throw e
@@ -146,18 +187,28 @@ object IrohTransport {
      * order — because the whole claim of this feature is that only the transport
      * changed.
      *
-     * A Session is built per **link**, never reused across links, so everything
-     * `WsTransport.Session` holds per *open* is simply held here: this class has
-     * no reconnect to survive (that is task 3 of this feature).
+     * A Session is built per **link**, never reused across links. That is the
+     * whole difference from `WsTransport.Session`, which keeps *one* Session
+     * across every reconnect and re-opens its state on each re-hello: here the
+     * state a reconnect would have to reset does not survive to be reset, and
+     * [IrohConnection] holds a succession of Sessions instead — one per link
+     * instance, each retired for good by [onDown].
      *
      * ## The mirror is per link INSTANCE (computenet-dqy.14)
      *
      * [RegistryMirrorCell.peer]'s KDoc argues the late bind safe from four
-     * premises; each has an analogue here and none is inherited by assertion:
+     * premises; each has an analogue here and none is inherited by assertion.
+     * All four are stated **about one link instance**, which is why they survive
+     * reconnect unchanged: a re-dial creates a different Session over a different
+     * link id, sharing no mirror, no egress and no ingress with the one it
+     * replaces, so there is no cross-instance ordering left for them to be about
+     * (see [IrohConnection.openLink] for the one cross-instance ordering there
+     * is, and why it is not a premise of any of them):
      *
      * 1. **Our hello, carrying this instance's mirror ref, is written before we
      *    announce anything.** On a dialled link it is the first `DATA` we send
-     *    ([openLocalHello] at [IrohConnection.dial]); on an accepted link it is
+     *    ([openLocalHello] at the end of [IrohConnection.openLink], on the first
+     *    dial and on every re-dial alike); on an accepted link it is
      *    sent from [onHello], still before [bindAndAnnounce] — see [onHello] for
      *    why the accepting side waits.
      * 2. **The peer cannot address this mirror before it has read that hello**,
@@ -284,6 +335,15 @@ object IrohTransport {
 
         /** This link instance's mirror ref, once [hello] has minted it. */
         val mirrorRef: CellRef? get() = mirror?.ref
+
+        /**
+         * This link instance's mirror itself — the cell whose gate [onDown] shuts
+         * for good. Exposed so that a *retired* instance's fence can be checked
+         * directly (`RegistryMirrorCell.refusedAnnouncements` counts what the
+         * shut gate refuses), which is the only way to tell a mirror that is
+         * detached from one that is merely unused.
+         */
+        internal val mirrorCell: RegistryMirrorCell? get() = mirror
 
         /** True once an admitted hello has installed this link's ingress. */
         val peered: Boolean get() = ingress != null
@@ -561,46 +621,171 @@ object IrohTransport {
         }
     }
 
-    /** The dialling side: a sidecar, one dialled link, one [Session]. */
+    /**
+     * The dialling side: one sidecar, and a **succession** of links — each with
+     * its own [Session] — under one connection handle.
+     *
+     * ## Requested down versus unplanned down
+     *
+     * Every `LINK_DOWN` arrives the same way whatever caused it
+     * (`PROTOCOL.md` §3: exactly one per side, from the link's own observer), so
+     * the difference has to be held here rather than read off the wire. A close
+     * this side asked for — [sever], [close] — sets [closeRequested] *before* it
+     * asks, and the handler consumes that flag instead of re-dialling. Anything
+     * else is unplanned and starts [scheduleReconnect]. This is `WsTransport`'s
+     * planned-close discipline (its `reconnect` flag), and it is what keeps a
+     * severed peering severed until the test heals it.
+     *
+     * ## What a re-established link shares with the one it replaces: nothing
+     *
+     * A re-dial mints a whole new [Session] — new mirror, new egress, new
+     * ingress, new hello, and a fresh `announceTo` catch-up over the local
+     * registry. The retired Session's mirror is detached permanently, and there
+     * is deliberately no way to re-open it (see [RegistryMirrorCell.detach]:
+     * "the gate never re-opens, and that is what makes the fence total"). The
+     * returning peer loses nothing by that, because a re-announcement is a full
+     * `localRefs` sweep.
+     *
+     * What *is* connection-scoped, and survives across instances, is only the
+     * accounting a per-link object could not carry honestly: the admission sink
+     * (a refused hello takes its own link down, so a per-Session sink would be
+     * discarded together with the count it just recorded — [IrohListener] owns
+     * one for the same reason) and the pre-hello drop total.
+     */
     class IrohConnection internal constructor(
         private val process: SidecarProcess,
         private val client: SidecarClient,
-        side: Peering.Side,
+        private val side: Peering.Side,
+        private val peerNodeId: ByteArray,
+        private val backoff: (attempt: Int) -> Long,
+        private val redialTimeout: Duration,
     ) : AutoCloseable {
 
-        private val linkRef = AtomicReference<SidecarLink?>(null)
+        /** @see IrohConnection — one sink across every link instance. */
+        private val admissionSink = BoundaryDenials().sinkFor("hello")
 
-        internal val session = Session(
-            side,
-            send = { payload ->
-                val link = linkRef.get() ?: throw SidecarException("this connection has no link yet")
-                link.send(payload)
-            },
-            refuse = { linkRef.get()?.close() },
-        )
+        private val currentLink = AtomicReference<SidecarLink?>(null)
+        private val currentSession = AtomicReference<Session?>(null)
+
+        /** Drops charged to links that are already gone; see [preHelloDrops]. */
+        private val retiredPreHelloDrops = AtomicLong()
+
+        /**
+         * Set immediately before this side asks for a close, and consumed by the
+         * `LINK_DOWN` that close produces. A one-shot rather than a level: it
+         * must not suppress the reconnect for the *next* link.
+         */
+        private val closeRequested = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        /** False until [close]; nothing re-dials after it. */
+        @Volatile
+        private var shuttingDown = false
+
+        /**
+         * Single-flight guard on the re-dial loop, for the reason
+         * `WsConnection.reconnecting` exists: one loop retries, and a
+         * `LINK_DOWN` that arrives while a loop is running must not spawn a
+         * second one racing it onto the same connection.
+         */
+        private val reconnecting = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        private val backoffCalls = AtomicLong()
+        private val highestAttempt = java.util.concurrent.atomic.AtomicInteger(-1)
 
         /** @see IrohListener.linkErrors */
         val linkErrors: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
 
         /** @see IrohListener.admissionDenialCount */
-        val admissionDenialCount: Long get() = session.admissionDenialCount
+        val admissionDenialCount: Long get() = admissionSink.denialCount
 
-        /** @see IrohListener.preHelloDrops */
-        val preHelloDrops: Long get() = session.preHelloDrops
+        /**
+         * @see IrohListener.preHelloDrops
+         *
+         * Summed over every link instance this connection has had, live one
+         * included — a count that reset on each re-dial would understate exactly
+         * the case it exists for.
+         */
+        val preHelloDrops: Long get() = retiredPreHelloDrops.get() + (currentSession.get()?.preHelloDrops ?: 0L)
 
-        /** True once the peer's hello was admitted and this link is peered. */
-        val peered: Boolean get() = session.peered
+        /** True while a link is up whose peer hello was admitted. */
+        val peered: Boolean get() = currentSession.get()?.peered ?: false
+
+        /**
+         * The live link instance's mirror ref, or null while there is no link.
+         * **A different [CellRef] after every re-establishment** — the assertion
+         * computenet-dqy.14's per-instance rule is checked by.
+         */
+        val mirrorRef: CellRef? get() = currentSession.get()?.mirrorRef
+
+        /** @see Session.mirrorCell */
+        internal val mirrorCell: RegistryMirrorCell? get() = currentSession.get()?.mirrorCell
+
+        /**
+         * How many times the re-dial schedule has been consulted, and the highest
+         * `attempt` it was consulted with (-1 = never). Together they say that the
+         * seam is real and which delays it was asked for — a reconnect test that
+         * injects a near-zero schedule asserts on these rather than on elapsed
+         * time, which no loaded machine can promise.
+         */
+        val backoffConsultations: Long get() = backoffCalls.get()
+
+        /** @see backoffConsultations */
+        val highestReconnectAttempt: Int get() = highestAttempt.get()
 
         /** This side's own iroh endpoint id. */
         val nodeId: ByteArray get() = process.nodeId
 
-        internal fun dial(peerNodeId: ByteArray, timeout: Duration) {
+        /**
+         * Take this connection's link down **without** re-dialling it: the
+         * transport's programmatic partition (egl.2-D3). `CLOSE_LINK` yields
+         * exactly one `LINK_DOWN` per side (`PROTOCOL.md` §3), so both peers
+         * detach their mirror; [heal] is what brings the peering back, and only
+         * as a new link.
+         */
+        fun sever() {
+            val link = currentLink.get() ?: return
+            closeRequested.set(true)
+            link.close()
+        }
+
+        /**
+         * Re-establish the peering as a NEW link, and therefore a new [Session]
+         * with a fresh mirror, a fresh hello and a fresh announcement catch-up.
+         * Nothing about the severed instance is resumed — there is nothing to
+         * resume it to.
+         */
+        fun heal(timeout: Duration = redialTimeout): Unit = openLink(timeout).let {}
+
+        /**
+         * Dial one link and install a Session on it.
+         *
+         * The one ordering that spans link instances lives here: the re-dial runs
+         * on the reconnect thread while the previous instance was retired on the
+         * sidecar's reader thread. It is not a premise of [Session]'s
+         * happens-before argument, and cannot become one, because the two
+         * instances share no cell: the retired mirror's gate is already shut when
+         * this returns, and this instance's mirror is minted below — after the
+         * link exists and before any frame can be routed on it, since
+         * [SidecarClient.dial] registers the listener before the `DIAL` goes out
+         * and `LINK_UP` precedes every `DATA` on that id.
+         */
+        internal fun openLink(timeout: Duration) {
+            val linkHolder = AtomicReference<SidecarLink?>(null)
+            val session = Session(
+                side,
+                send = { payload ->
+                    val link = linkHolder.get() ?: throw SidecarException("this connection has no link yet")
+                    link.send(payload)
+                },
+                refuse = { linkHolder.get()?.close() },
+                admissionSink = admissionSink,
+            )
             val link = client.dial(
                 peerNodeId,
                 object : LinkListener {
                     override fun onData(link: SidecarLink, payload: ByteArray) = session.onData(payload)
 
-                    override fun onDown(link: SidecarLink, reason: String) = session.onDown()
+                    override fun onDown(link: SidecarLink, reason: String) = retire(session, link, reason)
 
                     override fun onError(link: SidecarLink, reason: String) {
                         linkErrors += reason
@@ -609,7 +794,9 @@ object IrohTransport {
                 },
                 timeout,
             )
-            linkRef.set(link)
+            linkHolder.set(link)
+            currentLink.set(link)
+            currentSession.set(session)
             // The dialler's hello is its FIRST frame, and it is what adopts the
             // QUIC stream at the accepting sidecar (PROTOCOL.md §3). The peer
             // cannot have spoken before it: an accepting Session sends nothing
@@ -618,8 +805,69 @@ object IrohTransport {
             session.openLocalHello()
         }
 
+        /**
+         * One link instance is over: charge its drops to the connection, shut its
+         * mirror's gate for good, and decide whether a replacement is owed.
+         */
+        private fun retire(session: Session, link: SidecarLink, reason: String) {
+            retiredPreHelloDrops.addAndGet(session.preHelloDrops)
+            session.onDown()
+            currentSession.compareAndSet(session, null)
+            currentLink.compareAndSet(link, null)
+            if (shuttingDown) return
+            // A close this side asked for is not a partition to recover from.
+            if (closeRequested.getAndSet(false)) return
+            System.err.println("[IrohTransport] link ${link.id} went down unplanned ($reason); re-dialling")
+            scheduleReconnect()
+        }
+
+        /**
+         * Re-dial on [backoff] until a link comes back or [close] is called;
+         * retries forever, as `WsConnection.scheduleReconnect` does.
+         *
+         * The schedule is consulted once per attempt, immediately before that
+         * attempt — including the first, so a schedule is never bypassed by a
+         * re-dial that happens to succeed at once.
+         */
+        private fun scheduleReconnect() {
+            if (shuttingDown) return
+            if (!reconnecting.compareAndSet(false, true)) return // a loop is already retrying
+            Thread({
+                try {
+                    var attempt = 0
+                    while (!shuttingDown && currentSession.get() == null) {
+                        try {
+                            Thread.sleep(delayFor(attempt))
+                            attempt++
+                            if (shuttingDown) break
+                            openLink(redialTimeout)
+                        } catch (_: InterruptedException) {
+                            System.err.println("[IrohTransport] re-dial loop interrupted; this connection will not retry")
+                            return@Thread
+                        } catch (e: Exception) {
+                            System.err.println("[IrohTransport] re-dial attempt $attempt failed: $e")
+                        }
+                    }
+                } finally {
+                    reconnecting.set(false)
+                }
+                // A LINK_DOWN that landed while this loop was winding down found
+                // the guard held and returned; nothing else would retry for it.
+                if (!shuttingDown && currentSession.get() == null) scheduleReconnect()
+            }, "iroh-reconnect-${peerNodeId.toHex().take(8)}").apply { isDaemon = true }.start()
+        }
+
+        /** The schedule seam, with its consultation recorded. @see backoffConsultations */
+        private fun delayFor(attempt: Int): Long {
+            backoffCalls.incrementAndGet()
+            highestAttempt.updateAndGet { maxOf(it, attempt) }
+            return backoff(attempt)
+        }
+
         override fun close() {
-            runCatching { linkRef.get()?.close() }
+            shuttingDown = true
+            closeRequested.set(true)
+            runCatching { currentLink.get()?.close() }
             runCatching { client.shutdown() }
             runCatching { client.close() }
             process.close()
