@@ -172,13 +172,25 @@ floor_tool() {
 # publishes that sha and REFUSES a set spanning two, and the rendered findings block
 # carries the units' own gathering window — so the caveat this used to print, telling a
 # human to go read timestamps out of the ledger file by hand, is now a check.
+# computenet-x9e.18: a floor is per @Benchmark METHOD, so `render` emits ONE constructor
+# call and ONE findings block per method the ledger's rows name — a class of six methods
+# renders six of each. --jmh-config is one value applied to all of them, which is right for
+# a class whose methods share the class-level annotations and WRONG for one that declares
+# per-method @BenchmarkMode/@Fork/@Warmup/@Measurement overrides (FanOutScalingBenchmark
+# declares three distinct configurations across its six methods). The ledger cannot see the
+# annotations, so the operator corrects that field per entry before committing. The hint
+# says so rather than leaving it to be discovered from a wrong published field.
 print_render_hint() {
-  echo "'${CLASS}' is complete. Render its findings block with:"
+  echo "'${CLASS}' is complete. Render its findings block(s) with:"
   echo "  ./gradlew -p ${REPO_ROOT} :bench:floorTool -PfloorArgs=\"render --ledger ${LEDGER_DIR} --derived-on <iso-date> --jmh-config '<text — spaces allowed, keep the quotes>'\""
   echo "  --harness-sha is NOT passed: the units attest the sha each measured at, render"
   echo "  publishes it, and a set spanning two shas is refused naming both. --derived-on"
   echo "  is still ONE date you choose; the block's own 'Gathering window:' line states"
   echo "  the span, so paste the block whole."
+  echo "  ONE block per @Benchmark METHOD is printed (computenet-x9e.18). --jmh-config is"
+  echo "  applied to every one of them: if this class declares per-method @BenchmarkMode/"
+  echo "  @Fork/@Warmup/@Measurement overrides, correct that field on each entry before"
+  echo "  committing — the ledger cannot read the annotations and will not do it for you."
 }
 
 # --------------------------------------------------------------------------------------
