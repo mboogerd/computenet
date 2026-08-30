@@ -87,10 +87,24 @@ class IrohReconnectTest {
     /**
      * Streams a labelled sidecar's stderr into this test's own captured output
      * (JUnit's `system-out`, printed by Gradle on failure and always present in
-     * the XML report), so a dial timeout (`SidecarException`) can be attributed
-     * to a named cause instead of to load speculation (computenet-yn7e). Runs on
-     * [SidecarProcess]'s dedicated stderr-pump thread, so lines from both sides
-     * can interleave — the label is what keeps them attributable.
+     * the XML report), so a dial timeout (`SidecarException`) is investigated
+     * against what the sidecar itself said rather than against load speculation
+     * (computenet-yn7e). Runs on [SidecarProcess]'s dedicated stderr-pump thread,
+     * so lines from both sides can interleave — the label is what keeps them
+     * attributable.
+     *
+     * **Expect this to be EMPTY on exactly the failure it was added for, and
+     * read that emptiness as a finding rather than as broken instrumentation.**
+     * The sidecar writes to stderr from one place only — `main()`'s top-level
+     * fatal branch (`iroh/sidecar/src/main.rs`, `eprintln!("computenet-iroh-
+     * sidecar: {message}")`, followed by `ExitCode::FAILURE`) — plus whatever
+     * Rust's default panic hook emits. A dial timeout is neither: `server.rs`
+     * returns `dial failed: …` to the host as a protocol error frame over the
+     * loopback socket, which surfaces in Kotlin as `SidecarException` and never
+     * touches the child's stderr. So an empty capture rules out a sidecar crash
+     * or panic and says nothing more; it does not name a cause. (The re-dial
+     * loop is different — `IrohTransport` writes its own attempt lines to
+     * `System.err`, so those appear in `system-err` regardless of this sink.)
      */
     private fun stderrSink(label: String): (String) -> Unit = { line ->
         println("[iroh-stderr $label] $line")
