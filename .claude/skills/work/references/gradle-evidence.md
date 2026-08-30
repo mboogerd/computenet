@@ -121,14 +121,20 @@ session, neither having tried it; computenet-s16r.)
 # demo/* modules sit one level deeper, and a glob that misses them
 # undercounted 496 for 586 with no visible sign. The script's own two
 # depths are per results dir (files directly in it, and per-task subdirs);
-# a module root or the checkout root matches nothing and exits NO-RESULTS.
+# a module ROOT works too (v38r's build/test-results patterns cover it);
+# only the checkout root matches nothing and exits NO-RESULTS.
 ```
 
 It prints per-directory and total `tests/failures/errors/skipped` plus the
-newest `timestamp`, refuses to report zero result files (`NO-RESULTS`,
-exit 4 — a glob matching nothing is indistinguishable from a passing empty
-suite, computenet-wpvy.41), and prints the module list. **Read that list**:
-on a long-lived checkout `legacy/` and `runtime/` are stale build output
+newest `timestamp`, refuses to report zero result files (`NO-RESULTS`, exit 4
+— a glob matching nothing is indistinguishable from a passing empty suite,
+computenet-wpvy.41), and prints the module list. A path it could not RESOLVE OR
+READ is a different answer: `NO-SUCH-PATH`, exit 2, naming the cwd it resolved
+against. That used to be NO-RESULTS, so one `..` too many reaching into a
+sibling worktree read as "the suite did not run" for a suite that had run 489
+tests (computenet-dh5x). **Neither code is evidence about a suite.**
+
+**Read that list**: on a long-lived checkout `legacy/` and `runtime/` are stale build output
 (AGENTS.md) and one fresh module's `newest` hides fourteen stale ones. If
 `newest` is not from minutes ago, nothing here ran. The npm UI suites
 (`inspect/ui`, `demo/agora/ui`) emit no JUnit XML and are invisible to this

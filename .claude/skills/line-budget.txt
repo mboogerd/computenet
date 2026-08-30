@@ -265,7 +265,16 @@
 # Recomputed against 2r22's LANDED 9150 rather than merged with the 9140 this
 # branch carried — two PRs raising the same number always conflict and the
 # second depends on the first's landed value (computenet-x69c).
-work                9160
+# 9160 -> 9166 on 2026-08-30: computenet-dh5x (+6) — bought gradle-evidence.md's
+# statement that a path junit-count.py could not RESOLVE OR READ answers
+# NO-SUCH-PATH (exit 2), not NO-RESULTS, and that neither code is evidence
+# about a suite; +2 of the 6 correct an adjacent pre-existing sentence that
+# told callers a module root exits NO-RESULTS, which the v38r patterns made
+# false. The mechanical half is in junit-count.py and costs no budget lines.
+# RECOMPUTED against 1lbs's landed 9160, not merged with the 9156 this branch
+# carried — the second number depends on the first's landed value
+# (computenet-x69c, whose fix for this is PR #594).
+work                9166
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
