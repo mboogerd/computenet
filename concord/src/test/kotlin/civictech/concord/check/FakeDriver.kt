@@ -61,6 +61,7 @@ class FakeDriver(
     ) {
     }
     override fun driveContextless(cellId: CellId, inlet: String?, op: String, value: Value?) {}
+    override fun driveStamped(cellId: CellId, inlet: String?, actor: String, op: String, value: Value?) {}
     override fun despawn(cellId: CellId) {}
     override fun deadLetters(): List<DeadLetter> = deadLetters
     override fun effectLog(cellId: CellId): List<Effect> = effects[cellId].orEmpty()

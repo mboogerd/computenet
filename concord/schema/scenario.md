@@ -210,6 +210,7 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
 | read-state | `{type: read-state, on: s, limit: 2}` | `readState(cell, cursor, limit)`, looped to completion |
 | retransmit | `{type: retransmit, on: c, inlet?: in, source: s, counter: N, op: add, value?: apple, baseline?: {s: N}}` | `retransmit(cell, inlet, source, counter, op, value?, baseline?)` |
 | drive-contextless | `{type: drive-contextless, on: c, inlet?: in, op: add, value?: apple}` | `driveContextless(cell, inlet, op, value?)` |
+| drive-stamped | `{type: drive-stamped, on: c, actor: a1, inlet?: in, op: add, value?: apple}` | `driveStamped(cell, inlet, actor, op, value?)` |
 
 - **`op`** is a neutral op verb the cell catalog defines (`add`, `remove`, `put`,
   `remove-key`, `increment`, `decrement`, …).
@@ -228,6 +229,12 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
   **catch-up baseline** rather than an ordinary live frame — see below.
 - **`drive-contextless`** names no position at all — no `source:`, no
   `counter:`, no `baseline:`. The absence is the verb; see below.
+- **`drive-stamped … actor:`** names a **scenario-local external actor lane**,
+  never an implementation identifier and never a cell — the same rule
+  `retransmit … source:` follows. Repeating the handle means "the same external
+  actor again"; there is no `counter:`, because a scenario that could state the
+  position would be describing the graph's frame rather than an outsider's. See
+  below.
 
 #### `restart` (D-C12, spec 21 §RESTART re-baselines / spec 30/31 rule 5)
 
@@ -528,6 +535,96 @@ has to fall silent about it: `refusal-count` states the report's shape at a
 named cell, as an exact number. Say in a header comment why `no-dead-letters` is
 absent, as `restart` scenarios do.
 
+#### `drive-stamped` (`computenet-8ohq`, spec 24 §Effectful `[24-DUR-05]`)
+
+**Status.** Landed. This subsection is the single-writer, schema-change-gated
+review of the extension; the matching `@SerialName("drive-stamped")` `Step`, the
+`Driver` SPI verb, the `civictech.concord.driver.kernel` binding and the
+`CorpusRunner` dispatch arm moved with it in the same ticket, per D-C12's rule
+that a step verb's seams move together or the module does not compile. One
+corpus scenario drives it as landed: `DUR-STAMPED-01`.
+
+**What it is.** A `PORT_API` delivery at a named cell's inlet by an **external
+actor** — something that is not a cell in the scenario and has no outlet —
+carrying a wave position on a lane of that actor's own. The admitted twin of
+`drive-contextless`: the same route, the same intake, differing only in whether
+the frame carries a position the receiver's processed frontier can judge.
+
+**Why the vocabulary needed it.** `[24-DUR-06]` refuses the frame that carries
+nothing, and `DUR-CONTEXTLESS-01` covers that refusal. What the refusal exists
+to *protect* is the other half: once an external driver carries a lane position,
+the frame is admitted and `[24-DUR-05]` governs it like any other — it fires
+exactly once across a crash and its replay, and once more for each further
+arrival ahead of the restored frontier. **No verb reached that half at all**, so
+the corpus could be passed in full by an implementation that admitted an
+externally-driven frame and then re-fired its effect on replay — the exact
+failure the refusal rule was built to make impossible. The kernel asserts the
+property today (`EffectfulInletGuardTest`, *"a contextless external drive is
+refused and the stamped path fires exactly once across replay"*); nothing in the
+corpus did.
+
+No existing verb reaches it, and the reason is structural rather than a matter
+of nobody having written the scenario:
+
+- **`apply` is the graph's position.** It drives an op through the cell's own
+  outlet along the declared links, and the position it carries is minted for
+  that outlet. A frame that entered from outside the graph is not expressible
+  by it at any setting of its fields.
+- **`retransmit` names a cell.** Its `source:` must be a scenario cell whose
+  outlet owns the stated wave identity — the binding resolves the identity from
+  that outlet precisely so a retransmit claims a coordinate the source really
+  owns. An external actor is not a cell and owns no outlet, so its lane cannot
+  be named this way. And a retransmit is by construction a *duplicate* of a
+  delivery the graph already made, which is the opposite of a first arrival from
+  outside.
+- **`drive-contextless` is this verb with the lane removed** — the refused case,
+  not the admitted one.
+
+**Shape.**
+
+- **`on`** is the target cell whose inlet receives the delivery, exactly as
+  `drive-contextless`/`retransmit`/`restart`/`despawn` use it.
+- **`actor`** is the scenario-local lane handle. It is a *name for a lane*, and
+  the only thing the scenario is entitled to say about one: which lane, and how
+  many times. What the lane's identity is, and how a position on it is minted,
+  is the driver's — a corpus file that could state either would be pinning one
+  implementation's ingress representation, which is the rule `retransmit`'s
+  `source:` follows and the reason `DUR-STAMPED-01` names `a1` and nothing else.
+- **`inlet`** selects the receiving inlet; optional, default `"inlet"`.
+- **`op`** / **`value`** are exactly `apply`'s fields.
+
+There is deliberately **no `counter:`** — see the `actor:` note above — and no
+`times:`: each arrival on a lane is its own position, and repeating a drive is a
+different assertion from re-delivering one frame, which is `retransmit`'s job.
+
+**What a conforming driver must do.** Deliver at the named inlet through the
+same intake as ordinary traffic — so the implementation's admission decision,
+its journalling and its accounting all see the frame — carrying a position
+minted on a lane that is **stable for the whole run** (two drives naming one
+`actor` are two arrivals on one lane, not two lanes) and that **survives
+whatever crash and recovery the scenario performs** (a drive after a crash
+continues the lane rather than restarting it). Those two properties are the
+whole content of the admitted arm: without the first, "the same actor again"
+means nothing; without the second, a post-recovery drive re-presents a position
+the restored frontier has already acted on and is *suppressed*, so the scenario
+would read an artefact of the driver's forgetfulness as the property under test.
+
+A driver that cannot produce such a delivery at the named cell **fails loudly**
+rather than substituting a different one, and both plausible substitutions fail
+silently in the dangerous direction: a *contextless* delivery is refused, so the
+scenario goes red for the wrong reason, and a *per-call minted* lane is admitted
+and passes an exactly-once assertion while never exercising lane continuity at
+all. (The second is not hypothetical — the kernel's own
+`EffectfulInletGuardTest` pins that a per-call minted context IS deduped across
+a crash, which is exactly why it cannot stand in for a lane.) Which cells can
+receive one is a driver capability like any other, as with `retransmit`.
+
+**`drive-stamped` and the unkeyed `effect-count`.** An admitted external
+delivery names an element that no `add` on a direct upstream names, so the
+unkeyed form's key derivation is **incomplete by construction** and refuses
+outright wherever a `drive-stamped` targets the cone — see the effect-key
+derivation section below. A scenario using this verb names its keys.
+
 ### Script semantics (normative, all drivers)
 
 Steps targeting the **same** cell apply in file order. Steps on **different**
@@ -607,6 +704,16 @@ effect per delivered added element, keyed by the element). Anything else refuses
   in the cone);
 - any cell in the cone is `despawn`ed, `restart`ed or `restore`d;
 - an `apply` targets a cell in the cone that is *not* a direct upstream;
+- a `drive-stamped` targets **any** cell in the cone, sink included. Unlike a
+  contextless drive it is *admitted*, so it names an element that certainly
+  reached the sink and that no `add` names — an element free to fire zero times
+  invisibly under an unkeyed `exactly:`, which is the vacuous pass this whole
+  derivation exists to close (computenet-8ohq). Naming the driven element
+  instead was rejected: it would make the completeness argument depend on the
+  payload of a verb whose point is that the *frame* decides admission, and one
+  `exactly:` states a single count for every derived key, so a lane driven twice
+  with one element would still not be expressible. Name the keys;
+  `DUR-STAMPED-01` does;
 - a `drive-contextless` targets a cell in the cone that is *not* the sink itself.
   At the sink it is admitted and names nothing (see below); at any other cone cell
   the delivery is ordinary admitted traffic, which would feed the sink an element

@@ -36,6 +36,7 @@ import civictech.concord.schema.ReplicasConverge
 import civictech.concord.schema.RestartStep
 import civictech.concord.schema.RestoreStep
 import civictech.concord.schema.DriveContextlessStep
+import civictech.concord.schema.DriveStampedStep
 import civictech.concord.schema.RefusalCount
 import civictech.concord.schema.RetransmitStep
 import civictech.concord.schema.Scenario
@@ -674,6 +675,12 @@ class CorpusRunner {
                 // asserts (schema/scenario.md, `#### drive-contextless`).
                 is DriveContextlessStep ->
                     driver.driveContextless(step.on, step.inlet, step.op, step.value)
+                // The stamped-drive verb: the step names a scenario-local actor
+                // lane and the driver owns what a position on it is — the runner
+                // neither mints nor remembers one (schema/scenario.md, `####
+                // drive-stamped`).
+                is DriveStampedStep ->
+                    driver.driveStamped(step.on, step.inlet, step.actor, step.op, step.value)
                 is DespawnStep -> driver.despawn(step.on)
             }
         }

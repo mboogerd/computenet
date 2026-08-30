@@ -13,6 +13,7 @@ import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.DespawnStep
 import civictech.concord.schema.DisconnectStep
 import civictech.concord.schema.DriveContextlessStep
+import civictech.concord.schema.DriveStampedStep
 import civictech.concord.schema.EffectCount
 import civictech.concord.schema.EmissionCount
 import civictech.concord.schema.FinalView
@@ -611,6 +612,32 @@ object Checks {
                 is DriveContextlessStep -> {
                     if (step.on !in cone) continue
                     if (step.on != sink) return null
+                }
+                // computenet-8ohq. `drive-stamped` is the ADMITTED external
+                // drive, which makes it the opposite case from the arm above and
+                // an unconditional refusal of the derivation anywhere in the cone
+                // — at the sink itself as much as upstream of it.
+                //
+                // The delivery carries a lane position the receiver's frontier can
+                // judge, so it is admitted and the sink DOES fire for the element
+                // it names. That element is named by no `add` on a direct
+                // upstream, so the derived set would be missing a key that
+                // certainly reached the sink: an element free to fire zero times
+                // invisibly under an unkeyed `exactly:`, which is precisely the
+                // vacuous pass this derivation exists to close.
+                //
+                // Naming the driven element instead of refusing was considered and
+                // rejected. It is arguable for `op: add` with a scalar `value:`,
+                // but it makes the derivation's completeness argument depend on the
+                // payload of a verb whose whole point is that the *frame*, not the
+                // payload, decides admission — and one `exactly:` states a single
+                // count for every derived key, so a lane driven twice with the same
+                // element would still not be expressible. A scenario using this
+                // verb names its keys, which `DUR-STAMPED-01` does; `null` here is
+                // "the keys cannot be derived", reported as a loud failure of the
+                // unkeyed check rather than a quiet pass.
+                is DriveStampedStep -> {
+                    if (step.on in cone) return null
                 }
                 else -> Unit
             }

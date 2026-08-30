@@ -17,6 +17,7 @@ import civictech.cell.data.op.QuorumSetCell
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Effectful
+import civictech.cell.host.ActorIngress
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -217,6 +218,24 @@ internal class KernelDriverDur(
      */
     private val contextlessDriveLane: UUID = UUID.randomUUID()
     private var contextlessDrives: Long = 1L
+
+    /**
+     * The external actor lanes the `drive-stamped` verb delivers on, one
+     * [ActorIngress] per scenario-local handle, minted on first use.
+     *
+     * **Kept here, outside the host, deliberately** — for the same reason
+     * [effectLogs] and [refusals] are, and this one is load-bearing rather than
+     * merely convenient. [crashAndRecover] discards the host and every live
+     * cell instance; a lane that died with it would resume at counter 1 after a
+     * crash, so a post-recovery drive would re-present a position the restored
+     * frontier has already acted on and be *suppressed*. The scenario would
+     * then read "the effect did not re-fire" as the property under test when it
+     * was really an artefact of the driver forgetting its own lane. The lane
+     * surviving the crash is what CON1 makes a connector ingress responsible
+     * for persisting ([ActorIngress]'s `startingPosition`), and the driver
+     * models that here rather than pretending the question does not arise.
+     */
+    private val actorLanes = LinkedHashMap<String, ActorIngress>()
 
     private var host: ManagedHost = newHost()
 
@@ -574,6 +593,80 @@ internal class KernelDriverDur(
         val sinkInlet = (HostedCellProxy.create(target.ref, host, DeltaSink::class.java) as DeltaSink).inlet.call
         // The verb IS the absence of the context: clear it rather than assume it.
         CurrentContext.with(null) { sinkInlet.propagate(delta) }
+    }
+
+    /**
+     * The kernel binding of the `drive-stamped` verb (`computenet-8ohq`, the
+     * driver half of the gated schema change the same ticket wrote into
+     * `concord/schema/scenario.md`): a `PORT_API` delivery at [cellId]'s inlet
+     * carrying a wave position minted on the external actor lane [actor].
+     *
+     * The construction is `EffectfulInletGuardTest`'s stamped half
+     * (`kernel/src/test/kotlin/civictech/cell/durability/EffectfulInletGuardTest.kt`,
+     * `[24-DUR-06]` — *"the same driver, plugged in as an actor carrying its own
+     * frontier lane"*) lifted into the driver, and it is [driveContextless]'s
+     * construction with the one thing put back that the verb is about: the same
+     * [HostedCellProxy] call through the same host intake, wrapped in
+     * [ActorIngress.drive] rather than `CurrentContext.with(null)`.
+     *
+     * **Why [ActorIngress] and not a hand-rolled `MessageContext`.** A per-call
+     * minted `(UUID, 0)` context is *also* admitted and *also* deduped across a
+     * crash — `EffectfulInletGuardTest`'s "KFX-16 limit boundary" test pins
+     * exactly that — so a binding that minted one per drive would satisfy every
+     * assertion this verb's scenario makes while never exercising a lane at
+     * all. What it would silently lose is the property the seam exists for: one
+     * `(sourceId → counter)` lane, and one journaled `FrontierRecord`, per
+     * *actor* rather than per call. Delivering through the seam the kernel
+     * offers is what keeps the corpus's meaning of "the same external actor
+     * again" and the implementation's meaning the same thing.
+     *
+     * The lane is looked up by the scenario's handle in [actorLanes], which
+     * survives [crashAndRecover] — see that field for why the survival is
+     * load-bearing rather than incidental.
+     *
+     * **Two deliberate refusals**, both loud, and both [driveContextless]'s:
+     *
+     * 1. **Target must be an `effect-sink`.** The delivered delta carries an
+     *    add-tag, because a scenario names an element and never a tag identity.
+     *    An effect boundary reads a delta's added *elements* and decides on the
+     *    message context, neither of which is the tag; a tag-algebra fold would
+     *    read the tag, and this binding will not fabricate one and call it an
+     *    arrival.
+     * 2. **Inlet must be the default `inlet`.** Every durable sink's delta port
+     *    is named `inlet` ([DeltaSink]); delivering to the default while the
+     *    step named another would make the step's own `inlet:` a lie.
+     *
+     * The delta's add-tag is minted from the very position the lane installs,
+     * so a scenario's two drives on one lane carry two distinct tags and the
+     * sink's set sees two adds — the frame's `MessageContext` and the payload's
+     * tag agreeing rather than being independently invented.
+     */
+    fun driveStamped(cellId: CellId, inlet: String?, actor: String, op: String, value: Value?) {
+        val target = cells[cellId]
+            ?: throw UnsupportedCatalogBinding("drive-stamped target '$cellId' is not a durable-host cell")
+        if (target.type != EFFECT_SINK) {
+            throw UnsupportedCatalogBinding(
+                "drive-stamped target '$cellId' is a '${target.type}': this binding drives an externally-" +
+                    "stamped PORT_API delivery only at an '$EFFECT_SINK', whose inlet carries the " +
+                    "processed-frontier that judges the lane's position (`[24-DUR-05]`) and whose contract " +
+                    "reads a delta's added elements. A tag-algebra fold would additionally read the delta's " +
+                    "tag, which no scenario names",
+            )
+        }
+        val inletName = inlet ?: DEFAULT_INLET
+        if (inletName != DEFAULT_INLET) {
+            throw UnsupportedCatalogBinding(
+                "drive-stamped at '$cellId' names inlet '$inletName'; the durable delta port is '$DEFAULT_INLET'",
+            )
+        }
+        val ingress = actorLanes.getOrPut(actor) { ActorIngress(UUID.randomUUID()) }
+        val sinkInlet = (HostedCellProxy.create(target.ref, host, DeltaSink::class.java) as DeltaSink).inlet.call
+        ingress.drive {
+            // the position the lane just installed — read back rather than
+            // re-minted, so frame and payload cannot drift apart
+            val position = checkNotNull(CurrentContext.get()) { "ActorIngress.drive installed no context" }.timestamp
+            sinkInlet.propagate(retransmittedDelta(op, value, position))
+        }
     }
 
     /**

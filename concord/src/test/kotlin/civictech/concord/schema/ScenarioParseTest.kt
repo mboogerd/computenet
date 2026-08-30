@@ -52,6 +52,15 @@ class ScenarioParseTest {
         // step silently drives the default while the file still reads as
         // coverage of [24-DUR-06].
         "corpus/15-durability/DUR-CONTEXTLESS-01.yaml",
+        // computenet-8ohq: the stamped-lane scenario, carrying the schema's
+        // newest step verb. Same reason, and sharpest of all here — a mistyped
+        // `actor:` on the second `drive-stamped` parses cleanly and opens a
+        // SECOND lane, whose first position is ahead of the restored frontier
+        // for a trivial reason. The file would still pass, still read as
+        // coverage of the externally-driven arm of [24-DUR-05], and would have
+        // stopped asserting lane continuity across the crash — the one thing it
+        // exists to assert.
+        "corpus/15-durability/DUR-STAMPED-01.yaml",
     )
 
     @TestFactory
