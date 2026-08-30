@@ -104,7 +104,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `file-friction.sh` | Files a friction item collision-free under the SDLC epic, open and unclaimed |
 | `resumable-epics.sh` | Epics holding a feature left `in_progress` — step 3 ranks these above priority |
 | `bead.sh` | projected `bd show` — the bead's own fields as one object, `dependencies` dropped (57KB -> 7KB); no `.[0]` unwrap |
-| `wait-checks.sh` | THE settle loop, sha-bound over `commits/<sha>/check-runs` (`gh pr checks` is the fallback) — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`QUERY-FAILED` |
+| `wait-checks.sh` | THE settle loop, sha-bound over `commits/<sha>/check-runs` (`gh pr checks` is the fallback) — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`NO-RUN`/`QUERY-FAILED` |
 | `verify-branch-sync.sh` | 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
 | `merge-task.sh` | 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
 | `session-holder.sh` | this session's unique holder token, and `--check <token>` → MINE/LIVE/DEAD/UNKNOWN/FOREIGN; what tells a live sibling from a crash leftover, which `assignee` cannot |
@@ -2168,7 +2168,12 @@ collision; this is the one move that avoids it.
 
 Red required check → red-check-attribution.md; pending → wait with
 `.claude/skills/work/scripts/wait-checks.sh <pr-url>` (step 2's rules: classify on output, never
-`$?`; computenet-luhx, computenet-15it, computenet-1zhu). A verdict
+`$?`; computenet-luhx, computenet-15it, computenet-1zhu). **`NO-RUN` (exit 5)
+is never waited out**: GitHub started no workflow run for this head, so no
+amount of polling produces one and any green on the PR belongs to a DIFFERENT
+head — push again (an empty commit is enough; `ci.yml` has no
+`workflow_dispatch`, so there is nothing to re-run), and never ship on it
+(computenet-a5in). A verdict
 carrying a **§6 hand-back** is yours to complete, and it is the **normal**
 path, not an exception: review-feature.md §6 assigns the merge to you
 outright, because the classifier refuses reviewers `git merge`

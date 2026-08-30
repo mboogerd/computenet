@@ -524,6 +524,7 @@ So:
   ```bash
   .claude/skills/work/scripts/wait-checks.sh <pr-url>
   # SETTLED (0) / TIMEOUT-PENDING (4) / QUERY-FAILED (3 — nothing was checked)
+  # NO-RUN (5 — GitHub never built this head; never waited out, computenet-a5in)
   ```
 
   **But do not wait for pending checks — you are the wrong agent for it.**

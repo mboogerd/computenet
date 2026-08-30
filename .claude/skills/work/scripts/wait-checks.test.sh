@@ -25,6 +25,13 @@ cat > "$ROOT/bin/gh" <<'EOF'
 # `gh api` is the REST fallback, not a poll: it serves its own fixtures and
 # deliberately does NOT advance the round counter, so poll-count probes below
 # keep counting polls.
+# `gh run list` answers the NO-RUN interrogation (computenet-a5in). It serves
+# its own fixture and defaults to 1 — i.e. "a run exists" — so every case that
+# predates that state is unaffected by this branch.
+if [ "${1:-}" = run ] && [ "${2:-}" = list ]; then
+  if [ -f "$CTRL/run-list.out" ]; then cat "$CTRL/run-list.out"; else echo 1; fi
+  exit 0
+fi
 if [ "${1:-}" = api ]; then
   case "${2:-}" in
     *pulls/*) f="$CTRL/api-sha.out" ;;
@@ -220,6 +227,32 @@ printf '%s\n' "${REST_GREEN/concord-full$'\t'pass$'\t'success/concord-full$'\t'f
 out=$(run 10); rc=$?
 [ "$rc" -eq 0 ] && ok "SETTLED includes red, over REST as over GraphQL" || bad "exits $rc"
 has "$out" "concord-full" "the red row is printed for the caller to read"
+
+# --- the fourth state: GitHub never built this head (computenet-a5in) -------
+# Zero rows has two causes demanding opposite responses. Inside the cold-start
+# window it is ordinary; past it, with no run for the head, waiting cannot help.
+fixture
+: > "$CTRL/default.out"                      # no rows, ever
+echo deadbeef > "$CTRL/api-sha.out"          # the head resolves fine...
+echo 0 > "$CTRL/run-list.out"                # ...and no run exists for it
+out=$(WAIT_CHECKS_COLD_ROUNDS=2 run 6); rc=$?
+[ "$rc" -eq 5 ] && ok "no run for the head exits 5, not 3" || bad "exits $rc, wanted 5"
+has "$out" "NO-RUN" "the verdict names the fourth state"
+has "$out" "NOT 'not yet'" "it says waiting cannot fix it"
+hasnt "$out" "TIMEOUT-PENDING" "it does not spend the rest of the budget waiting"
+[ "$(rounds_polled)" -le 3 ] \
+  && ok "it stops at the cold-start boundary rather than polling on" \
+  || bad "polled $(rounds_polled) rounds after the boundary"
+
+fixture
+: > "$CTRL/default.out"
+echo deadbeef > "$CTRL/api-sha.out"
+echo 0 > "$CTRL/run-list.out"
+out=$(WAIT_CHECKS_COLD_ROUNDS=9 run 3); rc=$?
+[ "$rc" -eq 3 ] && ok "inside the cold window, zero rows is still QUERY-FAILED" || bad "exits $rc, wanted 3"
+has "$out" "COLD START — no rows yet" "early empty rounds are labelled, not silently repeated"
+hasnt "$out" "QUERY FAILED" "the cold rounds do not LEAD with the words an agent learns to skip"
+hasnt "$out" "NO-RUN" "it does not call NO-RUN before the cold window is over"
 
 echo
 echo "$pass passed, $fail failed"
