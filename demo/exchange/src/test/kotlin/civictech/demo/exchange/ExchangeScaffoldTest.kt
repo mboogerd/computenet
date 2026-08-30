@@ -107,11 +107,23 @@ class ExchangeScaffoldTest {
 
     @Tag("multi-jvm")
     @Test
-    fun `a kill -9'd peer recovers its journaled writer state and both sides re-converge`() {
+    fun `a kill -9'd peer reconnects, catches up from the survivor, and both sides re-converge`() {
         val journalB = Files.createTempDirectory("computenet-exchange-journal-b").toFile()
         // `0` everywhere, as in the test above. B's relaunch is a fresh process and
         // gets a fresh HTTP port — hence `var httpB`: this test needs the restarted
-        // peer to come back with its journaled state, not at the same address.
+        // peer to come back with the converged board, not at the same address.
+        //
+        // SCOPE (computenet-do5r, measured by the computenet-emtx audit at dcb2defa2):
+        // this is a kill / reconnect / park-replay / bidirectional-convergence test,
+        // NOT a journal-replay test. A survives the whole restart holding the converged
+        // board, so A's catch-up baseline subsumes everything B could have replayed —
+        // every assertion below still passes with `--journal` dropped from B's relaunch.
+        // B is still journaled here because that is the realistic restart shape, and
+        // because the journal must not *break* reconnect; the discriminating evidence
+        // for CP-C1 per-cell WAL replay is the solo sibling below, `writer journal alone
+        // reconstructs the board after restart`, which has no peer to supply anything
+        // (point it at a fresh journal dir and it fails: "timed out awaiting: board
+        // recovered from writer journal").
         val peerA = launch("0", "--listen", "0")
         val httpA = peerA.port("http")
         val ws = peerA.port("ws")
@@ -136,15 +148,16 @@ class ExchangeScaffoldTest {
             // life goes on at A: this order parks at A until B returns
             post(httpA, "add", "north", "o3", 7)
 
-            // B relaunches with the SAME journal dir — writer replay + reconnect
+            // B relaunches with the SAME journal dir — the realistic restart — and re-peers
             peerB = launch("0", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
             httpB = peerB.port("http")
             JvmPeer.await("peer B back up", listOf(peerB), timeoutMs = 45_000) { up(httpB) }
 
-            // B recovered its OWN journaled writer (south o2=5) from the per-cell WAL,
-            // re-received A's north (o1) over the re-peered mesh, and replayed A's
-            // parked north (o3) — north 17, south 5.
-            awaitUntil("B recovered + re-converged", timeoutMs = 45_000) { boardOf(httpB) == """{"north":17,"south":5}""" }
+            // B came back, re-peered, and caught up over the mesh: A's north (o1), A's
+            // parked north (o3), and B's own pre-crash south (o2=5) — which A also holds
+            // — land as north 17, south 5. Nothing here separates catch-up from WAL
+            // replay; see SCOPE above.
+            awaitUntil("B re-converged after reconnect", timeoutMs = 45_000) { boardOf(httpB) == """{"north":17,"south":5}""" }
             awaitUntil("A re-converged", timeoutMs = 45_000) { boardOf(httpA) == """{"north":17,"south":5}""" }
 
             // fully live again, both directions
@@ -162,6 +175,11 @@ class ExchangeScaffoldTest {
      * re-sync in the picture. This is the per-cell durability claim by itself: the
      * volatile aggregates (union / GroupBy / board) rebuild purely from replaying
      * the writer WAL.
+     *
+     * This is exchange's ONLY journal-discriminating test — the two-peer crash test
+     * above is subsumed by the surviving peer (computenet-do5r). Verified by mutation:
+     * give the recovered `ExchangeApp` a fresh journal dir instead of `journal` and it
+     * fails with `timed out awaiting: board recovered from writer journal`.
      */
     @Test
     fun `writer journal alone reconstructs the board after restart`() {
