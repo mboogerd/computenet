@@ -246,13 +246,13 @@
 # nothing. 5 lines survive here — the part that measured true and tells an agent
 # something to do. The other ~30 were a refutation with no action in it, which
 # is a bead comment, not a procedure file.
-work                9146
-# 9130 -> 9146 on 2026-08-30: computenet-2r22 (+16) — bought 5b's "scoping the
+# 9130 -> 9148 on 2026-08-30: computenet-2r22 (+18) — bought 5b's "scoping the
 # gate is not sufficient" paragraph and the wall-clock-await rule for going
 # under the cap. Recurrence of computenet-qmjd, whose prose remedy was followed
 # exactly and still reached load 204 on 16 cores. The mechanical half —
 # capacity.load1/advice from next-batch.py's load_advice() — costs no budget
 # lines, being script, and carries its own derivation in its docstring.
+work                9148
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

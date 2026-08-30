@@ -481,7 +481,21 @@ finally:
 if "ONE" not in (strong or ""):
     failed += 1
     print(f"FAIL: a >=2x-core load must say dispatch ONE agent, got {strong!r}")
-load_advice_cases = len(load_cases) * 2 + 1
+# a platform without getloadavg must degrade to (None, None), not raise
+for exc in (OSError("nope"), AttributeError("nope")):
+    def _boom(e=exc):
+        raise e
+    nb.os.getloadavg = _boom
+    try:
+        got = nb.load_advice(16, 3)
+    except Exception as e:                       # noqa: BLE001 - that is the bug
+        got = f"raised {e!r}"
+    finally:
+        nb.os.getloadavg = _real_getloadavg
+    if got != (None, None):
+        failed += 1
+        print(f"FAIL: getloadavg raising {exc!r} must give (None, None), got {got!r}")
+load_advice_cases = len(load_cases) * 2 + 3
 
 total = (load_advice_cases + merged_cases + len(cases) + len(branch_cases) + entry_resume_cases + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
          + len(verdict_cases) + len(parked_cases) + len(agreement_cases)

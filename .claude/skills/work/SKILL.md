@@ -1382,7 +1382,9 @@ accordingly per dispatch.
 **Scoping the gate is NOT sufficient, so read `max_parallel` as an upper bound
 you may go under, not a target to fill.** Scoping the task list does not scope
 the WORKERS: two scoped Gradle runs still share one daemon pool, one build
-cache and one `buildLogic.lock`, and each spawns its own test-worker fan-out.
+cache and one `buildLogic.lock`, and each spawns its own test-worker fan-out —
+and the cap's own arms were themselves scoped `:wire:test` runs, so scoping
+buys no headroom the cap has not already spent (`capacity_limit()`).
 Measured 2026-08-30 on 16 cores, cap 3, two implementers, file-disjoint, BOTH
 gates scoped: load 204.71 / 92.73 / 44.00, a 1-minute figure ~13x core count
 (computenet-2r22, recurrence of qmjd). Nothing timed out — the margin was luck.

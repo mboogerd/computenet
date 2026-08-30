@@ -210,16 +210,24 @@ def capacity_limit(cores, siblings=0):
         N=3   34.0s, 34.8s, 35.0s                       1.70x
         N=6   89.9s 93.1s 95.6s 96.6s 97.2s 97.8s      4.4x-4.8x
 
-    Both machines were measured with agents running REPO-WIDE gates. Scoped
-    gates are not equivalent and do not make the cap safer to fill — see
-    load_advice() for the 204-on-16-cores case (computenet-2r22).
+    WHAT THE ARMS ABOVE WERE, since it decides how far the cap can be trusted
+    (computenet-2r22 asked, and the first answer given here was the opposite of
+    the truth): every arm is a SCOPED, single-module `:wire:test --rerun`, on
+    both machines. The cap was never derived from a repo-wide gate. So scoping
+    each agent's gate does not buy headroom the cap has not already spent — the
+    204-on-16-cores reading in load_advice() is this derivation's predicted
+    direction, not a surprise, and the "if anything optimistic" caveat below
+    covers it.
 
     The criterion is per-run inflation, not throughput: a bounded wait sized on
     a quiet box is what breaks. Under 2x it holds; the recorded catastrophes are
     ~90x, not 2x. On 16 cores the largest arm that stayed under 2x was 3.
 
-    Load average is deliberately NOT the instrument. Over a ~25s workload the
-    1-minute average is still climbing when the build ends and still decaying
+    Load average is deliberately NOT the instrument HERE (load_advice() uses it
+    for a different question — what the box is doing now — and says why that is
+    sound; do not delete that advisory on this paragraph's authority). Over a
+    ~25s workload the 1-minute average is still climbing when the build ends
+    and still decaying
     when the next arm starts (N=3's pre-arm reading was 17.31, inherited from
     N=2), so it lags in both directions. Wall clock per run is measured
     directly.
