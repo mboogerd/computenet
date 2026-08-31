@@ -48,10 +48,17 @@ name: iroh-sidecar
 # latency. That decision is deferred to a human and parked under
 # computenet-eys1 rather than decided here.
 #
-# Residual: the beadsmirror iroh convergence suite (bd+dolt+sidecar together)
-# is NOT wired into this job. computenet-egl.4 had not landed on main when
-# this workflow was filed (computenet-egl.5's stated condition for adding
-# it) — re-check that condition before wiring the suite in here.
+# The beadsmirror iroh convergence suite (bd+dolt+sidecar together) IS wired
+# into this job (computenet-cqde, after computenet-egl.4 landed as #598): the
+# "beadsmirror iroh convergence suite" step below runs
+# IrohConvergenceSuiteTest's four cases and IrohMirrorTransportTest under
+# `-Piroh.enabled=true`, with `bd`/`dolt` provisioned via the same
+# `install-bd-dolt` composite action ci.yml's beadsmirror lanes use, and the
+# following step asserts (via `assert-beadsmirror-e2e`) that neither class
+# reported itself skipped — a Linux run of these cases with the toolchain
+# absent fails the job rather than passing green having asserted nothing,
+# same shape as computenet-7em.5 for the WS-transport suites. It is this
+# lane's only reason `demo/beadsmirror/**` is now also a trigger path below.
 #
 # Where a warm (cache-hit=true) figure comes from (computenet-jtvd): this
 # workflow only triggers on pull_request, so it never writes a main-scoped
@@ -67,6 +74,7 @@ on:
   pull_request:
     paths:
       - "iroh/**"
+      - "demo/beadsmirror/**"
       - ".github/workflows/iroh-sidecar.yml"
   workflow_dispatch: {}
 
@@ -84,6 +92,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      # Provisions `bd` and `dolt` for the "beadsmirror iroh convergence
+      # suite" step near the bottom of this job — see that action's header
+      # (computenet-mgxe) for why it is a composite action rather than a
+      # copy-pasted step, and ci.yml for the same pairing over the
+      # WS-transport suites. Installed early so it is available regardless of
+      # step ordering changes below; it costs well under 10s (two curls, no
+      # build-from-source).
+      - uses: ./.github/actions/install-bd-dolt
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -153,3 +170,37 @@ jobs:
           line="iroh-sidecar-timing step=gradle-iroh-check seconds=$((end - start)) cache-hit=${{ steps.rust-cache.outputs.cache-hit }}"
           echo "$line"
           echo "$line" >> "$GITHUB_STEP_SUMMARY"
+
+      # computenet-cqde: the only place IrohConvergenceSuiteTest's four cases
+      # and IrohMirrorTransportTest's sidecar-backed case execute anywhere
+      # besides a developer's darwin/arm64 machine. `-Piroh.enabled=true`
+      # makes :demo:beadsmirror depend on `:iroh:cargoBuild` and sets the
+      # `iroh.sidecar.binary` system property (demo/beadsmirror/build.gradle.kts)
+      # — a third cargo build in this job, redundant with the two steps above
+      # in the same way the egl.6 header already documents `:iroh:check`
+      # being redundant with the direct `cargo build`/`cargo test` pair; not a
+      # new kind of duplication. `--rerun` because Gradle's up-to-date
+      # checking would otherwise let a cached prior result stand in for
+      # actually executing these classes on this runner.
+      - name: beadsmirror iroh convergence suite (bd+dolt+sidecar together)
+        run: |
+          set -euo pipefail
+          ./gradlew :demo:beadsmirror:test -Piroh.enabled=true --rerun \
+            --tests 'civictech.demo.beadsmirror.e2e.IrohConvergenceSuiteTest' \
+            --tests 'civictech.demo.beadsmirror.IrohMirrorTransportTest'
+
+      # Non-vacuity assertion (computenet-cqde's acceptance clause 3): reddens
+      # this job, rather than logging, when either class above reports itself
+      # skipped — e.g. `bd`/`dolt` missing from PATH (the `install-bd-dolt`
+      # step above not having run) or the sidecar binary absent. Same
+      # composite action ci.yml's beadsmirror lanes use for the WS-transport
+      # suites (computenet-7em.5/q4qt); read its header for the three checks
+      # it runs. `report-dir` is left at its default
+      # (demo/beadsmirror/build/test-results/test), which this module does
+      # not override.
+      - name: Assert the iroh convergence suite actually ran (non-vacuous)
+        uses: ./.github/actions/assert-beadsmirror-e2e
+        with:
+          required-classes: >-
+            civictech.demo.beadsmirror.e2e.IrohConvergenceSuiteTest
+            civictech.demo.beadsmirror.IrohMirrorTransportTest
