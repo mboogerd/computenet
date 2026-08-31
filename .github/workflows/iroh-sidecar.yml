@@ -11,14 +11,10 @@ name: iroh-sidecar
 # works) — the residue finding (egl.6) reports that duplication as the
 # measured burden, not a defect of this job.
 #
-# Deliberately non-required: this workflow is not listed in ruleset 20149495's
-# required_status_checks, and this task does not touch the ruleset. Its job
-# name (`iroh-sidecar`) and check name differ from all six required contexts
-# (build-test-fast, build-test-serial, concord-full, ui-test, agora-ui-test,
-# kernel-test), so it cannot be confused with one by name alone.
-#
-# computenet-eys1 (2026-08-30) re-confirmed this is still the case and chose
-# to leave it that way rather than promote the lane. Re-run evidence (the
+# REQUIRED as of 2026-08-31 (computenet-eys1.1): this workflow's `iroh-sidecar`
+# job is now listed in ruleset 20149495's required_status_checks, alongside
+# build-test-fast, build-test-serial, concord-full, ui-test, agora-ui-test,
+# and kernel-test — seven required contexts total. Re-run evidence (the
 # AGENTS.md ruleset query):
 #
 #   GH_PAGER=cat gh api repos/mboogerd/computenet/rulesets/20149495 \
@@ -30,23 +26,22 @@ name: iroh-sidecar
 #      agora-ui-test
 #      ui-test
 #      kernel-test
+#      iroh-sidecar
 #
-# `iroh-sidecar` is absent, confirming this lane is still advisory. It is
-# currently the ONLY place the sidecar-backed JVM tests (23 total, run below
-# under `:iroh:check -Piroh.enabled=true`) execute at all: none of the six
-# required lanes above passes `-Piroh.enabled`, so they build/run only
-# :iroh's flag-independent sources — SidecarCodecTest (12) and
-# IrohSessionHelloTest (4), 16 of the 23. Consequence: a Linux regression in
-# IrohTransport, SidecarClient or SidecarProcess turns this check red and
-# blocks nothing, because auto-merge lands a PR on the six required checks
-# regardless of this job's result.
+# Decided (2026-08-31, sync-report follow-up): warm runs of this lane measured
+# ~2m10s-2m50s over 10 recent PRs (this workflow's own timed steps corroborate
+# that figure); acceptable added latency on every required PR. This job is the
+# ONLY place the sidecar-backed JVM tests (23 total, run below under
+# `:iroh:check -Piroh.enabled=true`) execute — none of the other six required
+# lanes passes `-Piroh.enabled`, so they build/run only :iroh's
+# flag-independent sources — SidecarCodecTest (12) and IrohSessionHelloTest
+# (4), 16 of the 23. A Linux regression in IrohTransport, SidecarClient or
+# SidecarProcess now blocks auto-merge, as intended.
 #
-# Promoting this lane into the required set is a repo-policy call, not a
-# mechanical follow-up: it would gate every PR touching `iroh/**` (not just
-# this workflow) on a lane whose pole is a cold cargo build, and it trades
-# off a transport nothing else yet depends on against everyone's merge
-# latency. That decision is deferred to a human and parked under
-# computenet-eys1 rather than decided here.
+# A cold run (cache miss) is not yet measured here; the 20-minute job timeout
+# above is the current backstop. If a cold run turns out to dominate merge
+# latency in practice, that is grounds to revisit this decision — not a
+# reason it was wrong to make now.
 #
 # The beadsmirror iroh convergence suite (bd+dolt+sidecar together) IS wired
 # into this job (computenet-cqde, after computenet-egl.4 landed as #598): the
