@@ -43,7 +43,28 @@ class NoCellClassArchitectureTest {
             // A class/object declaring `civictech.cell.Cell` (imported or fully qualified) as
             // a supertype. `\bCell\b` word-boundaries so a name like `CellHandler` or
             // `FooCell` — neither of which is the forbidden type — is not matched.
-            if (Regex("""\b(class|object)\s+\w+[^\n{]*:\s*(civictech\.cell\.)?Cell\b""").containsMatchIn(source)) {
+            //
+            // The declaration header is matched ACROSS newlines, because the multi-line form
+            //
+            //     class Foo(
+            //         val x: Int,
+            //     ) : Cell
+            //
+            // is the dominant style in this repository (`RelationSchema`, `Rule` and
+            // `Rejection` in this very module are declared that way) and a single-line-only
+            // scan fails open on exactly it. Three bounded segments, each of which cannot run
+            // away past the declaration it belongs to: an optional type-parameter list
+            // (`<...>`, no `>`), an optional constructor parameter list (`(...)`, up to its
+            // first `)`, newlines allowed), and a supertype list restricted to identifier,
+            // generic, comma, paren and whitespace characters — so it stops at the class body
+            // `{` and cannot reach a later `Cell` mention across a comment (`/`) or a string.
+            val cellSupertype = Regex(
+                """\b(class|object)\s+\w+""" +
+                    """(?:\s*<[^>]*>)?""" +
+                    """(?:\s*\([^)]*\))?""" +
+                    """\s*:\s*[\w.<>,()\s]*?\b(civictech\.cell\.)?Cell\b""",
+            )
+            if (cellSupertype.containsMatchIn(source)) {
                 violations += "civictech.cell.Cell implementation"
             }
             return violations
@@ -97,6 +118,54 @@ class NoCellClassArchitectureTest {
             class FixtureCell(override val ref: civictech.cell.CellRef) : civictech.cell.Cell
         """.trimIndent()
         classify(src) shouldContain "civictech.cell.Cell implementation"
+    }
+
+    @Test
+    fun `QRY1 §LOWER-03 synthetic source implementing Cell across a multi-line header is flagged`() {
+        val src = """
+            package civictech.query.fixture
+
+            import civictech.cell.Cell
+            import civictech.cell.CellRef
+
+            class FixtureCell(
+                override val ref: CellRef,
+            ) : Cell
+        """.trimIndent()
+        classify(src) shouldContain "civictech.cell.Cell implementation"
+    }
+
+    @Test
+    fun `QRY1 §LOWER-03 synthetic source implementing Cell as a secondary supertype is flagged`() {
+        val src = """
+            package civictech.query.fixture
+
+            import civictech.cell.Cell
+            import java.io.Serializable
+
+            class FixtureCell : Serializable, Cell
+        """.trimIndent()
+        classify(src) shouldContain "civictech.cell.Cell implementation"
+    }
+
+    @Test
+    fun `QRY1 §LOWER-03 a multi-line data class over a non-cell supertype is not flagged`() {
+        // Control for the cross-newline match above: the multi-line form is only a violation
+        // when the supertype really is `Cell`. This is the exact shape of this module's own
+        // `RelationSchema`/`Rule`, and the word `Cell` appears afterwards in a comment.
+        val src = """
+            package civictech.query.fixture
+
+            import java.io.Serializable
+
+            data class FixtureRow(
+                val a: Int,
+                val b: String,
+            ) : Serializable
+
+            // Lowering hands this to a kernel Cell later.
+        """.trimIndent()
+        classify(src).shouldBeEmpty()
     }
 
     @Test
