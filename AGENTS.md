@@ -267,10 +267,10 @@ Before declaring completion:
 ## Branches, PRs, and auto-merge
 
 `main` is protected by a repository ruleset: changes land only through a pull
-request, **six** required status checks must pass (`build-test-fast`,
+request, **seven** required status checks must pass (`build-test-fast`,
 `build-test-serial`, `concord-full`, `ui-test`, `agora-ui-test`,
-`kernel-test`), history stays linear, and the branch cannot be force-pushed or
-deleted. A direct push to `main` is rejected — always branch.
+`kernel-test`, `iroh-sidecar`), history stays linear, and the branch cannot
+be force-pushed or deleted. A direct push to `main` is rejected — always branch.
 
 That list is the ruleset's, not folklore — read it rather than trusting this
 paragraph if a check's status ever decides a ship:

@@ -65,12 +65,21 @@ name: iroh-sidecar
 # the Gradle lanes. A warm figure therefore requires either a PR run after
 # cache-seed.yml has run at least once post-merge, or a second run on the
 # same PR ref (which restores the first run's own PR-scoped cache entry).
+# NO `paths:` FILTER, deliberately (computenet-b6hu). This job is a REQUIRED
+# status check (see the header above), and GitHub does not treat an absent
+# required check as satisfied: a path-filtered required workflow simply never
+# reports on a PR outside its paths, and that PR stays `mergeStateStatus:
+# BLOCKED` forever with every other check green. Measured 2026-08-31: with the
+# filter in place, PR #601 (query/** only) held all six other required checks
+# SUCCESS and auto-merge armed, and sat BLOCKED indefinitely with no
+# `iroh-sidecar` row in its `statusCheckRollup` at all; #587 was in the same
+# state. Running on every PR is what the promotion decision already priced in
+# ("acceptable added latency on every required PR", ~2m10s-2m50s warm).
+# Re-adding a `paths:` filter here re-breaks every non-iroh PR in the
+# repository — remove the check from ruleset 20149495 first if that is ever
+# the intent.
 on:
   pull_request:
-    paths:
-      - "iroh/**"
-      - "demo/beadsmirror/**"
-      - ".github/workflows/iroh-sidecar.yml"
   workflow_dispatch: {}
 
 # Same idiom as ci.yml: supersede an in-flight run when a newer commit lands
