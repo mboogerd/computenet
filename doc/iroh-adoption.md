@@ -404,8 +404,9 @@ above, which names the same call sites):
   iroh test cases — the ones shown above to run in `LookupMode::N0` — into
   the `iroh-sidecar` workflow's `ubuntu-latest` CI lane; its first run passed
   with 8 tests, 0 skipped (**MEASURED**: `computenet-cqde`'s first CI run of
-  that lane this session, per this task's dispatch context — not re-verified
-  against a run id by this task). Given the reading above, that means the
+  that lane this session, per this task's dispatch context — GitHub Actions
+  run 33348839107, `iroh-sidecar` job, non-vacuity-assertion step, on
+  `ubuntu-latest`, from PR #599). Given the reading above, that means the
   `iroh-sidecar` CI lane reaches n0's public discovery/relay infrastructure
   from GitHub-hosted runners on every triggering PR. This document states
   that fact; it does not decide whether that exposure is acceptable — that is
@@ -414,5 +415,5 @@ above, which names the same call sites):
 
 ## See also
 
-- `doc/ARCHITECTURE.md` §7 (Documentation map) — points to this document.
+- "Relay hosting policy" above — this document's own section.
 - `doc/ARCHITECTURE.md` §7 (Documentation map) — points to this document.
