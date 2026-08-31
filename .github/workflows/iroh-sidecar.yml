@@ -52,8 +52,10 @@ name: iroh-sidecar
 # following step asserts (via `assert-beadsmirror-e2e`) that neither class
 # reported itself skipped — a Linux run of these cases with the toolchain
 # absent fails the job rather than passing green having asserted nothing,
-# same shape as computenet-7em.5 for the WS-transport suites. It is this
-# lane's only reason `demo/beadsmirror/**` is now also a trigger path below.
+# same shape as computenet-7em.5 for the WS-transport suites. That suite was
+# once this lane's only reason `demo/beadsmirror/**` was also a trigger path;
+# there is no `paths:` filter here any more (see below), so nothing is
+# path-scoped now — the sentence survives only to say why these steps exist.
 #
 # Where a warm (cache-hit=true) figure comes from (computenet-jtvd): this
 # workflow only triggers on pull_request, so it never writes a main-scoped
@@ -65,12 +67,38 @@ name: iroh-sidecar
 # the Gradle lanes. A warm figure therefore requires either a PR run after
 # cache-seed.yml has run at least once post-merge, or a second run on the
 # same PR ref (which restores the first run's own PR-scoped cache entry).
+#
+# NO `paths:` FILTER, deliberately (computenet-b6hu). This job is a REQUIRED
+# status check (see the header above), and GitHub does not treat an absent
+# required check as satisfied: a path-filtered required workflow simply never
+# reports on a PR outside its paths, and that PR stays `mergeStateStatus:
+# BLOCKED` forever with every other check green. Measured 2026-08-31: with the
+# filter in place, PR #601 (query/** only) held all six other required checks
+# SUCCESS and auto-merge armed, and sat BLOCKED indefinitely with no
+# `iroh-sidecar` row in its `statusCheckRollup` at all; #587 was in the same
+# state. Running on every PR is what the promotion decision already priced in
+# ("acceptable added latency on every required PR").
+#
+# WHAT THAT LATENCY ACTUALLY IS, re-measured at review time on a PR whose diff
+# touches no iroh source at all (PR #604, run 33379105667, job 99447143947 —
+# only this file and AGENTS.md changed): job wall 3m45s (09:43:49-09:47:34Z),
+# rust cache "full match: true" from the main-scoped cache-seed entry, so this
+# is a WARM run. Step timings: cargo-build 14s, cargo-test 6s,
+# gradle-iroh-check 109s, the rest checkout/toolchain/Gradle setup and the
+# beadsmirror convergence suite. The ~2m10s-2m50s warm figure in the header
+# above predates the beadsmirror convergence step (computenet-cqde, #599) and
+# therefore UNDERSTATES the current cost by roughly a minute; 3m45s warm is the
+# figure to reason with, and every merge now pays it. A cold run remains
+# unmeasured, with the 20-minute job timeout as its only backstop, and cold is
+# now reachable on ANY PR rather than only iroh-touching ones — if cache-seed
+# has not run since a Cargo.lock or toolchain change, the whole repository's
+# merge latency inherits that unmeasured cost.
+#
+# Re-adding a `paths:` filter here re-breaks every non-iroh PR in the
+# repository — remove the check from ruleset 20149495 first if that is ever
+# the intent.
 on:
   pull_request:
-    paths:
-      - "iroh/**"
-      - "demo/beadsmirror/**"
-      - ".github/workflows/iroh-sidecar.yml"
   workflow_dispatch: {}
 
 # Same idiom as ci.yml: supersede an in-flight run when a newer commit lands
