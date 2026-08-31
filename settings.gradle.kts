@@ -17,6 +17,7 @@ include(":testkit")
 // ([BEN1-01]).
 include(":bench")
 include(":oracle")
+include(":query")
 
 include(":kernel")
 include(":concord")
