@@ -1,2 +1,10 @@
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+sandbox_mode = "workspace-write"
+project_doc_max_bytes = 65536
+
+[sandbox_workspace_write]
+network_access = true
+
 [features]
 hooks = true
