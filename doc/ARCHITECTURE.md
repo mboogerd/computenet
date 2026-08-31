@@ -418,6 +418,9 @@ Authoritative:
 - `concord/schema/*.md` + `concord/corpus/DISPUTES.md` — scenario-authoring
   contracts and the dispute ledger.
 - `doc/demo-findings.md` — living register of demo-discovered kernel gaps.
+- `doc/iroh-adoption.md` — DSC0 (iroh) adoption-residue finding: measured
+  cross-compilation record, crate layout as consumed, DSC2 residual scope,
+  relay hosting policy.
 - `backlog/` — idea inbox (some files marked IMPLEMENTED/absorbed).
 
 Snapshots and partly-executed plans (read with their dates in mind):
