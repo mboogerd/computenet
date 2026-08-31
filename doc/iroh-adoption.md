@@ -102,7 +102,8 @@ claims:
 - **The cache key's environment hash includes the rustc version.** A new Rust
   stable release makes every iroh PR's first run go cold again until the next
   scheduled `cache-seed.yml` run reseeds the main-scoped entry — self-healing
-  within roughly 24h (the seed job's cron cadence), not a standing defect.
+  within roughly 24h, **ESTIMATED** from `cache-seed.yml`'s own
+  `cron: "17 4 * * *"` schedule (daily), not a standing defect.
 
 ## iroh crate layout as consumed
 
