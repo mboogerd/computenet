@@ -83,6 +83,20 @@ class SidecarProcess private constructor(
         private val HANDSHAKE_NODE_ID = Regex(""""nodeId"\s*:\s*"([0-9a-f]{64})"""")
 
         /**
+         * The pure decision behind [spawn]'s `iroh.relay.url` steering: append
+         * `--relay-url <relayUrl>` to [args] when [relayUrl] is non-null and
+         * [args] contains neither `--offline` nor `--relay-url` already;
+         * otherwise return [args] unchanged. Factored out of [spawn] so the
+         * decision is unit-testable without spawning a process — see
+         * `SidecarProcessArgsTest`.
+         */
+        internal fun effectiveArgs(args: List<String>, relayUrl: String?): List<String> {
+            if (relayUrl == null) return args
+            if (args.contains("--offline") || args.contains("--relay-url")) return args
+            return args + listOf("--relay-url", relayUrl)
+        }
+
+        /**
          * Spawn [binary] and read its handshake line.
          *
          * @param stderrSink each stderr line of the child, for a test or a host
@@ -90,12 +104,23 @@ class SidecarProcess private constructor(
          * @param args extra command-line arguments for the child, passed through
          *   verbatim — the binary's own contract (`iroh/sidecar/src/main.rs`):
          *   `--offline`, `--secret-key <64 hex>`, `--bind-addr <ip:port>`,
-         *   `--socket-port <port>`. Empty by default, which is a fresh key on an
+         *   `--socket-port <port>`, `--relay-url <url>` (refused together with
+         *   `--offline`). Empty by default, which is a fresh key on an
          *   ephemeral UDP port: an endpoint whose id changes every run. A caller
          *   that must bring the SAME endpoint back after its process died — the
          *   far side of a reconnect test — pins both with `--secret-key` and
          *   `--bind-addr`, so the NodeId a dialler was given and the addresses it
          *   was taught still name this endpoint after the restart.
+         *
+         *   When the JVM system property `iroh.relay.url` is set, and [args]
+         *   contains neither `--offline` nor `--relay-url`, `--relay-url
+         *   <property value>` is appended so every spawned sidecar can be
+         *   steered onto one relay from a single JVM property — the choke
+         *   point [effectiveArgs] this class narrows every JVM call site
+         *   through. Explicit caller args always win: an [args] list that
+         *   already names `--offline` or `--relay-url` is passed through
+         *   unchanged. With the property unset, [args] is passed through
+         *   byte-identical to before this parameter existed.
          * @throws SidecarException when the binary does not exist, exits before
          *   the handshake, or writes a line that is not `PROTOCOL.md` §1's.
          */
@@ -108,7 +133,8 @@ class SidecarProcess private constructor(
             val file: File = binary.toFile()
             if (!file.isFile) throw SidecarException("sidecar binary $binary does not exist")
 
-            val process = ProcessBuilder(listOf(file.absolutePath) + args)
+            val effectiveArgs = effectiveArgs(args, System.getProperty("iroh.relay.url"))
+            val process = ProcessBuilder(listOf(file.absolutePath) + effectiveArgs)
                 .redirectErrorStream(false)
                 .start()
 

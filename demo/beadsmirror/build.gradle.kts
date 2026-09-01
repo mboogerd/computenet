@@ -71,6 +71,13 @@ if (project.hasProperty("iroh.enabled")) {
     tasks.withType<Test>().configureEach {
         dependsOn(":iroh:cargoBuild")
         systemProperty("iroh.sidecar.binary", sidecarBinary.absolutePath)
+        // computenet-o0m3.3: same forwarding as iroh/build.gradle.kts — pass
+        // -Piroh.relay.url=<url> through as the JVM system property
+        // SidecarProcess.spawn reads, so one -P flag steers every sidecar this
+        // module's tests spawn (including IrohMirrorTransport's).
+        if (project.hasProperty("iroh.relay.url")) {
+            systemProperty("iroh.relay.url", project.property("iroh.relay.url") as String)
+        }
     }
 }
 
