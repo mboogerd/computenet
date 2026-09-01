@@ -115,6 +115,16 @@ def _norm(path):
     return p
 
 
+def _repo_root():
+    """The worktree root, falling back to the cwd if git cannot say."""
+    try:
+        out = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, check=True)
+        return out.stdout.strip() or os.getcwd()
+    except (OSError, subprocess.CalledProcessError):
+        return os.getcwd()
+
+
 def dir_claims(files, root=None):
     """Entries in a claim that name a DIRECTORY rather than files.
 
@@ -136,8 +146,16 @@ def dir_claims(files, root=None):
     A path is a directory claim if it exists on disk as one. Non-existent
     paths are NOT flagged: a claim naming a file the task is about to CREATE is
     ordinary and must not be nagged about.
+
+    A claim entry is REPO-ROOT-RELATIVE, so the root is resolved rather than
+    taken from the cwd — check-files-claim.sh learned the same lesson the hard
+    way, firing every census row on a bead whose files all exist when run from
+    a subdirectory. The direction of failure here is worse than that one: a
+    wrong root makes every isdir() false, so the detector reports nothing at
+    all and reads exactly like "no directory claims". A linked worktree is a
+    full tree, so its own root is the right answer inside one.
     """
-    root = root or os.getcwd()
+    root = root or _repo_root()
     return sorted(f for f in {_norm(x) for x in files}
                   if f and f != "." and os.path.isdir(os.path.join(root, f)))
 
@@ -355,6 +373,33 @@ def cap_batch(batch, skipped, cap):
     return batch[:cap], skipped
 
 
+def dir_claim_warnings(candidates, batch, skipped):
+    """Advisory lines for every directory-shaped claim among the candidates.
+
+    A function rather than inline in main() so the WIRING is testable: the
+    deliverable is a message reaching a reader, and `dir_claims` being correct
+    in isolation does not deliver it — deleting this loop from main() left the
+    suite green (computenet-i5zr review).
+
+    Scans `skipped` as well as `batch`: whether the over-broad claim WINS the
+    surface or loses it to a narrower sibling is `bd ready` ordering, which
+    nobody controls, and cap_batch demotes batched entries to skipped before
+    this runs. Scanning batch alone made the report a coin flip, and an empty
+    result would then not mean "no directory claims".
+    """
+    by_id = {task["id"]: task for task, _ in candidates}
+    out = []
+    for tid in [e["id"] for e in batch] + [s["id"] for s in skipped]:
+        task = by_id.get(tid)
+        for d in dir_claims(claim_of(task) if task else []):
+            out.append(
+                "%s claims the DIRECTORY %s -- it collides with every claim "
+                "beneath it, so this epic batches more serially than it needs "
+                "to. Narrow it to the files the item actually edits: "
+                "bd update %s --set-metadata files=<paths>" % (tid, d, tid))
+    return out
+
+
 def plan_batch(candidates, feature=None):
     """(batch, skipped) from `[(task, resumed)]` — the claim-disjointness rule.
 
@@ -454,14 +499,7 @@ def main():
 
     verdict, parked = _assess(feature, batch)
     warnings = []
-    for entry in batch:
-        for d in dir_claims(entry.get("files") or []):
-            warnings.append(
-                "%s claims the DIRECTORY %s -- it collides with every claim "
-                "beneath it, so this epic batches more serially than it needs "
-                "to. Narrow it to the files the item actually edits: "
-                "bd update %s --set-metadata files=<paths>"
-                % (entry["id"], d, entry["id"]))
+    warnings = dir_claim_warnings(candidates, batch, skipped)
     print(json.dumps({"batch": batch, "skipped": skipped,
                       "warnings": warnings,
                       "verdict": verdict, "parked": parked,

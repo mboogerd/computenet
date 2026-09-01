@@ -533,7 +533,63 @@ _b, _s = nb.plan_batch([(t("a", "bench/src"), False), (t("b", "bench/src/Foo.kt"
 if ids(_b) != ["a"] or len(_s) != 1:
     failed += 1
     print(f"FAIL: dir_claims must not alter batching — got {ids(_b)}, {_s}")
-dir_claim_cases_n = len(dir_claim_cases) + 1
+# The WIRING, not just the function. Deleting main()'s warnings loop left the
+# suite green at 104/104: the deliverable is a message reaching a reader, and
+# `dir_claims` being correct in isolation does not deliver it. Exercised as
+# main() composes it, over both batch and skipped — an over-broad claim reaches
+# `skipped` whenever `bd ready` ordering or capacity puts it there, so scanning
+# batch alone made the report a coin flip.
+_real_dir_claims = nb.dir_claims
+nb.dir_claims = lambda files, root=None: _real_dir_claims(files, root=_tmp)
+
+_cands = [(t("broad", "bench/src"), False), (t("narrow", "bench/src/Foo.kt"), False)]
+_b, _s = nb.plan_batch(_cands)
+_w = nb.dir_claim_warnings(_cands, _b, _s)
+if not any("broad claims the DIRECTORY bench/src" in w for w in _w):
+    failed += 1
+    print(f"FAIL: the batched directory claim must be reported — got {_w}")
+if not any("bd update broad --set-metadata files=" in w for w in _w):
+    failed += 1
+    print(f"FAIL: the warning must carry the command that narrows it — got {_w}")
+
+# reversed, so the over-broad claim LOSES the surface and lands in skipped
+_cands = [(t("narrow", "bench/src/Foo.kt"), False), (t("broad", "bench/src"), False)]
+_b, _s = nb.plan_batch(_cands)
+if "broad" in ids(_b):
+    failed += 1
+    print("FAIL: fixture wrong — 'broad' should have been skipped here")
+_w = nb.dir_claim_warnings(_cands, _b, _s)
+if not any("broad claims the DIRECTORY bench/src" in w for w in _w):
+    failed += 1
+    print(f"FAIL: a SKIPPED directory claim must be reported too — got {_w}")
+
+# a batch with no directory claim says nothing at all
+_cands = [(t("a", "bench/src/Foo.kt"), False)]
+_b, _s = nb.plan_batch(_cands)
+if nb.dir_claim_warnings(_cands, _b, _s):
+    failed += 1
+    print("FAIL: a clean batch must produce no warnings")
+nb.dir_claims = _real_dir_claims
+
+# The root is RESOLVED, not taken from the cwd: a claim entry is
+# repo-root-relative, and a wrong root makes every isdir() false, so the
+# detector reports nothing and reads exactly like "no directory claims"
+# (check-files-claim.sh learned the same lesson loudly; this one fails silent).
+import subprocess as _sp
+_git = _os.path.join(_tmp, "repo")
+_os.makedirs(_os.path.join(_git, "bench/src"), exist_ok=True)
+_os.makedirs(_os.path.join(_git, "sub"), exist_ok=True)
+_sp.run(["git", "init", "-q", _git], check=True)
+_cwd = _os.getcwd()
+try:
+    _os.chdir(_os.path.join(_git, "sub"))
+    if nb.dir_claims({"bench/src"}) != ["bench/src"]:
+        failed += 1
+        print("FAIL: dir_claims must resolve the repo root, not trust the cwd")
+finally:
+    _os.chdir(_cwd)
+
+dir_claim_cases_n = len(dir_claim_cases) + 7
 
 total = (load_advice_cases + merged_cases + len(cases) + len(branch_cases) + entry_resume_cases + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
          + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
