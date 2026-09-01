@@ -111,26 +111,39 @@ object WsTransport {
      * second forever. It is **not** exactly `limit`, and the softness is worth
      * stating precisely because it is structural, not an oversight:
      *
-     * - **`Session.peered` answers the wrong question.** It means "this side
-     *   admitted the peer's hello", not "the peer admitted mine" — and on
-     *   `:wire` a *refused* dialler routinely admits the listener's hello
-     *   anyway, because [WsListener] sends its hello from `onOpen`, before it
-     *   has seen the peer's. So the reset above sometimes fires on a connection
-     *   that was in fact refused, and the run restarts. Measured at
-     *   `refusedDialLimit = 2` on a loaded machine: the listener paid 3 rather
-     *   than 2.
-     * - `:iroh` does not have this problem — its accepting side sends nothing
-     *   until it has admitted the dialler's hello — which is why
-     *   `IrohTransport.REFUSED_DIAL_LIMIT` is the tighter of the two.
+     * **What is counted is an open that did not last.** `Session.peered` looks
+     * like the signal and is not: it means "this side admitted the PEER's
+     * hello", not "the peer admitted mine", and on `:wire` a refused dialler
+     * routinely admits the listener's hello anyway, because [WsListener] sends
+     * its hello from `onOpen`, before it has seen the peer's. A bound built on
+     * it reset its own run on connections that had in fact been refused, and
+     * measurably failed to bound: at `refusedDialLimit = 5` a listener still
+     * paid 9 accepts and climbing. `:iroh` has no such gap — its accepting side
+     * sends nothing until it has admitted the dialler's hello — which is why
+     * `IrohTransport.REFUSED_DIAL_LIMIT` keys on `peered` and this does not.
      *
-     * **An exact signal needs the listener to say it was a refusal, and neither
-     * available channel delivers reliably.** Measured over 318 refusals driven
-     * at a 20ms schedule: an RFC 6455 application close code reached the dialler
-     * 54 times and an abnormal `1006` the other 264, and a text line sent
-     * immediately before the close was lost with it — the server's close
+     * So this side keys on the one difference that is real and local: **a
+     * refusal is decided inside one round trip, and an admitted peering
+     * persists.** An open that closes within [REFUSAL_WINDOW_MS] counts; an open
+     * that outlives it clears the run. A refused connection closes in single
+     * -digit milliseconds, so the two are three orders of magnitude apart.
+     *
+     * **Its failure mode, stated rather than hidden:** a peering that genuinely
+     * cannot stay up — five reconnects in a row each dying inside the window —
+     * is abandoned as though it were refused. That is a judgement, not an
+     * accident: a dialler that has opened five connections in a row and held
+     * none of them for two seconds is not going to be helped by a sixth, and
+     * the failure is announced ([WsConnection.abandonedAfterRefusals]) rather
+     * than silent.
+     *
+     * **An exact signal would need the listener to say it was a refusal, and
+     * neither available channel delivers reliably.** Measured over 318 refusals
+     * driven at a 20ms schedule: an RFC 6455 application close code reached the
+     * dialler 54 times and an abnormal `1006` the other 264, and a text line
+     * sent immediately before the close was lost with it — the server's close
      * handshake does not complete before the connection drops. Making that
-     * reliable is `computenet-egl.7`, and it is what would turn this bound into
-     * an exact one.
+     * reliable is `computenet-egl.7`, and it is what would replace the window
+     * below with a fact.
      *
      * It does **not** bound a dial that never opens at all. java-websocket
      * reports a failed connect as a close too, but that close is not preceded by
@@ -141,6 +154,21 @@ object WsTransport {
      * link at all (`IrohTransport.REFUSED_DIAL_LIMIT`).
      */
     const val REFUSED_DIAL_LIMIT: Int = 5
+
+    /**
+     * How long an opened connection must last to clear the refused-dial run
+     * (computenet-4gzr) — see [REFUSED_DIAL_LIMIT] for why a duration is the
+     * discriminator here and not on `:iroh`.
+     *
+     * Two seconds is three orders of magnitude above what it separates: a hello
+     * refused at the allowlist is closed within one round trip of being sent,
+     * single-digit milliseconds on loopback and bounded by the peer's RTT
+     * anywhere else. It is not a timeout anyone waits on — nothing sleeps for
+     * it, it is only subtracted at close — so a loaded machine cannot turn it
+     * into a delay, only into a *longer* apparent lifetime, which errs towards
+     * clearing the run rather than towards abandoning a live peer.
+     */
+    const val REFUSAL_WINDOW_MS: Long = 2_000
 
     val DEFAULT_RECONNECT_BACKOFF: (attempt: Int) -> Long = { attempt ->
         // guard overflow on a long-lived failing connection: cap the shift itself
@@ -2363,6 +2391,12 @@ object WsTransport {
         private val unadmitted = AtomicInteger()
 
         /**
+         * `System.nanoTime()` at this instance's [onOpen], or 0 when no socket
+         * is open — consumed by the close it belongs to. @see unadmitted
+         */
+        private val openedAt = java.util.concurrent.atomic.AtomicLong()
+
+        /**
          * True once [refusedDialLimit] consecutive unadmitted opens have ended
          * the reconnecting. Distinct from [reconnect], which is `shutdown()`'s
          * flag: a client that gave up on a refusing listener is not the same
@@ -2439,6 +2473,7 @@ object WsTransport {
             // Charged before the hello goes out, because the hello is the cost:
             // this open has already committed the listener to one accept and one
             // hello parse whatever happens next (computenet-4gzr).
+            openedAt.set(System.nanoTime())
             unadmitted.incrementAndGet()
             send(session.hello())
         }
@@ -2455,10 +2490,15 @@ object WsTransport {
                     "closed by ${if (remote) "the peer" else "this side"}",
             )
             // The opens were counted as they happened; this is only where the run
-            // is cleared or acted on. `peered` is still this instance's — only
-            // the next `hello()` clears it, and that cannot run before this
-            // returns.
-            if (session.peered) unadmitted.set(0)
+            // is cleared or acted on. An open that outlived the refusal window
+            // was not a refusal — see [WsTransport.REFUSED_DIAL_LIMIT] for why
+            // this and not `session.peered`. `openedAt == 0` is a close for a
+            // connect that never opened: not a refusal either, and not counted,
+            // so it leaves the run alone.
+            val opened = openedAt.getAndSet(0L)
+            if (opened != 0L && System.nanoTime() - opened >= REFUSAL_WINDOW_MS * 1_000_000L) {
+                unadmitted.set(0)
+            }
             session.onClose() // unpublish: senders park until the re-hello re-announces
             if (unadmitted.get() >= refusedDialLimit) {
                 abandoned = true

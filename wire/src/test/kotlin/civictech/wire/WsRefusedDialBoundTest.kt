@@ -41,6 +41,12 @@ import java.net.URI
  * The acceptance criterion is the *listener's* cost, so that is what is
  * measured: `admissionDenialCount` is one accept-plus-hello-parse charged to
  * the refusing side. It must stay bounded, and it must stop growing.
+ *
+ * How the dialler concludes it — an open that did not outlive
+ * [WsTransport.REFUSAL_WINDOW_MS], rather than `Session.peered`, which on this
+ * transport answers a different question — is argued on
+ * [WsTransport.REFUSED_DIAL_LIMIT], together with what `:iroh` does instead
+ * and why the two may differ.
  */
 class WsRefusedDialBoundTest {
 
@@ -120,14 +126,14 @@ class WsRefusedDialBoundTest {
                     )
                 }
                 // The DEFAULT limit is the constant, not an independent literal
-                // — a lower bound, because the softness
-                // [WsTransport.REFUSED_DIAL_LIMIT] documents can only ever let
-                // the run go HIGHER, never fire early.
-                if (refused.unadmittedOpens < WsTransport.REFUSED_DIAL_LIMIT) {
+                // — a band of one, for the in-flight re-dial.
+                if (refused.unadmittedOpens !in
+                    WsTransport.REFUSED_DIAL_LIMIT..(WsTransport.REFUSED_DIAL_LIMIT + 1)
+                ) {
                     throw AssertionFailedError(
-                        "a dialler built with the default limit gave up after only ${refused.unadmittedOpens} " +
-                            "unadmitted opens, fewer than WsTransport.REFUSED_DIAL_LIMIT " +
-                            "(${WsTransport.REFUSED_DIAL_LIMIT}) — the bound must not fire early",
+                        "a dialler built with the default limit gave up after ${refused.unadmittedOpens} " +
+                            "unadmitted opens rather than WsTransport.REFUSED_DIAL_LIMIT " +
+                            "(${WsTransport.REFUSED_DIAL_LIMIT})",
                     )
                 }
                 if (!refused.abandonedAfterRefusals) {
@@ -169,18 +175,16 @@ class WsRefusedDialBoundTest {
                 // point is that TWO governs and five does not: an off-by-one
                 // window is a bound, an unbounded loop is not.
                 Thread.sleep(500)
-                // A band, not an equality: see [WsTransport.REFUSED_DIAL_LIMIT]'s
-                // "where it is soft". The point is that TWO governs and five
-                // does not — a small window is a bound, a loop is not.
-                if (refused.unadmittedOpens !in 2..4) {
+                Thread.sleep(500)
+                if (refused.unadmittedOpens !in 2..3) {
                     throw AssertionFailedError(
-                        "gave up after ${refused.unadmittedOpens} unadmitted opens for a limit of 2; the documented " +
-                            "softness allows a short extra run, not an unbounded one",
+                        "gave up after ${refused.unadmittedOpens} unadmitted opens for a limit of 2",
                     )
                 }
-                if (listener.admissionDenialCount !in 2L..4L) {
+                if (listener.admissionDenialCount !in 2L..3L) {
                     throw AssertionFailedError(
-                        "the listener paid ${listener.admissionDenialCount} refusals for a dialler limited to 2",
+                        "the listener paid ${listener.admissionDenialCount} accept+hello refusals for a dialler " +
+                            "limited to 2; only the one re-dial that can already be in flight may exceed the limit",
                     )
                 }
             } finally {
