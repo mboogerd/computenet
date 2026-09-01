@@ -1366,7 +1366,10 @@ Otherwise ask for the next batch:
 ```
 
 Returns `{batch: [{id, model, files, worktree, branch, resumed}], skipped,
-verdict, parked, capacity}`. The batch is what can safely run at once:
+warnings, verdict, parked, capacity}`. `warnings` names any claim that is a
+DIRECTORY — it collides with everything beneath it, so the epic batches more
+serially than it needs to; narrow that bead's `files` before dispatching
+(computenet-i5zr). The batch is what can safely run at once:
 resumables first (nothing else ever picks them back up), then ready tasks
 whose `files` claims don't overlap the batch; a task with no claim comes back
 alone. That is correct scheduling either way — but a claimless task still
