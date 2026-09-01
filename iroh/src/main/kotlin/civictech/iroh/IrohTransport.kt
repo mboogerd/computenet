@@ -646,8 +646,14 @@ object IrohTransport {
 
         /**
          * Every `ERROR` the sidecar reported on a link of this listener, in
-         * arrival order — including a `DATA` refused by a full send queue, which
-         * is never absorbed here (see [Session]'s KDoc and `computenet-ey4v`).
+         * arrival order — including a `DATA` refused by a full send queue.
+         *
+         * Recording is all this side owes: `PROTOCOL.md` §2 makes such an
+         * `ERROR` terminal for its link, and [SidecarClient] has already sent the
+         * `CLOSE_LINK` by the time `onError` runs (`computenet-ey4v`). The
+         * `LINK_DOWN` that follows retires the Session exactly as any other
+         * would; the accepting side does not re-dial, and the dialler's own
+         * reconnect is what brings the peering back.
          */
         val linkErrors: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
 
@@ -672,7 +678,10 @@ object IrohTransport {
 
                     override fun onError(link: SidecarLink, reason: String) {
                         linkErrors += reason
-                        System.err.println("[IrohTransport] link ${link.id} error: $reason")
+                        System.err.println(
+                            "[IrohTransport] link ${link.id} error: $reason — the link is closed " +
+                                "(PROTOCOL.md §2: an ERROR on an established link is terminal for it)",
+                        )
                     }
                 }
             }
@@ -780,6 +789,22 @@ object IrohTransport {
 
         /** @see IrohListener.linkErrors */
         val linkErrors: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
+
+        /**
+         * Set when the live link's `ERROR` closed it, and consumed by the
+         * `LINK_DOWN` that close produces — a one-shot in the shape of
+         * [closeRequested], and for a related reason: the `LINK_DOWN` that
+         * follows a refusal is indistinguishable on the wire from any other, and
+         * the difference has to be held here.
+         *
+         * What it buys is that such a down does **not** count toward
+         * [unadmitted]. That counter means "the peer keeps refusing us"
+         * ([REFUSED_DIAL_LIMIT]); a link this side tore down because its own send
+         * queue overflowed is no evidence of that, and letting it accumulate
+         * there would abandon a perfectly willing peer after a flood. A refusal
+         * still re-dials — it just re-dials as an ordinary unplanned down.
+         */
+        private val linkRefused = java.util.concurrent.atomic.AtomicBoolean(false)
 
         /** @see IrohListener.admissionDenialCount */
         val admissionDenialCount: Long get() = admissionSink.denialCount
@@ -901,7 +926,11 @@ object IrohTransport {
 
                     override fun onError(link: SidecarLink, reason: String) {
                         linkErrors += reason
-                        System.err.println("[IrohTransport] link ${link.id} error: $reason")
+                        linkRefused.set(true)
+                        System.err.println(
+                            "[IrohTransport] link ${link.id} error: $reason — the link is closed and will be " +
+                                "re-dialled (PROTOCOL.md §2: an ERROR on an established link is terminal for it)",
+                        )
                     }
                 },
                 timeout,
@@ -929,6 +958,11 @@ object IrohTransport {
             if (shuttingDown) return
             // A close this side asked for is not a partition to recover from.
             if (closeRequested.getAndSet(false)) return
+            // A link the sidecar refused something on is closed by the client
+            // (PROTOCOL.md §2, computenet-ey4v). It re-dials like any other
+            // unplanned down, but it is not evidence about the PEER's willingness
+            // and must not accumulate in `unadmitted`. @see linkRefused
+            val afterRefusal = linkRefused.getAndSet(false)
             // A link that came UP and went DOWN without ever being admitted is
             // the local shadow of a refusal PROTOCOL.md cannot report
             // (computenet-4gzr). An admitted link clears the run; a run that
@@ -936,7 +970,7 @@ object IrohTransport {
             // that happens on this wire will ever change the peer's mind.
             if (session.peered) {
                 unadmitted.set(0)
-            } else if (unadmitted.incrementAndGet() >= refusedDialLimit) {
+            } else if (!afterRefusal && unadmitted.incrementAndGet() >= refusedDialLimit) {
                 abandoned = true
                 System.err.println(
                     "[IrohTransport] link ${link.id} went down unplanned ($reason) after $refusedDialLimit " +
