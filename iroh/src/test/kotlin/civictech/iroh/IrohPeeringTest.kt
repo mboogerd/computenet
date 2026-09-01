@@ -209,10 +209,14 @@ class IrohPeeringTest {
             // A refused dialler is not told it was refused — it sees a plain
             // LINK_DOWN — so since computenet-egl.2.3 it re-dials on its backoff
             // and is refused again, exactly as a refused `:wire` client
-            // reconnects forever. The listener's denial count therefore grows
-            // while mallory is up, and only its DELTA across the admitted
-            // peering below is stable. (mallory's connection is closed by the
-            // `use` above, which stops its loop.)
+            // reconnects. The listener's denial count therefore grows while
+            // mallory is up, and only its DELTA across the admitted peering
+            // below is stable. Since computenet-4gzr that growth is BOUNDED —
+            // `IrohTransport.REFUSED_DIAL_LIMIT` unadmitted links and the
+            // dialler gives up, which `IrohRefusedDialBoundTest` pins — but this
+            // test still reads a settled value rather than a fixed one: the
+            // bound is a ceiling on the run, not a promise about which attempt
+            // was in flight when the `use` above closed the connection.
             val afterMallory = quiesced { listener.admissionDenialCount }
 
             // ---- good: on the allowlist, same listener --------------------
