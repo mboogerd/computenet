@@ -118,7 +118,10 @@ object IrohTransport {
      * [sidecarArgs] are passed to the child verbatim (see [SidecarProcess.spawn]):
      * pinning `--secret-key` and `--bind-addr` is what lets a listener come back
      * at the same endpoint after its process died, which is how an *unplanned*
-     * drop is staged.
+     * drop is staged. [SidecarProcess.spawn] may append `--relay-url` on top of
+     * [sidecarArgs] when the JVM system property `iroh.relay.url` is set and
+     * [sidecarArgs] names neither `--offline` nor `--relay-url` itself — see
+     * its KDoc.
      */
     fun listen(
         side: Peering.Side,
