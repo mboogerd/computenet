@@ -306,6 +306,21 @@ mod tests {
         assert_eq!(endpoint.bound_sockets().len(), 1);
         assert_eq!(endpoint.id(), endpoint.bound_addr().id);
 
+        // And no address lookup service beyond MemoryLookup: `presets::N0`
+        // would have added a PkarrPublisher, a PkarrResolver and a
+        // DnsAddressLookup on top of it (iroh 1.0.3 src/endpoint/presets.rs),
+        // so a count of exactly one is what pins Relay to the minimal preset
+        // rather than merely to the right relay map.
+        assert_eq!(
+            endpoint
+                .endpoint
+                .address_lookup()
+                .expect("the endpoint is open")
+                .len(),
+            1,
+            "MemoryLookup is the only address lookup service: no DNS/pkarr"
+        );
+
         // And the bound endpoint's relay map really is that one relay: iroh's
         // `remove_relay` answers `Some` only for a url the endpoint has
         // configured. Destructive, so it comes last.
