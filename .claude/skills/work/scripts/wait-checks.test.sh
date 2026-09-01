@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
 # Tests for wait-checks.sh. Stubs `gh` and `sleep` on PATH — the stub `gh`
 # serves per-round fixtures keyed on a counter file, so a run can go
-# pending -> settled without any network call, and the stub `sleep` makes 40
+# pending -> settled without any network call, and the stub `sleep` makes 28
 # rounds take milliseconds. Exits 0 if all cases pass.
+#
+# THE POLL IS THE REST CALL, NOT `gh pr checks`. This suite counted `gh pr
+# checks` invocations as rounds, which was right until computenet-00d8 made
+# REST the primary transport; after it, the counter advanced only when the
+# FALLBACK fired, and 10 of 40 assertions went red on main and stayed red with
+# no gate to say so (computenet-el2w). So the stub now counts
+# `commits/<sha>/check-runs` — the once-per-round primary read — and serves
+# `roundN.rest`; `gh pr checks` keeps its own counter (`gqlN.out`) because it
+# is the fallback and fires zero or many times per round.
+#
+# Two `gh api` calls are deliberately NOT polls: `.head.sha` (twice in some
+# rounds) and the exhaustion-time ages probe, recognized by `started_at` in its
+# jq program.
 #
 # The load-bearing cases pin the two traps the script exists for:
 # `gh pr checks` exiting 8 with well-formed pending rows must NOT read as a
@@ -17,14 +30,8 @@ ROOT=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/wait-checks-test.XXXXXX")" && pwd -P)
 trap 'rm -rf "$ROOT"' EXIT
 mkdir -p "$ROOT/bin"
 
-# gh stub: round N serves $CTRL/roundN.out (falling back to default.out) and
-# exits with roundN.exit / default.exit (falling back to 0). The counter file
-# doubles as the "how many polls happened" probe.
 cat > "$ROOT/bin/gh" <<'EOF'
 #!/usr/bin/env bash
-# `gh api` is the REST fallback, not a poll: it serves its own fixtures and
-# deliberately does NOT advance the round counter, so poll-count probes below
-# keep counting polls.
 # `gh run list` answers the NO-RUN interrogation (computenet-a5in). It serves
 # its own fixture and defaults to 1 — i.e. "a run exists" — so every case that
 # predates that state is unaffected by this branch.
@@ -33,18 +40,30 @@ if [ "${1:-}" = run ] && [ "${2:-}" = list ]; then
   exit 0
 fi
 if [ "${1:-}" = api ]; then
-  case "${2:-}" in
-    *pulls/*) f="$CTRL/api-sha.out" ;;
-    *)        f="$CTRL/api-rows.out" ;;
+  # The exhaustion-time ages probe, not a poll. Recognized by its jq program.
+  case "$*" in
+    *started_at*) [ -f "$CTRL/ages.out" ] && cat "$CTRL/ages.out"; exit 0 ;;
   esac
+  # Head resolution, not a poll. Defaults to a sha so the primary read is
+  # reachable without every fixture declaring one.
+  case "${2:-}" in
+    *pulls/*)
+      if [ -f "$CTRL/api-sha.out" ]; then cat "$CTRL/api-sha.out"; else echo deadbeefcafe; fi
+      exit 0 ;;
+  esac
+  # commits/<sha>/check-runs — THE poll. Missing fixture = REST answered nothing.
+  n=$(cat "$CTRL/round" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$CTRL/round"
+  f="$CTRL/round$n.rest"; [ -f "$f" ] || f="$CTRL/default.rest"
   [ -f "$f" ] || exit 1
   cat "$f"; exit 0
 fi
-n=$(cat "$CTRL/round" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$CTRL/round"
-f="$CTRL/round$n.out"; [ -f "$f" ] || f="$CTRL/default.out"
+# `gh pr checks` — the fallback transport, counted separately.
+g=$(cat "$CTRL/gql" 2>/dev/null || echo 0); g=$((g+1)); echo "$g" > "$CTRL/gql"
+f="$CTRL/gql$g.out"; [ -f "$f" ] || f="$CTRL/default.out"
+[ -f "$f" ] || exit 1
 cat "$f"
 rc=0
-if [ -f "$CTRL/round$n.exit" ]; then rc=$(cat "$CTRL/round$n.exit")
+if [ -f "$CTRL/gql$g.exit" ]; then rc=$(cat "$CTRL/gql$g.exit")
 elif [ -f "$CTRL/default.exit" ]; then rc=$(cat "$CTRL/default.exit"); fi
 exit "$rc"
 EOF
@@ -67,59 +86,69 @@ fixture() { CASE=$((CASE+1)); export CTRL="$ROOT/c$CASE"; mkdir -p "$CTRL"; }
 run() { "$SCRIPT" "https://github.com/mboogerd/computenet/pull/1" "$@" 2>&1; }
 rounds_polled() { cat "$CTRL/round" 2>/dev/null || echo 0; }
 
-# Fixture rows. Tabs matter: the status word must be followed by whitespace
-# for the recognizable-row grep, exactly as gh prints it.
-ALL_GREEN=$'build-test-fast\tpass\t1m2s\thttps://x\nbuild-test-serial\tpass\t2m\thttps://x\nconcord-full\tpass\t5m\thttps://x\nui-test\tpass\t1m\thttps://x\nagora-ui-test\tpass\t1m\thttps://x\nkernel-test\tpass\t4m\thttps://x\nauto-merge\tpass\t0s\thttps://x'
-ONE_PENDING=${ALL_GREEN/kernel-test$'\t'pass/kernel-test$'\t'pending}
-ONE_FAILED=${ALL_GREEN/concord-full$'\t'pass/concord-full$'\t'fail}
-EARLY=$'auto-merge\tpass\t0s\thttps://x'
+# REST rows: name, status word, conclusion — the shape rest_rows() prints.
+# Tabs matter: the status word must be followed by whitespace for the
+# recognizable-row grep.
+GREEN=$'build-test-fast\tpass\tsuccess\nbuild-test-serial\tpass\tsuccess\nconcord-full\tpass\tsuccess\nui-test\tpass\tsuccess\nagora-ui-test\tpass\tsuccess\nkernel-test\tpass\tsuccess\nauto-merge\tskipping\tskipped'
+ONE_PENDING=${GREEN/kernel-test$'\t'pass$'\t'success/kernel-test$'\t'pending$'\t'-}
+ONE_FAILED=${GREEN/concord-full$'\t'pass$'\t'success/concord-full$'\t'fail$'\t'failure}
+EARLY=$'auto-merge\tskipping\tskipped'
+# `gh pr checks` shape, for the fallback cases only.
+GQL_GREEN=$'build-test-fast\tpass\t1m2s\thttps://x\nbuild-test-serial\tpass\t2m\thttps://x\nconcord-full\tpass\t5m\thttps://x\nui-test\tpass\t1m\thttps://x\nagora-ui-test\tpass\t1m\thttps://x\nkernel-test\tpass\t4m\thttps://x\nauto-merge\tpass\t0s\thttps://x'
+GQL_PENDING=${GQL_GREEN/kernel-test$'\t'pass/kernel-test$'\t'pending}
 GARBAGE='error connecting to api.github.com: dial tcp: lookup failed'
 
 # 1. all six required rows present, none pending: SETTLED on round 1
 echo "settles immediately"
-fixture; printf '%s\n' "$ALL_GREEN" > "$CTRL/default.out"
+fixture; printf '%s\n' "$GREEN" > "$CTRL/default.rest"
 out=$(run); rc=$?
 [ "$rc" -eq 0 ] && ok "exits 0" || bad "exits $rc, wanted 0"
 [ "$(tail -1 <<<"$out")" = "SETTLED" ] && ok "SETTLED is the final line" \
   || bad "final line is '$(tail -1 <<<"$out")'"
 has "$out" "kernel-test" "the last rows are printed"
+has "$out" "verdict is for head deadbeefcafe" "the verdict names the head it judged"
 [ "$(rounds_polled)" = 1 ] && ok "stopped after one poll" || bad "polled $(rounds_polled) times"
 [ -f "$CTRL/sleeps" ] && bad "slept after the terminal round" || ok "no sleep on the terminal round"
 
 # 2. THE computenet-15it TRAP: gh exits 8 while pending, rows well-formed.
-#    Must read as unsettled (keep polling), never as a query failure.
+#    Must read as unsettled (keep polling), never as a query failure. Reached
+#    over the FALLBACK, which is the only path `gh pr checks`'s exit status
+#    can still be seen on.
 echo
 echo "pending with exit 8 is not a query failure (computenet-15it)"
-fixture
-printf '%s\n' "$ONE_PENDING" > "$CTRL/round1.out"; echo 8 > "$CTRL/round1.exit"
-printf '%s\n' "$ONE_PENDING" > "$CTRL/round2.out"; echo 8 > "$CTRL/round2.exit"
-printf '%s\n' "$ALL_GREEN"   > "$CTRL/round3.out"
+fixture                                        # no *.rest: REST answers nothing
+printf '%s\n' "$GQL_PENDING" > "$CTRL/gql1.out"; echo 8 > "$CTRL/gql1.exit"
+printf '%s\n' "$GQL_GREEN"   > "$CTRL/gql2.out"
 out=$(run); rc=$?
-[ "$rc" -eq 0 ] && ok "settles on round 3, exit 0" || bad "exits $rc, wanted 0"
+[ "$rc" -eq 0 ] && ok "settles once the fallback answers green, exit 0" || bad "exits $rc, wanted 0"
 hasnt "$out" "QUERY FAILED" "exit 8 with rows never prints QUERY FAILED"
 has "$out" "still pending" "the pending rounds are narrated"
-[ "$(rounds_polled)" = 3 ] && ok "polled exactly 3 rounds" || bad "polled $(rounds_polled)"
-[ "$(wc -l < "$CTRL/sleeps" | tr -d ' ')" = 2 ] && ok "slept between rounds, not after" \
-  || bad "slept $(wc -l < "$CTRL/sleeps") times, wanted 2"
+has "$out" "answering over gh pr checks" "the transport that answered is announced"
+[ "$(rounds_polled)" = 4 ] && ok "polled 4 rounds (3 before the fallback fires)" \
+  || bad "polled $(rounds_polled)"
+[ "$(wc -l < "$CTRL/sleeps" | tr -d ' ')" = 3 ] && ok "slept between rounds, not after" \
+  || bad "slept $(wc -l < "$CTRL/sleeps" | tr -d ' ') times, wanted 3"
 
 # 3. a settled reading that includes a FAILED check is still SETTLED — the
-#    caller reads the rows for red; gh's exit 1 there must not matter either.
+#    caller reads the rows for red, and the script names them.
 echo
 echo "settled includes failed checks"
-fixture; printf '%s\n' "$ONE_FAILED" > "$CTRL/default.out"; echo 1 > "$CTRL/default.exit"
+fixture; printf '%s\n' "$ONE_FAILED" > "$CTRL/default.rest"
 out=$(run); rc=$?
 [ "$rc" -eq 0 ] && ok "exits 0 (settled, not green)" || bad "exits $rc, wanted 0"
 [ "$(tail -1 <<<"$out")" = "SETTLED" ] && ok "SETTLED final line" || bad "final: $(tail -1 <<<"$out")"
 has "$out" $'concord-full\tfail' "the failed row is in the printed rows"
+has "$out" "RED — required check(s) FAILED: concord-full" "the red row is named, not left to be read"
+has "$out" "Do NOT gh pr ready" "SETTLED-with-red says not to ship"
 
 # 4. THE computenet-1zhu TRAP: only the auto-merge row for the first rounds.
 #    No pending anywhere, but it must NOT read as settled OR as a failure.
 echo
 echo "not-yet-reporting is neither settled nor failed (computenet-1zhu)"
 fixture
-printf '%s\n' "$EARLY" > "$CTRL/round1.out"
-printf '%s\n' "$EARLY" > "$CTRL/round2.out"
-printf '%s\n' "$ALL_GREEN" > "$CTRL/round3.out"
+printf '%s\n' "$EARLY" > "$CTRL/round1.rest"
+printf '%s\n' "$EARLY" > "$CTRL/round2.rest"
+printf '%s\n' "$GREEN" > "$CTRL/round3.rest"
 out=$(run); rc=$?
 [ "$rc" -eq 0 ] && ok "waits through the early state and settles" || bad "exits $rc, wanted 0"
 has "$out" "only 0 of 6 required rows reporting" "early rounds narrated as not-yet-reporting"
@@ -128,7 +157,7 @@ hasnt "$out" "QUERY FAILED" "early state is not a query failure"
 # 5. timeout while pending: TIMEOUT-PENDING, exit 4, last rows printed
 echo
 echo "timeout while pending"
-fixture; printf '%s\n' "$ONE_PENDING" > "$CTRL/default.out"; echo 8 > "$CTRL/default.exit"
+fixture; printf '%s\n' "$ONE_PENDING" > "$CTRL/default.rest"
 out=$(run 3); rc=$?
 [ "$rc" -eq 4 ] && ok "exits 4" || bad "exits $rc, wanted 4"
 [ "$(tail -1 <<<"$out")" = "TIMEOUT-PENDING" ] && ok "TIMEOUT-PENDING final line" \
@@ -136,42 +165,57 @@ out=$(run 3); rc=$?
 has "$out" $'kernel-test\tpending' "the last rows are printed above the verdict"
 [ "$(rounds_polled)" = 3 ] && ok "max-rounds argument respected" || bad "polled $(rounds_polled)"
 
+# 5b. exhaustion says WHY: a young pending check is ORDINARY, an old one STUCK
+#     (computenet-hil5). Two invocations is the normal cold settle.
+fixture; printf '%s\n' "$ONE_PENDING" > "$CTRL/default.rest"
+printf 'kernel-test 4\n' > "$CTRL/ages.out"
+out=$(run 2)
+has "$out" "kernel-test has been running 4m" "the pending check's age is reported"
+has "$out" "ORDINARY" "a young pending check is ordinary, not stuck"
+
+fixture; printf '%s\n' "$ONE_PENDING" > "$CTRL/default.rest"
+printf 'kernel-test 22\n' > "$CTRL/ages.out"
+out=$(run 2)
+has "$out" "STUCK" "a long-running required check is called stuck"
+
 # 6. timeout while never fully reporting folds into TIMEOUT-PENDING too
 echo
 echo "timeout while not-yet-reporting"
-fixture; printf '%s\n' "$EARLY" > "$CTRL/default.out"
+fixture; printf '%s\n' "$EARLY" > "$CTRL/default.rest"
 out=$(run 2); rc=$?
 [ "$rc" -eq 4 ] && ok "exits 4" || bad "exits $rc, wanted 4"
 [ "$(tail -1 <<<"$out")" = "TIMEOUT-PENDING" ] && ok "TIMEOUT-PENDING final line" \
   || bad "final: $(tail -1 <<<"$out")"
 
-# 7. no recognizable rows at all, every round: QUERY-FAILED, exit 3
+# 7. no recognizable rows at all, every round: QUERY-FAILED, exit 3.
+#    Past the cold-start window the rounds say QUERY FAILED; a run exists for
+#    the head (the stub's default), so this is not NO-RUN.
 echo
 echo "query failure"
-fixture; printf '%s\n' "$GARBAGE" > "$CTRL/default.out"; echo 1 > "$CTRL/default.exit"
-out=$(run 2); rc=$?
+fixture; printf '%s\n' "$GARBAGE" > "$CTRL/default.out"   # both transports mute
+out=$(WAIT_CHECKS_COLD_ROUNDS=1 run 3); rc=$?
 [ "$rc" -eq 3 ] && ok "exits 3" || bad "exits $rc, wanted 3"
 [ "$(tail -1 <<<"$out")" = "QUERY-FAILED" ] && ok "QUERY-FAILED final line" \
   || bad "final: $(tail -1 <<<"$out")"
-has "$out" "QUERY FAILED: $GARBAGE" "the gh error text is surfaced per round"
+has "$out" "QUERY FAILED" "rounds past the cold window are labelled a query failure"
 
 # 8. a transient query failure mid-run recovers; the verdict is the LAST state
 echo
 echo "transient query failure recovers"
 fixture
-printf '%s\n' "$GARBAGE" > "$CTRL/round1.out"; echo 1 > "$CTRL/round1.exit"
-printf '%s\n' "$ALL_GREEN" > "$CTRL/round2.out"
+: > "$CTRL/round1.rest"                        # REST answers nothing once
+printf '%s\n' "$GREEN" > "$CTRL/round2.rest"
 out=$(run); rc=$?
 [ "$rc" -eq 0 ] && ok "settles after a transient failure" || bad "exits $rc, wanted 0"
 [ "$(tail -1 <<<"$out")" = "SETTLED" ] && ok "SETTLED final line" || bad "final: $(tail -1 <<<"$out")"
 
-# 9. default max-rounds is 40
+# 9. default max-rounds is 28 (computenet-ymv4: 40 rounds outran the 600s cap)
 echo
 echo "default rounds"
-fixture; printf '%s\n' "$ONE_PENDING" > "$CTRL/default.out"
+fixture; printf '%s\n' "$ONE_PENDING" > "$CTRL/default.rest"
 out=$(run); rc=$?
 [ "$rc" -eq 4 ] && ok "times out with exit 4" || bad "exits $rc, wanted 4"
-[ "$(rounds_polled)" = 40 ] && ok "polled the default 40 rounds" || bad "polled $(rounds_polled)"
+[ "$(rounds_polled)" = 28 ] && ok "polled the default 28 rounds" || bad "polled $(rounds_polled)"
 
 # 10. usage errors
 echo
@@ -184,55 +228,50 @@ out=$(run nonsense); rc=$?
 out=$(run 0); rc=$?
 [ "$rc" -eq 2 ] && ok "zero max-rounds exits 2" || bad "exits $rc, wanted 2"
 
-# --- The REST fallback (computenet-fdv9) -----------------------------------
-# `gh pr checks` is GraphQL-only. Under a GraphQL outage this loop's only
-# possible outcome was to spin every round and report QUERY-FAILED, unable to
-# tell "endpoint down" from "checks not created yet".
-REST_GREEN=$'build-test-fast\tpass\tsuccess\nbuild-test-serial\tpass\tsuccess\nconcord-full\tpass\tsuccess\nui-test\tpass\tsuccess\nagora-ui-test\tpass\tsuccess\nkernel-test\tpass\tsuccess\nauto-merge\tskipping\tskipped'
-
-echo "REST fallback"
+# --- the fallback transport (computenet-fdv9, computenet-00d8) --------------
+# REST is primary because it keys on the COMMIT. `gh pr checks` remains as the
+# fallback for a REST outage — announced, and flagged as not sha-bound.
+echo
+echo "fallback to gh pr checks"
 fixture
-printf '%s\n' "$GARBAGE" > "$CTRL/default.out"          # GraphQL 503 every round
-printf '%s\n' "deadbeefcafe" > "$CTRL/api-sha.out"
-printf '%s\n' "$REST_GREEN" > "$CTRL/api-rows.out"
+printf '%s\n' "$GQL_GREEN" > "$CTRL/default.out"          # REST mute, GraphQL fine
 out=$(run 10); rc=$?
-[ "$rc" -eq 0 ] && ok "a GraphQL outage no longer blinds the wait (exits 0)" \
+[ "$rc" -eq 0 ] && ok "a REST outage no longer blinds the wait (exits 0)" \
   || bad "exits $rc, wanted 0"
-[ "$(tail -1 <<<"$out")" = "SETTLED" ] && ok "REST answer settles the wait" \
+[ "$(tail -1 <<<"$out")" = "SETTLED" ] && ok "the fallback answer settles the wait" \
   || bad "final line is '$(tail -1 <<<"$out")'"
-has "$out" "answering over REST" "the transport that answered is announced"
+has "$out" "answering over gh pr checks" "the transport that answered is announced"
+has "$out" "NOT sha-bound" "the fallback reading is flagged as not bound to a sha"
 
 # The fallback must not fire early: a transient failure or two is not an outage.
 fixture
-printf '%s\n' "$GARBAGE" > "$CTRL/round1.out"
-printf '%s\n' "$ALL_GREEN" > "$CTRL/default.out"
-printf '%s\n' "deadbeefcafe" > "$CTRL/api-sha.out"
-printf '%s\n' "$REST_GREEN" > "$CTRL/api-rows.out"
+: > "$CTRL/round1.rest"
+printf '%s\n' "$GREEN" > "$CTRL/default.rest"
+printf '%s\n' "$GQL_GREEN" > "$CTRL/default.out"
 out=$(run 10); rc=$?
-hasnt "$out" "answering over REST" "one bad round does not trigger the fallback"
-[ "$rc" -eq 0 ] && ok "recovers over GraphQL when it comes back" || bad "exits $rc"
+hasnt "$out" "answering over gh pr checks" "one bad round does not trigger the fallback"
+[ "$rc" -eq 0 ] && ok "recovers over REST when it comes back" || bad "exits $rc"
 
-# REST unavailable too: the refusal contract is preserved — never a false green.
-fixture
-printf '%s\n' "$GARBAGE" > "$CTRL/default.out"          # and no api-*.out fixtures
+# Both transports down: the refusal contract is preserved — never a false green.
+fixture                                                    # no fixtures at all
 out=$(run 5); rc=$?
 [ "$rc" -eq 3 ] && ok "both transports down still reports QUERY-FAILED" || bad "exits $rc, wanted 3"
-[ "$(tail -1 <<<"$out")" = "QUERY-FAILED" ] || bad "final line is '$(tail -1 <<<"$out")'"
+[ "$(tail -1 <<<"$out")" = "QUERY-FAILED" ] && ok "QUERY-FAILED final line" \
+  || bad "final line is '$(tail -1 <<<"$out")'"
 
-# A red check read over REST is still red — the fallback must not launder it.
+# A red check read over the fallback is still red — it must not launder it.
 fixture
-printf '%s\n' "$GARBAGE" > "$CTRL/default.out"
-printf '%s\n' "deadbeefcafe" > "$CTRL/api-sha.out"
-printf '%s\n' "${REST_GREEN/concord-full$'\t'pass$'\t'success/concord-full$'\t'fail$'\t'failure}" > "$CTRL/api-rows.out"
+printf '%s\n' "${GQL_GREEN/concord-full$'\t'pass/concord-full$'\t'fail}" > "$CTRL/default.out"
 out=$(run 10); rc=$?
-[ "$rc" -eq 0 ] && ok "SETTLED includes red, over REST as over GraphQL" || bad "exits $rc"
-has "$out" "concord-full" "the red row is printed for the caller to read"
+[ "$rc" -eq 0 ] && ok "SETTLED includes red over the fallback too" || bad "exits $rc"
+has "$out" "RED — required check(s) FAILED: concord-full" "the red row is named"
 
 # --- the fourth state: GitHub never built this head (computenet-a5in) -------
 # Zero rows has two causes demanding opposite responses. Inside the cold-start
 # window it is ordinary; past it, with no run for the head, waiting cannot help.
+echo
+echo "no run for the head"
 fixture
-: > "$CTRL/default.out"                      # no rows, ever
 echo deadbeef > "$CTRL/api-sha.out"          # the head resolves fine...
 echo 0 > "$CTRL/run-list.out"                # ...and no run exists for it
 out=$(WAIT_CHECKS_COLD_ROUNDS=2 run 6); rc=$?
@@ -245,7 +284,6 @@ hasnt "$out" "TIMEOUT-PENDING" "it does not spend the rest of the budget waiting
   || bad "polled $(rounds_polled) rounds after the boundary"
 
 fixture
-: > "$CTRL/default.out"
 echo deadbeef > "$CTRL/api-sha.out"
 echo 0 > "$CTRL/run-list.out"
 out=$(WAIT_CHECKS_COLD_ROUNDS=9 run 3); rc=$?
