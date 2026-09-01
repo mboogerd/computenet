@@ -110,6 +110,62 @@ object IrohTransport {
     }
 
     /**
+     * How many consecutive links may come **up** and go **down without ever
+     * being admitted** before this side stops re-dialling (computenet-4gzr).
+     *
+     * ## The case it bounds, and why nothing else could
+     *
+     * A hello refused at the listening side's allowlist is not a failed dial.
+     * The `DIAL` succeeds, `LINK_UP` arrives, the hello goes out — and only then
+     * does the peer refuse it by closing the link. `PROTOCOL.md` carries no
+     * refusal reason, so the resulting `LINK_DOWN` is byte-identical to a
+     * transport drop's, and [IrohConnection.retire] treated it as one. Worse,
+     * because the dial itself succeeded, each re-dial loop terminated
+     * immediately and the *next* refusal started a fresh loop at `attempt = 0`:
+     * the schedule never escalated past its first delay, so a refused peer
+     * re-dialled at a fixed ~1s forever, charging the refusing side one link
+     * accept plus one hello parse per second, indefinitely.
+     *
+     * The case is nonetheless distinguishable **locally**, which is why this
+     * needs no wire change: `LINK_UP` followed by `LINK_DOWN` with
+     * [Session.peered] never true. Carrying a refusal reason on the wire is the
+     * other remedy the filing bead offers and is deliberately not taken here —
+     * it is a `PROTOCOL.md` change, which belongs to the open sibling
+     * `computenet-ey4v`, and AGENTS.md holds this module to wire compatibility
+     * absent a spec requirement.
+     *
+     * ## Why five, and what it does not bound
+     *
+     * The number is a cost ceiling, not a semantic threshold: it is the total
+     * accept-plus-hello-parse work one refused peer may charge a listener per
+     * connection handle, and any small number does that. Five leaves room for
+     * the handful of unadmitted opens a *transient* fault can produce — a link
+     * torn down mid-handshake, a peer restarting between the dial and the hello
+     * — before the connection concludes it is being refused rather than
+     * unlucky. An **admitted** link resets the count to zero
+     * ([IrohConnection.unadmittedOpens]), so a healthy peering that flaps for
+     * hours never approaches it.
+     *
+     * **The listening side's cost is this limit plus at most one.** The re-dial
+     * loop re-arms itself when it finds no live session, and that check can win
+     * the race against the `LINK_DOWN` that would have set the give-up — so one
+     * further link can be in flight when the run completes. It is exactly one:
+     * the single-flight [IrohConnection.reconnecting] guard admits no second
+     * loop, and the in-flight link's own `LINK_DOWN` finds the give-up already
+     * set. So a refused peer costs a listener between `limit` and `limit + 1`
+     * link-accept-plus-hello-parses, and never more —
+     * [IrohConnection.unadmittedOpens] can likewise finish one above the limit,
+     * because the in-flight link still counts itself when it goes down.
+     *
+     * It does **not** bound a dial that never establishes at all — an
+     * unreachable or absent peer. That throws inside the re-dial loop, produces
+     * no link and no accept for the peer to pay for, and still retries forever
+     * on purpose, exactly as `:wire`'s reconnect into an unbound port does
+     * (`WsReconnectRefusedTest`).
+     */
+    const val REFUSED_DIAL_LIMIT: Int = 5
+
+    /**
      * Serve peerings on a fresh sidecar. Returns once the sidecar is listening;
      * [IrohListener.nodeId] and [IrohListener.addresses] are what a dialler
      * needs ([connect]'s two first arguments).
@@ -159,6 +215,11 @@ object IrohTransport {
      * re-dials [peerNodeId] on [backoff], each re-dial bounded by
      * [redialTimeout]. Both are seams for tests — a near-zero schedule and a
      * short dial timeout make reconnect observable without wall-clock waits.
+     *
+     * The one thing it does not do forever is re-dial a peer that keeps
+     * **refusing** it: [refusedDialLimit] consecutive links that came up and
+     * went down without ever being admitted end the re-dialling for good
+     * ([IrohConnection.abandonedAfterRefusals]). See [REFUSED_DIAL_LIMIT].
      */
     fun connect(
         side: Peering.Side,
@@ -170,12 +231,13 @@ object IrohTransport {
         backoff: (attempt: Int) -> Long = DEFAULT_RECONNECT_BACKOFF,
         redialTimeout: Duration = timeout,
         sidecarArgs: List<String> = emptyList(),
+        refusedDialLimit: Int = REFUSED_DIAL_LIMIT,
     ): IrohConnection {
         val process = SidecarProcess.spawn(binary, stderrSink = stderrSink, args = sidecarArgs)
         return try {
             val client = process.connect(timeout)
             client.addPeer(peerNodeId, peerAddresses, timeout)
-            IrohConnection(process, client, side, peerNodeId, backoff, redialTimeout)
+            IrohConnection(process, client, side, peerNodeId, backoff, redialTimeout, refusedDialLimit)
                 .also { it.openLink(timeout) }
         } catch (e: Throwable) {
             process.close()
@@ -662,6 +724,7 @@ object IrohTransport {
         private val peerNodeId: ByteArray,
         private val backoff: (attempt: Int) -> Long,
         private val redialTimeout: Duration,
+        private val refusedDialLimit: Int = REFUSED_DIAL_LIMIT,
     ) : AutoCloseable {
 
         /** @see IrohConnection — one sink across every link instance. */
@@ -691,6 +754,26 @@ object IrohTransport {
          * second one racing it onto the same connection.
          */
         private val reconnecting = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        /**
+         * Consecutive links that came **up** and went **down without ever being
+         * admitted** — the refusal signal `PROTOCOL.md` does not carry, read off
+         * the local link lifecycle instead (computenet-4gzr, [REFUSED_DIAL_LIMIT]).
+         *
+         * Reset to zero by any link that *was* admitted, so this counts a run of
+         * refusals rather than a lifetime total: a peering that flaps for hours
+         * and re-peers each time never approaches the limit.
+         */
+        private val unadmitted = java.util.concurrent.atomic.AtomicInteger(0)
+
+        /**
+         * True once [refusedDialLimit] consecutive unadmitted opens have ended
+         * the re-dialling. Terminal for the connection's own retry loop — only
+         * an explicit [heal] resumes it, which is an operator's decision to try
+         * again rather than a schedule's.
+         */
+        @Volatile
+        private var abandoned = false
 
         private val backoffCalls = AtomicLong()
         private val highestAttempt = java.util.concurrent.atomic.AtomicInteger(-1)
@@ -735,6 +818,21 @@ object IrohTransport {
         /** @see backoffConsultations */
         val highestReconnectAttempt: Int get() = highestAttempt.get()
 
+        /**
+         * How many consecutive links have come up and gone down without ever
+         * being admitted. @see REFUSED_DIAL_LIMIT
+         */
+        val unadmittedOpens: Int get() = unadmitted.get()
+
+        /**
+         * True once this connection has given up re-dialling a peer that keeps
+         * refusing it ([REFUSED_DIAL_LIMIT]). Read rather than inferred from
+         * silence: a dialler that has stopped retrying must never be invisible,
+         * which is the same reason `WsConnection.scheduleReconnect` announces an
+         * interrupted retry loop instead of dying quietly.
+         */
+        val abandonedAfterRefusals: Boolean get() = abandoned
+
         /** This side's own iroh endpoint id. */
         val nodeId: ByteArray get() = process.nodeId
 
@@ -756,8 +854,17 @@ object IrohTransport {
          * with a fresh mirror, a fresh hello and a fresh announcement catch-up.
          * Nothing about the severed instance is resumed — there is nothing to
          * resume it to.
+         *
+         * This is also the only way back from [abandonedAfterRefusals]: an
+         * explicit heal clears the unadmitted run, because a caller asking for a
+         * link is making a decision the schedule is not entitled to make on its
+         * own (computenet-4gzr).
          */
-        fun heal(timeout: Duration = redialTimeout): Unit = openLink(timeout).let {}
+        fun heal(timeout: Duration = redialTimeout) {
+            unadmitted.set(0)
+            abandoned = false
+            openLink(timeout)
+        }
 
         /**
          * Dial one link and install a Session on it.
@@ -820,6 +927,22 @@ object IrohTransport {
             if (shuttingDown) return
             // A close this side asked for is not a partition to recover from.
             if (closeRequested.getAndSet(false)) return
+            // A link that came UP and went DOWN without ever being admitted is
+            // the local shadow of a refusal PROTOCOL.md cannot report
+            // (computenet-4gzr). An admitted link clears the run; a run that
+            // reaches the limit ends the re-dialling for good, because nothing
+            // that happens on this wire will ever change the peer's mind.
+            if (session.peered) {
+                unadmitted.set(0)
+            } else if (unadmitted.incrementAndGet() >= refusedDialLimit) {
+                abandoned = true
+                System.err.println(
+                    "[IrohTransport] link ${link.id} went down unplanned ($reason) after $refusedDialLimit " +
+                        "consecutive links that were never admitted; this peer is refusing us and will not be " +
+                        "re-dialled. Call heal() to try again.",
+                )
+                return
+            }
             System.err.println("[IrohTransport] link ${link.id} went down unplanned ($reason); re-dialling")
             scheduleReconnect()
         }
@@ -833,7 +956,7 @@ object IrohTransport {
          * re-dial that happens to succeed at once.
          */
         private fun scheduleReconnect() {
-            if (shuttingDown) return
+            if (shuttingDown || abandoned) return
             if (!reconnecting.compareAndSet(false, true)) return // a loop is already retrying
             Thread({
                 try {
