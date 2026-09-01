@@ -458,7 +458,9 @@ Three standing disciplines:
     Marking a PR ready is the GraphQL `markPullRequestReadyForReview` with no
     REST equivalent, so retrying is the only option there.
 
-  It requires all six required rows PRESENT and none pending, keeps the
+  It requires every required row PRESENT and none pending — the set read
+  from the main ruleset each run, not a literal, because a literal can only
+  catch the absence of a check it already knows about (computenet-3qdo) — keeps the
   three non-settled states apart (query failed / not yet reporting /
   unsettled — one state to any test on `$?`, and two of them look green),
   and ends `SETTLED` (exit 0), `TIMEOUT-PENDING` (4) or `QUERY-FAILED`

@@ -14,8 +14,8 @@
 # check is PRESENT and none of them is pending.
 #
 # The three non-settled states each round — query failed (no recognizable
-# status rows at all), not-yet-reporting (rows exist but fewer than the 6
-# required), unsettled (all 6 present, something pending) — are one state to
+# status rows at all), not-yet-reporting (rows exist but fewer than the ruleset
+# requires), unsettled (all present, something pending) — are one state to
 # any test on `$?`, and two of them look green.
 #
 # REST IS THE PRIMARY TRANSPORT; `gh pr checks` IS THE FALLBACK. It was the
@@ -110,10 +110,39 @@ case "$rounds" in
 esac
 [ "$rounds" -ge 1 ] || { echo "wait-checks: max-rounds must be at least 1" >&2; exit 2; }
 
-# The six required checks, from the main-branch ruleset (AGENTS.md records the
-# command to re-read the authoritative list; kernel-test was missing from this
-# very list until 2026-08-17 — computenet-4prd).
-req='build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel-test'
+# THE REQUIRED SET IS READ FROM THE RULESET, NOT CARRIED HERE. This script's
+# whole reason to exist over a bare `gh pr checks` is that it requires every
+# required row PRESENT — i.e. it is the thing that catches an ABSENT required
+# check. A literal list cannot do that: it can only catch the absence of a
+# check it already knows about. On 2026-08-31 the ruleset gained a SEVENTH
+# context (`iroh-sidecar`); this script printed six green rows and SETTLED, the
+# caller ran `gh pr ready`, and the PR sat BLOCKED for eight polling rounds
+# because the missing row was not in the table it was told to read
+# (computenet-3qdo). The same drift bit AGENTS.md's own list on 2026-08-17
+# (computenet-4prd) — twice in a fortnight, in the same direction, which is
+# what a literal costs.
+#
+# WAIT_CHECKS_REQUIRED overrides with a whitespace-separated list (tests).
+required_contexts() {
+  gh api "repos/{owner}/{repo}/rules/branches/main" \
+    --jq '.[] | select(.type == "required_status_checks")
+          | .parameters.required_status_checks[].context' 2>/dev/null
+}
+
+req_list=${WAIT_CHECKS_REQUIRED:-$(required_contexts)}
+nreq=$(printf '%s\n' $req_list | grep -c .)
+if [ "$nreq" -gt 0 ]; then
+  echo "wait-checks: $nreq required contexts, read from the ruleset: $(printf '%s ' $req_list)"
+else
+  # The fallback is a DEGRADED reading and says so: it can miss a context added
+  # since this line was written, which is the exact failure it stands in for.
+  req_list='build-test-fast build-test-serial concord-full ui-test agora-ui-test kernel-test'
+  nreq=6
+  echo "wait-checks: WARNING could not read the main ruleset — falling back to a" \
+       "HARD-CODED list of $nreq contexts. A required check added since is INVISIBLE" \
+       "to this run: a SETTLED verdict here does not mean the PR can merge."
+fi
+req=$(printf '%s\n' $req_list | paste -sd'|' -)
 
 # How many consecutive query-failed rounds before trying the other transport.
 FALLBACK_AFTER=${WAIT_CHECKS_FALLBACK_AFTER:-3}
@@ -183,7 +212,7 @@ for i in $(seq 1 "$rounds"); do
   n=$(printf '%s\n' "$rows" | grep -oE "^($req)" | sort -u | grep -c .)
   # Classify on OUTPUT: REST down, or the check suite not created yet, both
   # leave no recognizable rows.
-  if [ "$n" -lt 6 ] && ! printf '%s\n' "$rows" | grep -qE '(pass|fail|pending|skipping)[[:space:]]'; then
+  if [ "$n" -lt "$nreq" ] && ! printf '%s\n' "$rows" | grep -qE '(pass|fail|pending|skipping)[[:space:]]'; then
     consecutive_failed=$((consecutive_failed + 1))
     if [ "$consecutive_failed" -ge "$FALLBACK_AFTER" ]; then
       # exit status deliberately not tested — `gh pr checks` exits 8 while
@@ -199,10 +228,10 @@ for i in $(seq 1 "$rounds"); do
   else
     consecutive_failed=0
   fi
-  if [ "$n" -lt 6 ]; then
+  if [ "$n" -lt "$nreq" ]; then
     if printf '%s\n' "$rows" | grep -qE '(pass|fail|pending|skipping)[[:space:]]'; then
       state=not-reporting               # normal early state (computenet-1zhu)
-      echo "round $i/$rounds: only $n of 6 required rows reporting"
+      echo "round $i/$rounds: only $n of $nreq required rows reporting"
     elif [ "$i" -le "$COLD_ROUNDS" ]; then
       state=query-failed                # no recognizable status rows at all
       # The LEADING WORDS are what an agent skims, so inside the window they
@@ -239,7 +268,7 @@ for i in $(seq 1 "$rounds"); do
     fi
   elif printf '%s\n' "$rows" | grep -q pending; then
     state=unsettled
-    echo "round $i/$rounds: all 6 required rows present, something still pending"
+    echo "round $i/$rounds: all $nreq required rows present, something still pending"
   else
     printf '%s\n' "$rows"
     echo "wait-checks: verdict is for head $judged_sha"
