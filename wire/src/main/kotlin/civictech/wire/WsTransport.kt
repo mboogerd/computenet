@@ -2480,6 +2480,31 @@ object WsTransport {
             close()
         }
 
+        /**
+         * Re-arm this connection after [abandonedAfterRefusals] — the `:wire`
+         * shape of `IrohConnection.heal`, closing the asymmetry computenet-f6dr
+         * found: `:wire`'s give-up otherwise had no way back short of building a
+         * new [WsConnection].
+         *
+         * [scheduleReconnect] treats [abandoned] and a maxed-out [unadmitted] run
+         * as terminal, so healing must clear both — not just flip [abandoned] —
+         * before it can ask for the reconnect it now permits again. An operator's
+         * decision to retry a peer that may since have been allowlisted (or whose
+         * peering was abandoned on a false-positive refusal read, see
+         * [WsTransport.REFUSAL_WINDOW_MS]), not a schedule's: nothing else calls
+         * this.
+         *
+         * A no-op after [shutdown] — [reconnect] stays false, so the
+         * [scheduleReconnect] this calls declines to start a loop. Healing
+         * resumes a client that gave up on a refusing peer; it does not undo an
+         * application's own decision to stop.
+         */
+        fun heal() {
+            unadmitted.set(0)
+            abandoned = false
+            scheduleReconnect()
+        }
+
         override fun onOpen(handshake: ServerHandshake) {
             // Charged before the hello goes out, because the hello is the cost:
             // this open has already committed the listener to one accept and one
