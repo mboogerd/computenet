@@ -218,4 +218,68 @@ class WsRefusedDialBoundTest {
             listener.stop(1000)
         }
     }
+
+    /**
+     * computenet-f6dr: an abandoned `:wire` client has a way back —
+     * [WsConnection.heal] — the same shape `IrohConnection.heal` already gave
+     * `:iroh`. This pins that a healed client re-peers once the listener's
+     * allowlist has since admitted it, which is exactly the false-positive
+     * case [WsTransport.REFUSED_DIAL_LIMIT]'s own KDoc names: a peering that
+     * genuinely could not stay up gets abandoned as though it had been
+     * refused, and an operator who judges that wrong needs a way to retry
+     * without reconstructing the connection.
+     *
+     * The allowlist is a mutable set held by the test, not by [Stack]: the
+     * listener's [civictech.cell.wire.Peering.Side.admits] reads `allow` at
+     * call time (`allow == null || peer in allow`), so mutating the same set
+     * instance after construction changes what the *next* hello sees without
+     * touching kernel or reconstructing the listener's side.
+     *
+     * Peering is confirmed from the **listener's** [WsListener.achievedAuthLevels],
+     * not from the healed client's own [WsConnection.achievedAuthLevel]:
+     * `achievedAuthLevel` reports which side *this* Session has admitted, not
+     * which side admitted *it* — the client's session admits the listener's
+     * (open-policy) hello independently of whether the listener in turn
+     * admits the client, so it can read non-null on a connection the listener
+     * is about to refuse and close. The listener admitting mallory is the
+     * property the allowlist actually governs.
+     */
+    @Test
+    fun `a healed client re-peers once the listener's allowlist admits it`() {
+        val allow = mutableSetOf<PeerId>()
+        val registry = LocationRegistry()
+        val host = ManagedHost(registry = registry)
+        val bridgeHost = ManagedHost(registry = registry)
+        val serverSide = Peering.Side(registry, bridgeHost, peer = PeerId("server"), allow = allow)
+        val listener = WsTransport.listen(0, serverSide)
+        try {
+            val mallory = Stack(name = "mallory")
+            val uri = URI("ws://localhost:${listener.port}")
+            val healable = WsTransport.connect(uri, mallory.side, backoff = { 20L }, refusedDialLimit = 2)
+            try {
+                await("the healable dialler gives up") { healable.abandonedAfterRefusals }
+                if (listener.achievedAuthLevels.any { it != null }) {
+                    throw AssertionFailedError("the listener admitted mallory despite an empty allowlist")
+                }
+
+                // The allowlist changes underneath the abandoned connection —
+                // an operator allowlisting the peer, or judging the refusal a
+                // false positive either way calls the same method.
+                allow += PeerId("mallory")
+                healable.heal()
+
+                await("the listener admits the healed client") { listener.achievedAuthLevels.any { it != null } }
+                if (healable.abandonedAfterRefusals) {
+                    throw AssertionFailedError(
+                        "heal() re-peered the client but it still reports abandonedAfterRefusals=true; a healed " +
+                            "connection must clear the give-up it is healing from",
+                    )
+                }
+            } finally {
+                healable.shutdown()
+            }
+        } finally {
+            listener.stop(1000)
+        }
+    }
 }

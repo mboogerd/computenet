@@ -858,7 +858,9 @@ object IrohTransport {
          * This is also the only way back from [abandonedAfterRefusals]: an
          * explicit heal clears the unadmitted run, because a caller asking for a
          * link is making a decision the schedule is not entitled to make on its
-         * own (computenet-4gzr).
+         * own (computenet-4gzr). `WsConnection.heal` (computenet-f6dr) is the
+         * `:wire` counterpart, closing what was otherwise a silent asymmetry
+         * between the two transports' give-up paths.
          */
         fun heal(timeout: Duration = redialTimeout) {
             unadmitted.set(0)
