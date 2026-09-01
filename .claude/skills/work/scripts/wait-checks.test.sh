@@ -44,6 +44,18 @@ if [ "${1:-}" = api ]; then
   case "$*" in
     *started_at*) [ -f "$CTRL/ages.out" ] && cat "$CTRL/ages.out"; exit 0 ;;
   esac
+  # The required-context query (computenet-3qdo), not a poll. Defaults to the
+  # six legacy contexts so every fixture predating the ruleset read is
+  # unaffected; `req.out` overrides, and `req-fail` makes the query answer
+  # nothing, which is the degraded-fallback case.
+  case "${2:-}" in
+    *rules/branches*)
+      [ -f "$CTRL/req-fail" ] && exit 1
+      if [ -f "$CTRL/req.out" ]; then cat "$CTRL/req.out"; else
+        printf '%s\n' build-test-fast build-test-serial concord-full ui-test agora-ui-test kernel-test
+      fi
+      exit 0 ;;
+  esac
   # Head resolution, not a poll. Defaults to a sha so the primary read is
   # reachable without every fixture declaring one.
   case "${2:-}" in
@@ -265,6 +277,58 @@ printf '%s\n' "${GQL_GREEN/concord-full$'\t'pass/concord-full$'\t'fail}" > "$CTR
 out=$(run 10); rc=$?
 [ "$rc" -eq 0 ] && ok "SETTLED includes red over the fallback too" || bad "exits $rc"
 has "$out" "RED — required check(s) FAILED: concord-full" "the red row is named"
+
+# --- the required set is the RULESET's, not a literal (computenet-3qdo) -----
+# A literal list can only catch the absence of a check it already knows about.
+# The ruleset gained a SEVENTH context on 2026-08-31; six green rows read as
+# SETTLED, `gh pr ready` ran, and the PR sat BLOCKED with the missing row
+# absent from the table the caller was told to read.
+echo
+echo "the required set is read from the ruleset"
+fixture
+printf '%s\n' build-test-fast build-test-serial concord-full ui-test agora-ui-test kernel-test iroh-sidecar > "$CTRL/req.out"
+printf '%s\n' "$GREEN" > "$CTRL/default.rest"      # the six, iroh-sidecar ABSENT
+out=$(run 3); rc=$?
+[ "$rc" -eq 4 ] && ok "a required context ABSENT from the rows never reads SETTLED" \
+  || bad "exits $rc, wanted 4"
+has "$out" "only 6 of 7 required rows reporting" "the count comes from the ruleset, not a literal"
+has "$out" "7 required contexts, read from the ruleset" "the set it is judging against is announced"
+
+# the UNSETTLED progress line takes its count from the ruleset too. Cosmetic —
+# the verdict and exit code are right either way — but "all 6 required rows
+# present" under a seven-context ruleset is the same literal-drift this bead is
+# about, printed to the operator who is deciding whether to ship.
+fixture
+printf '%s\n' build-test-fast build-test-serial concord-full ui-test agora-ui-test kernel-test iroh-sidecar > "$CTRL/req.out"
+printf '%s\n' "$GREEN"$'\niroh-sidecar\tpending\t-' > "$CTRL/default.rest"
+out=$(run 2)
+has "$out" "all 7 required rows present, something still pending" \
+  "the pending line counts against the ruleset, not a literal"
+
+# and with the seventh present it settles
+fixture
+printf '%s\n' build-test-fast build-test-serial concord-full ui-test agora-ui-test kernel-test iroh-sidecar > "$CTRL/req.out"
+printf '%s\n' "$GREEN"$'\niroh-sidecar\tpass\tsuccess' > "$CTRL/default.rest"
+out=$(run); rc=$?
+[ "$rc" -eq 0 ] && ok "all seven present and green settles" || bad "exits $rc, wanted 0"
+
+# a NEW required check is caught with no edit to this script — the whole point
+fixture
+printf '%s\n' build-test-fast build-test-serial concord-full ui-test agora-ui-test kernel-test iroh-sidecar brand-new-gate > "$CTRL/req.out"
+printf '%s\n' "$GREEN"$'\niroh-sidecar\tpass\tsuccess' > "$CTRL/default.rest"
+out=$(run 2); rc=$?
+[ "$rc" -eq 4 ] && ok "a context added to the ruleset today is required today" \
+  || bad "exits $rc, wanted 4"
+
+# the ruleset unreadable: fall back, and say the reading is degraded
+fixture
+touch "$CTRL/req-fail"
+printf '%s\n' "$GREEN" > "$CTRL/default.rest"
+out=$(run); rc=$?
+[ "$rc" -eq 0 ] && ok "an unreadable ruleset still yields a verdict on the known six" \
+  || bad "exits $rc, wanted 0"
+has "$out" "HARD-CODED list" "the fallback says it is a fallback"
+has "$out" "does not mean the PR can merge" "and says what the degraded verdict cannot tell you"
 
 # --- the fourth state: GitHub never built this head (computenet-a5in) -------
 # Zero rows has two causes demanding opposite responses. Inside the cold-start

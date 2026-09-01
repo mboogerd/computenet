@@ -157,7 +157,7 @@ returns nothing:
 
 **Say so in your first line, then proceed with an explicit NOT VERIFIED on
 every CI-dependent clause** — do not silently substitute your local macOS run
-for the six required checks, and do not invent a verdict for evidence that does
+for the required checks, and do not invent a verdict for evidence that does
 not exist yet. Your report hands the gate back to the orchestrator, which must
 open the PR and close it before shipping. Recording the gap prominently is the
 requirement, not a courtesy (computenet-a4cj).

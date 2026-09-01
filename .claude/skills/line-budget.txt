@@ -303,7 +303,12 @@
 # reachability.py still reports that file NOT-READ for the breakdown role —
 # a link would have flipped the gate to SERVED and spent the signal that
 # catches the NEXT misplacement there.
-work                9190
+# 9190 -> 9192 on 2026-09-01: computenet-3qdo (+2) — bought step 2's
+# description of wait-checks.sh saying the required set is READ FROM THE
+# RULESET each run. The literal 'all six' was the same drift the script
+# carried: the ruleset went to seven on 2026-08-31 and a PR shipped BLOCKED.
+# The mechanical half is in wait-checks.sh and costs no budget lines.
+work                9192
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

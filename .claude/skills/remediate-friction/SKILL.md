@@ -351,7 +351,7 @@ open that file, and this is the lane that shares a file on most PRs. Measured
 2026-08-29: six items, five PRs open when one merged, and the four raising the
 `work` entry all went `DIRTY` in that minute while the fifth, raising
 `remediate-friction`, did not — four hand-resolved rebases of an append-only
-ledger, each restarting the six required checks (~9-12m wall), two needing
+ledger, each restarting the required checks (~9-12m wall), two needing
 three `rebase --continue` rounds (computenet-x69c).
 
 **Hold the next item rather than opening its PR; holding is not idleness.**
