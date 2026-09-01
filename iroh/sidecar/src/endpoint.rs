@@ -10,7 +10,7 @@ use std::{
 
 use iroh::{
     address_lookup::memory::MemoryLookup, endpoint::presets, Endpoint, EndpointAddr, EndpointId,
-    SecretKey, TransportAddr,
+    RelayMap, RelayMode, RelayUrl, SecretKey, TransportAddr,
 };
 
 use crate::{
@@ -23,7 +23,9 @@ use crate::{
 pub const ALPN: &[u8] = b"computenet/sidecar/0";
 
 /// Where a bound endpoint looks up peer addresses it was not handed directly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Deliberately not `Copy`: [`LookupMode::Relay`] carries a [`RelayUrl`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum LookupMode {
     /// Only addresses supplied locally via [`SidecarEndpoint::add_peer`] are
     /// resolvable, and no relay is used. Nothing leaves the host's own network,
@@ -33,6 +35,28 @@ pub enum LookupMode {
     /// default, and the only mode that reaches a peer whose address is unknown.
     #[default]
     N0,
+    /// Exactly one operator-supplied relay, and no address lookup service at
+    /// all. Peer addresses come from [`SidecarEndpoint::add_peer`] and from a
+    /// peer's own relay address; nothing is published to or resolved from n0's
+    /// DNS/pkarr infrastructure. This is the mode CI uses against a
+    /// self-hosted relay.
+    Relay(RelayUrl),
+}
+
+impl LookupMode {
+    /// The relay configuration this mode adds on top of its preset, or `None`
+    /// when the preset's own relay behaviour stands.
+    ///
+    /// Only [`LookupMode::Relay`] overrides: it pins the endpoint to exactly
+    /// the one configured relay. [`LookupMode::Offline`] keeps
+    /// `presets::Minimal`'s disabled relay and [`LookupMode::N0`] keeps
+    /// `presets::N0`'s public relay map.
+    pub fn relay_override(&self) -> Option<RelayMode> {
+        match self {
+            LookupMode::Offline | LookupMode::N0 => None,
+            LookupMode::Relay(url) => Some(RelayMode::Custom(RelayMap::from_iter([url.clone()]))),
+        }
+    }
 }
 
 /// How to bind a [`SidecarEndpoint`].
@@ -88,10 +112,17 @@ impl SidecarEndpoint {
         };
         let lookup = MemoryLookup::new();
 
-        let mut builder = match config.lookup {
-            LookupMode::Offline => Endpoint::builder(presets::Minimal),
+        // `Relay` shares `Offline`'s minimal preset — no DNS/pkarr address
+        // lookup service — and then replaces its disabled relay with exactly
+        // the configured one. Everything after this point is identical across
+        // the three modes.
+        let mut builder = match &config.lookup {
+            LookupMode::Offline | LookupMode::Relay(_) => Endpoint::builder(presets::Minimal),
             LookupMode::N0 => Endpoint::builder(presets::N0),
         };
+        if let Some(relay_mode) = config.lookup.relay_override() {
+            builder = builder.relay_mode(relay_mode);
+        }
         builder = builder
             .alpns(vec![alpn.clone()])
             .address_lookup(lookup.clone());
@@ -220,5 +251,93 @@ impl SidecarEndpoint {
 
     fn next_link_id(&self) -> LinkId {
         LinkId::new(self.next_link_id.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    fn relay_url() -> RelayUrl {
+        RelayUrl::from_str("https://relay.example.org").expect("literal relay url")
+    }
+
+    fn other_url() -> RelayUrl {
+        RelayUrl::from_str("https://other-relay.example.org").expect("literal relay url")
+    }
+
+    #[test]
+    fn relay_mode_pins_exactly_the_configured_relay() {
+        let url = relay_url();
+        let mode = LookupMode::Relay(url.clone())
+            .relay_override()
+            .expect("Relay overrides the preset's relay behaviour");
+
+        assert_eq!(mode, RelayMode::Custom(RelayMap::from_iter([url.clone()])));
+        assert_eq!(mode.relay_map().urls::<Vec<_>>(), vec![url]);
+    }
+
+    #[test]
+    fn offline_and_n0_keep_their_presets_relay_behaviour() {
+        // The proof that --relay-url did not move the other two modes: neither
+        // overrides, so each keeps its preset's relay map (Minimal's disabled
+        // relay, N0's public one).
+        assert_eq!(LookupMode::Offline.relay_override(), None);
+        assert_eq!(LookupMode::N0.relay_override(), None);
+    }
+
+    #[tokio::test]
+    async fn a_relay_config_binds_an_endpoint_over_that_relay_alone() {
+        // A loopback relay url: nothing here reaches the network, and no relay
+        // needs to be listening for the endpoint to bind.
+        let url = RelayUrl::from_str("https://127.0.0.1:65535").expect("literal relay url");
+        let endpoint = SidecarEndpoint::bind(SidecarConfig {
+            lookup: LookupMode::Relay(url.clone()),
+            bind_addrs: vec!["127.0.0.1:0".parse().expect("literal loopback addr")],
+            ..Default::default()
+        })
+        .await
+        .expect("a custom relay is a valid relay map, so bind succeeds");
+
+        // Bound and usable: the id and the loopback socket are the same as in
+        // any other mode.
+        assert_eq!(endpoint.bound_sockets().len(), 1);
+        assert_eq!(endpoint.id(), endpoint.bound_addr().id);
+
+        // And the bound endpoint's relay map really is that one relay: iroh's
+        // `remove_relay` answers `Some` only for a url the endpoint has
+        // configured. Destructive, so it comes last.
+        assert!(
+            endpoint.endpoint.remove_relay(&other_url()).await.is_none(),
+            "no relay other than the configured one"
+        );
+        assert!(
+            endpoint.endpoint.remove_relay(&url).await.is_some(),
+            "the configured relay is in the bound endpoint's relay map"
+        );
+
+        endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn offline_binds_with_no_relay_at_all() {
+        // The other side of the same probe, and the proof --relay-url did not
+        // move the offline path: nothing is in Offline's relay map.
+        let endpoint = SidecarEndpoint::bind(SidecarConfig::offline_loopback())
+            .await
+            .expect("offline binds");
+
+        assert!(
+            endpoint.endpoint.remove_relay(&relay_url()).await.is_none(),
+            "offline configures no relay"
+        );
+        assert!(
+            endpoint.endpoint.remove_relay(&other_url()).await.is_none(),
+            "offline configures no relay"
+        );
+
+        endpoint.close().await;
     }
 }
