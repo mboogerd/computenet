@@ -72,7 +72,15 @@ while IFS= read -r rel; do
     [ -f "$dir/$stem.test.$ext" ] && suites="$suites$dir/$stem.test.$ext"$'\n'
   done
   if [ -z "$suites" ]; then
-    suites=$(grep -lF "$basefile" "$dir"/*.test.* 2>/dev/null)
+    # A mention in a COMMENT is not coverage. `sweep-stale-claims.sh` is named
+    # in a comment by two suites that never invoke it, and a bare `grep -l`
+    # reported it covered — over-reporting coverage is the one way this
+    # fallback can lie (computenet-hkjo). Strip comment lines before matching.
+    for cand in "$dir"/*.test.*; do
+      [ -f "$cand" ] || continue
+      sed 's/[[:space:]]*#.*$//' "$cand" | grep -qF "$basefile" \
+        && suites="$suites$cand"$'\n'
+    done
   fi
   if [ -z "$suites" ]; then
     echo "NO-TEST   $rel — no sibling suite and none mentions it"

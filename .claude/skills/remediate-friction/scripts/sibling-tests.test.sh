@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for sibling-tests.sh. Builds a throwaway git repo with a
 # .claude/skills/<skill>/scripts/ tree, commits a base, mutates it, and checks
-# which suites the runner selects and what it exits. Expect "19 passed, 0 failed".
+# which suites the runner selects and what it exits. Expect "21 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sibling-tests.sh"}
@@ -64,13 +64,24 @@ echo "no name sibling: a suite that MENTIONS the script is found (computenet-hkj
 # lane's own tooling untested.
 mkrepo
 printf '#!/usr/bin/env python3\nprint(1)\n' > "$D/bar.py"
-printf '#!/usr/bin/env bash\ngrep -q x /dev/null; exit 0  # covers bar.py\n' > "$D/cover.test.sh"
+printf '#!/usr/bin/env bash\npython3 "$(dirname "$0")/bar.py" >/dev/null\n' > "$D/cover.test.sh"
 ( cd "$R" && git add -A && git commit -qm add )
 echo '# edit' >> "$D/bar.py"; ( cd "$R" && git add -A && git commit -qm edit )
 out=$(run); rc=$?
 [ "$rc" = 0 ] && ok "the mentioning suite is run, exit 0" || bad "exits $rc, wanted 0"
 has "$out" "-> cover.test.sh" "the mentioning suite is selected"
 hasnt "$out" "NO-TEST" "a covered script is not reported untested"
+
+echo
+echo "a mention in a COMMENT is not coverage"
+mkrepo
+printf '#!/usr/bin/env bash\necho x\n' > "$D/quiet.sh"
+printf '#!/usr/bin/env bash\n# related to quiet.sh, but never runs it\nexit 0\n' > "$D/talker.test.sh"
+( cd "$R" && git add -A && git commit -qm add )
+echo '# edit' >> "$D/quiet.sh"; ( cd "$R" && git add -A && git commit -qm edit )
+out=$(run); rc=$?
+has "$out" "NO-TEST" "a suite that only NAMES the script in a comment is not coverage"
+hasnt "$out" "-> talker.test.sh" "the comment-only suite is not run"
 
 echo
 echo "a python script runs under python3"

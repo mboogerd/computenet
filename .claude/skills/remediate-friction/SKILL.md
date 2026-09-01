@@ -304,8 +304,9 @@ a role, does credit a skill's own `SKILL.md` to its own readers.
 .claude/skills/remediate-friction/scripts/sibling-tests.sh    # defaults to origin/main
 ```
 
-It derives the set from the diff — name sibling (`foo.sh` -> `foo.test.sh`),
-else any `*.test.*` in that `scripts/` dir mentioning the file — so it cannot go
+It derives the set from the diff — name sibling (`foo.sh` -> `foo.test.sh`), else
+any `*.test.*` in that `scripts/` dir naming the file OUTSIDE a comment (a
+mention in prose is not coverage) — so it cannot go
 stale, and it covers `work/scripts/` as well as this lane's own. Exit 1 means a
 suite is RED; `NO-TEST` is reported and does not block. This replaces naming one
 suite literally, which reached neither of the two instances that filed
