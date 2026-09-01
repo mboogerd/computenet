@@ -11,7 +11,8 @@ finish.
 
 Usage: next-batch.py <feature-id> [--actor NAME]
 Prints JSON: {"batch": [{id, model, files, worktree, branch, resumed}],
-              "skipped": [{id, reason}], "verdict": str, "parked": [id],
+              "skipped": [{id, reason}], "warnings": [str],
+              "verdict": str, "parked": [id],
               "capacity": {"cores": int, "max_parallel": int,
                            "load1": float|null, "advice": str|null}}
 
@@ -112,6 +113,33 @@ def _norm(path):
     while p.startswith("./"):
         p = p[2:]
     return p
+
+
+def dir_claims(files, root=None):
+    """Entries in a claim that name a DIRECTORY rather than files.
+
+    Containment (below) is deliberate and correct — a directory claim and a
+    file inside it are the same surface. What is NOT correct is writing the
+    directory in the first place: it collides with every sibling beneath it, so
+    claim-based batching stops discriminating and the epic is permanently
+    over-serialised. computenet-ciz9 claimed ["doc/bench/", "bench/src/"] and
+    every bench task in its epic nominally collided with it; the breakdown that
+    hit this ran the documented collision check, got a useless answer, and
+    handed the batching decision back to the orchestrator by hand
+    (computenet-i5zr).
+
+    The failure is quiet in the dangerous direction: not a wrong batch, a lost
+    one, with nothing reporting that parallelism was given up. So this is
+    ADVISORY — it never changes a batching decision, it says which claim to
+    narrow.
+
+    A path is a directory claim if it exists on disk as one. Non-existent
+    paths are NOT flagged: a claim naming a file the task is about to CREATE is
+    ordinary and must not be nagged about.
+    """
+    root = root or os.getcwd()
+    return sorted(f for f in {_norm(x) for x in files}
+                  if f and f != "." and os.path.isdir(os.path.join(root, f)))
 
 
 def overlaps(files, taken):
@@ -425,7 +453,17 @@ def main():
     load1, advice = load_advice(cores, cap)
 
     verdict, parked = _assess(feature, batch)
+    warnings = []
+    for entry in batch:
+        for d in dir_claims(entry.get("files") or []):
+            warnings.append(
+                "%s claims the DIRECTORY %s -- it collides with every claim "
+                "beneath it, so this epic batches more serially than it needs "
+                "to. Narrow it to the files the item actually edits: "
+                "bd update %s --set-metadata files=<paths>"
+                % (entry["id"], d, entry["id"]))
     print(json.dumps({"batch": batch, "skipped": skipped,
+                      "warnings": warnings,
                       "verdict": verdict, "parked": parked,
                       "capacity": {"cores": cores, "siblings": siblings,
                                    "max_parallel": cap,
