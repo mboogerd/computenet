@@ -337,7 +337,11 @@ work                9190
 # outlives the session (a claim left in_progress strands the item for 12h),
 # and narrowing the script exemption, which is from the ENTRY conflict and not
 # from the ~2-per-file bound.
-remediate-friction   384
+# 384 -> 396 on 2026-09-01: computenet-hkjo (+12) — bought sibling-tests.sh in
+# step 4, replacing a sentence that named ONE suite literally. The mechanical
+# half (the runner and its own 21-assertion suite) costs no budget lines; the
+# 12 are the call, what it selects, and what its two exits mean.
+remediate-friction   396
 # 201 -> 267 on 2026-08-29: computenet-d1im — sync-report gains §4, the
 # coherence audit: five named checks over a bounded set (top up-next picks,
 # beads touched by window decisions, epics a merge may have absorbed), ranked
