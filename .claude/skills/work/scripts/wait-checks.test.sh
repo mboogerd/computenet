@@ -294,6 +294,17 @@ out=$(run 3); rc=$?
 has "$out" "only 6 of 7 required rows reporting" "the count comes from the ruleset, not a literal"
 has "$out" "7 required contexts, read from the ruleset" "the set it is judging against is announced"
 
+# the UNSETTLED progress line takes its count from the ruleset too. Cosmetic —
+# the verdict and exit code are right either way — but "all 6 required rows
+# present" under a seven-context ruleset is the same literal-drift this bead is
+# about, printed to the operator who is deciding whether to ship.
+fixture
+printf '%s\n' build-test-fast build-test-serial concord-full ui-test agora-ui-test kernel-test iroh-sidecar > "$CTRL/req.out"
+printf '%s\n' "$GREEN"$'\niroh-sidecar\tpending\t-' > "$CTRL/default.rest"
+out=$(run 2)
+has "$out" "all 7 required rows present, something still pending" \
+  "the pending line counts against the ruleset, not a literal"
+
 # and with the seventh present it settles
 fixture
 printf '%s\n' build-test-fast build-test-serial concord-full ui-test agora-ui-test kernel-test iroh-sidecar > "$CTRL/req.out"

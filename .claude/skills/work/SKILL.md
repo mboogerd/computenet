@@ -1388,7 +1388,7 @@ it holds for a batch: load 338-724 on 16 cores, three gates, rotating
 :demo:beadsmirror timeouts — computenet-qmjd). In a batch of two or more, at
 most ONE dispatch keeps the repo-wide gate; every other prompt scopes the
 gate to the modules its claim touches and says where the wide evidence comes
-from instead (the feature PR's six required checks). Set `${gateScope}`
+from instead (the feature PR's required checks). Set `${gateScope}`
 accordingly per dispatch.
 
 **Scoping the gate is NOT sufficient, so read `max_parallel` as an upper bound
@@ -2144,7 +2144,7 @@ and shipping one is a contradiction merged into the file every session
 executes. Any of them, or any doubt → second tier.
 
 **The cost this tier exists to avoid is real and compounds.** Every merge of
-`origin/main` pushes a new head, and every new head restarts all six required
+`origin/main` pushes a new head, and every new head restarts all the required
 checks — **9–12 minutes**, governed by `build-test-fast` (measured across four
 runs, computenet-678u; this said ~4 minutes until then) — which a sibling merge
 can invalidate before it finishes, so the churn is superlinear in the number of concurrent same-file
