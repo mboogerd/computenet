@@ -292,7 +292,13 @@
 # lint cited as coverage over a CI safety net that had just been factored INTO
 # a composite action, i.e. the assertion itself was the unlinted script.
 # The mechanical half is in lint-workflow.rb and costs no budget lines.
-work                9180
+# 9180 -> 9196 on 2026-09-01: computenet-6eyp (+16) — bought the zsh `=word`
+# trap in epic.md and feature.md, the two files a BREAKDOWN dispatch reads.
+# The warning already existed, in agent-execution.md, which breakdowns are
+# not given: six agents hit it across two sessions, four of them after
+# computenet-a49j closed. Duplicated rather than linked because the whole
+# defect was a one-hop indirection nobody followed.
+work                9196
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
