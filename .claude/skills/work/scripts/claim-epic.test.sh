@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for claim-epic.sh. Stubs `bd` on PATH; every case gets a fresh control
-# dir. Exits 0 if all cases pass. Expect "20 passed, 0 failed".
+# dir. Exits 0 if all cases pass. Expect "26 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claim-epic.sh"}
@@ -35,7 +35,12 @@ case "$1" in
     esac ;;
 esac
 EOF
-chmod +x "$ROOT/bin/bd"
+cat > "$ROOT/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+echo "$1" >> "$CTRL/sleeps"
+exit 0
+EOF
+chmod +x "$ROOT/bin/bd" "$ROOT/bin/sleep"
 export PATH="$ROOT/bin:$PATH"
 
 pass=0; fail=0
@@ -129,6 +134,45 @@ echo '! [rejected]' > "$CTRL/push1.out"; echo '! [rejected]' > "$CTRL/push2.out"
 out=$("$SCRIPT" computenet-e 2>&1); st=$?
 [ "$st" = 2 ] && grep -q "LOCAL-ONLY" <<<"$out" \
   && ok "double rejection escalates, exit 2" || bad "double: exit=$st out=$out"
+
+# --- transport faults are not rejections (computenet-ckvu) ------------------
+# A DNS failure says nothing about the remote's state, and clears by itself in
+# seconds. Two back-to-back attempts sampled one instant of it and ended a
+# whole session at step 3 with the epic claimed local-only.
+DNS='Error 1105: failed to get remote db; dial tcp: lookup doltremoteapi.dolthub.com: no such host'
+
+# 8b. a transient DNS fault clears on the retry: claimed, no pull, no escalation
+fixture; old_show in_progress testbox
+printf '%s\n' "$DNS" > "$CTRL/push1.out"
+out=$("$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 0 ] && [ "$(cat "$CTRL/pushn")" = 2 ] \
+  && ok "a transient transport fault is retried, not escalated" \
+  || bad "dns retry: exit=$st pushes=$(cat "$CTRL/pushn" 2>/dev/null) out=$out"
+grep -q "dolt pull" "$BD_LOG" \
+  && bad "a transport fault must NOT trigger the rejection recovery" \
+  || ok "no pull: nothing was said about the remote's state"
+[ -s "$CTRL/sleeps" ] && ok "it waits between attempts rather than resampling one instant" \
+  || bad "retried with no backoff"
+
+# 8c. the fault persists: 3 attempts, then escalate — and say it was transport
+fixture; old_show in_progress testbox
+printf '%s\n' "$DNS" > "$CTRL/push1.out"
+printf '%s\n' "$DNS" > "$CTRL/push2.out"
+printf '%s\n' "$DNS" > "$CTRL/push3.out"
+out=$("$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 2 ] && [ "$(cat "$CTRL/pushn")" = 3 ] \
+  && ok "a persistent transport fault escalates after 3 attempts" \
+  || bad "dns persist: exit=$st pushes=$(cat "$CTRL/pushn" 2>/dev/null) out=$out"
+grep -q "transport fault" <<<"$out" \
+  && ok "the escalation names the fault class, not just LOCAL-ONLY" \
+  || bad "escalation does not distinguish transport from rejection: $out"
+
+# 8d. a rejection is still answered immediately — retrying it cannot help
+fixture; old_show in_progress testbox
+echo '! [rejected]  main -> main (non-fast-forward)' > "$CTRL/push1.out"
+out=$("$SCRIPT" computenet-e 2>&1); st=$?
+[ ! -s "$CTRL/sleeps" ] && ok "a rejection is not slept on" \
+  || bad "backed off on a rejection: $(cat "$CTRL/sleeps")"
 
 # --- metadata.holder: a SESSION-unique lock (computenet-83ay, computenet-yurq)
 # `assignee` is BEADS_ACTOR and therefore per-MACHINE, so a live sibling and a
