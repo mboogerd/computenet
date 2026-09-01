@@ -153,35 +153,7 @@ holder=$("$SCRIPT_DIR/session-holder.sh" 2>/dev/null) \
   && bd update "$id" --set-metadata "holder=$holder" >/dev/null \
   || echo "note: could not stamp metadata.holder — liveness falls back to the recency test" >&2
 
-# A push can fail two ways that demand opposite responses, and reading the
-# output is the only way to tell them apart. A REJECTION means the remote moved
-# and the fix is pull, re-verify, push. A TRANSPORT fault — DNS, dial, TLS —
-# means nothing was said about the remote's state at all, and the fix is to ask
-# again in a moment. Both used to land in the same branch, so a failure to
-# RESOLVE doltremoteapi.dolthub.com ended a whole session at step 3 with the
-# epic claimed local-only, over a fault that cleared by itself within seconds
-# (computenet-ckvu). The two attempts were back-to-back, so they sampled one
-# instant of DNS state. Step 2's `gh` guidance already retries with backoff;
-# this is the same idiom on the path that ends sessions.
-TRANSIENT='no such host|dial tcp|i/o timeout|connection reset|connection refused|TLS handshake|unexpected EOF|temporarily unavailable|503|502|504'
-
-# Echoes the last push output. 0 = pushed, 1 = rejected (recoverable by pull),
-# 2 = transport fault that survived every retry.
-push_with_backoff() {
-  local out i
-  for i in 1 2 3; do
-    out=$(bd dolt push 2>&1)
-    grep -qiE "rejected|error" <<<"$out" || { printf '%s' "$out"; return 0; }
-    if grep -qiE "$TRANSIENT" <<<"$out"; then
-      [ "$i" = 3 ] && break
-      echo "-- push hit a transport fault (attempt $i/3); retrying in $((i * 5))s --" >&2
-      sleep $((i * 5))
-      continue
-    fi
-    printf '%s' "$out"; return 1        # a rejection: retrying cannot help
-  done
-  printf '%s' "$out"; return 2
-}
+. "$SCRIPT_DIR/dolt-push-lib.sh"    # push_with_backoff (computenet-ckvu)
 
 push_out=$(push_with_backoff); push_rc=$?
 if [ "$push_rc" = 2 ]; then
@@ -206,7 +178,7 @@ if [ "$push_rc" != 0 ]; then
   push_out=$(push_with_backoff); push_rc=$?
   if [ "$push_rc" != 0 ]; then
     printf '%s\n' "$push_out" >&2
-    echo "ESCALATE: push failed twice; claim is LOCAL-ONLY — stop the session and report" >&2
+    echo "ESCALATE: push failed on both attempts; claim is LOCAL-ONLY — stop the session and report" >&2
     exit 2
   fi
 fi

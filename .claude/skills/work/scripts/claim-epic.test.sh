@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for claim-epic.sh. Stubs `bd` on PATH; every case gets a fresh control
-# dir. Exits 0 if all cases pass. Expect "26 passed, 0 failed".
+# dir. Exits 0 if all cases pass. Expect "28 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claim-epic.sh"}
@@ -163,9 +163,21 @@ out=$("$SCRIPT" computenet-e 2>&1); st=$?
 [ "$st" = 2 ] && [ "$(cat "$CTRL/pushn")" = 3 ] \
   && ok "a persistent transport fault escalates after 3 attempts" \
   || bad "dns persist: exit=$st pushes=$(cat "$CTRL/pushn" 2>/dev/null) out=$out"
-grep -q "transport fault" <<<"$out" \
-  && ok "the escalation names the fault class, not just LOCAL-ONLY" \
+grep -q "^ESCALATE: push failed 3x with a transport fault" <<<"$out" \
+  && ok "the ESCALATION LINE itself names the fault class, not just LOCAL-ONLY" \
   || bad "escalation does not distinguish transport from rejection: $out"
+
+# 8c2. a REJECTION whose text happens to contain 502/503/504 — a dolt progress
+#      count, a base32 hash — must still take the pull path. Unanchored 5xx
+#      codes turned a routinely recoverable non-fast-forward into a mislabelled
+#      session-ending escalation, so rejection markers are tested FIRST.
+fixture; old_show in_progress testbox
+echo '! [rejected] main -> main (non-fast-forward); uploaded 502 chunks' > "$CTRL/push1.out"
+out=$("$SCRIPT" computenet-e 2>&1); st=$?
+[ "$st" = 0 ] && grep -q "dolt pull" "$BD_LOG" \
+  && ok "a rejection carrying '502' is a rejection, not a transport fault" \
+  || bad "502-in-rejection misrouted: exit=$st out=$out"
+[ ! -s "$CTRL/sleeps" ] && ok "and it is not slept on" || bad "backed off on a rejection"
 
 # 8d. a rejection is still answered immediately — retrying it cannot help
 fixture; old_show in_progress testbox

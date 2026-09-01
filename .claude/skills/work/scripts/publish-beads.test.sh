@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for publish-beads.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "6 passed, 0 failed".
+# Expect "11 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/publish-beads.sh"}
@@ -24,7 +24,12 @@ case "$1 $2" in
     cat "$CTRL/pull.out" 2>/dev/null || echo "pull complete" ;;
 esac
 EOF
-chmod +x "$ROOT/bin/bd"
+cat > "$ROOT/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+echo "$1" >> "$CTRL/sleeps"
+exit 0
+EOF
+chmod +x "$ROOT/bin/bd" "$ROOT/bin/sleep"
 export PATH="$ROOT/bin:$PATH"
 
 pass=0; fail=0
@@ -73,6 +78,31 @@ out=$("$SCRIPT" 2>&1); st=$?
 [ "$st" = 2 ] && grep -q "LOCAL-ONLY" <<<"$out" \
   && ok "double nonzero exit exits 2 naming local-only state" \
   || bad "rc-only double: exit=$st out=$out"
+
+# --- transport faults are retried, not escalated (computenet-ckvu) ----------
+# This script had the same back-to-back two-attempt shape that ended a session
+# in claim-epic.sh: a DNS failure says nothing about the remote's state.
+DNS='Error 1105: failed to get remote db; dial tcp: lookup doltremoteapi.dolthub.com: no such host'
+
+fixture; printf '%s\n' "$DNS" > "$CTRL/push1.out"; echo 1 > "$CTRL/push1.rc"
+out=$("$SCRIPT" 2>&1); st=$?
+[ "$st" = 0 ] && [ "$(cat "$CTRL/pushn")" = 2 ] && ok "a transient transport fault is retried" \
+  || bad "dns retry: exit=$st pushes=$(cat "$CTRL/pushn" 2>/dev/null) out=$out"
+grep -q "recovering" <<<"$out" && bad "a transport fault must not trigger the pull recovery" \
+  || ok "no pull: nothing was said about the remote's state"
+
+fixture
+for n in 1 2 3; do printf '%s\n' "$DNS" > "$CTRL/push$n.out"; echo 1 > "$CTRL/push$n.rc"; done
+out=$("$SCRIPT" 2>&1); st=$?
+[ "$st" = 2 ] && [ "$(cat "$CTRL/pushn")" = 3 ] && ok "a persistent transport fault escalates after 3" \
+  || bad "dns persist: exit=$st pushes=$(cat "$CTRL/pushn" 2>/dev/null) out=$out"
+grep -q "^ESCALATE: push failed 3x with a transport fault" <<<"$out" \
+  && ok "the escalation line names the fault class" || bad "generic escalation: $out"
+
+fixture; echo '! [rejected] main -> main (non-fast-forward); uploaded 502 chunks' > "$CTRL/push1.out"
+out=$("$SCRIPT" 2>&1); st=$?
+[ "$st" = 0 ] && grep -q "recovering" <<<"$out" \
+  && ok "a rejection carrying '502' still takes the pull path" || bad "502 misrouted: $out"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

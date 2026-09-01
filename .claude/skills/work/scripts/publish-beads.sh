@@ -36,15 +36,19 @@
 #   other machine still sees this epic's items as they were at session start.
 set -uo pipefail
 
-# One helper, so the two call sites cannot drift apart.
-push_failed() {  # $1 = output, $2 = exit status
-  [ "$2" -ne 0 ] && return 0
-  grep -qiE "rejected|error" <<<"$1"
-}
+# push_with_backoff consults BOTH signals and separates a rejection from a
+# TRANSPORT fault, which is retried rather than escalated — this script had the
+# same back-to-back two-attempt shape that ended a session in computenet-ckvu.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dolt-push-lib.sh"
 
-out=$(bd dolt push 2>&1); rc=$?
+out=$(push_with_backoff); rc=$?
 printf '%s\n' "$out"
-push_failed "$out" "$rc" || exit 0
+[ "$rc" = 0 ] && exit 0
+if [ "$rc" = 2 ]; then
+  echo "ESCALATE: push failed 3x with a transport fault (network/DNS), not a rejection;" \
+       "tracker state is LOCAL-ONLY" >&2
+  exit 2
+fi
 
 echo "-- push rejected; recovering: pull, then push --"
 pout=$(bd dolt pull 2>&1)
@@ -53,10 +57,10 @@ if grep -qi "conflict" <<<"$pout"; then
   echo "ESCALATE: merge conflict — see .claude/skills/work/references/dolt-conflict.md (issues-only modify/modify is resolvable here; anything else needs an operator); state is LOCAL-ONLY" >&2
   exit 2
 fi
-out=$(bd dolt push 2>&1); rc=$?
+out=$(push_with_backoff); rc=$?
 printf '%s\n' "$out"
-if push_failed "$out" "$rc"; then
-  echo "ESCALATE: push failed twice; tracker state is LOCAL-ONLY" >&2
+if [ "$rc" != 0 ]; then
+  echo "ESCALATE: push failed on both attempts; tracker state is LOCAL-ONLY" >&2
   exit 2
 fi
 echo "-- recovered. Now VERIFY your own writes survived the merge (see step 6) --"
