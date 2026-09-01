@@ -29,7 +29,9 @@
 #     a live same-actor session was working the whole time (computenet-yurq);
 #   - pushes, reading the OUTPUT rather than exit codes (bd dolt push can
 #     exit 0 while printing a rejection). A rejected push pulls, re-verifies
-#     the epic is still ours, and pushes once more.
+#     the epic is still ours, and pushes once more. A push that fails on the
+#     TRANSPORT instead (DNS, dial, TLS) is retried with backoff first — it
+#     says nothing about the remote's state (computenet-ckvu).
 #
 # Run with a generous timeout (>=300s): a dolt push after a remote merge has
 # been measured over 120s.
@@ -151,8 +153,16 @@ holder=$("$SCRIPT_DIR/session-holder.sh" 2>/dev/null) \
   && bd update "$id" --set-metadata "holder=$holder" >/dev/null \
   || echo "note: could not stamp metadata.holder — liveness falls back to the recency test" >&2
 
-push_out=$(bd dolt push 2>&1)
-if grep -qiE "rejected|error" <<<"$push_out"; then
+. "$SCRIPT_DIR/dolt-push-lib.sh"    # push_with_backoff (computenet-ckvu)
+
+push_out=$(push_with_backoff); push_rc=$?
+if [ "$push_rc" = 2 ]; then
+  printf '%s\n' "$push_out" >&2
+  echo "ESCALATE: push failed 3x with a transport fault (network/DNS), not a rejection;" \
+       "claim is LOCAL-ONLY — stop the session and report" >&2
+  exit 2
+fi
+if [ "$push_rc" != 0 ]; then
   echo "-- push rejected; recovering: pull, re-verify, push --"
   pull_out=$(bd dolt pull 2>&1)
   if grep -qi "conflict" <<<"$pull_out"; then
@@ -165,10 +175,10 @@ if grep -qiE "rejected|error" <<<"$push_out"; then
     echo "LOST RACE: after the pull, $id is assigned to '$now_assignee' — select another epic" >&2
     exit 1
   fi
-  push_out=$(bd dolt push 2>&1)
-  if grep -qiE "rejected|error" <<<"$push_out"; then
+  push_out=$(push_with_backoff); push_rc=$?
+  if [ "$push_rc" != 0 ]; then
     printf '%s\n' "$push_out" >&2
-    echo "ESCALATE: push failed twice; claim is LOCAL-ONLY — stop the session and report" >&2
+    echo "ESCALATE: push failed on both attempts; claim is LOCAL-ONLY — stop the session and report" >&2
     exit 2
   fi
 fi
