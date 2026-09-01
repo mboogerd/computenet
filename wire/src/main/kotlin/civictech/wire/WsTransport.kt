@@ -615,8 +615,19 @@ object WsTransport {
 
         /**
          * Whether the **current connection instance** admitted a peer
-         * (computenet-4gzr) — the local shadow of a refusal the wire never
-         * reports, and the thing [WsConnection] counts a run of.
+         * (computenet-4gzr).
+         *
+         * **It is NOT what the refused-dial bound counts**, and the distinction
+         * is the whole reason [WsTransport.REFUSAL_WINDOW_MS] exists: this flag
+         * says "*this* side admitted the PEER's hello", which on `:wire` is
+         * routinely true for a dialler that was itself refused, because
+         * [WsListener] sends its hello from `onOpen` before it has seen the
+         * peer's. [WsConnection] therefore counts opens that did not outlive
+         * [WsTransport.REFUSAL_WINDOW_MS], not opens where this reads false —
+         * see [WsTransport.REFUSED_DIAL_LIMIT] for the measurement that settled
+         * it. Exposed as [peered] for parity with
+         * `IrohTransport.Session.peered`, where the same question *is* the
+         * refusal signal; nothing on this transport reads it yet.
          *
          * Per *open*, like [mirror], [pending], [achieved] and [localNonce], and
          * for the same reason: a client keeps one Session across every
