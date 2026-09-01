@@ -27,6 +27,7 @@ out/
 bin/
 !**/src/main/**/bin/
 !**/src/test/**/bin/
+!iroh/sidecar/src/bin/
 
 ### NetBeans ###
 /nbproject/private/

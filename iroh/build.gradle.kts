@@ -55,6 +55,13 @@ if (project.hasProperty("iroh.enabled")) {
     tasks.withType<Test>().configureEach {
         dependsOn(cargoBuild)
         systemProperty("iroh.sidecar.binary", sidecarBinary.asFile.absolutePath)
+        // computenet-o0m3.3: forward -Piroh.relay.url=<url>, when given, as the
+        // same-named JVM system property SidecarProcess.spawn reads to steer
+        // every spawned sidecar onto one relay. Absent the -P flag, no property
+        // is set and spawn args are unchanged.
+        if (project.hasProperty("iroh.relay.url")) {
+            systemProperty("iroh.relay.url", project.property("iroh.relay.url") as String)
+        }
     }
 
     // Exec's default behavior already fails the Gradle build on a nonzero

@@ -412,6 +412,25 @@ above, which names the same call sites):
   that fact; it does not decide whether that exposure is acceptable — that is
   a policy question outside this task's scope, flagged in this task's closing
   comment for the orchestrator to consider filing separately.
+- **Update (2026-09-01, `computenet-o0m3.4`): the CI consequence above no
+  longer holds.** The `iroh-sidecar` workflow now starts a job-local
+  `computenet-iroh-relay` (self-hosted, loopback, no TLS — built in
+  `computenet-o0m3.2`) after `cargo build` and passes its URL to both Gradle
+  test invocations as `-Piroh.relay.url=$RELAY_URL`, which
+  `SidecarProcess.effectiveArgs` (`computenet-o0m3.3`) turns into
+  `--relay-url` on every JVM-spawned sidecar in that lane. A liveness check
+  after the Gradle steps fails the job if the relay process died, so a run
+  that reached this far is evidence the lane actually exercised the
+  self-hosted relay rather than a coincidentally-passing test suite. This
+  changes only the CI default:
+  - **CI (`iroh-sidecar` workflow)**: job-local self-hosted relay, as of this
+    update. No JVM-driven test in this lane reaches n0's infrastructure any
+    more.
+  - **Local development, unconfigured**: unchanged — `iroh.relay.url` unset
+    means `SidecarProcess` appends nothing, and JVM call sites still default
+    to `LookupMode::N0` exactly as described above.
+  - **Deployment relay policy**: still open, still DSC2's — nothing here
+    decides where a running ComputeNet deployment gets its rendezvous from.
 
 ## See also
 
