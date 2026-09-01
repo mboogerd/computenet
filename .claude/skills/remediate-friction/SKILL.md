@@ -298,9 +298,20 @@ never answers `SERVED` outside `/work`: every modelled role is a `/work` role,
 so that would assert something false. The bare form, which claims nothing about
 a role, does credit a skill's own `SKILL.md` to its own readers.
 
-**Editing a script here? Run its sibling test** — `bash
-.claude/skills/remediate-friction/scripts/feedback.test.sh`. It is manual-only,
-wired into no gate, and this paragraph's own change went out red without it.
+**Editing a script? Run the sibling suites of everything the branch changed:**
+
+```bash
+.claude/skills/remediate-friction/scripts/sibling-tests.sh    # defaults to origin/main
+```
+
+It derives the set from the diff — name sibling (`foo.sh` -> `foo.test.sh`),
+else any `*.test.*` in that `scripts/` dir mentioning the file — so it cannot go
+stale, and it covers `work/scripts/` as well as this lane's own. Exit 1 means a
+suite is RED; `NO-TEST` is reported and does not block. This replaces naming one
+suite literally, which reached neither of the two instances that filed
+computenet-hkjo: a script edit shipped with its suite unrun twice in one drain,
+once leaving this lane's own discrimination suite red, both caught by a reviewer
+rather than by the lane.
 
 `NOT-READ` means the fix is correct and invisible — computenet-l5rc's glob-trap
 remedy landed in a file the orchestrator never opens, so it recurred twice in a
