@@ -97,6 +97,20 @@ name: iroh-sidecar
 # Re-adding a `paths:` filter here re-breaks every non-iroh PR in the
 # repository — remove the check from ruleset 20149495 first if that is ever
 # the intent.
+#
+# UPDATE (2026-09-01, computenet-o0m3.4): as of this change, the JVM-driven
+# test steps below ("iroh Gradle check, flag-enabled" and "beadsmirror iroh
+# convergence suite") no longer run against n0's public relay/discovery
+# infrastructure, contrary to what earlier revisions of doc/iroh-adoption.md
+# recorded as this lane's behaviour. A new step starts a job-local,
+# self-hosted `computenet-iroh-relay` right after `cargo build`, both Gradle
+# invocations receive its URL via `-Piroh.relay.url`, and a liveness check
+# after the Gradle steps reddens the job if that relay process died —
+# without which the self-hosting claim would be unverifiable, since peers in
+# these suites still hold direct loopback addresses via ADD_PEER and would
+# pass identically against a dead relay. See doc/iroh-adoption.md's
+# "Documented default for ComputeNet development" section for the same
+# update recorded from the adoption-policy side.
 on:
   pull_request:
   workflow_dispatch: {}
@@ -156,6 +170,55 @@ jobs:
           echo "$line"
           echo "$line" >> "$GITHUB_STEP_SUMMARY"
 
+      # computenet-o0m3.4: starts a job-local, self-hosted relay so no
+      # JVM-driven sidecar in the two Gradle steps below has to reach n0's
+      # public relay/discovery infrastructure. `cargo build` above already
+      # produced target/debug/computenet-iroh-relay (a plain `cargo build`
+      # with no `--bin` builds every binary target in the crate, including
+      # src/bin/relay.rs). The binary writes exactly one JSON line before it
+      # starts serving —
+      # `{"port":<n>,"relayUrl":"http://127.0.0.1:<n>"}` — verified by
+      # running it directly during this task's implementation (see
+      # iroh/sidecar/src/bin/relay.rs's own doc comment, which states the
+      # same shape). This step fails the job if that line never appears
+      # within the bounded wait below, or if the process exits first.
+      - name: Start job-local iroh relay
+        working-directory: iroh/sidecar
+        run: |
+          set -euo pipefail
+          nohup ./target/debug/computenet-iroh-relay --port 0 \
+            > /tmp/iroh-relay.out 2> /tmp/iroh-relay.err &
+          relay_pid=$!
+
+          relay_url=""
+          for _ in $(seq 1 50); do
+            if [ -s /tmp/iroh-relay.out ]; then
+              relay_url=$(grep -oE '"relayUrl":"[^"]+"' /tmp/iroh-relay.out | cut -d'"' -f4 || true)
+              [ -n "$relay_url" ] && break
+            fi
+            if ! kill -0 "$relay_pid" 2>/dev/null; then
+              echo "computenet-iroh-relay exited before printing its announcement line:" >&2
+              cat /tmp/iroh-relay.err >&2
+              exit 1
+            fi
+            sleep 0.2
+          done
+
+          if [ -z "$relay_url" ]; then
+            echo "timed out waiting for computenet-iroh-relay's announcement line" >&2
+            echo "--- stdout ---" >&2
+            cat /tmp/iroh-relay.out >&2
+            echo "--- stderr ---" >&2
+            cat /tmp/iroh-relay.err >&2
+            exit 1
+          fi
+
+          line="iroh-sidecar-relay pid=$relay_pid url=$relay_url"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          echo "RELAY_URL=$relay_url" >> "$GITHUB_ENV"
+          echo "RELAY_PID=$relay_pid" >> "$GITHUB_ENV"
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -188,7 +251,7 @@ jobs:
         run: |
           set -euo pipefail
           start=$(date +%s)
-          ./gradlew :iroh:check -Piroh.enabled=true
+          ./gradlew :iroh:check -Piroh.enabled=true -Piroh.relay.url="$RELAY_URL"
           end=$(date +%s)
           line="iroh-sidecar-timing step=gradle-iroh-check seconds=$((end - start)) cache-hit=${{ steps.rust-cache.outputs.cache-hit }}"
           echo "$line"
@@ -208,7 +271,7 @@ jobs:
       - name: beadsmirror iroh convergence suite (bd+dolt+sidecar together)
         run: |
           set -euo pipefail
-          ./gradlew :demo:beadsmirror:test -Piroh.enabled=true --rerun \
+          ./gradlew :demo:beadsmirror:test -Piroh.enabled=true -Piroh.relay.url="$RELAY_URL" --rerun \
             --tests 'civictech.demo.beadsmirror.e2e.IrohConvergenceSuiteTest' \
             --tests 'civictech.demo.beadsmirror.IrohMirrorTransportTest'
 
@@ -227,3 +290,30 @@ jobs:
           required-classes: >-
             civictech.demo.beadsmirror.e2e.IrohConvergenceSuiteTest
             civictech.demo.beadsmirror.IrohMirrorTransportTest
+
+      # computenet-o0m3.4: the ONLY thing in this job that makes the
+      # self-hosting claim non-vacuous. Every peer above still carries a
+      # direct loopback address via ADD_PEER, so both Gradle steps would pass
+      # exactly the same with a dead relay — a green run up to this point
+      # proves nothing about the relay on its own. `kill -0` on the pid this
+      # same job's "Start job-local iroh relay" step captured into
+      # $RELAY_PID (via GITHUB_ENV, so it is the literal pid of the process
+      # that step backgrounded, not a re-derived or reused one) reddens the
+      # job if that process died at any point during the Gradle steps above.
+      - name: Assert the job-local relay is still alive
+        run: |
+          set -euo pipefail
+          if [ -z "${RELAY_PID:-}" ]; then
+            echo "RELAY_PID is unset — the relay-start step did not run or did not export it" >&2
+            exit 1
+          fi
+          if ! kill -0 "$RELAY_PID" 2>/dev/null; then
+            echo "computenet-iroh-relay (pid $RELAY_PID) is not alive after the Gradle test steps" >&2
+            echo "--- stdout ---" >&2
+            cat /tmp/iroh-relay.out >&2 || true
+            echo "--- stderr ---" >&2
+            cat /tmp/iroh-relay.err >&2 || true
+            exit 1
+          fi
+          echo "iroh-sidecar-relay-liveness pid=$RELAY_PID alive=true"
+          kill "$RELAY_PID" 2>/dev/null || true
