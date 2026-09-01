@@ -7,13 +7,28 @@ description = "ComputeNet iroh sidecar: peer links over QUIC, dialled by endpoin
 license = "Apache-2.0"
 publish = false
 
-# Only `iroh` — deliberately no iroh-gossip / iroh-docs (epic computenet-egl §3
-# excludes them). tokio became a real dependency with the bin and its
-# local-socket protocol (computenet-egl.1.2): the loopback listener, the message
-# pumps and the per-link tasks all live in the library so tests can drive the
-# protocol in-process.
+# Two binaries: the sidecar itself (src/main.rs) and the self-hosted relay
+# (src/bin/relay.rs) CI points it at, so neither test run depends on n0's
+# public relay infrastructure (computenet-o0m3).
+[[bin]]
+name = "computenet-iroh-sidecar"
+path = "src/main.rs"
+
+[[bin]]
+name = "computenet-iroh-relay"
+path = "src/bin/relay.rs"
+
+# No iroh-gossip / iroh-docs (epic computenet-egl §3 excludes them). tokio became
+# a real dependency with the bin and its local-socket protocol
+# (computenet-egl.1.2): the loopback listener, the message pumps and the per-link
+# tasks all live in the library so tests can drive the protocol in-process.
 [dependencies]
 iroh = "1.0"
+# The relay server, at the same 1.0 line `iroh` already pins transitively — so
+# the relay we host and the client that dials it are one version. Its `server`
+# feature is what exposes `iroh_relay::server::Server`; the sidecar library
+# itself never touches it, only `src/bin/relay.rs` and `tests/relay_mode.rs`.
+iroh-relay = { version = "1.0", features = ["server"] }
 tokio = { version = "1", features = [
     "io-util",
     "macros",
