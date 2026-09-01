@@ -11,6 +11,14 @@ import civictech.cell.protocol.ProtocolId
  * §4.1): [LocalTrusted] for in-host/same-registry crossings (today's null
  * identity); [Peer] for bridge crossings, keyed on the [PeerId] the G-29
  * ingress already stamps.
+ *
+ * **[Peer.id] is the durable peer IDENTITY, never the key identifier**
+ * (feature `computenet-376c`). `Principal` is an attribution surface — it is
+ * what per-`Principal` statements, moderation decisions and rate accounting
+ * are recorded against — so it carries the identity the admitting side
+ * resolved through its `civictech.cell.link.PeerIdentityBinding`, not the
+ * `civictech.cell.link.KeyId` admission judged. Admission consumes the key
+ * identifier; attribution consumes this.
  */
 sealed interface Principal {
     data object LocalTrusted : Principal
@@ -47,6 +55,10 @@ typealias AuthLevel = civictech.cell.link.AuthLevel
  * claimed id (socket), or a peering both of whose sides hold the credentials
  * that exchange would have used (`Peering.loopback`, [DSC1-WIRE-05]) — and a
  * crossing that was not cannot reach it.
+ *
+ * The id this returns is the **identity** the admitting side resolved through
+ * its `civictech.cell.link.PeerIdentityBinding`, never the
+ * `civictech.cell.link.KeyId` it admitted on (feature `computenet-376c`).
  */
 fun currentPrincipal(): Principal =
     CurrentPeer.stamp()?.let { Principal.Peer(it.id, it.auth) } ?: Principal.LocalTrusted

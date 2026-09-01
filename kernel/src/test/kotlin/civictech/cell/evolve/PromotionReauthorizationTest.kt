@@ -13,6 +13,7 @@ import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkSupport
 import civictech.cell.link.Linked
 import civictech.cell.link.PeerId
+import civictech.cell.link.KeyId
 import civictech.cell.link.allowPeers
 import civictech.cell.membrane.BoundaryPolicy
 import civictech.cell.membrane.CompositeCell
@@ -56,7 +57,7 @@ private class ExposingMembrane(
         "outlet",
         organelle.outlet,
         policy = BoundaryPolicy(
-            linkAuthority = listOf(allowPeers(allowed)),
+            linkAuthority = listOf(allowPeers(KeyId(allowed.name))),
             protocolAuthority = mapOf(Protocols.Attention to ProtocolAuthority(ceiling = AttentionBand.LOW)),
         ),
     )
