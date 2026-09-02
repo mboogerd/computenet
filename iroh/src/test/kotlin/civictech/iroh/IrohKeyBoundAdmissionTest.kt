@@ -335,11 +335,34 @@ class IrohKeyBoundAdmissionTest {
                     settled >= 1L,
                     "at least one refusal must be accounted, and the count must settle rather than grow",
                 )
+                // `unadmittedOpens` is read the same way `admissionDenialCount`
+                // is above: quiesced rather than sampled once. IrohTransport's
+                // own KDoc on REFUSED_DIAL_LIMIT documents that at most one
+                // further link can be in flight when `abandoned` is observed —
+                // dialled by a re-dial loop iteration that wins its race
+                // against the LINK_DOWN which would have stopped it — so a
+                // single read taken right after `abandonedAfterRefusals` can
+                // still be one *link* short of what that in-flight link is
+                // about to add, or (on a loaded runner) briefly ahead of the
+                // final settled value if more than one such race stacks up.
+                // Quiescing removes the guesswork: once the value stops
+                // changing for `settleMillis`, nothing further is coming, and
+                // the bound below is checked against a number the production
+                // code has actually finished producing, not one caught
+                // mid-flight.
+                val settledUnadmitted = quiesced { refused.unadmittedOpens.toLong() }
                 assertTrue(
-                    refused.unadmittedOpens <= IrohTransport.REFUSED_DIAL_LIMIT + 1,
-                    "the refused dialler opened ${refused.unadmittedOpens} unadmitted links, past the bound " +
+                    settledUnadmitted >= IrohTransport.REFUSED_DIAL_LIMIT,
+                    "abandonedAfterRefusals was observed, so at least REFUSED_DIAL_LIMIT " +
+                        "(${IrohTransport.REFUSED_DIAL_LIMIT}) consecutive unadmitted opens must have been " +
+                        "counted; settled at $settledUnadmitted",
+                )
+                assertTrue(
+                    settledUnadmitted <= IrohTransport.REFUSED_DIAL_LIMIT + 1,
+                    "the refused dialler settled at $settledUnadmitted unadmitted links, past the bound " +
                         "IrohTransport.REFUSED_DIAL_LIMIT (${IrohTransport.REFUSED_DIAL_LIMIT}) plus the one " +
-                        "re-dial that may be in flight",
+                        "re-dial that may be in flight when abandonment is decided — and this is the settled, " +
+                        "not a mid-flight, value",
                 )
                 assertFalse(refused.peered, "a dialler that gave up is still not peered")
             }
