@@ -303,8 +303,12 @@ shell variable and nothing exports it across calls, let alone across a
 restart, so **note the directory's absolute path** here in as many words. A
 resume reads the *previous* session's dir by that literal path.
 
-Fires at 3h15m / 4h / 4h45m of a 5h slot (the last 15m is Finalize); scale
-proportionally if the routine names a different slot. **Note the monitor's
+Fires at 3h15m / 4h / 4h45m of a 5h slot — the slot END minus 105m/60m/15m,
+the last 15m being Finalize, so a rung is work time left, not wall clock left.
+On a different slot compute the same three offsets from the end (resume.md and
+`slot-elapsed.sh` both do), dropping a first sleep already ≤0; do NOT scale
+them as fractions — T-90m names 90 minutes of work, and a shorter slot does
+not make a feature shorter. **Note the monitor's
 task id** — `TaskStop` it when you reach Finalize. 
 > **`persistent: true` is load-bearing. Do NOT add `timeout_ms`.**
 > Verified by probe 2026-08-13: `persistent` genuinely overrides the
@@ -379,7 +383,10 @@ across ~5 turns of ship-gate and bookkeeping, enough to carry the session over
 the T-90m rung as it reasoned about which side of it it was on
 (computenet-1lbs). The decay is LARGEST IN BUSY SESSIONS, growing with how much
 subagent output you have digested — where the budget matters most. The rung the
-script names binds, whatever the last tier fired.
+script names binds, whatever the last tier fired — and the two can no longer
+disagree, both being the slot end minus 105m/60m/15m (computenet-v8kg). If
+they ever do, take the MORE CAUTIOUS rung and file it: the encodings have
+drifted, and this line used to hand that window to whichever permitted more.
 
 **Never WRITE an elapsed figure you did not compute in that same turn.** The
 failure mode is drift, not disagreement: a session recomputes correctly five
