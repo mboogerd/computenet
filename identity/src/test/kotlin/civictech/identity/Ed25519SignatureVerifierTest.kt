@@ -20,7 +20,12 @@ import kotlin.test.assertTrue
 class Ed25519SignatureVerifierTest {
 
     private val keys = Ed25519.generateKeyPair()
-    private val peer = fingerprint(keys.public)
+
+    // The verifier seam is IDENTITY-keyed (`verify(mintingPeer: PeerId, ...)`,
+    // a deliberate DSC4 residual of feature computenet-376c), so the peer here
+    // is the identity `PeerIdentity` resolves this key to — not
+    // `fingerprint(keys.public)`, which is now a KeyId.
+    private val peer = PeerIdentity(keys).peerId
     private val stranger = PeerId("ed25519:nobody-here")
 
     /** A stand-in for the sibling task's canonical encoding. */

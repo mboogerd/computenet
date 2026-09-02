@@ -2,6 +2,7 @@ package civictech.iroh
 
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.wire.Peering
 import org.junit.jupiter.api.Test
@@ -43,7 +44,7 @@ import kotlin.test.fail
  */
 class IrohRefusedDialBoundTest {
 
-    private class Stack(name: String?, allow: Set<PeerId>? = null) {
+    private class Stack(name: String?, allow: Set<KeyId>? = null) {
         val registry = LocationRegistry()
         val host = ManagedHost(registry = registry)
         val bridgeHost = ManagedHost(registry = registry)
@@ -74,7 +75,7 @@ class IrohRefusedDialBoundTest {
     @Test
     fun `a dialler refused at the listening side's allowlist stops re-dialling instead of looping forever`() {
         val binary = SidecarBinary.orSkip()
-        val server = Stack(name = "server", allow = setOf(PeerId("good")))
+        val server = Stack(name = "server", allow = setOf(KeyId("good")))
 
         IrohTransport.listen(server.side, binary, stderrSink = stderrSink("server-listener")).use { listener ->
             val mallory = Stack(name = "mallory")
@@ -164,7 +165,7 @@ class IrohRefusedDialBoundTest {
     @Test
     fun `the refused-dial limit governs exactly`() {
         val binary = SidecarBinary.orSkip()
-        val server = Stack(name = "server", allow = setOf(PeerId("good")))
+        val server = Stack(name = "server", allow = setOf(KeyId("good")))
 
         IrohTransport.listen(server.side, binary, stderrSink = stderrSink("server-listener")).use { listener ->
             val mallory = Stack(name = "mallory")

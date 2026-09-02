@@ -8,6 +8,7 @@ import civictech.cell.CellRef
 import civictech.cell.DenialReason
 import civictech.cell.Propagate
 import civictech.cell.host.IntakeClosedException
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
@@ -60,6 +61,12 @@ import kotlin.time.Duration.Companion.seconds
  * admission as a public-key allowlist, is feature `computenet-egl.3`; until it
  * lands, a hello-asserted name over iroh proves no more than a hello-asserted
  * name over a WebSocket does.
+ *
+ * Since feature `computenet-376c` the asserted token is admitted as a
+ * [civictech.cell.link.KeyId] and the identity stamped on every delivery is
+ * what `Peering.Side.identityBinding` resolves that key identifier to, so
+ * `computenet-egl.3` changes only *what `key` is* — a NodeId-derived key
+ * identifier instead of an asserted name — and no site downstream of [onHello].
  *
  * ## Scope
  *
@@ -508,7 +515,12 @@ object IrohTransport {
                 return
             }
             val parts = text.removePrefix(HELLO_PREFIX).trim().split(" ", limit = 2)
-            val peer = parts.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { PeerId(it) }
+            // Legacy-shaped hello: the token is an ASSERTED name this transport
+            // vouches for, so it is the admission token (a `KeyId`), and the
+            // identity is what this side's `PeerIdentityBinding` resolves it to
+            // — the one resolution on this path (feature `computenet-376c`).
+            val key = parts.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { KeyId(it) }
+            val peer = key?.let { side.identityBinding.identityOf(it) }
             val peerMirrorRef = runCatching { UUID.fromString(parts[0]) }.getOrNull()
             if (peerMirrorRef == null) {
                 refuseHello(
@@ -518,21 +530,26 @@ object IrohTransport {
                 )
                 return
             }
-            if (!admitted(peer)) return
+            if (!admitted(peer, key)) return
             // Our own hello first (see this method's KDoc), then bind + announce.
             openLocalHello()
-            bindAndAnnounce(peer, peerMirrorRef)
+            bindAndAnnounce(peer, key, peerMirrorRef)
         }
 
         /**
          * `Peering.Side.admits`, with the refusal accounted — the same code, the
          * same stderr line and the same denial shape `WsTransport` writes.
          *
+         * [key] is what the allowlist judges and [peer] is the identity that key
+         * resolved to, which is what the denial record attributes the refusal to
+         * (feature `computenet-376c`, and `WsTransport.Session.admitted`'s KDoc
+         * for the whole argument).
+         *
          * @return true when the peer is admitted; false after refusing it, in
          *   which case the caller must return without binding anything.
          */
-        private fun admitted(peer: PeerId?): Boolean {
-            if (side.admits(peer)) return true
+        private fun admitted(peer: PeerId?, key: KeyId?): Boolean {
+            if (side.admits(key)) return true
             System.err.println("[IrohTransport] refusing peer $peer: not on the allowlist (spec 43)")
             // Seam 1 (spec 40/43, [SEC1-07]): accounted before the link is
             // refused. Nothing throws — a denial is not a cell fault (BS-14) —
@@ -575,13 +592,13 @@ object IrohTransport {
          * class KDoc's four-step happens-before argument for why the late bind is
          * safe on this transport.
          */
-        private fun bindAndAnnounce(peer: PeerId?, peerMirrorRef: UUID) {
+        private fun bindAndAnnounce(peer: PeerId?, key: KeyId?, peerMirrorRef: UUID) {
             val instance = checkNotNull(mirror) { "onHello admitted a peer without opening a link instance" }
             // Bind BEFORE announcing, so every Remote location this link installs
             // — including the peer's own catch-up burst, which cannot start
             // before it has seen our hello — records the peer's name (V4-PEERID).
             instance.peer = peer
-            ingress = Peering.hostIngress(side, fromPeer = peer)
+            ingress = Peering.hostIngress(side, fromPeer = peer, fromKey = key)
             announcement?.close()
             announcement = Peering.announceTo(side, CellRef(peerMirrorRef), via = egress)
         }
