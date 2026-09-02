@@ -195,7 +195,11 @@ STUCK_AFTER_MIN=${WAIT_CHECKS_STUCK_AFTER_MIN:-15}
 # because the alternative is the same error text 28 times, which is how an
 # agent learns to skip the one line that matters (the same reasoning as the
 # COLD START label below).
-REST_ERR=$(mktemp "${TMPDIR:-/tmp}/wait-checks-err.XXXXXX")
+# Refuse rather than continue: with $REST_ERR empty every redirect fails, and
+# the exhaustion summary would then say "REST wrote no error — the query
+# succeeded", which is the opposite of true.
+REST_ERR=$(mktemp "${TMPDIR:-/tmp}/wait-checks-err.XXXXXX") \
+  || { echo "wait-checks: cannot create a temp file for REST errors" >&2; exit 2; }
 trap 'rm -f "$REST_ERR"' EXIT
 
 head_sha() {
