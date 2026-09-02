@@ -1784,13 +1784,13 @@ applies wherever you author a bead, not only here: 5c's red-check task, 5e's
 residuals, step 7's friction items.
 
 **RUN IT. It is not the same check as the invariant grep above, and neither
-subsumes the other.** This one reads the bead's TEXT for files the claim
-omits; that one reasons from the CODE about files the text never names. On
-computenet-t446 the orchestrator ran the symbol grep and not this — the newer,
-more elaborate procedure, and running it felt like having done the diligence.
-It widened the claim from 19 files to 37 and still missed two the bead names
-in its own words, which this catches in a second (computenet-9src). Both, in
-that order: this first, because it is cheap and mechanical.
+subsumes the other.** This reads the bead's TEXT for files the claim omits;
+that reasons from the CODE about files the text never names. On computenet-t446
+the orchestrator ran the symbol grep and not this — the newer, more elaborate
+procedure, and running it felt like having done the diligence. It widened the
+claim 19 files to 37 and still missed two the bead names in its own words,
+which this catches in a second (computenet-9src). Both, this one first: it is
+cheap and mechanical.
 
 **It is blind to most things that are not paths** — a bracketed requirement id
 (`[24-TMAP-03]`), a marker, a bare type name — and passes such a bead CLEAN
