@@ -3,10 +3,14 @@ package civictech.dialogue
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.FilterSetApi
 import civictech.cell.data.op.FlatMapSetApi
 import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.GroupByApi
 import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.op.SemiJoinApi
+import civictech.cell.data.op.SemiJoinCell
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graphOf
 import civictech.cell.graph.lookupOrThrow
@@ -14,11 +18,15 @@ import civictech.cell.graph.refAs
 import civictech.cell.host.ManagedHost
 import civictech.dialogue.extract.ExtractedClaim
 import civictech.dialogue.extract.ExtractedItem
+import civictech.dialogue.extract.ExtractedRelation
 import civictech.dialogue.extract.ExtractionAccounting
 import civictech.dialogue.extract.ExtractionGate
 import civictech.dialogue.extract.Extractor
 import civictech.dialogue.mint.ClaimAggregate
 import civictech.dialogue.mint.ClaimMint
+import civictech.dialogue.mint.RelationAggregate
+import civictech.dialogue.mint.RelationCandidate
+import civictech.dialogue.mint.RelationMint
 import civictech.dialogue.mint.claimKey
 
 /**
@@ -117,6 +125,51 @@ object DialoguePipeline {
          * [civictech.dialogue.CanonicalClaim].
          */
         val canonicalClaims: TypedRef<GroupByApi<ExtractedClaim, ClaimKey, ClaimAggregate>>,
+        /**
+         * Stage 5a (F3, item-kind split — relation leg): the relation-kind
+         * subset of [extractedItems], the mirror of [extractedClaims].
+         */
+        val extractedRelations: TypedRef<FlatMapSetApi<ExtractedItem, ExtractedRelation>>,
+        /**
+         * Stage 5b (F3, RelationMint): every live relation lifted into
+         * claim-key space by [RelationMint.candidates] — endpoints through
+         * [civictech.dialogue.mint.claimKey], polarity parsed.
+         */
+        val relationCandidates: TypedRef<FlatMapSetApi<ExtractedRelation, RelationCandidate>>,
+        /**
+         * Stage 5c (F3, [AGO1-REL-04] KEY-LEVEL half): the candidates whose
+         * source and target canonicalize to the same
+         * [civictech.dialogue.ClaimKey] — a *derived* set, so retracting the
+         * utterance behind a rejected relation retracts the rejection too. The
+         * textual half of the same rule lives in
+         * `ExtractionGate.malformedReason` and its ledger; this set is
+         * deliberately not written into `ExtractionAccounting`, because a
+         * mapper-side ledger write is exactly the seam `doc/demo-findings.md`
+         * F-13 records as absent.
+         */
+        val rejectedRelations: TypedRef<FilterSetApi<RelationCandidate>>,
+        /**
+         * Stage 5d (F3, 2aw.F3-D3, [AGO1-REL-03] / BS-05): the non-self
+         * candidates whose *source* key is a currently-minted claim key. A
+         * candidate held out here is PENDING, not dropped — it enters as soon
+         * as its endpoint is minted, with no re-extraction.
+         */
+        val sourceResolvedRelations: TypedRef<SemiJoinApi<RelationCandidate, ClaimKey>>,
+        /**
+         * Stage 5e (F3, 2aw.F3-D3): the second half of the pending/resolvable
+         * split — [sourceResolvedRelations] narrowed to candidates whose
+         * *target* key is also minted. This is the resolvable stream.
+         */
+        val resolvableRelations: TypedRef<SemiJoinApi<RelationCandidate, ClaimKey>>,
+        /**
+         * Stage 5f (F3, RelationMint): one [RelationAggregate] per distinct
+         * [civictech.dialogue.RelationKey] over the resolvable stream
+         * ([AGO1-REL-01]); group death when the last contributing utterance is
+         * retracted is [AGO1-REL-02]'s pipeline half. Pair a `MapDelta` key
+         * with its aggregate through [RelationMint.canonicalRelation] to
+         * assemble a [civictech.dialogue.CanonicalRelation].
+         */
+        val canonicalRelations: TypedRef<GroupByApi<RelationCandidate, RelationKey, RelationAggregate>>,
     )
 
     /**
@@ -205,11 +258,113 @@ object DialoguePipeline {
                     aggregator = ClaimMint.ClaimAggregator(),
                 )
             }
+            // Stage 5a (F3 item-kind split, relation leg): the mirror of the
+            // claim leg above — one pure hop per item kind off the SAME
+            // extractedItems outlet, never a chain off the claim leg.
+            val extractedRelations = spawn("extractedRelations") { ref ->
+                FlatMapSetCell<ExtractedItem, ExtractedRelation>(ref = ref) { item ->
+                    listOfNotNull(item as? ExtractedRelation)
+                }
+            }
+            // Stage 5b: lift into claim-key space (endpoints through the one
+            // claimKey seam, polarity parsed). RelationMint::candidates is a
+            // top-level-equivalent pure function, so this factory captures
+            // nothing.
+            val relationCandidates = spawn("relationCandidates") { ref ->
+                FlatMapSetCell<ExtractedRelation, RelationCandidate>(ref = ref, f = RelationMint::candidates)
+            }
+            // Stage 5c ([AGO1-REL-04] key-level): the self-relation split, as
+            // two complementary FilterCells off one outlet. Both are derived
+            // sets, so a retraction upstream retracts the rejection as well as
+            // the candidate — which is why the rejected relations are recorded
+            // HERE and not by a side effect into ExtractionAccounting (a
+            // mapper-side ledger write is doc/demo-findings.md F-13's absent
+            // seam, and no per-segment identity survives this far anyway).
+            val rejectedRelations = spawn("rejectedRelations") { ref ->
+                FilterCell<RelationCandidate>(ref = ref) { it.isSelfRelation }
+            }
+            val nonSelfRelations = spawn("nonSelfRelations") { ref ->
+                FilterCell<RelationCandidate>(ref = ref) { !it.isSelfRelation }
+            }
+            // Stages 5d/5e (2aw.F3-D3, [AGO1-REL-03] / BS-05): the
+            // pending/resolvable split, held by the GRAPH. Two chained
+            // semijoins against the minted-claim-key set — source first, then
+            // target. A candidate whose endpoint is not yet minted is simply
+            // held out of the semijoin's output; when the key later appears on
+            // the right side the row enters with no fresh left tag (SemiJoin
+            // mints output tags per entry by design), so nothing re-invokes
+            // extraction to resolve it.
+            //
+            // emitOnFrontier stays at its ungated DEFAULT (false), against the
+            // task's provisional direction, because this topology hits
+            // WaveGate's phantom-expected-edge caveat (G-13) after all —
+            // MEASURED, not argued.
+            //
+            // The shared-source premise does hold structurally: every inlet
+            // here descends from `utterances` (left: extractedItems ->
+            // extractedRelations -> relationCandidates -> nonSelfRelations;
+            // right: extractedItems -> extractedClaims -> claimKeys), so this
+            // reads like the shared-source diamond SemiJoinCell's KDoc scopes
+            // the gate to. What the KDoc's diamond additionally assumes, and
+            // this graph breaks, is that both arms CARRY the root's waves. The
+            // item-kind split partitions each utterance's items across the two
+            // arms: a claim-only utterance is a real delta on the right arm and
+            // nothing at all on the left, a relation-only utterance the mirror
+            // image. Each arm is therefore an expected edge for waves it
+            // structurally never delivers — G-13's phantom expected edge,
+            // arising here from the item-kind split rather than from two
+            // independent roots.
+            //
+            // Observed (task computenet-2aw.3.2, RelationMintTest): with
+            // `emitOnFrontier = true` on BOTH semijoins, or on the first alone,
+            // every relation assertion in that test fails with an EMPTY
+            // canonical set at quiescence — the gate holds the waves and the
+            // resolvable stream never emits. All five pass ungated. A gate that
+            // withholds output at rest is disqualifying, so the default stands.
+            //
+            // What the ungated default leaves open is the transient the gate
+            // exists for: admitting the utterance that mints a relation's last
+            // endpoint can flicker the relation into and out of the canonical
+            // fold within one wave, and F4's applier sits downstream of exactly
+            // that. Filed as its own item rather than papered over here.
+            val sourceResolvedRelations = spawn("sourceResolvedRelations") { ref ->
+                SemiJoinCell<RelationCandidate, ClaimKey, ClaimKey>(
+                    ref = ref,
+                    leftKey = { it.sourceKey },
+                    rightKey = { it },
+                )
+            }
+            val resolvableRelations = spawn("resolvableRelations") { ref ->
+                SemiJoinCell<RelationCandidate, ClaimKey, ClaimKey>(
+                    ref = ref,
+                    leftKey = { it.targetKey },
+                    rightKey = { it },
+                )
+            }
+            // Stage 5f (RelationMint fold): one aggregate per distinct
+            // (source, target, polarity) [AGO1-REL-01]; the kernel's group
+            // death is [AGO1-REL-02]'s pipeline half.
+            val canonicalRelations = spawn("canonicalRelations") { ref ->
+                GroupByCell(
+                    ref = ref,
+                    keyFn = { candidate: RelationCandidate -> candidate.relationKey },
+                    aggregator = RelationMint.RelationAggregator(),
+                )
+            }
             link(utterances.cell.outlet, segments.cell.inlet)
             link(segments.cell.outlet, extractedItems.cell.inlet)
             link(extractedItems.cell.outlet, extractedClaims.cell.inlet)
             link(extractedClaims.cell.outlet, claimKeys.cell.inlet)
             link(extractedClaims.cell.outlet, canonicalClaims.cell.inlet)
+            link(extractedItems.cell.outlet, extractedRelations.cell.inlet)
+            link(extractedRelations.cell.outlet, relationCandidates.cell.inlet)
+            link(relationCandidates.cell.outlet, rejectedRelations.cell.inlet)
+            link(relationCandidates.cell.outlet, nonSelfRelations.cell.inlet)
+            link(nonSelfRelations.cell.outlet, sourceResolvedRelations.cell.left)
+            link(claimKeys.cell.outlet, sourceResolvedRelations.cell.right)
+            link(sourceResolvedRelations.cell.outlet, resolvableRelations.cell.left)
+            link(claimKeys.cell.outlet, resolvableRelations.cell.right)
+            link(resolvableRelations.cell.outlet, canonicalRelations.cell.inlet)
             Refs(
                 utterances = utterances.refAs(),
                 segments = segments.refAs(),
@@ -217,6 +372,12 @@ object DialoguePipeline {
                 extractedClaims = extractedClaims.refAs(),
                 claimKeys = claimKeys.refAs(),
                 canonicalClaims = canonicalClaims.refAs(),
+                extractedRelations = extractedRelations.refAs(),
+                relationCandidates = relationCandidates.refAs(),
+                rejectedRelations = rejectedRelations.refAs(),
+                sourceResolvedRelations = sourceResolvedRelations.refAs(),
+                resolvableRelations = resolvableRelations.refAs(),
+                canonicalRelations = canonicalRelations.refAs(),
             )
         }
         return Built(refs, gate.accounting)
