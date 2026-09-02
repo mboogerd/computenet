@@ -59,12 +59,15 @@
 # old default of 40 rounds is ~13m20s, so a dispatched agent invoking this the
 # documented way was CUT OFF BY THE CAP before the loop could reach a verdict —
 # and a cut-off call looks like nothing at all, not like TIMEOUT-PENDING
-# (computenet-ymv4). 28 rounds is ~9m20s, inside the cap and above the measured
-# 9-12 minute settle time governed by build-test-fast (computenet-678u).
-# A caller with a longer budget passes max-rounds explicitly; one that needs
-# more than ~28 rounds needs a second call, not a bigger number.
+# (computenet-ymv4). 28 rounds is ~9m20s of SLEEP, which LOOKED inside the cap
+# and was not: the per-round API calls put it at ~602s on a quiet box, and it
+# was auto-backgrounded twice. THE BINDING BOUND IS NOW THE WALL-CLOCK DEADLINE
+# BELOW, not this count — the count is only an upper limit on rounds. In
+# practice the deadline ends the wait first, at ~8m10s over ~23 rounds
+# (computenet-tl8q). A caller with a longer budget passes max-rounds AND raises
+# WAIT_CHECKS_DEADLINE_SECONDS; raising either alone changes nothing.
 #
-# TWO CALLS IS THE NORMAL COLD START, NOT A FAULT. 28 rounds is ~9m20s and
+# TWO CALLS IS THE NORMAL COLD START, NOT A FAULT. The window is ~8m10s and
 # build-test-fast has measured 8m56s-13m25s across a dozen PRs, so a caller
 # that starts waiting when the run starts — every feature reviewer — times out
 # on a perfectly healthy PR as a matter of course (computenet-ymv4 fixed the
@@ -166,6 +169,13 @@ COLD_ROUNDS=${WAIT_CHECKS_COLD_ROUNDS:-15}
 # not like TIMEOUT-PENDING. 500s leaves ~100s for the final round's API calls
 # under the 600000 ms cap every dispatch prompt in this skill names.
 DEADLINE_SECONDS=${WAIT_CHECKS_DEADLINE_SECONDS:-500}
+case "$DEADLINE_SECONDS" in
+  # Unvalidated, a non-numeric value makes the arithmetic test error every
+  # round and evaluate false — silently restoring the unbounded behaviour this
+  # exists to remove. Refuse loudly instead, as max-rounds does.
+  ''|*[!0-9]*) echo "wait-checks: WAIT_CHECKS_DEADLINE_SECONDS must be a positive integer, got '$DEADLINE_SECONDS'" >&2; exit 2 ;;
+esac
+[ "$DEADLINE_SECONDS" -ge 1 ] || { echo "wait-checks: WAIT_CHECKS_DEADLINE_SECONDS must be at least 1" >&2; exit 2; }
 started_at_epoch=$(date +%s)
 
 # Minutes a required check may be running before an exhausted wait is called

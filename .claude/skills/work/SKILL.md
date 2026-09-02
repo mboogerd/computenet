@@ -433,10 +433,13 @@ Three standing disciplines:
   red required check on its own line above the verdict; that line is a
   backstop, not a substitute for reading the table.
 
-  **A cold start normally takes TWO invocations**: the ~9m20s window is sized
-  to the 600000 ms foreground cap and `build-test-fast` measures 8m56s–13m25s,
-  so waiting from the run's start times out on a healthy PR by construction
-  (computenet-hil5). On exhaustion the script names each pending check with
+  **A cold start normally takes TWO invocations**: the window is a ~500s
+  wall-clock budget (~8m10s of waiting, ~23 rounds) held under the 600000 ms
+  foreground cap, and `build-test-fast` measures 8m56s–13m25s, so waiting from
+  the run's start times out on a healthy PR by construction (computenet-hil5).
+  Sizing the window AT the cap is what got the call auto-backgrounded twice
+  (computenet-tl8q); a round count cannot bound wall clock, so the script now
+  stops on elapsed time and always returns a verdict. On exhaustion the script names each pending check with
   its age and prints `ORDINARY` (re-run it) or `STUCK`; only `STUCK` is a
   defect.
 
