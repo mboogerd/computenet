@@ -329,7 +329,15 @@
 # auto-backgrounded twice, and the script now bounds itself on wall clock at
 # ~8m10s. Leaving them would re-open, in the other direction, the script-vs-prose
 # divergence this bead is about. The mechanical half costs no budget lines.
-work                9209
+# 9209 -> 9219 on 2026-09-02: computenet-z6q2 (+10) — bought 5b's return shape
+# carrying `running_elsewhere`, and the carve-out on the verify-ready paragraph
+# saying a READY task whose skip reason names a live unit outside the feature
+# must NOT be dispatched by hand. The mechanical half (next-batch.py seeding
+# its disjointness test with those claims) costs no budget lines, but it is
+# invisible: the orchestrator reads the documented return shape, and the
+# verify-ready line routed straight back into the bug. Recomputed against the
+# landed 9209, not stacked on the number this branch was cut from.
+work                9219
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
