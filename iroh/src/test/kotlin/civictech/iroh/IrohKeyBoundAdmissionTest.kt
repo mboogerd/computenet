@@ -77,9 +77,9 @@ import kotlin.test.fail
  *    Session level; here the observable outcome is the count, the closed link
  *    and the untouched registry.
  *
- * Every wait is bounded ([await], [neverWithin], [quiesced] — copied from
- * [IrohPeeringTest] rather than imported, since this file may not modify it);
- * no fixed sleep is evidence for anything. Every sidecar is closed in `use`.
+ * Every wait is bounded ([await], [neverWithin], [quiesced] — shared helpers,
+ * `computenet-sr48`); no fixed sleep is evidence for anything. Every sidecar is
+ * closed in `use`.
  *
  * Skip-gated: without `-Piroh.enabled=true` (hence without a built sidecar)
  * every test here reports SKIPPED, never failed — see [SidecarBinary].
@@ -157,43 +157,6 @@ class IrohKeyBoundAdmissionTest {
         val secret = ByteArray(32).also { SecureRandom().nextBytes(it) }
             .joinToString("") { "%02x".format(it) }
         return listOf("--secret-key", secret)
-    }
-
-    private fun await(what: String, timeoutMs: Long = 30_000, condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!condition()) {
-            if (System.currentTimeMillis() > deadline) fail("timed out awaiting: $what")
-            Thread.sleep(50)
-        }
-    }
-
-    /** Nothing ever became true within [millis] — used to pin an absence. */
-    private fun neverWithin(millis: Long = 3_000, condition: () -> Boolean): Boolean {
-        val deadline = System.currentTimeMillis() + millis
-        while (System.currentTimeMillis() < deadline) {
-            if (condition()) return false
-            Thread.sleep(50)
-        }
-        return !condition()
-    }
-
-    /** Reads [value] only once it has stopped changing for [settleMillis] (computenet-6lam). */
-    private fun quiesced(settleMillis: Long = 1_500, timeoutMs: Long = 30_000, value: () -> Long): Long {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        var last = value()
-        var lastChangedAt = System.currentTimeMillis()
-        while (true) {
-            Thread.sleep(50)
-            val now = value()
-            val time = System.currentTimeMillis()
-            if (now != last) {
-                last = now
-                lastChangedAt = time
-            } else if (time - lastChangedAt >= settleMillis) {
-                return last
-            }
-            if (time > deadline) fail("timed out waiting for value to quiesce (stuck at $last)")
-        }
     }
 
     /** One `PORT_PROTOCOL` attention assertion aimed at [target]'s `outlet`. */

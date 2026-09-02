@@ -10,24 +10,14 @@ import civictech.cell.link.PeerId
 import civictech.cell.port.Use
 import civictech.cell.wire.Peering
 import civictech.identity.Ed25519
-import civictech.iroh.SidecarProtocol.DIRECTION_OUTBOUND
 import civictech.iroh.SidecarProtocol.NODE_ID_LEN
 import org.junit.jupiter.api.Test
-import java.io.DataInputStream
 import java.net.DatagramSocket
 import java.net.InetAddress
-import java.net.ServerSocket
-import java.net.Socket
-import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
 import java.util.UUID
-import java.util.concurrent.ArrayBlockingQueue
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotSame
 import kotlin.test.assertTrue
@@ -84,24 +74,6 @@ class IrohReconnectTest {
         val host = ManagedHost(registry = registry)
         val bridgeHost = ManagedHost(registry = registry)
         val side = Peering.Side(registry, bridgeHost, peer = name?.let { PeerId(it) })
-    }
-
-    private fun await(what: String, timeoutMs: Long = 60_000, condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!condition()) {
-            if (System.currentTimeMillis() > deadline) fail("timed out awaiting: $what")
-            Thread.sleep(50)
-        }
-    }
-
-    /** Nothing ever became true within [millis] — used to pin an absence. */
-    private fun neverWithin(millis: Long = 3_000, condition: () -> Boolean): Boolean {
-        val deadline = System.currentTimeMillis() + millis
-        while (System.currentTimeMillis() < deadline) {
-            if (condition()) return false
-            Thread.sleep(50)
-        }
-        return !condition()
     }
 
     /** A schedule that costs nothing to consult — the T12 seam, driven to ~0. */
@@ -434,150 +406,10 @@ class IrohReconnectTest {
         }
     }
 
-    /**
-     * Reads [value] only once it has stopped changing for [settleMillis]
-     * (computenet-6lam) — copied from [IrohKeyBoundAdmissionTest] rather than
-     * imported, as that file copied it from [IrohPeeringTest], since neither may
-     * be modified from here.
-     */
-    private fun quiesced(settleMillis: Long = 1_500, timeoutMs: Long = 30_000, value: () -> Long): Long {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        var last = value()
-        var lastChangedAt = System.currentTimeMillis()
-        while (true) {
-            Thread.sleep(50)
-            val now = value()
-            val time = System.currentTimeMillis()
-            if (now != last) {
-                last = now
-                lastChangedAt = time
-            } else if (time - lastChangedAt >= settleMillis) {
-                return last
-            }
-            if (time > deadline) fail("timed out waiting for value to quiesce (stuck at $last)")
-        }
-    }
-
     /** There is no child process behind [FakeSidecar]; the node id is never read here. */
     private object NoSidecar : IrohTransport.Sidecar {
         override val nodeId: ByteArray get() = ByteArray(NODE_ID_LEN)
         override fun close() = Unit
-    }
-
-    /**
-     * A loopback socket that speaks `PROTOCOL.md` by hand: one accepted host
-     * connection, a reader thread decoding host → sidecar messages into a queue,
-     * and [send] for sidecar → host ones. It implements no behaviour — every
-     * reply is written by the test.
-     *
-     * Copied from `SidecarBackpressureTest`'s private fixture of the same name
-     * rather than shared, for the reason [quiesced] is copied: that file is
-     * outside this change's scope. Extracting one shared fake is worth doing and
-     * is filed as `computenet-sr48`. This copy is not identical to the original —
-     * it counts `DIAL` frames ([dials]) and offers [nextDial]; the extraction has
-     * to keep both fixtures' capabilities rather than pick one.
-     */
-    private class FakeSidecar : AutoCloseable {
-
-        private val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
-        private val accepted = ArrayBlockingQueue<Socket>(1)
-        private val received = LinkedBlockingQueue<HostMessage>()
-
-        /** Every `DIAL` this fake has decoded — the count the pin above settles on. */
-        val dials = AtomicLong()
-
-        val port: Int get() = server.localPort
-
-        private val acceptor = Thread({
-            runCatching {
-                val socket = server.accept()
-                accepted.put(socket)
-                val input = DataInputStream(socket.getInputStream().buffered())
-                while (true) {
-                    val declared = input.readInt()
-                    val body = ByteArray(declared)
-                    input.readFully(body)
-                    val frame = SidecarCodec.decodeBody(body, 0, declared)
-                    when (val decoded = SidecarCodec.asHostMessage(frame)) {
-                        is Decoded.Ok -> {
-                            if (decoded.message is HostMessage.Dial) dials.incrementAndGet()
-                            received.put(decoded.message)
-                        }
-
-                        is Decoded.Malformed -> fail("the host sent an undecodable message: $decoded")
-                    }
-                }
-            }
-        }, "fake-sidecar-m475").apply { isDaemon = true; start() }
-
-        private fun connection(): Socket =
-            accepted.peek() ?: accepted.poll(30, TimeUnit.SECONDS)?.also { accepted.put(it) }
-                ?: fail("no host connected within 30s")
-
-        /** One sidecar → host message, encoded exactly as `PROTOCOL.md` §2 lays it out. */
-        fun send(message: SidecarMessage) {
-            val socket = connection()
-            socket.getOutputStream().apply {
-                write(SidecarCodec.encode(message))
-                flush()
-            }
-        }
-
-        fun nextHostMessage(seconds: Long = 30): HostMessage =
-            received.poll(seconds, TimeUnit.SECONDS) ?: fail("no host message within ${seconds}s")
-
-        /**
-         * The next `DIAL`, skipping any `DATA` an announcer wrote in between —
-         * this fixture asserts on dial *identity* and on [dials], never on the
-         * traffic a peering happens to produce.
-         */
-        fun nextDial(seconds: Long = 30): HostMessage.Dial {
-            val deadline = System.currentTimeMillis() + seconds * 1_000
-            while (System.currentTimeMillis() < deadline) {
-                val next = received.poll(500, TimeUnit.MILLISECONDS) ?: continue
-                if (next is HostMessage.Dial) return next
-            }
-            fail("no DIAL within ${seconds}s")
-        }
-
-        /**
-         * One link opened by [connection]'s own `openLink`, brought all the way to
-         * *admitted*: `DIAL` answered with `LINK_UP`, this side's hello drained,
-         * and a peer hello written back so the Session binds a mirror and installs
-         * an ingress. Returns the link id.
-         */
-        fun openAndAdmit(connection: IrohTransport.IrohConnection, peerNodeId: ByteArray): Long {
-            val opened = ArrayBlockingQueue<Result<Unit>>(1)
-            Thread({ opened.put(runCatching { connection.openLink(30.seconds) }) }, "m475-open-link")
-                .apply { isDaemon = true }
-                .start()
-            val dial = nextDial()
-            admit(dial.link, peerNodeId)
-            (opened.poll(30, TimeUnit.SECONDS) ?: fail("openLink did not settle within 30s")).getOrThrow()
-            return dial.link
-        }
-
-        /**
-         * Answer an outstanding `DIAL` on [link] with `LINK_UP`, drain the hello
-         * the dialler writes as its first frame, and answer it with a peer hello —
-         * `IROH-HELLO1 <mirror ref>`, the whole grammar (`PROTOCOL.md` §3).
-         */
-        fun admit(link: Long, peerNodeId: ByteArray) {
-            send(SidecarMessage.LinkUp(link, peerNodeId, DIRECTION_OUTBOUND))
-            assertIs<HostMessage.Data>(nextHostMessage())
-            send(
-                SidecarMessage.Data(
-                    link,
-                    (IrohTransport.HELLO_PREFIX + UUID.randomUUID()).toByteArray(StandardCharsets.UTF_8),
-                ),
-            )
-        }
-
-        override fun close() {
-            acceptor.interrupt()
-            runCatching { accepted.peek()?.close() }
-            runCatching { server.close() }
-        }
     }
 
     /**
