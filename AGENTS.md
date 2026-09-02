@@ -192,18 +192,20 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   finds them (computenet-fd9d). A zero result from `git grep -- <pathspec>`
   is evidence about the pathspec before it is evidence about the symbol:
   re-run zero-hit searches in a form whose failure would look different.
-- Fourth member, also git grep, and the easiest to hit: **git's regex engine
-  has no Perl-style `\s`, `\d` or `\w`** — it needs the POSIX class. So
-  `git grep -hE '^\s*@Test' <rev> -- 'iroh/src/test/kotlin/*.kt'` returns 0
-  while `'^[[:space:]]*@Test'` returns 46. Zero is a plausible shape for that
-  question, so it reads as "this module has no tests". The habit transfers
-  from every other search an agent runs here — ripgrep, `grep -P`, the Grep
-  tool all accept `\s` — and only git grep answers silently. It is reached
-  most often while counting or diffing symbols ACROSS REVISIONS, the one job
-  only git grep can do and one where a wrong zero directly weakens a verdict:
-  a reviewer checking that a test-only refactor deleted no test method got 0
-  at both revisions (computenet-s7az; the pathspec above was ALSO wrong, which
-  is how two members of this family stack into one indistinguishable zero).
+- Fourth member, also git grep, and the easiest to hit: **git's basic and
+  extended regex engines have no Perl-style `\s`, `\d` or `\w`** — they need
+  the POSIX class. So `git grep -hE '^\s*@Test' <rev> -- 'iroh/src/test/*.kt'`
+  returns 0 while `'^[[:space:]]*@Test'` returns 46. Worse than silent: the
+  escape degrades to the LITERAL character, so `\d` matches the letter `d` and
+  can report false positives as readily as zeros. The habit transfers from
+  every other search an agent runs here — ripgrep, `grep -P`, the Grep tool all
+  accept `\s` — and only git grep answers wrongly. `git grep -P` does accept
+  it, on a PCRE-enabled build (this machine's is); `[[:space:]]` needs no such
+  build and is the portable form. It is reached most often while counting or
+  diffing symbols ACROSS REVISIONS, the one job only git grep can do and one
+  where a wrong zero directly weakens a verdict: a reviewer checking that a
+  test-only refactor had deleted no test method got 0 at both revisions
+  (computenet-s7az).
 
 ## Verification
 
