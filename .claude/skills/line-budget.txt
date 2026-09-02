@@ -351,7 +351,13 @@
 # which is the bead's second acceptance criterion: the banner only helps a
 # reader who opens the file, and the template is what a dispatched reviewer
 # reads first.
-work                9235
+# 9235 -> 9245 on 2026-09-02: computenet-9src (+10) — bought 5b's statement that
+# the text check and the invariant symbol grep are COMPLEMENTARY and in which
+# order, plus the exception to "blind to anything that is not a path". The root
+# cause was not a weak script: on computenet-t446 the orchestrator ran the newer,
+# more elaborate symbol grep INSTEAD of this one, and a better script cannot fix
+# not being run. Recomputed against the landed 9235.
+work                9245
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
