@@ -84,6 +84,15 @@ oracle/src/main/kotlin/civictech/oracle/bind/OperatorCatalog.kt=>oracle/src/test
 ROOT_PREFIX=$(git rev-parse --show-toplevel 2>/dev/null)
 [ -n "$ROOT_PREFIX" ] && ROOT_PREFIX="$ROOT_PREFIX/"
 
+# The file listing, read ONCE and only when a `Type:<line>` reference actually
+# needs it. Measured on this repo: every git invocation costs ~2.3s of index
+# refresh whatever the pathspec, so a per-type `git ls-files` turned a
+# one-second check into minutes on a bead citing a dozen sites — and most beads
+# cite none at all, so the listing should not be paid for by default either.
+# Filled in below, before the loop that needs it — NOT inside a $(...), whose
+# assignment a subshell would discard, re-reading the listing per type.
+ALL_FILES=""
+
 found=0
 for id in "$@"; do
   # No `|| continue` here: with pipefail a failing `bd` would take the whole
@@ -175,8 +184,31 @@ for id in "$@"; do
     }
   done <<<"$COUPLINGS"
 
+  # A TYPE NAMED WITH A LINE NUMBER — `FilePeerKeyStoreTest:39` — is a claim
+  # about a specific SITE, not a mention, so it resolves to a file the bead
+  # expects to be touched (computenet-9src: two such references passed CLEAN
+  # because they are not path-shaped, and the orchestrator ran the elaborate
+  # symbol grep INSTEAD of the hand-resolution this arm now automates).
+  #
+  # This is deliberately NARROWER than the bare CamelCase lookup rejected
+  # below: `:<line>` is what separates "the defect is here" from "this bead
+  # mentions a type". Measured over the beads to hand before shipping, it
+  # fired on nothing it should not.
+  typed=$(printf '%s' "$text" \
+    | grep -oE '\b[A-Z][A-Za-z0-9_]{2,}:[0-9]+\b' \
+    | sed 's/:[0-9]*$//' | sort -u)
+  [ -z "$typed" ] || [ -n "$ALL_FILES" ] || ALL_FILES=$(git ls-files 2>/dev/null)
+  while IFS= read -r type; do
+    [ -n "$type" ] || continue
+    # One file or none. Several same-named files across modules is ambiguous,
+    # and guessing is how a heuristic earns a reputation for noise.
+    hits=$(printf '%s\n' "$ALL_FILES" | grep -E "(^|/)$type\\.(kt|java)$")
+    [ "$(printf '%s\n' "$hits" | grep -c .)" = 1 ] || continue
+    covered "$hits" || { echo "$id: names $type:<line>, which is $hits, not in metadata.files (a SITE reference — the bead points at a line there)"; found=1; }
+  done <<<"$typed"
+
   # NOT DONE HERE: resolving a TYPE named in the acceptance to its declaring
-  # file. A criterion usually talks about code by type — "matchable by kind
+  # file, with NO line number. A criterion usually talks about code by type — "matchable by kind
   # from RunOutcome" names the one file a kind can be added to without looking
   # like a path to any grep, so a task can be unsatisfiable from the moment it
   # is filed and this check still passes it clean (computenet-hws5). A

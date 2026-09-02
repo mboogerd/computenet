@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "28 passed, 0 failed".
+# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "33 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-files-claim.sh"}
@@ -161,6 +161,35 @@ if [ "$rc" = 0 ] && [[ "$out" == *"unreadable, skipping"* ]]; then
 else
   fail=$((fail+1)); echo "FAIL: a failing bd must say so, not pass silently (rc=$rc) out=<$out>"
 fi
+
+# --- a TYPE named with a LINE NUMBER is a site, not a mention (9src) --------
+# Two such references passed CLEAN on computenet-t446 because they are not
+# path-shaped, and the orchestrator ran the elaborate symbol grep instead of
+# the hand-resolution the skill prescribes. Real repo files, so the git
+# ls-files resolution is exercised rather than stubbed.
+cat > "$ROOT/bin/bd" <<'EOF'
+#!/usr/bin/env bash
+echo "Warning: beads.role not set"
+cat "$CTRL/show.json"
+EOF
+chmod +x "$ROOT/bin/bd"
+
+bead "the assertion at HelloProtocolTest:424 is wrong" "" "wire/src/main/kotlin/civictech/wire/HelloProtocol.kt"
+check "a Type:line the claim omits -> reports, exit 1" 1 "which is wire/src/test/kotlin/civictech/wire/HelloProtocolTest.kt"
+
+bead "the assertion at HelloProtocolTest:424 is wrong" "" "wire/src/test/kotlin/civictech/wire/HelloProtocolTest.kt"
+check "a Type:line the claim covers -> silent, exit 0" 0 ""
+
+# The narrowing that keeps this from being the rejected bare-CamelCase lookup.
+bead "HelloProtocolTest exercises the handshake; do not edit it" "" "wire/src/main/kotlin/civictech/wire/HelloProtocol.kt"
+check "a bare Type with no line number is NOT resolved" 0 ""
+
+# Ambiguity is silence, not a guess.
+bead "see SomeTypeThatDoesNotExistAnywhere:12" "" "a/b.kt"
+check "an unresolvable Type:line is silent" 0 ""
+
+bead "the acceptance cites IrohPeeringTest:74" "" "iroh/src/main/kotlin/civictech/iroh/IrohTransport.kt"
+check "the ACCEPTANCE field is read too, not just the description" 1 "IrohPeeringTest:<line>"
 
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]
