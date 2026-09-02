@@ -341,7 +341,7 @@ bd close <id> --reason "fixed in <pr-url> against skill revision <hash>"
 git worktree remove "$PWD/../computenet-worktrees/<id>"
 ```
 
-Take the next item without waiting; this lane is cheap per item, so
+Take the next item without waiting — repeat from step 2 while budget remains; this lane is cheap per item, so
 several items per session is normal — **but keep at most ~2 PRs open against
 any one file, and the sharper unit here is the BUDGET ENTRY**: every PR that
 moves a budget touches `.claude/skills/line-budget.txt`, and two PRs raising
