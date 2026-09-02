@@ -1058,11 +1058,54 @@ object IrohTransport {
          * own (computenet-4gzr). `WsConnection.heal` (computenet-f6dr) is the
          * `:wire` counterpart, closing what was otherwise a silent asymmetry
          * between the two transports' give-up paths.
+         *
+         * ## It dials only when no re-dial loop is already dialling
+         *
+         * This takes the same [reconnecting] single-flight guard
+         * [scheduleReconnect] takes, and **returns without dialling** when a loop
+         * holds it. The two paths were previously exclusive only by convention:
+         * [sever] sets [closeRequested], so [retire] starts no loop and a heal
+         * after a sever is alone in [openLink] — but after an *unplanned* drop the
+         * loop IS running, and a host calling this then put a second thread into
+         * [openLink]. Both dial, and both finish with an unconditional
+         * `currentLink.set` / `currentSession.set` (unlike [retire], which
+         * compare-and-sets), so the loser's link is never closed, its
+         * [LinkListener] stays registered, its [Session]'s ingress stays installed
+         * and its mirror is never detached — a duplicated peering and a leaked
+         * mirror, which is exactly what computenet-dqy.14's per-instance
+         * discipline forbids (computenet-m475).
+         *
+         * Returning is the right answer rather than a weaker one: the loop is
+         * already re-establishing this very peering and retries forever, so the
+         * caller's intent — "be peered again" — is served either way. What the
+         * caller uniquely asks for is the clearing of the refusal run above, and
+         * that happens unconditionally, **before** the guard, so a heal is never
+         * a complete no-op: it always lifts [abandonedAfterRefusals].
+         *
+         * Nothing is lost by not dialling here, because the two states that
+         * *stop* a loop from dialling also mean no loop holds the guard:
+         * [abandoned] is set by [retire] on a path that returns without
+         * scheduling, and [shuttingDown] means this connection is closed.
+         *
+         * @throws SidecarException as before, when it does dial and the dial
+         *   fails — a caller-driven heal reports its own failure rather than
+         *   retrying silently.
          */
         fun heal(timeout: Duration = redialTimeout) {
             unadmitted.set(0)
             abandoned = false
-            openLink(timeout)
+            if (!reconnecting.compareAndSet(false, true)) return // a loop is already dialling
+            try {
+                openLink(timeout)
+            } finally {
+                reconnecting.set(false)
+            }
+            // Reached only when the dial succeeded. A `LINK_DOWN` for the link
+            // just installed can have landed while the guard was held; its
+            // `scheduleReconnect` found the guard and returned, and nothing else
+            // would retry for it — the same hole [scheduleReconnect]'s own tail
+            // closes for the loop.
+            if (!shuttingDown && currentSession.get() == null) scheduleReconnect()
         }
 
         /**
