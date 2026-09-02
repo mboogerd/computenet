@@ -1,6 +1,8 @@
 package civictech.identity
 
 import java.security.GeneralSecurityException
+import java.security.InvalidKeyException
+import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
@@ -9,7 +11,9 @@ import java.security.PublicKey
 import java.security.SecureRandom
 import java.security.Signature
 import java.security.interfaces.EdECKey
+import java.security.spec.InvalidKeySpecException
 import java.security.spec.NamedParameterSpec
+import java.security.spec.X509EncodedKeySpec
 
 /**
  * The JDK-only Ed25519 primitives this module is built on (JEP 339, JDK 15+;
@@ -42,8 +46,88 @@ object Ed25519 {
     /** Ed25519 signatures are always 64 bytes; asserted by tests, not relied on for control flow. */
     const val SIGNATURE_LENGTH: Int = 64
 
+    /** An Ed25519 raw public key (a bare Edwards point, e.g. an iroh NodeId) is always 32 bytes. */
+    const val RAW_PUBLIC_KEY_LENGTH: Int = 32
+
+    /**
+     * The fixed RFC 8410 §4 SubjectPublicKeyInfo prefix for an Ed25519 public
+     * key: `SEQUENCE { SEQUENCE { OID id-Ed25519 }, BIT STRING (32 bytes) }`
+     * with an empty bit-string unused-bits count, up to but not including the
+     * 32 raw key bytes. A JDK Ed25519 [PublicKey.getEncoded] is exactly this
+     * 12-byte prefix followed by the 32 raw bytes (44 bytes total) — verified
+     * by [rawPublicKey]/[publicKeyFromRaw]'s round-trip test, not merely
+     * assumed from the RFC.
+     */
+    private val ED25519_SPKI_PREFIX: ByteArray = byteArrayOf(
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+    )
+
     /** A fresh keypair from the platform's [SecureRandom]. */
     fun generateKeyPair(): KeyPair = KeyPairGenerator.getInstance(ALGORITHM).generateKeyPair()
+
+    /**
+     * Wraps [raw] — 32 bytes of a bare Edwards point, such as an iroh NodeId —
+     * in the RFC 8410 SubjectPublicKeyInfo envelope and parses it as a JDK
+     * Ed25519 [PublicKey]. The result is accepted by [civictech.identity.fingerprint]
+     * and satisfies `Ed25519.isEd25519(result)`.
+     *
+     * A JDK quirk this function works around: [KeyFactory.generatePublic] for
+     * `"EdDSA"` does **not** validate the Edwards point at parse time — it
+     * stores the 32 bytes as "unparsed keybits" and only decompresses (and
+     * therefore validates) the point lazily, the first time the key is used
+     * by a [Signature]. A construction-time contract can't rely on that, so
+     * this function forces the decompression immediately by initializing a
+     * throwaway verification [Signature] with the freshly-parsed key — the
+     * cheapest JDK-only operation that reaches the point-decompression code
+     * path — and treats the [InvalidKeyException] that surfaces for a
+     * malformed point (e.g. `"y value is too large"`, `"Invalid point"`) as
+     * this function's own refusal.
+     *
+     * Total over hostile input in the sense that matters at an admission seam:
+     * every failure — wrong length, or 32 bytes that are not a valid Edwards
+     * point encoding — surfaces as [IllegalArgumentException] (never the JDK's
+     * checked [InvalidKeySpecException] or [InvalidKeyException]), so a caller
+     * can catch one type and refuse rather than crash. The message never
+     * echoes [raw]'s bytes; only the (public) length is named on a length
+     * mismatch.
+     *
+     * @throws IllegalArgumentException if `raw.size != `[RAW_PUBLIC_KEY_LENGTH],
+     *   naming the offending length, or if the 32 bytes are not a valid
+     *   Ed25519 point encoding.
+     */
+    fun publicKeyFromRaw(raw: ByteArray): PublicKey {
+        require(raw.size == RAW_PUBLIC_KEY_LENGTH) {
+            "raw Ed25519 public key must be $RAW_PUBLIC_KEY_LENGTH bytes, got ${raw.size}"
+        }
+        val spki = ED25519_SPKI_PREFIX + raw
+        val key = try {
+            KeyFactory.getInstance(KEY_FACTORY).generatePublic(X509EncodedKeySpec(spki))
+        } catch (e: InvalidKeySpecException) {
+            throw IllegalArgumentException("not a valid Ed25519 public key encoding", e)
+        }
+        try {
+            Signature.getInstance(ALGORITHM).initVerify(key)
+        } catch (e: InvalidKeyException) {
+            throw IllegalArgumentException("not a valid Ed25519 public key point encoding", e)
+        }
+        return key
+    }
+
+    /**
+     * The inverse of [publicKeyFromRaw]: the 32 raw Edwards-point bytes of an
+     * Ed25519 [publicKey] — the trailing bytes of its X.509/SPKI encoding
+     * after the fixed [ED25519_SPKI_PREFIX].
+     *
+     * @throws IllegalArgumentException if [publicKey] is not an Ed25519 key
+     *   (see [isEd25519]).
+     */
+    fun rawPublicKey(publicKey: PublicKey): ByteArray {
+        require(isEd25519(publicKey)) {
+            "not an Ed25519 public key: algorithm=${publicKey.algorithm}, class=${publicKey.javaClass.name}"
+        }
+        val encoded = publicKey.encoded
+        return encoded.copyOfRange(encoded.size - RAW_PUBLIC_KEY_LENGTH, encoded.size)
+    }
 
     /** True when [key] is an Edwards key on curve Ed25519 (as opposed to Ed448, or a non-EdDSA key). */
     fun isEd25519(key: java.security.Key): Boolean =
