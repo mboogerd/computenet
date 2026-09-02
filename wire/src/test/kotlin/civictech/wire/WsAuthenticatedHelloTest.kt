@@ -8,6 +8,7 @@ import civictech.cell.Consumer
 import civictech.cell.DenialReason
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.membrane.AuthLevel
 import civictech.cell.port.FanInlet
@@ -94,7 +95,7 @@ class WsAuthenticatedHelloTest {
      */
     private inner class Stack(
         name: String,
-        allow: Set<PeerId>? = null,
+        allow: Set<KeyId>? = null,
     ) {
         val identity: PeerIdentity = FilePeerKeyStore(keyDirs.resolve(name)).loadOrGenerate()
         val registry = LocationRegistry()
@@ -132,11 +133,14 @@ class WsAuthenticatedHelloTest {
      * both connections report `AuthLevel.Authenticated`
      * (`[DSC1-HELLO-01, 03..04]`).
      *
-     * The identity assertion is made twice on purpose: once against
-     * `fingerprint(otherKey)` — the derivation the requirement names — and once
-     * against the `PeerId` the other side's key store minted, the same value
-     * reached independently. With `Side.peer` null on both sides (see [Stack]),
-     * nothing else in the system could have produced it.
+     * The identity assertion is made twice on purpose: once against the
+     * admitting side's own `PeerIdentityBinding` applied to
+     * `fingerprint(otherKey)` — the derivation the requirement names, now split
+     * into "fingerprint the key, resolve the key identifier" (feature
+     * `computenet-376c`) — and once against the `PeerId` the other side's key
+     * store minted, the same value reached independently. With `Side.peer` null
+     * on both sides (see [Stack]), nothing else in the system could have
+     * produced it.
      */
     @Test
     fun `two keyholding peers complete the hello exchange and bind each other's key-derived id at Authenticated`() {
@@ -164,9 +168,14 @@ class WsAuthenticatedHelloTest {
                     listener.achievedAuthLevels == listOf(AuthLevel.Authenticated)
             }
 
-            // the bound id is the fingerprint of the key the peer presented ...
-            client.registry.remote(collector.ref).peer shouldBe fingerprint(server.identity.publicKey)
-            server.registry.remote(writer.ref).peer shouldBe fingerprint(client.identity.publicKey)
+            // the bound id is what the ADMITTING side's binding resolves the
+            // fingerprint of the presented key to — `.peer` is a PeerId and
+            // `fingerprint` now returns a KeyId, so the two are compared where
+            // the transport actually joins them ...
+            client.registry.remote(collector.ref).peer shouldBe
+                client.side.identityBinding.identityOf(fingerprint(server.identity.publicKey))
+            server.registry.remote(writer.ref).peer shouldBe
+                server.side.identityBinding.identityOf(fingerprint(client.identity.publicKey))
             // ... reached independently as the id each key store minted ...
             client.registry.remote(collector.ref).peer shouldBe server.identity.peerId
             server.registry.remote(writer.ref).peer shouldBe client.identity.peerId
@@ -279,7 +288,7 @@ class WsAuthenticatedHelloTest {
         val remote = Stack("taxonomy-remote")
         val stranger = Stack("taxonomy-stranger")
         // an allowlist naming somebody else, evaluated on the DERIVED id
-        val allowlisted = Stack("taxonomy-allowlisted", allow = setOf(stranger.identity.peerId))
+        val allowlisted = Stack("taxonomy-allowlisted", allow = setOf(stranger.identity.keyId))
 
         // One sink for the whole test, exactly as a listener shares one across
         // every connection it accepts — otherwise a per-Session sink would reset

@@ -10,6 +10,7 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.port.FanInlet
 import civictech.cell.port.PortRef
@@ -67,7 +68,7 @@ class IrohPeeringTest {
         return live.keys
     }
 
-    private class Stack(name: String? = null, allow: Set<PeerId>? = null) {
+    private class Stack(name: String? = null, allow: Set<KeyId>? = null) {
         val registry = LocationRegistry()
         val host = ManagedHost(registry = registry)
         val bridgeHost = ManagedHost(registry = registry)
@@ -179,7 +180,7 @@ class IrohPeeringTest {
     @Test
     fun `a peer off the listening side's allowlist is refused and accounted, an admitted one peers`() {
         val binary = SidecarBinary.orSkip()
-        val server = Stack(name = "server", allow = setOf(PeerId("good")))
+        val server = Stack(name = "server", allow = setOf(KeyId("good")))
 
         IrohTransport.listen(server.side, binary).use { listener ->
             val published = SetCell<String>()

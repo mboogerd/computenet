@@ -2,6 +2,7 @@ package civictech.wire
 
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.wire.Peering
 import org.junit.jupiter.api.Test
@@ -50,7 +51,7 @@ import java.net.URI
  */
 class WsRefusedDialBoundTest {
 
-    private class Stack(name: String?, allow: Set<PeerId>? = null) {
+    private class Stack(name: String?, allow: Set<KeyId>? = null) {
         val registry = LocationRegistry()
         val host = ManagedHost(registry = registry)
         val bridgeHost = ManagedHost(registry = registry)
@@ -80,7 +81,7 @@ class WsRefusedDialBoundTest {
 
     @Test
     fun `a dialler refused at the listener's allowlist stops re-dialling instead of looping forever`() {
-        val server = Stack(name = "server", allow = setOf(PeerId("good")))
+        val server = Stack(name = "server", allow = setOf(KeyId("good")))
         val listener = WsTransport.listen(0, server.side)
         try {
             val mallory = Stack(name = "mallory")
@@ -161,7 +162,7 @@ class WsRefusedDialBoundTest {
      */
     @Test
     fun `the refused-dial limit governs exactly, and does not close the listener to anyone else`() {
-        val server = Stack(name = "server", allow = setOf(PeerId("good")))
+        val server = Stack(name = "server", allow = setOf(KeyId("good")))
         val listener = WsTransport.listen(0, server.side)
         val uri = URI("ws://localhost:${listener.port}")
         try {
@@ -246,7 +247,7 @@ class WsRefusedDialBoundTest {
      */
     @Test
     fun `a healed client re-peers once the listener's allowlist admits it`() {
-        val allow = mutableSetOf<PeerId>()
+        val allow = mutableSetOf<KeyId>()
         val registry = LocationRegistry()
         val host = ManagedHost(registry = registry)
         val bridgeHost = ManagedHost(registry = registry)
@@ -265,7 +266,7 @@ class WsRefusedDialBoundTest {
                 // The allowlist changes underneath the abandoned connection —
                 // an operator allowlisting the peer, or judging the refusal a
                 // false positive either way calls the same method.
-                allow += PeerId("mallory")
+                allow += KeyId("mallory")
                 healable.heal()
 
                 await("the listener admits the healed client") { listener.achievedAuthLevels.any { it != null } }
