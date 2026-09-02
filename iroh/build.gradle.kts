@@ -16,11 +16,20 @@ plugins {
 }
 
 // egl.2 rule 2: the dependency direction is `:iroh -> :kernel`, never the
-// reverse, exactly as wire/build.gradle.kts documents for `:wire`. No `:wire`
-// and no `:identity` here — the NodeId-derived PeerId is feature egl.3's, and
-// this module has no business on another transport's classpath.
+// reverse, exactly as wire/build.gradle.kts documents for `:wire`.
+//
+// `:identity` joined it in feature egl.3: admission over this transport is a
+// public-key allowlist over the key fingerprinted from the connection's iroh
+// NodeId, and `civictech.identity` owns both halves of that — the raw-bytes to
+// `PublicKey` conversion (`Ed25519.publicKeyFromRaw`) and the one `fingerprint`
+// function in the repo. Deriving either here would be a second scheme.
+//
+// Still no `:wire`: this module has no business on another transport's
+// classpath. `:identity` itself depends only on `:kernel`, so the direction
+// stays `:iroh -> {:identity, :kernel} `, never the reverse.
 dependencies {
     implementation(project(":kernel"))
+    implementation(project(":identity"))
 
     testImplementation(project(":testkit"))
 }
