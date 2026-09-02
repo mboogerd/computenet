@@ -17,7 +17,10 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.wire.Peering
+import civictech.identity.Ed25519
+import civictech.identity.fingerprint
 import org.junit.jupiter.api.Test
+import java.security.SecureRandom
 import java.util.Collections
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -180,7 +183,18 @@ class IrohPeeringTest {
     @Test
     fun `a peer off the listening side's allowlist is refused and accounted, an admitted one peers`() {
         val binary = SidecarBinary.orSkip()
-        val server = Stack(name = "server", allow = setOf(KeyId("good")))
+        // Since computenet-egl.3 the allowlist judges the KEY the QUIC
+        // connection authenticated, not a name anyone writes — so the admitted
+        // peer's NodeId has to be known before the listener exists. Pin its
+        // sidecar's secret key (the `IrohReconnectTest` pattern), spawn it once
+        // to read the NodeId that key yields, and dial later with the same args
+        // so the endpoint is the same endpoint.
+        val goodSecretKey = ByteArray(32).also { SecureRandom().nextBytes(it) }
+            .joinToString("") { "%02x".format(it) }
+        val goodArgs = listOf("--secret-key", goodSecretKey)
+        val goodNodeId = SidecarProcess.spawn(binary, args = goodArgs).use { it.nodeId }
+        val goodKey = fingerprint(Ed25519.publicKeyFromRaw(goodNodeId))
+        val server = Stack(name = "server", allow = setOf(goodKey))
 
         IrohTransport.listen(server.side, binary).use { listener ->
             val published = SetCell<String>()
@@ -221,8 +235,17 @@ class IrohPeeringTest {
             val afterMallory = quiesced { listener.admissionDenialCount }
 
             // ---- good: on the allowlist, same listener --------------------
-            val good = Stack(name = "good")
-            IrohTransport.connect(good.side, listener.nodeId, listener.addresses, binary).use { admitted ->
+            // Its `Stack` carries no name at all: over this transport a peer's
+            // hello asserts nothing, and admission is decided entirely by the
+            // key its pinned sidecar holds.
+            val good = Stack()
+            IrohTransport.connect(
+                good.side,
+                listener.nodeId,
+                listener.addresses,
+                binary,
+                sidecarArgs = goodArgs,
+            ).use { admitted ->
                 await("the admitted peer learns the listening side's published ref") {
                     good.registry.location(published.ref) is LocationRegistry.Remote
                 }

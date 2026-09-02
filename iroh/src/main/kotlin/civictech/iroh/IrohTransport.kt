@@ -8,6 +8,7 @@ import civictech.cell.CellRef
 import civictech.cell.DenialReason
 import civictech.cell.Propagate
 import civictech.cell.host.IntakeClosedException
+import civictech.cell.link.AuthLevel
 import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
@@ -15,6 +16,8 @@ import civictech.cell.port.Use
 import civictech.cell.wire.BridgeEgressCell
 import civictech.cell.wire.Peering
 import civictech.cell.wire.RegistryMirrorCell
+import civictech.identity.Ed25519
+import civictech.identity.fingerprint
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.util.UUID
@@ -38,7 +41,7 @@ import kotlin.time.Duration.Companion.seconds
  * peers become one graph. The kernel is untouched: `:iroh -> :kernel`, never the
  * reverse (feature rule 2).
  *
- * ## The hello is a link-local grammar, and the identity it asserts is interim
+ * ## The hello is a link-local grammar, and it asserts no identity at all
  *
  * The sidecar protocol has no text/binary split the way a WebSocket does
  * (`iroh/sidecar/PROTOCOL.md` §3: `DATA` is `DATA`), so the hello cannot be told
@@ -47,26 +50,63 @@ import kotlin.time.Duration.Companion.seconds
  * `WireCodec` frame. `PROTOCOL.md` §3 guarantees per-link delivery order, which
  * is exactly the premise `WsTransport` takes from WebSocket message order, so
  * hello-before-announcements holds here for the same reason it holds there
- * (egl.2-D1). The bytes are new — `IROH-HELLO1 <mirrorRef>[ <peerName>]` in
- * UTF-8, see [IrohTransport.HELLO_PREFIX] — and are deliberately *not*
- * `WsTransport`'s: `[DSC1-HELLO-10]` freezes that line's bytes for that
- * transport, and nothing here may claim to speak it.
+ * (egl.2-D1). The bytes are new — `IROH-HELLO1 <mirrorRef>` in UTF-8, see
+ * [IrohTransport.HELLO_PREFIX] — and are deliberately *not* `WsTransport`'s:
+ * `[DSC1-HELLO-10]` freezes that line's bytes for that transport, and nothing
+ * here may claim to speak it.
  *
- * **egl.2-D4, stated so nobody reads the interim as the design: the [PeerId] a
- * peering over this transport carries is the one the peer ASSERTS in its
- * hello.** It is not derived from, or checked against, the iroh NodeId that
- * actually authenticated the QUIC connection — this feature keeps today's
- * `:wire` identity semantics unchanged so that the transport substitution is the
- * only variable. Deriving the `PeerId` from the NodeId, and demonstrating
- * admission as a public-key allowlist, is feature `computenet-egl.3`; until it
- * lands, a hello-asserted name over iroh proves no more than a hello-asserted
- * name over a WebSocket does.
+ * ## Admission is a public-key allowlist over the connection's NodeId
  *
- * Since feature `computenet-376c` the asserted token is admitted as a
- * [civictech.cell.link.KeyId] and the identity stamped on every delivery is
- * what `Peering.Side.identityBinding` resolves that key identifier to, so
- * `computenet-egl.3` changes only *what `key` is* — a NodeId-derived key
- * identifier instead of an asserted name — and no site downstream of [onHello].
+ * Feature `computenet-egl.3` replaced egl.2-D4's interim, in which the hello
+ * asserted a name and that name was the admission token. **The [KeyId] a
+ * connection is admitted on is now
+ * `fingerprint(Ed25519.publicKeyFromRaw(remoteNodeId))`** — the ed25519 public
+ * key the sidecar reports as the remote endpoint of *this* QUIC connection
+ * ([Session.remoteNodeId]: `SidecarLink.remoteNodeId` on an accepted link, the
+ * dialled `peerNodeId` on a dialled one). Nothing a peer writes can move it.
+ *
+ * The identity stamped on every delivery is
+ * `Peering.Side.identityBinding.identityOf(key)` and nothing else (feature
+ * `computenet-376c`): this module derives a *key identifier* from key material
+ * and never an identity, so when DSC4's anchor-vouched names replace the interim
+ * binding, no site here changes.
+ *
+ * **[Side.peer] is therefore no longer written to the wire over this
+ * transport.** Over iroh a peer's name is not a claim anyone needs — the
+ * connection already carries the key — so the hello this side sends is exactly
+ * `IROH-HELLO1 <mirrorRef>`. A hello that *does* carry a trailing token (a
+ * foreign or older client) is checked, never trusted: a token equal to the
+ * resolved identity is redundant and admitted, one that differs is refused
+ * `DenialReason.ID_MISMATCH` — the `:wire` `[DSC1-HELLO-06]` shape. A token can
+ * only ever CONFIRM the derived identity; it can never supply one.
+ *
+ * ## Why [AuthLevel.Authenticated], and what it does not claim
+ *
+ * [bindAndAnnounce] fixes `fromPeerAuth = AuthLevel.Authenticated` as a
+ * parameter at the admission decision. It appears in no frame and is read from
+ * no frame (`BridgeIngressCell.peerAuth`, `[DSC1-HELLO-05]`).
+ *
+ * The argument: iroh's QUIC/TLS 1.3 handshake is a **proof of possession** of
+ * the NodeId key, bound to this connection instance — the endpoint certificate
+ * is self-signed under the NodeId key and the handshake signs the transcript, so
+ * a link that came up is a link whose far end demonstrated the private half.
+ * That is the same thing `:wire`'s `HELLO2`/`PROOF` exchange establishes, done
+ * by the transport instead of by a frame.
+ *
+ * The trust assumption it rests on, stated so it can be attacked: **the sidecar
+ * is part of this side's trusted computing base.** It is a local child process
+ * reached over a loopback socket, and this side believes the NodeId it reports
+ * for a link the way a `:wire` side believes the peer certificate its TLS
+ * library reports. Neither side verifies its own crypto library.
+ *
+ * `[DSC1-NV-01]` (stolen key) stays **explicitly unverified**: an attacker
+ * holding a peer's iroh secret key is that peer, here as everywhere. Key-bound
+ * admission closes self-assertion, not key theft.
+ *
+ * No kernel consumer makes `Authenticated` unsound without `Side.credentials`:
+ * the level flows into `Principal.Peer` and `minAuth` floors only, and
+ * `PeerAuthPolicy.RequireAuthenticated`'s credentials requirement is a
+ * construction-time demand on a *side*, which this transport does not set.
  *
  * ## Scope
  *
@@ -86,10 +126,14 @@ import kotlin.time.Duration.Companion.seconds
 object IrohTransport {
 
     /**
-     * The hello line's prefix, trailing space included. A hello is
-     * `IROH-HELLO1 <mirrorRef>` optionally followed by ` <peerName>`; the ref is
-     * a [UUID] in its canonical form, which contains no space, so the split is
-     * unambiguous however the name is spelt.
+     * The hello line's prefix, trailing space included. A hello this side sends
+     * is exactly `IROH-HELLO1 <mirrorRef>`; the ref is a [UUID] in its canonical
+     * form, which contains no space.
+     *
+     * A hello this side *reads* may carry one trailing token — a foreign or
+     * older client asserting a name — which the split still isolates
+     * unambiguously. That token is only ever compared against the identity the
+     * connection's own key resolved to; see [Session.onHello].
      *
      * The version digit is part of the token rather than a separate field
      * because the whole grammar is one line: a future `IROH-HELLO2` is a
@@ -336,6 +380,17 @@ object IrohTransport {
      */
     internal class Session(
         private val side: Peering.Side,
+        /**
+         * The 32 raw ed25519 public-key bytes the sidecar reports as the remote
+         * endpoint of this link — `SidecarLink.remoteNodeId` on an accepted
+         * link, the `peerNodeId` this side dialled on a dialled one (iroh
+         * guarantees the dialled id is the endpoint reached). Both production
+         * sites hold it before any `DATA` can arrive.
+         *
+         * This, and nothing a peer writes, is what [admissionKey] is derived
+         * from.
+         */
+        private val remoteNodeId: ByteArray,
         private val send: (ByteArray) -> Unit,
         private val refuse: () -> Unit,
         /**
@@ -355,6 +410,30 @@ object IrohTransport {
          * frame.
          */
         val egress = BridgeEgressCell(signer = side.announcementSigner)
+
+        /**
+         * This link's admission key: the [KeyId] fingerprinted from
+         * [remoteNodeId]'s ed25519 public key, computed **once per connection**
+         * and held for this Session's whole life.
+         *
+         * Once, not per frame, and the cost is why it is spelt out here.
+         * [Ed25519.publicKeyFromRaw] forces eager Edwards-point validation
+         * because the JDK's `KeyFactory` for EdDSA does not validate at parse
+         * time — it stores the keybits and decompresses on first `Signature`
+         * use. Measured at ~30µs against ~1.1µs for a parse that skips it
+         * (~28x). That is nothing once per QUIC connection, which is what
+         * bind-once admission means; it would be a real per-message cost if
+         * anything called it per delivery. Nothing does: [onHello] reads this
+         * value and [bindAndAnnounce] carries the result onto the ingress.
+         *
+         * A [Result] rather than a throw, because a NodeId that is not a valid
+         * key is a **refusal** ([DenialReason.MALFORMED_HELLO]) and not a
+         * crash — the sidecar reporting unusable bytes is a contract violation
+         * this side accounts for rather than propagates.
+         */
+        private val admissionKey: Result<KeyId> by lazy(LazyThreadSafetyMode.NONE) {
+            runCatching { fingerprint(Ed25519.publicKeyFromRaw(remoteNodeId)) }
+        }
 
         /** @see Session — minted by [hello], retired for good by [onDown]. */
         @Volatile
@@ -460,8 +539,10 @@ object IrohTransport {
         private fun hello(): ByteArray {
             val fresh = Peering.spawnMirror(side, toPeer = egress)
             mirror = fresh
-            val name = side.peer?.let { " ${it.name}" } ?: ""
-            return (HELLO_PREFIX + fresh.ref.id + name).toByteArray(StandardCharsets.UTF_8)
+            // No name token: over iroh the connection's NodeId already carries
+            // the key, so `side.peer` would be an assertion nobody may act on.
+            // See the class KDoc.
+            return (HELLO_PREFIX + fresh.ref.id).toByteArray(StandardCharsets.UTF_8)
         }
 
         /**
@@ -515,18 +596,40 @@ object IrohTransport {
                 return
             }
             val parts = text.removePrefix(HELLO_PREFIX).trim().split(" ", limit = 2)
-            // Legacy-shaped hello: the token is an ASSERTED name this transport
-            // vouches for, so it is the admission token (a `KeyId`), and the
-            // identity is what this side's `PeerIdentityBinding` resolves it to
-            // — the one resolution on this path (feature `computenet-376c`).
-            val key = parts.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { KeyId(it) }
-            val peer = key?.let { side.identityBinding.identityOf(it) }
+            // The admission key comes from the connection, not from the line —
+            // and it is settled BEFORE the allowlist is consulted, so a NodeId
+            // this side cannot make a key of never reaches an allowlist decision
+            // at all. The detail names the shape only, never the bytes.
+            val key = admissionKey.getOrElse {
+                refuseHello(
+                    DenialReason.MALFORMED_HELLO,
+                    null,
+                    "hello refused: this link's remote NodeId is not a valid Ed25519 public key",
+                )
+                return
+            }
+            // The ONE resolution on this path (feature `computenet-376c`): the
+            // identity is whatever this side's binding maps the key to, never
+            // the fingerprint read as a name and never a `PeerId` built here.
+            val peer = side.identityBinding.identityOf(key)
             val peerMirrorRef = runCatching { UUID.fromString(parts[0]) }.getOrNull()
             if (peerMirrorRef == null) {
                 refuseHello(
                     DenialReason.MALFORMED_HELLO,
                     peer,
                     "hello refused: its first token is not a mirror ref UUID",
+                )
+                return
+            }
+            // A trailing token can only CONFIRM the derived identity, never
+            // supply one: equal is redundant and admitted, different is refused
+            // (`[DSC1-HELLO-06]`'s shape, recording both values by name).
+            val asserted = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
+            if (asserted != null && asserted != peer.name) {
+                refuseHello(
+                    DenialReason.ID_MISMATCH,
+                    peer,
+                    "hello claims $asserted but this link's NodeId resolves ${peer.name}",
                 )
                 return
             }
@@ -548,7 +651,7 @@ object IrohTransport {
          * @return true when the peer is admitted; false after refusing it, in
          *   which case the caller must return without binding anything.
          */
-        private fun admitted(peer: PeerId?, key: KeyId?): Boolean {
+        private fun admitted(peer: PeerId, key: KeyId): Boolean {
             if (side.admits(key)) return true
             System.err.println("[IrohTransport] refusing peer $peer: not on the allowlist (spec 43)")
             // Seam 1 (spec 40/43, [SEC1-07]): accounted before the link is
@@ -592,13 +695,21 @@ object IrohTransport {
          * class KDoc's four-step happens-before argument for why the late bind is
          * safe on this transport.
          */
-        private fun bindAndAnnounce(peer: PeerId?, key: KeyId?, peerMirrorRef: UUID) {
+        private fun bindAndAnnounce(peer: PeerId, key: KeyId, peerMirrorRef: UUID) {
             val instance = checkNotNull(mirror) { "onHello admitted a peer without opening a link instance" }
             // Bind BEFORE announcing, so every Remote location this link installs
             // — including the peer's own catch-up burst, which cannot start
             // before it has seen our hello — records the peer's name (V4-PEERID).
             instance.peer = peer
-            ingress = Peering.hostIngress(side, fromPeer = peer, fromKey = key)
+            // The level is a parameter fixed HERE, at the admission decision,
+            // before the ingress exists — never read from a frame. See the class
+            // KDoc for the proof-of-possession argument and its assumptions.
+            ingress = Peering.hostIngress(
+                side,
+                fromPeer = peer,
+                fromPeerAuth = AuthLevel.Authenticated,
+                fromKey = key,
+            )
             announcement?.close()
             announcement = Peering.announceTo(side, CellRef(peerMirrorRef), via = egress)
         }
@@ -680,6 +791,9 @@ object IrohTransport {
             client.onInboundLink { link ->
                 val session = Session(
                     side,
+                    // The key this link is admitted on: the endpoint the sidecar
+                    // authenticated when it accepted the QUIC connection.
+                    link.remoteNodeId,
                     send = { link.send(it) },
                     refuse = { link.close() },
                     admissionSink = admissionSink,
@@ -968,6 +1082,10 @@ object IrohTransport {
             val linkHolder = AtomicReference<SidecarLink?>(null)
             val session = Session(
                 side,
+                // The id we dialled IS the endpoint iroh reached — a dial only
+                // completes against the holder of that NodeId's key — so it is
+                // the authenticated remote key on this side too.
+                peerNodeId,
                 send = { payload ->
                     val link = linkHolder.get() ?: throw SidecarException("this connection has no link yet")
                     link.send(payload)
