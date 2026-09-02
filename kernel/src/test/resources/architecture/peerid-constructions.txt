@@ -1,0 +1,46 @@
+# IdentityDerivationRatchetTest baseline: every production file (across every
+# module settings.gradle.kts includes) that contains a `PeerId(` CONSTRUCTION
+# (not the `data class PeerId(...)` declaration itself, not a KDoc mention).
+#
+# This is a ratchet, not an allowlist to grow silently
+# (IdentityDerivationRatchetTest KDoc; mirrors ArchitectureRatchetTest's
+# package-edges.txt policy). A new entry here is a new place that turns key
+# material into a PeerId, and feature computenet-376c's whole point is that
+# there is exactly one such place:
+# `civictech.cell.link.PeerIdentityBinding.Companion.Interim`. Every entry
+# below is followed by a comment line saying WHY it is not that derivation —
+# a frame/hello token parse, a configured name, or the interim binding
+# itself. A change that adds a `PeerId(` construction not in this file fails
+# the build; if it is a real key-to-identity derivation, it is the second
+# site DSC4 forbids and must be routed through the binding instead. If it is
+# an innocent site (another token parse, another configured name), add it
+# here WITH its why-comment in the same PR, for the reviewer to judge.
+#
+# One path per line, `#`-comments allowed, each path entry immediately
+# followed by exactly one `#` why-comment line.
+
+kernel/src/main/kotlin/civictech/cell/link/Identity.kt
+# the interim binding itself — PeerIdentityBinding.Companion.Interim's lambda
+# body, the one named derivation site the seam exists to concentrate.
+
+kernel/src/main/kotlin/civictech/cell/wire/AnnouncementAdmission.kt
+# frame field parse — `PeerId(signerKeyId)` reads the minting peer id out of
+# a signed announcement frame field. Decided residual (feature
+# computenet-376c non-goals): announcement verification stays identity-keyed
+# in this feature, not a leak of the interim binding.
+
+wire/src/main/kotlin/civictech/wire/HelloProtocol.kt
+# frame/hello token parse — the identity a HELLO2 frame CLAIMS, read off the
+# wire as a plain string token, not derived from key material.
+
+demo/shopping/src/main/kotlin/civictech/demo/Main.kt
+# configured name — the demo's CLI-supplied `netName` becomes this side's
+# asserted `Side.peer`.
+
+demo/exchange/src/main/kotlin/civictech/demo/exchange/Main.kt
+# configured name — the demo's CLI-supplied `netName` becomes this side's
+# asserted `Side.peer`.
+
+demo/beadsmirror/src/main/kotlin/civictech/demo/beadsmirror/MirrorPeering.kt
+# configured name — built from the mirror rig's configured `rigName`/`role`
+# settings, not from key material.
