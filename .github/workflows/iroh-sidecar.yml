@@ -257,6 +257,27 @@ jobs:
           echo "$line"
           echo "$line" >> "$GITHUB_STEP_SUMMARY"
 
+      # computenet-6buf: the only Linux run of :iroh's JUnit suite (see the
+      # "iroh Gradle check, flag-enabled" step above) otherwise has its exact
+      # per-testcase `time` attributes torn down with the runner. `if:
+      # always()` because the run whose timings matter most for flake
+      # characterisation is a FAILING one, and a default (no-if) upload step
+      # is skipped once a prior step fails — the whole point of this artifact
+      # is to survive that case. 90-day retention (GitHub's default is also
+      # 90, made explicit here rather than left implicit): the intended
+      # consumer is cross-run flake characterisation over weeks, not
+      # same-day debugging (computenet-merg reached back to 2026-08-29 and
+      # wanted more history, not less), and log retention is a separate
+      # setting from artifact retention — this only governs the artifact.
+      - name: Upload :iroh JUnit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iroh-test-results
+          path: iroh/build/test-results/test/
+          if-no-files-found: warn
+          retention-days: 90
+
       # computenet-cqde: the only place IrohConvergenceSuiteTest's four cases
       # and IrohMirrorTransportTest's sidecar-backed case execute anywhere
       # besides a developer's darwin/arm64 machine. `-Piroh.enabled=true`
