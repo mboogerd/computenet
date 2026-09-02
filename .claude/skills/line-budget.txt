@@ -357,7 +357,14 @@
 # cause was not a weak script: on computenet-t446 the orchestrator ran the newer,
 # more elaborate symbol grep INSTEAD of this one, and a better script cannot fix
 # not being run. Recomputed against the landed 9235.
-work                9245
+# 9245 -> 9257 on 2026-09-02: computenet-s7az (+12) — bought the git grep \s
+# entry in agent-execution.md's "Commands that fail QUIETLY" list. The trap was
+# first written into AGENTS.md, which reachability.py says the ORCHESTRATOR
+# reads and the four dispatched roles do not — and the reporter was a feature
+# REVIEWER, hitting it while diffing symbols across revisions, which only git
+# grep can do. That is the computenet-l5rc shape exactly, and l5rc's own remedy
+# is dual-placed for the same reason. Recomputed against the landed 9245.
+work                9257
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
