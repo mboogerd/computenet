@@ -246,8 +246,8 @@ which is what makes them worth naming rather than leaving to be rediscovered.
   different: a plain recursive grep, or the same query against a string you
   KNOW is present.
 - **`git grep`'s regex engine has no Perl-style `\s`, `\d` or `\w`** — they
-  degrade to the LITERAL character, so `\s` matches nothing and `\d` matches
-  the letter `d`: false positives as readily as zeros. Measured:
+  degrade to the LITERAL character, so `\d` matches the letter `d` and `\s`
+  the letter `s`: false positives as readily as zeros. Measured:
   `git grep -hE '^\s*@Test' <rev> -- 'iroh/src/test/*.kt'` → 0;
   `'^[[:space:]]*@Test'` → 46. The habit transfers from every other search here
   — ripgrep, `grep -P`, the Grep tool all accept `\s` — and only `git grep`
