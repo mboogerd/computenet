@@ -35,7 +35,12 @@
 #   issue-quality.md "Backticks…"). Prefer the -file forms for any multi-line
 #   body; file-friction.sh exposes the same flags.
 #
-# Prints the new bead id on stdout. Exit 2 on bad arguments, 1 on a failed
+# Prints the new bead id on stdout, and NOTHING else — every diagnostic,
+# including the delegated `bd update` confirmation lines, goes to stderr, so
+# `T=$(create-ticket.sh ...)` is a usable id. It was not: bd's "Updated issue"
+# line landed on stdout ahead of the id, and callers using the documented
+# capture got a two-line string that bd then refused (computenet-5ari, two
+# agents in one session). Exit 2 on bad arguments, 1 on a failed
 # step, saying which. A crash between create and re-parent leaves an
 # unparented hash-id bead, not a lost one — recover with:
 #   bd update <id> --parent=<parent>
@@ -82,14 +87,14 @@ NEW=$(bd "${args[@]}" | jq -r '.id // empty')
 
 # 2. attach; the id does not change. (--top-level: nothing to attach.)
 if [ "$TOP" != 1 ]; then
-  bd update "$NEW" --parent="$PARENT" \
+  bd update "$NEW" --parent="$PARENT" >&2 \
     || { echo "$NEW created but NOT parented — recover: bd update $NEW --parent=$PARENT" >&2; exit 1; }
 fi
 
 # 3. optionally claim, so exactly one lane drains it. A failed claim is a
 #    note: the bead is filed and attached, which is the part that matters.
 if [ "$CLAIM" = 1 ]; then
-  bd update "$NEW" --claim \
+  bd update "$NEW" --claim >&2 \
     || echo "note: claim on $NEW failed; it is filed and parented but unclaimed" >&2
 fi
 echo "$NEW"
