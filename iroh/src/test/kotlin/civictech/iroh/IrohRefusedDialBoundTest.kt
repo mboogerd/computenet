@@ -51,14 +51,6 @@ class IrohRefusedDialBoundTest {
         val side = Peering.Side(registry, bridgeHost, peer = name?.let { PeerId(it) }, allow = allow)
     }
 
-    private fun await(what: String, timeoutMs: Long = 60_000, condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!condition()) {
-            if (System.currentTimeMillis() > deadline) fail("timed out awaiting: $what")
-            Thread.sleep(50)
-        }
-    }
-
     /**
      * The bound the first test holds the transport to — deliberately a literal
      * larger than [IrohTransport.REFUSED_DIAL_LIMIT], so it is an independent
