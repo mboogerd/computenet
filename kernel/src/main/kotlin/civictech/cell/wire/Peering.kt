@@ -10,6 +10,7 @@ import civictech.cell.link.AuthLevel
 import civictech.cell.link.Link
 import civictech.cell.link.Linked
 import civictech.cell.link.PeerId
+import civictech.cell.link.PeerIdentityBinding
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
@@ -480,6 +481,28 @@ object Peering {
          * ([DSC1-WIRE-06]).
          */
         val announcementVerification: AnnouncementVerification? = null,
+        /**
+         * The seam this side resolves an admitted connection's **identity**
+         * through, given the key identifier it admitted on (feature
+         * `computenet-376c`).
+         *
+         * Admission judges a `civictech.cell.link.KeyId`; attribution records
+         * a [PeerId]; this is the one named place that gets from the first to
+         * the second. The default,
+         * [PeerIdentityBinding.Interim][civictech.cell.link.PeerIdentityBinding.Companion.Interim],
+         * maps a key identifier to the identity of the same name, which is
+         * exactly the behaviour every side had before the two types existed.
+         * DSC4's anchor-vouched names arrive by substituting a different
+         * binding here, not by editing the sites that stamp.
+         *
+         * **No consumer in this task.** The loopback path, `hostIngress` and
+         * the `:wire`/`:iroh` transports start reading it in the sibling item
+         * that migrates admission onto the key identifier; today it is
+         * declared, defaulted and inert. It is last in the constructor so
+         * every existing positional and named `Side(...)` construction
+         * compiles unchanged.
+         */
+        val identityBinding: PeerIdentityBinding = PeerIdentityBinding.Interim,
     ) {
         /**
          * This side's signer, and therefore this side's announcement counter —

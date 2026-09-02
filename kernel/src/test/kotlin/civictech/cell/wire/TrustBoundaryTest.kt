@@ -21,6 +21,7 @@ import civictech.cell.port.LinkFrom
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.link.KeyId
 import civictech.cell.link.allowPeers
 import civictech.cell.port.input
 import civictech.cell.port.registerPort
@@ -362,13 +363,13 @@ class TrustBoundaryTest {
     @Test
     fun `link requests carry the delivering peer's identity into policies`() {
         val refusedRig = LinkRig(remotePeer = "evil")
-        refusedRig.collector.inlet.linking.policies += allowPeers(PeerId("good"))
+        refusedRig.collector.inlet.linking.policies += allowPeers(KeyId("good"))
         refusedRig.requestLink()
         refusedRig.collector.inlet.linking.links.shouldBeEmpty()
         refusedRig.deadLettersP.any { it.description.contains("allowlist") }.shouldBeTrue()
 
         val admittedRig = LinkRig(remotePeer = "good")
-        admittedRig.collector.inlet.linking.policies += allowPeers(PeerId("good"))
+        admittedRig.collector.inlet.linking.policies += allowPeers(KeyId("good"))
         admittedRig.requestLink()
         admittedRig.collector.inlet.linking.links.size shouldBe 1
     }
