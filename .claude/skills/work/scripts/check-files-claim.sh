@@ -204,7 +204,7 @@ for id in "$@"; do
     # and guessing is how a heuristic earns a reputation for noise.
     hits=$(printf '%s\n' "$ALL_FILES" | grep -E "(^|/)$type\\.(kt|java)$")
     [ "$(printf '%s\n' "$hits" | grep -c .)" = 1 ] || continue
-    covered "$hits" || { echo "$id: names $type:<line>, which is $hits, not in metadata.files (a SITE reference — the bead points at a line there)"; found=1; }
+    covered "$hits" || { echo "$id: names $type:<line>, which is $hits, not in metadata.files (a SITE reference — verify against the intended edits; a bead can cite a line it only reads)"; found=1; }
   done <<<"$typed"
 
   # NOT DONE HERE: resolving a TYPE named in the acceptance to its declaring

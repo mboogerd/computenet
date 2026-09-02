@@ -1783,10 +1783,20 @@ either widen the claim or satisfy yourself the file is read-only. This
 applies wherever you author a bead, not only here: 5c's red-check task, 5e's
 residuals, step 7's friction items.
 
-**It is blind to anything that is not a path** — a bracketed requirement id
-(`[24-TMAP-03]`), a marker, a type name — and passes such a bead CLEAN
-(computenet-hws5, then computenet-vjrs). Resolve each one by hand before
-dispatching: `git grep -l -F '[THE-ID]'` lists the files that *cite* it,
+**RUN IT. It is not the same check as the invariant grep above, and neither
+subsumes the other.** This one reads the bead's TEXT for files the claim
+omits; that one reasons from the CODE about files the text never names. On
+computenet-t446 the orchestrator ran the symbol grep and not this — the newer,
+more elaborate procedure, and running it felt like having done the diligence.
+It widened the claim from 19 files to 37 and still missed two the bead names
+in its own words, which this catches in a second (computenet-9src). Both, in
+that order: this first, because it is cheap and mechanical.
+
+**It is blind to most things that are not paths** — a bracketed requirement id
+(`[24-TMAP-03]`), a marker, a bare type name — and passes such a bead CLEAN
+(computenet-hws5, then computenet-vjrs). A type named WITH A LINE NUMBER
+(`FilePeerKeyStoreTest:39`) is the exception: that is a pointer at a site, so
+it is resolved and checked. Resolve the rest by hand before dispatching: `git grep -l -F '[THE-ID]'` lists the files that *cite* it,
 which is usually not where the artifact lives; the pinning test's KDoc says
 where ("which is `MapCellModel`'s file KDoc"). Widen the claim to that file.
 
