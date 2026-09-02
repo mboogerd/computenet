@@ -4,6 +4,19 @@
 to a ~2KB preview with no marker, and the authorship bound (§5) and
 verdict-token rule (§8) are past the cut (computenet-bgdb).
 
+**AND IT EXCEEDS ONE READ CALL.** At ~1200 lines the Read tool's per-call cap
+lands around line 1013, so §7 (residual filing) and §8 (the literal `READY` /
+`DRAFT` verdict token SKILL.md 5e tests you on) are past the cut. The result
+does say it truncated — and three reviewers still reached those sections only
+by paging on unprompted, none of them told to (computenet-98cu). Take the
+second pass before you start: `Read(file_path=…, offset=1000)`.
+
+**THE TWO RULES THAT DECIDE YOUR OUTPUT, hoisted so a one-page reader has
+them:** your final message must carry the literal token `READY` or `DRAFT`
+(§8 says what each means and 5e refuses to act without one), and every
+residual you find is FILED, not left in prose (§7 says where it attaches).
+Neither is optional, and neither is a summary of the sections — read them.
+
 Every task here is closed and each passed its own acceptance criteria. That
 is not the same as the feature being done — tasks pass individually and
 still leave seams nobody owned or criteria no task claimed.

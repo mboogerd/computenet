@@ -337,7 +337,21 @@
 # invisible: the orchestrator reads the documented return shape, and the
 # verify-ready line routed straight back into the bug. Recomputed against the
 # landed 9209, not stacked on the number this branch was cut from.
-work                9219
+# 9219 -> 9235 on 2026-09-02: computenet-98cu (+16) — bought review-feature.md's
+# opening banner: the file EXCEEDS ONE READ CALL (the cap lands near line 1016 of
+# 1200), and the two rules that decide a reviewer's output — the literal
+# READY/DRAFT verdict token and the residual-filing protocol, both in §§7-8, past
+# the cut — hoisted so a one-page reader has them. Three reviewers reached them
+# only by paging on unprompted, and 5e refuses to act without the token. Prose in
+# the file is the only fix available for the file that has the problem; the
+# mechanical half — a validator rule failing any reference over 900 lines that
+# does not say so in its first 50 — costs no budget lines and is what makes the
+# NEXT file to cross the line say it too.
+# and +3 more for the reviewer-dispatch template's "PAGE TO THE END" clause,
+# which is the bead's second acceptance criterion: the banner only helps a
+# reader who opens the file, and the template is what a dispatched reviewer
+# reads first.
+work                9235
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

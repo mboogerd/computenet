@@ -2029,7 +2029,10 @@ Agent({
   description: "Review feature <id>",
   model: "opus",
   run_in_background: true,
-  prompt: `Read (with the Read tool — cat truncates it to a ~2KB preview) .claude/skills/work/references/review-feature.md — from
+  prompt: `Read (with the Read tool — cat truncates it to a ~2KB preview) .claude/skills/work/references/review-feature.md — and
+PAGE TO THE END: it exceeds one Read call, and the rules that decide how you
+REPORT (§8's literal READY/DRAFT token, §7's residual filing) are past the cut
+(computenet-98cu) — from
 ${worktree}, never the main checkout, whose local branch is stale — and follow
 it to review feature ${id} against its own acceptance criteria.
 Worktree: ${worktree}  ·  Branch: ${branch}  ·  PR: ${pr}
