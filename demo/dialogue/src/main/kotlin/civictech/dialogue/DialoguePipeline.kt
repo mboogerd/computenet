@@ -5,15 +5,21 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.op.FlatMapSetApi
 import civictech.cell.data.op.FlatMapSetCell
+import civictech.cell.data.op.GroupByApi
+import civictech.cell.data.op.GroupByCell
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graphOf
 import civictech.cell.graph.lookupOrThrow
 import civictech.cell.graph.refAs
 import civictech.cell.host.ManagedHost
+import civictech.dialogue.extract.ExtractedClaim
 import civictech.dialogue.extract.ExtractedItem
 import civictech.dialogue.extract.ExtractionAccounting
 import civictech.dialogue.extract.ExtractionGate
 import civictech.dialogue.extract.Extractor
+import civictech.dialogue.mint.ClaimAggregate
+import civictech.dialogue.mint.ClaimMint
+import civictech.dialogue.mint.claimKey
 
 /**
  * The AGO1 dialogue pipeline's graph spec (epic computenet-2aw §2.2
@@ -88,6 +94,29 @@ object DialoguePipeline {
         val segments: TypedRef<FlatMapSetApi<Utterance, Segment>>,
         /** Stage 3: the well-formed items extracted from those segments. */
         val extractedItems: TypedRef<FlatMapSetApi<Segment, ExtractedItem>>,
+        /**
+         * Stage 4a (F3, item-kind split — claim leg): the claim-kind subset
+         * of [extractedItems]. The relation and stance legs belong to F3's
+         * sibling tasks and are not built here.
+         */
+        val extractedClaims: TypedRef<FlatMapSetApi<ExtractedItem, ExtractedClaim>>,
+        /**
+         * Stage 4b (F3, ClaimMint): the [civictech.dialogue.ClaimKey] of
+         * every currently-live [extractedClaims] element, deduplicated by
+         * the tagged-set algebra — equivalently, the set of keys ClaimMint
+         * currently has a canonical claim for (2aw.F3-D1). This is the
+         * `SetDelta<ClaimKey>` the relation sibling's `SemiJoinCell`s
+         * consume as their right side.
+         */
+        val claimKeys: TypedRef<FlatMapSetApi<ExtractedClaim, ClaimKey>>,
+        /**
+         * Stage 4c (F3, ClaimMint): one [ClaimAggregate] per distinct
+         * [civictech.dialogue.ClaimKey] ([AGO1-MINT-01]/-02/-03). Pair a
+         * `MapDelta` key with its aggregate through
+         * [ClaimMint.canonicalClaim] to assemble a
+         * [civictech.dialogue.CanonicalClaim].
+         */
+        val canonicalClaims: TypedRef<GroupByApi<ExtractedClaim, ClaimKey, ClaimAggregate>>,
     )
 
     /**
@@ -147,12 +176,47 @@ object DialoguePipeline {
             val extractedItems = spawn("extractedItems") { ref ->
                 FlatMapSetCell<Segment, ExtractedItem>(ref = ref, f = gate::extract)
             }
+            // Stage 4a (F3 item-kind split, claim leg): FlatMapSetCell with
+            // listOfNotNull(item as? ExtractedClaim) rather than a FilterCell
+            // + cast — FilterCell preserves the element type, so a cast hop
+            // would still be needed after it. One hop per item kind; the
+            // relation and stance legs are the sibling tasks'.
+            val extractedClaims = spawn("extractedClaims") { ref ->
+                FlatMapSetCell<ExtractedItem, ExtractedClaim>(ref = ref) { item ->
+                    listOfNotNull(item as? ExtractedClaim)
+                }
+            }
+            // Stage 4b (F3, 2aw.F3-D1): claimKey is the ONE canonicalization
+            // seam — every claim-key derivation, here and in ClaimMint below,
+            // goes through it.
+            val claimKeys = spawn("claimKeys") { ref ->
+                FlatMapSetCell<ExtractedClaim, ClaimKey>(ref = ref) { claim ->
+                    listOf(claimKey(claim.text))
+                }
+            }
+            // Stage 4c (F3, ClaimMint): keyed fold over the SAME
+            // extractedClaims stream as claimKeys above — both are pure hops
+            // off one outlet, not a chain, so neither depends on the other's
+            // liveness.
+            val canonicalClaims = spawn("canonicalClaims") { ref ->
+                GroupByCell(
+                    ref = ref,
+                    keyFn = { claim: ExtractedClaim -> claimKey(claim.text) },
+                    aggregator = ClaimMint.ClaimAggregator(),
+                )
+            }
             link(utterances.cell.outlet, segments.cell.inlet)
             link(segments.cell.outlet, extractedItems.cell.inlet)
+            link(extractedItems.cell.outlet, extractedClaims.cell.inlet)
+            link(extractedClaims.cell.outlet, claimKeys.cell.inlet)
+            link(extractedClaims.cell.outlet, canonicalClaims.cell.inlet)
             Refs(
                 utterances = utterances.refAs(),
                 segments = segments.refAs(),
                 extractedItems = extractedItems.refAs(),
+                extractedClaims = extractedClaims.refAs(),
+                claimKeys = claimKeys.refAs(),
+                canonicalClaims = canonicalClaims.refAs(),
             )
         }
         return Built(refs, gate.accounting)
