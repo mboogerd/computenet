@@ -113,8 +113,15 @@ class SidecarExchangeTest {
      * adopts that stream the link's send queue has no consumer at all, so §2's
      * 256-frame bound is an absolute count there. [SidecarLink.send] on an
      * INBOUND link therefore waits for the peer's first frame rather than
-     * queueing against an unadopted stream — the one route `PROTOCOL.md`
-     * sanctions while `computenet-ey4v` is open.
+     * queueing against an unadopted stream.
+     *
+     * That wait is `PROTOCOL.md`'s **avoidance** path, and avoidance is what a
+     * host is advised to do rather than all it may do: §2's Backpressure section
+     * now also states the recovery rule for a refusal that happens anyway — an
+     * `ERROR` on an established link is terminal for that link and the host
+     * closes it (`computenet-ey4v`, settled; pinned by [SidecarBackpressureTest]).
+     * The two are complementary, and this test is about the first: a host that
+     * waits here never reaches the second.
      *
      * The sibling test above exercises the wait only where it is already
      * satisfied (the dialler has spoken by the time the accepting side sends),
