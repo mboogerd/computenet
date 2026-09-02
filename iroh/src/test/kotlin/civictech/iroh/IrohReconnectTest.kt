@@ -473,7 +473,9 @@ class IrohReconnectTest {
      * Copied from `SidecarBackpressureTest`'s private fixture of the same name
      * rather than shared, for the reason [quiesced] is copied: that file is
      * outside this change's scope. Extracting one shared fake is worth doing and
-     * is filed as its own item.
+     * is filed as `computenet-sr48`. This copy is not identical to the original —
+     * it counts `DIAL` frames ([dials]) and offers [nextDial]; the extraction has
+     * to keep both fixtures' capabilities rather than pick one.
      */
     private class FakeSidecar : AutoCloseable {
 
