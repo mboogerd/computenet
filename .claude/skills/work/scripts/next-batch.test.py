@@ -589,11 +589,67 @@ try:
 finally:
     _os.chdir(_cwd)
 
+# --- a unit running OUTSIDE this feature holds its files (computenet-z6q2) --
+# A 5f route 0 unit is a direct child of the epic, so a query about one feature
+# cannot see it. Its claim now seeds the disjointness test.
+elsewhere_cases = 0
+
+def _ecase(expect_batch, expect_reason_part, elsewhere, cands, what):
+    global failed, elsewhere_cases
+    elsewhere_cases += 1
+    b, sk = nb.plan_batch(cands, elsewhere=elsewhere)
+    if ids(b) != expect_batch:
+        failed += 1
+        print(f"FAIL: {what} — expected batch {expect_batch}, got {ids(b)}")
+        return
+    if expect_reason_part is not None:
+        if not any(expect_reason_part in e["reason"] for e in sk):
+            failed += 1
+            print(f"FAIL: {what} — no skip reason containing "
+                  f"{expect_reason_part!r}; got {sk}")
+
+_ecase([], "running outside this feature: computenet-4gzr",
+       [{"id": "computenet-4gzr", "files": ["iroh/src/main/kotlin/X.kt"]}],
+       [(t("o0m3.3", "iroh/src/main/kotlin/X.kt"), False)],
+       "an exact overlap with a route-0 unit is skipped and names it")
+
+_ecase([], "running outside this feature: computenet-4gzr",
+       [{"id": "computenet-4gzr", "files": ["iroh/src/main"]}],
+       [(t("o0m3.3", "iroh/src/main/kotlin/X.kt"), False)],
+       "containment counts: a file inside the running unit's directory claim")
+
+_ecase(["free"], None,
+       [{"id": "computenet-4gzr", "files": ["iroh/src/main/kotlin/X.kt"]}],
+       [(t("free", "wire/src/main/kotlin/Y.kt"), False)],
+       "a disjoint task still batches")
+
+_ecase(["a"], None, [],
+       [(t("a", "wire/src/main/kotlin/Y.kt"), False)],
+       "no units running elsewhere is the old behaviour")
+
+# running_elsewhere() itself: what it includes and what it must not.
+_saved_bd = nb.bd
+nb.bd = lambda *a: [
+    {"id": "feat", "issue_type": "feature", "metadata": {"files": "a.kt"}},
+    {"id": "epic", "issue_type": "epic", "metadata": {"files": "b.kt"}},
+    {"id": "mine", "issue_type": "task", "metadata": {"files": "c.kt"}},
+    {"id": "route0", "issue_type": "task", "metadata": {"files": "d.kt"}},
+    {"id": "noclaim", "issue_type": "task", "metadata": {}},
+]
+_got = nb.running_elsewhere("MacBoo", "feat", {"mine"})
+nb.bd = _saved_bd
+elsewhere_cases += 1
+if [u["id"] for u in _got] != ["route0"]:
+    failed += 1
+    print("FAIL: running_elsewhere must exclude the feature, the epic, this "
+          f"feature's own candidates and claimless units — got {_got}")
+
 dir_claim_cases_n = len(dir_claim_cases) + 7
 
 total = (load_advice_cases + merged_cases + len(cases) + len(branch_cases) + entry_resume_cases + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
          + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
          + len(capacity_cases) + len(cap_cases) + capacity_reason_cases
-         + len(claim_shape_cases) + len(claim_error_cases) + dir_claim_cases_n)
+         + len(claim_shape_cases) + len(claim_error_cases) + dir_claim_cases_n
+         + elsewhere_cases)
 print(f"{total - failed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
