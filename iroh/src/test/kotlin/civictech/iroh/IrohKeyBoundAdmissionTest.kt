@@ -343,8 +343,10 @@ class IrohKeyBoundAdmissionTest {
                 // against the LINK_DOWN which would have stopped it — so a
                 // single read taken right after `abandonedAfterRefusals` can
                 // still be one *link* short of what that in-flight link is
-                // about to add, or (on a loaded runner) briefly ahead of the
-                // final settled value if more than one such race stacks up.
+                // about to add. Short is the only direction it can be wrong
+                // in: the run counter is cleared only by an admitted link or
+                // an explicit `heal()`, and a refused peering reaches
+                // neither, so the value never decreases under this read.
                 // Quiescing removes the guesswork: once the value stops
                 // changing for `settleMillis`, nothing further is coming, and
                 // the bound below is checked against a number the production
