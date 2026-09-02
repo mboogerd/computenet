@@ -100,15 +100,47 @@ What that costs a host:
   was refused, not which one — and when the link's consumer is draining
   concurrently, acceptances and refusals interleave, so the refusals are not even
   the last frames sent.
-* **So this section does not yet tell a host how to recover**, and it should not
-  be read as if it did: a resend reorders the link (the sidecar preserves the
-  order of the frames it accepted, so a frame re-sent after later frames were
-  accepted arrives behind them), and the host cannot identify the frame to resend
-  in any case. What a host can do today is **avoid the refusal**: on an inbound
-  link, wait for the peer's first frame before sending (§3, `LINK_UP`), and keep
-  its own outstanding `DATA` on a link within the bound. Settling the recovery
-  contract properly — a terminating rule, or a frame identifier the `ERROR` can
-  echo — is `computenet-ey4v`, and it is open at the time of writing.
+* **So an `ERROR` on an established link is terminal for that link, and the host
+  MUST take the link down.** The host sends `CLOSE_LINK` on that id, sends no
+  further `DATA` on it, and recovers *above* the link — by establishing a new one
+  and resynchronising whatever state the old one carried — never by resending
+  frames onto the same one (`computenet-ey4v`, settled; the sidecar's own
+  behaviour is unchanged by that decision — it reports and keeps serving, and the
+  closing is the host's).
+
+  The rule is stated over the **link**, because the link is all the wire names.
+  A host does not have to decide whether an `ERROR` was in reply to a particular
+  `DATA`, or which `DATA` it was, and that is what makes this contract
+  implementable from §2's framing. Every `ERROR` the sidecar can send on an
+  *established* link id means either that a frame did not go out (a full send
+  queue, a link that is no longer sending, a link id the sidecar does not know)
+  or that the link's own send pump failed. None of them leaves that link's frame
+  sequence intact, and none is recoverable by continuing on it — so a host that
+  closes on any of them is never closing a link it could have kept.
+
+  A resend rule was considered and is **not** implementable over this wire, at
+  any header. The `ERROR` names no frame and an accepted `DATA` is answered with
+  nothing, so a host can neither identify the frame to resend nor observe that
+  the resend was accepted; and even a correctly guessed resend arrives *behind*
+  the frames accepted after the refusal, because the sidecar preserves the order
+  of what it accepted. Giving `DATA` a host-chosen sequence number the `ERROR`
+  echoes would close the first gap and not the second: resending in order needs
+  an acknowledgement of *acceptance*, which is a per-frame reply on every
+  accepted frame — precisely the traffic the refusing bound exists to avoid, and
+  a far larger change than a wider header.
+
+* Terminality is scoped to **established** links, and to them only. An `ERROR` on
+  link `0` concerns no link. An `ERROR` answering a `DIAL` (a bad id, an id in
+  use, a malformed payload, a failed dial) settles that `DIAL` and establishes
+  nothing, so there is no link to close; §3's `DIAL` entry governs it. And an
+  `ERROR` is never terminal for the host *connection* unless the message itself
+  was malformed (§2).
+
+* Better than recovering is **not needing to**: a host should still **avoid the
+  refusal**. On an inbound link, wait for the peer's first frame before sending
+  (§3, `LINK_UP`), and keep the `DATA` outstanding on any one link within the
+  bound. A host that does both never meets the rule above.
+
 * The one remaining way to make the host connection stop answering is for the
   host to stop reading its own socket — a stall it can end at will, and not one
   a peer or a link can inflict on it.
@@ -158,7 +190,7 @@ body; the sidecar adds the QUIC-side length prefix. A payload larger than
 `MAX_FRAME_LEN` (16 MiB) is refused at the codec. A frame that arrives while the
 link already has 256 frames outstanding is refused with `ERROR` on that link and
 **not sent** (§2, Backpressure) — an `ERROR` in reply to `DATA` never means the
-frame went out.
+frame went out, and it ends the link: the host answers it with `CLOSE_LINK`.
 
 **`CLOSE_LINK`** — take the link down locally. The `LINK_DOWN` that follows comes
 from the link's own observer, so a host close and a peer close produce the same
@@ -222,6 +254,13 @@ only; hosts must not parse it. The id becomes free for reuse afterwards.
 **`ERROR`** — a request failed. It is not terminal for the connection unless the
 message itself was malformed (§2), in which case the sidecar drops the
 connection after sending it.
+
+It **is** terminal for an *established* link it names: the host closes that link
+with `CLOSE_LINK`, sends no further `DATA` on it, and rebuilds above it rather
+than resending onto it (§2, Backpressure — this is the whole of the host's
+recovery contract, and it needs nothing from the frame that the header does not
+already carry). On link `0`, or on a link whose `DIAL` it is answering, it
+closes nothing.
 
 ## 4. A complete exchange
 

@@ -54,8 +54,14 @@ interface LinkListener {
 
     /**
      * The sidecar refused something on this link. In reply to a `DATA` this
-     * always means that frame was NOT sent — see [SidecarClient]'s KDoc for the
-     * part of that contract which is still open (`computenet-ey4v`).
+     * always means that frame was NOT sent.
+     *
+     * **This is a notification of a terminal event, not an invitation to
+     * retry.** `PROTOCOL.md` §2 makes an `ERROR` on an established link terminal
+     * for that link, and [SidecarClient] has already sent `CLOSE_LINK` by the
+     * time this runs — [SidecarLink.send] on this link now throws, and an
+     * [onDown] follows. Recover by establishing a *new* link, never by resending
+     * onto this one (`computenet-ey4v`).
      */
     fun onError(link: SidecarLink, reason: String) {}
 }
@@ -74,6 +80,21 @@ class SidecarLink internal constructor(
     internal val downDelivered = AtomicBoolean(false)
     internal val peerSpoke = CountDownLatch(1)
 
+    /**
+     * Set the moment the sidecar reports an `ERROR` on this link, before the
+     * `CLOSE_LINK` that answers it and well before the `LINK_DOWN` that answers
+     * *that*. Nothing may be sent in the window between the two.
+     */
+    internal val refused = AtomicBoolean(false)
+
+    /**
+     * True once the sidecar reported an `ERROR` on this link and the client
+     * closed it for that reason (`PROTOCOL.md` §2, Backpressure). Distinct from
+     * an ordinary [LinkListener.onDown]: it says the link ended because
+     * something on it was refused, not because a peer or a caller ended it.
+     */
+    val refusedAndClosed: Boolean get() = refused.get()
+
     /** True once at least one `DATA` has arrived from the peer on this link. */
     val peerHasSpoken: Boolean get() = peerSpoke.count == 0L
 
@@ -87,12 +108,23 @@ class SidecarLink internal constructor(
      * link's send queue has no consumer at all and the 256-frame bound is an
      * absolute count. See [SidecarClient]'s KDoc.
      *
-     * @throws SidecarException when the link is down, the wait expires, or the
-     *   payload exceeds [SidecarProtocol.MAX_FRAME_LEN].
+     * @throws SidecarException when the link is down, when the sidecar has
+     *   already refused something on it ([refusedAndClosed]), when the wait
+     *   expires, or when the payload exceeds [SidecarProtocol.MAX_FRAME_LEN].
      */
     fun send(payload: ByteArray, awaitPeerFirstFrame: Duration = 30.seconds) {
         if (payload.size > SidecarProtocol.MAX_FRAME_LEN) {
             throw SidecarException("frame of ${payload.size} bytes exceeds MAX_FRAME_LEN (${SidecarProtocol.MAX_FRAME_LEN})")
+        }
+        // PROTOCOL.md §2: an ERROR on an established link is terminal for it, so
+        // the refusal closes the send path immediately rather than at the
+        // LINK_DOWN that follows — a frame written into that window would be
+        // refused in its turn, or worse, accepted behind a hole.
+        if (refused.get()) {
+            throw SidecarException(
+                "link $id was closed after the sidecar refused something on it; " +
+                    "recover on a new link, never by resending on this one (PROTOCOL.md §2, Backpressure)",
+            )
         }
         if (downDelivered.get()) throw SidecarException("link $id is down")
         if (direction == LinkDirection.INBOUND && !peerHasSpoken) {
@@ -143,25 +175,35 @@ class SidecarLink internal constructor(
  * rate: the 257th `DATA` and every one after it is refused until the dialler
  * speaks.
  *
- * ## The open residual: `computenet-ey4v`
+ * ## The recovery rule: a refusal ends the link (`computenet-ey4v`)
  *
- * What a host is required to **do** with such a refusal is unsettled, and this
- * client therefore does not pretend to recover from one. The reason is on the
- * wire: an `ERROR` carries a kind byte, an 8-byte link id and a UTF-8 reason and
- * **no sequence number**, while an *accepted* `DATA` is answered with nothing at
- * all. A host with more than one `DATA` outstanding on a link therefore learns
- * that *one* frame on that link was refused and never *which one* — and when the
- * link's consumer drains concurrently, acceptances and refusals interleave, so
- * the refused frames are not even the last ones sent. A blind resend reorders
- * the link. Settling that contract — a terminating rule, or a frame identifier
- * the `ERROR` can echo — is `computenet-ey4v`, open at the time of writing.
+ * **An `ERROR` on an established link is terminal for that link.** On one, this
+ * client sets [SidecarLink.refusedAndClosed], sends `CLOSE_LINK` on that id, and
+ * only then calls [LinkListener.onError]; [SidecarLink.send] throws from that
+ * moment, and the `LINK_DOWN` the close produces arrives as an ordinary
+ * [LinkListener.onDown]. A host recovers by establishing a **new** link and
+ * resynchronising over it — [IrohTransport.IrohConnection] already does exactly
+ * that for every `LINK_DOWN`, with a fresh mirror and a full `announceTo` sweep
+ * — never by resending onto the link that was refused.
  *
- * Until it is settled this client takes the one route `PROTOCOL.md` already
- * sanctions: **avoid the refusal**. [SidecarLink.send] on an inbound link waits
- * for the peer's first frame before sending (§3, `LINK_UP`), and a refusal that
- * happens anyway is surfaced verbatim through [LinkListener.onError] rather than
- * being absorbed here. Callers that keep their own outstanding `DATA` on a link
- * within the bound will not meet one.
+ * The rule is stated over the link because the link is all the wire names, and
+ * that is precisely what makes it implementable. An `ERROR` carries a kind byte,
+ * an 8-byte link id and a UTF-8 reason and **no sequence number**, while an
+ * *accepted* `DATA` is answered with nothing at all. A host with more than one
+ * `DATA` outstanding on a link therefore learns that *one* frame on that link
+ * was refused and never *which one* — and when the link's consumer drains
+ * concurrently, acceptances and refusals interleave, so the refused frames are
+ * not even the last ones sent. So no resend rule could be written, at any
+ * header: identifying the frame needs a sequence number, and resending it *in
+ * order* additionally needs an acknowledgement of acceptance on every accepted
+ * frame — the per-frame reply the refusing bound exists to avoid. Discarding the
+ * link discards the ordering context along with the hole in it, and needs
+ * nothing from the wire that is not already there.
+ *
+ * Closing is the fallback, not the plan: this client still **avoids the
+ * refusal**. [SidecarLink.send] on an inbound link waits for the peer's first
+ * frame before sending (§3, `LINK_UP`), and callers that keep their own
+ * outstanding `DATA` on a link within the bound never meet the rule above.
  */
 class SidecarClient(
     private val socket: Socket,
@@ -346,6 +388,15 @@ class SidecarClient(
                     return
                 }
                 val link = links[message.link] ?: return
+                // PROTOCOL.md §2, Backpressure (computenet-ey4v): an ERROR on an
+                // ESTABLISHED link is terminal for that link, so the client takes
+                // it down here rather than leaving the rule to each host of this
+                // class. The CAS is what stops the loop when CLOSE_LINK itself is
+                // answered with "no such link" — a race with a LINK_DOWN already
+                // in flight, and the one ERROR this could otherwise ping-pong on.
+                if (link.refused.compareAndSet(false, true)) {
+                    runCatching { sendMessage(HostMessage.CloseLink(link.id)) }
+                }
                 link.listenerRef.get()?.onError(link, message.reason)
             }
         }
