@@ -35,9 +35,10 @@ import java.io.File
  *     constructing one from a `KeyId`, a fingerprint, or key bytes is exactly
  *     the second site this feature forbids.
  * (b) exactly one production file implements `PeerIdentityBinding` (a line
- *     matching `PeerIdentityBinding\s*\{` as a SAM conversion, or
- *     `:\s*PeerIdentityBinding\b` as a supertype, excluding the interface's
- *     own `fun interface PeerIdentityBinding {` declaration line) — and it is
+ *     matching `PeerIdentityBinding\s*\{` as a SAM conversion, or a
+ *     `class`/`object` declaration line whose supertype list names
+ *     `PeerIdentityBinding` after a colon, excluding the interface's own
+ *     `fun interface PeerIdentityBinding {` declaration line) — and it is
  *     `civictech.cell.link.Identity.kt`.
  * (c) exactly one production `fun fingerprint(` declaration exists, and its
  *     return type on that line is `KeyId`.
@@ -52,13 +53,20 @@ class IdentityDerivationRatchetTest {
     private val peerIdDeclaration = Regex("""\bclass\s+PeerId\(""")
     private val bindingSamConversion = Regex("""\bPeerIdentityBinding\s*\{""")
 
-    // A SUPERTYPE declaration ("class Foo : PeerIdentityBinding {") always has
-    // whitespace directly before the colon in this codebase's (ktlint) style;
-    // a type ANNOTATION ("identityBinding: PeerIdentityBinding") never does.
-    // Requiring that whitespace is what keeps `val x: PeerIdentityBinding =
-    // PeerIdentityBinding.Interim` (a type usage, not an implementation) from
-    // being misread as a second implementation site.
-    private val bindingSupertype = Regex("""\s:\s*PeerIdentityBinding\b""")
+    // A SUPERTYPE declaration ("class Foo : PeerIdentityBinding {", or
+    // "class Foo: PeerIdentityBinding, Marker {" with no space before the
+    // colon and a further supertype after) is recognised by the `class`/
+    // `object` keyword that introduces the declared type, not by whitespace
+    // around the colon — whitespace-before-colon is a ktlint convention this
+    // repo does not mechanically enforce (no .editorconfig, no ktlint plugin
+    // in any build.gradle.kts, buildSrc or build-logic), so a supertype list
+    // can legally omit the leading space. Requiring the keyword instead is
+    // what keeps `val x: PeerIdentityBinding = PeerIdentityBinding.Interim`
+    // (a type usage, not an implementation) from being misread as a second
+    // implementation site: that line names no `class`/`object`.
+    private val bindingSupertype = Regex(
+        """^\s*(?:\w+\s+)*(?:class|object)\s+\w+\s*:\s*[^{]*\bPeerIdentityBinding\b""",
+    )
     private val bindingInterfaceDeclaration = Regex("""^\s*fun\s+interface\s+PeerIdentityBinding\b""")
     private val fingerprintDeclaration = Regex("""\bfun\s+fingerprint\([^)]*\)\s*:\s*([\w.]+)""")
 
@@ -288,6 +296,69 @@ class IdentityDerivationRatchetTest {
             actual,
         ) {
             "scanner should report exactly the legitimate site and the stray, never the KDoc-only mention; found: $actual"
+        }
+    }
+
+    /**
+     * Non-vacuousness route for assertion (b)'s [bindingSupertype] regex
+     * (test-only task — no production edit is in this claim to prove
+     * discrimination against, so the test carries its own fixture, same
+     * pattern as the `PeerId(` scanner's fixture self-check above).
+     *
+     * Pins the measured escape from `computenet-lusi`: a supertype
+     * declaration with no whitespace before the colon AND a second
+     * supertype after `PeerIdentityBinding` (`private class Escape:
+     * PeerIdentityBinding, ProbeMarker {`) must still be recognised as an
+     * implementation. In the SAME fixture, a type USAGE (`val binding:
+     * PeerIdentityBinding = PeerIdentityBinding.Interim`) must NOT be
+     * recognised — proving the widened regex does not trade the false
+     * negative for a false positive on the type-usage shape the whitespace
+     * requirement used to (incompletely) guard against.
+     */
+    @Test
+    fun `fixture self-check - the binding scanner flags a no-space multi-supertype declaration and ignores a type usage`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-c")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-c/src/main/kotlin/fixture/c").apply { mkdirs() }
+
+        File(moduleDir, "Escape.kt").writeText(
+            """
+            package fixture.c
+
+            private interface ProbeMarker
+
+            private class Escape: PeerIdentityBinding, ProbeMarker {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        File(moduleDir, "Usage.kt").writeText(
+            """
+            package fixture.c
+
+            class Usage {
+                fun make(binding: PeerIdentityBinding = PeerIdentityBinding.Interim): PeerIdentityBinding = binding
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        assertEquals(1, moduleRoots.size) {
+            "expected 1 fixture module root, found $moduleRoots — moduleMainRoots is broken against this tree"
+        }
+
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-c/src/main/kotlin/fixture/c/Escape.kt"), actual) {
+            "scanner should report exactly the no-space multi-supertype escape, never the type-usage-only file; " +
+                "found: $actual"
         }
     }
 }
