@@ -1378,9 +1378,10 @@ Otherwise ask for the next batch:
 
 Returns `{batch: [{id, model, files, worktree, branch, resumed}], skipped,
 warnings, running_elsewhere, verdict, parked, capacity}`.
-`running_elsewhere` names every unit you have in flight OUTSIDE this feature —
-a 5f route 0 direct child above all, which a query about one feature cannot
-see. Their claims hold their files, so a task overlapping one is skipped with
+`running_elsewhere` is `{id, files}` for every unit you have in flight outside
+this feature THAT CARRIES A FILES CLAIM — epics and claimless units hold
+nothing and are not listed. A 5f route 0 direct child is the case it exists
+for, being invisible to a query about one feature. Their claims hold their files, so a task overlapping one is skipped with
 that unit named. Route 0's disjointness test is a one-time admission check;
 this is what re-applies it on every later batch, instead of your memory of a
 dispatch three hours ago (computenet-z6q2). `warnings` names any claim that is a
