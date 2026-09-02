@@ -333,14 +333,15 @@ dispatch carries (a bare Gradle or long command otherwise backgrounds at
 120s and the agent stalls). Ship per AGENTS.md's confidence rule — the
 reviewer certifies, you run `gh pr ready`.
 
-On merge:
+On merge — which normally arrives while the NEXT item is already in flight,
+so this is "when it merges, do this", not a barrier the loop below waits at:
 
 ```bash
 bd close <id> --reason "fixed in <pr-url> against skill revision <hash>"
 git worktree remove "$PWD/../computenet-worktrees/<id>"
 ```
 
-Repeat from step 2 while budget remains; this lane is cheap per item, so
+Take the next item without waiting — repeat from step 2 while budget remains; this lane is cheap per item, so
 several items per session is normal — **but keep at most ~2 PRs open against
 any one file, and the sharper unit here is the BUDGET ENTRY**: every PR that
 moves a budget touches `.claude/skills/line-budget.txt`, and two PRs raising

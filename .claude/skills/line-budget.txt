@@ -367,7 +367,12 @@ work                9209
 # step 4, replacing a sentence that named ONE suite literally. The mechanical
 # half (the runner and its own 21-assertion suite) costs no budget lines; the
 # 12 are the call, what it selects, and what its two exits mean.
-remediate-friction   396
+# 396 -> 397 on 2026-09-02: computenet-qae3 (+1) — bought the clause saying a
+# merge normally arrives while the NEXT item is already in flight. "On merge:
+# ... Repeat from step 2" read literally is a barrier, so the ~2-PR bound two
+# lines below it was a dead letter to a literal reader; the 2026-08-29 drain
+# ran five PRs at once on the loose reading, and both readings were available.
+remediate-friction   397
 # 201 -> 267 on 2026-08-29: computenet-d1im — sync-report gains §4, the
 # coherence audit: five named checks over a bounded set (top up-next picks,
 # beads touched by window decisions, epics a merge may have absorbed), ranked
