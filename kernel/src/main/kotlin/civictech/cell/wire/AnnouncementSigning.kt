@@ -127,9 +127,12 @@ fun announcementCounterFloor(incarnation: Long): Long {
  *   [DEFAULT_ANNOUNCEMENT_TTL_MILLIS].
  * @property signerKeyId names the signing key among the signer's published
  *   keys ([DSC1-WIRE-01]). Defaults to the credentials' own
- *   [PeerCredentials.peerId] name, which *is* the key's fingerprint on every
- *   `:identity`-backed implementation — so the default is already a key id,
- *   not a peer name that happens to be nearby.
+ *   [PeerCredentials.keyId] name — the key's fingerprint, which is what this
+ *   field is for. Since feature `computenet-376c` that is a distinct property
+ *   from [PeerCredentials.peerId]; under the interim
+ *   `civictech.cell.link.PeerIdentityBinding` the two carry the same string,
+ *   so the emitted field is byte-identical to what the old
+ *   `credentials.peerId.name` default produced.
  * @property incarnation which *run* of this signing identity's process this
  *   signer belongs to, read **once**, at construction. See
  *   [AnnouncementSigner.counterFloor] for what it buys and what it assumes.

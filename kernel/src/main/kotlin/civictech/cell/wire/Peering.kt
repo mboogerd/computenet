@@ -788,7 +788,8 @@ object Peering {
      *   reach;
      * - the sender's [Side.peer] **is** the identity its own key resolves to
      *   (`sender.identityBinding.identityOf(credentials.keyId)`) — the
-     *   socket's `[DSC1-HELLO-06]` derive-and-compare, as data. A side announcing itself under a name its key does
+     *   socket's `[DSC1-HELLO-06]` derive-and-compare, as data. A side
+     *   announcing itself under a name its key does
      *   not derive is exactly the `ID_MISMATCH` the socket refuses, and the
      *   name is what gets stamped on every delivery, so promoting it would
      *   authenticate a claim no key backs. A [Side.peer] of null cannot be
