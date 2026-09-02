@@ -3,6 +3,7 @@ package civictech.iroh
 import civictech.cell.DenialReason
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.wire.Peering
 import org.junit.jupiter.api.Test
@@ -27,7 +28,7 @@ import kotlin.test.assertTrue
  */
 class IrohSessionHelloTest {
 
-    private fun side(name: String? = null, allow: Set<PeerId>? = null): Peering.Side {
+    private fun side(name: String? = null, allow: Set<KeyId>? = null): Peering.Side {
         val registry = LocationRegistry()
         return Peering.Side(registry, ManagedHost(registry = registry), peer = name?.let { PeerId(it) }, allow = allow)
     }
@@ -96,7 +97,7 @@ class IrohSessionHelloTest {
         val sent = mutableListOf<ByteArray>()
         var refusals = 0
         val session = IrohTransport.Session(
-            side(name = "server", allow = setOf(PeerId("good"))),
+            side(name = "server", allow = setOf(KeyId("good"))),
             send = { sent += it },
             refuse = { refusals++ },
         )
@@ -114,7 +115,7 @@ class IrohSessionHelloTest {
 
         // and an admitted name on the same allowlist still passes
         val admitted = IrohTransport.Session(
-            side(name = "server", allow = setOf(PeerId("good"))),
+            side(name = "server", allow = setOf(KeyId("good"))),
             send = { },
             refuse = { throw AssertionError("an admitted hello must not be refused") },
         )

@@ -11,6 +11,7 @@ import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.link.AuthLevel
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.port.FanOutlet
 import civictech.cell.protocol.ProtocolId
@@ -117,16 +118,36 @@ class BridgeIngressCell(
      */
     private val peerAuth: AuthLevel = AuthLevel.TransportVouched,
     /**
-     * Boundary admission (M8.3, spec 43 mechanism 2): allowlists are bridge
-     * configuration, not a protocol fork. A refused frame is refused before
-     * [WireCodec.decode] runs and before any delivery reaches the local
-     * registry ([SEC1-06]): a typed [civictech.cell.BoundaryDenial] naming the
-     * refused [PeerId] is emitted through [boundaryDenials] and this cell's
-     * denial counter increments ([SEC1-07]). Nothing is thrown, so the
-     * refusal is never classified as a cell fault that triggers supervision
-     * RESTART or escalation — a denial is not a fault (BS-14).
+     * The **key identifier** this connection was admitted on, judged by
+     * [admit] (feature `computenet-376c`). Null when the connection presented
+     * no key — an open side admits it, an allowlisted side refuses it.
+     *
+     * Distinct from [peer] on purpose: this is what admission *decides on*,
+     * [peer] is what every delivery is *stamped with*. Under the interim
+     * [civictech.cell.link.PeerIdentityBinding] the two carry the same string.
      */
-    private val admit: (PeerId?) -> Boolean = { true },
+    private val peerKey: KeyId? = null,
+    /**
+     * Boundary admission (M8.3, spec 43 mechanism 2): allowlists are bridge
+     * configuration, not a protocol fork. Judges [peerKey] — the key on the
+     * connection — and not [peer], which is the identity it resolved to
+     * (feature `computenet-376c`).
+     *
+     * A refused frame is refused before [WireCodec.decode] runs and before any
+     * delivery reaches the local registry ([SEC1-06]): a typed
+     * [civictech.cell.BoundaryDenial] naming the refused [PeerId] is emitted
+     * through [boundaryDenials] and this cell's denial counter increments
+     * ([SEC1-07]). Nothing is thrown, so the refusal is never classified as a
+     * cell fault that triggers supervision RESTART or escalation — a denial is
+     * not a fault (BS-14).
+     *
+     * **Residual (feature `computenet-376c`):** the emitted
+     * `civictech.cell.BoundaryDenial.principal` stays a [PeerId] and grows no
+     * `KeyId` field, so a refusal records the identity that was refused and
+     * names the refused key only in its `detail`. Re-keying the denial record
+     * is DSC4's remaining work.
+     */
+    private val admit: (KeyId?) -> Boolean = { true },
     /**
      * Reverse-direction sink for upstream protocol replies over a
      * wire-reconstructed [WireEdgeLink] (spec 41 point 4, G-35 phase B) —
@@ -278,7 +299,7 @@ class BridgeIngressCell(
     init {
         inlet.serve(object : Propagate<ByteArray> {
             override fun propagate(value: ByteArray) {
-                if (!admit(peer)) {
+                if (!admit(peerKey)) {
                     // Seam 1 (spec 40/43, [SEC1-07]): refused before decode and
                     // before any delivery reaches the local registry
                     // ([SEC1-06]). Nothing throws — a denial is not a cell
@@ -288,7 +309,7 @@ class BridgeIngressCell(
                         reason = DenialReason.NOT_ADMITTED,
                         principal = peer,
                         subject = null,
-                        detail = "frame from $peer refused: not on the allowlist (spec 43)",
+                        detail = "frame from $peer (key $peerKey) refused: not on the allowlist (spec 43)",
                         deniedArgs = listOf(value),
                     )
                     return

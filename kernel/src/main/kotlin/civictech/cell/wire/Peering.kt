@@ -7,6 +7,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
 import civictech.cell.link.AuthLevel
+import civictech.cell.link.KeyId
 import civictech.cell.link.Link
 import civictech.cell.link.Linked
 import civictech.cell.link.PeerId
@@ -343,7 +344,25 @@ sealed interface PeerAuthPolicy {
  * this interface. An implementation must keep [toString] free of it too.
  */
 interface PeerCredentials {
-    /** This side's key-derived identity — `civictech.identity.fingerprint(publicKey)`. */
+    /**
+     * This side's **key identifier** — `civictech.identity.fingerprint(publicKey)`,
+     * the fingerprint of [publicKey] (feature `computenet-376c`).
+     *
+     * This is the token boundary admission judges: an allowlist
+     * ([Peering.Side.allow]) names keys, and a hello is admitted on the key it
+     * presented.
+     */
+    val keyId: KeyId
+
+    /**
+     * This side's **durable identity** — what it signs and announces under,
+     * and what a peer that admits it stamps on every delivery.
+     *
+     * An implementation obtains it by resolving [keyId] through a
+     * [civictech.cell.link.PeerIdentityBinding]; it must **never** compute a
+     * second fingerprint of its own. That seam is the single place an identity
+     * is derived from key material (feature `computenet-376c`).
+     */
     val peerId: PeerId
 
     /** The public half, in its X.509/SubjectPublicKeyInfo encoding — what a hello presents. */
@@ -367,8 +386,23 @@ object Peering {
         val bridgeHost: ManagedHost,
         /** This side's transport identity (M8.2); null = anonymous. */
         val peer: PeerId? = null,
-        /** Deny-by-default admission (M8.3): peers accepted at this boundary; null = open. */
-        val allow: Set<PeerId>? = null,
+        /**
+         * Deny-by-default admission (M8.3): the **keys** accepted at this
+         * boundary; null = open.
+         *
+         * Keyed on [KeyId] rather than [PeerId] since feature
+         * `computenet-376c`: admission asks "may this connection in front of
+         * me be let in", which is a property of the key on the wire right now,
+         * while the [PeerId] this side then stamps is attribution resolved
+         * through [identityBinding]. Under the interim binding the two hold the
+         * same string, so an allowlist configured before the split admits and
+         * refuses exactly the same connections after it.
+         *
+         * Under `civictech.cell.link.AuthLevel.TransportVouched` no key exists:
+         * the entry then names the identifier a peer *asserted* and the
+         * transport vouched for — see [KeyId]'s own KDoc.
+         */
+        val allow: Set<KeyId>? = null,
         /**
          * **Test-only seam** (computenet-dqy.45), null on every production path
          * and never set by kernel, `:wire` or any demo. [announceTo] invokes it
@@ -542,7 +576,28 @@ object Peering {
             }
         }
 
-        fun admits(peer: PeerId?): Boolean = allow == null || peer in allow
+        /**
+         * The admission token this side would present to a peer — a keyed side
+         * presents its key's fingerprint, an unkeyed one the name it asserts.
+         *
+         * Used by [loopback] as the in-process stand-in for what a hello would
+         * carry on a socket. The `KeyId(peer.name)` arm is the **transport-
+         * vouched assertion**, not a derivation from key material: it is
+         * exactly what the legacy name-only hello puts on the wire, and it
+         * disappears when that hello does.
+         */
+        val presentedKeyId: KeyId? get() = credentials?.keyId ?: peer?.let { KeyId(it.name) }
+
+        /**
+         * Is the connection presenting key identifier [key] admitted here?
+         *
+         * Judges the **key**, never the identity (feature `computenet-376c`).
+         * There is deliberately no [PeerId] overload: a `null` argument would
+         * be ambiguous between the two, and `side::admits` — how
+         * [hostIngress] passes this gate to a `BridgeIngressCell` — would not
+         * resolve.
+         */
+        fun admits(key: KeyId?): Boolean = allow == null || key in allow
     }
 
     interface FrameInletProxy {
@@ -731,9 +786,9 @@ object Peering {
      * - the sender holds [Side.credentials] — on a socket this is what lets it
      *   answer with a `PROOF`; without a keypair there is no `PROOF` row to
      *   reach;
-     * - the sender's [Side.peer] **is** its own key fingerprint
-     *   (`credentials.peerId`) — the socket's `[DSC1-HELLO-06]` derive-and-
-     *   compare, as data. A side announcing itself under a name its key does
+     * - the sender's [Side.peer] **is** the identity its own key resolves to
+     *   (`sender.identityBinding.identityOf(credentials.keyId)`) — the
+     *   socket's `[DSC1-HELLO-06]` derive-and-compare, as data. A side announcing itself under a name its key does
      *   not derive is exactly the `ID_MISMATCH` the socket refuses, and the
      *   name is what gets stamped on every delivery, so promoting it would
      *   authenticate a claim no key backs. A [Side.peer] of null cannot be
@@ -754,7 +809,8 @@ object Peering {
     internal fun loopbackAuthLevel(sender: Side, receiver: Side): AuthLevel {
         val senderKeys = sender.credentials ?: return AuthLevel.TransportVouched
         if (receiver.credentials == null) return AuthLevel.TransportVouched
-        return if (sender.peer != null && sender.peer == senderKeys.peerId) AuthLevel.Authenticated
+        return if (sender.peer != null && sender.peer == sender.identityBinding.identityOf(senderKeys.keyId))
+            AuthLevel.Authenticated
         else AuthLevel.TransportVouched
     }
 
@@ -842,7 +898,13 @@ object Peering {
                 Use.fixed(
                     interposed(
                         interposeAToB,
-                        hostIngress(b, fromPeer = a.peer, fromPeerAuth = aToBLevel, onSpawn = { ingressOnB = it }),
+                        hostIngress(
+                            b,
+                            fromPeer = a.peer,
+                            fromPeerAuth = aToBLevel,
+                            fromKey = a.presentedKeyId,
+                            onSpawn = { ingressOnB = it },
+                        ),
                     ),
                     PortRef.generate(),
                 ),
@@ -853,7 +915,13 @@ object Peering {
                 Use.fixed(
                     interposed(
                         interposeBToA,
-                        hostIngress(a, fromPeer = b.peer, fromPeerAuth = bToALevel, onSpawn = { ingressOnA = it }),
+                        hostIngress(
+                            a,
+                            fromPeer = b.peer,
+                            fromPeerAuth = bToALevel,
+                            fromKey = b.presentedKeyId,
+                            onSpawn = { ingressOnA = it },
+                        ),
                     ),
                     PortRef.generate(),
                 ),
@@ -883,6 +951,17 @@ object Peering {
         fromPeer: PeerId? = null,
         fromPeerAuth: AuthLevel = AuthLevel.TransportVouched,
         /**
+         * The key identifier [side]'s allowlist judges this connection on
+         * (feature `computenet-376c`). [fromPeer] is what gets *stamped*;
+         * this is what gets *admitted*, and the caller decides both — this
+         * function resolves nothing.
+         *
+         * Null on a caller that names no key, which an open side admits and a
+         * side with an allowlist refuses, exactly as a null [fromPeer] did
+         * before the split.
+         */
+        fromKey: KeyId? = null,
+        /**
          * The admission gate this ingress judges announcements with. Defaults
          * to the side's own ([Side.announcementAdmission]) — the loopback and
          * pre-feature shape. A socket transport overrides it with
@@ -896,6 +975,7 @@ object Peering {
             InvocationSink(side.registry::deliver),
             peer = fromPeer,
             peerAuth = fromPeerAuth,
+            peerKey = fromKey,
             admit = side::admits,
             // Borrowed from the Side, so every ingress this side ever hosts —
             // including the fresh one a reconnect mints — shares one replay

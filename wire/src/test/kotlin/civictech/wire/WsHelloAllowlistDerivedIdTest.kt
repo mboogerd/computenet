@@ -3,6 +3,7 @@ package civictech.wire
 import civictech.cell.DenialReason
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.membrane.AuthLevel
 import civictech.cell.wire.PeerAuthPolicy
@@ -31,7 +32,7 @@ class WsHelloAllowlistDerivedIdTest {
 
     private fun identity(seed: String) = PeerIdentity(DeterministicKeySource.keyPairFromSeed(seed.toByteArray()))
 
-    private class Stack(val identity: PeerIdentity, allow: Set<PeerId>? = null) {
+    private class Stack(val identity: PeerIdentity, allow: Set<KeyId>? = null) {
         val registry = LocationRegistry()
         val bridgeHost = ManagedHost(registry = registry)
         val side = Peering.Side(
@@ -86,7 +87,7 @@ class WsHelloAllowlistDerivedIdTest {
     fun `BS-14 a different keypair claiming an allowlisted id is refused, its genuine holder is admitted`() {
         val allowed = identity("bs14-allowed")
         val attacker = identity("bs14-attacker")
-        val local = Stack(identity("bs14-local"), allow = setOf(allowed.peerId))
+        val local = Stack(identity("bs14-local"), allow = setOf(allowed.keyId))
 
         // -- an attacker holding a DIFFERENT keypair claims the allowlisted id --
         val attackSession = WsTransport.Session(local.side, send = {}, refuse = {}, sendText = {})

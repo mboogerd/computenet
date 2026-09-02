@@ -8,6 +8,7 @@ import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
@@ -114,6 +115,14 @@ class SignedAnnouncementTest {
      */
     private class Keys(override val peerId: PeerId, private val identity: PeerIdentity) : PeerCredentials {
         constructor(identity: PeerIdentity) : this(identity.peerId, identity)
+
+        /**
+         * A test double's key identifier: the same string as [peerId], which is
+         * what `PeerIdentityBinding.Interim` resolves between anyway (feature
+         * `computenet-376c`). Nothing here fingerprints a key — the kernel
+         * treats credentials as data ([DSC1-WIRE-04]).
+         */
+        override val keyId: KeyId = KeyId(peerId.name)
 
         override val publicKey: ByteArray = identity.publicKey.encoded
         override fun sign(message: ByteArray): ByteArray = identity.sign(message)

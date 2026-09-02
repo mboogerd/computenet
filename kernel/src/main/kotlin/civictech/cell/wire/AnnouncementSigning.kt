@@ -227,7 +227,7 @@ class AnnouncementSigner internal constructor(
     private val counter = AtomicLong(counterFloor)
 
     /** See [AnnouncementSigningConfig.signerKeyId]. */
-    val signerKeyId: String = config.signerKeyId ?: credentials.peerId.name
+    val signerKeyId: String = config.signerKeyId ?: credentials.keyId.name
 
     /** The last counter assigned; [counterFloor] before the first announcement. Test surface. */
     val lastCounter: Long get() = counter.get()

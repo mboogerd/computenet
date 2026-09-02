@@ -89,7 +89,7 @@ class TrustBoundaryTest {
         init {
             val p = Peering.Side(
                 registryP, bridgeP, peer = PeerId("p"),
-                allow = if (allowlisted) setOf(PeerId("good")) else null,
+                allow = if (allowlisted) setOf(KeyId("good")) else null,
             )
             val q = Peering.Side(registryQ, bridgeQ, peer = PeerId("evil"))
             // ingressOnA lives on bridgeP (p's bridge host) and receives q's
