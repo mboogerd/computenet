@@ -170,9 +170,15 @@ sealed interface SidecarMessage {
  * Pure encode/decode of the sidecar's local-socket protocol. No IO, no state.
  *
  * `DATA` is the one kind that travels both ways, and both directions build it
- * through the single [dataFrame] site below. That is deliberate: if
- * `computenet-ey4v` settles the refusal contract by giving `DATA` a host-chosen
- * sequence number, the header gains a field in exactly one place.
+ * through the single [dataFrame] site below. That is deliberate: `DATA`'s header
+ * is one thing, so one place builds it, and the two directions cannot drift
+ * apart into a header the host writes and a header it will not accept.
+ *
+ * The site was originally justified by a possibility that has since been
+ * decided against — `computenet-ey4v` settled the refusal contract *without* a
+ * host-chosen sequence number on `DATA` (a refusal is terminal for its link; see
+ * `PROTOCOL.md` §2, Backpressure), so no field is coming to be threaded through
+ * here. The single site stands on its own terms regardless, and should be kept.
  */
 object SidecarCodec {
 
