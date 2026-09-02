@@ -1377,7 +1377,13 @@ Otherwise ask for the next batch:
 ```
 
 Returns `{batch: [{id, model, files, worktree, branch, resumed}], skipped,
-warnings, verdict, parked, capacity}`. `warnings` names any claim that is a
+warnings, running_elsewhere, verdict, parked, capacity}`.
+`running_elsewhere` is `{id, files}` per unit in flight outside this feature
+THAT CARRIES A FILES CLAIM (epics and claimless ones hold nothing, so are not
+listed) — a 5f route 0 direct child above all, invisible to a one-feature query. Their claims hold their files, so a task overlapping one is skipped with
+that unit named. Route 0's disjointness test is a one-time admission check;
+this is what re-applies it on every later batch, instead of your memory of a
+dispatch three hours ago (computenet-z6q2). `warnings` names any claim that is a
 DIRECTORY — it collides with everything beneath it, so the epic batches more
 serially than it needs to; narrow that bead's `files` before dispatching
 (computenet-i5zr). The batch is what can safely run at once:
@@ -1447,6 +1453,10 @@ at all (computenet-38ze). Confirm before parking:
 
 Any `READY` line and the batch was not empty: dispatch that task by hand and
 do not park. Only an all-`BLOCKED` result earns the `parked_at` route.
+**Except when its `skipped` reason names a unit running outside this feature**
+— that task is `READY` in bd's sense and its files are held by something live,
+so dispatching it by hand walks straight into computenet-z6q2. Check that unit
+is still alive first; if it is, this task waits.
 
 `parked-residue` exists because parking a finished feature over follow-up
 questions *its own implementation filed* strands CI-green work with no path

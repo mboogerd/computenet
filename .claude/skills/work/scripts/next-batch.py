@@ -12,6 +12,7 @@ finish.
 Usage: next-batch.py <feature-id> [--actor NAME]
 Prints JSON: {"batch": [{id, model, files, worktree, branch, resumed}],
               "skipped": [{id, reason}], "warnings": [str],
+              "running_elsewhere": [{id, files}],
               "verdict": str, "parked": [id],
               "capacity": {"cores": int, "max_parallel": int,
                            "load1": float|null, "advice": str|null}}
@@ -43,6 +44,13 @@ at", not "none exist".
 
 A task with no `files` claim can't be scheduled against anything, so it is only
 ever returned alone — safer than guessing a claim for it.
+
+`running_elsewhere` is every unit this actor has `in_progress` outside this
+feature, with its claim. Those claims seed the disjointness test, so a unit
+dispatched through SKILL.md 5f route 0 — a direct child of the epic, invisible
+to a query about one feature — can no longer have its files handed to a second
+agent (computenet-z6q2). It is emitted so the caller can see what a short batch
+was held behind.
 """
 import json
 import os
@@ -400,7 +408,7 @@ def dir_claim_warnings(candidates, batch, skipped):
     return out
 
 
-def plan_batch(candidates, feature=None):
+def plan_batch(candidates, feature=None, elsewhere=()):
     """(batch, skipped) from `[(task, resumed)]` — the claim-disjointness rule.
 
     A task with no `files` claim is returned ALONE and everything else is
@@ -413,6 +421,14 @@ def plan_batch(candidates, feature=None):
     over a path that does not exist, and batches like any other.
     """
     batch, skipped, taken = [], [], set()
+    # Seed with what is already running outside this feature (computenet-z6q2),
+    # so an overlap with a route-0 unit is skipped by the same rule that skips
+    # an overlap with a sibling — no second implementation, no memory.
+    outside = {}
+    for unit in elsewhere:
+        for f in unit["files"]:
+            outside[f] = unit["id"]
+    taken |= set(outside)
     for task, resumed in candidates:
         tid = task["id"]
         # Human-gated beads sit in bd ready like ordinary work, but they are
@@ -433,12 +449,55 @@ def plan_batch(candidates, feature=None):
             break
         collisions = overlaps(files, taken)
         if collisions:
-            skipped.append({"id": tid,
-                            "reason": "overlaps " + ",".join(sorted(collisions))})
+            # Name the RUNNING UNIT, not just the path: the caller's next move
+            # for "overlaps a sibling in this batch" is to wait one round, and
+            # for "overlaps a unit running elsewhere" it is to check whether
+            # that unit is still alive.
+            owners = sorted({outside[c] for c in collisions if c in outside})
+            reason = "overlaps " + ",".join(sorted(collisions))
+            if owners:
+                reason += " — running outside this feature: " + ",".join(owners)
+            skipped.append({"id": tid, "reason": reason})
             continue
         taken |= files
         batch.append(_entry(task, resumed, sorted(files), feature))
     return batch, skipped
+
+
+def running_elsewhere(actor, feature, candidate_ids):
+    """Units this actor has in flight OUTSIDE this feature, with their claims.
+
+    next-batch.py is asked about ONE feature and, until computenet-z6q2, could
+    only see that feature's children. A unit taken onto a free lane through
+    SKILL.md 5f route 0 — a DIRECT CHILD of the epic, on its own branch and PR
+    — is invisible to it by construction, and route 0's disjointness test is a
+    one-time admission check that nothing re-applies on later batches. So the
+    script offered a task whose files a live route-0 unit was actively editing;
+    only the orchestrator's memory of a dispatch several turns earlier stopped
+    it, three hours into a session. That save does not repeat.
+
+    Everything `in_progress` and assigned to this actor counts, minus the
+    candidates themselves (this feature's resumable tasks are legitimately in
+    the batch) and minus epics and this feature, which claim no files of their
+    own. A STALE claim from a dead session therefore blocks a batch — the
+    conservative direction, and visible: every unit found is reported in the
+    output, so the caller can see what it was held behind rather than
+    wondering why the batch is short.
+    """
+    out = []
+    for task in bd("list", "--status", "in_progress", "--assignee", actor):
+        tid = task.get("id")
+        if not tid or tid in candidate_ids or tid == feature:
+            continue
+        if task.get("issue_type") == "epic":
+            continue
+        try:
+            files = claim_of(task)
+        except ClaimError:
+            continue                      # not ours to diagnose; 5b names it
+        if files:
+            out.append({"id": tid, "files": sorted(files)})
+    return out
 
 
 def main():
@@ -467,8 +526,9 @@ def main():
         seen.add(tid)
         candidates.append((task, resumed))
 
+    elsewhere = running_elsewhere(actor, feature, {t["id"] for t, _ in candidates})
     try:
-        batch, skipped = plan_batch(candidates, feature)
+        batch, skipped = plan_batch(candidates, feature, elsewhere)
     except ClaimError as exc:
         # Named and actionable: the bead id, what its claim looked like, and
         # the one fix. A bare traceback here names split() on a list and not
@@ -502,6 +562,7 @@ def main():
     warnings = dir_claim_warnings(candidates, batch, skipped)
     print(json.dumps({"batch": batch, "skipped": skipped,
                       "warnings": warnings,
+                      "running_elsewhere": elsewhere,
                       "verdict": verdict, "parked": parked,
                       "capacity": {"cores": cores, "siblings": siblings,
                                    "max_parallel": cap,
