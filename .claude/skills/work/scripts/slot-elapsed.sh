@@ -24,10 +24,22 @@ el=$(( (now - start) / 60 ))
 tot=$(( total / 60 ))
 left=$(( tot - el ))
 
-if   [ "$left" -le 0  ]; then rung="EXPIRED — go to Finalize now"
-elif [ "$left" -le 45 ]; then rung="T-45m — no new dispatches; review and merge what is in flight"
-elif [ "$left" -le 90 ]; then rung="T-90m — finish the current feature; start no new one"
-else                          rung="OPEN — new units allowed"
+# The last 15m of a slot is Finalize, so the WORK time left is 15m less than
+# the wall-clock time left, and the rungs are measured against that. This is
+# the one place the reserve is written down for the reading; the monitor's
+# sleeps (SKILL.md step 2) and resume.md's re-arm offsets are the same three
+# boundaries from the other end — slot-105m, slot-60m, slot-15m — and they
+# already carried the reserve while this script did not. That 15m gap made the
+# tier and the rung disagree at exactly 195m of a 300m slot, twice, with
+# SKILL.md's tie-breaker handing the window to the permissive side
+# (computenet-v8kg). Change one and change all three.
+RESERVE=15
+usable=$(( left - RESERVE ))
+
+if   [ "$usable" -le 0  ]; then rung="EXPIRED — go to Finalize now"
+elif [ "$usable" -le 45 ]; then rung="T-45m — no new dispatches; review and merge what is in flight"
+elif [ "$usable" -le 90 ]; then rung="T-90m — finish the current feature; start no new one"
+else                            rung="OPEN — new units allowed"
 fi
 
 last="$SCRATCH/slot-last-reading"

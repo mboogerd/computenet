@@ -314,7 +314,16 @@
 # act on it. Recomputed against the landed 9192, not stacked on the number
 # this branch was cut from — two PRs raising one entry always conflict, and
 # the second number depends on the first's landed value.
-work                9195
+# 9195 -> 9203 on 2026-09-02: computenet-v8kg (+8) — bought the statement that
+# the monitor's three tiers ARE the slot end minus 105m/60m/15m and are absolute
+# offsets, not fractions of the slot, plus the replacement tie-breaker (take the
+# more cautious rung and file it). The old text said "scale proportionally" and
+# handed a 15-minute window at every rung to whichever source permitted more
+# work; the mechanical half — slot-elapsed.sh's Finalize reserve and a 13-row
+# boundary grid — costs no budget lines. The 8th line is the monitor block's
+# own `SLOT=18000`, which lets the first tier's sleep be DERIVED ($((SLOT-6300)))
+# instead of hand-computed per slot length: one fewer place to get wrong.
+work                9203
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

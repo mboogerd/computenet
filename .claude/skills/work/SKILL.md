@@ -270,7 +270,8 @@ Monitor({
   description: "work session budget",
   persistent: true,
   command: `S=/absolute/path/to/scratch/slot-start   # LITERAL — see below
-sleep 11700; echo "BUDGET T-90m ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): finish the current feature; start no new one"
+SLOT=18000                                          # the same seconds as below
+sleep $(( SLOT - 6300 )); echo "BUDGET T-90m ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): finish the current feature; start no new one"
 sleep 2700;  echo "BUDGET T-45m ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): no new dispatches; review and merge what is in flight"
 sleep 2700;  echo "BUDGET EXPIRED ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): go to Finalize now"`
 })
@@ -303,8 +304,12 @@ shell variable and nothing exports it across calls, let alone across a
 restart, so **note the directory's absolute path** here in as many words. A
 resume reads the *previous* session's dir by that literal path.
 
-Fires at 3h15m / 4h / 4h45m of a 5h slot (the last 15m is Finalize); scale
-proportionally if the routine names a different slot. **Note the monitor's
+Fires at 3h15m / 4h / 4h45m of a 5h slot — the slot END minus 105m/60m/15m,
+the last 15m being Finalize, so a rung is work time left, not wall clock left.
+The first sleep is DERIVED from `SLOT`; drop it if it is already ≤0. The three
+offsets are absolute, never fractions of the slot — T-90m names 90 minutes of
+work, and a shorter slot does not make a feature shorter. `resume.md` re-arms
+from the same offsets, and `slot-elapsed.sh` reads its rung from them. **Note the monitor's
 task id** — `TaskStop` it when you reach Finalize. 
 > **`persistent: true` is load-bearing. Do NOT add `timeout_ms`.**
 > Verified by probe 2026-08-13: `persistent` genuinely overrides the
@@ -379,7 +384,10 @@ across ~5 turns of ship-gate and bookkeeping, enough to carry the session over
 the T-90m rung as it reasoned about which side of it it was on
 (computenet-1lbs). The decay is LARGEST IN BUSY SESSIONS, growing with how much
 subagent output you have digested — where the budget matters most. The rung the
-script names binds, whatever the last tier fired.
+script names binds, whatever the last tier fired — and the two can no longer
+disagree, both being the slot end minus 105m/60m/15m (computenet-v8kg). If
+they ever do, take the MORE CAUTIOUS rung and file it: the encodings have
+drifted, and this line used to hand that window to whichever permitted more.
 
 **Never WRITE an elapsed figure you did not compute in that same turn.** The
 failure mode is drift, not disagreement: a session recomputes correctly five
