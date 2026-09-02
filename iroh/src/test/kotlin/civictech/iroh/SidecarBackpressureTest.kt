@@ -3,6 +3,7 @@ package civictech.iroh
 import civictech.iroh.SidecarProtocol.DIRECTION_OUTBOUND
 import civictech.iroh.SidecarProtocol.MSG_HEADER_LEN
 import civictech.iroh.SidecarProtocol.NODE_ID_LEN
+import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Test
 import java.io.DataInputStream
 import java.net.InetAddress
@@ -75,7 +76,16 @@ class SidecarBackpressureTest {
                         "CLOSE_LINK; the host answered with $answer instead",
                 )
 
+                // The client sets refused/sends CLOSE_LINK/calls onError in that program
+                // order on its single reader thread (SidecarClient.onError), but onError
+                // runs on that reader thread while this assertion runs on the test thread
+                // — observing CLOSE_LINK above says nothing about whether onError has run
+                // yet. Bound-wait for the listener's record rather than reading it cold.
+                awaitUntil("listener.errors to record the refusal") { listener.errors.isNotEmpty() }
                 assertEquals(listOf(reason), listener.errors.toList(), "the refusal is reported verbatim, not absorbed")
+                // Safe without a wait: refused is set (via CAS) strictly before CLOSE_LINK
+                // is sent on the same reader thread, so this fake having already observed
+                // CLOSE_LINK above guarantees refused is already true.
                 assertTrue(link.refusedAndClosed, "the link records that it ended in a refusal")
 
                 // And nothing more goes onto it: recovery is a NEW link.
