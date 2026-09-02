@@ -51,7 +51,8 @@
 #
 # Usage: wait-checks.sh <pr-url> [max-rounds]
 #   Polls `commits/<head-sha>/check-runs` every 20s, up to max-rounds
-#   (default 28), falling back to `gh pr checks` when REST answers nothing.
+#   (default 28) OR the wall-clock budget below, whichever comes first,
+#   falling back to `gh pr checks` when REST answers nothing.
 #
 # WHY 28 AND NOT 40. Every dispatch prompt in this skill runs verification in
 # ONE foreground Bash call with an explicit timeout of at most 600000 ms. The
@@ -151,6 +152,21 @@ FALLBACK_AFTER=${WAIT_CHECKS_FALLBACK_AFTER:-3}
 # 15 is ~5m, above the 4.5m cold start measured in computenet-a5in. After this,
 # zero rows is interrogated: a head with no workflow run is NO-RUN, terminal.
 COLD_ROUNDS=${WAIT_CHECKS_COLD_ROUNDS:-15}
+
+# THE WALL-CLOCK BUDGET, which is what actually bounds this call. Rounds do
+# not cost 20s — they cost 20s plus two or three `gh api` round trips, and on a
+# loaded box those are seconds each. 28 rounds is ~9m20s of SLEEP but was
+# measured crossing the 600s foreground cap and being AUTO-BACKGROUNDED, twice:
+# once at 5-minute load 68, and once on an idle 16-core box at load 7 — so the
+# margin was never load-dependent, it simply did not exist (computenet-ymv4,
+# recurred as computenet-tl8q). A round COUNT cannot bound wall clock; only a
+# deadline can. Before each sleep this checks whether the next round would
+# cross the budget and stops if it would, so the call returns a verdict inside
+# the cap instead of being cut off — a cut-off call looks like nothing at all,
+# not like TIMEOUT-PENDING. 500s leaves ~100s for the final round's API calls
+# under the 600000 ms cap every dispatch prompt in this skill names.
+DEADLINE_SECONDS=${WAIT_CHECKS_DEADLINE_SECONDS:-500}
+started_at_epoch=$(date +%s)
 
 # Minutes a required check may be running before an exhausted wait is called
 # STUCK rather than ORDINARY. 15 sits above the slowest measured
@@ -284,7 +300,18 @@ for i in $(seq 1 "$rounds"); do
     echo SETTLED
     exit 0
   fi
-  [ "$i" -lt "$rounds" ] && sleep 20
+  if [ "$i" -lt "$rounds" ]; then
+    # +20 is the sleep about to be taken: stop when the NEXT round would cross
+    # the budget, not after it already has.
+    if [ $(( $(date +%s) - started_at_epoch + 20 )) -ge "$DEADLINE_SECONDS" ]; then
+      echo "wait-checks: wall-clock budget ${DEADLINE_SECONDS}s reached after $i of" \
+           "$rounds rounds — stopping short of the 600s foreground cap rather than" \
+           "being auto-backgrounded. Rounds are slower than 20s here. This is a" \
+           "TIMEOUT, not a fault: call again (two calls is the normal cold start)."
+      break
+    fi
+    sleep 20
+  fi
 done
 
 printf '%s\n' "$rows"
