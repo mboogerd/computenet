@@ -187,19 +187,55 @@ STUCK_AFTER_MIN=${WAIT_CHECKS_STUCK_AFTER_MIN:-15}
 # word, conclusion) so every classifier below is unchanged.
 # Silent failure here is not a green: it prints nothing, the caller's row count
 # stays 0, and the round remains query-failed.
+# WHY THE CAUSE IS KEPT (computenet-mmzm). Both reads discarded stderr, so a
+# real REST outage printed a bare `QUERY FAILED:` with nothing after the colon
+# — a 503, a DNS failure, an expired token and a rate limit all look identical,
+# at the gate that decides a merge. The stderr goes to $REST_ERR instead of
+# /dev/null, and the round line prints it. It is printed only when it CHANGES,
+# because the alternative is the same error text 28 times, which is how an
+# agent learns to skip the one line that matters (the same reasoning as the
+# COLD START label below).
+# Refuse rather than continue: with $REST_ERR empty every redirect fails, and
+# the exhaustion summary would then say "REST wrote no error — the query
+# succeeded", which is the opposite of true.
+REST_ERR=$(mktemp "${TMPDIR:-/tmp}/wait-checks-err.XXXXXX") \
+  || { echo "wait-checks: cannot create a temp file for REST errors" >&2; exit 2; }
+trap 'rm -f "$REST_ERR"' EXIT
+
 head_sha() {
-  gh api "repos/{owner}/{repo}/pulls/${pr##*/}" --jq .head.sha 2>/dev/null
+  gh api "repos/{owner}/{repo}/pulls/${pr##*/}" --jq .head.sha 2>>"$REST_ERR"
 }
 
 rest_rows() {
   local sha
+  : > "$REST_ERR"
   sha=$(head_sha) || return 1
   [ -n "$sha" ] || return 1
   gh api "repos/{owner}/{repo}/commits/$sha/check-runs?per_page=100" \
     --jq '.check_runs[] | "\(.name)\t\(if .status != "completed" then "pending"
                               elif .conclusion == "success" then "pass"
                               elif .conclusion == "skipped" then "skipping"
-                              else "fail" end)\t\(.conclusion // "-")"' 2>/dev/null
+                              else "fail" end)\t\(.conclusion // "-")"' 2>>"$REST_ERR"
+}
+
+# Sets $cause to the round's report of what REST said. NOT a command
+# substitution: it has to remember the last cause across rounds, and a $(...)
+# runs in a subshell whose assignment is discarded — which printed the same
+# error on every one of 28 rounds. Full text the first time it is seen, a
+# back-reference afterwards, so no round line is a colon and nothing.
+first_err_round=""
+set_cause() {
+  cause=$(tr '\n' ' ' < "$REST_ERR" | tr -s ' ')
+  cause=${cause% }
+  if [ -z "${cause// /}" ]; then
+    cause=""
+  elif [ "$cause" = "$last_cause" ]; then
+    cause="same REST error as round $first_err_round"
+  else
+    last_cause=$cause
+    first_err_round=$i
+    cause="REST said: $cause"
+  fi
 }
 
 # "<name> <minutes>" for every still-running check run on the head commit.
@@ -227,6 +263,7 @@ runs_for_head() {
 
 rows=""
 state=query-failed
+last_cause=""
 consecutive_failed=0
 judged_sha=""
 for i in $(seq 1 "$rounds"); do
@@ -267,8 +304,9 @@ for i in $(seq 1 "$rounds"); do
       # fallback only assigns rows that already contain status words), but
       # printing it costs nothing and stops this line from lying if that
       # changes.
+      set_cause
       echo "round $i/$rounds: COLD START — no rows yet, ordinary for the" \
-           "first ${COLD_ROUNDS} rounds: $rows"
+           "first ${COLD_ROUNDS} rounds: $rows${cause:+ [$cause]}"
     else
       state=query-failed
       # Past the cold-start window, zero rows is INTERROGATED EACH ROUND rather
@@ -290,7 +328,10 @@ for i in $(seq 1 "$rounds"); do
         echo NO-RUN
         exit 5
       fi
-      echo "round $i/$rounds: QUERY FAILED: $rows"
+      set_cause
+      # `$rows` is empty on this branch by construction, so without the cause
+      # this line is a colon and nothing else (computenet-mmzm).
+      echo "round $i/$rounds: QUERY FAILED: ${rows}${cause:-no REST error either — the query returned no rows}"
     fi
   elif printf '%s\n' "$rows" | grep -q pending; then
     state=unsettled
@@ -327,6 +368,15 @@ done
 printf '%s\n' "$rows"
 echo "wait-checks: verdict is for head ${judged_sha:-unknown}"
 if [ "$state" = query-failed ]; then
+  # The exhaustion summary carries the cause even if an identical earlier round
+  # already printed it: the acceptance is that a session can name the outage
+  # from this output WITHOUT running a second command, and the last line is
+  # where it looks (computenet-mmzm).
+  final_cause=$(tr '\n' ' ' < "$REST_ERR" | tr -s ' ')
+  [ -n "${final_cause// /}" ] \
+    && echo "wait-checks: nothing was read. The last REST error was: ${final_cause% }" \
+    || echo "wait-checks: nothing was read, and REST wrote no error — the query" \
+            "succeeded and returned no rows this head recognises."
   echo QUERY-FAILED
   exit 3
 fi

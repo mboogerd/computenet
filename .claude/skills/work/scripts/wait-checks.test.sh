@@ -66,7 +66,9 @@ if [ "${1:-}" = api ]; then
   # commits/<sha>/check-runs — THE poll. Missing fixture = REST answered nothing.
   n=$(cat "$CTRL/round" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$CTRL/round"
   f="$CTRL/round$n.rest"; [ -f "$f" ] || f="$CTRL/default.rest"
-  [ -f "$f" ] || exit 1
+  # A REST outage writes to STDERR and exits non-zero — what `gh api` really
+  # does, and what the script used to send to /dev/null (computenet-mmzm).
+  [ -f "$f" ] || { [ -f "$CTRL/rest-stderr" ] && cat "$CTRL/rest-stderr" >&2; exit 1; }
   cat "$f"; exit 0
 fi
 # `gh pr checks` — the fallback transport, counted separately.
@@ -378,6 +380,31 @@ fixture; printf '%s\n' "$GREEN" > "$CTRL/default.rest"
 out=$(WAIT_CHECKS_DEADLINE_SECONDS=500 run); rc=$?
 [ "$rc" -eq 0 ] && ok "a settling run is untouched by the budget" || bad "exits $rc, wanted 0"
 hasnt "$out" "wall-clock budget" "a run that settles never mentions the budget"
+
+# --- a REST outage says WHY (computenet-mmzm) ------------------------------
+# rest_rows() discarded stderr, so a real outage printed a bare "QUERY FAILED:"
+# and a 503, a DNS failure, an expired token and a rate limit were one state.
+echo
+echo "REST outage cause"
+fixture
+echo "$GARBAGE" > "$CTRL/rest-stderr"        # no .rest fixture: REST answers nothing
+out=$(WAIT_CHECKS_COLD_ROUNDS=0 run 3); rc=$?
+[ "$rc" -eq 3 ] && ok "an unexplained outage is still QUERY-FAILED" || bad "exits $rc, wanted 3"
+has "$out" "$GARBAGE" "the round line carries the cause gh wrote to stderr"
+has "$out" "The last REST error was:" "the exhaustion summary names it without a second command"
+has "$out" "same REST error as round 1" "later rounds back-reference instead of repeating"
+grep -qE 'QUERY FAILED: *$' <<<"$out" \
+  && bad "a round line was a colon and nothing" || ok "no bare colon-and-nothing line"
+# printed once, not once per round — 28 copies is how the one useful line is skipped
+[ "$(grep -cF "$GARBAGE" <<<"$out")" -le 2 ] \
+  && ok "the cause is not repeated every round" \
+  || bad "repeated $(grep -cF "$GARBAGE" <<<"$out") times"
+
+fixture                                       # a clean cold start says nothing extra
+printf '%s\n' "$GREEN" > "$CTRL/default.rest"
+out=$(run); rc=$?
+[ "$rc" -eq 0 ] && ok "a settling run is unaffected" || bad "exits $rc, wanted 0"
+hasnt "$out" "REST said:" "a healthy run never mentions a REST error"
 
 echo
 echo "$pass passed, $fail failed"
