@@ -127,6 +127,41 @@ class ClaimMintTest {
     }
 
     // ------------------------------------------------------------------
+    // AGO1-EXTR-03 — representative text is a function of the set, not order
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `AGO1-EXTR-03 - representative text is the lexicographically least contributing text, independent of admission order`() {
+        // Same key (case folds together), different raw contributing text —
+        // exactly the pair ClaimAggregator.value()'s representative-text
+        // choice discriminates between.
+        val textA = "Rain follows clouds."
+        val textB = "RAIN FOLLOWS CLOUDS."
+        val expected = listOf(textA, textB).sorted().first()
+
+        val forward = Rig()
+        forward.admit(utterance("u1", 1, "alice", textA))
+        forward.admit(utterance("u2", 2, "bob", textB))
+        val forwardText = forward.canonicalClaims().single().text
+
+        val backward = Rig()
+        backward.admit(utterance("u2", 2, "bob", textB))
+        backward.admit(utterance("u1", 1, "alice", textA))
+        val backwardText = backward.canonicalClaims().single().text
+
+        assertEquals(
+            expected,
+            forwardText,
+            "representative text must be the lexicographically least contributing text",
+        )
+        assertEquals(
+            forwardText,
+            backwardText,
+            "representative text must not depend on admission order [AGO1-EXTR-03]",
+        )
+    }
+
+    // ------------------------------------------------------------------
     // MINT-03 — [AGO1-MINT-03]
     // ------------------------------------------------------------------
 
