@@ -37,8 +37,11 @@ import java.io.File
  * (b) exactly one production file implements `PeerIdentityBinding` (a line
  *     matching `PeerIdentityBinding\s*\{` as a SAM conversion, or a
  *     `class`/`object` declaration line whose supertype list names
- *     `PeerIdentityBinding` after a colon, excluding the interface's own
- *     `fun interface PeerIdentityBinding {` declaration line) — and it is
+ *     `PeerIdentityBinding` after a colon, or a supertype colon written
+ *     `\s:\s*PeerIdentityBinding` — the two supertype forms are
+ *     complementary, see [bindingSupertypeSpacedColon] — excluding the
+ *     interface's own `fun interface PeerIdentityBinding {` declaration
+ *     line) — and it is
  *     `civictech.cell.link.Identity.kt`.
  * (c) exactly one production `fun fingerprint(` declaration exists, and its
  *     return type on that line is `KeyId`.
@@ -67,6 +70,24 @@ class IdentityDerivationRatchetTest {
     private val bindingSupertype = Regex(
         """^\s*(?:\w+\s+)*(?:class|object)\s+\w+\s*:\s*[^{]*\bPeerIdentityBinding\b""",
     )
+
+    // ...and the complementary form the keyword anchor structurally cannot
+    // reach: a declaration header whose colon is separated from the type name
+    // by a primary constructor ("class Foo(val n: Int) : PeerIdentityBinding,
+    // Marker {"), by an annotation before the modifiers ("@Suppress("x")
+    // class Foo : ..."), or which names no type at all (an anonymous
+    // "companion object : ..." / "val impl = object : ..."). This is the
+    // ORIGINAL whitespace-before-colon regex, kept as a second alternative
+    // rather than replaced: on each of those four shapes with a trailing
+    // supertype after the interface name, the keyword-anchored regex above
+    // does not match and neither does [bindingSamConversion] (no `{` follows
+    // the interface name), so dropping it would trade the escape it closes
+    // for four it opens. Measured 2026-09-02 (computenet-lusi review).
+    // Known residual, matched by NEITHER: a supertype list wrapped onto its
+    // own line with a comma after the interface name
+    // ("class Foo :\n    PeerIdentityBinding,\n    Marker {") — a line scan
+    // sees no declaration keyword and no colon on the continuation line.
+    private val bindingSupertypeSpacedColon = Regex("""\s:\s*PeerIdentityBinding\b""")
     private val bindingInterfaceDeclaration = Regex("""^\s*fun\s+interface\s+PeerIdentityBinding\b""")
     private val fingerprintDeclaration = Regex("""\bfun\s+fingerprint\([^)]*\)\s*:\s*([\w.]+)""")
 
@@ -114,7 +135,10 @@ class IdentityDerivationRatchetTest {
             file.forEachLine { line ->
                 val content = contentOrNull(line) ?: return@forEachLine
                 if (bindingInterfaceDeclaration.containsMatchIn(content)) return@forEachLine
-                if (bindingSamConversion.containsMatchIn(content) || bindingSupertype.containsMatchIn(content)) {
+                val isImplementation = bindingSamConversion.containsMatchIn(content) ||
+                    bindingSupertype.containsMatchIn(content) ||
+                    bindingSupertypeSpacedColon.containsMatchIn(content)
+                if (isImplementation) {
                     paths += relativePath
                 }
             }
@@ -339,6 +363,31 @@ class IdentityDerivationRatchetTest {
             """.trimIndent(),
         )
 
+        // Shapes the keyword-anchored regex alone cannot reach, in their OWN
+        // file so this assertion discriminates: delete
+        // [bindingSupertypeSpacedColon] and only this file drops out of the
+        // expected set. Each has a trailing supertype after the interface
+        // name, so [bindingSamConversion] does not see them either.
+        File(moduleDir, "Parity.kt").writeText(
+            """
+            package fixture.c
+
+            private class CtorEscape(private val n: Int) : PeerIdentityBinding, ProbeMarker {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+
+            @Suppress("unused") class AnnotatedEscape : PeerIdentityBinding, ProbeMarker {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+
+            private class Holder {
+                companion object : PeerIdentityBinding, ProbeMarker {
+                    override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+                }
+            }
+            """.trimIndent(),
+        )
+
         File(moduleDir, "Usage.kt").writeText(
             """
             package fixture.c
@@ -356,9 +405,13 @@ class IdentityDerivationRatchetTest {
 
         val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
 
-        assertEquals(setOf("fixture-c/src/main/kotlin/fixture/c/Escape.kt"), actual) {
-            "scanner should report exactly the no-space multi-supertype escape, never the type-usage-only file; " +
-                "found: $actual"
+        val expected = setOf(
+            "fixture-c/src/main/kotlin/fixture/c/Escape.kt",
+            "fixture-c/src/main/kotlin/fixture/c/Parity.kt",
+        )
+        assertEquals(expected, actual) {
+            "scanner should report the no-space multi-supertype escape AND the constructor/annotation/anonymous-" +
+                "object shapes, never the type-usage-only file; found: $actual"
         }
     }
 }
