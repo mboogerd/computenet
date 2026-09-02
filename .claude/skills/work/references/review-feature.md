@@ -4,11 +4,11 @@
 to a ~2KB preview with no marker, and the authorship bound (§5) and
 verdict-token rule (§8) are past the cut (computenet-bgdb).
 
-**AND IT EXCEEDS ONE READ CALL.** At ~1200 lines the Read tool's per-call
-token cap lands around line 1016, so ONE Read returns a truncated file that
-reads as complete — with §7 (residual filing) and §8 (the literal `READY` /
-`DRAFT` verdict token SKILL.md 5e tests you on) both past the cut. Three
-reviewers hit this and only paged on unprompted (computenet-98cu). Take the
+**AND IT EXCEEDS ONE READ CALL.** At ~1200 lines the Read tool's per-call cap
+lands around line 1013, so §7 (residual filing) and §8 (the literal `READY` /
+`DRAFT` verdict token SKILL.md 5e tests you on) are past the cut. The result
+does say it truncated — and three reviewers still reached those sections only
+by paging on unprompted, none of them told to (computenet-98cu). Take the
 second pass before you start: `Read(file_path=…, offset=1000)`.
 
 **THE TWO RULES THAT DECIDE YOUR OUTPUT, hoisted so a one-page reader has
