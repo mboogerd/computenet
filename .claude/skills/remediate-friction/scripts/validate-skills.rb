@@ -73,6 +73,19 @@ BODY_LINE_IDEAL = 500
 # contents."
 REFERENCE_TOC_THRESHOLD = 300
 
+# Lines above which a reference file no longer fits in ONE Read call, so a
+# reader that issues one Read gets a truncated file that reads as complete.
+# review-feature.md measured the cap at ~line 1016 of 1200; 900 leaves margin
+# for a line-dense file. A file over this must SAY SO in its opening lines,
+# where a truncated read still shows it — three reviewers reached
+# review-feature.md's verdict-token rule only by paging on unprompted, and the
+# rule they would have missed is the one SKILL.md 5e refuses to act without
+# (computenet-98cu). Prose in the file is the only fix available; this check is
+# what makes the next file to cross the line say it too.
+READ_CALL_LINES = 900
+READ_CALL_BANNER = /exceeds?\s+one\s+read\s+call/i.freeze
+READ_CALL_BANNER_LINES = 50
+
 # The ratchet's numbers. Absent file or absent entry is a FAILURE, not a pass:
 # a skill with no budget is exactly the unpriced growth this exists to stop.
 BUDGET_FILE = File.join(root, 'line-budget.txt')
@@ -173,6 +186,13 @@ files.each do |f|
     next unless text.lines.length > REFERENCE_TOC_THRESHOLD
 
     rel = File.join('references', File.basename(r))
+    if text.lines.length > READ_CALL_LINES &&
+       !text.lines.first(READ_CALL_BANNER_LINES).join.match?(READ_CALL_BANNER)
+      errs << "#{rel} is #{text.lines.length} lines (>#{READ_CALL_LINES}), so one Read " \
+              'call returns it TRUNCATED with no marker — say so in the first ' \
+              "#{READ_CALL_BANNER_LINES} lines (the words 'exceeds one Read call'), " \
+              'naming what lives past the cut'
+    end
     if text.scan(/^## /).length < 2
       warns << "#{rel} is #{text.lines.length} lines with no sections to index"
     elsif !toc?(text)
