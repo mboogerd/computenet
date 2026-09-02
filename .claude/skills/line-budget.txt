@@ -323,7 +323,13 @@
 # boundary grid — costs no budget lines. The 8th line is the monitor block's
 # own `SLOT=18000`, which lets the first tier's sleep be DERIVED ($((SLOT-6300)))
 # instead of hand-computed per slot length: one fewer place to get wrong.
-work                9203
+# 9203 -> 9209 on 2026-09-02: computenet-tl8q (+6) — bought the correction of
+# two sentences this fix falsified. Both said the wait window is "~9m20s, sized
+# to the 600000 ms cap"; sizing it AT the cap is exactly what got the call
+# auto-backgrounded twice, and the script now bounds itself on wall clock at
+# ~8m10s. Leaving them would re-open, in the other direction, the script-vs-prose
+# divergence this bead is about. The mechanical half costs no budget lines.
+work                9209
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

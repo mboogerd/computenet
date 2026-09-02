@@ -547,9 +547,12 @@ So:
   the trap itself. You have **no inbound wake-up**; your turn ending IS your
   completion. A conditional verdict terminates, and waiting cannot.
 
-  You could not win the wait in any case: the ~9m20s window is smaller than
+  You could not win the wait in any case: the ~8m10s window is smaller than
   `build-test-fast` and cannot be widened inside the 600000 ms cap
-  (computenet-hil5), so a cold start needs two invocations. Exhaustion prints
+  (computenet-hil5), so a cold start needs two invocations. The script bounds
+  itself on WALL CLOCK, so it returns TIMEOUT-PENDING rather than running past
+  the cap and being auto-backgrounded — which it did twice, and which looks
+  like nothing at all rather than like a timeout (computenet-tl8q). Exhaustion prints
   each pending check's age plus `ORDINARY` or `STUCK`; only `STUCK` is a
   finding worth reporting.
 

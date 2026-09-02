@@ -356,6 +356,29 @@ has "$out" "COLD START — no rows yet" "early empty rounds are labelled, not si
 hasnt "$out" "QUERY FAILED" "the cold rounds do not LEAD with the words an agent learns to skip"
 hasnt "$out" "NO-RUN" "it does not call NO-RUN before the cold window is over"
 
+# --- the wall-clock budget (computenet-tl8q) -------------------------------
+# A round COUNT does not bound wall clock: rounds cost 20s of sleep PLUS their
+# API round trips, and the call was auto-backgrounded past the 600s foreground
+# cap twice — once at load 68, once on an idle box. The deadline is what makes
+# the call return a verdict instead of being cut off.
+echo
+echo "wall-clock budget"
+fixture; printf '%s\n' "$ONE_PENDING" > "$CTRL/default.rest"
+out=$(WAIT_CHECKS_DEADLINE_SECONDS=1 run 28); rc=$?
+[ "$rc" -eq 4 ] && ok "an exhausted budget is TIMEOUT-PENDING, the same verdict as exhausted rounds" \
+  || bad "exits $rc, wanted 4"
+has "$out" "wall-clock budget 1s reached" "it says the budget, not the rounds, ended the wait"
+has "$out" "TIMEOUT-PENDING" "the verdict token is unchanged, so tail -1 callers do not break"
+[ "$(rounds_polled)" -le 2 ] \
+  && ok "it stops on the budget instead of polling all 28 rounds" \
+  || bad "polled $(rounds_polled) rounds with a 1s budget"
+
+# A budget large enough for the rounds must not perturb anything.
+fixture; printf '%s\n' "$GREEN" > "$CTRL/default.rest"
+out=$(WAIT_CHECKS_DEADLINE_SECONDS=500 run); rc=$?
+[ "$rc" -eq 0 ] && ok "a settling run is untouched by the budget" || bad "exits $rc, wanted 0"
+hasnt "$out" "wall-clock budget" "a run that settles never mentions the budget"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
