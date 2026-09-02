@@ -1,5 +1,8 @@
 package civictech.iroh
 
+import civictech.cell.host.LocationRegistry
+import civictech.cell.host.ManagedHost
+import civictech.cell.wire.Peering
 import civictech.iroh.SidecarProtocol.DIRECTION_OUTBOUND
 import civictech.iroh.SidecarProtocol.MSG_HEADER_LEN
 import civictech.iroh.SidecarProtocol.NODE_ID_LEN
@@ -17,6 +20,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * The host's recovery contract for a refused `DATA` (`computenet-ey4v`,
@@ -131,6 +135,157 @@ class SidecarBackpressureTest {
         }
     }
 
+    // ------------------------------------- what an IrohConnection does with one
+
+    /**
+     * The connection-level half of the same contract, and the pin
+     * `computenet-ey4v` shipped without (`computenet-pozr`).
+     *
+     * A refusal ends its link, and the `LINK_DOWN` that ending produces is
+     * byte-identical to any other — including to the one a *refused hello*
+     * produces at the listening side's allowlist, which is the signal
+     * [IrohTransport.REFUSED_DIAL_LIMIT] counts. So a link torn down because
+     * this side's own send queue overflowed would otherwise read as one more
+     * peer refusal, and enough of them would abandon a perfectly willing peer.
+     * `IrohConnection.linkRefused` is what separates the two, and these three
+     * tests are what say so.
+     *
+     * Driven over [FakeSidecar] like the tests above, and for the same payoff:
+     * no cargo, no flood, no timing. `IrohTransport.Sidecar` is the seam that
+     * makes an [IrohTransport.IrohConnection] constructible without a spawned
+     * binary.
+     */
+    @Test
+    fun `an unadmitted link that simply goes down counts toward the refused-dial bound`() {
+        assertEquals(
+            1,
+            unadmittedOpensAfterOneUnadmittedLink(refusedFirst = false),
+            "a link that came up and went down without ever being admitted is the local shadow of a refused " +
+                "hello (computenet-4gzr) and must count toward REFUSED_DIAL_LIMIT",
+        )
+    }
+
+    /** THE PIN. @see `an unadmitted link that simply goes down counts toward the refused-dial bound` */
+    @Test
+    fun `an unadmitted link the sidecar refused something on does not count toward the refused-dial bound`() {
+        assertEquals(
+            0,
+            unadmittedOpensAfterOneUnadmittedLink(refusedFirst = true),
+            "a link this side tore down because the sidecar refused a frame on it (PROTOCOL.md section 2) is no " +
+                "evidence about the PEER's willingness, and must not accumulate toward REFUSED_DIAL_LIMIT — " +
+                "letting it would abandon a willing peer after a queue-overflow flood (computenet-4gzr)",
+        )
+    }
+
+    /**
+     * The one-shot's lifetime, which the guard's own KDoc records as
+     * intentional: `retire` consumes the flag only *past* its `shuttingDown`
+     * and `closeRequested` early returns, so an `ERROR` followed by a
+     * caller-requested close leaves it set and it exempts the **next**
+     * unplanned down instead.
+     *
+     * This is here to make that a decision rather than an accident. It fails
+     * safe — abandonment is delayed by at most one link, never triggered early
+     * — and a future change of mind should have to come here and say so.
+     */
+    @Test
+    fun `the refusal flag outlives a caller-requested close and exempts the next unplanned down`() {
+        val side = dialerSide()
+        FakeSidecar().use { fake ->
+            SidecarClient.connect(fake.port).use { client ->
+                connectionOver(client, side).use { connection ->
+                    val refused = fake.answerOpenLink(connection)
+                    fake.refuse(refused)
+
+                    // A close this side asks for, INSTEAD of the LINK_DOWN the
+                    // client's own CLOSE_LINK would have produced. retire()
+                    // returns at `closeRequested` without reading the flag.
+                    connection.sever()
+                    assertEquals(HostMessage.CloseLink(refused), fake.nextHostMessage())
+                    fake.send(SidecarMessage.LinkDown(refused, "link closed"))
+
+                    // The next link is an ORDINARY unadmitted down. Its retire()
+                    // reaches scheduleReconnect, which nothing before it did —
+                    // so one backoff consultation is an exact witness that this
+                    // second retire ran to the end.
+                    val next = fake.answerOpenLink(connection)
+                    fake.send(SidecarMessage.LinkDown(next, "transport drop"))
+                    awaitUntil("retire() to have decided about the second link") {
+                        connection.backoffConsultations >= 1L
+                    }
+
+                    assertEquals(
+                        0,
+                        connection.unadmittedOpens,
+                        "the refusal flag is documented as surviving retire()'s closeRequested early return and " +
+                            "exempting the next unplanned down; it exempted nothing",
+                    )
+                    assertTrue(
+                        !connection.abandonedAfterRefusals,
+                        "nothing here reaches REFUSED_DIAL_LIMIT, so the connection must still be re-dialling",
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * One [IrohTransport.IrohConnection] over the fake, one link on it that comes
+     * **up** and goes **down without ever being admitted** (the peer never
+     * answers this side's hello), and the connection's unadmitted count once
+     * `retire` has decided.
+     *
+     * [refusedFirst] is the whole distinction: with it, the sidecar refuses a
+     * frame on the link before the down, exactly as `PROTOCOL.md` section 2's
+     * queue-full arm does.
+     */
+    private fun unadmittedOpensAfterOneUnadmittedLink(refusedFirst: Boolean): Int {
+        val side = dialerSide()
+        FakeSidecar().use { fake ->
+            SidecarClient.connect(fake.port).use { client ->
+                connectionOver(client, side).use { connection ->
+                    val link = fake.answerOpenLink(connection)
+                    if (refusedFirst) fake.refuse(link)
+                    fake.send(SidecarMessage.LinkDown(link, if (refusedFirst) "link closed" else "transport drop"))
+                    // retire() consults the schedule as its last act on both
+                    // paths under test (neither reaches the limit), so this is a
+                    // witness that the decision has been made — not a sleep.
+                    awaitUntil("retire() to have decided") { connection.backoffConsultations >= 1L }
+                    return connection.unadmittedOpens
+                }
+            }
+        }
+    }
+
+    /** A dialling side with no allowlist; nothing here ever gets as far as admission. */
+    private fun dialerSide(): Peering.Side {
+        val registry = LocationRegistry()
+        return Peering.Side(registry, ManagedHost(registry = registry), peer = null, allow = null)
+    }
+
+    /**
+     * A connection over [client] with a schedule long enough that its re-dial
+     * loop never fires inside a test — every link here is opened deliberately,
+     * so the fake never has to race one it did not ask for. The consultation is
+     * still recorded ([IrohTransport.IrohConnection.backoffConsultations]),
+     * which is what the tests wait on.
+     */
+    private fun connectionOver(client: SidecarClient, side: Peering.Side) =
+        IrohTransport.IrohConnection(
+            sidecar = NoSidecar,
+            client = client,
+            side = side,
+            peerNodeId = peerId,
+            backoff = { 60_000L },
+            redialTimeout = 30.seconds,
+        )
+
+    /** There is no child process behind [FakeSidecar]; the node id is never read here. */
+    private object NoSidecar : IrohTransport.Sidecar {
+        override val nodeId: ByteArray get() = ByteArray(NODE_ID_LEN)
+        override fun close() = Unit
+    }
+
     // ------------------------------------------------------------------ fake
 
     /**
@@ -182,6 +337,48 @@ class SidecarBackpressureTest {
             received.poll(seconds, TimeUnit.SECONDS) ?: fail("no host message within ${seconds}s")
 
         fun pollHostMessage(millis: Long): HostMessage? = received.poll(millis, TimeUnit.MILLISECONDS)
+
+        /**
+         * One link opened on [connection]: its `DIAL` answered with `LINK_UP`,
+         * and this side's hello — the first frame on every outbound link
+         * (`PROTOCOL.md` section 3) — drained. Returns the link id.
+         *
+         * The peer never answers that hello, so the link is never admitted:
+         * `IrohTransport.Session.peered` stays false and the down that follows is
+         * an unadmitted one, which is the only kind [IrohTransport.REFUSED_DIAL_LIMIT]
+         * counts.
+         */
+        fun answerOpenLink(connection: IrohTransport.IrohConnection): Long {
+            val opened = ArrayBlockingQueue<Result<Unit>>(1)
+            Thread({ opened.put(runCatching { connection.openLink(30.seconds) }) }, "open-link")
+                .apply { isDaemon = true }
+                .start()
+            val dial = assertIs<HostMessage.Dial>(nextHostMessage())
+            send(SidecarMessage.LinkUp(dial.link, ByteArray(NODE_ID_LEN) { 7 }, DIRECTION_OUTBOUND))
+            (opened.poll(30, TimeUnit.SECONDS) ?: fail("openLink did not settle within 30s")).getOrThrow()
+            assertIs<HostMessage.Data>(nextHostMessage())
+            return dial.link
+        }
+
+        /**
+         * Refuse a frame on [link], `PROTOCOL.md` section 2's queue-full arm
+         * verbatim, and wait for the `CLOSE_LINK` the host answers with — which
+         * is what says the client has already set the refusal flag the tests are
+         * about.
+         */
+        fun refuse(link: Long) {
+            send(
+                SidecarMessage.Failure(
+                    link,
+                    "link $link's send queue is full (256 frames outstanding); the frame was not sent",
+                ),
+            )
+            assertEquals(
+                HostMessage.CloseLink(link),
+                nextHostMessage(),
+                "PROTOCOL.md section 2: an ERROR on an established link is terminal for it and the host must CLOSE_LINK",
+            )
+        }
 
         /** `DIAL` from the client, answered with `LINK_UP` — the shortest route to an established link. */
         fun dialAndAnswer(client: SidecarClient, listener: LinkListener): SidecarLink {

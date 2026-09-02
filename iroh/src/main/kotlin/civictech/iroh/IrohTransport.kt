@@ -244,7 +244,7 @@ object IrohTransport {
         return try {
             val client = process.connect(timeout)
             client.addPeer(peerNodeId, peerAddresses, timeout)
-            IrohConnection(process, client, side, peerNodeId, backoff, redialTimeout, refusedDialLimit)
+            IrohConnection(process.asSidecar(), client, side, peerNodeId, backoff, redialTimeout, refusedDialLimit)
                 .also { it.openLink(timeout) }
         } catch (e: Throwable) {
             process.close()
@@ -713,6 +713,31 @@ object IrohTransport {
     }
 
     /**
+     * What an [IrohConnection] needs of the sidecar process it runs over: this
+     * side's endpoint id, and shutting the process down. Everything else it
+     * speaks to the sidecar through is [SidecarClient].
+     *
+     * A named seam rather than the concrete [SidecarProcess] because
+     * IrohConnection's *host-side* decisions — [IrohConnection.retire]'s refusal
+     * guard above all — are otherwise unreachable in a test. A [SidecarClient]
+     * can be pointed at any loopback socket, and so can be driven by a fake that
+     * speaks `PROTOCOL.md` by hand; a [SidecarProcess] cannot exist without
+     * spawning the Rust binary, which would gate every such test on cargo. The
+     * seam costs one interface and one adapter and buys the whole of
+     * `SidecarBackpressureTest`'s IrohConnection half (computenet-pozr).
+     */
+    internal interface Sidecar : AutoCloseable {
+        /** @see SidecarProcess.nodeId */
+        val nodeId: ByteArray
+    }
+
+    /** [SidecarProcess] as the narrow [Sidecar] an [IrohConnection] needs. */
+    internal fun SidecarProcess.asSidecar(): Sidecar = object : Sidecar {
+        override val nodeId: ByteArray get() = this@asSidecar.nodeId
+        override fun close() = this@asSidecar.close()
+    }
+
+    /**
      * The dialling side: one sidecar, and a **succession** of links — each with
      * its own [Session] — under one connection handle.
      *
@@ -744,7 +769,7 @@ object IrohTransport {
      * one for the same reason) and the pre-hello drop total.
      */
     class IrohConnection internal constructor(
-        private val process: SidecarProcess,
+        private val sidecar: Sidecar,
         private val client: SidecarClient,
         private val side: Peering.Side,
         private val peerNodeId: ByteArray,
@@ -820,6 +845,22 @@ object IrohTransport {
          * queue overflowed is no evidence of that, and letting it accumulate
          * there would abandon a perfectly willing peer after a flood. A refusal
          * still re-dials — it just re-dials as an ordinary unplanned down.
+         *
+         * ## It is consumed AFTER [retire]'s early returns, on purpose
+         *
+         * [retire] reads this only past `shuttingDown` and `closeRequested`, so
+         * an `ERROR` followed by a shutdown or a [sever] — rather than by the
+         * `LINK_DOWN` the client's own `CLOSE_LINK` normally produces — leaves
+         * the flag set, and it exempts the *next* unplanned down instead. That is
+         * deliberate, and it is the safe direction: the only effect is that
+         * abandonment is delayed by at most one link, never triggered early, and
+         * [heal] clears the run outright anyway. Consuming it above the early
+         * returns would buy an exactness no caller can observe, at the cost of a
+         * second write on the [close] path — where the connection is being torn
+         * down and nothing will read the flag again. Pinned by
+         * `SidecarBackpressureTest`'s
+         * `the refusal flag outlives a caller-requested close ...`, so a future
+         * change of mind here is a deliberate one (computenet-pozr).
          */
         private val linkRefused = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -876,7 +917,7 @@ object IrohTransport {
         val abandonedAfterRefusals: Boolean get() = abandoned
 
         /** This side's own iroh endpoint id. */
-        val nodeId: ByteArray get() = process.nodeId
+        val nodeId: ByteArray get() = sidecar.nodeId
 
         /**
          * Take this connection's link down **without** re-dialling it: the
@@ -1049,7 +1090,7 @@ object IrohTransport {
             runCatching { currentLink.get()?.close() }
             runCatching { client.shutdown() }
             runCatching { client.close() }
-            process.close()
+            sidecar.close()
         }
     }
 }
