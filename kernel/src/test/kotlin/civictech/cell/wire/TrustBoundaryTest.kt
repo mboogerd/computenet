@@ -71,7 +71,7 @@ class TrustBoundaryTest {
         val inlet: Use<Consumer<String>>
     }
 
-    private class Run(seed: Long, allowlisted: Boolean) {
+    private class Run(seed: Long, allowlisted: Boolean, qName: String = "evil") {
         val controller = SimulationController(seed)
         val rnd = Random(seed)
 
@@ -91,7 +91,7 @@ class TrustBoundaryTest {
                 registryP, bridgeP, peer = PeerId("p"),
                 allow = if (allowlisted) setOf(KeyId("good")) else null,
             )
-            val q = Peering.Side(registryQ, bridgeQ, peer = PeerId("evil"))
+            val q = Peering.Side(registryQ, bridgeQ, peer = PeerId(qName))
             // ingressOnA lives on bridgeP (p's bridge host) and receives q's
             // ("evil") traffic through p's allowlist — the ingress this test's
             // refusal assertions read from (computenet-usd.4.1).
@@ -160,6 +160,42 @@ class TrustBoundaryTest {
             // including from the pre-existing setup refusals above.
             run.bridgeP.supervisionAccounting().restarts shouldBe 0L
         }
+    }
+
+    /**
+     * The **positive** half of the same gate, and the one that pins
+     * `Peering.hostIngress`'s `fromKey` into `BridgeIngressCell.peerKey`
+     * (feature `computenet-376c`): a peer whose presented key identifier IS on
+     * the allowlist crosses it, on the very configuration the test above
+     * refuses.
+     *
+     * Without it the allowlist half of this file is satisfied by refusing
+     * *everything*: measured 2026-09-02 by mutating `peerKey = fromKey` to
+     * `peerKey = null` in `Peering.hostIngress` — which makes every
+     * allowlisted ingress refuse every frame — and running `:kernel:test`,
+     * `:wire:test` and `:iroh:test -Piroh.enabled=true` in full: 1416 tests,
+     * 0 failures. The `control - open mode` test below cannot catch it either,
+     * because its side carries no allowlist at all (`allow == null` short-
+     * circuits before the key is looked at).
+     *
+     * `Side.presentedKeyId` is what supplies the key here: `q` holds no
+     * credentials, so it presents `KeyId(q.peer.name)` — the transport-vouched
+     * assertion arm — which is exactly what a legacy name-only hello would put
+     * on a socket.
+     */
+    @Test
+    fun `an allowlisted peer's traffic crosses the same boundary that refuses an unlisted one`() {
+        val run = Run(seed = 0, allowlisted = true, qName = "good")
+        val ingress = run.loopback.ingressOnA!!
+        val sink = ingress.boundaryDenials["bridge-ingress"]!!
+        val denialCountBefore = sink.denialCount
+        val lettersBefore = run.deadLettersP.size
+
+        run.sendFromQ(5)
+
+        run.collector.received shouldBe (0 until 5).map { "q-$it" }
+        (sink.denialCount - denialCountBefore) shouldBe 0L
+        run.deadLettersP.size shouldBe lettersBefore
     }
 
     @Test
