@@ -270,7 +270,8 @@ Monitor({
   description: "work session budget",
   persistent: true,
   command: `S=/absolute/path/to/scratch/slot-start   # LITERAL — see below
-sleep 11700; echo "BUDGET T-90m ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): finish the current feature; start no new one"
+SLOT=18000                                          # the same seconds as below
+sleep $(( SLOT - 6300 )); echo "BUDGET T-90m ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): finish the current feature; start no new one"
 sleep 2700;  echo "BUDGET T-45m ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): no new dispatches; review and merge what is in flight"
 sleep 2700;  echo "BUDGET EXPIRED ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): go to Finalize now"`
 })
@@ -305,10 +306,10 @@ resume reads the *previous* session's dir by that literal path.
 
 Fires at 3h15m / 4h / 4h45m of a 5h slot — the slot END minus 105m/60m/15m,
 the last 15m being Finalize, so a rung is work time left, not wall clock left.
-On a different slot compute the same three offsets from the end (resume.md and
-`slot-elapsed.sh` both do), dropping a first sleep already ≤0; do NOT scale
-them as fractions — T-90m names 90 minutes of work, and a shorter slot does
-not make a feature shorter. **Note the monitor's
+The first sleep is DERIVED from `SLOT`; drop it if it is already ≤0. The three
+offsets are absolute, never fractions of the slot — T-90m names 90 minutes of
+work, and a shorter slot does not make a feature shorter. `resume.md` re-arms
+from the same offsets, and `slot-elapsed.sh` reads its rung from them. **Note the monitor's
 task id** — `TaskStop` it when you reach Finalize. 
 > **`persistent: true` is load-bearing. Do NOT add `timeout_ms`.**
 > Verified by probe 2026-08-13: `persistent` genuinely overrides the

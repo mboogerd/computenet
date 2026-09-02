@@ -88,9 +88,11 @@ says "$d" "previous reading unusable" "a truncated epoch is not reported as a ga
 d=$(slot 834 300); echo $(( $(date -u +%s) - 800 * 60 )) > "$d/slot-last-reading"
 says "$d" "800m of wall clock passed between turns" "a suspension gap beyond the slot is still reported"
 
-# rung boundaries, exactly on the edge
-d=$(slot 210 300); says "$d" "rung: T-90m"   "left == 90 is T-90m, not OPEN"
-d=$(slot 255 300); says "$d" "rung: T-45m"   "left == 45 is T-45m, not T-90m"
+# rung boundaries, exactly on the edge — the edges are the WORK time left, so
+# with the 15m Finalize reserve they sit at left == 105 / 60 / 15, not at
+# 90 / 45 / 0. The grid above pins them; these three are the interior rows.
+d=$(slot 210 300); says "$d" "rung: T-90m"   "left == 90 is inside T-90m"
+d=$(slot 255 300); says "$d" "rung: T-45m"   "left == 45 is inside T-45m"
 d=$(slot 300 300); says "$d" "rung: EXPIRED" "left == 0 is EXPIRED"
 
 echo "$pass passed, $fail failed"
