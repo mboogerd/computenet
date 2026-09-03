@@ -1,5 +1,6 @@
 package civictech.dialogue
 
+import civictech.cell.data.Aggregators
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
@@ -9,6 +10,8 @@ import civictech.cell.data.op.FlatMapSetApi
 import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.GroupByApi
 import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.op.JoinSetApi
+import civictech.cell.data.op.JoinSetCell
 import civictech.cell.data.op.SemiJoinApi
 import civictech.cell.data.op.SemiJoinCell
 import civictech.cell.graph.TypedRef
@@ -19,14 +22,21 @@ import civictech.cell.host.ManagedHost
 import civictech.dialogue.extract.ExtractedClaim
 import civictech.dialogue.extract.ExtractedItem
 import civictech.dialogue.extract.ExtractedRelation
+import civictech.dialogue.extract.ExtractedStance
 import civictech.dialogue.extract.ExtractionAccounting
 import civictech.dialogue.extract.ExtractionGate
 import civictech.dialogue.extract.Extractor
 import civictech.dialogue.mint.ClaimAggregate
 import civictech.dialogue.mint.ClaimMint
+import civictech.dialogue.mint.ClaimProvenanceEntry
+import civictech.dialogue.mint.ProvenanceIndex
 import civictech.dialogue.mint.RelationAggregate
 import civictech.dialogue.mint.RelationCandidate
 import civictech.dialogue.mint.RelationMint
+import civictech.dialogue.mint.RelationProvenanceEntry
+import civictech.dialogue.mint.StanceAggregate
+import civictech.dialogue.mint.StanceJoinRow
+import civictech.dialogue.mint.StanceProject
 import civictech.dialogue.mint.claimKey
 
 /**
@@ -170,6 +180,50 @@ object DialoguePipeline {
          * assemble a [civictech.dialogue.CanonicalRelation].
          */
         val canonicalRelations: TypedRef<GroupByApi<RelationCandidate, RelationKey, RelationAggregate>>,
+        /**
+         * Stage 6a (F3, item-kind split — stance leg): the stance-kind
+         * subset of [extractedItems], the third mirror of [extractedClaims]
+         * / [extractedRelations].
+         */
+        val extractedStances: TypedRef<FlatMapSetApi<ExtractedItem, ExtractedStance>>,
+        /**
+         * Stage 6b (F3, StanceProject, [AGO1-STANCE-01]): [extractedStances]
+         * joined against the [utterances] ingress on `utteranceId ==
+         * Utterance.id`, lifting each stance into event-order space (the
+         * `turn` an `ExtractedStance` alone does not carry). This is what
+         * makes the projection below last-writer-wins by EVENT order rather
+         * than by admission order.
+         */
+        val stanceJoinRows: TypedRef<JoinSetApi<ExtractedStance, Utterance, StanceJoinRow>>,
+        /**
+         * Stage 6c (F3, StanceProject): one [StanceAggregate] per distinct
+         * (speaker, [civictech.dialogue.ClaimKey]) pair
+         * ([AGO1-STANCE-01]/-02). Pair a `MapDelta` key with its aggregate
+         * through [StanceProject.projectedStance] to assemble a
+         * [civictech.dialogue.ProjectedStance]. Group death — the last
+         * supporting extraction retracted — removes the entry; see
+         * [StanceProject]'s KDoc for why that removal itself is the
+         * cleared-never-stale signal ([AGO1-STANCE-02]).
+         */
+        val projectedStances: TypedRef<GroupByApi<StanceJoinRow, Pair<String, ClaimKey>, StanceAggregate>>,
+        /**
+         * Stage 7a (F3, ProvenanceIndex, 2aw.F3-D2, [AGO1-PROV-01]): for
+         * every currently-live [civictech.dialogue.ClaimKey], the set of
+         * utterance ids justifying it — folded from the SAME
+         * [extractedClaims] stream [canonicalClaims] folds, so an utterance
+         * retraction that shrinks a canonical claim's provenance shrinks
+         * this index's entry in the same reconciliation ([AGO1-PROV-03]).
+         */
+        val claimProvenance: TypedRef<GroupByApi<ClaimProvenanceEntry, ClaimKey, Set<ClaimProvenanceEntry>>>,
+        /**
+         * Stage 7b (F3, ProvenanceIndex): the relation-leg mirror of
+         * [claimProvenance], folded from the *resolvable* candidate stream
+         * [canonicalRelations] itself folds — so a relation returning to
+         * PENDING (its endpoint's last claim retracted) removes its
+         * provenance entry exactly when [canonicalRelations] removes the
+         * relation.
+         */
+        val relationProvenance: TypedRef<GroupByApi<RelationProvenanceEntry, RelationKey, Set<RelationProvenanceEntry>>>,
     )
 
     /**
@@ -351,6 +405,65 @@ object DialoguePipeline {
                     aggregator = RelationMint.RelationAggregator(),
                 )
             }
+            // Stage 6a (F3 item-kind split, stance leg): the third mirror of
+            // the claim/relation legs — one pure hop off the SAME
+            // extractedItems outlet.
+            val extractedStances = spawn("extractedStances") { ref ->
+                FlatMapSetCell<ExtractedItem, ExtractedStance>(ref = ref) { item ->
+                    listOfNotNull(item as? ExtractedStance)
+                }
+            }
+            // Stage 6b (F3, StanceProject, [AGO1-STANCE-01]): join the stance
+            // leg against the utterances ingress for event order (`turn`),
+            // which ExtractedStance alone does not carry.
+            val stanceJoinRows = spawn("stanceJoinRows") { ref ->
+                JoinSetCell<ExtractedStance, Utterance, String, StanceJoinRow>(
+                    ref = ref,
+                    leftKey = { it.utteranceId },
+                    rightKey = { it.id },
+                    combine = StanceProject::joinRow,
+                )
+            }
+            // Stage 6c (F3, StanceProject fold): keyed by (speaker, claim
+            // key); LWW-by-turn selection lives in StanceAggregator.value().
+            val projectedStances = spawn("projectedStances") { ref ->
+                GroupByCell(
+                    ref = ref,
+                    keyFn = { row: StanceJoinRow -> row.speaker to row.key },
+                    aggregator = StanceProject.StanceAggregator(),
+                )
+            }
+            // Stage 7a (F3, ProvenanceIndex, 2aw.F3-D2): a pure hop off the
+            // SAME extractedClaims outlet canonicalClaims folds, then folded
+            // by the plain-String key (see ClaimProvenanceEntry's KDoc for
+            // why the key is flattened to a String rather than carried as
+            // ClaimKey).
+            val claimProvenanceEntries = spawn("claimProvenanceEntries") { ref ->
+                FlatMapSetCell<ExtractedClaim, ClaimProvenanceEntry>(ref = ref) { claim ->
+                    listOf(ProvenanceIndex.claimEntry(claim))
+                }
+            }
+            val claimProvenance = spawn("claimProvenance") { ref ->
+                GroupByCell(
+                    ref = ref,
+                    keyFn = { entry: ClaimProvenanceEntry -> ClaimKey(entry.key) },
+                    aggregator = Aggregators.collectToSet<ClaimProvenanceEntry>(),
+                )
+            }
+            // Stage 7b (F3, ProvenanceIndex): the relation-leg mirror, off
+            // the SAME resolvableRelations outlet canonicalRelations folds.
+            val relationProvenanceEntries = spawn("relationProvenanceEntries") { ref ->
+                FlatMapSetCell<RelationCandidate, RelationProvenanceEntry>(ref = ref) { candidate ->
+                    listOf(ProvenanceIndex.relationEntry(candidate))
+                }
+            }
+            val relationProvenance = spawn("relationProvenance") { ref ->
+                GroupByCell(
+                    ref = ref,
+                    keyFn = { entry: RelationProvenanceEntry -> RelationKey(entry.key) },
+                    aggregator = Aggregators.collectToSet<RelationProvenanceEntry>(),
+                )
+            }
             link(utterances.cell.outlet, segments.cell.inlet)
             link(segments.cell.outlet, extractedItems.cell.inlet)
             link(extractedItems.cell.outlet, extractedClaims.cell.inlet)
@@ -365,6 +478,14 @@ object DialoguePipeline {
             link(sourceResolvedRelations.cell.outlet, resolvableRelations.cell.left)
             link(claimKeys.cell.outlet, resolvableRelations.cell.right)
             link(resolvableRelations.cell.outlet, canonicalRelations.cell.inlet)
+            link(extractedItems.cell.outlet, extractedStances.cell.inlet)
+            link(extractedStances.cell.outlet, stanceJoinRows.cell.left)
+            link(utterances.cell.outlet, stanceJoinRows.cell.right)
+            link(stanceJoinRows.cell.outlet, projectedStances.cell.inlet)
+            link(extractedClaims.cell.outlet, claimProvenanceEntries.cell.inlet)
+            link(claimProvenanceEntries.cell.outlet, claimProvenance.cell.inlet)
+            link(resolvableRelations.cell.outlet, relationProvenanceEntries.cell.inlet)
+            link(relationProvenanceEntries.cell.outlet, relationProvenance.cell.inlet)
             Refs(
                 utterances = utterances.refAs(),
                 segments = segments.refAs(),
@@ -378,6 +499,11 @@ object DialoguePipeline {
                 sourceResolvedRelations = sourceResolvedRelations.refAs(),
                 resolvableRelations = resolvableRelations.refAs(),
                 canonicalRelations = canonicalRelations.refAs(),
+                extractedStances = extractedStances.refAs(),
+                stanceJoinRows = stanceJoinRows.refAs(),
+                projectedStances = projectedStances.refAs(),
+                claimProvenance = claimProvenance.refAs(),
+                relationProvenance = relationProvenance.refAs(),
             )
         }
         return Built(refs, gate.accounting)
