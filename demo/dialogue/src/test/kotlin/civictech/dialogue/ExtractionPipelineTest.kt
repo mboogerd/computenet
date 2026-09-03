@@ -21,6 +21,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
@@ -313,5 +314,50 @@ class ExtractionPipelineTest {
         assertEquals(listOf("Gamma stands."), rig.claimTexts())
         assertEquals(emptyList(), rig.accounting.rejected, "retraction recorded no rejection")
         assertEquals(emptyList(), rig.accounting.failed, "retraction recorded no failure")
+    }
+
+    // ------------------------------------------------------------------
+    // computenet-2aw.4.1 — replay-stable pipeline refs ([AGO1-DUR-01]'s
+    // pipeline half)
+    // ------------------------------------------------------------------
+
+    /** One independent host+pipeline, built with the given [namespace]. */
+    private fun buildOn(namespace: String?): DialoguePipeline.Refs {
+        val host = ManagedHost(scheduler = SimulationController(1L).scheduler())
+        return DialoguePipeline.build(host, RuleExtractor, namespace = namespace).refs
+    }
+
+    @Test
+    fun `computenet-2aw_4_1 - same namespace on two separate hosts yields identical pipeline refs`() {
+        val a = buildOn(namespace = "recovery-x")
+        val b = buildOn(namespace = "recovery-x")
+
+        assertEquals(a.utterances.ref, b.utterances.ref, "utterances ref is stable across builds under the same namespace")
+        assertEquals(a.canonicalClaims.ref, b.canonicalClaims.ref, "canonicalClaims ref is stable")
+        assertEquals(a.canonicalRelations.ref, b.canonicalRelations.ref, "canonicalRelations ref is stable")
+        assertEquals(a.projectedStances.ref, b.projectedStances.ref, "projectedStances ref is stable")
+
+        // Distinct handles under the same namespace still get distinct refs
+        // (the handle name is part of the ref seed, not just the namespace).
+        assertNotEquals(a.utterances.ref, a.canonicalClaims.ref)
+    }
+
+    @Test
+    fun `computenet-2aw_4_1 - omitting namespace reproduces today's random-per-build refs`() {
+        val a = buildOn(namespace = null)
+        val b = buildOn(namespace = null)
+
+        assertNotEquals(a.utterances.ref, b.utterances.ref, "no namespace: refs are fresh (random) per build, as before")
+        assertNotEquals(a.canonicalClaims.ref, b.canonicalClaims.ref)
+        assertNotEquals(a.canonicalRelations.ref, b.canonicalRelations.ref)
+        assertNotEquals(a.projectedStances.ref, b.projectedStances.ref)
+    }
+
+    @Test
+    fun `computenet-2aw_4_1 - different namespaces on the same handle yield different refs`() {
+        val a = buildOn(namespace = "ns-1")
+        val b = buildOn(namespace = "ns-2")
+
+        assertNotEquals(a.utterances.ref, b.utterances.ref)
     }
 }
