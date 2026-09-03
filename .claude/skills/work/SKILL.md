@@ -2266,6 +2266,17 @@ beyond that, sequence. Stated where it bites in
 [references/direct-child.md](references/direct-child.md), where nothing else
 bounds the count.
 
+**But the cycle is charged to the HEAD, not to the sibling** — every new head
+from any cause pays it, and a reviewer's zero-code repair on an already-green
+branch is the case that surprises. Two reviewers each pushed a KDoc-only fix —
+0 non-comment code lines — and paid 8m45s and 9m11s, with nothing landed under
+either branch and `merge-base..origin/main` empty both times (computenet-7wd6).
+The repair is still right and review-feature.md §5 already tells the reviewer
+to make it anyway; what changes is **your** arithmetic: **budget one check
+cycle per review that finds something**, not only per sibling landing. That is
+~9–12m each — three such reviews is most of a small item's budget, and it was
+previously attributed to nothing.
+
 **Cheaper still: prevent the collision instead of surviving it.** When two
 in-flight branches must each add an entry to the same *ordered list* — the
 `include()` block in `settings.gradle.kts`, the module table in
