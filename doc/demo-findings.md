@@ -425,3 +425,101 @@ a single because-utterance mints a non-empty canonical relation set`) drives
 non-empty canonical relation set from one utterance alone — the discriminating
 case: before this fix it stayed empty forever with no second utterance
 supplying the endpoints separately.
+
+## F-15 — CP-A3's absorb-ack is edge-local, so `emitOnFrontier` withholds output at rest whenever a wave-dropping arm is more than one hop deep
+
+**Observation** (computenet-23bf, discovered at `computenet-2aw.3.2` (F3 T2,
+RelationMint) and re-established at `915d574a9`): AGO1's relation leg splits
+into a pending/resolvable pair of `SemiJoinCell`s (`DialoguePipeline` stages
+5d/5e), whose two inlets both descend from the single `utterances` root. That
+is exactly the "shared-source diamond" `SemiJoinCell`/`WaveGate` scope
+`emitOnFrontier` to. Turning the gate on nonetheless **wedges the graph**:
+with `emitOnFrontier = true` on both semijoins, 4 of `RelationMintTest`'s 5
+cases fail at quiescence with an **empty** canonical relation set. (The fifth,
+`REL-04`, asserts that a self-canonicalizing relation mints *nothing*, so a
+wedged pipeline satisfies it vacuously — it is not evidence the gate works.)
+All five pass at the shipped ungated default.
+
+**Mechanism**: a shared root makes the diamond possible; it does not make it
+sufficient. The gate's completeness condition is a **static link set** with no
+upstream traversal, so each arm is an expected edge for every wave, including
+waves it structurally never carries. AGO1's item-kind split creates exactly
+that: a claim-only utterance is a real delta on the right arm
+(`extractedItems → extractedClaims → claimKeys`) and nothing at all on the
+left (`extractedItems → extractedRelations → relationCandidates →
+nonSelfRelations`); a relation-only utterance is the mirror image.
+
+The kernel already has the remedy for a structurally silent arm — CP-A3's
+absorb-ack (`civictech.cell.control.absorbAck`, G-40). What this finding
+establishes is that **the ack is edge-local and no plain operator relays it**.
+It is minted by the absorbing operator onto its own outlet links; a
+`FilterCell` / `FlatMapSetCell` hop installs no `Protocols.Progress` handler,
+so an ack arriving on such a hop's inlet neither advances anything nor is
+re-emitted. Only a cell that installs a frontier (`WaveGate`, `WaveFrontier`,
+`CoalescingCombineCell`, `AlignedCompositeCell`) consumes one.
+
+So the discriminator is the **depth of the silent arm**, not the disjointness
+of the waves:
+
+- absorber links **directly** into the gated inlet → the ack lands on the
+  expected edge, the wave completes, the gate is correct (this is the
+  pre-existing `a gated cell settles a wave one arm absorbs entirely` case);
+- absorber with **one or more pure hops below it** → the ack dies at the hop.
+  The wave is released only when that arm delivers a *later* wave (the
+  monotone-`max` watermark advance standing in for the lost ack), so
+  mid-stream output **lags**; and at rest, when the final wave is one the arm
+  never carries, output is **withheld permanently**. Both arms of AGO1's
+  relation leg are two hops deep, which is why the whole leg goes silent.
+
+**Reproduction**: `FrontierGatedEmissionTest` (`:kernel`), the pair
+`control - disjoint-wave arms one hop deep settle, because the absorb-ack
+lands on the gated edge` (green) and `disjoint-wave arms TWO hops deep
+withhold output at rest - the absorb-ack dies at the intervening hop`. Same
+rig, same disjoint waves, only the hop count differs — which is what pins the
+mechanism to ack non-relay rather than to the wave partition itself.
+
+**Why it's a gap**: "derive two arms from one stream, split by element kind,
+and join them" is generic incremental dataflow, not an AGO1 shape, and it is
+the *normal* way to build a diamond over a heterogeneous stream. Yet it is
+precisely the shape in which the flicker gate — the only remedy the kernel
+offers for a non-monotone binary operator's within-wave flicker — silently
+stops emitting. Silently is the sharp part: nothing throws, `bufferedWaves`
+is the only signal, and the symptom (an empty derived set at quiescence)
+looks like an extraction or key-canonicalization bug several stages upstream.
+
+**Proposed shape** (not implemented here; this entry is the finding, not the
+fix). Two candidates, in increasing order of ambition:
+
+1. **Relay `Progress` through pure operator hops.** A `FilterCell` /
+   `FlatMapSetCell` that receives an ack on its inlet re-emits one on its
+   outlet, making the ack transitive along a chain of pure hops and reducing
+   the deep case to the working shallow one. Cheap and local, but it needs a
+   rule for operators with more than one inlet and for stateful hops that may
+   legitimately emit later, and it makes every pure hop carry metadata-plane
+   machinery it currently does not.
+2. **Teach the frontier to tell a structurally silent arm from a stalled
+   one** — the standing G-40/G-13 residual, identical in `WaveGate`,
+   `WaveFrontier`, `CoalescingCombineCell` and `AlignedCompositeCell`. This
+   is the real fix and is out of proportion to one demo.
+
+**What ships instead, and what it costs**: `DialoguePipeline` stages 5d/5e
+stay at the ungated default, with the rationale in the code. The open cost is
+the transient the gate exists for — admitting the utterance that mints a
+relation's last endpoint can flicker the relation into and out of the
+canonical fold **within one wave**. F4's applier
+(`computenet-2aw.4.2`, `[AGO1-APPLY-04]`) is the sole writer into the agora
+graph and sits downstream of exactly that, so the flicker must be tolerated
+rather than merely transient. It is: the applier is **pull-based** — it reads
+`ObservationSink.current()` snapshots of the canonical folds after quiescence,
+on an explicit `reconcile()`, and registers no `onChange` listener that writes
+to agora. A within-wave admit-then-retract is therefore two folds into a View
+and **zero** agora operations. That tolerance is structural, not incidental,
+so it is a constraint on F4: an applier that ever becomes push-driven off the
+canonical relation fold re-opens this finding.
+
+**Honest limit of this entry**: the reproduction covers `SemiJoinCell`'s gate.
+`CombineLatestCell` shares `WaveGate` verbatim and so must share the defect,
+but that was not measured. Nor was the relay proposal (1) prototyped — its
+cost is argued, not weighed. And the "withheld permanently at rest" claim is
+about *this* graph's quiescence: a graph that keeps receiving waves on every
+arm sees only the lag.

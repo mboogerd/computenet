@@ -69,6 +69,12 @@ interface SemiJoinApi<A, B> {
  * phantom-expected-edge caveat before enabling it: the gate suits the
  * shared-source diamond (both inlets descending from one root, the only topology
  * in which the within-wave flicker exists at all), not two independent roots.
+ * **One root is necessary and not sufficient** — each arm must also *carry* the
+ * root's waves onto the gated edge, and where it structurally cannot, its
+ * absorb-ack rescues the wave only when the absorbing operator links directly
+ * into this cell's inlet; a pure hop in between swallows the ack and the gate
+ * withholds output at rest. [WaveGate]'s "One root is NOT sufficient" section
+ * has the mechanism and the measurement (computenet-23bf).
  */
 class SemiJoinCell<A, B, K>(
     ref: CellRef = CellRef(UUID.randomUUID()),
