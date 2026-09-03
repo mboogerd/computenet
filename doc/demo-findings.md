@@ -371,3 +371,57 @@ site (`:demo:dialogue`), on a single-threaded simulated host, and the gate's
 cache is unbounded and non-thread-safe by the same choice `TranscriptSource`
 makes. A kernel operator would additionally have to decide eviction and
 concurrency, which this finding does not settle.
+
+## F-14 — `RuleExtractor`'s relation endpoints now mint their own claims — at the cost of a third, redundant claim per "because" segment
+
+**Observation** (computenet-xwl0, found at `computenet-2aw.3` (F3) review,
+PR #635): `RuleExtractor` (`demo/dialogue/.../extract/RuleExtractor.kt`) drove
+zero canonical relations. For a segment "A because B" it emitted an
+`ExtractedClaim` of the *whole* trimmed segment ("A because B") and an
+`ExtractedRelation` whose endpoints were the substrings "A" and "B".
+`civictech.dialogue.mint.claimKey` (2aw.F3-D1) only trims/collapses
+whitespace/lowercases — by design, it does not, and must not, know a
+relation's endpoints are substrings of the segment that produced them — so
+`claimKey("A")` and `claimKey("B")` never matched the one claim key the
+segment minted (`claimKey("A because B")`). F3's pending/resolvable semijoin
+split (`DialoguePipeline` stages 5d/5e) held every such candidate PENDING
+forever: driven by `RuleExtractor`, the pipeline minted claims and provenance
+but no relations, unless a separate utterance happened to assert "A" and "B"
+as standalone claims. Every relation-bearing F3 test substituted a cassette
+extractor for exactly this reason.
+
+**Decision**: `RuleExtractor` now emits the two endpoint substrings as their
+own `ExtractedClaim`s, *in addition to* the whole-segment claim (its class
+KDoc's "Why the endpoint claims" carries the full reasoning). Chosen over the
+bead's other two options — leaving `RuleExtractor` claim-only and shipping the
+demo path on a recorded cassette, or accepting and stating a relation-free
+`RuleExtractor` demo — because the epic's differentiated output is the
+relations between claims, and an extractor that can never mint one
+demonstrates only half the system for a heuristic explicitly meant to be
+tiny and disposable (AGO3/KE1 replace it).
+
+**Why it's a gap, not just a fix**: the trade this decision accepts is real
+and is not free. A "because" segment now mints **three** canonical claims —
+the whole sentence, its conclusion, its reason — where a transcript reader
+would count two propositions; nobody asserted "A because B" as a standalone
+claim distinct from asserting A and B. This was verified, not assumed, before
+choosing it: no existing F3 test text contains "because" (so no F3 assertion
+changed), the two endpoint claims carry the segment's own `utteranceId` (no
+fabricated provenance), and the stance leg is unaffected (`RuleExtractor`
+never emits an `ExtractedStance`). What was **not** verified — because
+`DialogueApp.kt` wires no extractor yet (F4/F5 land later) — is how this
+third, redundant claim reads on an actual rendered argument map, or whether
+F4/F5 want to suppress/merge it once one exists. That is exactly the kind of
+"results dominated by a hidden rule rather than by extraction quality" this
+findings doc exists to flag (`Segmentation.kt`'s own KDoc names the same
+risk for its splitting rule): the rule
+producing the redundant claim is `RuleExtractor`'s "because" branch, not a
+`DialoguePipeline` defect, so the fix — if F4/F5 decide it needs one — belongs
+there, replacing or refining this heuristic, not in `claimKey` or the pipeline.
+
+**Regression coverage**: `RuleExtractorTest` (`driven through DialoguePipeline
+a single because-utterance mints a non-empty canonical relation set`) drives
+`RuleExtractor` through `DialoguePipeline.build` end to end and asserts a
+non-empty canonical relation set from one utterance alone — the discriminating
+case: before this fix it stayed empty forever with no second utterance
+supplying the endpoints separately.
