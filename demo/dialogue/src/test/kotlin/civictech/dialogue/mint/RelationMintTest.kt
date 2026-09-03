@@ -45,10 +45,15 @@ import kotlin.test.assertTrue
  * that the extractor was invoked once per segment and never re-invoked to
  * resolve a pending relation (2aw.F3-D3).
  *
- * `RuleExtractor` cannot serve here: it derives a relation whose endpoint
- * texts are substrings of the segment, while the claim it emits for that same
- * segment is the *whole* segment text — so its relation endpoints never
- * canonicalize to a claim key it mints, and nothing would ever resolve.
+ * `RuleExtractor` cannot serve here, though the reason changed with
+ * computenet-xwl0. It used to be that nothing would ever resolve: its
+ * relation's endpoint texts are substrings of the segment while the claim it
+ * emitted was the *whole* segment text, so the endpoints never canonicalized
+ * to a claim key it minted. It now additionally mints each endpoint substring
+ * as its own claim, so its relations *do* resolve — and that is exactly what
+ * disqualifies it here: it mints both endpoints in the same extraction as the
+ * relation, so it can never produce the initially-unminted endpoint BS-05
+ * asserts is held pending and minted later by a separate utterance.
  */
 class RelationMintTest {
 
