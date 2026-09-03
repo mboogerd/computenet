@@ -401,25 +401,27 @@ of 300m, believing it had a whole wind-down stage in hand (computenet-hs90,
 recurrence of computenet-776). No reading this turn → write "no elapsed reading
 this turn": an absent number is visible, a plausible wrong one is not.
 
-**And a reading bounds only the turn it was taken in — one turn boundary can
-carry hours.** 1lbs's decay was gradual and therefore watchable: ~78m and ~50m
-spread over five turns, showing up as a creeping "previous reading Nm ago". It
-recurred as a single discontinuity — twelve honest readings 3–23m apart, then
-ONE boundary of 152 minutes, landing at 313m of a 300m slot (computenet-099p).
-No reading frequency catches that: the gap is between turns, and the field that
-would warn you is only readable after the jump. So **never write a
-FORWARD-LOOKING budget claim from a reading taken in an earlier turn** — "160m
-of 300m; 50m before new work closes" was true when computed and 13 minutes past
-EXPIRED by the time anything acted on it. The discontinuous case is caught by
-the budget Monitor's SELF-REPORTED elapsed, not by which tier fired: a T-90m
-tier reporting "311m REAL elapsed" is self-evidently wrong as a tier and
-correct as a measurement, which is what the "each tier reports the elapsed it
-computes when it fires" design above is for. Act on that number.
-
 That one reading is what turned a confusing batch into a correct diagnosis the
 one time this happened. A session trusting the tiers in order would instead
 "finish the current feature", "stop dispatching" and "finalize" in three
 consecutive turns with no time between them.
+
+**And a reading bounds only the turn it was taken in — one turn boundary can
+carry hours.** The 1lbs decay above was gradual and therefore watchable, which
+is what a creeping "previous reading Nm ago" shows you. It recurred as a single
+discontinuity — twelve honest readings 3–23m apart, then ONE boundary of 152
+minutes, landing at 313m of a 300m slot (computenet-099p). No reading frequency
+catches that: the gap is between turns, and the field that would warn you is
+only readable after the jump. So **never write a FORWARD-LOOKING budget claim
+from a reading taken in an earlier turn** — "160m of 300m; 50m before new work
+closes" was true when computed and 13 minutes past EXPIRED by the time anything
+acted on it. The discontinuous case is caught by the budget Monitor's
+SELF-REPORTED elapsed, not by which tier fired: a T-90m tier reporting "311m
+REAL elapsed" is self-evidently wrong as a tier and correct as a measurement,
+which is what "each tier reports the elapsed it computes when it fires" is for.
+Act on that number, and on a pathological box (5b) act on it BEFORE the
+capacity advice: an expiring slot outranks a busy one.
+
 
 Three standing disciplines:
 
@@ -2092,7 +2094,17 @@ git -C <feature-worktree> log --oneline \
   $(git -C <feature-worktree> merge-base HEAD origin/main)..origin/main
 gh pr list --state open --json number,headRefName,isDraft \
   -q '.[] | "\(.number) \(.headRefName) draft=\(.isDraft)"'
+python3 .claude/skills/work/scripts/next-batch.py --capacity   # BEFORE dispatching
 ```
+
+**That last line is not optional, and this is the dispatch it exists for.** A
+feature reviewer runs the repo-wide `./gradlew test` (review-feature.md §3), so
+it is the single largest load source this session emits — and it has no batch
+call, which is how the agent that took a 16-core box to ~25x was the one
+dispatched without anyone reading the advice (computenet-lx7t). At the
+PATHOLOGICAL rung, hold the dispatch; below it, if an implementer is still
+live, say so in the prompt and scope the reviewer's gate the way 5b scopes a
+batch's.
 
 An empty first output is worth saying ("origin/main unchanged at `<sha>`").
 `${parkedChildren}` is the `parked` array from the `next-batch.py` call that

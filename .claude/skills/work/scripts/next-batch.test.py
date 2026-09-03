@@ -514,6 +514,20 @@ else:
        set(_cap["capacity"]) != {"cores", "max_parallel", "load1", "advice"}:
         failed += 1
         print(f"FAIL: --capacity shape is {_cap!r}")
+# --capacity honours --siblings, or it names a cap the caller does not have
+_sib = _subp.run(
+    [sys.executable, str(pathlib.Path(__file__).with_name("next-batch.py")),
+     "--capacity", "--siblings", "9"], capture_output=True, text=True)
+if _sib.returncode != 0 or _json.loads(_sib.stdout)["capacity"]["max_parallel"] != 1:
+    failed += 1
+    print(f"FAIL: --capacity ignores --siblings: {_sib.stdout or _sib.stderr!r}")
+# ...and refuses a feature id rather than silently ignoring it
+_bad = _subp.run(
+    [sys.executable, str(pathlib.Path(__file__).with_name("next-batch.py")),
+     "computenet-x", "--capacity"], capture_output=True, text=True)
+if _bad.returncode == 0 or "takes no feature id" not in _bad.stderr:
+    failed += 1
+    print(f"FAIL: --capacity with a feature id: rc={_bad.returncode} {_bad.stderr!r}")
 # a platform without getloadavg must degrade to (None, None), not raise
 for exc in (OSError("nope"), AttributeError("nope")):
     def _boom(e=exc):
