@@ -1,0 +1,112 @@
+[
+    {
+        "ref": "5b0d6c0d-52a8-3aa7-800b-aeb0e29a4089",
+        "kind": "CLAIM",
+        "text": "The budget is too high because travel costs increased.",
+        "credence": 0.5
+    },
+    {
+        "ref": "e03affb5-9a73-3010-a270-b84893eef7e6",
+        "kind": "CLAIM",
+        "text": "The budget is too high",
+        "credence": 0.71875
+    },
+    {
+        "ref": "faa7960b-a7b1-3b41-893f-0b36affbcb81",
+        "kind": "CLAIM",
+        "text": "travel costs increased.",
+        "credence": 0.5
+    },
+    {
+        "ref": "bd2e2132-9216-3e0a-872a-a5951e295c72",
+        "kind": "EDGE",
+        "polarity": "SUPPORT",
+        "source": "faa7960b-a7b1-3b41-893f-0b36affbcb81",
+        "target": "e03affb5-9a73-3010-a270-b84893eef7e6",
+        "credence": 0.5
+    },
+    {
+        "ref": "d395e9e0-0b70-37df-8658-5ecce7a71cfb",
+        "kind": "CLAIM",
+        "text": "The budget is too high because we hired more contractors.",
+        "credence": 0.5
+    },
+    {
+        "ref": "6666db9b-33a0-3330-8c95-5cb4167567cf",
+        "kind": "CLAIM",
+        "text": "we hired more contractors.",
+        "credence": 0.5
+    },
+    {
+        "ref": "4eaf2d41-3ea0-364a-a1e7-76423bb6db1d",
+        "kind": "EDGE",
+        "polarity": "SUPPORT",
+        "source": "6666db9b-33a0-3330-8c95-5cb4167567cf",
+        "target": "e03affb5-9a73-3010-a270-b84893eef7e6",
+        "credence": 0.5
+    },
+    {
+        "ref": "1b70ef10-0ae6-3666-9810-9af3ba28acf0",
+        "kind": "CLAIM",
+        "text": "Travel costs increased because flights got more expensive.",
+        "credence": 0.5
+    },
+    {
+        "ref": "d866eb5e-d3ae-339d-b8eb-4b2169f77326",
+        "kind": "CLAIM",
+        "text": "Travel costs increased",
+        "credence": 0.625
+    },
+    {
+        "ref": "2482600b-da56-312a-a842-60e557c89cfc",
+        "kind": "CLAIM",
+        "text": "flights got more expensive.",
+        "credence": 0.5
+    },
+    {
+        "ref": "e6e1fc9b-f482-3b1e-9e2e-56cfdd400606",
+        "kind": "EDGE",
+        "polarity": "SUPPORT",
+        "source": "2482600b-da56-312a-a842-60e557c89cfc",
+        "target": "d866eb5e-d3ae-339d-b8eb-4b2169f77326",
+        "credence": 0.5
+    },
+    {
+        "ref": "5561f800-e746-3c09-85ea-0b8e5d36fc9d",
+        "kind": "CLAIM",
+        "text": "No, I disagree that flights got more expensive.",
+        "credence": 0.5
+    },
+    {
+        "ref": "0fc1af74-9b8e-30c3-85cc-25907fba9c00",
+        "kind": "CLAIM",
+        "text": "We should revisit the budget next quarter.",
+        "credence": 0.5
+    },
+    {
+        "ref": "e5c81fd5-1dae-33d7-931c-bb1b274b3f9c",
+        "kind": "CLAIM",
+        "text": "We hired more contractors because the project scope grew.",
+        "credence": 0.5
+    },
+    {
+        "ref": "5026f04a-b145-3cf0-bf60-eaf20e9e2427",
+        "kind": "CLAIM",
+        "text": "We hired more contractors",
+        "credence": 0.625
+    },
+    {
+        "ref": "cb5396a7-749c-37ac-978b-2a8417242792",
+        "kind": "CLAIM",
+        "text": "the project scope grew.",
+        "credence": 0.5
+    },
+    {
+        "ref": "c50fa882-0ab1-315f-9678-8d38a9152c93",
+        "kind": "EDGE",
+        "polarity": "SUPPORT",
+        "source": "cb5396a7-749c-37ac-978b-2a8417242792",
+        "target": "5026f04a-b145-3cf0-bf60-eaf20e9e2427",
+        "credence": 0.5
+    }
+]
