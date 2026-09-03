@@ -409,7 +409,14 @@
 #   computenet-adgy (+4): PR #650's reviewer asked that agent-execution.md's
 #     `bd -C` bullet be generalised to any command line, in the file dispatched
 #     agents actually read. It rides here rather than colliding on this entry.
-work                9364
+# 9285 -> 9293 on 2026-09-03: computenet-7wd6 (+8). SKILL.md 5e attributed the
+# ~9-12m required-check cycle to sibling churn only. Two reviewers each paid it
+# in full for a KDoc-only repair on an already-green head, nothing landed under
+# either branch. The cost is unchanged and the repair is still right; what the
+# orchestrator gains is the arithmetic — budget one check cycle per review that
+# FINDS something, not only per sibling landing (~20-27m of a 300m slot across
+# three reviews, previously attributed to nothing).
+work                RECOMPUTE
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
