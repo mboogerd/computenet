@@ -205,7 +205,25 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   diffing symbols ACROSS REVISIONS, the one job only git grep can do and one
   where a wrong zero directly weakens a verdict: a reviewer checking that a
   test-only refactor had deleted no test method got 0 at both revisions
-  (computenet-s7az).
+  (computenet-s7az). `\x` escapes are absent for the same reason — a scripted
+  mutation keyed on `git grep -E 'ORA1 \xc2\xa7'` matched nothing, edited
+  nothing, and its test then passed FOR THE WRONG REASON (computenet-adgy).
+- Fifth member, and the one that produces a *finding* rather than a zero:
+  **never build a command line in a shell variable and invoke it bare.** zsh
+  does not field-split an unquoted expansion, so
+  `FILT="./gradlew :oracle:test --tests 'X' --rerun"; $FILT` looks the whole
+  string up as one command name and exits **127** — while the surrounding
+  block's own `echo`s still print plausibly, so the transcript reads like a
+  run. A feature reviewer lost all three of its mutation runs to this and
+  caught it only because it had captured `EXIT=$?`; without that it would
+  have reported three mutations that never ran, which is indistinguishable
+  from "the test does not discriminate" — a false finding against good work
+  (computenet-adgy, same family as computenet-wahz's `bd -C` case). Write the
+  command out per invocation, or define a function. The same shape in a
+  scripted mutation is why
+  `.claude/skills/work/references/mutation-check.md` step 3 requires proving
+  the mutation LANDED — a non-empty `git diff HEAD -- <file>` — before the
+  test result is read at all.
 
 ## Verification
 
