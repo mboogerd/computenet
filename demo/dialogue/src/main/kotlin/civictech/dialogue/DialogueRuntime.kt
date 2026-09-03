@@ -181,10 +181,12 @@ class DialogueRuntime(
     //      Spawned here rather than in GraphApplier because they are a *read*
     //      surface, not part of the write path: the applier deliberately holds
     //      only what it reconciles from. Both names are in SINK_NAMES, so both
-    //      refs are volatile — their MapDelta payloads carry
+    //      refs are volatile: their MapDelta payloads carry
     //      Claim/RelationProvenanceEntry, which have no polymorphic WireCodec
-    //      registration, so journaling them would throw SerializationException
-    //      on the first frame (see isDurable's KDoc).
+    //      registration, so a journaled frame of theirs could not encode.
+    //      See SINK_NAMES for why that is design intent here rather than an
+    //      enforced guard — a linked sink's frames never reach the WAL to be
+    //      encoded in the first place.
     private val claimProvenanceSink:
         ObserveCell<MapDelta<ClaimKey, Set<ClaimProvenanceEntry>>, Map<ClaimKey, Set<ClaimProvenanceEntry>>> =
         sink("claimProvenance", refs.claimProvenance.ref, View.map())
@@ -200,8 +202,9 @@ class DialogueRuntime(
      * host replaying frames addressed to last run's random sink ref would
      * dead-letter every one of them).
      *
-     * Every name passed here must also be in [SINK_NAMES], or [isDurable]
-     * calls the sink durable and its first frame fails to encode.
+     * Every name passed here should also be in [SINK_NAMES], so [isDurable]
+     * calls the sink volatile. Note that omitting one does **not** fail
+     * loudly — see [SINK_NAMES].
      */
     private fun <D : Any, S> sink(name: String, source: CellRef, view: View<D, S>): ObserveCell<D, S> {
         val cell = ObserveCell(view, sinkRef(name))
@@ -394,9 +397,21 @@ class DialogueRuntime(
          * three: the recovery-only `utterances` sink and the two
          * ProvenanceIndex read sinks (2aw.5-D9).
          *
-         * Every name here becomes a volatile ref via [isDurable]; a sink
-         * spawned under [sinkRef] and *missing* from this list is journaled,
-         * and its first frame throws.
+         * Every name here becomes a volatile ref via [isDurable].
+         *
+         * **A missing name does NOT fail loudly** (measured, computenet-2aw.5.1,
+         * and re-measured in review). Unlike a pipeline handle absent from
+         * [DERIVED_HANDLES] — whose cell is fed through a routed inlet and so
+         * hits `ManagedHost.enqueueHostedInvocation`, where the journal tee
+         * lives — a sink is fed by `Host.connect`, which binds outlet to inlet
+         * directly (`LinkAdmission.connect` → `outlet.linkTo(inlet)`) and never
+         * enters that intake. Dropping `claimProvenance` from this list
+         * therefore raises no `SerializationException` and still writes nothing
+         * to the WAL. So this list is belt-and-braces for sinks — the design
+         * intent (a sink is never durable; see [isDurable]'s KDoc and
+         * computenet-oy26's note on `GraphApplier.sink`) recorded where it can
+         * be read, not a guard any test in this module can demonstrate.
+         * `DialogueRuntimeSurfaceTest` pins the property and says the same.
          */
         private val SINK_NAMES =
             listOf("claims", "relations", "stances", "utterances", "claimProvenance", "relationProvenance")

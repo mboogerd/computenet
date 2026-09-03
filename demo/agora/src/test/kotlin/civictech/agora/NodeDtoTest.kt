@@ -21,7 +21,7 @@ import kotlin.test.assertEquals
  * 1. [`the lifted encoder is byte-identical to AgoraApp's former private one`]
  *    encodes the same nodes through [ReplicaNodeDto] — a verbatim copy of the
  *    `private data class NodeDto` that lived in `AgoraApp.kt` before the lift
- *    (same nine-field order, same defaults, same `Json` defaults) — and
+ *    (same eight-field order, same defaults, same `Json` defaults) — and
  *    asserts string equality. A changed field order, a changed default, or a
  *    changed `Json` configuration fails here.
  * 2. The golden-string tests below pin the omissions `demo/agora/ui/src/api/types.ts`
