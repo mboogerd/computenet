@@ -605,6 +605,29 @@ weak-tier approximation is far better in practice than the bound it is stated
 with. It is not a calibration; a calibration needs the graph shapes that make
 it worst, which nobody has characterized yet.
 
+**Correction (computenet-7iys, 2aw.F6-D3): "cyclic on odd seeds" above is the
+transcript's *intended* shape, not the final live digraph's actual shape, and
+the "All 20 odd seeds closed a cycle" parenthetical is the same conflation
+`OrderIndependenceTest`'s F-17 entry already names for BS-09 — `closedACycle`
+describes the transcript *before* the program's retractions.**
+`IncrementalEqualsBatchTest` classified its own DAG/cyclic tolerance the same
+way (`seed % 2`), so any odd seed whose retractions left its final live
+digraph acyclic was compared at `25 * 1e-3` where the exact `1e-9` bound was
+available, and the sweep asserted no non-vacuity on the cyclic half. Fixed by
+reusing `OrderIndependenceTest`'s `hasCycle`/`reaches` idiom over the
+already-computed `DialogueBatchReference` fold, so `cyclic` is now read off
+the final live relation set.
+
+**Measured**: of the 20 odd seeds, only seeds `[1, 5, 7, 13, 15, 21, 25, 29,
+33, 39]` have a final live digraph that is actually cyclic; seeds `[3, 9, 11,
+17, 19, 23, 27, 31, 35, 37]` reclassify to acyclic and are now compared at the
+exact `1e-9` bound instead of `25 * 1e-3`. Per 2aw.F6-D3's divergence policy,
+no seed is swapped or widened away if it turns red under the tighter
+classification — and none did: the sweep stays green with worst DAG gap
+`0.0` (now including the 10 reclassified seeds) and worst cyclic gap
+`2.2247e-4`, unchanged from the original measurement above because the
+genuinely-cyclic seed set's own worst gap was already the reported figure.
+
 ## F-17 — BS-09 measured: the canonical graph is order-independent, but *which* cycle edge is designated head is not — and neither is how many heads there are
 
 **Observation** (computenet-2aw.6.2, AGO1 F6 T2): BS-09's test
