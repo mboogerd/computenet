@@ -125,6 +125,11 @@ class IncrementalEqualsBatchTest {
         var blindDivergenceSeen = false
         var blindDivergentSeeds = 0
         var blindControlsRun = 0
+        // The observed headroom against each tolerance, reported so
+        // doc/demo-findings.md's G-19 note carries a measured number rather
+        // than "it passed".
+        var worstDagGap = 0.0
+        var worstCyclicGap = 0.0
 
         forEachSeed(SEEDS) { seed ->
             val cyclic = seed % 2 == 1L
@@ -160,6 +165,8 @@ class IncrementalEqualsBatchTest {
             refs.forEach { ref ->
                 val incremental = rig.credenceOf(ref)
                 val expected = batch.getValue(ref)
+                val gap = abs(incremental - expected)
+                if (cyclic) worstCyclicGap = maxOf(worstCyclicGap, gap) else worstDagGap = maxOf(worstDagGap, gap)
                 assertTrue(
                     abs(incremental - expected) <= tolerance,
                     "seed $seed (cyclic=$cyclic) node $ref: incremental $incremental vs batch $expected (tol $tolerance)",
@@ -201,6 +208,10 @@ class IncrementalEqualsBatchTest {
         println(
             "BS-10 retraction-blind control: ran on $blindControlsRun of ${SEEDS.count()} seeds, " +
                 "diverged on $blindDivergentSeeds",
+        )
+        println(
+            "BS-10 worst observed incremental-vs-batch gap: DAG seeds $worstDagGap (tol ${toleranceFor(false)}), " +
+                "cyclic seeds $worstCyclicGap (tol ${toleranceFor(true)})",
         )
     }
 
