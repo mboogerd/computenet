@@ -2256,23 +2256,26 @@ and shipping one is a contradiction merged into the file every session
 executes. Any of them, or any doubt → second tier.
 
 **The cost this tier exists to avoid is real and compounds.** Every merge of
-`origin/main` pushes a new head, and **every new head from any cause** restarts
-all the required checks — **9–12 minutes**, governed by `build-test-fast`
-(measured across four runs, computenet-678u; this said ~4 minutes until then).
-*Any cause* includes a reviewer's zero-code repair on an already-green head:
-two reviewers each pushed a KDoc-only fix — 0 non-comment code lines — and paid
-8m45s and 9m11s, with nothing landed under either branch and
-`merge-base..origin/main` empty both times (computenet-7wd6). The repair is
-still right and review-feature.md §5 says to make it anyway; what changes is
-**your** arithmetic: **budget one check cycle per review that finds
-something**, not only per sibling landing. Three such reviews is ~20–27m of a
-300m slot that would otherwise be attributed to nothing. A sibling merge
+`origin/main` pushes a new head, and every new head restarts all the required
+checks — **9–12 minutes**, governed by `build-test-fast` (measured across four
+runs, computenet-678u; this said ~4 minutes until then) — which a sibling merge
 can invalidate before it finishes, so the churn is superlinear in the number of concurrent same-file
 PRs (computenet-nxac: one PR paid the cycle three times). Which is the other
 half of the answer: **keep at most ~2 PRs open against any one file** —
 beyond that, sequence. Stated where it bites in
 [references/direct-child.md](references/direct-child.md), where nothing else
 bounds the count.
+
+**But the cycle is charged to the HEAD, not to the sibling** — every new head
+from any cause pays it, and a reviewer's zero-code repair on an already-green
+branch is the case that surprises. Two reviewers each pushed a KDoc-only fix —
+0 non-comment code lines — and paid 8m45s and 9m11s, with nothing landed under
+either branch and `merge-base..origin/main` empty both times (computenet-7wd6).
+The repair is still right and review-feature.md §5 already tells the reviewer
+to make it anyway; what changes is **your** arithmetic: **budget one check
+cycle per review that finds something**, not only per sibling landing. That is
+~9–12m each — three such reviews is most of a small item's budget, and it was
+previously attributed to nothing.
 
 **Cheaper still: prevent the collision instead of surviving it.** When two
 in-flight branches must each add an entry to the same *ordered list* — the
