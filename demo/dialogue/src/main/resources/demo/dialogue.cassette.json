@@ -1,0 +1,391 @@
+{
+    "3e64d00b1a8ce610d5211c32d0019d46ce8c5e070e60db81446c080cc7e4d943": [
+        {
+            "type": "claim",
+            "text": "A protected bike lane should be installed on Main Street.",
+            "speaker": "alice",
+            "utteranceId": "u1"
+        },
+        {
+            "type": "stance",
+            "claimText": "A protected bike lane should be installed on Main Street.",
+            "speaker": "alice",
+            "value": 0.9,
+            "utteranceId": "u1"
+        }
+    ],
+    "e4dadb65083b1a83ea265fcdd272934f5ac9699f35f31d2f9f8c2060b6d3571c": [
+        {
+            "type": "claim",
+            "text": "Removing on-street parking on Main Street will hurt local businesses.",
+            "speaker": "bob",
+            "utteranceId": "u2"
+        },
+        {
+            "type": "stance",
+            "claimText": "Removing on-street parking on Main Street will hurt local businesses.",
+            "speaker": "bob",
+            "value": 0.8,
+            "utteranceId": "u2"
+        },
+        {
+            "type": "relation",
+            "sourceText": "Removing on-street parking on Main Street will hurt local businesses.",
+            "targetText": "A protected bike lane should be installed on Main Street.",
+            "polarity": "ATTACK",
+            "utteranceId": "u2"
+        }
+    ],
+    "046439baa32c6cc5c73bebeaef3df51c8f2bbcc25330898418ee1c3690fc83de": [
+        {
+            "type": "claim",
+            "text": "A protected bike lane will reduce car-bike collisions on Main Street.",
+            "speaker": "alice",
+            "utteranceId": "u3"
+        },
+        {
+            "type": "stance",
+            "claimText": "A protected bike lane will reduce car-bike collisions on Main Street.",
+            "speaker": "alice",
+            "value": 0.85,
+            "utteranceId": "u3"
+        },
+        {
+            "type": "relation",
+            "sourceText": "A protected bike lane will reduce car-bike collisions on Main Street.",
+            "targetText": "A protected bike lane should be installed on Main Street.",
+            "polarity": "SUPPORT",
+            "utteranceId": "u3"
+        }
+    ],
+    "9f7badce5176f41be17fa7c5a6a2eff6d338391f3ccca83f38525540d1c13c02": [
+        {
+            "type": "relation",
+            "sourceText": "A protected bike lane should be installed on Main Street.",
+            "targetText": "Removing on-street parking on Main Street will hurt local businesses.",
+            "polarity": "ATTACK",
+            "utteranceId": "u4"
+        }
+    ],
+    "47e96dd10a878f1134f6f61589c7c08bf2964b80eca57e0c14b1ec34062a8972": [],
+    "a6e7bc9258389f17916cac02d8d5930092bf88a474e0505c06e3afcf3a1c1789": [
+        {
+            "type": "claim",
+            "text": "The city should add a raised crosswalk at Main and Oak.",
+            "speaker": "dave",
+            "utteranceId": "u5"
+        },
+        {
+            "type": "stance",
+            "claimText": "The city should add a raised crosswalk at Main and Oak.",
+            "speaker": "dave",
+            "value": 0.7,
+            "utteranceId": "u5"
+        }
+    ],
+    "05fb13eb530e8cc77a7355a6c6253648c87c00e22d7d4c7a6d5857f27a14fd13": [
+        {
+            "type": "claim",
+            "text": "Removing a travel lane on Main Street will worsen traffic congestion.",
+            "speaker": "bob",
+            "utteranceId": "u6"
+        },
+        {
+            "type": "stance",
+            "claimText": "Removing a travel lane on Main Street will worsen traffic congestion.",
+            "speaker": "bob",
+            "value": 0.75,
+            "utteranceId": "u6"
+        },
+        {
+            "type": "relation",
+            "sourceText": "Removing a travel lane on Main Street will worsen traffic congestion.",
+            "targetText": "A protected bike lane should be installed on Main Street.",
+            "polarity": "ATTACK",
+            "utteranceId": "u6"
+        }
+    ],
+    "8c61070dc1864c75eaa5ef2a6d1023a05f380f300f8654cdfa1bdb1a4e861edc": [
+        {
+            "type": "claim",
+            "text": "The city should fund a shuttle bus instead of building a bike lane.",
+            "speaker": "dave",
+            "utteranceId": "u7"
+        },
+        {
+            "type": "stance",
+            "claimText": "The city should fund a shuttle bus instead of building a bike lane.",
+            "speaker": "dave",
+            "value": 0.6,
+            "utteranceId": "u7"
+        },
+        {
+            "type": "relation",
+            "sourceText": "The city should fund a shuttle bus instead of building a bike lane.",
+            "targetText": "A protected bike lane should be installed on Main Street.",
+            "polarity": "ATTACK",
+            "utteranceId": "u7"
+        }
+    ],
+    "caf56ebee66c417e3840d71bd37bcf33251306f18654a3f16bac1291467e44a7": [
+        {
+            "type": "claim",
+            "text": "A bike lane will increase foot traffic to Main Street shops.",
+            "speaker": "alice",
+            "utteranceId": "u8"
+        },
+        {
+            "type": "stance",
+            "claimText": "A bike lane will increase foot traffic to Main Street shops.",
+            "speaker": "alice",
+            "value": 0.8,
+            "utteranceId": "u8"
+        },
+        {
+            "type": "relation",
+            "sourceText": "A bike lane will increase foot traffic to Main Street shops.",
+            "targetText": "Removing on-street parking on Main Street will hurt local businesses.",
+            "polarity": "ATTACK",
+            "utteranceId": "u8"
+        }
+    ],
+    "8e97bdc45cbd4da9191654ef3c5b169dcd8e605753833dc04c876b1aa0ead032": [
+        {
+            "type": "claim",
+            "text": "The bike lane project should be delayed for a full traffic study.",
+            "speaker": "carol",
+            "utteranceId": "u9"
+        },
+        {
+            "type": "stance",
+            "claimText": "The bike lane project should be delayed for a full traffic study.",
+            "speaker": "carol",
+            "value": 0.65,
+            "utteranceId": "u9"
+        },
+        {
+            "type": "relation",
+            "sourceText": "The bike lane project should be delayed for a full traffic study.",
+            "targetText": "A protected bike lane should be installed on Main Street.",
+            "polarity": "ATTACK",
+            "utteranceId": "u9"
+        }
+    ],
+    "0d152979022cf912638a83d2a88024cf97656e5e2b694a3b858aa1917e9ef72a": [
+        {
+            "type": "claim",
+            "text": "Removing a lane on Main Street will slow emergency vehicle response times.",
+            "speaker": "dave",
+            "utteranceId": "u10"
+        },
+        {
+            "type": "stance",
+            "claimText": "Removing a lane on Main Street will slow emergency vehicle response times.",
+            "speaker": "dave",
+            "value": 0.7,
+            "utteranceId": "u10"
+        }
+    ],
+    "c3a8a7f886b57c03d0c3be0b0dd0305f1493bd8131516f7dfd6baad0340b75e8": [
+        {
+            "type": "claim",
+            "text": "The city should paint sharrows instead of building a protected bike lane.",
+            "speaker": "bob",
+            "utteranceId": "u11"
+        },
+        {
+            "type": "stance",
+            "claimText": "The city should paint sharrows instead of building a protected bike lane.",
+            "speaker": "bob",
+            "value": 0.55,
+            "utteranceId": "u11"
+        },
+        {
+            "type": "relation",
+            "sourceText": "The city should paint sharrows instead of building a protected bike lane.",
+            "targetText": "A protected bike lane should be installed on Main Street.",
+            "polarity": "ATTACK",
+            "utteranceId": "u11"
+        }
+    ],
+    "3d35a7aafeecf46543e1400359c8efddcad52046e584794e2e3186dd3022188d": [
+        {
+            "type": "claim",
+            "text": "A  PROTECTED BIKE LANE SHOULD BE INSTALLED ON MAIN STREET.",
+            "speaker": "bob",
+            "utteranceId": "u12"
+        }
+    ],
+    "148909042a0709c31275aa3f62847c1e300e409d2ae86e6a5aa9f6ced3bb0e33": [
+        {
+            "type": "claim",
+            "text": "Main Street needs dedicated, physically separated space for cyclists.",
+            "speaker": "carol",
+            "utteranceId": "u13"
+        },
+        {
+            "type": "stance",
+            "claimText": "Main Street needs dedicated, physically separated space for cyclists.",
+            "speaker": "carol",
+            "value": 0.75,
+            "utteranceId": "u13"
+        }
+    ],
+    "3b550e6dee7932d165575670cf2fd666ce9bd8bb2584368d87e7ca83c71720f9": [
+        {
+            "type": "relation",
+            "sourceText": "The city should add a raised crosswalk at Main and Oak.",
+            "targetText": "A protected bike lane should be installed on Main Street.",
+            "polarity": "SUPPORT",
+            "utteranceId": "u14"
+        }
+    ],
+    "f320b1de12aaf1661c65a6cd90ec9614eeeeff0117e54a4eeaa41a5150a89a33": [
+        {
+            "type": "relation",
+            "sourceText": "The city should paint sharrows instead of building a protected bike lane.",
+            "targetText": "The city should fund a shuttle bus instead of building a bike lane.",
+            "polarity": "SUPPORT",
+            "utteranceId": "u15"
+        }
+    ],
+    "e130128b5866b0d0b68faa8398d790095d1964c31731642457086ab3a05e76fc": [
+        {
+            "type": "relation",
+            "sourceText": "Removing a lane on Main Street will slow emergency vehicle response times.",
+            "targetText": "A protected bike lane should be installed on Main Street.",
+            "polarity": "ATTACK",
+            "utteranceId": "u16"
+        }
+    ],
+    "7a7bf7fe5c623d7f9456021d54d3106cd29bb2924c4ddc8070cfa41af142c61a": [],
+    "a5d02eec8cf887628bdee11e074cc3ab1726b9785c87c09163cd15ee8db47a67": [
+        {
+            "type": "stance",
+            "claimText": "A protected bike lane should be installed on Main Street.",
+            "speaker": "dave",
+            "value": 0.5,
+            "utteranceId": "u18"
+        }
+    ],
+    "71aabb7187ad83499ea960abbfde5fabd35ba6340ae464e4489dbdb9008500f5": [
+        {
+            "type": "stance",
+            "claimText": "A protected bike lane should be installed on Main Street.",
+            "speaker": "carol",
+            "value": 0.6,
+            "utteranceId": "u19"
+        }
+    ],
+    "a2dca1e4dde2b51a7506d57fa5e52e897325729a471a3441611ba87cd92120ea": [
+        {
+            "type": "stance",
+            "claimText": "The city should add a raised crosswalk at Main and Oak.",
+            "speaker": "alice",
+            "value": 0.6,
+            "utteranceId": "u20"
+        }
+    ],
+    "afad8e239c68d1804954fdf5c030c8cabf52f746974c41e19b6bcad76a1f22d5": [
+        {
+            "type": "stance",
+            "claimText": "The city should fund a shuttle bus instead of building a bike lane.",
+            "speaker": "bob",
+            "value": 0.65,
+            "utteranceId": "u21"
+        }
+    ],
+    "76cb1cbb4abe461ec62117e7c149a647abeafb6624498307e65d9b32021cf156": [
+        {
+            "type": "stance",
+            "claimText": "The city should paint sharrows instead of building a protected bike lane.",
+            "speaker": "dave",
+            "value": 0.2,
+            "utteranceId": "u22"
+        }
+    ],
+    "578f0d6ed71ef16ae45bce58e79e6443b1516c0cde1036bc492e639627ee413b": [],
+    "fcb30d9039b06d29ec8be3b9fefb79d95b886606464f34f43ff4cb5c5b022b10": [
+        {
+            "type": "stance",
+            "claimText": "Removing on-street parking on Main Street will hurt local businesses.",
+            "speaker": "bob",
+            "value": 0.35,
+            "utteranceId": "u24"
+        }
+    ],
+    "8f726b65db4e3156d2b81283897ad8301f81c4f00bbf578d83a5341fc701b933": [],
+    "804511086ec26f6695711594360b6f35007e0db0e762283fd29d2d1224b7de29": [
+        {
+            "type": "stance",
+            "claimText": "A protected bike lane should be installed on Main Street.",
+            "speaker": "alice",
+            "value": 0.97,
+            "utteranceId": "u26"
+        }
+    ],
+    "165d56cc1860be21df8160ff2c18eabd4e833e20001ffa21912b7b4f32e607b2": [],
+    "b67bf825c24411022da34bb7d0cf22f7e6a18e3729590a8786ed09051595306e": [],
+    "8593e5ea54f315f036cc09167ef05524e2da6813f74891762ce4eee0a347450a": [],
+    "b04983e6bdb0236c70d20dd9e992b98c16ff5aa34052fc2cf1193329cdb2e8ce": [
+        {
+            "type": "claim",
+            "text": "The city should install bike racks near the Main Street shops.",
+            "speaker": "alice",
+            "utteranceId": "u30"
+        },
+        {
+            "type": "stance",
+            "claimText": "The city should install bike racks near the Main Street shops.",
+            "speaker": "alice",
+            "value": 0.8,
+            "utteranceId": "u30"
+        },
+        {
+            "type": "relation",
+            "sourceText": "The city should install bike racks near the Main Street shops.",
+            "targetText": "A bike lane will increase foot traffic to Main Street shops.",
+            "polarity": "SUPPORT",
+            "utteranceId": "u30"
+        }
+    ],
+    "58497c2e65a0df8794cab99637735d6528f93a7c4fd25fbfc6a624404b445d01": [],
+    "b67276b17e5226e2f1219004f78ea4123fa6a06005aa76faed2db51a88d309d1": [
+        {
+            "type": "stance",
+            "claimText": "Removing a lane on Main Street will slow emergency vehicle response times.",
+            "speaker": "dave",
+            "value": 0.5,
+            "utteranceId": "u32"
+        }
+    ],
+    "0a21f907b6bac554b7b9807b3fb956cafb9d96712fbf2f91f192cadb21835413": [],
+    "5aa5d0773ac2c4fe4058b0942f47a61eac7af24ed86da8d5a4fcec7d75cfbb92": [
+        {
+            "type": "claim",
+            "text": "The city should offset lost parking revenue with a small event fee.",
+            "speaker": "bob",
+            "utteranceId": "u34"
+        },
+        {
+            "type": "stance",
+            "claimText": "The city should offset lost parking revenue with a small event fee.",
+            "speaker": "bob",
+            "value": 0.6,
+            "utteranceId": "u34"
+        },
+        {
+            "type": "relation",
+            "sourceText": "The city should offset lost parking revenue with a small event fee.",
+            "targetText": "Removing on-street parking on Main Street will hurt local businesses.",
+            "polarity": "ATTACK",
+            "utteranceId": "u34"
+        }
+    ],
+    "7d5b537da55672cc5c6a83dba37c92d0b86f71f1ebacbfa5dcd47812b60f6432": [],
+    "794212530be1262b7faa6cb7b657a7502473a7b82196c62acca56714cda73e7f": [],
+    "5a1af064b15ed7e463e8af7db0c78ad335eb5ae61a2c144074e6b917d2cf1649": [],
+    "69e3b498d8cc1b16bfe69a748915d1dd3473677e3893fbe233205b4a3dcdb8dc": [],
+    "f7a503808ff10ab2704e0bd5cdca656889e936def55d8f69aa939518b04e3405": [],
+    "333e50d1c9fe725baf1e82f95e14d07a561dafde1416c322fd92bdba3a18f05c": []
+}
