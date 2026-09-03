@@ -396,11 +396,25 @@ object DialoguePipeline {
             // arising here from the item-kind split rather than from two
             // independent roots.
             //
+            // The kernel would normally rescue that with CP-A3's absorb-ack;
+            // computenet-23bf established why it does not here. The ack is
+            // EDGE-LOCAL and no plain operator relays it, so it survives only
+            // when the absorbing cell links DIRECTLY into the gated inlet.
+            // Both arms above are two hops deep (extractedRelations and
+            // extractedClaims are the absorbers; relationCandidates ->
+            // nonSelfRelations and claimKeys are pure hops below them), so
+            // each ack dies before reaching the semijoin. Reproduced
+            // minimally in :kernel's FrontierGatedEmissionTest (the
+            // one-hop/two-hop disjoint-wave-arm pair) and written up as
+            // doc/demo-findings.md F-15.
+            //
             // Observed (task computenet-2aw.3.2, RelationMintTest): with
             // `emitOnFrontier = true` on BOTH semijoins, or on the first alone,
-            // every relation assertion in that test fails with an EMPTY
-            // canonical set at quiescence — the gate holds the waves and the
-            // resolvable stream never emits. All five pass ungated. A gate that
+            // 4 of that test's 5 cases fail with an EMPTY canonical set at
+            // quiescence — the gate holds the waves and the resolvable stream
+            // never emits. (REL-04 asserts that nothing is minted, so a wedged
+            // pipeline satisfies it vacuously.) Re-measured at 915d574a9 by
+            // computenet-23bf. All five pass ungated. A gate that
             // withholds output at rest is disqualifying, so the default stands.
             //
             // What the ungated default leaves open is the transient the gate
