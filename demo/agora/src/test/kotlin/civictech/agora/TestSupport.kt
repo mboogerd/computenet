@@ -1,8 +1,5 @@
 package civictech.agora
 
-import civictech.agora.cell.Polarity
-import civictech.agora.semantics.DfQuad
-import civictech.agora.semantics.GradualSemantics
 import civictech.cell.CellRef
 import civictech.testkit.SimWorld
 
@@ -28,48 +25,8 @@ class Harness(
     fun runToIdle(budget: Int = 200_000): Int = world.runToIdle(budget)
 }
 
-/**
- * The batch reference: a plain-Kotlin Gauss-Seidel fixpoint over the final
- * graph, using the SAME semantics functions and the SAME ref-sorted fold
- * order as the cells — incremental == batch must be a property of the
- * propagation machinery, not of parallel math.
- */
-object BatchReference {
-    data class NodeSpec(
-        val stances: Map<String, Double> = emptyMap(),
-        val polarity: Polarity? = null, // non-null for edges
-        val source: CellRef? = null,
-        val target: CellRef? = null,
-    )
-
-    fun solve(
-        topology: Map<CellRef, NodeSpec>,
-        semantics: GradualSemantics = DfQuad,
-        tol: Double = 1e-13,
-        maxSweeps: Int = 100_000,
-    ): Map<CellRef, Double> {
-        val order = topology.keys.sortedWith(civictech.agora.cell.ClaimCell.REF_ORDER)
-        val cred = order.associateWith { 0.5 }.toMutableMap()
-        val incoming = order.associateWith { n ->
-            topology.entries
-                .filter { it.value.target == n }
-                .sortedWith(compareBy(civictech.agora.cell.ClaimCell.REF_ORDER) { it.key })
-        }
-        repeat(maxSweeps) {
-            var maxDelta = 0.0
-            order.forEach { n ->
-                val energies = incoming.getValue(n).map { (ref, spec) ->
-                    val e = cred.getValue(ref) * cred.getValue(spec.source!!)
-                    if (spec.polarity == Polarity.SUPPORT) e else -e
-                }
-                val attacks = energies.filter { it < 0 }.map { -it }
-                val supports = energies.filter { it > 0 }
-                val next = semantics.combine(semantics.base(topology.getValue(n).stances.values), attacks, supports)
-                maxDelta = maxOf(maxDelta, kotlin.math.abs(next - cred.getValue(n)))
-                cred[n] = next
-            }
-            if (maxDelta < tol) return cred
-        }
-        error("batch reference did not converge within $maxSweeps sweeps")
-    }
-}
+// BatchReference moved to src/testFixtures/kotlin/civictech/agora/BatchReference.kt
+// (computenet-5swa) so :demo:dialogue's differential tests can import it instead
+// of reproducing the solver. The `java-test-fixtures` plugin wires this module's
+// `test` source set to depend on `testFixtures` automatically, so callers in this
+// package (AgoraExitTest, CycleQuiescenceTest) keep resolving it unqualified.
