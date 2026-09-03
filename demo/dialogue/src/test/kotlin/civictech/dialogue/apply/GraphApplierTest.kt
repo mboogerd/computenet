@@ -132,16 +132,19 @@ class GraphApplierTest {
             world.runToIdle()
         }
 
-        /** Reconcile, then drain so credence updates settle before assertions. */
+        /**
+         * Reconcile, then drain so credence updates settle before assertions.
+         *
+         * [assertApply07] is deliberately NOT called here: an invariant helper
+         * that runs before a test's own assertions catches every mutation
+         * first and hides whether the criterion's own assertion discriminates
+         * at all. Each test invokes it explicitly, last.
+         */
         fun reconcile(): ReconcileReport {
             val report = applier.reconcile()
             world.runToIdle()
-            assertApply07()
             return report
         }
-
-        fun credenceOf(ref: civictech.cell.CellRef): Double =
-            service.graph().single { it.ref == ref }.credence
 
         /**
          * [AGO1-APPLY-07], asserted after every reconcile: every canonical
@@ -199,6 +202,8 @@ class GraphApplierTest {
         assertEquals(1, report.structureOps)
         assertEquals(1, report.stanceWrites, "alice's stance must be applied")
         assertTrue(rig.bindings.isBound(catsKey))
+
+        rig.assertApply07()
     }
 
     // ------------------------------------------------------------------
@@ -223,6 +228,17 @@ class GraphApplierTest {
             "[AGO1-APPLY-02] a reconcile over an unchanged canonical set must issue ZERO structure ops",
         )
         assertEquals(0, second.structureOps)
+        // ops alone does NOT pin idempotence: re-issuing createClaim under a
+        // ref agora already holds is REJECTED ("Cell already spawned"), which
+        // leaves ops empty and records a failure instead. Measured — removing
+        // both idempotence guards leaves every ops-based assertion in this
+        // test green.
+        assertEquals(
+            emptyList(),
+            second.failures,
+            "[AGO1-APPLY-02] a create the applier should never have issued shows up as a REJECTION, not as an op",
+        )
+        assertEquals(emptyList(), rig.applier.accounting.failures, "no write may have been attempted at all")
         assertEquals(0, second.stanceWrites, "an unchanged stance must not be re-issued")
         assertEquals(refsBefore, rig.service.graph().map { it.ref }, "the agora graph must be untouched")
         assertEquals(
@@ -230,6 +246,8 @@ class GraphApplierTest {
             rig.applier.accounting.structureOps,
             "the cumulative structure-op counter must not advance",
         )
+
+        rig.assertApply07()
     }
 
     // ------------------------------------------------------------------
@@ -260,6 +278,8 @@ class GraphApplierTest {
         assertEquals(3, report.structureOps, "only the explicit reconcile writes")
         assertNotNull(rig.service.nodeInfo(BindingTable.refFor(catsKey)))
         assertNotNull(rig.service.nodeInfo(BindingTable.refFor(supportKey)))
+
+        rig.assertApply07()
     }
 
     // ------------------------------------------------------------------
@@ -279,6 +299,8 @@ class GraphApplierTest {
         assertEquals(Polarity.SUPPORT, info.polarity)
         assertEquals(BindingTable.refFor(dogsKey), info.source)
         assertEquals(BindingTable.refFor(catsKey), info.target)
+
+        rig.assertApply07()
     }
 
     // ------------------------------------------------------------------
@@ -325,6 +347,8 @@ class GraphApplierTest {
             report.failures,
             "removing the edge before its endpoint claim means no write is ever rejected",
         )
+
+        rig.assertApply07()
     }
 
     // ------------------------------------------------------------------
@@ -367,6 +391,8 @@ class GraphApplierTest {
             "\"Dogs bark.\" must still be present in the agora graph",
         )
         assertEquals(0, report.structureOps, "no structure op succeeded this reconcile")
+
+        rig.assertApply07()
     }
 
     // ------------------------------------------------------------------
@@ -393,6 +419,8 @@ class GraphApplierTest {
         assertNull(rig.service.nodeInfo(BindingTable.refFor(catsKey)))
         assertTrue(!rig.bindings.isBound(catsKey) && !rig.bindings.isBound(supportKey), "both keys unbound")
         assertNotNull(rig.service.nodeInfo(BindingTable.refFor(dogsKey)), "the surviving claim is untouched")
+
+        rig.assertApply07()
     }
 
     // ------------------------------------------------------------------
@@ -421,6 +449,8 @@ class GraphApplierTest {
         assertTrue(rig.bindings.isBound(catsKey), "adoption must record the binding")
         assertEquals(BindingTable.refFor(catsKey), rig.bindings.refOf(catsKey))
         assertEquals(1, rig.service.graph().size)
+
+        rig.assertApply07()
     }
 
     // ------------------------------------------------------------------
@@ -456,6 +486,8 @@ class GraphApplierTest {
             report.failures,
             "an already-absent node is not a failure — calling remove on it would be",
         )
+
+        rig.assertApply07()
     }
 
     // ------------------------------------------------------------------
@@ -488,5 +520,7 @@ class GraphApplierTest {
         assertEquals(emptySet<ClaimKey>(), rig.bindings.boundClaims())
         assertEquals(emptySet<RelationKey>(), rig.bindings.boundRelations())
         assertTrue(rig.service.graph().isEmpty())
+
+        rig.assertApply07()
     }
 }
