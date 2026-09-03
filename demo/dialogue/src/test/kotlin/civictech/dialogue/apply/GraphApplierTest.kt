@@ -4,7 +4,10 @@ import civictech.agora.AgoraService
 import civictech.agora.cell.Polarity
 import civictech.agora.semantics.DfQuad
 import civictech.cell.data.SetOps
+import civictech.cell.observe.ObserveCell
+import civictech.cell.observe.View
 import civictech.dialogue.ClaimKey
+import civictech.dialogue.DialogueRuntime
 import civictech.dialogue.DialoguePipeline
 import civictech.dialogue.RelationKey
 import civictech.dialogue.Segment
@@ -15,6 +18,7 @@ import civictech.dialogue.extract.ExtractedItem
 import civictech.dialogue.extract.ExtractedRelation
 import civictech.dialogue.extract.ExtractedStance
 import civictech.dialogue.extract.segmentContentHash
+import civictech.dialogue.mint.ClaimAggregate
 import civictech.dialogue.mint.RelationMint
 import civictech.dialogue.mint.claimKey
 import civictech.testkit.SimWorld
@@ -25,6 +29,7 @@ import kotlinx.serialization.json.Json
 import java.io.StringReader
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -522,5 +527,123 @@ class GraphApplierTest {
         assertTrue(rig.service.graph().isEmpty())
 
         rig.assertApply07()
+    }
+
+    // ------------------------------------------------------------------
+    // [AGO1-APPLY-07] relation half — unbound endpoint at reconcile time
+    // (computenet-8fze, residual from computenet-2aw.4.2 F4 T2)
+    // ------------------------------------------------------------------
+
+    /**
+     * Reaches `reconcile()`'s relation-create `source == null || target ==
+     * null` branch: a canonical relation whose endpoint claim key is minted
+     * (so the relation itself is canonical, per F3's "PENDING until both
+     * endpoint keys are minted") but NOT bound in the [BindingTable] at
+     * reconcile time, because that claim's own create attempt fails in the
+     * SAME reconcile call.
+     *
+     * The failure is forced by spawning a conflicting cell directly on the
+     * host under `catsKey`'s deterministic ref, bypassing [AgoraService] so
+     * its own `nodeInfo` (the applier's adopt-if-present check) does not see
+     * it: the applier still attempts a real `createClaim`, which collides
+     * with the pre-spawned cell and is rejected. Claim creates run before
+     * relation creates in the fixed op order, so by the time the relation
+     * leg runs, `bindings.refOf(catsKey)` is null — not because the endpoint
+     * was never attempted, but because its own attempt just failed.
+     *
+     * Per the bead's note, an ops-only assertion is vacuous here (a rejected
+     * write also leaves `ops` empty), so this asserts on
+     * [ApplyAccounting] and on the agora graph state, never on the op list
+     * alone. [Rig.assertApply07] is invoked last, per the bead's other note,
+     * so it cannot pre-empt this test's own discriminating assertions.
+     */
+    @Test
+    fun `AGO1-APPLY-07 relation half - a canonical relation whose endpoint claim fails to bind in the same reconcile records a RELATION ApplyFailure`() {
+        val rig = Rig()
+        rig.admit(u1, u2, u3) // catsKey, dogsKey both minted; supportKey canonical (both endpoints minted)
+
+        // Force catsKey's own claim create to fail this reconcile: a cell
+        // already occupies its deterministic ref, spawned OUTSIDE
+        // AgoraService so `nodeInfo` — the adopt-if-present guard — does not
+        // see it and the applier's real `createClaim` collides for real.
+        val conflict = ObserveCell(View.map<ClaimKey, ClaimAggregate>(), BindingTable.refFor(catsKey))
+        rig.world.host.managementInlet.call.spawn(conflict)
+
+        val report = rig.reconcile()
+
+        // Precondition: the endpoint claim really did fail to bind, not
+        // succeed some other way.
+        assertTrue(!rig.bindings.isBound(catsKey), "precondition: catsKey failed to bind this reconcile")
+        val claimFailures = rig.applier.accounting.failures(ApplyKind.CLAIM)
+        assertEquals(1, claimFailures.size, "precondition: exactly one CLAIM failure (catsKey)")
+        assertEquals(catsKey.value, claimFailures.single().key)
+
+        // The relation's own key must never be marked bound, and the write
+        // must never have been attempted (assert on accounting/graph state,
+        // NOT on `report.ops` alone: a rejected write also leaves ops empty).
+        assertTrue(!rig.bindings.isBound(supportKey), "the relation must NOT be marked bound")
+        val relationFailures = rig.applier.accounting.failures(ApplyKind.RELATION)
+        assertEquals(
+            1,
+            relationFailures.size,
+            "[AGO1-APPLY-07] the unbound-endpoint relation must be recorded, not silently skipped",
+        )
+        assertEquals(supportKey.value, relationFailures.single().key)
+        assertTrue(
+            relationFailures.single().reason.contains(catsKey.value),
+            "the failure names the endpoint that is not bound: ${relationFailures.single().reason}",
+        )
+        assertNull(
+            rig.service.nodeInfo(BindingTable.refFor(supportKey)),
+            "no EDGE node may exist in the agora graph for an unbound-endpoint relation",
+        )
+        assertEquals(
+            1,
+            report.structureOps,
+            "only dogsKey's unrelated claim create succeeds this reconcile; catsKey's create and the relation both fail",
+        )
+
+        rig.assertApply07()
+    }
+
+    // ------------------------------------------------------------------
+    // computenet-oy26 — the sink ref seam
+    // ------------------------------------------------------------------
+
+    /**
+     * [GraphApplier]'s three observation sinks must spawn at exactly
+     * [DialogueRuntime.sinkRef], not at an independently re-literalized copy
+     * of `dialogue:sink:$name` (computenet-oy26). `DialogueRuntime` uses that
+     * same prefix, via `SINK_PREFIX`, to decide which refs are volatile
+     * ([DialogueRuntime.isDurable]); a second literal that happened to agree
+     * today could silently drift the moment `SINK_PREFIX` changed, making
+     * these sinks durable and routing `MapDelta` payloads over a
+     * non-`@Serializable` vocabulary through the journal.
+     *
+     * This does not merely assert two literals are `equals()` — it proves
+     * [GraphApplier]'s actual `management.spawn` call targets exactly
+     * [DialogueRuntime.sinkRef]`("claims")`: a cell is planted at that ref
+     * *before* [GraphApplier] is constructed, so if the applier's internal
+     * sink spawn disagreed by even one character it would spawn at a
+     * *different*, unoccupied ref and this collision would never fire.
+     */
+    @Test
+    fun `claims sink spawns at exactly DialogueRuntime's own sinkRef, not a re-literalized copy`() {
+        val world = SimWorld(seed = 1L)
+        val built = DialoguePipeline.build(world.host, cassette(), namespace = "applier-test")
+        val service = AgoraService(world.host, world.registry)
+        val bindings = BindingTable(journalDir = null)
+
+        val conflict = ObserveCell(View.map<ClaimKey, ClaimAggregate>(), DialogueRuntime.sinkRef("claims"))
+        world.host.managementInlet.call.spawn(conflict)
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            GraphApplier(world.host, built.refs, service, bindings)
+        }
+        assertTrue(
+            failure.message?.contains(DialogueRuntime.sinkRef("claims").toString()) == true,
+            "GraphApplier's claims sink must collide with a cell planted at " +
+                "DialogueRuntime.sinkRef(\"claims\") — got: ${failure.message}",
+        )
     }
 }
