@@ -179,6 +179,8 @@ requirement, not a courtesy (computenet-a4cj).
 bd show <feature-id> --json > "$SCRATCH/<id>.json"   # acceptance criteria, description
 bd list --parent=<feature-id> --all --json  # the tasks (--all: they are closed by now)
 bd comments <feature-id> --json > "$SCRATCH/comments.json"   # then read the file
+# the body key is `.text` — `.body` and `.comment` are the obvious guesses and
+# both yield null, which reads as an empty thread rather than as a bad jq
 ```
 
 **Read the comments — that third command is not optional.** `bd show --json`

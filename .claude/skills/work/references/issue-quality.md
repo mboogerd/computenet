@@ -39,6 +39,14 @@ side.
   whole value is that readers can trust it (computenet-7z3t). **Any constraint
   whose truth depends on that distinction — append-only, do-not-edit,
   already-published — states which merge it rests on.**
+- **An identifier allocated by "next free" goes stale between filing and
+  writing — say "the next free X", never a literal.** A bead said "F-14 is the
+  next free number" for a `doc/demo-findings.md` entry; by the time its
+  implementer ran, another PR had taken F-14, and only because that agent
+  re-checked did it write F-15 instead of a duplicate heading
+  (computenet-axxl). The number is resolved at WRITE time against the file's
+  current contents. Same shape as a branch name reserved in advance, which
+  `feature-branch.sh` exists to solve.
 - **A prescribed remedy is checked against the data the bead cites, or
   labelled a suggestion to verify.** In the same bead, a remedy told the
   implementer to attribute a "0.1–0.2 µs/element band" to the per-run medians;
