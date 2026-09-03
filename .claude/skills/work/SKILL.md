@@ -422,7 +422,6 @@ which is what "each tier reports the elapsed it computes when it fires" is for.
 Act on that number, and on a pathological box (5b) act on it BEFORE the
 capacity advice: an expiring slot outranks a busy one.
 
-
 Three standing disciplines:
 
 - **This is the only persistent monitor.** Every other watch is bounded

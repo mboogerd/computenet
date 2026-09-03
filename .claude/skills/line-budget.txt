@@ -381,32 +381,26 @@
 # `bd comments --json` recipe names `.text` (the wrong key returns null, which
 # reads as an empty thread). The third gap — create-ticket.sh's --help — is a
 # script and costs the ledger nothing.
-# 9275 -> 9335 on 2026-09-03, RECOMPUTED on rebase (measured against the
-# 9275 -> 9339 on 2026-09-03, RECOMPUTED on rebase (measured against the
-# landed 9275, not merged with the 9257 baseline it was written from): three
-# items in one PR, all in SKILL.md, so they
-# raise this entry once instead of colliding on it three times
-# (computenet-x69c's lesson).
-#   computenet-lx7t (+24): agent COUNT is not the load model — ONE repo-wide
-#     gradle gate alone took 16 cores to ~25x, cap 3 never binding; read
-#     `next-batch.py --capacity` before EVERY dispatch, reviewers included,
-#     since a reviewer dispatch has no batch call and so never saw the advice.
-#   computenet-099p (+16): a same-turn reading bounds only its own turn — one
-# 9275 -> 9355 on 2026-09-03, measured against the landed 9275 rather
-# than merged with the 9257 baseline it was first written from. Three items in
-# one PR, all in SKILL.md, so they raise this entry once instead of colliding
-# on it three times (computenet-x69c's lesson). Per-item counts are the diff's
-# own hunk deltas against origin/main, not estimates — an earlier version of
-# this comment summed four guesses to 65 against a measured 64, which a
-# reviewer caught (computenet-lx7t's own review).
-#   computenet-lx7t (+17 in SKILL.md step 5b, +10 in 5e, +4 in
-#     merge-task.md): agent COUNT is not the load model — ONE repo-wide gradle
-#     gate alone took 16 cores to ~25x, cap 3 never binding. `next-batch.py
-#     --capacity` exists so the two dispatches with no batch call — 5e's
-#     feature reviewer and merge-task.md's task reviewer — can read the advice
-#     that the batch path already had.
-#   computenet-099p (+17): a same-turn reading bounds only its own turn — one
-work                RECOMPUTE
+# 9285 -> 9364 on 2026-09-03. Three items in one PR, all in SKILL.md, so
+# they raise this entry once instead of colliding on it three times
+# (computenet-x69c's lesson). The entry has been RECOMPUTED against what landed
+# three times while this branch was open (#649 -> 9275, #652 -> 9285), never
+# merged with a baseline it was written from — which is the rule for two PRs on
+# one entry: the second number depends on the first's LANDED value, so neither
+# side of the conflict is right.
+#
+# Per-item counts are the diff's own hunk deltas against origin/main, not
+# estimates. An earlier version of this comment summed four guesses to 65
+# against a measured 64, and its correction still had one item 3 lines out; a
+# reviewer caught both (computenet-lx7t's own review, findings 3 and A).
+#   computenet-lx7t (+20 in SKILL.md 5b, +10 in 5e, +4 in merge-task.md):
+#     agent COUNT is not the load model — ONE repo-wide gradle gate alone took
+#     16 cores to ~25x, cap 3 never binding. `next-batch.py --capacity` exists
+#     so the two dispatches with no batch call — 5e's feature reviewer and
+#     merge-task.md's task reviewer — can read the advice the batch path
+#     already had, and 5e now scopes or holds the reviewer's own wide gate.
+#   computenet-099p (+16 net: +17 added, -1 stray blank line removed in
+#     review): a same-turn reading bounds only its own turn — one
 #     152m boundary landed a session at 313m of a 300m slot, which no reading
 #     frequency catches; no forward-looking budget claim from an older reading.
 #   computenet-9ofq (+25): the harness "stalled: no progress for 600s"
@@ -415,8 +409,7 @@ work                RECOMPUTE
 #   computenet-adgy (+4): PR #650's reviewer asked that agent-execution.md's
 #     `bd -C` bullet be generalised to any command line, in the file dispatched
 #     agents actually read. It rides here rather than colliding on this entry.
-
-work                RECOMPUTE
+work                9364
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

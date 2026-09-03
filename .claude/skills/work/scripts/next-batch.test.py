@@ -542,7 +542,11 @@ for exc in (OSError("nope"), AttributeError("nope")):
     if got != (None, None):
         failed += 1
         print(f"FAIL: getloadavg raising {exc!r} must give (None, None), got {got!r}")
-load_advice_cases = len(load_cases) * 2 + 3
+# +7: the ONE assertion, the PATHOLOGICAL/NOTHING assertion, two getloadavg
+# degradation cases, and --capacity's rc/shape, --siblings and feature-id checks.
+# These increment `failed` but not `total`, so the constant is how they are
+# counted (computenet-lx7t review, finding B: the suite ran 127 and printed 123).
+load_advice_cases = len(load_cases) * 2 + 7
 
 
 # --- dir_claims(): a DIRECTORY claim is advisory, not a batching change -----
