@@ -186,9 +186,19 @@ class DialogueAppTest {
                 // The ordering half, and the one that is mutation-killed: `step`
                 // is synchronous through the fence, so by the time it has
                 // answered, reconcile() has already run and /graph carries the
-                // bound ref with NO waiting at all. Move reconcile() out of the
-                // synchronous path (or out of afterQuiescence, where it would
-                // apply mid-wave) and this read is empty.
+                // bound ref with NO waiting at all.
+                //
+                // Measured in review, so the bound is exact rather than
+                // asserted. Replacing `runtime.afterQuiescence { … }` in
+                // `settle()` with a bare `run { … }` — reconcile outside the
+                // fence, applying mid-wave — reddens THIS line:
+                // "CharSequence <[]>, substring <09651f3e-…>", 5 of 10 red.
+                // The other variant, deferring the fence with
+                // `driver.execute { runtime.afterQuiescence { … } }`, does NOT
+                // redden this line: the driver is idle, so the deferred fence
+                // usually beats the /graph round trip. It reddens the reset
+                // assertion in [AGO1-REPLAY-03] instead ("expected: <[]>"),
+                // which pins the same synchronous-through-the-fence property.
                 assertContains(probe.get("/graph").body(), refOne)
 
                 // The frame half. Note what this alone cannot discriminate: a

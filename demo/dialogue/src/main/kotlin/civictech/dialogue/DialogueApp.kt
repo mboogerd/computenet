@@ -46,10 +46,21 @@ import java.util.concurrent.TimeUnit
  * [DialogueRuntime.reset] and [DialogueRuntime.afterQuiescence] is submitted
  * onto [driver], a single-threaded daemon executor; an HTTP handler never
  * touches the runtime itself. The one read that is not on [driver] is
- * `service.graph()` inside [graphJson] — a snapshot read, exactly as
- * `AgoraApp` does it from its own handler and hub threads, and the reason
- * [broadcast] is safe to call from the `onCredence` hook (which fires on a
- * host scheduler thread).
+ * `service.graph()` inside [graphJson], and 2aw.5-D10 requires it to be: the
+ * `onCredence` hook fires on a host scheduler thread, so [broadcast] cannot
+ * be driver-confined.
+ *
+ * **That read is not atomic, and the caveat belongs here rather than in the
+ * bead.** `AgoraService.graph()` iterates a plain `LinkedHashMap` that
+ * `createClaim`/`createEdge`/`remove` mutate, so a `/graph` read concurrent
+ * with an applying [DialogueRuntime.reconcile] can observe a partly-applied
+ * graph or throw `ConcurrentModificationException`. `AgoraApp`'s window is
+ * narrower than this one, not equal to it: `DemoShell` runs every handler on
+ * the single dispatcher thread, so there its mutations and its `/graph` reads
+ * are the *same* thread and only the credence hook races. Here every mutation
+ * is on [driver], so every `/graph` read races the applier. Closing it means
+ * making `AgoraService`'s node map concurrent, which this task's non-goals bar
+ * (no `demo/agora` change) — filed as computenet-47nz.
  *
  * `load`, `step` and `reset` are **synchronous**: submitted, awaited with a
  * bound, answered with their result. `replay` is **asynchronous** and answers
