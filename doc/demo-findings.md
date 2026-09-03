@@ -709,3 +709,79 @@ practice than its stated bound, and neither is a calibration. It is also a
 concrete, reproducible instance of what "head designation is a runtime artifact,
 not a property of the argumentation graph" means — worth knowing before anyone
 builds a user-visible feature on which edge is a head.
+
+## F-18 — the checked-in demo fixture, R3's paraphrase weakness made visible on purpose, and a REPLAY-01 gap that measured to zero
+
+**Observation** (computenet-2aw.6.3, AGO1 F6 T3): a runnable demo transcript
+and its cassette are now checked in at
+`demo/dialogue/src/main/resources/demo/dialogue.{jsonl,cassette.json}` —
+40 utterances, 4 speakers (alice/bob/carol/dave), one topic: a town council
+debate over a protected bike lane on Main Street. It is driven read-only
+through `DialogueRuntime` (ephemeral, `journalDir = null`) by
+`civictech.dialogue.gate.DemoFixtureTest`. Manual run:
+
+    ./gradlew :demo:dialogue:run --args="8090 --transcript demo/dialogue/src/main/resources/demo/dialogue.jsonl --extractor cassette --cassette demo/dialogue/src/main/resources/demo/dialogue.cassette.json"
+
+(the `--extractor`/`--cassette` flags are F5 T2's, predicted — F5 was not yet
+landed when this task was written).
+
+**What it exercises, by utterance id** (mirrored in the test file's own
+KDoc): plain claims+stances at u1, u2, u3, u5, u6, u7, u8, u9, u10, u11, u13,
+u30, u34; a verbatim-modulo-case/whitespace restatement of u1's claim at u12
+(same `claimKey`, one node, two contributing utterance ids); a **paraphrase**
+of the same idea by a third speaker at u13 (`"Main Street needs dedicated,
+physically separated space for cyclists."` vs u1's `"A protected bike lane
+should be installed on Main Street."`) — a genuinely different string that
+canonicalizes to a **different** `ClaimKey`, so it mints a **second** node
+rather than joining u1/u12's; attacks and supports including the transcript's
+one mutual attack (u2: C2 ATTACK C1, u4: C1 ATTACK C2 — a 2-cycle) and a
+SUPPORT (u3: C3 SUPPORT C1) landing on the claim already under attack; a
+stance change (u24: bob revises his own u2 stance on C2 at a later turn to a
+different value, LWW by event order — repeated at u26 and u32 for extra
+coverage); a two-sentence utterance (u5: a lead-in sentence with zero
+extracted items, then the sentence introducing C4 — two `Segment`s, two
+cassette entries); and one utterance that is the **sole contributor** of a
+relation (u16: `C9 ATTACK C1`) which `DemoFixtureTest` retracts directly
+(the JSONL carries no retraction records, so retraction goes through
+`DialoguePipeline.utteranceOps(...).remove`, the same primitive
+`TranscriptSource.reset` uses) — the relation unbinds, its EDGE node is gone,
+exactly one `REMOVE_RELATION` op is issued, and C1's post-retraction credence
+matches `BatchReference.solve` over the live set with u16 removed, within the
+cyclic tolerance.
+
+**R3 is the point, not an accident.** `claimKey`'s canonicalization is
+trim/collapse-whitespace/lowercase (epic §8/R3): u12's restatement of C1
+survives it (same string modulo case/whitespace), u13's paraphrase does not
+(a different string). The completeness test asserts both keys are bound as
+separate nodes and asserts they differ — the weakness is checked, not
+hidden. Nothing here proposes to fix it; AGO3/KE1 owns identity.
+
+**REPLAY-01 measured a zero gap, and the fixture explains why.** Unlike
+F-16/F-17's generative sweeps, this task's `[AGO1-REPLAY-01]` test replays
+the WHOLE fixed transcript into two fresh `DialogueRuntime`s on different
+`SimulationController` seeds (10 and 99), each admitting turn-ascending
+via one uninterleaved `source.replay(from = 1)` before the first reconcile.
+Measured: `worst non-cycle gap 0.0`, `worst cyclic gap 0.0` — including the
+2-cycle's own two claims and two edges, which the test deliberately carries a
+`25 * 1e-3` tolerance for and never needed it. This does not contradict F-17:
+`SimulationController`'s `seed` randomizes *which host* runs next when
+several hosts have pending work (`step()`: `busy[rng.nextInt(busy.size)]`,
+falling back to `busy.first()` with one candidate), and `DialogueRuntime`
+constructs exactly **one** `ManagedHost`. With a single host and a fixed,
+non-interleaved admission order, there is nothing for the seed to
+randomize — every wave still executes in the same FIFO order regardless of
+seed. F-17's head-designation non-determinism is real but is a property of
+**admission order** (a shuffled set load, or turns swapped) and of
+**multi-host** scheduling, not of the `SimulationController` seed alone on a
+single host with fixed input order. `CycleProbeTest`'s own second-world
+probe demonstrates the same thing from the order side: it moves the head by
+swapping two turns, not by changing a seed. Recorded here rather than left as
+an unexplained "REPLAY-01 has teeth in F-17-land but not in F6.3's fixture" —
+the test still carries the tolerance and the cyclic-node bookkeeping (2aw.F6-D5
+still governs the *assertion*, even though this fixture's own measurement
+came in at the exact-equality end of the range it allows), because the next
+transcript or next pair of seeds may not.
+
+**A divergent seed policy, restated for this task** (2aw.F6-D3): none of
+this task's runs diverged. Had one, it would be kept and recorded here, not
+swapped for a friendlier seed or transcript.
