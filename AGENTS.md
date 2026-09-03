@@ -223,7 +223,11 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   scripted mutation is why
   `.claude/skills/work/references/mutation-check.md` step 3 requires proving
   the mutation LANDED — a non-empty `git diff HEAD -- <file>` — before the
-  test result is read at all.
+  test result is read at all. Note which half each check covers: here the
+  variable held the test INVOCATION, so the mutation may well have landed and
+  step 3 would pass. It is step 4's `grep -E '^e:|BUILD' "$SCRATCH/mut.log"`
+  that catches this one — a command that exited 127 writes no `BUILD` line at
+  all.
 
 ## Verification
 
