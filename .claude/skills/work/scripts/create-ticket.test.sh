@@ -111,5 +111,21 @@ id=$("$SCRIPT" --type bug --title t --parent computenet-wpvy --claim 2>/dev/null
 [ "$st" = 0 ] && [[ "$id" =~ ^computenet-[a-z0-9.]+$ ]] \
   && ok "stdout is the bare id" || bad "stdout: exit=$st id=$(printf %q "$id")"
 
+# axxl: the flag names are reachable from the tool, not only by sed-ing it.
+# --help must print the real usage block (so it cannot drift from the header),
+# and a wrong flag must show it rather than only naming itself.
+fixture
+out=$("$SCRIPT" --help 2>&1); st=$?
+[ "$st" = 0 ] && grep -q -- '--desc-file' <<<"$out" && grep -q '^Usage:' <<<"$out" \
+  && ! grep -q '^#' <<<"$out" \
+  && ok "--help prints the usage block, comment markers stripped" \
+  || bad "--help: exit=$st out=$out"
+out=$("$SCRIPT" -h 2>&1); st=$?
+[ "$st" = 0 ] && grep -q '^Usage:' <<<"$out" && ok "-h is the same" || bad "-h: exit=$st"
+out=$("$SCRIPT" --description-file x 2>&1); st=$?
+[ "$st" = 2 ] && grep -q -- '--desc-file' <<<"$out" \
+  && ok "a wrong flag shows the usage that names the right one" \
+  || bad "unknown-arg usage: exit=$st out=$out"
+
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

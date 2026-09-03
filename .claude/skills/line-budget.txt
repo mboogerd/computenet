@@ -374,7 +374,14 @@
 # stale counts the sweep had missed inside review-feature.md itself ("six green
 # rows", "the other five settle") and a worked example that still called
 # iroh-sidecar non-required — the very inversion the bead is about.
-work                9275
+# 9275 -> 9285, RECOMPUTED on rebase against the landed number rather than
+# merged with the 9257 baseline it was written from (2026-09-03): computenet-axxl, two of its three one-line
+# documentation gaps. issue-quality.md gains the "next free X goes stale"
+# bullet (a bead named F-14; another PR took it first), review-feature.md's
+# `bd comments --json` recipe names `.text` (the wrong key returns null, which
+# reads as an empty thread). The third gap — create-ticket.sh's --help — is a
+# script and costs the ledger nothing.
+work                9285
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
