@@ -62,6 +62,19 @@ class AgoraService(
     )
 
     private val cells = mutableMapOf<CellRef, ClaimCell>()
+
+    /**
+     * `nodes` is read from `graph()`/`nodeInfo()`/`findEdge()` off whatever
+     * thread is serving `/graph` or an SSE `onCredence` broadcast, while
+     * `createClaim`/`createEdge`/`remove` mutate it from the app's
+     * mutation thread (the HTTP dispatcher in `AgoraApp`, the
+     * `dialogue-driver` thread in `DialogueApp` — see computenet-47nz).
+     * `nodesLock` is the single mutex both sides take: every mutator holds
+     * it for its full read-modify-write span (including [reaches], which
+     * walks `nodes` from inside [createEdge]), and every reader takes a
+     * defensive snapshot under it before iterating outside the lock.
+     */
+    private val nodesLock = Any()
     private val nodes = LinkedHashMap<CellRef, NodeInfo>()
 
     /** Per edge: the link feeding it from its source's credence outlet. */
@@ -117,7 +130,7 @@ class AgoraService(
         val cell = ClaimCell(ref, semantics).also { it.catchUp = !replaying }
         manage.spawn(cell)
         cells[ref] = cell
-        nodes[ref] = NodeInfo(Kind.CLAIM, text = text)
+        synchronized(nodesLock) { nodes[ref] = NodeInfo(Kind.CLAIM, text = text) }
         cell.credenceOutlet.streamTo(routedHub())
         log(StructureOp("claim", ref.id.toString(), text = text))
         return ref
@@ -129,14 +142,17 @@ class AgoraService(
         polarity: Polarity,
         ref: CellRef = CellRef(java.util.UUID.randomUUID()),
     ): CellRef {
-        require(source in nodes) { "unknown source ${source.id}" }
-        require(target in nodes) { "unknown target ${target.id}" }
-        val head = reaches(from = target, to = source)
+        val head = synchronized(nodesLock) {
+            require(source in nodes) { "unknown source ${source.id}" }
+            require(target in nodes) { "unknown target ${target.id}" }
+            val h = reaches(from = target, to = source)
+            nodes[ref] = NodeInfo(Kind.EDGE, polarity = polarity, source = source, target = target, head = h)
+            h
+        }
         val edge = EdgeCell(polarity, ref, semantics, quiescence = if (head) quiescence else 0.0)
             .also { it.catchUp = !replaying }
         manage.spawn(edge)
         cells[ref] = edge
-        nodes[ref] = NodeInfo(Kind.EDGE, polarity = polarity, source = source, target = target, head = head)
         edge.credenceOutlet.streamTo(routedHub())
         edge.influenceOutlet.streamTo(routedInfluence(target))
         sourceLinks[ref] = cells.getValue(source).credenceOutlet.streamTo(routedSource(ref))
@@ -145,7 +161,7 @@ class AgoraService(
     }
 
     fun setStance(id: CellRef, user: String, value: Double?) {
-        require(id in nodes) { "unknown node ${id.id}" }
+        synchronized(nodesLock) { require(id in nodes) { "unknown node ${id.id}" } }
         value?.let { require(it in 0.0..1.0) { "stance must be between 0 and 1 (was $it)" } }
         routedStance(id).propagate(StanceDelta(user, value))
     }
@@ -157,16 +173,18 @@ class AgoraService(
      * influence at any surviving target, then despawns.
      */
     fun remove(id: CellRef) {
-        require(id in nodes) { "unknown node ${id.id}" }
-        val doomed = mutableSetOf(id)
-        var grew = true
-        while (grew) {
-            grew = doomed.addAll(nodes.filter { (ref, info) ->
-                ref !in doomed && info.kind == Kind.EDGE && (info.source in doomed || info.target in doomed)
-            }.keys)
+        val (doomed, infos) = synchronized(nodesLock) {
+            require(id in nodes) { "unknown node ${id.id}" }
+            val d = mutableSetOf(id)
+            var grew = true
+            while (grew) {
+                grew = d.addAll(nodes.filter { (ref, info) ->
+                    ref !in d && info.kind == Kind.EDGE && (info.source in d || info.target in d)
+                }.keys)
+            }
+            d to d.associateWith { nodes.getValue(it) }
         }
-        doomed.forEach { ref ->
-            val info = nodes.getValue(ref)
+        infos.forEach { (ref, info) ->
             if (info.kind == Kind.EDGE) {
                 sourceLinks.remove(ref)?.unlink()
                 // during structure replay the journal already holds the
@@ -181,16 +199,17 @@ class AgoraService(
         doomed.forEach { ref ->
             manage.despawn(ref)
             cells.remove(ref)
-            nodes.remove(ref)
         }
+        synchronized(nodesLock) { doomed.forEach { nodes.remove(it) } }
         log(StructureOp("remove", id.id.toString())) // cascade re-derives on replay
     }
 
-    fun graph(): List<Node> = nodes.map { (ref, info) ->
-        Node(ref, info, hub.credenceOf(ref) ?: 0.5)
+    fun graph(): List<Node> {
+        val snapshot = synchronized(nodesLock) { nodes.entries.map { it.key to it.value } }
+        return snapshot.map { (ref, info) -> Node(ref, info, hub.credenceOf(ref) ?: 0.5) }
     }
 
-    fun nodeInfo(id: CellRef): NodeInfo? = nodes[id]
+    fun nodeInfo(id: CellRef): NodeInfo? = synchronized(nodesLock) { nodes[id] }
 
     /**
      * The existing edge with exactly this `(source, target, polarity)`, if any.
@@ -200,10 +219,12 @@ class AgoraService(
      * lookup — not an invariant enforced in [createEdge].
      */
     fun findEdge(source: CellRef, target: CellRef, polarity: Polarity): CellRef? =
-        nodes.entries.firstOrNull { (_, info) ->
-            info.kind == Kind.EDGE &&
-                info.source == source && info.target == target && info.polarity == polarity
-        }?.key
+        synchronized(nodesLock) {
+            nodes.entries.firstOrNull { (_, info) ->
+                info.kind == Kind.EDGE &&
+                    info.source == source && info.target == target && info.polarity == polarity
+            }?.key
+        }
 
     /** DFS along the influence-flow direction: claim → edges sourced at it → their targets. */
     private fun reaches(from: CellRef, to: CellRef): Boolean {
