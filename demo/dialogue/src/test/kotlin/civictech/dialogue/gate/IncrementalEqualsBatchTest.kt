@@ -29,8 +29,11 @@ import kotlin.test.assertTrue
  * interleaved with quiescence-scoped reconciles — and the credences that
  * settle are compared against [BatchReference.solve] over
  * [DialogueBatchReference]'s one-pass fold of the **final live set**. Exactly
- * (1e-9) on even seeds, which are DAG-shaped by construction; within
- * `25 * 1e-3` on odd seeds, which close a cycle, because
+ * (1e-9) on every seed whose **final live digraph** is acyclic — every even
+ * seed, which is DAG-shaped by construction, plus the odd seeds whose
+ * retractions left no cycle behind (see the note below); within
+ * `25 * 1e-3` only on the seeds whose final live digraph really is cyclic,
+ * because
  * `AgoraService.createEdge` designates the cycle head at creation time and a
  * head's absorb threshold makes the settled value path-dependent within that
  * threshold (2aw.F6-D5, and the same bound `AgoraExitTest` states).
