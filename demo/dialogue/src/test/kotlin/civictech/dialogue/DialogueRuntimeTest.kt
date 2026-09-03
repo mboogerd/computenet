@@ -45,6 +45,26 @@ import kotlin.test.assertTrue
  * endpoints do not canonicalize to claim keys it also mints, so a rule-driven
  * transcript would produce no canonical relations at all and the relation half
  * of every assertion below would be vacuously true.
+ *
+ * ### Measured cost — this class dominates the repository gate
+ *
+ * The BS-18 test alone is **~270 s** and the whole class **~274 s**
+ * (macOS/arm64, 2026-09-03, reviewer-measured from the JUnit XML; the
+ * implementer measured 283 s / 287 s on the same machine under different
+ * load). Three worlds, each converging the 2-cycle at `quiescence = 1e-3`
+ * against a real on-disk journal that fsyncs per journaled propagate round —
+ * the cost `AgoraService`'s own `DurabilityTest` avoids by switching to an
+ * in-memory journal, which BS-18 cannot do because its whole subject is what
+ * survives a `kill -9`.
+ *
+ * That is a **deliberate, ticket-pinned cost, not an oversight**:
+ * computenet-2aw.4.3's acceptance criteria pin the quiescence threshold, the
+ * 2-cycle and the third world (`repeat(2)`), so every available lever for
+ * making it cheaper is one of those criteria. It has not been measured on
+ * ubuntu, where the required checks run. Anyone shortening the repository
+ * gate should change the bead's criteria — or move this class to a
+ * tag-excluded lane (`buildSrc/.../kotlin-jvm.gradle.kts` `excludeTags`) —
+ * rather than quietly weakening an assertion here.
  */
 class DialogueRuntimeTest {
 
