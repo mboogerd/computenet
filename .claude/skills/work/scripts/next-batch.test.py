@@ -449,15 +449,22 @@ if "merged_into_feature" not in nb._entry({"id": "t"}, False, []):
     failed += 1
     print("FAIL: every entry must carry merged_into_feature for the 5b inspect rule")
 
-# load_advice: advisory only, and it must never fire when the cap is already 1
-# (computenet-2r22). getloadavg is stubbed so the thresholds are deterministic.
+# load_advice: advisory only. Below the pathological rung it must never fire
+# when the cap is already 1 (computenet-2r22) — there is no room to go under.
+# The >=5x rung is the exception and fires at any cap, because it is advice
+# about dispatching ANYTHING, including a reviewer that has no cap
+# (computenet-lx7t). getloadavg is stubbed so the thresholds are deterministic.
 load_cases = [
     #  load1, cores, cap, expect-advice
     (1.0,  16, 3, False),   # quiet box: nothing to say
     (15.9, 16, 3, False),   # just under core count
     (16.0, 16, 3, True),    # meets core count: go under the cap
-    (204.71, 16, 3, True),  # the measured near miss
-    (204.71, 16, 1, False), # cap already 1: no room to go under
+    (40.0, 16, 3, True),    # >=2x: dispatch ONE
+    (40.0, 16, 1, False),   # cap already 1: no room to go under
+    (79.9, 16, 1, False),   # just under 5x: still nothing to say at cap 1
+    (204.71, 16, 3, True),  # the 2r22 near miss — now pathological
+    (204.71, 16, 1, True),  # ...and pathological fires even at cap 1
+    (426.07, 16, 1, True),  # the lx7t measurement, one repo-wide gate
 ]
 _real_getloadavg = nb.os.getloadavg
 for load1, cores, cap, want in load_cases:
@@ -473,7 +480,7 @@ for load1, cores, cap, want in load_cases:
         failed += 1
         print(f"FAIL: load1={load1} cores={cores} cap={cap} advice={got_advice!r}, wanted advice={want}")
 # a 2x-core reading must name ONE agent, not merely 'go under'
-nb.os.getloadavg = lambda: (204.71, 0, 0)
+nb.os.getloadavg = lambda: (40.0, 0, 0)
 try:
     _, strong = nb.load_advice(16, 3)
 finally:
@@ -481,6 +488,32 @@ finally:
 if "ONE" not in (strong or ""):
     failed += 1
     print(f"FAIL: a >=2x-core load must say dispatch ONE agent, got {strong!r}")
+# and a 5x-core reading must say dispatch NOTHING, not dispatch ONE
+nb.os.getloadavg = lambda: (426.07, 0, 0)
+try:
+    _, patho = nb.load_advice(16, 3)
+finally:
+    nb.os.getloadavg = _real_getloadavg
+if "PATHOLOGICAL" not in (patho or "") or "NOTHING" not in (patho or ""):
+    failed += 1
+    print(f"FAIL: a >=5x-core load must say dispatch NOTHING, got {patho!r}")
+
+# --capacity: the capacity block alone, no feature id (computenet-lx7t). A
+# reviewer dispatch has no batch call, so this is its only route to the advice.
+import json as _json, subprocess as _subp
+_cap_out = _subp.run(
+    [sys.executable, str(pathlib.Path(__file__).with_name("next-batch.py")),
+     "--capacity"],
+    capture_output=True, text=True)
+if _cap_out.returncode != 0:
+    failed += 1
+    print(f"FAIL: --capacity exited {_cap_out.returncode}: {_cap_out.stderr[:200]}")
+else:
+    _cap = _json.loads(_cap_out.stdout)
+    if set(_cap) != {"capacity"} or \
+       set(_cap["capacity"]) != {"cores", "max_parallel", "load1", "advice"}:
+        failed += 1
+        print(f"FAIL: --capacity shape is {_cap!r}")
 # a platform without getloadavg must degrade to (None, None), not raise
 for exc in (OSError("nope"), AttributeError("nope")):
     def _boom(e=exc):

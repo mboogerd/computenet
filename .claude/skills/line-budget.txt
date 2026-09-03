@@ -381,7 +381,22 @@
 # `bd comments --json` recipe names `.text` (the wrong key returns null, which
 # reads as an empty thread). The third gap — create-ticket.sh's --help — is a
 # script and costs the ledger nothing.
-work                9285
+# 9275 -> 9335 on 2026-09-03, RECOMPUTED on rebase (measured against the
+# landed 9275, not merged with the 9257 baseline it was written from): three
+# items in one PR, all in SKILL.md, so they
+# raise this entry once instead of colliding on it three times
+# (computenet-x69c's lesson).
+#   computenet-lx7t (+24): agent COUNT is not the load model — ONE repo-wide
+#     gradle gate alone took 16 cores to ~25x, cap 3 never binding; read
+#     `next-batch.py --capacity` before EVERY dispatch, reviewers included,
+#     since a reviewer dispatch has no batch call and so never saw the advice.
+#   computenet-099p (+16): a same-turn reading bounds only its own turn — one
+#     152m boundary landed a session at 313m of a 300m slot, which no reading
+#     frequency catches; no forward-looking budget claim from an older reading.
+#   computenet-9ofq (+20): the harness "stalled: no progress for 600s"
+#     notification named as a distinct case with a fixed response, and the
+#     "start acting promptly" re-dispatch line marked as the guess it is.
+work                9345
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

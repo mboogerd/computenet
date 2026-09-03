@@ -401,6 +401,21 @@ of 300m, believing it had a whole wind-down stage in hand (computenet-hs90,
 recurrence of computenet-776). No reading this turn → write "no elapsed reading
 this turn": an absent number is visible, a plausible wrong one is not.
 
+**And a reading bounds only the turn it was taken in — one turn boundary can
+carry hours.** 1lbs's decay was gradual and therefore watchable: ~78m and ~50m
+spread over five turns, showing up as a creeping "previous reading Nm ago". It
+recurred as a single discontinuity — twelve honest readings 3–23m apart, then
+ONE boundary of 152 minutes, landing at 313m of a 300m slot (computenet-099p).
+No reading frequency catches that: the gap is between turns, and the field that
+would warn you is only readable after the jump. So **never write a
+FORWARD-LOOKING budget claim from a reading taken in an earlier turn** — "160m
+of 300m; 50m before new work closes" was true when computed and 13 minutes past
+EXPIRED by the time anything acted on it. The discontinuous case is caught by
+the budget Monitor's SELF-REPORTED elapsed, not by which tier fired: a T-90m
+tier reporting "311m REAL elapsed" is self-evidently wrong as a tier and
+correct as a measurement, which is what the "each tier reports the elapsed it
+computes when it fires" design above is for. Act on that number.
+
 That one reading is what turned a confusing batch into a correct diagnosis the
 one time this happened. A session trusting the tiers in order would instead
 "finish the current feature", "stop dispatching" and "finalize" in three
@@ -1429,7 +1444,27 @@ gates scoped: load 204.71 / 92.73 / 44.00, a 1-minute figure ~13x core count
 `next-batch.py` now reports `capacity.load1` and `capacity.advice`, what the
 box is doing at the moment you dispatch; that is advisory and never lowers the
 cap, because load lags in both directions and must not silently serialize a
-slot (`capacity_limit()` says why it is not the sizing instrument). **Go under
+slot (`capacity_limit()` says why it is not the sizing instrument).
+
+**Agent COUNT is not the load model — repo-wide GATES are.** One repo-wide
+`./gradlew test` is enough on its own: measured 2026-09-03 on 16 cores, two
+agents of which exactly one ran the wide gate read 391/426/353, ~25x core
+count, with cap 3 respected the whole session and never binding
+(computenet-lx7t). At that level you do not lose speed, you lose agents — a
+`ps` and every `bd` write auto-backgrounded past their tool timeouts, and a
+reviewer dispatched into the ~400 window STALLED with no side effects, then
+completed normally at ~8. So **read capacity before EVERY dispatch, reviewers
+included** — a reviewer dispatch has no batch call, which is exactly how the
+agent that caused the spike was the one dispatched blind:
+
+```bash
+python3 .claude/skills/work/scripts/next-batch.py --capacity
+```
+
+`advice` at the `>=5x cores` rung says PATHOLOGICAL: dispatch nothing, wait
+for the wide gate in flight to finish (recovery is abrupt — 426 to 8.57 in one
+measured case), and treat a timeout in a module the diff does not touch as
+contention, not a finding. **Go under
 the cap deliberately when any live agent's verdict turns on a WALL-CLOCK
 AWAIT** — multi-JVM crash-restart, SSE/socket, anything in the `:inspect` hang
 family — because there a load-induced timeout is not merely slow, it is
@@ -1950,6 +1985,31 @@ bounded Monitor (`persistent: false`, a single `sleep 1200; echo "PROGRESS
 CHECK <batch>"`); when it fires, recompute elapsed (step 2) and read the three
 signals — all still empty → `SendMessage` the agent; no substantive reply →
 `TaskStop` and re-dispatch rather than keep waiting.
+
+**A `status=failed` notification reading "Agent stalled: no progress for Ns
+(stream watchdog did not recover)" is a DIFFERENT case with a fixed response**,
+not the slow-but-progressing agent the paragraph above is about. The HARNESS
+watchdog fires at 600s, well before the ~20-minute bounded Monitor, so for this
+failure mode the Monitor is a backstop and not the detector (computenet-9ofq,
+recurrence of computenet-znlh). Do not re-derive the response each time:
+
+1. Read the three side-effect signals in the agent's worktree and on its bead.
+2. All three empty → the agent never started; **re-dispatch as a clean start**.
+   Say so in the new prompt in as many words — "a previous agent stalled before
+   taking any action; I verified it left NO side effects, so this is a clean
+   start, not a resume — do not go looking for prior work" — because the bead is
+   `in_progress` and a fresh agent will otherwise hunt for a partial that does
+   not exist.
+3. Any signal non-empty → it is not this case; treat it as the slow agent above.
+
+Measured: a sonnet implementer on a small, well-specified task stalled with
+zero side effects and cost ~30 minutes of one lane; the identical prompt
+completed in ~12 minutes on re-dispatch, so the task and the prompt are ruled
+out as the cause. **Do not add a "start acting promptly" line to the
+re-dispatch on the strength of that** — one session added one on the theory
+that a long opening reasoning stretch is what the watchdog punishes, and
+recorded it as a guess: a single success is no evidence either way, and the
+mechanism is unknown.
 
 **Find a stated outcome in an implementer's result before acting on it** —
 the same rule 5c gives reviewers, and the same failure. A completion

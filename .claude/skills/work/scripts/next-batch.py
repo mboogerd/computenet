@@ -10,6 +10,7 @@ without this they would never be picked back up and their feature could never
 finish.
 
 Usage: next-batch.py <feature-id> [--actor NAME]
+       next-batch.py --capacity      # the capacity block alone, no feature id
 Prints JSON: {"batch": [{id, model, files, worktree, branch, resumed}],
               "skipped": [{id, reason}], "warnings": [str],
               "running_elsewhere": [{id, files}],
@@ -215,15 +216,41 @@ def load_advice(cores, cap):
     average 204.71 / 92.73 / 44.00 — a 1-minute figure ~13x core count. Nothing
     timed out, so it was a near miss, not a loss; the margin was luck.
 
+    ONE REPO-WIDE GATE IS ENOUGH ON ITS OWN, so agent COUNT is not the load
+    model (computenet-lx7t, recurrence of 2r22/qmjd). Measured 2026-09-03,
+    MacBoo, 16 cores: TWO agents of which exactly one ran the repo-wide
+    `./gradlew test` — the other's gate was scoped to two demo modules — read
+    391/426/353 across three samples, ~25x core count. qmjd got 338-724 from
+    THREE repo-wide gates and 2r22 got ~204 from two scoped ones, so the
+    ordering is by repo-wide gates, not by agents: cap 3 was respected the
+    whole session and was never the binding constraint. What that costs at the
+    top rung is not slowness but lost agents — a `ps` and every `bd` write
+    auto-backgrounded past their tool timeouts, and a reviewer dispatched into
+    the ~400 window STALLED with no side effects, then completed normally once
+    load fell to ~8.
+
     Reading is one syscall and it is advisory, never subtractive: it does not
     lower `cap`, because a lagging instrument must not silently serialize a
     slot. It puts a number in front of the orchestrator at dispatch time.
+    `--capacity` prints this block alone, with no feature id, so a REVIEWER
+    dispatch can consult it too — reviewer dispatches have no batch call and
+    so never saw this advice, which is how the agent that caused the spike was
+    the one dispatched without reading it.
     """
     try:
         load1 = os.getloadavg()[0]
     except (OSError, AttributeError):      # not available on this platform
         return None, None
     load1 = round(load1, 2)
+    # The pathological rung is NOT gated on `cap`: it is advice about
+    # dispatching ANYTHING, including the single reviewer that has no cap.
+    if load1 >= 5 * cores:
+        return load1, (f"load1 {load1} is >=5x the {cores} cores: PATHOLOGICAL. "
+                       f"Dispatch NOTHING — an agent dispatched into this "
+                       f"window stalls, and a timeout in a module the diff "
+                       f"does not touch is contention, not a finding. Wait for "
+                       f"the repo-wide gate in flight to finish; recovery is "
+                       f"abrupt (426 -> 8.57 in one measured case).")
     if cap <= 1:
         return load1, None
     if load1 >= 2 * cores:
@@ -501,8 +528,19 @@ def running_elsewhere(actor, feature, candidate_ids):
 
 
 def main():
+    if "--capacity" in sys.argv:
+        # Capacity alone, no feature id: for a dispatch that has no batch call
+        # of its own (every reviewer dispatch). computenet-lx7t.
+        cores = os.cpu_count() or 1
+        cap = capacity_limit(cores, 0)
+        load1, advice = load_advice(cores, cap)
+        print(json.dumps({"capacity": {"cores": cores, "max_parallel": cap,
+                                       "load1": load1, "advice": advice}},
+                         indent=2))
+        return
     if len(sys.argv) < 2:
-        sys.exit("usage: next-batch.py <feature-id> [--actor NAME] [--siblings N]")
+        sys.exit("usage: next-batch.py <feature-id> [--actor NAME] [--siblings N]\n"
+                 "       next-batch.py --capacity")
     feature = sys.argv[1]
     actor = os.environ.get("BEADS_ACTOR", "")
     if "--actor" in sys.argv:
