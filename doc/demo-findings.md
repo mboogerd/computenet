@@ -557,3 +557,50 @@ Mechanism paragraph, and `WaveGate`'s own KDoc), so the same failure is
 expected there too, but "shares the code" is exactly the inference this
 measurement exists to not repeat on a third and fourth cell — that pair stays
 an open gap.
+
+## F-16 — BS-10 measured: the AGO1 pipeline's incremental credences equal the batch fold exactly on DAG transcripts, and sit 112x inside the cyclic bound
+
+**Observation** (computenet-2aw.6.1, AGO1 F6 T1): BS-10's sweep
+(`civictech.dialogue.gate.IncrementalEqualsBatchTest`, `:demo:dialogue`) drives
+40 seeded transcripts — seeds `0 until 40`, ~34 utterances each, cyclic on odd
+seeds — incrementally into a live `DialoguePipeline` + `GraphApplier` +
+`AgoraService`, with admissions and retractions interleaved and reconciles at
+quiescence after roughly every fifth step, and compares the settled credences
+against `BatchReference.solve` over `DialogueBatchReference`'s independent
+one-pass fold of the **final live utterance set**.
+
+**No seed diverged**, so 2aw.F6-D3's divergence policy fired on nothing and
+this entry records a measurement rather than a defect. The measurement itself
+is the point, because the G-19 residual is exactly "how far does the app-side
+head threshold let a cyclic graph drift from its fixpoint":
+
+- **DAG seeds (even): worst observed gap `0.0`** — not "within 1e-9", but
+  bit-identical, over all 20 seeds and every bound claim and relation node.
+- **Cyclic seeds (odd): worst observed gap `2.2247e-4`**, against the
+  `25 * 1e-3` bound `AgoraExitTest` states and this sweep reuses. That is
+  ~112x of headroom, and ~4.5x *inside* `AgoraService`'s own `quiescence`
+  threshold of `1e-3` — so on these transcripts the head's absorb threshold
+  costs less than one threshold's worth of drift, not the 25 the bound allows.
+  All 20 odd seeds closed a cycle (asserted, not assumed), so the figure is
+  not an artifact of cyclic seeds that happened to stay acyclic.
+
+**Honest limits of this entry.** (1) The `25 * 1e-3` bound is inherited from
+`AgoraExitTest` and is *not* calibrated by this measurement — 2.22e-4 is what
+these 40 transcripts produced, not a proof of a tighter bound; the transcripts
+here reach at most a handful of cycle-closing edges over 10 claims, where
+`AgoraExitTest` churns 60 random ops including edge-on-edge. Read it as
+evidence the bound is not tight *for this shape of graph*. (2) It says nothing
+about which edge is designated head: 2aw.F6-D5 records that
+`GraphApplier` step (4) iterates a `LinkedHashMap` `MapView`, so head
+designation is arrival-order dependent, and this sweep drives ONE admission
+order per seed. BS-09 (computenet-2aw.6.2) is what varies the order. (3) The
+extraction side is a cassette, so nothing here measures extraction quality
+(epic §3.7 forbids gating on it).
+
+**Why it belongs under G-19 and not as a new gap**: the residual G-19 names
+weak-tier convergence rate and hop-bound calibration as open. This is one
+datapoint against the "rate" half from a second, independent app — the first
+being `AgoraExitTest`'s own 100-seed probe — and the two agree that the
+weak-tier approximation is far better in practice than the bound it is stated
+with. It is not a calibration; a calibration needs the graph shapes that make
+it worst, which nobody has characterized yet.
