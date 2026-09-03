@@ -14,11 +14,6 @@ import civictech.cell.durability.Journal
 import civictech.cell.link.LinkResult
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
-import civictech.cell.wire.WireCodec
-import civictech.cell.wire.WireSerializers
-import kotlinx.serialization.modules.SerializersModule
-import kotlinx.serialization.modules.polymorphic
-import kotlinx.serialization.modules.subclass
 import civictech.dialogue.apply.BindingTable
 import civictech.dialogue.apply.GraphApplier
 import civictech.dialogue.apply.ReconcileReport
@@ -109,12 +104,6 @@ class DialogueRuntime(
     /** Agora's cycle-head absorb threshold; also the tests' credence tolerance base. */
     quiescence: Double = 1e-3,
 ) {
-
-    init {
-        // Before the host exists, so the very first journaled ingress frame
-        // can already encode an Utterance.
-        registerWirePayloads()
-    }
 
     val registry = LocationRegistry()
 
@@ -287,9 +276,10 @@ class DialogueRuntime(
      * anyway, so the WAL would grow by a full derived copy per restart.
      *
      * It is also what makes the WAL *encodable at all* today. A journaled
-     * frame is encoded through [WireCodec], which needs a polymorphic
-     * registration per payload type. `Utterance` gets one below; the derived
-     * payloads — `RelationCandidate`, `ClaimAggregate`, `StanceAggregate`,
+     * frame is encoded through `WireCodec`, which needs a polymorphic
+     * registration per payload type. `Utterance` gets one from
+     * [DialogueWireSerializers] (`META-INF/services/civictech.cell.wire.WireSerializers`);
+     * the derived payloads — `RelationCandidate`, `ClaimAggregate`, `StanceAggregate`,
      * `StanceJoinRow`, the provenance entries — carry no `@Serializable` at
      * all, and `projectedStances` is keyed by a `Pair`, which has no
      * polymorphic registration to give it. Journaling them is therefore not
@@ -309,51 +299,6 @@ class DialogueRuntime(
     private fun isDurable(ref: CellRef): Boolean = ref !in volatileRefs
 
     companion object {
-        /**
-         * Registers [Utterance] with the wire codec, once per process, so the
-         * ingress cell's `SetOps.add`/`remove` frames can be journaled.
-         *
-         * **Stopgap placement.** The repo's idiom for this is a
-         * `WireSerializers` implementation named from
-         * `META-INF/services/civictech.cell.wire.WireSerializers`
-         * (`AgoraWireSerializers` is the worked example), which loads into
-         * `WireCodec`'s baseline at process start. `:demo:dialogue` has no
-         * such resource, and adding one is two files outside task
-         * computenet-2aw.4.3's `metadata.files` claim, so the same
-         * contribution is made through [WireCodec.contribute] — the kernel's
-         * own late-registration seam ([JAR1-REG-08] arm 1) — from here
-         * instead. Behaviourally equivalent from the first
-         * `DialogueRuntime` construction onwards; strictly worse as
-         * architecture, because a `:demo:dialogue` consumer that journals an
-         * `Utterance` without going through this class still fails.
-         *
-         * The collision catch is what makes the two placements composable: if
-         * the services resource later lands, `Utterance` is already in the
-         * baseline, `contribute` throws on the duplicate registration, and
-         * this swallows it rather than breaking every construction.
-         */
-        private val wirePayloadsRegistered: Unit by lazy {
-            try {
-                WireCodec.contribute(DialogueWirePayloads())
-            } catch (_: IllegalArgumentException) {
-                // Already registered — by the ServiceLoader baseline, or by a
-                // duplicate of this very contribution. Either way it is there.
-            }
-        }
-
-        private fun registerWirePayloads() {
-            wirePayloadsRegistered
-        }
-
-        /** The dialogue payload types that cross the journal. See [isDurable]. */
-        private class DialogueWirePayloads : WireSerializers {
-            override val module: SerializersModule = SerializersModule {
-                polymorphic(Any::class) {
-                    subclass(Utterance::class)
-                }
-            }
-        }
-
         /**
          * Every handle [DialoguePipeline.build] spawns **except** `utterances`
          * — i.e. the whole derived pipeline, which [isDurable] makes volatile.
