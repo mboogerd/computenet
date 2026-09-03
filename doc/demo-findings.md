@@ -604,3 +604,85 @@ being `AgoraExitTest`'s own 100-seed probe — and the two agree that the
 weak-tier approximation is far better in practice than the bound it is stated
 with. It is not a calibration; a calibration needs the graph shapes that make
 it worst, which nobody has characterized yet.
+
+## F-17 — BS-09 measured: the canonical graph is order-independent, but *which* cycle edge is designated head is not — and neither is how many heads there are
+
+**Observation** (computenet-2aw.6.2, AGO1 F6 T2): BS-09's test
+(`civictech.dialogue.gate.OrderIndependenceTest`, `:demo:dialogue`) takes a
+`TranscriptGenerator` scenario's **final live utterance set** and loads it 6
+times per seed in 6 different shuffled orders — each in a fresh `SimWorld` on
+its own scheduler seed, through `DialoguePipeline.utteranceOps(...).add`
+rather than `TranscriptSource` ([AGO1-SRC-03]'s set-load relaxation, 2aw.F6-D6,
+since `TranscriptSource` rejects non-ascending turns) — quiesces, reconciles
+once, and fingerprints what settled. Seeds `2, 6` (DAG) and `3, 7` (cyclic),
+24 in-memory worlds in total.
+
+**The property holds where it is stated to hold.** Across all 6 orders on all
+4 seeds, these were **exactly** equal: the canonical claim key set, the
+canonical relation key set, the projected stance map (`StanceAggregate`
+including its winning `turn`/`utteranceId`), the claim-provenance index and the
+relation-provenance index. Credences on the two DAG seeds were **bit-identical**
+across orders — worst cross-order gap `0.0`, not "within 1e-9". Cyclic seeds:
+worst cross-order gap `1.7093e-4` against the `25 * 1e-3` bound (~146x of
+headroom, and ~6x inside `AgoraService`'s own `1e-3` quiescence threshold).
+
+**What is NOT order-independent, and this is the finding.** On seed 7 the set
+of edges designated **head** differed between admission orders — measured, not
+predicted:
+
+- order 0 heads: `{5→1 SUPPORT, 3→1 SUPPORT}`
+- order 1 heads: `{5→1 SUPPORT, 1→4 ATTACK}`
+- order 2 heads: `{1→5 SUPPORT, 4→3 SUPPORT}` — **disjoint from order 0's**
+- order 3 heads: `{5→1 SUPPORT, 1→4 ATTACK}`
+- order 5 heads: `{3→1 SUPPORT, 5→1 SUPPORT, 1→5 SUPPORT}` — **three heads
+  where order 0 had two**
+
+(order 4 agreed with order 0; seed 3 showed no difference across its 6 orders.)
+
+So it is not only *which* edge is head that moves with arrival order, but **how
+many** edges are heads at all, over one and the same canonical relation set.
+
+**The mechanism, cited rather than guessed** (2aw.F6-D5): `AgoraService.createEdge`
+designates `head = reaches(target, source)` **at creation time**, and
+`GraphApplier.reconcile()` step (4) creates relations in
+`relationSink.current()` iteration order — a `View.map()` over `MapView`, whose
+state is `mutableMapOf`, i.e. a `LinkedHashMap` in **arrival** order
+(`kernel/src/main/kotlin/civictech/cell/data/view/MapView.kt:19`). A shuffled
+set load therefore presents the same canonical relations to `createEdge` in a
+different sequence, and each edge's head bit is decided against however much of
+the cycle already existed when its turn came. In a graph with several
+overlapping cycles, an unlucky sequence can make three edges cycle-closing
+where a luckier one makes two.
+
+`civictech.dialogue.gate.CycleProbeTest`'s second world pins the same mechanism
+in the small and by construction: one mutual attack, replayed twice with the
+two attack utterances' turns swapped, moves the head to the other edge.
+
+**This is recorded, not asserted away and not failed.** BS-09's acceptance
+criterion says a head-set difference between orders on a cyclic seed is a
+finding under the G-19 residual, and the test prints it rather than comparing
+something coarser to hide it. What the test *does* assert about heads is the
+invariant that survives every order: every designated head lies on a cycle of
+the final claim digraph, and every 2-cycle has at least one head.
+
+**Honest limits.** (1) Four seeds and six shuffles is a small sample chosen to
+fit a sub-second test, not a search; a *negative* result on seed 3 is weak
+evidence — it may only mean these six shuffles never reached the arrival order
+that would have flipped a head, not that no such order exists. Read the
+positive result on seed 7 as the load-bearing one. (2) The `25 * 1e-3` bound is
+inherited from `AgoraExitTest` and is not calibrated here any more than it was
+in F-16; `1.7e-4` is what these transcripts produced. (3) One reconcile per run
+is deliberate — it maximises the arrival-order effect by presenting the whole
+canonical relation set to `createEdge` at once — so this measurement says
+nothing about incremental reconcile cadences, which BS-10 (F-16) drives
+instead. (4) Cassette extraction, so nothing here measures extraction quality
+(epic §3.7 forbids gating on it).
+
+**Why it belongs under G-19.** G-19's open half is weak-tier convergence rate
+and hop-bound calibration. F-16 measured the *magnitude* of the drift a head
+threshold permits; this entry measures its *cause* being non-deterministic
+under a permitted input ordering. Both say the approximation is far better in
+practice than its stated bound, and neither is a calibration. It is also a
+concrete, reproducible instance of what "head designation is a runtime artifact,
+not a property of the argumentation graph" means — worth knowing before anyone
+builds a user-visible feature on which edge is a head.
