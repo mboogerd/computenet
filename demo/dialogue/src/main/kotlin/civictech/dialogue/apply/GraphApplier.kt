@@ -8,12 +8,12 @@ import civictech.cell.link.LinkResult
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
 import civictech.dialogue.ClaimKey
+import civictech.dialogue.DialogueRuntime
 import civictech.dialogue.DialoguePipeline
 import civictech.dialogue.RelationKey
 import civictech.dialogue.mint.ClaimAggregate
 import civictech.dialogue.mint.RelationAggregate
 import civictech.dialogue.mint.StanceAggregate
-import java.util.UUID
 
 /**
  * Pipeline stage 8 (epic computenet-2aw §2.2, §2.5 "Stage 8 sink",
@@ -128,6 +128,15 @@ class GraphApplier(
      * `BindingTable`'s `dialogue:claim:`/`dialogue:relation:` prefixes, from
      * the pipeline's own `$namespace:$handle` refs, and from `agora:hub`.
      *
+     * The ref is derived from [DialogueRuntime.sinkRef] rather than
+     * re-literalizing `dialogue:sink:$name` here: `DialogueRuntime` uses the
+     * same prefix, via [DialogueRuntime.SINK_PREFIX], to build `volatileRefs`
+     * and decide [DialogueRuntime.isDurable]. A second, independent literal
+     * would silently drift out of `volatileRefs` if `SINK_PREFIX` ever
+     * changed, making these sinks durable and routing `MapDelta` payloads
+     * over a non-`@Serializable` vocabulary through the journal
+     * (computenet-oy26).
+     *
      * No `onChange` listener is registered here — see the class doc.
      */
     private fun <K, V> sink(
@@ -135,7 +144,7 @@ class GraphApplier(
         source: CellRef,
         view: View<MapDelta<K, V>, Map<K, V>>,
     ): ObserveCell<MapDelta<K, V>, Map<K, V>> {
-        val cell = ObserveCell(view, CellRef(UUID.nameUUIDFromBytes("dialogue:sink:$name".toByteArray())))
+        val cell = ObserveCell(view, DialogueRuntime.sinkRef(name))
         val management = host.managementInlet.call
         management.spawn(cell)
         val result = management.connect(source, "outlet", cell.ref, "inlet")
