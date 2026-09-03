@@ -19,6 +19,10 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -336,10 +340,197 @@ class DialogueAppTest {
         }
     }
 
+    // ------------------------------------------------------------------
+    // GET /transcript — computenet-2aw.5.3, [AGO1-OBS-03]
+    //
+    // Six utterances, one per outcome the bead's fixture names: (i) a clean
+    // claim (extracted), (ii) a claim segment whose extraction yields one
+    // blank-text item alongside a good one (rejected,
+    // ExtractionGate.malformedReason "blank claim text"), (iii) a segment
+    // whose content hash has no cassette entry (failed, CassetteMissException
+    // / BS-15), (iv) two utterances asserting the same claim text (two-id
+    // provenance, both extracted), and one utterance loaded but never
+    // admitted (pending).
+    // ------------------------------------------------------------------
+
+    private val obs03SharedClaimText = "Shared proposition holds."
+    private val obs03BadClaimText = "Second proposition maybe."
+
+    private fun obs03Utterance(turn: Int, speaker: String, text: String) =
+        Utterance(id = "obs03-u$turn", turn = turn, speaker = speaker, tsMillis = 1_000L * turn, text = text)
+
+    private val obs03Utterances = listOf(
+        obs03Utterance(1, "alice", "First proposition stands."),
+        obs03Utterance(2, "bob", "Second utterance body."),
+        obs03Utterance(3, "carol", "Third utterance body."),
+        obs03Utterance(4, "dave", "Fourth utterance body."),
+        obs03Utterance(5, "erin", "Fifth utterance body."),
+        obs03Utterance(6, "frank", "Sixth utterance, never admitted."),
+    )
+
+    private fun obs03Hash(text: String) =
+        segmentContentHash(Segment(id = "hash", utteranceId = "hash", ordinal = 0, speaker = "hash", text = text))
+
+    /**
+     * Deliberately omits an entry for turn 3's segment hash — that absence
+     * IS the fixture (a cassette miss, BS-15).
+     */
+    private val obs03CassetteEntries: Map<String, List<ExtractedItem>> = mapOf(
+        obs03Hash(obs03Utterances[0].text) to listOf(
+            ExtractedClaim(text = "First proposition stands.", speaker = "alice", utteranceId = "obs03-u1"),
+        ),
+        obs03Hash(obs03Utterances[1].text) to listOf(
+            ExtractedClaim(text = "", speaker = "bob", utteranceId = "obs03-u2"),
+            ExtractedClaim(text = obs03BadClaimText, speaker = "bob", utteranceId = "obs03-u2"),
+        ),
+        obs03Hash(obs03Utterances[3].text) to listOf(
+            ExtractedClaim(text = obs03SharedClaimText, speaker = "dave", utteranceId = "obs03-u4"),
+        ),
+        obs03Hash(obs03Utterances[4].text) to listOf(
+            ExtractedClaim(text = obs03SharedClaimText, speaker = "erin", utteranceId = "obs03-u5"),
+        ),
+    )
+
+    private fun obs03Cassette(): CassetteExtractor = CassetteExtractor.load(
+        StringReader(
+            Json.encodeToString(
+                MapSerializer(String.serializer(), ListSerializer(ExtractedItem.serializer())),
+                obs03CassetteEntries,
+            ),
+        ),
+    )
+
+    private fun obs03TranscriptFile(dir: File): File = File(dir, "obs03.jsonl").apply {
+        writeText(obs03Utterances.joinToString("\n") { Json.encodeToString(Utterance.serializer(), it) })
+    }
+
+    private fun JsonObject.arr(field: String): JsonArray = this[field]!!.jsonArray
+
     @Test
-    fun `GET transcript is 501 until computenet-2aw_5_3 lands`() {
+    fun `AGO1-OBS-03 - GET transcript lists per-utterance extraction status with counts summing to loaded`(
+        @TempDir dir: File,
+    ) {
+        serving(DialogueApp(port = 0, extractor = obs03Cassette(), transcriptFile = obs03TranscriptFile(dir))) {
+                _, probe ->
+            // Admit turns 1..5, leaving turn 6 loaded but never offered.
+            repeat(5) { assertEquals(200, probe.postForm("action=step", "/transcript").statusCode()) }
+
+            val body = probe.get("/transcript").body()
+            val json = Json.parseToJsonElement(body).jsonObject
+
+            assertEquals(6, json["loaded"]!!.jsonPrimitive.int, "all six utterances are loaded: $body")
+            assertEquals(5, json["admitted"]!!.jsonPrimitive.int, "five were admitted: $body")
+
+            val utterances = json.arr("utterances").map { it.jsonObject }
+            assertEquals(6, utterances.size)
+            val statuses = utterances.map { it.str("status") }
+            assertEquals(
+                listOf("extracted", "rejected", "failed", "extracted", "extracted", "pending"),
+                statuses,
+                "statuses in transcript order: $body",
+            )
+            assertEquals(
+                listOf(true, true, true, true, true, false),
+                utterances.map { it["admitted"]!!.jsonPrimitive.boolean },
+            )
+
+            val counts = json["counts"]!!.jsonObject
+            val countSum = listOf("pending", "extracted", "rejected", "failed")
+                .sumOf { counts[it]!!.jsonPrimitive.int }
+            assertEquals(6, countSum, "counts sum to loaded: $counts")
+            assertEquals(3, counts["extracted"]!!.jsonPrimitive.int)
+            assertEquals(1, counts["rejected"]!!.jsonPrimitive.int)
+            assertEquals(1, counts["failed"]!!.jsonPrimitive.int)
+            assertEquals(1, counts["pending"]!!.jsonPrimitive.int)
+
+            val rejected = json.arr("rejected").map { it.jsonObject }
+            assertEquals(1, rejected.size)
+            assertEquals("obs03-u2#0", rejected.single().str("segmentId"))
+            assertEquals("blank claim text", rejected.single().str("reason"))
+
+            val failed = json.arr("failed").map { it.jsonObject }
+            assertEquals(1, failed.size)
+            assertEquals("obs03-u3#0", failed.single().str("segmentId"))
+            assertContains(failed.single().str("reason")!!, "CassetteMissException")
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // GET /provenance — computenet-2aw.5.3, 2aw.F5-D1, [AGO1-PROV-02]/[AGO1-PROV-04]
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `AGO1-PROV-02 - GET provenance by ref answers the justifying utterances for a two-id claim`(
+        @TempDir dir: File,
+    ) {
+        serving(DialogueApp(port = 0, extractor = obs03Cassette(), transcriptFile = obs03TranscriptFile(dir))) {
+                _, probe ->
+            repeat(5) { assertEquals(200, probe.postForm("action=step", "/transcript").statusCode()) }
+
+            val sharedKey = claimKey(obs03SharedClaimText)
+            val sharedRef = BindingTable.refFor(sharedKey).id.toString()
+
+            val body = probe.get("/provenance?ref=$sharedRef").body()
+            val json = Json.parseToJsonElement(body).jsonObject
+            assertEquals(true, json["bound"]!!.jsonPrimitive.boolean, body)
+            assertEquals("claim", json.str("kind"))
+            assertEquals(sharedKey.value, json.str("key"))
+
+            val utterances = json.arr("utterances").map { it.jsonObject }
+            assertEquals(listOf("obs03-u4", "obs03-u5"), utterances.map { it.str("id") }, "turn order: $body")
+            assertEquals(listOf("dave", "erin"), utterances.map { it.str("speaker") })
+            assertEquals(listOf(4, 5), utterances.map { it["turn"]!!.jsonPrimitive.int })
+            utterances.forEach { assertNotNull(it.str("text")) }
+
+            // ?key= is the secondary lookup and resolves the same answer, ref included.
+            val encodedKey = java.net.URLEncoder.encode(sharedKey.value, Charsets.UTF_8)
+            val byKey = Json.parseToJsonElement(probe.get("/provenance?key=$encodedKey").body()).jsonObject
+            assertEquals(sharedRef, byKey.str("ref"))
+            assertEquals("claim", byKey.str("kind"))
+            assertEquals(
+                utterances.map { it.str("id") },
+                byKey.arr("utterances").map { it.jsonObject.str("id") },
+            )
+        }
+    }
+
+    @Test
+    fun `AGO1-PROV-02 - GET provenance for a bound relation names its producing utterance`(@TempDir dir: File) {
+        serving(DialogueApp(port = 0, extractor = cassette(), transcriptFile = transcriptFile(dir))) { _, probe ->
+            assertEquals(202, probe.postForm("action=replay&from=1&to=3", "/transcript").statusCode())
+            probe.await(path = "/graph", timeoutMs = 20_000) { it.contains(edgeRef) }
+
+            val body = probe.get("/provenance?ref=$edgeRef").body()
+            val json = Json.parseToJsonElement(body).jsonObject
+            assertEquals(true, json["bound"]!!.jsonPrimitive.boolean, body)
+            assertEquals("relation", json.str("kind"))
+            val utterances = json.arr("utterances").map { it.jsonObject }
+            assertEquals(listOf("u3"), utterances.map { it.str("id") }, "the relation's producing utterance: $body")
+        }
+    }
+
+    @Test
+    fun `AGO1-PROV-04 - an unbound ref is 200 bound false with no utterances field, distinct from a bound empty set`() {
         serving(DialogueApp(port = 0, extractor = RuleExtractor)) { _, probe ->
-            assertEquals(501, probe.get("/transcript").statusCode())
+            val response = probe.get("/provenance?ref=${java.util.UUID.randomUUID()}")
+            assertEquals(200, response.statusCode())
+            val json = Json.parseToJsonElement(response.body()).jsonObject
+            assertEquals(false, json["bound"]!!.jsonPrimitive.boolean)
+            assertFalse(json.containsKey("utterances"), "an unbound ref carries no utterances field: ${response.body()}")
+
+            val badRef = probe.get("/provenance?ref=not-a-uuid")
+            assertEquals(400, badRef.statusCode())
+            assertNoInternals(badRef.body())
+
+            val noParams = probe.get("/provenance")
+            assertEquals(400, noParams.statusCode())
+            assertNoInternals(noParams.body())
+
+            val unboundKey = probe.get("/provenance?key=no-such-key")
+            assertEquals(200, unboundKey.statusCode())
+            val keyJson = Json.parseToJsonElement(unboundKey.body()).jsonObject
+            assertEquals(false, keyJson["bound"]!!.jsonPrimitive.boolean)
+            assertFalse(keyJson.containsKey("utterances"))
         }
     }
 
