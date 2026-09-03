@@ -381,4 +381,127 @@ class TranscriptSourceTest {
         assertEquals("u8", source.step()?.id)
         assertEquals(1, ops.addCalls, "the first live step after recovery makes exactly one ops call")
     }
+
+    // ------------------------------------------------------------------
+    // computenet-2aw.5.1 — load() (2aw.5-D11) and replay(afterAdmit) (2aw.5-D5)
+    // ------------------------------------------------------------------
+
+    private fun turn(n: Int, text: String = "turn $n") =
+        Utterance(id = "u$n", turn = n, speaker = "alice", tsMillis = 1000L * n, text = text)
+
+    @Test
+    fun `computenet-2aw_5_1 - load replaces the transcript and re-seeks past every admitted turn`() {
+        val ops = CountingSetOps<Utterance>()
+        val first = (1..3).map { turn(it) }
+        val source = TranscriptSource(ops, first)
+
+        repeat(3) { assertEquals("u${it + 1}", source.step()?.id) }
+        assertEquals(3, ops.addCalls)
+        val admittedBeforeLoad = source.admitted
+
+        // The replacement re-states turns 1..3 under the SAME ids and content,
+        // then continues to 5. A driver that re-seeked from the top would
+        // either no-op three times (SRC-02) or, with different content, throw.
+        val second = (1..5).map { turn(it) }
+        source.load(second)
+
+        assertEquals(admittedBeforeLoad, source.admitted, "load() does not touch the admitted ledger")
+        assertEquals(3, source.lastAdmittedTurn)
+        assertEquals(3, ops.addCalls, "load() itself makes no ops call")
+
+        assertEquals("u4", source.step()?.id, "the cursor resumed at turn 4, not turn 1")
+        assertEquals(4, ops.addCalls)
+        assertEquals("u5", source.step()?.id)
+        assertEquals(null, source.step(), "the loaded transcript is exhausted at turn 5")
+    }
+
+    @Test
+    fun `computenet-2aw_5_1 - load onto a virgin source makes the whole transcript drawable`() {
+        val ops = CountingSetOps<Utterance>()
+        val source = TranscriptSource(ops)
+
+        assertEquals(null, source.step(), "nothing is drawable before a load")
+        source.load((1..3).map { turn(it) })
+
+        assertEquals(listOf("u1", "u2", "u3"), generateSequence { source.step()?.id }.toList())
+        assertEquals(3, ops.addCalls)
+    }
+
+    @Test
+    fun `computenet-2aw_5_1 - load is not a reset - a transcript that cannot advance the turn draws nothing`() {
+        val ops = CountingSetOps<Utterance>()
+        val source = TranscriptSource(ops, (1..5).map { turn(it) })
+        source.replay(from = 1)
+        assertEquals(5, ops.addCalls)
+
+        // Turns 1..3 only: every one of them is already admitted, so the
+        // re-seek lands past the end and step() reports exhaustion rather
+        // than replaying history.
+        source.load((1..3).map { turn(it) })
+
+        assertEquals(null, source.step())
+        assertEquals(5, ops.addCalls, "no re-admission reached the graph")
+        assertEquals(5, source.lastAdmittedTurn)
+    }
+
+    @Test
+    fun `computenet-2aw_5_1 - replay calls afterAdmit once per effective admission, in turn order, after the ops call`() {
+        val ops = CountingSetOps<Utterance>()
+        val source = TranscriptSource(ops, (1..5).map { turn(it) })
+
+        val hooked = mutableListOf<String>()
+        // Recording addCalls at hook time pins the ORDERING clause: the hook
+        // runs after ops.add, so the count already includes this utterance.
+        val addCallsAtHook = mutableListOf<Int>()
+        source.replay(from = 2, to = 4) { utterance ->
+            hooked += utterance.id
+            addCallsAtHook += ops.addCalls
+        }
+
+        assertEquals(listOf("u2", "u3", "u4"), hooked, "one hook per admission, in turn order")
+        assertEquals(listOf(1, 2, 3), addCallsAtHook, "each hook ran after its own ops.add")
+        assertEquals(3, ops.addCalls)
+    }
+
+    @Test
+    fun `computenet-2aw_5_1 - a second replay over the same range calls afterAdmit zero times`() {
+        val ops = CountingSetOps<Utterance>()
+        val source = TranscriptSource(ops, (1..5).map { turn(it) })
+
+        source.replay(from = 1, to = 3)
+        assertEquals(3, ops.addCalls)
+
+        val hooked = mutableListOf<String>()
+        source.replay(from = 1, to = 3) { hooked += it.id }
+
+        assertEquals(emptyList(), hooked, "identical re-admissions are no-ops, so the hook never fires")
+        assertEquals(3, ops.addCalls, "and nothing reached the graph either")
+    }
+
+    @Test
+    fun `computenet-2aw_5_1 - an out-of-order offer inside a replay calls afterAdmit zero times for it`() {
+        val ops = CountingSetOps<Utterance>()
+        // Turn 2 sits AFTER turn 3 in file order, so replaying from 1 admits
+        // 1 and 3 and then offers a non-advancing turn 2.
+        val outOfOrder = listOf(turn(1), turn(3), turn(2))
+        val source = TranscriptSource(ops, outOfOrder)
+
+        val hooked = mutableListOf<String>()
+        assertFailsWith<OutOfOrderTurnException> {
+            source.replay(from = 1) { hooked += it.id }
+        }
+
+        assertEquals(listOf("u1", "u3"), hooked, "the throwing offer fired no hook")
+        assertEquals(2, ops.addCalls)
+    }
+
+    @Test
+    fun `computenet-2aw_5_1 - replay without a hook is unchanged - the default argument keeps existing call sites`() {
+        val ops = CountingSetOps<Utterance>()
+        val source = TranscriptSource(ops, (1..4).map { turn(it) })
+
+        source.replay(from = 2, to = 3)
+
+        assertEquals(listOf("u2", "u3"), ops.added.map { it.id })
+    }
 }
