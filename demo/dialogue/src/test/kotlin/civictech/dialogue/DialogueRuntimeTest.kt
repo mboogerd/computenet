@@ -60,11 +60,22 @@ import kotlin.test.assertTrue
  * That is a **deliberate, ticket-pinned cost, not an oversight**:
  * computenet-2aw.4.3's acceptance criteria pin the quiescence threshold, the
  * 2-cycle and the third world (`repeat(2)`), so every available lever for
- * making it cheaper is one of those criteria. It has not been measured on
- * ubuntu, where the required checks run. Anyone shortening the repository
- * gate should change the bead's criteria — or move this class to a
+ * making it cheaper is one of those criteria. Anyone shortening the
+ * repository gate should change the bead's criteria — or move this class to a
  * tag-excluded lane (`buildSrc/.../kotlin-jvm.gradle.kts` `excludeTags`) —
  * rather than quietly weakening an assertion here.
+ *
+ * ### …but ~47 s on ubuntu, where the required checks actually run
+ *
+ * The macOS figure above is **not** the gate's cost, and the difference is
+ * large enough to change the decision computenet-4rof exists to make. Read
+ * off `build-test-fast`'s own job log for PR #637 (run 33718227232, job
+ * 100531880203, head `ea00f184`): `> Task :demo:dialogue:test` at
+ * `05:21:03.258Z`, BS-18 `PASSED` at `05:21:50.221Z` — **≤ 51 s for the whole
+ * class**, roughly 5.7x cheaper than on macOS/arm64. It is also **not on the
+ * critical path**: that lane totalled 8m00s and kept scheduling other modules'
+ * tests alongside and after this one. Whatever the local loop costs a
+ * developer on a Mac, this class is not what makes CI slow.
  */
 class DialogueRuntimeTest {
 
