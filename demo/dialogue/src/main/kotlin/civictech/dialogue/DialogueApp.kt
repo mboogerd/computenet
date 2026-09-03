@@ -1,19 +1,26 @@
 package civictech.dialogue
 
 import civictech.agora.graphJson
+import civictech.cell.CellRef
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.esc
 import civictech.demo.shell.respond
 import civictech.demo.shell.value
+import civictech.dialogue.apply.ApplyFailure
+import civictech.dialogue.apply.BoundKey
 import civictech.dialogue.apply.ReconcileReport
 import civictech.dialogue.extract.CassetteExtractor
 import civictech.dialogue.extract.Extractor
 import civictech.dialogue.extract.RuleExtractor
+import civictech.dialogue.extract.SegmentStatus
 import com.sun.net.httpserver.HttpExchange
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import java.io.File
 import java.net.URLDecoder
+import java.util.UUID
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
@@ -35,7 +42,30 @@ import java.util.concurrent.TimeUnit
  *    every later frame is a full snapshot, pushed on each settle and on each
  *    credence move.
  *  - `POST /transcript` — `action=load|replay|step|reset` (form-encoded).
- *    `GET /transcript` is computenet-2aw.5.3's and answers 501 until it lands.
+ *  - `GET /transcript` (computenet-2aw.5.3) — every loaded utterance with its
+ *    per-utterance extraction status ([AGO1-OBS-03]) and counts.
+ *  - `GET /provenance?ref=<cell ref>` or `?key=<canonical key>`
+ *    (computenet-2aw.5.3, [AGO1-PROV-02]/[AGO1-PROV-04]) — the utterances
+ *    behind a bound claim/relation, ref primary and key secondary
+ *    (2aw.F5-D1, epic §8 open question (c)). An unbound ref/key answers `200
+ *    {"bound":false}` — a structurally distinct, explicit "no provenance"
+ *    rather than an error or an empty success.
+ *
+ * ### 2aw.5-D6 — status/provenance reads never touch the single-thread ledgers
+ *
+ * [ExtractionAccounting][civictech.dialogue.extract.ExtractionAccounting] and
+ * [TranscriptSource] are "not thread-safe: drive from one thread", and an
+ * HTTP handler runs on `DemoShell`'s dispatcher thread, not [driver]. So
+ * `GET /transcript` and `GET /provenance` never read `runtime.accounting`,
+ * `runtime.source` or `runtime.applier.accounting` directly — they read only
+ * [transcriptSnapshot] (a `@Volatile` immutable snapshot built exclusively
+ * inside [refreshSnapshot], which itself only ever runs on [driver]:
+ * from [onSettled] inside the [settle] fence, from the boot sequence, and
+ * from the synchronous `load` action), [DialogueRuntime.bindings]
+ * (`synchronized`) and [DialogueRuntime.claimProvenance]/
+ * [DialogueRuntime.relationProvenance] (backed by `ObserveCell.current()`,
+ * itself a `@Volatile` snapshot). The snapshot can therefore lag live state
+ * by at most the one utterance currently being settled.
  *
  * ### 2aw.5-D4 — one driver thread, and only one
  *
@@ -137,6 +167,46 @@ class DialogueApp(
     var bootLoad: TranscriptLoadReport? = null
         private set
 
+    /**
+     * The currently drawable transcript ([TranscriptLoader.load]'s
+     * `utterances`), i.e. what the most recent boot `--transcript` or
+     * `action=load` handed [TranscriptSource.load] — DialogueApp's own
+     * bookkeeping, not [TranscriptSource]'s (which tracks *admission*, not
+     * the loaded file). Read only from [driver] (2aw.5-D6).
+     */
+    private var loadedTranscript: List<Utterance> = emptyList()
+
+    /**
+     * Every [ApplyFailure] any [settle] has recorded, oldest first
+     * (`GraphApplier`'s own [civictech.dialogue.apply.ApplyAccounting] is
+     * off-limits from here — see the class doc — so this is a local, driver-
+     * thread-only mirror of the same cumulative idea, scoped to what this
+     * app has observed). Read/written only from [driver].
+     */
+    private val applyFailuresLedger = mutableListOf<ApplyFailure>()
+
+    /** Set right before an async `replay` starts, cleared once it finishes. */
+    @Volatile
+    private var replayInFlight: Boolean = false
+
+    /**
+     * The `@Volatile` snapshot [handleTranscriptGet] and [handleProvenance]
+     * read exclusively (2aw.5-D6). Built only by [refreshSnapshot], which
+     * runs only on [driver]. The all-empty default is overwritten by the
+     * boot [settle] before [start] can ever expose it to a request.
+     */
+    @Volatile
+    private var transcriptSnapshot: TranscriptSnapshot = TranscriptSnapshot(
+        loadedUtterances = emptyList(),
+        utteranceDtos = emptyList(),
+        counts = Counts(pending = 0, extracted = 0, rejected = 0, failed = 0),
+        rejectedDtos = emptyList(),
+        failedDtos = emptyList(),
+        applyFailureDtos = emptyList(),
+        admittedCount = 0,
+        replaying = false,
+    )
+
     init {
         // Boot on the driver thread, like every other runtime call. No startup
         // checkpoint (AgoraApp's / DialogueRuntime's hazard note: a checkpoint
@@ -149,12 +219,14 @@ class DialogueApp(
                 val loaded = TranscriptLoader.load(transcriptFile)
                 runtime.source.load(loaded.utterances)
                 bootLoad = loaded.report
+                loadedTranscript = loaded.utterances
             }
             settle()
         }
 
         shell.route("/graph") { it.respond(200, graphJson(), "application/json") }
         shell.route("/transcript") { handleTranscript(it) }
+        shell.route("/provenance") { handleProvenance(it) }
         shell.sse("/events") { graphJson() }
     }
 
@@ -187,20 +259,102 @@ class DialogueApp(
             // The boot settle is by construction the first one, so this
             // records exactly what recovery had left to apply.
             if (bootReconcile == null) bootReconcile = report
-            onSettled()
+            onSettled(report)
             broadcast()
         }
     }
 
     /**
-     * Hook for computenet-2aw.5.3: `GET /transcript` serves a `@Volatile`
-     * snapshot of per-utterance extraction status, and that snapshot must be
-     * built **inside** the fence (2aw.5-D6) rather than read live off the
-     * single-threaded ledgers. Deliberately a no-op here so T3's amend is an
-     * insertion, not a re-plumbing.
+     * computenet-2aw.5.3 (2aw.5-D6/D7): rebuild [transcriptSnapshot] here,
+     * inside the fence, on [driver] — the one moment every ledger this reads
+     * (`runtime.accounting`, `runtime.source`) is quiescent and safe to read
+     * directly. [report]'s failures join [applyFailuresLedger] before the
+     * snapshot is rebuilt so the status surface accumulates across settles,
+     * mirroring `ApplyAccounting`'s own cumulative shape without reaching
+     * into it (`runtime.applier.accounting` stays off-limits to everything
+     * outside [DialogueRuntime]/`GraphApplier`, per the class doc).
      */
-    private fun onSettled() {
-        // computenet-2aw.5.3 fills this.
+    private fun onSettled(report: ReconcileReport) {
+        applyFailuresLedger += report.failures
+        refreshSnapshot()
+    }
+
+    /**
+     * Rebuild [transcriptSnapshot] from [loadedTranscript],
+     * `runtime.source.admitted` and `runtime.accounting` — **must** run on
+     * [driver] (called from [onSettled], inside the boot sequence, and from
+     * the synchronous `load` action; never from an HTTP handler thread).
+     *
+     * 2aw.5-D7 — one loaded utterance's status folds over its segments'
+     * statuses with precedence failed > rejected > pending > extracted; a
+     * blank-text utterance segments to zero segments and folds to
+     * `extracted` (the empty-list branch of [foldStatus]). An unadmitted
+     * utterance is `pending` without inspecting its segments at all — there
+     * is nothing in [ExtractionAccounting] to inspect, since nothing has
+     * been offered yet.
+     */
+    private fun refreshSnapshot() {
+        val admittedIds = runtime.source.admitted.map { it.id }.toSet()
+        val utteranceDtos = loadedTranscript.map { utterance -> utteranceDto(utterance, utterance.id in admittedIds) }
+        transcriptSnapshot = TranscriptSnapshot(
+            loadedUtterances = loadedTranscript,
+            utteranceDtos = utteranceDtos,
+            counts = Counts(
+                pending = utteranceDtos.count { it.status == STATUS_PENDING },
+                extracted = utteranceDtos.count { it.status == STATUS_EXTRACTED },
+                rejected = utteranceDtos.count { it.status == STATUS_REJECTED },
+                failed = utteranceDtos.count { it.status == STATUS_FAILED },
+            ),
+            rejectedDtos = runtime.accounting.rejected.map { RejectedDto(it.segmentId, it.reason) },
+            failedDtos = runtime.accounting.failed.map { FailedDto(it.segmentId, it.reason) },
+            applyFailureDtos = applyFailuresLedger.map {
+                ApplyFailureDto(kind = it.kind.name.lowercase(), key = it.key, reason = it.reason)
+            },
+            admittedCount = admittedIds.size,
+            replaying = replayInFlight,
+        )
+    }
+
+    private fun utteranceDto(utterance: Utterance, admitted: Boolean): UtteranceDto {
+        if (!admitted) {
+            return UtteranceDto(
+                id = utterance.id,
+                turn = utterance.turn,
+                speaker = utterance.speaker,
+                text = utterance.text,
+                admitted = false,
+                status = STATUS_PENDING,
+                segments = emptyList(),
+            )
+        }
+        val segmentDtos = segment(utterance).map(::segmentDto)
+        return UtteranceDto(
+            id = utterance.id,
+            turn = utterance.turn,
+            speaker = utterance.speaker,
+            text = utterance.text,
+            admitted = true,
+            status = foldStatus(segmentDtos.map { it.status }),
+            segments = segmentDtos,
+        )
+    }
+
+    private fun segmentDto(segment: Segment): SegmentDto {
+        val raw = runtime.accounting.status(segment.id)
+        val rejectedReasons = runtime.accounting.rejected.filter { it.segmentId == segment.id }.map { it.reason }
+        return when {
+            raw is SegmentStatus.Failed -> SegmentDto(segment.id, STATUS_FAILED, raw.reason)
+            rejectedReasons.isNotEmpty() -> SegmentDto(segment.id, STATUS_REJECTED, rejectedReasons.joinToString("; "))
+            raw is SegmentStatus.Unknown -> SegmentDto(segment.id, STATUS_PENDING, null)
+            else -> SegmentDto(segment.id, STATUS_EXTRACTED, null)
+        }
+    }
+
+    private fun foldStatus(statuses: List<String>): String = when {
+        statuses.any { it == STATUS_FAILED } -> STATUS_FAILED
+        statuses.any { it == STATUS_REJECTED } -> STATUS_REJECTED
+        statuses.any { it == STATUS_PENDING } -> STATUS_PENDING
+        else -> STATUS_EXTRACTED
     }
 
     // ------------------------------------------------------------------
@@ -219,11 +373,11 @@ class DialogueApp(
     // ------------------------------------------------------------------
 
     private fun handleTranscript(exchange: HttpExchange) {
+        if (exchange.requestMethod == "GET") {
+            return handleTranscriptGet(exchange)
+        }
         if (exchange.requestMethod != "POST") {
-            // GET /transcript — per-utterance extraction status — is
-            // computenet-2aw.5.3's, so this branch is a straight replacement
-            // for it rather than something it has to unpick.
-            return exchange.respond(501, "GET /transcript is not implemented yet (computenet-2aw.5.3)")
+            return exchange.respond(405, "method not allowed: ${exchange.requestMethod}")
         }
         val params = formParams(exchange)
         try {
@@ -250,6 +404,13 @@ class DialogueApp(
             require(file.isFile) { "no such transcript file: $path" }
             val loaded = TranscriptLoader.load(file)
             runtime.source.load(loaded.utterances)
+            loadedTranscript = loaded.utterances
+            // 2aw.5-D6: the loaded set changed even though nothing was
+            // admitted, so the snapshot needs a refresh here too — on
+            // [driver], same as every other refresh, but outside a
+            // [settle]/[afterQuiescence] fence: `load` touches only this
+            // app's own bookkeeping and `TranscriptSource`, never the host.
+            refreshSnapshot()
             loaded.report
         }
         val issues = report.issues.joinToString(",") {
@@ -284,6 +445,7 @@ class DialogueApp(
                 ?: throw IllegalArgumentException("pace must be 'max' or a positive number, was '$raw'")
             Pace.Wallclock(factor)
         }
+        replayInFlight = true
         driver.execute {
             // A driver-side failure cannot reach the (already answered) client;
             // it is named on stderr rather than swallowed, and the next
@@ -292,6 +454,12 @@ class DialogueApp(
                 runtime.source.replay(from = from, to = to, pace = pace, afterAdmit = { settle() })
             } catch (e: Exception) {
                 System.err.println("dialogue: replay(from=$from, to=$to) failed: $e")
+            } finally {
+                replayInFlight = false
+                // A range with no admissions leaves settle() (and so
+                // onSettled/refreshSnapshot) uncalled; refresh here on
+                // driver so the snapshot's `replaying` flag still clears.
+                refreshSnapshot()
             }
         }
         exchange.respond(
@@ -324,6 +492,131 @@ class DialogueApp(
     }
 
     // ------------------------------------------------------------------
+    // GET /transcript — computenet-2aw.5.3, [AGO1-OBS-03]
+    // ------------------------------------------------------------------
+
+    /**
+     * Reads [transcriptSnapshot] only (2aw.5-D6) — never `runtime.accounting`
+     * or `runtime.source` directly, on an HTTP handler thread.
+     */
+    private fun handleTranscriptGet(exchange: HttpExchange) {
+        val snapshot = transcriptSnapshot
+        val response = TranscriptResponse(
+            loaded = snapshot.loadedUtterances.size,
+            admitted = snapshot.admittedCount,
+            replaying = snapshot.replaying,
+            counts = snapshot.counts,
+            utterances = snapshot.utteranceDtos,
+            rejected = snapshot.rejectedDtos,
+            failed = snapshot.failedDtos,
+            applyFailures = snapshot.applyFailureDtos,
+        )
+        exchange.respond(200, Json.encodeToString(TranscriptResponse.serializer(), response), "application/json")
+    }
+
+    // ------------------------------------------------------------------
+    // GET /provenance — computenet-2aw.5.3, 2aw.F5-D1, [AGO1-PROV-02]/[AGO1-PROV-04]
+    // ------------------------------------------------------------------
+
+    /**
+     * `?ref=<uuid>` is primary, `?key=<canonical key>` is the secondary
+     * lookup (2aw.F5-D1, epic §8 open question (c)). Neither present, or a
+     * non-UUID `ref`, is 400. An unbound ref/key answers 200
+     * `{"bound":false}` — deliberately not 404: F5's non-goal list bars a
+     * provenance panel, but the shape this answers with is the one such a
+     * panel would need to tell "nothing here yet" from "bound, zero
+     * sources" ([AGO1-PROV-04]), which a 404 cannot do without inventing a
+     * body convention of its own.
+     *
+     * Reads [transcriptSnapshot], `runtime.bindings` and
+     * `runtime.claimProvenance`/`runtime.relationProvenance` only (2aw.5-D6)
+     * — the three surfaces documented safe for an HTTP handler thread.
+     */
+    private fun handleProvenance(exchange: HttpExchange) {
+        if (exchange.requestMethod != "GET") {
+            return exchange.respond(405, "method not allowed: ${exchange.requestMethod}")
+        }
+        val params = queryParams(exchange.requestURI.rawQuery)
+        val ref = params["ref"]
+        val key = params["key"]
+        when {
+            ref != null -> respondProvenanceByRef(exchange, ref)
+            key != null -> respondProvenanceByKey(exchange, key)
+            else -> exchange.respond(400, "missing ref or key")
+        }
+    }
+
+    private fun respondProvenanceByRef(exchange: HttpExchange, ref: String) {
+        val uuid = try {
+            UUID.fromString(ref)
+        } catch (e: IllegalArgumentException) {
+            return exchange.respond(400, "ref must be a UUID, was '$ref'")
+        }
+        when (val bound = runtime.bindings.keyOf(CellRef(uuid))) {
+            null -> exchange.respond(200, """{"ref":${esc(ref)},"bound":false}""", "application/json")
+            is BoundKey.OfClaim ->
+                respondBound(exchange, ref, "claim", bound.key.value, runtime.claimProvenance(bound.key) ?: emptySet())
+            is BoundKey.OfRelation ->
+                respondBound(
+                    exchange,
+                    ref,
+                    "relation",
+                    bound.key.value,
+                    runtime.relationProvenance(bound.key) ?: emptySet(),
+                )
+        }
+    }
+
+    private fun respondProvenanceByKey(exchange: HttpExchange, key: String) {
+        val claimKey = ClaimKey(key)
+        val claimRef = runtime.bindings.refOf(claimKey)
+        if (claimRef != null) {
+            return respondBound(
+                exchange,
+                claimRef.id.toString(),
+                "claim",
+                key,
+                runtime.claimProvenance(claimKey) ?: emptySet(),
+            )
+        }
+        val relationKey = RelationKey(key)
+        val relationRef = runtime.bindings.refOf(relationKey)
+        if (relationRef != null) {
+            return respondBound(
+                exchange,
+                relationRef.id.toString(),
+                "relation",
+                key,
+                runtime.relationProvenance(relationKey) ?: emptySet(),
+            )
+        }
+        exchange.respond(200, """{"key":${esc(key)},"bound":false}""", "application/json")
+    }
+
+    /**
+     * The always-carries-`utterances` shape ([AGO1-PROV-04]'s discriminator
+     * is `bound` alone, so this branch always includes the field, empty or
+     * not). [ids] resolves against [transcriptSnapshot]'s loaded list in
+     * turn order; an id the snapshot cannot resolve is emitted as `{"id":…}`
+     * alone, per 2aw.5-D8, rather than silently dropped.
+     */
+    private fun respondBound(exchange: HttpExchange, ref: String, kind: String, key: String, ids: Set<String>) {
+        val byId = transcriptSnapshot.loadedUtterances.associateBy { it.id }
+        val resolved = ids.mapNotNull { byId[it] }.sortedBy { it.turn }
+        val unresolved = ids - resolved.map { it.id }.toSet()
+        val utterancesJson = (
+            resolved.map {
+                """{"id":${esc(it.id)},"turn":${it.turn},"speaker":${esc(it.speaker)},"text":${esc(it.text)}}"""
+            } + unresolved.map { """{"id":${esc(it)}}""" }
+            ).joinToString(",")
+        exchange.respond(
+            200,
+            """{"ref":${esc(ref)},"bound":true,"kind":${esc(kind)},"key":${esc(key)},"utterances":[$utterancesJson]}""",
+            "application/json",
+        )
+    }
+
+    // ------------------------------------------------------------------
     // Lifecycle
     // ------------------------------------------------------------------
 
@@ -349,8 +642,89 @@ class DialogueApp(
                     val (k, v) = it.split("=", limit = 2)
                     k to URLDecoder.decode(v, Charsets.UTF_8)
                 }
+
+        /** [formParams]'s query-string mirror, for `GET /provenance?ref=…&key=…`. */
+        fun queryParams(raw: String?): Map<String, String> =
+            (raw ?: "").split("&").filter { it.contains("=") }
+                .associate {
+                    val (k, v) = it.split("=", limit = 2)
+                    URLDecoder.decode(k, Charsets.UTF_8) to URLDecoder.decode(v, Charsets.UTF_8)
+                }
+
+        // ------------------------------------------------------------------
+        // Extraction status vocabulary (2aw.5-D7)
+        // ------------------------------------------------------------------
+
+        const val STATUS_PENDING = "pending"
+        const val STATUS_EXTRACTED = "extracted"
+        const val STATUS_REJECTED = "rejected"
+        const val STATUS_FAILED = "failed"
     }
 }
+
+// ------------------------------------------------------------------
+// computenet-2aw.5.3 — the fenced snapshot and its wire DTOs
+// ------------------------------------------------------------------
+
+/**
+ * The `@Volatile` snapshot `GET /transcript` and `GET /provenance` read
+ * exclusively (2aw.5-D6). Built only inside [DialogueApp.refreshSnapshot],
+ * which runs only on [DialogueApp]'s driver thread.
+ */
+private data class TranscriptSnapshot(
+    /** The currently loaded transcript, in file/turn order — [DialogueApp.loadedTranscript]. */
+    val loadedUtterances: List<Utterance>,
+    /** One entry per [loadedUtterances], same order. */
+    val utteranceDtos: List<UtteranceDto>,
+    val counts: Counts,
+    /** [civictech.dialogue.extract.ExtractionAccounting.rejected], DTO'd. */
+    val rejectedDtos: List<RejectedDto>,
+    /** [civictech.dialogue.extract.ExtractionAccounting.failed], DTO'd. */
+    val failedDtos: List<FailedDto>,
+    /** [DialogueApp.applyFailuresLedger], DTO'd. */
+    val applyFailureDtos: List<ApplyFailureDto>,
+    val admittedCount: Int,
+    /** Whether an async `POST /transcript?action=replay` is currently in flight. */
+    val replaying: Boolean,
+)
+
+@Serializable
+private data class SegmentDto(val id: String, val status: String, val reason: String? = null)
+
+@Serializable
+private data class UtteranceDto(
+    val id: String,
+    val turn: Int,
+    val speaker: String,
+    val text: String,
+    val admitted: Boolean,
+    val status: String,
+    val segments: List<SegmentDto>,
+)
+
+@Serializable
+private data class Counts(val pending: Int, val extracted: Int, val rejected: Int, val failed: Int)
+
+@Serializable
+private data class RejectedDto(val segmentId: String, val reason: String)
+
+@Serializable
+private data class FailedDto(val segmentId: String, val reason: String)
+
+@Serializable
+private data class ApplyFailureDto(val kind: String, val key: String, val reason: String)
+
+@Serializable
+private data class TranscriptResponse(
+    val loaded: Int,
+    val admitted: Int,
+    val replaying: Boolean,
+    val counts: Counts,
+    val utterances: List<UtteranceDto>,
+    val rejected: List<RejectedDto>,
+    val failed: List<FailedDto>,
+    val applyFailures: List<ApplyFailureDto>,
+)
 
 /**
  * `<port> --transcript <file> --journal <dir> --extractor rule|cassette
