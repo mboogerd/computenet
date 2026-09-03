@@ -1,0 +1,2 @@
+{"id":"d1","turn":5,"speaker":"alice","tsMillis":5000,"text":"This one is admitted first."}
+{"id":"d2","turn":3,"speaker":"bob","tsMillis":3000,"text":"This turn does not advance."}
