@@ -5,6 +5,7 @@ import java.io.DataOutputStream
 import java.io.EOFException
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
@@ -157,6 +158,30 @@ class InMemoryJournal : Journal {
  * bytes are a record length, and to be mistaken for [MAGIC] that length would
  * have to be exactly `0x434E4A4C` — a single 1.1 GB record.
  *
+ * ## One handle, not one open per append (computenet-sh8z)
+ *
+ * The append handle is opened lazily on the first [append] and **kept**, rather
+ * than reopened per record. That is not a micro-optimization: on this repo's
+ * macOS/arm64 hosts `FileOutputStream(file, append = true)` costs ~3.3 ms,
+ * roughly **100x** the ~0.03 ms of the `fsync` that follows it, so reopening was
+ * essentially the entire cost of every journaled propagate round.
+ * `DialogueRuntimeTest`'s BS-18 spent 263.6 s of its 264.2 s inside this method
+ * across 73,146 appends, of which fsync was 7.8 s — measured 2026-09-03 (see
+ * that class's KDoc for the before/after).
+ *
+ * **Durability is unchanged**: every append still ends in `fd.sync()` before it
+ * returns. What was removed is the `open`/`close` pair around it, not the
+ * write-ahead guarantee — so nothing here weakens what survives a `kill -9`, and
+ * a second process opening the same path sees every acknowledged record whether
+ * or not the first process ever closed its handle (a held descriptor buffers
+ * nothing: each record is one `write` syscall, immediately fsync'd).
+ *
+ * The handle is not exposed for closing, because [Journal] has no lifecycle and
+ * its callers have none to hook: an abandoned journal is collected and its
+ * descriptor released by `FileOutputStream`'s own cleaner. [reset] closes and
+ * drops the handle explicitly, because the rename underneath it would otherwise
+ * leave subsequent appends writing to the *replaced* inode.
+ *
  * ponytail: one file, fsync per append, whole-log replay in memory — segments,
  * group commit, and streaming replay when a real workload's journal hurts.
  */
@@ -177,18 +202,42 @@ class FileJournal(
         file.parentFile?.mkdirs()
     }
 
+    /**
+     * The kept append handle, opened on first use and dropped by [reset].
+     * Guarded by this object's monitor, like every other member here.
+     */
+    private var sink: FileOutputStream? = null
+
+    /**
+     * The append handle, opening it — and writing the header, if this is the
+     * first write into an absent or empty file — on the first call.
+     */
+    private fun sink(): FileOutputStream {
+        sink?.let { return it }
+        val needsHeader = !file.exists() || file.length() == 0L
+        val opened = FileOutputStream(file, true)
+        if (needsHeader) {
+            opened.write(header())
+            opened.fd.sync()
+        }
+        sink = opened
+        return opened
+    }
+
     @Synchronized
     override fun append(record: ByteArray) {
-        val needsHeader = !file.exists() || file.length() == 0L
-        FileOutputStream(file, true).use { out ->
-            DataOutputStream(out.buffered()).apply {
-                if (needsHeader) writeHeader(this)
-                writeInt(record.size)
-                write(record)
-                flush()
-            }
-            out.fd.sync()
-        }
+        val out = sink()
+        // One `write` syscall for the whole framed record. Two writers on one
+        // path (TwoWriterDurabilityTest) each hold an O_APPEND descriptor, and
+        // O_APPEND makes a single write atomic with respect to the offset — so
+        // records interleave whole, never spliced. A buffered stream flushed in
+        // two parts would not have that property.
+        val framed = ByteBuffer.allocate(Int.SIZE_BYTES + record.size)
+            .putInt(record.size)
+            .put(record)
+            .array()
+        out.write(framed)
+        out.fd.sync()
     }
 
     @Synchronized
@@ -218,6 +267,12 @@ class FileJournal(
 
     @Synchronized
     override fun reset(records: List<ByteArray>) {
+        // Drop the append handle first: the move below replaces this path's
+        // inode, and a descriptor held across it would append into the file
+        // that was just unlinked — the compacted records would then be
+        // invisible to replay and the appended ones lost with the old inode.
+        sink?.close()
+        sink = null
         val tmp = File(file.parentFile, file.name + ".tmp")
         FileOutputStream(tmp).use { out ->
             DataOutputStream(out.buffered()).apply {
@@ -237,6 +292,10 @@ class FileJournal(
         out.write(MAGIC)
         out.writeInt(formatVersion)
     }
+
+    /** [MAGIC] and the big-endian version, as the [HEADER_BYTES] they occupy on disk. */
+    private fun header(): ByteArray =
+        ByteBuffer.allocate(HEADER_BYTES).put(MAGIC).putInt(formatVersion).array()
 
     /**
      * The version this file declares, checked against [formatVersion] before a single
