@@ -29,6 +29,13 @@ skill() {
   mkdir -p "$d/references"
   { printf -- '---\nname: demo\ndescription: A demo skill for tests.\n---\n\n'
     for _ in $(seq "$n"); do echo "body line"; done; } > "$d/SKILL.md"
+  # The ratchet treats a MISSING budget entry as a failure, so every fixture
+  # needs one or the case under test never gets to run. A generous number: the
+  # ratchet is not what these cases are about, and pinning it to the fixture's
+  # size would make every case that changes the line count also a budget edit.
+  # Absent this, the suite ran 4/11 on main from the day the ratchet landed —
+  # the gate's own gate, red, with nothing to say so (computenet-98cu).
+  printf 'demo %d\n' 1000000 > "$ROOT/$1/line-budget.txt"
   echo "$ROOT/$1"
 }
 
@@ -73,6 +80,32 @@ echo "case 6: a SKILL.md over the line ideal warns, and does not fail"
 r=$(skill fat 600); out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
 [ $rc -eq 0 ] && ok "exit 0 (design question, not a gate)" || bad "exit $rc -- $out"
 grep -qE 'body is 6[0-9][0-9] lines' <<<"$out" && ok "counts the body, not the frontmatter" || bad "bad count -- $out"
+
+echo "case 7: a reference past the Read-call cap must SAY it is truncated"
+r=$(skill huge 10); reference "$r" huge.md 950 with-toc
+out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
+[ $rc -eq 1 ] && ok "exit 1 (a gate: the reader is silently missing content)" || bad "exit $rc -- $out"
+grep -q 'returns it TRUNCATED' <<<"$out" && ok "names the real problem" || bad "wrong message -- $out"
+
+echo "case 8: the banner in the first 50 lines clears it"
+r=$(skill huge_ok 10); reference "$r" huge.md 950 with-toc
+printf '%s\n' "This file exceeds one Read call; §8 is past the cut." \
+  | cat - "$r/demo/references/huge.md" > "$r/demo/references/huge.md.tmp"
+mv "$r/demo/references/huge.md.tmp" "$r/demo/references/huge.md"
+out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "exit 0" || bad "exit $rc -- $out"
+
+echo "case 9: the banner BELOW the first 50 lines does not count"
+r=$(skill huge_late 10); reference "$r" huge.md 950 with-toc
+printf '%s\n' "This file exceeds one Read call." >> "$r/demo/references/huge.md"
+out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
+[ $rc -eq 1 ] && ok "exit 1 — a truncated read never reaches it" || bad "exit $rc -- $out"
+
+echo "case 10: a reference under the cap is not asked for the banner"
+r=$(skill midref 10); reference "$r" mid.md 400 with-toc
+out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "exit 0" || bad "exit $rc -- $out"
+grep -q 'TRUNCATED' <<<"$out" && bad "asked a short file for the banner -- $out" || ok "quiet"
 
 echo
 echo "$pass passed, $fail failed"

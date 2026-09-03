@@ -11,16 +11,51 @@ name: iroh-sidecar
 # works) — the residue finding (egl.6) reports that duplication as the
 # measured burden, not a defect of this job.
 #
-# Deliberately non-required: this workflow is not listed in ruleset 20149495's
-# required_status_checks, and this task does not touch the ruleset. Its job
-# name (`iroh-sidecar`) and check name differ from all six required contexts
-# (build-test-fast, build-test-serial, concord-full, ui-test, agora-ui-test,
-# kernel-test), so it cannot be confused with one by name alone.
+# REQUIRED as of 2026-08-31 (computenet-eys1.1): this workflow's `iroh-sidecar`
+# job is now listed in ruleset 20149495's required_status_checks, alongside
+# build-test-fast, build-test-serial, concord-full, ui-test, agora-ui-test,
+# and kernel-test — seven required contexts total. Re-run evidence (the
+# AGENTS.md ruleset query):
 #
-# Residual: the beadsmirror iroh convergence suite (bd+dolt+sidecar together)
-# is NOT wired into this job. computenet-egl.4 had not landed on main when
-# this workflow was filed (computenet-egl.5's stated condition for adding
-# it) — re-check that condition before wiring the suite in here.
+#   GH_PAGER=cat gh api repos/mboogerd/computenet/rulesets/20149495 \
+#     | jq -r '.rules[]|select(.type=="required_status_checks")
+#              |.parameters.required_status_checks[].context'
+#   -> build-test-fast
+#      build-test-serial
+#      concord-full
+#      agora-ui-test
+#      ui-test
+#      kernel-test
+#      iroh-sidecar
+#
+# Decided (2026-08-31, sync-report follow-up): warm runs of this lane measured
+# ~2m10s-2m50s over 10 recent PRs (this workflow's own timed steps corroborate
+# that figure); acceptable added latency on every required PR. This job is the
+# ONLY place the sidecar-backed JVM tests (23 total, run below under
+# `:iroh:check -Piroh.enabled=true`) execute — none of the other six required
+# lanes passes `-Piroh.enabled`, so they build/run only :iroh's
+# flag-independent sources — SidecarCodecTest (12) and IrohSessionHelloTest
+# (4), 16 of the 23. A Linux regression in IrohTransport, SidecarClient or
+# SidecarProcess now blocks auto-merge, as intended.
+#
+# A cold run (cache miss) is not yet measured here; the 20-minute job timeout
+# above is the current backstop. If a cold run turns out to dominate merge
+# latency in practice, that is grounds to revisit this decision — not a
+# reason it was wrong to make now.
+#
+# The beadsmirror iroh convergence suite (bd+dolt+sidecar together) IS wired
+# into this job (computenet-cqde, after computenet-egl.4 landed as #598): the
+# "beadsmirror iroh convergence suite" step below runs
+# IrohConvergenceSuiteTest's four cases and IrohMirrorTransportTest under
+# `-Piroh.enabled=true`, with `bd`/`dolt` provisioned via the same
+# `install-bd-dolt` composite action ci.yml's beadsmirror lanes use, and the
+# following step asserts (via `assert-beadsmirror-e2e`) that neither class
+# reported itself skipped — a Linux run of these cases with the toolchain
+# absent fails the job rather than passing green having asserted nothing,
+# same shape as computenet-7em.5 for the WS-transport suites. That suite was
+# once this lane's only reason `demo/beadsmirror/**` was also a trigger path;
+# there is no `paths:` filter here any more (see below), so nothing is
+# path-scoped now — the sentence survives only to say why these steps exist.
 #
 # Where a warm (cache-hit=true) figure comes from (computenet-jtvd): this
 # workflow only triggers on pull_request, so it never writes a main-scoped
@@ -32,11 +67,52 @@ name: iroh-sidecar
 # the Gradle lanes. A warm figure therefore requires either a PR run after
 # cache-seed.yml has run at least once post-merge, or a second run on the
 # same PR ref (which restores the first run's own PR-scoped cache entry).
+#
+# NO `paths:` FILTER, deliberately (computenet-b6hu). This job is a REQUIRED
+# status check (see the header above), and GitHub does not treat an absent
+# required check as satisfied: a path-filtered required workflow simply never
+# reports on a PR outside its paths, and that PR stays `mergeStateStatus:
+# BLOCKED` forever with every other check green. Measured 2026-08-31: with the
+# filter in place, PR #601 (query/** only) held all six other required checks
+# SUCCESS and auto-merge armed, and sat BLOCKED indefinitely with no
+# `iroh-sidecar` row in its `statusCheckRollup` at all; #587 was in the same
+# state. Running on every PR is what the promotion decision already priced in
+# ("acceptable added latency on every required PR").
+#
+# WHAT THAT LATENCY ACTUALLY IS, re-measured at review time on a PR whose diff
+# touches no iroh source at all (PR #604, run 33379105667, job 99447143947 —
+# only this file and AGENTS.md changed): job wall 3m45s (09:43:49-09:47:34Z),
+# rust cache "full match: true" from the main-scoped cache-seed entry, so this
+# is a WARM run. Step timings: cargo-build 14s, cargo-test 6s,
+# gradle-iroh-check 109s, the rest checkout/toolchain/Gradle setup and the
+# beadsmirror convergence suite. The ~2m10s-2m50s warm figure in the header
+# above predates the beadsmirror convergence step (computenet-cqde, #599) and
+# therefore UNDERSTATES the current cost by roughly a minute; 3m45s warm is the
+# figure to reason with, and every merge now pays it. A cold run remains
+# unmeasured, with the 20-minute job timeout as its only backstop, and cold is
+# now reachable on ANY PR rather than only iroh-touching ones — if cache-seed
+# has not run since a Cargo.lock or toolchain change, the whole repository's
+# merge latency inherits that unmeasured cost.
+#
+# Re-adding a `paths:` filter here re-breaks every non-iroh PR in the
+# repository — remove the check from ruleset 20149495 first if that is ever
+# the intent.
+#
+# UPDATE (2026-09-01, computenet-o0m3.4): as of this change, the JVM-driven
+# test steps below ("iroh Gradle check, flag-enabled" and "beadsmirror iroh
+# convergence suite") no longer run against n0's public relay/discovery
+# infrastructure, contrary to what earlier revisions of doc/iroh-adoption.md
+# recorded as this lane's behaviour. A new step starts a job-local,
+# self-hosted `computenet-iroh-relay` right after `cargo build`, both Gradle
+# invocations receive its URL via `-Piroh.relay.url`, and a liveness check
+# after the Gradle steps reddens the job if that relay process died —
+# without which the self-hosting claim would be unverifiable, since peers in
+# these suites still hold direct loopback addresses via ADD_PEER and would
+# pass identically against a dead relay. See doc/iroh-adoption.md's
+# "Documented default for ComputeNet development" section for the same
+# update recorded from the adoption-policy side.
 on:
   pull_request:
-    paths:
-      - "iroh/**"
-      - ".github/workflows/iroh-sidecar.yml"
   workflow_dispatch: {}
 
 # Same idiom as ci.yml: supersede an in-flight run when a newer commit lands
@@ -53,6 +129,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      # Provisions `bd` and `dolt` for the "beadsmirror iroh convergence
+      # suite" step near the bottom of this job — see that action's header
+      # (computenet-mgxe) for why it is a composite action rather than a
+      # copy-pasted step, and ci.yml for the same pairing over the
+      # WS-transport suites. Installed early so it is available regardless of
+      # step ordering changes below; it costs well under 10s (two curls, no
+      # build-from-source).
+      - uses: ./.github/actions/install-bd-dolt
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -85,6 +170,55 @@ jobs:
           echo "$line"
           echo "$line" >> "$GITHUB_STEP_SUMMARY"
 
+      # computenet-o0m3.4: starts a job-local, self-hosted relay so no
+      # JVM-driven sidecar in the two Gradle steps below has to reach n0's
+      # public relay/discovery infrastructure. `cargo build` above already
+      # produced target/debug/computenet-iroh-relay (a plain `cargo build`
+      # with no `--bin` builds every binary target in the crate, including
+      # src/bin/relay.rs). The binary writes exactly one JSON line before it
+      # starts serving —
+      # `{"port":<n>,"relayUrl":"http://127.0.0.1:<n>"}` — verified by
+      # running it directly during this task's implementation (see
+      # iroh/sidecar/src/bin/relay.rs's own doc comment, which states the
+      # same shape). This step fails the job if that line never appears
+      # within the bounded wait below, or if the process exits first.
+      - name: Start job-local iroh relay
+        working-directory: iroh/sidecar
+        run: |
+          set -euo pipefail
+          nohup ./target/debug/computenet-iroh-relay --port 0 \
+            > /tmp/iroh-relay.out 2> /tmp/iroh-relay.err &
+          relay_pid=$!
+
+          relay_url=""
+          for _ in $(seq 1 50); do
+            if [ -s /tmp/iroh-relay.out ]; then
+              relay_url=$(grep -oE '"relayUrl":"[^"]+"' /tmp/iroh-relay.out | cut -d'"' -f4 || true)
+              [ -n "$relay_url" ] && break
+            fi
+            if ! kill -0 "$relay_pid" 2>/dev/null; then
+              echo "computenet-iroh-relay exited before printing its announcement line:" >&2
+              cat /tmp/iroh-relay.err >&2
+              exit 1
+            fi
+            sleep 0.2
+          done
+
+          if [ -z "$relay_url" ]; then
+            echo "timed out waiting for computenet-iroh-relay's announcement line" >&2
+            echo "--- stdout ---" >&2
+            cat /tmp/iroh-relay.out >&2
+            echo "--- stderr ---" >&2
+            cat /tmp/iroh-relay.err >&2
+            exit 1
+          fi
+
+          line="iroh-sidecar-relay pid=$relay_pid url=$relay_url"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          echo "RELAY_URL=$relay_url" >> "$GITHUB_ENV"
+          echo "RELAY_PID=$relay_pid" >> "$GITHUB_ENV"
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -104,14 +238,103 @@ jobs:
       # That is redundant work relative to the two steps above — it exists to
       # prove the Gradle flag wiring itself works on Linux, not to save time
       # (iroh/build.gradle.kts's own comment makes the same point about
-      # cargoTest re-building). There is no `:iroh:test` task; `check` is the
-      # correct target because cargoTest is wired into it.
+      # cargoTest re-building). Since computenet-egl.2, :iroh applies
+      # buildsrc.convention.kotlin-jvm, so `:iroh:check` now also runs
+      # `:iroh:test` — the module's 23 JVM tests, including IrohPeeringTest,
+      # IrohReconnectTest, SidecarExchangeTest and SidecarHandshakeTest.
+      # `check` is still the right target (it subsumes `test` plus the
+      # cargoTest wiring), not a substitute for a missing `:iroh:test` task.
+      # See the workflow header (computenet-eys1) for the coverage and
+      # required-check consequences of that, and the parked promotion
+      # decision.
       - name: iroh Gradle check, flag-enabled (timed)
         run: |
           set -euo pipefail
           start=$(date +%s)
-          ./gradlew :iroh:check -Piroh.enabled=true
+          ./gradlew :iroh:check -Piroh.enabled=true -Piroh.relay.url="$RELAY_URL"
           end=$(date +%s)
           line="iroh-sidecar-timing step=gradle-iroh-check seconds=$((end - start)) cache-hit=${{ steps.rust-cache.outputs.cache-hit }}"
           echo "$line"
           echo "$line" >> "$GITHUB_STEP_SUMMARY"
+
+      # computenet-6buf: the only Linux run of :iroh's JUnit suite (see the
+      # "iroh Gradle check, flag-enabled" step above) otherwise has its exact
+      # per-testcase `time` attributes torn down with the runner. `if:
+      # always()` because the run whose timings matter most for flake
+      # characterisation is a FAILING one, and a default (no-if) upload step
+      # is skipped once a prior step fails — the whole point of this artifact
+      # is to survive that case. 90-day retention (GitHub's default is also
+      # 90, made explicit here rather than left implicit): the intended
+      # consumer is cross-run flake characterisation over weeks, not
+      # same-day debugging (computenet-merg reached back to 2026-08-29 and
+      # wanted more history, not less), and log retention is a separate
+      # setting from artifact retention — this only governs the artifact.
+      - name: Upload :iroh JUnit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iroh-test-results
+          path: iroh/build/test-results/test/
+          if-no-files-found: warn
+          retention-days: 90
+
+      # computenet-cqde: the only place IrohConvergenceSuiteTest's four cases
+      # and IrohMirrorTransportTest's sidecar-backed case execute anywhere
+      # besides a developer's darwin/arm64 machine. `-Piroh.enabled=true`
+      # makes :demo:beadsmirror depend on `:iroh:cargoBuild` and sets the
+      # `iroh.sidecar.binary` system property (demo/beadsmirror/build.gradle.kts)
+      # — a third cargo build in this job, redundant with the two steps above
+      # in the same way the egl.6 header already documents `:iroh:check`
+      # being redundant with the direct `cargo build`/`cargo test` pair; not a
+      # new kind of duplication. `--rerun` because Gradle's up-to-date
+      # checking would otherwise let a cached prior result stand in for
+      # actually executing these classes on this runner.
+      - name: beadsmirror iroh convergence suite (bd+dolt+sidecar together)
+        run: |
+          set -euo pipefail
+          ./gradlew :demo:beadsmirror:test -Piroh.enabled=true -Piroh.relay.url="$RELAY_URL" --rerun \
+            --tests 'civictech.demo.beadsmirror.e2e.IrohConvergenceSuiteTest' \
+            --tests 'civictech.demo.beadsmirror.IrohMirrorTransportTest'
+
+      # Non-vacuity assertion (computenet-cqde's acceptance clause 3): reddens
+      # this job, rather than logging, when either class above reports itself
+      # skipped — e.g. `bd`/`dolt` missing from PATH (the `install-bd-dolt`
+      # step above not having run) or the sidecar binary absent. Same
+      # composite action ci.yml's beadsmirror lanes use for the WS-transport
+      # suites (computenet-7em.5/q4qt); read its header for the three checks
+      # it runs. `report-dir` is left at its default
+      # (demo/beadsmirror/build/test-results/test), which this module does
+      # not override.
+      - name: Assert the iroh convergence suite actually ran (non-vacuous)
+        uses: ./.github/actions/assert-beadsmirror-e2e
+        with:
+          required-classes: >-
+            civictech.demo.beadsmirror.e2e.IrohConvergenceSuiteTest
+            civictech.demo.beadsmirror.IrohMirrorTransportTest
+
+      # computenet-o0m3.4: the ONLY thing in this job that makes the
+      # self-hosting claim non-vacuous. Every peer above still carries a
+      # direct loopback address via ADD_PEER, so both Gradle steps would pass
+      # exactly the same with a dead relay — a green run up to this point
+      # proves nothing about the relay on its own. `kill -0` on the pid this
+      # same job's "Start job-local iroh relay" step captured into
+      # $RELAY_PID (via GITHUB_ENV, so it is the literal pid of the process
+      # that step backgrounded, not a re-derived or reused one) reddens the
+      # job if that process died at any point during the Gradle steps above.
+      - name: Assert the job-local relay is still alive
+        run: |
+          set -euo pipefail
+          if [ -z "${RELAY_PID:-}" ]; then
+            echo "RELAY_PID is unset — the relay-start step did not run or did not export it" >&2
+            exit 1
+          fi
+          if ! kill -0 "$RELAY_PID" 2>/dev/null; then
+            echo "computenet-iroh-relay (pid $RELAY_PID) is not alive after the Gradle test steps" >&2
+            echo "--- stdout ---" >&2
+            cat /tmp/iroh-relay.out >&2 || true
+            echo "--- stderr ---" >&2
+            cat /tmp/iroh-relay.err >&2 || true
+            exit 1
+          fi
+          echo "iroh-sidecar-relay-liveness pid=$RELAY_PID alive=true"
+          kill "$RELAY_PID" 2>/dev/null || true

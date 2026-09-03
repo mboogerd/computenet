@@ -449,9 +449,207 @@ if "merged_into_feature" not in nb._entry({"id": "t"}, False, []):
     failed += 1
     print("FAIL: every entry must carry merged_into_feature for the 5b inspect rule")
 
-total = (merged_cases + len(cases) + len(branch_cases) + entry_resume_cases + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
+# load_advice: advisory only, and it must never fire when the cap is already 1
+# (computenet-2r22). getloadavg is stubbed so the thresholds are deterministic.
+load_cases = [
+    #  load1, cores, cap, expect-advice
+    (1.0,  16, 3, False),   # quiet box: nothing to say
+    (15.9, 16, 3, False),   # just under core count
+    (16.0, 16, 3, True),    # meets core count: go under the cap
+    (204.71, 16, 3, True),  # the measured near miss
+    (204.71, 16, 1, False), # cap already 1: no room to go under
+]
+_real_getloadavg = nb.os.getloadavg
+for load1, cores, cap, want in load_cases:
+    nb.os.getloadavg = lambda l=load1: (l, l, l)
+    try:
+        got_load, got_advice = nb.load_advice(cores, cap)
+    finally:
+        nb.os.getloadavg = _real_getloadavg
+    if got_load != round(load1, 2):
+        failed += 1
+        print(f"FAIL: load_advice must report load1 {load1}, got {got_load}")
+    if (got_advice is not None) is not want:
+        failed += 1
+        print(f"FAIL: load1={load1} cores={cores} cap={cap} advice={got_advice!r}, wanted advice={want}")
+# a 2x-core reading must name ONE agent, not merely 'go under'
+nb.os.getloadavg = lambda: (204.71, 0, 0)
+try:
+    _, strong = nb.load_advice(16, 3)
+finally:
+    nb.os.getloadavg = _real_getloadavg
+if "ONE" not in (strong or ""):
+    failed += 1
+    print(f"FAIL: a >=2x-core load must say dispatch ONE agent, got {strong!r}")
+# a platform without getloadavg must degrade to (None, None), not raise
+for exc in (OSError("nope"), AttributeError("nope")):
+    def _boom(e=exc):
+        raise e
+    nb.os.getloadavg = _boom
+    try:
+        got = nb.load_advice(16, 3)
+    except Exception as e:                       # noqa: BLE001 - that is the bug
+        got = f"raised {e!r}"
+    finally:
+        nb.os.getloadavg = _real_getloadavg
+    if got != (None, None):
+        failed += 1
+        print(f"FAIL: getloadavg raising {exc!r} must give (None, None), got {got!r}")
+load_advice_cases = len(load_cases) * 2 + 3
+
+
+# --- dir_claims(): a DIRECTORY claim is advisory, not a batching change -----
+# A directory claim collides with every sibling beneath it, so batching stops
+# discriminating and the epic is permanently over-serialised — quiet in the
+# dangerous direction, because nothing reports the parallelism given up
+# (computenet-i5zr; computenet-ciz9 claimed ["doc/bench/", "bench/src/"]).
+import os as _os
+import tempfile as _tempfile
+
+_tmp = _tempfile.mkdtemp()
+_os.makedirs(_os.path.join(_tmp, "bench/src"), exist_ok=True)
+open(_os.path.join(_tmp, "bench/src/Foo.kt"), "w").close()
+
+dir_claim_cases = [
+    ({"bench/src"}, ["bench/src"], "a directory that exists is flagged"),
+    ({"bench/src/"}, ["bench/src"], "a trailing slash is normalised first"),
+    ({"./bench/src"}, ["bench/src"], "a leading ./ is normalised first"),
+    ({"bench/src/Foo.kt"}, [], "a real FILE is not flagged"),
+    ({"bench/src/NotYet.kt"}, [],
+     "a path that does not exist is not flagged — a file about to be CREATED"),
+    ({"."}, [], "the whole-repo claim is its own defect, handled elsewhere"),
+    ({"bench/src", "bench/src/Foo.kt"}, ["bench/src"],
+     "only the directory entry of a mixed claim is flagged"),
+]
+for files, expected, what in dir_claim_cases:
+    got = nb.dir_claims(files, root=_tmp)
+    if got != expected:
+        failed += 1
+        print(f"FAIL: {what} — expected {expected}, got {got}")
+
+# It must not change WHICH tasks batch: containment already handled that, and
+# a detector that silently re-batches would be a second, hidden rule.
+_b, _s = nb.plan_batch([(t("a", "bench/src"), False), (t("b", "bench/src/Foo.kt"), False)])
+if ids(_b) != ["a"] or len(_s) != 1:
+    failed += 1
+    print(f"FAIL: dir_claims must not alter batching — got {ids(_b)}, {_s}")
+# The WIRING, not just the function. Deleting main()'s warnings loop left the
+# suite green at 104/104: the deliverable is a message reaching a reader, and
+# `dir_claims` being correct in isolation does not deliver it. Exercised as
+# main() composes it, over both batch and skipped — an over-broad claim reaches
+# `skipped` whenever `bd ready` ordering or capacity puts it there, so scanning
+# batch alone made the report a coin flip.
+_real_dir_claims = nb.dir_claims
+nb.dir_claims = lambda files, root=None: _real_dir_claims(files, root=_tmp)
+
+_cands = [(t("broad", "bench/src"), False), (t("narrow", "bench/src/Foo.kt"), False)]
+_b, _s = nb.plan_batch(_cands)
+_w = nb.dir_claim_warnings(_cands, _b, _s)
+if not any("broad claims the DIRECTORY bench/src" in w for w in _w):
+    failed += 1
+    print(f"FAIL: the batched directory claim must be reported — got {_w}")
+if not any("bd update broad --set-metadata files=" in w for w in _w):
+    failed += 1
+    print(f"FAIL: the warning must carry the command that narrows it — got {_w}")
+
+# reversed, so the over-broad claim LOSES the surface and lands in skipped
+_cands = [(t("narrow", "bench/src/Foo.kt"), False), (t("broad", "bench/src"), False)]
+_b, _s = nb.plan_batch(_cands)
+if "broad" in ids(_b):
+    failed += 1
+    print("FAIL: fixture wrong — 'broad' should have been skipped here")
+_w = nb.dir_claim_warnings(_cands, _b, _s)
+if not any("broad claims the DIRECTORY bench/src" in w for w in _w):
+    failed += 1
+    print(f"FAIL: a SKIPPED directory claim must be reported too — got {_w}")
+
+# a batch with no directory claim says nothing at all
+_cands = [(t("a", "bench/src/Foo.kt"), False)]
+_b, _s = nb.plan_batch(_cands)
+if nb.dir_claim_warnings(_cands, _b, _s):
+    failed += 1
+    print("FAIL: a clean batch must produce no warnings")
+nb.dir_claims = _real_dir_claims
+
+# The root is RESOLVED, not taken from the cwd: a claim entry is
+# repo-root-relative, and a wrong root makes every isdir() false, so the
+# detector reports nothing and reads exactly like "no directory claims"
+# (check-files-claim.sh learned the same lesson loudly; this one fails silent).
+import subprocess as _sp
+_git = _os.path.join(_tmp, "repo")
+_os.makedirs(_os.path.join(_git, "bench/src"), exist_ok=True)
+_os.makedirs(_os.path.join(_git, "sub"), exist_ok=True)
+_sp.run(["git", "init", "-q", _git], check=True)
+_cwd = _os.getcwd()
+try:
+    _os.chdir(_os.path.join(_git, "sub"))
+    if nb.dir_claims({"bench/src"}) != ["bench/src"]:
+        failed += 1
+        print("FAIL: dir_claims must resolve the repo root, not trust the cwd")
+finally:
+    _os.chdir(_cwd)
+
+# --- a unit running OUTSIDE this feature holds its files (computenet-z6q2) --
+# A 5f route 0 unit is a direct child of the epic, so a query about one feature
+# cannot see it. Its claim now seeds the disjointness test.
+elsewhere_cases = 0
+
+def _ecase(expect_batch, expect_reason_part, elsewhere, cands, what):
+    global failed, elsewhere_cases
+    elsewhere_cases += 1
+    b, sk = nb.plan_batch(cands, elsewhere=elsewhere)
+    if ids(b) != expect_batch:
+        failed += 1
+        print(f"FAIL: {what} — expected batch {expect_batch}, got {ids(b)}")
+        return
+    if expect_reason_part is not None:
+        if not any(expect_reason_part in e["reason"] for e in sk):
+            failed += 1
+            print(f"FAIL: {what} — no skip reason containing "
+                  f"{expect_reason_part!r}; got {sk}")
+
+_ecase([], "running outside this feature: computenet-4gzr",
+       [{"id": "computenet-4gzr", "files": ["iroh/src/main/kotlin/X.kt"]}],
+       [(t("o0m3.3", "iroh/src/main/kotlin/X.kt"), False)],
+       "an exact overlap with a route-0 unit is skipped and names it")
+
+_ecase([], "running outside this feature: computenet-4gzr",
+       [{"id": "computenet-4gzr", "files": ["iroh/src/main"]}],
+       [(t("o0m3.3", "iroh/src/main/kotlin/X.kt"), False)],
+       "containment counts: a file inside the running unit's directory claim")
+
+_ecase(["free"], None,
+       [{"id": "computenet-4gzr", "files": ["iroh/src/main/kotlin/X.kt"]}],
+       [(t("free", "wire/src/main/kotlin/Y.kt"), False)],
+       "a disjoint task still batches")
+
+_ecase(["a"], None, [],
+       [(t("a", "wire/src/main/kotlin/Y.kt"), False)],
+       "no units running elsewhere is the old behaviour")
+
+# running_elsewhere() itself: what it includes and what it must not.
+_saved_bd = nb.bd
+nb.bd = lambda *a: [
+    {"id": "feat", "issue_type": "feature", "metadata": {"files": "a.kt"}},
+    {"id": "epic", "issue_type": "epic", "metadata": {"files": "b.kt"}},
+    {"id": "mine", "issue_type": "task", "metadata": {"files": "c.kt"}},
+    {"id": "route0", "issue_type": "task", "metadata": {"files": "d.kt"}},
+    {"id": "noclaim", "issue_type": "task", "metadata": {}},
+]
+_got = nb.running_elsewhere("MacBoo", "feat", {"mine"})
+nb.bd = _saved_bd
+elsewhere_cases += 1
+if [u["id"] for u in _got] != ["route0"]:
+    failed += 1
+    print("FAIL: running_elsewhere must exclude the feature, the epic, this "
+          f"feature's own candidates and claimless units — got {_got}")
+
+dir_claim_cases_n = len(dir_claim_cases) + 7
+
+total = (load_advice_cases + merged_cases + len(cases) + len(branch_cases) + entry_resume_cases + len(sibling_cases) + sibling_sum_cases + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
          + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
          + len(capacity_cases) + len(cap_cases) + capacity_reason_cases
-         + len(claim_shape_cases) + len(claim_error_cases))
+         + len(claim_shape_cases) + len(claim_error_cases) + dir_claim_cases_n
+         + elsewhere_cases)
 print(f"{total - failed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

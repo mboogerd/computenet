@@ -104,7 +104,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `file-friction.sh` | Files a friction item collision-free under the SDLC epic, open and unclaimed |
 | `resumable-epics.sh` | Epics holding a feature left `in_progress` — step 3 ranks these above priority |
 | `bead.sh` | projected `bd show` — the bead's own fields as one object, `dependencies` dropped (57KB -> 7KB); no `.[0]` unwrap |
-| `wait-checks.sh` | THE settle loop, sha-bound over `commits/<sha>/check-runs` (`gh pr checks` is the fallback) — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`QUERY-FAILED` |
+| `wait-checks.sh` | THE settle loop, sha-bound over `commits/<sha>/check-runs` (`gh pr checks` is the fallback) — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`NO-RUN`/`QUERY-FAILED` |
 | `verify-branch-sync.sh` | 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
 | `merge-task.sh` | 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
 | `session-holder.sh` | this session's unique holder token, and `--check <token>` → MINE/LIVE/DEAD/UNKNOWN/FOREIGN; what tells a live sibling from a crash leftover, which `assignee` cannot |
@@ -270,7 +270,8 @@ Monitor({
   description: "work session budget",
   persistent: true,
   command: `S=/absolute/path/to/scratch/slot-start   # LITERAL — see below
-sleep 11700; echo "BUDGET T-90m ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): finish the current feature; start no new one"
+SLOT=18000                                          # the same seconds as below
+sleep $(( SLOT - 6300 )); echo "BUDGET T-90m ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): finish the current feature; start no new one"
 sleep 2700;  echo "BUDGET T-45m ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): no new dispatches; review and merge what is in flight"
 sleep 2700;  echo "BUDGET EXPIRED ($(( ($(date -u +%s) - $(cat "$S" 2>/dev/null || echo 0)) / 60 ))m REAL elapsed): go to Finalize now"`
 })
@@ -303,8 +304,12 @@ shell variable and nothing exports it across calls, let alone across a
 restart, so **note the directory's absolute path** here in as many words. A
 resume reads the *previous* session's dir by that literal path.
 
-Fires at 3h15m / 4h / 4h45m of a 5h slot (the last 15m is Finalize); scale
-proportionally if the routine names a different slot. **Note the monitor's
+Fires at 3h15m / 4h / 4h45m of a 5h slot — the slot END minus 105m/60m/15m,
+the last 15m being Finalize, so a rung is work time left, not wall clock left.
+The first sleep is DERIVED from `SLOT`; drop it if it is already ≤0. The three
+offsets are absolute, never fractions of the slot — T-90m names 90 minutes of
+work, and a shorter slot does not make a feature shorter. `resume.md` re-arms
+from the same offsets, and `slot-elapsed.sh` reads its rung from them. **Note the monitor's
 task id** — `TaskStop` it when you reach Finalize. 
 > **`persistent: true` is load-bearing. Do NOT add `timeout_ms`.**
 > Verified by probe 2026-08-13: `persistent` genuinely overrides the
@@ -350,40 +355,52 @@ The signature is **two or more budget notifications arriving together**, or
 any budget notification arriving with "stream ended" right behind it.
 
 **On ANY budget notification — not only at budget-gated decisions — recompute
-elapsed from `$SCRATCH/slot-start` before acting on it, and act on the number
-rather than on which tier fired — and recompute it anyway at every dispatch
-and at the moment you READ any
-completion notification, notification or not. A notification's `duration_ms`
-is the agent's own runtime, NOT the slot's wall clock: one reporting 7m15s
-arrived after 148 minutes of wall clock, and a session trusting it ran 54m
-over slot (computenet-vzhs).** After a second host suspension the
-monitor went permanently silent and no tier ever fired; the slot had expired
-~20 minutes before an accidental check noticed (computenet-6664). A rule keyed
-on a notification cannot see the case where none arrives; the subtraction is
-one line and costs nothing:
+elapsed before acting on it, and act on the number rather than on which tier
+fired — and recompute it anyway at every dispatch and at the moment you READ
+any completion notification, notification or not. A notification's
+`duration_ms` is the agent's own runtime, NOT the slot's wall clock: one
+reporting 7m15s arrived after 148 minutes of wall clock, and a session trusting
+it ran 54m over slot (computenet-vzhs).** After a second host suspension the
+monitor went permanently silent and no tier fired; the slot had expired ~20
+minutes before an accidental check noticed (computenet-6664). A rule keyed on a
+notification cannot see the case where none arrives, and the reading is one
+command:
 
 ```bash
-echo $(( ($(date -u +%s) - $(cat "$SCRATCH/slot-start")) / 60 ))m elapsed \
-     of $(( $(cat "$SCRATCH/slot-seconds") / 60 ))m
+.claude/skills/work/scripts/slot-elapsed.sh "$SCRATCH"
+# 144m of 300m elapsed, 156m left — rung: OPEN — new units allowed — previous
+# reading 50m ago — 50m of wall clock passed between turns
 ```
+
+**Run it as the FIRST tool call of any turn that decides whether to start a new
+unit** — dispatch, claim, or 5f route selection — not merely "at budget-gated
+decisions", which reads as satisfied by a reading several turns old. Its last
+field is the age of your previous reading: a true reading decays unperceived —
+a turn's own latency is invisible from inside, and the turn after a 50-minute
+stall looks identical to the turn after a 30-second one. Measured on
+MacBoo 2026-08-29/30 under `computenet-j2x`: honest readings of 117m and 144m,
+real 195m — ~78m and ~50m of between-turn wall clock each perceived as ~2m
+across ~5 turns of ship-gate and bookkeeping, enough to carry the session over
+the T-90m rung as it reasoned about which side of it it was on
+(computenet-1lbs). The decay is LARGEST IN BUSY SESSIONS, growing with how much
+subagent output you have digested — where the budget matters most. The rung the
+script names binds, whatever the last tier fired — and the two can no longer
+disagree, both being the slot end minus 105m/60m/15m (computenet-v8kg). If
+they ever do, take the MORE CAUTIOUS rung and file it: the encodings have
+drifted, and this line used to hand that window to whichever permitted more.
 
 **Never WRITE an elapsed figure you did not compute in that same turn.** The
 failure mode is drift, not disagreement: a session recomputes correctly five
-times and then keeps reporting numbers extrapolated from the last real
-reading. Estimating produces no symptom — the session feels identical either
-way — and one that ships every 30 minutes has nothing to make it notice. On
-2026-08-27 a session reported "81m", "88m", "98m" while the real figure was
-195m of 300m: ~100 minutes low for two hours, at which point it believed it
-had a whole wind-down stage in hand that it did not (computenet-hs90,
-recurrence of computenet-776). If you have no reading this turn, write "no
-elapsed reading this turn" — an absent number is visible, a plausible wrong
-one is not.
+times, then keeps extrapolating from the last real reading. Estimating produces
+no symptom. On 2026-08-27 one reported "81m", "88m", "98m" against a real 195m
+of 300m, believing it had a whole wind-down stage in hand (computenet-hs90,
+recurrence of computenet-776). No reading this turn → write "no elapsed reading
+this turn": an absent number is visible, a plausible wrong one is not.
 
-That is one subtraction, and it is what turned a confusing batch into a
-correct diagnosis the one time this happened. A session that instead trusted
-the tiers in order would "finish the current feature", then "stop
-dispatching", then "finalize" in three consecutive turns with no time between
-them.
+That one reading is what turned a confusing batch into a correct diagnosis the
+one time this happened. A session trusting the tiers in order would instead
+"finish the current feature", "stop dispatching" and "finalize" in three
+consecutive turns with no time between them.
 
 Three standing disciplines:
 
@@ -416,10 +433,13 @@ Three standing disciplines:
   red required check on its own line above the verdict; that line is a
   backstop, not a substitute for reading the table.
 
-  **A cold start normally takes TWO invocations**: the ~9m20s window is sized
-  to the 600000 ms foreground cap and `build-test-fast` measures 8m56s–13m25s,
-  so waiting from the run's start times out on a healthy PR by construction
-  (computenet-hil5). On exhaustion the script names each pending check with
+  **A cold start normally takes TWO invocations**: the window is a ~500s
+  wall-clock budget (~8m10s of waiting, ~23 rounds) held under the 600000 ms
+  foreground cap, and `build-test-fast` measures 8m56s–13m25s, so waiting from
+  the run's start times out on a healthy PR by construction (computenet-hil5).
+  Sizing the window AT the cap is what got the call auto-backgrounded twice
+  (computenet-tl8q); a round count cannot bound wall clock, so the script now
+  stops on elapsed time and always returns a verdict. On exhaustion the script names each pending check with
   its age and prints `ORDINARY` (re-run it) or `STUCK`; only `STUCK` is a
   defect.
 
@@ -449,7 +469,9 @@ Three standing disciplines:
     Marking a PR ready is the GraphQL `markPullRequestReadyForReview` with no
     REST equivalent, so retrying is the only option there.
 
-  It requires all six required rows PRESENT and none pending, keeps the
+  It requires every required row PRESENT and none pending — the set read
+  from the main ruleset each run, not a literal, because a literal can only
+  catch the absence of a check it already knows about (computenet-3qdo) — keeps the
   three non-settled states apart (query failed / not yet reporting /
   unsettled — one state to any test on `$?`, and two of them look green),
   and ends `SETTLED` (exit 0), `TIMEOUT-PENDING` (4) or `QUERY-FAILED`
@@ -467,8 +489,9 @@ Three standing disciplines:
   echo "<Monitor|shell|loop> <id or pid> <what it waits for>" >> "$SCRATCH/jobs"
   ```
 - **Between notifications you have no sense of elapsed time.** Run
-  `date -u +%H:%M` before any budget-gated decision — one session misread
-  1h31m as ~3h20m and nearly idled a third of its slot (computenet-776).
+  `slot-elapsed.sh` (above) before any budget-gated decision — one session
+  misread 1h31m as ~3h20m and nearly idled a third of its slot
+  (computenet-776).
 
 ### Resuming after the host process died
 
@@ -1354,7 +1377,16 @@ Otherwise ask for the next batch:
 ```
 
 Returns `{batch: [{id, model, files, worktree, branch, resumed}], skipped,
-verdict, parked, capacity}`. The batch is what can safely run at once:
+warnings, running_elsewhere, verdict, parked, capacity}`.
+`running_elsewhere` is `{id, files}` per unit in flight outside this feature
+THAT CARRIES A FILES CLAIM (epics and claimless ones hold nothing, so are not
+listed) — a 5f route 0 direct child above all, invisible to a one-feature query. Their claims hold their files, so a task overlapping one is skipped with
+that unit named. Route 0's disjointness test is a one-time admission check;
+this is what re-applies it on every later batch, instead of your memory of a
+dispatch three hours ago (computenet-z6q2). `warnings` names any claim that is a
+DIRECTORY — it collides with everything beneath it, so the epic batches more
+serially than it needs to; narrow that bead's `files` before dispatching
+(computenet-i5zr). The batch is what can safely run at once:
 resumables first (nothing else ever picks them back up), then ready tasks
 whose `files` claims don't overlap the batch; a task with no claim comes back
 alone. That is correct scheduling either way — but a claimless task still
@@ -1376,8 +1408,28 @@ it holds for a batch: load 338-724 on 16 cores, three gates, rotating
 :demo:beadsmirror timeouts — computenet-qmjd). In a batch of two or more, at
 most ONE dispatch keeps the repo-wide gate; every other prompt scopes the
 gate to the modules its claim touches and says where the wide evidence comes
-from instead (the feature PR's six required checks). Set `${gateScope}`
+from instead (the feature PR's required checks). Set `${gateScope}`
 accordingly per dispatch.
+
+**Scoping the gate is NOT sufficient, so read `max_parallel` as an upper bound
+you may go under, not a target to fill.** Scoping the task list does not scope
+the WORKERS: two scoped Gradle runs still share one daemon pool, one build
+cache and one `buildLogic.lock`, and each spawns its own test-worker fan-out —
+and the cap's own arms were themselves scoped `:wire:test` runs, so scoping
+buys no headroom the cap has not already spent (`capacity_limit()`). Scope
+anyway — it removes the repo-wide multiplier the paragraph above measured; it
+simply creates no slack underneath the cap.
+Measured 2026-08-30 on 16 cores, cap 3, two implementers, file-disjoint, BOTH
+gates scoped: load 204.71 / 92.73 / 44.00, a 1-minute figure ~13x core count
+(computenet-2r22, recurrence of qmjd). Nothing timed out — the margin was luck.
+`next-batch.py` now reports `capacity.load1` and `capacity.advice`, what the
+box is doing at the moment you dispatch; that is advisory and never lowers the
+cap, because load lags in both directions and must not silently serialize a
+slot (`capacity_limit()` says why it is not the sizing instrument). **Go under
+the cap deliberately when any live agent's verdict turns on a WALL-CLOCK
+AWAIT** — multi-JVM crash-restart, SSE/socket, anything in the `:inspect` hang
+family — because there a load-induced timeout is not merely slow, it is
+indistinguishable from the result being measured and can invert a verdict.
 
 An entry with empty `model` → dispatch at `sonnet`, comment on the task, log
 friction. **Empty batch** → read `verdict`, don't infer:
@@ -1401,6 +1453,10 @@ at all (computenet-38ze). Confirm before parking:
 
 Any `READY` line and the batch was not empty: dispatch that task by hand and
 do not park. Only an all-`BLOCKED` result earns the `parked_at` route.
+**Except when its `skipped` reason names a unit running outside this feature**
+— that task is `READY` in bd's sense and its files are held by something live,
+so dispatching it by hand walks straight into computenet-z6q2. Check that unit
+is still alive first; if it is, this task waits.
 
 `parked-residue` exists because parking a finished feature over follow-up
 questions *its own implementation filed* strands CI-green work with no path
@@ -1727,10 +1783,20 @@ either widen the claim or satisfy yourself the file is read-only. This
 applies wherever you author a bead, not only here: 5c's red-check task, 5e's
 residuals, step 7's friction items.
 
-**It is blind to anything that is not a path** — a bracketed requirement id
-(`[24-TMAP-03]`), a marker, a type name — and passes such a bead CLEAN
-(computenet-hws5, then computenet-vjrs). Resolve each one by hand before
-dispatching: `git grep -l -F '[THE-ID]'` lists the files that *cite* it,
+**RUN IT. It is not the same check as the invariant grep above, and neither
+subsumes the other.** This reads the bead's TEXT for files the claim omits;
+that reasons from the CODE about files the text never names. On computenet-t446
+the orchestrator ran the symbol grep and not this — the newer, more elaborate
+procedure, and running it felt like having done the diligence. It widened the
+claim 19 files to 37 and still missed two the bead names in its own words,
+which this catches in a second (computenet-9src). Both, this one first: it is
+cheap and mechanical.
+
+**It is blind to most things that are not paths** — a bracketed requirement id
+(`[24-TMAP-03]`), a marker, a bare type name — and passes such a bead CLEAN
+(computenet-hws5, then computenet-vjrs). A type named WITH A LINE NUMBER
+(`FilePeerKeyStoreTest:39`) is the exception: that is a pointer at a site, so
+it is resolved and checked. Resolve the rest by hand before dispatching: `git grep -l -F '[THE-ID]'` lists the files that *cite* it,
 which is usually not where the artifact lives; the pinning test's KDoc says
 where ("which is `MapCellModel`'s file KDoc"). Widen the claim to that file.
 
@@ -1973,7 +2039,10 @@ Agent({
   description: "Review feature <id>",
   model: "opus",
   run_in_background: true,
-  prompt: `Read (with the Read tool — cat truncates it to a ~2KB preview) .claude/skills/work/references/review-feature.md — from
+  prompt: `Read (with the Read tool — cat truncates it to a ~2KB preview) .claude/skills/work/references/review-feature.md — and
+PAGE TO THE END: it exceeds one Read call, and the rules that decide how you
+REPORT (§8's literal READY/DRAFT token, §7's residual filing) are past the cut
+(computenet-98cu) — from
 ${worktree}, never the main checkout, whose local branch is stale — and follow
 it to review feature ${id} against its own acceptance criteria.
 Worktree: ${worktree}  ·  Branch: ${branch}  ·  PR: ${pr}
@@ -2112,7 +2181,7 @@ and shipping one is a contradiction merged into the file every session
 executes. Any of them, or any doubt → second tier.
 
 **The cost this tier exists to avoid is real and compounds.** Every merge of
-`origin/main` pushes a new head, and every new head restarts all six required
+`origin/main` pushes a new head, and every new head restarts all the required
 checks — **9–12 minutes**, governed by `build-test-fast` (measured across four
 runs, computenet-678u; this said ~4 minutes until then) — which a sibling merge
 can invalidate before it finishes, so the churn is superlinear in the number of concurrent same-file
@@ -2138,7 +2207,12 @@ collision; this is the one move that avoids it.
 
 Red required check → red-check-attribution.md; pending → wait with
 `.claude/skills/work/scripts/wait-checks.sh <pr-url>` (step 2's rules: classify on output, never
-`$?`; computenet-luhx, computenet-15it, computenet-1zhu). A verdict
+`$?`; computenet-luhx, computenet-15it, computenet-1zhu). **`NO-RUN` (exit 5)
+is never waited out**: GitHub started no workflow run for this head, so no
+amount of polling produces one and any green on the PR belongs to a DIFFERENT
+head — push again (an empty commit is enough; `ci.yml` has no
+`workflow_dispatch`, so there is nothing to re-run), and never ship on it
+(computenet-a5in). A verdict
 carrying a **§6 hand-back** is yours to complete, and it is the **normal**
 path, not an exception: review-feature.md §6 assigns the merge to you
 outright, because the classifier refuses reviewers `git merge`

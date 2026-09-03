@@ -17,6 +17,7 @@ import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.DespawnStep
 import civictech.concord.schema.DisconnectStep
 import civictech.concord.schema.DriveContextlessStep
+import civictech.concord.schema.DriveStampedStep
 import civictech.concord.schema.EffectCount
 import civictech.concord.schema.EmissionCount
 import civictech.concord.schema.FinalView
@@ -946,6 +947,30 @@ class ChecksTest {
                     DriveContextlessStep(on = "src", op = "add", value = s("ghost")),
                 ),
             ),
+            // computenet-8ohq — `drive-stamped` is the ADMITTED external drive, the
+            // opposite case from `drive-contextless`: the delivery IS admitted, at
+            // the sink as much as anywhere else in the cone, and would feed it an
+            // element no `add` names — the vacuous pass again. Unlike the
+            // contextless arm, this one refuses at the sink itself too (rather than
+            // resolving there), which is why DUR-STAMPED-01 names its own keys
+            // instead of relying on this derivation. Both shapes below are
+            // `computenet-m0e6`'s coverage of that arm's refusal side.
+            "a drive-stamped at the sink itself" to scenario(
+                cells = listOf(jsrc, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(
+                    apply("src", "add", s("k1")),
+                    DriveStampedStep(on = "sink", actor = "a1", op = "add", value = s("ghost")),
+                ),
+            ),
+            "a drive-stamped into an upstream rather than the sink itself" to scenario(
+                cells = listOf(jsrc, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(
+                    apply("src", "add", s("k1")),
+                    DriveStampedStep(on = "src", actor = "a1", op = "add", value = s("ghost")),
+                ),
+            ),
         )
         // Collected rather than fail-fast on purpose: when a refusal rule is removed
         // this names *every* shape that starts resolving again, which is what makes
@@ -1070,6 +1095,20 @@ class ChecksTest {
             ),
         )
         derived(contextlessDriveOutsideTheCone) shouldBe setOf("k1")
+
+        // computenet-8ohq's resolving neighbour: a drive-stamped on a cell with no
+        // path to the sink cannot feed it at all, so it is ignored rather than
+        // refused — the DriveStampedStep arm refuses by cone membership, not by
+        // breadth, exactly like its contextless sibling above.
+        val stampedDriveOutsideTheCone = scenario(
+            cells = listOf(jsrc, esink, cell("other", "set-source")),
+            links = listOf(link("src", "sink")),
+            script = listOf(
+                apply("src", "add", s("k1")),
+                DriveStampedStep(on = "other", actor = "a1", op = "add", value = s("ghost")),
+            ),
+        )
+        derived(stampedDriveOutsideTheCone) shouldBe setOf("k1")
     }
 
     // --- wave-plane-unchanged / pages-equal-view (V1C-CONCORD) ---------------

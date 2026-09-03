@@ -4,6 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.Propagate
+import civictech.cell.control.absorbAck
 import civictech.cell.Timestamp
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
@@ -458,6 +459,290 @@ class FrontierGatedEmissionTest {
         // reconciled to nothing, and absorb-acked onward — never left pending
         join.bufferedWaves shouldBe 0
         seen.shouldBeEmpty()
+    }
+
+    // -------------------------------------- disjoint-wave arms (G-13/G-40)
+
+    /**
+     * The item-kind split (computenet-23bf): both inlets descend from one root,
+     * so the topology reads as [WaveGate]'s shared-source diamond, but each arm
+     * carries a **disjoint subset** of the root's waves — a left-kind element is
+     * a real delta on the left arm and nothing at all on the right, and the
+     * mirror image for a right-kind element.
+     *
+     * The wave that an arm structurally cannot deliver is retired by that arm's
+     * CP-A3 absorb-ack ([civictech.cell.control.absorbAck]) — but the ack is
+     * **edge-local**. It is minted by the absorbing operator onto its own outlet
+     * links and **no plain cell relays it**: a `FlatMapSetCell`/`FilterCell` hop
+     * has no [civictech.cell.protocol.Protocols.Progress] handler, so an ack
+     * arriving on its inlet neither advances anything nor is re-emitted. Only a
+     * cell that installs a frontier ([WaveGate], `WaveFrontier`,
+     * `CoalescingCombineCell`, `AlignedCompositeCell`) consumes one.
+     *
+     * So the depth of the silent arm decides everything, and it is the *depth*,
+     * not the disjointness, that breaks the gate:
+     *
+     *  - **one hop** (the absorber links straight into the gated inlet): the ack
+     *    lands on the expected edge, the wave completes, the gate is correct —
+     *    this is `a gated cell settles a wave one arm absorbs entirely` above;
+     *  - **two or more hops** (an absorber with a pure hop below it, which is the
+     *    AGO1 relation leg's shape): the ack dies at the hop, the expected edge
+     *    never settles for that wave, and the wave is held until the arm delivers
+     *    a *later* wave — so mid-stream output LAGS, and at rest, when the final
+     *    wave is one the arm never carries, output is WITHHELD PERMANENTLY.
+     *
+     * That is the answer to the discriminating question this test exists for:
+     * **both, and which one you see depends only on whether a later wave follows**.
+     */
+    private inner class DisjointArmRig(hops: Int) {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val source = SetSource()
+        val join = SemiJoinCell<String, String, String>(
+            leftKey = { it.removePrefix("L") },
+            rightKey = { it.removePrefix("R") },
+            negated = false,
+            emitOnFrontier = true,
+        )
+        val seen = mutableListOf<Seen<SetDelta<String>>>()
+        private val tagSource = UUID.randomUUID()
+
+        /**
+         * One arm: a [FilterCell] that admits only its own item [kind] — and
+         * absorb-acks every wave carrying the other kind — followed by
+         * `hops - 1` pure identity [FlatMapSetCell] hops. That is the AGO1
+         * relation leg's shape (`extractedItems -> extractedRelations ->
+         * relationCandidates -> nonSelfRelations`) reduced to its essentials.
+         */
+        private fun arm(kind: String, hops: Int) {
+            val head = FilterCell<String> { it.startsWith(kind) }
+            host.managementInlet.call.spawn(head)
+
+            @Suppress("UNCHECKED_CAST")
+            source.outlet.linkTo(head.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+            var tail: FanOutlet<Propagate<SetDelta<String>>> = head.outlet
+            repeat(hops - 1) {
+                val hop = FlatMapSetCell<String, String>(f = { listOf(it) })
+                host.managementInlet.call.spawn(hop)
+
+                @Suppress("UNCHECKED_CAST")
+                tail.linkTo(hop.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+                tail = hop.outlet
+            }
+            val gatedInlet = if (kind == "L") join.left else join.right
+
+            @Suppress("UNCHECKED_CAST")
+            tail.linkTo(gatedInlet as LinkFrom<Propagate<SetDelta<String>>>)
+        }
+
+        init {
+            val observer = SetObserver(setApi, seen)
+            listOf(source, join, observer).forEach { host.managementInlet.call.spawn(it) }
+            arm("L", hops)
+            arm("R", hops)
+            join.outlet.subscribe(Use.fixed(observer.inlet.call, PortRef.generate()))
+            controller.runToIdle()
+        }
+
+        fun send(counter: Long, element: String) {
+            source.send(SetDelta(adds = mapOf(element to setOf(Timestamp(tagSource, counter)))))
+            controller.runToIdle()
+        }
+    }
+
+    @Test
+    fun `control - disjoint-wave arms one hop deep settle, because the absorb-ack lands on the gated edge`() {
+        val rig = DisjointArmRig(hops = 1)
+
+        rig.send(1L, "L1") // left-kind wave: the right arm absorbs and acks
+        rig.join.bufferedWaves shouldBe 0
+        rig.seen.shouldBeEmpty() // L1 is live but unmatched, so the semijoin holds it out
+
+        rig.send(2L, "R1") // right-kind wave: the left arm absorbs and acks
+        rig.join.bufferedWaves shouldBe 0
+        rig.seen.single().delta.adds.keys shouldBe setOf("L1")
+    }
+
+    @Test
+    fun `disjoint-wave arms TWO hops deep withhold output at rest - the absorb-ack dies at the intervening hop`() {
+        val rig = DisjointArmRig(hops = 2)
+
+        rig.send(1L, "L1")
+        withClue("the right arm's ack died at its identity hop, so wave 1 never completes") {
+            rig.join.bufferedWaves shouldBe 1
+        }
+
+        rig.send(2L, "R1")
+        withClue("WITHHELD AT REST: L1 is matched and live, and nothing has been emitted") {
+            // wave 1 did retire here — the right arm's real wave-2 delta advanced
+            // its edge watermark past wave 1 (monotone `max`), which is the third
+            // advance mechanism standing in for the ack that died. But it retired
+            // BEFORE wave 2's right fold was applied, so it reconciled L1 against
+            // an empty right side and emitted nothing; and wave 2 itself, the wave
+            // that actually makes L1 enter, has no later left wave to release it.
+            rig.seen.shouldBeEmpty()
+            rig.join.bufferedWaves shouldBe 1
+        }
+
+        // ...and the withholding is released only by a LATER wave on the stalled
+        // arm (monotone `max` on the per-edge watermark), never by quiescence:
+        // this is the LAG half of the same mechanism.
+        rig.send(3L, "L3")
+        withClue("waves 1 and 2 flush once the left arm delivers wave 3") {
+            rig.seen.single().delta.adds.keys shouldBe setOf("L1")
+            rig.seen.single().timestamp.counter shouldBe 2L
+        }
+        withClue("wave 3 is now the one held: the right arm never carries it") {
+            rig.join.bufferedWaves shouldBe 1
+        }
+    }
+
+    // ------------------------------------- CombineLatestCell disjoint-wave arms
+    // (computenet-u0oa: F-15's declared "not measured" gap — CombineLatestCell
+    // shares WaveGate verbatim with SemiJoinCell (see WaveGate's own KDoc), so
+    // this is [DisjointArmRig] above with the gated cell and wire type swapped
+    // and nothing else — the same arm shape (a kind-filtering head that
+    // absorb-acks every other wave, CP-A3, followed by `hops - 1` pure identity
+    // hops), so a green one-hop control here pins the mechanism to the same ack
+    // non-relay, not to SemiJoinCell specifically.)
+
+    /**
+     * The `MapDelta` analogue of `DisjointArmRig`'s `FilterCell` head: admits
+     * only entries whose key carries this arm's [kind] prefix, strips the
+     * prefix (so both arms address the same combine key), and — like
+     * [FilterCell] — CP-A3 absorb-acks a wave that carries none of its kind
+     * instead of leaving it un-acknowledged.
+     */
+    private class MapFilterHead(
+        clazz: Class<Propagate<MapDelta<String, Int>>>,
+        private val kind: String,
+        override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ) : Cell {
+        val inlet = registerPort("inlet", FanInlet(clazz))
+        val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<String, Int>>>())
+
+        init {
+            inlet.onEach { delta ->
+                val puts = delta.puts.filterKeys { it.startsWith(kind) }.mapKeys { (k, _) -> k.removePrefix(kind) }
+                val removals = delta.removals.filter { it.startsWith(kind) }.map { it.removePrefix(kind) }.toSet()
+                if (puts.isEmpty() && removals.isEmpty()) {
+                    outlet.absorbAck() // no entry of this arm's kind in this wave — swallowed, CP-A3
+                } else {
+                    outlet.call.propagate(MapDelta(puts, removals))
+                }
+            }
+        }
+    }
+
+    /** [DisjointArmRig], but the gated cell is `CombineLatestCell` and the wire type is `MapDelta`. */
+    private inner class CombineDisjointArmRig(hops: Int) {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val source = MapSource()
+        val combine = CombineLatestCell<String, Int, Int, Int>(emitOnFrontier = true) { _, v, w ->
+            if (v == null || w == null) NULL_EXTENSION else v + w
+        }
+        val seen = mutableListOf<Seen<MapDelta<String, Int>>>()
+
+        /** One arm: a [MapFilterHead] admitting only [kind], followed by `hops - 1` pure identity [MapArm] hops. */
+        private fun arm(kind: String, hops: Int) {
+            val head = MapFilterHead(mapApi, kind)
+            host.managementInlet.call.spawn(head)
+
+            @Suppress("UNCHECKED_CAST")
+            source.outlet.linkTo(head.inlet as LinkFrom<Propagate<MapDelta<String, Int>>>)
+            var tail: FanOutlet<Propagate<MapDelta<String, Int>>> = head.outlet
+            repeat(hops - 1) {
+                val hop = MapArm(mapApi) { it } // pure identity hop: installs no Protocols.Progress handler
+                host.managementInlet.call.spawn(hop)
+
+                @Suppress("UNCHECKED_CAST")
+                tail.linkTo(hop.inlet as LinkFrom<Propagate<MapDelta<String, Int>>>)
+                tail = hop.outlet
+            }
+            val gatedInlet = if (kind == "L") combine.left else combine.right
+
+            @Suppress("UNCHECKED_CAST")
+            tail.linkTo(gatedInlet as LinkFrom<Propagate<MapDelta<String, Int>>>)
+        }
+
+        init {
+            val observer = MapObserver(mapApi, seen)
+            listOf(source, combine, observer).forEach { host.managementInlet.call.spawn(it) }
+            arm("L", hops)
+            arm("R", hops)
+            combine.outlet.subscribe(Use.fixed(observer.inlet.call, PortRef.generate()))
+            controller.runToIdle()
+        }
+
+        /** [key] rides unprefixed once the arm's head strips its kind marker; [element] is `"<kind><key>"`. */
+        fun send(element: String, value: Int) {
+            source.send(MapDelta(puts = mapOf(element to value), removals = emptySet()))
+            controller.runToIdle()
+        }
+    }
+
+    @Test
+    fun `control - CombineLatestCell disjoint-wave arms one hop deep settle, because the absorb-ack lands on the gated edge`() {
+        val rig = CombineDisjointArmRig(hops = 1)
+
+        rig.send("L1", 1) // left-kind wave: the right arm absorbs and acks directly onto combine.right
+        withClue("the ack landed on the expected edge, so the wave settled and the genuinely one-sided key null-extends") {
+            rig.combine.bufferedWaves shouldBe 0
+            rig.seen.single().delta.puts["1"] shouldBe NULL_EXTENSION
+        }
+
+        rig.send("R1", 10) // right-kind wave: the left arm absorbs and acks directly onto combine.left
+        withClue("both sides of key \"1\" are now known and reconciled together, in the wave that completed them") {
+            rig.combine.bufferedWaves shouldBe 0
+            rig.seen.last().delta.puts["1"] shouldBe 11
+        }
+    }
+
+    @Test
+    fun `CombineLatestCell disjoint-wave arms TWO hops deep emit a null-extension that is never corrected at rest - the absorb-ack dies at the intervening hop`() {
+        val rig = CombineDisjointArmRig(hops = 2)
+
+        rig.send("L1", 1)
+        withClue("the right arm's ack died at its identity hop, so wave 1's right edge never settled on its own") {
+            rig.combine.bufferedWaves shouldBe 1
+            rig.seen.shouldBeEmpty()
+        }
+
+        rig.send("R1", 10)
+        withClue(
+            "wave 1 DID retire here — the right arm's real wave-2 delta advanced its edge watermark past wave 1 " +
+                "(monotone max), the third advance mechanism standing in for the lost ack. But it retired BEFORE " +
+                "wave 2's own right fold applied, so it reconciled key \"1\" against an empty right side and " +
+                "emitted a null-extension that a shallower arm would never have shown: unlike SemiJoinCell's " +
+                "silent withholding, this is a WRONG value on the wire, and nothing retracts it — MapDiffPublisher " +
+                "only re-emits on the NEXT change to the key, which needs wave 2 to flush too.",
+        ) {
+            rig.seen.single().delta.puts["1"] shouldBe NULL_EXTENSION
+            rig.seen.single().timestamp.counter shouldBe 1L
+            // wave 2 stalls in turn: the left arm's ack for it died at its own hop,
+            // and no later left wave has arrived yet to advance that watermark
+            rig.combine.bufferedWaves shouldBe 1
+        }
+
+        // AT REST is exactly here: if nothing else ever arrives, key "1" stays
+        // published as -1 forever, even though both its real values (1 and 10)
+        // are sitting settled in the cell's own leftMap/rightMap — the discharge
+        // this gate exists to prevent, reintroduced by the hop depth it can't see.
+        withClue("WITHHELD/WRONG AT REST: the settled combine (11) is computed and buffered, never delivered") {
+            rig.seen.single().delta.puts["1"] shouldBe NULL_EXTENSION
+        }
+
+        // ...and it is released only by a LATER wave on the stalled (left) arm,
+        // never by quiescence — the LAG half of the same mechanism.
+        rig.send("L2", 100)
+        withClue("wave 2 flushes once the left arm delivers wave 3, correcting key \"1\" to its settled value") {
+            rig.seen.last().delta.puts["1"] shouldBe 11
+            rig.seen.last().timestamp.counter shouldBe 2L
+        }
+        withClue("wave 3 is now the one held: the right arm never carries it") {
+            rig.combine.bufferedWaves shouldBe 1
+        }
     }
 
     private companion object {

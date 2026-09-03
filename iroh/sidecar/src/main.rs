@@ -7,23 +7,28 @@
 //! described in `PROTOCOL.md`; nothing about the protocol is decided here.
 //!
 //! ```text
-//! computenet-iroh-sidecar [--offline] [--secret-key <64 hex chars>]
+//! computenet-iroh-sidecar [--offline] [--relay-url <url>]
+//!                         [--secret-key <64 hex chars>]
 //!                         [--bind-addr <ip:port>]... [--socket-port <port>]
 //! ```
 //!
 //! * `--offline` — resolve peers only from `ADD_PEER`, never a relay or DNS.
 //!   Bind loopback only. This is what makes a test run network-free.
+//! * `--relay-url` — use exactly this relay and no address lookup service, in
+//!   place of number 0's public relays and DNS/pkarr discovery. Mutually
+//!   exclusive with `--offline`.
 //! * `--secret-key` — the ed25519 secret key as 32 bytes of hex. Omitted, a
 //!   fresh key is generated, so the endpoint id changes every run.
 //! * `--bind-addr` — a UDP socket for the iroh endpoint; repeatable.
 //! * `--socket-port` — the loopback TCP port. `0` (the default) is ephemeral.
 
-use std::{io::Write, net::SocketAddr, process::ExitCode};
+use std::{io::Write, net::SocketAddr, process::ExitCode, str::FromStr};
 
 use computenet_iroh_sidecar::{
     handshake_line, protocol::decode_hex, serve, LookupMode, SecretKey, ServeOutcome,
     SidecarConfig, SidecarEndpoint,
 };
+use iroh::RelayUrl;
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -44,7 +49,10 @@ async fn run() -> Result<(), String> {
         SidecarConfig::offline_loopback()
     } else {
         SidecarConfig {
-            lookup: LookupMode::N0,
+            lookup: match args.relay_url {
+                Some(url) => LookupMode::Relay(url),
+                None => LookupMode::N0,
+            },
             ..Default::default()
         }
     };
@@ -91,8 +99,10 @@ async fn run() -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug)]
 struct Args {
     offline: bool,
+    relay_url: Option<RelayUrl>,
     secret_key: Option<SecretKey>,
     bind_addrs: Vec<SocketAddr>,
     socket_port: u16,
@@ -102,6 +112,7 @@ impl Args {
     fn parse(args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut parsed = Args {
             offline: false,
+            relay_url: None,
             secret_key: None,
             bind_addrs: Vec::new(),
             socket_port: 0,
@@ -110,6 +121,15 @@ impl Args {
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--offline" => parsed.offline = true,
+                "--relay-url" => {
+                    let raw = args.next().ok_or("--relay-url needs a value")?;
+                    // Parsed here rather than at bind time, so a typo fails
+                    // before any socket is bound or any handshake line written.
+                    parsed.relay_url = Some(
+                        RelayUrl::from_str(&raw)
+                            .map_err(|e| format!("--relay-url {raw} is not a URL: {e}"))?,
+                    );
+                }
                 "--secret-key" => {
                     let hex = args.next().ok_or("--secret-key needs a value")?;
                     let bytes = decode_hex(&hex).ok_or("--secret-key is not hex")?;
@@ -135,6 +155,70 @@ impl Args {
                 other => return Err(format!("unknown argument {other}")),
             }
         }
+        if parsed.offline && parsed.relay_url.is_some() {
+            return Err(
+                "--offline and --relay-url cannot be combined: --offline uses no relay at all"
+                    .to_string(),
+            );
+        }
         Ok(parsed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Args, String> {
+        Args::parse(args.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn relay_url_is_accepted_and_parsed() {
+        let args = parse(&["--relay-url", "https://relay.example.org"]).expect("accepted");
+        assert_eq!(
+            args.relay_url.map(|u| u.to_string()),
+            Some("https://relay.example.org/".to_string())
+        );
+        assert!(!args.offline);
+    }
+
+    #[test]
+    fn without_the_flag_the_relay_url_is_absent() {
+        let args = parse(&[]).expect("accepted");
+        assert_eq!(args.relay_url, None);
+        assert!(!args.offline);
+    }
+
+    #[test]
+    fn offline_combined_with_relay_url_is_refused_naming_both_flags() {
+        for argv in [
+            ["--offline", "--relay-url", "https://relay.example.org"].as_slice(),
+            ["--relay-url", "https://relay.example.org", "--offline"].as_slice(),
+        ] {
+            let message = parse(argv).expect_err("refused");
+            assert!(
+                message.contains("--offline") && message.contains("--relay-url"),
+                "diagnostic must name both flags, was: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_relay_url_is_refused_at_parse_time() {
+        let message = parse(&["--relay-url", "not a url"]).expect_err("refused");
+        assert!(
+            message.contains("--relay-url"),
+            "diagnostic must name the flag, was: {message}"
+        );
+    }
+
+    #[test]
+    fn relay_url_without_a_value_is_refused() {
+        let message = parse(&["--relay-url"]).expect_err("refused");
+        assert!(
+            message.contains("--relay-url"),
+            "diagnostic must name the flag, was: {message}"
+        );
     }
 }

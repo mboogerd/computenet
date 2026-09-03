@@ -116,8 +116,10 @@ class TwoWriterDurabilityTest {
      * T06 §B1b — the same property as [B1][`two concurrent writer threads - recovered order equals live order`],
      * over an [InMemoryJournal] instead of a [FileJournal], because **B1 as
      * written cannot fail**: `FileJournal.append` is `@Synchronized` *and*
-     * fsyncs, so it serializes the two writers for the whole (millisecond-
-     * scale) duration of the append. The pre-T04 race needs both threads to
+     * fsyncs, so it serializes the two writers for the whole duration of the
+     * append — ~3.4 ms until computenet-sh8z removed the per-append reopen,
+     * ~30 us (one `write` plus one `fsync`) since, and still orders of
+     * magnitude above the window below. The pre-T04 race needs both threads to
      * be between "append returned" and "dataLock acquired" simultaneously —
      * a window fsync makes vanishingly small. Reverting T04's append-inside-
      * the-lock fix leaves B1 green (verified: 3/3 passes with the append

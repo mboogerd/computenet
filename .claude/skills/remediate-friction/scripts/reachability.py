@@ -70,6 +70,36 @@ INDEX_ROW = re.compile(r"^\|\s*`references/[\w-]+\.md`\s*\|")
 
 SKILL_OF = re.compile(r"^\.claude/skills/([\w-]+)/")
 
+# The repo root, from this script's own location rather than the cwd, so it is
+# the same wherever the caller invoked it from. realpath, not abspath: abspath
+# does not resolve symlinks, and a symlinked invocation would derive a root
+# that refuses every valid in-repo path. (Only the ROOT is cwd-independent —
+# the existence check and the graph walk below are still relative to the cwd,
+# so this script is still run from the repo root.)
+REPO_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.realpath(__file__)), *[os.pardir] * 4))
+
+
+def to_repo_relative(f):
+    """Repo-root-relative form of `f`, or None if it lies outside the repo.
+
+    SKILL_OF anchors on `^.claude/skills/`, so an ABSOLUTE path used to match
+    nothing: it skipped the NO-MODEL decline and fell through to a graph that
+    is relative-only and cannot contain it, yielding a confident NOT-READ —
+    the very false-negative this script exists to catch, committed by the
+    script (computenet-k58k, and the same shape as computenet-z9tu before it).
+    An absolute path is what an agent produces naturally when it has just been
+    handed a worktree path, which is how this lane's dispatches phrase things,
+    so documenting "pass relative paths" was a prose mitigation for a
+    mechanical problem. It is normalised here instead.
+    """
+    # abspath() FIRST, so a relative path that escapes the repo
+    # (`../sibling-worktree/.claude/skills/...`) is caught by the same guard.
+    # Handling only the absolute form left exactly this defect standing one
+    # shape over — which is how the family got to four beads.
+    rel = os.path.relpath(os.path.abspath(f), REPO_ROOT)
+    return None if rel.split(os.sep)[0] == os.pardir else os.path.normpath(rel)
+
 
 def declined(path):
     """Why this file is outside the model — or None if the walk can judge it.
@@ -86,9 +116,9 @@ def declined(path):
     reader, not about any /work role, so only the bare form reports it
     (`trivially_served`). Under `--for` it declines like everything else.
 
-    An absolute path matches nothing here and falls through to the graph, which
-    is relative-only (`SKILLDIR`) and will answer `unreached`. Pass paths
-    relative to the repo root; a `./` prefix is fine (normpath strips it).
+    An absolute path is normalised to repo-root-relative before it gets here
+    (`to_repo_relative`), so it is judged like any other; one outside the repo
+    is refused with exit 2 rather than answered.
     """
     m = SKILL_OF.match(path)
     if m and m.group(1) != "work":
@@ -154,7 +184,13 @@ def main(argv):
             return 2
         role, rc = args[1], 0
         for f in args[2:]:
-            f = os.path.normpath(f)
+            rel = to_repo_relative(f)
+            if rel is None:
+                print(f"reachability: {f} is outside this repository "
+                      f"({REPO_ROOT}) — nothing here can judge it",
+                      file=sys.stderr)
+                return 2
+            f = rel
             if not os.path.exists(f):
                 print(f"reachability: {f} does not exist", file=sys.stderr)
                 return 2
@@ -190,7 +226,12 @@ def main(argv):
 
     rc = 0
     for f in args:
-        f = os.path.normpath(f)
+        rel = to_repo_relative(f)
+        if rel is None:
+            print(f"reachability: {f} is outside this repository "
+                  f"({REPO_ROOT}) — nothing here can judge it", file=sys.stderr)
+            return 2
+        f = rel
         if not os.path.exists(f):
             print(f"reachability: {f} does not exist", file=sys.stderr)
             return 2

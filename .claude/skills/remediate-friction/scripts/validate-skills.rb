@@ -73,6 +73,25 @@ BODY_LINE_IDEAL = 500
 # contents."
 REFERENCE_TOC_THRESHOLD = 300
 
+# Lines above which a reference file no longer fits in ONE Read call. The
+# result does carry a truncation marker, so this is not a silent cut — but
+# three reviewers reached review-feature.md's verdict-token rule only by paging
+# on unprompted, none of them told to, and that rule is the one SKILL.md 5e
+# refuses to act without (computenet-98cu). So a file over this must SAY SO in
+# its opening lines, where a truncated read still shows it.
+#
+# review-feature.md measured the cap at ~line 1013 of 1217 (25521 tokens against
+# a 25000 cap); 900 leaves margin. A LINE COUNT is a cheap proxy for a TOKEN
+# cap: at ~25 tokens/line it is slightly conservative, and a table-heavy file at
+# ~200 chars/line would cross 25k nearer 440 lines and slip through. Lower the
+# number when that file appears rather than pretending lines are tokens.
+#
+# Prose in the file is the only fix available for the file that has the problem;
+# this check is what makes the next file to cross the line say it too.
+READ_CALL_LINES = 900
+READ_CALL_BANNER = /exceeds?\s+one\s+read\s+call/i.freeze
+READ_CALL_BANNER_LINES = 50
+
 # The ratchet's numbers. Absent file or absent entry is a FAILURE, not a pass:
 # a skill with no budget is exactly the unpriced growth this exists to stop.
 BUDGET_FILE = File.join(root, 'line-budget.txt')
@@ -173,6 +192,14 @@ files.each do |f|
     next unless text.lines.length > REFERENCE_TOC_THRESHOLD
 
     rel = File.join('references', File.basename(r))
+    if text.lines.length > READ_CALL_LINES &&
+       !text.lines.first(READ_CALL_BANNER_LINES).join.match?(READ_CALL_BANNER)
+      errs << "#{rel} is #{text.lines.length} lines (>#{READ_CALL_LINES}), so one Read " \
+              'call returns it TRUNCATED — a marker says so, and readers page on ' \
+              'anyway only if told to, so say it in the first ' \
+              "#{READ_CALL_BANNER_LINES} lines (the words 'exceeds one Read call'), " \
+              'naming what lives past the cut'
+    end
     if text.scan(/^## /).length < 2
       warns << "#{rel} is #{text.lines.length} lines with no sections to index"
     elsif !toc?(text)

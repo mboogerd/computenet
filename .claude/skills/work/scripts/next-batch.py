@@ -11,15 +11,20 @@ finish.
 
 Usage: next-batch.py <feature-id> [--actor NAME]
 Prints JSON: {"batch": [{id, model, files, worktree, branch, resumed}],
-              "skipped": [{id, reason}], "verdict": str, "parked": [id],
-              "capacity": {"cores": int, "max_parallel": int}}
+              "skipped": [{id, reason}], "warnings": [str],
+              "running_elsewhere": [{id, files}],
+              "verdict": str, "parked": [id],
+              "capacity": {"cores": int, "max_parallel": int,
+                           "load1": float|null, "advice": str|null}}
 
 The batch is bounded on two axes, not one. Disjoint `files` claims prove it
 will not merge into a conflict; `capacity_limit()` bounds how many of those
 agents this machine can actually run without their Gradle builds starving each
 other into wall-clock timeouts (computenet-k9d.2). `capacity` reports the
 machine's core count and the cap that was applied, so the caller can quote a
-number it did not have to guess.
+number it did not have to guess — plus `load1`/`advice` from `load_advice()`,
+which is what the machine is doing RIGHT NOW. `max_parallel` is an upper bound
+the orchestrator may go under, not a target to fill.
 
 `verdict` explains an *empty* batch, which the caller cannot infer from
 `batch`/`skipped` alone and must not guess: "all-closed" (feature is ready for
@@ -39,6 +44,13 @@ at", not "none exist".
 
 A task with no `files` claim can't be scheduled against anything, so it is only
 ever returned alone — safer than guessing a claim for it.
+
+`running_elsewhere` is every unit this actor has `in_progress` outside this
+feature, with its claim. Those claims seed the disjointness test, so a unit
+dispatched through SKILL.md 5f route 0 — a direct child of the epic, invisible
+to a query about one feature — can no longer have its files handed to a second
+agent (computenet-z6q2). It is emitted so the caller can see what a short batch
+was held behind.
 """
 import json
 import os
@@ -111,6 +123,51 @@ def _norm(path):
     return p
 
 
+def _repo_root():
+    """The worktree root, falling back to the cwd if git cannot say."""
+    try:
+        out = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, check=True)
+        return out.stdout.strip() or os.getcwd()
+    except (OSError, subprocess.CalledProcessError):
+        return os.getcwd()
+
+
+def dir_claims(files, root=None):
+    """Entries in a claim that name a DIRECTORY rather than files.
+
+    Containment (below) is deliberate and correct — a directory claim and a
+    file inside it are the same surface. What is NOT correct is writing the
+    directory in the first place: it collides with every sibling beneath it, so
+    claim-based batching stops discriminating and the epic is permanently
+    over-serialised. computenet-ciz9 claimed ["doc/bench/", "bench/src/"] and
+    every bench task in its epic nominally collided with it; the breakdown that
+    hit this ran the documented collision check, got a useless answer, and
+    handed the batching decision back to the orchestrator by hand
+    (computenet-i5zr).
+
+    The failure is quiet in the dangerous direction: not a wrong batch, a lost
+    one, with nothing reporting that parallelism was given up. So this is
+    ADVISORY — it never changes a batching decision, it says which claim to
+    narrow.
+
+    A path is a directory claim if it exists on disk as one. Non-existent
+    paths are NOT flagged: a claim naming a file the task is about to CREATE is
+    ordinary and must not be nagged about.
+
+    A claim entry is REPO-ROOT-RELATIVE, so the root is resolved rather than
+    taken from the cwd — check-files-claim.sh learned the same lesson the hard
+    way, firing every census row on a bead whose files all exist when run from
+    a subdirectory. The direction of failure here is worse than that one: a
+    wrong root makes every isdir() false, so the detector reports nothing at
+    all and reads exactly like "no directory claims". A linked worktree is a
+    full tree, so its own root is the right answer inside one.
+    """
+    root = root or _repo_root()
+    return sorted(f for f in {_norm(x) for x in files}
+                  if f and f != "." and os.path.isdir(os.path.join(root, f)))
+
+
 def overlaps(files, taken):
     """Claims that collide with `files` — by containment, not string equality.
 
@@ -134,6 +191,48 @@ def overlaps(files, taken):
 
 # Cores one dispatched agent needs to itself. See capacity_limit().
 LANE_CORES = 5
+
+
+def load_advice(cores, cap):
+    """Advisory only: is this box ALREADY too busy to fill `cap`?
+
+    capacity_limit() sizes a lane from a quiet box, and deliberately does not
+    use load average to do it (see its docstring: over a ~25s workload the
+    1-minute figure lags in both directions). This is a different question,
+    asked at a different moment. The cap answers "how many lanes fit on an idle
+    machine"; this answers "what is on the machine right now, before I
+    dispatch" — the one signal the orchestrator lacked at the moment of the
+    decision, and the reason the cap must be read as an UPPER BOUND it may go
+    under rather than a target to fill.
+
+    Why the cap alone is not enough (computenet-2r22, recurrence of
+    computenet-qmjd): qmjd's remedy assumed the repo-wide `./gradlew test` was
+    the contention unit, so scoping each agent's gate would remove it. Scoping
+    the TASK LIST does not scope the WORKERS — two scoped Gradle invocations
+    still share one daemon pool, one build cache and one buildLogic.lock, and
+    each spawns its own test-worker fan-out. Measured 2026-08-30 on MacBoo,
+    16 cores, cap 3: two implementers, file-disjoint, BOTH gates scoped, load
+    average 204.71 / 92.73 / 44.00 — a 1-minute figure ~13x core count. Nothing
+    timed out, so it was a near miss, not a loss; the margin was luck.
+
+    Reading is one syscall and it is advisory, never subtractive: it does not
+    lower `cap`, because a lagging instrument must not silently serialize a
+    slot. It puts a number in front of the orchestrator at dispatch time.
+    """
+    try:
+        load1 = os.getloadavg()[0]
+    except (OSError, AttributeError):      # not available on this platform
+        return None, None
+    load1 = round(load1, 2)
+    if cap <= 1:
+        return load1, None
+    if load1 >= 2 * cores:
+        return load1, (f"load1 {load1} is >=2x the {cores} cores: dispatch ONE "
+                       f"agent, not {cap}, and wait for it")
+    if load1 >= cores:
+        return load1, (f"load1 {load1} already meets the {cores} cores: go "
+                       f"under the cap of {cap}")
+    return load1, None
 
 
 def capacity_limit(cores, siblings=0):
@@ -165,15 +264,31 @@ def capacity_limit(cores, siblings=0):
         N=3   34.0s, 34.8s, 35.0s                       1.70x
         N=6   89.9s 93.1s 95.6s 96.6s 97.2s 97.8s      4.4x-4.8x
 
+    WHAT THE ARMS ABOVE WERE, since it decides how far the cap can be trusted
+    (computenet-2r22 asked; the first two answers written here were wrong in
+    turn, so read this against the HONEST LIMITS paragraph below rather than
+    on its own): on the 16-core machine — the only one with arms, and the one
+    that pins LANE_CORES — every arm is a SCOPED, single-module
+    `:wire:test --rerun`. The cap is therefore not derived from a repo-wide
+    gate, and scoping each agent's gate buys no headroom the cap has not
+    already spent: the 204-on-16-cores reading in load_advice() is this
+    derivation's predicted direction, not a surprise, and the "if anything
+    optimistic" caveat below covers it. The 10-core record is not an arm at
+    all — it is three whole IMPLEMENTER lanes, whose gates at that date were
+    repo-wide (per qmjd, which postdates it) — so it cannot corroborate this
+    either way.
+
     The criterion is per-run inflation, not throughput: a bounded wait sized on
     a quiet box is what breaks. Under 2x it holds; the recorded catastrophes are
     ~90x, not 2x. On 16 cores the largest arm that stayed under 2x was 3.
 
-    Load average is deliberately NOT the instrument. Over a ~25s workload the
-    1-minute average is still climbing when the build ends and still decaying
-    when the next arm starts (N=3's pre-arm reading was 17.31, inherited from
-    N=2), so it lags in both directions. Wall clock per run is measured
-    directly.
+    Load average is deliberately NOT the instrument HERE (load_advice() uses it
+    for a different question — what the box is doing now — and says why that is
+    sound; do not delete that advisory on this paragraph's authority). Over a
+    ~25s workload the 1-minute average is still climbing when the build ends and
+    still decaying when the next arm starts (N=3's pre-arm reading was 17.31,
+    inherited from N=2), so it lags in both directions. Wall clock per run is
+    measured directly.
 
     WHY cores/5 AND NOT cores/3. `cores/3` was the value floated in
     computenet-avs's thread, and this bead's own evidence contradicts it: on the
@@ -266,7 +381,34 @@ def cap_batch(batch, skipped, cap):
     return batch[:cap], skipped
 
 
-def plan_batch(candidates, feature=None):
+def dir_claim_warnings(candidates, batch, skipped):
+    """Advisory lines for every directory-shaped claim among the candidates.
+
+    A function rather than inline in main() so the WIRING is testable: the
+    deliverable is a message reaching a reader, and `dir_claims` being correct
+    in isolation does not deliver it — deleting this loop from main() left the
+    suite green (computenet-i5zr review).
+
+    Scans `skipped` as well as `batch`: whether the over-broad claim WINS the
+    surface or loses it to a narrower sibling is `bd ready` ordering, which
+    nobody controls, and cap_batch demotes batched entries to skipped before
+    this runs. Scanning batch alone made the report a coin flip, and an empty
+    result would then not mean "no directory claims".
+    """
+    by_id = {task["id"]: task for task, _ in candidates}
+    out = []
+    for tid in [e["id"] for e in batch] + [s["id"] for s in skipped]:
+        task = by_id.get(tid)
+        for d in dir_claims(claim_of(task) if task else []):
+            out.append(
+                "%s claims the DIRECTORY %s -- it collides with every claim "
+                "beneath it, so this epic batches more serially than it needs "
+                "to. Narrow it to the files the item actually edits: "
+                "bd update %s --set-metadata files=<paths>" % (tid, d, tid))
+    return out
+
+
+def plan_batch(candidates, feature=None, elsewhere=()):
     """(batch, skipped) from `[(task, resumed)]` — the claim-disjointness rule.
 
     A task with no `files` claim is returned ALONE and everything else is
@@ -279,6 +421,14 @@ def plan_batch(candidates, feature=None):
     over a path that does not exist, and batches like any other.
     """
     batch, skipped, taken = [], [], set()
+    # Seed with what is already running outside this feature (computenet-z6q2),
+    # so an overlap with a route-0 unit is skipped by the same rule that skips
+    # an overlap with a sibling — no second implementation, no memory.
+    outside = {}
+    for unit in elsewhere:
+        for f in unit["files"]:
+            outside[f] = unit["id"]
+    taken |= set(outside)
     for task, resumed in candidates:
         tid = task["id"]
         # Human-gated beads sit in bd ready like ordinary work, but they are
@@ -299,12 +449,55 @@ def plan_batch(candidates, feature=None):
             break
         collisions = overlaps(files, taken)
         if collisions:
-            skipped.append({"id": tid,
-                            "reason": "overlaps " + ",".join(sorted(collisions))})
+            # Name the RUNNING UNIT, not just the path: the caller's next move
+            # for "overlaps a sibling in this batch" is to wait one round, and
+            # for "overlaps a unit running elsewhere" it is to check whether
+            # that unit is still alive.
+            owners = sorted({outside[c] for c in collisions if c in outside})
+            reason = "overlaps " + ",".join(sorted(collisions))
+            if owners:
+                reason += " — running outside this feature: " + ",".join(owners)
+            skipped.append({"id": tid, "reason": reason})
             continue
         taken |= files
         batch.append(_entry(task, resumed, sorted(files), feature))
     return batch, skipped
+
+
+def running_elsewhere(actor, feature, candidate_ids):
+    """Units this actor has in flight OUTSIDE this feature, with their claims.
+
+    next-batch.py is asked about ONE feature and, until computenet-z6q2, could
+    only see that feature's children. A unit taken onto a free lane through
+    SKILL.md 5f route 0 — a DIRECT CHILD of the epic, on its own branch and PR
+    — is invisible to it by construction, and route 0's disjointness test is a
+    one-time admission check that nothing re-applies on later batches. So the
+    script offered a task whose files a live route-0 unit was actively editing;
+    only the orchestrator's memory of a dispatch several turns earlier stopped
+    it, three hours into a session. That save does not repeat.
+
+    Everything `in_progress` and assigned to this actor counts, minus the
+    candidates themselves (this feature's resumable tasks are legitimately in
+    the batch) and minus epics and this feature, which claim no files of their
+    own. A STALE claim from a dead session therefore blocks a batch — the
+    conservative direction, and visible: every unit found is reported in the
+    output, so the caller can see what it was held behind rather than
+    wondering why the batch is short.
+    """
+    out = []
+    for task in bd("list", "--status", "in_progress", "--assignee", actor):
+        tid = task.get("id")
+        if not tid or tid in candidate_ids or tid == feature:
+            continue
+        if task.get("issue_type") == "epic":
+            continue
+        try:
+            files = claim_of(task)
+        except ClaimError:
+            continue                      # not ours to diagnose; 5b names it
+        if files:
+            out.append({"id": tid, "files": sorted(files)})
+    return out
 
 
 def main():
@@ -333,8 +526,9 @@ def main():
         seen.add(tid)
         candidates.append((task, resumed))
 
+    elsewhere = running_elsewhere(actor, feature, {t["id"] for t, _ in candidates})
     try:
-        batch, skipped = plan_batch(candidates, feature)
+        batch, skipped = plan_batch(candidates, feature, elsewhere)
     except ClaimError as exc:
         # Named and actionable: the bead id, what its claim looked like, and
         # the one fix. A bare traceback here names split() on a list and not
@@ -361,12 +555,18 @@ def main():
             sys.exit("next-batch: WORK_SIBLINGS must be a non-negative integer")
     cap = capacity_limit(cores, siblings)
     batch, skipped = cap_batch(batch, skipped, cap)
+    load1, advice = load_advice(cores, cap)
 
     verdict, parked = _assess(feature, batch)
+    warnings = []
+    warnings = dir_claim_warnings(candidates, batch, skipped)
     print(json.dumps({"batch": batch, "skipped": skipped,
+                      "warnings": warnings,
+                      "running_elsewhere": elsewhere,
                       "verdict": verdict, "parked": parked,
                       "capacity": {"cores": cores, "siblings": siblings,
-                                   "max_parallel": cap}},
+                                   "max_parallel": cap,
+                                   "load1": load1, "advice": advice}},
                      indent=2))
 
 

@@ -8,6 +8,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.link.AuthLevel
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.membrane.Principal
 import civictech.cell.membrane.currentPrincipal
@@ -60,6 +61,14 @@ class LoopbackPrincipalTest {
      * keys live in `:identity`, which `:kernel` does not depend on.
      */
     private class Credentials(override val peerId: PeerId) : PeerCredentials {
+        /**
+         * A test double's key identifier: the same string as [peerId], which is
+         * what `PeerIdentityBinding.Interim` resolves between anyway (feature
+         * `computenet-376c`). Nothing here fingerprints a key — the kernel
+         * treats credentials as data ([DSC1-WIRE-04]).
+         */
+        override val keyId: KeyId = KeyId(peerId.name)
+
         override val publicKey: ByteArray = "public-key-of-${peerId.name}".toByteArray()
         override fun sign(message: ByteArray): ByteArray = message
     }

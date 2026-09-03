@@ -245,6 +245,18 @@ which is what makes them worth naming rather than leaving to be rediscovered.
   any zero-hit search as "absent", re-run it in a form whose failure would look
   different: a plain recursive grep, or the same query against a string you
   KNOW is present.
+- **`git grep`'s regex engine has no Perl-style `\s`, `\d` or `\w`** — they
+  degrade to the LITERAL character, so `\d` matches the letter `d` and `\s`
+  the letter `s`: false positives as readily as zeros. Measured:
+  `git grep -hE '^\s*@Test' <rev> -- 'iroh/src/test/*.kt'` → 0;
+  `'^[[:space:]]*@Test'` → 46. The habit transfers from every other search here
+  — ripgrep, `grep -P`, the Grep tool all accept `\s` — and only `git grep`
+  answers wrongly. `git grep -P` accepts it on a PCRE-enabled build (this
+  machine's is); `[[:space:]]` needs no such build. **This one is a REVIEWER's
+  trap above all**: it is reached while counting or diffing symbols ACROSS
+  REVISIONS, the one job only `git grep` can do, and where a wrong zero
+  directly weakens a verdict — a feature reviewer checking a test-only refactor
+  had deleted no test method got 0 at both revisions (computenet-s7az).
 - **`bd -C <path>` cannot live in a shell variable.** `BD="bd -C /path"; $BD
   show x` fails with `no such file or directory: bd -C /path` — zsh does not
   word-split an unquoted expansion, so the whole string is looked up as one

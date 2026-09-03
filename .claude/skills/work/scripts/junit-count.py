@@ -24,7 +24,8 @@ mtimes with identical counts (computenet-qsfu).
 Usage: junit-count.py <results-dir | result-file.xml> [<results-dir | result-file.xml>...]
 Prints one line per directory and a TOTAL line, each with
 files/tests/failures/errors/skipped and the newest timestamp seen.
-Exit: 0 = counted (failures included — read the numbers); 2 = bad usage;
+Exit: 0 = counted (failures included — read the numbers); 2 = bad usage, or a
+      path that does not exist (NEVER reported as NO-RESULTS — see main());
       3 = an xml file would not parse (an unreadable result is not a pass);
       4 = NO xml files matched at all (NO-RESULTS).
 """
@@ -94,6 +95,31 @@ def main(argv):
         print("usage: junit-count.py <results-dir | result-file.xml> [<results-dir | result-file.xml>...]",
               file=sys.stderr)
         return 2
+    # A path that does not RESOLVE is a different answer from one that resolves
+    # to an empty tree, and it must not be able to look like NO-RESULTS.
+    # Reported 2026-08-30: a reviewer in worktree `computenet-em9i` ran
+    # `../../computenet-em9i/oracle/build/test-results/test` — one `..` too
+    # many, so it named nothing — and got NO-RESULTS for a suite that had run
+    # 489 tests. NO-RESULTS reads as "the tests did not run", which for
+    # :oracle on a concord change is an alarming and credible claim, so the
+    # tool's wrong answer is the more believable one: a measurement whose
+    # failure mode is a PASS (computenet-dh5x, after be43/lpp6/v38r each fixed
+    # one path shape). The cwd is printed because the mistake is always
+    # relative-path arithmetic and is invisible without it.
+    # os.access as well as exists: an UNREADABLE directory resolves, globs to
+    # [], and would otherwise reach NO-RESULTS — "could not read" is no more a
+    # statement about a suite than "does not exist" is.
+    missing = [d for d in dirs
+               if not (os.path.exists(d) and os.access(d, os.R_OK))]
+    if missing:
+        for d in missing:
+            why = "not readable" if os.path.exists(d) else "does not exist"
+            print(f"NO-SUCH-PATH: {d} ({why})", file=sys.stderr)
+        print(f"  (resolved against cwd {os.getcwd()})", file=sys.stderr)
+        print("NO-SUCH-PATH — nothing was counted; this is NOT a statement "
+              "about whether any suite ran", file=sys.stderr)
+        return 2
+
     total = [0, 0, 0, 0, 0]
     newest_all = ""
     for d in dirs:

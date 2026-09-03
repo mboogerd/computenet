@@ -371,3 +371,417 @@ site (`:demo:dialogue`), on a single-threaded simulated host, and the gate's
 cache is unbounded and non-thread-safe by the same choice `TranscriptSource`
 makes. A kernel operator would additionally have to decide eviction and
 concurrency, which this finding does not settle.
+
+## F-14 — `RuleExtractor`'s relation endpoints now mint their own claims — at the cost of a third, redundant claim per "because" segment
+
+**Observation** (computenet-xwl0, found at `computenet-2aw.3` (F3) review,
+PR #635): `RuleExtractor` (`demo/dialogue/.../extract/RuleExtractor.kt`) drove
+zero canonical relations. For a segment "A because B" it emitted an
+`ExtractedClaim` of the *whole* trimmed segment ("A because B") and an
+`ExtractedRelation` whose endpoints were the substrings "A" and "B".
+`civictech.dialogue.mint.claimKey` (2aw.F3-D1) only trims/collapses
+whitespace/lowercases — by design, it does not, and must not, know a
+relation's endpoints are substrings of the segment that produced them — so
+`claimKey("A")` and `claimKey("B")` never matched the one claim key the
+segment minted (`claimKey("A because B")`). F3's pending/resolvable semijoin
+split (`DialoguePipeline` stages 5d/5e) held every such candidate PENDING
+forever: driven by `RuleExtractor`, the pipeline minted claims and provenance
+but no relations, unless a separate utterance happened to assert "A" and "B"
+as standalone claims. Every relation-bearing F3 test substituted a cassette
+extractor for exactly this reason.
+
+**Decision**: `RuleExtractor` now emits the two endpoint substrings as their
+own `ExtractedClaim`s, *in addition to* the whole-segment claim (its class
+KDoc's "Why the endpoint claims" carries the full reasoning). Chosen over the
+bead's other two options — leaving `RuleExtractor` claim-only and shipping the
+demo path on a recorded cassette, or accepting and stating a relation-free
+`RuleExtractor` demo — because the epic's differentiated output is the
+relations between claims, and an extractor that can never mint one
+demonstrates only half the system for a heuristic explicitly meant to be
+tiny and disposable (AGO3/KE1 replace it).
+
+**Why it's a gap, not just a fix**: the trade this decision accepts is real
+and is not free. A "because" segment now mints **three** canonical claims —
+the whole sentence, its conclusion, its reason — where a transcript reader
+would count two propositions; nobody asserted "A because B" as a standalone
+claim distinct from asserting A and B. This was verified, not assumed, before
+choosing it: no existing F3 test text contains "because" (so no F3 assertion
+changed), the two endpoint claims carry the segment's own `utteranceId` (no
+fabricated provenance), and the stance leg is unaffected (`RuleExtractor`
+never emits an `ExtractedStance`). What was **not** verified — because
+`DialogueApp.kt` wires no extractor yet (F4/F5 land later) — is how this
+third, redundant claim reads on an actual rendered argument map, or whether
+F4/F5 want to suppress/merge it once one exists. That is exactly the kind of
+"results dominated by a hidden rule rather than by extraction quality" this
+findings doc exists to flag (`Segmentation.kt`'s own KDoc names the same
+risk for its splitting rule): the rule
+producing the redundant claim is `RuleExtractor`'s "because" branch, not a
+`DialoguePipeline` defect, so the fix — if F4/F5 decide it needs one — belongs
+there, replacing or refining this heuristic, not in `claimKey` or the pipeline.
+
+**Regression coverage**: `RuleExtractorTest` (`driven through DialoguePipeline
+a single because-utterance mints a non-empty canonical relation set`) drives
+`RuleExtractor` through `DialoguePipeline.build` end to end and asserts a
+non-empty canonical relation set from one utterance alone — the discriminating
+case: before this fix it stayed empty forever with no second utterance
+supplying the endpoints separately.
+
+## F-15 — CP-A3's absorb-ack is edge-local, so `emitOnFrontier` withholds output at rest whenever a wave-dropping arm is more than one hop deep
+
+**Observation** (computenet-23bf, discovered at `computenet-2aw.3.2` (F3 T2,
+RelationMint) and re-established at `915d574a9`): AGO1's relation leg splits
+into a pending/resolvable pair of `SemiJoinCell`s (`DialoguePipeline` stages
+5d/5e), whose two inlets both descend from the single `utterances` root. That
+is exactly the "shared-source diamond" `SemiJoinCell`/`WaveGate` scope
+`emitOnFrontier` to. Turning the gate on nonetheless **wedges the graph**:
+with `emitOnFrontier = true` on both semijoins, 4 of `RelationMintTest`'s 5
+cases fail at quiescence with an **empty** canonical relation set. (The fifth,
+`REL-04`, asserts that a self-canonicalizing relation mints *nothing*, so a
+wedged pipeline satisfies it vacuously — it is not evidence the gate works.)
+All five pass at the shipped ungated default.
+
+**Mechanism**: a shared root makes the diamond possible; it does not make it
+sufficient. The gate's completeness condition is a **static link set** with no
+upstream traversal, so each arm is an expected edge for every wave, including
+waves it structurally never carries. AGO1's item-kind split creates exactly
+that: a claim-only utterance is a real delta on the right arm
+(`extractedItems → extractedClaims → claimKeys`) and nothing at all on the
+left (`extractedItems → extractedRelations → relationCandidates →
+nonSelfRelations`); a relation-only utterance is the mirror image.
+
+The kernel already has the remedy for a structurally silent arm — CP-A3's
+absorb-ack (`civictech.cell.control.absorbAck`, G-40). What this finding
+establishes is that **the ack is edge-local and no plain operator relays it**.
+It is minted by the absorbing operator onto its own outlet links; a
+`FilterCell` / `FlatMapSetCell` hop installs no `Protocols.Progress` handler,
+so an ack arriving on such a hop's inlet neither advances anything nor is
+re-emitted. Only a cell that installs a frontier (`WaveGate`, `WaveFrontier`,
+`CoalescingCombineCell`, `AlignedCompositeCell`) consumes one.
+
+So the discriminator is the **depth of the silent arm**, not the disjointness
+of the waves:
+
+- absorber links **directly** into the gated inlet → the ack lands on the
+  expected edge, the wave completes, the gate is correct (this is the
+  pre-existing `a gated cell settles a wave one arm absorbs entirely` case);
+- absorber with **one or more pure hops below it** → the ack dies at the hop.
+  The wave is released only when that arm delivers a *later* wave (the
+  monotone-`max` watermark advance standing in for the lost ack), so
+  mid-stream output **lags**; and at rest, when the final wave is one the arm
+  never carries, output is **withheld permanently**. Both arms of AGO1's
+  relation leg are two hops deep, which is why the whole leg goes silent.
+
+**Reproduction**: `FrontierGatedEmissionTest` (`:kernel`), the pair
+`control - disjoint-wave arms one hop deep settle, because the absorb-ack
+lands on the gated edge` (green) and `disjoint-wave arms TWO hops deep
+withhold output at rest - the absorb-ack dies at the intervening hop`. Same
+rig, same disjoint waves, only the hop count differs — which is what pins the
+mechanism to ack non-relay rather than to the wave partition itself. The same
+file's `CombineDisjointArmRig` and its own control/case pair (`control -
+CombineLatestCell disjoint-wave arms one hop deep settle...` /
+`CombineLatestCell disjoint-wave arms TWO hops deep emit a null-extension that
+is never corrected at rest...`) repeat the measurement for `CombineLatestCell`
+— see "Measured" below.
+
+**Why it's a gap**: "derive two arms from one stream, split by element kind,
+and join them" is generic incremental dataflow, not an AGO1 shape, and it is
+the *normal* way to build a diamond over a heterogeneous stream. Yet it is
+precisely the shape in which the flicker gate — the only remedy the kernel
+offers for a non-monotone binary operator's within-wave flicker — silently
+stops emitting. Silently is the sharp part: nothing throws, `bufferedWaves`
+is the only signal, and the symptom (an empty derived set at quiescence)
+looks like an extraction or key-canonicalization bug several stages upstream.
+
+**Proposed shape** (not implemented here; this entry is the finding, not the
+fix). Two candidates, in increasing order of ambition:
+
+1. **Relay `Progress` through pure operator hops.** A `FilterCell` /
+   `FlatMapSetCell` that receives an ack on its inlet re-emits one on its
+   outlet, making the ack transitive along a chain of pure hops and reducing
+   the deep case to the working shallow one. Cheap and local, but it needs a
+   rule for operators with more than one inlet and for stateful hops that may
+   legitimately emit later, and it makes every pure hop carry metadata-plane
+   machinery it currently does not.
+2. **Teach the frontier to tell a structurally silent arm from a stalled
+   one** — the standing G-40/G-13 residual, identical in `WaveGate`,
+   `WaveFrontier`, `CoalescingCombineCell` and `AlignedCompositeCell`. This
+   is the real fix and is out of proportion to one demo.
+
+**What ships instead, and what it costs**: `DialoguePipeline` stages 5d/5e
+stay at the ungated default, with the rationale in the code. The open cost is
+the transient the gate exists for — admitting the utterance that mints a
+relation's last endpoint can flicker the relation into and out of the
+canonical fold **within one wave**. F4's applier
+(`computenet-2aw.4.2`, `[AGO1-APPLY-04]`) is the sole writer into the agora
+graph and sits downstream of exactly that, so the flicker must be tolerated
+rather than merely transient. It is: the applier is **pull-based** — it reads
+`ObservationSink.current()` snapshots of the canonical folds after quiescence,
+on an explicit `reconcile()`, and registers no `onChange` listener that writes
+to agora. A within-wave admit-then-retract is therefore two folds into a View
+and **zero** agora operations. That tolerance is structural, not incidental,
+so it is a constraint on F4: an applier that ever becomes push-driven off the
+canonical relation fold re-opens this finding.
+
+**Honest limit of this entry**: the reproduction covers `SemiJoinCell`'s gate.
+`CombineLatestCell` shares `WaveGate` verbatim and so must share the defect,
+which was not measured when this entry was written — it since has been, see
+**Measured** below. Nor was the relay proposal (1) prototyped — its
+cost is argued, not weighed. And the "withheld permanently at rest" claim is
+about *this* graph's quiescence: a graph that keeps receiving waves on every
+arm sees only the lag.
+
+**Measured (computenet-u0oa, 2026-09-03)**: `CombineLatestCell` does share the
+defect, extending `FrontierGatedEmissionTest`'s disjoint-wave-arm rig
+(`CombineDisjointArmRig`) to `CombineLatestCell` — same one-hop-settles /
+two-hop-withholds control/case pair, same arm shape (a kind-filtering head that
+CP-A3 absorb-acks every other wave, followed by `hops - 1` pure identity hops),
+gated cell and wire type (`MapDelta`) swapped and nothing else, so the green
+one-hop control pins the mechanism to the same ack non-relay as `SemiJoinCell`'s.
+The manifestation differs from `SemiJoinCell`'s complete silence, though, in a
+way that matters: `CombineLatestCell`'s premature reconciliation (against a
+still-incomplete other side) does not withhold — it **emits a wrong value**, a
+null-extension the gate exists specifically to suppress, and nothing retracts
+it until a later wave on the stalled arm forces a correcting flush (or forever,
+at rest). That is arguably worse than `SemiJoinCell`'s case: the wire carries a
+value that looks settled and is not, rather than carrying nothing. Which
+emission is the anomaly, precisely: the **one-hop control** emits that same
+null-extension for a genuinely one-sided key and then corrects it when the
+other side arrives, so the null-extension is not itself the defect. What the
+two-hop case loses is the *correction* — the null-extension is delivered late
+(under wave 1's identity, while wave 2's other side was already in hand) and is
+the last value on the wire at rest, with both real operands settled inside the
+cell.
+`WaveFrontier` and `AlignedCompositeCell` were not measured; both mirror the
+same static-frontier/CP-A3-non-relay shape `WaveGate` does (this entry's
+Mechanism paragraph, and `WaveGate`'s own KDoc), so the same failure is
+expected there too, but "shares the code" is exactly the inference this
+measurement exists to not repeat on a third and fourth cell — that pair stays
+an open gap.
+
+## F-16 — BS-10 measured: the AGO1 pipeline's incremental credences equal the batch fold exactly on DAG transcripts, and sit 112x inside the cyclic bound
+
+**Observation** (computenet-2aw.6.1, AGO1 F6 T1): BS-10's sweep
+(`civictech.dialogue.gate.IncrementalEqualsBatchTest`, `:demo:dialogue`) drives
+40 seeded transcripts — seeds `0 until 40`, ~34 utterances each, cyclic on odd
+seeds — incrementally into a live `DialoguePipeline` + `GraphApplier` +
+`AgoraService`, with admissions and retractions interleaved and reconciles at
+quiescence after roughly every fifth step, and compares the settled credences
+against `BatchReference.solve` over `DialogueBatchReference`'s independent
+one-pass fold of the **final live utterance set**.
+
+**No seed diverged**, so 2aw.F6-D3's divergence policy fired on nothing and
+this entry records a measurement rather than a defect. The measurement itself
+is the point, because the G-19 residual is exactly "how far does the app-side
+head threshold let a cyclic graph drift from its fixpoint":
+
+- **DAG seeds (even): worst observed gap `0.0`** — not "within 1e-9", but
+  bit-identical, over all 20 seeds and every bound claim and relation node.
+- **Cyclic seeds (odd): worst observed gap `2.2247e-4`**, against the
+  `25 * 1e-3` bound `AgoraExitTest` states and this sweep reuses. That is
+  ~112x of headroom, and ~4.5x *inside* `AgoraService`'s own `quiescence`
+  threshold of `1e-3` — so on these transcripts the head's absorb threshold
+  costs less than one threshold's worth of drift, not the 25 the bound allows.
+  All 20 odd seeds closed a cycle (asserted, not assumed), so the figure is
+  not an artifact of cyclic seeds that happened to stay acyclic.
+
+**Honest limits of this entry.** (1) The `25 * 1e-3` bound is inherited from
+`AgoraExitTest` and is *not* calibrated by this measurement — 2.22e-4 is what
+these 40 transcripts produced, not a proof of a tighter bound; the transcripts
+here reach at most a handful of cycle-closing edges over 10 claims, where
+`AgoraExitTest` churns 60 random ops including edge-on-edge. Read it as
+evidence the bound is not tight *for this shape of graph*. (2) It says nothing
+about which edge is designated head: 2aw.F6-D5 records that
+`GraphApplier` step (4) iterates a `LinkedHashMap` `MapView`, so head
+designation is arrival-order dependent, and this sweep drives ONE admission
+order per seed. BS-09 (computenet-2aw.6.2) is what varies the order. (3) The
+extraction side is a cassette, so nothing here measures extraction quality
+(epic §3.7 forbids gating on it).
+
+**Why it belongs under G-19 and not as a new gap**: the residual G-19 names
+weak-tier convergence rate and hop-bound calibration as open. This is one
+datapoint against the "rate" half from a second, independent app — the first
+being `AgoraExitTest`'s own 100-seed probe — and the two agree that the
+weak-tier approximation is far better in practice than the bound it is stated
+with. It is not a calibration; a calibration needs the graph shapes that make
+it worst, which nobody has characterized yet.
+
+## F-17 — BS-09 measured: the canonical graph is order-independent, but *which* cycle edge is designated head is not — and neither is how many heads there are
+
+**Observation** (computenet-2aw.6.2, AGO1 F6 T2): BS-09's test
+(`civictech.dialogue.gate.OrderIndependenceTest`, `:demo:dialogue`) takes a
+`TranscriptGenerator` scenario's **final live utterance set** and loads it 6
+times per seed in 6 different shuffled orders — each in a fresh `SimWorld` on
+its own scheduler seed, through `DialoguePipeline.utteranceOps(...).add`
+rather than `TranscriptSource` ([AGO1-SRC-03]'s set-load relaxation, 2aw.F6-D6,
+since `TranscriptSource` rejects non-ascending turns) — quiesces, reconciles
+once, and fingerprints what settled. Seeds `2, 6` (DAG) and `3, 7` (cyclic),
+24 in-memory worlds in total.
+
+**The property holds where it is stated to hold.** Across all 6 orders on all
+4 seeds, these were **exactly** equal: the canonical claim key set, the
+canonical relation key set, the projected stance map (`StanceAggregate`
+including its winning `turn`/`utteranceId`), the claim-provenance index and the
+relation-provenance index. Credences on the two DAG seeds were **bit-identical**
+across orders — worst cross-order gap `0.0`, not "within 1e-9". Cyclic seeds:
+worst cross-order gap `1.7093e-4` against the `25 * 1e-3` bound (~146x of
+headroom, and ~6x inside `AgoraService`'s own `1e-3` quiescence threshold).
+
+**What is NOT order-independent, and this is the finding.** On seed 7 the set
+of edges designated **head** differed between admission orders — measured, not
+predicted:
+
+- order 0 heads: `{5→1 SUPPORT, 3→1 SUPPORT}`
+- order 1 heads: `{5→1 SUPPORT, 1→4 ATTACK}`
+- order 2 heads: `{1→5 SUPPORT, 4→3 SUPPORT}` — **disjoint from order 0's**
+- order 3 heads: `{5→1 SUPPORT, 1→4 ATTACK}`
+- order 5 heads: `{3→1 SUPPORT, 5→1 SUPPORT, 1→5 SUPPORT}` — **three heads
+  where order 0 had two**
+
+(order 4 agreed with order 0; seed 3 showed no difference across its 6 orders.)
+
+Order 5 is also the direct refutation of the shape this was originally expected
+to take. Seed 7's final live digraph contains exactly **one** 2-cycle, and in
+order 5 **both** of its edges are heads (`5→1 SUPPORT` and `1→5 SUPPORT`),
+because a longer cycle through the same two claims already existed when the
+first of the pair was created — so `reaches(target, source)` held for both. Any
+criterion of the form "exactly one head per 2-cycle" is therefore false about
+this runtime, not merely unproven.
+
+So it is not only *which* edge is head that moves with arrival order, but **how
+many** edges are heads at all, over one and the same canonical relation set.
+
+**The mechanism, cited rather than guessed** (2aw.F6-D5): `AgoraService.createEdge`
+designates `head = reaches(target, source)` **at creation time**, and
+`GraphApplier.reconcile()` step (4) creates relations in
+`relationSink.current()` iteration order — a `View.map()` over `MapView`, whose
+state is `mutableMapOf`, i.e. a `LinkedHashMap` in **arrival** order
+(`kernel/src/main/kotlin/civictech/cell/data/view/MapView.kt:19`). A shuffled
+set load therefore presents the same canonical relations to `createEdge` in a
+different sequence, and each edge's head bit is decided against however much of
+the cycle already existed when its turn came. In a graph with several
+overlapping cycles, an unlucky sequence can make three edges cycle-closing
+where a luckier one makes two.
+
+`civictech.dialogue.gate.CycleProbeTest`'s second world pins the same mechanism
+in the small and by construction: one mutual attack, replayed twice with the
+two attack utterances' turns swapped, moves the head to the other edge.
+
+**This is recorded, not asserted away and not failed.** BS-09's acceptance
+criterion says a head-set difference between orders on a cyclic seed is a
+finding under the G-19 residual, and the test prints it rather than comparing
+something coarser to hide it. What the test *does* assert about heads is the
+invariant that survives every order — `AgoraService`'s own cycle model rather
+than a weakened stand-in: every designated head lies on a cycle of the final
+claim digraph, and **deleting every head edge leaves the digraph acyclic**, so
+every elementary cycle carries at least one head. That holds in all 24 runs and
+is order-invariant by construction: whichever edge of a cycle is created last
+sees the rest of it already present, so `reaches(target, source)` holds for it.
+The 2-cycle case is asserted separately only for the legibility of its failure
+message.
+
+**Honest limits.** (1) The cyclic half rests on **seed 7 alone**, and seed 3
+contributes nothing to it. Measured during review: seed 3's **final live**
+digraph is acyclic — 0 heads in all six orders, no 2-cycle — so its head
+assertions and its `25 * 1e-3` credence tolerance are exercised vacuously.
+`TranscriptGenerator`'s `closedACycle` (asserted by the test) is a property of
+the generated *transcript*, before the program's retractions; it does not
+survive them here. Seed 3's "no head-set difference across six shuffles" is
+therefore not a weak negative about shuffle coverage — as this entry first
+stated — but no observation at all. The seeds are deliberately not swapped for
+cyclic-er ones (2aw.F6-D3); instead the test now asserts that at least one
+cyclic seed's live digraph really is cyclic, so this cannot go silent
+unnoticed. Four seeds and six shuffles remains a small sample chosen to fit a
+sub-second test, not a search: read seed 7's positive result as load-bearing
+and expect an unseen order to produce head sets neither of these six did. (2) The `25 * 1e-3` bound is
+inherited from `AgoraExitTest` and is not calibrated here any more than it was
+in F-16; `1.7e-4` is what these transcripts produced. (3) One reconcile per run
+is deliberate — it maximises the arrival-order effect by presenting the whole
+canonical relation set to `createEdge` at once — so this measurement says
+nothing about incremental reconcile cadences, which BS-10 (F-16) drives
+instead. (4) Cassette extraction, so nothing here measures extraction quality
+(epic §3.7 forbids gating on it).
+
+**Why it belongs under G-19.** G-19's open half is weak-tier convergence rate
+and hop-bound calibration. F-16 measured the *magnitude* of the drift a head
+threshold permits; this entry measures its *cause* being non-deterministic
+under a permitted input ordering. Both say the approximation is far better in
+practice than its stated bound, and neither is a calibration. It is also a
+concrete, reproducible instance of what "head designation is a runtime artifact,
+not a property of the argumentation graph" means — worth knowing before anyone
+builds a user-visible feature on which edge is a head.
+
+## F-18 — the checked-in demo fixture, R3's paraphrase weakness made visible on purpose, and a REPLAY-01 gap that measured to zero
+
+**Observation** (computenet-2aw.6.3, AGO1 F6 T3): a runnable demo transcript
+and its cassette are now checked in at
+`demo/dialogue/src/main/resources/demo/dialogue.{jsonl,cassette.json}` —
+40 utterances, 4 speakers (alice/bob/carol/dave), one topic: a town council
+debate over a protected bike lane on Main Street. It is driven read-only
+through `DialogueRuntime` (ephemeral, `journalDir = null`) by
+`civictech.dialogue.gate.DemoFixtureTest`. Manual run:
+
+    ./gradlew :demo:dialogue:run --args="8090 --transcript demo/dialogue/src/main/resources/demo/dialogue.jsonl --extractor cassette --cassette demo/dialogue/src/main/resources/demo/dialogue.cassette.json"
+
+(the `--extractor`/`--cassette` flags are F5 T2's, predicted — F5 was not yet
+landed when this task was written).
+
+**What it exercises, by utterance id** (mirrored in the test file's own
+KDoc): plain claims+stances at u1, u2, u3, u5, u6, u7, u8, u9, u10, u11, u13,
+u30, u34; a verbatim-modulo-case/whitespace restatement of u1's claim at u12
+(same `claimKey`, one node, two contributing utterance ids); a **paraphrase**
+of the same idea by a third speaker at u13 (`"Main Street needs dedicated,
+physically separated space for cyclists."` vs u1's `"A protected bike lane
+should be installed on Main Street."`) — a genuinely different string that
+canonicalizes to a **different** `ClaimKey`, so it mints a **second** node
+rather than joining u1/u12's; attacks and supports including the transcript's
+one mutual attack (u2: C2 ATTACK C1, u4: C1 ATTACK C2 — a 2-cycle) and a
+SUPPORT (u3: C3 SUPPORT C1) landing on the claim already under attack; a
+stance change (u24: bob revises his own u2 stance on C2 at a later turn to a
+different value, LWW by event order — repeated at u26 and u32 for extra
+coverage); a two-sentence utterance (u5: a lead-in sentence with zero
+extracted items, then the sentence introducing C4 — two `Segment`s, two
+cassette entries); and one utterance that is the **sole contributor** of a
+relation (u16: `C9 ATTACK C1`) which `DemoFixtureTest` retracts directly
+(the JSONL carries no retraction records, so retraction goes through
+`DialoguePipeline.utteranceOps(...).remove`, the same primitive
+`TranscriptSource.reset` uses) — the relation unbinds, its EDGE node is gone,
+exactly one `REMOVE_RELATION` op is issued, and C1's post-retraction credence
+matches `BatchReference.solve` over the live set with u16 removed, within the
+cyclic tolerance.
+
+**R3 is the point, not an accident.** `claimKey`'s canonicalization is
+trim/collapse-whitespace/lowercase (epic §8/R3): u12's restatement of C1
+survives it (same string modulo case/whitespace), u13's paraphrase does not
+(a different string). The completeness test asserts both keys are bound as
+separate nodes and asserts they differ — the weakness is checked, not
+hidden. Nothing here proposes to fix it; AGO3/KE1 owns identity.
+
+**REPLAY-01 measured a zero gap, and the fixture explains why.** Unlike
+F-16/F-17's generative sweeps, this task's `[AGO1-REPLAY-01]` test replays
+the WHOLE fixed transcript into two fresh `DialogueRuntime`s on different
+`SimulationController` seeds (10 and 99), each admitting turn-ascending
+via one uninterleaved `source.replay(from = 1)` before the first reconcile.
+Measured: `worst non-cycle gap 0.0`, `worst cyclic gap 0.0` — including the
+2-cycle's own two claims and two edges, which the test deliberately carries a
+`25 * 1e-3` tolerance for and never needed it. This does not contradict F-17:
+`SimulationController`'s `seed` randomizes *which host* runs next when
+several hosts have pending work (`step()`: `busy[rng.nextInt(busy.size)]`,
+falling back to `busy.first()` with one candidate), and `DialogueRuntime`
+constructs exactly **one** `ManagedHost`. With a single host and a fixed,
+non-interleaved admission order, there is nothing for the seed to
+randomize — every wave still executes in the same FIFO order regardless of
+seed. F-17's head-designation non-determinism is real but is a property of
+**admission order** (a shuffled set load, or turns swapped) and of
+**multi-host** scheduling, not of the `SimulationController` seed alone on a
+single host with fixed input order. `CycleProbeTest`'s own second-world
+probe demonstrates the same thing from the order side: it moves the head by
+swapping two turns, not by changing a seed. Recorded here rather than left as
+an unexplained "REPLAY-01 has teeth in F-17-land but not in F6.3's fixture" —
+the test still carries the tolerance and the cyclic-node bookkeeping (2aw.F6-D5
+still governs the *assertion*, even though this fixture's own measurement
+came in at the exact-equality end of the range it allows), because the next
+transcript or next pair of seeds may not.
+
+**A divergent seed policy, restated for this task** (2aw.F6-D3): none of
+this task's runs diverged. Had one, it would be kept and recorded here, not
+swapped for a friendlier seed or transcript.

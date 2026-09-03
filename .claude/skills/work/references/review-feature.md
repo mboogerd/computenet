@@ -4,6 +4,19 @@
 to a ~2KB preview with no marker, and the authorship bound (§5) and
 verdict-token rule (§8) are past the cut (computenet-bgdb).
 
+**AND IT EXCEEDS ONE READ CALL.** At ~1200 lines the Read tool's per-call cap
+lands around line 1013, so §7 (residual filing) and §8 (the literal `READY` /
+`DRAFT` verdict token SKILL.md 5e tests you on) are past the cut. The result
+does say it truncated — and three reviewers still reached those sections only
+by paging on unprompted, none of them told to (computenet-98cu). Take the
+second pass before you start: `Read(file_path=…, offset=1000)`.
+
+**THE TWO RULES THAT DECIDE YOUR OUTPUT, hoisted so a one-page reader has
+them:** your final message must carry the literal token `READY` or `DRAFT`
+(§8 says what each means and 5e refuses to act without one), and every
+residual you find is FILED, not left in prose (§7 says where it attaches).
+Neither is optional, and neither is a summary of the sections — read them.
+
 Every task here is closed and each passed its own acceptance criteria. That
 is not the same as the feature being done — tasks pass individually and
 still leave seams nobody owned or criteria no task claimed.
@@ -111,12 +124,19 @@ there is no `actionlint` here and `pip3 install pyyaml` is PEP-668 blocked, so
 do not hand-roll it per review:
 
 ```bash
-ruby .claude/skills/work/scripts/lint-workflow.rb .github/workflows/<file>.yml
+ruby .claude/skills/work/scripts/lint-workflow.rb \
+  .github/workflows/<file>.yml .github/actions/<name>/action.yml
 ```
 
 It parses the YAML and runs every `run:` block through `bash -n`, exiting
-non-zero on either failure. It does **not** know the Actions schema, so a
-misspelled key or a bad `uses:` ref still passes — say so rather than
+non-zero on either failure. **Pass composite actions too** — it walks a
+workflow's `jobs.*.steps[]` and an action's `runs.steps[]`. Until 2026-08-30 it
+walked only the first, so on `.github/actions/**` it printed `0 run-blocks
+checked` and exited 0: a vacuous lint that reads as a clean one, cited as
+coverage over a CI safety net that had just been factored INTO a composite
+action (computenet-f38z). It now says `NOTHING CHECKED` on any file it found no
+bash in, and that line is never coverage. It still does **not** know the Actions
+schema, so a misspelled key or a bad `uses:` ref passes — say so rather than
 implying the workflow is fully validated. (Host quirk that costs a retry:
 `YAML.unsafe_load_file` does not exist in this Ruby's Psych;
 `YAML.load(File.read(...))` is the form that works.)
@@ -150,7 +170,7 @@ returns nothing:
 
 **Say so in your first line, then proceed with an explicit NOT VERIFIED on
 every CI-dependent clause** — do not silently substitute your local macOS run
-for the six required checks, and do not invent a verdict for evidence that does
+for the required checks, and do not invent a verdict for evidence that does
 not exist yet. Your report hands the gate back to the orchestrator, which must
 open the PR and close it before shipping. Recording the gap prominently is the
 requirement, not a courtesy (computenet-a4cj).
@@ -524,6 +544,7 @@ So:
   ```bash
   .claude/skills/work/scripts/wait-checks.sh <pr-url>
   # SETTLED (0) / TIMEOUT-PENDING (4) / QUERY-FAILED (3 — nothing was checked)
+  # NO-RUN (5 — GitHub never built this head; never waited out, computenet-a5in)
   ```
 
   **But do not wait for pending checks — you are the wrong agent for it.**
@@ -539,9 +560,12 @@ So:
   the trap itself. You have **no inbound wake-up**; your turn ending IS your
   completion. A conditional verdict terminates, and waiting cannot.
 
-  You could not win the wait in any case: the ~9m20s window is smaller than
+  You could not win the wait in any case: the ~8m10s window is smaller than
   `build-test-fast` and cannot be widened inside the 600000 ms cap
-  (computenet-hil5), so a cold start needs two invocations. Exhaustion prints
+  (computenet-hil5), so a cold start needs two invocations. The script bounds
+  itself on WALL CLOCK, so it returns TIMEOUT-PENDING rather than running past
+  the cap and being auto-backgrounded — which it did twice, and which looks
+  like nothing at all rather than like a timeout (computenet-tl8q). Exhaustion prints
   each pending check's age plus `ORDINARY` or `STUCK`; only `STUCK` is a
   finding worth reporting.
 

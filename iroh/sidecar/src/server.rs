@@ -55,6 +55,15 @@ pub enum ServeOutcome {
 /// * a link's send queue **refuses** — host `DATA` past the bound is answered
 ///   with `ERROR` on that link and not sent, because waiting on it would block
 ///   the single host message loop for every link at once (computenet-3gij).
+///
+/// The sidecar's half of that ends at the `ERROR`: it keeps the link registered
+/// and keeps serving. What the *host* owes in reply is `CLOSE_LINK` on that link
+/// — an `ERROR` on an established link is terminal for it (`PROTOCOL.md` §2,
+/// Backpressure; computenet-ey4v). The rule lives on the host side rather than
+/// here on purpose: the sidecar closing the link itself would make a flood
+/// indistinguishable from a peer disconnecting, and would take away the one
+/// property `tests/protocol.rs` pins about a flooded link — that it, and every
+/// other link on the connection, still answers `CLOSE_LINK` and `SHUTDOWN`.
 const QUEUE_DEPTH: usize = 256;
 
 struct LinkHandle {

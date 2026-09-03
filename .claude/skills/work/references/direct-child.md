@@ -34,7 +34,7 @@ apply.
   starts and the PR exists to attach the review to. **Exception: a first
   commit KNOWN to be red** — the implementer said so, or you already know the
   branch fails — defers the open to the first commit believed green. A run
-  you know is red spends the full six-check cycle (~9–12 min,
+  you know is red spends the full required-check cycle (~9–12 min,
   computenet-678u) to report nothing, so the CI-churn bound (computenet-nxac)
   governs over the bright line here. computenet-a4cj's precondition binds
   unchanged: the PR must exist before the reviewer is dispatched
@@ -119,8 +119,9 @@ one file.** Nothing else bounds the count here, and 5b's batching by
 disjoint `metadata.files` cannot help — items on a friction epic *share* the
 file by construction. Beyond ~2, sequence: hold the next item until one
 lands. Each landing forces every sibling PR on that file to merge
-`origin/main`, and every such merge restarts all six required checks
-(~4 min) — which the next sibling landing can invalidate before it finishes,
+`origin/main`, and every such merge restarts all the required checks
+(~9-12 min wall, measured 2026-08-30; this said ~4 min before the current
+check set, then six) — which the next sibling landing can invalidate mid-run,
 so the churn grows faster than the PR count (computenet-nxac: three such
 cycles on one PR). 5e has the cheaper re-check tier for the merges you do
 still pay.

@@ -298,9 +298,21 @@ never answers `SERVED` outside `/work`: every modelled role is a `/work` role,
 so that would assert something false. The bare form, which claims nothing about
 a role, does credit a skill's own `SKILL.md` to its own readers.
 
-**Editing a script here? Run its sibling test** — `bash
-.claude/skills/remediate-friction/scripts/feedback.test.sh`. It is manual-only,
-wired into no gate, and this paragraph's own change went out red without it.
+**Editing a script? Run the sibling suites of everything the branch changed:**
+
+```bash
+.claude/skills/remediate-friction/scripts/sibling-tests.sh    # defaults to origin/main
+```
+
+It derives the set from the diff — name sibling (`foo.sh` -> `foo.test.sh`), else
+any `*.test.*` in that `scripts/` dir naming the file OUTSIDE a comment (a
+mention in prose is not coverage) — so it cannot go
+stale, and it covers `work/scripts/` as well as this lane's own. Exit 1 means a
+suite is RED; `NO-TEST` is reported and does not block. This replaces naming one
+suite literally, which reached neither of the two instances that filed
+computenet-hkjo: a script edit shipped with its suite unrun twice in one drain,
+once leaving this lane's own discrimination suite red, both caught by a reviewer
+rather than by the lane.
 
 `NOT-READ` means the fix is correct and invisible — computenet-l5rc's glob-trap
 remedy landed in a file the orchestrator never opens, so it recurred twice in a
@@ -321,15 +333,47 @@ dispatch carries (a bare Gradle or long command otherwise backgrounds at
 120s and the agent stalls). Ship per AGENTS.md's confidence rule — the
 reviewer certifies, you run `gh pr ready`.
 
-On merge:
+On merge — which normally arrives while the NEXT item is already in flight,
+so this is "when it merges, do this", not a barrier the loop below waits at:
 
 ```bash
 bd close <id> --reason "fixed in <pr-url> against skill revision <hash>"
 git worktree remove "$PWD/../computenet-worktrees/<id>"
 ```
 
-Repeat from step 2 while budget remains; this lane is cheap per item, so
-several items per session is normal.
+Take the next item without waiting — repeat from step 2 while budget remains; this lane is cheap per item, so
+several items per session is normal — **but keep at most ~2 PRs open against
+any one file, and the sharper unit here is the BUDGET ENTRY**: every PR that
+moves a budget touches `.claude/skills/line-budget.txt`, and two PRs raising
+the *same entry* always conflict; two raising different, non-adjacent ones do not.
+The ~2-per-file bound and its reason live in `work/references/direct-child.md`
+(computenet-nxac); restated here because an agent in this lane has no reason to
+open that file, and this is the lane that shares a file on most PRs. Measured
+2026-08-29: six items, five PRs open when one merged, and the four raising the
+`work` entry all went `DIRTY` in that minute while the fifth, raising
+`remediate-friction`, did not — four hand-resolved rebases of an append-only
+ledger, each restarting the required checks (~9-12m wall), two needing
+three `rebase --continue` rounds (computenet-x69c).
+
+**Hold the next item rather than opening its PR; holding is not idleness.**
+Verdicts that close an item (superseded, rejected, needs-evidence) need no PR,
+and neither does verifying the next claim or drafting its diff in a worktree.
+**A hold is only good within this session** — step 2's `--claim` set assignee
+*and* `in_progress`, so a session that ends still holding strands the item
+behind step 2's 12h stale-claim window. Either land it, or release it the way
+step 3 releases a park: `bd update <id> --assignee="" --status=open`.
+
+A script-only PR does not touch the ledger — the ratchet prices only `SKILL.md`
+and `references/*.md` — so it is exempt from the *entry* conflict, **not** from
+the ~2-per-file bound, which still applies to two PRs editing one script. The
+exception to even that: a change to `validate-skills.rb`'s counting method has
+to move every budget number in the same diff.
+
+**When two PRs do raise the same entry, the conflict is unavoidable and the
+resolution is a RECOMPUTE, not a merge**: the second number depends on the
+first's LANDED value, so neither side of the conflict is right. Take the landed
+number, re-measure, write the total. Picking a side mis-prices the growth
+silently — the validator only errors ABOVE budget, so an under-count passes.
 
 ## 5. Finalize
 

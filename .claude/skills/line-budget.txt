@@ -246,7 +246,125 @@
 # nothing. 5 lines survive here — the part that measured true and tells an agent
 # something to do. The other ~30 were a refutation with no action in it, which
 # is a bead comment, not a procedure file.
-work                9130
+# 9130 -> 9150 on 2026-08-30: computenet-2r22 (+20) — 16 lines bought 5b's
+# "scoping the gate is not sufficient" paragraph and the wall-clock-await rule
+# for going under the cap; the other 4 are the review's: the clause recording
+# that the cap's own arms were scoped, and the half-sentence keeping "scope
+# anyway" from being read as license to skip the paragraph above it. Recurrence of computenet-qmjd, whose prose remedy was followed
+# exactly and still reached load 204 on 16 cores. The mechanical half —
+# capacity.load1/advice from next-batch.py's load_advice() — costs no budget
+# lines, being script, and carries its own derivation in its docstring.
+# 9150 -> 9160 on 2026-08-30: computenet-1lbs (+10) — bought the hookup for
+# slot-elapsed.sh, which prints the AGE of the previous elapsed reading (the
+# script itself is not counted here). Third report of this friction
+# (computenet-776 -> hs90 -> 1lbs); the first two fixes were prose that made
+# each reading true and said nothing about how fast a true reading goes stale.
+# ~24 lines of prose rationale were compressed out of step 2 to hold the growth
+# down; 3 of the 10 are the review's must-fixes (the "largest in busy sessions"
+# clause the acceptance requires, and a sample output that had been wrong).
+# Recomputed against 2r22's LANDED 9150 rather than merged with the 9140 this
+# branch carried — two PRs raising the same number always conflict and the
+# second depends on the first's landed value (computenet-x69c).
+# 9160 -> 9166 on 2026-08-30: computenet-dh5x (+6) — bought gradle-evidence.md's
+# statement that a path junit-count.py could not RESOLVE OR READ answers
+# NO-SUCH-PATH (exit 2), not NO-RESULTS, and that neither code is evidence
+# about a suite; +2 of the 6 correct an adjacent pre-existing sentence that
+# told callers a module root exits NO-RESULTS, which the v38r patterns made
+# false. The mechanical half is in junit-count.py and costs no budget lines.
+# RECOMPUTED against 1lbs's landed 9160, not merged with the 9156 this branch
+# carried — the second number depends on the first's landed value
+# (computenet-x69c, whose fix for this is PR #594).
+# 9166 -> 9167 on 2026-08-30: computenet-x69c (+1) — direct-child.md's
+# "~4 min" per-merge check cost predated the current six-check set and is now
+# ~9-12m wall (measured 2026-08-30). Corrected in the same diff as the lane
+# text that cites it, so the cite and the citee cannot drift apart.
+# 9167 -> 9173 on 2026-08-30: computenet-a5in (+6) — bought 5e naming the
+# fourth check state (NO-RUN, exit 5, never waited out, because GitHub started
+# no run for this head), plus the review's: the same state in
+# review-feature.md's enumeration, which the bead named and the first pass
+# skipped, and the correction that there is no workflow to re-run — ci.yml has
+# no workflow_dispatch, so a push is the only remedy.
+# The mechanical half is in wait-checks.sh and costs no budget lines.
+# 9173 -> 9180 on 2026-08-30: computenet-f38z (+7) — bought review-feature.md
+# saying that lint-workflow.rb now walks composite actions too, and that a
+# NOTHING CHECKED line is never coverage. It walked only jobs.*.steps[], so on
+# .github/actions/** it printed "0 run-blocks checked" and exited 0 — a vacuous
+# lint cited as coverage over a CI safety net that had just been factored INTO
+# a composite action, i.e. the assertion itself was the unlinted script.
+# The mechanical half is in lint-workflow.rb and costs no budget lines.
+# 9180 -> 9190 on 2026-09-01: computenet-6eyp (+10) — bought the zsh `=word`
+# trap in epic.md and feature.md, the two files a BREAKDOWN dispatch reads.
+# The warning already existed, in agent-execution.md, which breakdowns are not
+# given: six hit it across two sessions, four after computenet-a49j closed.
+# Duplicated rather than LINKED, twice over: the defect being fixed is a
+# one-hop indirection nobody followed, and a breakdown reads its reference as
+# one `git show origin/main:<path>` blob, so a relative link is not a click.
+# It also names agent-execution.md in prose rather than as a markdown link, so
+# reachability.py still reports that file NOT-READ for the breakdown role —
+# a link would have flipped the gate to SERVED and spent the signal that
+# catches the NEXT misplacement there.
+# 9190 -> 9192 on 2026-09-01: computenet-3qdo (+2) — bought step 2's
+# description of wait-checks.sh saying the required set is READ FROM THE
+# RULESET each run. The literal 'all six' was the same drift the script
+# carried: the ruleset went to seven on 2026-08-31 and a PR shipped BLOCKED.
+# The mechanical half is in wait-checks.sh and costs no budget lines.
+# 9192 -> 9195 on 2026-09-01: computenet-i5zr (+3) — bought 5b's documented
+# return shape carrying `warnings`, and what a DIRECTORY claim costs. The
+# detector is mechanical and free; these 3 lines are what makes the orchestrator
+# act on it. Recomputed against the landed 9192, not stacked on the number
+# this branch was cut from — two PRs raising one entry always conflict, and
+# the second number depends on the first's landed value.
+# 9195 -> 9203 on 2026-09-02: computenet-v8kg (+8) — bought the statement that
+# the monitor's three tiers ARE the slot end minus 105m/60m/15m and are absolute
+# offsets, not fractions of the slot, plus the replacement tie-breaker (take the
+# more cautious rung and file it). The old text said "scale proportionally" and
+# handed a 15-minute window at every rung to whichever source permitted more
+# work; the mechanical half — slot-elapsed.sh's Finalize reserve and a 13-row
+# boundary grid — costs no budget lines. The 8th line is the monitor block's
+# own `SLOT=18000`, which lets the first tier's sleep be DERIVED ($((SLOT-6300)))
+# instead of hand-computed per slot length: one fewer place to get wrong.
+# 9203 -> 9209 on 2026-09-02: computenet-tl8q (+6) — bought the correction of
+# two sentences this fix falsified. Both said the wait window is "~9m20s, sized
+# to the 600000 ms cap"; sizing it AT the cap is exactly what got the call
+# auto-backgrounded twice, and the script now bounds itself on wall clock at
+# ~8m10s. Leaving them would re-open, in the other direction, the script-vs-prose
+# divergence this bead is about. The mechanical half costs no budget lines.
+# 9209 -> 9219 on 2026-09-02: computenet-z6q2 (+10) — bought 5b's return shape
+# carrying `running_elsewhere`, and the carve-out on the verify-ready paragraph
+# saying a READY task whose skip reason names a live unit outside the feature
+# must NOT be dispatched by hand. The mechanical half (next-batch.py seeding
+# its disjointness test with those claims) costs no budget lines, but it is
+# invisible: the orchestrator reads the documented return shape, and the
+# verify-ready line routed straight back into the bug. Recomputed against the
+# landed 9209, not stacked on the number this branch was cut from.
+# 9219 -> 9235 on 2026-09-02: computenet-98cu (+16) — bought review-feature.md's
+# opening banner: the file EXCEEDS ONE READ CALL (the cap lands near line 1016 of
+# 1200), and the two rules that decide a reviewer's output — the literal
+# READY/DRAFT verdict token and the residual-filing protocol, both in §§7-8, past
+# the cut — hoisted so a one-page reader has them. Three reviewers reached them
+# only by paging on unprompted, and 5e refuses to act without the token. Prose in
+# the file is the only fix available for the file that has the problem; the
+# mechanical half — a validator rule failing any reference over 900 lines that
+# does not say so in its first 50 — costs no budget lines and is what makes the
+# NEXT file to cross the line say it too.
+# and +3 more for the reviewer-dispatch template's "PAGE TO THE END" clause,
+# which is the bead's second acceptance criterion: the banner only helps a
+# reader who opens the file, and the template is what a dispatched reviewer
+# reads first.
+# 9235 -> 9245 on 2026-09-02: computenet-9src (+10) — bought 5b's statement that
+# the text check and the invariant symbol grep are COMPLEMENTARY and in which
+# order, plus the exception to "blind to anything that is not a path". The root
+# cause was not a weak script: on computenet-t446 the orchestrator ran the newer,
+# more elaborate symbol grep INSTEAD of this one, and a better script cannot fix
+# not being run. Recomputed against the landed 9235.
+# 9245 -> 9257 on 2026-09-02: computenet-s7az (+12) — bought the git grep \s
+# entry in agent-execution.md's "Commands that fail QUIETLY" list. The trap was
+# first written into AGENTS.md, which reachability.py says the ORCHESTRATOR
+# reads and the four dispatched roles do not — and the reporter was a feature
+# REVIEWER, hitting it while diffing symbols across revisions, which only git
+# grep can do. That is the computenet-l5rc shape exactly, and l5rc's own remedy
+# is dual-placed for the same reason. Recomputed against the landed 9245.
+work                9257
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
@@ -269,7 +387,27 @@ work                9130
 # the non-.md decline; +3 for the sentence that would have caught this: the
 # scripts have a sibling self-check (feedback.test.sh), it is wired into no
 # gate, and this change shipped red for want of running it.
-remediate-friction   353
+# 353 -> 384 on 2026-08-30: computenet-x69c (+31) — bought step 4's PR-
+# concurrency bound. Every PR this lane ships that moves a budget touches this
+# very file, so the bound in work/references/direct-child.md (which this lane
+# never opens) bites here hardest: six items on 2026-08-29 left five PRs open
+# when one merged, and the four raising the same ENTRY went DIRTY while the
+# fifth did not. Includes the recompute rule for the conflict, which is not
+# mechanically resolvable. +10 of the 31 are the review's: the entry-vs-file
+# discriminator the evidence actually shows, the release rule for a hold that
+# outlives the session (a claim left in_progress strands the item for 12h),
+# and narrowing the script exemption, which is from the ENTRY conflict and not
+# from the ~2-per-file bound.
+# 384 -> 396 on 2026-09-01: computenet-hkjo (+12) — bought sibling-tests.sh in
+# step 4, replacing a sentence that named ONE suite literally. The mechanical
+# half (the runner and its own 21-assertion suite) costs no budget lines; the
+# 12 are the call, what it selects, and what its two exits mean.
+# 396 -> 397 on 2026-09-02: computenet-qae3 (+1) — bought the clause saying a
+# merge normally arrives while the NEXT item is already in flight. "On merge:
+# ... Repeat from step 2" read literally is a barrier, so the ~2-PR bound two
+# lines below it was a dead letter to a literal reader; the 2026-08-29 drain
+# ran five PRs at once on the loose reading, and both readings were available.
+remediate-friction   397
 # 201 -> 267 on 2026-08-29: computenet-d1im — sync-report gains §4, the
 # coherence audit: five named checks over a bounded set (top up-next picks,
 # beads touched by window decisions, epics a merge may have absorbed), ranked

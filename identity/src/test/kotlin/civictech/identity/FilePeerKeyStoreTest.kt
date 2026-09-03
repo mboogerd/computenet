@@ -36,7 +36,7 @@ class FilePeerKeyStoreTest {
             Files.readAllBytes(store.publicKeyFile),
             "the persisted SPKI must be the key that was returned",
         )
-        assertEquals(fingerprint(identity.publicKey), identity.peerId)
+        assertEquals(fingerprint(identity.publicKey), identity.keyId)
     }
 
     @Test

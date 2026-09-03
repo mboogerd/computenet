@@ -23,6 +23,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
+import civictech.cell.link.KeyId
 import civictech.cell.link.allowPeers
 import civictech.cell.port.registerPort
 import io.kotest.matchers.shouldBe
@@ -186,7 +187,7 @@ private class SubscribeAuthorityMembrane(
         "outlet",
         organelle.outlet,
         policy = BoundaryPolicy(
-            linkAuthority = listOf(allowPeers(allowed)),
+            linkAuthority = listOf(allowPeers(KeyId(allowed.name))),
             protocolAuthority = mapOf(Protocols.Attention to ProtocolAuthority(ceiling = AttentionBand.LOW)),
         ),
     )
@@ -201,7 +202,7 @@ private class FlattenedAuthorityMembrane(
         "exposedOutlet",
         "outlet",
         organelle.outlet,
-        policy = BoundaryPolicy(linkAuthority = listOf(allowPeers(allowed))),
+        policy = BoundaryPolicy(linkAuthority = listOf(allowPeers(KeyId(allowed.name)))),
     )
 }
 
@@ -509,7 +510,7 @@ class BoundaryPolicyTest {
                 "exposedInlet",
                 "inlet",
                 organelle.inlet,
-                policy = BoundaryPolicy(linkAuthority = listOf(allowPeers(PeerId("trusted-peer")))),
+                policy = BoundaryPolicy(linkAuthority = listOf(allowPeers(KeyId("trusted-peer")))),
             )
         }
         val membraneRef = host.managementInlet.call.spawn(membrane)
@@ -670,7 +671,7 @@ class BoundaryPolicyTest {
                 "exposedInlet",
                 "inlet",
                 organelle.inlet,
-                policy = BoundaryPolicy(linkAuthority = listOf(allowPeers(PeerId("alice")))),
+                policy = BoundaryPolicy(linkAuthority = listOf(allowPeers(KeyId("alice")))),
             )
         }
         val membraneRef = host.managementInlet.call.spawn(membrane)

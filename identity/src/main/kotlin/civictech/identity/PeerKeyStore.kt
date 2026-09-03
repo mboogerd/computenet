@@ -102,10 +102,11 @@ class KeyStoreRefusedException internal constructor(
  * recomputed at load time. It is therefore stored — and, because a stored
  * public key can be *swapped*, every load re-establishes that the two halves
  * belong together with an in-memory sign/verify round trip. A pair that fails
- * it is [KeyStoreRefusal.KEYPAIR_MISMATCH]: the node's [PeerId] derives from
- * the public half, so a mismatched pair is precisely "this key does not match
- * its derived PeerId", and continuing would mean signing under a name we
- * cannot prove.
+ * it is [KeyStoreRefusal.KEYPAIR_MISMATCH]: the node's
+ * [KeyId][civictech.cell.link.KeyId] is the fingerprint of the public half and
+ * its [PeerId] is what that key identifier resolves to, so a mismatched pair is
+ * precisely "this key does not match its derived name", and continuing would
+ * mean signing under a name we cannot prove.
  *
  * **Nothing here regenerates.** Every failure path throws
  * [KeyStoreRefusedException]; none writes. Silent regeneration is the worst

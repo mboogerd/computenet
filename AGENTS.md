@@ -192,6 +192,20 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   finds them (computenet-fd9d). A zero result from `git grep -- <pathspec>`
   is evidence about the pathspec before it is evidence about the symbol:
   re-run zero-hit searches in a form whose failure would look different.
+- Fourth member, also git grep, and the easiest to hit: **git's basic and
+  extended regex engines have no Perl-style `\s`, `\d` or `\w`** — they need
+  the POSIX class. So `git grep -hE '^\s*@Test' <rev> -- 'iroh/src/test/*.kt'`
+  returns 0 while `'^[[:space:]]*@Test'` returns 46. Worse than silent: the
+  escape degrades to the LITERAL character, so `\d` matches the letter `d` and
+  can report false positives as readily as zeros. The habit transfers from
+  every other search an agent runs here — ripgrep, `grep -P`, the Grep tool all
+  accept `\s` — and only git grep answers wrongly. `git grep -P` does accept
+  it, on a PCRE-enabled build (this machine's is); `[[:space:]]` needs no such
+  build and is the portable form. It is reached most often while counting or
+  diffing symbols ACROSS REVISIONS, the one job only git grep can do and one
+  where a wrong zero directly weakens a verdict: a reviewer checking that a
+  test-only refactor had deleted no test method got 0 at both revisions
+  (computenet-s7az).
 
 ## Verification
 
@@ -267,10 +281,10 @@ Before declaring completion:
 ## Branches, PRs, and auto-merge
 
 `main` is protected by a repository ruleset: changes land only through a pull
-request, **six** required status checks must pass (`build-test-fast`,
+request, **seven** required status checks must pass (`build-test-fast`,
 `build-test-serial`, `concord-full`, `ui-test`, `agora-ui-test`,
-`kernel-test`), history stays linear, and the branch cannot be force-pushed or
-deleted. A direct push to `main` is rejected — always branch.
+`kernel-test`, `iroh-sidecar`), history stays linear, and the branch cannot
+be force-pushed or deleted. A direct push to `main` is rejected — always branch.
 
 That list is the ruleset's, not folklore — read it rather than trusting this
 paragraph if a check's status ever decides a ship:

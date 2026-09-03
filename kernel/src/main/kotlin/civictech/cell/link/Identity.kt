@@ -4,15 +4,114 @@ package civictech.cell.link
 interface Identity
 
 /**
- * G-29 phase 1 (M8.2): who is asking. A bridge ingress stamps every delivered
- * invocation with its transport peer's id; handshakes running during that
- * delivery see it on [LinkRequest.identity]. Local links carry null (= this
- * process). Authentication of the name is future work (43) — today it
- * identifies the *connection*, which the transport vouches for.
+ * **Which key authenticated a connection** — the key identifier, and *not* a
+ * durable identity (feature `computenet-376c`; maintainer decision on
+ * `computenet-aimh`, 2026-08-29).
+ *
+ * Consumed by **boundary admission**: allowlists ([allowPeers],
+ * `Peering.Side.allow`), refusals, and the self-assertion check on a hello.
+ * The question it answers is "may this connection in front of me be let in",
+ * which is a property of the key on the wire right now.
+ *
+ * **It MUST NOT be stored as attribution.** A key is replaceable under the
+ * peer it belongs to: rotate it and every record keyed on the old
+ * identifier names nobody. Anything that records *who a peer durably is* —
+ * mirrored `Remote` locations, per-`Principal` statements, moderation
+ * decisions — takes a [PeerId], resolved from a key identifier through
+ * [PeerIdentityBinding] and never by inspecting key material directly.
+ *
+ * Deliberately **not** an [Identity], **not** `@Serializable` and **not**
+ * `java.io.Serializable`: nothing persists or transmits a `KeyId` *as a
+ * type*. The hello and announcement frames carry plain strings and are
+ * unchanged by this feature.
+ *
+ * **Under [AuthLevel.TransportVouched] no key exists at all.** The slot then
+ * holds the identifier the peer *asserted* and the transport vouched for —
+ * exactly what [PeerId] meant before this feature. An Open/legacy-hello
+ * reader should not read the type's name as a promise that a key was
+ * presented or proved; only [AuthLevel.Authenticated] carries that.
+ */
+data class KeyId(val name: String)
+
+/**
+ * **Who a peer durably IS** — the peer identity, consumed by *attribution*.
+ *
+ * The counterpart of [KeyId], and the other half of the split the maintainer
+ * decision on `computenet-aimh` (2026-08-29) made necessary: identity becomes
+ * a stable name and a key becomes something bound to that name and
+ * replaceable under it, so one type can no longer carry both (feature
+ * `computenet-376c`). While identity was *defined as* the key fingerprint the
+ * conflation was invisible, because the two were the same value.
+ *
+ * Consumers — every one of these means the durable identity, never the key:
+ * - [PeerStamp.id], and therefore [CurrentPeer] and
+ *   `civictech.cell.proxy.HostedPortInvocation`;
+ * - `civictech.cell.membrane.Principal.Peer.id` (`currentPrincipal()`);
+ * - `civictech.cell.link.LinkRequest.identity`, which is built from
+ *   [CurrentPeer.get];
+ * - `civictech.cell.location.LocationRegistry.Remote.peer` (mirrored
+ *   attribution);
+ * - `civictech.cell.wire.AnnouncementSigningInput.mintingPeerId`.
+ *
+ * **It is NOT derived from key material anywhere except through
+ * [PeerIdentityBinding].** That seam is the single place the derivation
+ * lives; there is no second site.
+ *
+ * G-29 phase 1 (M8.2) origin: a bridge ingress stamps every delivered
+ * invocation with the identity it resolved for its transport peer; handshakes
+ * running during that delivery see it on `LinkRequest.identity`. Local links
+ * carry null (= this process).
+ *
+ * The name, the `@SerialName` and the `java.io.Serializable` marker are
+ * deliberately unchanged: the serial name is a compatibility surface, and
+ * renaming the type across its ~75 referencing files would be churn with no
+ * semantic gain.
  */
 @kotlinx.serialization.Serializable
 @kotlinx.serialization.SerialName("PeerId")
 data class PeerId(val name: String) : Identity, java.io.Serializable
+
+/**
+ * The one seam that resolves a [KeyId] to the [PeerId] it belongs to
+ * (feature `computenet-376c`).
+ *
+ * Shaped like `civictech.cell.membrane.SignatureVerifier`: the kernel
+ * *declares* the seam and ships a default in the companion; a later binding
+ * (DSC4's anchor-vouched names, supplied from `:identity`) is injected rather
+ * than compiled in. Admission decides on the key; whatever it admits is
+ * stamped with the identity this binding resolves.
+ */
+fun interface PeerIdentityBinding {
+    /** The durable identity of the peer that key [key] belongs to. */
+    fun identityOf(key: KeyId): PeerId
+
+    companion object {
+        /**
+         * The **INTERIM** binding (feature `computenet-376c`): a peer's
+         * identity is its key identifier's own name.
+         *
+         * **This lambda body is THE ONE place an identity is derived from a
+         * key identifier.** The whole point of the seam is that the
+         * derivation has a single named home, so that when DSC4 lands
+         * anchor-vouched stable names it replaces *this default binding* and
+         * not a scattering of call sites. If you find yourself writing
+         * `PeerId(someKey.name)` — or a fingerprint-to-`PeerId` step —
+         * anywhere else, that is the second site this seam exists to
+         * prevent.
+         *
+         * It makes the split behaviour-preserving today: identity and key
+         * identifier hold the same string, which is exactly what they held
+         * before the two types existed.
+         *
+         * **`[DSC1-NV-01]` remains EXPLICITLY UNVERIFIED.** This seam claims
+         * nothing about stolen-key resistance — an attacker holding a peer's
+         * key is still that peer as far as this binding is concerned (epic
+         * `computenet-5y8t` residual R4). Naming the derivation does not
+         * strengthen it.
+         */
+        val Interim: PeerIdentityBinding = PeerIdentityBinding { PeerId(it.name) }
+    }
+}
 
 /**
  * How strongly a peer's [PeerId] is vouched for (spec 40/43, DSC1
@@ -74,6 +173,12 @@ enum class AuthLevel { TransportVouched, Authenticated }
  * [TransportVouched][AuthLevel.TransportVouched] is the default, which is what
  * keeps every pre-DSC1 caller at exactly today's behaviour
  * (`[DSC1-WIRE-06]`).
+ *
+ * **[id] is the IDENTITY, never the key identifier** (feature
+ * `computenet-376c`). A stamp is attribution: it says who the delivery is
+ * *from*, which outlives any particular key. The admitting side judges the
+ * connection on its [KeyId] and stamps the [PeerId] it resolved through its
+ * [PeerIdentityBinding]; a `KeyId` never reaches this slot.
  */
 data class PeerStamp(val id: PeerId, val auth: AuthLevel = AuthLevel.TransportVouched)
 

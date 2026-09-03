@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for create-ticket.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "12 passed, 0 failed".
+# Expect "13 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/create-ticket.sh"}
@@ -19,6 +19,8 @@ case "$1" in
     [ -f "$CTRL/create-garbage" ] && { echo "not json"; exit 0; }
     echo '{"id":"computenet-h4sh"}' ;;
   update)
+    # bd really does print this, on STDOUT — the whole of computenet-5ari.
+    echo "✓ Updated issue: $2"
     case "$*" in
       *--parent*) [ -f "$CTRL/parent-fail" ] && exit 1 ;;
       *--claim*)  [ -f "$CTRL/claim-fail" ] && exit 1 ;;
@@ -102,6 +104,12 @@ out=$("$SCRIPT" --type bug --title t --parent p --desc-file "$CTRL/body.txt" 2>&
   && ok "--desc-file body reaches bd verbatim" || bad "desc-file: exit=$st log=$(cat "$BD_LOG")"
 out=$("$SCRIPT" --type bug --title t --parent p --desc-file "$CTRL/missing.txt" 2>&1); st=$?
 [ "$st" = 2 ] && ok "missing --desc-file is exit 2" || bad "missing file: exit=$st out=$out"
+
+# 5ari: stdout is the id and nothing else, so T=$(create-ticket.sh ...) works
+fixture
+id=$("$SCRIPT" --type bug --title t --parent computenet-wpvy --claim 2>/dev/null); st=$?
+[ "$st" = 0 ] && [[ "$id" =~ ^computenet-[a-z0-9.]+$ ]] \
+  && ok "stdout is the bare id" || bad "stdout: exit=$st id=$(printf %q "$id")"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -1,16 +1,37 @@
-// :iroh has no JVM sources in this feature — it wraps the Rust crate at
-// iroh/sidecar/ (egl.1-D1) behind a Gradle flag, so it applies only the
-// `base` plugin (lifecycle tasks: build, check, clean) and NOT
-// buildsrc.convention.kotlin-jvm, which this module has no use for.
+// :iroh is the JVM half of the iroh adoption (DSC0, epic `computenet-egl`): it
+// wraps the Rust crate at iroh/sidecar/ (egl.1-D1) and speaks that crate's
+// local-socket protocol (iroh/sidecar/PROTOCOL.md) from Kotlin.
 //
-// egl.1-D4: the flag is the project property `iroh.enabled`
-// (-Piroh.enabled=true). Cargo tasks are registered ONLY when the property
-// is set — a registered-but-disabled task would still let Gradle resolve and
-// configure a cargo invocation on the default path, which is the wrong
-// shape. On the unset path this module has no cargo task at all: `./gradlew
-// :iroh:build` and `./gradlew build` never touch a Rust toolchain.
+// egl.1-D4: the cargo flag is the project property `iroh.enabled`
+// (-Piroh.enabled=true). Cargo tasks are registered ONLY when the property is
+// set — a registered-but-disabled task would still let Gradle resolve and
+// configure a cargo invocation on the default path, which is the wrong shape.
+// On the unset path this module has no cargo task at all: `./gradlew :iroh:build`
+// and `./gradlew build` never touch a Rust toolchain. The JVM half compiles and
+// its codec tests run on that default path; only the tests that spawn a sidecar
+// are skipped, by the assumption in `SidecarBinary` (egl.2's rule 5).
 plugins {
-    base
+    // Shared code is located in `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`.
+    id("buildsrc.convention.kotlin-jvm")
+}
+
+// egl.2 rule 2: the dependency direction is `:iroh -> :kernel`, never the
+// reverse, exactly as wire/build.gradle.kts documents for `:wire`.
+//
+// `:identity` joined it in feature egl.3: admission over this transport is a
+// public-key allowlist over the key fingerprinted from the connection's iroh
+// NodeId, and `civictech.identity` owns both halves of that — the raw-bytes to
+// `PublicKey` conversion (`Ed25519.publicKeyFromRaw`) and the one `fingerprint`
+// function in the repo. Deriving either here would be a second scheme.
+//
+// Still no `:wire`: this module has no business on another transport's
+// classpath. `:identity` itself depends only on `:kernel`, so the direction
+// stays `:iroh -> {:identity, :kernel} `, never the reverse.
+dependencies {
+    implementation(project(":kernel"))
+    implementation(project(":identity"))
+
+    testImplementation(project(":testkit"))
 }
 
 if (project.hasProperty("iroh.enabled")) {
@@ -32,6 +53,24 @@ if (project.hasProperty("iroh.enabled")) {
         dependsOn(cargoBuild)
         workingDir = sidecarDir.asFile
         commandLine("cargo", "test")
+    }
+
+    // egl.2-D2: the ONLY channel by which a test locates the sidecar. Set only
+    // on the flag-set path, so an unset build leaves the property absent and
+    // every sidecar-backed test takes its JUnit assumption. The path is cargo's
+    // default-bin convention for the `computenet-iroh-sidecar` package
+    // (iroh/sidecar/Cargo.toml), confirmed by a flag-set build.
+    val sidecarBinary = sidecarDir.file("target/debug/computenet-iroh-sidecar")
+    tasks.withType<Test>().configureEach {
+        dependsOn(cargoBuild)
+        systemProperty("iroh.sidecar.binary", sidecarBinary.asFile.absolutePath)
+        // computenet-o0m3.3: forward -Piroh.relay.url=<url>, when given, as the
+        // same-named JVM system property SidecarProcess.spawn reads to steer
+        // every spawned sidecar onto one relay. Absent the -P flag, no property
+        // is set and spawn args are unchanged.
+        if (project.hasProperty("iroh.relay.url")) {
+            systemProperty("iroh.relay.url", project.property("iroh.relay.url") as String)
+        }
     }
 
     // Exec's default behavior already fails the Gradle build on a nonzero

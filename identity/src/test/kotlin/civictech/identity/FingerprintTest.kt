@@ -13,27 +13,32 @@ import kotlin.test.assertNotSame
 import kotlin.test.assertTrue
 
 /**
- * Derivation stability ([DSC1-KEY-02..03]): the [PeerId] is a pure, total
- * function of the public key, in one fixed textual form.
+ * Derivation stability ([DSC1-KEY-02..03]): the `civictech.cell.link.KeyId` is
+ * a pure, total function of the public key, in one fixed textual form.
+ *
+ * What [fingerprint] returns is a **key identifier** since feature
+ * `computenet-376c` — the identity it belongs to is resolved from it through
+ * `civictech.cell.link.PeerIdentityBinding`. The textual form pinned here is
+ * unchanged, byte for byte.
  */
 class FingerprintTest {
 
     @Test
     fun `textual form is ed25519 prefixed unpadded base64url of the SHA-256 SPKI digest`() {
         val publicKey = Ed25519.generateKeyPair().public
-        val peerId = fingerprint(publicKey)
+        val keyId = fingerprint(publicKey)
 
         val expectedDigest = MessageDigest.getInstance("SHA-256").digest(publicKey.encoded)
         val expected = "ed25519:" + Base64.getUrlEncoder().withoutPadding().encodeToString(expectedDigest)
-        assertEquals(expected, peerId.name)
+        assertEquals(expected, keyId.name)
 
-        assertTrue(peerId.name.startsWith("ed25519:"), peerId.name)
+        assertTrue(keyId.name.startsWith("ed25519:"), keyId.name)
         assertEquals(PEER_ID_PREFIX, "ed25519:")
         // 8 characters of prefix + 43 of unpadded base64url over a 32-byte digest.
-        assertEquals(51, peerId.name.length, peerId.name)
-        assertEquals(PEER_ID_LENGTH, peerId.name.length)
+        assertEquals(51, keyId.name.length, keyId.name)
+        assertEquals(PEER_ID_LENGTH, keyId.name.length)
 
-        val body = peerId.name.removePrefix(PEER_ID_PREFIX)
+        val body = keyId.name.removePrefix(PEER_ID_PREFIX)
         assertEquals(43, body.length, body)
         assertTrue(body.none { it == '=' }, "base64url must be unpadded: $body")
         assertTrue(body.none { it == '+' || it == '/' }, "must be the URL alphabet, not standard base64: $body")
@@ -48,7 +53,7 @@ class FingerprintTest {
     }
 
     @Test
-    fun `equal keys derive equal PeerIds and unequal keys derive unequal PeerIds`() {
+    fun `equal keys derive equal KeyIds and unequal keys derive unequal KeyIds`() {
         val a = Ed25519.generateKeyPair().public
         val b = Ed25519.generateKeyPair().public
 

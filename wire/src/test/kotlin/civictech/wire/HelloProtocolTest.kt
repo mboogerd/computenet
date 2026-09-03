@@ -3,6 +3,7 @@ package civictech.wire
 import civictech.cell.DenialReason
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.wire.DEFAULT_NONCE_RETENTION_MILLIS
 import civictech.cell.wire.PeerAuthPolicy
@@ -421,7 +422,7 @@ class HelloProtocolTest {
         side.credentials shouldBe null
         // Unchanged admission: no allowlist means everything is admitted.
         side.admits(null) shouldBe true
-        side.admits(PeerId("jvm-a")) shouldBe true
+        side.admits(KeyId("jvm-a")) shouldBe true
     }
 
     @Test

@@ -1,6 +1,7 @@
 package civictech.wire
 
 import civictech.cell.DenialReason
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.wire.DEFAULT_NONCE_RETENTION_MILLIS
 import civictech.cell.wire.PeerCredentials
@@ -370,12 +371,16 @@ fun helloBytesCannotBeMisparsedByLegacy(line: String): Boolean = !line.startsWit
  * [PEER_ID_PREFIX] plus 43 unpadded-base64url characters, total
  * [PEER_ID_LENGTH].
  *
- * A *shape* check, not a verification — it says the claim could be a
- * fingerprint, never that it is *this* peer's. The binding between key and name
- * is checked by deriving the fingerprint from the presented key and comparing
- * (`DenialReason.ID_MISMATCH`, `[DSC1-HELLO-06]`), which is the admission
+ * A *shape* check on a **claimed identity**, not a verification — it says the
+ * claim has the form a key identifier takes, never that it is *this* peer's
+ * (feature `computenet-376c`; the value checked is the `PeerId` a `HELLO2`
+ * asserts, and the form it is checked against is the key-derived one). The
+ * binding between key and name is checked by fingerprinting the presented key,
+ * resolving that `civictech.cell.link.KeyId` through the side's
+ * `civictech.cell.link.PeerIdentityBinding`, and comparing
+ * (`DenialReason.ID_MISMATCH`, `[DSC1-HELLO-06]`) — which is the admission
  * point's job. Rejecting the wrong shape here means a claimed id that could not
- * possibly be a fingerprint never reaches that comparison, and never becomes a
+ * possibly be key-derived never reaches that comparison, and never becomes a
  * `PeerId`.
  */
 fun isKeyDerivedPeerIdForm(name: String): Boolean {
@@ -688,6 +693,15 @@ class HelloReplayGuard(
  * discipline `[DSC1-KEY-09]` puts on the type it wraps.
  */
 class PeerIdentityCredentials(private val identity: PeerIdentity) : PeerCredentials {
+    /** The fingerprint of the wrapped identity's public half — what admission judges. */
+    override val keyId: KeyId = identity.keyId
+
+    /**
+     * The identity the wrapped `PeerIdentity` resolved [keyId] to, forwarded
+     * rather than recomputed: `PeerIdentity.peerId` already goes through the
+     * kernel's one `civictech.cell.link.PeerIdentityBinding`, and this adapter
+     * must not become a second derivation site (feature `computenet-376c`).
+     */
     override val peerId: PeerId = identity.peerId
 
     private val spki: ByteArray = requireNotNull(identity.publicKey.encoded) {

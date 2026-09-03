@@ -136,6 +136,23 @@ class TranscriptSource(
      * outside the graph.
      */
     private val sleeper: (Long) -> Unit = { millis -> if (millis > 0) Thread.sleep(millis) },
+    /**
+     * Utterances already admitted by a prior process, WITHOUT going through
+     * [ops] (computenet-2aw.4.1, [AGO1-DUR-01] "admitted-utterance set
+     * recovers"). After a WAL recovery the `utterances` `SetCell` already
+     * holds these — a caller replaying a journal spawns the pipeline under
+     * the same [DialoguePipeline.build] `namespace` and recovers the host
+     * BEFORE constructing this source — but the driver's own ledger
+     * ([admitted], [lastAdmittedTurn], the [offer] dedup/turn-order checks)
+     * starts empty every time, since it lives here and not in the cell.
+     * Seeding it from [recovered] re-synchronizes the driver with the cell
+     * it is about to keep driving, with zero calls on [ops]: a second
+     * `ops.add` for an utterance the cell already holds would mint a second
+     * add-tag for it, which is exactly the divergence the ordering rule in
+     * [civictech.cell.host.KeyedCells]'s KDoc (M10.1) warns a recovering
+     * driver into.
+     */
+    recovered: Collection<Utterance> = emptyList(),
 ) {
 
     private val admittedInOrder = mutableListOf<Utterance>()
@@ -144,6 +161,27 @@ class TranscriptSource(
 
     /** Index into [transcript] that [step] reads next; moved by [replay]. */
     private var cursor: Int = 0
+
+    init {
+        // Seed the ledger from the recovered set, sorted into event order —
+        // [recovered] carries no ordering guarantee of its own (it is likely
+        // a SetCell's membership, unordered). admittedById/lastTurn end
+        // exactly as if every recovered utterance had been offer()'d in turn
+        // order, without the ops.add side effect offer() would otherwise make.
+        recovered.sortedBy { it.turn }.forEach { utterance ->
+            admittedInOrder += utterance
+            admittedById[utterance.id] = utterance
+            lastTurn = utterance.turn
+        }
+        // Advance the cursor past every recovered turn present in
+        // [transcript], so a subsequent replay()/step() resumes after what
+        // was already admitted rather than re-offering it (which offer()
+        // would reject outright once it hits a non-advancing turn, or accept
+        // as a same-id/same-content no-op if it got that far — neither is
+        // "resume").
+        cursor = transcript.indexOfFirst { it.turn > (lastTurn ?: Int.MIN_VALUE) }
+            .let { if (it < 0) transcript.size else it }
+    }
 
     /** The utterances admitted so far, in admission order. */
     val admitted: List<Utterance> get() = admittedInOrder.toList()

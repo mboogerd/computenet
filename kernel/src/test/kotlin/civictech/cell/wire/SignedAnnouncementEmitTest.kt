@@ -7,6 +7,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.host.TopologyLink
+import civictech.cell.link.KeyId
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
@@ -54,6 +55,14 @@ class SignedAnnouncementEmitTest {
 
     /** See the class KDoc: data, not cryptography ([DSC1-WIRE-04]). */
     private class FakeCredentials(override val peerId: PeerId) : PeerCredentials {
+        /**
+         * A test double's key identifier: the same string as [peerId], which is
+         * what `PeerIdentityBinding.Interim` resolves between anyway (feature
+         * `computenet-376c`). Nothing here fingerprints a key — the kernel
+         * treats credentials as data ([DSC1-WIRE-04]).
+         */
+        override val keyId: KeyId = KeyId(peerId.name)
+
         override val publicKey: ByteArray = "public-key-of-${peerId.name}".toByteArray()
         override fun sign(message: ByteArray): ByteArray = "SIG(".toByteArray() + message + ")".toByteArray()
     }

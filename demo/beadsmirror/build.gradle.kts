@@ -23,6 +23,13 @@ dependencies {
     implementation(project(":kernel"))
     implementation(project(":demo:shell"))
     implementation(project(":wire"))
+    // computenet-egl.4.1: the second MirrorTransport binding
+    // (IrohMirrorTransport), which carries the same peering over an iroh QUIC
+    // link. This does NOT put cargo on the default compile path: :iroh
+    // registers its cargo tasks only inside `if
+    // (project.hasProperty("iroh.enabled"))`, so on the unset path :iroh is an
+    // ordinary pure-JVM module and this dependency costs a Kotlin compile.
+    implementation(project(":iroh"))
     // `--listen 0` lets this node pick its own port and `MirrorPeering.boundWsPort`
     // reads back which one it got (computenet-dqy.25) — that accessor is
     // `WsTransport.WsListener`'s inherited `WebSocketServer.getPort()`, and
@@ -46,6 +53,33 @@ dependencies {
 // before changing anything about this module's test concurrency, and in
 // particular before adding a test that binds a port by any means other than
 // `bind(0)`-and-keep-it.
+
+// computenet-egl.4.1: the sidecar-locating wiring for this module's
+// iroh-backed tests, guarded by the SAME project property iroh/build.gradle.kts
+// guards its cargo tasks with. The guard is load-bearing, not cosmetic: the
+// ":iroh:cargoBuild" task does not EXIST outside it, so an unguarded reference
+// fails at configuration time on every default build. On the unset path this
+// block contributes nothing and the module's build is byte-for-byte what it
+// was before — no cargo, no system property, and every iroh-backed test here
+// takes IrohSidecarGate's JUnit assumption and reports SKIPPED.
+//
+// The binary path is cargo's default-bin convention for the
+// `computenet-iroh-sidecar` package, the same expression iroh/build.gradle.kts
+// uses.
+if (project.hasProperty("iroh.enabled")) {
+    val sidecarBinary = File(rootDir, "iroh/sidecar/target/debug/computenet-iroh-sidecar")
+    tasks.withType<Test>().configureEach {
+        dependsOn(":iroh:cargoBuild")
+        systemProperty("iroh.sidecar.binary", sidecarBinary.absolutePath)
+        // computenet-o0m3.3: same forwarding as iroh/build.gradle.kts — pass
+        // -Piroh.relay.url=<url> through as the JVM system property
+        // SidecarProcess.spawn reads, so one -P flag steers every sidecar this
+        // module's tests spawn (including IrohMirrorTransport's).
+        if (project.hasProperty("iroh.relay.url")) {
+            systemProperty("iroh.relay.url", project.property("iroh.relay.url") as String)
+        }
+    }
+}
 
 application {
     mainClass = "civictech.demo.beadsmirror.BeadsMirrorAppKt"

@@ -553,6 +553,11 @@ bd comment <id> --file "$SCRATCH/note.md"   # any body that quotes code
 Use the `--file` form whenever the text contains backticks: inside a
 double-quoted argument they execute as shell and the word vanishes from the
 stored comment while `bd` reports success ([bd-traps.md](bd-traps.md)).
+
+**Your shell is zsh.** An unquoted `echo ===` separator dies (`== not found`)
+— `=word` is filename-of-command expansion. Quote it (`echo '==='`) or use
+`printf`. Six breakdown agents have hit this (computenet-a49j, computenet-6eyp).
+
  Leave it `in_progress` — a feature
 closes only when its PR merges, never on task completion or a review verdict
 (review-feature.md: "Ready is not merged"). Report the task ids.
