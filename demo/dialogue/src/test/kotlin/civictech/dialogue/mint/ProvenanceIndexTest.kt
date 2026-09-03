@@ -203,6 +203,62 @@ class ProvenanceIndexTest {
         assertEquals(setOf("u3"), rig.relationProvenance(relationKey))
     }
 
+    /**
+     * [AGO1-PROV-01] indexes the utterances justifying every **canonical**
+     * relation, and [AGO1-REL-03] holds a relation whose endpoint is not yet
+     * minted PENDING rather than canonical. The two together mean a pending
+     * relation must have no provenance entry at all — the index is fed from
+     * the *resolvable* stream, not from the pending-inclusive candidate
+     * stream one hop upstream.
+     *
+     * Filed as a feature-level gap in review of computenet-2aw.3: with the
+     * relation-provenance fold linked off `nonSelfRelations` (pending
+     * included) instead of `resolvableRelations`, every other test in this
+     * module stayed green — `RelationMintTest`'s pending cases assert on
+     * `canonicalRelations` only, and this file's relation cases never
+     * observed a pending relation.
+     */
+    @Test
+    fun `PROV-01 pending half - a pending relation has no provenance entry, and returning to pending removes it`() {
+        val rig = Rig(extractor(relationItems))
+
+        val relationKey = RelationMint.relationKey(claimKey(dogsBark), claimKey(catsPurr), Polarity.SUPPORT)
+
+        // u2 and u3 only: "Dogs bark." is minted (by both), "Cats purr." is
+        // NOT — u1 is withheld — so the relation's TARGET endpoint is unminted
+        // and the candidate is held pending by the second semijoin.
+        rig.admit(u2)
+        rig.admit(u3)
+        assertTrue(
+            rig.relationAggregateView.current().isEmpty(),
+            "precondition [AGO1-REL-03]: the relation is pending, so no canonical relation exists",
+        )
+        assertTrue(
+            rig.relationProvenanceView.current().isEmpty(),
+            "a PENDING relation must have no provenance entry — the index is fed from the resolvable " +
+                "stream, not from the pending-inclusive candidate stream [AGO1-PROV-01]/[AGO1-REL-03]",
+        )
+
+        // Minting the missing endpoint resolves it: both the canonical
+        // relation and its provenance entry appear.
+        rig.admit(u1)
+        assertEquals(setOf(relationKey), rig.relationAggregateView.current().keys, "the relation is now canonical")
+        assertEquals(setOf("u3"), rig.relationProvenance(relationKey), "and its provenance names its sole contributor")
+
+        // Retracting that endpoint's only claim returns the relation to
+        // PENDING — the provenance entry must go with it, not linger.
+        rig.retract(u1)
+        assertTrue(
+            rig.relationAggregateView.current().isEmpty(),
+            "precondition: the relation is pending again once its target endpoint's claim is retracted",
+        )
+        assertFalse(
+            relationKey in rig.relationProvenanceView.current(),
+            "a relation returning to PENDING must lose its provenance entry in the same reconciliation " +
+                "[AGO1-PROV-01]/[AGO1-PROV-03]",
+        )
+    }
+
     @Test
     fun `PROV-03 - retracting one utterance removes it from every provenance set in the same reconciliation`() {
         val rig = Rig(extractor(relationItems))
