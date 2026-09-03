@@ -524,7 +524,8 @@ canonical relation fold re-opens this finding.
 
 **Honest limit of this entry**: the reproduction covers `SemiJoinCell`'s gate.
 `CombineLatestCell` shares `WaveGate` verbatim and so must share the defect,
-but that was not measured. Nor was the relay proposal (1) prototyped — its
+which was not measured when this entry was written — it since has been, see
+**Measured** below. Nor was the relay proposal (1) prototyped — its
 cost is argued, not weighed. And the "withheld permanently at rest" claim is
 about *this* graph's quiescence: a graph that keeps receiving waves on every
 arm sees only the lag.
@@ -542,7 +543,14 @@ still-incomplete other side) does not withhold — it **emits a wrong value**, a
 null-extension the gate exists specifically to suppress, and nothing retracts
 it until a later wave on the stalled arm forces a correcting flush (or forever,
 at rest). That is arguably worse than `SemiJoinCell`'s case: the wire carries a
-value that looks settled and is not, rather than carrying nothing.
+value that looks settled and is not, rather than carrying nothing. Which
+emission is the anomaly, precisely: the **one-hop control** emits that same
+null-extension for a genuinely one-sided key and then corrects it when the
+other side arrives, so the null-extension is not itself the defect. What the
+two-hop case loses is the *correction* — the null-extension is delivered late
+(under wave 1's identity, while wave 2's other side was already in hand) and is
+the last value on the wire at rest, with both real operands settled inside the
+cell.
 `WaveFrontier` and `AlignedCompositeCell` were not measured; both mirror the
 same static-frontier/CP-A3-non-relay shape `WaveGate` does (this entry's
 Mechanism paragraph, and `WaveGate`'s own KDoc), so the same failure is
