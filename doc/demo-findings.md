@@ -476,7 +476,12 @@ of the waves:
 lands on the gated edge` (green) and `disjoint-wave arms TWO hops deep
 withhold output at rest - the absorb-ack dies at the intervening hop`. Same
 rig, same disjoint waves, only the hop count differs — which is what pins the
-mechanism to ack non-relay rather than to the wave partition itself.
+mechanism to ack non-relay rather than to the wave partition itself. The same
+file's `CombineDisjointArmRig` and its own control/case pair (`control -
+CombineLatestCell disjoint-wave arms one hop deep settle...` /
+`CombineLatestCell disjoint-wave arms TWO hops deep emit a null-extension that
+is never corrected at rest...`) repeat the measurement for `CombineLatestCell`
+— see "Measured" below.
 
 **Why it's a gap**: "derive two arms from one stream, split by element kind,
 and join them" is generic incremental dataflow, not an AGO1 shape, and it is
@@ -523,3 +528,24 @@ but that was not measured. Nor was the relay proposal (1) prototyped — its
 cost is argued, not weighed. And the "withheld permanently at rest" claim is
 about *this* graph's quiescence: a graph that keeps receiving waves on every
 arm sees only the lag.
+
+**Measured (computenet-u0oa, 2026-09-03)**: `CombineLatestCell` does share the
+defect, extending `FrontierGatedEmissionTest`'s disjoint-wave-arm rig
+(`CombineDisjointArmRig`) to `CombineLatestCell` — same one-hop-settles /
+two-hop-withholds control/case pair, same arm shape (a kind-filtering head that
+CP-A3 absorb-acks every other wave, followed by `hops - 1` pure identity hops),
+gated cell and wire type (`MapDelta`) swapped and nothing else, so the green
+one-hop control pins the mechanism to the same ack non-relay as `SemiJoinCell`'s.
+The manifestation differs from `SemiJoinCell`'s complete silence, though, in a
+way that matters: `CombineLatestCell`'s premature reconciliation (against a
+still-incomplete other side) does not withhold — it **emits a wrong value**, a
+null-extension the gate exists specifically to suppress, and nothing retracts
+it until a later wave on the stalled arm forces a correcting flush (or forever,
+at rest). That is arguably worse than `SemiJoinCell`'s case: the wire carries a
+value that looks settled and is not, rather than carrying nothing.
+`WaveFrontier` and `AlignedCompositeCell` were not measured; both mirror the
+same static-frontier/CP-A3-non-relay shape `WaveGate` does (this entry's
+Mechanism paragraph, and `WaveGate`'s own KDoc), so the same failure is
+expected there too, but "shares the code" is exactly the inference this
+measurement exists to not repeat on a third and fourth cell — that pair stays
+an open gap.
