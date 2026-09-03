@@ -49,6 +49,23 @@ import kotlin.test.assertTrue
  * the G-19 residual. `TranscriptGenerator.UTTERANCE_COUNT` is the only cost
  * lever the task allows.
  *
+ * ### Which classification picks the tolerance (computenet-7iys)
+ *
+ * `seed % 2` only selects which shape [TranscriptGenerator] is asked to
+ * *attempt* — it decides `intendedCyclic`, the argument to
+ * [TranscriptGenerator.generate]. The tolerance below is instead read off the
+ * **final live digraph** (`generated.live` folded through
+ * [DialogueBatchReference], the same source the credence comparison already
+ * builds `batch` from), because a seed's transcript can close a cycle before
+ * retractions and settle acyclic after them — exactly the defect
+ * `OrderIndependenceTest` measured on seed 3 for BS-09's sibling sweep. Using
+ * seed parity here would compare an acyclic live digraph at `25 * 1e-3`
+ * instead of the exact `1e-9` bound the DAG case can actually meet, silently
+ * skipping the exactness half of the feature criterion on that seed. The
+ * sweep also asserts non-vacuity: at least one seed's final live digraph must
+ * genuinely be cyclic, or the cyclic tolerance and its measured gap would be
+ * unexercised.
+ *
  * ### The retraction-blind control
  *
  * A green differential test proves nothing if the reference cannot disagree.
@@ -130,11 +147,17 @@ class IncrementalEqualsBatchTest {
         // than "it passed".
         var worstDagGap = 0.0
         var worstCyclicGap = 0.0
+        // Non-vacuity of the cyclic half (computenet-7iys): closedACycle is a
+        // property of the transcript before retractions, not of the final
+        // live set, so this has to be measured rather than assumed.
+        val cyclicSeedsWithLiveCycle = mutableListOf<Long>()
 
         forEachSeed(SEEDS) { seed ->
-            val cyclic = seed % 2 == 1L
-            val tolerance = toleranceFor(cyclic)
-            val generated = TranscriptGenerator.generate(seed, cyclic)
+            // Only selects what TranscriptGenerator is asked to ATTEMPT.
+            // Never used as the tolerance classification below — see the KDoc
+            // "Which classification picks the tolerance" note.
+            val intendedCyclic = seed % 2 == 1L
+            val generated = TranscriptGenerator.generate(seed, intendedCyclic)
 
             val rig = replay(generated, transcriptSeed = seed, worldSeed = seed)
             val report = rig.settleAndReconcile()
@@ -146,6 +169,17 @@ class IncrementalEqualsBatchTest {
             val live = generated.live
             val reference = DialogueBatchReference.fold(generated.cassette, live)
             val batch = BatchReference.solve(reference.nodes)
+
+            // The tolerance classification: the FINAL LIVE digraph's actual
+            // cyclicity, not seed % 2 or generated.closedACycle (both describe
+            // the transcript before the program's retractions).
+            val digraph = reference.relationKeys.associateWith { key ->
+                val spec = reference.nodes.getValue(BindingTable.refFor(key))
+                spec.source!! to spec.target!!
+            }
+            val cyclic = hasCycle(digraph.values.toList())
+            if (cyclic) cyclicSeedsWithLiveCycle += seed
+            val tolerance = toleranceFor(cyclic)
 
             // (a) the canonical key sets, by key — never by ref (2aw.F6-D2).
             assertEquals(
@@ -205,6 +239,13 @@ class IncrementalEqualsBatchTest {
             "retraction-blind reference never diverged — the gate has no teeth " +
                 "(controls run on $blindControlsRun seeds, divergent on $blindDivergentSeeds)",
         )
+        assertTrue(
+            cyclicSeedsWithLiveCycle.isNotEmpty(),
+            "no seed's FINAL LIVE digraph is cyclic — the cyclic tolerance and its measured gap above are " +
+                "unexercised (seed % 2 / TranscriptGenerator.closedACycle describe the transcript before the " +
+                "program's retractions, not the live set)",
+        )
+        println("BS-10 seeds whose FINAL LIVE digraph is cyclic: $cyclicSeedsWithLiveCycle of ${SEEDS.toList()}")
         println(
             "BS-10 retraction-blind control: ran on $blindControlsRun of ${SEEDS.count()} seeds, " +
                 "diverged on $blindDivergentSeeds",
@@ -336,5 +377,30 @@ class IncrementalEqualsBatchTest {
             "no odd seed in $SEEDS closed a cycle — the cyclic half of the sweep would be vacuous",
         )
         println("TranscriptGenerator: $cyclicSeedsThatClosedACycle odd seeds closed a cycle")
+    }
+
+    // ------------------------------------------------------------------
+    // Final-live-digraph cycle detection (computenet-7iys) — OrderIndependenceTest's
+    // idiom, restated here so this file's classification does not depend on
+    // seed parity or TranscriptGenerator.closedACycle.
+    // ------------------------------------------------------------------
+
+    /** Whether [edges] (claim ref -> claim ref) contains any directed cycle. */
+    private fun hasCycle(edges: List<Pair<CellRef, CellRef>>): Boolean =
+        edges.any { (source, target) -> source == target || reaches(edges, from = target, to = source) }
+
+    /** Whether [to] is reachable from [from] over the claim-level edges. */
+    private fun reaches(edges: List<Pair<CellRef, CellRef>>, from: CellRef, to: CellRef): Boolean {
+        if (from == to) return true
+        val seen = mutableSetOf(from)
+        val stack = ArrayDeque(listOf(from))
+        while (stack.isNotEmpty()) {
+            val n = stack.removeLast()
+            edges.filter { it.first == n }.forEach { (_, next) ->
+                if (next == to) return true
+                if (seen.add(next)) stack.add(next)
+            }
+        }
+        return false
     }
 }
