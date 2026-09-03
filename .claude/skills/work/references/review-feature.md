@@ -484,7 +484,7 @@ is no suite to cache-prove and the recipe above has nothing to bite on
 such a diff they evidence exactly one thing — *the branch does not break the
 build* — because no required check executes the artifact at all. A verdict
 that rests on green checks here is resting on a fact about other code. Say so
-in as many words rather than letting six green rows read as verification.
+in as many words rather than letting green rows read as verification.
 
 ## 4. Your run is on macOS; the required checks are not
 
@@ -534,9 +534,10 @@ So:
   them for the **PR's current head**. **Enumerate every row it returns, not
   only the required ones**: the required set is what BLOCKS a merge, which is
   a different question from what CI RUNS. A non-required lane can be the only
-  place a module's tests execute — `iroh-sidecar` ran all 23 `:iroh` tests on
-  ubuntu while three dispatch prompts and a PR body asserted CI covered none
-  of them (computenet-9p3y). For each non-required row, say what it executes
+  place a module's tests execute — `iroh-sidecar` (then non-required; promoted
+  to required 2026-08-31) ran all 23 `:iroh` tests on ubuntu while three
+  dispatch prompts and a PR body asserted CI covered none of them
+  (computenet-9p3y). For each non-required row, say what it executes
   and whether it is the only coverage for any part of the diff; and treat
   "CI does not cover X" as a claim about a run — cite a run id or the lane's
   workflow file, never an inference from the required list. If §6's re-fetch makes you merge
@@ -591,7 +592,7 @@ can rather than sending it back.
 **Budget the repair, because it obliges a CI cycle.** A repair moves the head,
 so §6's re-read is no longer optional for you: you owe one full required-check
 cycle — **9–12 minutes on this repo**, governed by `build-test-fast`, which is
-the long pole; the other five settle in 15s–5m26s — plus the poll to watch it,
+the long pole; the others settle in 15s–5m26s — plus the poll to watch it,
 on top of the repair itself. (Measured 2026-08-19 across four runs: 8m58s,
 12m1s, 8m52s, ~9m. The figure here read "2–4 minutes" until computenet-678u
 measured it; a reviewer budgeting a merge-and-re-check cycle against its own
