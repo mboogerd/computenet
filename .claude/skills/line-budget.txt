@@ -364,7 +364,14 @@
 # REVIEWER, hitting it while diffing symbols across revisions, which only git
 # grep can do. That is the computenet-l5rc shape exactly, and l5rc's own remedy
 # is dual-placed for the same reason. Recomputed against the landed 9245.
-work                9257
+# 9257 -> 9273 on 2026-09-03: computenet-9p3y + computenet-s6x5, one edit for
+# both. review-feature.md §4 and review-task.md §3 stop enumerating the
+# required checks (a count wrong in BOTH directions across four instances) and
+# point at the ruleset via wait-checks.sh; §4 gains the non-required-lane
+# reading that would have stopped a false "CI covers none of :iroh" reaching
+# three dispatch prompts and a PR body. +16 lines to delete two lists that go
+# stale on every promotion.
+work                9273
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

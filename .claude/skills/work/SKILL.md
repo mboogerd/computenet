@@ -153,7 +153,11 @@ in other agents' heads as written. In force throughout:
   claim** — it needs a run that shows it or a doc citation, else write "I
   believe X; verify it". An untested `workflow_dispatch` assertion reached
   three dispatch prompts and two PR bodies before a reviewer's one-line
-  experiment disproved it (computenet-4l3l). Try it first.
+  experiment disproved it (computenet-4l3l). Try it first. **"CI does not
+  cover X" is this claim**, and reasoning from the required-check list is not
+  a run: the non-required `iroh-sidecar` lane was executing all 23 `:iroh`
+  tests while that inference reached three dispatch prompts, a PR body and
+  several progress reports (computenet-9p3y).
 - **Code you write yourself** (conflict resolutions, unblocking fixes) goes
   to a reviewer on the same terms as task work (5c).
 - **An Agent dispatch can be refused on its prompt's *wording*, not its

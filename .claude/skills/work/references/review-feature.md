@@ -491,9 +491,12 @@ in as many words rather than letting six green rows read as verification.
 Run `uname -sm` and put its output in your report. (For a diff proven
 docs-only in §3 there is no platform-dependent behaviour to measure: skip to
 the `gh pr checks` read below, and report its conclusions with §3's limit
-attached.) This repo is developed on darwin; all **six** required checks
-(`build-test-fast`, `build-test-serial`, `concord-full`, `ui-test`,
-`agora-ui-test`, `kernel-test`) run on `ubuntu-latest`. For most
+attached.) This repo is developed on darwin; **every** required check runs on
+`ubuntu-latest`. Do not write down which, or how many — the set is the
+ruleset's and it changes (`kernel-test` added 2026-08-17, `iroh-sidecar`
+2026-08-31); the count written here was wrong in both directions before it was
+removed (computenet-9p3y, computenet-s6x5). `wait-checks.sh` reads the ruleset
+each run and prints the contexts it found: that print is the list. For most
 diffs that gap is invisible; for anything touching sockets, ports, filesystem
 semantics, path handling, or process spawning it is exactly where the defect
 hides — a `:wire:test` that passed 15/15 locally failed `build-test-fast`
@@ -528,7 +531,15 @@ So:
   ```
 
   Quote each required check's name and conclusion in your verdict — and quote
-  them for the **PR's current head**. If §6's re-fetch makes you merge
+  them for the **PR's current head**. **Enumerate every row it returns, not
+  only the required ones**: the required set is what BLOCKS a merge, which is
+  a different question from what CI RUNS. A non-required lane can be the only
+  place a module's tests execute — `iroh-sidecar` ran all 23 `:iroh` tests on
+  ubuntu while three dispatch prompts and a PR body asserted CI covered none
+  of them (computenet-9p3y). For each non-required row, say what it executes
+  and whether it is the only coverage for any part of the diff; and treat
+  "CI does not cover X" as a claim about a run — cite a run id or the lane's
+  workflow file, never an inference from the required list. If §6's re-fetch makes you merge
   `origin/main`, that merge moves the head and this reading goes stale; §6
   says how to re-take it. A green check on a diff that touches no compiled
   input is evidence of nothing (it too can be cache and skip), so say which

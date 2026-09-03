@@ -325,9 +325,9 @@ out=$(run 2); rc=$?
 # the ruleset unreadable: fall back, and say the reading is degraded
 fixture
 touch "$CTRL/req-fail"
-printf '%s\n' "$GREEN" > "$CTRL/default.rest"
+printf '%s\n' "$GREEN"$'\niroh-sidecar\tpass\tsuccess' > "$CTRL/default.rest"
 out=$(run); rc=$?
-[ "$rc" -eq 0 ] && ok "an unreadable ruleset still yields a verdict on the known six" \
+[ "$rc" -eq 0 ] && ok "an unreadable ruleset still yields a verdict on the known seven" \
   || bad "exits $rc, wanted 0"
 has "$out" "HARD-CODED list" "the fallback says it is a fallback"
 has "$out" "does not mean the PR can merge" "and says what the degraded verdict cannot tell you"
