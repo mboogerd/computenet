@@ -1,9 +1,8 @@
 package civictech.dialogue.apply
 
 import civictech.agora.AgoraService
+import civictech.agora.BatchReference
 import civictech.agora.cell.Polarity
-import civictech.agora.semantics.DfQuad
-import civictech.agora.semantics.GradualSemantics
 import civictech.cell.CellRef
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.MapDelta
@@ -51,71 +50,19 @@ import kotlin.test.assertTrue
  * derives from them, which is the whole reason [AGO1-APPLY-03] insists the
  * applier go through `AgoraService` instead of spawning cells itself.
  *
- * ### Why the reference solver is copied rather than imported
+ * ### The reference solver
  *
  * Every credence literal below is justified by [BatchReference.solve] over
  * the same topology, never by re-deriving `DfQuad.combine` inline: a literal
  * recomputed from the production formula proves only that the formula equals
- * itself. `civictech.agora.BatchReference` lives in `:demo:agora`'s **test**
- * source set, which is not on `:demo:dialogue`'s test classpath (see
- * `demo/dialogue/build.gradle.kts`: `implementation(project(":demo:agora"))`
- * puts only agora's *main* output there), and `:demo:agora` is read-only for
- * this task. So the solver is reproduced verbatim below, keeping agora's
- * `ClaimCell.REF_ORDER` fold order, and remains independent of the
- * incremental propagation path it checks.
+ * itself. `civictech.agora.BatchReference` now lives in `:demo:agora`'s
+ * `testFixtures` source set (computenet-5swa) and is imported directly here —
+ * this file used to carry a private verbatim copy of the Gauss-Seidel driver
+ * because `:demo:agora`'s test source set was not on `:demo:dialogue`'s test
+ * classpath and agora was read-only for the task that added it
+ * (computenet-2aw.4.4); that constraint no longer applies.
  */
 class ApplierSemanticsTest {
-
-    // ------------------------------------------------------------------
-    // The batch reference (verbatim copy — see the class doc)
-    // ------------------------------------------------------------------
-
-    /**
-     * Gauss-Seidel fixpoint over the final graph, using the same semantics
-     * functions and the same ref-sorted fold order as the cells. Copied from
-     * `demo/agora/src/test/kotlin/civictech/agora/TestSupport.kt`; keep in
-     * step with it if agora's solver changes.
-     */
-    private object BatchReference {
-        data class NodeSpec(
-            val stances: Map<String, Double> = emptyMap(),
-            val polarity: Polarity? = null, // non-null for edges
-            val source: CellRef? = null,
-            val target: CellRef? = null,
-        )
-
-        fun solve(
-            topology: Map<CellRef, NodeSpec>,
-            semantics: GradualSemantics = DfQuad,
-            tol: Double = 1e-13,
-            maxSweeps: Int = 100_000,
-        ): Map<CellRef, Double> {
-            val order = topology.keys.sortedWith(civictech.agora.cell.ClaimCell.REF_ORDER)
-            val cred = order.associateWith { 0.5 }.toMutableMap()
-            val incoming = order.associateWith { n ->
-                topology.entries
-                    .filter { it.value.target == n }
-                    .sortedWith(compareBy(civictech.agora.cell.ClaimCell.REF_ORDER) { it.key })
-            }
-            repeat(maxSweeps) {
-                var maxDelta = 0.0
-                order.forEach { n ->
-                    val energies = incoming.getValue(n).map { (ref, spec) ->
-                        val e = cred.getValue(ref) * cred.getValue(spec.source!!)
-                        if (spec.polarity == Polarity.SUPPORT) e else -e
-                    }
-                    val attacks = energies.filter { it < 0 }.map { -it }
-                    val supports = energies.filter { it > 0 }
-                    val next =
-                        semantics.combine(semantics.base(topology.getValue(n).stances.values), attacks, supports)
-                    maxDelta = maxOf(maxDelta, kotlin.math.abs(next - cred.getValue(n)))
-                    cred[n] = next
-                }
-                if (maxDelta < tol) return cred
-            }
-            error("batch reference did not converge within $maxSweeps sweeps")
-        }
-    }
 
     // ------------------------------------------------------------------
     // Fixture — epic §4's BS-03 cassette
