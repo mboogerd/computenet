@@ -182,6 +182,15 @@ class InMemoryJournal : Journal {
  * drops the handle explicitly, because the rename underneath it would otherwise
  * leave subsequent appends writing to the *replaced* inode.
  *
+ * That self-drop covers one instance only. **Two live `FileJournal` instances
+ * on one path were already unsupported** (computenet-k1by: their `needsHeader`
+ * checks race and both emit a header), and the kept handle sharpens the same
+ * shape — a [reset] on instance A now strands instance B's subsequent appends
+ * in the unlinked inode, where the previous reopen-per-append would have
+ * followed the rename. Nothing in this repo does that: a journal is owned by
+ * exactly one host (`KeyedCells`, `AgoraApp`), and a recovery reader is
+ * constructed after the writer is gone.
+ *
  * ponytail: one file, fsync per append, whole-log replay in memory — segments,
  * group commit, and streaming replay when a real workload's journal hurts.
  */
