@@ -57,7 +57,9 @@ import kotlin.test.assertTrue
  * against a real on-disk journal that fsyncs per journaled propagate round —
  * the cost `AgoraService`'s own `DurabilityTest` avoids by switching to an
  * in-memory journal, which BS-18 cannot do because its whole subject is what
- * survives a `kill -9`.
+ * survives a `kill -9`. (Re-measured 2026-09-03 by computenet-4rof's review on
+ * the same host at load average ~4.5: BS-18 276.3 s, class 280.8 s, from the
+ * JUnit XML of `--rerun --no-build-cache`. The figures above hold.)
  *
  * That is a **deliberate, ticket-pinned cost, not an oversight**:
  * computenet-2aw.4.3's acceptance criteria pin the quiescence threshold, the
@@ -66,17 +68,31 @@ import kotlin.test.assertTrue
  * repository gate should change the bead's criteria rather than quietly
  * weakening an assertion here.
  *
- * ### …but ~47 s on ubuntu, where the required checks actually run
+ * ### …and on ubuntu the cost is run-variable by ~5.8x — 45 s to 262 s
  *
- * The macOS figure above is **not** the gate's cost, and the difference is
- * large enough to change the decision computenet-4rof exists to make. Read
- * off `build-test-fast`'s own job log for PR #637 (run 33718227232, job
- * 100531880203, head `ea00f184`): `> Task :demo:dialogue:test` at
- * `05:21:03.258Z`, BS-18 `PASSED` at `05:21:50.221Z` — **≤ 51 s for the whole
- * class**, roughly 5.7x cheaper than on macOS/arm64. It is also **not on the
- * critical path**: that lane totalled 8m00s and kept scheduling other modules'
- * tests alongside and after this one. Whatever the local loop costs a
- * developer on a Mac, this class is not what makes CI slow.
+ * The macOS figure above is not automatically the gate's cost — but neither is
+ * any single ubuntu reading. Two `build-test-fast` runs of this class, both on
+ * `ubuntu-latest`, differ by 5.8x, read off each job's own log:
+ *
+ * - PR #637 (run 33718227232, job 100531880203, head `ea00f184`): the five
+ *   cheap tests finish at `05:21:05.394Z`, BS-18 `PASSED` at `05:21:50.221Z`
+ *   — **~45 s**.
+ * - PR #642, the change described below (run 33726749625, job 100557346284,
+ *   head `75684f14`): cheap tests finish at `07:13:42.522Z`, BS-18 `PASSED` at
+ *   `07:18:04.418Z` — **~262 s**, i.e. ~38 s under the 5-minute default this
+ *   method used to run against.
+ *
+ * So the reading this item carried for most of its life — "~51 s on ubuntu,
+ * ~6x margin, the thin margin is purely a local/macOS problem" — does not
+ * survive its own PR's CI run. The thin margin is a property of the *slow*
+ * tail on both platforms; ubuntu just reaches it less often. Do not treat a
+ * single green ubuntu timing here as a margin.
+ *
+ * What both runs do agree on is that this class is **not on the critical
+ * path**: #637's lane totalled 8m00s and #642's ~9m30s, each scheduling other
+ * modules' tests alongside and after this one and each finishing minutes after
+ * BS-18 returned. There is a margin problem here; there is no CI-*cost*
+ * problem.
  *
  * ### …but the local margin against the global timeout was the real bug
  * (computenet-4rof)
@@ -87,16 +103,17 @@ import kotlin.test.assertTrue
  * BS-18's ~270 s idle cost is not merely "expensive" — it is a **~30 s
  * (~10%) margin**, and two different implementers hit the cap outright with
  * a sibling agent sharing the machine, even though neither of their diffs
- * touched anything this test depends on. That is a local/agent-experience
- * defect (a red suite unrelated to the diff under test), not a CI-cost one —
- * the ubuntu figures above already establish there is no CI-cost problem to
- * solve. computenet-4rof resolved it with a per-method
- * `@Timeout(value = 540, unit = TimeUnit.SECONDS)` on BS-18 alone (2x its
- * measured idle cost), rather than moving the class to a tag-excluded lane:
- * exclusion would still need a dedicated CI lane to keep exercising
- * [AGO1-DUR-01] at all, solves a cost problem this class does not have, and
- * does nothing for a developer who runs this class directly — which is
- * exactly when the thin margin bites. See computenet-4rof for the full
+ * touched anything this test depends on. It shows up first as a
+ * local/agent-experience defect (a red suite unrelated to the diff under
+ * test), and — on the evidence of the 262 s ubuntu run recorded above — the
+ * gating lane was riding the same thin margin, so this was never purely a
+ * macOS problem. computenet-4rof resolved it with a per-method
+ * `@Timeout(value = 540, unit = TimeUnit.SECONDS)` on BS-18 alone, rather
+ * than moving the class to a tag-excluded lane: exclusion would still need a
+ * dedicated CI lane to keep exercising [AGO1-DUR-01] at all, solves a *cost*
+ * problem this class does not have (it is not on the critical path either
+ * run), and does nothing for a developer who runs this class directly — which
+ * is exactly when the thin margin bites. See computenet-4rof for the full
  * comparison of options.
  */
 class DialogueRuntimeTest {
@@ -344,12 +361,14 @@ class DialogueRuntimeTest {
     // measured 2026-09-03) — thin enough that two different implementers hit
     // the 5-minute cap outright while an unrelated sibling agent shared the
     // machine (load 4.5-6.8), even though nothing in their diffs touched this
-    // test. `@Timeout` below raises the cap for this one method to 540 s (2x
-    // the measured idle cost — the repo's own default margin is likewise
-    // stated as a multiple, not an absolute distance), leaving genuine
-    // headroom against ordinary local/CI contention without loosening the
-    // 5-minute default that guards every other test in the repo against a
-    // real hang. See the class doc comment above for why the underlying cost
+    // test; and PR #642's own `build-test-fast` run measured 262 s on
+    // ubuntu-latest, ~38 s under the same cap, so the gating lane was riding
+    // the margin too. `@Timeout` below raises the cap for this one method to
+    // 540 s — ~2x the slowest run observed on either platform (276 s macOS,
+    // 262 s ubuntu), chosen so a wedged BS-18 is still reported in about twice
+    // its honest runtime rather than never, and deliberately scoped to this
+    // method so the 5-minute default keeps guarding every other test in the
+    // repo against a real hang. See the class doc comment above for why the underlying cost
     // is not itself a lever here.
     @Timeout(value = 540, unit = TimeUnit.SECONDS)
     @Test
