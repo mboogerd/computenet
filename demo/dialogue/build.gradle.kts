@@ -23,6 +23,10 @@ dependencies {
     implementation(libs.kotlinx.serialization)
 
     testImplementation(project(":testkit"))
+    // BatchReference, the batch fixpoint solver differential tests pin credence
+    // literals against (computenet-5swa) — replaces the private reproduction
+    // that used to live in ApplierSemanticsTest.kt.
+    testImplementation(testFixtures(project(":demo:agora")))
 }
 
 application {
