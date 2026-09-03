@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for create-ticket.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "13 passed, 0 failed".
+# Expect "16 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/create-ticket.sh"}
@@ -118,7 +118,8 @@ fixture
 out=$("$SCRIPT" --help 2>&1); st=$?
 [ "$st" = 0 ] && grep -q -- '--desc-file' <<<"$out" && grep -q '^Usage:' <<<"$out" \
   && ! grep -q '^#' <<<"$out" \
-  && ok "--help prints the usage block, comment markers stripped" \
+  && [ "$(wc -l <<<"$out")" -lt 12 ] \
+  && ok "--help prints the usage block, comment markers stripped, and stops" \
   || bad "--help: exit=$st out=$out"
 out=$("$SCRIPT" -h 2>&1); st=$?
 [ "$st" = 0 ] && grep -q '^Usage:' <<<"$out" && ok "-h is the same" || bad "-h: exit=$st"
