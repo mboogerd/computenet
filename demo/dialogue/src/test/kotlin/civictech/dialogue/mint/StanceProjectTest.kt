@@ -91,13 +91,24 @@ class StanceProjectTest {
     private val earlyText = "Early segment."
     private val lateText = "Late segment."
 
+    // Deliberately NOT "u1"/"u2": their utteranceIds are chosen so that
+    // lexicographic order DISAGREES with turn order (early="uz", late="ua",
+    // and "ua" < "uz"). A fold that selected by utteranceId alone —
+    // ignoring turn entirely — would pick the wrong (early, turn=1) winner
+    // here, so this fixture is what makes STANCE-01 actually discriminate
+    // "last-writer-wins by event order" from "last-writer-wins by
+    // utteranceId": with monotonically-correlated ids (e.g. "u1"/"u2") the
+    // two selections coincide and the assertions below pass either way
+    // (found in review of computenet-2aw.3.3: dropping `turn` from the
+    // aggregator's comparator entirely left this test green under the
+    // original "u1"/"u2" fixture).
     private val items = mapOf(
-        earlyText to listOf(ExtractedStance(claimText = claimText, speaker = "alice", value = 0.2, utteranceId = "u1")),
-        lateText to listOf(ExtractedStance(claimText = claimText, speaker = "alice", value = 0.9, utteranceId = "u2")),
+        earlyText to listOf(ExtractedStance(claimText = claimText, speaker = "alice", value = 0.2, utteranceId = "uz")),
+        lateText to listOf(ExtractedStance(claimText = claimText, speaker = "alice", value = 0.9, utteranceId = "ua")),
     )
 
-    private val early = utterance("u1", turn = 1, speaker = "alice", text = earlyText)
-    private val late = utterance("u2", turn = 5, speaker = "alice", text = lateText)
+    private val early = utterance("uz", turn = 1, speaker = "alice", text = earlyText)
+    private val late = utterance("ua", turn = 5, speaker = "alice", text = lateText)
 
     @Test
     fun `STANCE-01 - the later-turn stance wins regardless of admission order`() {
@@ -137,8 +148,8 @@ class StanceProjectTest {
     @Test
     fun `distinct speakers on the same claim key project independent stances`() {
         val bobItems = mapOf(
-            earlyText to listOf(ExtractedStance(claimText = claimText, speaker = "alice", value = 0.2, utteranceId = "u1")),
-            lateText to listOf(ExtractedStance(claimText = claimText, speaker = "bob", value = 0.7, utteranceId = "u2")),
+            earlyText to listOf(ExtractedStance(claimText = claimText, speaker = "alice", value = 0.2, utteranceId = "uz")),
+            lateText to listOf(ExtractedStance(claimText = claimText, speaker = "bob", value = 0.7, utteranceId = "ua")),
         )
         val rig = Rig(bobItems)
         rig.admit(early)
