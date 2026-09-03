@@ -48,6 +48,14 @@ set -uo pipefail
 
 TYPE= TITLE= PARENT= DESC= ACCEPT= PRIO=2 META= CLAIM=0 TOP=0
 LABELS=()
+# --help prints the comment header's own Usage block rather than a second copy
+# that can drift from it. A reviewer guessed `--description-file` for
+# `--desc-file` and burned two failed calls before resorting to sed-ing this
+# file; the flag names have to be reachable from the tool (computenet-axxl).
+usage() {
+  sed -n '/^# Usage:/,/^#$/p' "$0" | sed 's/^#[[:space:]]\{0,1\}//'
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --type)     TYPE=$2; shift 2 ;;
@@ -62,7 +70,8 @@ while [ $# -gt 0 ]; do
     --label)    LABELS+=("$2"); shift 2 ;;
     --metadata) META=$2; shift 2 ;;
     --claim)    CLAIM=1; shift ;;
-    *) echo "unknown argument: $1" >&2; exit 2 ;;
+    -h|--help)  usage; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 case "$TYPE" in bug|feature|task|chore) ;; *) echo "--type must be bug, feature, task or chore" >&2; exit 2 ;; esac

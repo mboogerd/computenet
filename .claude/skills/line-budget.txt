@@ -364,7 +364,70 @@
 # REVIEWER, hitting it while diffing symbols across revisions, which only git
 # grep can do. That is the computenet-l5rc shape exactly, and l5rc's own remedy
 # is dual-placed for the same reason. Recomputed against the landed 9245.
-work                9257
+# 9257 -> 9273 on 2026-09-03: computenet-9p3y + computenet-s6x5, one edit for
+# both. review-feature.md §4 and review-task.md §3 stop enumerating the
+# required checks (a count wrong in BOTH directions across four instances) and
+# point at the ruleset via wait-checks.sh; §4 gains the non-required-lane
+# reading that would have stopped a false "CI covers none of :iroh" reaching
+# three dispatch prompts and a PR body. +16 lines to delete two lists that go
+# stale on every promotion. 9273 -> 9275 in review: the reviewer found two
+# stale counts the sweep had missed inside review-feature.md itself ("six green
+# rows", "the other five settle") and a worked example that still called
+# iroh-sidecar non-required — the very inversion the bead is about.
+# 9275 -> 9285, RECOMPUTED on rebase against the landed number rather than
+# merged with the 9257 baseline it was written from (2026-09-03): computenet-axxl, two of its three one-line
+# documentation gaps. issue-quality.md gains the "next free X goes stale"
+# bullet (a bead named F-14; another PR took it first), review-feature.md's
+# `bd comments --json` recipe names `.text` (the wrong key returns null, which
+# reads as an empty thread). The third gap — create-ticket.sh's --help — is a
+# script and costs the ledger nothing.
+# 9285 -> 9364 on 2026-09-03. Three items in one PR, all in SKILL.md, so
+# they raise this entry once instead of colliding on it three times
+# (computenet-x69c's lesson). The entry has been RECOMPUTED against what landed
+# three times while this branch was open (#649 -> 9275, #652 -> 9285), never
+# merged with a baseline it was written from — which is the rule for two PRs on
+# one entry: the second number depends on the first's LANDED value, so neither
+# side of the conflict is right.
+#
+# Per-item counts are the diff's own hunk deltas against origin/main, not
+# estimates. An earlier version of this comment summed four guesses to 65
+# against a measured 64, and its correction still had one item 3 lines out; a
+# reviewer caught both (computenet-lx7t's own review, findings 3 and A).
+#   computenet-lx7t (+20 in SKILL.md 5b, +10 in 5e, +4 in merge-task.md):
+#     agent COUNT is not the load model — ONE repo-wide gradle gate alone took
+#     16 cores to ~25x, cap 3 never binding. `next-batch.py --capacity` exists
+#     so the two dispatches with no batch call — 5e's feature reviewer and
+#     merge-task.md's task reviewer — can read the advice the batch path
+#     already had, and 5e now scopes or holds the reviewer's own wide gate.
+#   computenet-099p (+16 net: +17 added, -1 stray blank line removed in
+#     review): a same-turn reading bounds only its own turn — one
+#     152m boundary landed a session at 313m of a 300m slot, which no reading
+#     frequency catches; no forward-looking budget claim from an older reading.
+#   computenet-9ofq (+25): the harness "stalled: no progress for 600s"
+#     notification named as a distinct case with a fixed response, and the
+#     "start acting promptly" re-dispatch line marked as the guess it is.
+#   computenet-adgy (+4): PR #650's reviewer asked that agent-execution.md's
+#     `bd -C` bullet be generalised to any command line, in the file dispatched
+#     agents actually read. It rides here rather than colliding on this entry.
+# 9364 -> 9375 on 2026-09-03: computenet-7wd6 (+11). Recomputed against
+# the landed number after #651 took this entry to 9364; the +8 originally
+# measured was against 9285.
+#
+# SKILL.md 5e attributed the ~9-12m required-check cycle to sibling churn only.
+# Two reviewers each paid it in full for a KDoc-only repair on an already-green
+# head — 0 non-comment code lines, nothing landed under either branch,
+# merge-base..origin/main empty both times. The cost is unchanged and the
+# repair is still right (review-feature.md section 5 already says so); what the
+# orchestrator gains is the arithmetic — budget one check cycle per review that
+# FINDS something, not only per sibling landing.
+#
+# +8 became +11 in review. The first cut spliced into the middle of the
+# existing sentence and left "invalidate" with no object; the new material is
+# now its own paragraph and the original sentence survives whole. The same
+# review struck a "~20-27m across three reviews" figure that did not follow
+# from any of the cited numbers — 3x the measured cycle is ~27-36m — so the
+# text now says "~9-12m each" and leaves the multiplication to the reader.
+work                9375
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

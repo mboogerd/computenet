@@ -1,0 +1,40 @@
+{"id":"u1","turn":1,"speaker":"alice","tsMillis":1000,"text":"Alice opens the meeting by proposing that the city install a protected bike lane on Main Street."}
+{"id":"u2","turn":2,"speaker":"bob","tsMillis":2000,"text":"Bob warns that removing the on-street parking to make room for it will hurt the shops along Main Street."}
+{"id":"u3","turn":3,"speaker":"alice","tsMillis":3000,"text":"Alice counters that a protected lane will reduce car-bike collisions and strengthens her case for the project."}
+{"id":"u4","turn":4,"speaker":"alice","tsMillis":4000,"text":"Alice adds that the parking worry does not actually undercut the case for the lane."}
+{"id":"u5","turn":5,"speaker":"dave","tsMillis":5000,"text":"Dave raises a separate safety issue. He argues that the city should add a raised crosswalk at Main and Oak."}
+{"id":"u6","turn":6,"speaker":"bob","tsMillis":6000,"text":"Bob says losing a travel lane on Main Street will make traffic congestion worse."}
+{"id":"u7","turn":7,"speaker":"dave","tsMillis":7000,"text":"Dave proposes that the city fund a shuttle bus instead of building a bike lane at all."}
+{"id":"u8","turn":8,"speaker":"alice","tsMillis":8000,"text":"Alice replies that a bike lane will increase foot traffic to the shops on Main Street, undercutting Bob's worry."}
+{"id":"u9","turn":9,"speaker":"carol","tsMillis":9000,"text":"Carol, the traffic engineer, argues the bike lane project should be delayed for a full traffic study."}
+{"id":"u10","turn":10,"speaker":"dave","tsMillis":10000,"text":"Dave says removing a lane on Main Street will slow emergency vehicle response times."}
+{"id":"u11","turn":11,"speaker":"bob","tsMillis":11000,"text":"Bob suggests the city paint sharrows instead of building a full protected bike lane."}
+{"id":"u12","turn":12,"speaker":"bob","tsMillis":12000,"text":"Bob says he actually agrees with what Alice proposed at the start of the meeting."}
+{"id":"u13","turn":13,"speaker":"carol","tsMillis":13000,"text":"Carol adds that Main Street really just needs safe, separated space for cyclists."}
+{"id":"u14","turn":14,"speaker":"dave","tsMillis":14000,"text":"Dave notes that his crosswalk proposal only strengthens the overall case for the lane."}
+{"id":"u15","turn":15,"speaker":"bob","tsMillis":15000,"text":"Bob adds that painting sharrows would pair naturally with funding the shuttle bus instead."}
+{"id":"u16","turn":16,"speaker":"dave","tsMillis":16000,"text":"Dave repeats that the emergency response concern directly undercuts the lane proposal."}
+{"id":"u17","turn":17,"speaker":"carol","tsMillis":17000,"text":"Carol asks whether everyone has had a chance to review the staff report."}
+{"id":"u18","turn":18,"speaker":"dave","tsMillis":18000,"text":"Dave says he is still undecided about the lane itself."}
+{"id":"u19","turn":19,"speaker":"carol","tsMillis":19000,"text":"Carol says she is leaning in favor of the lane overall."}
+{"id":"u20","turn":20,"speaker":"alice","tsMillis":20000,"text":"Alice says she likes the crosswalk idea too."}
+{"id":"u21","turn":21,"speaker":"bob","tsMillis":21000,"text":"Bob says he would back the shuttle bus proposal."}
+{"id":"u22","turn":22,"speaker":"dave","tsMillis":22000,"text":"Dave says he does not think sharrows go far enough."}
+{"id":"u23","turn":23,"speaker":"alice","tsMillis":23000,"text":"Alice thanks Bob for raising the parking concern earlier."}
+{"id":"u24","turn":24,"speaker":"bob","tsMillis":24000,"text":"Bob admits on reflection that the business impact might be smaller than he first thought."}
+{"id":"u25","turn":25,"speaker":"carol","tsMillis":25000,"text":"Carol notes that the meeting is running a little long tonight."}
+{"id":"u26","turn":26,"speaker":"alice","tsMillis":26000,"text":"Alice says the discussion has only made her more confident in the lane."}
+{"id":"u27","turn":27,"speaker":"dave","tsMillis":27000,"text":"Dave calls for a brief recess before the council continues."}
+{"id":"u28","turn":28,"speaker":"bob","tsMillis":28000,"text":"Bob steps out to take a phone call and says he will be right back."}
+{"id":"u29","turn":29,"speaker":"carol","tsMillis":29000,"text":"Carol reconvenes the meeting after the short recess."}
+{"id":"u30","turn":30,"speaker":"alice","tsMillis":30000,"text":"Alice proposes that the city also install bike racks near the Main Street shops."}
+{"id":"u31","turn":31,"speaker":"bob","tsMillis":31000,"text":"Bob says he has no objection to adding the bike racks."}
+{"id":"u32","turn":32,"speaker":"dave","tsMillis":32000,"text":"Dave admits his worry about emergency response has eased somewhat since the study came up."}
+{"id":"u33","turn":33,"speaker":"carol","tsMillis":33000,"text":"Carol asks if anyone else wants to speak before the vote."}
+{"id":"u34","turn":34,"speaker":"bob","tsMillis":34000,"text":"Bob suggests the city offset the lost parking revenue with a small event fee."}
+{"id":"u35","turn":35,"speaker":"alice","tsMillis":35000,"text":"Alice says she likes that idea a lot."}
+{"id":"u36","turn":36,"speaker":"dave","tsMillis":36000,"text":"Dave says the council will finalize its vote next week instead of tonight."}
+{"id":"u37","turn":37,"speaker":"bob","tsMillis":37000,"text":"Bob says that timeline works fine for him."}
+{"id":"u38","turn":38,"speaker":"carol","tsMillis":38000,"text":"Carol thanks everyone for a productive discussion."}
+{"id":"u39","turn":39,"speaker":"alice","tsMillis":39000,"text":"Alice says she looks forward to seeing the bike lane built."}
+{"id":"u40","turn":40,"speaker":"dave","tsMillis":40000,"text":"Dave adjourns the meeting for the night."}
