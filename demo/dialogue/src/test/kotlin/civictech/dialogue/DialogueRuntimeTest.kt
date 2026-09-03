@@ -267,8 +267,16 @@ class DialogueRuntimeTest {
         assertEquals(before.admitted, after.admitted, "$label: admitted-utterance ledger differs [AGO1-DUR-01]")
     }
 
-    private fun structureLines(dir: File) =
-        File(dir, DialogueRuntime.STRUCTURE_LOG).readLines().count { it.isNotBlank() }
+    /**
+     * Lines in agora's structure log — `0` when the file does not exist, so a
+     * runtime that never opened one is caught by the *recovery* assertions
+     * (world 2's ref set comes back empty) rather than by a
+     * `FileNotFoundException` thrown out of this helper before they run.
+     */
+    private fun structureLines(dir: File): Int {
+        val log = File(dir, DialogueRuntime.STRUCTURE_LOG)
+        return if (log.exists()) log.readLines().count { it.isNotBlank() } else 0
+    }
 
     private fun tempDir(prefix: String) = kotlin.io.path.createTempDirectory(prefix).toFile()
 
