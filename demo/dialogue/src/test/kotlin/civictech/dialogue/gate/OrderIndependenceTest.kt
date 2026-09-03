@@ -82,8 +82,33 @@ import kotlin.test.assertTrue
  * `doc/demo-findings.md` under the G-19 residual) instead of failing on it —
  * and, equally, instead of asserting it away by comparing something coarser.
  * What IS asserted about heads is the structural invariant that does hold in
- * every order: every designated head lies on a cycle of the final claim
- * digraph, and every 2-cycle in that digraph has at least one head.
+ * every order, and it is the applier's own cycle model rather than a weakened
+ * stand-in: every designated head lies on a cycle of the final claim digraph,
+ * and **deleting the head edges leaves that digraph acyclic** — i.e. every
+ * elementary cycle contains at least one head, which is exactly what
+ * `AgoraService`'s KDoc claims ("any new cycle runs through the edge that
+ * closed it", spec 21 §Cycles / 93 I-5+I-6). That is order-invariant for the
+ * same reason: whichever edge of a cycle is created last necessarily sees the
+ * rest of the cycle already present, so `reaches(target, source)` holds for it.
+ * The 2-cycle case is asserted separately only because its failure message is
+ * the legible one.
+ *
+ * The bead's original criterion — "exactly ONE head per 2-cycle" — is *false*,
+ * and measurably so: on seed 7 order 5 both edges of the single 2-cycle are
+ * heads, because a longer cycle through the same two claims already existed
+ * when the first of them was created. See `doc/demo-findings.md` F-17.
+ *
+ * ### Which seeds actually exercise the cyclic half
+ *
+ * [TranscriptGenerator.Generated.closedACycle] is a property of the generated
+ * *transcript*, before the program's retractions. It does not follow that the
+ * **final live set** is still cyclic, and on seed 3 it is not: 0 heads in all
+ * six orders, no 2-cycle, digraph acyclic. So seed 3 exercises the cyclic
+ * tolerance and the head invariants vacuously, and seed 7 carries the cyclic
+ * half of BS-09 on its own — which is why the test asserts below that at least
+ * one cyclic seed's live set really is cyclic, rather than trusting
+ * `closedACycle`. Seeds are NOT swapped for friendlier ones (2aw.F6-D3); the
+ * fact is recorded instead.
  *
  * Measured on the seeds below — see `doc/demo-findings.md` F-17 for the
  * numbers and their limits.
@@ -215,6 +240,7 @@ class OrderIndependenceTest {
     @Test
     fun `BS-09 AGO1-EXTR-03 - the same admitted set in N shuffled orders settles to the same canonical graph`() {
         val headDifferences = mutableListOf<String>()
+        val cyclicSeedsWithLiveCycle = mutableListOf<Long>()
         var worstCyclicGap = 0.0
         var worstDagGap = 0.0
 
@@ -298,6 +324,8 @@ class OrderIndependenceTest {
             //     between orders is recorded, never failed (2aw.F6-D5, G-19)
             // ----------------------------------------------------------
             val digraph = claimDigraph(generated, live)
+            val liveIsCyclic = hasCycle(digraph.values.toList())
+            if (cyclic && liveIsCyclic) cyclicSeedsWithLiveCycle += seed
             fingerprints.forEachIndexed { order, fingerprint ->
                 fingerprint.heads.forEach { head ->
                     val (source, target) = digraph.getValue(head)
@@ -313,7 +341,18 @@ class OrderIndependenceTest {
                         "seed $seed order $order: a 2-cycle with no designated head",
                     )
                 }
-                if (cyclic && twoCycles(digraph).isNotEmpty()) {
+                // The general form of the line above, and the applier's own
+                // stated cycle model: no cycle survives the removal of every
+                // head. Order-invariant — the last-created edge of any cycle
+                // always sees the rest of it — and strictly stronger than the
+                // 2-cycle case, which on these seeds is one pair on seed 7.
+                assertTrue(
+                    !hasCycle(digraph.filterKeys { it !in fingerprint.heads }.values.toList()),
+                    "seed $seed order $order: a cycle of the final claim digraph survived with no head on any of its " +
+                        "edges — AgoraService's model is that every elementary cycle contains a head, because any " +
+                        "new cycle runs through the edge that closed it (spec 21 §Cycles, 93 I-5+I-6)",
+                )
+                if (cyclic && liveIsCyclic) {
                     assertTrue(fingerprint.heads.isNotEmpty(), "seed $seed order $order: a cyclic graph with no head")
                 }
             }
@@ -326,6 +365,22 @@ class OrderIndependenceTest {
                 }
             }
         }
+
+        // Non-vacuity of the cyclic half. `closedACycle` is about the generated
+        // transcript; retractions can leave the final live set acyclic, and on
+        // seed 3 they do — 0 heads in every order. Without this guard a seed
+        // set that had gone entirely acyclic would leave every head assertion
+        // and the cyclic tolerance silently unexercised while the test stayed
+        // green.
+        assertTrue(
+            cyclicSeedsWithLiveCycle.isNotEmpty(),
+            "no CYCLIC_SEED's FINAL LIVE digraph is cyclic, so every head assertion above is vacuous — " +
+                "TranscriptGenerator.closedACycle describes the transcript before its retractions, not the live set",
+        )
+        println(
+            "BS-09 cyclic seeds whose FINAL LIVE digraph is still cyclic: " +
+                "$cyclicSeedsWithLiveCycle of $CYCLIC_SEEDS",
+        )
 
         // The observation, not an assertion. doc/demo-findings.md F-17 carries
         // whichever of the two outcomes this run produced, and why the negative
@@ -373,6 +428,10 @@ class OrderIndependenceTest {
         }
         return pairs
     }
+
+    /** Whether [edges] contains any directed cycle. */
+    private fun hasCycle(edges: List<Pair<CellRef, CellRef>>): Boolean =
+        edges.any { (source, target) -> source == target || reaches(edges, from = target, to = source) }
 
     /** Whether [to] is reachable from [from] over the claim-level edges. */
     private fun reaches(edges: List<Pair<CellRef, CellRef>>, from: CellRef, to: CellRef): Boolean {

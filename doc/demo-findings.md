@@ -639,6 +639,14 @@ predicted:
 
 (order 4 agreed with order 0; seed 3 showed no difference across its 6 orders.)
 
+Order 5 is also the direct refutation of the shape this was originally expected
+to take. Seed 7's final live digraph contains exactly **one** 2-cycle, and in
+order 5 **both** of its edges are heads (`5→1 SUPPORT` and `1→5 SUPPORT`),
+because a longer cycle through the same two claims already existed when the
+first of the pair was created — so `reaches(target, source)` held for both. Any
+criterion of the form "exactly one head per 2-cycle" is therefore false about
+this runtime, not merely unproven.
+
 So it is not only *which* edge is head that moves with arrival order, but **how
 many** edges are heads at all, over one and the same canonical relation set.
 
@@ -662,14 +670,29 @@ two attack utterances' turns swapped, moves the head to the other edge.
 criterion says a head-set difference between orders on a cyclic seed is a
 finding under the G-19 residual, and the test prints it rather than comparing
 something coarser to hide it. What the test *does* assert about heads is the
-invariant that survives every order: every designated head lies on a cycle of
-the final claim digraph, and every 2-cycle has at least one head.
+invariant that survives every order — `AgoraService`'s own cycle model rather
+than a weakened stand-in: every designated head lies on a cycle of the final
+claim digraph, and **deleting every head edge leaves the digraph acyclic**, so
+every elementary cycle carries at least one head. That holds in all 24 runs and
+is order-invariant by construction: whichever edge of a cycle is created last
+sees the rest of it already present, so `reaches(target, source)` holds for it.
+The 2-cycle case is asserted separately only for the legibility of its failure
+message.
 
-**Honest limits.** (1) Four seeds and six shuffles is a small sample chosen to
-fit a sub-second test, not a search; a *negative* result on seed 3 is weak
-evidence — it may only mean these six shuffles never reached the arrival order
-that would have flipped a head, not that no such order exists. Read the
-positive result on seed 7 as the load-bearing one. (2) The `25 * 1e-3` bound is
+**Honest limits.** (1) The cyclic half rests on **seed 7 alone**, and seed 3
+contributes nothing to it. Measured during review: seed 3's **final live**
+digraph is acyclic — 0 heads in all six orders, no 2-cycle — so its head
+assertions and its `25 * 1e-3` credence tolerance are exercised vacuously.
+`TranscriptGenerator`'s `closedACycle` (asserted by the test) is a property of
+the generated *transcript*, before the program's retractions; it does not
+survive them here. Seed 3's "no head-set difference across six shuffles" is
+therefore not a weak negative about shuffle coverage — as this entry first
+stated — but no observation at all. The seeds are deliberately not swapped for
+cyclic-er ones (2aw.F6-D3); instead the test now asserts that at least one
+cyclic seed's live digraph really is cyclic, so this cannot go silent
+unnoticed. Four seeds and six shuffles remains a small sample chosen to fit a
+sub-second test, not a search: read seed 7's positive result as load-bearing
+and expect an unseen order to produce head sets neither of these six did. (2) The `25 * 1e-3` bound is
 inherited from `AgoraExitTest` and is not calibrated here any more than it was
 in F-16; `1.7e-4` is what these transcripts produced. (3) One reconcile per run
 is deliberate — it maximises the arrival-order effect by presenting the whole
