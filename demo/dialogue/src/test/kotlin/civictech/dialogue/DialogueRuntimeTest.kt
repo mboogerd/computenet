@@ -319,6 +319,31 @@ class DialogueRuntimeTest {
      * runtime that never opened one is caught by the *recovery* assertions
      * (world 2's ref set comes back empty) rather than by a
      * `FileNotFoundException` thrown out of this helper before they run.
+     *
+     * computenet-oy26: this is the *only* assertion in BS-18 that can see
+     * `AgoraService`'s own replay re-appending to its structure log. Every
+     * `assertEquals(emptyList(), report.ops, ...)` beside it reads
+     * `GraphApplier`'s `ReconcileReport`, which counts only writes issued by
+     * *this call* to `applier.reconcile()` — it cannot see `AgoraService`'s
+     * constructor-time replay (`AgoraService.init`, `demo/agora/.../AgoraService.kt`
+     * lines 82-108 at this worktree's HEAD), which runs during `World(dir).open()`,
+     * strictly before `reconcile()` is ever called. `AgoraService.log()` is
+     * guarded by a private `replaying` flag it flips for the duration of that
+     * replay specifically so its own `createClaim`/`createEdge`/`remove`
+     * calls do not re-append the lines they are replaying — a bug there
+     * (dropping or inverting `if (!replaying)`) would grow `graph.jsonl` on
+     * every restart while `report.ops` from the subsequent `reconcile()`
+     * stayed `emptyList()`, exactly the split this assertion exists to catch.
+     *
+     * That guard lives in `demo/agora`, which is outside this bead's
+     * `metadata.files` claim (`GraphApplier.kt`, `DialogueRuntime.kt`,
+     * `DialogueRuntimeTest.kt`, `GraphApplierTest.kt`) — so a mutation
+     * demonstrating this assertion's discriminating power (flipping that
+     * guard, running BS-18, and watching `graph.jsonl` grow while
+     * `report.ops` stays empty) is not reachable from here. This comment is
+     * that finding stated plainly, per the bead's own fallback clause,
+     * rather than a weaker in-claim mutation manufactured to go red for an
+     * unrelated reason.
      */
     private fun structureLines(dir: File): Int {
         val log = File(dir, DialogueRuntime.STRUCTURE_LOG)
@@ -375,6 +400,11 @@ class DialogueRuntimeTest {
             val report = world.runtime.reconcile()
             world.drain()
             assertEquals(emptyList(), report.ops, "$label: recovered world re-applied structure ops [AGO1-DUR-02]")
+            // Not redundant with the assertion above despite both being green on
+            // the same mutations we can reach: this one is the only one that can
+            // see AgoraService's OWN replay re-appending to graph.jsonl, which
+            // `report.ops` structurally cannot — see structureLines()'s KDoc
+            // (computenet-oy26).
             assertEquals(
                 structureLinesBefore,
                 structureLines(dir),
@@ -393,6 +423,8 @@ class DialogueRuntimeTest {
                 "$label: re-replay admitted something [AGO1-REPLAY-02]",
             )
             assertEquals(emptyList(), second.ops, "$label: re-replay produced structure ops [AGO1-DUR-02]")
+            // Same rationale as the recovery check above (computenet-oy26):
+            // `second.ops` cannot see AgoraService's own replay path.
             assertEquals(
                 structureLinesBefore,
                 structureLines(dir),

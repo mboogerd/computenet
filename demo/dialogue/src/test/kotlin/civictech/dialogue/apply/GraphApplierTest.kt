@@ -7,6 +7,7 @@ import civictech.cell.data.SetOps
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
 import civictech.dialogue.ClaimKey
+import civictech.dialogue.DialogueRuntime
 import civictech.dialogue.DialoguePipeline
 import civictech.dialogue.RelationKey
 import civictech.dialogue.Segment
@@ -28,6 +29,7 @@ import kotlinx.serialization.json.Json
 import java.io.StringReader
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -602,5 +604,46 @@ class GraphApplierTest {
         )
 
         rig.assertApply07()
+    }
+
+    // ------------------------------------------------------------------
+    // computenet-oy26 — the sink ref seam
+    // ------------------------------------------------------------------
+
+    /**
+     * [GraphApplier]'s three observation sinks must spawn at exactly
+     * [DialogueRuntime.sinkRef], not at an independently re-literalized copy
+     * of `dialogue:sink:$name` (computenet-oy26). `DialogueRuntime` uses that
+     * same prefix, via `SINK_PREFIX`, to decide which refs are volatile
+     * ([DialogueRuntime.isDurable]); a second literal that happened to agree
+     * today could silently drift the moment `SINK_PREFIX` changed, making
+     * these sinks durable and routing `MapDelta` payloads over a
+     * non-`@Serializable` vocabulary through the journal.
+     *
+     * This does not merely assert two literals are `equals()` — it proves
+     * [GraphApplier]'s actual `management.spawn` call targets exactly
+     * [DialogueRuntime.sinkRef]`("claims")`: a cell is planted at that ref
+     * *before* [GraphApplier] is constructed, so if the applier's internal
+     * sink spawn disagreed by even one character it would spawn at a
+     * *different*, unoccupied ref and this collision would never fire.
+     */
+    @Test
+    fun `claims sink spawns at exactly DialogueRuntime's own sinkRef, not a re-literalized copy`() {
+        val world = SimWorld(seed = 1L)
+        val built = DialoguePipeline.build(world.host, cassette(), namespace = "applier-test")
+        val service = AgoraService(world.host, world.registry)
+        val bindings = BindingTable(journalDir = null)
+
+        val conflict = ObserveCell(View.map<ClaimKey, ClaimAggregate>(), DialogueRuntime.sinkRef("claims"))
+        world.host.managementInlet.call.spawn(conflict)
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            GraphApplier(world.host, built.refs, service, bindings)
+        }
+        assertTrue(
+            failure.message?.contains(DialogueRuntime.sinkRef("claims").toString()) == true,
+            "GraphApplier's claims sink must collide with a cell planted at " +
+                "DialogueRuntime.sinkRef(\"claims\") — got: ${failure.message}",
+        )
     }
 }
