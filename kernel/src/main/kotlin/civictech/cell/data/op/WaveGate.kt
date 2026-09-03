@@ -86,6 +86,38 @@ internal fun interface GatedFold<T> {
  * source from an absent one (the G-40/G-13 residual, identical here, in
  * `WaveFrontier`, in `CoalescingCombineCell`, and in `AlignedCompositeCell`).
  *
+ * ### One root is NOT sufficient — the arms must also CARRY the root's waves
+ *
+ * A shared root only makes the diamond *possible*. Each arm must additionally
+ * deliver, on the gated edge, something for every wave the other arm delivers —
+ * either a real delta or a CP-A3 absorb-ack. An arm that structurally partitions
+ * the root's waves away from itself (AGO1's item-kind split: a claim-only
+ * utterance is a real delta on one arm and nothing at all on the other) has an
+ * absorbing operator somewhere along it, and whether the gate survives that
+ * turns on **how deep the absorber sits**, not on the disjointness:
+ *
+ *  - the absorber links **directly** into the gated inlet — its
+ *    [civictech.cell.control.absorbAck] lands on the expected edge, the wave
+ *    completes, the gate is correct;
+ *  - the absorber has **one or more pure hops below it** — the ack is
+ *    *edge-local* and **no plain operator relays it**: a `FilterCell` /
+ *    `FlatMapSetCell` hop installs no [Protocols.Progress] handler, so an ack
+ *    arriving on its inlet neither advances anything nor is re-emitted. Only a
+ *    cell that installs a frontier (this gate, `WaveFrontier`,
+ *    `CoalescingCombineCell`, `AlignedCompositeCell`) consumes one. The expected
+ *    edge then never settles for that wave: output **lags** until the arm
+ *    happens to deliver a *later* wave (the monotone-`max` advance standing in
+ *    for the lost ack), and at rest — when the final wave is one that arm never
+ *    carries — output is **withheld permanently**, which disqualifies the gate.
+ *
+ * Measured on the AGO1 relation leg (computenet-23bf; both arms two hops deep,
+ * `RelationMintTest` reduced to an empty canonical relation set at quiescence)
+ * and reproduced minimally in `FrontierGatedEmissionTest`'s disjoint-wave-arm
+ * pair, whose one-hop control is the discriminator. Closing this properly means
+ * either relaying `Progress` through pure operator hops or teaching the frontier
+ * to tell a structurally silent arm from a stalled one — the G-40/G-13 residual
+ * again; see `doc/demo-findings.md` F-15.
+ *
  * Not thread-safe by itself: it runs under the owning cell's ordinary
  * single-threaded handler discipline, exactly as [CoalescingCombineCell]'s fold
  * does (protocol deliveries are synchronous on the sender's thread, which for an
