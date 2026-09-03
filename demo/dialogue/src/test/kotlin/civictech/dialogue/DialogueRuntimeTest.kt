@@ -19,10 +19,8 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
-import org.junit.jupiter.api.Timeout
 import java.io.File
 import java.io.StringReader
-import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -48,73 +46,52 @@ import kotlin.test.assertTrue
  * transcript would produce no canonical relations at all and the relation half
  * of every assertion below would be vacuously true.
  *
- * ### Measured cost — this class dominates the repository gate
+ * ### Measured cost — was ~270 s, is now ~2.5 s (computenet-sh8z)
  *
- * The BS-18 test alone is **~270 s** and the whole class **~274 s**
- * (macOS/arm64, 2026-09-03, reviewer-measured from the JUnit XML; the
- * implementer measured 283 s / 287 s on the same machine under different
- * load). Three worlds, each converging the 2-cycle at `quiescence = 1e-3`
- * against a real on-disk journal that fsyncs per journaled propagate round —
- * the cost `AgoraService`'s own `DurabilityTest` avoids by switching to an
- * in-memory journal, which BS-18 cannot do because its whole subject is what
- * survives a `kill -9`. (Re-measured 2026-09-03 by computenet-4rof's review on
- * the same host at load average ~4.5: BS-18 276.3 s, class 280.8 s, from the
- * JUnit XML of `--rerun --no-build-cache`. The figures above hold.)
+ * This class used to dominate the repository gate: BS-18 alone **264.2 s**,
+ * the class **268.5 s** (macOS/arm64, 2026-09-03, JUnit XML of
+ * `--rerun --no-build-cache`, load average 9.4 falling to 6.3). It is now
+ * **2.5 s** for BS-18 and **3.1 s** for the class, on the same host minutes
+ * later at load average 6.6 — a 104x reduction with every assertion, the
+ * `quiescence = 1e-3` threshold, the 2-cycle and the third world (`repeat(2)`)
+ * unchanged. Nothing here was weakened; the cost was never where it looked.
  *
- * That is a **deliberate, ticket-pinned cost, not an oversight**:
- * computenet-2aw.4.3's acceptance criteria pin the quiescence threshold, the
- * 2-cycle and the third world (`repeat(2)`), so every available lever for
- * making it cheaper is one of those criteria. Anyone shortening the
- * repository gate should change the bead's criteria rather than quietly
- * weakening an assertion here.
+ * What it actually was, profiled by counting and timing every
+ * `FileJournal.append` this test makes: **73,146 appends totalling 263.6 s** —
+ * i.e. essentially the whole test — of which `fsync` was **7.8 s** and the
+ * `open`/`write`/`close` around it **253 s**. The journaled propagate rounds
+ * were never fsync-bound. They were bound by `FileOutputStream(file, append =
+ * true)`, which costs ~3.3 ms on this host against the ~0.03 ms of the fsync
+ * that follows it (microbenchmark, 5,000 appends per arm: reopen+fsync
+ * 16.7 s, reopen without fsync 15.3 s, one kept handle with fsync 0.11 s, one
+ * kept handle without fsync 0.008 s — the fsync is 1% of the reopen).
+ * `FileJournal` now keeps one append handle instead of reopening per record,
+ * **still fsyncing every append**, so `kill -9` durability — this test's whole
+ * subject — is untouched.
  *
- * ### …and on ubuntu the cost is run-variable by ~5.8x — 45 s to 262 s
+ * **The macOS figure does not transfer to ubuntu, and this file should not
+ * pretend it does.** The pre-change ubuntu cost was run-variable by 5.8x (45 s
+ * to 262 s across three `build-test-fast` jobs of this class: PR #637 run
+ * 33718227232 job 100531880203 head `ea00f184` ~45 s; PR #642 run 33726749625
+ * job 100557346284 head `75684f14` ~262 s; PR #642 run 33727926137 job
+ * 100561063409 head `c090b763f` ~58 s), and on ext4 the `fsync` is a real
+ * barrier where on APFS it is nearly free — so the split between "reopen" and
+ * "fsync" measured above is a macOS split. Removing 73,146 `open`/`close`
+ * pairs can only make ubuntu faster, but by how much is unmeasured here. Read
+ * this PR's own `build-test-fast` log before quoting an ubuntu number.
  *
- * The macOS figure above is not automatically the gate's cost — but neither is
- * any single ubuntu reading. Two `build-test-fast` runs of this class, both on
- * `ubuntu-latest`, differ by 5.8x, read off each job's own log:
- *
- * - PR #637 (run 33718227232, job 100531880203, head `ea00f184`): the five
- *   cheap tests finish at `05:21:05.394Z`, BS-18 `PASSED` at `05:21:50.221Z`
- *   — **~45 s**.
- * - PR #642, the change described below (run 33726749625, job 100557346284,
- *   head `75684f14`): cheap tests finish at `07:13:42.522Z`, BS-18 `PASSED` at
- *   `07:18:04.418Z` — **~262 s**, i.e. ~38 s under the 5-minute default this
- *   method used to run against.
- *
- * So the reading this item carried for most of its life — "~51 s on ubuntu,
- * ~6x margin, the thin margin is purely a local/macOS problem" — does not
- * survive its own PR's CI run. The thin margin is a property of the *slow*
- * tail on both platforms; ubuntu just reaches it less often. Do not treat a
- * single green ubuntu timing here as a margin.
- *
- * What both runs do agree on is that this class is **not on the critical
- * path**: #637's lane totalled 8m00s and #642's ~9m30s, each scheduling other
- * modules' tests alongside and after this one and each finishing minutes after
- * BS-18 returned. There is a margin problem here; there is no CI-*cost*
- * problem.
- *
- * ### …but the local margin against the global timeout was the real bug
- * (computenet-4rof)
- *
- * The repo sets a global JUnit per-method timeout of 5 minutes
+ * The former cost was **ticket-pinned, not an oversight** — computenet-2aw.4.3
+ * pins the quiescence threshold, the 2-cycle and the third world, so every
+ * lever inside this file was one of its criteria, and computenet-4rof
+ * consequently treated the symptom with a per-method
+ * `@Timeout(value = 540, unit = TimeUnit.SECONDS)`. computenet-sh8z removed
+ * the cost instead, at the journal seam, and with it that override: at 2.5 s
+ * against the repo-wide 5-minute default
  * (`junit.jupiter.execution.timeout.testable.method.default`,
- * `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts:442`). Against that cap,
- * BS-18's ~270 s idle cost is not merely "expensive" — it is a **~30 s
- * (~10%) margin**, and two different implementers hit the cap outright with
- * a sibling agent sharing the machine, even though neither of their diffs
- * touched anything this test depends on. It shows up first as a
- * local/agent-experience defect (a red suite unrelated to the diff under
- * test), and — on the evidence of the 262 s ubuntu run recorded above — the
- * gating lane was riding the same thin margin, so this was never purely a
- * macOS problem. computenet-4rof resolved it with a per-method
- * `@Timeout(value = 540, unit = TimeUnit.SECONDS)` on BS-18 alone, rather
- * than moving the class to a tag-excluded lane: exclusion would still need a
- * dedicated CI lane to keep exercising [AGO1-DUR-01] at all, solves a *cost*
- * problem this class does not have (it is not on the critical path either
- * run), and does nothing for a developer who runs this class directly — which
- * is exactly when the thin margin bites. See computenet-4rof for the full
- * comparison of options.
+ * `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts:442`) the margin is ~118x,
+ * and a 540 s cap on a 2.5 s test would report a genuine wedge nine minutes
+ * late. If a future ubuntu run shows this class back in the tens of seconds,
+ * the thing to re-measure is the journal profile above, not the cap.
  */
 class DialogueRuntimeTest {
 
@@ -354,23 +331,10 @@ class DialogueRuntimeTest {
     // BS-18 / [AGO1-DUR-01] + [AGO1-DUR-02]
     // ------------------------------------------------------------------
 
-    // computenet-4rof: the repo's global per-method timeout
-    // (`junit.jupiter.execution.timeout.testable.method.default = 5m`,
-    // buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts:442) leaves this method a
-    // ~30 s margin (~10%) against its own idle macOS/arm64 cost (~270 s,
-    // measured 2026-09-03) — thin enough that two different implementers hit
-    // the 5-minute cap outright while an unrelated sibling agent shared the
-    // machine (load 4.5-6.8), even though nothing in their diffs touched this
-    // test; and PR #642's own `build-test-fast` run measured 262 s on
-    // ubuntu-latest, ~38 s under the same cap, so the gating lane was riding
-    // the margin too. `@Timeout` below raises the cap for this one method to
-    // 540 s — ~2x the slowest run observed on either platform (276 s macOS,
-    // 262 s ubuntu), chosen so a wedged BS-18 is still reported in about twice
-    // its honest runtime rather than never, and deliberately scoped to this
-    // method so the 5-minute default keeps guarding every other test in the
-    // repo against a real hang. See the class doc comment above for why the underlying cost
-    // is not itself a lever here.
-    @Timeout(value = 540, unit = TimeUnit.SECONDS)
+    // No @Timeout override here: computenet-4rof needed one because this method
+    // cost ~270 s against a 5-minute default; computenet-sh8z took the cost out
+    // at the journal seam (see the class KDoc) and it is now ~2.5 s, so the
+    // repo-wide default guards it with the same ~100x margin as everything else.
     @Test
     fun `BS-18 AGO1-DUR-01 - a world reopened on the same journal dir after a crash rebuilds the same graph, bindings and admitted ledger, and reconciles to nothing`() {
         val dir = tempDir("dialogue-runtime-durability")
