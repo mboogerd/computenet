@@ -1,5 +1,6 @@
 package civictech.dialogue
 
+import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
@@ -14,6 +15,7 @@ import civictech.cell.data.op.JoinSetApi
 import civictech.cell.data.op.JoinSetCell
 import civictech.cell.data.op.SemiJoinApi
 import civictech.cell.data.op.SemiJoinCell
+import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graphOf
 import civictech.cell.graph.lookupOrThrow
@@ -255,9 +257,34 @@ object DialoguePipeline {
      * cell: `FlatMapSetCell` requires a pure, total mapper, and an
      * `Extractor` is neither. See [ExtractionGate]'s KDoc for the full
      * reconciliation.
+     *
+     * [namespace] (computenet-2aw.4.1, [AGO1-DUR-01]'s pipeline half): `null`
+     * (the default) is byte-identical to today's behaviour — every spawn
+     * below gets [IdentityBinding.FreshLogical], a random ref per build.
+     * Non-null makes every pipeline cell's ref a pure function of
+     * `"$namespace:$handle"` ([IdentityBinding.Exact], the same
+     * `nameUUIDFromBytes` idiom [civictech.cell.host.KeyedCells] and
+     * [civictech.dialogue.apply.BindingTable] use), so a WAL-recovered host
+     * rebuilding this pipeline under the same namespace gets the same refs
+     * its journal's frames were written against — the host's `cells[cellRef]`
+     * lookup (`ManagedHost`) finds a live cell instead of dead-lettering.
+     * Callers that never recover a journal (every test today) omit it.
      */
-    fun build(host: ManagedHost, extractor: Extractor): Built {
+    fun build(host: ManagedHost, extractor: Extractor, namespace: String? = null): Built {
         val gate = ExtractionGate(extractor)
+        // One seam for every spawn below: null namespace reproduces today's
+        // FreshLogical default byte-for-byte; a namespace makes every handle's
+        // ref `nameUUIDFromBytes("$namespace:$handle")` — deterministic and
+        // restart-stable, never colliding across handles (the handle name is
+        // part of the seed) or with BindingTable's `dialogue:claim:`/
+        // `dialogue:relation:` prefixes or agora's `agora:hub` (disjoint
+        // prefix families).
+        fun identityFor(handle: String): IdentityBinding =
+            if (namespace == null) {
+                IdentityBinding.FreshLogical
+            } else {
+                IdentityBinding.Exact(CellRef(java.util.UUID.nameUUIDFromBytes("$namespace:$handle".toByteArray())))
+            }
         // graphOf returns the block's result directly. The ingress and
         // segmentation factories still meet F1's strict bar — each takes the
         // resolved ref and captures no instance; `::segment` is a top-level
@@ -276,11 +303,11 @@ object DialoguePipeline {
         // in F2 replays it, and F5 — which serves the ledger — is where that
         // has to be decided.
         val (refs, _) = graphOf(host.managementInlet) {
-            val utterances = spawn("utterances") { ref -> SetCell<Utterance>(ref = ref) }
-            val segments = spawn("segments") { ref ->
+            val utterances = spawn("utterances", identity = identityFor("utterances")) { ref -> SetCell<Utterance>(ref = ref) }
+            val segments = spawn("segments", identity = identityFor("segments")) { ref ->
                 FlatMapSetCell<Utterance, Segment>(ref = ref, f = ::segment)
             }
-            val extractedItems = spawn("extractedItems") { ref ->
+            val extractedItems = spawn("extractedItems", identity = identityFor("extractedItems")) { ref ->
                 FlatMapSetCell<Segment, ExtractedItem>(ref = ref, f = gate::extract)
             }
             // Stage 4a (F3 item-kind split, claim leg): FlatMapSetCell with
@@ -288,7 +315,7 @@ object DialoguePipeline {
             // + cast — FilterCell preserves the element type, so a cast hop
             // would still be needed after it. One hop per item kind; the
             // relation and stance legs are the sibling tasks'.
-            val extractedClaims = spawn("extractedClaims") { ref ->
+            val extractedClaims = spawn("extractedClaims", identity = identityFor("extractedClaims")) { ref ->
                 FlatMapSetCell<ExtractedItem, ExtractedClaim>(ref = ref) { item ->
                     listOfNotNull(item as? ExtractedClaim)
                 }
@@ -296,7 +323,7 @@ object DialoguePipeline {
             // Stage 4b (F3, 2aw.F3-D1): claimKey is the ONE canonicalization
             // seam — every claim-key derivation, here and in ClaimMint below,
             // goes through it.
-            val claimKeys = spawn("claimKeys") { ref ->
+            val claimKeys = spawn("claimKeys", identity = identityFor("claimKeys")) { ref ->
                 FlatMapSetCell<ExtractedClaim, ClaimKey>(ref = ref) { claim ->
                     listOf(claimKey(claim.text))
                 }
@@ -305,7 +332,7 @@ object DialoguePipeline {
             // extractedClaims stream as claimKeys above — both are pure hops
             // off one outlet, not a chain, so neither depends on the other's
             // liveness.
-            val canonicalClaims = spawn("canonicalClaims") { ref ->
+            val canonicalClaims = spawn("canonicalClaims", identity = identityFor("canonicalClaims")) { ref ->
                 GroupByCell(
                     ref = ref,
                     keyFn = { claim: ExtractedClaim -> claimKey(claim.text) },
@@ -315,7 +342,7 @@ object DialoguePipeline {
             // Stage 5a (F3 item-kind split, relation leg): the mirror of the
             // claim leg above — one pure hop per item kind off the SAME
             // extractedItems outlet, never a chain off the claim leg.
-            val extractedRelations = spawn("extractedRelations") { ref ->
+            val extractedRelations = spawn("extractedRelations", identity = identityFor("extractedRelations")) { ref ->
                 FlatMapSetCell<ExtractedItem, ExtractedRelation>(ref = ref) { item ->
                     listOfNotNull(item as? ExtractedRelation)
                 }
@@ -324,7 +351,7 @@ object DialoguePipeline {
             // claimKey seam, polarity parsed). RelationMint::candidates is a
             // top-level-equivalent pure function, so this factory captures
             // nothing.
-            val relationCandidates = spawn("relationCandidates") { ref ->
+            val relationCandidates = spawn("relationCandidates", identity = identityFor("relationCandidates")) { ref ->
                 FlatMapSetCell<ExtractedRelation, RelationCandidate>(ref = ref, f = RelationMint::candidates)
             }
             // Stage 5c ([AGO1-REL-04] key-level): the self-relation split, as
@@ -334,10 +361,10 @@ object DialoguePipeline {
             // HERE and not by a side effect into ExtractionAccounting (a
             // mapper-side ledger write is doc/demo-findings.md F-13's absent
             // seam, and no per-segment identity survives this far anyway).
-            val rejectedRelations = spawn("rejectedRelations") { ref ->
+            val rejectedRelations = spawn("rejectedRelations", identity = identityFor("rejectedRelations")) { ref ->
                 FilterCell<RelationCandidate>(ref = ref) { it.isSelfRelation }
             }
-            val nonSelfRelations = spawn("nonSelfRelations") { ref ->
+            val nonSelfRelations = spawn("nonSelfRelations", identity = identityFor("nonSelfRelations")) { ref ->
                 FilterCell<RelationCandidate>(ref = ref) { !it.isSelfRelation }
             }
             // Stages 5d/5e (2aw.F3-D3, [AGO1-REL-03] / BS-05): the
@@ -381,14 +408,14 @@ object DialoguePipeline {
             // endpoint can flicker the relation into and out of the canonical
             // fold within one wave, and F4's applier sits downstream of exactly
             // that. Filed as its own item rather than papered over here.
-            val sourceResolvedRelations = spawn("sourceResolvedRelations") { ref ->
+            val sourceResolvedRelations = spawn("sourceResolvedRelations", identity = identityFor("sourceResolvedRelations")) { ref ->
                 SemiJoinCell<RelationCandidate, ClaimKey, ClaimKey>(
                     ref = ref,
                     leftKey = { it.sourceKey },
                     rightKey = { it },
                 )
             }
-            val resolvableRelations = spawn("resolvableRelations") { ref ->
+            val resolvableRelations = spawn("resolvableRelations", identity = identityFor("resolvableRelations")) { ref ->
                 SemiJoinCell<RelationCandidate, ClaimKey, ClaimKey>(
                     ref = ref,
                     leftKey = { it.targetKey },
@@ -398,7 +425,7 @@ object DialoguePipeline {
             // Stage 5f (RelationMint fold): one aggregate per distinct
             // (source, target, polarity) [AGO1-REL-01]; the kernel's group
             // death is [AGO1-REL-02]'s pipeline half.
-            val canonicalRelations = spawn("canonicalRelations") { ref ->
+            val canonicalRelations = spawn("canonicalRelations", identity = identityFor("canonicalRelations")) { ref ->
                 GroupByCell(
                     ref = ref,
                     keyFn = { candidate: RelationCandidate -> candidate.relationKey },
@@ -408,7 +435,7 @@ object DialoguePipeline {
             // Stage 6a (F3 item-kind split, stance leg): the third mirror of
             // the claim/relation legs — one pure hop off the SAME
             // extractedItems outlet.
-            val extractedStances = spawn("extractedStances") { ref ->
+            val extractedStances = spawn("extractedStances", identity = identityFor("extractedStances")) { ref ->
                 FlatMapSetCell<ExtractedItem, ExtractedStance>(ref = ref) { item ->
                     listOfNotNull(item as? ExtractedStance)
                 }
@@ -416,7 +443,7 @@ object DialoguePipeline {
             // Stage 6b (F3, StanceProject, [AGO1-STANCE-01]): join the stance
             // leg against the utterances ingress for event order (`turn`),
             // which ExtractedStance alone does not carry.
-            val stanceJoinRows = spawn("stanceJoinRows") { ref ->
+            val stanceJoinRows = spawn("stanceJoinRows", identity = identityFor("stanceJoinRows")) { ref ->
                 JoinSetCell<ExtractedStance, Utterance, String, StanceJoinRow>(
                     ref = ref,
                     leftKey = { it.utteranceId },
@@ -426,7 +453,7 @@ object DialoguePipeline {
             }
             // Stage 6c (F3, StanceProject fold): keyed by (speaker, claim
             // key); LWW-by-turn selection lives in StanceAggregator.value().
-            val projectedStances = spawn("projectedStances") { ref ->
+            val projectedStances = spawn("projectedStances", identity = identityFor("projectedStances")) { ref ->
                 GroupByCell(
                     ref = ref,
                     keyFn = { row: StanceJoinRow -> row.speaker to row.key },
@@ -438,12 +465,12 @@ object DialoguePipeline {
             // by the plain-String key (see ClaimProvenanceEntry's KDoc for
             // why the key is flattened to a String rather than carried as
             // ClaimKey).
-            val claimProvenanceEntries = spawn("claimProvenanceEntries") { ref ->
+            val claimProvenanceEntries = spawn("claimProvenanceEntries", identity = identityFor("claimProvenanceEntries")) { ref ->
                 FlatMapSetCell<ExtractedClaim, ClaimProvenanceEntry>(ref = ref) { claim ->
                     listOf(ProvenanceIndex.claimEntry(claim))
                 }
             }
-            val claimProvenance = spawn("claimProvenance") { ref ->
+            val claimProvenance = spawn("claimProvenance", identity = identityFor("claimProvenance")) { ref ->
                 GroupByCell(
                     ref = ref,
                     keyFn = { entry: ClaimProvenanceEntry -> ClaimKey(entry.key) },
@@ -452,12 +479,12 @@ object DialoguePipeline {
             }
             // Stage 7b (F3, ProvenanceIndex): the relation-leg mirror, off
             // the SAME resolvableRelations outlet canonicalRelations folds.
-            val relationProvenanceEntries = spawn("relationProvenanceEntries") { ref ->
+            val relationProvenanceEntries = spawn("relationProvenanceEntries", identity = identityFor("relationProvenanceEntries")) { ref ->
                 FlatMapSetCell<RelationCandidate, RelationProvenanceEntry>(ref = ref) { candidate ->
                     listOf(ProvenanceIndex.relationEntry(candidate))
                 }
             }
-            val relationProvenance = spawn("relationProvenance") { ref ->
+            val relationProvenance = spawn("relationProvenance", identity = identityFor("relationProvenance")) { ref ->
                 GroupByCell(
                     ref = ref,
                     keyFn = { entry: RelationProvenanceEntry -> RelationKey(entry.key) },

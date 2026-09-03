@@ -281,4 +281,104 @@ class TranscriptSourceTest {
         rig.quiesce()
         assertEquals((5..8).map { "u$it" }, rig.observedIds())
     }
+
+    // ------------------------------------------------------------------
+    // computenet-2aw.4.1 — TranscriptSource(recovered = ...) seeding
+    // ([AGO1-DUR-01] "admitted-utterance set recovers")
+    // ------------------------------------------------------------------
+
+    /** Counts calls so a seeded ledger can be shown to make ZERO of them. */
+    private class CountingSetOps<E> : SetOps<E> {
+        var addCalls = 0
+            private set
+        var removeCalls = 0
+            private set
+        val added = mutableListOf<E>()
+        val removed = mutableListOf<E>()
+
+        override fun add(element: E) {
+            addCalls++
+            added += element
+        }
+
+        override fun remove(element: E) {
+            removeCalls++
+            removed += element
+        }
+    }
+
+    @Test
+    fun `computenet-2aw_4_1 - a source constructed with recovered utterances seeds its ledger with zero ops calls`() {
+        val ops = CountingSetOps<Utterance>()
+        val u1 = Utterance(id = "u1", turn = 1, speaker = "alice", tsMillis = 1000, text = "first")
+        val u2 = Utterance(id = "u2", turn = 2, speaker = "bob", tsMillis = 2000, text = "second")
+
+        val source = TranscriptSource(ops, recovered = listOf(u2, u1))
+
+        assertEquals(listOf(u1, u2), source.admitted, "recovered utterances are sorted into turn order")
+        assertEquals(2, source.lastAdmittedTurn)
+        assertEquals(0, ops.addCalls, "seeding must not call SetOps.add — the cell already holds these")
+        assertEquals(0, ops.removeCalls)
+    }
+
+    @Test
+    fun `computenet-2aw_4_1 - offer of an already-recovered utterance is a no-op with zero ops calls`() {
+        val ops = CountingSetOps<Utterance>()
+        val u1 = Utterance(id = "u1", turn = 1, speaker = "alice", tsMillis = 1000, text = "first")
+        val u2 = Utterance(id = "u2", turn = 2, speaker = "bob", tsMillis = 2000, text = "second")
+        val source = TranscriptSource(ops, recovered = listOf(u1, u2))
+
+        assertFalse(source.offer(u2), "re-offering an already-recovered utterance is a no-op")
+        assertEquals(0, ops.addCalls)
+        assertEquals(0, ops.removeCalls)
+        assertEquals(listOf(u1, u2), source.admitted, "the ledger is unchanged by the no-op")
+    }
+
+    @Test
+    fun `computenet-2aw_4_1 - offer of a new id at a recovered turn throws OutOfOrderTurnException`() {
+        val ops = CountingSetOps<Utterance>()
+        val u1 = Utterance(id = "u1", turn = 1, speaker = "alice", tsMillis = 1000, text = "first")
+        val u2 = Utterance(id = "u2", turn = 2, speaker = "bob", tsMillis = 2000, text = "second")
+        val source = TranscriptSource(ops, recovered = listOf(u1, u2))
+
+        val newAtTurn2 = Utterance(id = "u3", turn = 2, speaker = "carol", tsMillis = 2500, text = "late")
+        val failure = assertFailsWith<OutOfOrderTurnException> { source.offer(newAtTurn2) }
+
+        assertEquals("u3", failure.utteranceId)
+        assertEquals(2, failure.offeredTurn)
+        assertEquals(2, failure.lastAdmittedTurn)
+        assertEquals(0, ops.addCalls, "the rejection made no ops call")
+        assertEquals(0, ops.removeCalls)
+    }
+
+    @Test
+    fun `computenet-2aw_4_1 - reset on a recovered source retracts every recovered utterance, latest first`() {
+        val ops = CountingSetOps<Utterance>()
+        val u1 = Utterance(id = "u1", turn = 1, speaker = "alice", tsMillis = 1000, text = "first")
+        val u2 = Utterance(id = "u2", turn = 2, speaker = "bob", tsMillis = 2000, text = "second")
+        val source = TranscriptSource(ops, recovered = listOf(u1, u2))
+
+        source.reset()
+
+        assertEquals(listOf(u2, u1), ops.removed, "reset retracts in reverse admission order: u2 then u1")
+        assertEquals(0, ops.addCalls)
+        assertEquals(2, ops.removeCalls)
+        assertEquals(emptyList(), source.admitted)
+        assertEquals(null, source.lastAdmittedTurn)
+    }
+
+    @Test
+    fun `computenet-2aw_4_1 - the cursor resumes past recovered turns present in the transcript`() {
+        val transcript = forty()
+        val recoveredThroughTurn7 = transcript.filter { it.turn <= 7 }
+        val ops = CountingSetOps<Utterance>()
+        val source = TranscriptSource(ops, transcript, recovered = recoveredThroughTurn7)
+
+        assertEquals(7, source.lastAdmittedTurn)
+        assertEquals(0, ops.addCalls, "recovery seeded the ledger without any ops call")
+
+        // step() reads from the cursor, which must sit past turn 7.
+        assertEquals("u8", source.step()?.id)
+        assertEquals(1, ops.addCalls, "the first live step after recovery makes exactly one ops call")
+    }
 }
