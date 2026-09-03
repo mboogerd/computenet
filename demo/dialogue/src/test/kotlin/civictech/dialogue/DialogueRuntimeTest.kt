@@ -19,8 +19,10 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import org.junit.jupiter.api.Timeout
 import java.io.File
 import java.io.StringReader
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -61,9 +63,8 @@ import kotlin.test.assertTrue
  * computenet-2aw.4.3's acceptance criteria pin the quiescence threshold, the
  * 2-cycle and the third world (`repeat(2)`), so every available lever for
  * making it cheaper is one of those criteria. Anyone shortening the
- * repository gate should change the bead's criteria — or move this class to a
- * tag-excluded lane (`buildSrc/.../kotlin-jvm.gradle.kts` `excludeTags`) —
- * rather than quietly weakening an assertion here.
+ * repository gate should change the bead's criteria rather than quietly
+ * weakening an assertion here.
  *
  * ### …but ~47 s on ubuntu, where the required checks actually run
  *
@@ -76,6 +77,27 @@ import kotlin.test.assertTrue
  * critical path**: that lane totalled 8m00s and kept scheduling other modules'
  * tests alongside and after this one. Whatever the local loop costs a
  * developer on a Mac, this class is not what makes CI slow.
+ *
+ * ### …but the local margin against the global timeout was the real bug
+ * (computenet-4rof)
+ *
+ * The repo sets a global JUnit per-method timeout of 5 minutes
+ * (`junit.jupiter.execution.timeout.testable.method.default`,
+ * `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts:442`). Against that cap,
+ * BS-18's ~270 s idle cost is not merely "expensive" — it is a **~30 s
+ * (~10%) margin**, and two different implementers hit the cap outright with
+ * a sibling agent sharing the machine, even though neither of their diffs
+ * touched anything this test depends on. That is a local/agent-experience
+ * defect (a red suite unrelated to the diff under test), not a CI-cost one —
+ * the ubuntu figures above already establish there is no CI-cost problem to
+ * solve. computenet-4rof resolved it with a per-method
+ * `@Timeout(value = 540, unit = TimeUnit.SECONDS)` on BS-18 alone (2x its
+ * measured idle cost), rather than moving the class to a tag-excluded lane:
+ * exclusion would still need a dedicated CI lane to keep exercising
+ * [AGO1-DUR-01] at all, solves a cost problem this class does not have, and
+ * does nothing for a developer who runs this class directly — which is
+ * exactly when the thin margin bites. See computenet-4rof for the full
+ * comparison of options.
  */
 class DialogueRuntimeTest {
 
@@ -315,6 +337,21 @@ class DialogueRuntimeTest {
     // BS-18 / [AGO1-DUR-01] + [AGO1-DUR-02]
     // ------------------------------------------------------------------
 
+    // computenet-4rof: the repo's global per-method timeout
+    // (`junit.jupiter.execution.timeout.testable.method.default = 5m`,
+    // buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts:442) leaves this method a
+    // ~30 s margin (~10%) against its own idle macOS/arm64 cost (~270 s,
+    // measured 2026-09-03) — thin enough that two different implementers hit
+    // the 5-minute cap outright while an unrelated sibling agent shared the
+    // machine (load 4.5-6.8), even though nothing in their diffs touched this
+    // test. `@Timeout` below raises the cap for this one method to 540 s (2x
+    // the measured idle cost — the repo's own default margin is likewise
+    // stated as a multiple, not an absolute distance), leaving genuine
+    // headroom against ordinary local/CI contention without loosening the
+    // 5-minute default that guards every other test in the repo against a
+    // real hang. See the class doc comment above for why the underlying cost
+    // is not itself a lever here.
+    @Timeout(value = 540, unit = TimeUnit.SECONDS)
     @Test
     fun `BS-18 AGO1-DUR-01 - a world reopened on the same journal dir after a crash rebuilds the same graph, bindings and admitted ledger, and reconciles to nothing`() {
         val dir = tempDir("dialogue-runtime-durability")
