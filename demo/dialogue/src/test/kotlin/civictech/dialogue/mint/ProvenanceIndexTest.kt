@@ -32,10 +32,11 @@ import kotlin.test.assertTrue
  *
  * The claim-only fixture uses [RuleExtractor] (deterministic, no
  * cassette/JSON needed for a claim-only scenario, same as `ClaimMintTest`).
- * The relation fixture cannot: `RuleExtractor`'s relation endpoint texts are
- * substrings of the whole-segment claim text it emits for the same segment,
- * so they never canonicalize to a key that segment's own claim mints (see
- * `RelationMintTest`'s KDoc). It uses a plain in-memory `Extractor` lambda
+ * The relation fixture cannot: since computenet-xwl0 `RuleExtractor` mints
+ * each of its relation's endpoint substrings as a claim in the same
+ * extraction as the relation, so it can only ever produce an
+ * already-resolvable relation — never the pending half PROV-01 asserts on
+ * (see `RelationMintTest`'s KDoc). It uses a plain in-memory `Extractor` lambda
  * keyed by exact segment text instead — every fixture utterance below has a
  * distinct text, so `ExtractionGate`'s content-hash memoization never
  * coalesces two different utterances' extractions.
