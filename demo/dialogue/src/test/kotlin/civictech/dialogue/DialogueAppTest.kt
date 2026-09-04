@@ -576,6 +576,126 @@ class DialogueAppTest {
     }
 
     // ------------------------------------------------------------------
+    // foldStatus's pending rung — computenet-kygh, then computenet-miei
+    //
+    // The obs03 fixture above genuinely pins failed > rejected (obs03-u6) and
+    // rejected > extracted (obs03-u7), but cannot reach the `pending` rung by
+    // itself: a `pending` segment status only comes from `SegmentStatus.Unknown`
+    // (extraction never ran for that segment), and every settle()-fenced
+    // action — step/reset, the boot load, and each admission of a replay
+    // (afterAdmit settles every one) — drains the whole host
+    // queue before `refreshSnapshot` ever runs, so every segment of an
+    // admitted utterance reached that way is already `Extracted` or `Failed`
+    // by the time a snapshot is rebuilt.
+    //
+    // computenet-kygh shipped that as a structural impossibility across
+    // DialogueApp's WHOLE documented action surface. That claim was wrong,
+    // and computenet-miei falsified it: `action=load` does NOT go through
+    // `settle()` before refreshing — `DialogueApp.load` calls
+    // `refreshSnapshot()` directly, and `TranscriptSource.load` leaves the
+    // admitted ledger untouched by design ("Loading is therefore not a
+    // reset"). So stepping to admit `u1`, then loading a second transcript in
+    // which `u1` (same id, same turn) now carries additional text,
+    // re-segments `u1` against a segment accounting never saw: that
+    // segment's status reads `SegmentStatus.Unknown`, i.e. `pending`, with no
+    // race and no settle involved. The test below drives exactly that
+    // sequence and asserts the folded `pending` through `GET /transcript`.
+    //
+    // The test below pins `pending > extracted` only — it never puts a
+    // `rejected` segment alongside the load-introduced `pending` one in the
+    // same utterance — so the direct `foldStatus` precedence test below is
+    // still what pins `rejected > pending` and the empty-list `-> extracted`
+    // branch. Those two are unpinned HERE, not unreachable through HTTP:
+    // measured at computenet-miei's review, `rejected > pending` falls out of
+    // the same step-then-load pair with a cassette whose segment-0 claim is
+    // blank (`[rejected, pending]` -> `rejected`), and the empty-list branch
+    // needs only a `step` on a blank-text utterance (zero segments ->
+    // `extracted`). Both tests stay; see `DialogueApp.foldStatus`'s KDoc for
+    // why `internal` visibility stays too, and the residual bead for
+    // extending this fixture to those rungs.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `computenet-miei - step then load leaves an admitted utterance's new segment pending, folding to pending through GET transcript`(
+        @TempDir dir: File,
+    ) {
+        val firstText = "Alpha proposition stands."
+        val secondText = "Alpha proposition stands. Beta proposition stands."
+        fun singleUtteranceFile(name: String, text: String): File {
+            val u1 = Utterance(id = "u1", turn = 1, speaker = "alice", tsMillis = 1_000L, text = text)
+            return File(dir, name).apply { writeText(Json.encodeToString(Utterance.serializer(), u1)) }
+        }
+        val firstFile = singleUtteranceFile("miei-first.jsonl", firstText)
+        val secondFile = singleUtteranceFile("miei-second.jsonl", secondText)
+
+        serving(DialogueApp(port = 0, extractor = RuleExtractor, transcriptFile = firstFile)) { _, probe ->
+            assertEquals(200, probe.postForm("action=step", "/transcript").statusCode())
+
+            val afterStep = Json.parseToJsonElement(probe.get("/transcript").body()).jsonObject
+            val stepUtterance = afterStep.arr("utterances").single().jsonObject
+            assertEquals(
+                "extracted",
+                stepUtterance.str("status"),
+                "u1 extracts cleanly from the first file before load: $afterStep",
+            )
+
+            val load = probe.postForm("action=load&path=${secondFile.absolutePath}", "/transcript")
+            assertEquals(200, load.statusCode(), "load of the second file is accepted")
+
+            val afterLoad = Json.parseToJsonElement(probe.get("/transcript").body()).jsonObject
+            val utterance = afterLoad.arr("utterances").single().jsonObject
+            assertEquals(
+                true,
+                utterance["admitted"]!!.jsonPrimitive.boolean,
+                "u1 stays admitted across load — TranscriptSource.load leaves the admitted ledger untouched: $afterLoad",
+            )
+            val segmentStatuses = utterance.arr("segments").map { it.jsonObject.str("status") }
+            assertEquals(
+                listOf("extracted", "pending"),
+                segmentStatuses,
+                "u1's second segment is new text load never offered to extraction, so accounting has no " +
+                    "record for it (SegmentStatus.Unknown -> pending) while the first segment's earlier " +
+                    "extraction stands: $afterLoad",
+            )
+            assertEquals(
+                "pending",
+                utterance.str("status"),
+                "foldStatus folds [extracted, pending] to pending — the pending > extracted rung, pinned " +
+                    "through the HTTP surface: $afterLoad",
+            )
+        }
+    }
+
+    @Test
+    fun `computenet-kygh - foldStatus pins failed greater than rejected greater than pending greater than extracted precedence directly`() {
+        val app = DialogueApp(port = 0, extractor = RuleExtractor)
+        try {
+            assertEquals(
+                "failed",
+                app.foldStatus(listOf("rejected", "failed")),
+                "failed must outrank rejected",
+            )
+            assertEquals(
+                "rejected",
+                app.foldStatus(listOf("pending", "rejected")),
+                "rejected must outrank pending",
+            )
+            assertEquals(
+                "pending",
+                app.foldStatus(listOf("extracted", "pending")),
+                "pending must outrank extracted",
+            )
+            assertEquals(
+                "extracted",
+                app.foldStatus(emptyList()),
+                "an empty segment list folds to extracted",
+            )
+        } finally {
+            app.stop()
+        }
+    }
+
+    // ------------------------------------------------------------------
     // GET /provenance — computenet-2aw.5.3, 2aw.F5-D1, [AGO1-PROV-02]/[AGO1-PROV-04]
     // ------------------------------------------------------------------
 
