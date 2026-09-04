@@ -262,13 +262,21 @@ def load_advice(cores, cap):
     # dispatching ANYTHING, including the single reviewer that has no cap.
     if load1 >= 5 * cores:
         busy = busy_builds()
+        if busy is None:
+            return load1, (f"load1 {load1} is >=5x the {cores} cores: PATHOLOGICAL, "
+                           f"and `ps` could not be read, so whether the load is "
+                           f"OURS is UNKNOWN. Hold — a wrong hold costs one "
+                           f"deferred dispatch, a wrong dispatch stalls an agent "
+                           f"outright. Check by hand: "
+                           f"`ps -eo pid,pcpu,comm | sort -k2 -rn | head`.")
         if busy:
             return load1, (f"load1 {load1} is >=5x the {cores} cores: PATHOLOGICAL, "
                            f"and it is OURS ({busy}). Dispatch NOTHING — an agent "
                            f"dispatched into this window stalls, and a timeout in a "
                            f"module the diff does not touch is contention, not a "
                            f"finding. Wait for it to finish; recovery is abrupt "
-                           f"(426 -> 8.57 in one measured case).")
+                           f"(426 -> 8.57 in one measured case). Confirm with "
+                           f"`ps -eo pid,pcpu,comm | sort -k2 -rn | head`.")
         return load1, (f"load1 {load1} is >=5x the {cores} cores, but NO build of "
                        f"ours is running: this is HOST load (endpoint-security "
                        f"scanning our build tree is the measured cause, and it stays "
@@ -289,7 +297,15 @@ def load_advice(cores, cap):
 
 
 def busy_builds(ps_output=None):
-    """Names of OUR build processes actually burning CPU right now, "" if none.
+    """Names of OUR build processes actually burning CPU right now.
+
+    Three answers, not two: a string names them, `""` means `ps` was read and
+    none are running, and `None` means `ps` could not be read at all. The third
+    is separate because collapsing it into `""` would make the advice assert
+    "NO build of ours is running" about a fact it just failed to determine —
+    the very defect this function exists to remove, one level down. Unknown
+    holds, because the lx7t case genuinely stalls agents and inverts verdicts
+    while a spurious hold costs one deferred dispatch.
 
     `load_advice()`'s pathological rung used to assert its own cause — "wait for
     whatever is in flight, typically a repo-wide gate" — without ever checking
@@ -314,7 +330,7 @@ def busy_builds(ps_output=None):
                                        capture_output=True, text=True,
                                        timeout=10).stdout
         except (OSError, subprocess.SubprocessError):
-            return ""                      # can't tell -> say nothing, hold stands
+            return None                    # can't tell -> hold (see docstring)
     hits = []
     for line in ps_output.splitlines():
         parts = line.split(None, 1)

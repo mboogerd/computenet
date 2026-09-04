@@ -1473,8 +1473,9 @@ dispatch ONE agent with a scoped gate and expect it to be slow, not wrong.
 Measured 2026-09-04, MacBoo: load1 held 316/263/198 for ~25 minutes on endpoint
 security scanning a build tree, with only idle IDE daemons running, while a
 session obeying the old cause-asserting text waited for a gate that did not
-exist (computenet-91xn). **Go under
-the cap deliberately when any live agent's verdict turns on a WALL-CLOCK
+exist (computenet-91xn).
+
+**Go under the cap deliberately when any live agent's verdict turns on a WALL-CLOCK
 AWAIT** — multi-JVM crash-restart, SSE/socket, anything in the `:inspect` hang
 family — because there a load-induced timeout is not merely slow, it is
 indistinguishable from the result being measured and can invert a verdict.
@@ -2111,9 +2112,11 @@ call, which is how the agent that took a 16-core box to ~25x was the one
 dispatched without anyone reading the advice (computenet-lx7t). At the
 PATHOLOGICAL rung, hold the dispatch — unless the advice says the load is HOST
 load rather than ours, in which case there is no gate to wait for and holding
-is an indefinite idle (5b; computenet-91xn). Below it, if an implementer is
-still live, say so in the prompt and scope the reviewer's gate the way 5b
-scopes a batch's.
+is an indefinite idle (5b; computenet-91xn). "Slow, not wrong" was measured on
+SCOPED runs, so dispatch under HOST load only with the reviewer's gate scoped —
+this is the one unscoped gate the session emits. Below the rung, if an
+implementer is still live, say so in the prompt and scope the reviewer's gate
+the way 5b scopes a batch's.
 
 An empty first output is worth saying ("origin/main unchanged at `<sha>`").
 `${parkedChildren}` is the `parked` array from the `next-batch.py` call that
