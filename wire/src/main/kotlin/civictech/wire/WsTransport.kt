@@ -2479,8 +2479,9 @@ object WsTransport {
          * is closed — so `connect` was throwing
          * `IllegalStateException: could not connect to <uri> — readyState=CLOSING`
          * for the very case this transport is built to survive, at whatever rate
-         * the machine happened to lose the race: 13 of 100 dials against a peer
-         * that closes at the handshake, on an idle 16-core darwin box, and often
+         * the machine happened to lose the race: 22 of 100 dials against a peer
+         * that closes at the handshake, on a 16-core darwin box (32 of 100 on an
+         * independent re-run of the same mutation during review), and often
          * enough on a two-core ubuntu runner to redden `build-test-fast` twice in
          * one day on diffs that touched no `:wire` file (computenet-ulgy, runs
          * 33848578396 and 33873071525).

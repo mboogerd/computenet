@@ -192,9 +192,12 @@ class WsRefusedDialBoundTest {
      * counting the latch down and this thread being rescheduled to read
      * `isOpen()`; nothing in the transport or the peer can order those two, so
      * the interference cannot be forced, only made likely. Measured against the
-     * unfixed transport on an idle 16-core darwin host: **13 of 100** dials
-     * threw. At that rate a hundred dials leave a false green at ~1e-6, while a
-     * single dial would have reported a fix that isn't one seven times in eight.
+     * unfixed transport on a 16-core darwin host, with [SlammingPeer] configured
+     * exactly as it ships (see its KDoc — both details are load-bearing):
+     * **22 of 100** dials threw, and **32 of 100** on an independent re-run of
+     * the same mutation during review. At the lower of those two rates a hundred
+     * dials leave a false green at ~1e-11, while a single dial would have
+     * reported a fix that isn't one roughly four times in five.
      * A busier host (CI's) only raises the rate. If this ever goes green against
      * an unfixed transport, the number to raise is the iteration count, not the
      * bound in [await].
