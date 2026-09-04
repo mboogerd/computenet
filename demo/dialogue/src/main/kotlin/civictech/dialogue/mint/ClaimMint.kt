@@ -16,6 +16,10 @@ import java.io.Serializable
  * independent, so [Aggregator.value] never sees the group's key — the
  * key-bearing type is assembled from a [ClaimKey] and this aggregate at read
  * time, by [ClaimMint.canonicalClaim].
+ *
+ * [text] is this fold's representative, not the text the agora graph
+ * displays for the claim — see [ClaimMint.ClaimAggregator]'s "The
+ * representative is NOT what the agora graph displays" (computenet-0d5e).
  */
 data class ClaimAggregate(val text: String, val fromUtterances: Set<String>)
 
@@ -44,6 +48,33 @@ object ClaimMint {
      * being emitted) exactly when the last contributing element is retracted
      * — [AGO1-MINT-03] is the kernel's group-death semantics, not
      * reimplemented here.
+     *
+     * ### The representative is NOT what the agora graph displays
+     *
+     * (computenet-0d5e, decided rather than fixed.) This representative is
+     * the value of *this fold*. It is not the text a reader sees on the claim
+     * node: `GraphApplier` writes a claim's text once, at
+     * `AgoraService.createClaim`, and never re-reads [ClaimAggregate.text]
+     * for an already-bound key. So when two utterances contribute texts
+     * differing only in case — `claimKey` lowercases (2aw.F3-D1), so they
+     * share one key — the node displays whichever text was live at first
+     * bind, while this representative is the lexicographically least of the
+     * live set. Measured: the pair {"travel costs increased", "Travel costs
+     * increased"} has representative `Travel costs increased`, and the node
+     * in `demo/agora/ui/test/fixtures/dialogue-graph.json` reads `travel
+     * costs increased` because the lowercase contribution replays first.
+     *
+     * That divergence is intended, and the reasoning belongs with
+     * `GraphApplier`'s "Claim text is written once" section rather than here.
+     * The short form: the lexicographic tie-break is *arbitrary* — neither
+     * speaker's capitalization is more correct — so reconciling it would buy
+     * no meaning, and would cost user-visible text churn every time a
+     * contribution is admitted or retracted.
+     *
+     * Do not read "pure function of the LIVE contributing set" above as a
+     * statement about the graph. It is a statement about this aggregate, and
+     * `GraphApplierTest`'s `INTENDED - a claim merged from two case-differing
+     * texts displays the first-bound one ...` pins the difference.
      */
     class ClaimAggregator : Aggregator<ExtractedClaim, ClaimAggregate, ClaimAggregator.Acc> {
         /** One contributing claim's text and the utterance it came from. */

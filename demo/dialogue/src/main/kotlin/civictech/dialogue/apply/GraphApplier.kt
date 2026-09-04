@@ -72,6 +72,55 @@ import civictech.dialogue.mint.StanceAggregate
  * graph underneath it surfaces as a recorded failure ([AGO1-APPLY-06]), never
  * as silent repair.
  *
+ * ### Claim text is written once, at create (computenet-0d5e)
+ *
+ * The claim-creates block below skips an already-bound key wholesale, so
+ * `ClaimAggregate.text` is read exactly once per key — at
+ * [AgoraService.createClaim] — and later contributions change a claim's
+ * *provenance*, never its display. A claim contributed by two utterances
+ * whose texts differ only in case therefore shows whichever text was live at
+ * first bind, not
+ * [civictech.dialogue.mint.ClaimMint.ClaimAggregator]'s lexicographically
+ * least representative, and that displayed text is admission-order
+ * dependent.
+ *
+ * **This is intended.** It was decided on computenet-0d5e against the
+ * alternative — reconciling a bound claim's text when its representative
+ * changes — for three reasons:
+ *
+ * - **Identity and content are not the same kind of thing, and their purity
+ *   requirements point in opposite directions.** [BindingTable.refFor] is a
+ *   pure function of the canonical key because identity must *converge
+ *   without coordination*: two independent tables, a fresh directory, a
+ *   replayed journal and a restarted process all have to agree on a claim's
+ *   ref with nothing to consult, and adopt-if-present depends on it. Purity
+ *   there buys **stability** — the same key is the same ref forever, and
+ *   recomputing it changes nothing observable. Display text could never be a
+ *   pure function of the canonical key at all (the key is lowercased and
+ *   whitespace-collapsed; it does not contain the text). The only purity on
+ *   offer is in the *live contributing set*, which is exactly what changes
+ *   over time — so making display text pure in it would make the text
+ *   **churn** under a reader on every admission and retraction. That is the
+ *   opposite of what `refFor`'s purity provides, not the same property
+ *   extended.
+ * - **The tie-break is arbitrary.** Lexicographic least is UTF-16 code-unit
+ *   order, under which `'T'`(84) precedes `'t'`(116). It picks a
+ *   capitalization, not a better claim. Both candidates are texts a speaker
+ *   actually uttered, and computenet-9bip already settled the division of
+ *   labour this sits in: normalize the KEY, preserve the TEXT.
+ * - **There is no write surface for it, and the substitute is destructive.**
+ *   [AgoraService] exposes no text update, and its durable structure log has
+ *   no op for one; adding both is a format change bought with an arbitrary
+ *   tie-break. The only re-text available to the sole writer today is
+ *   `remove` + `createClaim` at the same deterministic ref — and
+ *   [AgoraService.remove] cascades over every edge that becomes dangling, so
+ *   the graph would delete a claim's whole relational neighbourhood, its
+ *   stances and its credence to change one letter.
+ *
+ * `GraphApplierTest`'s `INTENDED - a claim merged from two case-differing
+ * texts displays the first-bound one ...` pins this, including that the ref
+ * does not churn while the text order-depends.
+ *
  * ### Fixed op order
  *
  * (1) relation removals, (2) claim removals, (3) claim creates, (4) relation
@@ -211,6 +260,9 @@ class GraphApplier(
         // (3) claim creates — before relation creates, so an edge's endpoints
         //     exist by the time createEdge runs.
         claims.forEach { (key, aggregate) ->
+            // Bound means done: the text is NOT reconciled against the
+            // aggregate's current representative. See the class doc's "Claim
+            // text is written once, at create" (computenet-0d5e).
             if (bindings.isBound(key)) return@forEach
             val ref = BindingTable.refFor(key)
             if (service.nodeInfo(ref) != null) {
