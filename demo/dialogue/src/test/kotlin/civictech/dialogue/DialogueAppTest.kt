@@ -128,6 +128,37 @@ class DialogueAppTest {
         }
     }
 
+    /**
+     * The `/graph` a finished `action=replay` leaves behind — a **converged**
+     * graph, not merely one that mentions the edge (computenet-xqp9).
+     *
+     * `/graph` is a live read of `AgoraService.nodes`, and `createEdge`
+     * publishes a node into that map *before* the propagation it starts has
+     * reached anything. For this fixture, turn 3's edge is therefore visible
+     * while "Proposition two holds." still reads its unattacked 0.5 rather
+     * than the DF-QuAD 0.3 the 0.8 attacker settles it to; busy-polling
+     * `/graph` across a `from=1&to=3` replay hits that state on every run on
+     * darwin. So `await { it.contains(edgeRef) }` is a *structure* predicate,
+     * and using it as a completeness predicate samples a mid-wave graph —
+     * which is what reddened `build-test-fast` three times on 2026-09-04
+     * (runs 33870008437, 33872830042, 33873071525, always the same one field
+     * at 0.3 where 0.5 had been captured).
+     *
+     * The wait here is *positive*, not a settling heuristic: `replayInFlight`
+     * is cleared in `DialogueApp.replay`'s `finally`, on the driver, after the
+     * last `settle()` of that replay has returned — and since computenet-xqp9
+     * a `settle()` returns only once the reconcile's own waves have drained.
+     * `"replaying":false` therefore *implies* a converged graph. A
+     * stability-based wait ("unchanged for N ms") deliberately is not used:
+     * it passes by outlasting the window rather than by observing its close,
+     * so a slower machine simply widens the window past N and the flake
+     * returns.
+     */
+    private fun HttpProbe.replayedGraph(timeoutMs: Long = 20_000): String {
+        await(path = "/transcript", timeoutMs = timeoutMs) { it.contains(""""replaying":false""") }
+        return get("/graph").body()
+    }
+
     private fun graphNodes(body: String): List<JsonObject> =
         (Json.parseToJsonElement(body) as JsonArray).map { it as JsonObject }
 
@@ -234,7 +265,10 @@ class DialogueAppTest {
             assertContains(accepted.body(), """"from":1""")
             assertContains(accepted.body(), """"to":3""")
 
-            val first = probe.await(path = "/graph", timeoutMs = 20_000) { it.contains(edgeRef) }
+            // The baseline has to be a *converged* graph, not the first one
+            // that mentions the edge — see [replayedGraph] (computenet-xqp9).
+            val first = probe.replayedGraph()
+            assertContains(first, edgeRef, message = "the replay admitted all three turns")
 
             assertEquals(202, probe.postForm("action=replay&from=1&to=3", "/transcript").statusCode())
             // A replay over an already-admitted range is every-utterance
@@ -242,6 +276,48 @@ class DialogueAppTest {
             // waiting for a synchronous action to drain behind it.
             assertEquals(200, probe.postForm("action=step", "/transcript").statusCode())
             assertEquals(first, probe.get("/graph").body(), "the second replay changed nothing")
+        }
+    }
+
+    /**
+     * computenet-xqp9: the moment `GET /transcript` stops saying a replay is
+     * in flight, `GET /graph` is **converged** — not merely structurally
+     * complete.
+     *
+     * This is the invariant the flake violated, and the one [replayedGraph]
+     * and every future `/graph` comparison rest on. It holds because of two
+     * things together, and it goes red if either is removed: `settle()`
+     * drains the reconcile's *own* waves before publishing (without that
+     * second fence a settle returns with the new edge visible and its
+     * target's credence not yet moved), and `GET /transcript` reports the
+     * live `replayInFlight` rather than the last settle's snapshot copy
+     * (without that it answers `false` for the whole window between the 202
+     * and the first settle, and this loop exits immediately).
+     *
+     * Deliberately a busy poll with nothing between the two reads: any sleep
+     * would let the wave land on its own and the test would pass for the
+     * wrong reason. Demonstrated red on the pre-fix shape by dropping the
+     * second `afterQuiescence` and delaying `AgoraService.routedInfluence` by
+     * 300ms — "Proposition two holds." then reads 0.5, the CI signature.
+     */
+    @Test
+    fun `computenet-xqp9 - a finished replay leaves a converged graph, not a mid-wave one`(@TempDir dir: File) {
+        serving(DialogueApp(port = 0, extractor = cassette(), transcriptFile = transcriptFile(dir))) { _, probe ->
+            assertEquals(202, probe.postForm("action=replay&from=1&to=3", "/transcript").statusCode())
+            val deadline = System.currentTimeMillis() + 20_000
+            var finished = false
+            while (!finished && System.currentTimeMillis() < deadline) {
+                finished = probe.get("/transcript").body().contains(""""replaying":false""")
+            }
+            assertTrue(finished, "the replay finished within the bound")
+
+            val graph = probe.get("/graph").body()
+            assertContains(graph, edgeRef, message = "the ATTACK edge is in the graph: $graph")
+            // DF-QuAD: the 0.8 attacker takes the unattacked 0.5 to 0.3. The
+            // whole failure mode is this field reading 0.5 — the edge already
+            // published, its influence not yet applied.
+            val two = graphNodes(graph).single { it.str("ref") == refTwo }
+            assertEquals(0.3, two["credence"]!!.jsonPrimitive.content.toDouble(), 1e-9)
         }
     }
 
@@ -590,7 +666,12 @@ class DialogueAppTest {
         serving(DialogueApp(port = 0, extractor = cassette(), transcriptFile = transcript, journalDir = journal)) {
                 _, probe ->
             assertEquals(202, probe.postForm("action=replay&from=1&to=3", "/transcript").statusCode())
-            probe.await(path = "/graph", timeoutMs = 20_000) { it.contains(edgeRef) }
+            // Not `await { contains(edgeRef) }`: that returns while turn 3's
+            // `createEdge` is still running, and `serving` then stops the app
+            // inside that window — which is computenet-t3sp's lost-EDGE
+            // signature, since `log(StructureOp("edge", …))` trails the
+            // in-memory publication. Leave on a converged graph instead.
+            assertContains(probe.replayedGraph(), edgeRef)
         }
 
         val restarted = DialogueApp(
