@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for slot-elapsed.sh. Fabricates slot-start/slot-seconds so every rung
-# and every gap case runs deterministically. Expect "31 passed, 0 failed".
+# and every gap case runs deterministically. Expect "37 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slot-elapsed.sh"}
@@ -61,6 +61,40 @@ says "$d" "previous reading 0m ago" "a back-to-back call reports a 0m gap"
 d=$(slot 200 300)
 echo $(( $(date -u +%s) - 50 * 60 )) > "$d/slot-last-reading"
 says "$d" "50m of wall clock passed between turns" "a 50m between-turn gap is called out"
+
+# computenet-gsm6: the gap alone is not the signal — WHICH RUNG IT CROSSED is.
+# The 2026-09-04 case: a 180m boundary landing at 271m of a 300m slot, with a
+# silent monitor, so nothing else could have said it: OPEN -> T-45m in one turn.
+d=$(slot 271 300)
+echo $(( $(date -u +%s) - 180 * 60 )) > "$d/slot-last-reading"
+says "$d" "crossed a rung UNOBSERVED (OPEN -> T-45m)" "a gap that crosses rungs says which ones"
+d=$(slot 271 300)
+echo $(( $(date -u +%s) - 180 * 60 )) > "$d/slot-last-reading"
+says "$d" "WARNING" "an unobserved crossing is loud, not a field to compute from"
+# a long gap that stays on ONE rung is not a crossing and must not cry wolf
+d=$(slot 60 300)
+echo $(( $(date -u +%s) - 40 * 60 )) > "$d/slot-last-reading"
+out=$("$SCRIPT" "$d" 2>&1)
+case "$out" in *WARNING*) bad "a 40m gap inside OPEN must not warn — got: $out" ;;
+                       *) ok "a long gap that crosses no rung does not warn" ;; esac
+# a gap of an hour or more warns even when it crosses NO rung: it spends a
+# rung's worth of budget either way (10m -> 190m of a 300m slot leaves 95m of
+# work time, five minutes short of T-90m, and the rung name never changed).
+d=$(slot 190 300)
+echo $(( $(date -u +%s) - 180 * 60 )) > "$d/slot-last-reading"
+says "$d" "an hour or more passed UNOBSERVED" "a 180m gap inside one rung still warns"
+# the rounding SHAPE must match `usable`'s, or the warning goes silent within a
+# minute of every boundary: prev-start = 194m30s is OPEN (usable 91), and a
+# single-floor-over-the-difference computation calls it T-90m and says nothing.
+d=$(slot 205 300)
+echo $(( $(date -u +%s) - 10 * 60 - 30 )) > "$d/slot-last-reading"
+says "$d" "crossed a rung UNOBSERVED (OPEN -> T-90m)" "a non-whole-minute previous reading still detects the crossing"
+# ...and a gap under the 10m reporting floor never reaches the crossing check
+d=$(slot 195 300)
+echo $(( $(date -u +%s) - 2 * 60 )) > "$d/slot-last-reading"
+out=$("$SCRIPT" "$d" 2>&1)
+case "$out" in *WARNING*) bad "a 2m gap must not warn — got: $out" ;;
+                       *) ok "a sub-10m gap does not warn even at a rung edge" ;; esac
 
 # The auxiliary age field must never suppress the primary elapsed reading: an
 # empty last-reading file is reachable (the write truncates first) and an empty
