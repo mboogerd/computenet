@@ -341,7 +341,10 @@ object FaultCodecs {
         },
     )
 
-    fun kinds(): Set<String> = byKind.keys.toSet()
+    fun kinds(): Set<String> {
+        ShippedFaults.ensureRegistered()
+        return byKind.keys.toSet()
+    }
 
     /** Visible for suites that register per-test codecs and must not leak them into others. */
     fun unregister(kind: String) {
@@ -366,11 +369,92 @@ object FaultCodecs {
     }
 
     fun decode(record: FaultRecord): Fault {
+        ShippedFaults.ensureRegistered()
         val codec = byKind[record.kind] ?: throw IllegalArgumentException(
             "unknown fault kind \"${record.kind}\" for fault \"${record.id}\"; registered kinds: " +
                 "${byKind.keys.sorted()}. An artifact naming a kind this JVM has not registered cannot be replayed.",
         )
         return codec.decode(record.id, record.params)
+    }
+}
+
+/**
+ * The fault classes `:testkit` ships, and the one thing that makes a *decode-only* JVM possible
+ * (computenet-trpc).
+ *
+ * ## The hole this closes
+ *
+ * A [FaultCodec] registers itself from its fault class's `companion object`, which runs when
+ * the class is first loaded. Encoding is safe by construction — a plan being written
+ * necessarily holds instances, so the classes are loaded. **Decoding is not**: a JVM whose only
+ * contact with a fault class is reading an artifact that names its `kind` has never loaded it,
+ * so [FaultCodecs.decode] throws "unknown fault kind" for a perfectly valid artifact. Every
+ * landed consumer builds its plans in the same process that replays them, which is why nothing
+ * caught this; a replay tool, a CLI or a sweep-rerun harness does not, and does not have to
+ * know the rig's plumbing well enough to touch ten classes first.
+ *
+ * ## The trade-off, stated
+ *
+ * This deliberately **re-centralises** what per-class registration decentralised, and the cost
+ * is the obvious one: [CLASSES] is a list in a different file from the classes it names, and a
+ * new fault class can be added without it. So the list is not trusted to stay current — it is
+ * *pinned*. `ReplayTest.theEagerRegistrationListNamesEveryShippedFaultCodec_computenet_trpc`
+ * reads the compiled class files of this package and fails if any class declaring a
+ * [FaultCodec] field is missing from [CLASSES] (or named here and since deleted). The
+ * registration itself stays in each fault class, so a fault and its codec still cannot drift;
+ * what lives here is only the *list of classes to load*, which is the part a class file can
+ * answer authoritatively.
+ *
+ * ## Why not [FaultCodecs]' own initialiser
+ *
+ * The bead prescribed exactly that, and it deadlocks. `FaultCodecs.<clinit>` forcing
+ * `ReorderFault.<clinit>`, while `ReorderFault.<clinit>` calls [FaultCodecs.register] and so
+ * forces `FaultCodecs.<clinit>`, is a class-initialisation cycle: harmless on one thread (the
+ * JVM permits re-entrant initialisation) and a hard deadlock when two threads enter it from
+ * opposite ends — which is reachable the moment two suites first-touch the rig in parallel.
+ * Registering from [FaultCodecs.decode] and [FaultCodecs.kinds] instead breaks the cycle:
+ * `FaultCodecs.<clinit>` becomes trivial again, and nothing a fault class's initialiser calls
+ * leads back here.
+ */
+object ShippedFaults {
+
+    /**
+     * Every fault class in this module that registers a [FaultCodec].
+     *
+     * Class *literals*, not `CODEC` reads: `X::class.java` does not run `X`'s initialiser, so
+     * building this list registers nothing and cannot itself depend on load order. The loading
+     * is [ensureRegistered]'s job, once, at the first decode.
+     */
+    val CLASSES: List<Class<out Fault>> = listOf(
+        CrashFault::class.java,
+        PartitionFault::class.java,
+        JournalFault::class.java,
+        RestartAtFrontierFault::class.java,
+        ReorderFault::class.java,
+        DuplicateFault::class.java,
+        JoinEvent::class.java,
+        RejoinEvent::class.java,
+        DepartEvent::class.java,
+        ReassignEvent::class.java,
+    )
+
+    @Volatile
+    private var registered = false
+
+    /**
+     * Load every class in [CLASSES], so each one's codec is in [FaultCodecs] before the first
+     * decode. Idempotent and cheap after the first call (one volatile read).
+     *
+     * `Class.forName(name, true, loader)` is the initialisation, and it is deliberately *not*
+     * a read of `X.CODEC`: a read would observe `null` for the one class whose initialiser is
+     * already in flight on this thread, and store it. Forcing initialisation by name has no
+     * such window — the JVM lets the in-flight initialisation complete on its own.
+     */
+    @Synchronized
+    fun ensureRegistered() {
+        if (registered) return
+        CLASSES.forEach { Class.forName(it.name, true, it.classLoader) }
+        registered = true
     }
 }
 
