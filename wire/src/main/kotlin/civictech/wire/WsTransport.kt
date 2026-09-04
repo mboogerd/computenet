@@ -336,7 +336,13 @@ object WsTransport {
     ): WsConnection {
         awaitReachable(uri, backoff)
         val connection = WsConnection(uri, side, backoff, refusedDialLimit)
-        check(connection.connectBlocking(10, TimeUnit.SECONDS)) {
+        // `connectBlocking` is `connectLatch.await(timeout) && isOpen()`, and BOTH
+        // `onWebsocketOpen` and `onWebsocketClose` count that latch down — so it
+        // answers "is the socket open *now*", not "did this dial open". A peer that
+        // closes the socket between the countDown and this thread's `isOpen()` read
+        // therefore reports a dial that opened, sent its hello and was refused as a
+        // dial that never connected. See [WsConnection.everOpened].
+        check(connection.connectBlocking(10, TimeUnit.SECONDS) || connection.everOpened) {
             "could not connect to $uri — ${connection.dialDiagnosis()}"
         }
         return connection
@@ -2459,6 +2465,37 @@ object WsTransport {
         val unadmittedOpens: Int get() = unadmitted.get()
 
         /**
+         * True once this client's socket has **ever** opened (computenet-ulgy) —
+         * the distinction [WsTransport.connect] owes its caller, which
+         * `connectBlocking` cannot make.
+         *
+         * `WebSocketClient.connectBlocking` is `connectLatch.await(timeout) &&
+         * isOpen()`, and 1.6.0 counts that latch down from `onWebsocketOpen`
+         * *and* from `onWebsocketClose`. Its `false` therefore conflates two
+         * outcomes: a dial that never opened, and a dial that opened and whose
+         * peer closed it before the dialling thread was rescheduled to read
+         * `isOpen()`. The second is a **refusal** — the premise of
+         * [REFUSED_DIAL_LIMIT] is that a refused dial opens, sends its hello and
+         * is closed — so `connect` was throwing
+         * `IllegalStateException: could not connect to <uri> — readyState=CLOSING`
+         * for the very case this transport is built to survive, at whatever rate
+         * the machine happened to lose the race: 13 of 100 dials against a peer
+         * that closes at the handshake, on an idle 16-core darwin box, and often
+         * enough on a two-core ubuntu runner to redden `build-test-fast` twice in
+         * one day on diffs that touched no `:wire` file (computenet-ulgy, runs
+         * 33848578396 and 33873071525).
+         *
+         * Set unconditionally in [onOpen], and never cleared: it records that a
+         * socket existed, not that one exists. A dial that never opened — the
+         * unbound port of `WsReconnectRefusedTest`, and the accepts-and-closes
+         * peer `WsConnectRaceTest` pins the give-up message on — leaves this
+         * false and still gives up with the same diagnosis.
+         */
+        @Volatile
+        internal var everOpened: Boolean = false
+            private set
+
+        /**
          * True once this client has given up reconnecting to a listener that
          * keeps refusing its hello ([WsTransport.REFUSED_DIAL_LIMIT]).
          *
@@ -2544,6 +2581,7 @@ object WsTransport {
         }
 
         override fun onOpen(handshake: ServerHandshake) {
+            everOpened = true
             // Charged before the hello goes out, because the hello is the cost:
             // this open has already committed the listener to one accept and one
             // hello parse whatever happens next (computenet-4gzr).
