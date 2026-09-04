@@ -8,6 +8,7 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * The format generation this build reads and writes.
@@ -183,13 +184,68 @@ class InMemoryJournal : Journal {
  * leave subsequent appends writing to the *replaced* inode.
  *
  * That self-drop covers one instance only. **Two live `FileJournal` instances
- * on one path were already unsupported** (computenet-k1by: their `needsHeader`
- * checks race and both emit a header), and the kept handle sharpens the same
- * shape — a [reset] on instance A now strands instance B's subsequent appends
- * in the unlinked inode, where the previous reopen-per-append would have
- * followed the rename. Nothing in this repo does that: a journal is owned by
- * exactly one host (`KeyedCells`, `AgoraApp`), and a recovery reader is
- * constructed after the writer is gone.
+ * on one path now share the header decision instead of racing it**
+ * (computenet-k1by). Before this, `needsHeader` was check-then-act across
+ * instances — nothing serialized instance A's read of `file.length()` against
+ * instance B's — so both could see an empty file, and both would emit a
+ * header. The second one landed mid-stream, where replay decoded it as a
+ * record of length `0x434E4A4C` (~1.1 GB), hit EOF, and silently dropped
+ * everything after it as a torn trailing record: SILENT truncation, not an
+ * error. And the kept handle (this section) sharpened the same shape further:
+ * a [reset] on instance A would strand instance B's subsequent appends in the
+ * unlinked inode, where the previous reopen-per-append would at least have
+ * followed the rename.
+ *
+ * ## Interleaving correctly, not refusing or a shared instance (computenet-k1by)
+ *
+ * [sink] makes the header decision — "is this file empty, and if so, write
+ * the header" — inside a lock keyed by the file's canonical path
+ * ([headerLocks]), so two instances opening their handles at the same moment
+ * serialize on that one decision: whichever gets there first writes the
+ * header, and the other observes a non-empty file and writes none. Once the
+ * header is settled, each instance's own `append` writes a whole framed
+ * record in one `write` syscall against an `O_APPEND` descriptor — the same
+ * atomicity `TwoWriterDurabilityTest`'s two *threads* on one instance already
+ * rely on (see [append]) — so two *instances*' appends interleave correctly
+ * for the same reason once neither is racing to write a second header.
+ *
+ * This was chosen over the other two options the bead considered:
+ * - **Refusing a second live instance outright** — e.g. an exclusive lock
+ *   held for the handle's whole lifetime — was tried first and rejected: it
+ *   broke `FileJournalHandleTest`'s own *"the version header is written once,
+ *   by the first writer only"* test, which constructs several short-lived
+ *   `FileJournal` instances one after another on the same path, each left
+ *   unclosed (this class's handles have no close hook by design — see "One
+ *   handle" above). Nothing distinguishes that sequential, non-overlapping
+ *   reuse from a genuine concurrent second writer once a lock is held for the
+ *   whole handle lifetime; refusing the second would refuse legitimate reuse
+ *   this repo's own test suite already relies on, which the acceptance
+ *   criteria for this fix require to keep passing UNCHANGED. A per-instance
+ *   *lifetime* lock is therefore off the table; only a lock scoped to the
+ *   header decision itself survives that constraint, which is what [sink]
+ *   does.
+ * - **A process-wide instance cache keyed by canonical path** was rejected
+ *   because [Journal] deliberately has no lifecycle for callers to hook (see
+ *   "One handle" above) — a cache needs eviction, and nothing here owns the
+ *   moment an instance becomes safe to evict.
+ *
+ * The remaining gap is deliberate and is the cost of this choice: [headerLocks]
+ * is a JVM-local mutex, so it serializes instances **within one process** but
+ * not across two OS processes racing the same path — a scenario this repo
+ * does not construct today (see below) and that a lock held for the header
+ * decision alone cannot fully close without also refusing legitimate
+ * sequential reuse across processes, which nothing here has a way to permit
+ * safely. Readers are unaffected either way: [replay] never touches
+ * [headerLocks], so a second instance can still replay a journal a live
+ * writer holds open (pinned by `FileJournalHandleTest`'s cross-instance
+ * visibility test, unchanged by this fix).
+ *
+ * Nothing in this repo constructs two writers on one path today — a journal is
+ * owned by exactly one host (`KeyedCells`, `AgoraApp`), and a recovery reader
+ * is constructed after the writer is gone — so this is a guard against a
+ * latent hazard
+ * against a latent hazard at an API that did not forbid it, not a fix to a
+ * live defect.
  *
  * ponytail: one file, fsync per append, whole-log replay in memory — segments,
  * group commit, and streaming replay when a real workload's journal hurts.
@@ -205,6 +261,25 @@ class FileJournal(
 
         /** [MAGIC] plus the big-endian `int` version that follows it. */
         private const val HEADER_BYTES = 8
+
+        /**
+         * Per-canonical-path mutex serializing the header decision across
+         * concurrently constructed [FileJournal] instances on the same file
+         * (computenet-k1by; see the class KDoc's "Interleaving correctly, not
+         * refusing" section). Held only for the few instructions of
+         * [sink]'s header check-and-write, never for a handle's lifetime, so
+         * it does not block legitimate sequential reuse of short-lived
+         * instances on one path.
+         */
+        private val headerLocks = ConcurrentHashMap<String, Any>()
+
+        /** [File.getCanonicalPath], falling back to the absolute path if canonicalization fails. */
+        private fun canonicalPathOf(file: File): String =
+            try {
+                file.canonicalPath
+            } catch (_: java.io.IOException) {
+                file.absolutePath
+            }
     }
 
     init {
@@ -219,15 +294,20 @@ class FileJournal(
 
     /**
      * The append handle, opening it — and writing the header, if this is the
-     * first write into an absent or empty file — on the first call.
+     * first write into an absent or empty file — on the first call. The
+     * header decision is serialized across instances via [headerLocks]
+     * (computenet-k1by): whichever instance's [sink] call gets there first
+     * writes the header, and any other instance racing it observes a
+     * non-empty file and writes none.
      */
     private fun sink(): FileOutputStream {
         sink?.let { return it }
-        val needsHeader = !file.exists() || file.length() == 0L
         val opened = FileOutputStream(file, true)
-        if (needsHeader) {
-            opened.write(header())
-            opened.fd.sync()
+        synchronized(headerLocks.computeIfAbsent(canonicalPathOf(file)) { Any() }) {
+            if (file.length() == 0L) {
+                opened.write(header())
+                opened.fd.sync()
+            }
         }
         sink = opened
         return opened
