@@ -74,11 +74,12 @@ reading a self-modifying change needs, before §5.
 ## 1. The standard, then the diff
 
 ```bash
-bd show <task-id> --json > "$SCRATCH/<id>.json"        # criteria, files claim (a LIST — unwrap .[0])
+.claude/skills/work/scripts/bead.sh <task-id>          # criteria, files claim (one object — no .[0])
 bd comments <task-id> --json > "$SCRATCH/<id>-c.json"  # the implementer's landing notes
-# Redirect BOTH, then grep/jq the files: a task inlines its parent epic's whole
-# description, and a big epic overruns the tool result with nothing saying so
-# (computenet-h0dj, computenet-rram, computenet-yc1w).
+# NOT `bd show ... | tail -c`: a task inlines its parent epic's whole
+# description, and a truncated read returns the EPIC's acceptance looking like a
+# complete read of the task (computenet-h0dj, computenet-rram -> zwju -> o5oz,
+# computenet-yc1w). bead.sh projects it away; redirecting to a file also works.
 git -C <task-worktree> fetch origin main
 git -C <task-worktree> fetch origin <feature-branch> || true   # may not exist yet
 FB=$(git -C <task-worktree> rev-parse --verify -q origin/<feature-branch> \
@@ -203,9 +204,10 @@ Check:
   so the read cannot truncate, before concluding anything is missing:
 
   ```bash
-  bd show <id> --json > "$SCRATCH/<id>.json"
-  jq -r '.[0] | has("acceptance_criteria"), .acceptance_criteria' "$SCRATCH/<id>.json"
-  ```
+  bd show <id> --json > "$SCRATCH/<id>.json"    # NOT bead.sh: its jq always
+  jq -r '.[0] | has("acceptance_criteria"), .acceptance_criteria' \
+    "$SCRATCH/<id>.json"                        # emits the key, so `has` is
+  ```                                           # always true through it
 
   Only if *that* is empty does the ladder apply. This is the
   shape a directly-filed bug or chore arrives in, with no breakdown to have

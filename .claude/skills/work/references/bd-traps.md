@@ -101,7 +101,11 @@ SKILL.md and the other references cite this file as "`bd` traps".
   the command — fails identically (computenet-rram). The payload is one copy
   of the parent body **per dependency entry**, not one per bead, so several
   dependencies multiply it: 35KB overrun on a task, ~149KB from one call on a
-  feature (computenet-zwju). Read the bead's own fields through the
+  feature (computenet-zwju). **A truncated read of this does not look
+  truncated** — its tail is the PARENT's acceptance and metadata, well-formed,
+  so it reads as a complete read of the wrong bead (computenet-o5oz, sighting
+  three of rram -> zwju -> o5oz; a fourth belongs on that chain, not a fresh
+  file). Read the bead's own fields through the
   projection, which drops `dependencies` before the output can reach a tool
   result (57KB -> 7KB on computenet-x9e.3):
 
