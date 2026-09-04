@@ -348,11 +348,14 @@ class DialogueRuntime(
      * [DialogueWireSerializers] (`META-INF/services/civictech.cell.wire.WireSerializers`);
      * the derived payloads — `RelationCandidate`, `ClaimAggregate`, `StanceAggregate`,
      * `StanceJoinRow`, the provenance entries — carry no `@Serializable` at
-     * all, and `projectedStances` is keyed by a `Pair`, which has no
+     * all, and `projectedStances` is keyed by a `Pair` (the provenance folds
+     * by the `ClaimKey`/`RelationKey` value classes), none of which has a
      * polymorphic registration to give it. Journaling them is therefore not
      * merely wasteful but impossible without first making the whole mint
-     * vocabulary wire-capable, which is nobody's task here (see this class's
-     * follow-up bead).
+     * vocabulary wire-capable — deliberately still not done, decided in
+     * computenet-zxt5 and recorded on [DialogueWireSerializers], whose
+     * `MintWireCapabilityTest` measures both the current unencodability and
+     * the contribution that would lift it.
      *
      * The volatile set is spelled as [DERIVED_HANDLES] rather than derived
      * from [DialoguePipeline.Refs], because `Refs` does not expose every cell
