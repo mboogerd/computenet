@@ -48,13 +48,13 @@
         "credence": 0.5
     },
     {
-        "ref": "5561f800-e746-3c09-85ea-0b8e5d36fc9d",
+        "ref": "63ec03a8-38ba-3688-8249-297eb775b938",
         "kind": "CLAIM",
         "text": "No, I disagree that flights got more expensive.",
         "credence": 0.5
     },
     {
-        "ref": "0fc1af74-9b8e-30c3-85cc-25907fba9c00",
+        "ref": "b3f033e3-04ae-34ad-8748-ff8ec29be0ab",
         "kind": "CLAIM",
         "text": "We should revisit the budget next quarter.",
         "credence": 0.5
