@@ -2028,14 +2028,45 @@ re-delivery path as of this base, not an inert one.
   number honestly rather than either hiding it or duplicating BS-15's gate.
 - **`[CHA3-51]`'s "duplicated across the transition" is read at the successor
   only** (below, §5) — filed as `computenet-yqgd`, not re-filed here.
-- **BS-17's exclusive payload never crosses a mesh MEMBERSHIP departure** (§2
-  above, measured at task review): zero `DepartEvent`s of any `DepartureMode`
-  across seeds 1..50. The unclean
-  departure is the bridge host's own `CrashFault.midDrain`. Filed as
-  `computenet-usmw`. This is a *coverage* limit — the composition is reachable
-  in principle, it simply was not run — so it is recorded here rather than in
-  `concord/corpus/DISPUTES.md`, which is for properties that cannot be checked
-  honestly at all.
+- ~~**BS-17's exclusive payload never crosses a mesh MEMBERSHIP departure**~~
+  (§2 above, measured at task review): zero `DepartEvent`s of any
+  `DepartureMode` across seeds 1..50; the only unclean departure was the bridge
+  host's own `CrashFault.midDrain`. Filed as `computenet-usmw` as a *coverage*
+  limit — the composition was reachable in principle and simply was not run —
+  which is why it was recorded here rather than in `concord/corpus/DISPUTES.md`.
+  **CLOSED by `computenet-usmw`**: `ChurnExclusiveBridgeGraph` now runs at
+  `eventCount = 8`, `stepBudget = 60`, where the same 50 seeds draw **107
+  `DepartEvent`s** (33 `EVICT_CLEAN`, 28 `PARTITION_SUSPEND`, **26
+  `CRASH_UNCLEAN`**, 20 `EVICT_NO_CLOSE`), earliest at step 4, against bridge
+  windows spanning `0..19`..`0..110`. **All 50 seeds fire a mesh departure
+  inside their own bridge window** — asserted per seed in
+  `ExclusiveChurnTest.everyExclusivePayloadSurvivesChurnOrFailsTheRun_BS17`
+  from the *reported activation steps*, not from the plan, so an inert
+  departure cannot satisfy it — and all 26 unclean departures land inside a
+  window (on 20 of the 50 seeds), which a second, sweep-wide assertion pins.
+  Two knobs were needed, not one: `eventCount` makes departures exist (2 draws
+  none, structurally — a 2-peer roster cannot reach the
+  MEMBER-with-a-surviving-peer branch in two events), `stepBudget` makes them
+  *overlap the transfer* (at 600 the earliest departure was step 61 and only 6
+  of 50 seeds overlapped; the horizon moves the steps, not the draws).
+
+  The one seed that reddened the widened sweep (`peer "peer0" is already a
+  member, so a rejoin cannot be applied to it`, from `MeshPeer.rejoin`: 1 of 50
+  at `eventCount = 8`, 9 of 50 at 12) was an **incoherence between two
+  membership models**, not a property failure, and is fixed in
+  `PeerHandles.kt`. `MeshPeer.member` surviving a departure is **intended**,
+  and which `DepartureMode` paths clear it is now stated on the flag's own
+  KDoc: `CRASH_UNCLEAN` always (the host rebuild runs `discardHostLocalState`);
+  `EVICT_CLEAN`/`EVICT_NO_CLOSE` only when `Replication.evict` despawns — a
+  refused eviction (no reachable peer) suspends and retains state, which is
+  BS-9's own pinned reading in `DepartureGatesTest` and would be falsified by
+  "fixing" the flag; `PARTITION_SUSPEND` never, by design, with `rejoin`'s heal
+  branch as its return path. What was missing is that `ChurnGenerator` marks a
+  peer DEPARTED the moment it emits the `DepartEvent` and later rejoins it, so
+  a plan can ask a peer the kernel refused to evict to come back.
+  `MeshPeer.rejoin` now treats exactly that case as a no-op (the kernel's own
+  G-45 heal in `Replication.linkOut` resumes the replica when a peer becomes
+  visible again); every other "already a member" rejoin still raises.
 - **No new `concord/corpus/DISPUTES.md` entry was needed from this task.**
   Every churn-reachable property this task's own tests exercise (exclusive
   accounting under churn, dead-letter accounting under churn, pinned-seed
