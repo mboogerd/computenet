@@ -126,7 +126,6 @@ object DstReplayCli {
             ?: return usage(err, "expected exactly one artifact path, got ${positional.size}")
 
         return try {
-            warmFaultCodecs()
             // Initialisation is the registration: `Class.forName(name, true, loader)` runs the
             // class initialiser, which for a Kotlin `object` is where its `init` block lives.
             registrars.forEach { Class.forName(it, true, DstReplayCli::class.java.classLoader) }
@@ -145,26 +144,6 @@ object DstReplayCli {
 
     @JvmStatic
     fun main(args: Array<String>): Unit = exitProcess(run(args))
-
-    /**
-     * Load the six fault classes so their `CODEC`s are registered.
-     *
-     * A [FaultCodec] registers itself in the class initialiser of the fault it belongs to, and
-     * a fresh JVM has loaded none of them — so without this, replaying any artifact would need
-     * a `--register` naming a fault class, which is rig plumbing a consumer should not have to
-     * know. What a `--register` is genuinely needed for is the *consumer's* graph and check,
-     * which live in the consumer's own source set and which this module cannot know about.
-     */
-    private fun warmFaultCodecs() {
-        listOf(
-            PartitionFault.CODEC,
-            DuplicateFault.CODEC,
-            ReorderFault.CODEC,
-            CrashFault.CODEC,
-            JournalFault.CODEC,
-            RestartAtFrontierFault.CODEC,
-        )
-    }
 
     private fun usage(err: Appendable, problem: String): Int {
         err.appendLine("$problem\nusage: ${ReplayCommands.MAIN_CLASS} <artifact.json> [--register <fqcn>]...")
