@@ -176,7 +176,7 @@ open the PR and close it before shipping. Recording the gap prominently is the
 requirement, not a courtesy (computenet-a4cj).
 
 ```bash
-bd show <feature-id> --json > "$SCRATCH/<id>.json"   # acceptance criteria, description
+.claude/skills/work/scripts/bead.sh <feature-id>     # acceptance criteria, description
 bd list --parent=<feature-id> --all --json  # the tasks (--all: they are closed by now)
 bd comments <feature-id> --json > "$SCRATCH/comments.json"   # then read the file
 # the body key is `.text` — `.body` and `.comment` are the obvious guesses and
@@ -214,8 +214,9 @@ this file's opening "every task here is closed".
 Read the parent epic too, and any spec sections the feature cites — those
 are the authority (AGENTS.md), above the feature's own prose.
 
-**Resolving the parent is a script, not a field read.** `bd show --json`
-**omits `parent` entirely when it is unset** — a parented bead carries the
+**Resolving the parent is a script, not a field read** — and this is the
+other read `bead.sh` cannot do for you, since its jq always emits `parent`,
+null when unset. `bd show --json` **omits `parent` entirely when it is unset** — a parented bead carries the
 key, an unparented one has no such key at all — so `.[0].parent` reads `null`
 both for an item that genuinely has none *and* for an id `bd` could not
 resolve, and the field alone cannot tell you which. `bd list --parent` is no
@@ -251,14 +252,19 @@ uncertainty — never the accusation.
 the JSON read key is **`acceptance_criteria`**. `jq '.[0].acceptance'`
 answers `null` on a bead that *has* criteria, which sends a reviewer down the
 ladder below for no reason (computenet-2rix, [bd-traps.md](bd-traps.md)). And
-read it from a file — `bd show` on a feature inlines its parent epic's whole
-description and has overrun the tool-result limit at 55KB, and **a truncated
-bead read is a truncated acceptance list** with nothing in the output saying
-so (computenet-h0dj, computenet-rram).
+read it through `bead.sh` or from a file — `bd show` on a feature inlines its
+parent epic's whole description and has overrun the tool-result limit at 55KB,
+and **a truncated bead read is a truncated acceptance list** with nothing in
+the output saying so. Worse than truncated: the tail of that read is the
+PARENT's acceptance and metadata, so it looks like a complete read of the
+wrong bead — a reviewer scored against an epic's criteria believing they were
+the item's (computenet-h0dj, computenet-rram -> zwju -> o5oz).
 
 **`acceptance_criteria` may be empty or absent altogether** — on a bead filed
 mid-session by another agent it usually is, because nothing broke it down, and
 three reviewers hit it in one session (computenet-d7tk, computenet-qxg5).
+(This is one of the two reads `bead.sh` cannot do for you: its jq always
+emits the key, null when unset, so an absence test needs the raw `bd show`.)
 `bd show --json` cannot even tell the two apart: `.[0].acceptance_criteria`
 reads `null` for an empty field and the key is simply missing for an absent
 one, which is easy to misread as a `bd` failure rather than as the bead's real
