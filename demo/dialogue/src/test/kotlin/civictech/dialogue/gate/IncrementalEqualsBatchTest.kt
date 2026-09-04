@@ -266,8 +266,13 @@ class IncrementalEqualsBatchTest {
 
     @Test
     fun `AGO1-REPLAY-01 - the same program in two fresh pipelines on different world seeds agrees by key and credence`() {
-        listOf(2L to false, 3L to true).forEach { (seed, cyclic) ->
-            val generated = TranscriptGenerator.generate(seed, cyclic)
+        // (seed, intendedCyclic) — intendedCyclic only selects what
+        // TranscriptGenerator is asked to ATTEMPT (unchanged values: false
+        // for seed 2, true for seed 3). It is NEVER used as the comparison
+        // rule below — see the classification note at the BS-10 sweep above
+        // and computenet-7iys/computenet-n23m.
+        listOf(2L to false, 3L to true).forEach { (seed, intendedCyclic) ->
+            val generated = TranscriptGenerator.generate(seed, intendedCyclic)
             val first = replay(generated, transcriptSeed = seed, worldSeed = 1_000L + seed)
             first.settleAndReconcile()
             val second = replay(generated, transcriptSeed = seed, worldSeed = 9_000L + seed)
@@ -275,6 +280,35 @@ class IncrementalEqualsBatchTest {
 
             assertEquals(first.bindings.boundClaims(), second.bindings.boundClaims(), "seed $seed: claim keys")
             assertEquals(first.bindings.boundRelations(), second.bindings.boundRelations(), "seed $seed: relation keys")
+
+            // The tolerance classification: the FINAL LIVE digraph's actual
+            // cyclicity — not the `intendedCyclic` literal above, which
+            // describes the transcript before the program's own retractions
+            // (same fix as BS-10's computenet-7iys, one test over: computenet-n23m).
+            val live = generated.live
+            val reference = DialogueBatchReference.fold(generated.cassette, live)
+            val digraph = reference.relationKeys.associateWith { key ->
+                val spec = reference.nodes.getValue(BindingTable.refFor(key))
+                spec.source!! to spec.target!!
+            }
+            val cyclic = hasCycle(digraph.values.toList())
+            // Self-protection (computenet-n23m review): the branch above picks
+            // between a strict and a 25*1e-3-loose comparison, and drift in
+            // the WRONG direction — strict measured today silently reclassified
+            // to loose tomorrow, by a hasCycle/reaches regression or a future
+            // generator change — would pass unnoticed, because a bit-identical
+            // pair trivially also satisfies the loose bound (that is this
+            // review's own finding: forcing the old hardcoded `cyclic = true`
+            // for seed 3 left this test green). Pin today's measured
+            // classification so that kind of drift is announced, not silent.
+            val measuredAcyclic = mapOf(2L to true, 3L to true)
+            assertEquals(
+                measuredAcyclic.getValue(seed),
+                !cyclic,
+                "seed $seed: final live digraph classification drifted from the " +
+                    "2026-09-04 measurement (acyclic for both seeds 2 and 3) — " +
+                    "re-verify whether the credence bound should still be strict",
+            )
 
             val refs = first.bindings.boundClaims().map { BindingTable.refFor(it) } +
                 first.bindings.boundRelations().map { BindingTable.refFor(it) }

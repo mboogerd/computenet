@@ -628,6 +628,45 @@ classification — and none did: the sweep stays green with worst DAG gap
 `2.2247e-4`, unchanged from the original measurement above because the
 genuinely-cyclic seed set's own worst gap was already the reported figure.
 
+**Further correction (computenet-n23m, 2aw.F6-D3): the same file's other test,
+AGO1-REPLAY-01, carried the identical conflation one test over.**
+`listOf(2L to false, 3L to true)` used the same literal both to select what
+`TranscriptGenerator.generate` is asked to *attempt* and as the
+bit-identical-vs-`25 * 1e-3` comparison rule — exactly BS-10's own defect
+above, in REPLAY-01's two-fresh-pipelines sweep. Fixed the same way: the
+literal boolean is renamed `intendedCyclic` (values unchanged — `false` for
+seed 2, `true` for seed 3, so the two probe transcripts driven are identical
+to before) and the comparison rule is now derived from the final live digraph
+via this class's own `hasCycle`/`reaches` helpers, exactly as BS-10 does.
+
+**Measured**: seed 3's final live digraph reclassifies to acyclic here too —
+consistent with BS-10's own measurement of the same seed above — so REPLAY-01
+now compares seed 3 at the exact bit-identical rule instead of `25 * 1e-3`.
+It agrees: `./gradlew :demo:dialogue:test --tests
+'civictech.dialogue.gate.IncrementalEqualsBatchTest' --rerun --no-build-cache`
+passed with all 3 tests green (JUnit XML timestamp `2026-09-04T00:07:56.172Z`,
+0 failures, 0 errors), and REPLAY-01's `a == b` assertion held for every bound
+claim/relation node on seed 3 across both fresh-pipeline world seeds (world
+seeds `1_003` and `9_003`) — a genuine bit-identical result. Per 2aw.F6-D3's
+divergence policy, seed 3 was not swapped or the tolerance widened; it simply
+turned out to agree under the tighter rule, so the sweep stays green.
+
+**Honest limit of the mutation check.** Forcing the derivation back to the old
+hardcoded literal (`cyclic = intendedCyclic`, restoring seed 3's
+classification to `true`/loose) does **not** turn this test red: seed 3's
+credences are bit-identical across world seeds under either comparison mode,
+and a strict equality trivially also satisfies the loose `25 * 1e-3` bound.
+The mutation proves the classification itself changed (seed 3: derived
+`false` vs. hardcoded `true` — the same reclassification BS-10 measured
+above) but cannot show a red/green difference on this specific 2-seed probe,
+because neither seed 2 nor seed 3 has any live divergence left to catch once
+you already know they land bit-identical. That is a property of this narrow
+probe (only two seeds, both ultimately acyclic post-fix), not evidence the
+fix is cosmetic: the derived value is read from a different data source than
+the literal it replaces and the two disagree on seed 3, which is the
+load-bearing fact this entry records even though this test's own two seeds
+cannot exhibit it as a pass/fail difference.
+
 ## F-17 — BS-09 measured: the canonical graph is order-independent, but *which* cycle edge is designated head is not — and neither is how many heads there are
 
 **Observation** (computenet-2aw.6.2, AGO1 F6 T2): BS-09's test
