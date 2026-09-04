@@ -73,12 +73,24 @@ interface GroupByApi<E, K, A> {
  * that no requirement asks for, and one that would hide exactly the loud
  * failure above from the next author of an unregistered key type.
  *
+ * *Per application* is meant literally: `Pair` is a stdlib type with one slot
+ * in the `Any` scope, so two contributions that both register it collide and
+ * fail codec construction fast (`SerializerAlreadyRegisteredException`, the
+ * behaviour [civictech.cell.wire.WireSerializers] documents; measured — a
+ * production `Pair` registration reddens `MintWireCapabilityTest`'s
+ * contribution arm on exactly that exception). One owner per process, not one
+ * per module that happens to want it.
+ *
  * No `GroupByCell` in this repository needs such a registration today: every
  * fold whose output can reach a journal or a bridge is keyed by `String`,
  * `Int` or `Long` (all registered in the baseline), and the folds keyed by a
- * compound or value-class type — `:demo:dialogue`'s `projectedStances`,
- * `claimProvenance`, `relationProvenance` — sit in a pipeline that is
- * deliberately volatile and in a module with no `:wire` dependency. The
+ * compound or value-class type reach neither. Those are `:demo:dialogue`'s
+ * `projectedStances`, `claimProvenance` and `relationProvenance`, which sit in
+ * a pipeline that is deliberately volatile and in a module with no `:wire`
+ * dependency; and `:demo:skillmatch`'s `matchCounts`, keyed by the compound
+ * `CandidateJob`, in a module that likewise has no `:wire` dependency and
+ * journals nothing (`:inspect`, which it does depend on, renders values
+ * through its own reflective `ValueEncoder`, not through `WireCodec`). The
  * catalog folds in `:concord`/`:oracle` are statically `Any?`-keyed but run
  * only in-process.
  */
