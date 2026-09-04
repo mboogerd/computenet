@@ -120,6 +120,20 @@ class AgoraService(
         }
     }
 
+    /**
+     * Append a structure op to the durable log.
+     *
+     * **Call this before wiring, not after** (computenet-t3sp).
+     * `manage.spawn` and `streamTo` both stage work on the host queue and can
+     * block, so a thread interrupted there — `DialogueApp.stop()`'s driver
+     * shutdown being the observed case — unwinds out of
+     * [createClaim]/[createEdge] with the node already published into [nodes]
+     * (hence already served by [graph]) and nothing in `graph.jsonl`. That
+     * node is then unrecoverable: the next boot replays a log that never
+     * mentions it. Logging first inverts the failure into the benign
+     * direction — a logged-but-unwired node is rebuilt in full on the next
+     * replay, because replay re-runs the whole of `create*`.
+     */
     private fun log(op: StructureOp) {
         if (!replaying) structureLog?.appendText(
             kotlinx.serialization.json.Json.encodeToString(StructureOp.serializer(), op) + "\n"
@@ -131,8 +145,9 @@ class AgoraService(
         manage.spawn(cell)
         cells[ref] = cell
         synchronized(nodesLock) { nodes[ref] = NodeInfo(Kind.CLAIM, text = text) }
-        cell.credenceOutlet.streamTo(routedHub())
+        // Durable record first: see [log]'s note (computenet-t3sp).
         log(StructureOp("claim", ref.id.toString(), text = text))
+        cell.credenceOutlet.streamTo(routedHub())
         return ref
     }
 
@@ -153,10 +168,11 @@ class AgoraService(
             .also { it.catchUp = !replaying }
         manage.spawn(edge)
         cells[ref] = edge
+        // Durable record first: see [log]'s note (computenet-t3sp).
+        log(StructureOp("edge", ref.id.toString(), polarity = polarity, source = source.id.toString(), target = target.id.toString()))
         edge.credenceOutlet.streamTo(routedHub())
         edge.influenceOutlet.streamTo(routedInfluence(target))
         sourceLinks[ref] = cells.getValue(source).credenceOutlet.streamTo(routedSource(ref))
-        log(StructureOp("edge", ref.id.toString(), polarity = polarity, source = source.id.toString(), target = target.id.toString()))
         return ref
     }
 
