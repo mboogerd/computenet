@@ -65,7 +65,11 @@ import java.util.concurrent.TimeUnit
  * (`synchronized`) and [DialogueRuntime.claimProvenance]/
  * [DialogueRuntime.relationProvenance] (backed by `ObserveCell.current()`,
  * itself a `@Volatile` snapshot). The snapshot can therefore lag live state
- * by at most the one utterance currently being settled.
+ * by at most the one utterance currently being settled. The one field
+ * [handleTranscriptGet] does *not* take from the snapshot is `replaying`: it
+ * reads the live `@Volatile` [replayInFlight], because a lifecycle bit whose
+ * whole purpose is "has this finished yet" must not lag by a settle
+ * (computenet-xqp9).
  *
  * ### 2aw.5-D4 — one driver thread, and only one
  *
@@ -105,10 +109,22 @@ import java.util.concurrent.TimeUnit
  * it calls it **inside** [DialogueRuntime.afterQuiescence] ([AGO1-APPLY-04]:
  * apply at quiescence, never mid-wave). Nothing here registers an `onChange`.
  * The order inside the fence is load-bearing for [AGO1-OBS-02]: drain →
- * `reconcile()` → [onSettled] → [broadcast], so the frame a subscriber sees
- * after an admission carries the **post**-reconciliation graph — the newly
- * bound claim ref is already in it — rather than the graph as it stood before
- * the applier ran.
+ * `reconcile()` → **drain again** → [onSettled] → [broadcast], so the frame a
+ * subscriber sees after an admission carries the **post**-reconciliation
+ * graph — the newly bound claim ref is already in it — rather than the graph
+ * as it stood before the applier ran.
+ *
+ * The second drain is computenet-xqp9's fix and is not symmetry for its own
+ * sake. `reconcile()` publishes its new nodes into `AgoraService.nodes`
+ * (whence `/graph` serves them at once) but only *stages* the propagation
+ * that gives them their credences, so without it the fence published a graph
+ * that was structurally complete and numerically stale — an edge already
+ * visible while its target still read its unattacked value. With it, "a
+ * settle has completed" means the reconcile's own waves have landed, which is
+ * what makes `GET /transcript`'s `"replaying":false` a usable *converged*
+ * signal. It fences the settle's own effects only: `/graph` is still a live
+ * read, and an `onCredence` broadcast chasing an unrelated stance write is
+ * still mid-wave by construction.
  *
  * ### Manual check
  *
@@ -254,8 +270,33 @@ class DialogueApp(
      * [DialogueRuntime.afterQuiescence] block.
      */
     private fun settle() {
+        var reconciled: ReconcileReport? = null
+        runtime.afterQuiescence { reconciled = runtime.reconcile() }
+        val report = reconciled!!
+
+        // computenet-xqp9: a *second* fence, because `reconcile()` does not
+        // finish the work it starts. Its `createClaim`/`createEdge` calls
+        // publish nodes into `AgoraService.nodes` — whence `/graph` serves
+        // them immediately — and only *stage* the propagation that gives
+        // those nodes their credences. So at the instant `reconcile()`
+        // returns, the graph is structurally complete and numerically stale:
+        // for the three-turn fixture, the ATTACK edge is already visible
+        // while its target still reads its unattacked 0.5 rather than the
+        // DF-QuAD 0.3. Publishing there is what made `[AGO1-OBS-02]`'s frame
+        // — and every read taken just after a settle — a mid-wave sample, and
+        // it is what reddened `build-test-fast` three times on 2026-09-04
+        // (0.3 where 0.5 had been captured).
+        //
+        // Draining again before [onSettled]/[broadcast] makes "a settle has
+        // completed" mean what callers already read it as: the reconcile's
+        // own waves have landed. That gives the surface a *positive*
+        // convergence signal — once `GET /transcript` reports
+        // `"replaying":false`, the final settle of that replay has drained,
+        // so `/graph` is converged — rather than an "it has probably stopped
+        // moving by now" wait. Note this fences the settle's own effects
+        // only: `/graph` remains a live read, and an `onCredence` broadcast
+        // from an unrelated stance write is still mid-wave by construction.
         runtime.afterQuiescence {
-            val report = runtime.reconcile()
             // The boot settle is by construction the first one, so this
             // records exactly what recovery had left to apply.
             if (bootReconcile == null) bootReconcile = report
@@ -504,7 +545,17 @@ class DialogueApp(
         val response = TranscriptResponse(
             loaded = snapshot.loadedUtterances.size,
             admitted = snapshot.admittedCount,
-            replaying = snapshot.replaying,
+            // The live @Volatile flag, not `snapshot.replaying`
+            // (computenet-xqp9). `replayInFlight` is set before the 202 that
+            // starts a replay and cleared in that replay's `finally`, after
+            // its last `settle()` has returned; the snapshot's copy only
+            // catches up at the *next* refresh, so a caller polling for
+            // "the replay has finished" would read a stale `false` for the
+            // whole window between the 202 and the first settle. Since
+            // `settle()` now drains the reconcile's own waves before
+            // returning, `"replaying":false` is the surface's positive
+            // "the graph has converged" signal — it has to be exact.
+            replaying = replayInFlight,
             counts = snapshot.counts,
             utterances = snapshot.utteranceDtos,
             rejected = snapshot.rejectedDtos,
@@ -622,9 +673,23 @@ class DialogueApp(
 
     fun start(): DialogueApp = apply { shell.start() }
 
+    /**
+     * Graceful first, interrupting only as a backstop (computenet-t3sp).
+     *
+     * `shutdownNow()` alone interrupts whatever the driver is running, and a
+     * driver task is where the durable record of a structure op is written:
+     * `AgoraService.createEdge` publishes the edge into the node map (so
+     * `/graph` can already serve it) and appends to `graph.jsonl` afterwards.
+     * An interrupt taken between those two points leaves an edge that the
+     * first process served and the next process cannot recover — the
+     * lost-EDGE shape computenet-t3sp recorded. Draining the driver first
+     * lets an in-flight settle finish; the interrupt stays as the bound, so a
+     * genuinely wedged driver still cannot hold a `stop()` open.
+     */
     fun stop() {
         shell.stop()
-        driver.shutdownNow()
+        driver.shutdown()
+        if (!driver.awaitTermination(STOP_DRAIN_MS, TimeUnit.MILLISECONDS)) driver.shutdownNow()
     }
 
     private companion object {
@@ -633,6 +698,14 @@ class DialogueApp(
 
         /** Boot recovers a journal and reconciles once, so it gets more room. */
         const val BOOT_TIMEOUT_MS = 120_000L
+
+        /**
+         * How long [stop] lets the driver drain before interrupting it. Sized
+         * against a single in-flight settle, not against a replay: a
+         * `Pace.Wallclock` replay holds the driver for the transcript's
+         * duration and is expected to be cut short.
+         */
+        const val STOP_DRAIN_MS = 5_000L
 
         /** `AgoraApp.handleOp`'s form parsing, verbatim. */
         fun formParams(exchange: HttpExchange): Map<String, String> =
