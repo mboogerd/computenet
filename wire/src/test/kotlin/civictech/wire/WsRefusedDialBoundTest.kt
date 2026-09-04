@@ -100,6 +100,13 @@ class WsRefusedDialBoundTest {
      * is the earliest a peer can possibly close and so the widest this window
      * gets. It is still a race — see the test below for why it is run a hundred
      * times rather than once.
+     *
+     * **Two details here are load-bearing and measured, not incidental.**
+     * Connections are served on the accept thread itself rather than one thread
+     * each, and the dials below use a 20ms schedule. Against the unfixed
+     * transport, that pair failed 22 of 100 dials; a thread per connection made
+     * it 0 of 100, and a 200ms schedule 2 of 100. Tidying either away leaves a
+     * test that passes against the defect it was written for.
      */
     private class SlammingPeer : AutoCloseable {
         private val server = ServerSocket(0, 64, InetAddress.getLoopbackAddress())
@@ -111,10 +118,8 @@ class WsRefusedDialBoundTest {
             while (!server.isClosed) {
                 val socket = runCatching { server.accept() }.getOrElse { return@Thread }
                 accepted += socket
-                Thread({
-                    runCatching { serve(socket) }
-                    runCatching { socket.close() }
-                }, "slamming-peer-conn").apply { isDaemon = true }.start()
+                runCatching { serve(socket) }
+                runCatching { socket.close() }
             }
         }, "slamming-peer").apply { isDaemon = true; start() }
 
@@ -151,7 +156,7 @@ class WsRefusedDialBoundTest {
             }
             // Let the dialler read that buffer before the FIN arrives, so what it
             // sees is a close frame and not a bare end-of-stream.
-            Thread.sleep(100)
+            Thread.sleep(50)
         }
 
         override fun close() {
@@ -209,7 +214,7 @@ class WsRefusedDialBoundTest {
             repeat(dials) {
                 val client = Stack(name = "client")
                 try {
-                    val connection = WsTransport.connect(uri, client.side, backoff = { 200L }, refusedDialLimit = 2)
+                    val connection = WsTransport.connect(uri, client.side, backoff = { 20L }, refusedDialLimit = 2)
                     if (connection.unadmittedOpens >= 1) opened++
                     connection.shutdown()
                 } catch (e: IllegalStateException) {
