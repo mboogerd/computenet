@@ -788,9 +788,13 @@ class DialogueAppTest {
             assertEquals(202, probe.postForm("action=replay&from=1&to=3", "/transcript").statusCode())
             // Not `await { contains(edgeRef) }`: that returns while turn 3's
             // `createEdge` is still running, and `serving` then stops the app
-            // inside that window — which is computenet-t3sp's lost-EDGE
-            // signature, since `log(StructureOp("edge", …))` trails the
-            // in-memory publication. Leave on a converged graph instead.
+            // inside that window — computenet-t3sp's lost-EDGE signature.
+            // `AgoraService.createEdge` now appends its structure op with
+            // nothing interruptible between the publication into `nodes` and
+            // the append (computenet-xqp9, computenet-f7y8), so the window no
+            // longer loses the edge; leaving on a converged graph keeps this
+            // test off that seam regardless, and is what makes the `/graph`
+            // comparison after the restart a comparison of settled states.
             assertContains(probe.replayedGraph(), edgeRef)
         }
 
