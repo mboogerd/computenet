@@ -57,18 +57,19 @@ class RuleExtractorTest {
     }
 
     @Test
-    fun `a because-segment yields its claim, the two endpoint claims, and a supporting relation`() {
+    fun `a because-segment yields only the two endpoint claims and a supporting relation, not the whole-segment claim`() {
         val s = segment(text = "It rains because clouds are heavy", speaker = "bob", utteranceId = "u2")
 
         val items = RuleExtractor.extract(s)
 
-        // Endpoint claims (targetClaim then sourceClaim) are minted in
-        // addition to the whole-segment claim, so the relation's endpoints
-        // canonicalize to a claim key this same segment mints — see
-        // RuleExtractor's KDoc "Why the endpoint claims" (computenet-xwl0).
+        // Endpoint claims (targetClaim then sourceClaim) are minted INSTEAD
+        // OF the whole-segment claim, so the relation's endpoints
+        // canonicalize to a claim key this same segment mints, without also
+        // minting a redundant orphan node for the whole sentence — see
+        // RuleExtractor's KDoc "Why only the endpoint claims"
+        // (computenet-xwl0, then computenet-i6hp).
         assertEquals(
             listOf(
-                ExtractedClaim(text = "It rains because clouds are heavy", speaker = "bob", utteranceId = "u2"),
                 ExtractedClaim(text = "It rains", speaker = "bob", utteranceId = "u2"),
                 ExtractedClaim(text = "clouds are heavy", speaker = "bob", utteranceId = "u2"),
                 ExtractedRelation(
@@ -79,6 +80,10 @@ class RuleExtractorTest {
                 ),
             ),
             items,
+        )
+        assertTrue(
+            items.none { it is ExtractedClaim && it.text == "It rains because clouds are heavy" },
+            "the whole-segment claim must not be minted once the because-split succeeds",
         )
     }
 
