@@ -63,8 +63,12 @@ belong to feature computenet-2aw.6.
 
 ```
 ./gradlew :demo:dialogue:test
-cd demo/agora/ui && npm test
+cd demo/agora/ui && npm install && npm test
 ```
+
+(`node_modules/` is gitignored and therefore per-worktree, so the `npm install`
+is not redundant with the one in "Run" above: in a fresh worktree `npm test`
+alone fails with `sh: vitest: command not found`.)
 
 `demo/agora/ui/test/dialogue-graph.test.ts` feeds a captured `/graph`
 response (`demo/agora/ui/test/fixtures/dialogue-graph.json`, captured from
