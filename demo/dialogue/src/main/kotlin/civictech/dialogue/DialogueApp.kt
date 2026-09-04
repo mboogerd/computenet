@@ -391,7 +391,34 @@ class DialogueApp(
         }
     }
 
-    private fun foldStatus(statuses: List<String>): String = when {
+    /**
+     * 2aw.5-D7's fold, precedence failed > rejected > pending > extracted.
+     *
+     * **`internal`, not `private` (computenet-kygh).** The `pending` rung
+     * cannot be pinned by driving [DialogueApp] through its HTTP surface:
+     * [settle]'s first [DialogueRuntime.afterQuiescence] fence drains the
+     * *whole* host queue — "not the work queued before it, and not the work
+     * that work enqueued, however deep the cascade" per that method's KDoc —
+     * before `reconcile()` is even called, and [refreshSnapshot] only ever
+     * runs after that drain. So segmentation, extraction and minting for an
+     * admitted utterance are always fully complete by the time a snapshot is
+     * rebuilt: every segment of an admitted utterance is already `Extracted`
+     * or `Failed` in [civictech.dialogue.extract.ExtractionAccounting],
+     * never left at `SegmentStatus.Unknown` for [segmentDto] to read as
+     * `pending`. (The only other producer of `pending`, [utteranceDto]'s
+     * early return for an unadmitted utterance, never calls [foldStatus] at
+     * all.) Measured against `load`/`step`/`replay`/`reset` — the app's whole
+     * documented action surface — none can leave a segment `Unknown` once
+     * [refreshSnapshot] observes it: there is no asynchronous or partial
+     * extraction path for `load`/`step`/`reset` (synchronous, driver-bound,
+     * fenced the same way) or `replay` (fences identically per admission via
+     * its `afterAdmit = { settle() }`). Widening this one function's
+     * visibility is the smallest production change that lets a test pin the
+     * rung directly instead of leaving it unpinned or filing the requirement
+     * as undemonstrable — see `DialogueAppTest`'s direct `foldStatus`
+     * precedence test.
+     */
+    internal fun foldStatus(statuses: List<String>): String = when {
         statuses.any { it == STATUS_FAILED } -> STATUS_FAILED
         statuses.any { it == STATUS_REJECTED } -> STATUS_REJECTED
         statuses.any { it == STATUS_PENDING } -> STATUS_PENDING

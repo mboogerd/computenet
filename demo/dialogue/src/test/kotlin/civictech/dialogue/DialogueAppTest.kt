@@ -576,6 +576,58 @@ class DialogueAppTest {
     }
 
     // ------------------------------------------------------------------
+    // foldStatus's pending rung — computenet-kygh, residual of computenet-5x1b
+    //
+    // The obs03 fixture above genuinely pins failed > rejected (obs03-u6) and
+    // rejected > extracted (obs03-u7), but cannot reach the `pending` rung:
+    // a `pending` segment status only comes from `SegmentStatus.Unknown`
+    // (extraction never ran for that segment), and `settle()`'s first
+    // `afterQuiescence` fence drains the *whole* host queue — segmentation,
+    // extraction, minting, however deep the cascade — before `reconcile()`
+    // is even called; `refreshSnapshot` only ever runs after that. So every
+    // segment of an admitted utterance is always already `Extracted` or
+    // `Failed` by the time a `GET /transcript` snapshot is built, across
+    // every one of `load`/`step`/`replay`/`reset` — the app's whole
+    // documented action surface. `pending` is only ever produced by
+    // `utteranceDto`'s early return for an unadmitted utterance (obs03-u8
+    // above), which never calls `foldStatus` at all. There is therefore no
+    // deterministic — or even racy — way to hand `foldStatus` a `pending`
+    // element through the HTTP surface, and per AGENTS.md's rule that an
+    // honestly-unreachable requirement is filed rather than weakened into a
+    // passing scenario, this test pins the rung directly against the
+    // now-`internal` `foldStatus` instead.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `computenet-kygh - foldStatus pins failed greater than rejected greater than pending greater than extracted precedence directly`() {
+        val app = DialogueApp(port = 0, extractor = RuleExtractor)
+        try {
+            assertEquals(
+                "failed",
+                app.foldStatus(listOf("rejected", "failed")),
+                "failed must outrank rejected",
+            )
+            assertEquals(
+                "rejected",
+                app.foldStatus(listOf("pending", "rejected")),
+                "rejected must outrank pending",
+            )
+            assertEquals(
+                "pending",
+                app.foldStatus(listOf("extracted", "pending")),
+                "pending must outrank extracted",
+            )
+            assertEquals(
+                "extracted",
+                app.foldStatus(emptyList()),
+                "an empty segment list folds to extracted",
+            )
+        } finally {
+            app.stop()
+        }
+    }
+
+    // ------------------------------------------------------------------
     // GET /provenance — computenet-2aw.5.3, 2aw.F5-D1, [AGO1-PROV-02]/[AGO1-PROV-04]
     // ------------------------------------------------------------------
 
