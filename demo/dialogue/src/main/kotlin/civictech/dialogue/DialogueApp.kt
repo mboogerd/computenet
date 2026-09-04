@@ -402,9 +402,11 @@ class DialogueApp(
      * `step`/`replay`/`reset`, and the boot load — does drain the whole host
      * queue via [settle] before [refreshSnapshot] runs, so segmentation and
      * extraction for an admitted utterance are complete by the time those
-     * paths rebuild a snapshot. But [load] is the one action that calls
-     * [refreshSnapshot] directly, deliberately OUTSIDE any [settle] fence
-     * (see its own comment), and [TranscriptSource.load] leaves the admitted
+     * paths rebuild a snapshot. But [load] calls [refreshSnapshot] directly,
+     * deliberately OUTSIDE any [settle] fence (see its own comment) — as
+     * does `replay`'s `finally`, though only after its per-admission
+     * settles, so that one observes nothing unextracted — and
+     * [TranscriptSource.load] leaves the admitted
      * ledger untouched by design ("Loading is therefore not a reset"). So
      * `step` admitting `u1`, followed by `load` of a transcript in which
      * `u1` (same id, same turn) now carries additional text, re-segments
@@ -416,12 +418,17 @@ class DialogueApp(
      *
      * That HTTP fixture pins `pending > extracted` only: it never puts a
      * `rejected` segment alongside the load-introduced `pending` one in the
-     * same utterance, so `rejected > pending` and the empty-list `->
-     * extracted` branch stay unreached by the HTTP surface in one call.
-     * `internal` stays for that reason, not because the rung is
-     * unreachable through HTTP at all — the direct `foldStatus` precedence
-     * test below still carries the two rungs (and the empty-list case) the
-     * HTTP fixture does not, so it is not redundant with the HTTP pin.
+     * same utterance. Those remaining rungs are **unpinned there, not
+     * unreachable** — measured at computenet-miei's review, `rejected >
+     * pending` falls out of the *same* two calls with a cassette whose
+     * segment-0 claim is blank (`[rejected, pending]` -> `rejected`), and
+     * the empty-list `-> extracted` branch needs only a `step` on a
+     * blank-text utterance (as [refreshSnapshot]'s own KDoc already says).
+     * So `internal` stays for a narrower reason than reachability: the
+     * direct `foldStatus` precedence test below is what actually pins those
+     * rungs today, and it needs this visibility. Extending the HTTP fixture
+     * to cover them would remove that reason; that is filed, not assumed
+     * away.
      */
     internal fun foldStatus(statuses: List<String>): String = when {
         statuses.any { it == STATUS_FAILED } -> STATUS_FAILED

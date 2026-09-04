@@ -589,8 +589,8 @@ class DialogueAppTest {
     //
     // computenet-kygh shipped that as a structural impossibility across
     // DialogueApp's WHOLE documented action surface. That claim was wrong,
-    // and computenet-miei falsified it: `action=load` is the one action that
-    // does NOT go through `settle()` — `DialogueApp.load` calls
+    // and computenet-miei falsified it: `action=load` does NOT go through
+    // `settle()` before refreshing — `DialogueApp.load` calls
     // `refreshSnapshot()` directly, and `TranscriptSource.load` leaves the
     // admitted ledger untouched by design ("Loading is therefore not a
     // reset"). So stepping to admit `u1`, then loading a second transcript in
@@ -600,14 +600,18 @@ class DialogueAppTest {
     // race and no settle involved. The test below drives exactly that
     // sequence and asserts the folded `pending` through `GET /transcript`.
     //
-    // That HTTP fixture pins `pending > extracted` only — it never puts a
+    // The test below pins `pending > extracted` only — it never puts a
     // `rejected` segment alongside the load-introduced `pending` one in the
-    // same utterance — so it does not make the direct `foldStatus`
-    // precedence test below redundant: that test still pins `rejected >
-    // pending` and the empty-list `-> extracted` branch, which the HTTP
-    // surface does not reach in one call. Both tests stay; see
-    // `DialogueApp.foldStatus`'s KDoc for why `internal` visibility stays
-    // too.
+    // same utterance — so the direct `foldStatus` precedence test below is
+    // still what pins `rejected > pending` and the empty-list `-> extracted`
+    // branch. Those two are unpinned HERE, not unreachable through HTTP:
+    // measured at computenet-miei's review, `rejected > pending` falls out of
+    // the same step-then-load pair with a cassette whose segment-0 claim is
+    // blank (`[rejected, pending]` -> `rejected`), and the empty-list branch
+    // needs only a `step` on a blank-text utterance (zero segments ->
+    // `extracted`). Both tests stay; see `DialogueApp.foldStatus`'s KDoc for
+    // why `internal` visibility stays too, and the residual bead for
+    // extending this fixture to those rungs.
     // ------------------------------------------------------------------
 
     @Test
