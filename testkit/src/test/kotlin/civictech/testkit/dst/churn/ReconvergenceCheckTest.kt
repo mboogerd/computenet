@@ -250,8 +250,12 @@ class ReconvergenceCheckTest {
         )
         assertTrue(convergence.converged(), "the survivors converge with the departed stream excluded")
 
-        // ...and the survivors hold everything peer1 accepted before it left: evict's final
-        // push-catch-up is [42-REPL-06]'s handoff, so a clean departure loses nothing.
+        // ...and the survivors hold everything peer1 accepted before it left. Note WHY that is
+        // assertable here: peer1's last write is ~100 controller steps ahead of the departure, so
+        // it is applied and gossiped long before the evict. A clean departure does NOT lose
+        // nothing in general — a write accepted a step earlier is dropped at peer1's own intake
+        // (computenet-9c5t; the boundary is pinned by :kernel's ChurnReconvergenceTest and stated
+        // on BatchReference), which is why the check's permitted arm exists at all.
         val accepted = AcceptedOps.of(world)
         val reference = BatchReference.of(world, MeshPayload.SET).foldOf(peers.toSet())
         val observed = MeshConvergences.project(assertNotNull(convergence.state(observer.ref)))
