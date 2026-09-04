@@ -127,6 +127,22 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
 
     fun start(): AgoraApp = apply { shell.start() }
 
+    /**
+     * `shell.stop()` alone — deliberately no host drain and no journal fence
+     * (computenet-u7by; the reasoning and its pins are the class KDoc of
+     * `AgoraStopWindowTest`).
+     *
+     * In short: unlike `DialogueApp`, this app owns no interruptible mutation
+     * thread. `DemoShell` leaves `server.executor = null`, so the JDK's
+     * `ServerImpl.DefaultExecutor` runs each exchange inline on
+     * `HTTP-Dispatcher` and `stop(delay)` ends in `dispatcherThread.join()`
+     * without ever interrupting it — an in-flight `createClaim`/`createEdge`/
+     * `remove` therefore completes before this returns. The data half needs no
+     * fence either: `ManagedHost` appends the journal frame inside the same
+     * `dataLock` critical section as staging, and `FileJournal.append` ends in
+     * `fd.sync()`. If `DemoShell` ever acquires an executor, that premise dies
+     * and `AgoraStopWindowTest`'s first arm goes red.
+     */
     fun stop() = shell.stop()
 }
 
