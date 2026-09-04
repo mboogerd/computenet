@@ -126,8 +126,19 @@ class GlitchFreeBridgedDiamondTest {
         val inlet: Use<Propagate<String>>
     }
 
+    /**
+     * Which Near→Far frames the seeded duplicator is allowed to copy.
+     *
+     * [PROTOCOL_ONLY] is the shipped wiring and the only value any pre-existing test uses, so
+     * the default leaves this file's behaviour — and its RNG draw sequence — byte-identical to
+     * what it was before this knob existed. The other two exist for the BS-16 arm below, which
+     * needs to *neutralise* ([NONE]) and *ungate* ([ALL_FRAMES]) the injector in-build rather
+     * than by a hand mutation a reviewer has to re-apply.
+     */
+    enum class DuplicationScope { PROTOCOL_ONLY, ALL_FRAMES, NONE }
+
     /** Two processes and a full-duplex bridge; the Near→Far leg duplicates protocol frames on the seed. */
-    private class Net(seed: Long) {
+    private class Net(seed: Long, duplication: DuplicationScope = DuplicationScope.PROTOCOL_ONLY) {
         val controller = SimulationController(seed)
         val rnd = Random(seed)
         val registryNear = LocationRegistry()
@@ -190,11 +201,13 @@ class GlitchFreeBridgedDiamondTest {
                 rng = rnd,
             )
             val protocolDuplicator = FrameInterposer { frame, step ->
-                if (WireCodec.decode(frame).type == civictech.cell.proxy.HostedPortInvocation.Type.PORT_PROTOCOL) {
-                    duplicateProtocolFrame.apply(frame, step)
-                } else {
-                    listOf(frame)
+                val duplicable = when (duplication) {
+                    DuplicationScope.NONE -> false
+                    DuplicationScope.ALL_FRAMES -> true
+                    DuplicationScope.PROTOCOL_ONLY ->
+                        WireCodec.decode(frame).type == civictech.cell.proxy.HostedPortInvocation.Type.PORT_PROTOCOL
                 }
+                if (duplicable) duplicateProtocolFrame.apply(frame, step) else listOf(frame)
             }
             egressNF.outlet.subscribe(Use.fixed(object : Propagate<ByteArray> {
                 override fun propagate(value: ByteArray) {
@@ -227,8 +240,13 @@ class GlitchFreeBridgedDiamondTest {
      * the far consumer, C crosses the bridge into it. Returns the observer's
      * arrival log.
      */
-    private fun runDiamond(seed: Long, waves: Int, protected: Boolean): List<Obs> {
-        val net = Net(seed)
+    private fun runDiamond(
+        seed: Long,
+        waves: Int,
+        protected: Boolean,
+        duplication: DuplicationScope = DuplicationScope.PROTOCOL_ONLY,
+    ): List<Obs> {
+        val net = Net(seed, duplication)
         val obs = mutableListOf<Obs>()
 
         val a = SourceCell()
@@ -295,6 +313,79 @@ class GlitchFreeBridgedDiamondTest {
                 }
             }
             obs.chunked(2).map { it[0].ts.counter } shouldBe (1L..waves).toList()
+        }
+    }
+
+    /**
+     * True iff [seed] satisfies, on its own, every assertion
+     * `bridged diamond is glitch-free for every seed` makes — i.e. this seed's entry in that
+     * test's per-seed outcome vector, which is what [CHA1-61] is about. A throw counts as a
+     * failing seed, since that is how the outcome would present in the suite.
+     */
+    private fun diamondOutcome(seed: Long, waves: Int, duplication: DuplicationScope): Boolean =
+        try {
+            val obs = runDiamond(seed, waves, protected = true, duplication = duplication)
+            obs.size == waves * 2 &&
+                obs.chunked(2).withIndex().all { (i, wave) ->
+                    wave.map { it.ts }.toSet().size == 1 &&
+                        wave.map { it.label }.toSet() == setOf("B", "C") &&
+                        wave.map { it.n }.toSet() == setOf(i + 1)
+                } &&
+                obs.chunked(2).map { it[0].ts.counter } == (1L..waves).toList()
+        } catch (t: Throwable) {
+            false
+        }
+
+    /**
+     * **BS-16 — "the retrofit is behaviour-preserving" ([CHA1-61]), for this file, stated so it
+     * cannot pass on a dead injector.**
+     *
+     * computenet-umx.3.9 replaced this file's hand-rolled protocol-frame duplicator with the
+     * rig's own [FrameInterposers.duplicating]. [CHA1-61] asks that the per-seed pass/fail
+     * outcome be unchanged by that swap. It is — and it is unchanged for a reason that makes the
+     * bare parity assertion worthless, which is why this test has three arms rather than one:
+     *
+     *  - **Arm 1, the criterion.** The pinned vector is a literal recorded from the PRE-retrofit
+     *    code at `67399fc23^` — where `bridged diamond is glitch-free for every seed` asserted,
+     *    and passed, on every seed of `0 until 100`. So the pre-retrofit vector is all-true by
+     *    record, not by recomputation from the retrofitted path. The retrofitted path must
+     *    reproduce it.
+     *  - **Arm 2, the vacuity, recorded as a fact rather than a comment.** Neutralising the
+     *    duplicator entirely leaves that vector *identical*. Measured under the umx.3.9 review
+     *    (`.take(1)` on the delivery, five of five tests green) and re-measured here at
+     *    computenet-xpj5 before this test existed (`:kernel:test --tests
+     *    GlitchFreeBridgedDiamondTest --rerun`: 5 tests, 0 failures). Arm 1 is therefore blind
+     *    to the bug BS-16 exists to catch, and asserting the invariance out loud is what stops a
+     *    later reader from mistaking arm 1 for coverage of the injector.
+     *  - **Arm 3, the non-vacuity.** What *does* discriminate is the opposite mutation the
+     *    file's own KDoc names: ungate the duplicator so data frames copy too, and the
+     *    glitch-free invariant breaks on at least one seed. That can only happen if
+     *    [FrameInterposers.duplicating] is actually firing on this edge, so arm 3 fails against
+     *    a neutralised injector where arm 1 cannot.
+     *
+     * **What this test does NOT claim.** The per-*frame* duplication decisions are NOT
+     * pre-retrofit ones — `duplicating` draws `nextDouble()` where the hand-rolled duplicator
+     * drew `nextBoolean()`, so the two disagree on 21 of the first 40 frames on seed 0 (measured
+     * in umx.3.9, and recorded in [Net]'s KDoc above). Parity here is coarse — the per-seed
+     * outcome and nothing finer — and that limit is a property of the retrofit, not of this
+     * test.
+     */
+    @Test
+    fun `BS-16 CHA1-61 - the per-seed outcome vector survives the retrofit, is blind to a dead duplicator, and ungating it diverges`() {
+        val waves = 20
+        val seeds = 0L until 30L // a prefix of the existing 0..99 range; 30 seeds x 3 arms
+
+        // Arm 1 — the criterion. Pinned from the pre-retrofit run at 67399fc23^: every seed passed.
+        val preRetrofitOutcomes = seeds.map { true }
+        seeds.map { diamondOutcome(it, waves, DuplicationScope.PROTOCOL_ONLY) } shouldBe preRetrofitOutcomes
+
+        // Arm 2 — the measured vacuity: arm 1 is invariant under a fully neutralised injector.
+        seeds.map { diamondOutcome(it, waves, DuplicationScope.NONE) } shouldBe preRetrofitOutcomes
+
+        // Arm 3 — non-vacuity: ungated, the rig's duplicator is observable, so it is alive.
+        val ungated = seeds.map { diamondOutcome(it, waves, DuplicationScope.ALL_FRAMES) }
+        withClue("ungating the duplicator must break the invariant on some seed", ungated) {
+            ungated.any { !it }.shouldBeTrue()
         }
     }
 
