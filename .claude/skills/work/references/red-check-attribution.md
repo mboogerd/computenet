@@ -20,13 +20,30 @@ guessing one here cost a reviewer 8 runs):
    from the check's one-line summary:
    ```bash
    gh pr checks <pr-url>                        # which check failed, and its run url
-   gh run view <run-id> --log-failed -R mboogerd/computenet | tail -60
+   gh run view <run-id> --log-failed -R mboogerd/computenet \
+     | grep -E 'FAILED|FAILURE| e: ' | head -40
 
    # capturing the whole log: run FROM THE REPO, redirect OUT to the scratchpad
    gh run view <run-id> --log -R mboogerd/computenet > "$SCRATCH/<run-id>.log"
    ```
    Quote the `FAILED` line. A red check whose log you have not read is
    unattributed, full stop.
+
+   **`--log-failed` returns the failed JOB's whole log, which on a Gradle job
+   is overwhelmingly `PASSED` lines** — hence the grep above rather than a
+   bare `tail`. A screenful of `PASSED` under a flag named `--log-failed` is
+   NOT evidence the failure lies in another lane; it is the flag working as
+   documented. Read it as such and you attribute a red check to the wrong
+   lane, or call a check flaky that is not — the two errors this file exists
+   to prevent (computenet-8c7s; merge-task.md's SKIPPED check greps
+   `gh run view --log` for the same reason). Note the SPACES around ` e: `:
+   `gh run view` prefixes every line with `<job>\t<step>\t<timestamp> `, so an
+   anchored `^e:` matches nothing at all (measured: 0 hits across 5 logs,
+   19,201 lines, every one prefixed), while a bare `e:` matches 173 lines of
+   `name:`/`overwrite:`/`DeprecationWarning:` noise on one run and pushes the
+   real `FAILED` lines past `head -40`. On a run with dozens of failures it is
+   the trailing `> Task … FAILED` / `BUILD FAILED` summary that `head` drops,
+   not the failing testcases.
 
    **`gh` resolves the repo from `cwd`, not from the output path.** Running
    this *from* the scratchpad — the right place to put a 6,000-line log —
