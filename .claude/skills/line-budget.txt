@@ -466,7 +466,18 @@
 # The detector itself is mechanical and costs no budget lines: slot-elapsed.sh
 # puts the previous reading on the same rung ladder and warns when they differ,
 # or when an hour passed regardless.
-work                9413
+#
+# 9413 -> 9432 on 2026-09-04 (computenet-o5oz): +19 routing the four
+# agent-facing bead reads through the bead.sh projection and saying what the
+# failure actually looks like. `bd show` on a child inlines the parent epic's
+# whole description, and a TRUNCATED read of that does not look truncated — its
+# tail is the parent's acceptance and metadata, well-formed, so it reads as a
+# complete read of the WRONG bead. Sighting three (rram -> zwju -> o5oz), and
+# the first where a reviewer nearly scored an item against its epic's criteria.
+# +5 of the 19 say which two reads deliberately stay on raw `bd show`: the
+# projection always emits the key, so an absence test needs the unprojected
+# form. The projection itself already existed and costs nothing.
+work                9432
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
