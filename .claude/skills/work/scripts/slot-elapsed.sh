@@ -36,11 +36,22 @@ left=$(( tot - el ))
 RESERVE=15
 usable=$(( left - RESERVE ))
 
-if   [ "$usable" -le 0  ]; then rung="EXPIRED — go to Finalize now"
-elif [ "$usable" -le 45 ]; then rung="T-45m — no new dispatches; review and merge what is in flight"
-elif [ "$usable" -le 90 ]; then rung="T-90m — finish the current feature; start no new one"
-else                            rung="OPEN — new units allowed"
-fi
+# `rung_of <usable-minutes>` — named so the PREVIOUS reading can be put on the
+# same ladder, which is what makes an unobserved crossing detectable below.
+rung_of() {
+  if   [ "$1" -le 0  ]; then echo "EXPIRED"
+  elif [ "$1" -le 45 ]; then echo "T-45m"
+  elif [ "$1" -le 90 ]; then echo "T-90m"
+  else                       echo "OPEN"
+  fi
+}
+name=$(rung_of "$usable")
+case "$name" in
+  EXPIRED) rung="EXPIRED — go to Finalize now" ;;
+  T-45m)   rung="T-45m — no new dispatches; review and merge what is in flight" ;;
+  T-90m)   rung="T-90m — finish the current feature; start no new one" ;;
+  *)       rung="OPEN — new units allowed" ;;
+esac
 
 last="$SCRATCH/slot-last-reading"
 prev=$(cat "$last" 2>/dev/null || true)
@@ -58,6 +69,36 @@ if [ -n "$prev" ]; then
     age="previous reading unusable (not a plausible time; treat as no reading)"
   elif [ "$gap" -ge 10 ]; then
     age="previous reading ${gap}m ago — ${gap}m of wall clock passed between turns"
+    # WHICH RUNG THE GAP CROSSED, not merely how long it was. SKILL.md's answer
+    # to a long turn boundary is the budget Monitor's self-reported elapsed —
+    # unavailable when the Monitor is silent, which is its own documented
+    # failure mode. The two are written as if the other cannot be happening, so
+    # their intersection had no detector at all: measured 2026-09-04 on MacBoo,
+    # a 300m slot where no tier ever fired AND one boundary carried 180m, found
+    # by accident because an unrelated `uptime` happened to show the wall clock
+    # (computenet-gsm6, recurrence of computenet-ltv9 + computenet-099p). Two
+    # dispatches were made at a rung the real clock had already left behind.
+    # The gap alone did not announce that; the CROSSING does, and this script
+    # can see it without the Monitor speaking at all.
+    # Same SHAPE as `usable` above — two floors subtracted, not one floor over
+    # the difference. `(total - (prev-start))/60` is one minute low whenever
+    # `prev - start` is not a whole number of minutes, i.e. ~59 runs in 60,
+    # which pulls the previous rung toward the current one and SILENCES the
+    # warning within a minute of every boundary. Silence is the direction this
+    # whole line exists to remove, and the test grid could not see it because
+    # it fabricates whole-minute offsets on both sides.
+    prev_usable=$(( tot - (prev - start) / 60 - RESERVE ))
+    prev_name=$(rung_of "$prev_usable")
+    if [ "$prev_name" != "$name" ]; then
+      age="$age — WARNING: this gap crossed a rung UNOBSERVED (${prev_name} -> ${name}); re-read any budget-gated decision made since"
+    elif [ "$gap" -ge 60 ]; then
+      # A crossing is not the only loss. An hour that lands just short of a rung
+      # spends a rung's worth of budget and changes no name — 10m -> 190m of a
+      # 300m slot goes from 275m usable to 95m, five minutes short of T-90m, and
+      # the crossing test alone says nothing. An hour is the floor because the
+      # rungs are 45m apart and this must not cry wolf on ordinary turns.
+      age="$age — WARNING: an hour or more passed UNOBSERVED (still ${name}, ${usable}m of work time left); re-read any budget-gated decision made since"
+    fi
   else
     age="previous reading ${gap}m ago"
   fi

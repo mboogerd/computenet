@@ -456,7 +456,17 @@
 # row), naming --stdin as --body-file's alias, and correcting a stale "SKILL.md
 # presents them as interchangeable" — step 7 already distinguishes the wrappers
 # from bare bd create; bd update was the half nothing covered.
-work                9408
+#
+# 9408 -> 9413 on 2026-09-04 (computenet-gsm6): +5 for the second detector of a
+# discontinuous turn boundary. SKILL.md's only answer was the budget Monitor's
+# self-reported elapsed, which is unavailable exactly when the Monitor is the
+# thing that failed — and on 2026-09-04 both failed at once on a 300m slot,
+# leaving a 180m boundary to be found by accident. The paragraph now names both
+# detectors and the one residual hole (a turn that takes no reading at all).
+# The detector itself is mechanical and costs no budget lines: slot-elapsed.sh
+# puts the previous reading on the same rung ladder and warns when they differ,
+# or when an hour passed regardless.
+work                9413
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

@@ -415,10 +415,15 @@ catches that: the gap is between turns, and the field that would warn you is
 only readable after the jump. So **never write a FORWARD-LOOKING budget claim
 from a reading taken in an earlier turn** — "160m of 300m; 50m before new work
 closes" was true when computed and 13 minutes past EXPIRED by the time anything
-acted on it. The discontinuous case is caught by the budget Monitor's
-SELF-REPORTED elapsed, not by which tier fired: a T-90m tier reporting "311m
-REAL elapsed" is self-evidently wrong as a tier and correct as a measurement,
-which is what "each tier reports the elapsed it computes when it fires" is for.
+acted on it. Two detectors catch that, and you need both: each covers the
+other's documented failure. The Monitor's SELF-REPORTED elapsed, not which tier
+fired — a T-90m tier reporting "311m REAL elapsed" is wrong as a tier and right
+as a measurement. And when the Monitor is SILENT, which removes that one
+entirely, slot-elapsed.sh's `WARNING: ... UNOBSERVED`, needing nothing but the
+reading you already take — so the residual hole is only the turn that takes no
+reading at all, which is why the rule above makes it the FIRST tool call
+(computenet-gsm6: both failed at once and the 180m boundary was found by
+accident).
 Act on that number, and on a pathological box (5b) act on it BEFORE the
 capacity advice: an expiring slot outranks a busy one.
 
