@@ -770,6 +770,97 @@ class DialogueAppTest {
     }
 
     // ------------------------------------------------------------------
+    // computenet-7nmg — the load-introduced `pending` segment is RECOVERABLE
+    //
+    // computenet-7nmg was filed as a question off computenet-miei's test
+    // above: is an admitted utterance's load-introduced segment sitting at
+    // `pending` intended, or a gap? It rested on the premise that the segment
+    // stays pending *permanently* — "nothing in the documented action surface
+    // (step/replay/reset all advance past already-admitted turns) ever offers
+    // u1 again", so recovery needs an "out-of-band reset+replay".
+    //
+    // That premise is false, and this test is where it is falsified rather
+    // than argued. `step` and `replay` do advance past an already-admitted
+    // turn — `replay` seeks by `from`, and both funnel through `offer`, which
+    // rejects a re-offer of an admitted id. `reset` does the opposite:
+    // [TranscriptSource.reset] retracts every admitted utterance and clears
+    // `admittedById`, `admittedInOrder`, `lastTurn` AND the cursor, and
+    // `DialogueApp` exposes it as `POST /transcript action=reset`. So the
+    // recovery is two documented POSTs on this app's own action surface, not
+    // an out-of-band manoeuvre: reset, then step, and the utterance's new
+    // text is offered to extraction for the first time.
+    //
+    // The decision recorded on computenet-7nmg is therefore INTENDED — `load`
+    // is deliberately not a reset (see [TranscriptSource.load]'s KDoc) and
+    // the demo already has the primitive that re-offers. What this does NOT
+    // settle: whether the app should grow a *finer* re-offer/reprocess
+    // primitive that recovers one utterance without discarding the rest of
+    // the transcript. Deliberately left unbuilt — that is a product question
+    // about the demo's action surface, and the whole-transcript reset is a
+    // sufficient answer for a demo.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `computenet-7nmg - reset then step re-offers a loaded utterance whose text grew, clearing its pending segment`(
+        @TempDir dir: File,
+    ) {
+        val firstText = "Alpha proposition stands."
+        val secondText = "Alpha proposition stands. Beta proposition stands."
+        fun singleUtteranceFile(name: String, text: String): File {
+            val u1 = Utterance(id = "u1", turn = 1, speaker = "alice", tsMillis = 1_000L, text = text)
+            return File(dir, name).apply { writeText(Json.encodeToString(Utterance.serializer(), u1)) }
+        }
+        val firstFile = singleUtteranceFile("7nmg-first.jsonl", firstText)
+        val secondFile = singleUtteranceFile("7nmg-second.jsonl", secondText)
+
+        serving(DialogueApp(port = 0, extractor = RuleExtractor, transcriptFile = firstFile)) { _, probe ->
+            assertEquals(200, probe.postForm("action=step", "/transcript").statusCode())
+            assertEquals(200, probe.postForm("action=load&path=${secondFile.absolutePath}", "/transcript").statusCode())
+
+            // computenet-miei's state: u1 admitted with the old text, re-segmented
+            // against the new, so u1#1 has no accounting record and folds to pending.
+            val afterLoad = Json.parseToJsonElement(probe.get("/transcript").body()).jsonObject
+            assertEquals(
+                listOf("extracted", "pending"),
+                afterLoad.arr("utterances").single().jsonObject.arr("segments").map { it.jsonObject.str("status") },
+                "precondition — the load-introduced segment u1#1 starts pending: $afterLoad",
+            )
+
+            val reset = probe.postForm("action=reset", "/transcript")
+            assertEquals(200, reset.statusCode(), "reset is a documented action of this surface")
+
+            val afterReset = Json.parseToJsonElement(probe.get("/transcript").body()).jsonObject
+            assertEquals(
+                false,
+                afterReset.arr("utterances").single().jsonObject["admitted"]!!.jsonPrimitive.boolean,
+                "reset clears the admitted ledger, so u1 is unadmitted and re-offerable: $afterReset",
+            )
+
+            val step = probe.postForm("action=step", "/transcript")
+            assertEquals(200, step.statusCode())
+            assertTrue(
+                step.body().contains(secondText),
+                "reset rewound the cursor, so step re-offers u1 — with the LOADED text, not the admitted " +
+                    "one: ${step.body()}",
+            )
+
+            val afterStep = Json.parseToJsonElement(probe.get("/transcript").body()).jsonObject
+            val utterance = afterStep.arr("utterances").single().jsonObject
+            assertEquals(
+                listOf("extracted", "extracted"),
+                utterance.arr("segments").map { it.jsonObject.str("status") },
+                "u1#1 is extracted after the re-offer — the pending state is recoverable, not permanent: $afterStep",
+            )
+            assertEquals(
+                "extracted",
+                utterance.str("status"),
+                "so the utterance folds away from pending: reset+step is the in-surface recovery the bead " +
+                    "believed did not exist: $afterStep",
+            )
+        }
+    }
+
+    // ------------------------------------------------------------------
     // GET /provenance — computenet-2aw.5.3, 2aw.F5-D1, [AGO1-PROV-02]/[AGO1-PROV-04]
     // ------------------------------------------------------------------
 
