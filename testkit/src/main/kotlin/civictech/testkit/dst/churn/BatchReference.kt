@@ -127,16 +127,29 @@ sealed interface ReferenceFold {
  *    so they may appear in the fold and may not.
  *
  * **Why an orderly eviction is in the permitted arm and not the required one — measured, not
- * assumed.** `Replication.evict`'s final push-catch-up is documented as *best-effort*, and the
- * BS-1 seed sweep measured what that costs: at seed 1 the element `peer2-11` was accepted by
- * peer2 at controller step 552 and peer2 was evicted at step 553, and the element never reached
- * the survivors (seed 2 lost two the same way, each accepted within three steps of its
+ * assumed.** The BS-1 seed sweep measured the cost: at seed 1 the element `peer2-11` was accepted
+ * by peer2 at controller step 552 and peer2 was evicted at step 553, and the element never
+ * reached the survivors (seed 2 lost two the same way, each accepted within three steps of its
  * replica's departure). Requiring a cleanly departed replica's every operation would therefore
  * assert something the kernel does not promise. What *is* asserted, where the harness controls
  * the race, is the stronger claim: `ReconvergenceCheckTest`'s BS-2 and `:kernel`'s
  * `ChurnReconvergenceTest` both evict a replica whose last write is ~100 controller steps old
  * and assert the survivors hold it — i.e. `[42-REPL-06]`'s handoff, checked as an equality
  * against the reference over *every* peer.
+ *
+ * **What loses it is NOT `Replication.evict`'s best-effort catch-up** (computenet-9c5t), though
+ * that is the natural reading and was this KDoc's original one. `evict`'s queued `suspend`
+ * *preempts* a local write already accepted at the host intake but not yet dispatched to the
+ * cell — management enqueues at scheduler priority 0, a data dispatch at 20 — so the write parks
+ * and the queued `despawn` tears that park queue down into dead letters (accounted, not silently
+ * dropped, but not applied either). Such an operation is never applied to the
+ * departing replica at all, so no gating or re-ordering of the catch-up could hand it off.
+ * `AcceptedOp` is recorded at the *issuing* site (see its KDoc, and this is the right place for
+ * it), which is exactly why an operation can be in this ledger and in no replica's state. The
+ * boundary is pinned executably by `ChurnReconvergenceTest."a write issued one step before a
+ * clean evict is dropped at the departing replica's own intake"`, which shows the element absent
+ * from the *departed* replica's own frozen fold. See `Replication.evict`'s KDoc for the
+ * kernel-side statement.
  *
  * When nothing has departed the two sets coincide and the check is a plain equality, which is
  * the case [CHA3-11]'s wording describes. The bounds exist so a plan containing a departure is
