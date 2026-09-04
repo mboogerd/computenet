@@ -292,6 +292,23 @@ class IncrementalEqualsBatchTest {
                 spec.source!! to spec.target!!
             }
             val cyclic = hasCycle(digraph.values.toList())
+            // Self-protection (computenet-n23m review): the branch above picks
+            // between a strict and a 25*1e-3-loose comparison, and drift in
+            // the WRONG direction — strict measured today silently reclassified
+            // to loose tomorrow, by a hasCycle/reaches regression or a future
+            // generator change — would pass unnoticed, because a bit-identical
+            // pair trivially also satisfies the loose bound (that is this
+            // review's own finding: forcing the old hardcoded `cyclic = true`
+            // for seed 3 left this test green). Pin today's measured
+            // classification so that kind of drift is announced, not silent.
+            val measuredAcyclic = mapOf(2L to true, 3L to true)
+            assertEquals(
+                measuredAcyclic.getValue(seed),
+                !cyclic,
+                "seed $seed: final live digraph classification drifted from the " +
+                    "2026-09-04 measurement (acyclic for both seeds 2 and 3) — " +
+                    "re-verify whether the credence bound should still be strict",
+            )
 
             val refs = first.bindings.boundClaims().map { BindingTable.refFor(it) } +
                 first.bindings.boundRelations().map { BindingTable.refFor(it) }
