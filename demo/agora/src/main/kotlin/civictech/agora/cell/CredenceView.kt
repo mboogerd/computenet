@@ -18,11 +18,26 @@ import java.io.Serializable
  * arrival order. It fires once per applied delta with `(source, credence)` —
  * matching `GraphHubCell.onUpdate` — while [apply]'s return value reports
  * *effective* change so the sink fires `onChange` only on a real value change.
+ *
+ * Threading (computenet-ecso): in normal use, [apply] and [current] are only
+ * ever invoked by the [ObserveCell] wrapping this view — always under its own
+ * lock, from its host scheduler thread — and every cross-thread read of the
+ * fold (agora's `graph()` on the HTTP dispatcher / `dialogue-driver` thread)
+ * goes through `ObservationSink.current()`, i.e. [ObserveCell]'s own
+ * `@Volatile latest`, not through this class's [current] directly. That
+ * already gives `graph()` readers a safe publication of whatever [apply] last
+ * wrote here, by the ordinary "plain write before a volatile write, volatile
+ * read before the dependent plain read" JMM argument. [credences] is still
+ * marked `@Volatile` here, independently, so this class is safe to publish
+ * across threads on its own terms — e.g. a future caller that holds a
+ * `CredenceView` directly rather than only its wrapping `ObservationSink` —
+ * rather than relying on every future caller going through [ObserveCell].
  */
 class CredenceView(
     private val onUpdate: (CellRef, Double) -> Unit = { _, _ -> },
 ) : View<CredenceUpdate, Map<CellRef, Double>> {
 
+    @Volatile
     private var credences: Map<CellRef, Double> = emptyMap()
 
     override fun apply(delta: CredenceUpdate): Boolean {
