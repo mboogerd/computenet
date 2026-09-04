@@ -343,18 +343,36 @@ class DialogueAppTest {
     // ------------------------------------------------------------------
     // GET /transcript — computenet-2aw.5.3, [AGO1-OBS-03]
     //
-    // Six utterances, one per outcome the bead's fixture names: (i) a clean
+    // Eight utterances, one per outcome the bead's fixture names: (i) a clean
     // claim (extracted), (ii) a claim segment whose extraction yields one
     // blank-text item alongside a good one (rejected,
     // ExtractionGate.malformedReason "blank claim text"), (iii) a segment
     // whose content hash has no cassette entry (failed, CassetteMissException
     // / BS-15), (iv) two utterances asserting the same claim text (two-id
-    // provenance, both extracted), and one utterance loaded but never
-    // admitted (pending).
+    // provenance, both extracted), one utterance loaded but never admitted
+    // (pending) — plus, per computenet-5x1b, two MULTI-segment utterances
+    // that pin foldStatus's failed > rejected > pending > extracted
+    // precedence rather than merely exercising each branch in isolation:
+    // obs03-u6 has one failed segment and one rejected segment (must fold to
+    // "failed"), and obs03-u7 has one rejected segment and one extracted
+    // segment (must fold to "rejected"). Permuting foldStatus's branch order
+    // reddens these two folded-status assertions — see computenet-5x1b.
     // ------------------------------------------------------------------
 
     private val obs03SharedClaimText = "Shared proposition holds."
     private val obs03BadClaimText = "Second proposition maybe."
+
+    // computenet-5x1b: the two segment texts of obs03-u6, one uncassetted
+    // (failed) and one carrying a blank claim (rejected) — pins
+    // foldStatus's failed > rejected precedence on a genuinely multi-segment
+    // utterance, not a unanimous one.
+    private val obs03U6FailingSegmentText = "Alpha will fail badly."
+    private val obs03U6RejectedSegmentText = "Beta claim is blank text."
+
+    // The two segment texts of obs03-u7: one rejected, one extracted — pins
+    // foldStatus's rejected > extracted precedence the same way.
+    private val obs03U7RejectedSegmentText = "Gamma claim is blank as well."
+    private val obs03U7ExtractedSegmentText = "Delta proposition stands firmly."
 
     private fun obs03Utterance(turn: Int, speaker: String, text: String) =
         Utterance(id = "obs03-u$turn", turn = turn, speaker = speaker, tsMillis = 1_000L * turn, text = text)
@@ -365,7 +383,9 @@ class DialogueAppTest {
         obs03Utterance(3, "carol", "Third utterance body."),
         obs03Utterance(4, "dave", "Fourth utterance body."),
         obs03Utterance(5, "erin", "Fifth utterance body."),
-        obs03Utterance(6, "frank", "Sixth utterance, never admitted."),
+        obs03Utterance(6, "gina", "$obs03U6FailingSegmentText $obs03U6RejectedSegmentText"),
+        obs03Utterance(7, "hank", "$obs03U7RejectedSegmentText $obs03U7ExtractedSegmentText"),
+        obs03Utterance(8, "frank", "Eighth utterance, never admitted."),
     )
 
     private fun obs03Hash(text: String) =
@@ -373,7 +393,8 @@ class DialogueAppTest {
 
     /**
      * Deliberately omits an entry for turn 3's segment hash — that absence
-     * IS the fixture (a cassette miss, BS-15).
+     * IS the fixture (a cassette miss, BS-15) — and for obs03-u6's first
+     * segment, the second cassette miss that gives u6 its failed status.
      */
     private val obs03CassetteEntries: Map<String, List<ExtractedItem>> = mapOf(
         obs03Hash(obs03Utterances[0].text) to listOf(
@@ -388,6 +409,15 @@ class DialogueAppTest {
         ),
         obs03Hash(obs03Utterances[4].text) to listOf(
             ExtractedClaim(text = obs03SharedClaimText, speaker = "erin", utteranceId = "obs03-u5"),
+        ),
+        obs03Hash(obs03U6RejectedSegmentText) to listOf(
+            ExtractedClaim(text = "", speaker = "gina", utteranceId = "obs03-u6"),
+        ),
+        obs03Hash(obs03U7RejectedSegmentText) to listOf(
+            ExtractedClaim(text = "", speaker = "hank", utteranceId = "obs03-u7"),
+        ),
+        obs03Hash(obs03U7ExtractedSegmentText) to listOf(
+            ExtractedClaim(text = "Delta proposition stands firmly.", speaker = "hank", utteranceId = "obs03-u7"),
         ),
     )
 
@@ -412,46 +442,60 @@ class DialogueAppTest {
     ) {
         serving(DialogueApp(port = 0, extractor = obs03Cassette(), transcriptFile = obs03TranscriptFile(dir))) {
                 _, probe ->
-            // Admit turns 1..5, leaving turn 6 loaded but never offered.
-            repeat(5) { assertEquals(200, probe.postForm("action=step", "/transcript").statusCode()) }
+            // Admit turns 1..7, leaving turn 8 loaded but never offered.
+            repeat(7) { assertEquals(200, probe.postForm("action=step", "/transcript").statusCode()) }
 
             val body = probe.get("/transcript").body()
             val json = Json.parseToJsonElement(body).jsonObject
 
-            assertEquals(6, json["loaded"]!!.jsonPrimitive.int, "all six utterances are loaded: $body")
-            assertEquals(5, json["admitted"]!!.jsonPrimitive.int, "five were admitted: $body")
+            assertEquals(8, json["loaded"]!!.jsonPrimitive.int, "all eight utterances are loaded: $body")
+            assertEquals(7, json["admitted"]!!.jsonPrimitive.int, "seven were admitted: $body")
 
             val utterances = json.arr("utterances").map { it.jsonObject }
-            assertEquals(6, utterances.size)
+            assertEquals(8, utterances.size)
             val statuses = utterances.map { it.str("status") }
             assertEquals(
-                listOf("extracted", "rejected", "failed", "extracted", "extracted", "pending"),
+                listOf("extracted", "rejected", "failed", "extracted", "extracted", "failed", "rejected", "pending"),
                 statuses,
                 "statuses in transcript order: $body",
             )
+            // obs03-u6 (index 5) folds a [failed, rejected] segment pair to
+            // "failed" and obs03-u7 (index 6) folds a [rejected, extracted]
+            // segment pair to "rejected" — the precedence pin itself.
+            assertEquals("failed", statuses[5], "u6's failed segment must outrank its rejected one: $body")
+            assertEquals("rejected", statuses[6], "u7's rejected segment must outrank its extracted one: $body")
             assertEquals(
-                listOf(true, true, true, true, true, false),
+                listOf(true, true, true, true, true, true, true, false),
                 utterances.map { it["admitted"]!!.jsonPrimitive.boolean },
             )
 
             val counts = json["counts"]!!.jsonObject
             val countSum = listOf("pending", "extracted", "rejected", "failed")
                 .sumOf { counts[it]!!.jsonPrimitive.int }
-            assertEquals(6, countSum, "counts sum to loaded: $counts")
+            assertEquals(8, countSum, "counts sum to loaded: $counts")
             assertEquals(3, counts["extracted"]!!.jsonPrimitive.int)
-            assertEquals(1, counts["rejected"]!!.jsonPrimitive.int)
-            assertEquals(1, counts["failed"]!!.jsonPrimitive.int)
+            assertEquals(2, counts["rejected"]!!.jsonPrimitive.int)
+            assertEquals(2, counts["failed"]!!.jsonPrimitive.int)
             assertEquals(1, counts["pending"]!!.jsonPrimitive.int)
 
+            // Three rejected ITEMS, not two: obs03-u6's second segment
+            // ("Beta claim is blank text.") is itself a rejected item, on
+            // top of the one that makes obs03-u2 rejected and the one that
+            // makes obs03-u7's first segment rejected — a segment can be
+            // "the" rejected segment of its utterance while still
+            // contributing only one item to this item-level ledger.
             val rejected = json.arr("rejected").map { it.jsonObject }
-            assertEquals(1, rejected.size)
-            assertEquals("obs03-u2#0", rejected.single().str("segmentId"))
-            assertEquals("blank claim text", rejected.single().str("reason"))
+            assertEquals(3, rejected.size)
+            val rejectedBySegment = rejected.associateBy { it.str("segmentId") }
+            assertEquals("blank claim text", rejectedBySegment.getValue("obs03-u2#0").str("reason"))
+            assertEquals("blank claim text", rejectedBySegment.getValue("obs03-u6#1").str("reason"))
+            assertEquals("blank claim text", rejectedBySegment.getValue("obs03-u7#0").str("reason"))
 
             val failed = json.arr("failed").map { it.jsonObject }
-            assertEquals(1, failed.size)
-            assertEquals("obs03-u3#0", failed.single().str("segmentId"))
-            assertContains(failed.single().str("reason")!!, "CassetteMissException")
+            assertEquals(2, failed.size)
+            val failedBySegment = failed.associateBy { it.str("segmentId") }
+            assertContains(failedBySegment.getValue("obs03-u3#0").str("reason")!!, "CassetteMissException")
+            assertContains(failedBySegment.getValue("obs03-u6#0").str("reason")!!, "CassetteMissException")
         }
     }
 
