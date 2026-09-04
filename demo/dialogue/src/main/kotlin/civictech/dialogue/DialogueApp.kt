@@ -399,13 +399,13 @@ class DialogueApp(
      * [DialogueApp]'s HTTP surface — computenet-kygh's claim that this was
      * structurally impossible across the whole action surface was wrong
      * (falsified by computenet-miei). Every settle()-fenced action —
-     * `step`/`replay`/`reset`, and the boot load — does drain the whole host
+     * `step`/`reset`, and the boot load — does drain the whole host
      * queue via [settle] before [refreshSnapshot] runs, so segmentation and
      * extraction for an admitted utterance are complete by the time those
      * paths rebuild a snapshot. But [load] calls [refreshSnapshot] directly,
      * deliberately OUTSIDE any [settle] fence (see its own comment) — as
-     * does `replay`'s `finally`, though only after its per-admission
-     * settles, so that one observes nothing unextracted — and
+     * does `replay`'s `finally`, though its own admissions are settled by
+     * `afterAdmit`, so it introduces no new unextracted segment — and
      * [TranscriptSource.load] leaves the admitted
      * ledger untouched by design ("Loading is therefore not a reset"). So
      * `step` admitting `u1`, followed by `load` of a transcript in which
