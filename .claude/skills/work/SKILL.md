@@ -1120,7 +1120,11 @@ decision (computenet-wv9c). Concretely:
 
 - `bd update <id> --acceptance=…` (and `--description=…` where it prescribes
   the rejected approach), **keeping the superseded text verbatim under a
-  `Superseded <date> by human answer:` label** so provenance survives;
+  `Superseded <date> by human answer:` label** so provenance survives. For a
+  body too long to inline the flag is **`--body-file`** — NOT the wrappers'
+  `--desc-file`, and there is no acceptance-from-file flag at all; guessing
+  aborts the whole call and discards the `--title` beside it
+  ([bd-traps.md](references/bd-traps.md) has the three-path table);
 - check the PARENT feature's and epic's criteria for the same clause — the
   park is filed on the narrowest item but the answer's blast radius is every
   criterion that cites it — and amend those too or say on the bead why not;

@@ -217,12 +217,22 @@ SKILL.md and the other references cite this file as "`bd` traps".
 - **`bd update` aborts the WHOLE call on one unknown flag**, discarding the
   writes a valid flag in the same call would have made. Measured 2026-08-29:
   `bd update <id> --nosuchflag --set-metadata probe2=x` → `Error: unknown
-  flag`, and `probe2` was never set. The shape that produces it: `bd update`
-  has `--body-file` but **no `--acceptance-file`** — only `--acceptance
-  <string>` — while `create-ticket.sh` and `file-friction.sh` both expose
-  `--desc-file` AND `--accept-file`, so an agent that has just used those
-  reaches for the pair here and loses the description write too
-  (computenet-9z8t). Set acceptance in its own `bd update` call, and re-read
+  flag`, and `probe2` was never set. The shape that produces it: **three call
+  paths spell these flags three ways**, and SKILL.md presents them as
+  interchangeable prose. Guessing costs the whole call:
+
+  | path | description from a file | acceptance |
+  |---|---|---|
+  | `bd create` | `--body-file F` | `--acceptance STR` only |
+  | `bd update` | `--body-file F` | `--acceptance STR` only |
+  | `create-ticket.sh`, `file-friction.sh` | `--desc-file F` | `--accept-file F` |
+
+  So `--desc-file` and `--accept-file` exist ONLY on the wrappers, and neither
+  `bd` path has any acceptance-from-file flag at all. Three sessions have paid
+  the same two minutes finding one cell of that table: computenet-9z8t
+  (`bd update --acceptance-file`), computenet-g1gf (`bd create --desc-file`),
+  computenet-k9th (`bd update --desc-file`, which discarded the `--title`
+  write beside it). Set acceptance in its own `bd update` call, and re-read
   the bead rather than trusting a multi-field update's exit code.
 - **`create-ticket.sh` can be DENIED by the permission classifier inside a
   dispatched subagent** — not a script error, a refusal of the bash call
