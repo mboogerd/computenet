@@ -487,7 +487,19 @@
 # measured claim was actually made — the SKILL.md sites alone left that path
 # untouched. The two mechanisms (claim-item.sh, the sweep's holder check and
 # its two suites) cost no budget lines.
-work                9442
+#
+# 9442 -> 9459 on 2026-09-04 (computenet-8c7s): +17 in red-check-attribution.md
+# step 1. `--log-failed` returns the failed JOB's whole log, which on a Gradle
+# job is 2,205 PASSED lines against 4 failure lines (measured, run 33888400440)
+# — and a screenful of PASSED under a flag by that name reads as "the failure
+# is not in this job", which is how a red check gets attributed to the wrong
+# lane. The prescribed command is now a grep rather than a bare tail. +9 of the
+# 17 are the review's finding that the pattern must be space-delimited: an
+# anchored ^e: matches nothing at all (gh prefixes every line), while a bare
+# e: matches 173 lines of noise and pushes the real failures past head -40.
+# That paragraph is the difference between a pattern that works and one that
+# looks like it does.
+work                9459
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
