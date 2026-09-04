@@ -103,6 +103,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `create-ticket.sh` | THE create path for a ticket under a shared epic — unparented, then re-parented |
 | `file-friction.sh` | Files a friction item collision-free under the SDLC epic, open and unclaimed |
 | `resumable-epics.sh` | Epics holding a feature left `in_progress` — step 3 ranks these above priority |
+| `claim-item.sh` | `bd update <id> --claim` plus the session holder token, so a live sibling's claim is not swept as a crash leftover (`claim-epic.sh` does this for epics) |
 | `bead.sh` | projected `bd show` — the bead's own fields as one object, `dependencies` dropped (57KB -> 7KB); no `.[0]` unwrap |
 | `wait-checks.sh` | THE settle loop, sha-bound over `commits/<sha>/check-runs` (`gh pr checks` is the fallback) — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`NO-RUN`/`QUERY-FAILED` |
 | `verify-branch-sync.sh` | 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
@@ -1251,7 +1252,7 @@ bin in `:gen:test`).
 ### 5a. Set up or resume the feature
 
 ```bash
-bd update <feature-id> --claim                              # idempotent if yours
+.claude/skills/work/scripts/claim-item.sh <feature-id>      # idempotent if yours
 .claude/skills/work/scripts/feature-branch.sh <feature-id>  # -> "<branch>\t<worktree>"
 ```
 
@@ -1766,7 +1767,9 @@ and a chain of them has blown the 120s default mid-sequence, leaving a
 claimed task with no recorded worktree (computenet-9r8):
 
 ```bash
-bd update <task-id> --claim
+.claude/skills/work/scripts/claim-item.sh <task-id>   # two bd writes, but
+# sequenced inside the script with the second's failure demoted to a warning —
+# not a chained block whose mid-sequence death leaves half-recorded state
 ```
 
 ```bash
@@ -2625,7 +2628,7 @@ least one *single-word* search to have come back empty before you file.
 comment this session's instance (what you were doing, what happened, what it
 cost — `bd comment <id> "<text>"`, body positional, or `--file` for any body
 that quotes code) — comment count is the remediation priority — then claim it for this
-machine if unclaimed (`bd update <id> --claim`; already claimed by the other
+machine if unclaimed (`claim-item.sh <id>`; already claimed by the other
 machine → done, its lane owns it). If the item is labeled `needs-evidence`,
 the remediation lane judged the existing reports unconvincing and its latest
 comment says exactly what to capture — answer those questions in your
