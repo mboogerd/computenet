@@ -399,7 +399,8 @@ class DialogueApp(
      * [DialogueApp]'s HTTP surface — computenet-kygh's claim that this was
      * structurally impossible across the whole action surface was wrong
      * (falsified by computenet-miei). Every settle()-fenced action —
-     * `step`/`reset`, and the boot load — does drain the whole host
+     * `step`/`reset`, the boot load, and each admission of a `replay`
+     * (its `afterAdmit` settles every one) — does drain the whole host
      * queue via [settle] before [refreshSnapshot] runs, so segmentation and
      * extraction for an admitted utterance are complete by the time those
      * paths rebuild a snapshot. But [load] calls [refreshSnapshot] directly,

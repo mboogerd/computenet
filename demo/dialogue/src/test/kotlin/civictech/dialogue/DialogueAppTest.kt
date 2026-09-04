@@ -582,7 +582,8 @@ class DialogueAppTest {
     // rejected > extracted (obs03-u7), but cannot reach the `pending` rung by
     // itself: a `pending` segment status only comes from `SegmentStatus.Unknown`
     // (extraction never ran for that segment), and every settle()-fenced
-    // action — step/reset, and the boot load — drains the whole host
+    // action — step/reset, the boot load, and each admission of a replay
+    // (afterAdmit settles every one) — drains the whole host
     // queue before `refreshSnapshot` ever runs, so every segment of an
     // admitted utterance reached that way is already `Extracted` or `Failed`
     // by the time a snapshot is rebuilt.
