@@ -1462,11 +1462,20 @@ agent that caused the spike was the one dispatched blind:
 python3 .claude/skills/work/scripts/next-batch.py --capacity
 ```
 
-`advice` at the `>=5x cores` rung says PATHOLOGICAL: dispatch nothing, wait
-for the wide gate in flight to finish (recovery is abrupt — 426 to 8.57 in one
-measured case), and treat a timeout in a module the diff does not touch as
-contention, not a finding. **Go under
-the cap deliberately when any live agent's verdict turns on a WALL-CLOCK
+**The `>=5x cores` rung splits on WHOSE load it is, and the advice string says
+which**, because a high load1 does not imply a build of ours is running. When
+`ps` shows a busy java/gradle process the advice says PATHOLOGICAL and it is
+OURS: dispatch nothing, wait for the wide gate to finish (recovery is abrupt —
+426 to 8.57 in one measured case), and treat a timeout in a module the diff
+does not touch as contention, not a finding. When no build of ours is running
+the advice says HOST load: there is nothing to wait for, so **do not idle** —
+dispatch ONE agent with a scoped gate and expect it to be slow, not wrong.
+Measured 2026-09-04, MacBoo: load1 held 316/263/198 for ~25 minutes on endpoint
+security scanning a build tree, with only idle IDE daemons running, while a
+session obeying the old cause-asserting text waited for a gate that did not
+exist (computenet-91xn).
+
+**Go under the cap deliberately when any live agent's verdict turns on a WALL-CLOCK
 AWAIT** — multi-JVM crash-restart, SSE/socket, anything in the `:inspect` hang
 family — because there a load-induced timeout is not merely slow, it is
 indistinguishable from the result being measured and can invert a verdict.
@@ -2101,9 +2110,13 @@ feature reviewer runs the repo-wide `./gradlew test` (review-feature.md §3), so
 it is the single largest load source this session emits — and it has no batch
 call, which is how the agent that took a 16-core box to ~25x was the one
 dispatched without anyone reading the advice (computenet-lx7t). At the
-PATHOLOGICAL rung, hold the dispatch; below it, if an implementer is still
-live, say so in the prompt and scope the reviewer's gate the way 5b scopes a
-batch's.
+PATHOLOGICAL rung, hold the dispatch — unless the advice says the load is HOST
+load rather than ours, in which case there is no gate to wait for and holding
+is an indefinite idle (5b; computenet-91xn). "Slow, not wrong" was measured on
+SCOPED runs, so dispatch under HOST load only with the reviewer's gate scoped —
+this is the one unscoped gate the session emits. Below the rung, if an
+implementer is still live, say so in the prompt and scope the reviewer's gate
+the way 5b scopes a batch's.
 
 An empty first output is worth saying ("origin/main unchanged at `<sha>`").
 `${parkedChildren}` is the `parked` array from the `next-batch.py` call that

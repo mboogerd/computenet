@@ -488,15 +488,66 @@ finally:
 if "ONE" not in (strong or ""):
     failed += 1
     print(f"FAIL: a >=2x-core load must say dispatch ONE agent, got {strong!r}")
-# and a 5x-core reading must say dispatch NOTHING, not dispatch ONE
+# and a 5x-core reading with a build of OURS running must say dispatch NOTHING,
+# not dispatch ONE
+_real_busy = nb.busy_builds
 nb.os.getloadavg = lambda: (426.07, 0, 0)
 try:
+    nb.busy_builds = lambda ps_output=None: "java at 380%"
     _, patho = nb.load_advice(16, 3)
 finally:
+    nb.busy_builds = _real_busy
     nb.os.getloadavg = _real_getloadavg
 if "PATHOLOGICAL" not in (patho or "") or "NOTHING" not in (patho or ""):
     failed += 1
     print(f"FAIL: a >=5x-core load must say dispatch NOTHING, got {patho!r}")
+
+# ...but only when a build of OURS is what is burning the box. With no busy
+# java/gradle process the pathological remedy ("wait for the gate") is
+# unreachable and the session must not idle (computenet-91xn).
+nb.os.getloadavg = lambda: (316.28, 0, 0)
+try:
+    nb.busy_builds = lambda ps_output=None: ""
+    _, host = nb.load_advice(16, 3)
+    nb.busy_builds = lambda ps_output=None: "java at 91%"
+    _, ours = nb.load_advice(16, 3)
+finally:
+    nb.busy_builds = _real_busy
+    nb.os.getloadavg = _real_getloadavg
+if "NOTHING" in (host or "") or "HOST load" not in (host or ""):
+    failed += 1
+    print(f"FAIL: 5x load with no build of ours must not say dispatch NOTHING, got {host!r}")
+if "NOTHING" not in (ours or "") or "OURS" not in (ours or ""):
+    failed += 1
+    print(f"FAIL: 5x load with a busy build must still hold, got {ours!r}")
+# busy_builds() itself: %CPU is the discriminator, not the process name. An idle
+# JetBrains daemon is what MacBoo actually had while load1 read 316.
+if nb.busy_builds("%CPU COMM\n 90.1 java\n 55.0 wdavdaemon_enterprise\n") != "java at 90%":
+    failed += 1
+    print("FAIL: busy_builds must report a busy java and ignore a busy non-build process")
+if nb.busy_builds(" 0.3 java\n 54.3 com.manageengine.appctrl.driver\n") != "":
+    failed += 1
+    print("FAIL: an idle java daemon under host load must not count as our build")
+# UNKNOWN is a third answer, not the host case: a `ps` that cannot be read must
+# not let the advice assert that no build of ours is running (91xn review, F1).
+_real_run = nb.subprocess.run
+def _ps_boom(*a, **k):
+    raise OSError("ps unavailable")
+nb.os.getloadavg = lambda: (316.28, 0, 0)
+try:
+    nb.subprocess.run = _ps_boom
+    unknown_probe = nb.busy_builds()
+    _, unknown = nb.load_advice(16, 3)
+finally:
+    nb.subprocess.run = _real_run
+    nb.os.getloadavg = _real_getloadavg
+if unknown_probe is not None:
+    failed += 1
+    print(f"FAIL: an unreadable ps must return None, not {unknown_probe!r}")
+if "UNKNOWN" not in (unknown or "") or "Hold" not in (unknown or "") \
+   or "NO build of ours" in (unknown or ""):
+    failed += 1
+    print(f"FAIL: an unreadable ps must hold on an UNKNOWN cause, got {unknown!r}")
 
 # --capacity: the capacity block alone, no feature id (computenet-lx7t). A
 # reviewer dispatch has no batch call, so this is its only route to the advice.
@@ -542,11 +593,13 @@ for exc in (OSError("nope"), AttributeError("nope")):
     if got != (None, None):
         failed += 1
         print(f"FAIL: getloadavg raising {exc!r} must give (None, None), got {got!r}")
-# +7: the ONE assertion, the PATHOLOGICAL/NOTHING assertion, two getloadavg
+# +11: the ONE assertion, the PATHOLOGICAL/NOTHING assertion, the two
+# cause-check branches, two busy_builds() cases and the two unreadable-ps
+# cases (computenet-91xn), two getloadavg
 # degradation cases, and --capacity's rc/shape, --siblings and feature-id checks.
 # These increment `failed` but not `total`, so the constant is how they are
 # counted (computenet-lx7t review, finding B: the suite ran 127 and printed 123).
-load_advice_cases = len(load_cases) * 2 + 7
+load_advice_cases = len(load_cases) * 2 + 13
 
 
 # --- dir_claims(): a DIRECTORY claim is advisory, not a batching change -----

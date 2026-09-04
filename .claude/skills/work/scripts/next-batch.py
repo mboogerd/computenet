@@ -59,6 +59,9 @@ import re
 import subprocess
 import sys
 
+# A build process below this %CPU is idle (a parked IDE daemon), not a gate.
+CPU_BUSY_PCT = 10.0
+
 
 def bd(*args):
     out = subprocess.run(["bd", *args, "--json"], capture_output=True, text=True)
@@ -258,13 +261,30 @@ def load_advice(cores, cap):
     # The pathological rung is NOT gated on `cap`: it is advice about
     # dispatching ANYTHING, including the single reviewer that has no cap.
     if load1 >= 5 * cores:
-        return load1, (f"load1 {load1} is >=5x the {cores} cores: PATHOLOGICAL. "
-                       f"Dispatch NOTHING — an agent dispatched into this "
-                       f"window stalls, and a timeout in a module the diff "
-                       f"does not touch is contention, not a finding. Wait for "
-                       f"whatever is in flight — typically a repo-wide gate — to "
-                       f"finish; recovery is abrupt (426 -> 8.57 in one measured "
-                       f"case).")
+        busy = busy_builds()
+        if busy is None:
+            return load1, (f"load1 {load1} is >=5x the {cores} cores: PATHOLOGICAL, "
+                           f"and `ps` could not be read, so whether the load is "
+                           f"OURS is UNKNOWN. Hold — a wrong hold costs one "
+                           f"deferred dispatch, a wrong dispatch stalls an agent "
+                           f"outright. Check by hand: "
+                           f"`ps -eo pid,pcpu,comm | sort -k2 -rn | head`.")
+        if busy:
+            return load1, (f"load1 {load1} is >=5x the {cores} cores: PATHOLOGICAL, "
+                           f"and it is OURS ({busy}). Dispatch NOTHING — an agent "
+                           f"dispatched into this window stalls, and a timeout in a "
+                           f"module the diff does not touch is contention, not a "
+                           f"finding. Wait for it to finish; recovery is abrupt "
+                           f"(426 -> 8.57 in one measured case). Confirm with "
+                           f"`ps -eo pid,pcpu,comm | sort -k2 -rn | head`.")
+        return load1, (f"load1 {load1} is >=5x the {cores} cores, but NO build of "
+                       f"ours is running: this is HOST load (endpoint-security "
+                       f"scanning our build tree is the measured cause, and it stays "
+                       f"high long after the build exits). There is nothing to wait "
+                       f"for, so do not idle. Dispatch ONE agent with a SCOPED gate "
+                       f"and expect it to be slow, not wrong. Confirm with "
+                       f"`ps -eo pid,pcpu,comm | sort -k2 -rn | head` before "
+                       f"overriding either way.")
     if cap <= 1:
         return load1, None
     if load1 >= 2 * cores:
@@ -274,6 +294,58 @@ def load_advice(cores, cap):
         return load1, (f"load1 {load1} already meets the {cores} cores: go "
                        f"under the cap of {cap}")
     return load1, None
+
+
+def busy_builds(ps_output=None):
+    """Names of OUR build processes actually burning CPU right now.
+
+    Three answers, not two: a string names them, `""` means `ps` was read and
+    none are running, and `None` means `ps` could not be read at all. The third
+    is separate because collapsing it into `""` would make the advice assert
+    "NO build of ours is running" about a fact it just failed to determine —
+    the very defect this function exists to remove, one level down. Unknown
+    holds, because the lx7t case genuinely stalls agents and inverts verdicts
+    while a spurious hold costs one deferred dispatch.
+
+    `load_advice()`'s pathological rung used to assert its own cause — "wait for
+    whatever is in flight, typically a repo-wide gate" — without ever checking
+    it. On a corporate-managed box that cause is routinely false: measured
+    2026-09-04 on MacBoo, load1 sat at 316/263/198 for ~25 minutes with the top
+    consumers being an app-control system extension (54%), Microsoft Defender
+    (36%) and WindowServer, and `pgrep -fl java` finding only two IDLE JetBrains
+    daemons. macOS load average counts uninterruptible I/O wait, so a scanner
+    working through a build tree inflates load1 enormously and keeps it inflated
+    long after the build that caused it exited. The prescribed remedy — wait for
+    the gate — is then unreachable: there is no gate, and a session following the
+    text literally idles indefinitely (computenet-91xn).
+
+    So the rung now checks the cause it names. This is deliberately coarse: any
+    java/gradle/kotlin process above CPU_BUSY_PCT counts as ours and the hold
+    stands unchanged. It only has to separate "a build is running" from "nothing
+    of ours is running at all", which is the case the prose got wrong.
+    """
+    if ps_output is None:
+        try:
+            ps_output = subprocess.run(["ps", "-Ao", "pcpu,comm"],
+                                       capture_output=True, text=True,
+                                       timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None                    # can't tell -> hold (see docstring)
+    hits = []
+    for line in ps_output.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pcpu = float(parts[0])
+        except ValueError:                 # the header row
+            continue
+        name = parts[1].strip()
+        low = name.lower()
+        if pcpu >= CPU_BUSY_PCT and ("java" in low or "gradle" in low
+                                     or "kotlin" in low):
+            hits.append(f"{name} at {pcpu:.0f}%")
+    return ", ".join(hits)
 
 
 def capacity_limit(cores, siblings=0):

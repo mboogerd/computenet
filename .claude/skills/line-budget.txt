@@ -427,7 +427,21 @@
 # review struck a "~20-27m across three reviews" figure that did not follow
 # from any of the cited numbers — 3x the measured cycle is ~27-36m — so the
 # text now says "~9-12m each" and leaves the multiplication to the reader.
-work                9375
+#
+# 9375 -> 9388 on 2026-09-04 (computenet-91xn): +13 for the split of 5b's
+# PATHOLOGICAL rung into "the load is OURS, hold" and "the load is the HOST's,
+# there is nothing to wait for, do not idle", restated at 5e's reviewer
+# dispatch and in merge-task.md. The rung named its own cause without checking
+# it, so on a Defender-managed box its remedy was unreachable and a session
+# idled ~25 minutes waiting for a gate that did not exist. The CHECK itself is
+# mechanical and costs no budget lines — next-batch.py's busy_builds() now
+# reads `ps` and the advice string says which case it is.
+#
+# 9388 -> 9391 in review: +2 telling 5e's reviewer dispatch to SCOPE its gate
+# under HOST load ("slow, not wrong" was measured on scoped runs, and the
+# feature reviewer's repo-wide gate is the one unscoped run the session emits),
+# +1 reflowing a bold marker the 5b insert had split mid-sentence.
+work                9391
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
