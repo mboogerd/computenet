@@ -127,8 +127,11 @@ class TranscriptSource(
     /**
      * The loaded transcript [replay] and [step] draw from, in file order.
      * Empty when the source is fed incrementally through [offer].
+     *
+     * A `var` because [load] replaces it on a running source (2aw.5-D11);
+     * every read of it is inside this class.
      */
-    private val transcript: List<Utterance> = emptyList(),
+    private var transcript: List<Utterance> = emptyList(),
     /**
      * How [Pace.Wallclock] waits. Injectable so a test can assert pacing
      * behaviour without spending the wall-clock time; the default sleeps the
@@ -179,8 +182,36 @@ class TranscriptSource(
         // would reject outright once it hits a non-advancing turn, or accept
         // as a same-id/same-content no-op if it got that far — neither is
         // "resume").
+        seekPastAdmitted()
+    }
+
+    /**
+     * Point [cursor] at the first transcript entry whose turn advances past
+     * [lastTurn] — the seek both the constructor and [load] need, spelled
+     * once so the two cannot drift apart.
+     */
+    private fun seekPastAdmitted() {
         cursor = transcript.indexOfFirst { it.turn > (lastTurn ?: Int.MIN_VALUE) }
             .let { if (it < 0) transcript.size else it }
+    }
+
+    /**
+     * Replace the drawable transcript on a running source (2aw.5-D11).
+     *
+     * The admitted ledger is **untouched**: [admitted], [lastAdmittedTurn]
+     * and the [offer] dedup/turn-order checks all survive, and the cursor is
+     * re-seeked exactly as the constructor seeks it, so a subsequent
+     * [step]/[replay] resumes after what was already admitted rather than
+     * re-offering it. Loading is therefore not a reset — a caller that wants
+     * the graph emptied calls [reset] first (and, at the runtime level,
+     * reconciles).
+     *
+     * No `SetOps` call is made here: loading changes what the driver *can*
+     * admit, never what it *has* admitted.
+     */
+    fun load(transcript: List<Utterance>) {
+        this.transcript = transcript
+        seekPastAdmitted()
     }
 
     /** The utterances admitted so far, in admission order. */
@@ -249,8 +280,21 @@ class TranscriptSource(
      *   the end of the transcript.
      * @param pace how to space the admissions; see [Pace]. The set admitted
      *   is identical whichever pace is used [AGO1-SRC-07].
+     * @param afterAdmit invoked on the driving thread immediately after each
+     *   [offer] that actually admitted — once per *effective* admission, in
+     *   turn order, never for an identical re-admission (which is a no-op,
+     *   rule 1) and never when [offer] throws. This is how a caller
+     *   reconciles per utterance while pacing stays in the driver (epic
+     *   §8/R4: quiescence-scoped per utterance); it runs *inside* the paced
+     *   loop, so the next admission waits for it. [step] needs no equivalent
+     *   — it already returns the admitted utterance (2aw.5-D5).
      */
-    fun replay(from: Int, to: Int? = null, pace: Pace = Pace.AsFastAsPossible) {
+    fun replay(
+        from: Int,
+        to: Int? = null,
+        pace: Pace = Pace.AsFastAsPossible,
+        afterAdmit: (Utterance) -> Unit = {},
+    ) {
         cursor = transcript.indexOfFirst { it.turn >= from }.let { if (it < 0) transcript.size else it }
 
         var previousTs: Long? = null
@@ -266,7 +310,7 @@ class TranscriptSource(
             }
 
             cursor++
-            offer(next)
+            if (offer(next)) afterAdmit(next)
         }
     }
 
