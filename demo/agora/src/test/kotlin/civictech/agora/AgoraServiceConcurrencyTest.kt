@@ -27,7 +27,9 @@ import kotlin.test.Test
  *
  * Pre-fix (raw `LinkedHashMap`, no synchronization): reddens reliably with a
  * `ConcurrentModificationException` out of `graph()`'s `nodes.map` — measured
- * 20/20 runs failing, see the bead comment for the run log. Post-fix: green.
+ * red on every pre-fix run recorded on computenet-47nz (5/5 by the
+ * implementer, a further 6/6 in review, each failing in under 1s). Post-fix:
+ * green, 5/5 by the implementer and 5/5 in review.
  */
 class AgoraServiceConcurrencyTest {
 
@@ -75,10 +77,11 @@ class AgoraServiceConcurrencyTest {
             reader.start()
             writer.start()
 
-            // 3s wall-clock of real overlap between the two threads — sized to
-            // reproduce reliably (measured 20/20 pre-fix failures in under 3s
-            // each, see the bead comment), short enough to stay well inside a
-            // dispatch slot.
+            // 3s wall-clock of real overlap between the two threads — an upper
+            // bound, not the observed time to failure: every pre-fix run
+            // recorded on computenet-47nz reddened well inside it (the review's
+            // six pre-fix runs each in under 1s), and it is short enough to stay
+            // well inside a dispatch slot.
             val deadline = System.currentTimeMillis() + 3_000
             while (System.currentTimeMillis() < deadline && failure.get() == null) {
                 Thread.sleep(20)
