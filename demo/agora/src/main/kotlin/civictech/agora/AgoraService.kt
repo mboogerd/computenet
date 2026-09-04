@@ -164,12 +164,15 @@ class AgoraService(
             nodes[ref] = NodeInfo(Kind.EDGE, polarity = polarity, source = source, target = target, head = h)
             h
         }
+        // Durable record first: see [log]'s note (computenet-t3sp). manage.spawn
+        // below blocks and can throw (quota refusal, a spawn failure surfaced
+        // through the future), so it must not sit between publication into
+        // [nodes] and this append (computenet-f7y8).
+        log(StructureOp("edge", ref.id.toString(), polarity = polarity, source = source.id.toString(), target = target.id.toString()))
         val edge = EdgeCell(polarity, ref, semantics, quiescence = if (head) quiescence else 0.0)
             .also { it.catchUp = !replaying }
         manage.spawn(edge)
         cells[ref] = edge
-        // Durable record first: see [log]'s note (computenet-t3sp).
-        log(StructureOp("edge", ref.id.toString(), polarity = polarity, source = source.id.toString(), target = target.id.toString()))
         edge.credenceOutlet.streamTo(routedHub())
         edge.influenceOutlet.streamTo(routedInfluence(target))
         sourceLinks[ref] = cells.getValue(source).credenceOutlet.streamTo(routedSource(ref))
