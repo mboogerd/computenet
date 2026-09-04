@@ -141,7 +141,8 @@ sealed interface ReferenceFold {
  * that is the natural reading and was this KDoc's original one. `evict`'s queued `suspend`
  * *preempts* a local write already accepted at the host intake but not yet dispatched to the
  * cell — management enqueues at scheduler priority 0, a data dispatch at 20 — so the write parks
- * and the queued `despawn` discards the park queue. Such an operation is never applied to the
+ * and the queued `despawn` tears that park queue down into dead letters (accounted, not silently
+ * dropped, but not applied either). Such an operation is never applied to the
  * departing replica at all, so no gating or re-ordering of the catch-up could hand it off.
  * `AcceptedOp` is recorded at the *issuing* site (see its KDoc, and this is the right place for
  * it), which is exactly why an operation can be in this ledger and in no replica's state. The

@@ -402,8 +402,12 @@ class Replication(
      *    [civictech.cell.host.HostScheduler.submit]'s contract is ascending
      *    priority then FIFO. So `suspend` runs *ahead* of an accepted-but-
      *    undispatched write, `deliver` finds the freshly installed `ParkQueue`
-     *    and parks it, and `despawn` discards that park queue without draining
-     *    it. Such a write is lost at THIS replica — never applied here, so no
+     *    and parks it, and `despawn` then tears that queue down: it is drained
+     *    into dead letters, one per parked invocation, reason
+     *    `cell <ref> left the host while suspended` and counted in the host's
+     *    `parkedDrainedOnTeardown` stat — accounted for, never silently
+     *    dropped, but never applied to the cell. Such a write is lost at THIS
+     *    replica as far as replicated state is concerned — never applied here, so no
      *    handoff of any kind could carry it onward. Measured by
      *    `ChurnReconvergenceTest."a write issued one step before a clean evict
      *    is dropped at the departing replica's own intake"`, which also shows a

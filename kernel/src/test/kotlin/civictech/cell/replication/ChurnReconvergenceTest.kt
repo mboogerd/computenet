@@ -146,8 +146,9 @@ class ChurnReconvergenceTest {
      * enqueues at priority 0 (`HostManagementApi`'s dispatch), and `HostScheduler.submit`'s
      * contract is ascending priority, then FIFO. So `evict`'s queued `suspend` **preempts** every
      * already-accepted-but-undispatched local write: `deliver` finds the cell's `ParkQueue`
-     * installed and parks it, and the queued `despawn` discards the park queue without draining
-     * it. `evict` is therefore a gated *stop*, not a gated drain, for work accepted at the
+     * installed and parks it, and the queued `despawn` tears that queue down into dead letters
+     * (`ManagedHost.clearSupervision`, counted as `parkedDrainedOnTeardown`) — accounted for, but
+     * never applied to the cell. `evict` is therefore a gated *stop*, not a gated drain, for work accepted at the
      * host intake but not yet applied to the cell.
      *
      * Making that a genuine drain is a host-granularity change to spec 33's drain, not a
