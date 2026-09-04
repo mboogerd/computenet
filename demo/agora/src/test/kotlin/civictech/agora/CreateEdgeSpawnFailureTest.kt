@@ -39,7 +39,7 @@ import kotlin.test.assertTrue
 class CreateEdgeSpawnFailureTest {
 
     @Test
-    fun `a spawn that throws still leaves the edge served by graph but out of the structure log`() {
+    fun `a spawn that throws leaves the edge served by graph and still recorded in the structure log`() {
         val dir = kotlin.io.path.createTempDirectory("create-edge-spawn-failure").toFile()
         val structureLog = java.io.File(dir, "graph.jsonl")
 
