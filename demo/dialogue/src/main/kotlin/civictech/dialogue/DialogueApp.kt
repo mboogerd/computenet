@@ -394,29 +394,42 @@ class DialogueApp(
     /**
      * 2aw.5-D7's fold, precedence failed > rejected > pending > extracted.
      *
-     * **`internal`, not `private` (computenet-kygh).** The `pending` rung
-     * cannot be pinned by driving [DialogueApp] through its HTTP surface:
-     * [settle]'s first [DialogueRuntime.afterQuiescence] fence drains the
-     * *whole* host queue — "not the work queued before it, and not the work
-     * that work enqueued, however deep the cascade" per that method's KDoc —
-     * before `reconcile()` is even called, and [refreshSnapshot] only ever
-     * runs after that drain. So segmentation, extraction and minting for an
-     * admitted utterance are always fully complete by the time a snapshot is
-     * rebuilt: every segment of an admitted utterance is already `Extracted`
-     * or `Failed` in [civictech.dialogue.extract.ExtractionAccounting],
-     * never left at `SegmentStatus.Unknown` for [segmentDto] to read as
-     * `pending`. (The only other producer of `pending`, [utteranceDto]'s
-     * early return for an unadmitted utterance, never calls [foldStatus] at
-     * all.) Measured against `load`/`step`/`replay`/`reset` — the app's whole
-     * documented action surface — none can leave a segment `Unknown` once
-     * [refreshSnapshot] observes it: there is no asynchronous or partial
-     * extraction path for `load`/`step`/`reset` (synchronous, driver-bound,
-     * fenced the same way) or `replay` (fences identically per admission via
-     * its `afterAdmit = { settle() }`). Widening this one function's
-     * visibility is the smallest production change that lets a test pin the
-     * rung directly instead of leaving it unpinned or filing the requirement
-     * as undemonstrable — see `DialogueAppTest`'s direct `foldStatus`
-     * precedence test.
+     * **`internal`, not `private` (computenet-kygh).** `pending` IS
+     * deterministically reachable for an admitted utterance through
+     * [DialogueApp]'s HTTP surface — computenet-kygh's claim that this was
+     * structurally impossible across the whole action surface was wrong
+     * (falsified by computenet-miei). Every settle()-fenced action —
+     * `step`/`reset`, the boot load, and each admission of a `replay`
+     * (its `afterAdmit` settles every one) — does drain the whole host
+     * queue via [settle] before [refreshSnapshot] runs, so segmentation and
+     * extraction for an admitted utterance are complete by the time those
+     * paths rebuild a snapshot. But [load] calls [refreshSnapshot] directly,
+     * deliberately OUTSIDE any [settle] fence (see its own comment) — as
+     * does `replay`'s `finally`, though its own admissions are settled by
+     * `afterAdmit`, so it introduces no new unextracted segment — and
+     * [TranscriptSource.load] leaves the admitted
+     * ledger untouched by design ("Loading is therefore not a reset"). So
+     * `step` admitting `u1`, followed by `load` of a transcript in which
+     * `u1` (same id, same turn) now carries additional text, re-segments
+     * `u1` against a segment [civictech.dialogue.extract.ExtractionAccounting]
+     * never saw: [segmentDto] reads that segment's `SegmentStatus.Unknown`
+     * as `pending`, with no race — see `DialogueAppTest`'s
+     * `computenet-miei` HTTP-level test, which drives exactly that sequence
+     * and asserts the folded `pending`.
+     *
+     * That HTTP fixture pins `pending > extracted` only: it never puts a
+     * `rejected` segment alongside the load-introduced `pending` one in the
+     * same utterance. Those remaining rungs are **unpinned there, not
+     * unreachable** — measured at computenet-miei's review, `rejected >
+     * pending` falls out of the *same* two calls with a cassette whose
+     * segment-0 claim is blank (`[rejected, pending]` -> `rejected`), and
+     * the empty-list `-> extracted` branch needs only a `step` on a
+     * blank-text utterance (as [refreshSnapshot]'s own KDoc already says).
+     * So `internal` stays for a narrower reason than reachability: the
+     * direct `foldStatus` precedence test below is what actually pins those
+     * rungs today, and it needs this visibility. Extending the HTTP fixture
+     * to cover them would remove that reason; that is filed, not assumed
+     * away.
      */
     internal fun foldStatus(statuses: List<String>): String = when {
         statuses.any { it == STATUS_FAILED } -> STATUS_FAILED
