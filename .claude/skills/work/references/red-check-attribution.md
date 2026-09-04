@@ -148,7 +148,14 @@ that may ship on a red check. The rule below is unchanged by it.
 have now reproduced three times, and it goes back to being red work under
 the default. Comment each occurrence on the flake bead (run id, sha,
 pass/fail) — the occurrence count is what eventually gets it fixed, and it
-only exists if you write it. (Occurrence comments are counting, not
+only exists if you write it. **This one comment is a STANDING authorized
+cross-bead write for a reviewer**, needing no per-dispatch wording: you
+attributed the failure, so you are the only party that knows it happened, and
+routing it through a report the orchestrator must notice is how an occurrence
+gets silently dropped (computenet-yubh — it reached computenet-xybk only
+because the orchestrator happened to read that section of a long report). It
+is a comment and nothing else: closing, re-prioritising, reassigning or
+claiming the flake bead stays the orchestrator's. (Occurrence comments are counting, not
 diagnosis — the run-id-only form is deliberate here and exempt from
 issue-quality.md's CI-evidence rule; the *bead itself* carries the full
 excerpt.)

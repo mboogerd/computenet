@@ -1598,8 +1598,9 @@ verdict. (`parked` is only meaningful on an empty batch.)
   **A review-filed residual is a THIRD shape, and it is neither of the two.**
   review-feature.md §7 residuals now carry `--metadata` at filing, but one
   that arrives without it is not a breakdown defect: nothing was forgotten and
-  there is no breakdown to blame, and cross-bead writes are not authorized to
-  a reviewer anyway. Applying the "forgot" branch literally means logging a
+  there is no breakdown to blame, and no cross-bead write is commissioned to a
+  reviewer here (its one standing write is the flake-bead occurrence comment,
+  which is not this). Applying the "forgot" branch literally means logging a
   breakdown defect against a reviewer that behaved correctly
   (computenet-419f). Recognise it by the description's `Residual from
   <feature-id>` opener, **author the claim yourself and say so on the bead** —
@@ -1756,7 +1757,10 @@ verdict. (`parked` is only meaningful on an empty batch.)
   own commission as an overstep (computenet-dqy.72, computenet-szdd). Write
   it once as `${crossBeadWrites}` and carry the **same string** into the 5c
   and 5e reviewer prompts (`none` is the normal value and means something:
-  no cross-bead write is authorized). Reserved actions stay yours: closing,
+  no *commissioned* cross-bead write. It never withdraws a reviewer's standing
+  flake-bead occurrence comment, which red-check-attribution.md authorizes
+  directly — a reviewer reading `none` as "not even that" drops the occurrence
+  and nothing notices, computenet-yubh). Reserved actions stay yours: closing,
   re-prioritising, reassigning, re-parenting or claiming any *other* bead is
   the orchestrator's — a criterion demanding one is done by you after the
   merge, and the prompt says so ("<id> is closed by me, not by you").
@@ -2147,8 +2151,11 @@ ${worktree}, never the main checkout, whose local branch is stale — and follow
 it to review feature ${id} against its own acceptance criteria.
 Worktree: ${worktree}  ·  Branch: ${branch}  ·  PR: ${pr}
 Cross-bead writes authorized on this feature and its tasks:
-${crossBeadWrites or "none"}. Treat what it names as commissioned work rather
-than scope creep, and anything beyond it as unauthorized.
+${crossBeadWrites or "none commissioned"}. Treat what it names as commissioned
+work rather than scope creep, and anything beyond it as unauthorized — except
+the one standing write red-check-attribution.md authorizes directly: an
+occurrence comment on a flake bead you attributed a red check to, which no
+value of this field withdraws.
 origin/main as of dispatch: ${mainSha}; landed since this branch forked:
 ${logOutput or "nothing"}.
 Open PRs that may merge under you while you review: ${prList}. Section 6's
