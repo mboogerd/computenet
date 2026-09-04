@@ -13,8 +13,17 @@ argument, so it must precede the flags; 8090 avoids 8080, which is routinely
 squatted by other sessions on this machine):
 
 ```
-./gradlew :demo:dialogue:run --args="8090 --transcript demo/dialogue/src/test/resources/bs20-because.jsonl --journal /tmp/dialogue"
+./gradlew :demo:dialogue:run --args="8090 --transcript $(pwd)/demo/dialogue/src/test/resources/bs20-because.jsonl --journal /tmp/dialogue"
 ```
+
+**Both file arguments have to be absolute** (hence the `$(pwd)`, run from the
+repository root). Gradle's `application` plugin gives `:demo:dialogue:run` a
+working directory of the *subproject* — `demo/dialogue/`, not the repo root —
+so a repo-root-relative `--transcript` path resolves against
+`demo/dialogue/demo/dialogue/…` and boot dies with a bare
+`FileNotFoundException` before the port is ever announced. Verified
+2026-09-04: the relative form fails, the `$(pwd)` form above serves
+`/graph` with 17 nodes.
 
 Point the existing frontend at it (`vite.config.ts` already proxies `/graph`
 and `/events` to `AGORA_BACKEND`, so no frontend change is needed):
