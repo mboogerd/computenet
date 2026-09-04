@@ -26,6 +26,7 @@ import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import org.junit.jupiter.api.Test
 import java.util.*
 import civictech.cell.data.delta.CounterDelta
@@ -73,6 +74,25 @@ class BridgedGraphTest {
             { it <= "e" },
             { it in setOf("a", "c", "e", "g", "i") },
             { it >= "c" },
+        )
+
+        /**
+         * The per-seed outcome vector of `control - dropping one frame diverges the bridged view
+         * on at least one seed`, over its own seed range `0 until 30`, as a LITERAL.
+         *
+         * Provenance, and why it is not a recomputation of the retrofitted path: the retrofit at
+         * 67399fc23 changed this file's injector and nothing else that `runBridged` consults
+         * (see the diff — three imports, a KDoc, `interpose` -> `interposer`, and the two
+         * control call sites), and arm 1 of the BS-16 test proves the two injectors are
+         * frame-for-frame identical. The vector is therefore the pre-retrofit vector, and a
+         * later change to `runBridged`, to the wire format, or to the rig's `drop()` moves it.
+         */
+        val PRE_RETROFIT_DROP_OUTCOMES: List<Boolean> = listOf(
+            /* seeds  0..5  */ true, true, false, true, true, false,
+            /* seeds  6..11 */ true, true, true, false, true, false,
+            /* seeds 12..17 */ false, true, true, false, true, true,
+            /* seeds 18..23 */ true, false, true, true, false, true,
+            /* seeds 24..29 */ false, true, true, true, true, true,
         )
     }
 
@@ -252,6 +272,59 @@ class BridgedGraphTest {
         }
         // if this fails, the harness cannot detect wire faults
         (diverged > 0).shouldBeTrue()
+    }
+
+    /** View R intact: the bridged view folds to the same set, and the count agrees. */
+    private fun bridgedViewIsIntact(run: Run): Boolean =
+        tagFold(run.earlyR.arrivals) == run.expected &&
+            run.countsR.arrivals.sumOf { it.amount } == run.expected.size.toLong()
+
+    /**
+     * **BS-16 — "the retrofit is behaviour-preserving" ([CHA1-61]), for this file.**
+     *
+     * computenet-umx.3.2 replaced this file's `interpose: (ByteArray, Int) -> ByteArray?` lambda
+     * with the rig's [FrameInterposers.drop]/[FrameInterposers.windowed]. Unlike the duplicator
+     * retrofit in `GlitchFreeBridgedDiamondTest`, this one draws no randomness at all, so parity
+     * here can be established **exactly** rather than statistically — and the exactness is what
+     * makes the pinned per-seed vector below trustworthy without re-running pre-retrofit code:
+     *
+     *  - **Arm 1** replays the pre-retrofit lambda, copied verbatim from `67399fc23^`, beside
+     *    the retrofitted interposer over the crossing indices the control actually reaches, and
+     *    requires frame-for-frame agreement. Given agreement, and a `runBridged` body otherwise
+     *    unchanged by that commit, the per-seed outcome vector is identical by construction.
+     *  - **Arm 2** pins that vector over the control's own seed range and asserts it.
+     *  - **Arm 3** is the non-vacuity arm: swap the injector for [FrameInterposers.pass] — the
+     *    neutralised injector — and both the frame-level agreement and the per-seed vector must
+     *    change. Without it, arm 2 would certify a rig whose `drop()` had silently become a
+     *    no-op, since "no frame was ever dropped" also produces a stable vector.
+     */
+    @Test
+    fun `BS-16 CHA1-61 - the rig drop injector is frame-for-frame the pre-retrofit lambda, and the per-seed vector moves when it is neutralised`() {
+        // Arm 1 — the pre-retrofit injector, verbatim from 67399fc23^ (BridgedGraphTest.kt:238):
+        //     runBridged(seed, ops = 40) { bytes, index -> if (index == 2) null else bytes }
+        // `null` meant "drop"; the retrofitted seam says the same thing with an empty list.
+        val preRetrofit: (ByteArray, Int) -> ByteArray? = { bytes, index -> if (index == 2) null else bytes }
+        val retrofitted = FrameInterposers.windowed(StepWindow(2, 3), FrameInterposers.drop())
+        val probe = byteArrayOf(7, 8, 9, 10)
+        val indices = 0 until 8
+        val preRetrofitFrames = indices.map { i -> listOfNotNull(preRetrofit(probe, i)).map(ByteArray::toList) }
+        indices.map { i -> retrofitted.apply(probe, i).map(ByteArray::toList) } shouldBe preRetrofitFrames
+
+        // Arm 2 — the per-seed outcome vector over the drop control's existing seed range.
+        val dropVector = (0L until 30L).map { seed ->
+            bridgedViewIsIntact(runBridged(seed, ops = 40, interposer = retrofitted))
+        }
+        dropVector shouldBe PRE_RETROFIT_DROP_OUTCOMES
+
+        // Arm 3 — non-vacuity. A neutralised injector disagrees at the frame level...
+        indices.map { i -> FrameInterposers.pass.apply(probe, i).map(ByteArray::toList) } shouldNotBe preRetrofitFrames
+        // ...and produces a different, uniformly intact per-seed vector, so arm 2 is not a
+        // statement that would survive `drop()` becoming a no-op.
+        val neutralisedVector = (0L until 30L).map { seed ->
+            bridgedViewIsIntact(runBridged(seed, ops = 40, interposer = FrameInterposers.pass))
+        }
+        neutralisedVector shouldNotBe PRE_RETROFIT_DROP_OUTCOMES
+        neutralisedVector.all { it }.shouldBeTrue()
     }
 
     @Test

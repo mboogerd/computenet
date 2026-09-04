@@ -112,4 +112,47 @@ class RecoveryAccountingTest {
         controller.runToIdle()
         letters.size shouldBe 1
     }
+
+    /**
+     * **BS-16 — "the retrofit is behaviour-preserving" ([CHA1-61]), for this file.**
+     *
+     * computenet-umx.3.10 replaced the anonymous `object : Journal` above with the rig's
+     * [MutatingJournal] + [JournalMutation.CorruptAt]. The retrofit comment claims the
+     * replacement is *byte-identical*; nothing re-checked that claim, which is exactly the gap
+     * BS-16 names. This file has no seed range, so [CHA1-61]'s "same outcome per seed" degrades
+     * to its deterministic single-run case — and the strongest executable form of it here is the
+     * byte-level equivalence the claim is actually made of.
+     *
+     *  - **Arm 1** runs the pre-retrofit decorator, copied verbatim from `67399fc23^`, and the
+     *    retrofitted one over the same journal, and requires record-for-record byte equality.
+     *  - **Arm 2** is the non-vacuity arm. The undecorated journal must *disagree* — otherwise
+     *    arm 1 would pass just as happily against a `MutatingJournal` whose mutation had become
+     *    a no-op, which is the failure it exists to catch — and the disagreement must be exactly
+     *    the one record at [JournalMutation.CorruptAt]'s index, not a wholesale rewrite.
+     */
+    @Test
+    fun `BS-16 CHA1-61 - MutatingJournal CorruptAt is byte-for-byte the pre-retrofit corrupting journal`() {
+        val (journal, _) = writeJournal(5)
+        val pristine = journal.replay()
+        (pristine.size >= 3).shouldBeTrue()
+        val corruptAt = pristine.size / 2
+
+        // Arm 1 — the pre-retrofit decorator, verbatim from 67399fc23^ (RecoveryAccountingTest.kt:82).
+        val preRetrofit = object : Journal {
+            override fun append(record: ByteArray) = journal.append(record)
+            override fun replay(): List<ByteArray> =
+                journal.replay().mapIndexed { i, r -> if (i == corruptAt) byteArrayOf(99) else r }
+            override fun reset(records: List<ByteArray>) = journal.reset(records)
+        }
+        val retrofitted = MutatingJournal(journal, JournalMutation.CorruptAt(corruptAt))
+
+        val retrofittedRecords = retrofitted.replay()
+        retrofittedRecords.map(ByteArray::toList) shouldBe preRetrofit.replay().map(ByteArray::toList)
+
+        // Arm 2 — non-vacuity: an undecorated replay is NOT what arm 1 asserted, and the single
+        // record it differs by is the corrupted one.
+        (pristine.map(ByteArray::toList) == preRetrofit.replay().map(ByteArray::toList)) shouldBe false
+        retrofittedRecords.indices.filter { !retrofittedRecords[it].contentEquals(pristine[it]) } shouldBe
+            listOf(corruptAt)
+    }
 }
