@@ -7,6 +7,8 @@ import civictech.testkit.dst.CheckRegistry
 import civictech.testkit.dst.CrashFault
 import civictech.testkit.dst.DeadLetterAccounting
 import civictech.testkit.dst.DeadLetterPolicy
+import civictech.testkit.dst.DepartEvent
+import civictech.testkit.dst.DepartureMode
 import civictech.testkit.dst.DstCheck
 import civictech.testkit.dst.DuplicateFault
 import civictech.testkit.dst.ExclusiveLedger
@@ -50,7 +52,7 @@ import kotlin.test.assertTrue
  * implementation to answer to it, for no behavioural difference: both mechanisms discard the
  * host generation exactly the same way (`HostSlot.crash()`).
  *
- * ## The mesh is present but idle
+ * ## The mesh is present, churning, and idle of workload
  *
  * `ChurnConfig.opScriptLength = 0`: the mesh peers churn but issue no writes of
  * their own. BS-17's property is exclusive-payload accounting, not reconvergence — that is
@@ -60,30 +62,52 @@ import kotlin.test.assertTrue
  * seed `dstSweep` runs it against — a seed-varying roster would need a seed-varying graph,
  * which `dstSweep`'s single `graph:` parameter cannot express.
  *
- * ## What the mesh's churn does and does NOT contribute here — measured, not assumed
+ * ## What the mesh's churn contributes — measured, not assumed (`computenet-usmw`)
  *
- * At `peerCount = 2..2` and `eventCount = 2` the generator draws, across the WHOLE checked-in
- * range (seeds 1..50): 73 [civictech.testkit.dst.JoinEvent]s, 100
- * [civictech.testkit.dst.ReassignEvent]s, and **zero [civictech.testkit.dst.DepartEvent]s of any
- * [civictech.testkit.dst.DepartureMode]**. No mesh peer ever departs, cleanly or uncleanly, on
- * any seed this suite runs. The unclean departure BS-17's *Given* names is therefore delivered
- * **solely** by [CrashFault.midDrain] on `excl-receiver` (`fired=1` on every seed), never by a
- * churn departure. The mesh's membership events are *not* disjoint from the payload path — the
- * bridge's last traced activity lands somewhere in steps 56..105 depending on seed, and the
- * earliest joins (step 92 / 289 / 26 on seeds 1 / 2 / 5) fall inside the bridge's own window on seeds 1 and
- * 5 — but a join is not the departure BS-17's *Given* asks for, and no departure is drawn at
- * all.
+ * At `peerCount = 2..2`, `eventCount = 8`, `stepBudget = 60`, across the whole checked-in range
+ * (seeds 1..50): **107 [civictech.testkit.dst.DepartEvent]s** — 33 `EVICT_CLEAN`, 28
+ * `PARTITION_SUSPEND`, **26 [civictech.testkit.dst.DepartureMode.CRASH_UNCLEAN]** and 20
+ * `EVICT_NO_CLOSE` — the earliest at step 4, against a bridge whose own traced activity spans
+ * `0..19` at the shortest seed and `0..110` at the longest. **Every one of the 50 seeds fires a
+ * mesh departure inside its own bridge window, and all 26 unclean ones land inside a window
+ * (on 20 seeds).** [everyExclusivePayloadSurvivesChurnOrFailsTheRun_BS17] asserts both — the
+ * per-seed half from what the run *reported firing*, never from the plan, so a departure that
+ * went inert cannot satisfy it.
  *
- * So read this suite as **CHA1's exclusive accounting under an unclean HOST departure, in a
- * world that also contains a churning mesh** — not as an exclusive payload carried through
- * membership churn. Widening it to a real mesh departure overlapping the transfer is
- * `computenet-usmw`. Raising `EVENT_COUNT` here is not a *free* fix, but it is closer than it
- * looks: at 8 the generator draws 107 [civictech.testkit.dst.DepartEvent]s across the same 50
- * seeds (26 of them [civictech.testkit.dst.DepartureMode.CRASH_UNCLEAN], on 20 seeds), the
- * earliest at step 61, and 14 of 50 seeds place one inside the 56..105 band above — and 49 of
- * the 50 conforming runs still pass. What blocks it is **one** seed: seed 8 refuses at run time
- * with `peer "peer0" is already a member, so a rejoin cannot be applied to it`, raised from
- * `MeshPeer.rejoin`, which is enough to redden the whole sweep.
+ * So an exclusive payload in this graph really is in flight across real membership churn,
+ * unclean departures included; the bridge receiver's own [CrashFault.midDrain] is now the
+ * *second* unclean departure in the composition rather than the only one.
+ *
+ * ### Why those two numbers, and what the earlier ones were
+ *
+ * The suite shipped at `eventCount = 2`, `stepBudget = 600`, where the generator drew 73
+ * [civictech.testkit.dst.JoinEvent]s, 100 [civictech.testkit.dst.ReassignEvent]s and **zero**
+ * departures of any mode — structurally, not by sampling accident: at a 2-peer roster two
+ * events can only ever reach `join`/`join` or `join`/`reassign`, never the
+ * MEMBER-with-a-surviving-peer branch a [civictech.testkit.dst.DepartEvent] comes from. That
+ * was `computenet-usmw`, and closing it needed both knobs, not one:
+ *
+ *  - **`eventCount = 8`** is what makes departures exist at all (107 of them; 4 and 6 draw 43
+ *    and 74).
+ *  - **`stepBudget = 60`** is what makes them *overlap the transfer*. The generator spreads
+ *    `eventCount` events over `stepBudget - 1`, so at 600 the earliest departure landed at step
+ *    61 and only **6 of 50** seeds put one inside their own bridge window. Compressing the
+ *    horizon to 60 — comfortably inside even the shortest bridge window — takes that to 50 of
+ *    50 with the identical event sequence (`stepBudget` moves the steps, not the draws: the
+ *    departure count is 107 either way).
+ *
+ * `aliveUntil = STEP_BUDGET` follows the horizon down; the run stays non-idle past it on the
+ * bridge's own retry traffic, which is why every churn event still fires non-inert ([CHA3-47],
+ * asserted below).
+ *
+ * One seed used to refuse at run time — `peer "peer0" is already a member, so a rejoin cannot
+ * be applied to it`, raised from `MeshPeer.rejoin` (seed 8 at `eventCount = 8`; 9 of 50 at 12).
+ * That was an incoherence between the generator's membership bookkeeping and the harness's, not
+ * a property failure: a [civictech.testkit.dst.DepartureMode.EVICT_CLEAN] the KERNEL refused
+ * (`Replication.evict` returns false and suspends when no other replica is reachable) leaves the
+ * peer a member — deliberately, per BS-9 — while the plan has already marked it departed and
+ * goes on to rejoin it. `MeshPeer.rejoin` now treats that one case as a no-op; see its comment
+ * and [MeshPeer.member]'s KDoc for which departure modes clear the flag.
  *
  * ## Accounting, not a bespoke assertion (`[CHA3-44]`, `[CHA3-45]`)
  *
@@ -107,8 +131,13 @@ object ChurnExclusiveBridgeGraph {
     private const val CRASH_STEP: Int = 2
 
     private const val PEER_COUNT: Int = 2
-    private const val EVENT_COUNT: Int = 2
-    private const val STEP_BUDGET: Int = 600
+
+    /**
+     * Sized by `computenet-usmw` so a real mesh departure lands inside the bridge's own step
+     * window on **every** seed — see the class KDoc's "measured, not assumed" section.
+     */
+    private const val EVENT_COUNT: Int = 8
+    private const val STEP_BUDGET: Int = 60
 
     private val meshConfig = ChurnConfig(
         peerCount = PEER_COUNT..PEER_COUNT,
@@ -251,6 +280,43 @@ class ExclusiveChurnTest {
                     "planned=$plannedIds fired=$fired",
             )
         }
+
+        // `computenet-usmw`: the composition BS-17's own prose names — an exclusive payload in
+        // flight across a REAL mesh membership departure — asserted per seed rather than assumed.
+        //
+        // Both halves are read from what the run actually DID, never from the plan: the window is
+        // the bridge's own traced step span, and the departure is a `DepartEvent` the report says
+        // fired, at the step it says it fired on. A per-seed assertion over the *plan* would pass
+        // on a seed whose departure went inert, which certifies nothing.
+        var crashUncleanInWindow = 0
+        sweep.entries.forEach { entry ->
+            val report = entry.report
+            assertTrue(report != null, "seed ${entry.seed}: no report, so no window to assert against")
+            val window = report.trace
+                .filter { it.host == "excl-sender" || it.host == "excl-receiver" }
+                .maxOfOrNull { it.step }
+                ?: -1
+            assertTrue(window > 0, "seed ${entry.seed}: the exclusive bridge traced no activity at all")
+
+            val departIds = ChurnExclusiveBridgeGraph.churnPlan(entry.seed).events
+                .filterIsInstance<DepartEvent>()
+                .associateBy { it.id }
+            val firedInWindow = report.appliedFaults
+                .mapNotNull { applied -> departIds[applied.id]?.let { it to applied.activationSteps } }
+                .filter { (_, steps) -> steps.any { it in 0..window } }
+            assertTrue(
+                firedInWindow.isNotEmpty(),
+                "seed ${entry.seed}: BS-17 requires a real mesh departure inside the bridge's active " +
+                    "window 0..$window; departures fired at " +
+                    report.appliedFaults.filter { it.id in departIds }.map { "${it.id}@${it.activationSteps}" },
+            )
+            crashUncleanInWindow += firedInWindow.count { (event, _) -> event.mode == DepartureMode.CRASH_UNCLEAN }
+        }
+        assertTrue(
+            crashUncleanInWindow > 0,
+            "BS-17's Given names an UNCLEAN departure: at least one CRASH_UNCLEAN mesh departure must " +
+                "fire inside the bridge window somewhere in the range, not merely a clean one",
+        )
 
         // The fixed-identity bridge adversary must have fired at least once across the range —
         // a single inert seed is expected (partition/duplicate probabilities), but never every seed.
