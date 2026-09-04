@@ -218,17 +218,20 @@ SKILL.md and the other references cite this file as "`bd` traps".
   writes a valid flag in the same call would have made. Measured 2026-08-29:
   `bd update <id> --nosuchflag --set-metadata probe2=x` → `Error: unknown
   flag`, and `probe2` was never set. The shape that produces it: **three call
-  paths spell these flags three ways**, and SKILL.md presents them as
-  interchangeable prose. Guessing costs the whole call:
+  paths spell these flags three ways**. Step 7 distinguishes the wrappers from
+  bare `bd create` (that was g1gf's fix); nothing said anything about
+  `bd update`, and guessing there costs the whole call:
 
   | path | description from a file | acceptance |
   |---|---|---|
   | `bd create` | `--body-file F` | `--acceptance STR` only |
   | `bd update` | `--body-file F` | `--acceptance STR` only |
-  | `create-ticket.sh`, `file-friction.sh` | `--desc-file F` | `--accept-file F` |
+  | `create-ticket.sh`, `file-friction.sh` (CREATE only) | `--desc-file F` | `--accept-file F` |
 
-  So `--desc-file` and `--accept-file` exist ONLY on the wrappers, and neither
-  `bd` path has any acceptance-from-file flag at all. Three sessions have paid
+  So `--desc-file` and `--accept-file` exist ONLY on the wrappers, which only
+  create — an orchestrator *updating* a bead has no wrapper path at all and
+  must use `bd update`'s row. Neither `bd` path has any acceptance-from-file
+  flag. (`--stdin` is an alias for `--body-file -` on both.) Three sessions have paid
   the same two minutes finding one cell of that table: computenet-9z8t
   (`bd update --acceptance-file`), computenet-g1gf (`bd create --desc-file`),
   computenet-k9th (`bd update --desc-file`, which discarded the `--title`
