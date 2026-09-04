@@ -416,9 +416,10 @@ actual rendered argument map.
 **Update (computenet-i6hp, F4/F5 now landed)**: with an extractor actually
 wired and a rendered map available, the whole-segment claim's cost was
 measured instead of estimated. Driving `RuleExtractor` through
-`DialoguePipeline` over the checked-in `demo/dialogue/src/test/resources/
-bs20-because.jsonl` fixture (six utterances, four "because" segments, two
-plain segments) and inspecting `AgoraService.graph()` showed:
+`DialoguePipeline` over the checked-in
+`demo/dialogue/src/test/resources/bs20-because.jsonl` fixture (six
+utterances, four "because" segments, two plain segments) and inspecting
+`AgoraService.graph()` showed:
 
 - 13 total claim nodes; 4 of them were whole-segment claims (one per
   "because" segment), and **all 4 were unconnected orphans** — zero edges
@@ -426,6 +427,18 @@ plain segments) and inspecting `AgoraService.graph()` showed:
 - The map's genuinely freestanding claims (segments with no "because" split)
   numbered only 2 ("No, I disagree that flights got more expensive.", "We
   should revisit the budget next quarter.").
+
+That measurement came from a throwaway probe that is **not** committed, so
+the numbers above are not reproducible by re-running a test. They are
+re-derivable by hand from artifacts that *are* checked in, and this is the
+derivation (computenet-i6hp review): `segment` keeps each sentence's
+terminal `.` and `claimKey` only trims/collapses/lowercases, so the
+pre-change extractor mints, over that fixture, 4 whole-segment keys, 7
+distinct endpoint keys (u1/u2 share `the budget is too high`; `travel costs
+increased.` and `travel costs increased` are two keys, per F-14's sibling
+finding computenet-9bip) and 2 plain-segment keys — 4 + 7 + 2 = 13, with
+every relation endpoint drawn from the 7, which is why all 4 whole-segment
+keys are orphans.
 
 So on this fixture the whole-segment claim was not a rare edge case: it was
 the single largest category of node on the map (4 of 13, outnumbering the
