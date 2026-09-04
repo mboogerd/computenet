@@ -7,19 +7,20 @@ import civictech.dialogue.Segment
  * 2aw-D4). No randomness, no clock, no I/O — `[AGO1-EXTR-01]`'s extractor
  * half. A tiny, deliberately replaceable heuristic:
  *
- * - Every segment yields an [ExtractedClaim] of its trimmed text.
- * - A segment containing " because " (case-insensitive) additionally yields
- *   an [ExtractedRelation] where the text after "because" supports the text
- *   before it: `sourceText` = the reason (after), `targetText` = the claim
- *   being supported (before), `polarity` = `"SUPPORT"`. It ALSO yields an
- *   [ExtractedClaim] for each of the two endpoint substrings — see
- *   "Why the endpoint claims" below.
+ * - A segment with no " because " (case-insensitive) match yields a single
+ *   [ExtractedClaim] of its trimmed text.
+ * - A segment containing " because " whose split succeeds (both sides
+ *   non-blank) yields **only** the two endpoint claims — see "Why only the
+ *   endpoint claims" below — plus an [ExtractedRelation] where the text
+ *   after "because" supports the text before it: `sourceText` = the reason
+ *   (after), `targetText` = the claim being supported (before), `polarity` =
+ *   `"SUPPORT"`. It does **not** also mint a claim of the whole segment.
  * - A segment opening with a disagreement marker ("no, ", "i disagree",
  *   "that's wrong") yields no relation beyond its own claim: this extractor
  *   sees one segment at a time and deliberately does not invent
  *   cross-segment state to resolve what is being disagreed with.
  *
- * ### Why the endpoint claims (computenet-xwl0, AGO1 F3 follow-up)
+ * ### Why only the endpoint claims (computenet-xwl0 then computenet-i6hp)
  *
  * `[civictech.dialogue.mint.claimKey]` only trims, collapses whitespace and
  * lowercases (2aw.F3-D1) — it does not, and per that seam's own KDoc must
@@ -34,26 +35,35 @@ import civictech.dialogue.Segment
  * claims, a demo extractor that can never produce one demonstrates only
  * half the system.
  *
- * The fix mints the two endpoint substrings ("A", "B") as their own
- * `ExtractedClaim`s **in addition to** the whole-segment claim, so their
- * keys land in `claimKeys` and the relation resolves with no change to
- * `claimKey` itself (which AGO3 replaces wholesale, not this extractor).
- * This is a deliberate, measured trade, not a free lunch: a "because"
- * segment now mints **three** canonical claims (the whole sentence, its
- * conclusion, its reason) where a human reading the transcript would count
- * two propositions — nobody asserted "A because B" as a standalone claim
- * distinct from asserting A and B. Verified before choosing this over
- * leaving `RuleExtractor` claim-only: no F3 test text contains "because",
- * so this changes no existing F3 assertion, the endpoint claims share the
- * segment's own `utteranceId` so provenance is not fabricated, and the
- * stance leg is untouched (`RuleExtractor` never emits an `ExtractedStance`).
- * The remaining cost — the extra whole-sentence claim sitting alongside its
- * own decomposition on the map — is accepted here rather than removed by
- * dropping the whole-segment claim for "because" segments, because that
- * would make a "because" segment's claim-output shape diverge from every
- * other segment's ("every segment yields a claim of its trimmed text") for
- * a demo heuristic that is explicitly meant to stay tiny and replaceable.
- * Recorded in `doc/demo-findings.md` F-14.
+ * computenet-xwl0 fixed this by minting the two endpoint substrings ("A",
+ * "B") as their own `ExtractedClaim`s **in addition to** the whole-segment
+ * claim, so their keys land in `claimKeys` and the relation resolves with no
+ * change to `claimKey` itself (which AGO3 replaces wholesale, not this
+ * extractor). That shipped a real, admitted cost: a "because" segment then
+ * minted **three** canonical claims (the whole sentence, its conclusion, its
+ * reason) where a human reading the transcript would count two propositions.
+ * At the time (F3 review, PR #635) `DialogueApp.kt` wired no extractor, so
+ * the cost was evaluated only on paper.
+ *
+ * computenet-i6hp evaluated it on an actual rendered argument map, once F4
+ * (the applier) and F5 (the HTTP surface) existed to build one: driving
+ * `RuleExtractor` through `DialoguePipeline` over the checked-in
+ * `bs20-because.jsonl` fixture (six utterances, four "because" segments) and
+ * inspecting `AgoraService.graph()` showed **4 of the resulting 13 claim
+ * nodes were the whole-segment claim, and every one of those 4 was an
+ * unconnected orphan** — the map's genuinely freestanding claims (segments
+ * with no "because") numbered only 2. The whole-segment claim was not a rare
+ * edge case on this fixture; it was the largest single category of node on
+ * the map, and every instance of it carried zero relation information. That
+ * measurement is what "every segment yields a claim of its trimmed text"
+ * was costing on a real map, not a hypothetical one, so the decision changed:
+ * for a segment whose because-split succeeds, `RuleExtractor` now emits
+ * *only* the two endpoint claims and the relation — dropping the
+ * whole-segment claim — at the price of a "because" segment's claim-output
+ * shape diverging from every other segment's. The endpoint claims still
+ * carry the segment's own `utteranceId`, so provenance is not fabricated,
+ * and the stance leg is unaffected (`RuleExtractor` never emits an
+ * `ExtractedStance`). Recorded in `doc/demo-findings.md` F-14.
  */
 object RuleExtractor : Extractor {
 
@@ -78,10 +88,11 @@ object RuleExtractor : Extractor {
             return listOf(claim)
         }
 
-        // The endpoint claims (see the class KDoc's "Why the endpoint
+        // The endpoint claims (see the class KDoc's "Why only the endpoint
         // claims"): minted so the relation below has a canonical claim key
-        // to resolve against on BOTH sides, in addition to — not instead
-        // of — the whole-segment claim above.
+        // to resolve against on BOTH sides, INSTEAD OF the whole-segment
+        // claim built above — `claim` is deliberately not included in the
+        // returned list once the because-split succeeds (computenet-i6hp).
         val targetClaim = ExtractedClaim(
             text = target,
             speaker = segment.speaker,
@@ -98,6 +109,6 @@ object RuleExtractor : Extractor {
             polarity = "SUPPORT",
             utteranceId = segment.utteranceId,
         )
-        return listOf(claim, targetClaim, sourceClaim, relation)
+        return listOf(targetClaim, sourceClaim, relation)
     }
 }
