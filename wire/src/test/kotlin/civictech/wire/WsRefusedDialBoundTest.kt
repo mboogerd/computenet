@@ -7,7 +7,13 @@ import civictech.cell.link.PeerId
 import civictech.cell.wire.Peering
 import org.junit.jupiter.api.Test
 import org.opentest4j.AssertionFailedError
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
 import java.net.URI
+import java.security.MessageDigest
+import java.util.Base64
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * computenet-4gzr: a dialler refused at the listener's allowlist must stop
@@ -78,6 +84,173 @@ class WsRefusedDialBoundTest {
      * injecting one.
      */
     private val generousBound = 8L
+
+    /** How many dials the slammed-handshake test below takes; see its KDoc for why 100. */
+    private val dials = 100
+
+    /**
+     * A peer that completes the WebSocket upgrade and closes the socket in the
+     * same TCP write — the refusal of every other test in this class, stripped
+     * of its round trip.
+     *
+     * A real [WsListener] refuses on the peer's *hello*, so its close costs a
+     * round trip and lands somewhere random relative to the dialling thread.
+     * Writing the 101 response and the CLOSE frame together puts the close in
+     * the dialler's read buffer at the instant the handshake completes, which
+     * is the earliest a peer can possibly close and so the widest this window
+     * gets. It is still a race — see the test below for why it is run a hundred
+     * times rather than once.
+     *
+     * **Two details here are load-bearing and measured, not incidental.**
+     * Connections are served on the accept thread itself rather than one thread
+     * each, and the dials below use a 20ms schedule. Against the unfixed
+     * transport, that pair failed 22 of 100 dials; a thread per connection made
+     * it 0 of 100, and a 200ms schedule 2 of 100. Tidying either away leaves a
+     * test that passes against the defect it was written for.
+     */
+    private class SlammingPeer : AutoCloseable {
+        private val server = ServerSocket(0, 64, InetAddress.getLoopbackAddress())
+        private val accepted = CopyOnWriteArrayList<Socket>()
+
+        val port: Int get() = server.localPort
+
+        private val acceptor = Thread({
+            while (!server.isClosed) {
+                val socket = runCatching { server.accept() }.getOrElse { return@Thread }
+                accepted += socket
+                runCatching { serve(socket) }
+                runCatching { socket.close() }
+            }
+        }, "slamming-peer").apply { isDaemon = true; start() }
+
+        /**
+         * `awaitReachable`'s bare TCP probe lands here too: it connects and
+         * closes without sending a request line, so `key` stays null and this
+         * returns having written nothing.
+         */
+        private fun serve(socket: Socket) {
+            val input = socket.getInputStream().bufferedReader()
+            var key: String? = null
+            while (true) {
+                val line = input.readLine() ?: break
+                if (line.isEmpty()) break
+                if (line.startsWith("Sec-WebSocket-Key:", ignoreCase = true)) {
+                    key = line.substringAfter(':').trim()
+                }
+            }
+            val accept = key?.let {
+                Base64.getEncoder().encodeToString(
+                    MessageDigest.getInstance("SHA-1")
+                        .digest((it + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray(Charsets.US_ASCII)),
+                )
+            } ?: return
+            val response = (
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: $accept\r\n\r\n"
+                ).toByteArray(Charsets.US_ASCII)
+            // A server-to-client CLOSE frame, status 1000: unmasked, 2-byte payload.
+            val close = byteArrayOf(0x88.toByte(), 0x02, 0x03, 0xE8.toByte())
+            socket.getOutputStream().apply {
+                write(response + close)
+                flush()
+            }
+            // Let the dialler read that buffer before the FIN arrives, so what it
+            // sees is a close frame and not a bare end-of-stream.
+            Thread.sleep(50)
+        }
+
+        override fun close() {
+            runCatching { server.close() }
+            accepted.forEach { runCatching { it.close() } }
+            acceptor.join(2_000)
+        }
+    }
+
+    /**
+     * computenet-ulgy: **a dial the peer closes at once is a connection, not a
+     * failed dial** — and until this was fixed it was what made the rest of this
+     * class flake on ubuntu `build-test-fast`.
+     *
+     * [WsTransport.connect] required `connectBlocking` to return true, and
+     * java-websocket's `connectBlocking` is `connectLatch.await(timeout) &&
+     * isOpen()`, with the latch counted down from `onWebsocketOpen` *and* from
+     * `onWebsocketClose`. A peer whose close was decoded before the dialling
+     * thread got back to `isOpen()` therefore produced `false` from a dial that
+     * *had* opened — and `connect` threw
+     * `IllegalStateException: could not connect to <uri> — readyState=CLOSING`
+     * for a socket that had opened, sent its hello and been refused exactly as
+     * designed. That is the premise of this whole class
+     * ([WsTransport.REFUSED_DIAL_LIMIT]): a refused dial opens first. So each of
+     * the three tests above raced its own `connect` setup line against the
+     * refusal it was written to study; on a loaded two-core runner the refusal
+     * won. Observed on run 33848578396 (`a healed client re-peers…`, thrown from
+     * this file's `connect` at line 259) and on run 33873071525 (`a dialler
+     * refused at the listener's allowlist…`), on heads whose diffs touched no
+     * `:wire` file at all.
+     *
+     * **Why a hundred dials and not one.** The window is between java-websocket
+     * counting the latch down and this thread being rescheduled to read
+     * `isOpen()`; nothing in the transport or the peer can order those two, so
+     * the interference cannot be forced, only made likely. Measured against the
+     * unfixed transport on a 16-core darwin host, with [SlammingPeer] configured
+     * exactly as it ships (see its KDoc — both details are load-bearing):
+     * **22 of 100** dials threw, and **32 of 100** on an independent re-run of
+     * the same mutation during review. At the lower of those two rates a hundred
+     * dials leave a false green at ~1e-11, while a single dial would have
+     * reported a fix that isn't one roughly four times in five.
+     * A busier host (CI's) only raises the rate. If this ever goes green against
+     * an unfixed transport, the number to raise is the iteration count, not the
+     * bound in [await].
+     *
+     * The distinction `connect` still owes its caller — opened versus *never*
+     * opened — is pinned from the other side by `WsConnectRaceTest`'s "a give-up
+     * names the readyState and the close the client saw": a peer that accepts
+     * and closes without ever completing the upgrade must still throw.
+     */
+    @Test
+    fun `a dial the peer closes at the handshake yields a connection, not a failed dial`() {
+        val peer = SlammingPeer()
+        val uri = URI("ws://localhost:${peer.port}")
+        try {
+            val refusals = mutableListOf<String>()
+            var opened = 0
+            repeat(dials) {
+                val client = Stack(name = "client")
+                try {
+                    val connection = WsTransport.connect(uri, client.side, backoff = { 20L }, refusedDialLimit = 2)
+                    if (connection.unadmittedOpens >= 1) opened++
+                    connection.shutdown()
+                } catch (e: IllegalStateException) {
+                    refusals += e.message ?: "<no message>"
+                }
+            }
+            if (refusals.isNotEmpty()) {
+                throw AssertionFailedError(
+                    "${refusals.size} of $dials dials to a peer that closes at the handshake were reported as " +
+                        "failed connections, though every one of them opened. A refusal is an open followed by a " +
+                        "close, and connect must hand back the connection that observed it. First: " +
+                        refusals.first(),
+                )
+            }
+            if (opened != dials) {
+                throw AssertionFailedError(
+                    "$opened of $dials returned connections had actually opened a socket; connect must not report " +
+                        "success for a dial that never opened",
+                )
+            }
+
+            // And the object handed back is the live one that carries the refusal
+            // bound — unreachable by a caller that got an exception instead.
+            val connection = WsTransport.connect(uri, Stack(name = "client").side, backoff = { 20L }, refusedDialLimit = 2)
+            try {
+                await("the slammed dialler gives up") { connection.abandonedAfterRefusals }
+            } finally {
+                connection.shutdown()
+            }
+        } finally {
+            peer.close()
+        }
+    }
 
     @Test
     fun `a dialler refused at the listener's allowlist stops re-dialling instead of looping forever`() {
