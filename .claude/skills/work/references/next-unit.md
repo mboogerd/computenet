@@ -105,8 +105,11 @@ feature with its handoff comment and go to Finalize.
 **3. The epic's remaining work is blocked solely by an item in a different
 epic** → claim and work **that item** (not its epic; this adds no epic
 claim), unless the SDLC exclusion catches it. The claim is an acquisition —
-bracket it: `bd dolt pull`, re-verify still ready and unclaimed, claim by id,
-`bd dolt push`. And because a concurrent session's *child* claims are local
+bracket it: `bd dolt pull`, re-verify still ready and unclaimed, claim by id
+with `claim-item.sh <id>` — NOT a bare `bd update --claim`, which stamps no
+`metadata.holder` and so leaves the claim indistinguishable from a crash
+leftover to a concurrent sibling's sweep, which reopened exactly such a claim
+73 minutes after it was made (computenet-yvdl) — then `bd dolt push`. And because a concurrent session's *child* claims are local
 while its epic is open, **check the item's epic first** — an epic claim is
 always pushed, a child claim only once its epic closes (5b):
 
@@ -157,7 +160,8 @@ If you later find a sibling PR touching your item's files, stop and park —
 don't pick a winner; the losing side may hold pushed, unreviewed work.
 
 **4. The epic is dry but real budget remains** → continuation work, claimed
-by specific id (same acquisition bracket as route 3; never a second *epic*).
+by specific id with `claim-item.sh` (same acquisition bracket as route 3;
+never a second *epic*).
 If the epic went dry because everything left is human-gated or cross-epic
 blocked, also `bd defer` it (step 3's route) so the next session doesn't
 resume a dead queue.

@@ -477,7 +477,17 @@
 # +5 of the 19 say which two reads deliberately stay on raw `bd show`: the
 # projection always emits the key, so an absence test needs the unprojected
 # form. The projection itself already existed and costs nothing.
-work                9432
+#
+# 9432 -> 9442 on 2026-09-04 (computenet-yvdl): +10 routing every claim below
+# the epic layer through claim-item.sh, so the claim carries a session-unique
+# holder token. Measured: a second /work session on the same box reopened this
+# session's live item claim 73 minutes after it was made, because the assignee
+# is unique per MACHINE and there was no holder to distinguish them. +5 of the
+# 10 are next-unit.md's routes 3/4 and claim-sync.md, which is where the
+# measured claim was actually made — the SKILL.md sites alone left that path
+# untouched. The two mechanisms (claim-item.sh, the sweep's holder check and
+# its two suites) cost no budget lines.
+work                9442
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
