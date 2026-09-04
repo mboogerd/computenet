@@ -48,6 +48,51 @@ interface GroupByApi<E, K, A> {
  * `MapDelta` write race. Only
  * this cell's *output* speaks `MapDelta`, and nothing here reads it back in —
  * so there is no G-23 caveat on this cell for `UntagCell` to discharge.
+ *
+ * ### Keys that cross a boundary must be registered individually (computenet-zxt5)
+ *
+ * This cell's outlet is `MapDelta<K, A>`, and `WireCodec` registers `MapDelta`
+ * with the polymorphic `Any` serializer for both key and value. So **a
+ * `GroupByCell` whose output is journaled or bridged requires `K` to have its
+ * own polymorphic registration under `WireCodec`'s `Any`-rooted scope** — the
+ * key is not covered by anything the cell itself declares, and a `keyFn`
+ * returning an unregistered type fails only at the first frame that cell
+ * accepts, with `Serializer for subclass '<K>' is not found in the polymorphic
+ * scope of 'Any'`.
+ *
+ * The decision, for compound and value-class keys alike: **register them per
+ * application, from that module's `WireSerializers` contribution — not from
+ * the kernel baseline.** `Pair` takes
+ * `PairSerializer(polymorphicAny, polymorphicAny)` and a `@JvmInline value
+ * class` takes its own generated serializer; both were measured to work
+ * through the ordinary contribution seam (`:demo:dialogue`'s
+ * `MintWireCapabilityTest`). They are deliberately absent from
+ * [civictech.cell.wire.WireCodec]'s `baselineModule` because registering
+ * `Pair` kernel-wide would silently make *every* `Pair` wire-capable with both
+ * components erased to polymorphic `Any` — a repo-wide encoding commitment
+ * that no requirement asks for, and one that would hide exactly the loud
+ * failure above from the next author of an unregistered key type.
+ *
+ * *Per application* is meant literally: `Pair` is a stdlib type with one slot
+ * in the `Any` scope, so two contributions that both register it collide and
+ * fail codec construction fast (`SerializerAlreadyRegisteredException`, the
+ * behaviour [civictech.cell.wire.WireSerializers] documents; measured — a
+ * production `Pair` registration reddens `MintWireCapabilityTest`'s
+ * contribution arm on exactly that exception). One owner per process, not one
+ * per module that happens to want it.
+ *
+ * No `GroupByCell` in this repository needs such a registration today: every
+ * fold whose output can reach a journal or a bridge is keyed by `String`,
+ * `Int` or `Long` (all registered in the baseline), and the folds keyed by a
+ * compound or value-class type reach neither. Those are `:demo:dialogue`'s
+ * `projectedStances`, `claimProvenance` and `relationProvenance`, which sit in
+ * a pipeline that is deliberately volatile and in a module with no `:wire`
+ * dependency; and `:demo:skillmatch`'s `matchCounts`, keyed by the compound
+ * `CandidateJob`, in a module that likewise has no `:wire` dependency and
+ * journals nothing (`:inspect`, which it does depend on, renders values
+ * through its own reflective `ValueEncoder`, not through `WireCodec`). The
+ * catalog folds in `:concord`/`:oracle` are statically `Any?`-keyed but run
+ * only in-process.
  */
 class GroupByCell<E, K, A, ACC : Serializable>(
     ref: CellRef = CellRef(UUID.randomUUID()),
