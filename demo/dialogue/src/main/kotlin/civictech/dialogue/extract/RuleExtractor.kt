@@ -65,48 +65,58 @@ import civictech.dialogue.Segment
  * and the stance leg is unaffected (`RuleExtractor` never emits an
  * `ExtractedStance`). Recorded in `doc/demo-findings.md` F-14.
  *
- * ### Trailing full stops, and what is deliberately NOT normalized (computenet-9bip)
+ * ### Trailing terminators, and what is deliberately NOT normalized (computenet-9bip, computenet-qoei)
  *
  * [civictech.dialogue.Segmentation] splits on `(?<=[.!?])\s+`, a lookbehind,
  * so the sentence terminator stays attached to the sentence. A "because"
- * split therefore hands the endpoint AFTER "because" a trailing "." whenever
- * the reason falls at the end of its sentence, while the endpoint BEFORE
- * "because" never has one. `[civictech.dialogue.mint.claimKey]` hashes the
- * text as given, so the SAME proposition uttered once as a reason and once as
- * a conclusion minted two claim keys. Measured on `bs20-because.jsonl`: of
- * three endpoint texts the transcript deliberately repeats across speakers,
- * only "The budget is too high" — the one that is a conclusion both times —
- * merged; "travel costs increased." / "Travel costs increased" and "we hired
- * more contractors." / "We hired more contractors" stayed separate.
+ * split therefore hands the endpoint AFTER "because" a trailing terminator
+ * whenever the reason falls at the end of its sentence, while the endpoint
+ * BEFORE "because" never has one. `[civictech.dialogue.mint.claimKey]` hashes
+ * the text as given, so the SAME proposition uttered once as a reason and
+ * once as a conclusion minted two claim keys. Measured on
+ * `bs20-because.jsonl`: of three endpoint texts the transcript deliberately
+ * repeats across speakers, only "The budget is too high" — the one that is a
+ * conclusion both times — merged; "travel costs increased." / "Travel costs
+ * increased" and "we hired more contractors." / "We hired more contractors"
+ * stayed separate.
  *
- * Three separate decisions, each made on its own merits:
+ * computenet-9bip fixed `.`/`…` and, in the same pass, bundled `?` and `!`
+ * together as both "preserved, since they change what the segment asserts".
+ * computenet-qoei found that bundle wrong for `!`: it is reachable through
+ * the identical split-position accident (`bs20-because.jsonl` has no `!`, but
+ * segmentation admits it as readily as `.`), and unlike `?` it does not
+ * change the sentence's mood — "the budget is too high!" and "the budget is
+ * too high" are the same declarative with different emphasis, not two
+ * propositions, whereas "is the budget too high?" is genuinely an
+ * interrogative. computenet-qoei therefore unbundles the two:
  *
- * - **Trailing full stops (`.`, `…`, and runs of them) are stripped.** A full
- *   stop is punctuation the segmenter contributed, not content: whether a
- *   proposition carries one depends only on where it happened to fall in its
- *   sentence, which is exactly the accident that must not fork identity. The
- *   stripped text is what is emitted for the claim AND for the relation
- *   endpoint, so display and key agree and `RelationMint` still resolves
- *   against a key these same claims mint.
- * - **`?` and `!` are preserved.** They are not filler: they change what the
- *   segment asserts — "the budget is too high!" and the question "is the
- *   budget too high?" are not the proposition "the budget is too high", and a
- *   demo whose claim text is user-visible should not fold a question into an
- *   assertion. This is a narrower rule than "strip sentence punctuation", and
- *   deliberately so.
+ * - **Trailing full stops, ellipses and exclamations (`.`, `…`, `!`, and runs
+ *   of them) are stripped.** This punctuation is what the segmenter
+ *   contributed, not content: whether a proposition carries it depends only
+ *   on where it happened to fall in its sentence, which is exactly the
+ *   accident that must not fork identity — 9bip's own reasoning for `.`,
+ *   extended here to `!` on the same grounds. The stripped text is what is
+ *   emitted for the claim AND for the relation endpoint, so display and key
+ *   agree and `RelationMint` still resolves against a key these same claims
+ *   mint.
+ * - **`?` is preserved.** It is not filler: it changes what the segment
+ *   asserts — the question "is the budget too high?" is not the proposition
+ *   "the budget is too high". This is a narrower rule than "strip sentence
+ *   punctuation", and deliberately so: folding an interrogative into an
+ *   assertion is a different defect, not a fix for this one.
  * - **Capitalization is NOT touched here.** The obvious reading of the defect
  *   blames sentence-initial case as well, and that reading is wrong:
  *   `claimKey` already lowercases (2aw.F3-D1), so identity is *already*
  *   case-insensitive and the two unmerged pairs above differ, after
- *   canonicalization, only by the full stop. The text this extractor emits is
- *   what the reader sees on the map, so it keeps the speaker's own
+ *   canonicalization, only by the terminator. The text this extractor emits
+ *   is what the reader sees on the map, so it keeps the speaker's own
  *   capitalization; normalizing the KEY while preserving the DISPLAYED text
  *   is the existing division of labour, and case-folding here would damage
  *   the display without changing a single key.
  *
  * The strip is applied to the ENDPOINT claims only, not to the whole-segment
  * claim a non-"because" segment yields, and that asymmetry is deliberate. An
- * endpoint's full stop is an artifact of *where the because-split fell*: the
+ * endpoint's terminator is an artifact of *where the because-split fell*: the
  * same proposition carries one as a reason and not as a conclusion, which is
  * precisely the accident that forks identity. A whole-segment claim's
  * terminator is its own sentence's and is present uniformly, so it never
@@ -116,26 +126,31 @@ import civictech.dialogue.Segment
  * costs increased") — a real residual, left open deliberately rather than
  * fixed here, because stripping it changes the canonical key of every plain
  * claim in the demo and belongs with `claimKey`'s own canonicalization rule
- * (2aw.F3-D1), not with this extractor's split. Filed as its own item.
+ * (2aw.F3-D1), not with this extractor's split. Filed as its own item
+ * (computenet-lv25).
  */
 object RuleExtractor : Extractor {
 
     private val becauseRegex = Regex(" because ", RegexOption.IGNORE_CASE)
 
     /**
-     * Trailing full stops only — see the class KDoc's "Trailing full stops":
-     * `?` and `!` are deliberately absent from this class.
+     * Trailing sentence-terminator punctuation the segmenter itself
+     * contributes — see the class KDoc's "Trailing terminators": `.`, `…`
+     * and `!`. `?` is deliberately absent from this class (computenet-qoei):
+     * an interrogative asserts something different from its declarative, so
+     * it is content, not a segmenter artifact.
      */
-    private val trailingFullStop = Regex("[.…]+$")
+    private val trailingTerminator = Regex("[.…!]+$")
 
     /**
-     * Drops the sentence-final full stop the segmenter left on [text]. A text
-     * that is *nothing but* full stops is returned unchanged rather than
-     * emptied, so this can never turn a non-blank endpoint blank.
+     * Drops the sentence-final terminator the segmenter left on [text]. A
+     * text that is *nothing but* terminator punctuation is returned
+     * unchanged rather than emptied, so this can never turn a non-blank
+     * endpoint blank.
      */
-    private fun withoutTrailingFullStop(text: String): String {
+    private fun withoutTrailingTerminator(text: String): String {
         val trimmed = text.trim()
-        val stripped = trimmed.replace(trailingFullStop, "").trim()
+        val stripped = trimmed.replace(trailingTerminator, "").trim()
         return stripped.ifBlank { trimmed }
     }
 
@@ -153,11 +168,12 @@ object RuleExtractor : Extractor {
         }
 
         // Both endpoints go through the same normalization — see the class
-        // KDoc's "Trailing full stops" (computenet-9bip). In practice only
-        // `source` can carry a sentence-final full stop, but normalizing
-        // both keeps the rule one rule rather than a positional special case.
-        val target = withoutTrailingFullStop(trimmedText.substring(0, becauseMatch.range.first))
-        val source = withoutTrailingFullStop(trimmedText.substring(becauseMatch.range.last + 1))
+        // KDoc's "Trailing terminators" (computenet-9bip, extended to `!` by
+        // computenet-qoei). In practice only `source` can carry a
+        // sentence-final terminator, but normalizing both keeps the rule one
+        // rule rather than a positional special case.
+        val target = withoutTrailingTerminator(trimmedText.substring(0, becauseMatch.range.first))
+        val source = withoutTrailingTerminator(trimmedText.substring(becauseMatch.range.last + 1))
         if (target.isEmpty() || source.isEmpty()) {
             return listOf(claim)
         }

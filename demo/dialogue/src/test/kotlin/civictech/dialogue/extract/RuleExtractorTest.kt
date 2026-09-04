@@ -225,11 +225,28 @@ class RuleExtractorTest {
         assertEquals(reasonText, (reason[2] as ExtractedRelation).sourceText)
     }
 
+    // ------------------------------------------------------------------
+    // computenet-qoei: unbundling 9bip's "`?` and `!` are preserved" into
+    // two separate decisions. `?` is kept preserved — an interrogative is a
+    // different speech act, not the declarative with different terminal
+    // punctuation. `!` is reclassified: it is exactly the segmenter-supplied
+    // terminator 9bip's "Trailing full stops" already strips for `.`/`…` —
+    // present on an endpoint only because of which side of the because-split
+    // it fell on — so it is stripped alongside them.
+    // ------------------------------------------------------------------
+
     @Test
-    fun `a question mark or exclamation is preserved, since it changes what the claim asserts`() {
+    fun `a question mark is preserved, since it changes what the claim asserts`() {
+        val items = RuleExtractor.extract(segment(text = "We should panic because the budget is too high?"))
+
+        assertEquals("the budget is too high?", (items[1] as ExtractedClaim).text)
+    }
+
+    @Test
+    fun `an exclamation is stripped from a because-endpoint, like a full stop, since it is the segmenter's terminator artifact`() {
         val items = RuleExtractor.extract(segment(text = "We should panic because the budget is too high!"))
 
-        assertEquals("the budget is too high!", (items[1] as ExtractedClaim).text)
+        assertEquals("the budget is too high", (items[1] as ExtractedClaim).text)
     }
 
     @Test
@@ -270,6 +287,38 @@ class RuleExtractorTest {
         )
         // 3 propositions across the two utterances: the budget claim, the
         // shared travel-costs claim, and the flights claim.
+        assertEquals(3, claims.size, "the two utterances mint three distinct claims, not four")
+    }
+
+    @Test
+    fun `driven through DialoguePipeline, a proposition uttered once as an exclamation-terminated reason and once as a conclusion mints ONE claim with both utterance ids`() {
+        // The discriminating regression for computenet-qoei: before `!` was
+        // stripped, u1's reason endpoint keyed as "travel costs increased!"
+        // and u2's conclusion endpoint as "travel costs increased" — two
+        // canonical claims for one proposition, exactly the defect shape
+        // computenet-9bip fixed for `.`, left standing for `!`.
+        val rig = Rig()
+
+        rig.admit(utterance("u1", 1, "alice", "The budget is too high because travel costs increased!"))
+        rig.admit(utterance("u2", 2, "carol", "Travel costs increased because flights got more expensive."))
+
+        val shared = claimKey("Travel costs increased")
+
+        val provenance = rig.claimProvenanceView.current()[shared]
+        assertNotNull(provenance, "the shared proposition must have a canonical claim key")
+        assertEquals(
+            setOf("u1", "u2"),
+            ProvenanceIndex.claimProvenance(provenance),
+            "one claim key, justified by BOTH the utterance that used it as an exclamation-terminated reason " +
+                "and the one that used it as a conclusion",
+        )
+
+        val claims = rig.claimView.current()
+        assertEquals(
+            setOf("u1", "u2"),
+            claims[shared]?.fromUtterances,
+            "the canonical claim fold must see both contributions under the one key",
+        )
         assertEquals(3, claims.size, "the two utterances mint three distinct claims, not four")
     }
 }
