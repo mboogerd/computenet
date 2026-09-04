@@ -441,7 +441,22 @@
 # under HOST load ("slow, not wrong" was measured on scoped runs, and the
 # feature reviewer's repo-wide gate is the one unscoped run the session emits),
 # +1 reflowing a bold marker the 5b insert had split mid-sentence.
-work                9391
+#
+# 9391 -> 9405 on 2026-09-04 (computenet-k9th): +14 for a three-row table of
+# which description/acceptance file flag each bd call path takes, replacing the
+# prose that described one cell of it. `--desc-file`/`--accept-file` exist only
+# on the wrappers; neither bd path has an acceptance-from-file flag at all; and
+# a guess aborts the whole call, discarding the valid writes beside it. Three
+# sessions each paid the same two minutes finding one cell (9z8t, g1gf, k9th),
+# so the table is cheaper than the fourth. +4 of the 14 name the flag at 5e's
+# text-correction site, which is where the third instance was paid.
+#
+# 9405 -> 9408 in review: +3 saying the wrappers are CREATE-only (so an
+# orchestrator updating a bead has no wrapper path and must use bd update's
+# row), naming --stdin as --body-file's alias, and correcting a stale "SKILL.md
+# presents them as interchangeable" — step 7 already distinguishes the wrappers
+# from bare bd create; bd update was the half nothing covered.
+work                9408
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of
