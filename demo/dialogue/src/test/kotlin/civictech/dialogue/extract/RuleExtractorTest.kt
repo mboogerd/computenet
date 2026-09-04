@@ -9,14 +9,20 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.dialogue.ClaimKey
 import civictech.dialogue.DialoguePipeline
 import civictech.dialogue.RelationKey
 import civictech.dialogue.Segment
 import civictech.dialogue.Utterance
+import civictech.dialogue.mint.ClaimAggregate
+import civictech.dialogue.mint.ClaimProvenanceEntry
+import civictech.dialogue.mint.ProvenanceIndex
 import civictech.dialogue.mint.RelationAggregate
 import civictech.dialogue.mint.RelationMint
+import civictech.dialogue.mint.claimKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -122,10 +128,30 @@ class RuleExtractorTest {
         /** The canonical relation fold's raw output: relation key -> aggregate. */
         val aggregateView = MapView<RelationKey, RelationAggregate>()
 
+        /** The canonical claim fold's raw output: claim key -> aggregate. */
+        val claimView = MapView<ClaimKey, ClaimAggregate>()
+
+        /** ProvenanceIndex's claim leg: claim key -> the entries justifying it. */
+        val claimProvenanceView = MapView<ClaimKey, Set<ClaimProvenanceEntry>>()
+
         init {
             host.lookupOrThrow(refs.canonicalRelations).outlet.subscribe(
                 Use.fixed(
                     Propagate<MapDelta<RelationKey, RelationAggregate>> { delta -> aggregateView.apply(delta) },
+                    PortRef.generate(),
+                ),
+            )
+            host.lookupOrThrow(refs.canonicalClaims).outlet.subscribe(
+                Use.fixed(
+                    Propagate<MapDelta<ClaimKey, ClaimAggregate>> { delta -> claimView.apply(delta) },
+                    PortRef.generate(),
+                ),
+            )
+            host.lookupOrThrow(refs.claimProvenance).outlet.subscribe(
+                Use.fixed(
+                    Propagate<MapDelta<ClaimKey, Set<ClaimProvenanceEntry>>> { delta ->
+                        claimProvenanceView.apply(delta)
+                    },
                     PortRef.generate(),
                 ),
             )
@@ -162,5 +188,88 @@ class RuleExtractorTest {
                 "asserting its endpoints as standalone claims",
         )
         assertEquals(1, rig.canonicalRelationCount())
+    }
+
+    // ------------------------------------------------------------------
+    // computenet-9bip: the trailing full stop the segmenter leaves on a
+    // sentence-final endpoint must not fork the claim key.
+    //
+    // Segmentation splits on `(?<=[.!?])\s+`, which KEEPS the terminator on
+    // the sentence, so the endpoint AFTER "because" ends in "." while the
+    // same proposition used as a conclusion (the endpoint BEFORE "because")
+    // does not. `claimKey` already lowercases, so sentence-initial case is
+    // NOT what forks these — the full stop alone is.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `a sentence-final endpoint drops its trailing full stop, so it keys equal to the same proposition used as a conclusion`() {
+        val reason = RuleExtractor.extract(
+            segment(text = "The budget is too high because travel costs increased.", utteranceId = "u1"),
+        )
+        val conclusion = RuleExtractor.extract(
+            segment(text = "Travel costs increased because flights got more expensive.", utteranceId = "u2"),
+        )
+
+        val reasonText = (reason[1] as ExtractedClaim).text
+        val conclusionText = (conclusion[0] as ExtractedClaim).text
+
+        assertEquals("travel costs increased", reasonText, "the endpoint keeps no sentence-final full stop")
+        assertEquals("Travel costs increased", conclusionText, "the conclusion endpoint is untouched")
+        assertEquals(
+            claimKey(conclusionText),
+            claimKey(reasonText),
+            "the same proposition uttered as a reason and as a conclusion must canonicalize to ONE claim key",
+        )
+        // The relation's endpoint texts are the SAME strings as the claims',
+        // so RelationMint canonicalizes against a key these claims mint.
+        assertEquals(reasonText, (reason[2] as ExtractedRelation).sourceText)
+    }
+
+    @Test
+    fun `a question mark or exclamation is preserved, since it changes what the claim asserts`() {
+        val items = RuleExtractor.extract(segment(text = "We should panic because the budget is too high!"))
+
+        assertEquals("the budget is too high!", (items[1] as ExtractedClaim).text)
+    }
+
+    @Test
+    fun `driven through DialoguePipeline, a proposition uttered once as a reason and once as a conclusion mints ONE claim with both utterance ids`() {
+        // The discriminating regression for computenet-9bip. Before the
+        // trailing full stop was dropped, u1's reason endpoint keyed as
+        // "travel costs increased." and u2's conclusion endpoint as
+        // "travel costs increased" — two canonical claims for one
+        // proposition, each with a single-utterance provenance set, which is
+        // exactly the merge the demo transcript was authored to show and did
+        // not get (measured in demo/agora/ui/test/fixtures/dialogue-graph.json).
+        val rig = Rig()
+
+        rig.admit(utterance("u1", 1, "alice", "The budget is too high because travel costs increased."))
+        rig.admit(utterance("u2", 2, "carol", "Travel costs increased because flights got more expensive."))
+
+        val shared = claimKey("Travel costs increased")
+
+        val provenance = rig.claimProvenanceView.current()[shared]
+        assertNotNull(provenance, "the shared proposition must have a canonical claim key")
+        assertEquals(
+            setOf("u1", "u2"),
+            ProvenanceIndex.claimProvenance(provenance),
+            "one claim key, justified by BOTH the utterance that used it as a reason and the one that used it " +
+                "as a conclusion",
+        )
+
+        val claims = rig.claimView.current()
+        assertEquals(
+            setOf("u1", "u2"),
+            claims[shared]?.fromUtterances,
+            "the canonical claim fold must see both contributions under the one key",
+        )
+        assertEquals(
+            emptyList(),
+            claims.keys.filter { it != shared && it.value.trimEnd('.') == shared.value },
+            "no second claim key may differ from the shared one only by trailing punctuation",
+        )
+        // 3 propositions across the two utterances: the budget claim, the
+        // shared travel-costs claim, and the flights claim.
+        assertEquals(3, claims.size, "the two utterances mint three distinct claims, not four")
     }
 }
