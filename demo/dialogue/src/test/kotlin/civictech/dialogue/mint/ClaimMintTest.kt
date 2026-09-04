@@ -185,10 +185,10 @@ class ClaimMintTest {
         val rig = Rig()
 
         // Same key modulo case and internal whitespace runs — exactly what
-        // claimKey()'s canonicalization (trim, collapse whitespace, lowercase)
-        // is defined to fold together. Different terminating punctuation would
-        // NOT fold (deliberately weak identity, 2aw.F3-D1), so both keep the
-        // same "." to stay a same-key pair.
+        // claimKey()'s canonicalization is defined to fold together. Both
+        // texts keep the "." so this stays a case/whitespace pair and nothing
+        // else: since computenet-lv25 the terminator would fold too, which the
+        // dedicated tests above pin, so it must not be what carries this one.
         rig.admit(utterance("u1", 1, "alice", "The sky is blue."))
         rig.admit(utterance("u2", 2, "bob", "THE   SKY IS BLUE."))
 
