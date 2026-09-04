@@ -1176,9 +1176,16 @@ than half a feature parked on a branch.
 
 ### In every case
 
-**Write to the feature under review and to items you create — nothing else.**
+**Write to the feature under review, to items you create, and — the one
+standing exception — an occurrence comment on a flake bead you attributed a
+red check to (red-check-attribution.md). Nothing else.**
 Closing, re-prioritising, reassigning, re-parenting or claiming any other
 bead is the orchestrator's, and the tasks under this feature are other beads.
+The exception exists because §4 sends you to a procedure whose last step is
+that comment, and the two rules read as a contradiction: a reviewer that
+resolved it in favour of this paragraph re-ran the job and could not record
+the occurrence, leaving a count — the whole mechanism — dependent on the
+orchestrator reading its report (computenet-yubh).
 Apply the same rule when you judge the diff: an implementer's write onto a
 bead it was not assigned is *commissioned* work if the item's acceptance
 criteria or the cross-bead line in its dispatch prescribe it — on
