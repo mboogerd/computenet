@@ -106,8 +106,9 @@ class FileJournalHandleTest {
      *
      * Two *instances* on one path are a different case, unchanged by
      * computenet-sh8z and not a consequence of the kept handle — see
-     * [FileJournal]'s KDoc ("Refusal, not interleaving or a shared instance")
-     * and the `refuses` test below (computenet-k1by).
+     * [FileJournal]'s KDoc ("Interleaving correctly, not refusing or a shared
+     * instance") and the `two live instances on the same path never write two
+     * headers` test below (computenet-k1by).
      */
     @Test
     fun `concurrent threads on one journal interleave whole records`() {
@@ -164,9 +165,11 @@ class FileJournalHandleTest {
      * length `0x434E4A4C` (~1.1 GB), hit EOF, and silently dropped everything
      * after it as one torn trailing record — SILENT truncation, not a thrown
      * error, which is why this test can only see the hazard in a corrupted
-     * replay, not in an exception (see this task's report for the harness run
-     * that reproduced it against the unfixed code, and the mutation-check run
-     * that confirms this test discriminates).
+     * replay, not in an exception. computenet-k1by's own comment thread
+     * carries the harness run that reproduced it against the unfixed code
+     * (duplicate MAGIC in 20/20 trials) and the mutation-check runs that
+     * confirm this test discriminates: reverting `sink()` to the check-then-act
+     * body fails the record-count assertion below 5/5.
      *
      * The fix serializes the header decision across instances (see
      * [FileJournal]'s KDoc, "Interleaving correctly, not refusing"): whichever

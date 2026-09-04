@@ -230,8 +230,10 @@ class InMemoryJournal : Journal {
  *   moment an instance becomes safe to evict.
  *
  * The remaining gap is deliberate and is the cost of this choice: [headerLocks]
- * is a JVM-local mutex, so it serializes instances **within one process** but
- * not across two OS processes racing the same path — a scenario this repo
+ * is a JVM-local mutex keyed by canonical path, so it serializes instances
+ * **within one process, reaching one file by paths that canonicalize the
+ * same** — it does not serialize two OS processes racing the same path, nor
+ * two hard links to one inode (different canonical paths, so different locks) — a scenario this repo
  * does not construct today (see below) and that a lock held for the header
  * decision alone cannot fully close without also refusing legitimate
  * sequential reuse across processes, which nothing here has a way to permit
@@ -243,9 +245,7 @@ class InMemoryJournal : Journal {
  * Nothing in this repo constructs two writers on one path today — a journal is
  * owned by exactly one host (`KeyedCells`, `AgoraApp`), and a recovery reader
  * is constructed after the writer is gone — so this is a guard against a
- * latent hazard
- * against a latent hazard at an API that did not forbid it, not a fix to a
- * live defect.
+ * latent hazard at an API that did not forbid it, not a fix to a live defect.
  *
  * ponytail: one file, fsync per append, whole-log replay in memory — segments,
  * group commit, and streaming replay when a real workload's journal hurts.
