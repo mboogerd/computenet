@@ -12,6 +12,10 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
 import java.io.File
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Method
+import java.net.URL
+import java.net.URLClassLoader
 import java.util.IdentityHashMap
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -20,6 +24,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -389,6 +394,119 @@ class ReplayTest {
         }
     }
 
+    // ------------------------------------------------------------------ decode-only JVM
+
+    /**
+     * A JVM whose only contact with a fault class is *reading an artifact that names its kind*
+     * can still decode it (computenet-trpc).
+     *
+     * ## Why the isolated class loader is the test, not scaffolding around it
+     *
+     * `FaultCodec`s register from their fault class's companion object, so the registry is a
+     * function of *what this JVM has loaded*. Every landed consumer builds its plans in the
+     * same process that replays them, which loads every class it will later need — so a test
+     * written in the ordinary way passes against a registry that would be empty for a real
+     * replay tool, and proves nothing at all. Worse, it would pass **for a reason it cannot
+     * see**: a sibling test method in the same forked JVM having constructed the fault first
+     * (the ordering effect [FaultCodecRoundTripTest.LANDED_KINDS] documents).
+     *
+     * So the decode happens in a child [URLClassLoader] whose parent is the *platform* loader:
+     * nothing of `civictech.testkit` is shared with this JVM's loader, and the only class the
+     * test touches inside it is `DstArtifacts`. [assertSame] on the loader is the pin on that —
+     * a decoded fault loaded by this test's own loader would mean the isolation leaked and the
+     * assertion below is vacuous.
+     *
+     * ## What makes the kind list complete rather than "the ones I thought of"
+     *
+     * [SHIPPED_FAULT_FIXTURES] is a hand-written map — it has to be, because only a fault
+     * class's own constructor knows what a *valid* instance of it is — but it is never trusted
+     * as the enumeration. It is checked against `FaultCodecs.kinds()` **as the isolated loader
+     * reports it**, i.e. against whatever the eager registration list actually registered. A
+     * fault class added without a fixture here fails on that comparison, and one added without
+     * an eager-list entry fails
+     * [theEagerRegistrationListNamesEveryShippedFaultCodec_computenet_trpc], which reads the
+     * compiled class files rather than any list a human wrote.
+     */
+    @Test
+    fun everyShippedFaultKindDecodesInAJvmThatNeverConstructedTheFault_CHA1_31() {
+        val json = decodeOnlyArtifactJson()
+
+        isolatedRigLoader().use { loader ->
+            val artifacts = loader.loadClass("civictech.testkit.dst.DstArtifacts")
+            val artifact = artifacts.callObjectMethod(
+                "parse",
+                listOf(String::class.java, String::class.java),
+                listOf(json, "<decode-only-fixture>"),
+            )
+            val plan = artifact.javaClass.getMethod("plan").invokeUnwrapped(artifact)
+            val faults = plan.javaClass.getMethod("getFaults").invokeUnwrapped(plan) as List<*>
+
+            assertEquals(SHIPPED_FAULT_FIXTURES.size, faults.size)
+            faults.forEach { fault ->
+                assertSame(
+                    loader,
+                    fault!!.javaClass.classLoader,
+                    "the decoded fault must come from the isolated loader, or this test proves nothing",
+                )
+            }
+            assertEquals(
+                SHIPPED_FAULT_FIXTURES.keys.sorted(),
+                faults.map { it!!.javaClass.getMethod("getId").invokeUnwrapped(it) as String }.sorted(),
+                "every shipped kind's fixture must decode, keyed by its own kind as the fault id",
+            )
+
+            val faultCodecs = loader.loadClass("civictech.testkit.dst.FaultCodecs")
+            @Suppress("UNCHECKED_CAST")
+            val kinds = faultCodecs.callObjectMethod("kinds", emptyList(), emptyList()) as Set<String>
+            assertEquals(
+                SHIPPED_FAULT_FIXTURES.keys.sorted(),
+                kinds.sorted(),
+                "the fixtures above must cover exactly the kinds a fresh JVM registers eagerly — " +
+                    "a new fault class means a new fixture here, not a quietly narrower test",
+            )
+        }
+    }
+
+    /**
+     * [ShippedFaults.CLASSES] names **every** class in this module that registers a
+     * [FaultCodec] — checked against the compiled class files, not against a list.
+     *
+     * ## Why this test is the actual deliverable of computenet-trpc
+     *
+     * The eager list re-centralises what per-class registration decentralised, and a central
+     * list that can fall behind silently would just move the bug: a fault class added in six
+     * months would register on load exactly as today, pass every round-trip suite in this
+     * repository, and be undecodable in the one JVM that matters — with nothing red anywhere.
+     * "Nobody will forget" is not a mechanism, so this is the mechanism.
+     *
+     * The enumeration is authoritative because it is the shipped artefact itself: every
+     * `.class` file under the code source of [FaultCodec] is opened and asked, via reflection,
+     * whether it *declares a field of type [FaultCodec]* — which is precisely what a Kotlin
+     * `companion object { val CODEC: FaultCodec = FaultCodecs.register(...) }` compiles to (a
+     * static field on the enclosing class). Adding a fault class in the prescribed shape
+     * therefore fails this test until [ShippedFaults.CLASSES] names it, and deleting one fails
+     * it until the entry goes.
+     *
+     * `Class.forName(name, false, ...)` and `declaredFields` are both non-initialising, so the
+     * scan does not register anything and cannot mask what it is looking for.
+     */
+    @Test
+    fun theEagerRegistrationListNamesEveryShippedFaultCodec_computenet_trpc() {
+        val declaring = classesDeclaringAFaultCodecField()
+        assertTrue(
+            declaring.size >= 6,
+            "the scan found only ${declaring.size} codec-declaring classes, which cannot be right — " +
+                "it has stopped seeing the class files and would pass vacuously: $declaring",
+        )
+        assertEquals(
+            declaring.sorted(),
+            ShippedFaults.CLASSES.map { it.name }.sorted(),
+            "ShippedFaults.CLASSES must name exactly the classes that register a FaultCodec. A fault class " +
+                "missing from it registers only when something loads it, which is the decode-only hole " +
+                "computenet-trpc closed; a stale entry names a class that no longer exists.",
+        )
+    }
+
     companion object {
         private const val DROP_KIND = "dst-selftest-drop-from-step"
         private const val SUITE = "dst-selftest-replay"
@@ -411,5 +529,144 @@ class ReplayTest {
 
         /** `chains * (rounds + 1)` hops in each direction, with no frame lost. */
         private const val EXPECTED_DELIVERIES = 4 * 7 * 2
+
+        // -------------------------------------------------------------- decode-only fixtures
+
+        /**
+         * One valid instance of every fault class `:testkit` ships, keyed by its published kind
+         * and carrying that kind as its fault id (so a decoded fault names the fixture it came
+         * from without a second lookup table).
+         *
+         * Hand-written on purpose, and never the enumeration: only a fault class's own
+         * constructor knows what a valid instance is, so the *values* cannot be derived — but
+         * the *key set* is asserted against the registry of a fresh JVM, and the class list
+         * behind that registry is asserted against the compiled class files. Every fault
+         * activates far past any run here; nothing in this file executes them.
+         */
+        private val SHIPPED_FAULT_FIXTURES: Map<String, Fault> = listOf(
+            CrashFault.atQuiescence(CrashFault.KIND, host = "h", atStep = 9_000, journal = "j"),
+            PartitionFault.drop(PartitionFault.KIND, edge = "e", from = 9_000),
+            JournalFault(
+                JournalFault.KIND,
+                journal = "j",
+                mutation = JournalMutation.TruncateTail(1),
+                window = StepWindow(9_000),
+            ),
+            RestartAtFrontierFault(
+                RestartAtFrontierFault.KIND,
+                host = "h",
+                journal = "j",
+                atStep = 9_000,
+                prefix = 2,
+            ),
+            ReorderFault.crossLink("reorder", edge = "e", window = 4, from = 9_000, until = 9_100),
+            DuplicateFault.frames("duplicate", edge = "e", copies = 2, from = 9_000, until = 9_100),
+            JoinEvent(JoinEvent.KIND, "peer1", 9_000),
+            RejoinEvent(RejoinEvent.KIND, "peer2", 9_000),
+            DepartEvent(DepartEvent.KIND, "peer3", 9_000, DepartureMode.EVICT_NO_CLOSE),
+            ReassignEvent(ReassignEvent.KIND, "peer0", 9_000, "interest-3", 5L),
+        ).associateBy { FaultCodecs.encode(it).kind }
+
+        /** The artifact a decode-only JVM is handed: one record of every shipped kind, nothing else. */
+        private fun decodeOnlyArtifactJson(): String = DstArtifact(
+            rig = DstRig.stamp(),
+            suite = "dst-selftest-decode-only",
+            seed = 7L,
+            graphId = "dst-selftest-decode-only-graph",
+            checkId = "dst-selftest-decode-only-check",
+            budget = 16,
+            plan = PlanRecord(SHIPPED_FAULT_FIXTURES.values.map(FaultCodecs::encode)),
+            observed = ObservedRun(
+                outcome = DstOutcome.FAILED,
+                steps = 1,
+                failingCheck = "decode-only fixture",
+                failingStep = 1,
+                traceDigest = "0",
+                traceEvents = 1,
+            ),
+        ).toJson()
+
+        /**
+         * A loader that shares **no** application class with this JVM: its parent is the
+         * platform loader, so `civictech.testkit.dst` — and the Kotlin runtime under it — is
+         * loaded afresh and its `FaultCodecs` registry starts empty.
+         *
+         * The URLs are gathered from three places because no single one is dependable across
+         * runners: a Gradle test worker loads test classes through a `URLClassLoader` whose
+         * `urls` hold the real runtime classpath while `java.class.path` may name only the
+         * worker jar, and a plain `java -cp` run is the other way round. The code-source
+         * locations are the backstop for both.
+         */
+        private fun isolatedRigLoader(): URLClassLoader {
+            val urls = linkedSetOf<URL>()
+            generateSequence(ReplayTest::class.java.classLoader as ClassLoader?) { it.parent }
+                .filterIsInstance<URLClassLoader>()
+                .forEach { urls += it.urLs }
+            System.getProperty("java.class.path").orEmpty()
+                .split(File.pathSeparator)
+                .filter { it.isNotBlank() }
+                .forEach { urls += File(it).absoluteFile.toURI().toURL() }
+            listOf(FaultCodec::class.java, DstArtifact::class.java, Json::class.java, Unit::class.java)
+                .mapNotNull { it.protectionDomain?.codeSource?.location }
+                .forEach { urls += it }
+            return URLClassLoader(urls.toTypedArray(), ClassLoader.getPlatformClassLoader())
+        }
+
+        /**
+         * Every class under [FaultCodec]'s own code source that declares a [FaultCodec]-typed
+         * field — i.e. every fault class carrying the prescribed `companion object` `CODEC`.
+         *
+         * The code source is `:testkit`'s compiled main output (a directory under Gradle, a jar
+         * for a consumer), which is why this is a statement about what the module *ships*
+         * rather than about what some test happened to import. Test classes are outside it, so
+         * a per-suite codec ([DROP_KIND] here) is correctly invisible.
+         */
+        private fun classesDeclaringAFaultCodecField(): List<String> {
+            val loader = FaultCodec::class.java.classLoader
+            val source = FaultCodec::class.java.protectionDomain.codeSource.location
+            val root = File(source.toURI())
+            val names: List<String> = if (root.isDirectory) {
+                root.walkTopDown()
+                    .filter { it.isFile && it.extension == "class" }
+                    .map { it.relativeTo(root).path.removeSuffix(".class").replace(File.separatorChar, '.') }
+                    .toList()
+            } else {
+                java.util.zip.ZipFile(root).use { zip ->
+                    zip.entries().asSequence()
+                        .map { it.name }
+                        .filter { it.endsWith(".class") }
+                        .map { it.removeSuffix(".class").replace('/', '.') }
+                        .toList()
+                }
+            }
+            return names
+                .filter { it.startsWith("civictech.testkit.dst.") }
+                .filter { name ->
+                    // `initialize = false`: the scan must not register the very thing it measures.
+                    val type = Class.forName(name, false, loader)
+                    type.declaredFields.any { it.type == FaultCodec::class.java }
+                }
+                .sorted()
+        }
+
+        /** Invoke a method on a Kotlin `object` living in another loader, unwrapping reflection. */
+        private fun Class<*>.callObjectMethod(
+            method: String,
+            paramTypes: List<Class<*>>,
+            args: List<Any?>,
+        ): Any = getMethod(method, *paramTypes.toTypedArray())
+            .invokeUnwrapped(getField("INSTANCE").get(null), *args.toTypedArray())
+
+        /**
+         * Rethrow what the called code threw, not `InvocationTargetException`. The failure this
+         * test exists for is `FaultCodecs.decode`'s "unknown fault kind" message, and a wrapper
+         * would hide it behind a reflection stack.
+         */
+        private fun Method.invokeUnwrapped(receiver: Any?, vararg args: Any?): Any =
+            try {
+                invoke(receiver, *args)!!
+            } catch (e: InvocationTargetException) {
+                throw e.cause ?: e
+            }
     }
 }

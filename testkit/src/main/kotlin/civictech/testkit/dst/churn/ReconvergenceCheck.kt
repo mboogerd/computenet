@@ -155,7 +155,10 @@ object MeshConvergences {
  * See [BatchReference]: `required` is the live replicas, `permitted` adds every departed one —
  * whether a departing replica's last operations left with it is a race this harness does not
  * control, and the BS-1 sweep measured an orderly eviction losing an element accepted one step
- * earlier. With nothing departed the two sets coincide and this is a plain equality.
+ * earlier. (That loss is `Replication.evict`'s queued `suspend` preempting the write at the
+ * departing replica's own intake, not its best-effort catch-up missing it — computenet-9c5t;
+ * [BatchReference] carries the mechanism.) With nothing departed the two sets coincide and this
+ * is a plain equality.
  *
  * ## Two boundaries a caller must know, stated here rather than only on the bead
  *
