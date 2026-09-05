@@ -150,6 +150,76 @@ class ReplicationTest {
         onQ.membership().shouldNotBeEmpty()
     }
 
+    /**
+     * `Replication.evict`'s **final push-catch-up**: on a clean eviction with a reachable peer,
+     * the departing replica re-fires its state as a delta at one peer's existing link before it
+     * despawns — spec 42 §Eviction (*"a final state-as-delta catch-up (21) re-fires at one
+     * reachable peer's existing link"*) and 93 I-3 §4.6 step 3.
+     *
+     * ## Why the pin needs a lossy link, and why it had none before (computenet-078s)
+     *
+     * The catch-up is deliberately **idempotent anti-entropy**, so on a healthy mesh the peer
+     * already holds everything the departing replica could send it: link-time catch-up
+     * ([Replication] `maybeLink`), park/replay across a partition and idempotent merge all
+     * conspire to make its effect invisible to any fold-level assertion. Measured on
+     * 2026-09-05, deleting its body left `:kernel`'s replication package (93 tests), `:testkit`
+     * (248), `:concord` core+dist+dur (327) and `:demo:exchange` (17) all green — spec text
+     * pinned by nothing. `concord/corpus/42-replication/42-REPL-DEPART-01.yaml` cannot pin it
+     * either, by construction rather than by measurement: its `despawn` step routes through
+     * `KernelDriver.despawn` → `host.managementInlet.call.despawn`, which never enters `evict`.
+     *
+     * What makes an end-to-end pin possible here is that a genuinely **dropping** transport seam
+     * does exist — [Peering.FrameInterpose], CHA1's frame plane. `Loopback.partition()` only
+     * *parks* (senders replay on heal, so nothing is ever missing), but an interposer returning
+     * `emptyList()` loses the frame outright. So this test opens a window in which one delta
+     * from P is lost, closes it, and shows the element is **still** absent at Q — nothing else
+     * in the runtime re-sends it, because the link already exists and no re-link fires — and
+     * then evicts P. The catch-up is the only remaining carrier, which is exactly what the
+     * final assertion reads.
+     */
+    @Test
+    fun `a clean evict re-fires this replica's state at a reachable peer's link`() {
+        val controller = SimulationController()
+        var losing = false
+        val p = Peer(controller)
+        val q = Peer(controller)
+        Peering.loopback(
+            p.side,
+            q.side,
+            interposeAToB = Peering.FrameInterpose { frame -> if (losing) emptyList() else listOf(frame) },
+        )
+        val logicalId = UUID.randomUUID()
+
+        val onP = p.replica(logicalId, 0)
+        val onQ = q.replica(logicalId, 1)
+        controller.runToIdle()
+
+        // Control: with the seam passing frames through, ordinary gossip reaches Q.
+        p.ops(onP).add("gossiped")
+        controller.runToIdle()
+        onQ.membership() shouldBe setOf("gossiped")
+
+        // Lose exactly the delta carrying "orphan". Unlike partition(), this is a real loss:
+        // the sender's frame is dropped after egress, so there is nothing parked to replay.
+        losing = true
+        p.ops(onP).add("orphan")
+        controller.runToIdle()
+        onP.membership() shouldBe setOf("gossiped", "orphan")
+        onQ.membership() shouldBe setOf("gossiped")
+
+        // Seam restored — and nothing re-sends it. This is the assertion that makes the last one
+        // load-bearing: without it, "Q has orphan after the evict" could be ordinary gossip.
+        losing = false
+        controller.runToIdle()
+        onQ.membership() shouldBe setOf("gossiped")
+
+        // Clean eviction of P: Q is reachable, so evict drains, catches up and despawns.
+        p.replication.evict(onP, p.host) shouldBe true
+        controller.runToIdle()
+
+        onQ.membership() shouldBe setOf("gossiped", "orphan")
+    }
+
     /** Merge-fold across a replica's own delta outlet — reconstructs its OR-set membership. */
     private fun mergeFold(acc: SetDelta<String>, delta: SetDelta<String>): SetDelta<String> = acc.merge(delta)
 
