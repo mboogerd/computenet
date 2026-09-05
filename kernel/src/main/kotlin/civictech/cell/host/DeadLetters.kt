@@ -8,6 +8,7 @@ import civictech.cell.Owned
 import civictech.cell.Redacted
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
+import civictech.cell.proxy.Proxy
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -232,16 +233,56 @@ internal class DeadLetters(
      * ordinary values, never a live exclusive handle. A wrapper the failing
      * invocation had already taken/released before throwing has nothing left
      * to capture; it is redacted with no value rather than crashing capture.
+     *
+     * ## Exclusives *nested inside* a captured wrapper (computenet-c0gz)
+     *
+     * The top-level substitution is not the whole obligation. An `Owned` held
+     * in a field of the captured value is reached by neither branch on its
+     * own, and the two shapes fail differently:
+     *
+     * - A `Leased` whose value holds an `Owned`: the lease is released and the
+     *   value is replaced by a marker, so the inner handle becomes unreachable
+     *   through the record — nothing downstream can ever consume it. That is
+     *   the silent drop AGENTS.md forbids, and is the sanitizer's counterpart
+     *   to the one `Proxy.discharge` closed for its own walk (computenet-zyg1).
+     * - An `Owned` whose value holds an `Owned`: [Owned.freeze] consumes only
+     *   the outer handle and wraps the *same object graph*, so the inner
+     *   handle rides into the fan-out inside the `Frozen`, contradicting this
+     *   doc's own MUST NOT sentence.
+     *
+     * Both are closed by handing the captured value to `Proxy.discharge`,
+     * whose walk is the repository's single definition of an exclusive's
+     * reach — so the sanitizer consumes exactly what the compile-time
+     * `carriesExclusive` scan marked the method exclusive for, no more.
+     * What this does **not** do is substitute inside the graph: the inner
+     * handle is *consumed*, and the (now dead) `Owned` object still travels
+     * inside the `Frozen`. Rebuilding an arbitrary user type with `Frozen`
+     * fields is not possible here; "no live exclusive handle" is the property
+     * that holds, and it is the one the fan-out needs.
+     *
+     * Ordering with `Proxy.discharge` is symmetric and needs no coordination,
+     * because each walk is gated on its own consumption succeeding: whichever
+     * runs second finds `take()`/`release()` already done, declines to descend,
+     * and books the occurrence on `Proxy.doubleDischarges` — so a nested
+     * exclusive gets exactly one consumer either way. Measured both ways
+     * (`LifecycleAndDeadLetterTest`, computenet-c0gz).
      */
     private fun sanitizeForDeadLetter(hostedInvocation: HostedPortInvocation): HostedPortInvocation {
         val args = hostedInvocation.invocation.args
         if (args.none { it is Owned<*> || it is Leased<*> }) return hostedInvocation
         val sanitized = args.map { arg ->
             when (arg) {
+                // freeze() consumes only the OUTER handle; the frozen value's own
+                // exclusives are given their consumer here (computenet-c0gz).
                 is Owned<*> -> runCatching { arg.freeze() }
+                    .onSuccess { frozen -> runCatching { Proxy.discharge(frozen.value) } }
                     .getOrElse { Redacted("Owned payload already consumed before capture") }
+                // the released value is replaced by a marker, so an exclusive inside
+                // it would have no consumer at all unless discharged here. Gated on
+                // the release succeeding, exactly as `Proxy.discharge`'s own Leased
+                // branch is, so an already-released lease is not walked twice.
                 is Leased<*> -> Redacted("Leased payload released at dead-letter capture")
-                    .also { runCatching { arg.release() } }
+                    .also { runCatching { arg.release().also { _ -> Proxy.discharge(arg.value) } } }
                 else -> arg
             }
         }
