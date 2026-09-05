@@ -114,20 +114,24 @@ import civictech.dialogue.Segment
  *   is the existing division of labour, and case-folding here would damage
  *   the display without changing a single key.
  *
- * The strip is applied to the ENDPOINT claims only, not to the whole-segment
- * claim a non-"because" segment yields, and that asymmetry is deliberate. An
- * endpoint's terminator is an artifact of *where the because-split fell*: the
- * same proposition carries one as a reason and not as a conclusion, which is
- * precisely the accident that forks identity. A whole-segment claim's
- * terminator is its own sentence's and is present uniformly, so it never
- * forks two whole-segment claims against each other. It does still fork a
- * whole-segment claim from an endpoint claim of the same proposition
- * ("Travel costs increased." as its own utterance vs "... because travel
- * costs increased") — a real residual, left open deliberately rather than
- * fixed here, because stripping it changes the canonical key of every plain
- * claim in the demo and belongs with `claimKey`'s own canonicalization rule
- * (2aw.F3-D1), not with this extractor's split. Filed as its own item
- * (computenet-lv25).
+ * The strip is applied here to the ENDPOINT claims only, not to the
+ * whole-segment claim a non-"because" segment yields, and that asymmetry is
+ * deliberate. An endpoint's terminator is an artifact of *where the
+ * because-split fell*, and this extractor strips it from the text it EMITS so
+ * that display and key agree on the map. A whole-segment claim's terminator is
+ * its own sentence's, and the reader should see it, so this extractor leaves
+ * it alone.
+ *
+ * It nonetheless forked identity — a whole-segment claim against an endpoint
+ * claim of the same proposition ("Travel costs increased." as its own
+ * utterance vs "... because travel costs increased"). computenet-lv25 closed
+ * that residual in [civictech.dialogue.mint.claimKey] rather than here,
+ * because it is a rule about the KEY and not about the displayed text: see
+ * that function's "Trailing terminators" KDoc for the decision and its
+ * reasoning. The consequence for this extractor is that the strip above is now
+ * about display alone — `claimKey` would fold those endpoints regardless — and
+ * the two terminator classes must stay in step: `[.…!]` stripped, `?`
+ * preserved, in both places.
  */
 object RuleExtractor : Extractor {
 
