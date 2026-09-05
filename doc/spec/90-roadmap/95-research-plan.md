@@ -239,6 +239,11 @@ default; measure how often it hurts.
 **Actions**: run the E3.5 harness under join/churn seeds with (3); count frozen-
 stability windows; prove or refute (1)'s completeness claim on the
 `SimulationController` before considering (2).
+**Spec**: 40/42 §Delivered watermarks and causal stability — [42-WM-05]
+(min-over-members stability), [42-WM-07] (one membership snapshot per read) and
+[42-WM-08] (departure: closed, suspended, or frozen) are all written against
+this entry's open question and adopt direction (3); the R1 failover interplay
+named above is the same boundary read from the leader side.
 
 ## R14 — Watermark columns across emission epochs (96 §E3 residual; G-42 corner)
 
@@ -253,6 +258,10 @@ itself is causally stable — the substrate eating its own dog food. (2) fold wi
 R10's delta-interval bookkeeping.
 **Actions**: extend the E3.5 harness with RESTART/re-baseline seeds; assert whether
 (1) closes every straggler window it can generate.
+**Spec**: 40/42 §Delivered watermarks and causal stability, §Open interactions —
+the superseded-column rule is recorded there as **unpinned** (no `[42-WM-nn]` id
+is minted for it), with the reasoning and the shipped freeze in
+`concord/corpus/DISPUTES.md` entry `42-WM-R14`.
 
 ## R15 — Waterline liveness under idle sources (96 §E4 residual; cross-links R13)
 
