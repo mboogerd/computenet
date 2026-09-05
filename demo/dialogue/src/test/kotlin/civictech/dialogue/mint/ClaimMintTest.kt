@@ -177,6 +177,56 @@ class ClaimMintTest {
     }
 
     // ------------------------------------------------------------------
+    // computenet-2qkn — RuleExtractor's and claimKey's trailing-terminator
+    // classes are pinned to each other, not just held in step by KDoc prose
+    // ------------------------------------------------------------------
+
+    /**
+     * `RuleExtractor.trailingTerminator` and `civictech.dialogue.mint`'s own
+     * `trailingTerminator` are two independent `Regex` vals with identical
+     * source text, kept in sync only by KDoc prose until now (computenet-2qkn,
+     * filed reviewing computenet-lv25). The asymmetry is deliberate, per both
+     * KDocs: if [claimKey]'s class is WIDER than the extractor's, only the
+     * KEY changes — the displayed text is untouched, so it is harmless. If
+     * the EXTRACTOR's class is wider than [claimKey]'s, the same proposition
+     * forks into two canonical claims again — the computenet-9bip /
+     * computenet-qoei / computenet-lv25 defect, for a fourth time.
+     *
+     * So this pin is deliberately directional, not a flat equality check: it
+     * asserts every terminator [RuleExtractor.withoutTrailingTerminator]
+     * strips is also stripped by [withoutTrailingTerminator] (this package's,
+     * behind [claimKey]), and says nothing about the reverse. A flat equality
+     * pin would also fail the moment `claimKey` alone grows a new key-only
+     * normalization — exactly the harmless direction the KDocs call out —
+     * which would make the pin a nuisance rather than a guard.
+     *
+     * The candidate set below deliberately includes characters neither class
+     * currently strips (`;`, `:`, `,`, `)`, `"`, `'`, `~`, `-`) alongside the
+     * three the classes currently agree on (`.`, `…`, `!`) and the one both
+     * deliberately preserve (`?`, computenet-qoei) — so a future change that
+     * adds a character to the extractor's class alone, without touching
+     * `claimKey`'s, is caught even though it names a character this test's
+     * author never anticipated.
+     */
+    @Test
+    fun `computenet-2qkn - every terminator RuleExtractor strips is also stripped by claimKey's canonicalization`() {
+        val candidates = listOf(".", "…", "!", "?", ";", ":", ",", ")", "\"", "'", "~", "-")
+        for (terminator in candidates) {
+            val text = "The budget is too high$terminator"
+            val strippedByExtractor = RuleExtractor.withoutTrailingTerminator(text) != text
+            if (!strippedByExtractor) continue
+            val strippedByClaimKey = withoutTrailingTerminator(text) != text
+            assertTrue(
+                strippedByClaimKey,
+                "RuleExtractor strips trailing '$terminator' as a segmenter artifact but claimKey's " +
+                    "canonicalization does not — the same proposition would fork into two canonical " +
+                    "claims again depending on where it lands relative to a \"because\" split " +
+                    "(the computenet-9bip/-qoei/-lv25 defect)",
+            )
+        }
+    }
+
+    // ------------------------------------------------------------------
     // BS-02 (canonical-claim half) — [AGO1-MINT-01]/[AGO1-MINT-02]
     // ------------------------------------------------------------------
 
