@@ -143,16 +143,23 @@ object RuleExtractor : Extractor {
      * and `!`. `?` is deliberately absent from this class (computenet-qoei):
      * an interrogative asserts something different from its declarative, so
      * it is content, not a segmenter artifact.
+     *
+     * `internal`, not `private` (computenet-2qkn): [ClaimMintTest] pins this
+     * class against [civictech.dialogue.mint.withoutTrailingTerminator] so
+     * the two cannot silently drift apart again — see that test for why the
+     * pin is directional rather than an equality check.
      */
-    private val trailingTerminator = Regex("[.…!]+$")
+    internal val trailingTerminator = Regex("[.…!]+$")
 
     /**
      * Drops the sentence-final terminator the segmenter left on [text]. A
      * text that is *nothing but* terminator punctuation is returned
      * unchanged rather than emptied, so this can never turn a non-blank
      * endpoint blank.
+     *
+     * `internal` for the same reason as [trailingTerminator] (computenet-2qkn).
      */
-    private fun withoutTrailingTerminator(text: String): String {
+    internal fun withoutTrailingTerminator(text: String): String {
         val trimmed = text.trim()
         val stripped = trimmed.replace(trailingTerminator, "").trim()
         return stripped.ifBlank { trimmed }

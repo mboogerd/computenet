@@ -69,14 +69,25 @@ fun claimKey(text: String): ClaimKey =
  * runs of them — kept in step with
  * `civictech.dialogue.extract.RuleExtractor.trailingTerminator`. `?` is
  * absent by decision, not oversight; see [claimKey]'s KDoc.
+ *
+ * `internal`, not `private` (computenet-2qkn): `ClaimMintTest` pins this
+ * class against `RuleExtractor.trailingTerminator` directionally — every
+ * terminator the extractor strips must also be stripped here, so the two
+ * cannot fork identity again the way computenet-9bip/-qoei/-lv25 each had to
+ * fix in turn. The reverse direction (this class stripping something the
+ * extractor does not) is deliberately left unpinned: it only changes
+ * canonicalization of the KEY, never the displayed text, so it is harmless
+ * by this seam's own division of labour — see [claimKey]'s KDoc.
  */
-private val trailingTerminator = Regex("[.…!]+$")
+internal val trailingTerminator = Regex("[.…!]+$")
 
 /**
  * Drops the sentence-final terminator from an already trimmed, whitespace-
  * collapsed [text]. A text that is *nothing but* terminator punctuation is
  * returned unchanged rather than emptied, so canonicalization can never
  * collapse every such claim onto one empty key.
+ *
+ * `internal` for the same reason as [trailingTerminator] (computenet-2qkn).
  */
-private fun withoutTrailingTerminator(text: String): String =
+internal fun withoutTrailingTerminator(text: String): String =
     text.replace(trailingTerminator, "").trim().ifBlank { text }
