@@ -19,8 +19,10 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import org.junit.jupiter.api.Timeout
 import java.io.File
 import java.io.StringReader
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -85,13 +87,23 @@ import kotlin.test.assertTrue
  * lever inside this file was one of its criteria, and computenet-4rof
  * consequently treated the symptom with a per-method
  * `@Timeout(value = 540, unit = TimeUnit.SECONDS)`. computenet-sh8z removed
- * the cost instead, at the journal seam, and with it that override: at 2.5 s
- * against the repo-wide 5-minute default
+ * the cost instead, at the journal seam, and with it that override: at the
+ * **local** 2.5 s figure above, against the repo-wide 5-minute default
  * (`junit.jupiter.execution.timeout.testable.method.default`,
- * `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts:442`) the margin is ~118x,
- * and a 540 s cap on a 2.5 s test would report a genuine wedge nine minutes
- * late. If a future ubuntu run shows this class back in the tens of seconds,
- * the thing to re-measure is the journal profile above, not the cap.
+ * `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts:442`), the margin looks like
+ * ~118x.
+ *
+ * **That comparison is the wrong one — computenet-hmcr.** sh8z's fix removed
+ * the per-append reopen, not the fsyncs: this test still makes ~72,193
+ * `FileDescriptor.sync()` calls (see BS-18 below), so its runtime is
+ * essentially linear in per-fsync latency and a macOS/APFS number is not the
+ * number a CI timeout should be sized against. On the green attempt of run
+ * 33888840373 (job 101080993741, 2026-09-04) BS-18 itself ran ~37.7 s, an
+ * ~8x margin against the 300 s default, not ~118x — full derivation on the
+ * method below, which carries its own `@Timeout` sized off that figure rather
+ * than this paragraph's local one. If a future ubuntu run shows this class
+ * back in the tens of seconds, the thing to re-measure is the journal profile
+ * above, not the cap.
  */
 class DialogueRuntimeTest {
 
@@ -356,10 +368,51 @@ class DialogueRuntimeTest {
     // BS-18 / [AGO1-DUR-01] + [AGO1-DUR-02]
     // ------------------------------------------------------------------
 
-    // No @Timeout override here: computenet-4rof needed one because this method
-    // cost ~270 s against a 5-minute default; computenet-sh8z took the cost out
-    // at the journal seam (see the class KDoc) and it is now ~2.5 s, so the
-    // repo-wide default guards it with the same ~100x margin as everything else.
+    // computenet-hmcr: this comment used to say the repo-wide 300 s default
+    // guards this method with "the same ~100x margin as everything else". That
+    // was wrong. computenet-sh8z's fix (see class KDoc) removed the per-append
+    // reopen, not the fsyncs: this test still makes ~72,193
+    // `FileDescriptor.sync()` calls, so its runtime is essentially linear in
+    // per-fsync latency, and the ~2.5 s local figure the "~100x" claim was
+    // computed from is a fast-local-SSD number, not a CI one.
+    //
+    // CI figure, re-derived from the raw job log rather than copied from the
+    // bead: run 33888840373, job 101080993741 (`build-test-fast`, attempt 2 —
+    // the green one), 2026-09-04. In that log, the previous DialogueRuntimeTest
+    // method in the same JVM fork ("AGO1-REPLAY-02 - replaying the transcript a
+    // second time...") reports PASSED at 15:41:38.8612594Z, and this method's
+    // own PASSED line prints at 15:42:16.5681074Z — a gap of 37.706848 s
+    // (~37.7 s). Against the 300 s repo-wide default that is an ~8x margin,
+    // not ~100x.
+    //
+    // Sharper evidence than that margin, from the FAILED attempt of the exact
+    // same run (job 101075238478, attempt 1 — the attempt computenet-k1by's
+    // investigation started from, before the re-run that produced the green
+    // attempt above): its `test-results-fast` artifact contains
+    // TEST-civictech.dialogue.DialogueRuntimeTest.xml recording this method
+    // itself failing with `java.util.concurrent.TimeoutException: ... timed
+    // out after 5 minutes`, reported time="341.907". Under the I/O contention
+    // that attempt actually hit (`:demo:beadsmirror:test`'s dolt-subprocess
+    // phase overlapping this test — see the bead), this exact method did not
+    // finish inside the 300 s default at all: a real, observed >=8x
+    // degradation that hit BS-18 directly in this exact run, not an inference
+    // from correlated tests.
+    //
+    // Bound: 600 s = ~15.9x the 37.7 s CI baseline (600 / 37.7). It survives
+    // the bead's independently-measured 3-6x degradation window from
+    // ReadyScheduleTest/ReadyDifferentialTest with room to spare (6x * 37.7 s
+    // = 226.2 s, well under 600 s), and it survives the ~8x degradation that
+    // actually hit this method above (8x * 37.7 s = 301.6 s, still ~2x under
+    // 600 s) — the harder case, since that one is a direct measurement on
+    // this method rather than a correlated proxy. It deliberately does not
+    // try to survive an unbounded degradation factor: the fix with real
+    // leverage is cutting the ~72,193 fsyncs themselves (a kernel
+    // durability/group-commit question, CP-C1, filed as its own item) or
+    // keeping this test off a lane that shares a disk with
+    // :demo:beadsmirror:test's dolt subprocess (a CI-topology change) — both
+    // out of scope for this bound, which only buys margin against the
+    // sensitivity those would remove.
+    @Timeout(value = 600, unit = TimeUnit.SECONDS)
     @Test
     fun `BS-18 AGO1-DUR-01 - a world reopened on the same journal dir after a crash rebuilds the same graph, bindings and admitted ledger, and reconciles to nothing`() {
         val dir = tempDir("dialogue-runtime-durability")
