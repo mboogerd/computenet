@@ -277,14 +277,23 @@ internal class DeadLetters(
      *   rather than a `Frozen`. A second arrival at the sanitizer is therefore
      *   invisible in that counter — the test's 0 asserts the sanitizer did not
      *   re-walk, not that a re-walk would have been counted.
-     * - **Capture first, `Proxy.discharge` second** — not pinned here; its
-     *   declining half is `Proxy.discharge`'s own already-consumed/already-
-     *   released branches (`ProxyDischargeReachTest`). Measured under review
-     *   2026-09-05 on this shape: sanitize delta 0, then the walk arriving
-     *   second books **2** (one per outer wrapper) and descends into neither,
-     *   leaving both inner handles dead and consumed once.
+     * - **Capture first, `Proxy.discharge` second** — pinned by
+     *   `LifecycleAndDeadLetterTest` since computenet-1ffh; its declining half
+     *   is `Proxy.discharge`'s own already-consumed/already-released branches
+     *   (`ProxyDischargeReachTest`). Measured 2026-09-05 on this shape:
+     *   sanitize delta 0, then the walk arriving second books **2** (one per
+     *   outer wrapper) and descends into neither, leaving both inner handles
+     *   dead and consumed once.
      *
-     * (computenet-c0gz.)
+     * Booking the sanitizer's own already-consumed arrivals on that counter, so
+     * the two orders agree, was considered under computenet-1ffh and rejected:
+     * capture legitimately runs after a correct single discharge of the same
+     * arguments (this host's contextless-`Effectful` refusal does exactly that),
+     * so the increment would fire where nothing was consumed twice. The
+     * exclusion and its consequence for a host asserting on the tripwire are
+     * recorded next to the number, in `Proxy.doubleDischarges`' KDoc.
+     *
+     * (computenet-c0gz, computenet-1ffh.)
      */
     private fun sanitizeForDeadLetter(hostedInvocation: HostedPortInvocation): HostedPortInvocation {
         val args = hostedInvocation.invocation.args
