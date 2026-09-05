@@ -1183,20 +1183,32 @@ open class ManagedHost(
      * 93 I-3 §4.6 naming the mechanism that makes it lose nothing — *"30/33 step
      * 2, whose phase-2 task sits below data priority"*.
      *
-     * Two phases, the same shape as [beginDrain] at host granularity:
+     * The one thing it adds to the previous suspend/despawn pair is the **drain
+     * barrier**: an awaited empty task on the drain band (priority 30 — BELOW
+     * data's 20, so no priority inversion), the same device [beginDrain] uses at
+     * host granularity. A priority-30 task cannot run while anything at 0/10/20
+     * is pending, so when the barrier returns every invocation the host had
+     * already accepted has been dispatched to its cell — spec 33 step 2,
+     * *"process (or park) everything already accepted"*. Only then does the
+     * teardown run: [HostManagementApi.suspend] closes the cell's intake (the
+     * cell-granularity analogue of [closeIntake]; there is no fail-fast per cell,
+     * so a later arrival parks rather than being refused), [beforeDespawn] fires
+     * the caller's final anti-entropy push — genuinely drain-gated now, reading
+     * state as of the drained intake rather than as of the call — and
+     * [HostManagementApi.despawn] tears the cell down.
      *
-     *  - **phase 1, management band (priority 0)**: [HostManagementApi.suspend]
-     *    closes this cell's intake at once. It is the cell-granularity analogue
-     *    of [closeIntake]: there is no fail-fast per cell, so an arrival from
-     *    here on parks instead of being refused.
-     *  - **phase 2, drain band (priority 30 — BELOW data's 20, so no priority
-     *    inversion)**: by the time this runs, every invocation the host had
-     *    already accepted for this cell has been dispatched — into the park
-     *    queue phase 1 installed. Replaying that queue into the cell is spec 33
-     *    step 2, *"process (or park) everything already accepted"*. Then
-     *    [beforeDespawn] (the caller's final anti-entropy push, which is
-     *    therefore genuinely drain-gated: it reads state as of the drained
-     *    intake, not as of the call), then [HostManagementApi.despawn].
+     * The teardown stays on the management band rather than riding the barrier's
+     * own task, and that is load-bearing: `spawn` is priority 0, so a *deferred*
+     * despawn is overtaken by a caller that evicts and immediately re-spawns the
+     * same ref, which fails as `Cell already spawned` (measured against
+     * `:testkit`'s `RejoinSubscriptionTest` / `ChurnMeshTest` while building
+     * this). Departure ordering is unchanged; only the barrier is new.
+     *
+     * The barrier **awaits**, like `spawn` and `lookup` on the same API, so the
+     * caller's own bookkeeping after `evict` still runs after the drain. A host
+     * under a saturating data stream could in principle hold the barrier off;
+     * unlike [beginDrain] there is no per-cell intake to close first, and that
+     * residual is the price of cell rather than host granularity.
      *
      * **What this fixed (computenet-078s).** `Replication.evict` used to enqueue
      * both `suspend` and `despawn` on the management band at priority 0, ahead of
@@ -1209,21 +1221,21 @@ open class ManagedHost(
      * `civictech.cell.replication.ChurnReconvergenceTest."a write issued one step
      * before a clean evict reaches the survivors"`.
      *
-     * The replay is delivered inline rather than re-enqueued (unlike
-     * [HostManagementApi.resume], which re-enqueues at data priority): a
-     * re-enqueue at 20 would sort *after* this priority-30 task has finished and
-     * so could not be sequenced before the despawn. Park order is preserved
-     * either way — [ParkQueue.drain] yields it.
      */
     internal fun drainCellThenDespawn(ref: CellRef, beforeDespawn: () -> Unit = {}) {
+        // Phase 1+2 barrier, drain band (priority 30). An empty task at 30 cannot
+        // run until nothing at 0/10/20 is pending, so when this returns every
+        // invocation this host had already accepted has been dispatched to its
+        // cell — spec 33 step 2, obtained by exactly the device [beginDrain] uses
+        // at host granularity, and the only thing this method adds.
+        enqueueAwaiting(30) { }
+        // Phase 3 — the teardown, on the management band exactly as before, so a
+        // caller that evicts and immediately re-spawns the same ref still sees
+        // the despawn first (a deferred despawn breaks depart-then-rejoin:
+        // `spawn` is priority 0 and would overtake it — "Cell already spawned").
         enqueue(0) { internalApi.suspend(ref) }
-        enqueue(30) {
-            // everything accepted before phase 1 has been dispatched by now, and
-            // parked; apply it before the teardown (spec 33 step 2)
-            suspendedCells.remove(ref)?.drain()?.forEach { deliver(it) }
-            beforeDespawn()
-            internalApi.despawn(ref)
-        }
+        beforeDespawn()
+        enqueue(0) { internalApi.despawn(ref) }
     }
 
     init {
