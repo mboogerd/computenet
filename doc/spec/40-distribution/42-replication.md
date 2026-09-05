@@ -439,9 +439,10 @@ be unsound in a different direction each time.
   `watermarks[id]?.suspend()`) instead of departing it. Closing
   would be a lie: the replica may still hold unique state, and its frozen row is
   the *correct* answer for as long as it is unreachable. A WAIT read still holds
-  on it; only a DEGRADE read drops it. `Replication.rebind` (anchor `heal (G-45)`)
-  and `supersedeLocalInstance` call `resume()`, and the post-resume catch-up
-  advances the row that froze while parked. `close`, `suspend` and `resume` are all
+  on it; only a DEGRADE read drops it. `Replication.linkOut` (anchor
+  `heal (G-45)`, reached from the `registry.onPublish` hook when a peer becomes
+  visible again) and `supersedeLocalInstance` call `resume()`, and the
+  post-resume catch-up advances the row that froze while parked. `close`, `suspend` and `resume` are all
   effective-only, so a repeated call is a fixpoint like every other lane.
 - **Unclean.** A crash without `evict`, or churn, leaves the row present and never
   closed, so the pointwise minimum of [42-WM-05] freezes at it. This is the decided
