@@ -1,0 +1,12 @@
+# computenet-a266: 5b's claim-derivation guidance gains the observed-versus-
+# fixed asymmetry, alongside the mechanism-versus-invariant one it already had.
+#
+# +30 for a shape measured twice — a claim authored from the DEFECT SITES, or
+# from the file an acceptance clause names, omits the file where the fix
+# belongs whenever the observation site is downstream of the state the fix
+# needs — plus the one-hop question that reaches it (which type already holds
+# that state?) and the two greps that answer it. Neither check-files-claim.sh
+# nor af9q's invariant grep can fire on this shape, which is why prose is the
+# only route: both times, the only thing that would have found it was reading
+# the two call sites before dispatching.
+work +30
