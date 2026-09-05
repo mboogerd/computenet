@@ -87,8 +87,15 @@ class CausalStabilityTest {
         val frontier = stability.stableFrontier(logicalId)
 
         // Structural half of KE3-20, stated as the mutation the suite must
-        // kill: a MAX would read {s→9, u→4}, and no open slot's own row is
-        // the answer either.
+        // kill, and no open slot's own row is the answer either.
+        //
+        // The `shouldNotBe` below is DOCUMENTATION of the MAX shape, not the
+        // discriminating assertion: on these rows a min→max mutation reads
+        // {s→9} and NOT {s→9, u→4}, because `u` stays absent either way (B
+        // has no `u` column, so `u` is bottom under MIN and MAX alike). The
+        // assertion that actually goes red under that mutation is the next
+        // line, `perSource[s] shouldBe 5L` (expected 5L, was 9L) — measured
+        // in the review of computenet-9sm.3.1.
         frontier.perSource shouldNotBe mapOf(s to 9L, u to 4L)
         frontier.perSource[s] shouldBe 5L
         frontier.perSource shouldNotBe exampleRows.getValue(a)
