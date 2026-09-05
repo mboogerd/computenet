@@ -21,7 +21,8 @@ guessing one here cost a reviewer 8 runs):
    ```bash
    gh pr checks <pr-url>                        # which check failed, and its run url
    gh run view <run-id> --log-failed -R mboogerd/computenet \
-     | grep -E 'FAILED|FAILURE| e: |\.(kt|java):[0-9]+\)' | head -40
+     | grep -E 'FAILED|FAILURE| e: |Caused by:|(Exception|Error):|\.(kt|java):[0-9]+\)' \\
+       | head -60
 
    # capturing the whole log: run FROM THE REPO, redirect OUT to the scratchpad
    gh run view <run-id> --log -R mboogerd/computenet > "$SCRATCH/<run-id>.log"
@@ -30,12 +31,11 @@ guessing one here cost a reviewer 8 runs):
    `at <class>.<method>(<File>:<line>)` lines. A red check whose log you have
    not read is unattributed, full stop.
 
-   The frame alternative is `\.(kt|java):[0-9]+\)`, not `^[[:space:]]*at `.
-   `gh run view` prefixes every line with `<job>\t<step>\t<timestamp> `, so an
-   anchored frame pattern matches **nothing** for the same reason `^e:` does —
-   measured 0 hits against a 1,232-line failed log — while a loose ` at ` also
-   takes Gradle's own ` at all()` lines. Requiring the `.kt:NNN)` shape took 0
-   false positives on that same log.
+   The frame alternative is `\.(kt|java):[0-9]+\)` — not `^[[:space:]]*at `,
+   which hits the prefix trap described below and matched **0 lines across 18
+   failed logs, 15 of them carrying frames**, and not a loose ` at `, which
+   also takes Gradle's own ` at all()` lines. The `.kt:NNN)` shape took 0 false
+   positives across the same 18.
 
    **The frame is what separates a failure in the test's SETUP from one in
    the behaviour under test**, and it is the half that ages out. computenet-ulgy
@@ -69,9 +69,17 @@ guessing one here cost a reviewer 8 runs):
    anchored `^e:` matches nothing at all (measured: 0 hits across 5 logs,
    19,201 lines, every one prefixed), while a bare `e:` matches 173 lines of
    `name:`/`overwrite:`/`DeprecationWarning:` noise on one run and pushes the
-   real `FAILED` lines past `head -40`. On a run with dozens of failures it is
-   the trailing `> Task … FAILED` / `BUILD FAILED` summary that `head` drops,
-   not the failing testcases.
+   real `FAILED` lines past the `head`. **The frame and exception
+   alternatives change that arithmetic**: `testLogging` runs
+   `TestExceptionFormat.FULL`, so each failing test contributes ~9 matched
+   lines rather than 1. Measured on synthesised logs built from real lines,
+   `head -40` began dropping the trailing `> Task … FAILED` / `BUILD FAILED`
+   summary at **5** failures and later testcases with it — which is why the
+   `head` above is 60, not 40. Past roughly six failures even that is short:
+   re-grep without the frame and exception alternatives to get the summary and
+   the full `FAILED` list, then grep the frames of the one test you are
+   attributing. On the 18 real failed logs sampled, the full pattern totalled
+   5-15 matches and dropped nothing.
 
    **`gh` resolves the repo from `cwd`, not from the output path.** Running
    this *from* the scratchpad — the right place to put a 6,000-line log —

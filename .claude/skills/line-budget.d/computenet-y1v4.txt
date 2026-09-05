@@ -3,7 +3,7 @@
 # BEAD for a full stack — so the agent attributing the check, at the moment it
 # writes the bead, was never told to capture a frame.
 #
-# +28. The grep gains a frame alternative (mechanical: it changes what an agent
+# +36. The grep gains frame and exception alternatives (mechanical: it changes what an agent
 # captures whether or not the prose is read), and the prose says what the frame
 # buys. computenet-ulgy is the measurement: filed with test name, message, run
 # id and a same-lane control, its "what a fix needs" prescribed making the
@@ -12,9 +12,25 @@
 # connect site means setup, an await means semantics.
 #
 # The pattern itself cost lines because the obvious one is wrong: `gh run view`
-# prefixes every line, so `^[[:space:]]*at ` matches NOTHING (measured 0 hits
-# on a 1,232-line failed log — this file's own `^e:` trap, one alternation
-# over), and a loose ` at ` takes Gradle's ` at all()` lines. `\.(kt|java):
-# [0-9]+\)` took 0 false positives on that log. Recording the measurement is
-# what stops the next editor from "simplifying" it back.
-work +28
+# prefixes every line, so `^[[:space:]]*at ` matches NOTHING — 0 lines across
+# 18 failed logs, 15 of which do carry frames (this file's own `^e:` trap, one
+# alternation over) — and a loose ` at ` takes Gradle's ` at all()` lines.
+# `\.(kt|java):[0-9]+\)` took 0 false positives across the same 18. Recording
+# the measurement is what stops the next editor from "simplifying" it back.
+#
+# +8 in the reviewer round, which sampled 18 real logs rather than the one the
+# first round used (that one turned out to carry no failure content at all, so
+# its "0 false positives" was vacuous). Two changes it forced:
+#
+#   - the head arithmetic. FULL exception format means ~9 matched lines per
+#     failing test, so `head -40` started dropping the trailing BUILD FAILED
+#     summary at FIVE failures — and later testcases with it, which the
+#     paragraph directly under the grep explicitly promises it does not. The
+#     head is now 60, with the fallback named for a run past ~6 failures. The
+#     change had invalidated a measured claim and left the number standing.
+#   - `Caused by:` and `(Exception|Error):`. The heading promises the assertion
+#     message and this file elsewhere promises the exception class, and the
+#     grep emitted neither. Costs +1 to +3 lines per log with one noise hit
+#     across 18, and on one sampled run it recovers verbatim the exception this
+#     bead was filed about.
+work +36
