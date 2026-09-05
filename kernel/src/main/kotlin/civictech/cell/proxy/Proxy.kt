@@ -182,8 +182,14 @@ object Proxy {
      * unless the exactly-once invariant broke, which is worse for a host asserting on it
      * than the gap being documented. What a host reading this number therefore does not
      * see: a payload consumed once elsewhere and then met again by dead-letter capture. It
-     * still sees every double arrival at this walk, which is the path every suppression,
-     * denial and drop route goes through.
+     * still sees every double arrival at this walk — the path the `Effectful` suppression,
+     * ADMIT-drop (`civictech.cell.port.InletPolicy`), route-refusal
+     * (`ManagedHost.internalHostRoutingApi.refuse`) and sink-less denial
+     * (`civictech.cell.dischargeRefusedArgs`) routes all discharge through. The refusal
+     * route that does **not** reach this walk for its top-level arguments is a hosted
+     * membrane's denial with a reporter attached
+     * (`civictech.cell.BoundaryDenialSink.deny`), whose one discharge site is the sanitizer
+     * itself: a second arrival there is invisible here for exactly the reason above.
      */
     val doubleDischarges: Long get() = doubleDischargeCount.get()
 
