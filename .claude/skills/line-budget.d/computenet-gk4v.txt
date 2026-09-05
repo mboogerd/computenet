@@ -6,7 +6,7 @@
 # gradle-evidence.md as counts + timestamps + --rerun, so a reviewer following
 # the pointer never learns the fact exists.
 #
-# +15 to add <system-out> to those two enumerations, with the "an empty
+# +20 to add <system-out> to those two enumerations, with the "an empty
 # console grep is not evidence" clause that is the whole point (+7), and the
 # reviewer round (+8): gradle-evidence.md's recipe was `grep -A3` on ONE named
 # TEST-<Class>.xml, which truncates the per-seed sweep output that filed this
@@ -15,4 +15,4 @@
 # was a false universal — :bench under -PbenchOnly turns it on, and
 # review-feature.md section 1 prescribes exactly that run 390 lines above the
 # claim. No new content otherwise — gradle-evidence.md is not restated.
-work +15
+work +20

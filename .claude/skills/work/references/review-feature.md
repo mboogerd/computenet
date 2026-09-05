@@ -428,7 +428,7 @@ XML counts + timestamp via `.claude/skills/work/scripts/junit-count.py`, the
 holds anything a test PRINTED. That last is the one reviewers reach for
 without knowing it exists: `testLogging.showStandardStreams` is off on this
 build — `:bench` under `-PbenchOnly` is the one exception, which is the very
-run §1 prescribes — so a `println` otherwise reaches the Gradle console
+run this file's preamble opens with — so a `println` otherwise reaches the Gradle console
 **never**, and an empty console grep is not evidence that the test printed
 nothing (computenet-gk4v).
 A cargo-touching task has a different standard — gradle-evidence.md
