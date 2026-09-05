@@ -87,29 +87,37 @@ The scripts do the fiddly parts — where a wrong flag or missed filter
 silently loses work. Prefer them to hand-rolling. After editing one, run its
 sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 
-| `.claude/skills/work/scripts/…` | Does |
+Each row is `<signature> — what it does`. `.claude/skills/work/scripts/usage-table.test.sh`
+checks the signatures against the scripts: `sibling-tests.sh` runs it whenever
+a script changes, and the remediate-friction lane runs it beside the rubric
+gate, so an edit to either side is covered. It checks that a row names nothing
+the script does not have — **not** that a row is complete: a signature is a
+summary, and the long-optioned scripts state their full usage in their own
+header.
+
+| `.claude/skills/work/scripts/…` | `<args>` — does |
 |---|---|
-| `sweep-stale-claims.sh` | Reopens this machine's task claims abandoned by a dead run (skips reviewed-and-waiting and skill-friction items) |
-| `check-files-claim.sh` | Warns when a bead's own text names a file its `metadata.files` claim omits |
-| `ready-in-epic.sh` | Ready work anywhere beneath an epic — `bd ready --parent` reaches one level |
-| `reclaim-worktrees.sh` | Removes worktrees whose bead is already closed — the join `sweep-merged-prs.sh` cannot make |
-| `sweep-merged-prs.sh` | Closes beads whose PR merged after their session ended; removes their worktrees |
-| `next-batch.py` | Next set of tasks safe to run in parallel — file-disjoint AND within machine capacity |
-| `ensure-worktree.sh` | Attaches a worktree on a branch, new or resumed, or fails loudly |
-| `epic-of.sh` | Resolves a bead's effective epic (`.parent` chain, else dotted prefix) |
-| `claim-epic.sh` | Claims or takes over an epic and pushes the acquisition (the claim-as-lock bracket) |
-| `feature-branch.sh` | Resolves a feature's branch + worktree, minting `-rN` when the old PR squash-merged |
-| `publish-beads.sh` | Publication push with rejection recovery; fails on a nonzero exit **or** a rejection in the output |
-| `create-ticket.sh` | THE create path for a ticket under a shared epic — unparented, then re-parented |
-| `file-friction.sh` | Files a friction item collision-free under the SDLC epic, open and unclaimed |
-| `resumable-epics.sh` | Epics holding a feature left `in_progress` — step 3 ranks these above priority |
-| `claim-item.sh` | `bd update <id> --claim` plus the session holder token, so a live sibling's claim is not swept as a crash leftover (`claim-epic.sh` does this for epics) |
+| `sweep-stale-claims.sh` | `[--hours N] [--dry-run]` — Reopens this machine's task claims abandoned by a dead run (skips reviewed-and-waiting and skill-friction items) |
+| `check-files-claim.sh` | `<bead-id>...` — Warns when a bead's own text names a file its `metadata.files` claim omits |
+| `ready-in-epic.sh` | `<epic-id> [--ids-only]` — Ready work anywhere beneath an epic — `bd ready --parent` reaches one level |
+| `reclaim-worktrees.sh` | `[--dry-run] [--min-age-minutes N]` — Removes worktrees whose bead is already closed — the join `sweep-merged-prs.sh` cannot make |
+| `sweep-merged-prs.sh` | `[--dry-run] [--limit N]` — Closes beads whose PR merged after their session ended; removes their worktrees |
+| `next-batch.py` | `<feature-id> [--actor NAME] [--siblings N]`, or `--capacity` alone — Next set of tasks safe to run in parallel — file-disjoint AND within machine capacity |
+| `ensure-worktree.sh` | `<path> <branch> [base-ref]` — Attaches a worktree on a branch, new or resumed, or fails loudly |
+| `epic-of.sh` | `<bead-id>` — Resolves a bead's effective epic (`.parent` chain, else dotted prefix) |
+| `claim-epic.sh` | `<epic-id>` — Claims or takes over an epic and pushes the acquisition (the claim-as-lock bracket) |
+| `feature-branch.sh` | `<feature-id>` — Resolves a feature's branch + worktree, minting `-rN` when the old PR squash-merged |
+| `publish-beads.sh` | `(no arguments)` — Publication push with rejection recovery; fails on a nonzero exit **or** a rejection in the output |
+| `create-ticket.sh` | `--type <bug\|feature\|task\|chore> --title "<one line>" (--parent <id> \| --top-level) [--desc-file F] [--accept-file F] [--priority N] [--label L]... [--metadata '<json>'] [--claim]` — THE create path for a ticket under a shared epic — unparented, then re-parented |
+| `file-friction.sh` | `--type bug\|feature --title T --desc D\|--desc-file F --accept A\|--accept-file F [--parent computenet-wpvy] [--priority N] [--skill-version <sha>]` — Files a friction item collision-free under the SDLC epic, open and unclaimed |
+| `resumable-epics.sh` | `(no arguments)` — Epics holding a feature left `in_progress` — step 3 ranks these above priority |
+| `claim-item.sh` | `<id>` — `bd update <id> --claim` plus the session holder token, so a live sibling's claim is not swept as a crash leftover (`claim-epic.sh` does this for epics) |
 | `bead.sh` | `<id> [-r] [jq-filter]` — projected `bd show`: the bead's own fields as one object, `dependencies` dropped (57KB -> 7KB); no `.[0]` unwrap. Output over 25KB is written to a file and the path printed |
-| `wait-checks.sh` | THE settle loop, sha-bound over `commits/<sha>/check-runs` (`gh pr checks` is the fallback) — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`NO-RUN`/`QUERY-FAILED` |
-| `verify-branch-sync.sh` | 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
-| `merge-task.sh` | 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
-| `session-holder.sh` | this session's unique holder token, and `--check <token>` → MINE/LIVE/DEAD/UNKNOWN/FOREIGN; what tells a live sibling from a crash leftover, which `assignee` cannot |
-| `junit-count.py` | JUnit XML accounting (counts + newest timestamp, both glob depths); refuses to report zero result files |
+| `wait-checks.sh` | `<pr-url> [max-rounds]` — THE settle loop, sha-bound over `commits/<sha>/check-runs` (`gh pr checks` is the fallback) — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`NO-RUN`/`QUERY-FAILED` |
+| `verify-branch-sync.sh` | `<worktree> <branch>` — 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
+| `merge-task.sh` | `[--dry-run] [--keep-open] <task-id> <feature-branch>` — 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
+| `session-holder.sh` | `[--check <token>]` — this session's unique holder token, and `--check <token>` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN; what tells a live sibling from a crash leftover, which `assignee` cannot |
+| `junit-count.py` | `<results-dir \| result-file.xml>...` — JUnit XML accounting (counts + newest timestamp, both glob depths); refuses to report zero result files |
 
 (`scripts/beads-nightly-sync.sh` is the **repo-root** catch-up job; no
 scheduler runs it — never assume a sync will happen on its own.)

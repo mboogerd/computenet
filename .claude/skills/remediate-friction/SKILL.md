@@ -263,6 +263,7 @@ constantly, which is how they drift from what a skill is expected to be
 
 ```bash
 ruby .claude/skills/remediate-friction/scripts/validate-skills.rb
+.claude/skills/work/scripts/usage-table.test.sh   # work/SKILL.md's script table
 ```
 
 It checks every skill under `.claude/skills/` against Anthropic's

@@ -14,7 +14,7 @@
 #
 # Coverage is resolved in two steps, because the two are not the same question:
 #   1. the NAME sibling — foo.sh -> foo.test.sh, foo.py -> foo.test.py.
-#   2. failing that, any *.test.* in the same scripts/ directory that MENTIONS
+#   2. AND any *.test.* in the same scripts/ directory that MENTIONS
 #      the script by basename. reachability.py and recurrence-audit.py have no
 #      name sibling and are both covered by feedback.test.sh; a strict name
 #      rule would call the lane's own tooling untested.
@@ -71,17 +71,23 @@ while IFS= read -r rel; do
   for ext in sh py; do
     [ -f "$dir/$stem.test.$ext" ] && suites="$suites$dir/$stem.test.$ext"$'\n'
   done
-  if [ -z "$suites" ]; then
+  # Both rules, not one-or-the-other. A cross-cutting suite (usage-table.test.sh
+  # checks SKILL.md's script table against every script) covers files that ALSO
+  # have a name sibling, and under a fallback it never ran for any of them —
+  # exactly the scripts whose table rows are most likely to be edited
+  # (computenet-nrv5).
+  {
     # A mention in a COMMENT is not coverage. `sweep-stale-claims.sh` is named
     # in a comment by two suites that never invoke it, and a bare `grep -l`
     # reported it covered — over-reporting coverage is the one way this
     # fallback can lie (computenet-hkjo). Strip comment lines before matching.
     for cand in "$dir"/*.test.*; do
       [ -f "$cand" ] || continue
+      case "$suites" in *"$cand"$'\n'*) continue ;; esac
       sed 's/[[:space:]]*#.*$//' "$cand" | grep -qF "$basefile" \
         && suites="$suites$cand"$'\n'
     done
-  fi
+  }
   if [ -z "$suites" ]; then
     echo "NO-TEST   $rel — no sibling suite and none mentions it"
     untested=$((untested + 1)); continue

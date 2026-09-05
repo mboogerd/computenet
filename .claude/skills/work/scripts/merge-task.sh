@@ -13,7 +13,7 @@
 # origin: a close is what tells every later session the work landed, so a
 # close on an undurable merge is the lie this ordering exists to prevent.
 #
-# Usage: merge-task.sh [--dry-run] <task-id> <feature-branch>
+# Usage: merge-task.sh [--dry-run] [--keep-open] <task-id> <feature-branch>
 #   --dry-run  run the gates and show the incoming --stat; mutate nothing
 # Each gate prints "GATE <name>: PASS" or aborts with "GATE <name>: FAIL — why".
 # Exit: 0 = merged, pushed, proven durable, closed (or --dry-run with gates
