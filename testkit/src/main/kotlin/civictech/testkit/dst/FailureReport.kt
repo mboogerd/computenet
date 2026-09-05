@@ -200,7 +200,11 @@ data class FailureReport(
         deadLetters.unexplained.forEach { appendLine("      ${it.render()}") }
         exclusives?.let { appendLine(field("exclusives", it.renderSummary())) }
         appendLine(field("artifact", artifact?.absolutePath ?: "(none written)"))
-        appendLine(field("replay", replay.commandLine))
+        // The command gets its own unpadded line, deliberately not run through field(): a
+        // command sharing a line with a padded "replay" label is not copy-pasteable, because
+        // selecting the line and pasting it runs "replay" as the program name (computenet-umx.5).
+        appendLine("  replay:")
+        appendLine("    " + replay.commandLine)
         replay.caveat?.let { appendLine("      # $it") }
     }.trimEnd()
 

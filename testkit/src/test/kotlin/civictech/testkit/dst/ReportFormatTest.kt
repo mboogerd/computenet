@@ -91,7 +91,7 @@ class ReportFormatTest {
         assertTrue("failing check   ${ReportFixtures.CHECK_MESSAGE}" in rendered, rendered)
         assertTrue("dead letters    0" in rendered, rendered)
         assertTrue("artifact        ${artifact.absolutePath}" in rendered, rendered)
-        assertTrue("replay          " in rendered, rendered)
+        assertTrue("replay:" in rendered, rendered)
     }
 
     /**
@@ -342,6 +342,59 @@ class ReportFormatTest {
         )
     }
 
+    /**
+     * computenet-umx.5: the replay command must be copy-pasteable straight out of the rendered
+     * report — not merely present on [ReplayCommand.commandLine], which
+     * [theRenderedReplayCommandActuallyReplaysTheArtifact_CHA1_51] above already executes
+     * without ever going through [FailureReport.render]. This test extracts the executable line
+     * from the **rendered text** itself and runs exactly that, so a regression that reunites the
+     * label and the command on one line fails here even though the other test stays green.
+     */
+    @Test
+    fun theReplayLineExtractedFromTheRenderedReportIsExecutableVerbatim_umx_5() {
+        val run = ReportFixtures.run(seed = 18)
+        val report = run.execute()
+        val artifact = DstArtifacts.write(
+            DstArtifact.of(run, report, suite = ReportFixtures.SUITE, checkId = ReportFixtures.CHECK_ID),
+            root,
+        )
+        val rendered = FailureReport.of(
+            report,
+            suite = ReportFixtures.SUITE,
+            artifact = artifact,
+            registrars = listOf(ReportFixtures::class.java.name),
+        ).render()
+
+        val commandLine = replayCommandLineFrom(rendered)
+        assertTrue(
+            commandLine.startsWith("\""),
+            "the line meant to be pasted must start with the executable, with no label token to " +
+                "strip first:\n$commandLine",
+        )
+
+        val process = ProcessBuilder("/bin/sh", "-c", commandLine).redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().readText()
+        val exit = process.waitFor()
+
+        assertEquals(0, exit, "the line extracted from the rendered report must replay verbatim. Output:\n$output")
+        assertTrue("REPLAYED" in output, output)
+    }
+
+    /**
+     * The `unavailable()` half of the same rendering: with no artifact, the line where the
+     * command would be must stay recognisably non-executable, so the test above's extraction
+     * logic cannot mistake it for a runnable command.
+     */
+    @Test
+    fun theUnavailableReplayLineIsNotMistakenForARunnableCommand_umx_5() {
+        val report = ReportFixtures.run(seed = 19).execute()
+        val rendered = FailureReport.of(report, suite = ReportFixtures.SUITE).render()
+
+        val commandLine = replayCommandLineFrom(rendered)
+        assertTrue(commandLine.startsWith("(no replay command:"), commandLine)
+        assertFalse(commandLine.startsWith("\""), "must not look like an executable path: $commandLine")
+    }
+
     // ------------------------------------------------------------------ [CHA1-52] dead letters
 
     /** Classification is by the record's structural fields, never by its description text. */
@@ -436,6 +489,18 @@ class ReportFormatTest {
         DeadLetter(hostRef, IllegalStateException(description), description)
 
     private fun undeliverable(description: String) = DeadLetter(hostRef, null, description)
+
+    /**
+     * The line a human would actually select and paste: the one immediately after the `replay:`
+     * header, with its own leading whitespace trimmed. Leading whitespace is not the defect —
+     * shells ignore it — the defect this task fixes is a leading *label token* sharing the line.
+     */
+    private fun replayCommandLineFrom(rendered: String): String =
+        rendered.lineSequence()
+            .dropWhile { it.trim() != "replay:" }
+            .drop(1)
+            .first()
+            .trim()
 
     companion object {
         private val hostRef = CellRef(java.util.UUID.randomUUID())
