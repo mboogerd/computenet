@@ -208,6 +208,29 @@ class TranscriptSource(
      *
      * No `SetOps` call is made here: loading changes what the driver *can*
      * admit, never what it *has* admitted.
+     *
+     * **The consequence, spelled out (computenet-7nmg).** If the loaded
+     * transcript gives an ALREADY-ADMITTED id longer text than the admitted
+     * copy carries, that extra text is never offered to extraction by any
+     * subsequent [step] or [replay]: the id is admitted, so [offer] would
+     * reject a re-offer as a [DuplicateUtteranceIdException], and the cursor
+     * has been seeked past its turn regardless. A status surface that
+     * re-segments the loaded text against the admitted ledger — which is
+     * exactly what `DialogueApp.refreshSnapshot` does — therefore shows the
+     * new segment as never-extracted (`SegmentStatus.Unknown`, i.e.
+     * `pending`) and the utterance folds to `pending`. **This is intended,
+     * not a defect**: it is what "loading is not a reset" means observably,
+     * and re-deriving it as a bug is the mistake computenet-7nmg was filed
+     * to stop.
+     *
+     * It is also **not permanent**. [reset] clears the admitted ledger AND
+     * the cursor, so `reset` followed by [step]/[replay] re-offers the id
+     * with the loaded text and the new segment extracts like any other —
+     * `DialogueApp` exposes both as documented `POST /transcript` actions
+     * (pinned by `DialogueAppTest`'s `computenet-7nmg` test). What the demo
+     * deliberately does NOT have is a finer re-offer primitive that recovers
+     * one utterance without discarding the rest of the transcript; the
+     * whole-transcript [reset] is the only route, by choice.
      */
     fun load(transcript: List<Utterance>) {
         this.transcript = transcript
