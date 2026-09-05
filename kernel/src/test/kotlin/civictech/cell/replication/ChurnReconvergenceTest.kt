@@ -127,44 +127,41 @@ class ChurnReconvergenceTest {
     }
 
     /**
-     * The boundary of `Replication.evict`'s final push-catch-up, measured rather than assumed
-     * (computenet-9c5t): a write issued **one controller step** before an `EVICT_CLEAN` does not
-     * reach the survivors, and a write issued a hundred steps before one does.
+     * `Replication.evict` is spec 33's drain applied at cell granularity (spec 42 §Eviction,
+     * `doc/spec/40-distribution/42-replication.md`: "intake closes (spec 33's drain, applied at
+     * cell instead of host granularity)"), so a write the host had **already accepted** when the
+     * eviction was called must be applied and handed off, not discarded — spec 33's drain
+     * protocol step 2 is "drain queue → process (or park) everything already accepted", and
+     * 93 I-3 §4.6 names the mechanism that makes it true: the drain's "phase-2 task sits below
+     * data priority" (spec 31 §priorities: management 0, data 20, drain completion 30).
      *
-     * ## Why this is a boundary and not a lost-write bug of the catch-up
+     * This test pins that at the tightest boundary the harness can express: a write issued **one
+     * controller step** before an `EVICT_CLEAN` reaches the survivors, exactly as a write issued
+     * a hundred steps before one does.
      *
-     * `evict`'s catch-up is documented best-effort, and it is easy to read the loss as the
-     * catch-up firing too early — `fireLinked` runs inline in `evict`'s own frame while
-     * `HostManagementApi.suspend`/`despawn` are queued, so the catch-up is *not* in fact
-     * drain-gated. That ordering wart is real. It is **not** what loses the element, and this
-     * test is what says so: the racing write is absent from the DEPARTING replica's own frozen
-     * fold, so it was never applied to peer1 at all and no gating of the catch-up could have
-     * carried it.
+     * ## What it used to pin, and why that flipped (computenet-078s)
      *
-     * The mechanism is the host's scheduling bands. A data send stages at send time and enqueues
-     * its dispatch at priority 20 (`ManagedHost.enqueueHostedInvocation`); a management call
-     * enqueues at priority 0 (`HostManagementApi`'s dispatch), and `HostScheduler.submit`'s
-     * contract is ascending priority, then FIFO. So `evict`'s queued `suspend` **preempts** every
-     * already-accepted-but-undispatched local write: `deliver` finds the cell's `ParkQueue`
-     * installed and parks it, and the queued `despawn` tears that queue down into dead letters
+     * Until computenet-078s this test asserted the *opposite* — the racing element absent from
+     * both the survivors' fold and peer1's own frozen fold — and its KDoc explained the loss as a
+     * scheduling-band boundary rather than a defect: `evict` enqueued `suspend` and `despawn` at
+     * management priority 0 while an accepted-but-undispatched data dispatch sits at 20, and
+     * `HostScheduler.submit` orders by ascending priority then FIFO, so `suspend` PREEMPTED the
+     * accepted write, `deliver` parked it, and `despawn` drained that queue into dead letters
      * (`ManagedHost.clearSupervision`, counted as `parkedDrainedOnTeardown`) — accounted for, but
-     * never applied to the cell. `evict` is therefore a gated *stop*, not a gated drain, for work accepted at the
-     * host intake but not yet applied to the cell.
-     *
-     * Making that a genuine drain is a host-granularity change to spec 33's drain, not a
-     * re-ordering of these three lines — filed as its own item rather than smuggled in here.
+     * never applied and never gossiped. That is the inverse of the ordering the spec's own
+     * no-loss argument rests on, so it was a divergence from decided spec text, not a boundary.
+     * `ManagedHost.drainCellThenDespawn` now supplies the missing phase-2 ordering.
      *
      * ## What this pins, so the claim above cannot rot
      *
-     *  - the racing element IS in the accepted-op ledger (it was issued while peer1 was a member,
-     *    which is what makes `BatchReference`'s permitted arm necessary);
-     *  - it is in neither the survivors' fold nor peer1's own frozen fold — dropped at peer1's
-     *    intake, not in transit;
-     *  - the control element, issued a hundred steps earlier, IS in the survivors' fold — so the
-     *    loss is the departure-boundary race and not a general failure to hand off.
+     *  - the racing element IS in the accepted-op ledger (it was issued while peer1 was a member);
+     *  - it IS in peer1's own frozen fold — accepted work is applied before the teardown, which is
+     *    the drain property, and the only thing that could carry it to a peer;
+     *  - it IS in the survivors' fold — so the handoff happens at the one-step boundary too;
+     *  - the control element, issued a hundred steps earlier, is in the survivors' fold as before.
      */
     @Test
-    fun `a write issued one step before a clean evict is dropped at the departing replica's own intake`() {
+    fun `a write issued one step before a clean evict reaches the survivors`() {
         val peers = listOf("peer0", "peer1", "peer2")
         val config = ChurnConfig(
             peerCount = 3..3,
@@ -222,14 +219,14 @@ class ChurnReconvergenceTest {
             "peer1-98" in survivorElements,
             "a write a hundred steps ahead of the departure IS handed off; survivors hold $survivorElements",
         )
-        assertFalse(
+        assertTrue(
             "peer1-99" in departedElements,
-            "the racing write is dropped at peer1's OWN intake — never applied locally, so no gating " +
-                "of evict's catch-up could carry it; peer1's frozen fold holds $departedElements",
+            "the racing write was ACCEPTED at peer1's intake before the evict, so evict's drain " +
+                "must apply it before teardown (spec 33 step 2); peer1's frozen fold holds $departedElements",
         )
-        assertFalse(
+        assertTrue(
             "peer1-99" in survivorElements,
-            "and it therefore never reaches the survivors; survivors hold $survivorElements",
+            "and it therefore reaches the survivors; survivors hold $survivorElements",
         )
     }
 }

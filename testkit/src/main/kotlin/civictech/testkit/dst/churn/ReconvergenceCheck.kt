@@ -6,6 +6,7 @@ import civictech.cell.data.delta.PnCounterDelta
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.verify.ReplicaConvergence
 import civictech.testkit.dst.CheckRegistry
+import civictech.testkit.dst.DepartureMode
 import civictech.testkit.dst.DstCheck
 import civictech.testkit.dst.DstWorld
 import java.util.WeakHashMap
@@ -152,13 +153,16 @@ object MeshConvergences {
  *
  * ## The two bounds, and when they are one equality
  *
- * See [BatchReference]: `required` is the live replicas, `permitted` adds every departed one —
- * whether a departing replica's last operations left with it is a race this harness does not
- * control, and the BS-1 sweep measured an orderly eviction losing an element accepted one step
- * earlier. (That loss is `Replication.evict`'s queued `suspend` preempting the write at the
- * departing replica's own intake, not its best-effort catch-up missing it — computenet-9c5t;
- * [BatchReference] carries the mechanism.) With nothing departed the two sets coincide and this
- * is a plain equality.
+ * See [BatchReference]: `required` is the live replicas **plus every cleanly evicted one**
+ * ([requiredPeers]), because a clean eviction drains and hands off what it had accepted; only an
+ * *unclean* departure — a crash, an unhealed partition loss — is merely `permitted`, and that is
+ * a genuine "may or may not", not a race the harness declines to judge. The arm used to permit
+ * orderly evictions too, on a measurement: the BS-1 sweep saw one lose an element accepted a
+ * single controller step earlier. That was a kernel defect (`Replication.evict`'s queued
+ * `suspend` preempting the write at the departing replica's own intake — computenet-9c5t
+ * measured it, computenet-078s fixed it; [BatchReference] carries the mechanism), not a property
+ * of orderly departure, and the arm follows the fix. With nothing departed the two sets coincide
+ * and this is a plain equality.
  *
  * ## Two boundaries a caller must know, stated here rather than only on the bead
  *
@@ -244,14 +248,39 @@ class ReconvergenceCheck internal constructor(
     }
 
     /**
-     * Which peers' accepted operations the survivors still owe: those still counted as members.
+     * Which peers' accepted operations the survivors still owe: those still counted as members,
+     * **and every replica that departed by an eviction the kernel actually carried out**.
      *
-     * A departed replica's last operations are in the *permitted* arm instead, orderly departure
-     * included — see [BatchReference] for the measurement behind that, and for which test asserts
-     * the stronger handoff claim where the harness controls the race.
+     * A clean eviction is spec 33's drain at cell granularity (spec 42 §Eviction), so everything
+     * the departing replica had accepted is applied and gossiped before it goes — there is no
+     * race for this harness to tolerate, and tolerating one would let a genuine handoff failure
+     * pass. That was not always true: until computenet-078s `Replication.evict` preempted an
+     * accepted-but-undispatched write with its own priority-0 `suspend`, so a clean departure
+     * could lose an operation and this arm had to permit it. [BatchReference] carries the
+     * mechanism and names the kernel test that pins the fix at the one-controller-step boundary.
+     *
+     * [departedCleanly] is the *kernel's* verdict, not the plan's: `lastEvictDespawned == true`
+     * means [civictech.cell.replication.Replication.evict] found a reachable peer and despawned.
+     * An eviction it **refused** (no reachable peer, so it suspended instead) leaves the peer a
+     * member with its fold intact and is covered by the `member` arm; a crash or an unhealed
+     * partition loss stays in the *permitted* arm, which is what that arm exists for — those
+     * departures make no handoff promise and never will.
      */
     private fun requiredPeers(peers: List<MeshPeer>): Set<String> =
-        peers.filter { it.member }.map { it.name }.toSet()
+        peers.filter { it.member || departedCleanly(it) }.map { it.name }.toSet()
+
+    /**
+     * Whether [peer]'s last departure was an eviction that despawned — the drain-and-hand-off
+     * path, either watermark variant ([DepartureMode.EVICT_NO_CLOSE] is the PN-0c control seam
+     * over the departed watermark row and changes nothing about the drain).
+     *
+     * Both fields are read, not just [MeshPeer.lastEvictDespawned]: that field records the last
+     * *eviction*, so a peer that was evicted, rejoined and then crashed still carries `true` from
+     * the earlier eviction. The same pairing guards [MeshPeer]'s own `refusedEviction`.
+     */
+    private fun departedCleanly(peer: MeshPeer): Boolean =
+        peer.lastEvictDespawned == true &&
+            (peer.lastDeparture == DepartureMode.EVICT_CLEAN || peer.lastDeparture == DepartureMode.EVICT_NO_CLOSE)
 
     private fun assertOneMembership(observers: List<MeshPeer>, dataId: java.util.UUID) {
         val byObserver = observers.associate { it.name to it.registry.replicasOf(dataId) }
