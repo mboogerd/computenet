@@ -383,51 +383,44 @@ class Replication(
      * heal; the next re-announce that grows `replicasOf` back above one
      * resumes it automatically ([linkOut]).
      *
-     * **Gated stop** otherwise, in three steps:
+     * **Gated drain+despawn** otherwise, in three steps — spec 42's
+     * *"intake closes (spec 33's drain, applied at cell instead of host
+     * granularity)"*, realized by
+     * [civictech.cell.host.ManagedHost.drainCellThenDespawn]:
      * [civictech.cell.host.HostManagementApi.suspend] closes this replica's own
-     * intake, a final state-as-delta catch-up re-fires at one reachable peer's
-     * existing link (the same M10.1 re-announce hook [maybeLink] uses), then
-     * despawn unpublishes the ref — surviving peers' linkers simply stop
-     * targeting a ref no longer in `replicasOf` on their next announcement, no
-     * ack protocol.
+     * intake on the management band; then, on the drain band (priority 30,
+     * BELOW data's 20, so every already-accepted invocation has been dispatched
+     * first — spec 31 §priorities, spec 33 step 2), the parked accepted work is
+     * applied to the cell, a final state-as-delta catch-up re-fires at one
+     * reachable peer's existing link (the same M10.1 re-announce hook
+     * [maybeLink] uses), and despawn unpublishes the ref — surviving peers'
+     * linkers simply stop targeting a ref no longer in `replicasOf` on their
+     * next announcement, no ack protocol.
      *
-     * **The catch-up is best-effort, and this is NOT spec 33's drain applied at
-     * cell granularity** (computenet-9c5t; this KDoc used to claim it was). Two
-     * separate things it does not do, in the order they bite:
+     * **This IS spec 33's drain at cell granularity, and used not to be**
+     * (computenet-078s; the boundary computenet-9c5t documented). Until that
+     * item, `suspend` and `despawn` were both enqueued at management priority 0
+     * — ahead of data's 20 — so `suspend` PREEMPTED a write the host had already
+     * accepted and journalled but not yet dispatched to the cell: `deliver` found
+     * the freshly installed `ParkQueue`, parked it, and `despawn` drained that
+     * queue into dead letters (one per parked invocation, reason
+     * `cell <ref> left the host while suspended`, counted in the host's
+     * `parkedDrainedOnTeardown` stat). Accounted for, never silently dropped —
+     * but never applied to the cell, so never gossiped and never reaching the
+     * survivors. That inverted the very ordering the spec's own no-loss argument
+     * rests on (93 I-3 §4.6: a connected replica *"drains its outbound delta
+     * queue before deactivation (30/33 step 2, whose phase-2 task sits below
+     * data priority)"*), which is why it was a defect and not a boundary.
+     * The phase-2 ordering also makes the catch-up genuinely drain-gated: it
+     * reads state as of the drained intake rather than as of the call.
      *
-     *  - **`suspend` PREEMPTS local work already accepted at the host intake.**
-     *    A data send stages at send time and enqueues its dispatch at priority
-     *    20 ([civictech.cell.host.ManagedHost.enqueueHostedInvocation]) while a
-     *    management call enqueues at priority 0, and
-     *    [civictech.cell.host.HostScheduler.submit]'s contract is ascending
-     *    priority then FIFO. So `suspend` runs *ahead* of an accepted-but-
-     *    undispatched write, `deliver` finds the freshly installed `ParkQueue`
-     *    and parks it, and `despawn` then tears that queue down: it is drained
-     *    into dead letters, one per parked invocation, reason
-     *    `cell <ref> left the host while suspended` and counted in the host's
-     *    `parkedDrainedOnTeardown` stat — accounted for, never silently
-     *    dropped, but never applied to the cell. Such a write is lost at THIS
-     *    replica as far as replicated state is concerned — never applied here, so no
-     *    handoff of any kind could carry it onward. Measured by
-     *    `ChurnReconvergenceTest."a write issued one step before a clean evict
-     *    is dropped at the departing replica's own intake"`, which also shows a
-     *    write a hundred controller steps earlier IS handed off.
-     *  - **The catch-up is not drain-gated either.** `suspend` and `despawn`
-     *    are queued; `fireLinked` runs inline in this frame, so the catch-up
-     *    reads state as of the *call*, not as of the drained intake. Harmless
-     *    today because the preemption above means there is no already-applied-
-     *    but-unread write for it to miss, but it is an ordering wart, not a
-     *    guarantee.
-     *
-     * What the catch-up therefore IS: anti-entropy for state this replica holds
-     * that one reachable peer may not have absorbed yet — idempotent either way.
-     * `[42-REPL-06]` asks only that survivors converge and that the departed
-     * replica's frozen stream not count as divergence; it does not promise the
-     * departing replica's last accepted operations are handed off, and this code
-     * does not provide that. `civictech.testkit.dst.churn.BatchReference` encodes
-     * exactly that boundary (a cleanly-departed replica sits in its *permitted*
-     * arm, not its required one). Turning the stop into a genuine drain is a
-     * spec-33 change at host granularity, not a re-ordering of these three lines.
+     * What the catch-up IS: anti-entropy for state this replica holds that one
+     * reachable peer may not have absorbed yet — idempotent either way.
+     * `[42-REPL-06]` asks that survivors converge and that the departed
+     * replica's frozen stream not count as divergence; the drain adds that the
+     * departing replica's *accepted* operations are applied before it goes, so
+     * they gossip like any other. Pinned by `ChurnReconvergenceTest."a write
+     * issued one step before a clean evict reaches the survivors"`.
      *
      * Returns `true` if the replica despawned, `false` if it suspended
      * instead (no reachable peer).
@@ -457,17 +450,22 @@ class Replication(
             }
             return false
         }
-        host.managementInlet.call.suspend(cell.ref)
-        // Final push-catch-up to one reachable peer: best-effort anti-entropy,
-        // idempotent either way. Deliberately NOT drain-gated — it fires inline
-        // while `suspend`/`despawn` are queued — and deliberately not a handoff
-        // of this replica's last accepted writes. See the KDoc's "gated stop"
-        // section (computenet-9c5t) before reading an ordering guarantee here.
-        linked.entries.firstOrNull { it.key.first == cell.ref }?.let { (_, linkedPair) ->
-            @Suppress("UNCHECKED_CAST")
-            (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(linkedPair.second)
+        // Gated DRAIN+despawn (spec 42 §Eviction; spec 33 §The drain protocol
+        // step 2; 93 I-3 §4.6). The link to catch up on is captured HERE, in the
+        // caller's frame, because the local bookkeeping below drops `linked`
+        // synchronously while the drain runs on the host's scheduler thread.
+        val catchUpTarget = linked.entries.firstOrNull { it.key.first == cell.ref }?.value?.second
+        host.drainCellThenDespawn(cell.ref) {
+            // Final push-catch-up to one reachable peer: anti-entropy for state
+            // this replica holds that the peer may not have absorbed, idempotent
+            // either way. It now runs in the drain's phase 2, so it reads state
+            // as of the *drained* intake — including the writes this eviction
+            // just flushed (computenet-078s closed that ordering wart).
+            catchUpTarget?.let { link ->
+                @Suppress("UNCHECKED_CAST")
+                (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(link)
+            }
         }
-        host.managementInlet.call.despawn(cell.ref)
         localReplicas[cell.ref.id]?.remove(cell)
         // clean-departure watermark close: only once the last local replica of
         // this id leaves (the companion carries this peer's single row).

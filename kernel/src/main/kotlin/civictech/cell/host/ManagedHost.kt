@@ -1161,8 +1161,73 @@ open class ManagedHost(
 
     inline fun <reified T : Any> lookup(ref: CellRef): T? = lookup(ref, T::class.java)
 
+    /**
+     * The host's own [HostManagementApi] implementation — the same object the
+     * [managementInlet] proxy dispatches into, held as a field (rather than a
+     * local of [init]) so a host-internal caller that must choose the scheduler
+     * band for itself can invoke it directly. [drainCellThenDespawn] is the one
+     * such caller: the management proxy always enqueues at priority 0, which is
+     * exactly the ordering it has to avoid.
+     *
+     * Every call through this field runs it **on the scheduler thread**, inside
+     * an [enqueue]d task, exactly as the proxy path does; it is not a bypass of
+     * the queue, only of the band choice.
+     */
+    private lateinit var internalApi: HostManagementApi
+
+    /**
+     * Spec 33's drain protocol (`33 §The drain protocol` steps 1–3) applied at
+     * **cell** granularity, then despawn — which is what spec 42 defines an
+     * eviction to be: *"intake closes (spec 33's drain, applied at cell instead
+     * of host granularity)"* (`40/42 §Eviction is a gated drain+despawn`), with
+     * 93 I-3 §4.6 naming the mechanism that makes it lose nothing — *"30/33 step
+     * 2, whose phase-2 task sits below data priority"*.
+     *
+     * Two phases, the same shape as [beginDrain] at host granularity:
+     *
+     *  - **phase 1, management band (priority 0)**: [HostManagementApi.suspend]
+     *    closes this cell's intake at once. It is the cell-granularity analogue
+     *    of [closeIntake]: there is no fail-fast per cell, so an arrival from
+     *    here on parks instead of being refused.
+     *  - **phase 2, drain band (priority 30 — BELOW data's 20, so no priority
+     *    inversion)**: by the time this runs, every invocation the host had
+     *    already accepted for this cell has been dispatched — into the park
+     *    queue phase 1 installed. Replaying that queue into the cell is spec 33
+     *    step 2, *"process (or park) everything already accepted"*. Then
+     *    [beforeDespawn] (the caller's final anti-entropy push, which is
+     *    therefore genuinely drain-gated: it reads state as of the drained
+     *    intake, not as of the call), then [HostManagementApi.despawn].
+     *
+     * **What this fixed (computenet-078s).** `Replication.evict` used to enqueue
+     * both `suspend` and `despawn` on the management band at priority 0, ahead of
+     * data's 20. So `suspend` PREEMPTED a write the host had already accepted and
+     * journalled but not yet dispatched, `deliver` parked it, and `despawn`'s
+     * [clearSupervision] drained that queue into dead letters — accounted as
+     * `parkedDrainedOnTeardown`, never silently dropped, but never applied to the
+     * cell and so never gossiped to the surviving replicas either. That is the
+     * inverse of the ordering the spec's own no-loss argument rests on. Pinned by
+     * `civictech.cell.replication.ChurnReconvergenceTest."a write issued one step
+     * before a clean evict reaches the survivors"`.
+     *
+     * The replay is delivered inline rather than re-enqueued (unlike
+     * [HostManagementApi.resume], which re-enqueues at data priority): a
+     * re-enqueue at 20 would sort *after* this priority-30 task has finished and
+     * so could not be sequenced before the despawn. Park order is preserved
+     * either way — [ParkQueue.drain] yields it.
+     */
+    internal fun drainCellThenDespawn(ref: CellRef, beforeDespawn: () -> Unit = {}) {
+        enqueue(0) { internalApi.suspend(ref) }
+        enqueue(30) {
+            // everything accepted before phase 1 has been dispatched by now, and
+            // parked; apply it before the teardown (spec 33 step 2)
+            suspendedCells.remove(ref)?.drain()?.forEach { deliver(it) }
+            beforeDespawn()
+            internalApi.despawn(ref)
+        }
+    }
+
     init {
-        val internalApi = object : HostManagementApi {
+        internalApi = object : HostManagementApi {
             override fun spawn(cell: Cell): CellRef {
                 require(!cells.containsKey(cell.ref)) { "Cell already spawned: ${cell.ref}" }
                 // quota walks every ancestor (G-28): a sandboxed subtree cannot
