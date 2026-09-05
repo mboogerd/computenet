@@ -168,7 +168,9 @@ class B13CrossLoaderWireIdentityTest {
             //    loudly, not silently dropped or half-decoded.
             // ================================================================
             contributedByA.forEach(WireCodec::withdraw)
-            shouldThrow<SerializationException> { WireCodec.decode(bytes) }
+            withClue("ARM-1 (loud failure): a codec with no contribution live accepted a module type's bytes") {
+                shouldThrow<SerializationException> { WireCodec.decode(bytes) }
+            }
 
             // ================================================================
             // 2. The second endpoint contributes independently, from its OWN
@@ -222,7 +224,9 @@ class B13CrossLoaderWireIdentityTest {
             //    UNENCODABLE. The codec's polymorphic registry is keyed by the
             //    runtime Class, and classA is not in it.
             // ================================================================
-            shouldThrow<SerializationException> { WireCodec.encode(invocationOf(valueA)) }
+            withClue("ARM-4 (converse): endpoint A's Class was encodable under endpoint B's contribution alone") {
+                shouldThrow<SerializationException> { WireCodec.encode(invocationOf(valueA)) }
+            }
 
             // Sanity: A's and B's values are not merely unequal by accident —
             // they differ only in the loader that defined their class.
