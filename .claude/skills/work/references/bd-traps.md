@@ -148,9 +148,10 @@ SKILL.md and the other references cite this file as "`bd` traps".
   that itself: it writes the projected bead to `$SCRATCH/bead-<id>.json` and
   prints that path instead of the body, so a `Read` call pages it and
   nothing is silently missing. Paging it back through Bash does not work —
-  the harness re-persists a large Bash output too. A caller that must pipe
-  the whole object takes a field filter (never spills) or raises
-  `BEAD_SPILL_BYTES`.
+  the harness re-persists a large Bash output too. A caller that PIPES
+  `bead.sh` into another command raises `BEAD_SPILL_BYTES`: a scalar filter
+  (`-r '.status'`) never spills, but `-r '.description'` is
+  description-sized and does.
 - **`bd comment` executes backticks in its free text and reports success.**
   Backticks inside a double-quoted shell argument are command substitution,
   so the word vanishes from the stored comment while `bd` prints "Comment

@@ -40,21 +40,36 @@ echo "case 1: a small bead prints inline, no file written"
 out=$(BODY_CHARS=100 bash "$SCRIPT" known 2>&1); rc=$?
 [ $rc -eq 0 ] && ok "exit 0" || bad "exit $rc -- $out"
 grep -q '"id": "known"' <<<"$out" && ok "the bead itself is on stdout" || bad "no bead -- $out"
-[ -e "$ROOT/bead-known.json" ] && bad "spilled a small bead" || ok "no file written"
+[ -z "$(ls "$ROOT"/bead-known.* 2>/dev/null)" ] && ok "no file written" || bad "spilled a small bead"
 
 echo "case 2: a bead over the cap spills to a file and says so"
 out=$(BODY_CHARS=40000 bash "$SCRIPT" known 2>&1); rc=$?
 [ $rc -eq 0 ] && ok "exit 0" || bad "exit $rc -- $out"
 grep -q 'exceeds one tool result' <<<"$out" && ok "names the reason" || bad "silent -- $out"
-[ -s "$ROOT/bead-known.json" ] && ok "wrote $ROOT/bead-known.json" || bad "no file"
-grep -q '"id": "known"' "$ROOT/bead-known.json" && ok "the file holds the projection" || bad "file is not the bead"
+spilled=$(grep -o "$ROOT/[^ ]*" <<<"$out")
+[ -s "$spilled" ] && ok "wrote $spilled" || bad "no file"
+grep -q '"id": "known"' "$spilled" && ok "the file holds the projection" || bad "file is not the bead"
 [ "$(wc -c <<<"$out")" -lt 500 ] && ok "stdout stayed small" || bad "printed the body anyway"
-rm -f "$ROOT/bead-known.json"
+rm -f "$ROOT"/bead-known.*
 
-echo "case 3: a field filter never spills, however big the bead"
+echo "case 3: a SCALAR field filter never spills, however big the bead"
 out=$(BODY_CHARS=40000 bash "$SCRIPT" known -r '.status' 2>&1); rc=$?
 [ $rc -eq 0 ] && ok "exit 0" || bad "exit $rc -- $out"
 [ "$out" = open ] && ok "the value, not a path" || bad "got: $out"
+
+echo "case 3b: a description-sized filter DOES spill — 'field filter' is not a"
+echo "         size guarantee, and a piping caller that believes it gets a path"
+out=$(BODY_CHARS=40000 bash "$SCRIPT" known -r '.description' 2>&1)
+grep -q 'exceeds one tool result' <<<"$out" && ok "spilled" || bad "printed 40KB inline -- ${out:0:80}"
+
+echo "case 3c: two spills of one bead do not collide on a filename"
+a=$(BODY_CHARS=40000 bash "$SCRIPT" known 2>&1 | grep -o "$ROOT/[^ ]*")
+b=$(BODY_CHARS=40000 bash "$SCRIPT" known 2>&1 | grep -o "$ROOT/[^ ]*")
+[ -n "$a" ] && [ "$a" != "$b" ] && ok "distinct paths" || bad "same path twice: $a / $b"
+
+echo "case 3d: an empty result stays empty, not a blank line"
+out=$(BODY_CHARS=100 bash "$SCRIPT" known -r '.nosuchfield // empty' 2>&1)
+[ -z "$out" ] && ok "no output" || bad "printed: '$out'"
 
 echo "case 4: BEAD_SPILL_BYTES moves the cap, so a caller can pipe"
 out=$(BODY_CHARS=40000 BEAD_SPILL_BYTES=999999 bash "$SCRIPT" known 2>&1)

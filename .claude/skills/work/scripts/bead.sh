@@ -28,9 +28,9 @@
 # string `null`. Read the exit code, not the text.
 #
 # Output over BEAD_SPILL_BYTES (default 25000) is written to a FILE and the
-# path printed instead — see the SPILL note below. So a caller that pipes this
-# into another command must either take a field filter (which never spills) or
-# set BEAD_SPILL_BYTES high enough to disable it.
+# path printed instead — see the SPILL note below. A caller that PIPES this
+# into another command sets BEAD_SPILL_BYTES high enough to disable it: a
+# scalar filter (`-r '.status'`) never spills, but `-r '.description'` will.
 set -uo pipefail
 
 id=${1:?usage: bead.sh <id> [-r] [jq-filter]}
@@ -61,13 +61,19 @@ rc=$?
 # before and after it and works from a partial spec (computenet-cjfd, and the
 # rram -> zwju -> o5oz chain before it). Above the cap this writes the output
 # to a file and prints the path instead: a Read call pages it, and nothing is
-# silently missing. Field filters (`-r '.status'`) are bytes and never spill.
+# silently missing. A SCALAR field filter (`.status`, `.parent`) is bytes and
+# never spills; `-r '.description'` is description-sized and does, so a caller
+# that pipes bead.sh into another command raises BEAD_SPILL_BYTES rather than
+# assuming a filter is small. The count is CHARACTERS, so a non-ASCII bead
+# spills a little later than its byte size suggests.
 if [ "${#out}" -gt "${BEAD_SPILL_BYTES:-25000}" ]; then
-  dir=${SCRATCH:-${TMPDIR:-/tmp}}
-  f="${dir%/}/bead-$id.json"
+  # mktemp, not a fixed name: two agents reading the same bead in a shared
+  # TMPDIR would otherwise race on one path, and a `-r` spill holds raw prose
+  # rather than JSON.
+  f=$(mktemp "${SCRATCH:-${TMPDIR:-/tmp}}/bead-$id.XXXXXX")
   printf '%s\n' "$out" > "$f"
-  echo "bead.sh: ${#out} bytes exceeds one tool result; wrote $f — read it with the Read tool (it will NOT fit in a single Bash output either)."
-else
+  echo "bead.sh: ${#out} characters exceeds one tool result; wrote $f — read it with the Read tool (it will NOT fit in a single Bash output either)."
+elif [ -n "$out" ]; then
   printf '%s\n' "$out"
 fi
 exit $rc

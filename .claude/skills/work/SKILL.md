@@ -1055,7 +1055,8 @@ shared-surface write you have to push the moment it exists (step 3).
 **Read the breakdown's report for a re-scope.** `epic.md` requires it to
 rewrite an epic's title, description and acceptance in place when the epic
 cites its own decided upstream finding, and to say so in as many words. If it
-did, re-read the epic (`bd show <epic>`) before step 5 — the acceptance every
+did, re-read the epic (`.claude/skills/work/scripts/bead.sh <epic>`, never a
+plain `bd show` — bd-traps.md) before step 5 — the acceptance every
 feature review traces back to is no longer the text you claimed
 (computenet-taug). No such statement means no re-scope; don't infer one.
 
