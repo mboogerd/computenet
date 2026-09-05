@@ -325,15 +325,20 @@ class BridgeIngressCell(
                 // `Peering.hostIngress` proxy (never called directly on the
                 // calling/socket thread), so the throw is caught by
                 // `ManagedHost.deliver`'s own invocation catch, exactly like
-                // any other cell fault. Under the default
-                // `SupervisionPolicy.PROPAGATE` that means: an unconditional
-                // stderr line, one `supervisionAccounting().deadLetters`
-                // increment, and one record on `ManagedHost.deadLetterOutlet`
-                // carrying this exception as its `cause` — never silently
-                // swallowed, and the connection itself is untouched (this
-                // ingress cell, and the socket underneath it, keep processing
-                // subsequent frames). Pinned end-to-end over a real
-                // `WsTransport` socket by
+                // any other cell fault. That catch calls `deadLetter(...)`
+                // BEFORE it consults `policies[cellRef] ?: PROPAGATE` — every
+                // supervision policy dead-letters (observability is not a
+                // policy, G-26), so this is unconditional on the policy, not
+                // a consequence of the default: an unconditional stderr line,
+                // one `supervisionAccounting().deadLetters` increment, and
+                // one record on `ManagedHost.deadLetterOutlet` carrying this
+                // exception as its `cause` — never silently swallowed, under
+                // RESTART or SUSPEND as much as under PROPAGATE. The default
+                // `SupervisionPolicy.PROPAGATE` additionally emits
+                // `Stall(DEAD_LETTERED)` downstream. The connection itself is
+                // untouched either way (this ingress cell, and the socket
+                // underneath it, keep processing subsequent frames). Pinned
+                // end-to-end over a real `WsTransport` socket by
                 // `civictech.wire.WsIngressDecodeFailureTest`.
                 val decodedFrame = WireCodec.decodeFrame(value)
                 val gate = announcementAdmission

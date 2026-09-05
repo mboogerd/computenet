@@ -235,10 +235,15 @@ class WsIngressDecodeFailureTest {
             //     bridge host, which hosts the BridgeIngressCell that ran
             //     WireCodec.decodeFrame) must move, and the outlet must have
             //     delivered a record whose cause is the SerializationException.
+            var deadLettersAfter = deadLettersBefore
             await("the malformed frame was dead-lettered on the server's bridge host") {
-                server.bridgeHost.supervisionAccounting().deadLetters > deadLettersBefore
+                deadLettersAfter = server.bridgeHost.supervisionAccounting().deadLetters
+                deadLettersAfter > deadLettersBefore
             }
-            server.bridgeHost.supervisionAccounting().deadLetters shouldBe deadLettersBefore + 1
+            // Assert on the value the poll itself observed, not a fresh read: the
+            // counter is live and a second read across the window between the
+            // await succeeding and this line could in principle have moved again.
+            deadLettersAfter shouldBe deadLettersBefore + 1
 
             val deadLetter = captured.get()
             checkNotNull(deadLetter) { "dead-letter outlet never emitted a record for the malformed frame" }
