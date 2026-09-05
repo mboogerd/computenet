@@ -335,7 +335,22 @@ acceptance and the surrounding skill text. The reviewer runs under
 prompt, along with the explicit foreground-timeout line every `work`
 dispatch carries (a bare Gradle or long command otherwise backgrounds at
 120s and the agent stalls). Ship per AGENTS.md's confidence rule — the
-reviewer certifies, you run `gh pr ready`.
+reviewer certifies, you run:
+
+```bash
+gh pr ready <n> && gh pr merge <n> --auto --squash
+```
+
+**Both, always.** `ready_for_review` arms auto-merge via
+`.github/workflows/auto-merge.yml`, but that job is `continue-on-error`, so a
+failure to arm is silent and nothing retries it — PR #676 sat green and was
+merged by hand with `autoMergeRequest` null (computenet-uot5). `--auto` is
+idempotent, so arming an already-armed PR costs nothing. Do **not** substitute
+a `gh pr view --json autoMergeRequest` check: the workflow has not run yet
+seconds after `gh pr ready`, so it reads `NOT-ARMED` on a PR that arms fine
+(#707: null at t=0, `enabledAt` 45s later). If a merge is still missing later,
+`work`'s `references/ship-feature.md` diagnoses it — a `skipped` auto-merge run
+needs a fresh event, never a re-run.
 
 On merge — which normally arrives while the NEXT item is already in flight,
 so this is "when it merges, do this", not a barrier the loop below waits at:

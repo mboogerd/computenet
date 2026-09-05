@@ -1,0 +1,10 @@
+# computenet-uot5: step 4 now arms auto-merge unconditionally
+# (`gh pr ready <n> && gh pr merge <n> --auto --squash`) rather than ending at
+# `gh pr ready`. The arming job is continue-on-error, so a failure is silent
+# and nothing retries it — PR #676 sat green and was merged by hand.
+#
+# +15 for the two-command form plus why a `gh pr view --json autoMergeRequest`
+# check is the wrong substitute: measured on PR #707, it reads NOT-ARMED at
+# t=0 on a PR that arms 45s later, so an agent acting on it hand-merges a PR
+# the workflow was about to take.
+remediate-friction +15
