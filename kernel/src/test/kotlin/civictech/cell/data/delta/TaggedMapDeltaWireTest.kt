@@ -12,9 +12,14 @@ import kotlin.random.nextLong
 /**
  * BS-18 (`[KE1-41]`, donated from KE1/`computenet-j2x` into WIR1/`computenet-ncz`
  * as task `computenet-jend`) — the POSITIVE wire property for [TaggedMapDelta]:
- * round-trip identity through [TaggedMapDeltaSerializer] (this file, above the
- * serializer — [TaggedMapWire]), and the compact source-dictionary encoding's
- * measured size win over a naive per-dot full-`UUID` encoding.
+ * round-trip identity through [TaggedMapDeltaSerializer], and the compact
+ * source-dictionary encoding's measured size win over a naive per-dot
+ * full-`UUID` encoding.
+ *
+ * Both cited types live in `kernel/src/main/kotlin/civictech/cell/data/delta/TaggedMapDelta.kt`
+ * — [TaggedMapWire] at `:261`, [TaggedMapDeltaSerializer] immediately below it
+ * at `:274` (re-verified at this task's base commit `1dbf8d45e`; the bead cited
+ * `:274` and it has not drifted).
  *
  * [TaggedMapDelta] is registered polymorphically beside `SetDelta`/`MapDelta`
  * in `civictech.cell.wire.WireCodec`'s `SerializersModule` — the
