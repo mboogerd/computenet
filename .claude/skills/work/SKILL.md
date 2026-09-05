@@ -1800,7 +1800,9 @@ verdict. (`parked` is only meaningful on an empty batch.)
 Claim, record, attach — **one write per Bash call, each with a ≥300s
 timeout**, never chained in one block: `bd` writes contend on the Dolt DB
 and a chain of them has blown the 120s default mid-sequence, leaving a
-claimed task with no recorded worktree (computenet-9r8):
+claimed task with no recorded worktree (computenet-9r8) — and, separately,
+the permission classifier has denied a bundled call outright, which the
+timeout reason does not predict (computenet-br1y; bd-traps.md):
 
 ```bash
 .claude/skills/work/scripts/claim-item.sh <task-id>   # two bd writes, but

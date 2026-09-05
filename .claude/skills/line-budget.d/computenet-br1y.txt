@@ -1,0 +1,23 @@
+# computenet-br1y: the PLACEMENT half of this bead's acceptance was already
+# satisfied — bd-traps.md, which dispatched agents read, already says "never
+# chain bd writes in one Bash block". What was missing is the SECOND reason:
+# that bullet gave only the Dolt/120s rationale, so a session that hits the
+# permission classifier instead reads the guidance as inapplicable and retries
+# the chain with a longer timeout.
+#
+# +12 for the classifier reason and, load-bearing, HOW THE TWO FAIL
+# DIFFERENTLY: a timeout leaves a partial write to reconcile, a denial leaves
+# nothing written. No new placement work — the classifier is already
+# documented in this same file for create-ticket.sh inside a subagent.
+#
+# The reviewer round is most of the cost: the claim had to carry its
+# measurement conditions (2026-09-02, three bd dep adds plus lint/list/comment,
+# split went through unchanged) and the word NOT UNIVERSAL, because the
+# create-ticket.sh bullet it cites says the orchestrator ran the same
+# invocation successfully twice and agent-execution.md calls such refusals
+# contextual. "A denial gets you nothing written" is likewise scoped to the
+# compound call, since claim-sync.md records a wrapper refused WHILE both
+# commands inside it ran. Plus a half-clause on SKILL.md 5b, whose in-flow copy
+# was otherwise left strictly weaker than the reference — the same divergence
+# this bead complains about, mirrored.
+work +12
