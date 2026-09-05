@@ -397,6 +397,33 @@ class Replication(
      * linkers simply stop targeting a ref no longer in `replicasOf` on their
      * next announcement, no ack protocol.
      *
+     * **This call blocks, and only from outside the host's own execution
+     * context.** [civictech.cell.host.ManagedHost.drainCellThenDespawn]'s
+     * first act is an awaited drain-band task, so `evict` itself blocks until
+     * that barrier returns — the same rule
+     * [civictech.cell.host.HostScheduler.await]'s KDoc states for
+     * `spawn`/`lookup`/`connect`: *"Only legal from outside the host's
+     * execution context ... host tasks never await."* Call it from a host
+     * task and the scheduler enforces the rule itself:
+     * `VirtualThreadScheduler`/`CoroutineScheduler`'s `await` throws *"await
+     * called from the host's own execution context (would deadlock)"*, and
+     * `SimulationController`'s throws *"simulation quiescent but awaited
+     * future incomplete."* This is a genuinely new precondition
+     * (computenet-078s): before it, both `suspend` and `despawn` took the
+     * management proxy's fire-and-forget `else` branch (`enqueue(0)`,
+     * `ManagedHost`'s `managementInlet.serve` dispatch) and `evict` never
+     * awaited anything.
+     *
+     * **The barrier is host-wide, not cell-scoped.** It is one more task on
+     * the same host-wide queue every other priority-0/10/20 task on this
+     * host drains through, so it cannot run while any of those are pending —
+     * `evict` blocks for the whole host's backlog, not just this cell's. A
+     * host under a saturating data stream can hold the barrier off for as
+     * long as the scheduler's await timeout (`future.get(5,
+     * TimeUnit.SECONDS)` in both `VirtualThreadScheduler` and
+     * `CoroutineScheduler`), at which point `evict` throws rather than
+     * completing.
+     *
      * **This IS spec 33's drain at cell granularity, and used not to be**
      * (computenet-078s; the boundary computenet-9c5t documented). Until that
      * item, `suspend` and `despawn` were both enqueued at management priority 0

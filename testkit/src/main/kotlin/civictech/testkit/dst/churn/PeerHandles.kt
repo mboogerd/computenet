@@ -276,10 +276,22 @@ class MeshPeer internal constructor(
 
     // ------------------------------------------------------------------- departure primitives
 
-    /** [DepartureMode.EVICT_CLEAN]. Returns [Replication.evict]'s own verdict. */
+    /**
+     * [DepartureMode.EVICT_CLEAN]. Returns [Replication.evict]'s own verdict.
+     *
+     * Blocks the calling thread on [Replication.evict]'s host-wide drain
+     * barrier — legal only from outside the host's own execution context,
+     * same as [Replication.evict] itself requires.
+     */
     fun evictClean(): Boolean = evict(closeDepartedRow = true)
 
-    /** [DepartureMode.EVICT_NO_CLOSE] — the PN-0c control seam. */
+    /**
+     * [DepartureMode.EVICT_NO_CLOSE] — the PN-0c control seam.
+     *
+     * Blocks the calling thread on [Replication.evict]'s host-wide drain
+     * barrier — legal only from outside the host's own execution context,
+     * same as [Replication.evict] itself requires.
+     */
     fun evictNoClose(): Boolean = evict(closeDepartedRow = false)
 
     private fun evict(closeDepartedRow: Boolean): Boolean {
