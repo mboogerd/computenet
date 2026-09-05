@@ -129,7 +129,17 @@ out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
 grep -q "delta names 'typoed'" <<<"$out" && ok "names the typo" || bad "wrong message -- $out"
 rm "$r/line-budget.d/computenet-typo.txt"
 
-echo "case 14: line-budget.d is not mistaken for a skill directory"
+echo "case 14: the effective budget is printed whenever a delta is in play"
+out=$(ruby "$SCRIPT" "$r" 2>&1)
+grep -q '5 base +100' <<<"$out" && ok "says base and delta, not just the total" || bad "silent drift -- $out"
+
+echo "case 15: README.txt in line-budget.d is documentation, not a delta"
+printf 'demo +100000\n' > "$r/line-budget.d/README.txt"
+out=$(ruby "$SCRIPT" "$r" 2>&1)
+grep -q '100100' <<<"$out" && bad "parsed the README as a delta -- $out" || ok "skipped"
+rm "$r/line-budget.d/README.txt"
+
+echo "case 16: line-budget.d is not mistaken for a skill directory"
 out=$(ruby "$SCRIPT" "$r" 2>&1)
 grep -q 'line-budget.d: FAIL directory has no SKILL.md' <<<"$out" \
   && bad "treated the data dir as a skill -- $out" || ok "quiet"

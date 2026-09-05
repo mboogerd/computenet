@@ -109,7 +109,9 @@ BASE_BUDGETS = File.exist?(BUDGET_FILE) ? File.readlines(BUDGET_FILE, encoding: 
 # NEW files merge cleanly and neither has to be recomputed. Fold them into the
 # base whenever one session holds the ledger alone.
 BUDGET_DIR = File.join(root, 'line-budget.d')
-DELTAS = Dir.glob(File.join(BUDGET_DIR, '*.txt')).each_with_object(Hash.new(0)) do |f, h|
+DELTAS = Dir.glob(File.join(BUDGET_DIR, '*.txt'))
+             .reject { |f| File.basename(f) == 'README.txt' }
+             .each_with_object(Hash.new(0)) do |f, h|
   File.readlines(f, encoding: 'UTF-8')
       .reject { |l| l.strip.empty? || l.lstrip.start_with?('#') }
       .each { |l| n, v = l.split; h[n] += v.to_i }
@@ -191,8 +193,10 @@ files.each do |f|
   # The RATCHET (line-budget.txt). The ideal above has warned for weeks and
   # been read past every time; this is the same number with teeth, set at each
   # skill's current size so nothing has to be restructured today. Growth is
-  # what it prices: over budget, remove as much as you added or raise the
-  # number in the diff, where it can be questioned.
+  # what it prices: over budget, remove as much as you added or add a delta
+  # file (line-budget.d/<bead-id>.txt), in the diff, where it can be
+  # questioned. Never edit the base number — see the DELTAS note above for why
+  # a shared ledger line serialises a whole lane.
   ref_lines = Dir.glob(File.join(File.dirname(f), 'references', '*.md'))
                  .sum { |r| File.readlines(r, encoding: 'UTF-8').length }
   total = body_lines + ref_lines
@@ -200,7 +204,11 @@ files.each do |f|
   if budget.nil?
     errs << "no line budget for '#{skill}' — add one to .claude/skills/line-budget.txt " \
             "(set it at the current #{total} so the skill starts even)"
-  elsif total > budget
+  elsif DELTAS[skill] != 0
+    warns << "budget #{budget} = #{BASE_BUDGETS[skill]} base #{format('%+d', DELTAS[skill])} " \
+             "in line-budget.d (fold them back when you hold the ledger alone)"
+  end
+  if !budget.nil? && total > budget
     errs << "is #{total} lines (SKILL.md body #{body_lines} + references " \
             "#{ref_lines}), over its #{budget} budget by #{total - budget}. " \
             'Remove as much as you added, or add ' \

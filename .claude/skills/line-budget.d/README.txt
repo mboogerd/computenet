@@ -13,3 +13,9 @@
 # session holds the ledger alone, and delete them here in the same commit.
 #
 # A delta naming a skill with no line-budget.txt entry FAILS the validator.
+# This README is skipped by the parser, so its comment lines cost nothing.
+#
+# MEASURE the delta, never round it up: the validator only errors ABOVE budget,
+# so an over-counted delta buys silent headroom for the next session's growth
+# and nothing catches it. Every OK line prints the effective budget and its
+# deltas, which is where the drift shows.

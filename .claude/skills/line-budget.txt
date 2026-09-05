@@ -9,12 +9,13 @@
 #
 # Nothing here demands a restructure. Each budget is set at the size the skill
 # ALREADY IS, so today's tree passes untouched. What changes is the price of
-# growth: a session that adds 40 lines must remove 40, or raise the number
-# below — one line, in the diff, where a reviewer and a human can see it and
-# ask what it bought. That is the question no mechanism currently asks.
+# growth: a session that adds 40 lines must remove 40, or add a delta file
+# (see RAISING A BUDGET below) — in the diff, where a reviewer and a human can
+# see it and ask what it bought. That is the question no mechanism currently
+# asks.
 #
-# Lower a number whenever a drain removes text. That is the ratchet: the budget
-# can fall silently and can only rise deliberately.
+# Write a NEGATIVE delta whenever a drain removes text. That is the ratchet:
+# the budget can fall silently and can only rise deliberately.
 #
 # Format: <skill-dir-name> <max-lines>
 # Counted as SKILL.md's body (frontmatter excluded) plus every references/*.md,
