@@ -144,12 +144,19 @@ object RuleExtractor : Extractor {
      * an interrogative asserts something different from its declarative, so
      * it is content, not a segmenter artifact.
      *
-     * `internal`, not `private` (computenet-2qkn): [ClaimMintTest] pins this
-     * class against [civictech.dialogue.mint.withoutTrailingTerminator] so
-     * the two cannot silently drift apart again — see that test for why the
-     * pin is directional rather than an equality check.
+     * `private` (computenet-8ojp, reverting computenet-2qkn's `internal`):
+     * [ClaimMintTest] pins this class against
+     * [civictech.dialogue.mint.claimKey] through the public surface —
+     * [extract] and `claimKey` — rather than by reaching in here directly.
+     * computenet-if9j settled this exact question a commit earlier for
+     * `DialogueApp.foldStatus`: `internal`-for-a-direct-unit-test is not
+     * justified once the behaviour is reachable publicly, and the reviewer
+     * that filed computenet-8ojp measured that the public-surface pin below
+     * is constructible and catches the same mutation this class's widening
+     * would introduce. See that test for why the pin is directional rather
+     * than an equality check.
      */
-    internal val trailingTerminator = Regex("[.…!]+$")
+    private val trailingTerminator = Regex("[.…!]+$")
 
     /**
      * Drops the sentence-final terminator the segmenter left on [text]. A
@@ -157,9 +164,9 @@ object RuleExtractor : Extractor {
      * unchanged rather than emptied, so this can never turn a non-blank
      * endpoint blank.
      *
-     * `internal` for the same reason as [trailingTerminator] (computenet-2qkn).
+     * `private` for the same reason as [trailingTerminator] (computenet-8ojp).
      */
-    internal fun withoutTrailingTerminator(text: String): String {
+    private fun withoutTrailingTerminator(text: String): String {
         val trimmed = text.trim()
         val stripped = trimmed.replace(trailingTerminator, "").trim()
         return stripped.ifBlank { trimmed }
