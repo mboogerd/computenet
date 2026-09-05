@@ -169,3 +169,43 @@ recovered-outlet wave identity, i.e. the `sourceId`/`counter` the single
 frontier is keyed on. Changing what the existing frontier is keyed on is in
 scope for it and is *not* a gate violation; adding a parallel structure that
 records "already acted" per inlet is.
+
+## KE3-D4 — the stability read is interest-blind, so PN-6 sharding freezes cross-slice sources
+
+Recorded by: `computenet-9sm.3.1` (feature `computenet-9sm.3`, epic
+`computenet-9sm`). Base commit: `ac146f7b2` (`main`).
+
+### What was decided
+
+Decision 9sm.3-D4: `civictech.cell.consistency.CausalStability` takes three
+injected reads (`watermarkOf`, `membersOf`, `watermarkRefOf`) and does **not**
+apply `interestOf`, unlike its sibling `ReplicaQuorum`, which takes four. The
+stability read is per logical id, not per key, so there is no key against
+which an `Interest` could be evaluated; carrying `interestOf` would leave a
+dead constructor parameter.
+
+### The limitation this leaves
+
+Under PN-6 sharding — an instance set whose members carry disjoint
+`Interest`s — a member never delivers waves outside its own slice, so its
+watermark row never gains a column for the sources belonging to other slices.
+`[42-WM-05]` reads an absent column as bottom, so **every cross-slice source
+is permanently bottom** and `stableFrontier` never advances for it. Stability
+therefore freezes for the whole logical id as soon as the instance set is
+sharded, even though each slice is individually making progress.
+
+This is the conservative direction — the read under-reports stability and
+never runs ahead of the true global frontier — so it is safe, and it is the
+same shape as the R14 supersession freeze recorded in
+`concord/corpus/DISPUTES.md` entry `42-WM-R14`: unbounded-but-correct.
+
+### Disposition
+
+Documented, not fixed. The KDoc on `CausalStability` states it at the site.
+An interest-scoped stability read — MIN taken per interest slice, or the
+covering-subset filter of `ReplicaQuorum.frontier` lifted to a key-less read —
+is a **design question**, not an implementation gap: it needs a decision about
+what "stable" means for an id whose replicas hold disjoint state, which no
+spec section in `doc/spec/40-distribution/42-replication.md` answers today.
+A consumer that needs stability under sharding should be filed against that
+design question rather than against this class.
