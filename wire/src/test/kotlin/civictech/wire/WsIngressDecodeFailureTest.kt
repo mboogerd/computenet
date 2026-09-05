@@ -245,6 +245,17 @@ class WsIngressDecodeFailureTest {
             // await succeeding and this line could in principle have moved again.
             deadLettersAfter shouldBe deadLettersBefore + 1
 
+            // The counter and the outlet move on different schedules:
+            // `DeadLetters.deadLetter` increments `count` synchronously, then
+            // hands the emission to `ManagedHost`'s own scheduler
+            // (`emit = { dl -> scheduler.submit(0) { deadLetterOutlet.call.propagate(dl) } }`),
+            // which queues it as a separate task rather than running it inline.
+            // The await above only proves the counter moved; the outlet delivery
+            // can still be pending when it does. Await the capture on its own
+            // schedule too, rather than reading it once right after.
+            await("the dead-letter outlet delivered a record for the malformed frame") {
+                captured.get() != null
+            }
             val deadLetter = captured.get()
             checkNotNull(deadLetter) { "dead-letter outlet never emitted a record for the malformed frame" }
             (deadLetter.cause is SerializationException) shouldBe true
