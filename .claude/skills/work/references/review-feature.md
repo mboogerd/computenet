@@ -424,11 +424,13 @@ files this diff adds or removes — not what imports them.
 **[gradle-evidence.md](gradle-evidence.md) is that proof standard**: the
 task-count line, the per-task state line read as an absence, the JUnit
 XML counts + timestamp via `.claude/skills/work/scripts/junit-count.py`, the
-`<system-out>` block that holds anything a test PRINTED, plus the `--rerun` and
-`--no-build-cache` semantics. That last is the one reviewers reach for without
-knowing it exists: `testLogging.showStandardStreams` is off on this build, so a
-`println` in a test reaches the Gradle console **never**, and an empty console
-grep is not evidence that the test printed nothing (computenet-gk4v).
+`--rerun` and `--no-build-cache` semantics, and the `<system-out>` block that
+holds anything a test PRINTED. That last is the one reviewers reach for
+without knowing it exists: `testLogging.showStandardStreams` is off on this
+build — `:bench` under `-PbenchOnly` is the one exception, which is the very
+run §1 prescribes — so a `println` otherwise reaches the Gradle console
+**never**, and an empty console grep is not evidence that the test printed
+nothing (computenet-gk4v).
 A cargo-touching task has a different standard — gradle-evidence.md
 § "Cargo is not Gradle".
 **Carry `--no-build-cache`, here, at the point of use.** A bare `--rerun` can
