@@ -1,0 +1,12 @@
+# computenet-gk4v: the fact was already in gradle-evidence.md:91-93 (landed
+# 297647611, before the bead was filed) — a println goes nowhere because
+# testLogging.showStandardStreams is off, and its output is in the XML's
+# <system-out>. What was missing was reachability: neither review-feature.md
+# nor review-task.md mentioned <system-out>, and both summarise
+# gradle-evidence.md as counts + timestamps + --rerun, so a reviewer following
+# the pointer never learns the fact exists.
+#
+# +7 to add <system-out> to those two enumerations, with the "an empty console
+# grep is not evidence" clause that is the whole point. No new content —
+# gradle-evidence.md is not restated.
+work +7

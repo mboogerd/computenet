@@ -422,9 +422,13 @@ a special case. More generally, before you pick the suites, ask what READS the
 files this diff adds or removes — not what imports them.
 
 **[gradle-evidence.md](gradle-evidence.md) is that proof standard**: the
-task-count line, the per-task state line read as an absence, and the JUnit
-XML counts + timestamp via `.claude/skills/work/scripts/junit-count.py`, plus the `--rerun` and
-`--no-build-cache` semantics.
+task-count line, the per-task state line read as an absence, the JUnit
+XML counts + timestamp via `.claude/skills/work/scripts/junit-count.py`, the
+`<system-out>` block that holds anything a test PRINTED, plus the `--rerun` and
+`--no-build-cache` semantics. That last is the one reviewers reach for without
+knowing it exists: `testLogging.showStandardStreams` is off on this build, so a
+`println` in a test reaches the Gradle console **never**, and an empty console
+grep is not evidence that the test printed nothing (computenet-gk4v).
 A cargo-touching task has a different standard — gradle-evidence.md
 § "Cargo is not Gradle".
 **Carry `--no-build-cache`, here, at the point of use.** A bare `--rerun` can
