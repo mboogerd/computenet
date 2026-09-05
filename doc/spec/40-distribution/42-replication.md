@@ -506,8 +506,11 @@ Closing it needs the notice to reach every replica as data — a fenced-source
 lattice on the gossip mesh, which does not exist (96 §E1 follow-on) — and the
 alternative of gating exclusion on the `ReBaseline` itself being causally
 stable (95 §R14 direction 1) presupposes the very stability read this section
-defines. Neither the set family (whose `applyReBaseline` forwards the notice
-downstream transitively) nor the map family closes the window on its own, and
+defines. Neither tag family closes the window on its own: the set family
+forwards the notice transparently to its own downstream — `cell.data.op.UnionSetCell`
+folds through `applyReBaseline` and re-emits on its outlet, one hop onward
+rather than a mesh-wide fence, and carries the over-retraction trade instead —
+while the map family does not forward the notice at all. And
 `cell.data.WatermarkCell` has no supersession vocabulary at all: its rows are
 grow-only in every lane and no column is ever removed.
 
