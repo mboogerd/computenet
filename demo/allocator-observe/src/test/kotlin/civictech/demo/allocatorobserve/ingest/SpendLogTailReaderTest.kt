@@ -32,9 +32,12 @@ class SpendLogTailReaderTest {
     }
 
     /** Polls a fresh reader over the same run dir, collecting what the consumer saw. */
-    private fun poll(store: SpendOffsetStore = OffsetCheckpoint(runDir)): TailBatch {
+    private fun poll(
+        store: SpendOffsetStore = OffsetCheckpoint(runDir),
+        chunkSize: Int = SpendLogTailReader.DEFAULT_CHUNK_SIZE,
+    ): TailBatch {
         var seen: TailBatch? = null
-        val returned = SpendLogTailReader(log, store).poll { seen = it }
+        val returned = SpendLogTailReader(log, store, chunkSize).poll { seen = it }
         // The value handed to the consumer and the value returned are the same
         // batch — a caller must not have to choose between them.
         seen shouldBe returned
@@ -185,6 +188,143 @@ class SpendLogTailReaderTest {
         // an empty head window must not read as a changed identity.
         grown.reason shouldBe TailReason.Resumed(0L)
         grown.lines shouldContainExactly listOf("one")
+    }
+
+    // ---- computenet-v5c7: the read is chunked, and the chunk size is a parameter ----
+    //
+    // The defect these cover is a whole-file read (TailReason.FirstStart or
+    // TailReason.ReBaselined) over a range that does not fit an Int. A 4 GiB
+    // fixture is not a unit test, so the CHUNK SIZE is the parameter that makes
+    // the multi-chunk arithmetic — the boundary carry, the offset accounting —
+    // reachable at a size a temp dir can hold. What these tests exercise is the
+    // same loop production runs; only the number of iterations differs.
+
+    /** `count` lines of the form `line-0000`, plus their newlines. Returns the lines. */
+    private fun manyLines(count: Int): List<String> {
+        val lines = (0 until count).map { "line-%04d".format(it) }
+        append(lines.joinToString("") { it + "\n" })
+        return lines
+    }
+
+    @Test
+    fun `a line whose bytes straddle a chunk boundary is delivered exactly once and intact`() {
+        // 7-byte chunks against 9-byte lines ("abcdefgh\n"): no line can begin
+        // and end inside one chunk, so EVERY line straddles a boundary.
+        append("abcdefgh\nijklmnop\nqrstuvwx\n")
+        val batch = poll(chunkSize = 7)
+        batch.reason shouldBe TailReason.FirstStart
+        batch.lines shouldContainExactly listOf("abcdefgh", "ijklmnop", "qrstuvwx")
+        batch.offset shouldBe 27L
+
+        // Exactly once: the straddling line is not re-emitted by a later poll.
+        poll(chunkSize = 7).lines.shouldBeEmpty()
+    }
+
+    @Test
+    fun `a chunk boundary landing exactly on a newline neither duplicates nor drops a line`() {
+        // 4-byte chunks against 4-byte lines ("abc\n"): every chunk ends exactly
+        // on a newline, so the carry is empty at every boundary.
+        append("abc\ndef\nghi\n")
+        val batch = poll(chunkSize = 4)
+        batch.lines shouldContainExactly listOf("abc", "def", "ghi")
+        batch.offset shouldBe 12L
+    }
+
+    @Test
+    fun `a line longer than one chunk is assembled across chunks and delivered intact`() {
+        // The carry, not the read buffer, is what has to grow here: a 200-byte
+        // line read through an 8-byte buffer spans 25 chunks.
+        val long = "x".repeat(200)
+        append("short\n" + long + "\nafter\n")
+        val batch = poll(chunkSize = 8)
+        batch.lines shouldContainExactly listOf("short", long, "after")
+        batch.offset shouldBe (6 + 201 + 6).toLong()
+    }
+
+    @Test
+    fun `the offset advances across a multi-chunk read without re-reading or skipping a byte`() {
+        // 500 lines of 10 bytes = 5000 bytes read through a 64-byte buffer:
+        // ~79 chunks in one poll, then a second poll over an append that itself
+        // spans several chunks. The union of the two batches must be the file
+        // exactly once, in order, and the offsets must chain.
+        val first = manyLines(500)
+        val batchA = poll(chunkSize = 64)
+        batchA.reason shouldBe TailReason.FirstStart
+        batchA.lines shouldContainExactly first
+        batchA.offset shouldBe 5000L
+
+        val second = (500 until 700).map { "line-%04d".format(it) }
+        append(second.joinToString("") { it + "\n" })
+        val batchB = poll(chunkSize = 64)
+        batchB.reason shouldBe TailReason.Resumed(5000L)
+        batchB.lines shouldContainExactly second
+        batchB.offset shouldBe 7000L
+
+        // Nothing re-read, nothing skipped: concatenating what the two polls
+        // delivered reconstructs the file byte-for-byte.
+        (batchA.lines + batchB.lines).joinToString("") { it + "\n" } shouldBe
+            Files.readString(log)
+
+        // And the log is now idle, not mid-prefix.
+        poll(chunkSize = 64).lines.shouldBeEmpty()
+    }
+
+    @Test
+    fun `a whole-file multi-chunk read converges the materialized set on the current content`() {
+        // Both whole-file reasons, since those are the only two that read a
+        // range large enough for the narrowing to have mattered.
+        val original = manyLines(300)
+        poll(chunkSize = 37).lines shouldContainExactly original
+
+        // Replace with LONGER, different content: a re-baseline re-reads the
+        // whole file across many chunks and must deliver all of it.
+        val replacement = (0 until 400).map { "fresh-%04d".format(it) }
+        Files.writeString(log, replacement.joinToString("") { it + "\n" })
+        val rebaselined = poll(chunkSize = 37)
+        rebaselined.reason.shouldBeInstanceOf<TailReason.ReBaselined>()
+        rebaselined.lines shouldContainExactly replacement
+        rebaselined.offset shouldBe 4400L
+
+        // The materialized set is exactly the file content, with nothing of the
+        // superseded log left in it.
+        rebaselined.lines.toSet() shouldBe replacement.toSet()
+        rebaselined.lines.any { it in original } shouldBe false
+    }
+
+    @Test
+    fun `a trailing partial line spanning the final chunks is withheld, then delivered once`() {
+        val head = manyLines(50) // 500 bytes
+        append("unterminated-tail-with-no-newline-yet")
+        val partial = poll(chunkSize = 16)
+        partial.lines shouldContainExactly head
+        partial.offset shouldBe 500L
+
+        append("-now-complete\n")
+        val completed = poll(chunkSize = 16)
+        completed.reason shouldBe TailReason.Resumed(500L)
+        completed.lines shouldContainExactly listOf("unterminated-tail-with-no-newline-yet-now-complete")
+        completed.offset shouldBe 551L
+        poll(chunkSize = 16).lines.shouldBeEmpty()
+    }
+
+    @Test
+    fun `a multi-byte character straddling a chunk boundary survives decoding`() {
+        // "€" is 3 UTF-8 bytes at offsets 1..3 and 7..9 of this 12-byte file.
+        // The chunk size has to actually SPLIT one: at 5 bytes the boundaries
+        // fall at 5 and 10, inside no character, and the test passes even if
+        // each chunk fragment is decoded separately. At 2 bytes every chunk
+        // boundary that matters lands mid-sequence, so the line is only
+        // recovered if the CARRY holds raw bytes and decoding happens once per
+        // complete line. Scanning for 0x0A bytewise is safe because a newline
+        // never occurs inside a multi-byte sequence — this pins that too.
+        append("a€b\nc€d\n")
+        poll(chunkSize = 2).lines shouldContainExactly listOf("a€b", "c€d")
+    }
+
+    @Test
+    fun `a non-positive chunk size is refused at construction`() {
+        assertThrows<IllegalArgumentException> { SpendLogTailReader(log, OffsetCheckpoint(runDir), 0) }
+        assertThrows<IllegalArgumentException> { SpendLogTailReader(log, OffsetCheckpoint(runDir), -1) }
     }
 
     /** Records read/write calls into a shared ordering log, delegating the real work. */

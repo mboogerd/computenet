@@ -1,5 +1,6 @@
 package civictech.demo.allocatorobserve.ingest
 
+import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
@@ -141,57 +142,70 @@ data class TailBatch(
  * ever read twice. The single exception is a re-baseline, where re-reading
  * from 0 is the whole point.
  *
- * ## Bounded by the size of ONE read, not of the log
+ * ## Bounded by the CHUNK, not by the range and not by the log
  *
- * [readCompleteLines] buffers the whole `[start, length)` range in memory in
- * one `ByteArray`, so a single poll's cost is the size of that range. For the
- * steady state — an append-only log polled regularly — the range is whatever
- * arrived since the last poll and this is nothing. The two polls that read the
- * *whole* file are the ones to size against: a [TailReason.FirstStart] with no
- * checkpoint, and every [TailReason.ReBaselined].
+ * [readCompleteLines] no longer buffers the whole `[start, length)` range at
+ * once. It reads the range through a reusable [chunkSize]-byte `ByteBuffer`,
+ * emitting each complete line as its terminating `'\n'` is scanned and
+ * carrying any trailing partial line across the chunk boundary, so the read
+ * buffer is a constant `chunkSize` bytes however large the range is. Nothing in
+ * the read path narrows a `Long` range to an `Int` any more: the only `Int` is
+ * the chunk size itself, which is an `Int` by construction.
  *
- * **Above 2 GiB the range is narrowed unsoundly, and past 4 GiB it fails
- * SILENTLY.** [readCompleteLines] sizes its buffer with
- * `(length - start).toInt()`, which is a low-32-bits truncation, so the three
- * regimes are (measured, not inferred):
+ * That removes the three regimes this class used to document and
+ * `computenet-v5c7` was filed for — a whole-file read (a
+ * [TailReason.FirstStart] with no checkpoint, or any
+ * [TailReason.ReBaselined]) of a range in `[2 GiB, 4 GiB)` raising
+ * `IllegalArgumentException` out of [poll], a range of exactly `4 GiB` reading
+ * zero bytes and reporting an empty batch at an unchanged offset, and a range
+ * above `4 GiB` delivering a *prefix* and advancing the checkpoint into it.
+ * None of the three is reachable now: the loop is driven by `Long` arithmetic
+ * against `length - start` and terminates only when the range is consumed or
+ * the channel reports EOF.
  *
- * - **`[2 GiB, 4 GiB)`** — the span goes negative and `ByteBuffer.allocate`
- *   raises `IllegalArgumentException` out of [poll]. Loud.
- * - **exactly `4 GiB`** — the span is `0`, the read returns no bytes, no
- *   newline is found, and the poll reports an empty batch at the unchanged
- *   offset. Indistinguishable from an idle log.
- * - **`> 4 GiB`** — the span is the range modulo 4 GiB, so the poll reads and
- *   delivers a *prefix* of the file and advances the checkpoint into it. The
- *   next poll's remaining span narrows to something small, and the reader
- *   settles into delivering nothing while the log keeps growing.
+ * **Two bounds survive, and neither is silent.**
  *
- * Nothing in the last two regimes throws, increments a failure count, or
- * otherwise says the reader has stopped following the log. Below 2 GiB the
- * remaining bound is ordinary: a whole-file read larger than the free heap
- * raises `OutOfMemoryError`, which at least does not advance the checkpoint
- * (it precedes the hand-off), so that batch is retried rather than skipped.
+ * - **One line must fit in memory.** The partial-line carry grows to the length
+ *   of the longest line in the range, because a line is only emitted once its
+ *   newline is seen. A line longer than [chunkSize] is therefore delivered
+ *   correctly — it is assembled across as many chunks as it needs — but it is
+ *   held whole while that happens. The *read buffer* stays at `chunkSize`; the
+ *   carry does not. At the socaity v1 record width (~130 bytes) this is
+ *   nothing; a log with no newlines at all would be the pathological case.
+ * - **The delivered batch is the range's line content.** [TailBatch.lines] is a
+ *   `List<String>` of every complete line read, so a whole-file read of an
+ *   enormous log still materializes that log's lines on the heap even though it
+ *   never buffers more than one chunk of raw bytes. Chunking bounds the *read*,
+ *   not the batch; bounding the batch would mean streaming lines to the
+ *   consumer instead of handing it a list, which is a change to [poll]'s
+ *   contract and is deliberately not made here.
  *
- * At the v1 record width (~130 bytes, one record per worker session) 2 GiB is
- * on the order of 16 million sessions, so the bound is real rather than
- * imminent. Chunking the read to remove it is deliberately NOT done here —
- * it is tracked as a residual on `computenet-fpml`, because no test in this
- * module can exercise a multi-gigabyte file and untested arithmetic is not an
- * improvement on documented arithmetic. Recorded next to the claim rather
- * than only in the bead: the "read each byte at most once" property above
- * says nothing about how much of the file one read holds at a time, and the
- * `> 4 GiB` regime violates the *other* half of that property — it reads each
- * byte at most once by never reading most of them at all.
+ * Both bounds fail as `OutOfMemoryError`, which precedes the hand-off to the
+ * consumer and therefore precedes the checkpoint write — so the batch is
+ * retried on the next poll rather than skipped. That is the whole difference
+ * from what this section used to describe: the failure is loud and the
+ * checkpoint does not advance past bytes nobody saw.
  *
  * @param logPath the spend log. A parameter, never a hardcoded path
  *   (fpml.1-D1): no real socaity log exists yet and its eventual location is
  *   undecided. It need not exist.
  * @param checkpoint where the position is persisted between polls and across
  *   restarts.
+ * @param chunkSize the size in bytes of the single reusable read buffer. A
+ *   parameter so the chunk-boundary cases — a line straddling a boundary, a
+ *   boundary landing exactly on a newline, a line longer than one chunk — are
+ *   testable at a size a unit test can actually build a fixture for; a 4 GiB
+ *   fixture is not a unit test. Production has no reason to change it.
  */
 class SpendLogTailReader(
     private val logPath: Path,
     private val checkpoint: SpendOffsetStore,
+    private val chunkSize: Int = DEFAULT_CHUNK_SIZE,
 ) {
+
+    init {
+        require(chunkSize > 0) { "chunkSize must be positive, was $chunkSize" }
+    }
 
     /**
      * Reads whatever complete lines are new, hands them to [consume], and only
@@ -261,13 +275,17 @@ class SpendLogTailReader(
     }
 
     /**
-     * Reads `[start, length)` and splits off the complete lines.
+     * Reads `[start, length)` in [chunkSize]-byte chunks and splits off the
+     * complete lines.
      *
-     * The whole range is buffered at once, and `(length - start).toInt()`
-     * below is a low-32-bits truncation, so this is only correct for a range
-     * under 2 GiB — above that it throws, and above 4 GiB it silently reads a
-     * prefix. Only a whole-file read (a first start, or a re-baseline) can get
-     * there; see the class KDoc's "Bounded by the size of ONE read".
+     * The range is `Long` throughout — nothing narrows it — so the size of the
+     * range places no bound on correctness; see the class KDoc's "Bounded by
+     * the CHUNK". A line whose bytes straddle a chunk boundary is accumulated
+     * in a `ByteArrayOutputStream` carry across as many chunks as it spans and
+     * emitted exactly once, when its newline is scanned. `'\n'` (`0x0A`) never
+     * occurs inside a multi-byte UTF-8 sequence, so scanning for it bytewise
+     * cannot split a character, and decoding per line is equivalent to decoding
+     * the whole complete-line region at once.
      *
      * @return the lines (newline stripped) and the offset just past the last
      *   `'\n'` — equal to [start] when the range holds no newline at all.
@@ -275,27 +293,67 @@ class SpendLogTailReader(
     private fun readCompleteLines(start: Long, length: Long): Pair<List<String>, Long> {
         if (length <= start) return emptyList<String>() to start
 
-        val span = (length - start).toInt()
-        val bytes =
-            FileChannel.open(logPath, StandardOpenOption.READ).use { channel ->
-                val buffer = ByteBuffer.allocate(span)
-                channel.position(start)
-                while (buffer.hasRemaining() && channel.read(buffer) >= 0) {
-                    // read until the range is exhausted or EOF (the file may
-                    // have shrunk since `length` was observed)
-                }
+        val lines = mutableListOf<String>()
+        val carry = ByteArrayOutputStream()
+        val span = length - start
+        var scanned = 0L
+        // Bytes of the range up to and including the last '\n' seen. The offset
+        // never advances past this, so a trailing partial line is left for a
+        // later poll (class KDoc, "Partial lines").
+        var consumed = 0L
+
+        FileChannel.open(logPath, StandardOpenOption.READ).use { channel ->
+            channel.position(start)
+            val buffer = ByteBuffer.allocate(chunkSize)
+            while (scanned < span) {
+                buffer.clear()
+                // Never read past the observed `length`: the file may have been
+                // appended to since, and those bytes belong to a later poll.
+                val remaining = span - scanned
+                if (remaining < chunkSize.toLong()) buffer.limit(remaining.toInt())
+                val read = channel.read(buffer)
+                // EOF (the file shrank since `length` was observed), or a
+                // pathological zero-byte read: stop rather than spin.
+                if (read <= 0) break
                 buffer.flip()
-                ByteArray(buffer.remaining()).also { buffer.get(it) }
+                val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
+
+                var from = 0
+                while (from < bytes.size) {
+                    val newline = indexOfNewline(bytes, from)
+                    if (newline < 0) break
+                    carry.write(bytes, from, newline - from)
+                    lines += carry.toString(Charsets.UTF_8)
+                    carry.reset()
+                    consumed = scanned + newline + 1
+                    from = newline + 1
+                }
+                carry.write(bytes, from, bytes.size - from)
+                scanned += bytes.size
             }
+        }
 
-        val lastNewline = bytes.lastIndexOf('\n'.code.toByte())
-        if (lastNewline < 0) return emptyList<String>() to start
+        if (lines.isEmpty()) return emptyList<String>() to start
+        return lines to (start + consumed)
+    }
 
-        // Everything strictly before the last newline is complete-line text;
-        // `split` on it yields one entry per terminated line (an empty line
-        // included, since "".split("\n") is [""], which is the single empty
-        // line a lone "\n" really is).
-        val complete = String(bytes, 0, lastNewline, Charsets.UTF_8)
-        return complete.split("\n") to (start + lastNewline + 1)
+    private fun indexOfNewline(bytes: ByteArray, from: Int): Int {
+        var i = from
+        while (i < bytes.size) {
+            if (bytes[i] == NEWLINE) return i
+            i++
+        }
+        return -1
+    }
+
+    companion object {
+        /**
+         * 1 MiB: large enough that a steady-state poll reads its whole (tiny)
+         * append in one chunk, small enough that the read buffer is never a
+         * consideration however big the log gets.
+         */
+        const val DEFAULT_CHUNK_SIZE: Int = 1 shl 20
+
+        private const val NEWLINE: Byte = '\n'.code.toByte()
     }
 }
