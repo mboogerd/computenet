@@ -220,6 +220,268 @@ Three properties the linker and the wire depend on, made true of the code:
   own holdings. A per-instance `since` is monotone *within* its instance and
   never contaminated by a sibling's progress.
 
+## Delivered watermarks and causal stability
+
+A replica set converges (§Design as implemented), but convergence alone answers
+neither of the two questions a settling consumer actually asks: *has this wave
+reached every replica that could hold a key it touches* (the **frontier read**,
+used by the cross-replica completeness gate in 22), and *can no concurrent
+operation for this timestamp still arrive anywhere* (the **stability read**, the
+compaction/GC trigger — causal stability in the sense of research 03 §3 Def 5.1).
+Both are answered off one gossiped substrate: a **delivered-watermark companion**
+riding the ordinary replica mesh, with no second protocol, no consensus and no
+total order. This section states that substrate and the two reads over it. It is
+built for the frontier read (96 E3.2–E3.4, `cell.data.WatermarkCell`,
+`cell.data.delta.WatermarkDelta`, `cell.data.delta.DeliveredFrontier`,
+`cell.consistency.ReplicaQuorum`); the stability read, the heartbeat and the
+departure notice are decided design, labelled below where they are not code.
+
+**The companion.** Each data replica of a logical id gets one companion
+`cell.data.WatermarkCell`, itself `Replicable` and itself replicated, so the
+companions of one logical id find each other by `LocationRegistry.replicasOf`
+exactly as the data replicas do (`Replication.watermarkRef` derives the companion
+ref from the data id, `watermark:{logicalId}`, borrowing the data replica's
+`instanceId`; `Replication.trackDeliveries` wires it). The companion's replica
+slot is `WatermarkCell.slotId(ref)` — **derived** from the ref, not random, so a
+replica replaying its journal credits the same row the network already saw. A
+companion is never itself tracked; that would recurse.
+
+### The primitive: one contiguous delivered prefix per (slot, source)
+
+[42-WM-01] The delivered-watermark state SHALL carry, per replica slot and per
+wave source id, a `deliveredThru` counter naming the **contiguous** delivered
+prefix — the highest `t` such that every counter `1..t` from that source has been
+delivered at that slot — and a counter arriving above a gap SHALL NOT advance the
+row until the gap is filled.
+
+Contiguity is the whole point of the rule: a source's tags are unit-counter dots
+`(sourceId, 1), (sourceId, 2), …`, and over a multi-path gossip mesh they arrive
+out of order, so a plain max would claim a hole had been delivered and release a
+wave that had not. `cell.data.delta.DeliveredFrontier` is the implementation —
+prefix plus an out-of-order holdback, returning the new `thru` **only** when the
+contiguous prefix actually advanced. Tag sources and wave sources share the same
+`(UUID, Long)` monotone shape, so one vocabulary serves both.
+
+Two distinct lanes ride the one companion and must not be confused. The
+**per-origin** lane is the fold seam: `Replication.trackDeliveries` registers
+`DeliveryTracking.onDeliver` (anchor `onDeliver`) so each raised origin prefix —
+read where the incoming delta's origin tags are still visible — feeds
+`WatermarkCell.advance(source, thru)`. The **per-outlet-epoch** lane is
+`WatermarkCell.trackDeliveriesOf`, the retained CP-B2 tap, which answers "how
+many waves has this replica re-emitted", not "which origin waves has the replica
+set delivered" (the KDoc at `Replication` anchor `CP-B2 re-emission tracking`
+says the same). They are different key spaces sharing one mesh.
+
+### Merge is a join-semilattice
+
+[42-WM-02] The merge of two delivered-watermark states SHALL be pointwise max per
+`(replicaSlot, sourceId)` — an absent entry reading as bottom (`Long.MIN_VALUE`,
+**not** `0`, so an unseen row can never coincide with a real zero and look caught
+up) — with `closed` and `members` union-merged and `suspended` max-merged, such
+that merge is commutative, associative and idempotent and a gossip echo
+terminates.
+
+[42-WM-03] IF a replica receives a delivered-watermark delta that would lower a
+row, or re-receives one it has already absorbed, THEN its state SHALL be
+unchanged and it SHALL re-emit nothing. Rows are never retracted: progress is
+monotone.
+
+`cell.data.delta.WatermarkDelta.merge` and its `dominates` order are the lattice;
+`WatermarkCell.advance` is effective-only (`if (thru <= …) return`) and
+`applyRemote` re-emits **exactly** the entries that raised something, returning on
+a fixpoint (anchor `echo terminates here`). Effective-only re-emission (21) is
+what makes the mesh quiesce.
+
+**What is carried from Naiad, and what is given up (research 02 §2–3).** The
+safety property is Naiad's, verbatim in sense: *no local frontier ever moves ahead
+of the global frontier*, so a notification released locally is always safe. What
+is **not** carried is Naiad's mechanism. Its progress protocol broadcasts signed
+`(pointstamp, delta)` occurrence counts and accumulates them by addition, which is
+**not idempotent**: over a gossip mesh with redelivery and multi-path arrival it
+double-counts, and recovering it would demand exactly-once FIFO per peer pair —
+precisely the channel assumption (fixed, fully-known worker set; reliable FIFO;
+fault tolerance by checkpoint/restore rather than membership change) that a
+membership-changing replica mesh cannot supply. The reformulation to a
+join-semilattice of per-source low-watermarks merged by pointwise max (research 05
+gap 7; the same shape as `PnCounterDelta`) buys idempotence and costs precision in
+two places, both named honestly here: a row can only **rise**, so there is no
+retraction of progress and no downward correction of an over-eager advance; and
+liveness degrades exactly where the lattice cannot distinguish "silent" from
+"gone" — an idle replica (answered by the heartbeat, [42-WM-06]) and a replica
+that departs without closing its row (frozen stability, [42-WM-08]). Causal
+stability itself and its idle-replica caveat are research 03 §3 (S3/S6, Bauwens &
+Gonzalez Boix); the layering of the cross-replica frontier (gap 7) over
+compaction/GC (gap 6) is research 05 gaps 6–7.
+
+### The four lanes, and the rule for a fifth
+
+`cell.data.WatermarkCell` carries exactly **four independent lattices**, each
+grow-only or pointwise-monotone in its own right, and `ReplicaQuorum.frontier`
+reads all four independently:
+
+1. **`rows`** — the base per-`(replicaSlot, sourceId)` delivered-counter map
+   ([42-WM-01]–[42-WM-03]); `advance`/`applyRemote` merge it.
+2. **`closed`** (PN-0c) — the grow-only set of cleanly departed slots, so a read
+   stops waiting on a row that provably can never advance again ([42-WM-08]).
+3. **`suspendEpoch`** (PN-19, 34 decision 3) — the per-slot suspend epoch, odd =
+   suspended: the resumable analogue of `closed` for a member that may return.
+   Only a slot's own owner writes it (single-writer, alternating), so max-merge is
+   a genuine monotone join.
+4. **`members`** (FU-2) — the grow-only set of covering member slots that have
+   announced their existence, converging membership itself faster than the
+   point-to-point topology announcements `instancesOf` feeds off ([42-WM-07]).
+
+The cell SHALL NOT gain a fifth lane. Each lane above answers a different "what do
+I know about this replica slot" question; a fifth per-slot settlement concern
+unrelated to delivery, departure, suspension or membership is the signal that this
+cell is doing more than one job, and is a **sibling-cell** design question (epic
+[KE3-07]), not a fifth `Mutable*` field. Note what this rule does *not* forbid:
+both the heartbeat ([42-WM-06]) and the stability read ([42-WM-05]) are behaviour
+**over** lanes 1–4, not new state, and neither needs a fifth lane to be built.
+
+### The frontier read (decided in 96 E3.1, built in E3.4)
+
+[42-WM-04] A wave `(s, t)` touching key `k` SHALL be treated as replica-complete
+only when every **open covering member** — a live member whose `Interest` admits
+`k`, whose slot is not `closed`, and, under a DEGRADE settlement policy, whose
+slot is not `suspended` — satisfies `row[s] >= t`; a covering member with no row
+for `s` SHALL read as bottom and hold the wave; an empty covering subset SHALL
+hold rather than release vacuously; and WHILE the companion names a member slot
+the local membership view has not accounted for, every keyed wave SHALL hold.
+
+`cell.consistency.ReplicaQuorum.frontier` is the implementation and its KDoc the
+detailed truth; the four policy switches (`creationFence`, `degrade`,
+`membershipBarrier`, and the unfiltered `key == null` path) are documented there
+and their rationale in 22, which this rule restates rather than extends. Read it
+against 22 §Interest-scoped settlement (PN-7) for the covering-subset quorum, 22
+§R13 creation fence for the rowless-member hold, and 22 §Converged-membership
+barrier (FU-2) for the unaccounted-slot hold. The two conservative asymmetries are
+the same asymmetry twice: a *known* covering member with no row holds on bottom,
+and an *unknown* one — announced on the companion CRDT but absent from this node's
+`instancesOf` view — holds every keyed wave. Both release the moment the view
+converges; an unkeyed wave (no covering quorum) is never held, so default
+settlement is unchanged.
+
+### The stability read (decided in 96 E3.1, unbuilt — E3.5, `computenet-9sm.3`)
+
+[42-WM-05] For a source `s`, `stableFrontier[s]` SHALL be the pointwise **minimum**
+over every open membership row of `row[s]`, with an absent row reading as bottom,
+such that at all times `stableFrontier[s] <= row[slot][s]` for every open slot and
+`stableFrontier[s]` is monotone non-decreasing.
+
+"Open" here is the same predicate the frontier read uses: a member, not `closed`,
+and — under DEGRADE — not `suspended`. Reading an absent row as bottom **freezes**
+the minimum, which is the conservative direction and is the point: it is the same
+Naiad safety property in its terminal form — no local read may run ahead of the
+true global frontier. A timestamp `τ` is causally stable once no concurrent
+operation for it can still arrive anywhere, i.e. once the frontier read has
+terminated for it everywhere (research 03 §3 Def 5.1); it is the trigger a
+compaction or GC pass waits on. The frontier read and the stability read are the
+*same primitive at two freshness levels* — one wave, all covering members, versus
+all sources, all open members — which is why research 05 gaps 6 and 7 fold into
+one substrate rather than two. Nothing in `kernel/` computes `stableFrontier`
+today; this paragraph is design.
+
+### Idle liveness: heartbeat rows (decided in 96 E3.1, unbuilt — E3.3(c), `computenet-9sm.2`)
+
+[42-WM-06] WHEN a heartbeat cadence fires on a replica whose row has not changed
+since that replica's last emission, the replica SHALL re-emit that row verbatim,
+and every receiver SHALL absorb it as a fixpoint and re-emit nothing.
+
+Without it a silent replica is indistinguishable from a slow one, and the pointwise
+minimum in [42-WM-05] never moves: "if one single node does not issue any updates
+for some time, no causal stability can be determined at any replica" (research 03
+§3, S6). The heartbeat is safe precisely because [42-WM-02] and [42-WM-03] make a
+repeated row a fixpoint — a non-idempotent accumulator could not afford to resend
+one. It is behaviour over lane 1, not a fifth lane. No heartbeat exists in
+`kernel/` or `wire/` today.
+
+### Membership is one snapshot per read
+
+[42-WM-07] Each evaluation of the frontier read or the stability read SHALL take
+**one** membership snapshot — the `instancesOf` fold for the logical id together
+with the companion's announced `members` set — and SHALL evaluate every member
+against that one snapshot; and because the `instancesOf` fold is only eventually
+consistent (R13), a covering member the local view has not yet learned of SHALL be
+waited on only through the announced `members` set, never conjured by the fold.
+
+`ReplicaQuorum.frontier` reads `membersOf(logicalId)` once per predicate call;
+`Replication.trackDeliveries` calls `WatermarkCell.announceMember()` on join, and
+`WatermarkCell.members()` is what the barrier reads. The announced set is the more
+complete of the two because it rides the *transitively* gossiped companion CRDT,
+whereas `instancesOf` mirrors only direct peers — which is exactly why it can name
+a slot the fold has not accounted for, and why that discrepancy is a hold rather
+than a bug.
+
+### Departure: closed, suspended, or frozen
+
+[42-WM-08] IF a replica departs, THEN its slot SHALL be marked `closed` — and its
+row SHALL thereafter constrain neither read — only where the departure was clean
+(the last local replica of the id drained and despawned through
+`Replication.evict`); an unreachable-but-possibly-alive replica SHALL be
+*suspended* rather than closed; an unclean departure SHALL leave the row in place,
+freezing the stability read at it; and a frozen row SHALL NOT be released by
+timeout or lease.
+
+The three cases are three different pieces of knowledge, and collapsing them would
+be unsound in a different direction each time.
+
+- **Clean.** `Replication.evict` (anchor `closeDepartedRow`) closes the row via
+  `watermarks[id]?.close()` once `localReplicas[id]` is empty — once the *last*
+  local replica leaves, because the companion carries this peer's single row. The
+  `closed` marker rides the same idempotent watermark mesh as the data, so it
+  converges even where a topology unpublish is lost. [42-REPL-06] is the
+  convergence half of orderly departure (the departed replica's frozen final
+  stream is not a divergence); this rule is the settlement half, and the two are
+  complementary, not duplicates.
+- **Suspended, not closed.** A replica with no reachable peer is partitioned as
+  far as the local view can tell, so `evict` parks it (a `managementInlet` suspend plus
+  `watermarks[id]?.suspend()`) instead of departing it. Closing
+  would be a lie: the replica may still hold unique state, and its frozen row is
+  the *correct* answer for as long as it is unreachable. A WAIT read still holds
+  on it; only a DEGRADE read drops it. `Replication.rebind` (anchor `heal (G-45)`)
+  and `supersedeLocalInstance` call `resume()`, and the post-resume catch-up
+  advances the row that froze while parked. `close`, `suspend` and `resume` are all
+  effective-only, so a repeated call is a fixpoint like every other lane.
+- **Unclean.** A crash without `evict`, or churn, leaves the row present and never
+  closed, so the pointwise minimum of [42-WM-05] freezes at it. This is the decided
+  disposition, not an oversight: a rebuilt replica at the same instance id reuses
+  the memoised companion, so the row it froze at crash time is what a frontier read
+  still sees (`Replication.rehomeCompanion`'s KDoc states this; only the
+  companion's *residency* is re-established). It is surfaced to the application as
+  a `Stall`-family notice — decided, unbuilt (96 E3.6(c), `computenet-9sm.5`).
+  Lease- or timeout-based row eviction is explicitly **out of scope** and is
+  research R13: a lease races a partitioned-but-alive replica, and losing that race
+  releases a wave the survivor never delivered, which is the one failure the whole
+  substrate exists to prevent. Freezing is the honest cost.
+
+### The three named costs
+
+Each of the three costs 96 E3.1 point 3 names is accepted with a stated
+disposition; none is silently absent.
+
+1. **Membership completeness.** The reads are gated on the `replicasOf`/
+   `instancesOf` announcement fold, which is eventually consistent. Disposition:
+   conservative holds on both halves ([42-WM-04], [42-WM-07]) — a known rowless
+   member holds on bottom, an announced-but-unaccounted member holds every keyed
+   wave. Whether the fold is *sufficient* under join and churn is open, and is 95
+   §R13; do not read this section as resolving it.
+2. **Idle-replica liveness.** A replica that delivers nothing publishes nothing,
+   and the stability minimum never advances. Disposition: heartbeat rows
+   ([42-WM-06]), safe by idempotence — decided, unbuilt.
+3. **Frozen stability on unclean departure.** A row nobody closes freezes the
+   stability read indefinitely. Disposition: freeze and notify ([42-WM-08]); never
+   unfreeze by timeout. The alternative — lease-fenced eviction — is 95 §R13, named
+   only, not adopted here.
+
+The epoch-hygiene question (when a `ReBaseline`-superseded source's watermark
+column may be dropped) is 95 §R14, likewise named and not resolved.
+
+### Open interactions
+
+The R14 superseded-source-column rule and the FRM1/G-36 two-hop-cut interaction
+with this section are recorded here.
+
 ## Decided in 93, not yet built
 
 The feature-interaction analysis settled the following for this layer; all of
