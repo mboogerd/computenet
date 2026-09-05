@@ -18,6 +18,7 @@ import civictech.dialogue.Utterance
 import civictech.dialogue.extract.RuleExtractor
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
@@ -87,6 +88,95 @@ class ClaimMintTest {
         Utterance(id = id, turn = turn, speaker = speaker, tsMillis = 1000L * turn, text = text)
 
     // ------------------------------------------------------------------
+    // computenet-lv25 — the trailing-terminator rule lives in claimKey
+    // ------------------------------------------------------------------
+
+    /**
+     * The defect computenet-lv25 fixes, end to end through the pipeline: one
+     * proposition uttered once as a plain standalone segment (which keeps its
+     * sentence-final full stop, since [civictech.dialogue.Segmentation] splits
+     * on a lookbehind) and once as the reason endpoint of a "because" split
+     * (which [civictech.dialogue.extract.RuleExtractor] strips, per
+     * computenet-9bip) must mint ONE canonical claim naming both utterances.
+     *
+     * Before the fix the two minted `ClaimKey(travel costs increased.)` and
+     * `ClaimKey(travel costs increased)` — two canonical claims for one
+     * proposition, the residual computenet-9bip left open.
+     */
+    @Test
+    fun `computenet-lv25 - a plain segment and a because-endpoint of the same proposition mint ONE claim naming both utterances`() {
+        val rig = Rig()
+
+        // u1: no " because ", so RuleExtractor emits the whole segment
+        // verbatim — terminator included.
+        rig.admit(utterance("u1", 1, "alice", "Travel costs increased."))
+        // u2: the same proposition as the reason endpoint of a because split,
+        // where RuleExtractor already strips the terminator.
+        rig.admit(utterance("u2", 2, "bob", "The budget is too high because travel costs increased."))
+
+        val sharedKey = claimKey("Travel costs increased")
+        assertEquals(
+            setOf(sharedKey, claimKey("The budget is too high")),
+            rig.claimKeyView.current(),
+            "the standalone claim and the because-endpoint of the same proposition must canonicalize to ONE key",
+        )
+
+        val shared = rig.canonicalClaims().single { it.key == sharedKey }
+        assertEquals(
+            setOf("u1", "u2"),
+            shared.fromUtterances,
+            "provenance must name both the standalone utterance and the because utterance",
+        )
+    }
+
+    /**
+     * The terminator class [claimKey] strips, and the one it deliberately
+     * does not. Mirrors `RuleExtractor`'s "Trailing terminators" rule
+     * (computenet-9bip as amended by computenet-qoei): `.`, `…` and `!` are
+     * segmenter artifacts and fold; `?` marks a genuinely different
+     * proposition and forks.
+     */
+    @Test
+    fun `computenet-lv25 - claimKey strips trailing full stops ellipses and exclamations but preserves the question mark`() {
+        assertEquals(
+            claimKey("The budget is too high"),
+            claimKey("The budget is too high."),
+            "a trailing full stop is the segmenter's, not content",
+        )
+        assertEquals(
+            claimKey("The budget is too high"),
+            claimKey("The budget is too high…"),
+            "a trailing ellipsis is the segmenter's, not content",
+        )
+        assertEquals(
+            claimKey("The budget is too high"),
+            claimKey("The budget is too high!"),
+            "computenet-qoei: `!` is the same split-position accident as `.` and does not change the mood",
+        )
+        assertEquals(
+            claimKey("The budget is too high"),
+            claimKey("The budget is too high...!"),
+            "runs of terminator punctuation strip as one",
+        )
+        assertNotEquals(
+            claimKey("Is the budget too high"),
+            claimKey("Is the budget too high?"),
+            "`?` is preserved: an interrogative asserts something different from its declarative",
+        )
+    }
+
+    /**
+     * The guard the strip needs: a claim whose text is nothing but terminator
+     * punctuation must not canonicalize to the empty key, which every other
+     * such claim would then collide with.
+     */
+    @Test
+    fun `computenet-lv25 - a text that is nothing but terminator punctuation is not emptied by canonicalization`() {
+        assertEquals(ClaimKey("..."), claimKey("..."))
+        assertEquals(ClaimKey("!"), claimKey(" ! "))
+    }
+
+    // ------------------------------------------------------------------
     // BS-02 (canonical-claim half) — [AGO1-MINT-01]/[AGO1-MINT-02]
     // ------------------------------------------------------------------
 
@@ -95,10 +185,10 @@ class ClaimMintTest {
         val rig = Rig()
 
         // Same key modulo case and internal whitespace runs — exactly what
-        // claimKey()'s canonicalization (trim, collapse whitespace, lowercase)
-        // is defined to fold together. Different terminating punctuation would
-        // NOT fold (deliberately weak identity, 2aw.F3-D1), so both keep the
-        // same "." to stay a same-key pair.
+        // claimKey()'s canonicalization is defined to fold together. Both
+        // texts keep the "." so this stays a case/whitespace pair and nothing
+        // else: since computenet-lv25 the terminator would fold too, which the
+        // dedicated tests above pin, so it must not be what carries this one.
         rig.admit(utterance("u1", 1, "alice", "The sky is blue."))
         rig.admit(utterance("u2", 2, "bob", "THE   SKY IS BLUE."))
 
