@@ -62,7 +62,9 @@ abort "no SKILL.md found under #{root}" if files.empty?
 
 # A skill directory with no SKILL.md is a broken skill, not an absence — report
 # it rather than skipping silently.
-missing = Dir.glob(File.join(root, '*')).select { |d| File.directory?(d) } -
+# `.d` suffix marks a data directory (line-budget.d), not a skill.
+missing = Dir.glob(File.join(root, '*'))
+             .select { |d| File.directory?(d) && !d.end_with?('.d') } -
           files.map { |f| File.dirname(f) }
 
 # skill-creator: "Keep SKILL.md under 500 lines; if you're approaching this
@@ -95,9 +97,29 @@ READ_CALL_BANNER_LINES = 50
 # The ratchet's numbers. Absent file or absent entry is a FAILURE, not a pass:
 # a skill with no budget is exactly the unpriced growth this exists to stop.
 BUDGET_FILE = File.join(root, 'line-budget.txt')
-BUDGETS = File.exist?(BUDGET_FILE) ? File.readlines(BUDGET_FILE, encoding: 'UTF-8')
+BASE_BUDGETS = File.exist?(BUDGET_FILE) ? File.readlines(BUDGET_FILE, encoding: 'UTF-8')
   .reject { |l| l.strip.empty? || l.lstrip.start_with?('#') }
   .to_h { |l| n, v = l.split; [n, v.to_i] } : {}
+
+# Deltas (line-budget.d/<bead-id>.txt, `<skill> <signed-delta>`). The base
+# ledger is ONE shared line per skill, and every fix in a drain moves the same
+# one; the second PR's number depends on the first's LANDED value, so the two
+# cannot be prepared in parallel (computenet-kzyk: five ready fixes shipped one
+# per CI cycle). Deltas compose where absolutes do not — two PRs adding two
+# NEW files merge cleanly and neither has to be recomputed. Fold them into the
+# base whenever one session holds the ledger alone.
+BUDGET_DIR = File.join(root, 'line-budget.d')
+DELTAS = Dir.glob(File.join(BUDGET_DIR, '*.txt'))
+             .reject { |f| File.basename(f) == 'README.txt' }
+             .each_with_object(Hash.new(0)) do |f, h|
+  File.readlines(f, encoding: 'UTF-8')
+      .reject { |l| l.strip.empty? || l.lstrip.start_with?('#') }
+      .each { |l| n, v = l.split; h[n] += v.to_i }
+end
+BUDGETS = BASE_BUDGETS.to_h { |k, v| [k, v + DELTAS[k]] }
+# A delta naming a skill the base ledger does not is a typo that would silently
+# under-price the real one, so it fails rather than being ignored.
+UNKNOWN_DELTAS = DELTAS.keys - BASE_BUDGETS.keys
 
 # Any backtick-free run of path characters ending in a script extension and
 # containing a scripts/ segment. Deliberately broad: a citation is a citation
@@ -171,8 +193,10 @@ files.each do |f|
   # The RATCHET (line-budget.txt). The ideal above has warned for weeks and
   # been read past every time; this is the same number with teeth, set at each
   # skill's current size so nothing has to be restructured today. Growth is
-  # what it prices: over budget, remove as much as you added or raise the
-  # number in the diff, where it can be questioned.
+  # what it prices: over budget, remove as much as you added or add a delta
+  # file (line-budget.d/<bead-id>.txt), in the diff, where it can be
+  # questioned. Never edit the base number — see the DELTAS note above for why
+  # a shared ledger line serialises a whole lane.
   ref_lines = Dir.glob(File.join(File.dirname(f), 'references', '*.md'))
                  .sum { |r| File.readlines(r, encoding: 'UTF-8').length }
   total = body_lines + ref_lines
@@ -180,11 +204,16 @@ files.each do |f|
   if budget.nil?
     errs << "no line budget for '#{skill}' — add one to .claude/skills/line-budget.txt " \
             "(set it at the current #{total} so the skill starts even)"
-  elsif total > budget
+  elsif DELTAS[skill] != 0
+    warns << "budget #{budget} = #{BASE_BUDGETS[skill]} base #{format('%+d', DELTAS[skill])} " \
+             "in line-budget.d (fold them back when you hold the ledger alone)"
+  end
+  if !budget.nil? && total > budget
     errs << "is #{total} lines (SKILL.md body #{body_lines} + references " \
             "#{ref_lines}), over its #{budget} budget by #{total - budget}. " \
-            'Remove as much as you added, or raise the number in ' \
-            '.claude/skills/line-budget.txt and say what it bought.'
+            'Remove as much as you added, or add ' \
+            ".claude/skills/line-budget.d/<bead-id>.txt holding `#{skill} " \
+            "+#{total - budget}` and say what it bought."
   end
 
   Dir.glob(File.join(File.dirname(f), 'references', '*.md')).sort.each do |r|
@@ -232,6 +261,11 @@ end
 missing.each do |d|
   failures += 1
   puts "#{File.basename(d)}: FAIL directory has no SKILL.md"
+end
+
+UNKNOWN_DELTAS.each do |n|
+  failures += 1
+  puts "line-budget.d: FAIL delta names '#{n}', which has no entry in line-budget.txt"
 end
 
 puts "#{files.length + missing.length} skill(s) checked, #{failures} failing"

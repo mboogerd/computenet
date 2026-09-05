@@ -9,18 +9,32 @@
 #
 # Nothing here demands a restructure. Each budget is set at the size the skill
 # ALREADY IS, so today's tree passes untouched. What changes is the price of
-# growth: a session that adds 40 lines must remove 40, or raise the number
-# below — one line, in the diff, where a reviewer and a human can see it and
-# ask what it bought. That is the question no mechanism currently asks.
+# growth: a session that adds 40 lines must remove 40, or add a delta file
+# (see RAISING A BUDGET below) — in the diff, where a reviewer and a human can
+# see it and ask what it bought. That is the question no mechanism currently
+# asks.
 #
-# Lower a number whenever a drain removes text. That is the ratchet: the budget
-# can fall silently and can only rise deliberately.
+# Write a NEGATIVE delta whenever a drain removes text. That is the ratchet:
+# the budget can fall silently and can only rise deliberately.
 #
 # Format: <skill-dir-name> <max-lines>
 # Counted as SKILL.md's body (frontmatter excluded) plus every references/*.md,
 # because the context cost of a skill is everything an agent is sent to read.
 #
-# Enforced by scripts/validate-skills.rb, which FAILS above the budget.
+# Enforced by remediate-friction/scripts/validate-skills.rb, which FAILS above
+# the budget.
+#
+# RAISING A BUDGET: do NOT edit the number below. Add a file
+# line-budget.d/<bead-id>.txt holding `<skill> <signed-delta>` plus the prose
+# saying what the growth bought. The effective budget is the number below plus
+# every delta. The numbers below are ONE shared line per skill and every fix in
+# a drain moves the same one, so two prepared fixes could never be in flight at
+# once: the second's number depends on the first's LANDED value, which is a
+# recompute, not a merge (computenet-kzyk — five ready fixes shipped one per CI
+# cycle). Two new files merge cleanly and neither needs recomputing.
+#
+# A delta may be negative; that is how the ratchet falls. Fold the deltas into
+# the numbers below whenever a session holds the ledger alone.
 
 # 8055 -> 8059 on 2026-08-20: step 4's twin scan became a command
 # (scripts/twin-scan.py) instead of "eyeball the --all listing for same-titled
