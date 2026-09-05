@@ -88,9 +88,19 @@ run whose XML held 408 across 45 files, and the undercount passed as "all
 green" (computenet-ozgs). Counts come from `junit-count.py` below, nothing
 else — not a hand-rolled XML regex: `<testcase>`/`<failure>` adjacency
 reads failures as passes. And a `println` inside a test goes **nowhere** on this build —
-`testLogging.showStandardStreams` is off — so a print probe, or a test whose
+`testLogging.showStandardStreams` is off (the one exception is `:bench` under
+`-PbenchOnly`, which turns it on) — so a print probe, or a test whose
 acceptance is "reports its own figure", reads as silence; its output is in
-the XML's `<system-out>`: `grep -A3 '<system-out>' <module>/build/test-results/test/TEST-<Class>.xml`.
+the XML's `<system-out>`:
+`grep -h -A200 '<system-out>' <module>/build/test-results/test/*.xml`.
+`-A3` and a single `TEST-<Class>.xml` are enough to confirm a print happened
+and truncate anything longer — a per-seed sweep prints tens of lines across
+many classes (computenet-gk4v). `-h` is load-bearing: without it every line,
+context lines included, carries a ~60-char path prefix and the CDATA is
+unreadable. `-A200` clears all but the largest block measured here (808 lines
+in `:gen`), and a truncated one shows an opening `<system-out>` with no
+closer; when that happens the range match is unbounded and no longer:
+`sed -n '/<system-out>/,/<\/system-out>/p' <module>/build/test-results/test/*.xml`.
 
 **3. The JUnit XML counts and timestamp**, which separate a run from a
 replay — a cached repeat run leaves `newest` unchanged with identical counts

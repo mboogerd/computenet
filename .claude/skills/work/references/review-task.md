@@ -284,8 +284,12 @@ build is indistinguishable from a real one in the output you normally read.
 **[gradle-evidence.md](gradle-evidence.md) is the proof standard**: the
 task-count line, the per-task state line read as an absence (four states,
 only two marked), the `| tail -N` and `-q` traps that destroy it, `--rerun`
-binding and the build-cache restore it does not show, and the JUnit XML
-counts + `timestamp` via `.claude/skills/work/scripts/junit-count.py`. Consume all three signals
+binding and the build-cache restore it does not show, the JUnit XML
+counts + `timestamp` via `.claude/skills/work/scripts/junit-count.py`, and the
+`<system-out>` block — `testLogging.showStandardStreams` is off (except
+`:bench` under `-PbenchOnly`), so a test's `println` otherwise reaches the
+Gradle console never, and an empty console grep is not evidence that it
+printed nothing (computenet-gk4v). Consume all three signals
 per run and quote them — counts, module list, `newest` — in your report. An
 unquantified "suite green", yours or the implementer's, is not a
 verification record, and the orchestrator never re-runs it: your report *is*
