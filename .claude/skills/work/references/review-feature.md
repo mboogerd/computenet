@@ -176,9 +176,11 @@ open the PR and close it before shipping. Recording the gap prominently is the
 requirement, not a courtesy (computenet-a4cj).
 
 ```bash
-bd show <feature-id> --json > "$SCRATCH/<id>.json"   # acceptance criteria, description
+.claude/skills/work/scripts/bead.sh <feature-id>     # acceptance criteria, description
 bd list --parent=<feature-id> --all --json  # the tasks (--all: they are closed by now)
 bd comments <feature-id> --json > "$SCRATCH/comments.json"   # then read the file
+# the body key is `.text` — `.body` and `.comment` are the obvious guesses and
+# both yield null, which reads as an empty thread rather than as a bad jq
 ```
 
 **Read the comments — that third command is not optional.** `bd show --json`
@@ -212,8 +214,9 @@ this file's opening "every task here is closed".
 Read the parent epic too, and any spec sections the feature cites — those
 are the authority (AGENTS.md), above the feature's own prose.
 
-**Resolving the parent is a script, not a field read.** `bd show --json`
-**omits `parent` entirely when it is unset** — a parented bead carries the
+**Resolving the parent is a script, not a field read** — and this is the
+other read `bead.sh` cannot do for you, since its jq always emits `parent`,
+null when unset. `bd show --json` **omits `parent` entirely when it is unset** — a parented bead carries the
 key, an unparented one has no such key at all — so `.[0].parent` reads `null`
 both for an item that genuinely has none *and* for an id `bd` could not
 resolve, and the field alone cannot tell you which. `bd list --parent` is no
@@ -249,14 +252,19 @@ uncertainty — never the accusation.
 the JSON read key is **`acceptance_criteria`**. `jq '.[0].acceptance'`
 answers `null` on a bead that *has* criteria, which sends a reviewer down the
 ladder below for no reason (computenet-2rix, [bd-traps.md](bd-traps.md)). And
-read it from a file — `bd show` on a feature inlines its parent epic's whole
-description and has overrun the tool-result limit at 55KB, and **a truncated
-bead read is a truncated acceptance list** with nothing in the output saying
-so (computenet-h0dj, computenet-rram).
+read it through `bead.sh` or from a file — `bd show` on a feature inlines its
+parent epic's whole description and has overrun the tool-result limit at 55KB,
+and **a truncated bead read is a truncated acceptance list** with nothing in
+the output saying so. Worse than truncated: the tail of that read is the
+PARENT's acceptance and metadata, so it looks like a complete read of the
+wrong bead — a reviewer scored against an epic's criteria believing they were
+the item's (computenet-h0dj, computenet-rram -> zwju -> o5oz).
 
 **`acceptance_criteria` may be empty or absent altogether** — on a bead filed
 mid-session by another agent it usually is, because nothing broke it down, and
 three reviewers hit it in one session (computenet-d7tk, computenet-qxg5).
+(This is one of the two reads `bead.sh` cannot do for you: its jq always
+emits the key, null when unset, so an absence test needs the raw `bd show`.)
 `bd show --json` cannot even tell the two apart: `.[0].acceptance_criteria`
 reads `null` for an empty field and the key is simply missing for an absent
 one, which is easy to misread as a `bd` failure rather than as the bead's real
@@ -484,16 +492,19 @@ is no suite to cache-prove and the recipe above has nothing to bite on
 such a diff they evidence exactly one thing — *the branch does not break the
 build* — because no required check executes the artifact at all. A verdict
 that rests on green checks here is resting on a fact about other code. Say so
-in as many words rather than letting six green rows read as verification.
+in as many words rather than letting green rows read as verification.
 
 ## 4. Your run is on macOS; the required checks are not
 
 Run `uname -sm` and put its output in your report. (For a diff proven
 docs-only in §3 there is no platform-dependent behaviour to measure: skip to
 the `gh pr checks` read below, and report its conclusions with §3's limit
-attached.) This repo is developed on darwin; all **six** required checks
-(`build-test-fast`, `build-test-serial`, `concord-full`, `ui-test`,
-`agora-ui-test`, `kernel-test`) run on `ubuntu-latest`. For most
+attached.) This repo is developed on darwin; **every** required check runs on
+`ubuntu-latest`. Do not write down which, or how many — the set is the
+ruleset's and it changes (`kernel-test` added 2026-08-17, `iroh-sidecar`
+2026-08-31); the count written here was wrong in both directions before it was
+removed (computenet-9p3y, computenet-s6x5). `wait-checks.sh` reads the ruleset
+each run and prints the contexts it found: that print is the list. For most
 diffs that gap is invisible; for anything touching sockets, ports, filesystem
 semantics, path handling, or process spawning it is exactly where the defect
 hides — a `:wire:test` that passed 15/15 locally failed `build-test-fast`
@@ -528,7 +539,16 @@ So:
   ```
 
   Quote each required check's name and conclusion in your verdict — and quote
-  them for the **PR's current head**. If §6's re-fetch makes you merge
+  them for the **PR's current head**. **Enumerate every row it returns, not
+  only the required ones**: the required set is what BLOCKS a merge, which is
+  a different question from what CI RUNS. A non-required lane can be the only
+  place a module's tests execute — `iroh-sidecar` (then non-required; promoted
+  to required 2026-08-31) ran all 23 `:iroh` tests on ubuntu while three
+  dispatch prompts and a PR body asserted CI covered none of them
+  (computenet-9p3y). For each non-required row, say what it executes
+  and whether it is the only coverage for any part of the diff; and treat
+  "CI does not cover X" as a claim about a run — cite a run id or the lane's
+  workflow file, never an inference from the required list. If §6's re-fetch makes you merge
   `origin/main`, that merge moves the head and this reading goes stale; §6
   says how to re-take it. A green check on a diff that touches no compiled
   input is evidence of nothing (it too can be cache and skip), so say which
@@ -580,7 +600,7 @@ can rather than sending it back.
 **Budget the repair, because it obliges a CI cycle.** A repair moves the head,
 so §6's re-read is no longer optional for you: you owe one full required-check
 cycle — **9–12 minutes on this repo**, governed by `build-test-fast`, which is
-the long pole; the other five settle in 15s–5m26s — plus the poll to watch it,
+the long pole; the others settle in 15s–5m26s — plus the poll to watch it,
 on top of the repair itself. (Measured 2026-08-19 across four runs: 8m58s,
 12m1s, 8m52s, ~9m. The figure here read "2–4 minutes" until computenet-678u
 measured it; a reviewer budgeting a merge-and-re-check cycle against its own
@@ -1156,9 +1176,16 @@ than half a feature parked on a branch.
 
 ### In every case
 
-**Write to the feature under review and to items you create — nothing else.**
+**Write to the feature under review, to items you create, and — the one
+standing exception — an occurrence comment on a flake bead you attributed a
+red check to (red-check-attribution.md). Nothing else.**
 Closing, re-prioritising, reassigning, re-parenting or claiming any other
 bead is the orchestrator's, and the tasks under this feature are other beads.
+The exception exists because §4 sends you to a procedure whose last step is
+that comment, and the two rules read as a contradiction: a reviewer that
+resolved it in favour of this paragraph re-ran the job and could not record
+the occurrence, leaving a count — the whole mechanism — dependent on the
+orchestrator reading its report (computenet-yubh).
 Apply the same rule when you judge the diff: an implementer's write onto a
 bead it was not assigned is *commissioned* work if the item's acceptance
 criteria or the cross-bead line in its dispatch prescribe it — on

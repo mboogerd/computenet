@@ -383,16 +383,71 @@ class Replication(
      * heal; the next re-announce that grows `replicasOf` back above one
      * resumes it automatically ([linkOut]).
      *
-     * **Drain-gated** otherwise: [civictech.cell.host.HostManagementApi.suspend]
-     * first closes this replica's own intake so no further local write races
-     * the teardown (spec 33's drain, applied at cell instead of host
-     * granularity — every effective delta already streamed to peers as it
-     * was produced, so nothing buffered needs an extra flush), a final
-     * state-as-delta catch-up re-fires at one reachable peer's existing link
-     * (the same M10.1 re-announce hook [maybeLink] uses), then despawn
-     * unpublishes the ref — surviving peers' linkers simply stop targeting a
-     * ref no longer in `replicasOf` on their next announcement, no ack
-     * protocol.
+     * **Gated drain+despawn** otherwise, in three steps — spec 42's
+     * *"intake closes (spec 33's drain, applied at cell instead of host
+     * granularity)"*, realized by
+     * [civictech.cell.host.ManagedHost.drainCellThenDespawn]:
+     * [civictech.cell.host.HostManagementApi.suspend] closes this replica's own
+     * intake on the management band; then, on the drain band (priority 30,
+     * BELOW data's 20, so every already-accepted invocation has been dispatched
+     * first — spec 31 §priorities, spec 33 step 2), the parked accepted work is
+     * applied to the cell, a final state-as-delta catch-up re-fires at one
+     * reachable peer's existing link (the same M10.1 re-announce hook
+     * [maybeLink] uses), and despawn unpublishes the ref — surviving peers'
+     * linkers simply stop targeting a ref no longer in `replicasOf` on their
+     * next announcement, no ack protocol.
+     *
+     * **This call blocks, and only from outside the host's own execution
+     * context.** [civictech.cell.host.ManagedHost.drainCellThenDespawn]'s
+     * first act is an awaited drain-band task, so `evict` itself blocks until
+     * that barrier returns — the same rule
+     * [civictech.cell.host.HostScheduler.await]'s KDoc states for
+     * `spawn`/`lookup`/`connect`: *"Only legal from outside the host's
+     * execution context ... host tasks never await."* Call it from a host
+     * task and the scheduler enforces the rule itself:
+     * `VirtualThreadScheduler`/`CoroutineScheduler`'s `await` throws *"await
+     * called from the host's own execution context (would deadlock)"*, and
+     * `SimulationController`'s throws *"simulation quiescent but awaited
+     * future incomplete."* This is a genuinely new precondition
+     * (computenet-078s): before it, both `suspend` and `despawn` took the
+     * management proxy's fire-and-forget `else` branch (`enqueue(0)`,
+     * `ManagedHost`'s `managementInlet.serve` dispatch) and `evict` never
+     * awaited anything.
+     *
+     * **The barrier is host-wide, not cell-scoped.** It is one more task on
+     * the same host-wide queue every other priority-0/10/20 task on this
+     * host drains through, so it cannot run while any of those are pending —
+     * `evict` blocks for the whole host's backlog, not just this cell's. A
+     * host under a saturating data stream can hold the barrier off for as
+     * long as the scheduler's await timeout (`future.get(5,
+     * TimeUnit.SECONDS)` in both `VirtualThreadScheduler` and
+     * `CoroutineScheduler`), at which point `evict` throws rather than
+     * completing.
+     *
+     * **This IS spec 33's drain at cell granularity, and used not to be**
+     * (computenet-078s; the boundary computenet-9c5t documented). Until that
+     * item, `suspend` and `despawn` were both enqueued at management priority 0
+     * — ahead of data's 20 — so `suspend` PREEMPTED a write the host had already
+     * accepted and journalled but not yet dispatched to the cell: `deliver` found
+     * the freshly installed `ParkQueue`, parked it, and `despawn` drained that
+     * queue into dead letters (one per parked invocation, reason
+     * `cell <ref> left the host while suspended`, counted in the host's
+     * `parkedDrainedOnTeardown` stat). Accounted for, never silently dropped —
+     * but never applied to the cell, so never gossiped and never reaching the
+     * survivors. That inverted the very ordering the spec's own no-loss argument
+     * rests on (93 I-3 §4.6: a connected replica *"drains its outbound delta
+     * queue before deactivation (30/33 step 2, whose phase-2 task sits below
+     * data priority)"*), which is why it was a defect and not a boundary.
+     * The phase-2 ordering also makes the catch-up genuinely drain-gated: it
+     * reads state as of the drained intake rather than as of the call.
+     *
+     * What the catch-up IS: anti-entropy for state this replica holds that one
+     * reachable peer may not have absorbed yet — idempotent either way.
+     * `[42-REPL-06]` asks that survivors converge and that the departed
+     * replica's frozen stream not count as divergence; the drain adds that the
+     * departing replica's *accepted* operations are applied before it goes, so
+     * they gossip like any other. Pinned by `ChurnReconvergenceTest."a write
+     * issued one step before a clean evict reaches the survivors"`.
      *
      * Returns `true` if the replica despawned, `false` if it suspended
      * instead (no reachable peer).
@@ -422,13 +477,22 @@ class Replication(
             }
             return false
         }
-        host.managementInlet.call.suspend(cell.ref)
-        // final push-catch-up to one reachable peer (best-effort; idempotent either way)
-        linked.entries.firstOrNull { it.key.first == cell.ref }?.let { (_, linkedPair) ->
-            @Suppress("UNCHECKED_CAST")
-            (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(linkedPair.second)
+        // Gated DRAIN+despawn (spec 42 §Eviction; spec 33 §The drain protocol
+        // step 2; 93 I-3 §4.6). The link to catch up on is captured HERE, in the
+        // caller's frame, because the local bookkeeping below drops `linked`
+        // synchronously while the drain runs on the host's scheduler thread.
+        val catchUpTarget = linked.entries.firstOrNull { it.key.first == cell.ref }?.value?.second
+        host.drainCellThenDespawn(cell.ref) {
+            // Final push-catch-up to one reachable peer: anti-entropy for state
+            // this replica holds that the peer may not have absorbed, idempotent
+            // either way. It now runs in the drain's phase 2, so it reads state
+            // as of the *drained* intake — including the writes this eviction
+            // just flushed (computenet-078s closed that ordering wart).
+            catchUpTarget?.let { link ->
+                @Suppress("UNCHECKED_CAST")
+                (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(link)
+            }
         }
-        host.managementInlet.call.despawn(cell.ref)
         localReplicas[cell.ref.id]?.remove(cell)
         // clean-departure watermark close: only once the last local replica of
         // this id leaves (the companion carries this peer's single row).

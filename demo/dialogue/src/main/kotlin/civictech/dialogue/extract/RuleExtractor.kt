@@ -7,19 +7,20 @@ import civictech.dialogue.Segment
  * 2aw-D4). No randomness, no clock, no I/O — `[AGO1-EXTR-01]`'s extractor
  * half. A tiny, deliberately replaceable heuristic:
  *
- * - Every segment yields an [ExtractedClaim] of its trimmed text.
- * - A segment containing " because " (case-insensitive) additionally yields
- *   an [ExtractedRelation] where the text after "because" supports the text
- *   before it: `sourceText` = the reason (after), `targetText` = the claim
- *   being supported (before), `polarity` = `"SUPPORT"`. It ALSO yields an
- *   [ExtractedClaim] for each of the two endpoint substrings — see
- *   "Why the endpoint claims" below.
+ * - A segment with no " because " (case-insensitive) match yields a single
+ *   [ExtractedClaim] of its trimmed text.
+ * - A segment containing " because " whose split succeeds (both sides
+ *   non-blank) yields **only** the two endpoint claims — see "Why only the
+ *   endpoint claims" below — plus an [ExtractedRelation] where the text
+ *   after "because" supports the text before it: `sourceText` = the reason
+ *   (after), `targetText` = the claim being supported (before), `polarity` =
+ *   `"SUPPORT"`. It does **not** also mint a claim of the whole segment.
  * - A segment opening with a disagreement marker ("no, ", "i disagree",
  *   "that's wrong") yields no relation beyond its own claim: this extractor
  *   sees one segment at a time and deliberately does not invent
  *   cross-segment state to resolve what is being disagreed with.
  *
- * ### Why the endpoint claims (computenet-xwl0, AGO1 F3 follow-up)
+ * ### Why only the endpoint claims (computenet-xwl0 then computenet-i6hp)
  *
  * `[civictech.dialogue.mint.claimKey]` only trims, collapses whitespace and
  * lowercases (2aw.F3-D1) — it does not, and per that seam's own KDoc must
@@ -34,30 +35,142 @@ import civictech.dialogue.Segment
  * claims, a demo extractor that can never produce one demonstrates only
  * half the system.
  *
- * The fix mints the two endpoint substrings ("A", "B") as their own
- * `ExtractedClaim`s **in addition to** the whole-segment claim, so their
- * keys land in `claimKeys` and the relation resolves with no change to
- * `claimKey` itself (which AGO3 replaces wholesale, not this extractor).
- * This is a deliberate, measured trade, not a free lunch: a "because"
- * segment now mints **three** canonical claims (the whole sentence, its
- * conclusion, its reason) where a human reading the transcript would count
- * two propositions — nobody asserted "A because B" as a standalone claim
- * distinct from asserting A and B. Verified before choosing this over
- * leaving `RuleExtractor` claim-only: no F3 test text contains "because",
- * so this changes no existing F3 assertion, the endpoint claims share the
- * segment's own `utteranceId` so provenance is not fabricated, and the
- * stance leg is untouched (`RuleExtractor` never emits an `ExtractedStance`).
- * The remaining cost — the extra whole-sentence claim sitting alongside its
- * own decomposition on the map — is accepted here rather than removed by
- * dropping the whole-segment claim for "because" segments, because that
- * would make a "because" segment's claim-output shape diverge from every
- * other segment's ("every segment yields a claim of its trimmed text") for
- * a demo heuristic that is explicitly meant to stay tiny and replaceable.
- * Recorded in `doc/demo-findings.md` F-14.
+ * computenet-xwl0 fixed this by minting the two endpoint substrings ("A",
+ * "B") as their own `ExtractedClaim`s **in addition to** the whole-segment
+ * claim, so their keys land in `claimKeys` and the relation resolves with no
+ * change to `claimKey` itself (which AGO3 replaces wholesale, not this
+ * extractor). That shipped a real, admitted cost: a "because" segment then
+ * minted **three** canonical claims (the whole sentence, its conclusion, its
+ * reason) where a human reading the transcript would count two propositions.
+ * At the time (F3 review, PR #635) `DialogueApp.kt` wired no extractor, so
+ * the cost was evaluated only on paper.
+ *
+ * computenet-i6hp evaluated it on an actual rendered argument map, once F4
+ * (the applier) and F5 (the HTTP surface) existed to build one: driving
+ * `RuleExtractor` through `DialoguePipeline` over the checked-in
+ * `bs20-because.jsonl` fixture (six utterances, four "because" segments) and
+ * inspecting `AgoraService.graph()` showed **4 of the resulting 13 claim
+ * nodes were the whole-segment claim, and every one of those 4 was an
+ * unconnected orphan** — the map's genuinely freestanding claims (segments
+ * with no "because") numbered only 2. The whole-segment claim was not a rare
+ * edge case on this fixture; it was the largest single category of node on
+ * the map, and every instance of it carried zero relation information. That
+ * measurement is what "every segment yields a claim of its trimmed text"
+ * was costing on a real map, not a hypothetical one, so the decision changed:
+ * for a segment whose because-split succeeds, `RuleExtractor` now emits
+ * *only* the two endpoint claims and the relation — dropping the
+ * whole-segment claim — at the price of a "because" segment's claim-output
+ * shape diverging from every other segment's. The endpoint claims still
+ * carry the segment's own `utteranceId`, so provenance is not fabricated,
+ * and the stance leg is unaffected (`RuleExtractor` never emits an
+ * `ExtractedStance`). Recorded in `doc/demo-findings.md` F-14.
+ *
+ * ### Trailing terminators, and what is deliberately NOT normalized (computenet-9bip, computenet-qoei)
+ *
+ * [civictech.dialogue.Segmentation] splits on `(?<=[.!?])\s+`, a lookbehind,
+ * so the sentence terminator stays attached to the sentence. A "because"
+ * split therefore hands the endpoint AFTER "because" a trailing terminator
+ * whenever the reason falls at the end of its sentence, while the endpoint
+ * BEFORE "because" never has one. `[civictech.dialogue.mint.claimKey]` hashes
+ * the text as given, so the SAME proposition uttered once as a reason and
+ * once as a conclusion minted two claim keys. Measured on
+ * `bs20-because.jsonl`: of three endpoint texts the transcript deliberately
+ * repeats across speakers, only "The budget is too high" — the one that is a
+ * conclusion both times — merged; "travel costs increased." / "Travel costs
+ * increased" and "we hired more contractors." / "We hired more contractors"
+ * stayed separate.
+ *
+ * computenet-9bip fixed `.`/`…` and, in the same pass, bundled `?` and `!`
+ * together as both "preserved, since they change what the segment asserts".
+ * computenet-qoei found that bundle wrong for `!`: it is reachable through
+ * the identical split-position accident (`bs20-because.jsonl` has no `!`, but
+ * segmentation admits it as readily as `.`), and unlike `?` it does not
+ * change the sentence's mood — "the budget is too high!" and "the budget is
+ * too high" are the same declarative with different emphasis, not two
+ * propositions, whereas "is the budget too high?" is genuinely an
+ * interrogative. computenet-qoei therefore unbundles the two:
+ *
+ * - **Trailing full stops, ellipses and exclamations (`.`, `…`, `!`, and runs
+ *   of them) are stripped.** This punctuation is what the segmenter
+ *   contributed, not content: whether a proposition carries it depends only
+ *   on where it happened to fall in its sentence, which is exactly the
+ *   accident that must not fork identity — 9bip's own reasoning for `.`,
+ *   extended here to `!` on the same grounds. The stripped text is what is
+ *   emitted for the claim AND for the relation endpoint, so display and key
+ *   agree and `RelationMint` still resolves against a key these same claims
+ *   mint.
+ * - **`?` is preserved.** It is not filler: it changes what the segment
+ *   asserts — the question "is the budget too high?" is not the proposition
+ *   "the budget is too high". This is a narrower rule than "strip sentence
+ *   punctuation", and deliberately so: folding an interrogative into an
+ *   assertion is a different defect, not a fix for this one.
+ * - **Capitalization is NOT touched here.** The obvious reading of the defect
+ *   blames sentence-initial case as well, and that reading is wrong:
+ *   `claimKey` already lowercases (2aw.F3-D1), so identity is *already*
+ *   case-insensitive and the two unmerged pairs above differ, after
+ *   canonicalization, only by the terminator. The text this extractor emits
+ *   is what the reader sees on the map, so it keeps the speaker's own
+ *   capitalization; normalizing the KEY while preserving the DISPLAYED text
+ *   is the existing division of labour, and case-folding here would damage
+ *   the display without changing a single key.
+ *
+ * The strip is applied here to the ENDPOINT claims only, not to the
+ * whole-segment claim a non-"because" segment yields, and that asymmetry is
+ * deliberate. An endpoint's terminator is an artifact of *where the
+ * because-split fell*, and this extractor strips it from the text it EMITS so
+ * that display and key agree on the map. A whole-segment claim's terminator is
+ * its own sentence's, and the reader should see it, so this extractor leaves
+ * it alone.
+ *
+ * It nonetheless forked identity — a whole-segment claim against an endpoint
+ * claim of the same proposition ("Travel costs increased." as its own
+ * utterance vs "... because travel costs increased"). computenet-lv25 closed
+ * that residual in [civictech.dialogue.mint.claimKey] rather than here,
+ * because it is a rule about the KEY and not about the displayed text: see
+ * that function's "Trailing terminators" KDoc for the decision and its
+ * reasoning. The consequence for this extractor is that the strip above is now
+ * about display alone — `claimKey` would fold those endpoints regardless — and
+ * the two terminator classes must stay in step: `[.…!]` stripped, `?`
+ * preserved, in both places.
  */
 object RuleExtractor : Extractor {
 
     private val becauseRegex = Regex(" because ", RegexOption.IGNORE_CASE)
+
+    /**
+     * Trailing sentence-terminator punctuation the segmenter itself
+     * contributes — see the class KDoc's "Trailing terminators": `.`, `…`
+     * and `!`. `?` is deliberately absent from this class (computenet-qoei):
+     * an interrogative asserts something different from its declarative, so
+     * it is content, not a segmenter artifact.
+     *
+     * `private` (computenet-8ojp, reverting computenet-2qkn's `internal`):
+     * [ClaimMintTest] pins this class against
+     * [civictech.dialogue.mint.claimKey] through the public surface —
+     * [extract] and `claimKey` — rather than by reaching in here directly.
+     * computenet-if9j settled this exact question a commit earlier for
+     * `DialogueApp.foldStatus`: `internal`-for-a-direct-unit-test is not
+     * justified once the behaviour is reachable publicly, and the reviewer
+     * that filed computenet-8ojp measured that the public-surface pin below
+     * is constructible and catches the same mutation this class's widening
+     * would introduce. See that test for why the pin is directional rather
+     * than an equality check.
+     */
+    private val trailingTerminator = Regex("[.…!]+$")
+
+    /**
+     * Drops the sentence-final terminator the segmenter left on [text]. A
+     * text that is *nothing but* terminator punctuation is returned
+     * unchanged rather than emptied, so this can never turn a non-blank
+     * endpoint blank.
+     *
+     * `private` for the same reason as [trailingTerminator] (computenet-8ojp).
+     */
+    private fun withoutTrailingTerminator(text: String): String {
+        val trimmed = text.trim()
+        val stripped = trimmed.replace(trailingTerminator, "").trim()
+        return stripped.ifBlank { trimmed }
+    }
 
     override fun extract(segment: Segment): List<ExtractedItem> {
         val trimmedText = segment.text.trim()
@@ -72,16 +185,22 @@ object RuleExtractor : Extractor {
             return listOf(claim)
         }
 
-        val target = trimmedText.substring(0, becauseMatch.range.first).trim()
-        val source = trimmedText.substring(becauseMatch.range.last + 1).trim()
+        // Both endpoints go through the same normalization — see the class
+        // KDoc's "Trailing terminators" (computenet-9bip, extended to `!` by
+        // computenet-qoei). In practice only `source` can carry a
+        // sentence-final terminator, but normalizing both keeps the rule one
+        // rule rather than a positional special case.
+        val target = withoutTrailingTerminator(trimmedText.substring(0, becauseMatch.range.first))
+        val source = withoutTrailingTerminator(trimmedText.substring(becauseMatch.range.last + 1))
         if (target.isEmpty() || source.isEmpty()) {
             return listOf(claim)
         }
 
-        // The endpoint claims (see the class KDoc's "Why the endpoint
+        // The endpoint claims (see the class KDoc's "Why only the endpoint
         // claims"): minted so the relation below has a canonical claim key
-        // to resolve against on BOTH sides, in addition to — not instead
-        // of — the whole-segment claim above.
+        // to resolve against on BOTH sides, INSTEAD OF the whole-segment
+        // claim built above — `claim` is deliberately not included in the
+        // returned list once the because-split succeeds (computenet-i6hp).
         val targetClaim = ExtractedClaim(
             text = target,
             speaker = segment.speaker,
@@ -98,6 +217,6 @@ object RuleExtractor : Extractor {
             polarity = "SUPPORT",
             utteranceId = segment.utteranceId,
         )
-        return listOf(claim, targetClaim, sourceClaim, relation)
+        return listOf(targetClaim, sourceClaim, relation)
     }
 }

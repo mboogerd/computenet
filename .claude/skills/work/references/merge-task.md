@@ -23,7 +23,14 @@ never the agent that wrote it. **Reviewers count against the same
 as an implementer does, and the cap was measured on mixed lanes
 (computenet-avs). Count every dispatched agent still running; when the cap is
 full, hold the reviewer and dispatch as a lane frees (you merge passes one at
-a time anyway).
+a time anyway). **The cap is not the whole question — read the box too**, with
+`python3 .claude/skills/work/scripts/next-batch.py --capacity`, because a
+reviewer dispatch has no batch call of its own and so never sees
+`capacity.advice`. At its PATHOLOGICAL rung, hold: an agent dispatched into
+that window has been observed stalling outright (computenet-lx7t). Read the
+whole advice string, not the rung name: the same reading with no build of ours
+running is reported as HOST load, where there is nothing to wait for and the
+hold would be an indefinite idle (computenet-91xn).
 
 `${featureBranchOnOrigin}` below is one line, and it saves the reviewer a
 failed command: either `The feature branch ${featureBranch} IS on origin.` or

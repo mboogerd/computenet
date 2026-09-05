@@ -11,9 +11,6 @@ import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
 import civictech.demo.shell.value
 import com.sun.net.httpserver.HttpExchange
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.json.Json
 import java.io.File
 import java.net.URLDecoder
 import java.util.*
@@ -43,18 +40,6 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
     private val shell = DemoShell(port)
     val boundPort: Int get() = shell.boundPort
 
-    @Serializable
-    private data class NodeDto(
-        val ref: String,
-        val kind: String,
-        val text: String? = null,
-        val polarity: Polarity? = null,
-        val source: String? = null,
-        val target: String? = null,
-        val head: Boolean = false,
-        val credence: Double,
-    )
-
     init {
         // No startup checkpoint: checkpoint runs on the management band and
         // would jump ahead of the still-staged replay frames, compacting the
@@ -71,21 +56,10 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
         shell.sse("/events") { graphJson() }
     }
 
-    private fun graphJson(): String = Json.encodeToString(
-        ListSerializer(NodeDto.serializer()),
-        service.graph().map { node ->
-            NodeDto(
-                ref = node.ref.id.toString(),
-                kind = node.info.kind.name,
-                text = node.info.text,
-                polarity = node.info.polarity,
-                source = node.info.source?.id?.toString(),
-                target = node.info.target?.id?.toString(),
-                head = node.info.head,
-                credence = node.credence,
-            )
-        },
-    )
+    // The DTO and its encoder live in NodeDto.kt: `:demo:dialogue` serves the
+    // identical shape, and one definition is what keeps the two backends from
+    // drifting apart (2aw.5-D3).
+    private fun graphJson(): String = civictech.agora.graphJson(service.graph())
 
     private fun handleOp(exchange: HttpExchange) {
         val params = exchange.requestBody.readBytes().decodeToString()
@@ -153,6 +127,22 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
 
     fun start(): AgoraApp = apply { shell.start() }
 
+    /**
+     * `shell.stop()` alone — deliberately no host drain and no journal fence
+     * (computenet-u7by; the reasoning and its pins are the class KDoc of
+     * `AgoraStopWindowTest`).
+     *
+     * In short: unlike `DialogueApp`, this app owns no interruptible mutation
+     * thread. `DemoShell` leaves `server.executor = null`, so the JDK's
+     * `ServerImpl.DefaultExecutor` runs each exchange inline on
+     * `HTTP-Dispatcher` and `stop(delay)` ends in `dispatcherThread.join()`
+     * without ever interrupting it — an in-flight `createClaim`/`createEdge`/
+     * `remove` therefore completes before this returns. The data half needs no
+     * fence either: `ManagedHost` appends the journal frame inside the same
+     * `dataLock` critical section as staging, and `FileJournal.append` ends in
+     * `fd.sync()`. If `DemoShell` ever acquires an executor, that premise dies
+     * and `AgoraStopWindowTest`'s first arm goes red.
+     */
     fun stop() = shell.stop()
 }
 

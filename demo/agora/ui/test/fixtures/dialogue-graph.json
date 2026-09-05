@@ -1,0 +1,76 @@
+[
+    {
+        "ref": "e03affb5-9a73-3010-a270-b84893eef7e6",
+        "kind": "CLAIM",
+        "text": "The budget is too high",
+        "credence": 0.763671875
+    },
+    {
+        "ref": "d866eb5e-d3ae-339d-b8eb-4b2169f77326",
+        "kind": "CLAIM",
+        "text": "travel costs increased",
+        "credence": 0.625
+    },
+    {
+        "ref": "4eb12c9f-3a9e-3043-a361-4b660d3fbc04",
+        "kind": "EDGE",
+        "polarity": "SUPPORT",
+        "source": "d866eb5e-d3ae-339d-b8eb-4b2169f77326",
+        "target": "e03affb5-9a73-3010-a270-b84893eef7e6",
+        "credence": 0.5
+    },
+    {
+        "ref": "5026f04a-b145-3cf0-bf60-eaf20e9e2427",
+        "kind": "CLAIM",
+        "text": "we hired more contractors",
+        "credence": 0.625
+    },
+    {
+        "ref": "8218c5c1-fdf3-3386-9e13-279d4288cae0",
+        "kind": "EDGE",
+        "polarity": "SUPPORT",
+        "source": "5026f04a-b145-3cf0-bf60-eaf20e9e2427",
+        "target": "e03affb5-9a73-3010-a270-b84893eef7e6",
+        "credence": 0.5
+    },
+    {
+        "ref": "4f51f250-6ee6-3a69-a95a-8168f7af36ba",
+        "kind": "CLAIM",
+        "text": "flights got more expensive",
+        "credence": 0.5
+    },
+    {
+        "ref": "4619cc9c-4b07-3a92-8323-2e4379ad62a7",
+        "kind": "EDGE",
+        "polarity": "SUPPORT",
+        "source": "4f51f250-6ee6-3a69-a95a-8168f7af36ba",
+        "target": "d866eb5e-d3ae-339d-b8eb-4b2169f77326",
+        "credence": 0.5
+    },
+    {
+        "ref": "63ec03a8-38ba-3688-8249-297eb775b938",
+        "kind": "CLAIM",
+        "text": "No, I disagree that flights got more expensive.",
+        "credence": 0.5
+    },
+    {
+        "ref": "b3f033e3-04ae-34ad-8748-ff8ec29be0ab",
+        "kind": "CLAIM",
+        "text": "We should revisit the budget next quarter.",
+        "credence": 0.5
+    },
+    {
+        "ref": "8f9f4f8e-86a1-31f9-865d-94b3116343a4",
+        "kind": "CLAIM",
+        "text": "the project scope grew",
+        "credence": 0.5
+    },
+    {
+        "ref": "7ae591dc-43b8-3892-99e4-d62574f93b19",
+        "kind": "EDGE",
+        "polarity": "SUPPORT",
+        "source": "8f9f4f8e-86a1-31f9-865d-94b3116343a4",
+        "target": "5026f04a-b145-3cf0-bf60-eaf20e9e2427",
+        "credence": 0.5
+    }
+]

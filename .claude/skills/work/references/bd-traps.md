@@ -101,7 +101,11 @@ SKILL.md and the other references cite this file as "`bd` traps".
   the command — fails identically (computenet-rram). The payload is one copy
   of the parent body **per dependency entry**, not one per bead, so several
   dependencies multiply it: 35KB overrun on a task, ~149KB from one call on a
-  feature (computenet-zwju). Read the bead's own fields through the
+  feature (computenet-zwju). **A truncated read of this does not look
+  truncated** — its tail is the PARENT's acceptance and metadata, well-formed,
+  so it reads as a complete read of the wrong bead (computenet-o5oz, sighting
+  three of rram -> zwju -> o5oz; a fourth belongs on that chain, not a fresh
+  file). Read the bead's own fields through the
   projection, which drops `dependencies` before the output can reach a tool
   result (57KB -> 7KB on computenet-x9e.3):
 
@@ -217,12 +221,25 @@ SKILL.md and the other references cite this file as "`bd` traps".
 - **`bd update` aborts the WHOLE call on one unknown flag**, discarding the
   writes a valid flag in the same call would have made. Measured 2026-08-29:
   `bd update <id> --nosuchflag --set-metadata probe2=x` → `Error: unknown
-  flag`, and `probe2` was never set. The shape that produces it: `bd update`
-  has `--body-file` but **no `--acceptance-file`** — only `--acceptance
-  <string>` — while `create-ticket.sh` and `file-friction.sh` both expose
-  `--desc-file` AND `--accept-file`, so an agent that has just used those
-  reaches for the pair here and loses the description write too
-  (computenet-9z8t). Set acceptance in its own `bd update` call, and re-read
+  flag`, and `probe2` was never set. The shape that produces it: **three call
+  paths spell these flags three ways**. Step 7 distinguishes the wrappers from
+  bare `bd create` (that was g1gf's fix); nothing said anything about
+  `bd update`, and guessing there costs the whole call:
+
+  | path | description from a file | acceptance |
+  |---|---|---|
+  | `bd create` | `--body-file F` | `--acceptance STR` only |
+  | `bd update` | `--body-file F` | `--acceptance STR` only |
+  | `create-ticket.sh`, `file-friction.sh` (CREATE only) | `--desc-file F` | `--accept-file F` |
+
+  So `--desc-file` and `--accept-file` exist ONLY on the wrappers, which only
+  create — an orchestrator *updating* a bead has no wrapper path at all and
+  must use `bd update`'s row. Neither `bd` path has any acceptance-from-file
+  flag. (`--stdin` is an alias for `--body-file -` on both.) Three sessions have paid
+  the same two minutes finding one cell of that table: computenet-9z8t
+  (`bd update --acceptance-file`), computenet-g1gf (`bd create --desc-file`),
+  computenet-k9th (`bd update --desc-file`, which discarded the `--title`
+  write beside it). Set acceptance in its own `bd update` call, and re-read
   the bead rather than trusting a multi-field update's exit code.
 - **`create-ticket.sh` can be DENIED by the permission classifier inside a
   dispatched subagent** — not a script error, a refusal of the bash call

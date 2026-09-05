@@ -1,0 +1,6 @@
+{"id":"u1","turn":1,"speaker":"alice","tsMillis":1000,"text":"The budget is too high because travel costs increased."}
+{"id":"u2","turn":2,"speaker":"bob","tsMillis":2000,"text":"The budget is too high because we hired more contractors."}
+{"id":"u3","turn":3,"speaker":"carol","tsMillis":3000,"text":"Travel costs increased because flights got more expensive."}
+{"id":"u4","turn":4,"speaker":"bob","tsMillis":4000,"text":"No, I disagree that flights got more expensive."}
+{"id":"u5","turn":5,"speaker":"alice","tsMillis":5000,"text":"We should revisit the budget next quarter."}
+{"id":"u6","turn":6,"speaker":"carol","tsMillis":6000,"text":"We hired more contractors because the project scope grew."}

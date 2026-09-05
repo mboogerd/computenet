@@ -48,7 +48,10 @@ session boundaries.
 **Claim by id, never `bd ready --claim`.** `bd ready` has no `--id` filter,
 and `--claim` takes whatever is first *at claim time* — which need not be
 the item you just read and decided to work. Select with `bd ready ...
---json`, then claim that specific id with `bd update`.
+--json`, then claim that specific id with `claim-item.sh <id>`, which claims
+and stamps the session holder token in one step (a bare `bd update --claim`
+stamps no holder, and a concurrent sibling's sweep cannot then tell your live
+claim from a crash leftover — computenet-yvdl).
 
 ## What a claim guarantees
 

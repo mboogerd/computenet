@@ -364,7 +364,156 @@
 # REVIEWER, hitting it while diffing symbols across revisions, which only git
 # grep can do. That is the computenet-l5rc shape exactly, and l5rc's own remedy
 # is dual-placed for the same reason. Recomputed against the landed 9245.
-work                9257
+# 9257 -> 9273 on 2026-09-03: computenet-9p3y + computenet-s6x5, one edit for
+# both. review-feature.md §4 and review-task.md §3 stop enumerating the
+# required checks (a count wrong in BOTH directions across four instances) and
+# point at the ruleset via wait-checks.sh; §4 gains the non-required-lane
+# reading that would have stopped a false "CI covers none of :iroh" reaching
+# three dispatch prompts and a PR body. +16 lines to delete two lists that go
+# stale on every promotion. 9273 -> 9275 in review: the reviewer found two
+# stale counts the sweep had missed inside review-feature.md itself ("six green
+# rows", "the other five settle") and a worked example that still called
+# iroh-sidecar non-required — the very inversion the bead is about.
+# 9275 -> 9285, RECOMPUTED on rebase against the landed number rather than
+# merged with the 9257 baseline it was written from (2026-09-03): computenet-axxl, two of its three one-line
+# documentation gaps. issue-quality.md gains the "next free X goes stale"
+# bullet (a bead named F-14; another PR took it first), review-feature.md's
+# `bd comments --json` recipe names `.text` (the wrong key returns null, which
+# reads as an empty thread). The third gap — create-ticket.sh's --help — is a
+# script and costs the ledger nothing.
+# 9285 -> 9364 on 2026-09-03. Three items in one PR, all in SKILL.md, so
+# they raise this entry once instead of colliding on it three times
+# (computenet-x69c's lesson). The entry has been RECOMPUTED against what landed
+# three times while this branch was open (#649 -> 9275, #652 -> 9285), never
+# merged with a baseline it was written from — which is the rule for two PRs on
+# one entry: the second number depends on the first's LANDED value, so neither
+# side of the conflict is right.
+#
+# Per-item counts are the diff's own hunk deltas against origin/main, not
+# estimates. An earlier version of this comment summed four guesses to 65
+# against a measured 64, and its correction still had one item 3 lines out; a
+# reviewer caught both (computenet-lx7t's own review, findings 3 and A).
+#   computenet-lx7t (+20 in SKILL.md 5b, +10 in 5e, +4 in merge-task.md):
+#     agent COUNT is not the load model — ONE repo-wide gradle gate alone took
+#     16 cores to ~25x, cap 3 never binding. `next-batch.py --capacity` exists
+#     so the two dispatches with no batch call — 5e's feature reviewer and
+#     merge-task.md's task reviewer — can read the advice the batch path
+#     already had, and 5e now scopes or holds the reviewer's own wide gate.
+#   computenet-099p (+16 net: +17 added, -1 stray blank line removed in
+#     review): a same-turn reading bounds only its own turn — one
+#     152m boundary landed a session at 313m of a 300m slot, which no reading
+#     frequency catches; no forward-looking budget claim from an older reading.
+#   computenet-9ofq (+25): the harness "stalled: no progress for 600s"
+#     notification named as a distinct case with a fixed response, and the
+#     "start acting promptly" re-dispatch line marked as the guess it is.
+#   computenet-adgy (+4): PR #650's reviewer asked that agent-execution.md's
+#     `bd -C` bullet be generalised to any command line, in the file dispatched
+#     agents actually read. It rides here rather than colliding on this entry.
+# 9364 -> 9375 on 2026-09-03: computenet-7wd6 (+11). Recomputed against
+# the landed number after #651 took this entry to 9364; the +8 originally
+# measured was against 9285.
+#
+# SKILL.md 5e attributed the ~9-12m required-check cycle to sibling churn only.
+# Two reviewers each paid it in full for a KDoc-only repair on an already-green
+# head — 0 non-comment code lines, nothing landed under either branch,
+# merge-base..origin/main empty both times. The cost is unchanged and the
+# repair is still right (review-feature.md section 5 already says so); what the
+# orchestrator gains is the arithmetic — budget one check cycle per review that
+# FINDS something, not only per sibling landing.
+#
+# +8 became +11 in review. The first cut spliced into the middle of the
+# existing sentence and left "invalidate" with no object; the new material is
+# now its own paragraph and the original sentence survives whole. The same
+# review struck a "~20-27m across three reviews" figure that did not follow
+# from any of the cited numbers — 3x the measured cycle is ~27-36m — so the
+# text now says "~9-12m each" and leaves the multiplication to the reader.
+#
+# 9375 -> 9388 on 2026-09-04 (computenet-91xn): +13 for the split of 5b's
+# PATHOLOGICAL rung into "the load is OURS, hold" and "the load is the HOST's,
+# there is nothing to wait for, do not idle", restated at 5e's reviewer
+# dispatch and in merge-task.md. The rung named its own cause without checking
+# it, so on a Defender-managed box its remedy was unreachable and a session
+# idled ~25 minutes waiting for a gate that did not exist. The CHECK itself is
+# mechanical and costs no budget lines — next-batch.py's busy_builds() now
+# reads `ps` and the advice string says which case it is.
+#
+# 9388 -> 9391 in review: +2 telling 5e's reviewer dispatch to SCOPE its gate
+# under HOST load ("slow, not wrong" was measured on scoped runs, and the
+# feature reviewer's repo-wide gate is the one unscoped run the session emits),
+# +1 reflowing a bold marker the 5b insert had split mid-sentence.
+#
+# 9391 -> 9405 on 2026-09-04 (computenet-k9th): +14 for a three-row table of
+# which description/acceptance file flag each bd call path takes, replacing the
+# prose that described one cell of it. `--desc-file`/`--accept-file` exist only
+# on the wrappers; neither bd path has an acceptance-from-file flag at all; and
+# a guess aborts the whole call, discarding the valid writes beside it. Three
+# sessions each paid the same two minutes finding one cell (9z8t, g1gf, k9th),
+# so the table is cheaper than the fourth. +4 of the 14 name the flag at 5e's
+# text-correction site, which is where the third instance was paid.
+#
+# 9405 -> 9408 in review: +3 saying the wrappers are CREATE-only (so an
+# orchestrator updating a bead has no wrapper path and must use bd update's
+# row), naming --stdin as --body-file's alias, and correcting a stale "SKILL.md
+# presents them as interchangeable" — step 7 already distinguishes the wrappers
+# from bare bd create; bd update was the half nothing covered.
+#
+# 9408 -> 9413 on 2026-09-04 (computenet-gsm6): +5 for the second detector of a
+# discontinuous turn boundary. SKILL.md's only answer was the budget Monitor's
+# self-reported elapsed, which is unavailable exactly when the Monitor is the
+# thing that failed — and on 2026-09-04 both failed at once on a 300m slot,
+# leaving a 180m boundary to be found by accident. The paragraph now names both
+# detectors and the one residual hole (a turn that takes no reading at all).
+# The detector itself is mechanical and costs no budget lines: slot-elapsed.sh
+# puts the previous reading on the same rung ladder and warns when they differ,
+# or when an hour passed regardless.
+#
+# 9413 -> 9432 on 2026-09-04 (computenet-o5oz): +19 routing the four
+# agent-facing bead reads through the bead.sh projection and saying what the
+# failure actually looks like. `bd show` on a child inlines the parent epic's
+# whole description, and a TRUNCATED read of that does not look truncated — its
+# tail is the parent's acceptance and metadata, well-formed, so it reads as a
+# complete read of the WRONG bead. Sighting three (rram -> zwju -> o5oz), and
+# the first where a reviewer nearly scored an item against its epic's criteria.
+# +5 of the 19 say which two reads deliberately stay on raw `bd show`: the
+# projection always emits the key, so an absence test needs the unprojected
+# form. The projection itself already existed and costs nothing.
+#
+# 9432 -> 9442 on 2026-09-04 (computenet-yvdl): +10 routing every claim below
+# the epic layer through claim-item.sh, so the claim carries a session-unique
+# holder token. Measured: a second /work session on the same box reopened this
+# session's live item claim 73 minutes after it was made, because the assignee
+# is unique per MACHINE and there was no holder to distinguish them. +5 of the
+# 10 are next-unit.md's routes 3/4 and claim-sync.md, which is where the
+# measured claim was actually made — the SKILL.md sites alone left that path
+# untouched. The two mechanisms (claim-item.sh, the sweep's holder check and
+# its two suites) cost no budget lines.
+#
+# 9442 -> 9459 on 2026-09-04 (computenet-8c7s): +17 in red-check-attribution.md
+# step 1. `--log-failed` returns the failed JOB's whole log, which on a Gradle
+# job is 2,205 PASSED lines against 4 failure lines (measured, run 33888400440)
+# — and a screenful of PASSED under a flag by that name reads as "the failure
+# is not in this job", which is how a red check gets attributed to the wrong
+# lane. The prescribed command is now a grep rather than a bare tail. +9 of the
+# 17 are the review's finding that the pattern must be space-delimited: an
+# anchored ^e: matches nothing at all (gh prefixes every line), while a bare
+# e: matches 173 lines of noise and pushes the real failures past head -40.
+# That paragraph is the difference between a pattern that works and one that
+# looks like it does.
+#
+# 9459 -> 9480 on 2026-09-04 (computenet-yubh): +21 resolving a collision the
+# skill created for itself. review-feature.md §4 sends a reviewer that meets a
+# red check into red-check-attribution.md, whose last step is a comment on the
+# FLAKE bead — while §7 tells the same reviewer to write to the feature under
+# review and nothing else. A reviewer resolved it in favour of §7, re-ran the
+# job, and could not record the occurrence; the count that "eventually gets it
+# fixed" reached the bead only because the orchestrator happened to read that
+# paragraph of a long report. The occurrence comment is now a STANDING
+# authorized cross-bead write, named in §7, in red-check-attribution.md and —
+# after review found the first attempt had missed it — in the reviewer dispatch
+# TEMPLATE, which is the only one of the three a reviewer actually receives
+# (SKILL.md is NOT-READ at any hop from a reviewer). Two sentences elsewhere
+# that flatly denied any reviewer cross-bead write are corrected with it.
+work                9480
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

@@ -261,7 +261,11 @@ which is what makes them worth naming rather than leaving to be rediscovered.
   show x` fails with `no such file or directory: bd -C /path` — zsh does not
   word-split an unquoted expansion, so the whole string is looked up as one
   command name. Type `bd -C "$WT" show x` each time, or define a function:
-  `bd() { command bd -C "$WT" "$@"; }` (computenet-wahz).
+  `bd() { command bd -C "$WT" "$@"; }` (computenet-wahz). **The rule is any
+  command line, not just `bd`** — a reviewer lost all three of its mutation
+  runs to `FILT="./gradlew … --tests 'X' --rerun"; $FILT`, exit 127, while the
+  block's own echoes printed plausibly (computenet-adgy; AGENTS.md carries the
+  family).
 - **A `/*` inside a Kotlin KDoc comments out the rest of the file.** Kotlin
   block comments NEST, so a path glob like `micro/*Benchmark.kt` written in a
   `/** … */` opens a second level that never closes. The errors land

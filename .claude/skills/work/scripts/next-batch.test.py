@@ -449,15 +449,22 @@ if "merged_into_feature" not in nb._entry({"id": "t"}, False, []):
     failed += 1
     print("FAIL: every entry must carry merged_into_feature for the 5b inspect rule")
 
-# load_advice: advisory only, and it must never fire when the cap is already 1
-# (computenet-2r22). getloadavg is stubbed so the thresholds are deterministic.
+# load_advice: advisory only. Below the pathological rung it must never fire
+# when the cap is already 1 (computenet-2r22) — there is no room to go under.
+# The >=5x rung is the exception and fires at any cap, because it is advice
+# about dispatching ANYTHING, including a reviewer that has no cap
+# (computenet-lx7t). getloadavg is stubbed so the thresholds are deterministic.
 load_cases = [
     #  load1, cores, cap, expect-advice
     (1.0,  16, 3, False),   # quiet box: nothing to say
     (15.9, 16, 3, False),   # just under core count
     (16.0, 16, 3, True),    # meets core count: go under the cap
-    (204.71, 16, 3, True),  # the measured near miss
-    (204.71, 16, 1, False), # cap already 1: no room to go under
+    (40.0, 16, 3, True),    # >=2x: dispatch ONE
+    (40.0, 16, 1, False),   # cap already 1: no room to go under
+    (79.9, 16, 1, False),   # just under 5x: still nothing to say at cap 1
+    (204.71, 16, 3, True),  # the 2r22 near miss — now pathological
+    (204.71, 16, 1, True),  # ...and pathological fires even at cap 1
+    (426.07, 16, 1, True),  # the lx7t measurement, one repo-wide gate
 ]
 _real_getloadavg = nb.os.getloadavg
 for load1, cores, cap, want in load_cases:
@@ -473,7 +480,7 @@ for load1, cores, cap, want in load_cases:
         failed += 1
         print(f"FAIL: load1={load1} cores={cores} cap={cap} advice={got_advice!r}, wanted advice={want}")
 # a 2x-core reading must name ONE agent, not merely 'go under'
-nb.os.getloadavg = lambda: (204.71, 0, 0)
+nb.os.getloadavg = lambda: (40.0, 0, 0)
 try:
     _, strong = nb.load_advice(16, 3)
 finally:
@@ -481,6 +488,97 @@ finally:
 if "ONE" not in (strong or ""):
     failed += 1
     print(f"FAIL: a >=2x-core load must say dispatch ONE agent, got {strong!r}")
+# and a 5x-core reading with a build of OURS running must say dispatch NOTHING,
+# not dispatch ONE
+_real_busy = nb.busy_builds
+nb.os.getloadavg = lambda: (426.07, 0, 0)
+try:
+    nb.busy_builds = lambda ps_output=None: "java at 380%"
+    _, patho = nb.load_advice(16, 3)
+finally:
+    nb.busy_builds = _real_busy
+    nb.os.getloadavg = _real_getloadavg
+if "PATHOLOGICAL" not in (patho or "") or "NOTHING" not in (patho or ""):
+    failed += 1
+    print(f"FAIL: a >=5x-core load must say dispatch NOTHING, got {patho!r}")
+
+# ...but only when a build of OURS is what is burning the box. With no busy
+# java/gradle process the pathological remedy ("wait for the gate") is
+# unreachable and the session must not idle (computenet-91xn).
+nb.os.getloadavg = lambda: (316.28, 0, 0)
+try:
+    nb.busy_builds = lambda ps_output=None: ""
+    _, host = nb.load_advice(16, 3)
+    nb.busy_builds = lambda ps_output=None: "java at 91%"
+    _, ours = nb.load_advice(16, 3)
+finally:
+    nb.busy_builds = _real_busy
+    nb.os.getloadavg = _real_getloadavg
+if "NOTHING" in (host or "") or "HOST load" not in (host or ""):
+    failed += 1
+    print(f"FAIL: 5x load with no build of ours must not say dispatch NOTHING, got {host!r}")
+if "NOTHING" not in (ours or "") or "OURS" not in (ours or ""):
+    failed += 1
+    print(f"FAIL: 5x load with a busy build must still hold, got {ours!r}")
+# busy_builds() itself: %CPU is the discriminator, not the process name. An idle
+# JetBrains daemon is what MacBoo actually had while load1 read 316.
+if nb.busy_builds("%CPU COMM\n 90.1 java\n 55.0 wdavdaemon_enterprise\n") != "java at 90%":
+    failed += 1
+    print("FAIL: busy_builds must report a busy java and ignore a busy non-build process")
+if nb.busy_builds(" 0.3 java\n 54.3 com.manageengine.appctrl.driver\n") != "":
+    failed += 1
+    print("FAIL: an idle java daemon under host load must not count as our build")
+# UNKNOWN is a third answer, not the host case: a `ps` that cannot be read must
+# not let the advice assert that no build of ours is running (91xn review, F1).
+_real_run = nb.subprocess.run
+def _ps_boom(*a, **k):
+    raise OSError("ps unavailable")
+nb.os.getloadavg = lambda: (316.28, 0, 0)
+try:
+    nb.subprocess.run = _ps_boom
+    unknown_probe = nb.busy_builds()
+    _, unknown = nb.load_advice(16, 3)
+finally:
+    nb.subprocess.run = _real_run
+    nb.os.getloadavg = _real_getloadavg
+if unknown_probe is not None:
+    failed += 1
+    print(f"FAIL: an unreadable ps must return None, not {unknown_probe!r}")
+if "UNKNOWN" not in (unknown or "") or "Hold" not in (unknown or "") \
+   or "NO build of ours" in (unknown or ""):
+    failed += 1
+    print(f"FAIL: an unreadable ps must hold on an UNKNOWN cause, got {unknown!r}")
+
+# --capacity: the capacity block alone, no feature id (computenet-lx7t). A
+# reviewer dispatch has no batch call, so this is its only route to the advice.
+import json as _json, subprocess as _subp
+_cap_out = _subp.run(
+    [sys.executable, str(pathlib.Path(__file__).with_name("next-batch.py")),
+     "--capacity"],
+    capture_output=True, text=True)
+if _cap_out.returncode != 0:
+    failed += 1
+    print(f"FAIL: --capacity exited {_cap_out.returncode}: {_cap_out.stderr[:200]}")
+else:
+    _cap = _json.loads(_cap_out.stdout)
+    if set(_cap) != {"capacity"} or \
+       set(_cap["capacity"]) != {"cores", "max_parallel", "load1", "advice"}:
+        failed += 1
+        print(f"FAIL: --capacity shape is {_cap!r}")
+# --capacity honours --siblings, or it names a cap the caller does not have
+_sib = _subp.run(
+    [sys.executable, str(pathlib.Path(__file__).with_name("next-batch.py")),
+     "--capacity", "--siblings", "9"], capture_output=True, text=True)
+if _sib.returncode != 0 or _json.loads(_sib.stdout)["capacity"]["max_parallel"] != 1:
+    failed += 1
+    print(f"FAIL: --capacity ignores --siblings: {_sib.stdout or _sib.stderr!r}")
+# ...and refuses a feature id rather than silently ignoring it
+_bad = _subp.run(
+    [sys.executable, str(pathlib.Path(__file__).with_name("next-batch.py")),
+     "computenet-x", "--capacity"], capture_output=True, text=True)
+if _bad.returncode == 0 or "takes no feature id" not in _bad.stderr:
+    failed += 1
+    print(f"FAIL: --capacity with a feature id: rc={_bad.returncode} {_bad.stderr!r}")
 # a platform without getloadavg must degrade to (None, None), not raise
 for exc in (OSError("nope"), AttributeError("nope")):
     def _boom(e=exc):
@@ -495,7 +593,13 @@ for exc in (OSError("nope"), AttributeError("nope")):
     if got != (None, None):
         failed += 1
         print(f"FAIL: getloadavg raising {exc!r} must give (None, None), got {got!r}")
-load_advice_cases = len(load_cases) * 2 + 3
+# +11: the ONE assertion, the PATHOLOGICAL/NOTHING assertion, the two
+# cause-check branches, two busy_builds() cases and the two unreadable-ps
+# cases (computenet-91xn), two getloadavg
+# degradation cases, and --capacity's rc/shape, --siblings and feature-id checks.
+# These increment `failed` but not `total`, so the constant is how they are
+# counted (computenet-lx7t review, finding B: the suite ran 127 and printed 123).
+load_advice_cases = len(load_cases) * 2 + 13
 
 
 # --- dir_claims(): a DIRECTORY claim is advisory, not a batching change -----

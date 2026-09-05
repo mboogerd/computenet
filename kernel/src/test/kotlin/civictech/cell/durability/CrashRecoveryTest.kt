@@ -224,4 +224,50 @@ class CrashRecoveryTest {
             memberships[0].none { it.startsWith("p0-burst") }.shouldBeTrue()
         }
     }
+
+    /** Did the accepted-but-unflushed burst survive the crash on peer 0? */
+    private fun burstSurvived(memberships: List<Set<String>>): Boolean =
+        memberships[0].any { it.startsWith("p0-burst") }
+
+    /**
+     * **BS-16 — "the retrofit is behaviour-preserving" ([CHA1-61]), for this file.**
+     *
+     * computenet-umx.3.10 replaced this file's hand-rolled crash-and-rebuild with [CrashFault]
+     * and swapped a captured `UUID.randomUUID()` `logicalId` for [HostRebuild]'s [StableRefs].
+     * Two things the retrofit's own KDoc asserts and nothing re-checks:
+     *
+     *  - **Arm 1 — the rebuild hinge.** "The rebuilt cells re-register at the *same* `CellRef`s,
+     *    so this changes no assertion." Pre-retrofit that held by construction: one `logicalId`
+     *    captured in a `var`, reused. Post-retrofit it holds only because [StableRefs] is a
+     *    deterministic function of `(namespace, instanceId, name)` — a property of the rig, on
+     *    which every seed's outcome now depends. Its non-vacuity arm is that the ref is
+     *    genuinely *derived*: a different `instanceId` or namespace must give a different ref,
+     *    or "stable" would just mean "constant" and the three replicas would collide.
+     *  - **Arm 2 — the per-seed outcome vector, and what decides it.** Pinned from the
+     *    pre-retrofit assertions at `67399fc23^`, which recorded the burst present on every
+     *    journaled seed and absent on every unjournaled one. The two vectors are complements,
+     *    and that is the discriminating fact rather than either vector alone: a [CrashFault]
+     *    that had stopped crashing, or a `journal = null` control that had stopped being a
+     *    control, would leave the burst present in BOTH runs. So this arm cannot pass against a
+     *    neutralised injector, where a bare "the vector is unchanged" assertion could.
+     *
+     * The seed range is a 20-seed prefix of the existing 0..99 / 0..49 ranges: two full sessions
+     * per seed, and the existing tests already drive 150 of them in this class.
+     */
+    @Test
+    fun `BS-16 CHA1-61 - the rebuilt peer keeps its pre-crash CellRef, and the per-seed burst-loss vector is journal-decided`() {
+        // Arm 1 — stable across rebuild generations...
+        val namespace = "crash-recovery-bs16"
+        val refs0 = HostRebuild.refs(namespace)
+        refs0.ref("replica") shouldBe refs0.ref("replica")
+        HostRebuild.refs(namespace).ref("replica") shouldBe refs0.ref("replica")
+        // ...and derived, not constant: the other replicas and other namespaces differ.
+        (StableRefs(namespace, instanceId = 1).ref("replica") == refs0.ref("replica")) shouldBe false
+        (HostRebuild.refs("other-$namespace").ref("replica") == refs0.ref("replica")) shouldBe false
+
+        // Arm 2 — the per-seed outcome vector, pinned from the pre-retrofit assertions.
+        val seeds = 0L until 20L
+        seeds.map { burstSurvived(runSession(it, journaled = true)) } shouldBe seeds.map { true }
+        seeds.map { burstSurvived(runSession(it, journaled = false)) } shouldBe seeds.map { false }
+    }
 }

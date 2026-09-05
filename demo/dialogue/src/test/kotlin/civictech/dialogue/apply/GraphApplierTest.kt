@@ -66,6 +66,17 @@ class GraphApplierTest {
     /** u7: "Dogs bark." --ATTACK--> "Cats purr.", plus bob's stance on "Cats purr.". */
     private val attackText = "No it does not."
 
+    /**
+     * u8/u9: the same proposition contributed twice, differing ONLY in case —
+     * so [claimKey] (which lowercases, 2aw.F3-D1) folds them onto one claim
+     * key while [civictech.dialogue.mint.ClaimMint.ClaimAggregator]'s
+     * lexicographically-least representative is the capitalized one
+     * ('T' = 84 sorts before 't' = 116 in UTF-16 order). computenet-0d5e's
+     * subject.
+     */
+    private val travelLower = "travel costs increased"
+    private val travelUpper = "Travel costs increased"
+
     private val cassetteEntries: Map<String, List<ExtractedItem>> = mapOf(
         // BS-01's utterance: ONE utterance yielding a claim AND a stance on it.
         catsPurr to listOf(
@@ -85,6 +96,8 @@ class GraphApplierTest {
             ExtractedRelation(sourceText = dogsBark, targetText = catsPurr, polarity = "ATTACK", utteranceId = "u7"),
             ExtractedStance(claimText = catsPurr, speaker = "bob", value = 0.2, utteranceId = "u7"),
         ),
+        travelLower to listOf(ExtractedClaim(text = travelLower, speaker = "erin", utteranceId = "u8")),
+        travelUpper to listOf(ExtractedClaim(text = travelUpper, speaker = "frank", utteranceId = "u9")),
     ).mapKeys { (text, _) -> segmentContentHash(hashSegment(text)) }
 
     private fun hashSegment(text: String) =
@@ -108,6 +121,8 @@ class GraphApplierTest {
     private val u5 = utterance("u5", 5, "dave", fishSwim)
     private val u6 = utterance("u6", 6, "dave", secondRelationText)
     private val u7 = utterance("u7", 7, "bob", attackText)
+    private val u8 = utterance("u8", 8, "erin", travelLower)
+    private val u9 = utterance("u9", 9, "frank", travelUpper)
 
     private val catsKey = claimKey(catsPurr)
     private val dogsKey = claimKey(dogsBark)
@@ -644,6 +659,101 @@ class GraphApplierTest {
             failure.message?.contains(DialogueRuntime.sinkRef("claims").toString()) == true,
             "GraphApplier's claims sink must collide with a cell planted at " +
                 "DialogueRuntime.sinkRef(\"claims\") — got: ${failure.message}",
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // computenet-0d5e — a merged claim's DISPLAYED text is written once, at
+    // create. INTENDED, and pinned as such.
+    // ------------------------------------------------------------------
+
+    /**
+     * The displayed text of a claim contributed by two case-differing
+     * utterances is whichever text was live at FIRST BIND, and it is
+     * therefore admission-order dependent — while the claim's *ref* and
+     * ClaimMint's *representative* are both order-independent.
+     *
+     * **This is the intended division of labour, not a defect** (decided on
+     * computenet-0d5e; reasoning in
+     * [civictech.dialogue.mint.ClaimMint.ClaimAggregator] and in
+     * [GraphApplier]'s "Claim text is written once" section). In one
+     * sentence: identity must converge without coordination, so
+     * [BindingTable.refFor] is a pure function of the canonical key; display
+     * text is *content* a speaker actually uttered, written once by the sole
+     * writer, and making it a pure function of the LIVE contributing set
+     * would make it *change* under a reader every time a contribution is
+     * admitted or retracted — the opposite of the stability `refFor`'s purity
+     * buys.
+     *
+     * Read this test as the honest statement of what the graph shows. It runs
+     * the same two utterances in both orders through [DialoguePipeline] plus
+     * [GraphApplier] and asserts, per order:
+     *
+     * - the two texts share one canonical key and one node — no ref churn,
+     *   no second claim;
+     * - the aggregate is identical in both orders (same live set, same
+     *   lexicographically-least representative `Travel costs increased`);
+     * - the node's displayed text is the first-admitted one, so it DIFFERS
+     *   between the orders and is not the representative.
+     */
+    @Test
+    fun `INTENDED - a claim merged from two case-differing texts displays the first-bound one, while its ref and ClaimMint's representative stay order-independent`() {
+        val key = claimKey(travelLower)
+        assertEquals(
+            key,
+            claimKey(travelUpper),
+            "precondition: the two texts differ only in case, so claimKey folds them onto one claim key",
+        )
+
+        /** Admit [first], reconcile, admit [second], reconcile; return the single claim node. */
+        fun run(first: Utterance, second: Utterance): AgoraService.Node {
+            val rig = Rig()
+            rig.admit(first)
+            assertEquals(1, rig.reconcile().structureOps, "the first utterance creates the claim node")
+            rig.admit(second)
+            assertEquals(
+                0,
+                rig.reconcile().structureOps,
+                "the second contribution joins the SAME key: no create, and no ref churn",
+            )
+
+            val aggregate = rig.applier.observedClaims().getValue(key)
+            assertEquals(
+                setOf("u8", "u9"),
+                aggregate.fromUtterances,
+                "both utterances justify the one claim",
+            )
+            assertEquals(
+                travelUpper,
+                aggregate.text,
+                "ClaimMint's representative is order-independent: the lexicographically least " +
+                    "contributing text, whichever order the two arrived in",
+            )
+
+            val node = rig.service.graph().single()
+            assertEquals(
+                BindingTable.refFor(key),
+                node.ref,
+                "claim refs stay a pure function of the canonical key — no churn on re-binding",
+            )
+            rig.assertApply07()
+            return node
+        }
+
+        val lowerFirst = run(first = u8, second = u9)
+        val upperFirst = run(first = u9, second = u8)
+
+        assertEquals(
+            travelLower,
+            lowerFirst.info.text,
+            "INTENDED (computenet-0d5e): the graph displays the text live at FIRST BIND — " +
+                "here u8's — not ClaimMint's representative, which is '$travelUpper'",
+        )
+        assertEquals(
+            travelUpper,
+            upperFirst.info.text,
+            "INTENDED (computenet-0d5e): admitting u9 first displays u9's text; the displayed " +
+                "text is admission-order dependent by design, while the ref above is not",
         )
     }
 }

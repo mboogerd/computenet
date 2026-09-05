@@ -140,8 +140,8 @@ if [ "$nreq" -gt 0 ]; then
 else
   # The fallback is a DEGRADED reading and says so: it can miss a context added
   # since this line was written, which is the exact failure it stands in for.
-  req_list='build-test-fast build-test-serial concord-full ui-test agora-ui-test kernel-test'
-  nreq=6
+  req_list='build-test-fast build-test-serial concord-full ui-test agora-ui-test kernel-test iroh-sidecar'
+  nreq=7
   echo "wait-checks: WARNING could not read the main ruleset — falling back to a" \
        "HARD-CODED list of $nreq contexts. A required check added since is INVISIBLE" \
        "to this run: a SETTLED verdict here does not mean the PR can merge."

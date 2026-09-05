@@ -2028,14 +2028,45 @@ re-delivery path as of this base, not an inert one.
   number honestly rather than either hiding it or duplicating BS-15's gate.
 - **`[CHA3-51]`'s "duplicated across the transition" is read at the successor
   only** (below, §5) — filed as `computenet-yqgd`, not re-filed here.
-- **BS-17's exclusive payload never crosses a mesh MEMBERSHIP departure** (§2
-  above, measured at task review): zero `DepartEvent`s of any `DepartureMode`
-  across seeds 1..50. The unclean
-  departure is the bridge host's own `CrashFault.midDrain`. Filed as
-  `computenet-usmw`. This is a *coverage* limit — the composition is reachable
-  in principle, it simply was not run — so it is recorded here rather than in
-  `concord/corpus/DISPUTES.md`, which is for properties that cannot be checked
-  honestly at all.
+- ~~**BS-17's exclusive payload never crosses a mesh MEMBERSHIP departure**~~
+  (§2 above, measured at task review): zero `DepartEvent`s of any
+  `DepartureMode` across seeds 1..50; the only unclean departure was the bridge
+  host's own `CrashFault.midDrain`. Filed as `computenet-usmw` as a *coverage*
+  limit — the composition was reachable in principle and simply was not run —
+  which is why it was recorded here rather than in `concord/corpus/DISPUTES.md`.
+  **CLOSED by `computenet-usmw`**: `ChurnExclusiveBridgeGraph` now runs at
+  `eventCount = 8`, `stepBudget = 60`, where the same 50 seeds draw **107
+  `DepartEvent`s** (33 `EVICT_CLEAN`, 28 `PARTITION_SUSPEND`, **26
+  `CRASH_UNCLEAN`**, 20 `EVICT_NO_CLOSE`), earliest at step 4, against bridge
+  windows spanning `0..19`..`0..110`. **All 50 seeds fire a mesh departure
+  inside their own bridge window** — asserted per seed in
+  `ExclusiveChurnTest.everyExclusivePayloadSurvivesChurnOrFailsTheRun_BS17`
+  from the *reported activation steps*, not from the plan, so an inert
+  departure cannot satisfy it — and all 26 unclean departures land inside a
+  window (on 20 of the 50 seeds), which a second, sweep-wide assertion pins.
+  Two knobs were needed, not one: `eventCount` makes departures exist (2 draws
+  none, structurally — a 2-peer roster cannot reach the
+  MEMBER-with-a-surviving-peer branch in two events), `stepBudget` makes them
+  *overlap the transfer* (at 600 the earliest departure was step 61 and only 6
+  of 50 seeds overlapped; the horizon moves the steps, not the draws).
+
+  The one seed that reddened the widened sweep (`peer "peer0" is already a
+  member, so a rejoin cannot be applied to it`, from `MeshPeer.rejoin`: 1 of 50
+  at `eventCount = 8`, 9 of 50 at 12) was an **incoherence between two
+  membership models**, not a property failure, and is fixed in
+  `PeerHandles.kt`. `MeshPeer.member` surviving a departure is **intended**,
+  and which `DepartureMode` paths clear it is now stated on the flag's own
+  KDoc: `CRASH_UNCLEAN` always (the host rebuild runs `discardHostLocalState`);
+  `EVICT_CLEAN`/`EVICT_NO_CLOSE` only when `Replication.evict` despawns — a
+  refused eviction (no reachable peer) suspends and retains state, which is
+  BS-9's own pinned reading in `DepartureGatesTest` and would be falsified by
+  "fixing" the flag; `PARTITION_SUSPEND` never, by design, with `rejoin`'s heal
+  branch as its return path. What was missing is that `ChurnGenerator` marks a
+  peer DEPARTED the moment it emits the `DepartEvent` and later rejoins it, so
+  a plan can ask a peer the kernel refused to evict to come back.
+  `MeshPeer.rejoin` now treats exactly that case as a no-op (the kernel's own
+  G-45 heal in `Replication.linkOut` resumes the replica when a peer becomes
+  visible again); every other "already a member" rejoin still raises.
 - **No new `concord/corpus/DISPUTES.md` entry was needed from this task.**
   Every churn-reachable property this task's own tests exercise (exclusive
   accounting under churn, dead-letter accounting under churn, pinned-seed
@@ -2161,3 +2192,121 @@ verification section; see the task's own report for its result.
   concord scenario anywhere in the feature, verified against `git diff` on
   this task's own branch and by citation of every sibling's own landing note
   above.
+
+## `computenet-yqgd` — 2026-09-05 — BS-14 write accounting widened to every instance, not the successor alone
+
+Recorded by: `computenet-yqgd` (task, parent `computenet-umx` — CHA1 epic).
+Realizes the scope decision `[CHA3-51]`'s "duplicated across the transition"
+left open at `computenet-umx.2.8`'s landing (§6 above, and its own citation of
+this bead). No kernel `main` edit either way, per this task's own acceptance.
+
+### The decision
+
+**Yes — `[CHA3-51]`'s accounting must cover every instance, not only the
+post-transition leader.** Reading only the successor's total was silently
+generous: `duplicated=0` there was literally true and easy to misread as "the
+transition duplicated nothing", when the demoted instance was in fact holding
+duplicated state the whole time. A write-accounting report whose central
+number can be misread as a system-wide guarantee when it is a
+one-instance reading is the wrong shape for a findings artifact, so
+`LeaderChurnReport` now carries `instanceReadings: List<InstanceStateReading>`
+(instance name + its own total), populated by both `SingleWriterChurnTest`
+arms, alongside the pre-existing `expectedTotal`/`observedTotal` pair (kept
+for the two already-pinned successor-only assertions and because "what does
+the successor itself hold" remains a question worth its own field).
+`InstanceStateReading.lost(expectedTotal)` / `.duplicated(expectedTotal)`
+mirror the report-level definitions per instance, and
+`LeaderChurnReport.instancesWithDuplicates` names which instance(s)
+duplicated without the caller re-deriving it. `[CHA3-52]`'s no-verdict
+constraint is unaffected — `SingleWriterChurnTest`'s reflection test over
+`declaredFields` still finds no `pass`/`verdict` field on the report or the
+new type.
+
+### Reproduction, before building on the bead's numbers
+
+Nothing has touched `LastReplicaProbe.kt` or `SingleWriterChurnTest.kt` since
+`3d190aaff` (`computenet-umx.2`, #479, the commit the bead's own measurement
+was taken against), so per task discipline the numbers were re-measured
+rather than trusted: a temporary `println` after each arm's `report(...)`
+call (reverted before the real change), run via
+`./gradlew :testkit:test --tests 'civictech.testkit.dst.churn.SingleWriterChurnTest' --rerun -i`,
+printed:
+
+```
+DIAG demote-first: peerA(demoted).total=4 peerB(successor).total=2
+DIAG promote-first: peerA(demoted).total=6 peerB(successor).total=4
+```
+
+**Exact match to the bead's measurement.** No discrepancy in the raw numbers.
+
+### A discrepancy in the bead's own prose, found and corrected rather than carried forward
+
+The bead (and this task's own dispatch, quoting it) states the demoted
+instance ends "exactly twice the successor's total" **in both orders**. That
+is arithmetically true of the demote-first arm (4 == 2×2) but **not** the
+promote-first arm (6 != 2×4 == 8) — a first version of this task's pinned
+assertion (`2 * report.observedTotal`) asserted the false form and failed
+immediately (`expected: <8> but was: <6>`), which is what surfaced this. The
+invariant that **does** hold in both arms, derived from the same numbers, is
+**duplicated-at-the-demoted-instance == 2**, i.e. exactly the count of
+pre-transition writes (`expectedTotal` is 4 promote-first and 2
+demote-first — it is `accepted.size`, and the promote-first arm accepts two
+more writes across the transition; demoted total is
+`expectedTotal + 2` in both arms: 4+2=6 promote-first, 2+2=4 demote-first).
+Mechanism: the successor's from-zero catch-up ships its own CURRENT total (2,
+the pre-transition write count, at the moment of designation) onto the
+already-populated ex-leader, so the ex-leader's own 2 pre-transition writes
+are counted a second time regardless of which order the two `designateLeader`
+calls run in — the order changes the split-brain window (2 promote-first, 0
+demote-first) but not this duplication. `SingleWriterChurnTest` pins the
+corrected invariant (`peerAReading.duplicated(report.expectedTotal) == 2L`)
+in both arms, states the correction in the class KDoc and the two pinned
+constants' KDoc, and does not carry the "twice" phrasing forward as if it
+were exact.
+
+### What changed, and what did not
+
+- `LastReplicaProbe.kt`: `LeaderChurnReport` gained `instanceReadings`
+  (default `emptyList()`, so the two pre-existing successor-only assertions
+  and every other caller are unaffected) and `instancesWithDuplicates`; new
+  type `InstanceStateReading`; `LeaderChurnMeasurement.report` gained an
+  optional `instanceReadings` parameter, default empty, same reason.
+- `SingleWriterChurnTest.kt`: both BS-14 arms now pass
+  `instanceReadings = listOf(InstanceStateReading("peerA", set.a.total), InstanceStateReading("peerB", set.b.total))`
+  to `report(...)` and assert the demoted instance's total and its
+  `duplicated(expectedTotal)` against two new pinned constants
+  (`MEASURED_DEMOTED_TOTAL_PROMOTE_FIRST = 6`,
+  `MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST = 4`), plus
+  `instancesWithDuplicates == listOf("peerA")` in both arms. Class and
+  companion KDoc updated to state the decision and the "twice" correction
+  above rather than defer the question.
+- **No kernel `main` edit.** `SingleWriterReplication`, `SwCounterCell`'s
+  reference fencing, and the catch-up mechanism are unchanged; this task
+  reads more of the existing state, it does not change what state exists.
+- **No `concord/corpus/` change** and no `doc/spec/` edit.
+
+### Verification
+
+```
+./gradlew :testkit:test --tests 'civictech.testkit.dst.churn.SingleWriterChurnTest' --rerun
+  3 tests, 0 failures, 0 errors, 0 skipped (per-file JUnit XML, timestamp 2026-09-05T09:30:43.955Z)
+./gradlew :testkit:test --rerun
+  34 files, 248 tests, 0 failures, 0 errors, 0 skipped, newest 2026-09-05T09:31:31.283Z
+```
+
+`:kernel:test` not run from this task: the change touches only `:testkit`
+main/test sources and this doc, with no kernel-facing seam changed; the
+repo-wide required checks (a sibling task is concurrently holding the
+repo-wide gate on `computenet-078s`, files disjoint from this one's) are the
+evidence for anything beyond `:testkit`.
+
+### Disposition
+
+Closes the scope question `computenet-umx.2.8` (§6 above) left open and cited
+forward as `computenet-yqgd`. The successor-only reading that shipped with
+`computenet-umx.2` is superseded by the per-instance reading above wherever a
+caller opts in (`instanceReadings` is additive and optional, so nothing
+existing regresses). The "exactly twice" phrasing in this bead's own
+description is corrected here rather than repeated; readers following the
+citation chain from §6 above should read this section's "duplicated == 2"
+invariant instead of the successor-ratio one.

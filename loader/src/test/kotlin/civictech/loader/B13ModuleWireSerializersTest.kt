@@ -90,13 +90,39 @@ import java.util.UUID
  *    integration module buys the same near-zero marginal coverage for a
  *    permanent subproject.
  *
- * What genuinely remains uncovered is **two-JVM cross-loader wire identity**:
- * the same jar loaded into two independent [ModuleClassLoader]s in two
- * processes, where encode and decode no longer share one process-global
+ * ## The residual, and how it was settled (bug computenet-bb5b)
+ *
+ * What this test left uncovered is **cross-loader wire identity**: the same jar
+ * opened into two independent [ModuleClassLoader]s behind two independent
+ * codec registries, where encode and decode no longer share one process-global
  * [WireCodec]. That is a different scenario from B13 (which is about a late
- * contribution reaching the codec at all), and is worth its own item if and when
- * a demo takes on dynamic loading for real — at which point that demo, already a
- * `:wire` consumer, is the natural host and the dependency edge costs nothing.
+ * contribution reaching the codec at all).
+ *
+ * It is now covered, in this module, by [B13CrossLoaderWireIdentityTest] — and
+ * **not** by the two-JVM rig the residual was first written as. The reasoning,
+ * so it is not re-opened a third time:
+ *
+ * - The two things two processes buy — two codec registries and two
+ *   classloaders — are both obtainable in one JVM, because `WireCodec.decode`
+ *   is a pure function of (bytes, currently-live contributions) and
+ *   [ModuleClassLoader.open] over one jar twice yields two distinct `Class`
+ *   objects. The sibling test asserts that second premise rather than assuming
+ *   it.
+ * - The socket adds nothing, by the byte-boundary argument already stated
+ *   above and ratified by computenet-06cn.
+ * - **Per-process contribution is the HOST's responsibility, not the
+ *   loader's.** `ModuleLoader` hands its host the discovered
+ *   [civictech.cell.wire.WireSerializers] through `onWireSerializers` and does
+ *   nothing further; a host running a second process must load the module and
+ *   contribute there too. `:loader` has no transport dependency at all
+ *   ([ModuleDependencyTest]) and cannot make that true for a peer it has no
+ *   knowledge of. What the runtime owes is that the failure be **loud** when a
+ *   host has not done so, and that is the sibling test's first assertion.
+ *
+ * A two-JVM test would therefore have paid a permanent subproject (or an
+ * inverted `:wire -> :loader` edge) for no reachable failure mode either half
+ * misses — the same trade this KDoc's point 3 already rejected for the
+ * composed single-process test.
  */
 class B13ModuleWireSerializersTest {
 

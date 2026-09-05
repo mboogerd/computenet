@@ -184,6 +184,42 @@ class LinkSupersessionTest {
         sourceAttention.band shouldBe AttentionBand.LOW
     }
 
+    // ---- computenet-dmkp: the retraction must not transiently empty the frontier ----
+
+    /**
+     * computenet-dmkp — a relink is not a band event. `evictSuperseded` removes
+     * the superseded record and (since computenet-4jpd) retracts its frontier
+     * slot; if that retraction runs BEFORE the replacement's
+     * `onLinkedListeners` report, a source whose only downstream link is being
+     * relinked folds over ZERO slots in between, so `recompute` takes the
+     * `null` branch, the band flaps to neutral `NORMAL`, and `onBandChange` +
+     * `emitUpstream` fire — then the replacement restores it. Measured on the
+     * unfixed code, this list was `[NORMAL, HIGH]`.
+     *
+     * The pin is the transition LIST, not the final band: the flap is
+     * self-correcting inside the same handshake call, so an end-state assertion
+     * cannot see it.
+     */
+    @Test
+    fun `relinking the sole downstream link of a source at a non-neutral band produces no band transition`() {
+        val source = Stage()
+        val sink = Stage()
+        val sourceAttention = AttentionSupport.of(source)
+        val sinkAttention = AttentionSupport.of(sink)
+
+        sinkAttention.attend(1f)
+        linkStages(source, sink)
+        sourceAttention.band shouldBe AttentionBand.HIGH
+
+        val transitions = mutableListOf<AttentionBand>()
+        sourceAttention.onBandChange { transitions += it }
+
+        linkStages(source, sink) // supersedes the sole downstream link
+
+        transitions shouldBe emptyList()
+        sourceAttention.band shouldBe AttentionBand.HIGH
+    }
+
     @Test
     @Suppress("UNCHECKED_CAST")
     fun `an Observe tap and a Consume link over the same pair both survive`() {

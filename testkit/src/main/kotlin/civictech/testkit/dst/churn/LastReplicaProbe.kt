@@ -531,13 +531,16 @@ data class AcceptedWrite(val ordinal: Int, val acceptedBy: String, val duringSpl
  * directions, so the report carries [interleaving] — *what the orchestrator did, in order* —
  * and lets R1's own design pass draw the conclusion.
  *
- * ## The accounting's scope: the successor, and only the successor
+ * ## The accounting's scope: EVERY instance, not the successor alone
  *
  * [lostWrites] and [duplicatedWrites] compare [expectedTotal] against [observedTotal], which the
- * driver supplies from the **post-transition leader**. No other instance's state is read here, so
- * `duplicated=0` means "the successor applied nothing twice", not "no instance did". A demoted
- * leader can end a transition holding a different total — see computenet-yqgd — and this type
- * does not report it.
+ * driver supplies from the **post-transition leader** — that pair is kept for the successor's own
+ * question ("did the surviving state lose or double-count a write") and for the two existing
+ * pinned regressions. But `duplicated=0` at the successor alone reads as "no instance duplicated",
+ * which is false: the demoted leader can hold a different total after the same transition (see
+ * computenet-yqgd, where the measurement is what makes [instanceReadings] exist at all), so
+ * [CHA3-51]'s "duplicated across the transition" is decided here to mean every instance, and
+ * [instanceReadings] is the per-instance version of the same [expectedTotal] comparison.
  *
  * @property interleaving the ordered orchestration steps that produced this transition, as the
  *   driver named them. [CHA3-51] asks for "the interleaving that produced it" and this is it:
@@ -547,8 +550,18 @@ data class AcceptedWrite(val ordinal: Int, val acceptedBy: String, val duringSpl
  * @property accepted every write the measurement issued that some leader applied.
  * @property expectedTotal what the surviving state should hold if no accepted write was lost
  *   and none was applied twice — one unit per element of [accepted], by construction of the
- *   probe's payload.
- * @property observedTotal what the post-transition leader's state actually holds.
+ *   probe's payload. The same expectation every instance is compared against in
+ *   [instanceReadings]: nothing here designs a per-instance target, it is the one total every
+ *   instance would hold if the transition lost and duplicated nothing anywhere.
+ * @property observedTotal what the post-transition leader's state actually holds. Kept as its own
+ *   field, rather than derived from [instanceReadings], because the two existing pinned tests
+ *   assert it directly and because "the successor's own total" is a question worth asking on its
+ *   own even where every instance is read.
+ * @property instanceReadings every instance's own state at report time, by name — [CHA3-51]'s
+ *   accounting extended past the successor. Read the type KDoc before treating a non-zero
+ *   [InstanceStateReading.duplicated] as a bug: an instance whose own state was never expected to
+ *   equal [expectedTotal] (e.g. a demoted leader that received a from-zero catch-up on top of its
+ *   own pre-transition state) reads as a genuine divergence here, not as a defect in the reading.
  */
 data class LeaderChurnReport(
     val interleaving: List<String>,
@@ -556,6 +569,7 @@ data class LeaderChurnReport(
     val accepted: List<AcceptedWrite>,
     val expectedTotal: Long,
     val observedTotal: Long,
+    val instanceReadings: List<InstanceStateReading> = emptyList(),
 ) {
 
     /** Samples in which more than one instance believed itself leader. */
@@ -583,18 +597,45 @@ data class LeaderChurnReport(
     /** Writes accepted while more than one instance believed itself leader. */
     val acceptedDuringSplitBrain: List<AcceptedWrite> get() = accepted.filter { it.duringSplitBrain }
 
+    /**
+     * [instanceReadings] with at least one write duplicated against [expectedTotal] — [CHA3-51]'s
+     * accounting widened past the successor, as a value rather than a count so a caller can name
+     * *which* instance.
+     */
+    val instancesWithDuplicates: List<InstanceStateReading>
+        get() = instanceReadings.filter { it.duplicated(expectedTotal) > 0 }
+
     /** Reporting only — it embeds run-varying counts. Never a check's message. */
     fun summary(): String = buildString {
         append("leader churn: window=$splitBrainWindow sample(s) of ${samples.size}")
         append("; accepted=${accepted.size} duringSplitBrain=${acceptedDuringSplitBrain.size}")
         append("; expectedTotal=$expectedTotal observedTotal=$observedTotal")
         append(" lost=$lostWrites duplicated=$duplicatedWrites")
+        if (instanceReadings.isNotEmpty()) {
+            append("; instances=[").append(instanceReadings.joinToString("; ") { it.summary() }).append("]")
+        }
         append("; interleaving=").append(interleaving)
         append("; samples=[").append(samples.joinToString("; ") { it.summary() }).append("]")
         if (accepted.isNotEmpty()) {
             append("; writes=[").append(accepted.joinToString("; ") { it.summary() }).append("]")
         }
     }
+}
+
+/**
+ * [CHA3-51]'s per-instance write accounting: one instance's own state at report time, compared
+ * against the same [LeaderChurnReport.expectedTotal] every instance is measured against.
+ *
+ * @property instance the belief-read name ([LeaderBeliefSample.believedLeaders]'s vocabulary),
+ *   so a reading lines up with the same names the split-brain samples use.
+ * @property total that instance's own state at report time — the driver's read, not a derived
+ *   value; see [LeaderChurnMeasurement.report].
+ */
+data class InstanceStateReading(val instance: String, val total: Long) {
+    /** This instance's own reading against the shared expectation. Definitions mirror the report's. */
+    fun lost(expectedTotal: Long): Long = (expectedTotal - total).coerceAtLeast(0)
+    fun duplicated(expectedTotal: Long): Long = (total - expectedTotal).coerceAtLeast(0)
+    fun summary(): String = "$instance=$total"
 }
 
 /**
@@ -651,14 +692,24 @@ class LeaderChurnMeasurement(
         accepted += AcceptedWrite(ordinal, acceptedBy, duringSplitBrain = believedLeaders().size > 1)
     }
 
-    /** The report, against the surviving state's [observedTotal]. */
-    fun report(observedTotal: Long): LeaderChurnReport = LeaderChurnReport(
-        interleaving = steps.toList(),
-        samples = samples.toList(),
-        accepted = accepted.toList(),
-        expectedTotal = accepted.size.toLong(),
-        observedTotal = observedTotal,
-    )
+    /**
+     * The report, against the surviving state's [observedTotal].
+     *
+     * @param instanceReadings every instance's own state at report time, by the same names
+     *   [believedLeaders] returns — [CHA3-51]'s accounting decided (computenet-yqgd) to cover
+     *   every instance, not the successor alone. Optional and empty by default: a caller that
+     *   only cares about the successor's own number (or has only one instance to read) is not
+     *   made to supply a reading it does not have.
+     */
+    fun report(observedTotal: Long, instanceReadings: List<InstanceStateReading> = emptyList()): LeaderChurnReport =
+        LeaderChurnReport(
+            interleaving = steps.toList(),
+            samples = samples.toList(),
+            accepted = accepted.toList(),
+            expectedTotal = accepted.size.toLong(),
+            observedTotal = observedTotal,
+            instanceReadings = instanceReadings,
+        )
 }
 
 /**

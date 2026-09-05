@@ -10,6 +10,7 @@ without this they would never be picked back up and their feature could never
 finish.
 
 Usage: next-batch.py <feature-id> [--actor NAME]
+       next-batch.py --capacity      # the capacity block alone, no feature id
 Prints JSON: {"batch": [{id, model, files, worktree, branch, resumed}],
               "skipped": [{id, reason}], "warnings": [str],
               "running_elsewhere": [{id, files}],
@@ -57,6 +58,9 @@ import os
 import re
 import subprocess
 import sys
+
+# A build process below this %CPU is idle (a parked IDE daemon), not a gate.
+CPU_BUSY_PCT = 10.0
 
 
 def bd(*args):
@@ -215,15 +219,72 @@ def load_advice(cores, cap):
     average 204.71 / 92.73 / 44.00 — a 1-minute figure ~13x core count. Nothing
     timed out, so it was a near miss, not a loss; the margin was luck.
 
+    ONE REPO-WIDE GATE IS ENOUGH ON ITS OWN, so agent COUNT is not the load
+    model (computenet-lx7t, recurrence of 2r22/qmjd). Measured 2026-09-03,
+    MacBoo, 16 cores: TWO agents of which exactly one ran the repo-wide
+    `./gradlew test` — the other's gate was scoped to two demo modules — read
+    391/426/353 across three samples, ~25x core count. qmjd got 338-724 from
+    THREE repo-wide gates and 2r22 got ~204 from two scoped ones, so the
+    ordering is by repo-wide gates, not by agents: cap 3 was respected the
+    whole session and was never the binding constraint. What that costs at the
+    top rung is not slowness but lost agents — a `ps` and every `bd` write
+    auto-backgrounded past their tool timeouts, and a reviewer dispatched into
+    the ~400 window STALLED with no side effects, then completed normally once
+    load fell to ~8.
+
+    WHAT THIS IS NOT. It is a higher THRESHOLD on the same gate-blind reading,
+    not a gate-aware model: `load1` cannot tell one repo-wide gate from three,
+    and `capacity_limit()` still counts agents uniformly. qmjd's 338 (three
+    wide gates) and lx7t's 426 (one) land on the same rung. The gate-aware half
+    of lx7t is prose, in the two places a dispatch is written — SKILL.md 5b
+    scopes a batch's gates, and 5e/merge-task.md now hold or scope a REVIEWER's
+    — because scope is a property of the prompt, which this script does not
+    write. Sizing lanes by declared gate scope would be the real model; it is
+    not attempted here and lx7t's bead says so.
+
     Reading is one syscall and it is advisory, never subtractive: it does not
     lower `cap`, because a lagging instrument must not silently serialize a
-    slot. It puts a number in front of the orchestrator at dispatch time.
+    slot. The pathological rung says "dispatch NOTHING", which is not a
+    contradiction of that: it is an EXPLICIT stop the caller can see and
+    overrule, not a silent one, and an expiring slot outranks it (SKILL.md
+    step 2). It puts a number in front of the orchestrator at dispatch time.
+    `--capacity` prints this block alone, with no feature id, so a REVIEWER
+    dispatch can consult it too — reviewer dispatches have no batch call and
+    so never saw this advice, which is how the agent that caused the spike was
+    the one dispatched without reading it.
     """
     try:
         load1 = os.getloadavg()[0]
     except (OSError, AttributeError):      # not available on this platform
         return None, None
     load1 = round(load1, 2)
+    # The pathological rung is NOT gated on `cap`: it is advice about
+    # dispatching ANYTHING, including the single reviewer that has no cap.
+    if load1 >= 5 * cores:
+        busy = busy_builds()
+        if busy is None:
+            return load1, (f"load1 {load1} is >=5x the {cores} cores: PATHOLOGICAL, "
+                           f"and `ps` could not be read, so whether the load is "
+                           f"OURS is UNKNOWN. Hold — a wrong hold costs one "
+                           f"deferred dispatch, a wrong dispatch stalls an agent "
+                           f"outright. Check by hand: "
+                           f"`ps -eo pid,pcpu,comm | sort -k2 -rn | head`.")
+        if busy:
+            return load1, (f"load1 {load1} is >=5x the {cores} cores: PATHOLOGICAL, "
+                           f"and it is OURS ({busy}). Dispatch NOTHING — an agent "
+                           f"dispatched into this window stalls, and a timeout in a "
+                           f"module the diff does not touch is contention, not a "
+                           f"finding. Wait for it to finish; recovery is abrupt "
+                           f"(426 -> 8.57 in one measured case). Confirm with "
+                           f"`ps -eo pid,pcpu,comm | sort -k2 -rn | head`.")
+        return load1, (f"load1 {load1} is >=5x the {cores} cores, but NO build of "
+                       f"ours is running: this is HOST load (endpoint-security "
+                       f"scanning our build tree is the measured cause, and it stays "
+                       f"high long after the build exits). There is nothing to wait "
+                       f"for, so do not idle. Dispatch ONE agent with a SCOPED gate "
+                       f"and expect it to be slow, not wrong. Confirm with "
+                       f"`ps -eo pid,pcpu,comm | sort -k2 -rn | head` before "
+                       f"overriding either way.")
     if cap <= 1:
         return load1, None
     if load1 >= 2 * cores:
@@ -233,6 +294,58 @@ def load_advice(cores, cap):
         return load1, (f"load1 {load1} already meets the {cores} cores: go "
                        f"under the cap of {cap}")
     return load1, None
+
+
+def busy_builds(ps_output=None):
+    """Names of OUR build processes actually burning CPU right now.
+
+    Three answers, not two: a string names them, `""` means `ps` was read and
+    none are running, and `None` means `ps` could not be read at all. The third
+    is separate because collapsing it into `""` would make the advice assert
+    "NO build of ours is running" about a fact it just failed to determine —
+    the very defect this function exists to remove, one level down. Unknown
+    holds, because the lx7t case genuinely stalls agents and inverts verdicts
+    while a spurious hold costs one deferred dispatch.
+
+    `load_advice()`'s pathological rung used to assert its own cause — "wait for
+    whatever is in flight, typically a repo-wide gate" — without ever checking
+    it. On a corporate-managed box that cause is routinely false: measured
+    2026-09-04 on MacBoo, load1 sat at 316/263/198 for ~25 minutes with the top
+    consumers being an app-control system extension (54%), Microsoft Defender
+    (36%) and WindowServer, and `pgrep -fl java` finding only two IDLE JetBrains
+    daemons. macOS load average counts uninterruptible I/O wait, so a scanner
+    working through a build tree inflates load1 enormously and keeps it inflated
+    long after the build that caused it exited. The prescribed remedy — wait for
+    the gate — is then unreachable: there is no gate, and a session following the
+    text literally idles indefinitely (computenet-91xn).
+
+    So the rung now checks the cause it names. This is deliberately coarse: any
+    java/gradle/kotlin process above CPU_BUSY_PCT counts as ours and the hold
+    stands unchanged. It only has to separate "a build is running" from "nothing
+    of ours is running at all", which is the case the prose got wrong.
+    """
+    if ps_output is None:
+        try:
+            ps_output = subprocess.run(["ps", "-Ao", "pcpu,comm"],
+                                       capture_output=True, text=True,
+                                       timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None                    # can't tell -> hold (see docstring)
+    hits = []
+    for line in ps_output.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pcpu = float(parts[0])
+        except ValueError:                 # the header row
+            continue
+        name = parts[1].strip()
+        low = name.lower()
+        if pcpu >= CPU_BUSY_PCT and ("java" in low or "gradle" in low
+                                     or "kotlin" in low):
+            hits.append(f"{name} at {pcpu:.0f}%")
+    return ", ".join(hits)
 
 
 def capacity_limit(cores, siblings=0):
@@ -500,9 +613,46 @@ def running_elsewhere(actor, feature, candidate_ids):
     return out
 
 
+def _siblings():
+    """Other live /work sessions sharing this box: --siblings N, else
+    WORK_SIBLINGS, else 0. Shared by the batch path and --capacity, which must
+    not disagree about the cap."""
+    if "--siblings" in sys.argv:
+        try:
+            return max(0, int(sys.argv[sys.argv.index("--siblings") + 1]))
+        except (IndexError, ValueError):
+            sys.exit("next-batch: --siblings takes a non-negative integer")
+    if os.environ.get("WORK_SIBLINGS"):
+        try:
+            return max(0, int(os.environ["WORK_SIBLINGS"]))
+        except ValueError:
+            sys.exit("next-batch: WORK_SIBLINGS must be a non-negative integer")
+    return 0
+
+
 def main():
+    if "--capacity" in sys.argv:
+        # Capacity alone, no feature id: for a dispatch that has no batch call
+        # of its own (every reviewer dispatch). computenet-lx7t.
+        rest = [a for a in sys.argv[1:] if a != "--capacity"]
+        if "--siblings" in rest:
+            i = rest.index("--siblings")
+            rest = rest[:i] + rest[i + 2:]
+        if rest:
+            sys.exit("next-batch.py: --capacity takes no feature id "
+                     f"(got {rest[0]!r}); it reports the box, not a batch")
+        cores = os.cpu_count() or 1
+        # The cap is per-session on a shared box, so honour --siblings here too
+        # or --capacity would name a cap the caller may not actually have.
+        cap = capacity_limit(cores, _siblings())
+        load1, advice = load_advice(cores, cap)
+        print(json.dumps({"capacity": {"cores": cores, "max_parallel": cap,
+                                       "load1": load1, "advice": advice}},
+                         indent=2))
+        return
     if len(sys.argv) < 2:
-        sys.exit("usage: next-batch.py <feature-id> [--actor NAME] [--siblings N]")
+        sys.exit("usage: next-batch.py <feature-id> [--actor NAME] [--siblings N]\n"
+                 "       next-batch.py --capacity")
     feature = sys.argv[1]
     actor = os.environ.get("BEADS_ACTOR", "")
     if "--actor" in sys.argv:
@@ -542,17 +692,7 @@ def main():
     # Siblings are discovered by the orchestrator (step 3's liveness check) and
     # passed in; this script cannot see them. Default 0 = "I am alone", which
     # is the pre-2026-08-19 behaviour.
-    siblings = 0
-    if "--siblings" in sys.argv:
-        try:
-            siblings = max(0, int(sys.argv[sys.argv.index("--siblings") + 1]))
-        except (IndexError, ValueError):
-            sys.exit("next-batch: --siblings takes a non-negative integer")
-    elif os.environ.get("WORK_SIBLINGS"):
-        try:
-            siblings = max(0, int(os.environ["WORK_SIBLINGS"]))
-        except ValueError:
-            sys.exit("next-batch: WORK_SIBLINGS must be a non-negative integer")
+    siblings = _siblings()
     cap = capacity_limit(cores, siblings)
     batch, skipped = cap_batch(batch, skipped, cap)
     load1, advice = load_advice(cores, cap)

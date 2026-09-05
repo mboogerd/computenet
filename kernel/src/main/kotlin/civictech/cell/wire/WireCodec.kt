@@ -289,6 +289,23 @@ object WireCodec {
      * (or an earlier contribution) already registered, the rebuild throws and
      * the codec is left on its previous module, unchanged.
      *
+     * ## Contribution is PER PROCESS, and that is the host's job
+     *
+     * `WireCodec` is an `object`: this registry is process-global and process-
+     * *local*. A peer in another JVM has its own, so a module type is decodable
+     * there only if that process has itself loaded the module and called this
+     * method — `:loader` hands its host the discovered [WireSerializers]
+     * through `ModuleLoader`'s `onWireSerializers` seam and does nothing
+     * further, having no transport dependency and no knowledge of any peer.
+     * Wire identity travels as the `@SerialName` in the bytes; the `Class`
+     * behind it does not travel at all, and each side decodes into its own
+     * classloader's version of the type.
+     *
+     * A process that has not contributed refuses such bytes **loudly**
+     * ([kotlinx.serialization.SerializationException] from [decode]), never silently — decided and
+     * pinned by bug computenet-bb5b in
+     * `civictech.loader.B13CrossLoaderWireIdentityTest`.
+     *
      * @throws IllegalArgumentException when the contribution collides.
      */
     fun contribute(serializers: WireSerializers) {

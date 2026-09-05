@@ -250,8 +250,15 @@ class ReconvergenceCheckTest {
         )
         assertTrue(convergence.converged(), "the survivors converge with the departed stream excluded")
 
-        // ...and the survivors hold everything peer1 accepted before it left: evict's final
-        // push-catch-up is [42-REPL-06]'s handoff, so a clean departure loses nothing.
+        // ...and the survivors hold everything peer1 accepted before it left. Peer1's last write
+        // here is ~100 controller steps ahead of the departure, so it is applied and gossiped long
+        // before the evict — but that slack is no longer what makes this assertable. Since
+        // computenet-078s a clean eviction is spec 33's drain at cell granularity
+        // (ManagedHost.drainCellThenDespawn), so a write accepted one controller step earlier is
+        // handed off too; :kernel's ChurnReconvergenceTest."a write issued one step before a clean
+        // evict reaches the survivors" pins exactly that boundary, and ReconvergenceCheck's
+        // required arm now includes cleanly evicted replicas. The permitted arm exists for
+        // *unclean* departures — a crash, an unhealed partition loss — which promise no handoff.
         val accepted = AcceptedOps.of(world)
         val reference = BatchReference.of(world, MeshPayload.SET).foldOf(peers.toSet())
         val observed = MeshConvergences.project(assertNotNull(convergence.state(observer.ref)))

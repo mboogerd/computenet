@@ -104,13 +104,11 @@ class FileJournalHandleTest {
      * across two flushes would splice them and replay would decode garbage
      * lengths.
      *
-     * Two *instances* on one path remain unsupported, unchanged by
-     * computenet-sh8z and not a consequence of the kept handle: the
-     * `needsHeader` check is check-then-act across instances, so both write a
-     * version header and the second lands mid-stream. Measured against the
-     * PRE-sh8z `append` — which reopened the file and had exactly the same
-     * check — a 2-instance x 50-record race produced a duplicate header in
-     * 20/20 trials. Filed as its own item rather than fixed here.
+     * Two *instances* on one path are a different case, unchanged by
+     * computenet-sh8z and not a consequence of the kept handle — see
+     * [FileJournal]'s KDoc ("Interleaving correctly, not refusing or a shared
+     * instance") and the `two live instances on the same path never write two
+     * headers` test below (computenet-k1by).
      */
     @Test
     fun `concurrent threads on one journal interleave whole records`() {
@@ -154,5 +152,61 @@ class FileJournalHandleTest {
         file.readBytes().take(FileJournal.MAGIC.size).toByteArray() shouldBe FileJournal.MAGIC
         // 8 header bytes, then each record's 4-byte length prefix and payload.
         file.length() shouldBe (8 + (4 + "first".length) + (4 + "second".length)).toLong()
+    }
+
+    /**
+     * The actual computenet-k1by hazard: two LIVE `FileJournal` instances on
+     * one path, appending concurrently from separate threads. Before the fix,
+     * both instances' `needsHeader` checks raced (check-then-act across
+     * instances, unguarded by either instance's own per-object
+     * `@Synchronized` monitor — a monitor guards one instance, not two), so
+     * both could observe an empty file and both would write a header. The
+     * second `CNJL` landed mid-stream, where replay decoded it as a record of
+     * length `0x434E4A4C` (~1.1 GB), hit EOF, and silently dropped everything
+     * after it as one torn trailing record — SILENT truncation, not a thrown
+     * error, which is why this test can only see the hazard in a corrupted
+     * replay, not in an exception. computenet-k1by's own comment thread
+     * carries the harness run that reproduced it against the unfixed code
+     * (duplicate MAGIC in 20/20 trials) and the mutation-check runs that
+     * confirm this test discriminates: reverting `sink()` to the check-then-act
+     * body fails the record-count assertion below 5/5.
+     *
+     * The fix serializes the header decision across instances (see
+     * [FileJournal]'s KDoc, "Interleaving correctly, not refusing"): whichever
+     * instance's [FileJournal.append] gets to the header check first writes
+     * it, the other observes a non-empty file and writes none, and both then
+     * append through their own `O_APPEND` descriptor exactly as two threads
+     * on one instance already do (the test above). The two writers' records
+     * therefore interleave correctly rather than being refused — chosen
+     * because refusing a still-live second instance broke the "single
+     * header" test below, which relies on exactly this kind of legitimate,
+     * non-overlapping reuse.
+     */
+    @Test
+    fun `two live instances on the same path never write two headers`() {
+        val dir = createTempDirectory("fj-two-instances").toFile()
+        val file = dir.resolve("host.journal")
+
+        val perWriter = 50
+        val writers = (0 until 2).map { w ->
+            Thread {
+                val journal = FileJournal(file)
+                repeat(perWriter) { journal.append(rec("w$w-$it")) }
+            }
+        }
+        writers.forEach { it.start() }
+        writers.forEach { it.join(60_000) }
+
+        // Exactly one header, at offset 0 — never a second MAGIC spliced mid-stream.
+        file.readBytes().take(FileJournal.MAGIC.size).toByteArray() shouldBe FileJournal.MAGIC
+
+        val replayed = FileJournal(file).replay().map { String(it) }
+        replayed.size shouldBe 2 * perWriter
+        replayed.toSet().size shouldBe 2 * perWriter
+        assertTrue(
+            replayed.all { it.matches(Regex("""w[01]-\d+""")) },
+            "a duplicate header decoded as a garbage record, corrupting replay: " +
+                "${replayed.filterNot { it.matches(Regex("""w[01]-\d+""")) }}",
+        )
     }
 }

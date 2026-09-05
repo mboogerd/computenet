@@ -103,6 +103,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `create-ticket.sh` | THE create path for a ticket under a shared epic — unparented, then re-parented |
 | `file-friction.sh` | Files a friction item collision-free under the SDLC epic, open and unclaimed |
 | `resumable-epics.sh` | Epics holding a feature left `in_progress` — step 3 ranks these above priority |
+| `claim-item.sh` | `bd update <id> --claim` plus the session holder token, so a live sibling's claim is not swept as a crash leftover (`claim-epic.sh` does this for epics) |
 | `bead.sh` | projected `bd show` — the bead's own fields as one object, `dependencies` dropped (57KB -> 7KB); no `.[0]` unwrap |
 | `wait-checks.sh` | THE settle loop, sha-bound over `commits/<sha>/check-runs` (`gh pr checks` is the fallback) — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`NO-RUN`/`QUERY-FAILED` |
 | `verify-branch-sync.sh` | 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
@@ -153,7 +154,11 @@ in other agents' heads as written. In force throughout:
   claim** — it needs a run that shows it or a doc citation, else write "I
   believe X; verify it". An untested `workflow_dispatch` assertion reached
   three dispatch prompts and two PR bodies before a reviewer's one-line
-  experiment disproved it (computenet-4l3l). Try it first.
+  experiment disproved it (computenet-4l3l). Try it first. **"CI does not
+  cover X" is this claim**, and reasoning from the required-check list is not
+  a run: the non-required `iroh-sidecar` lane was executing all 23 `:iroh`
+  tests while that inference reached three dispatch prompts, a PR body and
+  several progress reports (computenet-9p3y).
 - **Code you write yourself** (conflict resolutions, unblocking fixes) goes
   to a reviewer on the same terms as task work (5c).
 - **An Agent dispatch can be refused on its prompt's *wording*, not its
@@ -401,6 +406,27 @@ That one reading is what turned a confusing batch into a correct diagnosis the
 one time this happened. A session trusting the tiers in order would instead
 "finish the current feature", "stop dispatching" and "finalize" in three
 consecutive turns with no time between them.
+
+**And a reading bounds only the turn it was taken in — one turn boundary can
+carry hours.** The 1lbs decay above was gradual and therefore watchable, which
+is what a creeping "previous reading Nm ago" shows you. It recurred as a single
+discontinuity — twelve honest readings 3–23m apart, then ONE boundary of 152
+minutes, landing at 313m of a 300m slot (computenet-099p). No reading frequency
+catches that: the gap is between turns, and the field that would warn you is
+only readable after the jump. So **never write a FORWARD-LOOKING budget claim
+from a reading taken in an earlier turn** — "160m of 300m; 50m before new work
+closes" was true when computed and 13 minutes past EXPIRED by the time anything
+acted on it. Two detectors catch that, and you need both: each covers the
+other's documented failure. The Monitor's SELF-REPORTED elapsed, not which tier
+fired — a T-90m tier reporting "311m REAL elapsed" is wrong as a tier and right
+as a measurement. And when the Monitor is SILENT, which removes that one
+entirely, slot-elapsed.sh's `WARNING: ... UNOBSERVED`, needing nothing but the
+reading you already take — so the residual hole is only the turn that takes no
+reading at all, which is why the rule above makes it the FIRST tool call
+(computenet-gsm6: both failed at once and the 180m boundary was found by
+accident).
+Act on that number, and on a pathological box (5b) act on it BEFORE the
+capacity advice: an expiring slot outranks a busy one.
 
 Three standing disciplines:
 
@@ -1100,7 +1126,11 @@ decision (computenet-wv9c). Concretely:
 
 - `bd update <id> --acceptance=…` (and `--description=…` where it prescribes
   the rejected approach), **keeping the superseded text verbatim under a
-  `Superseded <date> by human answer:` label** so provenance survives;
+  `Superseded <date> by human answer:` label** so provenance survives. For a
+  body too long to inline the flag is **`--body-file`** — NOT the wrappers'
+  `--desc-file`, and there is no acceptance-from-file flag at all; guessing
+  aborts the whole call and discards the `--title` beside it
+  ([bd-traps.md](references/bd-traps.md) has the three-path table);
 - check the PARENT feature's and epic's criteria for the same clause — the
   park is filed on the narrowest item but the answer's blast radius is every
   criterion that cites it — and amend those too or say on the bead why not;
@@ -1222,7 +1252,7 @@ bin in `:gen:test`).
 ### 5a. Set up or resume the feature
 
 ```bash
-bd update <feature-id> --claim                              # idempotent if yours
+.claude/skills/work/scripts/claim-item.sh <feature-id>      # idempotent if yours
 .claude/skills/work/scripts/feature-branch.sh <feature-id>  # -> "<branch>\t<worktree>"
 ```
 
@@ -1425,8 +1455,37 @@ gates scoped: load 204.71 / 92.73 / 44.00, a 1-minute figure ~13x core count
 `next-batch.py` now reports `capacity.load1` and `capacity.advice`, what the
 box is doing at the moment you dispatch; that is advisory and never lowers the
 cap, because load lags in both directions and must not silently serialize a
-slot (`capacity_limit()` says why it is not the sizing instrument). **Go under
-the cap deliberately when any live agent's verdict turns on a WALL-CLOCK
+slot (`capacity_limit()` says why it is not the sizing instrument).
+
+**Agent COUNT is not the load model — repo-wide GATES are.** One repo-wide
+`./gradlew test` is enough on its own: measured 2026-09-03 on 16 cores, two
+agents of which exactly one ran the wide gate read 391/426/353, ~25x core
+count, with cap 3 respected the whole session and never binding
+(computenet-lx7t). At that level you do not lose speed, you lose agents — a
+`ps` and every `bd` write auto-backgrounded past their tool timeouts, and a
+reviewer dispatched into the ~400 window STALLED with no side effects, then
+completed normally at ~8. So **read capacity before EVERY dispatch, reviewers
+included** — a reviewer dispatch has no batch call, which is exactly how the
+agent that caused the spike was the one dispatched blind:
+
+```bash
+python3 .claude/skills/work/scripts/next-batch.py --capacity
+```
+
+**The `>=5x cores` rung splits on WHOSE load it is, and the advice string says
+which**, because a high load1 does not imply a build of ours is running. When
+`ps` shows a busy java/gradle process the advice says PATHOLOGICAL and it is
+OURS: dispatch nothing, wait for the wide gate to finish (recovery is abrupt —
+426 to 8.57 in one measured case), and treat a timeout in a module the diff
+does not touch as contention, not a finding. When no build of ours is running
+the advice says HOST load: there is nothing to wait for, so **do not idle** —
+dispatch ONE agent with a scoped gate and expect it to be slow, not wrong.
+Measured 2026-09-04, MacBoo: load1 held 316/263/198 for ~25 minutes on endpoint
+security scanning a build tree, with only idle IDE daemons running, while a
+session obeying the old cause-asserting text waited for a gate that did not
+exist (computenet-91xn).
+
+**Go under the cap deliberately when any live agent's verdict turns on a WALL-CLOCK
 AWAIT** — multi-JVM crash-restart, SSE/socket, anything in the `:inspect` hang
 family — because there a load-induced timeout is not merely slow, it is
 indistinguishable from the result being measured and can invert a verdict.
@@ -1539,8 +1598,9 @@ verdict. (`parked` is only meaningful on an empty batch.)
   **A review-filed residual is a THIRD shape, and it is neither of the two.**
   review-feature.md §7 residuals now carry `--metadata` at filing, but one
   that arrives without it is not a breakdown defect: nothing was forgotten and
-  there is no breakdown to blame, and cross-bead writes are not authorized to
-  a reviewer anyway. Applying the "forgot" branch literally means logging a
+  there is no breakdown to blame, and no cross-bead write is commissioned to a
+  reviewer here (its one standing write is the flake-bead occurrence comment,
+  which is not this). Applying the "forgot" branch literally means logging a
   breakdown defect against a reviewer that behaved correctly
   (computenet-419f). Recognise it by the description's `Residual from
   <feature-id>` opener, **author the claim yourself and say so on the bead** —
@@ -1697,7 +1757,10 @@ verdict. (`parked` is only meaningful on an empty batch.)
   own commission as an overstep (computenet-dqy.72, computenet-szdd). Write
   it once as `${crossBeadWrites}` and carry the **same string** into the 5c
   and 5e reviewer prompts (`none` is the normal value and means something:
-  no cross-bead write is authorized). Reserved actions stay yours: closing,
+  no *commissioned* cross-bead write. It never withdraws a reviewer's standing
+  flake-bead occurrence comment, which red-check-attribution.md authorizes
+  directly — a reviewer reading `none` as "not even that" drops the occurrence
+  and nothing notices, computenet-yubh). Reserved actions stay yours: closing,
   re-prioritising, reassigning, re-parenting or claiming any *other* bead is
   the orchestrator's — a criterion demanding one is done by you after the
   merge, and the prompt says so ("<id> is closed by me, not by you").
@@ -1708,7 +1771,9 @@ and a chain of them has blown the 120s default mid-sequence, leaving a
 claimed task with no recorded worktree (computenet-9r8):
 
 ```bash
-bd update <task-id> --claim
+.claude/skills/work/scripts/claim-item.sh <task-id>   # two bd writes, but
+# sequenced inside the script with the second's failure demoted to a warning —
+# not a chained block whose mid-sequence death leaves half-recorded state
 ```
 
 ```bash
@@ -1947,6 +2012,31 @@ CHECK <batch>"`); when it fires, recompute elapsed (step 2) and read the three
 signals — all still empty → `SendMessage` the agent; no substantive reply →
 `TaskStop` and re-dispatch rather than keep waiting.
 
+**A `status=failed` notification reading "Agent stalled: no progress for Ns
+(stream watchdog did not recover)" is a DIFFERENT case with a fixed response**,
+not the slow-but-progressing agent the paragraph above is about. The HARNESS
+watchdog fires at 600s, well before the ~20-minute bounded Monitor, so for this
+failure mode the Monitor is a backstop and not the detector (computenet-9ofq,
+recurrence of computenet-znlh). Do not re-derive the response each time:
+
+1. Read the three side-effect signals in the agent's worktree and on its bead.
+2. All three empty → the agent never started; **re-dispatch as a clean start**.
+   Say so in the new prompt in as many words — "a previous agent stalled before
+   taking any action; I verified it left NO side effects, so this is a clean
+   start, not a resume — do not go looking for prior work" — because the bead is
+   `in_progress` and a fresh agent will otherwise hunt for a partial that does
+   not exist.
+3. Any signal non-empty → it is not this case; treat it as the slow agent above.
+
+Measured: a sonnet implementer on a small, well-specified task stalled with
+zero side effects and cost ~30 minutes of one lane; the identical prompt
+completed in ~12 minutes on re-dispatch, so the task and the prompt are ruled
+out as the cause. **Do not add a "start acting promptly" line to the
+re-dispatch on the strength of that** — one session added one on the theory
+that a long opening reasoning stretch is what the watchdog punishes, and
+recorded it as a guess: a single success is no evidence either way, and the
+mechanism is unknown.
+
 **Find a stated outcome in an implementer's result before acting on it** —
 the same rule 5c gives reviewers, and the same failure. A completion
 notification looks identical whether the agent finished or stopped itself
@@ -2028,7 +2118,21 @@ git -C <feature-worktree> log --oneline \
   $(git -C <feature-worktree> merge-base HEAD origin/main)..origin/main
 gh pr list --state open --json number,headRefName,isDraft \
   -q '.[] | "\(.number) \(.headRefName) draft=\(.isDraft)"'
+python3 .claude/skills/work/scripts/next-batch.py --capacity   # BEFORE dispatching
 ```
+
+**That last line is not optional, and this is the dispatch it exists for.** A
+feature reviewer runs the repo-wide `./gradlew test` (review-feature.md §3), so
+it is the single largest load source this session emits — and it has no batch
+call, which is how the agent that took a 16-core box to ~25x was the one
+dispatched without anyone reading the advice (computenet-lx7t). At the
+PATHOLOGICAL rung, hold the dispatch — unless the advice says the load is HOST
+load rather than ours, in which case there is no gate to wait for and holding
+is an indefinite idle (5b; computenet-91xn). "Slow, not wrong" was measured on
+SCOPED runs, so dispatch under HOST load only with the reviewer's gate scoped —
+this is the one unscoped gate the session emits. Below the rung, if an
+implementer is still live, say so in the prompt and scope the reviewer's gate
+the way 5b scopes a batch's.
 
 An empty first output is worth saying ("origin/main unchanged at `<sha>`").
 `${parkedChildren}` is the `parked` array from the `next-batch.py` call that
@@ -2047,8 +2151,11 @@ ${worktree}, never the main checkout, whose local branch is stale — and follow
 it to review feature ${id} against its own acceptance criteria.
 Worktree: ${worktree}  ·  Branch: ${branch}  ·  PR: ${pr}
 Cross-bead writes authorized on this feature and its tasks:
-${crossBeadWrites or "none"}. Treat what it names as commissioned work rather
-than scope creep, and anything beyond it as unauthorized.
+${crossBeadWrites or "none commissioned"}. Treat what it names as commissioned
+work rather than scope creep, and anything beyond it as unauthorized — except
+the one standing write red-check-attribution.md authorizes directly: an
+occurrence comment on a flake bead you attributed a red check to, which no
+value of this field withdraws.
 origin/main as of dispatch: ${mainSha}; landed since this branch forked:
 ${logOutput or "nothing"}.
 Open PRs that may merge under you while you review: ${prList}. Section 6's
@@ -2190,6 +2297,17 @@ half of the answer: **keep at most ~2 PRs open against any one file** —
 beyond that, sequence. Stated where it bites in
 [references/direct-child.md](references/direct-child.md), where nothing else
 bounds the count.
+
+**But the cycle is charged to the HEAD, not to the sibling** — every new head
+from any cause pays it, and a reviewer's zero-code repair on an already-green
+branch is the case that surprises. Two reviewers each pushed a KDoc-only fix —
+0 non-comment code lines — and paid 8m45s and 9m11s, with nothing landed under
+either branch and `merge-base..origin/main` empty both times (computenet-7wd6).
+The repair is still right and review-feature.md §5 already tells the reviewer
+to make it anyway; what changes is **your** arithmetic: **budget one check
+cycle per review that finds something**, not only per sibling landing. That is
+~9–12m each — three such reviews is most of a small item's budget, and it was
+previously attributed to nothing.
 
 **Cheaper still: prevent the collision instead of surviving it.** When two
 in-flight branches must each add an entry to the same *ordered list* — the
@@ -2517,7 +2635,7 @@ least one *single-word* search to have come back empty before you file.
 comment this session's instance (what you were doing, what happened, what it
 cost — `bd comment <id> "<text>"`, body positional, or `--file` for any body
 that quotes code) — comment count is the remediation priority — then claim it for this
-machine if unclaimed (`bd update <id> --claim`; already claimed by the other
+machine if unclaimed (`claim-item.sh <id>`; already claimed by the other
 machine → done, its lane owns it). If the item is labeled `needs-evidence`,
 the remediation lane judged the existing reports unconvincing and its latest
 comment says exactly what to capture — answer those questions in your

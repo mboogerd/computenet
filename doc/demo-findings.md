@@ -372,7 +372,7 @@ cache is unbounded and non-thread-safe by the same choice `TranscriptSource`
 makes. A kernel operator would additionally have to decide eviction and
 concurrency, which this finding does not settle.
 
-## F-14 — `RuleExtractor`'s relation endpoints now mint their own claims — at the cost of a third, redundant claim per "because" segment
+## F-14 — `RuleExtractor`'s relation endpoints mint their own claims; the whole-segment claim is dropped once a because-split succeeds
 
 **Observation** (computenet-xwl0, found at `computenet-2aw.3` (F3) review,
 PR #635): `RuleExtractor` (`demo/dialogue/.../extract/RuleExtractor.kt`) drove
@@ -400,31 +400,69 @@ relations between claims, and an extractor that can never mint one
 demonstrates only half the system for a heuristic explicitly meant to be
 tiny and disposable (AGO3/KE1 replace it).
 
-**Why it's a gap, not just a fix**: the trade this decision accepts is real
-and is not free. A "because" segment now mints **three** canonical claims —
-the whole sentence, its conclusion, its reason — where a transcript reader
-would count two propositions; nobody asserted "A because B" as a standalone
-claim distinct from asserting A and B. This was verified, not assumed, before
-choosing it: no existing F3 test text contains "because" (so no F3 assertion
-changed), the two endpoint claims carry the segment's own `utteranceId` (no
-fabricated provenance), and the stance leg is unaffected (`RuleExtractor`
-never emits an `ExtractedStance`). What was **not** verified — because
-`DialogueApp.kt` wires no extractor yet (F4/F5 land later) — is how this
-third, redundant claim reads on an actual rendered argument map, or whether
-F4/F5 want to suppress/merge it once one exists. That is exactly the kind of
-"results dominated by a hidden rule rather than by extraction quality" this
-findings doc exists to flag (`Segmentation.kt`'s own KDoc names the same
-risk for its splitting rule): the rule
-producing the redundant claim is `RuleExtractor`'s "because" branch, not a
-`DialoguePipeline` defect, so the fix — if F4/F5 decide it needs one — belongs
-there, replacing or refining this heuristic, not in `claimKey` or the pipeline.
+**Why it was a gap, not just a fix, when this was first written**: the trade
+this decision accepted was real and not free. A "because" segment minted
+**three** canonical claims — the whole sentence, its conclusion, its reason —
+where a transcript reader would count two propositions; nobody asserted "A
+because B" as a standalone claim distinct from asserting A and B. This was
+verified, not assumed, before choosing it: no existing F3 test text contains
+"because" (so no F3 assertion changed), the two endpoint claims carry the
+segment's own `utteranceId` (no fabricated provenance), and the stance leg is
+unaffected (`RuleExtractor` never emits an `ExtractedStance`). What was **not**
+verified at that point — because `DialogueApp.kt` wired no extractor yet
+(F4/F5 landed later) — was how this third, redundant claim would read on an
+actual rendered argument map.
 
-**Regression coverage**: `RuleExtractorTest` (`driven through DialoguePipeline
-a single because-utterance mints a non-empty canonical relation set`) drives
-`RuleExtractor` through `DialoguePipeline.build` end to end and asserts a
-non-empty canonical relation set from one utterance alone — the discriminating
-case: before this fix it stayed empty forever with no second utterance
-supplying the endpoints separately.
+**Update (computenet-i6hp, F4/F5 now landed)**: with an extractor actually
+wired and a rendered map available, the whole-segment claim's cost was
+measured instead of estimated. Driving `RuleExtractor` through
+`DialoguePipeline` over the checked-in
+`demo/dialogue/src/test/resources/bs20-because.jsonl` fixture (six
+utterances, four "because" segments, two plain segments) and inspecting
+`AgoraService.graph()` showed:
+
+- 13 total claim nodes; 4 of them were whole-segment claims (one per
+  "because" segment), and **all 4 were unconnected orphans** — zero edges
+  touched any of them.
+- The map's genuinely freestanding claims (segments with no "because" split)
+  numbered only 2 ("No, I disagree that flights got more expensive.", "We
+  should revisit the budget next quarter.").
+
+That measurement came from a throwaway probe that is **not** committed, so
+the numbers above are not reproducible by re-running a test. They are
+re-derivable by hand from artifacts that *are* checked in, and this is the
+derivation (computenet-i6hp review): `segment` keeps each sentence's
+terminal `.` and `claimKey` only trims/collapses/lowercases, so the
+pre-change extractor mints, over that fixture, 4 whole-segment keys, 7
+distinct endpoint keys (u1/u2 share `the budget is too high`; `travel costs
+increased.` and `travel costs increased` are two keys, per F-14's sibling
+finding computenet-9bip) and 2 plain-segment keys — 4 + 7 + 2 = 13, with
+every relation endpoint drawn from the 7, which is why all 4 whole-segment
+keys are orphans.
+
+So on this fixture the whole-segment claim was not a rare edge case: it was
+the single largest category of node on the map (4 of 13, outnumbering the
+real standalone claims 2-to-1), and every instance carried zero relation
+information — exactly the "results dominated by a hidden rule rather than by
+extraction quality" risk this findings doc exists to flag. That measurement
+tipped the decision: `RuleExtractor` now emits *only* the two endpoint claims
+(plus the relation) for a segment whose because-split succeeds, dropping the
+whole-segment claim, at the price of a "because" segment's claim-output shape
+diverging from every other segment's ("every segment yields a claim of its
+trimmed text"). See `RuleExtractor`'s KDoc "Why only the endpoint claims" for
+the full reasoning and the measurement above.
+
+**Regression coverage**: `RuleExtractorTest`'s
+`a because-segment yields only the two endpoint claims and a supporting
+relation, not the whole-segment claim` asserts the new claim set directly
+(and that the whole-segment claim is absent). `driven through DialoguePipeline
+a single because-utterance mints a non-empty canonical relation set` still
+drives `RuleExtractor` through `DialoguePipeline.build` end to end and asserts
+a non-empty canonical relation set from one utterance alone — the
+discriminating case for the relation leg: before the original computenet-xwl0
+fix it stayed empty forever with no second utterance supplying the endpoints
+separately, and it continues to pass now that the whole-segment claim is
+dropped, since the relation only ever needed the two endpoint claims.
 
 ## F-15 — CP-A3's absorb-ack is edge-local, so `emitOnFrontier` withholds output at rest whenever a wave-dropping arm is more than one hop deep
 
@@ -604,6 +642,68 @@ being `AgoraExitTest`'s own 100-seed probe — and the two agree that the
 weak-tier approximation is far better in practice than the bound it is stated
 with. It is not a calibration; a calibration needs the graph shapes that make
 it worst, which nobody has characterized yet.
+
+**Correction (computenet-7iys, 2aw.F6-D3): "cyclic on odd seeds" above is the
+transcript's *intended* shape, not the final live digraph's actual shape, and
+the "All 20 odd seeds closed a cycle" parenthetical is the same conflation
+`OrderIndependenceTest`'s F-17 entry already names for BS-09 — `closedACycle`
+describes the transcript *before* the program's retractions.**
+`IncrementalEqualsBatchTest` classified its own DAG/cyclic tolerance the same
+way (`seed % 2`), so any odd seed whose retractions left its final live
+digraph acyclic was compared at `25 * 1e-3` where the exact `1e-9` bound was
+available, and the sweep asserted no non-vacuity on the cyclic half. Fixed by
+reusing `OrderIndependenceTest`'s `hasCycle`/`reaches` idiom over the
+already-computed `DialogueBatchReference` fold, so `cyclic` is now read off
+the final live relation set.
+
+**Measured**: of the 20 odd seeds, only seeds `[1, 5, 7, 13, 15, 21, 25, 29,
+33, 39]` have a final live digraph that is actually cyclic; seeds `[3, 9, 11,
+17, 19, 23, 27, 31, 35, 37]` reclassify to acyclic and are now compared at the
+exact `1e-9` bound instead of `25 * 1e-3`. Per 2aw.F6-D3's divergence policy,
+no seed is swapped or widened away if it turns red under the tighter
+classification — and none did: the sweep stays green with worst DAG gap
+`0.0` (now including the 10 reclassified seeds) and worst cyclic gap
+`2.2247e-4`, unchanged from the original measurement above because the
+genuinely-cyclic seed set's own worst gap was already the reported figure.
+
+**Further correction (computenet-n23m, 2aw.F6-D3): the same file's other test,
+AGO1-REPLAY-01, carried the identical conflation one test over.**
+`listOf(2L to false, 3L to true)` used the same literal both to select what
+`TranscriptGenerator.generate` is asked to *attempt* and as the
+bit-identical-vs-`25 * 1e-3` comparison rule — exactly BS-10's own defect
+above, in REPLAY-01's two-fresh-pipelines sweep. Fixed the same way: the
+literal boolean is renamed `intendedCyclic` (values unchanged — `false` for
+seed 2, `true` for seed 3, so the two probe transcripts driven are identical
+to before) and the comparison rule is now derived from the final live digraph
+via this class's own `hasCycle`/`reaches` helpers, exactly as BS-10 does.
+
+**Measured**: seed 3's final live digraph reclassifies to acyclic here too —
+consistent with BS-10's own measurement of the same seed above — so REPLAY-01
+now compares seed 3 at the exact bit-identical rule instead of `25 * 1e-3`.
+It agrees: `./gradlew :demo:dialogue:test --tests
+'civictech.dialogue.gate.IncrementalEqualsBatchTest' --rerun --no-build-cache`
+passed with all 3 tests green (JUnit XML timestamp `2026-09-04T00:07:56.172Z`,
+0 failures, 0 errors), and REPLAY-01's `a == b` assertion held for every bound
+claim/relation node on seed 3 across both fresh-pipeline world seeds (world
+seeds `1_003` and `9_003`) — a genuine bit-identical result. Per 2aw.F6-D3's
+divergence policy, seed 3 was not swapped or the tolerance widened; it simply
+turned out to agree under the tighter rule, so the sweep stays green.
+
+**Honest limit of the mutation check.** Forcing the derivation back to the old
+hardcoded literal (`cyclic = intendedCyclic`, restoring seed 3's
+classification to `true`/loose) does **not** turn this test red: seed 3's
+credences are bit-identical across world seeds under either comparison mode,
+and a strict equality trivially also satisfies the loose `25 * 1e-3` bound.
+The mutation proves the classification itself changed (seed 3: derived
+`false` vs. hardcoded `true` — the same reclassification BS-10 measured
+above) but cannot show a red/green difference on this specific 2-seed probe,
+because neither seed 2 nor seed 3 has any live divergence left to catch once
+you already know they land bit-identical. That is a property of this narrow
+probe (only two seeds, both ultimately acyclic post-fix), not evidence the
+fix is cosmetic: the derived value is read from a different data source than
+the literal it replaces and the two disagree on seed 3, which is the
+load-bearing fact this entry records even though this test's own two seeds
+cannot exhibit it as a pass/fail difference.
 
 ## F-17 — BS-09 measured: the canonical graph is order-independent, but *which* cycle edge is designated head is not — and neither is how many heads there are
 

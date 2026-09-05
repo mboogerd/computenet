@@ -138,7 +138,27 @@ class MeshPeer internal constructor(
     var assignments: InstanceSet? = null
         private set
 
-    /** Whether this peer is currently a member of the mesh (`join`ed and not departed). */
+    /**
+     * Whether this peer is currently a member of the mesh (`join`ed and not departed).
+     *
+     * **Which [DepartureMode] paths clear it** (measured, `computenet-usmw`; the flag surviving
+     * a departure is INTENDED, not a defect):
+     *
+     *  - [DepartureMode.CRASH_UNCLEAN] — **always**. [crash] discards the host slot, whose
+     *    rebuild runs [declareHost]'s lambda at `generation > 0` and so [discardHostLocalState].
+     *  - [DepartureMode.EVICT_CLEAN] / [DepartureMode.EVICT_NO_CLOSE] — **only when
+     *    [Replication.evict] despawns**. Evict returns false when `replicasOf(id) − {local}` is
+     *    empty; it then suspends the replica rather than dropping it, and this peer stays a
+     *    member with its fold intact. That is BS-9's own pinned reading
+     *    (`DepartureGatesTest`: "a refused eviction never despawns — state is retained"), so
+     *    clearing the flag there would falsify a landed property, not fix a bug.
+     *  - [DepartureMode.PARTITION_SUSPEND] — **never**, by construction. [partitionAway] parks
+     *    links and sets [suspended]; the peer is still a member, and [rejoin]'s heal branch is
+     *    its return path.
+     *
+     * The one place this used to bite is the second case, where the plan's own bookkeeping and
+     * the harness's disagree — see [rejoin], which reconciles them.
+     */
     var member: Boolean = false
         private set
 
@@ -207,9 +227,36 @@ class MeshPeer internal constructor(
             heal()
             return
         }
+        if (member && refusedEviction()) {
+            // The paired DepartEvent was an eviction the KERNEL refused: `Replication.evict`
+            // found `replicasOf(id) − {local}` empty, so it suspended the replica instead of
+            // despawning it and returned false — and [evict] below deliberately keeps
+            // [member] true, because a refused eviction is not a departure (BS-9,
+            // `DepartureGatesTest`: "a refused eviction never despawns — state is retained").
+            //
+            // A generated plan does not model that refusal: [ChurnGenerator] marks the peer
+            // DEPARTED at the moment it emits the DepartEvent and later emits the paired
+            // RejoinEvent, so the plan asks a peer that never left to come back. Before
+            // `computenet-usmw` this raised `IllegalStateException` from the `check` below and
+            // reddened the whole sweep on the seeds that draw the sequence (1 of 50 at
+            // `eventCount = 8` on the BS-17 bridge config, 9 of 50 at 12) — an *incoherence
+            // between two models*, not a property failure. The honest resolution is a no-op:
+            // this peer is already a member with its fold intact, and the kernel's own G-45
+            // heal (`Replication.linkOut`) resumes it the moment another replica of the id
+            // becomes visible again. Re-spawning would mint a second replica behind one ref.
+            return
+        }
         check(!member) { "peer \"$name\" is already a member, so a rejoin cannot be applied to it" }
         spawn()
     }
+
+    /**
+     * True when the last departure was an eviction [Replication.evict] refused — the one way a
+     * [depart] leaves this peer a member without leaving it [suspended]. See [rejoin].
+     */
+    private fun refusedEviction(): Boolean =
+        lastEvictDespawned == false &&
+            (lastDeparture == DepartureMode.EVICT_CLEAN || lastDeparture == DepartureMode.EVICT_NO_CLOSE)
 
     override fun depart(mode: DepartureMode) {
         lastDeparture = mode
@@ -229,10 +276,22 @@ class MeshPeer internal constructor(
 
     // ------------------------------------------------------------------- departure primitives
 
-    /** [DepartureMode.EVICT_CLEAN]. Returns [Replication.evict]'s own verdict. */
+    /**
+     * [DepartureMode.EVICT_CLEAN]. Returns [Replication.evict]'s own verdict.
+     *
+     * Blocks the calling thread on [Replication.evict]'s host-wide drain
+     * barrier — legal only from outside the host's own execution context,
+     * same as [Replication.evict] itself requires.
+     */
     fun evictClean(): Boolean = evict(closeDepartedRow = true)
 
-    /** [DepartureMode.EVICT_NO_CLOSE] — the PN-0c control seam. */
+    /**
+     * [DepartureMode.EVICT_NO_CLOSE] — the PN-0c control seam.
+     *
+     * Blocks the calling thread on [Replication.evict]'s host-wide drain
+     * barrier — legal only from outside the host's own execution context,
+     * same as [Replication.evict] itself requires.
+     */
     fun evictNoClose(): Boolean = evict(closeDepartedRow = false)
 
     private fun evict(closeDepartedRow: Boolean): Boolean {
