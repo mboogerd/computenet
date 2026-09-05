@@ -126,7 +126,8 @@ sub-epic as free — is the orchestrator's to write and push, not yours
 
 ## Break it down
 
-Read the full epic (`bd show <id>`) and every spec/doc section it cites —
+Read the full epic (`.claude/skills/work/scripts/bead.sh <id>`, never a plain
+`bd show` — see `references/bd-traps.md`) and every spec/doc section it cites —
 the cited spec text is the authority (AGENTS.md), not your first instinct.
 
 Propose features that together deliver the epic, each independently

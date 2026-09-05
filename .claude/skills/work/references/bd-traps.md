@@ -132,6 +132,25 @@ SKILL.md and the other references cite this file as "`bd` traps".
   it never saw (computenet-h0dj). The general rule, of which `bd comments`
   and `bd ready --type=epic --json` are the already-known cases: **any `bd`
   read whose size is not bounded by construction goes to a file first.**
+
+  **The PLAIN (non-`--json`) `bd show` view is not the safe alternative** —
+  it is the same trap wearing the smaller number. `bd show computenet-9sm`
+  is 114KB against the epic's own 36KB description, and the harness elides
+  the MIDDLE of a tool result that big with a `... [N characters truncated]
+  ...` marker sitting inside prose: well-formed text before it, well-formed
+  text after it, and a spec read in halves. Measured 2026-09-05: one
+  breakdown agent hit it, and the workaround then had to be hand-carried
+  into **nine consecutive dispatch prompts** because it lived only in an
+  orchestrator's head (computenet-cjfd). `bead.sh` is the standing read for
+  every bead, large or small.
+
+  **Above ~25KB even the projection does not fit**, and `bead.sh` handles
+  that itself: it writes the projected bead to `$SCRATCH/bead-<id>.json` and
+  prints that path instead of the body, so a `Read` call pages it and
+  nothing is silently missing. Paging it back through Bash does not work —
+  the harness re-persists a large Bash output too. A caller that must pipe
+  the whole object takes a field filter (never spills) or raises
+  `BEAD_SPILL_BYTES`.
 - **`bd comment` executes backticks in its free text and reports success.**
   Backticks inside a double-quoted shell argument are command substitution,
   so the word vanishes from the stored comment while `bd` prints "Comment

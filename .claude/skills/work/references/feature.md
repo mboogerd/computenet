@@ -197,7 +197,8 @@ assumption, one level further from anyone who could notice.
 
 ## Break it down
 
-Read the feature (`bd show <id>`), its parent epic, and every spec section
+Read the feature (`.claude/skills/work/scripts/bead.sh <id>`, never a plain
+`bd show` — see `references/bd-traps.md`), its parent epic, and every spec section
 they cite — that text is the authority (AGENTS.md). Verify every file,
 module, and test you name actually exists before writing it into a task.
 
