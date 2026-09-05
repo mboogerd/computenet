@@ -59,9 +59,10 @@ sealed interface Fault {
  * anything the six classes need must be reachable from here first.
  *
  * `Fault` is a *sealed* interface, so it has one further consequence worth knowing: sealed
- * permits implementations only in this package **and this compilation unit**, which means a
- * consumer's test source set cannot implement `Fault` at all. `ScriptedFault` is how such a
- * consumer injects anything of its own.
+ * permits implementations only in this package **and this module** (the same compiled source
+ * set — [ChurnEvent] lives in a different *file* of this package and module, and does implement
+ * `Fault`), which means a consumer's **test** source set, being a different module, cannot
+ * implement `Fault` at all. `ScriptedFault` is how such a consumer injects anything of its own.
  */
 class ScriptedFault(
     override val id: String,
