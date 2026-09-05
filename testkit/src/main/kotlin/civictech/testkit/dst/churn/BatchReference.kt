@@ -119,37 +119,34 @@ sealed interface ReferenceFold {
  * [foldOf] takes the peer names whose accepted operations the caller claims are part of the
  * mesh's state. [ReconvergenceCheck] supplies two such sets:
  *
- *  - **required** — replicas still counted as live membership. Everything they accepted must be
- *    in the converged fold: this is the substance of [CHA3-11], and a lost or invented operation
- *    of a live replica fails the run.
- *  - **permitted** — required plus every replica that has *departed*, orderly or not. Whether a
- *    departing replica's last operations left with it is a race this harness does not control,
- *    so they may appear in the fold and may not.
+ *  - **required** — replicas still counted as live membership, **plus every replica whose
+ *    departure was an eviction the kernel carried out**. Everything they accepted must be in the
+ *    converged fold: this is the substance of [CHA3-11], and a lost or invented operation of such
+ *    a replica fails the run.
+ *  - **permitted** — required plus every replica that departed *uncleanly*: a crash, or a
+ *    partition loss that never healed. Whether such a replica's last operations left with it is
+ *    a race nothing controls — no drain runs on that path — so they may appear in the fold and
+ *    may not.
  *
- * **Why an orderly eviction is STILL in the permitted arm, and what changed under it**
- * (computenet-078s). The arm was placed there on a measurement: the BS-1 seed sweep found that
- * at seed 1 the element `peer2-11` was accepted by peer2 at controller step 552, peer2 was
- * evicted at step 553, and the element never reached the survivors (seed 2 lost two the same
- * way). The cause was a kernel defect, now fixed: `Replication.evict` enqueued `suspend` and
- * `despawn` at management priority 0, ahead of a data dispatch's 20, so `suspend` *preempted* a
- * write the host had already accepted but not yet dispatched to the cell; the write parked and
- * `despawn` tore that park queue down into dead letters (accounted as `parkedDrainedOnTeardown`,
- * never silently dropped, but never applied and so never gossiped). `evict` now takes
+ * **Why an orderly eviction is in the REQUIRED arm, and what it used to be** (computenet-078s).
+ * It sat in the permitted arm, placed there on a measurement: the BS-1 seed sweep found that at
+ * seed 1 the element `peer2-11` was accepted by peer2 at controller step 552, peer2 was evicted
+ * at step 553, and the element never reached the survivors (seed 2 lost two the same way). The
+ * cause was a kernel defect, now fixed: `Replication.evict` enqueued `suspend` and `despawn` at
+ * management priority 0, ahead of a data dispatch's 20, so `suspend` *preempted* a write the host
+ * had already accepted but not yet dispatched to the cell; the write parked and `despawn` tore
+ * that park queue down into dead letters (accounted as `parkedDrainedOnTeardown`, never silently
+ * dropped, but never applied and so never gossiped). `evict` now takes
  * `ManagedHost.drainCellThenDespawn`'s drain barrier first — spec 33 step 2, *"process (or park)
  * everything already accepted"*, which spec 42 §Eviction had always defined an eviction to be —
  * so an operation accepted before the eviction call IS applied and handed off.
  * `civictech.cell.replication.ChurnReconvergenceTest."a write issued one step before a clean
  * evict reaches the survivors"` pins that at the one-controller-step boundary, and it fails
- * against the pre-fix kernel.
- *
- * **The arm is nonetheless left as it stands, deliberately, and this is a known residual.**
- * Tightening it — moving a *cleanly* departed replica from `permitted` into `required` — is a
- * change to `ReconvergenceCheck.requiredPeers`, which computes both sets and which
- * computenet-078s's file claim did not cover; it is filed rather than smuggled in from a file
- * that cannot make the change. What the arm now over-permits is narrower than what it used to:
- * a write racing a *clean* evict is handed off, while an unclean departure (crash, partition
- * loss) still may or may not leave its last operations behind, which is what the permitted arm
- * exists for and always will.
+ * against the pre-fix kernel;
+ * `civictech.cell.replication.ReplicationTest."a clean evict re-fires this replica's state at a
+ * reachable peer's link"` pins the catch-up that carries it over a lossy link. With the promise
+ * kept, permitting its absence would only hide a regression, so
+ * [ReconvergenceCheck]'s `requiredPeers` asserts the handoff instead.
  *
  * `AcceptedOp` is recorded at the *issuing* site (see its KDoc, and this is the right place for
  * it), which is why an operation can be in this ledger and in no replica's state at all when a
