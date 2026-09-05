@@ -107,6 +107,33 @@ out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
 [ $rc -eq 0 ] && ok "exit 0" || bad "exit $rc -- $out"
 grep -q 'TRUNCATED' <<<"$out" && bad "asked a short file for the banner -- $out" || ok "quiet"
 
+echo "case 11: a delta file raises the budget without touching line-budget.txt"
+r=$(skill delta 10); printf 'demo 5\n' > "$r/line-budget.txt"
+out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
+[ $rc -eq 1 ] && ok "over the base budget, as set up" || bad "exit $rc -- $out"
+mkdir -p "$r/line-budget.d"; printf '# bought: nothing, this is a test\ndemo +100\n' > "$r/line-budget.d/computenet-test.txt"
+out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "the delta clears it" || bad "exit $rc -- $out"
+
+echo "case 12: deltas COMPOSE — every file summed onto the base, none recomputed"
+printf 'demo -98\n' > "$r/line-budget.d/computenet-other.txt"
+out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
+[ $rc -eq 1 ] && ok "exit 1" || bad "exit $rc -- $out"
+grep -q 'over its 7 budget' <<<"$out" && ok "5 + 100 - 98 = 7, both deltas applied" || bad "wrong effective budget -- $out"
+rm "$r/line-budget.d/computenet-other.txt"
+
+echo "case 13: a delta naming an unknown skill FAILS rather than being ignored"
+printf 'typoed +100\n' > "$r/line-budget.d/computenet-typo.txt"
+out=$(ruby "$SCRIPT" "$r" 2>&1); rc=$?
+[ $rc -eq 1 ] && ok "exit 1" || bad "exit $rc -- $out"
+grep -q "delta names 'typoed'" <<<"$out" && ok "names the typo" || bad "wrong message -- $out"
+rm "$r/line-budget.d/computenet-typo.txt"
+
+echo "case 14: line-budget.d is not mistaken for a skill directory"
+out=$(ruby "$SCRIPT" "$r" 2>&1)
+grep -q 'line-budget.d: FAIL directory has no SKILL.md' <<<"$out" \
+  && bad "treated the data dir as a skill -- $out" || ok "quiet"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

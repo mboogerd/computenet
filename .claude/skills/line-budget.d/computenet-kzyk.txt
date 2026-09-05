@@ -1,0 +1,7 @@
+# computenet-kzyk: budget deltas replace edits to the shared line-budget.txt
+# entry, so two prepared friction fixes can be in flight at once.
+#
+# Net -6 in remediate-friction/SKILL.md: the delta mechanism's description is
+# shorter than the two paragraphs it retires (how to recompute a conflicting
+# budget entry, and the 2026-08-29 measurement of four rebases caused by it).
+remediate-friction -6

@@ -276,8 +276,12 @@ on demand, never as a per-change gate.
 
 It also enforces the **line-budget ratchet** (`.claude/skills/line-budget.txt`).
 Budgets sit at each skill's current size, so nothing needs restructuring — what
-it prices is growth. Over budget: remove as much as you added, or raise the
-number in the diff and say what it bought. **Lower a number whenever a drain
+it prices is growth. Over budget: remove as much as you added, or **add a delta
+file** `.claude/skills/line-budget.d/<id>.txt` holding `<skill> <+N>` plus the
+prose saying what it bought. Never edit the number in `line-budget.txt` — that
+one shared line is why the lane used to ship one item per CI cycle
+(computenet-kzyk); deltas are separate new files, so two PRs merge cleanly and
+neither is recomputed. **A delta may be negative — write one whenever a drain
 removes text.** (The old `ideal <=500` warning was computed and read past on
 every run while `work/SKILL.md` went 668 → 2236 lines.)
 
@@ -341,19 +345,15 @@ bd close <id> --reason "fixed in <pr-url> against skill revision <hash>"
 git worktree remove "$PWD/../computenet-worktrees/<id>"
 ```
 
-Take the next item without waiting — repeat from step 2 while budget remains; this lane is cheap per item, so
-several items per session is normal — **but keep at most ~2 PRs open against
-any one file, and the sharper unit here is the BUDGET ENTRY**: every PR that
-moves a budget touches `.claude/skills/line-budget.txt`, and two PRs raising
-the *same entry* always conflict; two raising different, non-adjacent ones do not.
-The ~2-per-file bound and its reason live in `work/references/direct-child.md`
-(computenet-nxac); restated here because an agent in this lane has no reason to
-open that file, and this is the lane that shares a file on most PRs. Measured
-2026-08-29: six items, five PRs open when one merged, and the four raising the
-`work` entry all went `DIRTY` in that minute while the fifth, raising
-`remediate-friction`, did not — four hand-resolved rebases of an append-only
-ledger, each restarting the required checks (~9-12m wall), two needing
-three `rebase --continue` rounds (computenet-x69c).
+Take the next item without waiting — repeat from step 2 while budget remains;
+this lane is cheap per item, so several items per session is normal — **but
+keep at most ~2 PRs open against any one file.** The bound and its reason live
+in `work/references/direct-child.md` (computenet-nxac); restated here because
+an agent in this lane has no reason to open that file. Budget growth is no
+longer part of that bound: each PR writes its own `line-budget.d/<id>.txt`, so
+budgets no longer serialise the lane (computenet-x69c cost four hand-resolved
+rebases of the shared ledger in one minute; computenet-kzyk, five ready fixes
+shipped one per CI cycle).
 
 **Hold the next item rather than opening its PR; holding is not idleness.**
 Verdicts that close an item (superseded, rejected, needs-evidence) need no PR,
@@ -363,17 +363,11 @@ and neither does verifying the next claim or drafting its diff in a worktree.
 behind step 2's 12h stale-claim window. Either land it, or release it the way
 step 3 releases a park: `bd update <id> --assignee="" --status=open`.
 
-A script-only PR does not touch the ledger — the ratchet prices only `SKILL.md`
-and `references/*.md` — so it is exempt from the *entry* conflict, **not** from
-the ~2-per-file bound, which still applies to two PRs editing one script. The
-exception to even that: a change to `validate-skills.rb`'s counting method has
-to move every budget number in the same diff.
-
-**When two PRs do raise the same entry, the conflict is unavoidable and the
-resolution is a RECOMPUTE, not a merge**: the second number depends on the
-first's LANDED value, so neither side of the conflict is right. Take the landed
-number, re-measure, write the total. Picking a side mis-prices the growth
-silently — the validator only errors ABOVE budget, so an under-count passes.
+A script-only PR writes no delta — the ratchet prices only `SKILL.md` and
+`references/*.md` — but the ~2-per-file bound still applies to two PRs editing
+one script. The one change that must still touch `line-budget.txt` itself is a
+change to `validate-skills.rb`'s counting method, which moves every base number
+in the same diff.
 
 ## 5. Finalize
 
