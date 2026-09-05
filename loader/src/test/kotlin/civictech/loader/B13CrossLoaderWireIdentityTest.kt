@@ -77,7 +77,8 @@ import java.util.UUID
  * 2. **No real socket hop, and no read-loop failure handling.** What
  *    `WsTransport`'s ingress loop *does* when a decode throws — log, drop,
  *    or drop the connection — is a separate, socket-side question this test
- *    does not reach. It is filed as its own item rather than folded in here.
+ *    does not reach. It is filed as its own item — bug computenet-mvu9 —
+ *    rather than folded in here.
  *
  * ## The decision this test records
  *
