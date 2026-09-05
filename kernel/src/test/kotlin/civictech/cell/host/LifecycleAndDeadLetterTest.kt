@@ -11,6 +11,7 @@ import civictech.cell.Frozen
 import civictech.cell.Leased
 import civictech.cell.Owned
 import civictech.cell.Propagate
+import civictech.cell.Redacted
 import civictech.cell.link.PeerId
 import civictech.cell.port.Port
 import civictech.cell.port.PortDelegateProvider
@@ -345,5 +346,141 @@ class LifecycleAndDeadLetterTest {
         hostApi.spawn(cell)
         assertThrows<IllegalArgumentException> { hostApi.spawn(cell) }
         cell.activations shouldBe 1
+    }
+
+    /** computenet-c0gz: an envelope holding a nested [Owned]. */
+    class NestedEnvelope(val inner: Owned<String>)
+
+    /**
+     * The nested shape [sanitizeForDeadLetter][DeadLetters] has to reach: an
+     * exclusive is the payload's *field*, not a top-level argument.
+     */
+    interface NestedConsumer {
+        fun accept(leased: Leased<NestedEnvelope>, owned: Owned<NestedEnvelope>)
+    }
+
+    private val acceptNested = NestedConsumer::class.java.methods.find { it.name == "accept" }
+
+    /**
+     * computenet-c0gz — an exclusive nested inside a dead-lettered
+     * `Owned`/`Leased` must still get a consumer.
+     *
+     * Both shapes go through `DeadLetters.sanitizeForDeadLetter` in one
+     * capture, via [ManagedHost.enqueueHostedInvocation] (the instrument
+     * `routerInlet.call.route` is not — see the computenet-mouq test above):
+     *
+     * - arg 0 is a `Leased` whose value holds an `Owned`. The lease is
+     *   released and stands in as a [civictech.cell.Redacted] marker, so the
+     *   inner `Owned` is not reachable through the record at all; if the
+     *   sanitizer does not consume it, nothing ever does — the silent drop
+     *   AGENTS.md's core invariant forbids.
+     * - arg 1 is an `Owned` whose value holds an `Owned`. The outer is frozen,
+     *   and the inner rides into the fan-out outlet *inside* that `Frozen`;
+     *   [DeadLetters]' own KDoc says a live `Owned` MUST NOT enter it, so the
+     *   inner must be consumed even though the object graph is unchanged.
+     *
+     * Measured against the unfixed sanitizer (2026-09-05): both inners were
+     * still takeable. Exactly-once is asserted through
+     * [Proxy.doubleDischarges], so a fix that discharges twice is not mistaken
+     * for one that discharges once.
+     */
+    @Test
+    fun `an exclusive nested inside a dead-lettered Owned or Leased is consumed exactly once`() {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+        val cell = TrackingCell()
+        host.managementInlet.call.spawn(cell)
+
+        val innerInLease = Owned("inner-in-lease")
+        var leaseReturned: NestedEnvelope? = null
+        val leased = Leased(NestedEnvelope(innerInLease)) { leaseReturned = it }
+
+        val innerInOwned = Owned("inner-in-owned")
+        val owned = Owned(NestedEnvelope(innerInOwned))
+
+        val doubleDischargesBefore = Proxy.doubleDischarges
+
+        host.enqueueHostedInvocation(
+            HostedPortInvocation(
+                cellRef = cell.ref,
+                portName = "nope",
+                type = HostedPortInvocation.Type.PORT_API,
+                invocation = Invocation.of(acceptNested, arrayOf(leased, owned)),
+            ),
+        )
+        controller.runToIdle()
+
+        // the capture path really ran: the top-level substitutions happened
+        val captured = letters.single().invocation.shouldNotBeNull()
+        captured.invocation.args[0].shouldBeInstanceOf<Redacted>()
+        captured.invocation.args[1].shouldBeInstanceOf<Frozen<*>>()
+        leaseReturned.shouldNotBeNull()
+
+        // the pin: neither nested exclusive is left live
+        assertThrows<IllegalStateException>("Owned nested inside a released Leased was left live") {
+            innerInLease.take()
+        }
+        assertThrows<IllegalStateException>("Owned nested inside a Frozen entering the fan-out was left live") {
+            innerInOwned.take()
+        }
+        // ...and each got its consumer exactly once, not twice
+        Proxy.doubleDischarges shouldBe doubleDischargesBefore
+    }
+
+    /**
+     * computenet-c0gz — the ordering interaction, measured rather than assumed.
+     * `Proxy.discharge` (the suppression/denial walk) and
+     * `DeadLetters.sanitizeForDeadLetter` can both meet the same wrapper, and
+     * both now descend into its value. Neither coordinates with the other:
+     * each descends only when its own `take()`/`release()` succeeded, so the
+     * second one to arrive declines and the nested exclusive still gets
+     * exactly one consumer.
+     *
+     * The discriminator is [Proxy.doubleDischarges] measured over the *whole*
+     * sequence. A sanitizer that descended unconditionally would re-walk an
+     * already-consumed inner handle and book a second occurrence here, which
+     * is invisible in the "is it still takeable" assertion the test above
+     * makes.
+     */
+    @Test
+    fun `a wrapper already walked by Proxy discharge is not walked again by dead-letter capture`() {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+        val cell = TrackingCell()
+        host.managementInlet.call.spawn(cell)
+
+        val innerInLease = Owned("inner-in-lease")
+        val leased = Leased(NestedEnvelope(innerInLease))
+        val innerInOwned = Owned("inner-in-owned")
+        val owned = Owned(NestedEnvelope(innerInOwned))
+
+        // the suppression/denial walk gets there first and consumes everything
+        Proxy.discharge(leased)
+        Proxy.discharge(owned)
+        assertThrows<IllegalStateException> { innerInLease.take() }
+        assertThrows<IllegalStateException> { innerInOwned.take() }
+
+        val doubleDischargesBefore = Proxy.doubleDischarges
+
+        host.enqueueHostedInvocation(
+            HostedPortInvocation(
+                cellRef = cell.ref,
+                portName = "nope",
+                type = HostedPortInvocation.Type.PORT_API,
+                invocation = Invocation.of(acceptNested, arrayOf(leased, owned)),
+            ),
+        )
+        controller.runToIdle()
+
+        // capture still succeeds and still admits no live handle: a pre-consumed
+        // `Owned` degrades to a marker rather than crashing the capture
+        val captured = letters.single().invocation.shouldNotBeNull()
+        captured.invocation.args[0].shouldBeInstanceOf<Redacted>()
+        captured.invocation.args[1].shouldBeInstanceOf<Redacted>()
+
+        // the pin: the sanitizer declined to descend, so nothing was consumed twice
+        Proxy.doubleDischarges shouldBe doubleDischargesBefore
     }
 }
