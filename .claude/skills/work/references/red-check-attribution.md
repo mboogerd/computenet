@@ -16,18 +16,46 @@ agent, carries the run id, job and verbatim `FAILED` line and no mechanism
 you have not tested ([orchestrator-authorship.md](orchestrator-authorship.md);
 guessing one here cost a reviewer 8 runs):
 
-1. **The failing test and its assertion message**, read from the run, not
-   from the check's one-line summary:
+1. **The failing test, its assertion message, and the failing FRAME**, read
+   from the run, not from the check's one-line summary:
    ```bash
    gh pr checks <pr-url>                        # which check failed, and its run url
    gh run view <run-id> --log-failed -R mboogerd/computenet \
-     | grep -E 'FAILED|FAILURE| e: ' | head -40
+     | grep -E 'FAILED|FAILURE| e: |Caused by:|(Exception|Error):|\.(kt|java):[0-9]+\)' \\
+       | head -60
 
    # capturing the whole log: run FROM THE REPO, redirect OUT to the scratchpad
    gh run view <run-id> --log -R mboogerd/computenet > "$SCRATCH/<run-id>.log"
    ```
-   Quote the `FAILED` line. A red check whose log you have not read is
-   unattributed, full stop.
+   Quote the `FAILED` line **and the frames under it** — the
+   `at <class>.<method>(<File>:<line>)` lines. A red check whose log you have
+   not read is unattributed, full stop.
+
+   The frame alternative is `\.(kt|java):[0-9]+\)` — not `^[[:space:]]*at `,
+   which hits the prefix trap described below and matched **0 lines across 18
+   failed logs, 15 of them carrying frames**, and not a loose ` at `, which
+   also takes Gradle's own ` at all()` lines. The `.kt:NNN)` shape took 0 false
+   positives across the same 18.
+
+   **The frame is what separates a failure in the test's SETUP from one in
+   the behaviour under test**, and it is the half that ages out. computenet-ulgy
+   was filed with the test name, the message, the run id and a decisive
+   same-lane control, and its "What a fix needs" then prescribed making the
+   waits condition-based. All three awaits in that class already were, on a
+   30s bound, and none of them fired: the failure was in the setup dial three
+   lines earlier, stated in one frame the bead never quoted
+   (`at WsTransport.connect(WsTransport.kt:339)`). A `connect` site means
+   setup; an await means semantics — one line settles a triage that cost an
+   implementer a wrong lead (computenet-y1v4). The log ages out before the
+   bead is worked, so an unquoted frame is unrecoverable and the wrong
+   prescription is all that survives.
+
+   For the same reason, **a "what a fix needs" section is a reading of the
+   evidence, not a finding** — label it as one. It is SKILL.md's "a
+   PRESCRIPTIVE handoff comment is a hypothesis, not an instruction"
+   (computenet-lc3o) reaching flake beads, where the stale thing is a
+   diagnosis rather than a branch or a file reference, and where the agent
+   that reads it cannot cheaply falsify it.
 
    **`--log-failed` returns the failed JOB's whole log, which on a Gradle job
    is overwhelmingly `PASSED` lines** — hence the grep above rather than a
@@ -41,9 +69,17 @@ guessing one here cost a reviewer 8 runs):
    anchored `^e:` matches nothing at all (measured: 0 hits across 5 logs,
    19,201 lines, every one prefixed), while a bare `e:` matches 173 lines of
    `name:`/`overwrite:`/`DeprecationWarning:` noise on one run and pushes the
-   real `FAILED` lines past `head -40`. On a run with dozens of failures it is
-   the trailing `> Task … FAILED` / `BUILD FAILED` summary that `head` drops,
-   not the failing testcases.
+   real `FAILED` lines past the `head`. **The frame and exception
+   alternatives change that arithmetic**: `testLogging` runs
+   `TestExceptionFormat.FULL`, so each failing test contributes ~9 matched
+   lines rather than 1. Measured on synthesised logs built from real lines,
+   `head -40` began dropping the trailing `> Task … FAILED` / `BUILD FAILED`
+   summary at **5** failures and later testcases with it — which is why the
+   `head` above is 60, not 40. Past roughly six failures even that is short:
+   re-grep without the frame and exception alternatives to get the summary and
+   the full `FAILED` list, then grep the frames of the one test you are
+   attributing. On the 18 real failed logs sampled, the full pattern totalled
+   5-15 matches and dropped nothing.
 
    **`gh` resolves the repo from `cwd`, not from the output path.** Running
    this *from* the scratchpad — the right place to put a 6,000-line log —
