@@ -2192,3 +2192,119 @@ verification section; see the task's own report for its result.
   concord scenario anywhere in the feature, verified against `git diff` on
   this task's own branch and by citation of every sibling's own landing note
   above.
+
+## `computenet-yqgd` — 2026-09-05 — BS-14 write accounting widened to every instance, not the successor alone
+
+Recorded by: `computenet-yqgd` (task, parent `computenet-umx` — CHA1 epic).
+Realizes the scope decision `[CHA3-51]`'s "duplicated across the transition"
+left open at `computenet-umx.2.8`'s landing (§6 above, and its own citation of
+this bead). No kernel `main` edit either way, per this task's own acceptance.
+
+### The decision
+
+**Yes — `[CHA3-51]`'s accounting must cover every instance, not only the
+post-transition leader.** Reading only the successor's total was silently
+generous: `duplicated=0` there was literally true and easy to misread as "the
+transition duplicated nothing", when the demoted instance was in fact holding
+duplicated state the whole time. A write-accounting report whose central
+number can be misread as a system-wide guarantee when it is a
+one-instance reading is the wrong shape for a findings artifact, so
+`LeaderChurnReport` now carries `instanceReadings: List<InstanceStateReading>`
+(instance name + its own total), populated by both `SingleWriterChurnTest`
+arms, alongside the pre-existing `expectedTotal`/`observedTotal` pair (kept
+for the two already-pinned successor-only assertions and because "what does
+the successor itself hold" remains a question worth its own field).
+`InstanceStateReading.lost(expectedTotal)` / `.duplicated(expectedTotal)`
+mirror the report-level definitions per instance, and
+`LeaderChurnReport.instancesWithDuplicates` names which instance(s)
+duplicated without the caller re-deriving it. `[CHA3-52]`'s no-verdict
+constraint is unaffected — `SingleWriterChurnTest`'s reflection test over
+`declaredFields` still finds no `pass`/`verdict` field on the report or the
+new type.
+
+### Reproduction, before building on the bead's numbers
+
+Nothing has touched `LastReplicaProbe.kt` or `SingleWriterChurnTest.kt` since
+`3d190aaff` (`computenet-umx.2`, #479, the commit the bead's own measurement
+was taken against), so per task discipline the numbers were re-measured
+rather than trusted: a temporary `println` after each arm's `report(...)`
+call (reverted before the real change), run via
+`./gradlew :testkit:test --tests 'civictech.testkit.dst.churn.SingleWriterChurnTest' --rerun -i`,
+printed:
+
+```
+DIAG demote-first: peerA(demoted).total=4 peerB(successor).total=2
+DIAG promote-first: peerA(demoted).total=6 peerB(successor).total=4
+```
+
+**Exact match to the bead's measurement.** No discrepancy in the raw numbers.
+
+### A discrepancy in the bead's own prose, found and corrected rather than carried forward
+
+The bead (and this task's own dispatch, quoting it) states the demoted
+instance ends "exactly twice the successor's total" **in both orders**. That
+is arithmetically true of the demote-first arm (4 == 2×2) but **not** the
+promote-first arm (6 != 2×4 == 8) — a first version of this task's pinned
+assertion (`2 * report.observedTotal`) asserted the false form and failed
+immediately (`expected: <8> but was: <6>`), which is what surfaced this. The
+invariant that **does** hold in both arms, derived from the same numbers, is
+**duplicated-at-the-demoted-instance == 2**, i.e. exactly the count of
+pre-transition writes (`expectedTotal` is 4; demoted total is
+`expectedTotal + 2` in both arms: 4+2=6 promote-first, 2+2=4 demote-first).
+Mechanism: the successor's from-zero catch-up ships its own CURRENT total (2,
+the pre-transition write count, at the moment of designation) onto the
+already-populated ex-leader, so the ex-leader's own 2 pre-transition writes
+are counted a second time regardless of which order the two `designateLeader`
+calls run in — the order changes the split-brain window (2 promote-first, 0
+demote-first) but not this duplication. `SingleWriterChurnTest` pins the
+corrected invariant (`peerAReading.duplicated(report.expectedTotal) == 2L`)
+in both arms, states the correction in the class KDoc and the two pinned
+constants' KDoc, and does not carry the "twice" phrasing forward as if it
+were exact.
+
+### What changed, and what did not
+
+- `LastReplicaProbe.kt`: `LeaderChurnReport` gained `instanceReadings`
+  (default `emptyList()`, so the two pre-existing successor-only assertions
+  and every other caller are unaffected) and `instancesWithDuplicates`; new
+  type `InstanceStateReading`; `LeaderChurnMeasurement.report` gained an
+  optional `instanceReadings` parameter, default empty, same reason.
+- `SingleWriterChurnTest.kt`: both BS-14 arms now pass
+  `instanceReadings = listOf(InstanceStateReading("peerA", set.a.total), InstanceStateReading("peerB", set.b.total))`
+  to `report(...)` and assert the demoted instance's total and its
+  `duplicated(expectedTotal)` against two new pinned constants
+  (`MEASURED_DEMOTED_TOTAL_PROMOTE_FIRST = 6`,
+  `MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST = 4`), plus
+  `instancesWithDuplicates == listOf("peerA")` in both arms. Class and
+  companion KDoc updated to state the decision and the "twice" correction
+  above rather than defer the question.
+- **No kernel `main` edit.** `SingleWriterReplication`, `SwCounterCell`'s
+  reference fencing, and the catch-up mechanism are unchanged; this task
+  reads more of the existing state, it does not change what state exists.
+- **No `concord/corpus/` change** and no `doc/spec/` edit.
+
+### Verification
+
+```
+./gradlew :testkit:test --tests 'civictech.testkit.dst.churn.SingleWriterChurnTest' --rerun
+  3 tests, 0 failures, 0 errors, 0 skipped (per-file JUnit XML, timestamp 2026-09-05T09:30:43.955Z)
+./gradlew :testkit:test --rerun
+  34 files, 248 tests, 0 failures, 0 errors, 0 skipped, newest 2026-09-05T09:31:31.283Z
+```
+
+`:kernel:test` not run from this task: the change touches only `:testkit`
+main/test sources and this doc, with no kernel-facing seam changed; the
+repo-wide required checks (a sibling task is concurrently holding the
+repo-wide gate on `computenet-078s`, files disjoint from this one's) are the
+evidence for anything beyond `:testkit`.
+
+### Disposition
+
+Closes the scope question `computenet-umx.2.8` (§6 above) left open and cited
+forward as `computenet-yqgd`. The successor-only reading that shipped with
+`computenet-umx.2` is superseded by the per-instance reading above wherever a
+caller opts in (`instanceReadings` is additive and optional, so nothing
+existing regresses). The "exactly twice" phrasing in this bead's own
+description is corrected here rather than repeated; readers following the
+citation chain from §6 above should read this section's "duplicated == 2"
+invariant instead of the successor-ratio one.
