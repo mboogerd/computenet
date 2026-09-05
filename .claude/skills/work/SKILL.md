@@ -1652,8 +1652,8 @@ verdict. (`parked` is only meaningful on an empty batch.)
   files a review had confirmed the defects in, and the fix belonged in
   `FloorDerivationLedger.render`, which already held `units.size`;
   computenet-078s's acceptance said "tighten `BatchReference`'s required arm",
-  and `BatchReference` does not compute the arm — `ReconvergenceCheck.
-  requiredPeers` does (computenet-a266). Both times the implementer found it
+  and `BatchReference` does not compute the arm —
+  `ReconvergenceCheck.requiredPeers` does (computenet-a266). Both times the implementer found it
   in its first pass and correctly refused to reach outside the claim; the
   first shipped an accepted architectural seam, the second nearly shipped its
   own acceptance criterion unmet under an unscheduled follow-up bead.
@@ -1664,12 +1664,13 @@ verdict. (`parked` is only meaningful on an empty batch.)
   further out, and it is answerable without reading the whole module:
 
   > For each defect site or named file, **which type already holds the state
-  > the fix must read or write?** Grep for that state, not for the symbols the
-  > bead uses — `grep -rn 'units.size' --include='*.kt' .`,
-  > `grep -rn 'requiredPeers' --include='*.kt' .` — and claim what declares it.
+  > the fix must write?** Grep the state's own noun **as the bead words it** —
+  > "the required arm", "how many units contributed" — then follow the one hop
+  > to the declaring symbol (`required` -> `ReconvergenceCheck.requiredPeers`;
+  > `units` -> `FloorDerivationLedger`), and claim what declares it.
 
-  Quote the glob: an unquoted `--include=*.kt` dies in zsh before grep runs,
-  and this check reads a zero result as "nothing else holds it". When the
+  Both hops were re-run at the two beads' dispatch-time trees and land on the
+  right file, so this needs no reading of the code. When the
   answer is genuinely unclear, prefer the wider claim on the same arithmetic
   as above: an over-broad lock costs a sibling a batch slot, an under-broad
   one costs an architectural seam nobody wanted.
