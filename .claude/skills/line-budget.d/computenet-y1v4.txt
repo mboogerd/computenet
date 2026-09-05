@@ -1,0 +1,20 @@
+# computenet-y1v4: red-check-attribution.md artifact 1 asked for the FAILED
+# line and the assertion message, and issue-quality.md separately asked the
+# BEAD for a full stack — so the agent attributing the check, at the moment it
+# writes the bead, was never told to capture a frame.
+#
+# +28. The grep gains a frame alternative (mechanical: it changes what an agent
+# captures whether or not the prose is read), and the prose says what the frame
+# buys. computenet-ulgy is the measurement: filed with test name, message, run
+# id and a same-lane control, its "what a fix needs" prescribed making the
+# waits condition-based; all three already were, on a 30s bound, and none
+# fired — the failure was the setup dial, stated in one unquoted frame. A
+# connect site means setup, an await means semantics.
+#
+# The pattern itself cost lines because the obvious one is wrong: `gh run view`
+# prefixes every line, so `^[[:space:]]*at ` matches NOTHING (measured 0 hits
+# on a 1,232-line failed log — this file's own `^e:` trap, one alternation
+# over), and a loose ` at ` takes Gradle's ` at all()` lines. `\.(kt|java):
+# [0-9]+\)` took 0 false positives on that log. Recording the measurement is
+# what stops the next editor from "simplifying" it back.
+work +28

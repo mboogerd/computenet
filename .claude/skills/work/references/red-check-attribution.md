@@ -16,18 +16,46 @@ agent, carries the run id, job and verbatim `FAILED` line and no mechanism
 you have not tested ([orchestrator-authorship.md](orchestrator-authorship.md);
 guessing one here cost a reviewer 8 runs):
 
-1. **The failing test and its assertion message**, read from the run, not
-   from the check's one-line summary:
+1. **The failing test, its assertion message, and the failing FRAME**, read
+   from the run, not from the check's one-line summary:
    ```bash
    gh pr checks <pr-url>                        # which check failed, and its run url
    gh run view <run-id> --log-failed -R mboogerd/computenet \
-     | grep -E 'FAILED|FAILURE| e: ' | head -40
+     | grep -E 'FAILED|FAILURE| e: |\.(kt|java):[0-9]+\)' | head -40
 
    # capturing the whole log: run FROM THE REPO, redirect OUT to the scratchpad
    gh run view <run-id> --log -R mboogerd/computenet > "$SCRATCH/<run-id>.log"
    ```
-   Quote the `FAILED` line. A red check whose log you have not read is
-   unattributed, full stop.
+   Quote the `FAILED` line **and the frames under it** — the
+   `at <class>.<method>(<File>:<line>)` lines. A red check whose log you have
+   not read is unattributed, full stop.
+
+   The frame alternative is `\.(kt|java):[0-9]+\)`, not `^[[:space:]]*at `.
+   `gh run view` prefixes every line with `<job>\t<step>\t<timestamp> `, so an
+   anchored frame pattern matches **nothing** for the same reason `^e:` does —
+   measured 0 hits against a 1,232-line failed log — while a loose ` at ` also
+   takes Gradle's own ` at all()` lines. Requiring the `.kt:NNN)` shape took 0
+   false positives on that same log.
+
+   **The frame is what separates a failure in the test's SETUP from one in
+   the behaviour under test**, and it is the half that ages out. computenet-ulgy
+   was filed with the test name, the message, the run id and a decisive
+   same-lane control, and its "What a fix needs" then prescribed making the
+   waits condition-based. All three awaits in that class already were, on a
+   30s bound, and none of them fired: the failure was in the setup dial three
+   lines earlier, stated in one frame the bead never quoted
+   (`at WsTransport.connect(WsTransport.kt:339)`). A `connect` site means
+   setup; an await means semantics — one line settles a triage that cost an
+   implementer a wrong lead (computenet-y1v4). The log ages out before the
+   bead is worked, so an unquoted frame is unrecoverable and the wrong
+   prescription is all that survives.
+
+   For the same reason, **a "what a fix needs" section is a reading of the
+   evidence, not a finding** — label it as one. It is SKILL.md's "a
+   PRESCRIPTIVE handoff comment is a hypothesis, not an instruction"
+   (computenet-lc3o) reaching flake beads, where the stale thing is a
+   diagnosis rather than a branch or a file reference, and where the agent
+   that reads it cannot cheaply falsify it.
 
    **`--log-failed` returns the failed JOB's whole log, which on a Gradle job
    is overwhelmingly `PASSED` lines** — hence the grep above rather than a
