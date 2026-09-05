@@ -2480,3 +2480,68 @@ must observe" argument, since a second implementation would have to be able to
 report it). It is *not* a driver-binding widening: the driver can already
 observe it (`FanOutlet.observe`/`tap` is exactly this), which is why the
 property is statable at the driver and not in the corpus.
+
+---
+
+## `42-WM-R14` — a `ReBaseline`-superseded source's watermark column cannot be excluded from the stability MIN (`kernel-gap`)
+
+- **Requirement it would cover**: the min-over-*live*-sources form of the
+  stability read — the precondition [KE3-30] (epic `computenet-9sm` §3 R3)
+  depends on, i.e. that a tag is discardable once it is `≤
+  stableFrontier(logicalId)`. Excluding a superseded source's column from
+  [42-WM-05]'s pointwise minimum is what would make the MIN advance past a
+  dead emission epoch, and so what would make reclamation reachable at all
+  after a `ReBaseline`. The rule is deliberately **not** written in
+  `doc/spec/40-distribution/42-replication.md` §Delivered watermarks and
+  causal stability (§Open interactions records it as unpinned); no
+  `[42-WM-nn]` id was minted for it.
+- **Why it cannot be pinned honestly — the straggler window is open by
+  construction in both tag families.**
+  1. **Map family: the fence is replica-local.**
+     `civictech.cell.data.delta.TagState` accumulates `notice.supersedes`
+     into a private `deadSources` set and thereafter filters those sources
+     out of `apply`; `civictech.cell.data.OrMapCell`'s `applyReBaseline`
+     KDoc states the consequence itself — the fence "binds only the replicas
+     that actually processed a notice", so a dot of a superseded source held
+     by a peer that never saw one stays live there and can be gossiped
+     onward as new information. If the column were excluded from the MIN,
+     reclamation could run in precisely the window that straggler arrives
+     in, and the tag it needs to be dominated by is gone.
+  2. **Set family: the notice is forwarded, not fenced globally.**
+     `UnionSetCell` forwards a re-baseline downstream transparently (the
+     over-retraction trade), which propagates the epoch change but does not
+     make the supersession itself a converged fact at every replica of the
+     id. The forward is a downstream courtesy, not a mesh-wide fence.
+  3. **The watermark plane has no supersession vocabulary at all.**
+     `WatermarkCell` rows (`kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`)
+     and `ReplicaQuorum` never read `deadSources` or `supersedes`; rows are
+     grow-only in every lane and no column is ever removed. There is no
+     place in the shipped code where the exclusion could even be expressed.
+- **Missing capability** — two, and either alone is insufficient:
+  (i) a **fenced-source lattice** that carries `ReBaseline` supersession to
+  every replica of the logical id as data, so the fence stops being
+  replica-local (named as 96 §E1 follow-on work in `OrMapCell`'s own KDoc;
+  the corresponding measured negative result is filed as `computenet-u7fi`);
+  and (ii) a **causal-stability read over the supersession itself** — 95
+  §R14 direction 1, "a dead source's column is reclaimable once the
+  `ReBaseline` is causally stable" — which is circular against the very
+  stability read this would make sound, and so needs (i) or an independent
+  ordering before it can be used.
+- **What was NOT done instead** (the point of the filing): no form-(a)
+  requirement was written asserting that a superseded column is excluded.
+  Such a rule would read as pinned in `CONCORDANCE.md` while authorizing
+  reclamation over an open straggler window that no shipped mechanism
+  closes. The shipped behaviour is instead stated as-is — a superseded
+  column stays in the MIN, so one supersession freezes stability for every
+  replica of the id (unbounded-but-correct, the disposition 95 §R14 already
+  records) — and 96 E3.7's reclamation ships gated on "no superseded column
+  present".
+- **Check to restore**: R14's own action. Extend the E3.5 harness with
+  RESTART / re-baseline seeds; with the exclusion applied, assert that no
+  dead-epoch straggler is ever admitted as new information at any replica,
+  over every seed. If that holds, pin form (a) as a new `[42-WM-nn]` rule in
+  §Delivered watermarks and causal stability and retire this entry; if it
+  does not, the counterexample is itself the answer and the freeze stands.
+- **Revisit trigger**: a fenced-source lattice lands on the gossip mesh (the
+  KE3 decision on building one belongs to feature `computenet-9sm.8`, not to
+  this entry), or 95 §R14 is otherwise closed.

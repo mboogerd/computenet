@@ -482,7 +482,62 @@ column may be dropped) is 95 §R14, likewise named and not resolved.
 ### Open interactions
 
 The R14 superseded-source-column rule and the FRM1/G-36 two-hop-cut interaction
-with this section are recorded here.
+with this section are recorded here. Both are recorded open: neither is
+resolved by anything in this section.
+
+**R14 — superseded columns and the stability MIN.** Whether a `ReBaseline`-
+superseded source's column is excluded from the pointwise minimum of [42-WM-05]
+is **unpinned** — see `concord/corpus/DISPUTES.md` entry `42-WM-R14`. No rule
+here decides it, and no `[42-WM-nn]` id is minted for one. The shipped
+behaviour is that a superseded column **stays in the MIN**: one supersession
+therefore freezes stability for every replica of the id until R14 is answered
+— unbounded-but-correct, the same disposition 95 §R14 records for the corner.
+
+The reason the exclusion cannot be pinned today is that the supersession fence
+is not global. `cell.data.delta.TagState` records `notice.supersedes` into its
+own `deadSources` set and thereafter filters tags of those sources out of
+`apply`; `cell.data.OrMapCell`'s re-baseline KDoc states the consequence in as
+many words — the fence is *replica-local*, binding only the replicas that
+actually processed a notice, so a dot of a superseded source held by a peer
+that never saw one stays live there and can still be gossiped onward as new
+information. Excluding the column from the MIN would authorize reclamation
+([KE3-30]'s precondition) in exactly the window that straggler can arrive in.
+Closing it needs the notice to reach every replica as data — a fenced-source
+lattice on the gossip mesh, which does not exist (96 §E1 follow-on) — and the
+alternative of gating exclusion on the `ReBaseline` itself being causally
+stable (95 §R14 direction 1) presupposes the very stability read this section
+defines. Neither the set family (whose `applyReBaseline` forwards the notice
+downstream transitively) nor the map family closes the window on its own, and
+`cell.data.WatermarkCell` has no supersession vocabulary at all: its rows are
+grow-only in every lane and no column is ever removed.
+
+The practical consequence for the reclamation work is a precondition, not a
+rule: stability-scoped reclamation (96 E3.7) ships gated on **no superseded
+column present** for the id being reclaimed.
+
+**FRM1 BS-7 — the two-hop upstream cut (G-36).** FRM1's BS-7 configuration is
+`A → M → D` with `M` absorbing and `D` also fed by `B`; the link `A → M` is cut
+while `D` waits on the `M` arm for wave `t`. It expects a **counterexample**,
+because every metadata-plane notice is single-hop (91 §G-36) and so no notice
+of the cut reaches `D` through `M`.
+
+The delivered-watermark lattice **does not currently carry transitive progress
+for the wave plane** and is not offered here as G-36's missing channel. A
+`WatermarkCell` row advances only from its own replica's `DeliveredFrontier` /
+outlet tap; nothing writes a row on behalf of an upstream hop, and the mesh
+carries per-replica delivery, not per-hop wave progress. The open question this
+section records, and does not answer, is whether the two-hop cut leaves a
+`deliveredThru` column pinned forever, and if so whether that freezes the
+stability read the way an unclean departure does ([42-WM-08]) — because if it
+does, the `Stall`-family notice named there must cover that cause too, and the
+notice is currently specified for departure only.
+
+This paragraph is a **stated unknown**, not a finding: FRM1 (`computenet-7fe`)
+is open at the time of writing and its BS-7 trace has not been produced. When
+it closes, the recorded trace in `doc/formal/findings.md` replaces the
+prediction above; it does not by itself resolve the interaction, which stays
+open until either G-36 gains a transitive channel or [42-WM-08]'s notice is
+widened. Neither disposition adopts this lattice as that channel.
 
 ## Decided in 93, not yet built
 
