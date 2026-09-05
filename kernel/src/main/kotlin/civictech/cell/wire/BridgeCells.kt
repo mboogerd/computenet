@@ -314,6 +314,27 @@ class BridgeIngressCell(
                     )
                     return
                 }
+                // computenet-mvu9: decided behaviour when this throws — most
+                // concretely a kotlinx.serialization.SerializationException
+                // (computenet-bb5b) from a peer that has admitted this
+                // connection but has NOT contributed a loaded module's
+                // WireSerializers for a type the frame carries. Unlike the
+                // admission/announcement refusals around this call, nothing
+                // here catches the throw locally: this whole `propagate`
+                // body runs as a hosted invocation reached through the
+                // `Peering.hostIngress` proxy (never called directly on the
+                // calling/socket thread), so the throw is caught by
+                // `ManagedHost.deliver`'s own invocation catch, exactly like
+                // any other cell fault. Under the default
+                // `SupervisionPolicy.PROPAGATE` that means: an unconditional
+                // stderr line, one `supervisionAccounting().deadLetters`
+                // increment, and one record on `ManagedHost.deadLetterOutlet`
+                // carrying this exception as its `cause` — never silently
+                // swallowed, and the connection itself is untouched (this
+                // ingress cell, and the socket underneath it, keep processing
+                // subsequent frames). Pinned end-to-end over a real
+                // `WsTransport` socket by
+                // `civictech.wire.WsIngressDecodeFailureTest`.
                 val decodedFrame = WireCodec.decodeFrame(value)
                 val gate = announcementAdmission
                 if (gate != null && WireCodec.isAnnouncement(decodedFrame.frame)) {
