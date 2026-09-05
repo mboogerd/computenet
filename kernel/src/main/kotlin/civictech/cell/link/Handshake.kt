@@ -195,9 +195,11 @@ internal fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
  * Firing it is safe in the sense that matters — retraction is what every
  * id-keyed subscriber wants on a supersession, and `onUnlinkListeners` has
  * exactly one production subscriber in the repository (the frontier GC above;
- * `git grep 'onUnlinkListeners +='` finds no other registration in main or
- * test sources), which is the subscriber this fix is for. No owned/leased
- * payload, wave or tag state rides this path.
+ * `git grep 'onUnlinkListeners +='` finds no other registration under any
+ * `src/main` — the only other hits are two test subscribers,
+ * `BridgedLinkSupersessionTest` and `StreamToUnlinkNotificationTest`), which
+ * is the subscriber this fix is for. No owned/leased payload, wave or tag
+ * state rides this path.
  *
  * Two ordering facts, stated as measured rather than as intent
  * (computenet-4jpd review):
@@ -236,9 +238,19 @@ internal fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
  *   every non-neutral source, whereas the doubled one only perturbs
  *   non-idempotent aggregators.
  *
- * Each side fires only its OWN listeners, because this function is called once
- * per side — matching the coverage `PortLink`'s teardown gives a real unlink,
- * which multicasts to `support` and `sourceLinking` alike.
+ * This function is called once per side, and the caller multicasts each side's
+ * returned records to that side's OWN listeners only — matching the coverage
+ * `PortLink`'s teardown gives a real unlink, which multicasts to `support` and
+ * `sourceLinking` alike.
+ *
+ * Second residual of the deferral, and the price of the split: removal and
+ * notification are no longer adjacent, so a listener that THROWS out of the
+ * intervening `onLinkedListeners` multicast strands the superseded record's
+ * slot in the frontier permanently — the exact leak computenet-4jpd closed,
+ * reachable now only on an exception path. Nothing on that path is guarded
+ * today (the handshake is already non-atomic there: `install` and `register`
+ * have both run), so this narrows failure-path robustness rather than
+ * introducing a new hazard class. See computenet-dmkp's review residuals.
  *
  * @return the records removed, for the caller's deferred retraction multicast.
  */
