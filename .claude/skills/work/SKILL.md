@@ -1645,6 +1645,37 @@ verdict. (`parked` is only meaningful on an empty batch.)
   orchestrator-authored and how it was derived — that record is what lets
   the next miss be diagnosed.
 
+  **The second asymmetry is WHERE IT IS OBSERVED versus WHERE IT IS FIXED**,
+  and af9q's grep does not reach it. A claim authored from the DEFECT SITES —
+  or from the file an acceptance clause names — omits the file where the fix
+  most naturally belongs whenever the observation site is downstream of the
+  state the fix needs. Measured twice: computenet-71hu's claim held the three
+  files a review had confirmed the defects in, and the fix belonged in
+  `FloorDerivationLedger.render`, which already held `units.size`;
+  computenet-078s's acceptance said "tighten `BatchReference`'s required arm",
+  and `BatchReference` does not compute the arm —
+  `ReconvergenceCheck.requiredPeers` does (computenet-a266). Both times the implementer found it
+  in its first pass and correctly refused to reach outside the claim; the
+  first shipped an accepted architectural seam, the second nearly shipped its
+  own acceptance criterion unmet under an unscheduled follow-up bead.
+
+  Neither check fires on this. `check-files-claim.sh` passes the bead CLEAN,
+  because the file the bead names IS in the claim; af9q's grep needs a symbol
+  the bead does not mention. The question that does reach it is one hop
+  further out, and it is answerable without reading the whole module:
+
+  > For each defect site or named file, **which type already holds the state
+  > the fix must write?** Grep the state's own noun **as the bead words it** —
+  > "the required arm", "how many units contributed" — then follow the one hop
+  > to the declaring symbol (`required` -> `ReconvergenceCheck.requiredPeers`;
+  > `units` -> `FloorDerivationLedger`), and claim what declares it.
+
+  Both hops were re-run at the two beads' dispatch-time trees and land on the
+  right file, so this needs no reading of the code. When the
+  answer is genuinely unclear, prefer the wider claim on the same arithmetic
+  as above: an over-broad lock costs a sibling a batch slot, an under-broad
+  one costs an architectural seam nobody wanted.
+
   **A claim COPIED from a sibling bead is orchestrator-authored too, and gets
   the same grep.** Copying feels like the conservative move — the claim is
   evidence-backed and came from a bead that shipped — and that framing is
