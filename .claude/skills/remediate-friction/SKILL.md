@@ -365,9 +365,11 @@ step 3 releases a park: `bd update <id> --assignee="" --status=open`.
 
 A script-only PR writes no delta — the ratchet prices only `SKILL.md` and
 `references/*.md` — but the ~2-per-file bound still applies to two PRs editing
-one script. The one change that must still touch `line-budget.txt` itself is a
-change to `validate-skills.rb`'s counting method, which moves every base number
-in the same diff.
+one script. Two changes still touch `line-budget.txt` itself: a change to
+`validate-skills.rb`'s counting method, which moves every base number in the
+same diff, and the fold-back — writing the accumulated deltas into the base
+numbers and deleting the delta files, which only a session holding the ledger
+alone should do.
 
 ## 5. Finalize
 
