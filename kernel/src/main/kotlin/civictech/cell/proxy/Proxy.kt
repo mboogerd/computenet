@@ -151,6 +151,45 @@ object Proxy {
      * Pooling is unbuilt (`Ownership.kt`, "G-21 phase 3"), so no such callback exists in this
      * repository today; making the distinction exact needs a non-consuming state predicate on
      * `Owned`/`Leased` themselves, which is filed separately.
+     *
+     * **Second limit, and it is a deliberate exclusion (computenet-1ffh):** this counts
+     * arrivals at *this walk* only. `civictech.cell.host.DeadLetters.sanitizeForDeadLetter`
+     * also meets exclusive arguments, and when it meets one that is already consumed or
+     * released its own `freeze()`/`release()` failure is swallowed by a `runCatching` and
+     * books **nothing** here. So a second arrival at the sanitizer is invisible in this
+     * number, and the same event is counted differently depending on which path arrives
+     * second. Measured 2026-09-05 on a `Leased`/`Owned` pair each holding a nested `Owned`,
+     * both directions pinned by `civictech.cell.host.LifecycleAndDeadLetterTest`:
+     *
+     * - [discharge] first, capture second: delta **0**.
+     * - capture first, [discharge] second: delta **2** (one per outer wrapper, booked by
+     *   this walk's own already-consumed branches).
+     *
+     * Symmetrizing that — narrowing the sanitizer's `runCatching` the way [consuming] is
+     * narrowed and incrementing this counter there — was considered and **rejected**,
+     * because capture legitimately runs *after* a correct, single discharge of the same
+     * arguments on ordinary paths, so the increment would fire where nothing was consumed
+     * twice:
+     *
+     * - `civictech.cell.host.ManagedHost`'s contextless-`Effectful` refusal discharges the
+     *   invocation's args and *then* dead-letters carrying that same `HostedPortInvocation`
+     *   — discharge-then-capture by construction, on every such refusal.
+     * - An inlet handler that takes its `Owned` payload and only then throws lands in the
+     *   host's fault catch, which dead-letters with the invocation; the sanitizer meets a
+     *   handle whose single rightful consumer already ran.
+     *
+     * Counting those would move a tripwire whose whole contract is that it *does not* move
+     * unless the exactly-once invariant broke, which is worse for a host asserting on it
+     * than the gap being documented. What a host reading this number therefore does not
+     * see: a payload consumed once elsewhere and then met again by dead-letter capture. It
+     * still sees every double arrival at this walk — the path the `Effectful` suppression,
+     * ADMIT-drop (`civictech.cell.port.InletPolicy`), route-refusal
+     * (`ManagedHost.internalHostRoutingApi.refuse`) and sink-less denial
+     * (`civictech.cell.dischargeRefusedArgs`) routes all discharge through. The refusal
+     * route that does **not** reach this walk for its top-level arguments is a hosted
+     * membrane's denial with a reporter attached
+     * (`civictech.cell.BoundaryDenialSink.deny`), whose one discharge site is the sanitizer
+     * itself: a second arrival there is invisible here for exactly the reason above.
      */
     val doubleDischarges: Long get() = doubleDischargeCount.get()
 

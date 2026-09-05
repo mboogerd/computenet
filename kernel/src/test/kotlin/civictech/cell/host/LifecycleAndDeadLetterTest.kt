@@ -483,4 +483,69 @@ class LifecycleAndDeadLetterTest {
         // the pin: the sanitizer declined to descend, so nothing was consumed twice
         Proxy.doubleDischarges shouldBe doubleDischargesBefore
     }
+
+    /**
+     * computenet-1ffh — the OTHER arrival order, and the measurement behind the
+     * decision recorded in [Proxy.doubleDischarges]' KDoc.
+     *
+     * The test above drives `Proxy.discharge` first and capture second, and
+     * pins a delta of **0**. This one drives the same two paths in the opposite
+     * order over the same shape and pins a delta of **2** — one per outer
+     * wrapper, booked by `Proxy.discharge`'s own already-consumed/
+     * already-released branches when the sanitizer got there first.
+     *
+     * The asymmetry is the point: the same event (two arrivals at one wrapper)
+     * is counted 2 in one order and 0 in the other, because
+     * `sanitizeForDeadLetter` swallows its own `freeze()`/`release()` failure
+     * in `runCatching` and books nothing. Symmetrizing it — counting the
+     * sanitizer's arrival on the same tripwire — was considered under
+     * computenet-1ffh and **rejected**; the reason, and what the counter
+     * therefore does not see, is stated next to the number in
+     * [Proxy.doubleDischarges]. This test exists so those two numbers are
+     * executable rather than folklore: if either order's delta changes, that
+     * KDoc is stale and this goes red.
+     */
+    @Test
+    fun `dead-letter capture arriving first leaves the second walk to book both wrappers`() {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+        val cell = TrackingCell()
+        host.managementInlet.call.spawn(cell)
+
+        val innerInLease = Owned("inner-in-lease")
+        val leased = Leased(NestedEnvelope(innerInLease))
+        val innerInOwned = Owned("inner-in-owned")
+        val owned = Owned(NestedEnvelope(innerInOwned))
+
+        val doubleDischargesBefore = Proxy.doubleDischarges
+
+        // capture gets there FIRST this time
+        host.enqueueHostedInvocation(
+            HostedPortInvocation(
+                cellRef = cell.ref,
+                portName = "nope",
+                type = HostedPortInvocation.Type.PORT_API,
+                invocation = Invocation.of(acceptNested, arrayOf(leased, owned)),
+            ),
+        )
+        controller.runToIdle()
+
+        // both wrappers were live when the sanitizer met them, so it substituted
+        // normally and descended: Leased -> marker, Owned -> Frozen
+        val captured = letters.single().invocation.shouldNotBeNull()
+        captured.invocation.args[0].shouldBeInstanceOf<Redacted>()
+        captured.invocation.args[1].shouldBeInstanceOf<Frozen<*>>()
+        assertThrows<IllegalStateException> { innerInLease.take() }
+        assertThrows<IllegalStateException> { innerInOwned.take() }
+
+        // the sanitizer alone books nothing
+        Proxy.doubleDischarges shouldBe doubleDischargesBefore
+
+        // ...and the walk arriving SECOND books one per outer wrapper and
+        // declines to descend, where the reverse order booked zero
+        Proxy.discharge(leased)
+        Proxy.discharge(owned)
+        Proxy.doubleDischarges shouldBe doubleDischargesBefore + 2
+    }
 }
