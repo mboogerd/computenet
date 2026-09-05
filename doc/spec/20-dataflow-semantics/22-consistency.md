@@ -233,6 +233,25 @@ wave exactly as a local one does. *(§Bridged frontier below still labels the
 `Progress` crossing and the handshake-routed bridged open unimplemented —
 a stale label against this landed code, not a live residual.)*
 
+**Cross-replica extension (E3.4).** Completeness as stated above is per edge,
+per source, on one node; when a join's arms are fed by *different replicas*
+of one logical source, "my replica delivered it" is not "it is complete" —
+the wave is replica-complete only when the covering members' delivered rows
+say so, a `[42-WM-04]` frontier read over the `[42-WM-01]` delivered-prefix
+rows (40/42 §Delivered watermarks and causal stability). A replica-fed edge
+adds that predicate to its settlement: `cell.consistency.WaveFrontier`
+consumes a `cell.consistency.ReplicaFrontier`, built by
+`cell.consistency.ReplicaQuorum`, alongside the per-edge watermark fold this
+section already describes. The covering-subset quorum, the R13 creation
+fence for a not-yet-known covering member, and the converged-membership
+barrier that fixes the covering set for the read are specified below in
+§Interest-scoped settlement (PN-7), §R13 creation fence, and
+§Converged-membership barrier (FU-2) — this paragraph only names the
+predicate the join-side settlement adds, not those rules themselves. The
+terminal state of the same read is the causal-stability read `[42-WM-05]`,
+which 24 §Tag continuity across epochs, restart, and swap uses as its
+compaction trigger.
+
 ⚠ GAP (G-40): *(residual narrowed by CP-A2/CP-A3/CP-A4 — the core mechanism is
 landed; see §Completeness over silent or stuck edges above)*. Landed:
 per-source per-edge watermarks advanced by real deltas, by the `Progress`

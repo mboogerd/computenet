@@ -682,9 +682,10 @@ layer G-62 — both cited from those gaps, neither owed by this section.
 
 ## Tag continuity across epochs, restart, and swap
 
-Three tag-algebra rules govern replication, RESTART, and instance swap.
-They are decided design (93 I-14, I-22, I-27); `[24-TAG-02]` is implemented
-(W2.1), `[24-TAG-01]` and `[24-TAG-03]` are not.
+Four tag-algebra rules govern replication, RESTART, instance swap, and
+compaction. They are decided design (93 I-14, I-22, I-27, 96 E3.7);
+`[24-TAG-02]` is implemented (W2.1), `[24-TAG-01]`, `[24-TAG-03]`, and
+`[24-TAG-04]` are not.
 
 *(The ⚠ EARS-GAP that used to stand here asked a spec editor with fuller
 context to confirm or retract the `[24-TAG-*]` ids, on the suspicion that the
@@ -776,6 +777,20 @@ that is what the per-rule notes below now say instead of one blanket line.)*
   no supersession signal. The drain-window export snapshot is the same
   `Stateful.snapshot()` that G-25 journals — one capture serves the
   handoff, the rollback checkpoint, and the journal.
+- **Compaction below the stable frontier** (decided in 96 E3.7; unbuilt —
+  feature computenet-9sm.6, OR-map half computenet-9sm.8). `[24-TAG-04]`
+  WHEN a convergent cell compacts its tag state, it SHALL discard a tag
+  only if that tag is at or below the stable frontier (`[42-WM-05]`) at the
+  moment of discard, and IF a later delta, baseline or catch-up carries a
+  discarded tag, THEN the cell SHALL NOT re-admit it as new information
+  (Event-driven / Unwanted). Stability, not local delivery, is the trigger:
+  reclaiming at the locally delivered frontier can resurrect a removed
+  element on some schedule (96 E3.5's control), where reclaiming at the
+  stable frontier cannot, because every covering replica has already
+  converged past it. Compaction rides the G-25 checkpoint path, never the
+  emission hot path; a `StateRequest(since)` that asks for state below the
+  compaction floor is answered with full state rather than a since-delta
+  (E3.7, 40/42 §Scatter-gather pull `RetainedFrontiers`).
 
 ⚠ GAP (G-42): Epoch source-ids and restart generations accrete unboundedly:
 OR-set/PN source columns, stale glitch-free partial-wave buffers, and
