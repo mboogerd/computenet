@@ -423,10 +423,33 @@ class SingleWriterChurnTest {
         // The report type carries no verdict surface at all: everything on it is a count, a
         // sample or the interleaving. A `passed`/`acceptable` field would be this harness
         // choosing a direction, which [CHA3-52] forbids.
+        //
+        // `declaredFields` alone only sees backing fields, so a getter-only computed property
+        // (`val passed get() = ...`, which Kotlin compiles to a `getPassed()` method with no
+        // backing field) would be invisible to this pin and could reintroduce exactly the
+        // verdict surface [CHA3-52] forbids without ever going red (computenet-fmri). Widen the
+        // check to every zero-arg method the class declares as well, stripped of any `get`
+        // prefix so a computed property's own name is what gets matched — not kotlin-reflect's
+        // `memberProperties` (`:testkit` declares no kotlin-reflect dependency; see
+        // testkit/build.gradle.kts), but the same declared-members surface `java.lang.Class`
+        // already exposes.
+        //
+        // Deliberately NOT filtered to `startsWith("get")`: Kotlin's boolean-property convention
+        // compiles `val isPassing get() = ...` to `isPassing()`, with no `get` prefix at all, so
+        // a `get`-only filter is blind to exactly the shape a boolean verdict would most likely
+        // take (measured: such a property left the `get`-filtered pin green). Dropping the filter
+        // also covers a verdict exposed as a zero-arg *function* (`fun passed(): Boolean`), which
+        // [CHA3-52] forbids just the same. Nothing this type declares today — the twelve property
+        // getters plus `summary`, `component1..6`, `hashCode`, `toString` — trips the substring
+        // test, so the widening costs no false positive.
         val fields = LeaderChurnReport::class.java.declaredFields.map { it.name }
+        val computedGetterNames = LeaderChurnReport::class.java.declaredMethods
+            .filter { it.parameterCount == 0 }
+            .map { it.name.removePrefix("get").replaceFirstChar(Char::lowercase) }
+        val names = fields + computedGetterNames
         assertTrue(
-            fields.none { it.contains("pass", ignoreCase = true) || it.contains("verdict", ignoreCase = true) },
-            "LeaderChurnReport must carry measurements only, found: $fields",
+            names.none { it.contains("pass", ignoreCase = true) || it.contains("verdict", ignoreCase = true) },
+            "LeaderChurnReport must carry measurements only, found: $names",
         )
     }
 
