@@ -202,36 +202,50 @@ internal fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
  * Two ordering facts, stated as measured rather than as intent
  * (computenet-4jpd review):
  *
- * - Eviction MUST run before [LinkSupport.register] for a reason stronger than
- *   notification order: the filter below matches on `(from, to, role)` only, so
- *   once the replacement is registered it matches its own eviction predicate.
- *   Moving the two `evictSuperseded` calls after `register` evicts the new
- *   record and reddens all seven `LinkSupersessionTest` cases
- *   (`expected:<1> but was:<0>`).
- * - It does NOT avoid a transient empty frontier — it creates one. Between the
- *   retraction here and the replacement's `onLinkedListeners` report, a port
- *   whose only downstream link is being relinked folds over zero slots, so
- *   `recompute` takes the `null` branch and the band flaps to neutral `NORMAL`
- *   and back. Measured on this code: relinking the sole link of a source
- *   sitting at HIGH fires `onBandChange` with `[NORMAL, HIGH]` where before
- *   this change it fired nothing. The flap is synchronous, self-correcting
- *   inside the same handshake call and touches only control-plane band
- *   signalling — but it is a spurious `emitUpstream` per relink, and removing
- *   it means deferring the retraction past the replacement's establishment
- *   rather than reordering these calls. Not done here; see the follow-up bead.
+ * - **Removal** MUST run before [LinkSupport.register] for a reason stronger
+ *   than notification order: the filter below matches on `(from, to, role)`
+ *   only, so once the replacement is registered it matches its own eviction
+ *   predicate. Moving the two `evictSuperseded` calls after `register` evicts
+ *   the new record and reddens all seven `LinkSupersessionTest`
+ *   computenet-lioe/4jpd cases (`expected:<1> but was:<0>`).
+ * - **The retraction multicast** must NOT run there, and that is why this
+ *   function only *returns* the evicted records rather than notifying about
+ *   them (computenet-dmkp). Firing `onUnlinkListeners` at the removal point
+ *   left a window with zero slots: between the retraction and the
+ *   replacement's `onLinkedListeners` report, a port whose only downstream
+ *   link is being relinked folds over an empty frontier, so `recompute` takes
+ *   the `null` branch and the band flaps to neutral `NORMAL` and back.
+ *   Measured: relinking the sole link of a source sitting at HIGH fired
+ *   `onBandChange` with `[NORMAL, HIGH]` — a spurious `emitUpstream` per
+ *   relink. The caller therefore fires these listeners at the END of the
+ *   `Connected` branch, after the replacement's `onLinkedListeners` has
+ *   re-established the edge's slot, so the frontier goes
+ *   old-slot → old+new → new and never passes through empty. The slot is
+ *   still genuinely retracted (the 4jpd cases pin exactly that), only later.
+ *
+ *   Residual, stated rather than left to be rediscovered: the intermediate
+ *   state now holds TWO slots for one edge instead of zero, which is
+ *   invisible to an idempotent fold (`Max`, the default: both slots carry the
+ *   same reported level) but visible to a counting one — under
+ *   `AttentionAggregator.Sum` a relink transiently doubles the edge's
+ *   contribution. Making the swap atomic is not reachable from this file: it
+ *   would need `AttentionFrontier` to rekey a slot, i.e. a change on the
+ *   attention side, which computenet-dmkp deliberately scopes out. Both zero
+ *   and two are transient and self-correcting inside this call; the empty one
+ *   was chosen against because neutral-`NORMAL` is a *different band* for
+ *   every non-neutral source, whereas the doubled one only perturbs
+ *   non-idempotent aggregators.
  *
  * Each side fires only its OWN listeners, because this function is called once
  * per side — matching the coverage `PortLink`'s teardown gives a real unlink,
  * which multicasts to `support` and `sourceLinking` alike.
+ *
+ * @return the records removed, for the caller's deferred retraction multicast.
  */
-private fun evictSuperseded(support: LinkSupport, from: PortRef, to: PortRef, role: LinkRole) {
+private fun evictSuperseded(support: LinkSupport, from: PortRef, to: PortRef, role: LinkRole): List<Link> =
     support.links
         .filter { it.from == from && it.to == to && it.role == role }
-        .forEach { superseded ->
-            support.remove(superseded)
-            support.onUnlinkListeners.forEach { it(superseded) }
-        }
-}
+        .onEach { support.remove(it) }
 
 /**
  * Runs the handshake shared by the inlet implementations:
@@ -307,8 +321,8 @@ internal fun <Api> handshake(
             // sides instead of growing one corpse per relink. See
             // [evictSuperseded]; done after admission, so a refusal never
             // disturbs the incumbent.
-            evictSuperseded(support, portOut.ref, targetRef, role)
-            sourceLinking?.let { evictSuperseded(it, portOut.ref, targetRef, role) }
+            val supersededTarget = evictSuperseded(support, portOut.ref, targetRef, role)
+            val supersededSource = sourceLinking?.let { evictSuperseded(it, portOut.ref, targetRef, role) }.orEmpty()
             // Both sides retain the identity this link was ESTABLISHED with, so
             // a later rebind re-authorizes the original peer rather than
             // whoever is ambient at rebind time ([SEC1-10]; the source side is
@@ -327,6 +341,16 @@ internal fun <Api> handshake(
             sourceLinking?.onLinked?.invoke(link)
             support.onLinkedListeners.forEach { it(link) }
             sourceLinking?.onLinkedListeners?.forEach { it(link) }
+            // computenet-dmkp: the superseded records' retraction multicast,
+            // deliberately LAST — after the replacement has reported itself, so
+            // an id-keyed subscriber (`AttentionSupport`'s frontier) never sees
+            // the edge absent. Removal already happened before `register`
+            // (it has to; see [evictSuperseded]); only the notification is
+            // deferred, so the slot is still retracted.
+            supersededTarget.forEach { superseded -> support.onUnlinkListeners.forEach { it(superseded) } }
+            supersededSource.forEach { superseded ->
+                sourceLinking?.onUnlinkListeners?.forEach { it(superseded) }
+            }
             result
         }
 
