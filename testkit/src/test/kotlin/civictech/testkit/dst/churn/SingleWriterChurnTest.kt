@@ -423,10 +423,24 @@ class SingleWriterChurnTest {
         // The report type carries no verdict surface at all: everything on it is a count, a
         // sample or the interleaving. A `passed`/`acceptable` field would be this harness
         // choosing a direction, which [CHA3-52] forbids.
+        //
+        // `declaredFields` alone only sees backing fields, so a getter-only computed property
+        // (`val passed get() = ...`, which Kotlin compiles to a `getPassed()` method with no
+        // backing field) would be invisible to this pin and could reintroduce exactly the
+        // verdict surface [CHA3-52] forbids without ever going red (computenet-fmri). Widen the
+        // check to every zero-arg `getXxx()` method the class declares as well, stripped of its
+        // `get` prefix so a computed property's own name is what gets matched — not kotlin-reflect's
+        // `memberProperties` (`:testkit` declares no kotlin-reflect dependency; see
+        // testkit/build.gradle.kts), but the same declared-members surface `java.lang.Class`
+        // already exposes.
         val fields = LeaderChurnReport::class.java.declaredFields.map { it.name }
+        val computedGetterNames = LeaderChurnReport::class.java.declaredMethods
+            .filter { it.parameterCount == 0 && it.name.startsWith("get") }
+            .map { it.name.removePrefix("get").replaceFirstChar(Char::lowercase) }
+        val names = fields + computedGetterNames
         assertTrue(
-            fields.none { it.contains("pass", ignoreCase = true) || it.contains("verdict", ignoreCase = true) },
-            "LeaderChurnReport must carry measurements only, found: $fields",
+            names.none { it.contains("pass", ignoreCase = true) || it.contains("verdict", ignoreCase = true) },
+            "LeaderChurnReport must carry measurements only, found: $names",
         )
     }
 
