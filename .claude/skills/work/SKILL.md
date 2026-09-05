@@ -104,7 +104,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `file-friction.sh` | Files a friction item collision-free under the SDLC epic, open and unclaimed |
 | `resumable-epics.sh` | Epics holding a feature left `in_progress` — step 3 ranks these above priority |
 | `claim-item.sh` | `bd update <id> --claim` plus the session holder token, so a live sibling's claim is not swept as a crash leftover (`claim-epic.sh` does this for epics) |
-| `bead.sh` | projected `bd show` — the bead's own fields as one object, `dependencies` dropped (57KB -> 7KB); no `.[0]` unwrap |
+| `bead.sh` | `<id> [-r] [jq-filter]` — projected `bd show`: the bead's own fields as one object, `dependencies` dropped (57KB -> 7KB); no `.[0]` unwrap. Output over 25KB is written to a file and the path printed |
 | `wait-checks.sh` | THE settle loop, sha-bound over `commits/<sha>/check-runs` (`gh pr checks` is the fallback) — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`NO-RUN`/`QUERY-FAILED` |
 | `verify-branch-sync.sh` | 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
 | `merge-task.sh` | 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
@@ -1055,7 +1055,8 @@ shared-surface write you have to push the moment it exists (step 3).
 **Read the breakdown's report for a re-scope.** `epic.md` requires it to
 rewrite an epic's title, description and acceptance in place when the epic
 cites its own decided upstream finding, and to say so in as many words. If it
-did, re-read the epic (`bd show <epic>`) before step 5 — the acceptance every
+did, re-read the epic (`.claude/skills/work/scripts/bead.sh <epic>`, never a
+plain `bd show` — bd-traps.md) before step 5 — the acceptance every
 feature review traces back to is no longer the text you claimed
 (computenet-taug). No such statement means no re-scope; don't infer one.
 
@@ -1894,7 +1895,8 @@ cut from, NOT a diff baseline: ${taskBase}. Anything merged into main before
 it is already in your worktree; check with git rather than assuming either
 way. To diff your own work, use git merge-base <feature-branch> HEAD,
 computed inside your worktree.
-Read it: bd show ${id} --json, then bd comments ${id} --json — an AMENDS
+Read it: .claude/skills/work/scripts/bead.sh ${id} (never a plain
+bd show — bd-traps.md), then bd comments ${id} --json — an AMENDS
 comment there supersedes the description (run bd with -C <main-checkout>;
 only that checkout has the beads database)
 Then read the skill files FROM YOUR OWN WORKTREE — ${taskWorktree}/.claude/
