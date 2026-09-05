@@ -1,0 +1,14 @@
+# computenet-nrv5: SKILL.md's scripts table is what an orchestrator calls
+# from, and it listed what each script DOES with no arguments at all — every
+# call a guess or a re-read of the source.
+#
+# +6, all of it the paragraph above the table saying what the new first column
+# is and that a check keeps it honest. The 20 signatures themselves are inline
+# in existing rows and cost no lines.
+#
+# The signatures would have drifted the day after they were written — the
+# bead's filer said as much ("I have NOT audited the others") — so they land
+# with scripts/usage-table.test.sh, which sibling-tests.sh now runs whenever
+# any script changes. Scripts are not priced by the ratchet, so the check
+# itself is free; this entry buys only the sentence that makes it findable.
+work +6
