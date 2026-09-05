@@ -428,14 +428,23 @@ class SingleWriterChurnTest {
         // (`val passed get() = ...`, which Kotlin compiles to a `getPassed()` method with no
         // backing field) would be invisible to this pin and could reintroduce exactly the
         // verdict surface [CHA3-52] forbids without ever going red (computenet-fmri). Widen the
-        // check to every zero-arg `getXxx()` method the class declares as well, stripped of its
-        // `get` prefix so a computed property's own name is what gets matched — not kotlin-reflect's
+        // check to every zero-arg method the class declares as well, stripped of any `get`
+        // prefix so a computed property's own name is what gets matched — not kotlin-reflect's
         // `memberProperties` (`:testkit` declares no kotlin-reflect dependency; see
         // testkit/build.gradle.kts), but the same declared-members surface `java.lang.Class`
         // already exposes.
+        //
+        // Deliberately NOT filtered to `startsWith("get")`: Kotlin's boolean-property convention
+        // compiles `val isPassing get() = ...` to `isPassing()`, with no `get` prefix at all, so
+        // a `get`-only filter is blind to exactly the shape a boolean verdict would most likely
+        // take (measured: such a property left the `get`-filtered pin green). Dropping the filter
+        // also covers a verdict exposed as a zero-arg *function* (`fun passed(): Boolean`), which
+        // [CHA3-52] forbids just the same. Nothing this type declares today — the twelve property
+        // getters plus `summary`, `component1..6`, `hashCode`, `toString` — trips the substring
+        // test, so the widening costs no false positive.
         val fields = LeaderChurnReport::class.java.declaredFields.map { it.name }
         val computedGetterNames = LeaderChurnReport::class.java.declaredMethods
-            .filter { it.parameterCount == 0 && it.name.startsWith("get") }
+            .filter { it.parameterCount == 0 }
             .map { it.name.removePrefix("get").replaceFirstChar(Char::lowercase) }
         val names = fields + computedGetterNames
         assertTrue(
