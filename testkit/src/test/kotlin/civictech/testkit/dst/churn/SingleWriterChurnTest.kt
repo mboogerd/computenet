@@ -74,6 +74,17 @@ import kotlin.test.assertTrue
  * its limits are stated on `MEASURED_OBSERVED_TOTAL`. A zero here is a result about **this**
  * interleaving; 95 §R1's "in every interleaving" is research-gated and is not answered.
  *
+ * **computenet-yqgd decided that "duplicated across the transition" must be read at every
+ * instance, not the successor alone**, because the successor-only zero above is true and
+ * incomplete: the DEMOTED instance measurably duplicates exactly the 2 pre-transition writes on
+ * top of state it already held, in both orders (`MEASURED_DEMOTED_TOTAL_PROMOTE_FIRST`,
+ * `MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST`). (The bead that filed this, computenet-yqgd, describes
+ * that duplication as the demoted total ending "exactly twice the successor's" in both orders —
+ * true of the demote-first arm (4 == 2*2) but not this one (6 != 2*4); the invariant that DOES
+ * hold in both is duplicated-at-demoted == 2, and this file's arms pin that, with the discrepancy
+ * reported on the bead rather than carried forward silently.)
+ * `LeaderChurnReport.instanceReadings` carries that reading and both arms below pin it.
+ *
  * That dependency is stated rather than hidden, because it bounds the claim: the numbers below
  * are what happens *with that fencing implementation*, and a cell that stamped its outbound
  * deltas from a separate applied-epoch field would account differently. The measurement is
@@ -271,7 +282,13 @@ class SingleWriterChurnTest {
         set.issue(set.a)?.let { measurement.acceptedWrite(3, it) }
         measurement.tick("post-transition write")
 
-        val report = measurement.report(observedTotal = set.b.total)
+        val report = measurement.report(
+            observedTotal = set.b.total,
+            instanceReadings = listOf(
+                InstanceStateReading("peerA", set.a.total),
+                InstanceStateReading("peerB", set.b.total),
+            ),
+        )
 
         // [CHA3-50] — a MEASURED window, not a vacuous zero. Feature §9 risk 5's other branch.
         assertTrue(report.splitBrainWindow > 0, "explicit-only designation DOES admit a window: ${report.summary()}")
@@ -304,6 +321,30 @@ class SingleWriterChurnTest {
         assertEquals(MEASURED_OBSERVED_TOTAL, report.observedTotal, report.summary())
         assertEquals(MEASURED_LOST, report.lostWrites, report.summary())
         assertEquals(MEASURED_DUPLICATED, report.duplicatedWrites, report.summary())
+
+        // computenet-yqgd's decision: [CHA3-51]'s "duplicated across the transition" is read at
+        // EVERY instance, not the successor alone. Pinned here rather than only asserted-zero: the
+        // demoted leader (peerA) measurably duplicates exactly the 2 pre-transition writes on top
+        // of the state it already held — the successor's from-zero catch-up ships the leader's
+        // CURRENT total (2, at the moment of designation) back onto an already-populated
+        // ex-leader rather than a fresh follower (mechanism: `onLinked`'s
+        // `Stamped(currentEpoch, total)`).
+        //
+        // NOTE ON THE BEAD'S OWN WORDING: computenet-yqgd's description states the demoted
+        // instance ends "exactly twice the successor's total" in both orders. That holds for the
+        // demote-first arm (4 == 2*2) but NOT here: 6 != 2*4. The raw numbers the bead reports
+        // (6 and 4) are exactly what this arm measures; only the "twice" characterization is
+        // wrong for this arm. What actually holds in both arms is duplicated-at-demoted == 2,
+        // the pre-transition write count — see the demote-first arm below and the discrepancy
+        // reported on the bead.
+        val peerAReading = report.instanceReadings.single { it.instance == "peerA" }
+        assertEquals(MEASURED_DEMOTED_TOTAL_PROMOTE_FIRST, peerAReading.total, report.summary())
+        assertEquals(
+            2L,
+            peerAReading.duplicated(report.expectedTotal),
+            "the demoted instance duplicated exactly the 2 pre-transition writes: ${report.summary()}",
+        )
+        assertTrue(report.instancesWithDuplicates.map { it.instance } == listOf("peerA"), report.summary())
     }
 
     // -------------------------------------------------------------- BS-14, demote-first arm
@@ -327,7 +368,13 @@ class SingleWriterChurnTest {
         set.drain()
         measurement.tick("designateLeader(epoch=1, peerB) on peerB")
 
-        val report = measurement.report(observedTotal = set.b.total)
+        val report = measurement.report(
+            observedTotal = set.b.total,
+            instanceReadings = listOf(
+                InstanceStateReading("peerA", set.a.total),
+                InstanceStateReading("peerB", set.b.total),
+            ),
+        )
 
         assertEquals(
             0,
@@ -346,6 +393,22 @@ class SingleWriterChurnTest {
         assertEquals(2, report.accepted.size, report.summary())
         assertEquals(0L, report.lostWrites, report.summary())
         assertEquals(0L, report.duplicatedWrites, report.summary())
+
+        // computenet-yqgd's decision, measured in this order too: the demoted leader (peerA)
+        // again duplicates exactly the 2 pre-transition writes, even though the successor-only
+        // accounting above reads clean. Same mechanism as the promote-first arm — demote-first
+        // only changes WHEN the outgoing leader steps down, not what its catch-up does to it.
+        // Here (and only here) that duplication happens to make peerA's total exactly twice the
+        // successor's (4 == 2*2); see the promote-first arm's comment for why that ratio is not
+        // the invariant — duplicated == 2 (the pre-transition write count) is.
+        val peerAReading = report.instanceReadings.single { it.instance == "peerA" }
+        assertEquals(MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST, peerAReading.total, report.summary())
+        assertEquals(
+            2L,
+            peerAReading.duplicated(report.expectedTotal),
+            "the demoted instance duplicated exactly the 2 pre-transition writes: ${report.summary()}",
+        )
+        assertTrue(report.instancesWithDuplicates.map { it.instance } == listOf("peerA"), report.summary())
     }
 
     // ----------------------------------------------------------------------------- boundary
@@ -386,14 +449,14 @@ class SingleWriterChurnTest {
          * **constructed** interleaving rather than a generated one (class KDoc again).
          *
          * And one more limit, which the phrase "none lost, none duplicated" would otherwise
-         * overstate: the accounting is read **at the successor only** — `observedTotal` is the
-         * post-transition leader's state and nothing here reads or asserts the DEMOTED
-         * instance's. Those two states are not guaranteed to agree after a transition: the
-         * successor's `onLinked` catch-up ships its total as a *from-zero* delta, and on a
-         * failover that delta's target is an already-populated ex-leader rather than a fresh
-         * follower. Whether [CHA3-51]'s "duplicated across the transition" should be accounted
-         * at every instance is filed as computenet-yqgd, with the reviewer's measurements; it is
-         * deliberately not decided here.
+         * overstate on its own: `observedTotal` is the post-transition leader's state, and by
+         * itself says nothing about the DEMOTED instance's. Those two states are not guaranteed
+         * to agree after a transition: the successor's `onLinked` catch-up ships its total as a
+         * *from-zero* delta, and on a failover that delta's target is an already-populated
+         * ex-leader rather than a fresh follower. **computenet-yqgd decided this must be
+         * accounted, not left as a stated gap**: [MEASURED_DEMOTED_TOTAL_PROMOTE_FIRST] and
+         * [MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST] below are that accounting, read via
+         * `LeaderChurnReport.instanceReadings` in both arms of this test.
          *
          * None of this is evidence that the split-brain window is harmless in general — the window itself is
          * real and non-zero, and 95 §R1's "prove or refute ... in every interleaving" is a
@@ -402,5 +465,28 @@ class SingleWriterChurnTest {
         const val MEASURED_OBSERVED_TOTAL: Long = 4
         const val MEASURED_LOST: Long = 0
         const val MEASURED_DUPLICATED: Long = 0
+
+        /**
+         * computenet-yqgd's decision realised: [CHA3-51]'s "duplicated across the transition"
+         * read at the DEMOTED instance (peerA), not only the successor. Measured at
+         * [MEASURED_OBSERVED_TOTAL] + 2 — the outgoing leader's own 2 pre-transition writes,
+         * counted once in its own state and shipped a second time by the successor's from-zero
+         * catch-up (`Stamped(currentEpoch, total)`, where `total` was 2 at the moment of
+         * designation), landing on top of state the demoted instance already held. The bead that
+         * filed this describes the result as the demoted total ending "exactly twice the
+         * successor's" in both orders; that arithmetic does not hold here (6 != 2*4) — see the
+         * class KDoc for the correction and the invariant that does hold (duplicated == 2).
+         */
+        const val MEASURED_DEMOTED_TOTAL_PROMOTE_FIRST: Long = 6
+
+        /**
+         * The same accounting, demote-first arm: the demoted leader again duplicates exactly its
+         * own 2 pre-transition writes, landing at 4 — even though the successor-only reading for
+         * this arm is clean (`lostWrites=0`, `duplicatedWrites=0`). Here the result also happens
+         * to equal twice the successor's total (4 == 2*2, unlike the promote-first arm); see the
+         * class KDoc. The order of designation calls changes the split-brain window (0 here vs 2
+         * promote-first) but not the demoted instance's duplication.
+         */
+        const val MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST: Long = 4
     }
 }
