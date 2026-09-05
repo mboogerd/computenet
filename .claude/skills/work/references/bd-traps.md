@@ -325,12 +325,16 @@ SKILL.md and the other references cite this file as "`bd` traps".
   block: one write per call, each with the long timeout, or the chain dies
   mid-sequence and leaves half-recorded state (computenet-9oq,
   computenet-9r8). **There is a second, independent reason, and the two fail
-  DIFFERENTLY**: the auto-mode permission classifier denies a compound Bash
-  call bundling several `bd` mutations outright (computenet-br1y), the same
-  way it denies `create-ticket.sh` inside a subagent (above). A timeout gets
-  you a partial write you must go and reconcile; a denial gets you nothing
-  written and a refusal to read — so a session that has only heard the timeout
-  reason retries the chain with a longer timeout and is denied again.
+  DIFFERENTLY**: the auto-mode permission classifier has DENIED a compound
+  Bash call bundling several `bd` mutations. Measured 2026-09-02 on a
+  breakdown agent — one call bundling three `bd dep add`s plus lint, list and
+  comment was refused, and the same commands split one per call went through
+  unchanged (computenet-br1y). Same classifier that denies `create-ticket.sh`
+  inside a subagent (above) and, like it, **not universal**. A timeout leaves
+  a partial write you must go and reconcile; a denial of the compound call is
+  pre-execution, so nothing runs and nothing is written — which is why a
+  session that has only heard the timeout reason may retry with a longer
+  timeout and be denied again.
 - **`bd comments` is PLURAL for reading; `bd comment` is singular for
   writing.** Measured on bd 1.1.2 (Homebrew, 2026-08-20): `bd comments <id>`
   and `bd comments <id> --json` both work; `bd comment <id>` with no body
