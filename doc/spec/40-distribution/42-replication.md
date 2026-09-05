@@ -507,12 +507,12 @@ lattice on the gossip mesh, which does not exist (96 §E1 follow-on) — and the
 alternative of gating exclusion on the `ReBaseline` itself being causally
 stable (95 §R14 direction 1) presupposes the very stability read this section
 defines. Neither tag family closes the window on its own: the set family
-forwards the notice transparently to its own downstream — `cell.data.op.UnionSetCell`
-folds through `applyReBaseline` and re-emits on its outlet, one hop onward
-rather than a mesh-wide fence, and carries the over-retraction trade instead —
-while the map family does not forward the notice at all. And
-`cell.data.WatermarkCell` has no supersession vocabulary at all: its rows are
-grow-only in every lane and no column is ever removed.
+forwards the notice transparently to its own downstream —
+`cell.data.op.UnionSetCell` folds through `applyReBaseline` and re-emits on
+its outlet, one hop onward rather than a mesh-wide fence, and carries the
+over-retraction trade instead — while the map family does not forward the
+notice at all. And `cell.data.WatermarkCell` has no supersession vocabulary
+at all: its rows are grow-only in every lane and no column is ever removed.
 
 The practical consequence for the reclamation work is a precondition, not a
 rule: stability-scoped reclamation (96 E3.7) ships gated on **no superseded
