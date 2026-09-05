@@ -2249,7 +2249,9 @@ assertion (`2 * report.observedTotal`) asserted the false form and failed
 immediately (`expected: <8> but was: <6>`), which is what surfaced this. The
 invariant that **does** hold in both arms, derived from the same numbers, is
 **duplicated-at-the-demoted-instance == 2**, i.e. exactly the count of
-pre-transition writes (`expectedTotal` is 4; demoted total is
+pre-transition writes (`expectedTotal` is 4 promote-first and 2
+demote-first — it is `accepted.size`, and the promote-first arm accepts two
+more writes across the transition; demoted total is
 `expectedTotal + 2` in both arms: 4+2=6 promote-first, 2+2=4 demote-first).
 Mechanism: the successor's from-zero catch-up ships its own CURRENT total (2,
 the pre-transition write count, at the moment of designation) onto the
