@@ -70,16 +70,21 @@ fun claimKey(text: String): ClaimKey =
  * `civictech.dialogue.extract.RuleExtractor.trailingTerminator`. `?` is
  * absent by decision, not oversight; see [claimKey]'s KDoc.
  *
- * `internal`, not `private` (computenet-2qkn): `ClaimMintTest` pins this
- * class against `RuleExtractor.trailingTerminator` directionally — every
- * terminator the extractor strips must also be stripped here, so the two
- * cannot fork identity again the way computenet-9bip/-qoei/-lv25 each had to
- * fix in turn. The reverse direction (this class stripping something the
- * extractor does not) is deliberately left unpinned: it only changes
- * canonicalization of the KEY, never the displayed text, so it is harmless
- * by this seam's own division of labour — see [claimKey]'s KDoc.
+ * `private` (computenet-8ojp, reverting computenet-2qkn's `internal`):
+ * `ClaimMintTest` pins this class against `RuleExtractor`'s directionally —
+ * every terminator the extractor strips must also be stripped here, so the
+ * two cannot fork identity again the way computenet-9bip/-qoei/-lv25 each
+ * had to fix in turn — but does so through the public surface (`extract` and
+ * [claimKey]) rather than by reaching in here directly, per the same
+ * computenet-if9j principle cited on `RuleExtractor.trailingTerminator`'s
+ * KDoc: `internal`-for-a-direct-unit-test is not justified once the
+ * behaviour is reachable publicly, and it was measured to be. The reverse
+ * direction (this class stripping something the extractor does not) is
+ * deliberately left unpinned: it only changes canonicalization of the KEY,
+ * never the displayed text, so it is harmless by this seam's own division of
+ * labour — see [claimKey]'s KDoc.
  */
-internal val trailingTerminator = Regex("[.…!]+$")
+private val trailingTerminator = Regex("[.…!]+$")
 
 /**
  * Drops the sentence-final terminator from an already trimmed, whitespace-
@@ -87,7 +92,7 @@ internal val trailingTerminator = Regex("[.…!]+$")
  * returned unchanged rather than emptied, so canonicalization can never
  * collapse every such claim onto one empty key.
  *
- * `internal` for the same reason as [trailingTerminator] (computenet-2qkn).
+ * `private` for the same reason as [trailingTerminator] (computenet-8ojp).
  */
-internal fun withoutTrailingTerminator(text: String): String =
+private fun withoutTrailingTerminator(text: String): String =
     text.replace(trailingTerminator, "").trim().ifBlank { text }

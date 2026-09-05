@@ -14,7 +14,9 @@ import civictech.cell.port.Use
 import civictech.dialogue.CanonicalClaim
 import civictech.dialogue.ClaimKey
 import civictech.dialogue.DialoguePipeline
+import civictech.dialogue.Segment
 import civictech.dialogue.Utterance
+import civictech.dialogue.extract.ExtractedRelation
 import civictech.dialogue.extract.RuleExtractor
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -182,23 +184,39 @@ class ClaimMintTest {
     // ------------------------------------------------------------------
 
     /**
-     * `RuleExtractor.trailingTerminator` and `civictech.dialogue.mint`'s own
-     * `trailingTerminator` are two independent `Regex` vals with identical
-     * source text, kept in sync only by KDoc prose until now (computenet-2qkn,
-     * filed reviewing computenet-lv25). The asymmetry is deliberate, per both
-     * KDocs: if [claimKey]'s class is WIDER than the extractor's, only the
-     * KEY changes — the displayed text is untouched, so it is harmless. If
-     * the EXTRACTOR's class is wider than [claimKey]'s, the same proposition
-     * forks into two canonical claims again — the computenet-9bip /
-     * computenet-qoei / computenet-lv25 defect, for a fourth time.
+     * `RuleExtractor`'s trailing-terminator class and `claimKey`'s own are
+     * two independent, `private` regexes with identical source text, kept in
+     * sync only by KDoc prose (computenet-2qkn found this, filed reviewing
+     * computenet-lv25; computenet-8ojp moved the pin here, to the PUBLIC
+     * surface, after computenet-if9j ruled out `internal`-for-a-direct-test
+     * a commit earlier for the same module). The asymmetry between the two
+     * classes is deliberate, per both KDocs: if `claimKey`'s class is WIDER
+     * than the extractor's, only the KEY changes — the displayed text is
+     * untouched, so it is harmless. If the EXTRACTOR's class is wider than
+     * `claimKey`'s, the same proposition forks into two canonical claims
+     * again — the computenet-9bip / computenet-qoei / computenet-lv25 defect,
+     * for a fourth time.
      *
-     * So this pin is deliberately directional, not a flat equality check: it
-     * asserts every terminator [RuleExtractor.withoutTrailingTerminator]
-     * strips is also stripped by [withoutTrailingTerminator] (this package's,
-     * behind [claimKey]), and says nothing about the reverse. A flat equality
-     * pin would also fail the moment `claimKey` alone grows a new key-only
-     * normalization — exactly the harmless direction the KDocs call out —
-     * which would make the pin a nuisance rather than a guard.
+     * So this pin is deliberately directional, not a flat equality check.
+     * For each candidate terminator it drives [RuleExtractor.extract] over a
+     * "because" segment whose reason endpoint carries that terminator, and
+     * reads the [ExtractedRelation.sourceText] the extractor actually
+     * emitted — the same value `RelationMint` resolves a claim key against —
+     * to see whether the extractor treats the character as a terminator at
+     * all. Only when it does is anything asserted: that
+     * `claimKey(body + terminator) == claimKey(body)`, i.e. that a plain
+     * whole-segment claim of `"body" + terminator"` (uttered standalone,
+     * keeping its own terminator per `Segmentation`'s lookbehind split) would
+     * canonicalize to the SAME key the because-endpoint already collapses to.
+     * If it does not, the same proposition forks into two canonical claims
+     * depending on where it lands relative to a "because" split — exactly
+     * the recurring defect above, caught this time through `extract` and
+     * `claimKey` rather than by reaching into either `private` helper.
+     *
+     * A flat equality pin over the two regexes would also fail the moment
+     * `claimKey` alone grows a new key-only normalization — exactly the
+     * harmless direction the KDocs call out — which would make the pin a
+     * nuisance rather than a guard.
      *
      * The candidate set below deliberately includes characters neither class
      * currently strips (`;`, `:`, `,`, `)`, `"`, `'`, `~`, `-`) alongside the
@@ -207,23 +225,50 @@ class ClaimMintTest {
      * adds a character to the extractor's class alone, without touching
      * `claimKey`'s, is caught even though it names a character this test's
      * author never anticipated.
+     *
+     * **Non-vacuity guard:** the loop above `continue`s past any candidate
+     * the extractor does not treat as a terminator, so if `RuleExtractor`'s
+     * class were neutered to match nothing, every candidate would be skipped
+     * and the test would pass having asserted zero times. The count below
+     * requires the three currently-agreed terminators (`.`, `…`, `!`) to
+     * have actually been exercised, so that mutation is caught here instead
+     * of passing vacuously.
      */
     @Test
-    fun `computenet-2qkn - every terminator RuleExtractor strips is also stripped by claimKey's canonicalization`() {
+    fun `computenet-8ojp - every terminator RuleExtractor's extract strips is also stripped by claimKey's canonicalization`() {
+        val target = "The budget is too high"
+        val body = "Travel costs increased"
         val candidates = listOf(".", "…", "!", "?", ";", ":", ",", ")", "\"", "'", "~", "-")
+        var exercised = 0
         for (terminator in candidates) {
-            val text = "The budget is too high$terminator"
-            val strippedByExtractor = RuleExtractor.withoutTrailingTerminator(text) != text
+            val rawSource = "$body$terminator"
+            val segment = Segment(
+                id = "s-$terminator",
+                utteranceId = "u-$terminator",
+                ordinal = 0,
+                speaker = "alice",
+                text = "$target because $rawSource",
+            )
+            val relation = RuleExtractor.extract(segment).filterIsInstance<ExtractedRelation>().single()
+            val strippedByExtractor = relation.sourceText != rawSource
             if (!strippedByExtractor) continue
-            val strippedByClaimKey = withoutTrailingTerminator(text) != text
-            assertTrue(
-                strippedByClaimKey,
-                "RuleExtractor strips trailing '$terminator' as a segmenter artifact but claimKey's " +
-                    "canonicalization does not — the same proposition would fork into two canonical " +
-                    "claims again depending on where it lands relative to a \"because\" split " +
-                    "(the computenet-9bip/-qoei/-lv25 defect)",
+            exercised += 1
+
+            assertEquals(
+                claimKey(body),
+                claimKey(rawSource),
+                "RuleExtractor's extract strips trailing '$terminator' as a segmenter artifact (source " +
+                    "endpoint became \"${relation.sourceText}\") but claimKey's canonicalization does not — " +
+                    "the same proposition would fork into two canonical claims again depending on where it " +
+                    "lands relative to a \"because\" split (the computenet-9bip/-qoei/-lv25 defect)",
             )
         }
+        assertTrue(
+            exercised >= 3,
+            "non-vacuity guard: expected at least the three agreed terminators (., …, !) to have been " +
+                "stripped by RuleExtractor.extract and exercised above, but only $exercised candidate(s) " +
+                "were — a class neutered to strip nothing would otherwise leave this test vacuously green",
+        )
     }
 
     // ------------------------------------------------------------------
