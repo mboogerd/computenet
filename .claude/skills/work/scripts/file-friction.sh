@@ -25,9 +25,12 @@
 #
 # Usage:
 #   file-friction.sh --type bug|feature --title "<one line, NO 'work skill:' prefix>" \
-#     --desc "<what the skill says / what happened / what it cost>" \
-#     --accept "<what must change in the skill for this not to recur>" \
+#     (--desc "<what the skill says / what happened / what it cost>" | --desc-file F) \
+#     (--accept "<what must change in the skill for this not to recur>" | --accept-file F) \
 #     [--parent computenet-wpvy] [--priority 2] [--skill-version <sha>]
+#   --desc-file/--accept-file are PREFERRED: a body passed as --desc "$(cat f)"
+#   goes through a shell word, so backticks and $(...) in it are executed
+#   (computenet-s5dh).
 #
 # Prints the new bead id. Exit 1 on a failed step, saying which. A crash
 # between create and re-parent leaves an unparented hash-id bead, not a lost

@@ -9,8 +9,9 @@ Resumable tasks (in_progress, mine) come first — `bd ready` cannot see them, s
 without this they would never be picked back up and their feature could never
 finish.
 
-Usage: next-batch.py <feature-id> [--actor NAME]
-       next-batch.py --capacity      # the capacity block alone, no feature id
+Usage: next-batch.py <feature-id> [--actor NAME] [--siblings N]
+       next-batch.py --capacity [--siblings N]   # the capacity block alone,
+                                                 # no feature id
 Prints JSON: {"batch": [{id, model, files, worktree, branch, resumed}],
               "skipped": [{id, reason}], "warnings": [str],
               "running_elsewhere": [{id, files}],
