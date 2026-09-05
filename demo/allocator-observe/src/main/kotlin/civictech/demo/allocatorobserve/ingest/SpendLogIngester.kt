@@ -119,14 +119,22 @@ data class SpendPollOutcome(
  *   this feature does not wire up. A restarted ingester is therefore
  *   constructed over the same [runDir] *and* handed the fold it is resuming
  *   into.
+ * @param checkpoint the reader's [SpendOffsetStore], defaulted to the
+ *   file-backed [OffsetCheckpoint] over [runDir] so existing callers are
+ *   unaffected. Accepting it as a parameter is what makes the crash-ordering
+ *   rule documented on [SpendOffsetStore] — fold before persist — observable
+ *   at THIS seam: a test double can record its [SpendOffsetStore.write] and
+ *   check what the fold already holds at that moment, rather than trusting
+ *   that [poll]'s KDoc still matches its body (`computenet-xol9`).
  */
 class SpendLogIngester(
     logPath: Path,
     runDir: Path,
     val records: SetCell<SpendRecord> = SetCell(),
+    checkpoint: SpendOffsetStore = OffsetCheckpoint(runDir),
 ) {
 
-    private val reader = SpendLogTailReader(logPath, OffsetCheckpoint(runDir))
+    private val reader = SpendLogTailReader(logPath, checkpoint)
 
     /**
      * Running per-reason failure counts since this ingester was constructed.

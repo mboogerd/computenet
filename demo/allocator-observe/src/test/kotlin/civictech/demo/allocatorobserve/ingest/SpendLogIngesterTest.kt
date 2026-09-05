@@ -247,6 +247,51 @@ class SpendLogIngesterTest {
     }
 
     /**
+     * At the wired seam (`computenet-xol9`), the crash-ordering rule
+     * [SpendOffsetStore] documents — "the checkpoint is written only AFTER the
+     * batch it covers has been handed to the consumer" — must be an observable
+     * property of [SpendLogIngester], not just of [SpendLogTailReader] in
+     * isolation ([SpendLogTailReaderTest] already covers the reader alone).
+     *
+     * The double's [SpendOffsetStore.write] snapshots the SAME fold cell the
+     * ingester folds into, at the instant persistence happens. If the fold ran
+     * first, as the crash-ordering rule requires, that snapshot already
+     * contains the record the poll just read. Delegating to a real
+     * [OffsetCheckpoint] keeps the checkpoint file itself correct, so this test
+     * is purely an observation, not a stub that changes ingester behavior.
+     *
+     * Mutation-checked (`computenet-xol9`): rewriting [SpendLogIngester.poll]
+     * to `val batch = reader.poll { }; return fold(batch)` — folding only AFTER
+     * `reader.poll` returns, which is also after the reader has persisted —
+     * makes this test's assertion fail, because the snapshot is taken while the
+     * fold is still empty.
+     */
+    @Test
+    fun `the fold runs before the checkpoint is persisted, at the wired seam`() {
+        append(line(workItem = "a"))
+        val fold = SetCell<SpendRecord>()
+        val real = OffsetCheckpoint(runDir)
+        var membershipAtPersistTime: Set<SpendRecord>? = null
+        val observingStore =
+            object : SpendOffsetStore {
+                override fun read(): CheckpointState? = real.read()
+
+                override fun write(state: CheckpointState) {
+                    membershipAtPersistTime = fold.membership()
+                    real.write(state)
+                }
+            }
+        val ingester = SpendLogIngester(log, runDir, fold, observingStore)
+
+        val outcome = ingester.poll()
+
+        outcome.added shouldBe 1
+        // The whole point: at the moment the checkpoint was persisted, the
+        // fold this poll just produced was already visible.
+        membershipAtPersistTime shouldBe setOf(record(workItem = "a"))
+    }
+
+    /**
      * A log that has not arrived yet is not an empty log: the fold keeps what it
      * has rather than being reconciled to nothing. (The spend log syncs over the
      * beads/dolt channel — see the feature description.)
