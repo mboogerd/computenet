@@ -527,15 +527,7 @@
 # TEMPLATE, which is the only one of the three a reviewer actually receives
 # (SKILL.md is NOT-READ at any hop from a reviewer). Two sentences elsewhere
 # that flatly denied any reviewer cross-bead write are corrected with it.
-# 9480 -> 9501 on 2026-09-05: computenet-cjfd — bd-traps.md gains the plain
-# (non-JSON) `bd show` case: 114KB on a 36KB epic, elided in the MIDDLE by the
-# harness with a marker that sits inside prose, so a spec is read in halves and
-# looks whole. Plus the ~25KB threshold above which bead.sh now spills to a
-# file. +21 lines against a workaround that lived only in an orchestrator's
-# head and had to be hand-carried into nine consecutive dispatch prompts.
-# +2 more in the reviewer round: SKILL.md 5f's post-rescope epic re-read was
-# still a plain `bd show <epic>`, the exact 114KB call the new prose forbids.
-work                9503
+work                9480
 # 271 -> 333 on 2026-08-20: the four feedback mechanisms this file is part of
 # (recurrence audit, fix_kind, reachability gate, this ratchet) need ~62 lines
 # of instruction to be usable. Raised deliberately, after trimming 18 lines of

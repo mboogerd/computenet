@@ -1895,7 +1895,8 @@ cut from, NOT a diff baseline: ${taskBase}. Anything merged into main before
 it is already in your worktree; check with git rather than assuming either
 way. To diff your own work, use git merge-base <feature-branch> HEAD,
 computed inside your worktree.
-Read it: bd show ${id} --json, then bd comments ${id} --json — an AMENDS
+Read it: .claude/skills/work/scripts/bead.sh ${id} (never a plain
+bd show — bd-traps.md), then bd comments ${id} --json — an AMENDS
 comment there supersedes the description (run bd with -C <main-checkout>;
 only that checkout has the beads database)
 Then read the skill files FROM YOUR OWN WORKTREE — ${taskWorktree}/.claude/

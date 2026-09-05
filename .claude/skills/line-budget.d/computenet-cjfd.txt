@@ -1,0 +1,12 @@
+# computenet-cjfd — the plain (non-JSON) `bd show` view is not the safe
+# alternative to --json: 114KB on a 36KB epic, elided in the MIDDLE by the
+# harness with a marker that sits inside prose, so a spec is read in halves and
+# looks whole.
+#
+# +19 bd-traps.md: the plain-view case and the ~25KB threshold above which
+#     bead.sh now spills to a file.
+# +5  SKILL.md and epic.md/feature.md: three read instructions that were still
+#     a plain `bd show` on an epic or a child — 5f's post-rescope re-read, the
+#     task dispatch template, and the two breakdown entry points — plus
+#     bead.sh's arguments in the script table.
+work +24

@@ -68,8 +68,11 @@ b=$(BODY_CHARS=40000 bash "$SCRIPT" known 2>&1 | grep -o "$ROOT/[^ ]*")
 [ -n "$a" ] && [ "$a" != "$b" ] && ok "distinct paths" || bad "same path twice: $a / $b"
 
 echo "case 3d: an empty result stays empty, not a blank line"
-out=$(BODY_CHARS=100 bash "$SCRIPT" known -r '.nosuchfield // empty' 2>&1)
-[ -z "$out" ] && ok "no output" || bad "printed: '$out'"
+# Count BYTES off the pipe, not $( ): command substitution strips the trailing
+# newline, so a `$(...)` assertion here is vacuous — it stays green when the
+# blank line comes back (measured, computenet-cjfd reviewer round).
+n=$(BODY_CHARS=100 bash "$SCRIPT" known -r '.nosuchfield // empty' 2>/dev/null | wc -c)
+[ "$n" -eq 0 ] && ok "no output" || bad "printed $n bytes"
 
 echo "case 4: BEAD_SPILL_BYTES moves the cap, so a caller can pipe"
 out=$(BODY_CHARS=40000 BEAD_SPILL_BYTES=999999 bash "$SCRIPT" known 2>&1)

@@ -70,7 +70,11 @@ if [ "${#out}" -gt "${BEAD_SPILL_BYTES:-25000}" ]; then
   # mktemp, not a fixed name: two agents reading the same bead in a shared
   # TMPDIR would otherwise race on one path, and a `-r` spill holds raw prose
   # rather than JSON.
-  f=$(mktemp "${SCRATCH:-${TMPDIR:-/tmp}}/bead-$id.XXXXXX")
+  dir=${SCRATCH:-${TMPDIR:-/tmp}}
+  # A failed mktemp must not print a success-shaped message with an empty
+  # path: the output would be gone and the exit code still 0. Fall back to
+  # printing it, which is at worst the old truncation.
+  f=$(mktemp "${dir%/}/bead-$id.XXXXXX") || { printf '%s\n' "$out"; exit $rc; }
   printf '%s\n' "$out" > "$f"
   echo "bead.sh: ${#out} characters exceeds one tool result; wrote $f — read it with the Read tool (it will NOT fit in a single Bash output either)."
 elif [ -n "$out" ]; then
