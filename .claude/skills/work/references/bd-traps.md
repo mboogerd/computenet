@@ -324,7 +324,13 @@ SKILL.md and the other references cite this file as "`bd` traps".
   sync commands a ≥300s timeout, and never chain `bd` *writes* in one Bash
   block: one write per call, each with the long timeout, or the chain dies
   mid-sequence and leaves half-recorded state (computenet-9oq,
-  computenet-9r8).
+  computenet-9r8). **There is a second, independent reason, and the two fail
+  DIFFERENTLY**: the auto-mode permission classifier denies a compound Bash
+  call bundling several `bd` mutations outright (computenet-br1y), the same
+  way it denies `create-ticket.sh` inside a subagent (above). A timeout gets
+  you a partial write you must go and reconcile; a denial gets you nothing
+  written and a refusal to read — so a session that has only heard the timeout
+  reason retries the chain with a longer timeout and is denied again.
 - **`bd comments` is PLURAL for reading; `bd comment` is singular for
   writing.** Measured on bd 1.1.2 (Homebrew, 2026-08-20): `bd comments <id>`
   and `bd comments <id> --json` both work; `bd comment <id>` with no body

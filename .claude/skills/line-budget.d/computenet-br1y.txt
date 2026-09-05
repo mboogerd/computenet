@@ -1,0 +1,12 @@
+# computenet-br1y: the PLACEMENT half of this bead's acceptance was already
+# satisfied — bd-traps.md, which dispatched agents read, already says "never
+# chain bd writes in one Bash block". What was missing is the SECOND reason:
+# that bullet gave only the Dolt/120s rationale, so a session that hits the
+# permission classifier instead reads the guidance as inapplicable and retries
+# the chain with a longer timeout.
+#
+# +6 for the classifier reason and, load-bearing, HOW THE TWO FAIL
+# DIFFERENTLY: a timeout leaves a partial write to reconcile, a denial leaves
+# nothing written. No new placement work — the classifier is already
+# documented in this same file for create-ticket.sh inside a subagent.
+work +6
