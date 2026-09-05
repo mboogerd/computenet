@@ -309,11 +309,16 @@ class SpendLogTailReaderTest {
 
     @Test
     fun `a multi-byte character straddling a chunk boundary survives decoding`() {
-        // "€" is 3 UTF-8 bytes; a 5-byte chunk splits it. Scanning for 0x0A
-        // bytewise is only safe because a newline never occurs inside a
-        // multi-byte sequence — this pins that.
+        // "€" is 3 UTF-8 bytes at offsets 1..3 and 7..9 of this 12-byte file.
+        // The chunk size has to actually SPLIT one: at 5 bytes the boundaries
+        // fall at 5 and 10, inside no character, and the test passes even if
+        // each chunk fragment is decoded separately. At 2 bytes every chunk
+        // boundary that matters lands mid-sequence, so the line is only
+        // recovered if the CARRY holds raw bytes and decoding happens once per
+        // complete line. Scanning for 0x0A bytewise is safe because a newline
+        // never occurs inside a multi-byte sequence — this pins that too.
         append("a€b\nc€d\n")
-        poll(chunkSize = 5).lines shouldContainExactly listOf("a€b", "c€d")
+        poll(chunkSize = 2).lines shouldContainExactly listOf("a€b", "c€d")
     }
 
     @Test
