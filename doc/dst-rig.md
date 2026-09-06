@@ -218,8 +218,16 @@ budget 40_000):
 | `localRefs()` order captured per run | differs every run on BOTH a diverging and a stable seed — the entropy is always present; only a heal consumes it |
 | whole suite re-run under `-XX:+UnlockExperimentalVMOptions -XX:hashCode=2` | still non-deterministic — rules out identity-hash ordering |
 
-Divergences are order-only and small: the trace event multiset is unchanged and the step index
-moves by 1–5. That is why it survives a casual look at a green sweep.
+Divergences are small, and on most seeds they are order-only: the trace event multiset is
+unchanged modulo the step index, which moves by 1–5 (seeds 1 and 8 — 12 runs each, one distinct
+multiset once the step field is ignored). **They are not order-only in general, and a consumer
+must not assume the event COUNT is stable either**: 12 runs of seed 107 produced traces of 124,
+125 and 127 events, three distinct multisets even ignoring the step index. The reordered
+relinking can therefore add or drop gossip events, not only move them — so a check over this
+rig's trace is no safer for counting events, or comparing them as a multiset, than for digesting
+them. (Measured during the review of computenet-l0gd, same commit and configuration as the table
+above.) Either way the difference is small, which is why it survives a casual look at a green
+sweep.
 
 **The verdict-level consequence, which is what actually bites a consumer.** Because the failing
 region moves, **pinning a failing SEED SET by number is unsound over this rig** — four 200-seed
