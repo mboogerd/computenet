@@ -755,13 +755,23 @@ assertions.
 ### Residual, NEWLY MEASURED and NOT this item's to fix
 
 **BS-12's `stableFenceAttributed` assertion is itself intermittently red, and
-it was already red before this change.** On the UNWIDENED adversary at the
-merge base it fired on 1 of 7 sweeps (seed 12, differing element `peer2-23`,
-`fencedAtLacking=peer2:[8](all)`); on the widened adversary, 2 of 10. Those
-rates are not distinguishable at this sample size, so the widening is not what
-introduces it — the baseline reproduction is the evidence. A dedicated 5-run
-pin on seed 12 under STABLE scored **0/5**, so it is a rare schedule rather
-than a property of that seed.
+it was already red before this change.** It fires on seed 12, differing element
+`peer2-23`, `fencedAtLacking=peer2:[8](all)`.
+
+MEASURED head-to-head in one session, the BS-12 arm alone, eight 200-seed
+sweeps of each adversary back to back (the unwidened half taken by removing
+`gc-park-b`/`gc-park-c` under a `.mutation-in-progress` marker, then reverted):
+
+    WIDENED    3 of 8 sweeps red
+    UNWIDENED  2 of 8 sweeps red
+
+Over every sweep taken for this item the totals are 7 of 22 widened and 3 of 15
+unwidened. **The widening does not move this rate**, and the unwidened
+reproduction at the merge base is the evidence that it is not this change's
+doing. A dedicated 5-run pin on seed 12 under STABLE scored **0/5**, so it is a
+rare schedule rather than a property of that seed — which is also why
+computenet-vhlm's eight consecutive green runs are consistent with a ~20-30%
+per-sweep failure rate rather than evidence against it.
 
 The shape is consistent with the same-element residual recorded under
 `## KE3-GC-FENCE-KEY`: `peer2-23` is peer2's own last write, and a rejoining
