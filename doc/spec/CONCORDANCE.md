@@ -160,7 +160,7 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 42-WM-05 | — | gap |
 | 42-WM-06 | — | gap |
 | 42-WM-07 | — | gap |
-| 42-WM-08 | — | gap |
+| 42-WM-08 | 42-WM-DEPART-01 | covered |
 
 ## Lint findings
 
@@ -226,4 +226,3 @@ None.
 - Coverage gap: requirement '42-WM-05' (20-dataflow-semantics/22-consistency.md) has no covering scenario
 - Coverage gap: requirement '42-WM-06' (40-distribution/42-replication.md) has no covering scenario
 - Coverage gap: requirement '42-WM-07' (40-distribution/42-replication.md) has no covering scenario
-- Coverage gap: requirement '42-WM-08' (40-distribution/42-replication.md) has no covering scenario
