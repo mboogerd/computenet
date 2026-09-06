@@ -212,6 +212,71 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     }
 
     /**
+     * Discard tags at or below [frontier], per source, and nothing else
+     * (decision 9sm.4-D1/D2; the epic's §2 table names `TagState.compactBelow`
+     * as the eventual OR-map home — this is the `SetCell` half only). The
+     * minimal safe discard: for each element `e`, `D = dels[e] ∩ { t : t ≤
+     * frontier }` is removed from both `dels[e]` and `adds[e]` (a del-tag IS
+     * the add-tag it covers — same [Timestamp] — so "add-tags ≤ frontier that
+     * a del-tag covered" is exactly `adds[e] ∩ D`), and an element key whose
+     * set became empty is dropped from that map. A LIVE add-tag (present in
+     * `adds`, absent from `dels`) is never a member of any `D` and is never
+     * touched, even when it is ≤ frontier — so [membership] is unchanged by
+     * construction: `D ⊆ dels[e]` is removed from both sides, never from one.
+     * A tombstone with no matching add (`dels` holds a key `adds` lacks — the
+     * remote-tombstone-before-add case [openWalk]'s KDoc names) is discarded
+     * like any other.
+     *
+     * The `[KE3-30]` interlock / `[42-WM-05]` absent-row-is-bottom: a tag
+     * source with no entry in [frontier] reads as bottom, so nothing of that
+     * source is ever discarded.
+     *
+     * **This records nothing.** No floor, no fence: [delivered], [tagCounter]
+     * and [deliveryListeners] are untouched, nothing is emitted, and a later
+     * delta carrying a discarded tag is re-admitted as new information by
+     * [applyRemote] (novelty there is `tags − adds[e]`, and a discarded tag is
+     * absent from `adds[e]` again). **That re-admission is deliberate and
+     * load-bearing** — it is what lets feature computenet-9sm.4's BS-13
+     * control resurrect an element — **and it is why feature computenet-9sm.6
+     * must add the re-admission fence (`[24-TAG-04]`'s second clause) before
+     * anything wires this seam to a checkpoint.** No checkpoint wiring, no
+     * floor/fence, no snapshot persistence, no `StateRequest(since)` fallback,
+     * no `OrMapCell`/`TagState` reclamation belong here; those are out of
+     * scope for this task.
+     *
+     * `internal`: reachable from `:kernel` tests only. `:testkit` must not see
+     * this — it is a harness seam, not a public capability.
+     *
+     * Runs entirely under [stateLock] and makes no outbound call.
+     *
+     * @return the total number of tags discarded (from `dels` plus the
+     *   matching tags also removed from `adds`).
+     */
+    internal fun compactBelow(frontier: TagFrontier): Int = synchronized(stateLock) {
+        var discarded = 0
+        val emptiedDels = mutableListOf<E>()
+        for ((element, delTags) in dels) {
+            val covered = delTags.filterTo(mutableSetOf()) { tag ->
+                (frontier.perSource[tag.sourceId] ?: Long.MIN_VALUE) >= tag.counter
+            }
+            if (covered.isEmpty()) continue
+            delTags -= covered
+            discarded += covered.size
+            adds[element]?.let { addTags ->
+                val addCovered = addTags.intersect(covered)
+                if (addCovered.isNotEmpty()) {
+                    addTags -= addCovered
+                    discarded += addCovered.size
+                    if (addTags.isEmpty()) adds.remove(element)
+                }
+            }
+            if (delTags.isEmpty()) emptiedDels += element
+        }
+        emptiedDels.forEach { dels.remove(it) }
+        discarded
+    }
+
+    /**
      * Highest tag counter observed per tag source, restricted to the keys
      * [scope] admits (spec 20/21 §Pull, 93 I-24; PN-3c). `null`/[Interest.Total]
      * scope iterates every key — byte-identical to the pre-scope frontier — so a
