@@ -82,6 +82,21 @@ import java.util.UUID
  * retraction branch was entered and declined to fire. The very same branch
  * demonstrably *can* fire in this same rig — it is what produces the single
  * `Resume` after the operator heals and evicts, in the last test.
+ *
+ * **The limit of that count, measured.** `stalledEvaluations` counts retraction
+ * checks only while the slot is *actually* latched; on its own it is NOT a
+ * discriminator against a detector that never latches at all, because
+ * [Rig.writeThroughTheFreeze] then leaves its `evaluationsAtStall` at -1 and
+ * returns the whole evaluation total, which still exceeds the bound. The task
+ * review measured exactly that: with the detector's `count >= threshold` latch
+ * raised so it never trips, the [KE3-28] control below stayed GREEN while the
+ * [KE3-27] test went red. What pins the latch is `notices shouldBe
+ * listOf(expected)` in the [KE3-27] test and `notices.size shouldBe 1` in the
+ * unfreeze test; the control is read together with those, not alone. The
+ * review's other two production mutations — the retraction guard forced false
+ * (unfreeze test red at its `Resume` assertion) and the `notifyDownstream`
+ * fan-out removed (the `downstream` assertions red ALONE, the `notices` ones
+ * still green) — are what make the rest of this non-vacuous.
  */
 class UncleanDepartureStabilityTest {
 
@@ -93,11 +108,15 @@ class UncleanDepartureStabilityTest {
         /**
          * Write steps after the teardown. MEASURED, not the bead's suggested
          * 500: one step drains to exactly four companion deltas (four detector
-         * evaluations), the latch trips inside step 1, and 40 steps therefore
-         * hold it across ~150 further evaluations — two orders of magnitude
-         * more retraction checks than the threshold needs, at a cost that keeps
-         * a 20-seed sweep well inside a minute. 500 steps would buy no
-         * additional production branch.
+         * evaluations), identically on every seed, so 40 steps are 160
+         * evaluations. The latch trips at the 5th — inside the SECOND write
+         * step — and 40 steps therefore hold it across 152 further evaluations:
+         * two orders of magnitude more retraction checks than the threshold
+         * needs, at a cost that keeps a 20-seed sweep well inside a minute.
+         * 500 steps would buy no additional production branch: once a slot is
+         * latched, [civictech.cell.consistency.StabilityFreezeDetector.evaluate]
+         * runs only its retraction check for it, and that is already exercised
+         * 152 times here.
          */
         const val STEPS = 40
 
