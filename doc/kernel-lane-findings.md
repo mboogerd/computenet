@@ -347,3 +347,57 @@ adversary that never fires at all (the clause's purpose), so this is a
 lower bar than the bead asked for, not a defect — recorded here as a known
 gap between what was required and what was checked, rather than stretched
 into this task's own scope to repair.
+
+## KE3-HB — the idle-replica heartbeat repairs a LOST row emission, and nothing else
+
+Measured by `kernel/src/test/kotlin/civictech/cell/replication/WatermarkHeartbeatTest.kt`
+(BS-2 / BS-3 / BS-3′, `[KE3-13]`/`[KE3-15]`, feature `computenet-9sm.2`,
+task `computenet-9sm.2.3`) at base commit `41494ecbf` ("Merge
+computenet-9sm.2.2"), three peers A/B/C replicating one `SetCell` over a
+loopback triangle, 30 seeds per scenario. `k = 4`, `t = 8`.
+
+### The three measured outcomes
+
+| scenario | heartbeat on C | C's last row emission | `stableFrontier[s]` on A and B |
+| --- | --- | --- | --- |
+| **BS-2** | on | destroyed on C→A and C→B | `k` until the first tick, `t` at every observation after it, `t+6` after a re-link |
+| **BS-3** | off | destroyed on C→A and C→B | `k` at every one of the 12 observations, strictly below C's true row `t` |
+| **BS-3′** | off | delivered (no drop at all) | `t` after phase 2 and at every phase-3 observation |
+
+BS-2 and BS-3 differ only in the flag; BS-3 and BS-3′ differ only in the
+loss. So the freeze is caused by the loss, and the flag is what repairs it.
+The discrimination was checked by running BS-2's expectations with
+`heartbeatOnC = false`: the phase-3 sequence assertion goes red at the first
+post-tick observation, `expected:<[4L, 8L, 8L, …]> but was:<[4L, 4L, 4L, …]>`.
+
+### The consequence, which narrows the feature's stated value
+
+In this lattice **an idle member's silence never freezes `stableFrontier`
+below that member's own row by itself.** `WatermarkCell.advance` emits the
+raised *absolute* value, `applyRemote` re-emits every raised entry, and
+`outlet.catchUpOnLinked` ships full state on every (re)link — so in a
+lossless mesh every peer's view of an idle member's row already equals that
+row, and the MIN reads identically with or without a heartbeat. BS-3′ is
+that measurement: C idle behind a cut inbound, heartbeat off, and the read
+still sits at C's true row `t`. Only a **lost row emission** produces the
+stale view the feature's `## Today` describes as "missed the last gossip",
+and repairing that is the whole of what the heartbeat does for lane 1.
+
+The practical reach is therefore narrower than the feature's `## Why`
+states: no shipped transport in this repository produces such a loss without
+a re-link that catches up — a socket drop re-links, `Peering.Loopback.heal()`
+re-links — so today the loss is reachable only through a test interposer.
+The mechanism is cheap, correct and idempotent, and it is the right insurance
+for a transport that later loses a frame without re-linking; it is not, on
+the evidence here, load-bearing for any mesh this repository ships.
+
+### Side observation, `unverified:` as to mechanism
+
+Lifting C's inbound drop and driving further traffic does **not** catch C up:
+the A→C edge delivers the new frame (its delivered counter rises) but C's own
+watermark row stays at `t`, because the data deltas destroyed while its
+inbound was cut are gone and nothing on the data path replays them. Only the
+re-link does — `linkAC.heal()`/`linkBC.heal()`, after which the read settles
+at `t+6`. The test pins the outcome; which mechanism holds C's set back
+(inlet frontier alignment over the missing tag prefix is the obvious
+candidate) was not verified here.
