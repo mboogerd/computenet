@@ -632,11 +632,29 @@ carries the same pair that was discarded. Four 200-seed runs after the change:
     STABLE diverging         2   3   1   4
     CONTROL diverging        3   3   3   1
 
-computenet-pay7's criterion 2 is met literally, in count, in the same run — no
-amendment was needed. Every remaining STABLE divergence differs by `peer2-23`
-with attribution NONE, and the CONTROL arm (which now prints its own per-seed
-DIVERGE lines) produces that shape and nothing else. `MAX_STABLE_DIVERGING` was
-NOT raised and `SEEDS` was NOT narrowed.
+and four more taken independently in the task review on the same host (load1
+4.6-10.4, same date):
+
+    STABLE resurrecting     []  []  []  []
+    STABLE fence-attributed []  []  []  []
+    STABLE diverging         1   5   3   4
+    CONTROL diverging        3   3   3   4
+
+Every remaining STABLE divergence differs by `peer2-23` with attribution NONE,
+and the CONTROL arm (which now prints its own per-seed DIVERGE lines) produces
+that shape and nothing else. `MAX_STABLE_DIVERGING` was NOT raised and `SEEDS`
+was NOT narrowed.
+
+**What that does and does not settle.** The two arms are now in ONE BAND — 1-5
+STABLE against 1-4 CONTROL, where before the re-key they were 5-8 against 1-4 —
+so the ~3x excess this item was filed over is gone. The per-run INEQUALITY
+computenet-pay7's criterion 2 words ("no worse than the Trigger.NONE control
+arm's, measured in the same run") nevertheless does not hold on every run: run 4
+of the first table is 4 against 1, run 2 of the second is 5 against 3. On a rig
+that is not reproducible and whose two arms each move by several seeds between
+runs, a per-run count comparison is not assertable and the harness never
+asserted it. What carries criterion 2 is the ATTRIBUTION assertion — empty on
+8 of 8 runs above — with the absolute count bound behind it.
 
 ### Residual holes, stated rather than left to be discovered
 
