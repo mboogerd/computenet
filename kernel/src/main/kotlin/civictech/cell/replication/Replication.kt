@@ -1,6 +1,8 @@
 package civictech.cell.replication
 
 import civictech.cell.CellRef
+import civictech.cell.TagFrontier
+import civictech.cell.consistency.CausalStability
 import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.consistency.ReplicaQuorum
 import civictech.cell.Propagate
@@ -113,6 +115,100 @@ class Replication(
         interestOf = { ref -> registry.instances.interestOf(ref) },
         watermarkRefOf = ::watermarkRef,
     )
+
+    /**
+     * The **causal-stability** read (E3.5, `computenet-9sm.3`; spec
+     * `doc/spec/40-distribution/42-replication.md` [42-WM-05], [42-WM-07]):
+     * a sibling of [replicaQuorum] over the *same* injected reads minus
+     * `interestOf` — decision 9sm.3-D1 (one class each, not one class with
+     * two moods) and 9sm.3-D4 (interest is deliberately not applied; there
+     * is no key to scope it against for a per-logical-id read). See
+     * [CausalStability] for the whole model, including R14 (a superseded
+     * column stays in the MIN).
+     */
+    private val causalStability = CausalStability(
+        watermarkOf = { logicalId -> watermarks[logicalId] },
+        membersOf = { logicalId -> registry.instances.instancesOf(logicalId) },
+        watermarkRefOf = ::watermarkRef,
+    )
+
+    /**
+     * One-line facade over [CausalStability.stableFrontier] — the same shape
+     * [replicaFrontier] has over [ReplicaQuorum.frontier], and for the same
+     * reason: call sites name `Replication`, the semantics live in the
+     * `.consistency` class. **[CausalStability.stableFrontier] is the truth**:
+     * the pointwise MIN of every open membership row, an absent row (and an
+     * open slot lacking a column) reading as bottom and therefore ABSENT from
+     * [TagFrontier.perSource]; no companion yields `TagFrontier(emptyMap())`.
+     *
+     * Inert ([KE3-22], `[24-BOUND-01]`): a read emits nothing on the companion
+     * outlet, mints no tag and never enters [civictech.cell.CurrentContext], so
+     * it is safe from a checkpoint or GC pass outside any wave.
+     *
+     * @param degrade drop recoverably-suspended (odd-epoch) slots from the open
+     *   set — the same PN-19 quorum-shrink switch [replicaFrontier] carries.
+     */
+    fun stableFrontier(logicalId: UUID, degrade: Boolean = false): TagFrontier =
+        causalStability.stableFrontier(logicalId, degrade)
+
+    /**
+     * Poke [listener] with the new [TagFrontier] whenever [logicalId]'s
+     * [stableFrontier] **rises** — the stability analogue of
+     * [onWatermarkAdvance] and built the same way (decision 9sm.3-D2: a tap on
+     * the local companion's outlet). Returns silently when no replica of
+     * [logicalId] has been [replicate]d here, exactly as [onWatermarkAdvance]
+     * does.
+     *
+     * **Exactly once per effective rise, per listener** ([KE3-21]). The
+     * baseline is taken at registration — registering never fires — and each
+     * companion delta recomputes. A *rise* is: some source strictly greater
+     * than in the previous frontier, or present now and absent before (absent
+     * = bottom). Anything else is not a rise and does not call: a redelivered
+     * or echoed delta, a rowless member marker, or one member advancing while
+     * another still caps the MIN. A source DROPPING OUT (membership grew, or a
+     * newly-open slot has no row yet) is likewise not a rise, and the recorded
+     * baseline is **not** lowered — so the next genuine rise of another source
+     * still fires exactly once rather than twice.
+     *
+     * **The tap only sees companion-lattice movement** — `rows`, `closed`,
+     * `suspended`, `members` deltas. A `closed` arrival CAN raise the MIN (a
+     * lagging slot leaves the open set) and does fire. A rise caused *solely*
+     * by [civictech.cell.host.InstanceIndex.instancesOf] shrinking moves no
+     * companion lattice and is therefore observed only at the next companion
+     * delta.
+     */
+    fun onStabilityAdvance(logicalId: UUID, listener: (TagFrontier) -> Unit) {
+        val companion = watermarks[logicalId] ?: return
+        var last = stableFrontier(logicalId)
+        companion.outlet.tap(Use.fixed(Propagate<WatermarkDelta> {
+            val now = stableFrontier(logicalId)
+            // A rise: strictly greater somewhere, or newly present (absent = bottom).
+            val rises = now.perSource.any { (source, value) ->
+                last.perSource[source]?.let { value > it } ?: true
+            }
+            if (rises) {
+                last = now
+                listener(now)
+            }
+        }, PortRef.generate()))
+    }
+
+    /**
+     * **A control seam only** (decision 9sm.3-D5, [KE3-20]): this peer's OWN
+     * companion row for [logicalId] — what this replica has locally delivered,
+     * NOT what is globally stable. Empty when no replica of [logicalId] lives
+     * here.
+     *
+     * It exists so `computenet-9sm.4`'s BS-13 control can switch a compaction
+     * trigger to the **wrong** frontier and show the difference; nothing in
+     * production may read it, and it is `internal` so only `:kernel` tests
+     * reach it. The right read is [stableFrontier], which is this row's
+     * pointwise MIN against every other open member's.
+     */
+    internal fun localDeliveredFrontier(logicalId: UUID): TagFrontier {
+        val companion = watermarks[logicalId] ?: return TagFrontier(emptyMap())
+        return TagFrontier(companion.rows()[WatermarkCell.slotId(companion.ref)] ?: emptyMap())
+    }
 
     /**
      * One-line factory over [ReplicaQuorum.frontier] (T11-D) — kept here so
