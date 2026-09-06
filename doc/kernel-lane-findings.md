@@ -859,3 +859,67 @@ Not settled: whether every occurrence of this signature has this provenance. One
 occurrence was caught in twelve sweeps and it is the only one read so far; the
 instrumentation is committed so the next occurrence carries its own answer,
 including the holders' departure history (`holderState=`), which run 10 predates.
+
+## KE3-23-HOLDER — the holder of the fenced element really did depart: an eviction the kernel DESPAWNED, followed by a rejoin
+
+**computenet-dwkp, 2026-09-06, darwin/arm64 16-core, load1 6-15, `GcSafetySweepTest`
+(BS-12 + BS-13, seeds 1..200, budget 40_000), branch `task/computenet-dwkp` at
+`9bafc27b0` then `a961dfa4b`. This branch descends from `task/computenet-nwnl`'s tip,
+so every rate below is the POST-widening rate. One host, one session; not a
+cross-host claim.**
+
+`KE3-23-PROVENANCE` above closed the fence side and left the holder side open. Three
+further occurrences were caught here, all seed 12, all `differing=[peer2-23]`, all
+reproducing the provenance clause verbatim (`own=true inc=11/11 restores=0
+mintedHere=peer2-23 sameElement=true lastDeparture=null`). Two carried the
+`holderState=` print committed at `9bafc27b0`; the third carried the sharpened one.
+
+### The reading
+
+```
+attribution=[peer2-23 held=[peer0]
+  holderState=[peer0{lastDeparture=EVICT_CLEAN suspended=false evictDespawned=true member=true}]
+  liveTags=[8]
+  provenance=[peer2{tag=8 own=true inc=11/11 restores=0 mintedHere=peer2-23 sameElement=true
+              lastDeparture=null suspended=false}]
+  fencedAtLacking=peer2:[8](all)]
+```
+
+`lastDeparture=EVICT_CLEAN` alone would NOT have answered the question, and the first
+two occurrences (which printed only it) did not. `Replication.evict` has two outcomes:
+it returns false when `replicasOf(id) − {local}` is empty, and then **suspends** the
+replica instead of despawning it, leaves `member` true with the fold **intact**, and
+`PeerHandles.rejoin` no-ops through `refusedEviction()` (`PeerHandles.member` KDoc,
+computenet-usmw; `DepartureGatesTest`: "a refused eviction never despawns — state is
+retained"). `suspended` does not separate the two either — only `PARTITION_SUSPEND`
+sets that flag. So `EVICT_CLEAN suspended=false` is equally consistent with "the
+holder left and came back" and with "the holder never left at all".
+
+`evictDespawned=true` settles it: the eviction **despawned**, so peer0 genuinely left
+the mesh, and `member=true` says it is back. This is computenet-dwkp's shape **(i)** —
+the holder was not an open member at certification time — and it is NOT shape (iii).
+
+### What it does NOT settle
+
+- **Where peer0's live `peer2-23` came from.** A despawn drops the replica and
+  `PeerHandles.spawn` builds a fresh `SetCell`, so peer0 cannot be carrying its own
+  pre-departure fold across; the add it holds at quiescence must have been re-acquired
+  after the rejoin, from a replica that still had the add and not the del. That is an
+  INFERENCE from the spawn path, not a read — nothing printed here observed the
+  transfer.
+- **The ordering.** `lastDeparture` carries a mode, not a step. Whether peer0's
+  departure straddles the moment peer2's del-dot crossed `stableFrontier` — the thing
+  that would make the certificate vacuously true for peer0 — is unmeasured. The
+  natural next instrument is the STEP of peer0's depart and rejoin against the step of
+  peer2's `compactBelow`.
+- **Whether shape (ii) is also in play.** (i) and (ii) are not exclusive: a departed
+  replica that returns is exactly the case where the open-member set the frontier is
+  computed over can disagree with the set live at quiescence.
+
+### Rate
+
+Five sweeps at `9bafc27b0` produced two catches; six at `a961dfa4b` produced one. Eleven
+sweeps, three catches — roughly 1 in 4, against the 1-in-12 the previous session saw at
+the same commit. Full-class sweeps ran in 8-13s each on this host, not the minutes an
+earlier note assumed. Seed-pinning remains a dead end (a dedicated 5-run pin on seed 12
+scored 0/5); the schedule, not the seed, is what is rare.
