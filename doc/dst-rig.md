@@ -172,8 +172,91 @@ via `world.rng(purpose)`. Two runs of the same `(graph, plan)` on the same rig c
 same trace digest; `DstRun.assertDeterministic(runs)` is the cheap, available-to-every-consumer
 assertion of exactly that, and is worth calling on a new graph before anything else. **Object
 identity is not part of that contract** — `PortRef.generate()` and similar identity-only
-constructs are not required to be seed-derived, because nothing about `[CHA1-30]` depends on
-*which* opaque identity a subscription gets, only on what the trace and the check observe.
+constructs are not required to be seed-derived. That is a deliberate exclusion, not an
+observation that identity never leaks: it does, on exactly one path, and the next subsection is
+the measured account of where and what it costs.
+
+### A peering that re-opens mid-run is outside the determinism contract
+
+**A graph whose run re-opens a `Peering.Loopback` — `heal()` after `partition()` — is not
+trace-reproducible. `DstRun.assertDeterministic()` fails on it, and no rig-side change can make
+it pass.** On the churn mesh (`ChurnMesh.spec`) that is every drawn plan containing a
+`DepartureMode.PARTITION_SUSPEND` departure that is later rejoined or healed, and only those:
+`MeshPeer.rejoin` on a suspended peer is `heal()`, and `LinkControl.severing`'s heal is
+`Peering.Loopback.heal()`.
+
+**The mechanism.** `Loopback.heal()` is `open()`: it spawns fresh `RegistryMirrorCell`s and calls
+`Peering.announceTo` on both sides. `announceTo`'s catch-up sweep is
+
+```kotlin
+side.registry.localRefs().forEach { ref  -> catchUp(...) { announce.published(ref) } }
+side.registry.localLinks().forEach { link -> catchUp(...) { announce.linked(link) } }
+```
+
+`localRefs()` is a filter over `LocationRegistry`'s `ConcurrentHashMap<CellRef, Location>`, and
+`localLinks()` a filter over `TopologyIndex`'s `ConcurrentHashMap<UUID, TopologyLink>`. Both are
+iterated in **hash order of their keys**, and both key populations contain identities the kernel
+mints with `UUID.randomUUID()` — bridge and mirror cells (`BridgeCells`, `Peering`'s
+`CellRef(UUID.randomUUID())`), host refs, and every `TopologyLink.id`. `UUID.hashCode()` is a
+*value* hash, so this is not identity-hash ordering and no JVM flag suppresses it: the
+announcement ORDER is a fresh draw from `SecureRandom` on every run, and it is not derived from
+`plan.seed` because it is not derived from anything the rig owns. Reordered announcements reorder
+the gossip re-linking they cause, which moves later trace events by a few controller steps.
+
+**The measurement that establishes it** (computenet-l0gd, at `8d65b542b`, on
+`StableFrontierChurnSweep.config` over `ChurnMesh.spec(..., maxPeers = 3, aliveUntil = 7000)`,
+budget 40_000):
+
+| observation | result |
+| --- | --- |
+| 3 runs each of seeds 1, 8, 9, 19, 62, 87, 107 | 1/8/9/19/107 diverge; 62 and 87 are stable |
+| plans of the diverging seeds | **all five contain a `PARTITION_SUSPEND` later rejoined/healed** |
+| plans of the stable seeds | **neither contains one** (62: `CRASH_UNCLEAN` + `EVICT_NO_CLOSE`; 87: `EVICT_NO_CLOSE`) |
+| where each divergence starts | always the first trace event AFTER the rejoin/heal step, never before it (seed 1: heal @1607, diverges @1695; seed 9: @2083 → @2116; seed 19: @1829 → @1857; seed 107: @2599 → @2661; seed 8: @3525 → @3592) |
+| controlled swap: seed 1 with `PARTITION_SUSPEND` → `EVICT_CLEAN` | **deterministic**, 3/3 identical digests |
+| controlled swap: seed 87 with `EVICT_NO_CLOSE` → `PARTITION_SUSPEND` (+ heal) | **non-deterministic**, 3 distinct digests |
+| `localRefs()` order captured per run | differs every run on BOTH a diverging and a stable seed — the entropy is always present; only a heal consumes it |
+| whole suite re-run under `-XX:+UnlockExperimentalVMOptions -XX:hashCode=2` | still non-deterministic — rules out identity-hash ordering |
+
+Divergences are small, and on most seeds they are order-only: the trace event multiset is
+unchanged modulo the step index, which moves by 1–5 (seeds 1 and 8 — 12 runs each, one distinct
+multiset once the step field is ignored). **They are not order-only in general, and a consumer
+must not assume the event COUNT is stable either**: 12 runs of seed 107 produced traces of 124,
+125 and 127 events, three distinct multisets even ignoring the step index. The reordered
+relinking can therefore add or drop gossip events, not only move them — so a check over this
+rig's trace is no safer for counting events, or comparing them as a multiset, than for digesting
+them. (Measured during the review of computenet-l0gd, same commit and configuration as the table
+above.) Either way the difference is small, which is why it survives a casual look at a green
+sweep.
+
+**The verdict-level consequence, which is what actually bites a consumer.** Because the failing
+region moves, **pinning a failing SEED SET by number is unsound over this rig** — four 200-seed
+runs of one identical churn-mesh sweep produced failing sets of 12, 12, 15 and 14 seeds agreeing
+on only 6 members. **Pinning one recorded seed by repeated re-run IS sound**: a single seed
+re-run in isolation reproduces its own outcome (8 of 8 for each of six candidates). So record the
+seed and re-run it; never assert "exactly these seeds fail", and never assert an exact failure
+density. A sweep that asserts only `assertAllPassed()` names no seed and is unaffected.
+
+**What the audit of existing sweeps found** (computenet-l0gd, same commit). No suite pins an
+exact failing seed set or an exact failure density over a `PARTITION_SUSPEND`-capable churn
+sweep. The exposed sweeps — `StableFrontierChurnSweepTest`, `GcSafetySweepTest`,
+`ChurnSweepTest`, `ExclusiveChurnTest`, `ChurnShrinkTest` — all assert `assertAllPassed()`, a
+non-emptiness, or a seed discovered at runtime. `GcSafetySweepTest`'s
+`the recorded seeds reproduce their resurrection verdict_BS12_BS13` is the exemplar of the sound
+form: it re-runs ONE recorded seed five times and requires the same failure message each time.
+The nearest thing to a residual risk is that file's `assertTrue(resurrecting.isNotEmpty())` —
+population-dependent, though not an exact-set pin, so it fails only if the region moves to empty.
+Suites that restrict `departureWeights` to the other three modes (`ChurnReconvergenceTest`,
+`ReconvergenceCheckTest`, `GossipInstrumentsTest`) are immune by construction, and the one suite
+that does pin an exact failing set — `SweepTest`'s `"failed on 7 of 100"` — runs on the
+churn-free synthetic self-test graph.
+
+**Not fixable from `:testkit`.** Every entropy source above is a `UUID.randomUUID()` inside
+`:kernel` main (`BridgeCells`, `Peering`, `Link`, `ManagedHost`), consumed by hash-ordered
+`ConcurrentHashMap` views in `LocationRegistry`/`TopologyIndex`. Making the reconnect sweep
+deterministic means deriving those identities, or giving `announceTo` a total order — a kernel
+change, deliberately out of scope here. Until then this is a documented limitation, so that no
+later work item prescribes a digest pin the rig cannot honour.
 
 `PartitionMode.PARK` is the one documented case where a fault cannot reach the graph through the
 six seams above, and the resolution is instructive for any future fault with the same shape. Park
