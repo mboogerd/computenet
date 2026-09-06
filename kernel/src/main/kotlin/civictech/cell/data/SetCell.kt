@@ -288,6 +288,22 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         UUID.nameUUIDFromBytes("set-tags:${ref.id}:${ref.instanceId}".toByteArray())
     private var tagCounter = 0L
 
+    // ------------------------------------------------------------------ computenet-dwkp
+    // TEST-SUPPORT PROVENANCE, additive and read-only from the protocol's point of view.
+    // Nothing in `applyRemote`, `compactBelow` or the inlet handler consults any of this;
+    // the three fields below are written where tags are minted and where checkpoints are
+    // restored, and read only by the `internal` diagnostic `fenceProvenance` at the bottom
+    // of the class. See that function's KDoc for why the measurement needs them.
+    /** Which construction of a cell carrying THIS `tagSource` this instance is (1-based). */
+    internal val diagnosticIncarnation: Int =
+        incarnations.computeIfAbsent(tagSource) { java.util.concurrent.atomic.AtomicInteger() }.incrementAndGet()
+
+    /** Tag counter -> the element it was minted for, by THIS instance only. Under [stateLock]. */
+    private val mintedHere = HashMap<Long, Any?>()
+
+    /** How many times [restore] has run on this instance — i.e. whether its state is replayed. */
+    private var restoreCount = 0
+
     // Per-origin delivered frontier (spec 40/42 §Delivered watermarks, E3.3(a)):
     // add-tags this replica has durably absorbed, tracked as a max-contiguous
     // prefix per ORIGIN source (the tag's minting source, still visible here in
@@ -350,6 +366,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // the propagation after it, never under (see stateLock's KDoc).
             val (tag, advanced) = synchronized(stateLock) {
                 val minted = Timestamp(tagSource, ++tagCounter)
+                mintedHere[minted.counter] = element // computenet-dwkp provenance; see [fenceProvenance]
                 adds.getOrPut(element) { mutableSetOf() } += minted
                 minted to foldDelivered(listOf(minted)) // a local mint is trivially contiguous
             }
@@ -385,6 +402,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
                 val seen = liveTags(element)
                 if (seen.isEmpty()) return
                 val dot = Timestamp(tagSource, ++tagCounter)
+                mintedHere[dot.counter] = element // computenet-dwkp provenance; see [fenceProvenance]
                 val entry = seen + dot
                 dels.getOrPut(element) { mutableSetOf() } += entry
                 entry to foldDelivered(listOf(dot)) // a local mint is trivially contiguous
@@ -648,6 +666,42 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     }
 
     /**
+     * The PROVENANCE of a fenced tag — computenet-dwkp's measurement, and the third
+     * diagnostic read of this family after [liveTagsOf] and [fencedAmong].
+     *
+     * [fencedAmong] says a tag is fenced HERE; it does not say *which incarnation of this
+     * replica* minted it, and that is the whole of computenet-dwkp's open question. The
+     * hypothesis under test is computenet-vhlm's recorded residual — "a rejoining
+     * incarnation that re-mints a colliding counter for *the same* element is still
+     * wrongly fenced" — which requires the fenced tag to have been minted by a DIFFERENT
+     * incarnation than the one now holding the fence, i.e. by a journal/checkpoint replay
+     * or by a re-mint after the counter restarted at 0.
+     *
+     * So the read answers exactly two questions, per the bead:
+     *
+     *  - **Is the fencing incarnation a rejoin?** `inc` is this instance's 1-based
+     *    construction ordinal for its `tagSource`, and `incTotal` how many exist now.
+     *    `inc > 1` means an earlier incarnation of this same replica ref existed.
+     *  - **Was the fenced tag minted by a replay?** `restores` counts [restore] calls on
+     *    this instance (a replayed instance has `restores > 0`), and `mintedHere` names the
+     *    element THIS instance minted that counter for, or `ABSENT` when this instance never
+     *    minted it at all. `mintedHere=<the same element>` means one incarnation both minted
+     *    and fenced the tag — no cross-incarnation collision, and the hypothesis is refuted
+     *    for that tag. `ABSENT` or a different element means the mint and the fence came from
+     *    different incarnations, which is the residual.
+     *
+     * `own` reports whether the tag's source is this replica's own `tagSource` at all; a
+     * fenced tag from another source cannot be a same-source re-mint by construction.
+     */
+    internal fun fenceProvenance(element: E, tag: Timestamp): String = synchronized(stateLock) {
+        val own = tag.sourceId == tagSource
+        val minted = if (mintedHere.containsKey(tag.counter)) "${mintedHere[tag.counter]}" else "ABSENT"
+        val total = incarnations[tagSource]?.get() ?: diagnosticIncarnation
+        "tag=${tag.counter} own=$own inc=$diagnosticIncarnation/$total restores=$restoreCount " +
+            "mintedHere=$minted sameElement=${own && mintedHere[tag.counter] == element}"
+    }
+
+    /**
      * Highest tag counter observed per tag source, restricted to the keys
      * [scope] admits (spec 20/21 §Pull, 93 I-24; PN-3c). `null`/[Interest.Total]
      * scope iterates every key — byte-identical to the pre-scope frontier — so a
@@ -776,6 +830,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         (maps.getValue("dels") as Map<E, Set<Timestamp>>).forEach { (e, tags) -> dels[e] = tags.toMutableSet() }
         tagCounter = maps["counter"] as? Long ?: 0L
         reclaimed.restore(maps["reclaimed"]) // absent on a pre-fence checkpoint: an empty fence
+        restoreCount++ // computenet-dwkp provenance; see [fenceProvenance]
         Unit
     }
 
@@ -981,6 +1036,16 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
 
     companion object {
         fun <E> create(): SetApi<E> = SetCell()
+
+        /**
+         * Per-`tagSource` construction count — the ONLY way an instance can tell that an
+         * earlier incarnation of itself existed, since `tagSource` is derived from the ref
+         * and a rejoining replica reuses the ref by construction (computenet-dwkp). Process-
+         * wide and never pruned: it is diagnostic-only, one `AtomicInteger` per distinct
+         * (id, instanceId) a test constructs, and nothing reads it on a protocol path.
+         */
+        private val incarnations =
+            java.util.concurrent.ConcurrentHashMap<UUID, java.util.concurrent.atomic.AtomicInteger>()
 
         // Crude, deliberately: StateRead.byteBudget is advisory and
         // cell-estimated, and an estimate a cell cannot make it is free to

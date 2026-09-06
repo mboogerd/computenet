@@ -514,7 +514,26 @@ object GcSafetySweep {
                             name to (fenced.map { it.counter }.sorted() to (fenced.size == liveTags.size))
                         }
                     }
+                // computenet-dwkp's MEASUREMENT. `fencedAtLacking` says a lacking replica holds
+                // the live tag in its fence; it does not say whether the tag was minted by the
+                // incarnation now fencing it or by an earlier one — and that distinction is the
+                // whole of computenet-vhlm's recorded same-element residual. `SetCell.
+                // fenceProvenance` reads it directly (incarnation ordinal, restore count, and
+                // the element THIS instance minted that counter for), and the peer's own
+                // `lastDeparture` says whether it ever left. Printed for every fenced tag so a
+                // sweep that catches the rare schedule carries the answer in its artifact rather
+                // than needing to be caught again.
+                val provenance = cellsByPeer
+                    .filterNot { it.first in holders }
+                    .flatMap { (name, cell) ->
+                        cell.fencedAmong(element, liveTags).sortedBy { it.counter }.map { t ->
+                            val peer = live.firstOrNull { it.name == name }
+                            "$name{${cell.fenceProvenance(element, t)} " +
+                                "lastDeparture=${peer?.lastDeparture} suspended=${peer?.suspended}}"
+                        }
+                    }
                 Triple(element, "$element held=$holders liveTags=${liveTags.map { it.counter }.sorted()} " +
+                    (if (provenance.isEmpty()) "" else "provenance=$provenance ") +
                     "fencedAtLacking=" + (
                     if (fencedAt.isEmpty()) "NONE"
                     else fencedAt.joinToString { "${it.first}:${it.second.first}${if (it.second.second) "(all)" else "(partial)"}" }
