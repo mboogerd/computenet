@@ -521,19 +521,26 @@ class GcSafetySweepTest {
         // an add-tag whose `dels` entry the reclaimer HAD already discarded, re-delivered by the
         // `gc-dup`/`gc-reorder` adversary.
         assertTrue(
-            stableResurrecting.isEmpty(),
-            "[KE3-23] branch G: the STABLE trigger must resurrect NOTHING across $SEEDS. A " +
-                "non-empty set here is a regression in the del-dot or the re-admission floor — " +
-                "do not narrow SEEDS and do not weaken the observable. resurrecting=" +
-                stableResurrecting,
+            stableResurrecting.isNotEmpty(),
+            "[KE3-23] branch F-B: no seed resurrected under the STABLE trigger. The del-dot " +
+                "removes the DEL-DELIVERY half of the hazard and MEASURABLY does not remove the " +
+                "RE-ADMISSION half (8-9 of 200 on this base), so an empty set here means either " +
+                "the fence landed — in which case this assertion is the one to update, together " +
+                "with the divergence assertion below — or the rig stopped reaching the state. " +
+                "Do not narrow SEEDS to reach it. failures=" + sweep.failures.map { it.seed to it.message },
         )
-        // The second half of branch G, and the one `resurrected(...)` alone cannot see: no live
-        // replica may be left holding a different membership from its peers at quiescence.
+        // The divergence bound is read against the no-reclaimer CONTROL arm, not against zero:
+        // the rig diverges on a few seeds with no compaction at all. What this asserts is that
+        // compaction does not make it MATERIALLY worse — which is exactly the assertion that
+        // fails for a per-source re-admission floor (31-33 of 200 against a floor of 2-4), and
+        // the reason this bead did not ship one. See SetCell.compactBelow's KDoc.
         assertTrue(
-            stableDiverging.isEmpty(),
-            "[KE3-23] branch G: live replicas' memberships must AGREE at quiescence across " +
-                "$SEEDS. See MEMBERSHIP_DIVERGENCE_FAILURE — this is the failure a " +
-                "resurrection-only observable reports as green. diverging=$stableDiverging",
+            stableDiverging.size <= MAX_STABLE_DIVERGING,
+            "[KE3-23]: compacting at the STABLE frontier left ${stableDiverging.size} seeds with " +
+                "permanently diverged memberships, above the recorded bound of " +
+                "$MAX_STABLE_DIVERGING. Reclamation must not cost membership convergence — a " +
+                "resurrection-only observable reports this state as GREEN. diverging=" +
+                "$stableDiverging (compare the CONTROL arm, which measures the rig's own floor)",
         )
         // F-A is unchanged and still expected: `ReplicaConvergence` folds emitted deltas and
         // cannot express compaction, so its disagreement is a limit of the reference fold, not of
@@ -708,17 +715,15 @@ class GcSafetySweepTest {
                 "seed. outcomes=$localMessages",
         )
 
-        // The STABLE pin — INVERTED by computenet-v2ka. This seed used to be the recorded
-        // `[KE3-23]` finding (it resurrected on 8 of 8 dedicated re-runs); it is now the recorded
-        // proof that the same schedule is GC-safe, run after run. Pinning the seed that was the
-        // sharpest witness AGAINST the property is what makes the flip evidence rather than a
-        // lucky draw: nothing about the schedule changed, only the tag algebra under it.
+        // The STABLE pin — still branch F-B. `[KE3-23]` is NOT closed: the del-dot removes the
+        // del-delivery half of the hazard, and the re-admission half (`[24-TAG-04]` clause 2)
+        // is still open, so a recorded seed still reproduces harm here.
         val stableMessages = run(GcSafetySweep.Trigger.STABLE, BS12_SEED)
         println("[PIN] STABLE seed=$BS12_SEED -> $stableMessages")
         assertTrue(
-            stableMessages.none { it in HARMED },
-            "the recorded STABLE seed $BS12_SEED must be GC-safe on EVERY run: no resurrection " +
-                "and no membership divergence. outcomes=$stableMessages",
+            stableMessages.all { it in HARMED },
+            "the recorded STABLE seed $BS12_SEED must be observably harmed on EVERY run; it is " +
+                "never replaced by a friendlier seed. outcomes=$stableMessages",
         )
     }
 
@@ -812,19 +817,29 @@ class GcSafetySweepTest {
          * intersection was `{62, 87, 107, 138, 170, 175}`; each of those six then resurrected on
          * 8 of 8 dedicated re-runs. 62 is the smallest.
          *
+         * **Re-derived by computenet-v2ka.** The old value 62 no longer reproduces: the del-dot
+         * consumes tag counters, so every schedule downstream of a remove shifts and the seed
+         * that used to be the sharpest witness is not any more. 126 was chosen the same way the
+         * old value was — it is the one seed present in the resurrecting set of EVERY 200-seed
+         * run taken on this base, on BOTH arms (STABLE: {63,109,120,126,168,169,180},
+         * {25,75,121,126,154,166,168,172}, {12,13,14,70,109,126,166,168,180}; LOCAL:
+         * {30,103,107,126,131,174,184,194}, {9,30,93,103,107,126,131,174,181,184,194},
+         * {9,18,30,103,107,116,124,126,131,184,194}) — and it is then held to
+         * [PIN_RUNS] dedicated re-runs below.
+         *
          * **The per-seed sets are NOT identical between sweeps**, because the rig is not
          * reproducible (see the pin test's KDoc). That is why the pin is a dedicated repeated run
          * of THIS seed rather than an assertion that this seed appears in the sweep's failing set:
          * the latter would be flaky for a reason that has nothing to do with the property.
          */
-        private const val BS13_SEED: Long = 62L
+        private const val BS13_SEED: Long = 126L
 
         /**
          * The recorded STABLE (`[KE3-23]`, BS-12) seed — the branch-F-B finding, and the sweep's
          * headline result: **compaction at the stable frontier resurrects a removed element too**.
          * Same selection method; the three STABLE sweeps' intersection was `{62, 138, 154, 184}`.
          */
-        private const val BS12_SEED: Long = 62L
+        private const val BS12_SEED: Long = 126L
 
         /**
          * The two folded CHA1 faults asserted PER SEED in [assertAdversaryFired] — MEASURED to fire
@@ -860,6 +875,20 @@ class GcSafetySweepTest {
          * fold merely being unable to express compaction ([GcSafetySweep.DISAGREEMENT_FAILURE],
          * the tolerated F-A class).
          */
+        /**
+         * The bound on STABLE membership divergence. MEASURED at 2 of 200 with the del-dot in
+         * place, against a no-reclaimer control that itself diverges on 2-4 — so reclamation at
+         * the stable frontier costs nothing here. The bound is set well above both because the
+         * rig is not reproducible (see the pin test's KDoc) and the control moves by 2-3 seeds
+         * between runs; the failure it exists to catch is an order of magnitude away (a
+         * per-source re-admission floor measured 31-33, see `SetCell.compactBelow`'s KDoc).
+         *
+         * It is deliberately NOT read off the control arm at runtime: JUnit does not order the
+         * two @Test methods, so a cross-arm read would make this assertion depend on which ran
+         * first.
+         */
+        private const val MAX_STABLE_DIVERGING: Int = 10
+
         private val HARMED: Set<String> = setOf(
             GcSafetySweep.RESURRECTION_FAILURE,
             GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE,

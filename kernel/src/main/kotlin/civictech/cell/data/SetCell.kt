@@ -52,37 +52,6 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     private val adds = mutableMapOf<E, MutableSet<Timestamp>>()
     private val dels = mutableMapOf<E, MutableSet<Timestamp>>()
 
-    /**
-     * The **re-admission floor** — `[24-TAG-04]`'s second clause ("IF a later
-     * delta, baseline or catch-up carries a discarded tag, THEN the cell SHALL
-     * NOT re-admit it as new information"), per tag source.
-     *
-     * [compactBelow] raises it to the highest counter it discarded for a
-     * source; [applyRemote] then treats an incoming ADD-tag at or below it as
-     * already observed rather than as novelty. Without it reclamation is not
-     * merely un-done but *unsafe*: a discarded add-tag is absent from [adds]
-     * again, so a duplicated or reordered old frame carrying it reads as new
-     * information and the element comes back to life (MEASURED — this is the
-     * residual that survived the del-dot alone: 8 of 200 seeds under the
-     * `gc-dup`/`gc-reorder` adversary, every one of them a tag whose entry the
-     * reclaimer had already discarded; computenet-v2ka).
-     *
-     * **Why it cannot fence a live tag.** It is only ever raised to a counter
-     * at or below the frontier a discard ran at, and a discard runs at the
-     * *stable* frontier — a pointwise MIN over the open membership rows, this
-     * replica's own included. So `floor[s]` never exceeds this replica's own
-     * max-contiguous delivered prefix for `s`, and every tag at or below it has
-     * already been absorbed here: it is either still live in [adds] (where
-     * novelty is empty anyway) or discarded (where fencing is the point).
-     *
-     * **The DEL lane is deliberately NOT fenced.** A tag below the floor can
-     * still be live here while its remove is in flight — the covering del names
-     * the add-tag's counter, not the del-dot's — so fencing dels would drop a
-     * genuine tombstone and strand the element live for ever. Re-admitting a
-     * tombstone merely re-grows `dels`, which the next compaction reclaims
-     * again; re-admitting an add resurrects.
-     */
-    private val readmissionFloor = mutableMapOf<UUID, Long>()
 
     /**
      * Guards **every** access to [adds], [dels], [tagCounter], [delivered] and
@@ -251,12 +220,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // monitor — neither the listener notification nor the re-emission.
         val (effective, advanced) = synchronized(stateLock) {
             val newAdds = delta.adds
-                .mapValues { (e, tags) ->
-                    // the re-admission fence (`[24-TAG-04]` clause 2): a tag at or
-                    // below the floor was discarded here, not missed here.
-                    tags.filterNot { it.counter <= (readmissionFloor[it.sourceId] ?: Long.MIN_VALUE) }
-                        .toSet() - (adds[e] ?: emptySet())
-                }
+                .mapValues { (e, tags) -> tags - (adds[e] ?: emptySet()) }
                 .filterValues { it.isNotEmpty() }
             val newDels = delta.dels
                 .mapValues { (e, tags) -> tags - (dels[e] ?: emptySet()) }
@@ -315,21 +279,33 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * source with no entry in [frontier] reads as bottom, so nothing of that
      * source is ever discarded.
      *
-     * **This records the re-admission floor, and nothing else**
-     * (computenet-v2ka; the KDoc that stood here said "records nothing", which
-     * was true of 9sm.4's harness-only seam and is no longer). [delivered],
-     * [tagCounter] and [deliveryListeners] are untouched and nothing is
-     * emitted, but every discarded tag raises [readmissionFloor] for its
-     * source, so a later delta, baseline or catch-up carrying that tag is NOT
-     * re-admitted as new information — `[24-TAG-04]`'s second clause, which
-     * this rule's first clause is unsafe without. **MEASURED:** the del-dot
-     * alone left 8 of 200 sweep seeds resurrecting, every one of them a
-     * duplicated or reordered frame re-delivering a tag this method had
-     * already discarded.
+     * **This still records nothing.** [delivered], [tagCounter] and
+     * [deliveryListeners] are untouched, nothing is emitted, and a later delta
+     * carrying a discarded tag is re-admitted as new information by
+     * [applyRemote] (novelty there is `tags − adds[e]`, and a discarded tag is
+     * absent from `adds[e]` again). That is `[24-TAG-04]`'s SECOND clause and
+     * it is still open — computenet-9sm.6's re-admission fence.
      *
-     * Still out of scope here: checkpoint wiring, the `StateRequest(since)`
-     * below-the-floor full-state fallback, and `OrMapCell`/`TagState`
-     * reclamation (computenet-9sm.6, computenet-9sm.8).
+     * **What computenet-v2ka measured about that fence, because it tried to
+     * build it here and could not make it safe.** With the del-dot in place the
+     * residual under the sweep's `gc-dup`/`gc-reorder` adversary is 8-9 of 200
+     * seeds, every one a duplicated or reordered frame re-delivering a tag this
+     * method had already discarded. A **per-source re-admission floor** — the
+     * obvious fix, and the one computenet-9sm.6-D2 plans — does drive those to
+     * ZERO, and is nonetheless **not safe**: in all three variants tried (floor
+     * raised to the discarded counter; the same capped at this replica's own
+     * max-contiguous delivered prefix; and that cap with the delivered frontier
+     * restricted to the add lane so it can only certify tags the replica holds)
+     * it fenced *live* add-tags and left **31-33 of 200 seeds with permanently
+     * diverged memberships**, against a no-reclaimer control floor of 2-4. The
+     * resurrection observable reports all of that as GREEN — the divergence is
+     * only visible to `GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE`, which this
+     * bead added for exactly that reason. Whoever builds the fence needs a
+     * causal context, not a per-source high-water.
+     *
+     * Also still out of scope here: checkpoint wiring, the
+     * `StateRequest(since)` below-the-floor full-state fallback, and
+     * `OrMapCell`/`TagState` reclamation (computenet-9sm.6, computenet-9sm.8).
      *
      * `internal`: reachable from `:kernel` tests only. `:testkit` must not see
      * this — it is a harness seam, not a public capability.
@@ -353,11 +329,6 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             val covered = delTags.toSet()
             delTags -= covered
             discarded += covered.size
-            // raise the re-admission floor to what was actually discarded, per
-            // source ([readmissionFloor]; `[24-TAG-04]` clause 2)
-            covered.forEach { tag ->
-                readmissionFloor.merge(tag.sourceId, tag.counter, ::maxOf)
-            }
             adds[element]?.let { addTags ->
                 val addCovered = addTags.intersect(covered)
                 if (addCovered.isNotEmpty()) {
@@ -482,13 +453,6 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
                 "adds" to HashMap(adds.mapValues { HashSet(it.value) }),
                 "dels" to HashMap(dels.mapValues { HashSet(it.value) }),
                 "counter" to tagCounter,
-                // ADDITIVE (`[24-TAG-04]` clause 2, computenet-v2ka): the
-                // re-admission floor is state — a restored instance that lost it
-                // would re-admit every tag it had reclaimed the moment a
-                // journal-tail replay or an anti-entropy catch-up re-delivered
-                // one. `restore` defaults it to empty, so an older checkpoint
-                // reads exactly as it did.
-                "floor" to HashMap(readmissionFloor),
             )
         )
     }
@@ -501,8 +465,6 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         (maps.getValue("adds") as Map<E, Set<Timestamp>>).forEach { (e, tags) -> adds[e] = tags.toMutableSet() }
         (maps.getValue("dels") as Map<E, Set<Timestamp>>).forEach { (e, tags) -> dels[e] = tags.toMutableSet() }
         tagCounter = maps["counter"] as? Long ?: 0L
-        readmissionFloor.clear()
-        (maps["floor"] as? Map<UUID, Long>)?.let { readmissionFloor.putAll(it) }
         Unit
     }
 
