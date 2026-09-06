@@ -2600,11 +2600,13 @@ property is statable at the driver and not in the corpus.
   a checkpoint is taken for a `Replicable` tagged cell, THEN `dels` entries
   whose every tag is `≤ stableFrontier` … SHALL be discarded").
 - **Why it cannot be pinned honestly as a passing check**: it is FALSE on
-  the shipped mechanism, measured both seeded (`GcSafetySweepTest`'s BS-12,
-  branch F-B, `BS12_SEED = 62` and 7-10 other seeds per 200-seed run) and
-  deterministically (`CompactionTriggerPinTest`'s `P2 LOST del` scenario).
-  `SetCell.foldDelivered` is fed only from `add()`'s local mint and from
-  `applyRemote()`'s `newAdds` — `remove()` mints and folds nothing into the
+  the shipped mechanism (at the time this entry was filed — the pre-del-dot,
+  unfixed build), measured both seeded (`GcSafetySweepTest`'s BS-12,
+  branch F-B, `BS12_SEED = 62` and 7-11 other seeds per 200-seed run, 8-12
+  total, matching `doc/kernel-lane-findings.md`'s per-run figures for that
+  build) and deterministically (`CompactionTriggerPinTest`'s `P2 LOST del`
+  scenario). `SetCell.foldDelivered` is fed only from `add()`'s local mint and
+  from `applyRemote()`'s `newAdds` — `remove()` mints and folds nothing into the
   delivered lane. So `del-tag ≤ stableFrontier` certifies that every open
   member has delivered the matching *add*, never that any member has
   delivered the matching *remove*. A member that held the add but missed

@@ -12,7 +12,10 @@ wave-position vocabulary in `concord/schema/scenario.md`. Stage 3 authored three
 scenarios (`21-PULL-02`, `24-BOUND-01`, `24-BOUND-02`). **`[21-PULL-03]` is
 filed in `concord/corpus/DISPUTES.md`, not covered**: its family antecedent is
 unsatisfiable by any catalog cell (every tag-frontier family is an
-observed-remove set, whose retraction mints nothing), and the script model
+observed-remove set; since computenet-v2ka a local retraction mints its own
+del-dot and moves the frontier, but the surviving counterexample — a reordered
+remote `dels` entry whose dot is below a per-source max the replica already
+holds — is narrower still and just as unauthorable), and the script model
 cannot interleave a mutation with a walk — so the only authorable scenario would
 have asserted the trivial instance while reading as `covered`.
 **Model:** `claude-opus-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,

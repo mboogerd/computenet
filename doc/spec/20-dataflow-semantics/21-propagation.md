@@ -222,24 +222,33 @@ The family qualification on [21-PULL-03] is load-bearing, and is why the
 requirement is not simply "the union equals the state". Comparing a walk's
 opening and closing stamps detects **tag gains, and only tag gains**, which is
 the whole of what a tag frontier measures. The set family's observed-remove
-mints nothing — it copies the add-tags it already holds into its del-map
-(effective-only removal, above; 24 §Established pattern) — so a mid-walk
-retraction of an element the walk has already paged leaves both stamps equal
-while the union still names that element present. For such a family equal
-stamps are *necessary but not sufficient*; the `since` escalation path inherits
-the same limit, because it filters out the tombstone's re-used tags along with
-the adds they cover; and the cell declares the weakness on its own read rather
-than letting the union claim more than it can. This is a property of that
-family's tag algebra, not of paging — the pull reply has always reported
-currency the same way — and closing it (a retraction that mints a tag) is a
-state-family question filed as research.
+now mints its own del-dot alongside the add-tags it already holds
+(effective-only removal, above; 24 §Established pattern) — the dot never
+enters the add-map, so `membership()` is unchanged, but a *locally applied*
+mid-walk retraction now moves the closing stamp and the walk's check catches
+it. The surviving counterexample is narrower: the frontier is a per-source
+**max**, not a set, so a *reordered remote* `dels` entry whose dot counter is
+below a tag this replica already holds from that source changes membership
+while raising no maximum. For that counterexample equal stamps are still
+*necessary but not sufficient*; the `since` escalation path inherits the same
+limit, because it filters out the tombstone's re-used tags along with the adds
+they cover; and the cell declares the weakness on its own read rather than
+letting the union claim more than it can. This is a property of that family's
+tag algebra, not of paging — the pull reply has always reported currency the
+same way — and closing it fully (making the frontier a set rather than a
+per-source max) is a state-family question filed as research.
 
 ⚠ EARS-GAP ([21-PULL-03]): the requirement's antecedent is unreachable from the
 conformance boundary as it stands. Every tag-frontier-carrying family in the
-standard library is an observed-remove set, so none satisfies "every state
-change mints or absorbs a tag"; and a conformance script cannot interleave a
-mutation with a walk, so even for a qualifying family only the trivial
-(quiescent) instance would be exercised. Filed in `concord/corpus/DISPUTES.md`
+standard library is an observed-remove set. Since computenet-v2ka `SetCell`'s
+retraction mints a del-dot, so a *locally applied* retraction is caught; every
+other such family's retraction still copies the add-tags it already holds into
+its del-map and mints nothing, and even for `SetCell` a *reordered remote*
+`dels` entry whose dot is below a per-source max changes membership while
+raising no maximum. A scenario over `set-source` therefore still could not make
+"every state change mints or absorbs a tag" true of the walk's check; and a
+conformance script cannot interleave a mutation with a walk, so even for a
+qualifying family only the trivial (quiescent) instance would be exercised. Filed in `concord/corpus/DISPUTES.md`
 rather than covered by a scenario that would read as covered while asserting
 only the trivial instance. The at-rest half of the property is separately
 carried, and covered, by requirement 24-BOUND-02 (24).

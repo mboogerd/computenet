@@ -477,8 +477,13 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
     /**
      * Does the step's `op:`/`value:` describe [dot] as [delta] carries it? Only the
      * dot-minting ops are expressible: an OR-map `put` and an OR-set `add` mint a
-     * dot, while a `remove` mints none (it tombstones dots minted earlier), so
-     * there is no `(source, counter)` position a `remove` could ever name.
+     * dot. An OR-map `remove` still mints none — it tombstones the put-dots it
+     * already observed live — so there is no `(source, counter)` position for it
+     * to name. An OR-set `remove` is different since computenet-v2ka: it mints its
+     * own del-dot into `SetDelta.dels`, so that dot DOES have a nameable
+     * `(source, counter)` position; `describes` below has no case for it, which is
+     * a real gap in what this driver can express rather than a property of the
+     * delta shape.
      */
     @Suppress("UNCHECKED_CAST")
     private fun describes(op: String, value: Value?, dot: Timestamp, delta: Any): Boolean = when {
