@@ -554,6 +554,87 @@ failure modes have the same shape (an older reader's decode of the whole
 payload breaks, not just the new part) and the same non-fix
 (`ignoreUnknownKeys` addresses only the field case).
 
+#### Decision: the constraint stays operational — no mechanism (computenet-5zba)
+
+Both hazards above were documented in successive items rather than mechanised,
+and nothing enforces the constraint they state: no `VERSION` bump, no
+negotiation, no gate, no test fails if a future change violates it. **That is
+now a decision, not a deferral.** The KE3-39 constraint remains an
+*operational* one — roll a mesh onto one build before any peer emits a
+newly-added optional field or a newly-added enum constant — and the reasoning
+is recorded here so a third item does not re-document the same hazard.
+
+Each candidate mechanism was eliminated on its own merits, in this order:
+
+1. **A `VERSION`-bump discipline for enum-constant additions cannot work,
+   because `version` is never on the wire.** `WireFrame.version` defaults to
+   `WireCodec.VERSION` and `WireCodec.build` never sets `encodeDefaults`, so
+   kotlinx's default (`false`) omits the field from every frame this codec
+   emits. A reader therefore supplies its *own* default for the absent key,
+   and `decodeFrame`'s `check(frame.version == VERSION)` compares `VERSION`
+   against itself — it passes whatever the writer's `VERSION` was. Measured
+   2026-09-06 and pinned in `WireCodecTest`'s "VERSION is omitted from every
+   encoded frame" test, which also fires the check by splicing an explicit
+   differing `version` into a frame, to show it is real code and merely
+   unreachable from anything the encoder produces. So a bump is invisible to a
+   peer, not protective. (That the check is unreachable is a separate defect
+   in its own right, filed as `computenet-u5gb`; the point *here* is only that
+   the mechanism this bead named cannot be built on it.)
+2. **Even if `version` did travel, a bump would be strictly worse than the
+   status quo for the operation it is meant to protect.** The check is a hard
+   equality with no compatibility window, so a bump makes an older peer refuse
+   **every** frame from an upgraded one — not just the frames carrying the new
+   constant. It converts a narrow, per-payload failure into total loss of
+   interop for the whole upgrade window, which is the opposite of what the
+   additive-field policy exists to buy.
+3. **Neither cheap decoder setting is a fix** — re-measured on this branch
+   (2026-09-06) rather than inherited, and now pinned in `WireCodecTest`, each
+   with a control that fails if the setting under test were inert:
+   `ignoreUnknownKeys = true` rescues the unknown *key* and throws on the
+   unknown *constant* (a value of a key the reader already knows);
+   `coerceInputValues = true` substitutes the **declaring property's** default
+   or `null`, and `Stall.reason` is neither default-valued nor nullable, so
+   the same bytes that throw for `Stall` do coerce for a legacy shape whose
+   `reason` carries a default.
+4. **Negotiation is the only mechanism that would actually work, and it is not
+   this bead's size.** `WireCodec` is a stateless per-frame codec with no
+   handshake surface; version/capability negotiation is a wire-protocol
+   feature, already spun out as its own follow-on gap ("Protocol capability
+   negotiation & versioning across peers", `93-feature-interactions.md` I-1
+   §8) and named as that document's most substantive unresolved piece.
+5. **A guardrail test that fails when a wire-facing `@Serializable` enum gains
+   a constant is honest only if it enumerates all of them, and that is
+   disproportionate.** `WireCodec` is reached from `kernel`, `wire`,
+   `identity`, `iroh` and the demo modules; nothing structurally marks an enum
+   as wire-facing rather than local, so such a check would have to carry a
+   hand-maintained inventory that goes stale as modules are added and cannot
+   distinguish the two cases. That is a large, decaying guard against a hazard
+   whose realized consequence is a loud, immediately diagnosable decode
+   failure.
+
+**The position that survives — deliberately — is that failing loudly is
+better.** Both remaining "fixes" (a fallback constant with a custom
+serializer, or coercion at the use site) buy continuity by letting a peer keep
+running while misreading a control-plane notice. A `Stall` whose reason is
+silently read as something other than what the writer meant is a false
+statement about a replica's liveness, on the very plane the watermark machinery
+exists to keep honest; a `SerializationException` naming the unrecognised
+constant is a worse outage and a better failure.
+
+**Cost of the decision, stated plainly:** a mixed-version mesh is unprotected
+by anything but this paragraph, and a future change that violates the
+constraint will be caught by a peer failing at run time, not by a test at merge
+time. That is accepted because the repo has no rolling-upgrade procedure and no
+version negotiation — the constraint governs an operation that is today
+hypothetical.
+
+**Reopening trigger** (so the next reader knows what would change the answer,
+rather than re-deriving it): cross-peer capability/version negotiation landing,
+or a rolling upgrade of a live mesh becoming a supported operation. Either
+makes mixed-version decode a real path with a real handshake to hang a
+mechanism on; until then, re-documenting these hazards adds nothing to this
+section.
+
 ### Open interactions
 
 The R14 superseded-source-column rule and the FRM1/G-36 two-hop-cut interaction

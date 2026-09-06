@@ -11,10 +11,15 @@ import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
+import civictech.cell.control.StallNotice
+import civictech.cell.control.StallReason
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import org.junit.jupiter.api.Test
 import java.util.Base64
@@ -186,4 +191,146 @@ class WireCodecTest {
         WireCodec.VERSION shouldBe 2
         decodedFrame.frame.version shouldBe 2
     }
+
+    // ------------------------------------------------------------------
+    // KE3-39 decision evidence (computenet-5zba)
+    //
+    // These three tests are the measurements the decision recorded in
+    // `doc/spec/40-distribution/42-replication.md` §"Wire compatibility of
+    // additive fields (KE3-39)" § "Decision: no mechanism" rests on. They are
+    // deliberately here rather than in prose only: the decision turns on what
+    // the two candidate cheap fixes and the candidate VERSION mechanism
+    // actually do, and a prose measurement decays silently while a test does
+    // not. Each carries a CONTROL that fails if the setting under test were
+    // inert, so a green run cannot be green for the wrong reason.
+    // ------------------------------------------------------------------
+
+    /** The `["Stall", {...}]` payload object a peer actually puts on the wire. */
+    private fun stallPayloadOnTheWire(notice: StallNotice): kotlinx.serialization.json.JsonElement {
+        val propagate = Propagate::class.java.getMethod("propagate", Any::class.java)
+        val encoded = WireCodec.encode(frame(propagate, notice)).decodeToString()
+        return Json.parseToJsonElement(encoded).jsonObject["args"]!!.jsonArray[0].jsonArray[1]
+    }
+
+    /**
+     * `ignoreUnknownKeys = true` is not the fix, re-measured on this branch:
+     * it rescues the unknown *key* hazard and does nothing at all for the
+     * unknown *constant* hazard, which is a value of a key the reader already
+     * knows. The first half is the control — it proves the setting is live on
+     * this decoder, so the throw in the second half is the constant and not a
+     * mis-set-up probe.
+     */
+    @Test
+    fun `KE3-39 - ignoreUnknownKeys rescues an unknown KEY but never an unknown enum CONSTANT`() {
+        val lenient = Json { ignoreUnknownKeys = true }
+        val ts = Timestamp(UUID(0L, 2L), 3L)
+
+        // Control: an unknown `slot` key, on a reason the pre-KE3 reader knows.
+        // With the setting on, the decode SUCCEEDS — so the setting is applied.
+        val knownReasonWithSlot = stallPayloadOnTheWire(
+            StallNotice.Stall(StallReason.SUSPENDED, ts, UUID.fromString("00000000-0000-0000-0000-0000000000aa")),
+        )
+        knownReasonWithSlot.jsonObject.containsKey("slot") shouldBe true
+        lenient.decodeFromJsonElement(Ke339LegacyStall.serializer(), knownReasonWithSlot) shouldBe
+            Ke339LegacyStall(Ke339LegacyReason.SUSPENDED, ts)
+
+        // The measurement: same setting, no unknown key at all, and it throws
+        // on the unrecognised constant.
+        val frozen = stallPayloadOnTheWire(StallNotice.Stall(StallReason.STABILITY_FROZEN))
+        frozen.jsonObject.containsKey("slot") shouldBe false
+        val thrown = shouldThrow<kotlinx.serialization.SerializationException> {
+            lenient.decodeFromJsonElement(Ke339LegacyStall.serializer(), frozen)
+        }
+        thrown.message.orEmpty() shouldContain "STABILITY_FROZEN"
+    }
+
+    /**
+     * `coerceInputValues = true` is not the fix either, re-measured on this
+     * branch: it substitutes the **declaring property's** default (or `null`,
+     * for a nullable property), never anything belonging to the enum, and
+     * `Stall.reason` is neither default-valued nor nullable. The control is a
+     * legacy shape whose `reason` *does* carry a default: the identical bytes
+     * coerce there, which is what proves the setting is live and pins WHY it
+     * is inert for `Stall`.
+     */
+    @Test
+    fun `KE3-39 - coerceInputValues cannot rescue Stall reason, which has neither a default nor a nullable type`() {
+        val coercing = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+        val frozen = stallPayloadOnTheWire(StallNotice.Stall(StallReason.STABILITY_FROZEN))
+
+        shouldThrow<kotlinx.serialization.SerializationException> {
+            coercing.decodeFromJsonElement(Ke339LegacyStall.serializer(), frozen)
+        }
+
+        // Control: same decoder, same bytes, a `reason` that carries a default.
+        coercing.decodeFromJsonElement(Ke339LegacyStallDefaultedReason.serializer(), frozen) shouldBe
+            Ke339LegacyStallDefaultedReason(Ke339LegacyReason.SUSPENDED)
+    }
+
+    /**
+     * The candidate mechanism — "bump [WireCodec.VERSION] when a wire-facing
+     * enum gains a constant" — cannot work, and this is why: **`version`
+     * never appears on the wire**. [WireFrame.version] defaults to
+     * [WireCodec.VERSION] and `WireCodec.build` never sets `encodeDefaults`,
+     * so kotlinx's default (`false`) omits the field from every frame this
+     * codec produces. A reader therefore decodes the *absent* key as its OWN
+     * default, and `decodeFrame`'s `check(frame.version == VERSION)` compares
+     * `VERSION` against itself — it passes no matter what the writer's
+     * `VERSION` was.
+     *
+     * The check is not dead code (the second half fires it), but it is
+     * unreachable from any frame this encoder emits, so a `VERSION` bump is
+     * invisible to a peer rather than protective. That measurement is what
+     * removes the VERSION-bump discipline from the candidate list in the
+     * KE3-39 decision.
+     */
+    @Test
+    fun `KE3-39 - VERSION is omitted from every encoded frame, so a bump cannot gate a mixed-version mesh`() {
+        val add = SetOps::class.java.getMethod("add", Any::class.java)
+        val bytes = WireCodec.encode(frame(add, "milk"))
+
+        // Omitted entirely: nothing on the wire carries the writer's VERSION.
+        Json.parseToJsonElement(bytes.decodeToString()).jsonObject.containsKey("version") shouldBe false
+        // So the reader supplies its own, and the equality check is a tautology.
+        WireCodec.decodeFrame(bytes).frame.version shouldBe WireCodec.VERSION
+
+        // The check itself is real — it fires only for a frame that EXPLICITLY
+        // carries a differing version, which no encoder in this repo produces.
+        val explicitlyVersioned = JsonObject(
+            mapOf("version" to JsonPrimitive(WireCodec.VERSION + 1)) +
+                Json.parseToJsonElement(bytes.decodeToString()).jsonObject,
+        )
+        val thrown = shouldThrow<IllegalStateException> {
+            WireCodec.decode(Json.encodeToString(JsonObject.serializer(), explicitlyVersioned).toByteArray())
+        }
+        thrown.message.orEmpty() shouldContain "unsupported wire version"
+    }
 }
+
+/**
+ * Stand-in for [StallReason] as it stood at `ea84150f5`, one commit before
+ * `STABILITY_FROZEN` was added (see `StallNoticeWireCompatTest`'s KDoc for
+ * the capture provenance). Top-level because Kotlin has no local `enum class`;
+ * named distinctly from that file's equivalent so the two private
+ * declarations in this package never read as the same type.
+ */
+@kotlinx.serialization.Serializable
+private enum class Ke339LegacyReason { SUSPENDED, RESTARTING, DEAD_LETTERED }
+
+/**
+ * Pre-KE3 `StallNotice.Stall` shape: `reason` is neither nullable nor
+ * default-valued, which is exactly the property that makes
+ * `coerceInputValues` inert for it.
+ */
+@kotlinx.serialization.Serializable
+private data class Ke339LegacyStall(val reason: Ke339LegacyReason, val timestamp: Timestamp? = null)
+
+/**
+ * The `coerceInputValues` control: identical but for a DEFAULT-VALUED
+ * `reason`, the one shape that setting can actually rescue.
+ */
+@kotlinx.serialization.Serializable
+private data class Ke339LegacyStallDefaultedReason(
+    val reason: Ke339LegacyReason = Ke339LegacyReason.SUSPENDED,
+    val timestamp: Timestamp? = null,
+)
