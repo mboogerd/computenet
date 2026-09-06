@@ -1,0 +1,690 @@
+package civictech.cell.replication
+
+import civictech.cell.data.SetCell
+import civictech.cell.data.delta.SetDelta
+import civictech.testkit.dst.CheckRegistry
+import civictech.testkit.dst.DepartEvent
+import civictech.testkit.dst.DepartureMode
+import civictech.testkit.dst.DstCheck
+import civictech.testkit.dst.DstRun
+import civictech.testkit.dst.DstWorld
+import civictech.testkit.dst.DuplicateFault
+import civictech.testkit.dst.FaultPlan
+import civictech.testkit.dst.GraphRegistry
+import civictech.testkit.dst.GraphSpec
+import civictech.testkit.dst.PartitionFault
+import civictech.testkit.dst.ReorderFault
+import civictech.testkit.dst.churn.ChurnCheckFailure
+import civictech.testkit.dst.churn.ChurnMesh
+import civictech.testkit.dst.churn.ChurnPlan
+import civictech.testkit.dst.churn.ChurnSeeds
+import civictech.testkit.dst.churn.ChurnWrite
+import civictech.testkit.dst.churn.MeshConvergences
+import civictech.testkit.dst.churn.MeshPayload
+import civictech.testkit.dst.churn.MeshPeers
+import civictech.testkit.dst.churn.ReferenceFold
+import civictech.testkit.dst.dstSweep
+import org.junit.jupiter.api.AfterAll
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.Test
+import java.io.File
+import java.util.WeakHashMap
+import kotlin.test.assertTrue
+
+// ================================================================================================
+// computenet-9sm.4.4 — the GC safety sweep. See [GcSafetySweep] for the model.
+// ================================================================================================
+
+/** One breach of a per-invocation compaction rule, recorded in the hook and thrown by the check. */
+internal data class GcViolation(
+    val kind: String,
+    val step: Int,
+    val peer: String,
+    val detail: String,
+) {
+    override fun toString(): String = "$kind step=$step peer=$peer $detail"
+}
+
+/**
+ * What one run's step hooks recorded.
+ *
+ * Violations are **recorded, never thrown**: an exception out of a `StepHooks` hook propagates out
+ * of `DstRun.execute()` and is a broken experiment rather than a FAILED verdict. The registered
+ * [DstCheck] is what throws, on a quiesced run. (Same rule, same reason, as
+ * `StableFrontierChurnSweep`.)
+ */
+internal class GcObservations {
+    val violations: MutableList<GcViolation> = mutableListOf()
+
+    /** Removals actually issued by the removes hook (`MeshPeer.remove` returned true). */
+    var removesIssued: Long = 0
+
+    /** `compactBelow` calls made. */
+    var invocations: Long = 0
+
+    /** Tags discarded across all invocations — the reclaimer's own work. */
+    var discarded: Long = 0
+
+    /** `(peer)` evaluations of the `resurrected(...)` observable at quiescence. */
+    var resurrectionChecks: Long = 0
+}
+
+internal object GcObservationRegistry {
+    private val byWorld = WeakHashMap<DstWorld, GcObservations>()
+
+    @Synchronized
+    fun of(world: DstWorld): GcObservations = byWorld.getOrPut(world) { GcObservations() }
+}
+
+/** Sweep-wide non-vacuity counters for ONE trigger, absorbed from each quiesced run. */
+internal class GcTotals(val label: String) {
+    var runs: Int = 0
+    var invocations: Long = 0
+    var discarded: Long = 0
+    var resurrectionChecks: Long = 0
+
+    /** Removals issued, per run — the per-seed non-vacuity assertion needs the minimum. */
+    val removesPerRun: MutableList<Long> = mutableListOf()
+
+    fun reset() {
+        runs = 0
+        invocations = 0
+        discarded = 0
+        resurrectionChecks = 0
+        removesPerRun.clear()
+    }
+
+    @Synchronized
+    fun absorb(observations: GcObservations) {
+        runs++
+        invocations += observations.invocations
+        discarded += observations.discarded
+        resurrectionChecks += observations.resurrectionChecks
+        removesPerRun += observations.removesIssued
+    }
+
+    override fun toString(): String =
+        "$label{runs=$runs invocations=$invocations discarded=$discarded " +
+            "resurrectionChecks=$resurrectionChecks removes=${removesPerRun.sum()} " +
+            "minRemovesOnASeed=${removesPerRun.minOrNull() ?: -1}}"
+}
+
+/**
+ * BS-12 (`[KE3-23]`) and BS-13 (`[KE3-20]`) as ONE seeded sweep run twice: a reclaimer driving
+ * [SetCell.compactBelow] from `Replication.stableFrontier` (STABLE), and the same reclaimer driven
+ * from the wrong seam `Replication.localDeliveredFrontier` (LOCAL), over the CHA1/CHA3 churn rig
+ * with partition, heal, churn and duplicate/reorder faults folded in.
+ *
+ * ## The adversary is the sibling sweep's, deliberately
+ *
+ * [StableFrontierChurnSweep.config] and [StableFrontierChurnSweep.churnPlan] are reused rather
+ * than re-derived, so this sweep and BS-5's run over the *same* generated churn and the two are
+ * comparable like for like. `churnPlan` already heals dangling partitions, so a still-suspended
+ * peer is rejoined before quiescence. No `CrashFault` is folded in here: the out-of-band crash has
+ * no paired rejoin, so the crashed peer's frozen fold would fail `converged()` for a reason that
+ * has nothing to do with compaction (churn's own `CRASH_UNCLEAN`, always paired with a rejoin by
+ * `ChurnGenerator`, still covers crash).
+ *
+ * ## The observable
+ *
+ * `resurrected(cell, fold) = cell.membership() − MeshConvergences.project(fold).elements`, reused
+ * verbatim from `CompactionTriggerPinTest`, whose class KDoc defines it. It is the only observable
+ * that can see a re-admission: `ReplicaConvergence` folds EMITTED deltas and keeps every tombstone
+ * the cell ever emitted, while `compactBelow` drops them from the cell.
+ *
+ * ## What the deterministic pins already settled, and what this sweep therefore asks
+ *
+ * `CompactionTriggerPinTest` (computenet-9sm.4.2) MEASURED that `SetCell.foldDelivered` is fed only
+ * from `add()` and from `applyRemote()`'s `newAdds` — `remove()` mints and folds nothing — so the
+ * stable frontier certifies ADD delivery only, and a straggler that missed a REMOVE can resurrect
+ * the element even under STABLE. That is settled deterministically and is not re-litigated here.
+ * This sweep asks the SEEDED question instead: does the churn adversary reach that state on its
+ * own, and how often, under partition, duplicate and reorder — and does the wrong seam (LOCAL)
+ * reach it strictly more often.
+ *
+ * ## What was MEASURED (seeds 1..200, budget 40_000, 16-core macOS; ~5.0 s + ~4.3 s)
+ *
+ * **BS-12 is branch F, and its F-B arm is the headline result: compaction at the STABLE frontier
+ * resurrects removed elements too.** Four independent 200-seed STABLE sweeps found 8, 10, 10 and
+ * 11 resurrecting seeds, and 122-126 fold-disagreeing (F-A) seeds. The LOCAL arm found 12, 12, 15
+ * and 14. So `[KE3-20]` is reproduced — and the feature's empirical claim that LOCAL's set is a
+ * **strict superset** of STABLE's is **falsified**: the two sets overlap without either containing
+ * the other. That is consistent with `CompactionTriggerPinTest`'s P2 mechanism rather than
+ * surprising given it — the stable frontier certifies ADD delivery only, so it is not the
+ * qualitatively safer seam a superset relation would imply. It is a *seeded* corroboration of a
+ * deterministically settled fact, at rates this range can see.
+ *
+ * ## The rig is not reproducible, and that is not this task's doing
+ *
+ * The per-seed failing sets differ from run to run, and `DstRun.assertDeterministic()` fails on
+ * every churn-mesh configuration tried — including with **both** of this sweep's step hooks removed,
+ * and again with both installed but **no** folded faults. See the pin test's KDoc for the 2x2 and
+ * for what is pinned instead. Filed separately; nothing here is weakened to accommodate it.
+ *
+ * ## Honesty (feature rule 6, harness half)
+ *
+ * This is a **bounded-schedule check over a finite seed range**, not a proof. It says nothing about
+ * schedules outside the range or outside this generator's reach; the universally-quantified form
+ * needs FRM1's model checker. The residual is filed by the docs task (computenet-9sm.4.5) in
+ * `concord/corpus/DISPUTES.md` under the entry title
+ * **"GC safety under compaction is bounded-schedule evidence, not a proof (`[KE3-20]`, `[KE3-23]`)"**.
+ */
+object GcSafetySweep {
+
+    enum class Trigger(val id: String, val checkId: String) {
+        STABLE("gc-safety-sweep-stable", "gc-safety-stable"),
+        LOCAL("gc-safety-sweep-local", "gc-safety-local"),
+    }
+
+    // The sibling's constants are private to its file; restated here (9sm.4.4's own record).
+    private const val PEER_COUNT: Int = 3
+    private const val OP_SCRIPT_LENGTH: Int = 24
+    private const val STEP_BUDGET: Int = 6000
+    private const val DRAIN_MARGIN: Int = 1000
+    private const val WRITE_START: Int = 300
+    private const val WRITE_STRIDE: Int = 200
+
+    /**
+     * Steps between an add and its paired remove. ESTIMATED: under the 200-step stride, so an add
+     * and its remove straddle at most a few compaction points, and past the "tens of steps" one
+     * replicated write costs.
+     */
+    private const val REMOVE_LAG: Int = 90
+
+    /** Compaction period, in controller steps. ESTIMATED per 9sm.4-D4. */
+    private const val K: Int = 25
+
+    /**
+     * The last step the reclaimer fires on — the mesh's own `aliveUntil` horizon, past which the
+     * heartbeat has stopped and the run is supposed to be draining towards quiescence.
+     *
+     * **MEASURED, not stylistic.** An UNBOUNDED reclaimer makes the run non-terminating whenever
+     * removals are also issued: `compactBelow` "records nothing" (its KDoc) and deliberately
+     * re-admits a straggler carrying a discarded tag, so a compaction point that discards a
+     * tombstone lets the next gossip frame re-deliver that tag as novel, the cell emits, the next
+     * compaction point 25 steps later discards it again, and the world never goes idle. It is a
+     * property of the pair: with seeds 1..10 at budget 40_000, removes-only and reclaimer-only
+     * each exhausted 0 of 10, both-unbounded exhausted 6 of 10, and both-with-this-bound exhausted
+     * 0 of 10. Raising the budget does not help — the sweep at 200_000 exhausted the same 19 of 30
+     * as at 40_000 (bd comment on computenet-9sm.4.4). A reclaimer that runs for ever after the
+     * workload has stopped is not the thing under test; one that runs across the whole workload
+     * and its drain is.
+     *
+     * It does **not** blunt the observable: every compaction point inside the workload still
+     * fires, and a re-admission that happened there is still live in `membership()` at quiescence,
+     * which is where `resurrected(...)` reads it.
+     */
+    private const val RECLAIM_UNTIL: Int = STEP_BUDGET + DRAIN_MARGIN
+
+    val faultIds: Set<String> = setOf("gc-park", "gc-dup", "gc-reorder")
+
+    /** Sizes the graph only: roster length and the strided write schedule. */
+    private val templatePlan: ChurnPlan =
+        ChurnSeeds.plans(0L..0L, StableFrontierChurnSweep.config).single().let { plan ->
+            plan.copy(
+                writeSchedule = (0 until OP_SCRIPT_LENGTH).map { i ->
+                    ChurnWrite(WRITE_START + i * WRITE_STRIDE, plan.peers[i % plan.peers.size], i)
+                },
+            )
+        }
+
+    /** The removes the removes-hook will issue: every odd-ordinal write, [REMOVE_LAG] steps later. */
+    private val removeSchedule: Map<Int, List<Pair<String, String>>> =
+        templatePlan.writeSchedule
+            .filter { it.ordinal % 2 == 1 }
+            .groupBy({ it.atStep + REMOVE_LAG }, { it.peer to "${it.peer}-${it.ordinal}" })
+
+    internal val totals: Map<Trigger, GcTotals> = Trigger.entries.associateWith { GcTotals(it.name) }
+
+    fun graphOf(trigger: Trigger): GraphSpec = GraphSpec(trigger.id) { world ->
+        ChurnMesh.spec(
+            templatePlan,
+            payload = MeshPayload.SET,
+            maxPeers = PEER_COUNT,
+            aliveUntil = STEP_BUDGET + DRAIN_MARGIN,
+        ).builder.build(world)
+        // Installed INSIDE the builder so every seed's freshly-built world carries both hooks.
+        world.steps.onStep { w, step -> issueRemoves(w, step) }
+        world.steps.onStep { w, step -> if (step <= RECLAIM_UNTIL) compact(w, step, trigger) }
+    }
+
+    private val stableGraph: GraphSpec by lazy { graphOf(Trigger.STABLE) }
+    private val localGraph: GraphSpec by lazy { graphOf(Trigger.LOCAL) }
+
+    fun graph(trigger: Trigger): GraphSpec = if (trigger == Trigger.STABLE) stableGraph else localGraph
+
+    // ----------------------------------------------------------------------------- the workload
+
+    /**
+     * The remover is the adder, so the removal is effective — a removal of an element the replica
+     * has not observed is a no-op in `SetCell`.
+     */
+    private fun issueRemoves(world: DstWorld, step: Int) {
+        val due = removeSchedule[step] ?: return
+        val observations = GcObservationRegistry.of(world)
+        for ((peer, element) in due) {
+            if (MeshPeers.find(world, peer)?.remove(element) == true) observations.removesIssued++
+        }
+    }
+
+    // ---------------------------------------------------------------------------- the reclaimer
+
+    @Suppress("UNCHECKED_CAST")
+    private fun compact(world: DstWorld, step: Int, trigger: Trigger) {
+        if (step <= 0 || step % K != 0) return
+        val observations = GcObservationRegistry.of(world)
+        for (peer in MeshPeers.all(world)) {
+            if (!peer.member) continue
+            val cell = (peer.replica ?: continue) as? SetCell<String> ?: continue
+            val frontier = when (trigger) {
+                Trigger.STABLE -> peer.replication.stableFrontier(peer.ref.id)
+                Trigger.LOCAL -> peer.replication.localDeliveredFrontier(peer.ref.id)
+            }
+            val before = cell.membership()
+            val discarded = cell.compactBelow(frontier)
+            val after = cell.membership()
+
+            observations.invocations++
+            observations.discarded += discarded
+            // Feature rule 3: reclamation is invisible to the value.
+            if (after != before) {
+                observations.violations += GcViolation(
+                    "compaction changed membership", step, peer.name,
+                    "added=${after - before} removed=${before - after} discarded=$discarded",
+                )
+            }
+            // Feature rule 4, the [KE3-30] interlock: an empty frontier certifies nothing.
+            if (frontier.perSource.isEmpty() && discarded > 0) {
+                observations.violations += GcViolation(
+                    "compaction discarded below an empty frontier", step, peer.name,
+                    "discarded=$discarded",
+                )
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------- the plan
+
+    fun plan(seed: Long): FaultPlan = StableFrontierChurnSweep.churnPlan(seed).withFaults(
+        PartitionFault.park("gc-park", "peer0<->peer1", from = 1200, until = 1800),
+        DuplicateFault.frames("gc-dup", "peer1<->peer2", copies = 1, probability = 0.5),
+        ReorderFault("gc-reorder", "peer0<->peer2", window = 3),
+    ).toFaultPlan()
+
+    // --------------------------------------------------------------------------------- the check
+
+    /**
+     * `membership() − project(emitted-delta fold)` — `CompactionTriggerPinTest`'s observable,
+     * verbatim. An element in this set is live in the cell while the cell's own emitted history
+     * says it was removed: a re-admission.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun resurrected(cell: SetCell<String>, fold: SetDelta<String>): Set<String> =
+        cell.membership() - (MeshConvergences.project(fold) as ReferenceFold.Elements).elements
+
+    const val VIOLATION_FAILURE: String = "compaction broke a per-invocation rule"
+    const val RESURRECTION_FAILURE: String = "compaction resurrected a removed element"
+    const val DISAGREEMENT_FAILURE: String = "live folds disagree after compaction"
+
+    @Suppress("UNCHECKED_CAST")
+    fun check(trigger: Trigger): DstCheck = CheckRegistry.register(trigger.checkId) { world ->
+        val observations = GcObservationRegistry.of(world)
+        val live = MeshPeers.all(world).filter { it.member && it.replica != null }
+
+        observations.violations.firstOrNull()?.let { first ->
+            totals.getValue(trigger).absorb(observations)
+            throw ChurnCheckFailure(
+                VIOLATION_FAILURE,
+                detail = "${observations.violations.size} violation(s); first: $first; " +
+                    "invocations=${observations.invocations} discarded=${observations.discarded}",
+            )
+        }
+
+        val resurrections = mutableListOf<String>()
+        for (peer in live) {
+            val cell = peer.replica as? SetCell<String> ?: continue
+            val fold = MeshConvergences.of(world, peer.name)?.state(peer.ref) as? SetDelta<String> ?: continue
+            observations.resurrectionChecks++
+            val re = resurrected(cell, fold)
+            if (re.isNotEmpty()) {
+                val tagView = re.associateWith { e ->
+                    "adds=${fold.adds[e]?.map { it.counter }?.sorted()} " +
+                        "dels=${fold.dels[e]?.map { it.counter }?.sorted()}"
+                }
+                resurrections += "peer=${peer.name} elements=$re $tagView"
+            }
+        }
+        if (resurrections.isNotEmpty()) {
+            totals.getValue(trigger).absorb(observations)
+            throw ChurnCheckFailure(
+                RESURRECTION_FAILURE,
+                detail = "${resurrections.size} live replica(s) re-admitted: ${resurrections.joinToString("; ")}; " +
+                    "discarded=${observations.discarded}",
+            )
+        }
+
+        val disagreeing = MeshPeers.all(world).mapNotNull { peer ->
+            val convergence = MeshConvergences.of(world, peer.name) ?: return@mapNotNull null
+            if (convergence.converged()) null else peer.name to convergence.states().keys
+        }
+        totals.getValue(trigger).absorb(observations)
+        if (disagreeing.isNotEmpty()) {
+            // The second datum is a DIAGNOSTIC LABEL, not a check: memberships agreeing while the
+            // folds differ is branch F-A — `ReplicaConvergence` cannot express compaction (a
+            // replica that (re)joins after a peer compacted receives a catch-up without the
+            // discarded tags), and the feature forbids substituting a weaker bespoke check.
+            val memberships = live.mapNotNull { (it.replica as? SetCell<String>)?.membership() }.toSet()
+            throw ChurnCheckFailure(
+                DISAGREEMENT_FAILURE,
+                detail = "peers with unconverged folds: ${disagreeing.joinToString { "${it.first}${it.second}" }}; " +
+                    "membershipsAgree=${memberships.size <= 1} memberships=$memberships",
+            )
+        }
+    }
+}
+
+/**
+ * BS-12 / BS-13. See [GcSafetySweep] for the model, the observable, and the honesty clause; this
+ * class is the seed range, the two runs, and the non-vacuity accounting.
+ */
+class GcSafetySweepTest {
+
+    @Test
+    fun `compaction at the stable frontier is GC-safe across a churn sweep_BS12`() {
+        // Reset HERE, not only in @BeforeAll: the determinism arm runs the LOCAL check too, and
+        // `runs == total` must count this sweep's runs and nothing else.
+        GcSafetySweep.totals.getValue(GcSafetySweep.Trigger.STABLE).reset()
+        val startedAt = System.nanoTime()
+        val sweep = MeshConvergences.observing {
+            dstSweep(
+                suite = "gc-safety-stable",
+                seeds = SEEDS,
+                graph = GcSafetySweep.graph(GcSafetySweep.Trigger.STABLE),
+                checkId = GcSafetySweep.Trigger.STABLE.checkId,
+                budget = BUDGET,
+                artifactRoot = stableRoot,
+                planFor = GcSafetySweep::plan,
+            )
+        }
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+        val totals = GcSafetySweep.totals.getValue(GcSafetySweep.Trigger.STABLE)
+
+        stableResurrecting = sweep.failures.filter { it.message == GcSafetySweep.RESURRECTION_FAILURE }
+            .map { it.seed }.toSet()
+        stableDisagreeing = sweep.failures.filter { it.message == GcSafetySweep.DISAGREEMENT_FAILURE }
+            .map { it.seed }.toSet()
+        val other = sweep.failures.filterNot {
+            it.message == GcSafetySweep.RESURRECTION_FAILURE || it.message == GcSafetySweep.DISAGREEMENT_FAILURE
+        }
+
+        // The seed range is RECORDED and NEVER narrowed after a failure: a red seed is reported
+        // with its artifact path (below), not replaced by a friendlier one.
+        println(
+            "[BS-12] seeds=$SEEDS elapsedMs=$elapsedMs artifacts=$stableRoot totals=$totals " +
+                "${sweep.summary()}\n" +
+                "[BS-12] F-B resurrecting seeds=$stableResurrecting (classified F-B)\n" +
+                "[BS-12] F-A fold-disagreeing seeds=$stableDisagreeing (classified F-A: " +
+                "ReplicaConvergence cannot express compaction)\n" +
+                "[BS-12] artifacts=${sweep.artifactPaths}",
+        )
+        assertTrue(
+            other.isEmpty(),
+            "unclassified STABLE failures — every failure must be F-A or F-B, or the sweep is " +
+                "reporting something this task has not accounted for: " +
+                other.joinToString { "${it.seed}:${it.message}" },
+        )
+        assertNonVacuous("BS-12", sweep.total, totals)
+        assertAdversaryFired("BS-12", sweep)
+
+        // BRANCH F, and the branch is decided by the MEASUREMENT. Both classes must be present:
+        // F-B is the `[KE3-23]` finding itself and F-A is `ReplicaConvergence`'s expressiveness
+        // limit; a run showing only one of them is a different experiment from the one recorded.
+        // MEASURED over three independent 200-seed runs: F-B on 8, 10 and 10 seeds; F-A on 126,
+        // 124 and 122. The FAILING SET IS NOT PINNED BY NUMBER — the bead asks for that and the
+        // rig cannot deliver it (see the pin test's KDoc); the recorded seed is pinned instead,
+        // by a dedicated repeated run.
+        assertTrue(
+            stableResurrecting.isNotEmpty(),
+            "[KE3-23] branch F-B: no seed resurrected under the STABLE trigger. Three prior 200-seed " +
+                "runs each found 8-10, so an empty set is a change in the system or in the rig, not " +
+                "a green result — do not narrow SEEDS to reach it. failures=" +
+                sweep.failures.map { it.seed to it.message },
+        )
+        assertTrue(
+            stableDisagreeing.isNotEmpty(),
+            "[KE3-23] branch F-A: no fold disagreement was observed, which the recorded measurement " +
+                "says should happen on well over half the range: $stableDisagreeing",
+        )
+    }
+
+    @Test
+    fun `compaction at the local delivered frontier resurrects a removed element_BS13`() {
+        GcSafetySweep.totals.getValue(GcSafetySweep.Trigger.LOCAL).reset()
+        val startedAt = System.nanoTime()
+        val sweep = MeshConvergences.observing {
+            dstSweep(
+                suite = "gc-safety-local",
+                seeds = SEEDS,
+                graph = GcSafetySweep.graph(GcSafetySweep.Trigger.LOCAL),
+                checkId = GcSafetySweep.Trigger.LOCAL.checkId,
+                budget = BUDGET,
+                artifactRoot = localRoot,
+                planFor = GcSafetySweep::plan,
+            )
+        }
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+        val totals = GcSafetySweep.totals.getValue(GcSafetySweep.Trigger.LOCAL)
+
+        val resurrecting = sweep.failures.filter { it.message == GcSafetySweep.RESURRECTION_FAILURE }
+            .map { it.seed }.toSet()
+        val disagreeing = sweep.failures.filter { it.message == GcSafetySweep.DISAGREEMENT_FAILURE }
+            .map { it.seed }.toSet()
+        val other = sweep.failures.filterNot {
+            it.message == GcSafetySweep.RESURRECTION_FAILURE || it.message == GcSafetySweep.DISAGREEMENT_FAILURE
+        }
+        println(
+            "[BS-13] seeds=$SEEDS elapsedMs=$elapsedMs artifacts=$localRoot totals=$totals " +
+                "${sweep.summary()}\n" +
+                "[BS-13] resurrecting seeds=$resurrecting (${resurrecting.size} of ${sweep.total})\n" +
+                "[BS-13] fold-disagreeing seeds=$disagreeing (${disagreeing.size} of ${sweep.total})\n" +
+                "[COMPARISON] STABLE: resurrecting seeds = $stableResurrecting, " +
+                "fold-disagreeing seeds = $stableDisagreeing; LOCAL: resurrecting seeds = $resurrecting",
+        )
+        assertTrue(
+            other.isEmpty(),
+            "unclassified LOCAL failures: ${other.joinToString { "${it.seed}:${it.message}" }}",
+        )
+        assertNonVacuous("BS-13", sweep.total, totals)
+        assertAdversaryFired("BS-13", sweep)
+
+        // The control that passes by OBSERVING the failure: the wrong seam must be able to make
+        // the observable fire, or the observable is inert and BS-12's arm proves nothing. MEASURED
+        // over three independent 200-seed runs: 12, 12 and 15 seeds resurrected.
+        assertTrue(
+            resurrecting.isNotEmpty(),
+            "[KE3-20]: no seed in $SEEDS resurrected a removed element under the LOCAL trigger. " +
+                "That would be the 9sm.4-D3 finding — widen the adversary, never weaken the check — " +
+                "and [KE3-20] would stay open. failures=${sweep.failures.map { it.seed to it.message }}",
+        )
+    }
+
+    /**
+     * Feature rule 5, in the only form this rig supports — and the substitution is MEASURED, not
+     * a convenience. See [BS13_SEED].
+     *
+     * `DstRun.assertDeterministic()` (trace-digest reproduction) is what the bead prescribes. It
+     * **does not pass on this graph under a `ChurnGenerator`-drawn plan**, and the cause is not
+     * this task's: a 2x2 corner measurement on seeds 1/8/9/19 at budget 40_000 found the digest
+     * differing between two back-to-back runs with **both** step hooks removed and the full fault
+     * plan in place, and again with both hooks installed and **no** folded faults at all (bare
+     * `churnPlan`). Neither hook and neither fault is the cause.
+     *
+     * **Scope of that claim, MEASURED in the 9sm.4.4 review** and narrower than "the churn mesh
+     * is not reproducible": the sibling BS-5 graph — none of this task's hooks — is likewise not
+     * deterministic on seed 62, which is what puts the cause upstream of this task. But
+     * `ChurnMeshTest."two runs of one churn plan produce the same trace digest"` PASSES today on a
+     * hand-built `ChurnPlan`, and the bare-`churnPlan` corner is **seed-dependent** (of seeds
+     * 1/8/9/19/62/87/107 at `runs = 3`, seeds 62 and 87 reproduced and the rest did not). So what
+     * is unreproducible is a generated churn plan on this mesh, not `ChurnMesh` as such. Filed as
+     * its own item (computenet-l0gd) rather than papered over here.
+     *
+     * What IS reproducible is the **verdict**, which is the property rule 5 exists to protect: the
+     * recorded seed must still be the seed that resurrects, run after run, so the pin is a pin and
+     * not a lucky draw. [BS13_SEED] and [BS12_SEED] are re-run [PIN_RUNS] times each and every run
+     * must report [GcSafetySweep.RESURRECTION_FAILURE].
+     */
+    @Test
+    fun `the recorded seeds reproduce their resurrection verdict_BS12_BS13`() {
+        for ((trigger, seed) in listOf(
+            GcSafetySweep.Trigger.LOCAL to BS13_SEED,
+            GcSafetySweep.Trigger.STABLE to BS12_SEED,
+        )) {
+            val outcomes = (1..PIN_RUNS).map {
+                MeshConvergences.observing {
+                    DstRun(
+                        GcSafetySweep.graph(trigger),
+                        GcSafetySweep.plan(seed),
+                        BUDGET,
+                        checks.getValue(trigger),
+                    ).execute()
+                }
+            }
+            val messages = outcomes.map { it.failingCheck?.message ?: it.outcome.name }
+            println("[PIN] $trigger seed=$seed -> $messages")
+            assertTrue(
+                messages.all { it == GcSafetySweep.RESURRECTION_FAILURE },
+                "the recorded $trigger seed $seed must resurrect on EVERY run; it is never replaced " +
+                    "by a friendlier seed. outcomes=$messages",
+            )
+        }
+    }
+
+    private fun assertNonVacuous(tag: String, total: Int, totals: GcTotals) {
+        assertTrue(totals.runs == total, "$tag: every seed must have absorbed its counters: $totals of $total")
+        assertTrue(totals.invocations > 0, "$tag: the reclaimer never ran: $totals")
+        assertTrue(
+            totals.discarded > 0,
+            "$tag: a sweep whose reclaimer never discarded a tag proves nothing about reclamation: $totals",
+        )
+        assertTrue(
+            totals.resurrectionChecks > 0,
+            "$tag: the resurrection observable was never evaluated on a live replica: $totals",
+        )
+        assertTrue(
+            (totals.removesPerRun.minOrNull() ?: 0L) > 0,
+            "$tag: some seed issued no removal at all, so it could not have re-admitted anything: $totals",
+        )
+    }
+
+    /**
+     * The adversary actually fired, in the two forms this rig can honestly promise.
+     *
+     * **Churn events are asserted per seed**: they are played from the plan, so a missing one is a
+     * real defect. **The three folded CHA1 faults are asserted sweep-wide**, with the seeds they
+     * were inert on named. That is a deliberate divergence from the bead's "assert per seed that
+     * the fired fault-id set contains … `gc-dup`", and it is MEASURED: `gc-dup` is a probability-0.5
+     * duplicator on `peer1<->peer2`, so a seed whose churn leaves that edge nearly idle can draw no
+     * duplicate at all (seed 91 of 200, first run). Per-seed the assertion would be a coin-flip
+     * dressed as a property; sweep-wide it still catches an adversary that never fires, which is
+     * what the clause is for.
+     */
+    private fun assertAdversaryFired(tag: String, sweep: civictech.testkit.dst.DstSweepReport) {
+        val drawnModes = mutableSetOf<DepartureMode>()
+        val inert = GcSafetySweep.faultIds.associateWith { mutableListOf<Long>() }
+        sweep.entries.forEach { entry ->
+            val plan = StableFrontierChurnSweep.churnPlan(entry.seed)
+            val fired = entry.report?.appliedFaults.orEmpty().filter { it.fired > 0 }.map { it.id }.toSet()
+            val plannedEvents = plan.events.map { it.id }.toSet()
+            assertTrue(
+                plannedEvents.all { it in fired },
+                "$tag seed ${entry.seed}: every planned churn event must fire, or the adversary proves " +
+                    "nothing; missing=${plannedEvents - fired} fired=$fired",
+            )
+            GcSafetySweep.faultIds.forEach { id -> if (id !in fired) inert.getValue(id) += entry.seed }
+            plan.events.filterIsInstance<DepartEvent>().forEach { drawnModes += it.mode }
+        }
+        println("[$tag] folded faults inert on: ${inert.filterValues { it.isNotEmpty() }}")
+        inert.forEach { (id, seeds) ->
+            assertTrue(
+                seeds.size < sweep.total,
+                "$tag: folded fault $id never fired on ANY seed, so the adversary it claims is absent",
+            )
+        }
+        assertTrue(
+            drawnModes.containsAll(DepartureMode.entries),
+            "$tag: the sweep must draw every departure mode across its range: drawn=$drawnModes",
+        )
+    }
+
+    companion object {
+        /**
+         * Recorded, and **never narrowed after a failure**. MEASURED wall time for the pair at this
+         * range: ~5.0 s (BS-12) + ~4.4 s (BS-13) on a 16-core macOS host, well inside the ~60 s
+         * budget the bead sets, so the range is the bead's full ESTIMATE rather than a subset.
+         */
+        private val SEEDS = 1L..200L
+
+        private const val BUDGET: Int = 40_000
+
+        /** Re-runs behind each recorded seed's pin. MEASURED: 8 of 8 for six candidate seeds. */
+        private const val PIN_RUNS: Int = 5
+
+        /**
+         * The recorded LOCAL (`[KE3-20]`, BS-13) seed: it resurrects a removed element under a
+         * reclaimer keyed on `localDeliveredFrontier`.
+         *
+         * Chosen by MEASUREMENT and **never replaced by a friendlier seed**. Three independent
+         * 200-seed LOCAL sweeps produced resurrecting sets of 12, 12 and 15 seeds whose
+         * intersection was `{62, 87, 107, 138, 170, 175}`; each of those six then resurrected on
+         * 8 of 8 dedicated re-runs. 62 is the smallest.
+         *
+         * **The per-seed sets are NOT identical between sweeps**, because the rig is not
+         * reproducible (see the pin test's KDoc). That is why the pin is a dedicated repeated run
+         * of THIS seed rather than an assertion that this seed appears in the sweep's failing set:
+         * the latter would be flaky for a reason that has nothing to do with the property.
+         */
+        private const val BS13_SEED: Long = 62L
+
+        /**
+         * The recorded STABLE (`[KE3-23]`, BS-12) seed — the branch-F-B finding, and the sweep's
+         * headline result: **compaction at the stable frontier resurrects a removed element too**.
+         * Same selection method; the three STABLE sweeps' intersection was `{62, 138, 154, 184}`.
+         */
+        private const val BS12_SEED: Long = 62L
+
+        private val stableRoot = File("build/dst-stability/gc-sweep-stable")
+        private val localRoot = File("build/dst-stability/gc-sweep-local")
+
+        /** Set by the BS-12 arm, read by BS-13's comparison line. */
+        private var stableResurrecting: Set<Long> = emptySet()
+        private var stableDisagreeing: Set<Long> = emptySet()
+
+        /** Registered once in [register]; a second `CheckRegistry.register` of the same id would clash. */
+        private val checks: MutableMap<GcSafetySweep.Trigger, DstCheck> = mutableMapOf()
+
+        @JvmStatic
+        @BeforeAll
+        fun register() {
+            GcSafetySweep.Trigger.entries.forEach {
+                GraphRegistry.register(GcSafetySweep.graph(it))
+                checks[it] = GcSafetySweep.check(it)
+                GcSafetySweep.totals.getValue(it).reset()
+            }
+            stableRoot.deleteRecursively()
+            localRoot.deleteRecursively()
+        }
+
+        @JvmStatic
+        @AfterAll
+        fun unregister() {
+            GcSafetySweep.Trigger.entries.forEach {
+                GraphRegistry.unregister(it.id)
+                CheckRegistry.unregister(it.checkId)
+            }
+        }
+    }
+}
+
+
+
+

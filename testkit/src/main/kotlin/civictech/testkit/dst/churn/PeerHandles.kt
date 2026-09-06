@@ -436,6 +436,46 @@ class MeshPeer internal constructor(
         return true
     }
 
+    /**
+     * Issue one workload removal against a [MeshPayload.SET] replica. No-op — and reported as
+     * such — while this peer is not a member, same contract as [write]: the schedule that would
+     * drive this is generated against the roster, so a remove aimed at a departed peer is
+     * expected rather than an error.
+     *
+     * Returns true if the removal was issued.
+     *
+     * `check(payload == MeshPayload.SET)`: a PN counter has no remove, and the message names the
+     * payload rather than throwing a bare `ClassCastException` from the proxy cast below.
+     *
+     * Issued through the SAME hosted proxy [write] uses, so a removal is scheduled and traced
+     * exactly as a write is — it just does not go through [proxy]'s counter arm, because there is
+     * nothing for a counter to remove.
+     *
+     * **Deliberately NOT an [AcceptedOp].** [AcceptedOp] / [BatchReference.foldOf] model an
+     * add-only ledger — [BatchReference]'s KDoc is explicit that the batch outcome for
+     * [MeshPayload.SET] is "the OR-set outcome of the accepted **adds**" — and
+     * [ReconvergenceCheck] compares folds to that reference. Teaching the ledger about removes
+     * would be a change to the CHA3 reference semantics that no consumer of this feature needs:
+     * its reference is the replica's own emitted-delta fold ([MeshConvergences.project]), not the
+     * batch reference. **A plan that calls this must not be judged by [ReconvergenceCheck] /
+     * [BatchReference]** — the reference would still count the removed element as accepted
+     * because nothing here tells it otherwise, and the comparison would read a correct removal as
+     * a lost operation.
+     *
+     * Also **not** wired through [ChurnObserver.recordWrite]: that counter is driven from
+     * [ChurnMesh.build]'s own played `writeSchedule` ([ChurnWrite]), and a removal is not a
+     * scheduled write — recording one here would move the BS-15 overlap figure for an operation
+     * the plan format (`[CHA3-07]`) does not model. A sweep that needs removals schedules them
+     * from its own graph's step hook (`doc/dst-rig.md` §1 seam 4), the same way [ChurnMesh.build]
+     * plays the write schedule; this method is only the primitive that hook calls.
+     */
+    fun remove(element: String): Boolean {
+        if (!member) return false
+        check(payload == MeshPayload.SET) { "peer \"$name\" carries $payload, which has no remove" }
+        (proxy() as SetInletProxy).inlet.call.remove(element)
+        return true
+    }
+
     private fun proxy(): Any = writeProxy ?: HostedCellProxy.create(
         ref,
         registry,
