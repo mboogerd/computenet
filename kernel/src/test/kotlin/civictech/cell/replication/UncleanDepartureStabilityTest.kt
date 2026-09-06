@@ -90,9 +90,13 @@ import java.util.UUID
  * returns the whole evaluation total, which still exceeds the bound. The task
  * review measured exactly that: with the detector's `count >= threshold` latch
  * raised so it never trips, the [KE3-28] control below stayed GREEN while the
- * [KE3-27] test went red. What pins the latch is `notices shouldBe
+ * [KE3-27] test went red. **The feature review closed that**: the control now
+ * also asserts `notices.filterIsInstance<Stall>().size shouldBe 1`, so the
+ * same never-latching mutation reddens the control on its own — re-measured
+ * there (threshold latch raised out of reach → control red at that line;
+ * reverted → green). The latch is additionally pinned by `notices shouldBe
  * listOf(expected)` in the [KE3-27] test and `notices.size shouldBe 1` in the
- * unfreeze test; the control is read together with those, not alone. The
+ * unfreeze test. The
  * review's other two production mutations — the retraction guard forced false
  * (unfreeze test red at its `Resume` assertion) and the `notifyDownstream`
  * fan-out removed (the `downstream` assertions red ALONE, the `notices` ones
@@ -366,6 +370,16 @@ class UncleanDepartureStabilityTest {
             // evaluations while the latch was held, and declined each time.
             rig.notices.filterIsInstance<StallNotice.Resume>().shouldBeEmpty()
             rig.downstream.filterIsInstance<StallNotice.Resume>().shouldBeEmpty()
+            // The latch was actually taken. Without this line the count below
+            // is NOT a discriminator: a detector that never latches leaves
+            // `writeThroughTheFreeze`'s `evaluationsAtStall` at -1, so it
+            // returns the whole evaluation total, which still exceeds 100 and
+            // the control stays green while [KE3-27] goes red (measured by
+            // this feature's task review, and by the feature review that added
+            // this assertion). The expected 1 is [KE3-27]'s literal — exactly
+            // one Stall per frozen slot — not a value recomputed from the
+            // detector.
+            rig.notices.filterIsInstance<StallNotice.Stall>().size shouldBe 1
             (stalledEvaluations > 100) shouldBe true
         }
     }
