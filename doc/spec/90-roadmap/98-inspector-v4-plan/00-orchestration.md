@@ -614,13 +614,18 @@ Four rulings this checkpoint records.
    graph state.
 4. **`[21-PULL-03]` is filed in `DISPUTES.md`, not covered — the correct
    outcome, not a shortfall.** No `21-PULL-03.yaml` was authored. Two
-   independent reasons, both verified: no catalog family satisfies the
-   requirement's antecedent (every tag-frontier family is an observed-remove
-   set; the operator families are further away still — their frontier is not
-   even monotone, per the C9 residual), and a `read-state` step is a whole walk
-   by construction, so the script model cannot order a mutation against a page
-   boundary. The evaluator reproduced both of the worker's non-vacuity probes
-   against the driver binding: dropping the last entry of each page fails
+   independent reasons, both verified: the one qualifying family violates the
+   requirement it qualifies for (since computenet-v2ka, `SetCell` reaches the
+   antecedent on its own words — an `add` mints a tag, an effective `remove`
+   mints its own del-dot — but its frontier is a per-source max, not a set, so
+   a reordered remote del-tag below an already-held max is absorbed, changes
+   membership, and moves no stamp: equal endpoint stamps are necessary but not
+   sufficient for that family; the operator families are further away still —
+   their frontier is not even monotone, per the C9 residual), and a
+   `read-state` step is a whole walk by construction, so the script model
+   cannot order a mutation against a page boundary. The evaluator reproduced
+   both of the worker's non-vacuity probes against the driver binding:
+   dropping the last entry of each page fails
    `24-BOUND-01`/`24-BOUND-02` on 20 of 20 runs while `21-PULL-02` still passes;
    a membership-neutral re-emission driven to completion before paging fails
    `21-PULL-02`/`24-BOUND-02` on 20 of 20 runs with the wave-plane diagnostic
@@ -909,11 +914,15 @@ or a walk that returned no page. "Nothing was observed" cannot read as "the
 property held".
 
 `[21-PULL-03]` remaining in `DISPUTES.md` rather than covered is the correct
-outcome and this checkpoint does not disturb it — no catalog family satisfies
-its antecedent, and a `read-state` step is a whole walk by construction, so the
-script model cannot order a mutation against a page boundary. That second
-reason is a *harness* limit, not a spec gap, and it is the one to revisit if
-the corpus ever gains a mid-walk mutation verb.
+outcome and this checkpoint does not disturb it — the one qualifying family
+violates the requirement it qualifies for (since computenet-v2ka, `SetCell`
+reaches the antecedent on its own words, but its frontier is a per-source max,
+not a set, so a reordered remote del-tag below an already-held max is
+absorbed, changes membership, and moves no stamp), and a `read-state` step is
+a whole walk by construction, so the script model cannot order a mutation
+against a page boundary. That second reason is a *harness* limit, not a spec
+gap, and it is the one to revisit if the corpus ever gains a mid-walk mutation
+verb.
 
 ### Inspection 3 and the four defects
 
