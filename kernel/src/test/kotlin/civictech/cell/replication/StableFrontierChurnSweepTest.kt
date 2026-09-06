@@ -86,6 +86,15 @@ internal class StabilityObservations {
     /** Individual `(peer, slot, source)` comparisons actually evaluated. */
     var triplesChecked: Long = 0
 
+    /**
+     * `(peer, source)` pairs on which `[KE3-18]`'s arm actually ran — that is, a source present in
+     * BOTH this read and the previous one for that peer, with the open-slot set unchanged between
+     * them. Counted because the exemption clause is the arm's own vacuity risk: a sweep in which
+     * membership never held still between two reads would satisfy `[KE3-18]` without ever
+     * comparing anything.
+     */
+    var regressionComparisons: Long = 0
+
     /** Per peer: the open-slot set and the frontier as of the previous step it was read on. */
     val previous: MutableMap<String, Pair<Set<UUID>, Map<UUID, Long>>> = mutableMapOf()
 }
@@ -102,12 +111,14 @@ internal object StabilityTotals {
     var frontierReads: Long = 0
     var nonEmptyFrontierReads: Long = 0
     var triplesChecked: Long = 0
+    var regressionComparisons: Long = 0
     var runs: Int = 0
 
     fun reset() {
         frontierReads = 0
         nonEmptyFrontierReads = 0
         triplesChecked = 0
+        regressionComparisons = 0
         runs = 0
     }
 
@@ -116,12 +127,13 @@ internal object StabilityTotals {
         frontierReads += observations.frontierReads
         nonEmptyFrontierReads += observations.nonEmptyFrontierReads
         triplesChecked += observations.triplesChecked
+        regressionComparisons += observations.regressionComparisons
         runs++
     }
 
     override fun toString(): String =
         "runs=$runs frontierReads=$frontierReads nonEmptyFrontierReads=$nonEmptyFrontierReads " +
-            "triplesChecked=$triplesChecked"
+            "triplesChecked=$triplesChecked regressionComparisons=$regressionComparisons"
 }
 
 /**
@@ -343,6 +355,7 @@ object StableFrontierChurnSweep {
             if (previous != null && previous.first == open) {
                 for ((source, value) in stable) {
                     val before = previous.second[source] ?: continue
+                    observations.regressionComparisons++
                     if (value < before) {
                         observations.regressions += StabilityRegression(step, peer.name, source, before, value)
                     }
@@ -445,6 +458,11 @@ class StableFrontierChurnSweepTest {
         assertTrue(
             StabilityTotals.triplesChecked > 0,
             "no (peer, slot, source) triple was ever compared: $StabilityTotals",
+        )
+        assertTrue(
+            StabilityTotals.regressionComparisons > 0,
+            "[KE3-18]'s arm never ran: no source was ever present in two consecutive reads under an " +
+                "unchanged open-slot set, so the no-drop property was never actually compared: $StabilityTotals",
         )
     }
 
