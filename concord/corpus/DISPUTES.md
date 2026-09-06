@@ -2564,10 +2564,10 @@ property is statable at the driver and not in the corpus.
   compaction-period verb, only fixed step sequences. Consequently no
   `[42-WM-nn]` or `[24-TAG-nn]` id is claimed covered by this harness, and
   nothing in `CONCORDANCE.md` names it.
-- **Missing capability**: FRM1's model checker (epic `computenet-9sm` names
-  it as this KE3-F4 item's proof instrument for the universally-quantified
-  form) — the mechanism that could check "for all schedules" rather than
-  "for these 200 seeds".
+- **Missing capability**: FRM1's model checker (`computenet-7fe`) — this
+  feature's own description (`computenet-9sm.4`) names it as what the
+  universally-quantified form needs — the mechanism that could check "for
+  all schedules" rather than "for these 200 seeds".
 - **What was NOT done instead**: no `concord/corpus/*.yaml` scenario was
   authored as a weakened stand-in for `[KE3-23]`, and `[KE3-23]` is not
   marked covered anywhere. The seeded result is instead reported as-is —
