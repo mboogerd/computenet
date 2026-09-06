@@ -577,9 +577,11 @@ Each candidate mechanism was eliminated on its own merits, in this order:
    encoded frame" test, which also fires the check by splicing an explicit
    differing `version` into a frame, to show it is real code and merely
    unreachable from anything the encoder produces. So a bump is invisible to a
-   peer, not protective. (That the check is unreachable is a separate defect
-   in its own right, filed as `computenet-u5gb`; the point *here* is only that
-   the mechanism this bead named cannot be built on it.)
+   peer, not protective. (That the check is unreachable was raised as a
+   separate item, `computenet-u5gb`, and is **settled below** — see "Decision:
+   the frame version stays unemitted, and the check stays a foreign-frame
+   guard"; it is no longer an open defect. The point *here* is only that the
+   mechanism this bead named cannot be built on it.)
 2. **Even if `version` did travel, a bump would be strictly worse than the
    status quo for the operation it is meant to protect.** The check is a hard
    equality with no compatibility window, so a bump makes an older peer refuse
