@@ -536,9 +536,24 @@ object GcSafetySweep {
                 // the lacking replica minted and fenced the tag itself, which moves the open
                 // question to why the holder still has the element live — so the holders'
                 // departure history is printed beside the fence's.
+                //
+                // `lastDeparture` alone does NOT answer it, because it records only the MODE.
+                // `Replication.evict` returns false when `replicasOf(id) − {local}` is empty; it
+                // then SUSPENDS the replica instead of despawning, leaves `member` true and the
+                // fold intact, and `PeerHandles.rejoin` no-ops through `refusedEviction()`
+                // (`PeerHandles.member` KDoc, computenet-usmw; `DepartureGatesTest`: "a refused
+                // eviction never despawns — state is retained"). `suspended` does not separate
+                // the two either — only PARTITION_SUSPEND sets it. So `EVICT_CLEAN
+                // suspended=false` is consistent BOTH with "the holder really left and came
+                // back" and with "the holder never left, the kernel refused the eviction". The
+                // discriminator is `lastEvictDespawned` (true = despawned, false = refused and
+                // suspended, null = the last departure was not an eviction) together with
+                // `member`; both are public reads on the testkit handle, so this stays an
+                // additive test-only print.
                 val holderState = holders.map { name ->
                     val peer = live.firstOrNull { it.name == name }
-                    "$name{lastDeparture=${peer?.lastDeparture} suspended=${peer?.suspended}}"
+                    "$name{lastDeparture=${peer?.lastDeparture} suspended=${peer?.suspended} " +
+                        "evictDespawned=${peer?.lastEvictDespawned} member=${peer?.member}}"
                 }
                 Triple(element, "$element held=$holders holderState=$holderState " +
                     "liveTags=${liveTags.map { it.counter }.sorted()} " +
