@@ -311,7 +311,10 @@ class CompactionTriggerPinTest {
         val local = mesh.a.replication.localDeliveredFrontier(logicalId)
         val stable = mesh.a.replication.stableFrontier(logicalId)
         trace("P1.5", "local[sA]" to local.perSource[sA], "stable" to stable.perSource)
-        local.perSource[sA] shouldBe 1L
+        // 2, not 1: the DEL-DOT (computenet-v2ka) is A's own tag counter 2, minted by the
+        // remove and folded into A's delivered frontier. That it shows up HERE, one above the
+        // add, is the mechanism in its smallest visible form.
+        local.perSource[sA] shouldBe 2L
         stable.perSource[sA] shouldBe null
 
         // [KE3-30] interlock, mesh half: bottom for sA => nothing of sA discarded.
@@ -324,7 +327,9 @@ class CompactionTriggerPinTest {
         //    discrimination, and neither call moved membership.
         val localDiscards = mesh.ra.compactBelow(local)
         trace("P1.6-local-compact", "discarded" to localDiscards, "A" to tags(mesh.ra))
-        localDiscards shouldBe 2
+        // 3, not 2: the `dels` entry is now {add-tag 1, del-dot 2} and the covered add-tag 1
+        // goes with it — the dot is the third tag the reclaimer accounts for.
+        localDiscards shouldBe 3
         mesh.ra.membership() shouldBe emptySet()
 
         // 7. Release the held rows and let them land. STABLE now reads sA -> 1 —
@@ -433,8 +438,12 @@ class CompactionTriggerPinTest {
         val discardedA = mesh.ra.compactBelow(mesh.a.replication.stableFrontier(logicalId))
         val discardedC = mesh.rc.compactBelow(mesh.c.replication.stableFrontier(logicalId))
         trace("P2p.3", "discardedA" to discardedA, "discardedC" to discardedC, "A" to tags(mesh.ra))
-        discardedA shouldBe 2
-        discardedC shouldBe 2
+        // 0, not 2 (computenet-v2ka). The severed B has not delivered the DEL-DOT, so the stable
+        // frontier still reads `sA -> 1` while the `dels` entry is {1, dot 2} — and `[KE3-31]`'s
+        // every-tag rule declines the whole entry. Reclamation is now DEFERRED by exactly the
+        // condition it should be deferred by: an open member that has not seen the remove.
+        discardedA shouldBe 0
+        discardedC shouldBe 0
 
         mesh.healB()
         controller.runToIdle()
@@ -455,20 +464,40 @@ class CompactionTriggerPinTest {
         mesh.memberships() shouldBe listOf(emptySet(), emptySet(), emptySet())
         resurrected(mesh.ra, foldA) shouldBe emptySet()
         resurrected(mesh.rc, foldC) shouldBe emptySet()
+
+        // NON-VACUITY, and the answer to "does the del-dot just switch GC off?" — it does not.
+        // Once the heal has delivered the dot to B, B's row rises to 2, the stable frontier
+        // rises with it, and the SAME call that returned 0 above now reclaims the whole entry:
+        // both tags of `dels` plus the add-tag they cover. Reclamation is deferred, not denied.
+        val afterHealA = mesh.ra.compactBelow(mesh.a.replication.stableFrontier(logicalId))
+        val afterHealC = mesh.rc.compactBelow(mesh.c.replication.stableFrontier(logicalId))
+        trace("P2p.6", "afterHealA" to afterHealA, "afterHealC" to afterHealC, "A" to tags(mesh.ra))
+        afterHealA shouldBe 3
+        afterHealC shouldBe 3
+        mesh.memberships() shouldBe listOf(emptySet(), emptySet(), emptySet())
     }
 
     /**
-     * **P2, the schedule that actually tests the hazard — and it RESURRECTS.**
-     * B misses the remove because the frames are LOST (class KDoc fact 2). A
-     * and C compact at a stable frontier that legitimately reads `sA → 1`, the
-     * heal re-ships B's add-only state, and `e` comes back to life on all
-     * three replicas with no del-tag left anywhere in the mesh.
+     * **P2 — the schedule that tests the hazard, and the deterministic reproduction
+     * computenet-v2ka fixed.** B misses the remove because the frames are LOST (class KDoc
+     * fact 2), so it holds the add and not the del.
      *
-     * `P2: resurrects under STABLE` — memberships after the heal are
-     * `A=[e] B=[e] C=[e]`.
+     * **Before the del-dot** this test asserted a RESURRECTION, and that was the correct
+     * reading of the shipped algebra: the `dels` entry was `{add-tag 1}`, the stable frontier
+     * legitimately read `sA → 1` because B genuinely *had* delivered the ADD, A and C therefore
+     * discarded 2 tags each, and the heal re-shipped B's add-only state into two replicas with
+     * no tombstone left. Measured on base 8d65b542b: `discardedA=2 discardedC=2`, then
+     * `memberships=[[e], [e], [e]]`, `resurrectedA=[e]`, `resurrectedC=[e]`.
+     *
+     * **After it**, `remove` mints a del-dot, so the entry is `{add-tag 1, del-dot 2}` and B —
+     * which never received the remove — never delivers counter 2. The stable frontier still
+     * reads `sA → 1`, `[KE3-31]`'s every-tag rule sees `2 > 1` and declines, and the heal ends
+     * with A's and C's tombstones killing `e` at B instead of B's add reviving it at A and C.
+     * That inversion — same schedule, same frontier value, opposite outcome — is the whole
+     * mechanism, and it is what makes the frontier certify the REMOVE rather than the add.
      */
     @Test
-    fun `P2 LOST del - compacting at the STABLE frontier resurrects a removed element`() {
+    fun `P2 LOST del - the del-dot keeps the STABLE frontier from discarding an undelivered remove`() {
         val controller = SimulationController()
         val logicalId = UUID.randomUUID()
         val mesh = Mesh(controller, logicalId)
@@ -511,10 +540,12 @@ class CompactionTriggerPinTest {
             "A" to tags(mesh.ra),
             "C" to tags(mesh.rc),
         )
+        // The frontier is UNCHANGED from the unfixed run — still exactly 1, the add's counter.
+        // Only the rule's reach changed: the entry now also holds the del-dot at 2.
         stableA.perSource[sA] shouldBe 1L
         stableC.perSource[sA] shouldBe 1L
-        discardedA shouldBe 2
-        discardedC shouldBe 2
+        discardedA shouldBe 0
+        discardedC shouldBe 0
         mesh.ra.membership() shouldBe emptySet()
         mesh.rc.membership() shouldBe emptySet()
 
@@ -535,18 +566,23 @@ class CompactionTriggerPinTest {
             "converged" to folds.converged(),
             "liveReplicas" to mesh.a.registry.instances.replicasOf(logicalId).size,
         )
-        // THE FINDING: `e` is live on all three replicas, and no del-tag for it
-        // survives anywhere in the mesh.
-        mesh.memberships() shouldBe listOf(setOf("e"), setOf("e"), setOf("e"))
-        resurrected(mesh.ra, foldA) shouldBe setOf("e")
-        resurrected(mesh.rc, foldC) shouldBe setOf("e")
+        // THE FIX: `e` is dead on all three replicas. The unfixed code produced
+        // `[[e], [e], [e]]` here with no del-tag left anywhere in the mesh.
+        mesh.memberships() shouldBe listOf(emptySet(), emptySet(), emptySet())
+        resurrected(mesh.ra, foldA) shouldBe emptySet()
+        resurrected(mesh.rc, foldC) shouldBe emptySet()
         // Non-vacuity for converged(): three live streams, so the judgement is real.
         mesh.a.registry.instances.replicasOf(logicalId).size shouldBe 3
-        // Classified, not replaced ([KE3-23]): the emitted-delta folds do NOT
-        // agree afterwards — B's fold never carried a del, A's and C's did — so
-        // the membership-level agreement above sits on top of a fold-level
-        // disagreement. That is exactly the state `resurrected` names.
-        folds.converged() shouldBe false
+        // And the folds now AGREE: B learned the del from A's and C's surviving tombstones on
+        // the heal, so its emitted stream carries one too. Unfixed, this read false.
+        folds.converged() shouldBe true
+
+        // Non-vacuity, as in P2 PARKED: with the dot delivered everywhere the same call
+        // reclaims the entry in full, so the deferral above is a deferral and not a deadlock.
+        val afterHealA = mesh.ra.compactBelow(mesh.a.replication.stableFrontier(logicalId))
+        trace("P2.6", "afterHealA" to afterHealA, "A" to tags(mesh.ra))
+        afterHealA shouldBe 3
+        mesh.ra.membership() shouldBe emptySet()
     }
 
     /**
@@ -602,9 +638,14 @@ class CompactionTriggerPinTest {
             "A" to tags(mesh.ra),
             "C" to tags(mesh.rc),
         )
+        // `sA -> 1` is the ADD's counter; the DEL-DOT is 2 and B, still losing frames, has not
+        // delivered it. So the landed rows no longer license a discard (computenet-v2ka): what
+        // P3 was built to show — that STABLE's silence in P1 step 5 was the timing of one read
+        // and not a property — is now shown by the frontier RISING to 1 and the discard staying
+        // 0, because 1 is not enough. The trigger is not the thing that changed; the rule is.
         landedStable.perSource[sA] shouldBe 1L
-        landedDiscards shouldBe 2
-        landedDiscardsC shouldBe 2
+        landedDiscards shouldBe 0
+        landedDiscardsC shouldBe 0
 
         mesh.loseB(false)
         mesh.healB()
@@ -619,7 +660,9 @@ class CompactionTriggerPinTest {
             "resurrectedA" to resurrected(mesh.ra, foldA),
             "converged" to folds.converged(),
         )
-        mesh.ra.membership() shouldBe setOf("e")
-        resurrected(mesh.ra, foldA) shouldBe setOf("e")
+        // NO LONGER RESURRECTS (computenet-v2ka). A and C never discarded, so their tombstones
+        // survive the heal and re-kill `e` at B instead of B's add-only state reviving it.
+        mesh.memberships() shouldBe listOf(emptySet(), emptySet(), emptySet())
+        resurrected(mesh.ra, foldA) shouldBe emptySet()
     }
 }

@@ -3,6 +3,10 @@ package civictech.cell.host
 import civictech.cell.Cursor
 import civictech.cell.ExclusiveEntry
 import civictech.cell.Owned
+import civictech.cell.Propagate
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.proxy.Invocation
+import java.util.UUID
 import civictech.cell.ReadCaveat
 import civictech.cell.StatePage
 import civictech.cell.StateRead
@@ -190,32 +194,67 @@ class BoundedStateReadTest {
     }
 
     /**
-     * C8: the honest limit of the stability check on *this* family, pinned so a
-     * later scenario cannot be written over it.
+     * C8, **as amended by computenet-v2ka**: the honest limit of the stability
+     * check on *this* family, pinned so a later scenario cannot be written over
+     * it — on the counterexample that still exists.
      *
      * [StatePage]'s across-page contract is "equal endpoint frontiers ⇒ the union
-     * is a snapshot", and the frontier detects tag *gains*. An OR-set's
-     * observed-remove mints no tag — it copies the add-tags it already holds into
-     * `dels` — so a remove-only mid-walk mutation is invisible to the check. That
-     * makes equal endpoints necessary but not sufficient here, which is what both
-     * KDocs now say and what `V1C-CONCORD` must not contradict.
+     * is a snapshot", and the frontier detects tag *gains*. The version of this
+     * test that stood here pinned a LOCAL remove as the counterexample, on the
+     * ground that "an observed-remove mints no tag". That ceased to be true: a
+     * `remove` now mints a **del-dot** (`[24-TAG-04]`, computenet-v2ka), and
+     * `currentFrontier` is a max over `adds ∪ dels`, so a locally applied
+     * remove-only mutation now DOES move the closing stamp and the caller's
+     * check catches it. First arm below.
+     *
+     * The limit itself survives, because the frontier is a per-source **max**
+     * and not a set: a REORDERED remote del whose dot counter is below a tag
+     * this replica already holds from that source changes membership while
+     * leaving every per-source maximum where it was. Second arm. So equal
+     * endpoints remain necessary but not sufficient here — what changed is
+     * which mutation demonstrates it, not the verdict — and `V1C-CONCORD` must
+     * still not contradict it.
      */
     @Test
-    fun `a remove-only mid-walk mutation leaves both endpoint frontiers equal, so the check is necessary not sufficient`() {
-        val cell = populated(30)
-
-        val pages = walk(cell, limit = 10, between = { pageNumber ->
+    fun `a local remove now moves the closing frontier, while a reordered remote del still evades it`() {
+        // ARM 1 — the local remove mints its del-dot, so the endpoints DIFFER
+        // and the caller's check reports the mid-walk mutation.
+        val local = populated(30)
+        val localPages = walk(local, limit = 10, between = { pageNumber ->
             // a key page 1 already returned, removed before page 2 is asked for
-            if (pageNumber == 1) cell.inlet.call.remove("k0000")
+            if (pageNumber == 1) local.inlet.call.remove("k0000")
         })
+        snapshotDels(local).keys shouldContain "k0000" // the removal really happened
+        localPages.first().frontier shouldNotBe localPages.last().frontier
+        // the union still smears (that is this family's documented behaviour),
+        // but the caller is now TOLD not to trust it
+        entriesOf(localPages).single { it.element == "k0000" }.present.shouldBeTrue()
 
-        // the removal really happened
-        snapshotDels(cell).keys shouldContain "k0000"
-        // ... and minted no tag, so the check the caller is told to perform passes
-        pages.first().frontier shouldBe pages.last().frontier
-        // ... while the union still names the removed element present. Asserted as
-        // the documented limit, not as a promise the caller may rely on.
-        entriesOf(pages).single { it.element == "k0000" }.present.shouldBeTrue()
+        // ARM 2 — the surviving counterexample. A remote source `o` whose add of
+        // "z" (o,9) and add of "w" (o,20) both arrived, so this replica's max for
+        // `o` is 20; the del of "z" — covering (o,9), dot (o,12) — was reordered
+        // behind them. Applying it mid-walk removes "z" and moves no maximum.
+        val remote = SetCell<String>()
+        val o = UUID.randomUUID()
+        spawn(remote)
+        deliver(remote, SetDelta(adds = mapOf("z" to setOf(Timestamp(o, 9)))))
+        deliver(remote, SetDelta(adds = mapOf("w" to setOf(Timestamp(o, 20)))))
+
+        val remotePages = walk(remote, limit = 1, between = { pageNumber ->
+            if (pageNumber == 1) {
+                deliver(remote, SetDelta(dels = mapOf("z" to setOf(Timestamp(o, 9), Timestamp(o, 12)))))
+            }
+        })
+        remote.membership() shouldNotContain "z" // the removal really happened
+        remotePages.first().frontier shouldBe remotePages.last().frontier
+        entriesOf(remotePages).single { it.element == "z" }.present.shouldBeTrue()
+    }
+
+    /** Merge a peer delta into [cell] the way the wire does — through `deltaInlet`. */
+    private fun deliver(cell: SetCell<String>, delta: SetDelta<String>) {
+        val propagate = Propagate::class.java.getMethod("propagate", Any::class.java)
+        Invocation.of(propagate, arrayOf<Any?>(delta), null).invoke(cell.deltaInlet.call)
+        controller.runToIdle()
     }
 
     @Test
