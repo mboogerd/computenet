@@ -287,6 +287,10 @@ object WireCodec {
      * decode throws [kotlinx.serialization.SerializationException] on the
      * unknown key rather than ignoring it — pinned concretely in
      * `kernel/src/test/kotlin/civictech/cell/wire/StallNoticeWireCompatTest.kt`.
+     * (A *genuinely* older peer receiving a `STABILITY_FROZEN` `Stall` fails
+     * earlier still, on the reason itself — the second hazard below; the
+     * unknown-key failure is the one that fires when the reason is a constant
+     * the older peer already knows.)
      * Consequence: a mixed-version mesh MUST NOT populate a newly-added
      * optional field until every peer has upgraded past the version that
      * introduced it (`doc/spec/40-distribution/42-replication.md`
@@ -316,9 +320,13 @@ object WireCodec {
      * `kernel/src/test/kotlin/civictech/cell/wire/StallNoticeWireCompatTest.kt`'s
      * "unknown enum constant hazard" test.
      *
-     * Closing this would need `coerceInputValues = true` (silently substitutes
-     * the enum's default — [civictech.cell.control.StallReason] has none
-     * today) or a dedicated fallback constant with a custom serializer. Either
+     * Closing this would need `coerceInputValues = true` **plus a change at
+     * the use site** — that setting substitutes the *declaring property's*
+     * default value (or `null`, for a nullable property), not anything
+     * belonging to the enum, so on its own it is inert here: `Stall.reason`
+     * is neither nullable nor default-valued, and this frame still throws
+     * under `coerceInputValues = true` (measured 2026-09-06) — or a dedicated
+     * fallback constant with a custom serializer. Either
      * is a separate, deliberate wire-behaviour decision — trading a loud
      * rolling-upgrade failure for a peer that keeps running while quietly
      * misreading the reason on a control-plane notice — named here only as
