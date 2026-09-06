@@ -145,9 +145,11 @@ internal class GcTotals(val label: String) {
  * ## What was MEASURED (seeds 1..200, budget 40_000, 16-core macOS; ~5.0 s + ~4.3 s)
  *
  * **BS-12 is branch F, and its F-B arm is the headline result: compaction at the STABLE frontier
- * resurrects removed elements too.** Four independent 200-seed STABLE sweeps found 8, 10, 10 and
- * 11 resurrecting seeds, and 122-126 fold-disagreeing (F-A) seeds. The LOCAL arm found 12, 12, 15
- * and 14. So `[KE3-20]` is reproduced — and the feature's empirical claim that LOCAL's set is a
+ * resurrects removed elements too.** `doc/kernel-lane-findings.md` `## KE3-GC` records five
+ * independent 200-seed STABLE sweeps — 8, 10, 10, 11 (implementer) and 9 (reviewer) — and a later
+ * run raised the observed ceiling to 12, so the band actually measured so far is 8-12 resurrecting
+ * seeds, and 122-126 fold-disagreeing (F-A) seeds. The LOCAL arm's five runs found 8, 12, 12, 14
+ * and 15. So `[KE3-20]` is reproduced — and the feature's empirical claim that LOCAL's set is a
  * **strict superset** of STABLE's is **falsified**: the two sets overlap without either containing
  * the other. That is consistent with `CompactionTriggerPinTest`'s P2 mechanism rather than
  * surprising given it — the stable frontier certifies ADD delivery only, so it is not the
@@ -439,15 +441,16 @@ class GcSafetySweepTest {
         // BRANCH F, and the branch is decided by the MEASUREMENT. Both classes must be present:
         // F-B is the `[KE3-23]` finding itself and F-A is `ReplicaConvergence`'s expressiveness
         // limit; a run showing only one of them is a different experiment from the one recorded.
-        // MEASURED over three independent 200-seed runs: F-B on 8, 10 and 10 seeds; F-A on 126,
-        // 124 and 122. The FAILING SET IS NOT PINNED BY NUMBER — the bead asks for that and the
+        // MEASURED over (at least) five independent 200-seed runs, per doc/kernel-lane-findings.md
+        // `## KE3-GC`: F-B on 8, 9, 10, 10 and 11 seeds, and a later run at 12 — band 8-12 so far;
+        // F-A on 122-126. The FAILING SET IS NOT PINNED BY NUMBER — the bead asks for that and the
         // rig cannot deliver it (see the pin test's KDoc); the recorded seed is pinned instead,
         // by a dedicated repeated run.
         assertTrue(
             stableResurrecting.isNotEmpty(),
-            "[KE3-23] branch F-B: no seed resurrected under the STABLE trigger. Three prior 200-seed " +
-                "runs each found 8-10, so an empty set is a change in the system or in the rig, not " +
-                "a green result — do not narrow SEEDS to reach it. failures=" +
+            "[KE3-23] branch F-B: no seed resurrected under the STABLE trigger. At least five prior " +
+                "200-seed runs found 8-12, so an empty set is a change in the system or in the rig, " +
+                "not a green result — do not narrow SEEDS to reach it. failures=" +
                 sweep.failures.map { it.seed to it.message },
         )
         assertTrue(
@@ -499,7 +502,8 @@ class GcSafetySweepTest {
 
         // The control that passes by OBSERVING the failure: the wrong seam must be able to make
         // the observable fire, or the observable is inert and BS-12's arm proves nothing. MEASURED
-        // over three independent 200-seed runs: 12, 12 and 15 seeds resurrected.
+        // over five independent 200-seed runs (doc/kernel-lane-findings.md `## KE3-GC`): 8, 12, 12,
+        // 14 and 15 seeds resurrected.
         assertTrue(
             resurrecting.isNotEmpty(),
             "[KE3-20]: no seed in $SEEDS resurrected a removed element under the LOCAL trigger. " +
@@ -577,14 +581,19 @@ class GcSafetySweepTest {
     }
 
     /**
-     * The adversary actually fired, in the two forms this rig can honestly promise.
+     * The adversary actually fired, in the forms this rig can honestly promise.
      *
      * **Churn events are asserted per seed**: they are played from the plan, so a missing one is a
-     * real defect. **The three folded CHA1 faults are asserted sweep-wide**, with the seeds they
-     * were inert on named. That is a deliberate divergence from the bead's "assert per seed that
-     * the fired fault-id set contains … `gc-dup`", and it is MEASURED: `gc-dup` is a probability-0.5
-     * duplicator on `peer1<->peer2`, so a seed whose churn leaves that edge nearly idle can draw no
-     * duplicate at all (seed 91 of 200, first run). Per-seed the assertion would be a coin-flip
+     * real defect. Of the three folded CHA1 faults, **`gc-park` and `gc-reorder` are now asserted
+     * PER SEED** ([PER_SEED_FAULT_IDS]) — MEASURED to fire on 200 of 200 seeds on BOTH the STABLE
+     * and LOCAL arms in the feature reviewer's independent run (`computenet-9sm.4.4`'s task review,
+     * corroborated again by this bead's own re-run), so a per-seed bar costs nothing today and is a
+     * real property, not a lucky range. **`gc-dup` alone stays asserted sweep-wide**
+     * ([SWEEP_WIDE_FAULT_ID]), with the seeds it was inert on named. That is a deliberate divergence
+     * from the bead's "assert per seed that the fired fault-id set contains … `gc-dup`", and it is
+     * MEASURED: `gc-dup` is a probability-0.5 duplicator on `peer1<->peer2`, so a seed whose churn
+     * leaves that edge nearly idle can draw no duplicate at all (seed 91 of 200, reproduced in every
+     * run so far, implementer and reviewer alike). Per-seed the assertion would be a coin-flip
      * dressed as a property; sweep-wide it still catches an adversary that never fires, which is
      * what the clause is for.
      */
@@ -601,15 +610,21 @@ class GcSafetySweepTest {
                     "nothing; missing=${plannedEvents - fired} fired=$fired",
             )
             GcSafetySweep.faultIds.forEach { id -> if (id !in fired) inert.getValue(id) += entry.seed }
+            assertTrue(
+                PER_SEED_FAULT_IDS.all { it in fired },
+                "$tag seed ${entry.seed}: ${PER_SEED_FAULT_IDS - fired} must fire on every seed — " +
+                    "MEASURED 0 of 200 inert on either arm in every run so far, so a miss here is a " +
+                    "real regression, not a coin-flip; fired=$fired",
+            )
             plan.events.filterIsInstance<DepartEvent>().forEach { drawnModes += it.mode }
         }
         println("[$tag] folded faults inert on: ${inert.filterValues { it.isNotEmpty() }}")
-        inert.forEach { (id, seeds) ->
-            assertTrue(
-                seeds.size < sweep.total,
-                "$tag: folded fault $id never fired on ANY seed, so the adversary it claims is absent",
-            )
-        }
+        val duplicatorInertSeeds = inert.getValue(SWEEP_WIDE_FAULT_ID)
+        assertTrue(
+            duplicatorInertSeeds.size < sweep.total,
+            "$tag: folded fault $SWEEP_WIDE_FAULT_ID never fired on ANY seed, so the adversary it " +
+                "claims is absent",
+        )
         assertTrue(
             drawnModes.containsAll(DepartureMode.entries),
             "$tag: the sweep must draw every departure mode across its range: drawn=$drawnModes",
@@ -651,6 +666,18 @@ class GcSafetySweepTest {
          * Same selection method; the three STABLE sweeps' intersection was `{62, 138, 154, 184}`.
          */
         private const val BS12_SEED: Long = 62L
+
+        /**
+         * The two folded CHA1 faults asserted PER SEED in [assertAdversaryFired] — MEASURED to fire
+         * on 200 of 200 seeds on both arms, unlike [SWEEP_WIDE_FAULT_ID].
+         */
+        private val PER_SEED_FAULT_IDS: Set<String> = setOf("gc-park", "gc-reorder")
+
+        /**
+         * The one folded CHA1 fault that stays asserted sweep-wide: a probability-0.5 duplicator
+         * that legitimately draws nothing on an idle seed (measured: seed 91 of 200, every run).
+         */
+        private const val SWEEP_WIDE_FAULT_ID: String = "gc-dup"
 
         private val stableRoot = File("build/dst-stability/gc-sweep-stable")
         private val localRoot = File("build/dst-stability/gc-sweep-local")
