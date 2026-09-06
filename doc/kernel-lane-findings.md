@@ -209,3 +209,141 @@ what "stable" means for an id whose replicas hold disjoint state, which no
 spec section in `doc/spec/40-distribution/42-replication.md` answers today.
 A consumer that needs stability under sharding should be filed against that
 design question rather than against this class.
+
+## KE3-GC — the GC proof harness: what the stable and local triggers did
+
+Recorded by: `computenet-9sm.4.5` (feature `computenet-9sm.4`, epic
+`computenet-9sm`). Base commit: `5882eb930` (`main`), which is
+`computenet-9sm.4.4`'s merge — `kernel/src/test/kotlin/civictech/cell/replication/GcSafetySweepTest.kt`
+(`GcSafetySweep`/`GcSafetySweepTest`) is the harness this entry reports on.
+
+### The adversary and the seed range
+
+`SEEDS = 1L..200L`, `BUDGET = 40_000`, over `StableFrontierChurnSweep.config` /
+`.churnPlan(seed)` (the sibling BS-5 sweep's own generated churn, reused
+verbatim so the two runs are comparable like for like) — strided writes
+paired with removes (odd-ordinal writes, `REMOVE_LAG = 90`, remover ==
+adder) and a reclaimer step hook (period `K = 25`, `SetCell.compactBelow`
+driven from either seam) — plus the three folded CHA1 faults `gc-park`,
+`gc-dup`, `gc-reorder`. Wall time, seeds 1..200: BS-12 (STABLE) 4.4-5.0 s,
+BS-13 (LOCAL) 4.2-4.4 s across the implementer's and reviewer's independent
+runs on 16-core macOS.
+
+### BS-13 (`[KE3-20]`) — reproduced, `BS13_SEED = 62`
+
+`BS13_SEED = 62L`. Under the LOCAL trigger (reclaimer driven from
+`Replication.localDeliveredFrontier`, the wrong seam), seed 62 makes
+`SetCell.compactBelow` discard a tag that a later frame re-delivers as new
+information, so the removed element is back in `membership()` at
+quiescence — the `resurrected(cell, fold)` observable fires — on every one
+of 5 pinned re-runs (`GcSafetySweepTest`'s `..._BS12_BS13` test). The
+harness records this as a per-seed pass/fail on the `resurrected(...)`
+observable; it does not capture which element or which replica resurrected
+on seed 62 specifically (that granularity is not part of `GcObservations`),
+so this entry states the property, not an element/replica pair. Four
+independent 200-seed LOCAL sweeps found 12, 12, 15 and 14 resurrecting
+seeds respectively, with `{62, 87, 107, 138, 170, 175}` in the intersection
+of the first three; 62 is the smallest and was chosen for that reason. Seed
+62 is **not to be replaced with a friendlier seed** (AGENTS.md): the pin
+re-runs it, not the sweep's per-run failing set, because the rig is not
+trace-reproducible (see below) and the per-run set churns.
+
+`[KE3-20]` (E3.5(iii)'s control: "reclaiming at the merely-locally-delivered
+frontier resurrects a removed element on at least one seed") is therefore
+**reproduced**. No D3 widening of the adversary was needed.
+
+### BS-12 (`[KE3-23]`) — branch F: the feature's own containment claim is FALSIFIED
+
+The feature's empirical expectation was that LOCAL's resurrecting-seed set
+strictly contains STABLE's — i.e. that reclaiming at the stable frontier is
+qualitatively safer, only slower to prove. **That is falsified.** Five
+independent 200-seed sweeps (implementer x4, reviewer x1) agree: the STABLE
+and LOCAL resurrecting sets overlap WITHOUT one containing the other, at
+comparable rates. STABLE resurrected on 8, 10, 10, 11 seeds (implementer)
+and 9 (reviewer, `[5, 20, 62, 70, 120, 136, 138, 154, 184]`); LOCAL
+resurrected on 12, 12, 15, 14 (implementer) and 8 (reviewer,
+`[14, 62, 87, 107, 138, 170, 175, 181]`). The reviewer's own two sets
+intersect at `{62, 138}` — two seeds resurrect under BOTH triggers, which a
+strict-superset relation forbids.
+
+STABLE branches into two failure classes, both required to be present by
+the sweep's own assertions:
+
+- **F-B (the headline): compaction at the STABLE frontier resurrects
+  removed elements too**, on `BS12_SEED = 62` and 7-10 other seeds per
+  200-seed run. Mechanism: `SetCell.foldDelivered` is fed only from
+  `add()`'s local mint and from `applyRemote()`'s `newAdds` — `remove()`
+  mints and folds nothing into the delivered lane. So
+  `del-tag ≤ stableFrontier` certifies that every open member has *delivered
+  the add*, not that any member has delivered the matching remove. A member
+  that held the add but missed the remove (a partition opened between the
+  two) re-ships the add-only state at heal, and a replica that has already
+  compacted the tombstone below the stable frontier re-admits it as new
+  information. This directly contradicts
+  `doc/spec/20-dataflow-semantics/24-data-cells.md`'s `[24-TAG-04]`
+  sentence: "reclaiming at the locally delivered frontier can resurrect a
+  removed element on some schedule … where reclaiming at the stable
+  frontier cannot, because every covering replica has already converged
+  past it." It bears on `[KE3-23]` (E3.5(iii), the GC safety property
+  itself) and on `[KE3-31]` ("dels entries whose every tag is
+  `≤ stableFrontier` … SHALL be discarded" at checkpoint time), and
+  therefore on features computenet-9sm.6 and the OR-map half
+  computenet-9sm.8, which are the consumers that will wire a reclaimer
+  against this same rule. It is corroborated **deterministically**, not
+  just seeded, by `CompactionTriggerPinTest`'s `P2 LOST del` scenario (the
+  del genuinely lost, not merely severed-and-healed) — see that class's
+  KDoc for the schedule. What would make the spec sentence true: certifying
+  the *remove* as delivered, not just the add — a del-side delivered lane,
+  or removes minting their own dot. That is a design question for the
+  epic, not for this feature.
+- **F-A: `ReplicaConvergence` cannot express compaction.** It folds emitted
+  deltas and keeps every tombstone the cell ever emitted, so it disagrees
+  with a cell that has legitimately compacted one away; this is an
+  expressiveness limit of the diagnostic, not a safety violation, and fires
+  on 122-126 of 200 seeds per run. The feature forbids a bespoke
+  replacement check (`[KE3-23]`), so this is recorded, not patched around.
+
+`[KE3-23]` must **NOT** be reported green: the property it names — a
+reclaimer discarding del-tags `≤ stableFrontier` never breaks convergence —
+does not hold on the schedules this harness reaches.
+
+### The P2 pin, seed-free
+
+`CompactionTriggerPinTest`'s `P2 LOST del - compacting at the STABLE
+frontier resurrects a removed element` is the deterministic form of the
+same fact BS-12/F-B measures seeded: with the del genuinely lost (not
+merely severed-and-healed, which is the `P2 PARKED del` control and does
+NOT resurrect), compacting at the stable frontier resurrects. It needs no
+seed because it is a single hand-built schedule, and it is what BS-12's
+seeded sweep corroborates at scale.
+
+### The rig is not trace-reproducible — filed separately, upstream of this feature
+
+`DstRun.assertDeterministic()` fails on every churn-mesh configuration
+tried on this graph, including with both of `GcSafetySweep`'s step hooks
+removed and the full fault plan in place, and again with both hooks
+installed and no folded faults (bare `churnPlan`). The sibling BS-5 graph —
+carrying none of this feature's hooks — is likewise not deterministic on a
+`ChurnGenerator`-drawn plan (seed 62), which puts the cause upstream of
+this feature. `BS13_SEED = 62` and `BS12_SEED = 62` are therefore pinned by
+**5x re-run stability** (5 of 5, and the six candidate seeds each 8 of 8 on
+a dedicated check), not by trace determinism. Filed as **computenet-l0gd**
+(bug, parent `computenet-9sm`); its scope is narrower than "the churn mesh
+is not reproducible" — `ChurnMeshTest`'s own determinism test passes today
+on a hand-built plan, and only a `ChurnGenerator`-drawn plan is affected,
+and even then only on some seeds (62 and 87 reproduced out of
+1/8/9/19/62/87/107 tried).
+
+### A residual bar, reported and not repaired
+
+`gc-park` and `gc-reorder` (alongside `gc-dup`) are asserted **sweep-wide**
+rather than per seed — the same relaxation applied to `gc-dup`, for which
+it is justified (`gc-dup` is a probability-0.5 duplicator that legitimately
+draws nothing on an idle seed, measured: seed 91 of 200 in every run).
+Unlike `gc-dup`, both `gc-park` and `gc-reorder` fired on 200 of 200 seeds
+on both arms in the reviewer's independent run, so a per-seed assertion
+would have held for them without loosening. The sweep still catches an
+adversary that never fires at all (the clause's purpose), so this is a
+lower bar than the bead asked for, not a defect — recorded here as a known
+gap between what was required and what was checked, rather than stretched
+into this task's own scope to repair.
