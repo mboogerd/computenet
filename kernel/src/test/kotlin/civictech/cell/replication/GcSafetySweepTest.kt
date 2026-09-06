@@ -357,7 +357,7 @@ class GcSafetySweepTest {
                 seeds = SEEDS,
                 graph = GcSafetySweep.graph(GcSafetySweep.Trigger.STABLE),
                 checkId = GcSafetySweep.Trigger.STABLE.checkId,
-                budget = 40_000,
+                budget = 200_000,
                 artifactRoot = stableRoot,
                 planFor = GcSafetySweep::plan,
             )
@@ -402,7 +402,7 @@ class GcSafetySweepTest {
                 seeds = SEEDS,
                 graph = GcSafetySweep.graph(GcSafetySweep.Trigger.LOCAL),
                 checkId = GcSafetySweep.Trigger.LOCAL.checkId,
-                budget = 40_000,
+                budget = 200_000,
                 artifactRoot = localRoot,
                 planFor = GcSafetySweep::plan,
             )
