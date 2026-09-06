@@ -471,7 +471,7 @@ object GcSafetySweep {
                 val fencedAt = cellsByPeer
                     .filterNot { it.first in holders }
                     .mapNotNull { (name, cell) ->
-                        val fenced = cell.fencedAmong(liveTags)
+                        val fenced = cell.fencedAmong(element, liveTags)
                         if (fenced.isEmpty()) null else {
                             name to (fenced.map { it.counter }.sorted() to (fenced.size == liveTags.size))
                         }
@@ -1061,20 +1061,60 @@ class GcSafetySweepTest {
          * the tolerated F-A class).
          */
         /**
-         * The bound on STABLE membership divergence. MEASURED with the re-admission fence
-         * (computenet-pay7) at **5-8 of 200 across four 200-seed runs**, against a no-reclaimer
-         * CONTROL that diverged on 1-4 in the same runs. That excess over the control is
-         * recorded, not explained away — and it is not the fence's own hazard, for a reason the
-         * workload makes checkable: `removeSchedule` removes only ODD-ordinal writes, so an
-         * EVEN-ordinal element's add-tag never enters any `dels` entry, can never be recorded by
-         * `compactBelow`, and therefore cannot be in the fence at all. Four of the seven seeds
-         * diverging on the last run differ by exactly one such element (`peer1-22`, `peer2-20`,
-         * `peer1-16` — all even), and the remaining three differ by `peer2-23`, the same
-         * last-write straggler shape the CONTROL arm itself produces. What compaction changes is
-         * the traffic: the fence removes the discard/re-admit/re-emit churn (`discarded` falls
-         * from ~64_000 to ~5_900 over the sweep), so the rig's own late-write floor is reached on
-         * more seeds. That is the honest reading, and it is a bounded-schedule observation rather
-         * than a proof.
+         * The bound on STABLE membership divergence.
+         *
+         * ## computenet-vhlm, 2026-09-06 — the excess is GONE, and the paragraph that argued it
+         * away was arguing away a BUG
+         *
+         * The wording immediately below is computenet-pay7's, preserved VERBATIM because it is
+         * what this bound was raised 10 -> 12 to accommodate, and because its central inference
+         * turned out to be true and irrelevant at the same time:
+         *
+         * > MEASURED with the re-admission fence (computenet-pay7) at **5-8 of 200 across four
+         * > 200-seed runs**, against a no-reclaimer CONTROL that diverged on 1-4 in the same
+         * > runs. That excess over the control is recorded, not explained away — and it is not
+         * > the fence's own hazard, for a reason the workload makes checkable: `removeSchedule`
+         * > removes only ODD-ordinal writes, so an EVEN-ordinal element's add-tag never enters
+         * > any `dels` entry, can never be recorded by `compactBelow`, and therefore cannot be
+         * > in the fence at all. Four of the seven seeds diverging on the last run differ by
+         * > exactly one such element (`peer1-22`, `peer2-20`, `peer1-16` — all even), and the
+         * > remaining three differ by `peer2-23`, the same last-write straggler shape the
+         * > CONTROL arm itself produces. What compaction changes is the traffic: the fence
+         * > removes the discard/re-admit/re-emit churn (`discarded` falls from ~64_000 to
+         * > ~5_900 over the sweep), so the rig's own late-write floor is reached on more seeds.
+         * > That is the honest reading, and it is a bounded-schedule observation rather than a
+         * > proof.
+         *
+         * computenet-vhlm replaced that inference with the MEASUREMENT its acceptance asked for
+         * — [GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE], a direct read of
+         * `ReclaimedDots` — and the measurement said the opposite. The four EVEN-ordinal seeds
+         * the inference exonerated ([18, 114, 159, 169]) were fenced anyway, at every replica
+         * lacking the element and on ALL of its live tags. The inference was right that the
+         * element's own tag could never be recorded; what it missed is that `ReclaimedDots` was
+         * keyed on `(sourceId, counter)` and `SetCell`'s tag source is REUSED across a replica's
+         * incarnations while its counter restarts at 0 — so a dot reclaimed from a departed
+         * incarnation fenced a different, live element minted by its rejoin. See
+         * `ReclaimedDots`' KDoc §"Why the key is (element, tag) and not the tag alone".
+         *
+         * Keying the fence on `(element, tag)` closes it, and computenet-pay7's acceptance
+         * criterion 2 is then met LITERALLY, in count, in the same run — no amendment needed.
+         * MEASURED across four 200-seed runs, darwin/arm64 16-core, load1 3.7-11.2, budget
+         * 40_000, 2026-09-06:
+         *
+         *   STABLE resurrecting     []  []  []  []          (branch G, unchanged)
+         *   STABLE fence-attributed []  []  []  []          <- the new assertion, empty every run
+         *   STABLE diverging         2   3   1   4
+         *   CONTROL diverging        3   3   3   1
+         *
+         * Every remaining STABLE divergence differs by `peer2-23` with attribution NONE, and the
+         * CONTROL arm — which now prints its own per-seed DIVERGE lines — produces exactly that
+         * shape and nothing else. The "same shape as the control" claim is an artifact now, not
+         * an assertion.
+         *
+         * The bound is deliberately LEFT at 12 rather than lowered to the new band: the rig is
+         * not reproducible, and a bound tightened onto a four-run maximum would fail for reasons
+         * that have nothing to do with the property. It is a ceiling on a known failure mode, not
+         * a pin on the current number. It has never been raised by computenet-vhlm.
          *
          * The bound is set above the observed maximum because the rig is not reproducible (see
          * the pin test's KDoc) and both arms move by several seeds between runs; the failure it

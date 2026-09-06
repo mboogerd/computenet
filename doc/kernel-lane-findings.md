@@ -575,3 +575,82 @@ consumes tag counters, so every schedule downstream of a remove shifts and the
 old pin no longer reproduces. `126` is the one seed present in the resurrecting
 set of every 200-seed run taken on this base, on both arms, and reproduced on
 5 of 5 dedicated re-runs.
+
+## KE3-GC-FENCE-KEY — the re-admission fence was keyed on the tag alone, and tag counters are reused across a replica's incarnations
+
+**computenet-vhlm, 2026-09-06, darwin/arm64 16-core, `GcSafetySweepTest`, seeds
+1..200, budget 40_000.** Filed against computenet-pay7's acceptance criterion 2
+("membership divergence no worse than the Trigger.NONE control arm's, measured
+in the same run"), which the shipped harness never checked: `MAX_STABLE_DIVERGING`
+is an absolute bound and was raised 10 -> 12 rather than the gap closed.
+
+### The measurement that replaced the inference
+
+computenet-pay7 argued the 3x excess over the control was not the fence's harm,
+from the workload: `GcSafetySweep.removeSchedule` removes only ODD-ordinal
+writes, so an EVEN-ordinal element's add-tag never enters a `dels` entry, can
+never be recorded by `compactBelow`, and is structurally un-fenceable. That
+argument is CORRECT. It is also insufficient, and the difference was invisible
+until it was measured rather than reasoned about.
+
+`GcSafetySweep` now performs the read directly
+(`FENCE_ATTRIBUTED_DIVERGENCE_FAILURE`): for every element the live replicas
+disagree on at quiescence, take the tags making it live where it IS live and ask
+every replica that LACKS it whether any is in that replica's own `ReclaimedDots`
+(`SetCell.liveTagsOf` / `SetCell.fencedAmong`, two internal diagnostic reads).
+
+    STABLE diverging        [43, 103, 145, 149, 173]  attribution NONE
+    STABLE fence-attributed [18, 114, 159, 169]       attribution (all), every lacking replica
+    CONTROL diverging       [43, 108, 173]            attribution NONE
+
+All four attributed seeds differ by an EVEN-ordinal element — `peer1-22`,
+`peer2-20`, `peer2-20`, `peer1-16` — the exact class the inference exonerated.
+
+### The mechanism: tag-source counter reuse
+
+`SetCell.tagSource` is `nameUUIDFromBytes("set-tags:${ref.id}:${ref.instanceId}")`
+— derived, not random, so a recovered instance replaying its journal re-mints the
+tags the network already observed. `tagCounter` restarts at 0 on any construction
+that does not `restore()`. In the churn rig `MeshPeer.index` IS the `instanceId`
+of every ref the peer owns, and a rejoin reuses the same `CellRef` by
+construction (`MeshPeer`'s KDoc, "Rejoin determinism"), while a generation > 0
+starts from a fresh `Replication` and no replica.
+
+So a peer that departs and rejoins re-mints counters its previous incarnation
+spent. `ReclaimedDots` was keyed on `(sourceId, counter)`, so a dot reclaimed
+from the departed incarnation fenced a DIFFERENT, LIVE element minted by the
+rejoin — permanently, at every replica holding that dot. Seed 18's `peer1-22` is
+peer1's eighth write and carries counter 4.
+
+### The fix, and what it measured
+
+`ReclaimedDots` is keyed on `(element, tag)`. Nothing is lost: a replayed frame
+carries the same pair that was discarded. Four 200-seed runs after the change:
+
+    STABLE resurrecting     []  []  []  []     (branch G, unchanged)
+    STABLE fence-attributed []  []  []  []
+    STABLE diverging         2   3   1   4
+    CONTROL diverging        3   3   3   1
+
+computenet-pay7's criterion 2 is met literally, in count, in the same run — no
+amendment was needed. Every remaining STABLE divergence differs by `peer2-23`
+with attribution NONE, and the CONTROL arm (which now prints its own per-seed
+DIVERGE lines) produces that shape and nothing else. `MAX_STABLE_DIVERGING` was
+NOT raised and `SEEDS` was NOT narrowed.
+
+### Residual holes, stated rather than left to be discovered
+
+- **Same element, colliding counter.** A rejoining incarnation that re-mints a
+  colliding counter for *the same* element is still wrongly fenced. Closing that
+  needs the tag source to be incarnation-unique, which is a change to the
+  journal-replay contract `tagSource` exists to keep. Out of scope.
+- **BS-13 lost its witness, and no friendlier seed was substituted.** The LOCAL
+  arm — the wrong seam, `[KE3-20]` — no longer resurrects (the fence applies to
+  whatever frontier drives the reclaimer) and, with the collision removed,
+  diverges on 0-3 of 200 rather than 3-6. Its recorded pin `BS13_SEED = 18` no
+  longer reproduces, and NO seed does: dedicated 5-run pins on the four
+  candidates observed across four sweeps scored 2/5 (70), 3/5 (146), 0/5 (181)
+  and 0/5 (90). The seed was left at 18 and the pin left RED rather than replaced
+  by a seed that happens to fail today. What survives is a sweep-level
+  discriminator that is arguably sharper than the pin was: every LOCAL divergence
+  is `FENCE_ATTRIBUTED`, and every STABLE divergence is not.

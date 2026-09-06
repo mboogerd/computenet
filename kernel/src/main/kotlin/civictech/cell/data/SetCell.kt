@@ -66,34 +66,75 @@ interface SetApi<E> {
  * by construction — the safety argument is structural, and the sweep measures
  * it rather than establishing it.
  *
+ * ## Why the key is (element, tag) and not the tag alone
+ *
+ * The paragraph above is only true of a tag that means what it did when it was
+ * discarded, and a `Timestamp` does **not** carry that guarantee across a
+ * replica's own restart. [SetCell.tagSource] is
+ * `nameUUIDFromBytes("set-tags:${'$'}{ref.id}:${'$'}{ref.instanceId}")` — deliberately
+ * derived, so a recovered instance replaying its journal re-mints the exact
+ * tags the network observed — while `tagCounter` restarts at 0 on any
+ * construction that does not [SetCell.restore]. A replica that crashes and
+ * rejoins under the same [civictech.cell.CellRef] therefore re-mints counters
+ * its previous incarnation already spent, and `(sourceId, counter)` names a
+ * DIFFERENT, LIVE element the second time round.
+ *
+ * Keyed on the tag alone, the fence then rejects that live element's add-tag
+ * for ever, at every replica that reclaimed the colliding dot — a permanent
+ * membership divergence, and exactly the harm the shape argument above claims
+ * is unreachable. **It was reached**: computenet-vhlm's attribution read
+ * measured it on 4 of 200 seeds of `GcSafetySweepTest`'s STABLE arm
+ * ([18, 114, 159, 169], 2026-09-06, darwin/arm64), each on an EVEN-ordinal
+ * element the sweep's `removeSchedule` never removes — structurally impossible
+ * to have been reclaimed for itself, and fenced anyway.
+ *
+ * Keying on `(element, tag)` closes it, because the collision is between two
+ * mints that name different ELEMENTS. Nothing is lost from the fence's purpose:
+ * a replayed frame carries the same `(element, tag)` pair that was discarded,
+ * which is precisely what [holds] asks about.
+ *
+ * **The residual hole, stated rather than left to be discovered**: a rejoining
+ * incarnation that re-mints a colliding counter for *the same element* is still
+ * wrongly fenced. That needs the tag source to be incarnation-unique, which is
+ * a change to the journal-replay contract [SetCell.tagSource] exists to keep
+ * and is out of scope here (filed as a follow-up on computenet-vhlm).
+ *
  * ## What it costs, stated where the number is
  *
  * This is **not free**, and it is not a bounded-memory reclaimer. It converts
  * the reclaimed state from per-element tag *maps* (an element key, a `dels`
- * set, and the covered `adds` entries) into a per-source list of contiguous
- * counter RUNS. A source mints counters densely (`++tagCounter`), and a
- * workload that removes what it adds reclaims them in near-contiguous blocks,
- * so runs coalesce and the retained size is O(number of gaps), not O(number of
- * reclaimed tags) — but an adversarial interleaving of live and reclaimed tags
- * from one source degrades to one run per reclaimed tag. The reclamation is
- * therefore a real reduction and not a bound; a bounded form needs epoch
- * hygiene (G-42), which is research-gated and out of scope here.
+ * set, and the covered `adds` entries) into a per-element, per-source list of
+ * contiguous counter RUNS — so it keeps an entry per element reclaimed, and the
+ * saving over the tombstone it replaces is the tag SETS, not the element keys.
+ * (The un-keyed form dropped the element keys too; it is unsound, see above.)
+ * Within one element and source a run still coalesces: the tags covering one
+ * element are usually one add and one del-dot, minted adjacently, so the common
+ * case is one or two runs per element. An adversarial interleaving degrades to
+ * one run per reclaimed tag, as before. The reclamation is therefore a real
+ * reduction and not a bound; a bounded form needs epoch hygiene (G-42), which
+ * is research-gated and out of scope here.
  *
  * Runs are inclusive `[lo, hi]` pairs, kept sorted, disjoint and
- * non-adjacent, flattened into one list per source.
+ * non-adjacent, flattened into one list per (element, source).
  */
-internal class ReclaimedDots : Serializable {
-    private val runs = HashMap<UUID, ArrayList<Long>>()
+internal class ReclaimedDots<E> : Serializable {
+    private val runs = HashMap<E, HashMap<UUID, ArrayList<Long>>>()
 
-    /** Distinct sources with at least one reclaimed run — the retained-size accounting. */
-    val sourceCount: Int get() = runs.size
+    /** Distinct elements with at least one reclaimed run — the retained-size accounting. */
+    val elementCount: Int get() = runs.size
 
-    /** Total contiguous runs across every source. The real memory cost; see the class KDoc. */
-    val runCount: Int get() = runs.values.sumOf { it.size / 2 }
+    /** Total contiguous runs across every element and source. The real memory cost; see the class KDoc. */
+    val runCount: Int get() = runs.values.sumOf { perSource -> perSource.values.sumOf { it.size / 2 } }
 
-    /** Is [tag] one this replica reclaimed? Binary search over the source's runs. */
-    operator fun contains(tag: Timestamp): Boolean {
-        val r = runs[tag.sourceId] ?: return false
+    /**
+     * Did this replica reclaim [tag] **for [element]**? Binary search over that
+     * element's runs for the tag's source.
+     *
+     * The element key is load-bearing, not an index: see the class KDoc's
+     * "Why the key is (element, tag) and not the tag alone".
+     */
+    fun holds(element: E, tag: Timestamp): Boolean {
+        val r = runs[element]?.get(tag.sourceId) ?: return false
         var lo = 0
         var hi = r.size / 2 - 1
         while (lo <= hi) {
@@ -107,9 +148,9 @@ internal class ReclaimedDots : Serializable {
         return false
     }
 
-    /** Record [tag] as reclaimed, coalescing with an adjacent or containing run. */
-    fun record(tag: Timestamp) {
-        val r = runs.getOrPut(tag.sourceId) { ArrayList() }
+    /** Record [tag] as reclaimed **for [element]**, coalescing with an adjacent or containing run. */
+    fun record(element: E, tag: Timestamp) {
+        val r = runs.getOrPut(element) { HashMap() }.getOrPut(tag.sourceId) { ArrayList() }
         val c = tag.counter
         // first run whose hi >= c - 1: the only run c can touch from the left
         var lo = 0
@@ -138,13 +179,29 @@ internal class ReclaimedDots : Serializable {
         r.add(i * 2 + 1, c)
     }
 
-    /** Checkpoint form: source -> flattened `[lo, hi, …]` runs. Additive; see [restore]. */
-    fun save(): Serializable = HashMap(runs.mapValues { ArrayList(it.value) })
+    /** Checkpoint form: element -> source -> flattened `[lo, hi, …]` runs. Additive; see [restore]. */
+    fun save(): Serializable =
+        HashMap(runs.mapValues { (_, perSource) -> HashMap(perSource.mapValues { ArrayList(it.value) }) })
 
     @Suppress("UNCHECKED_CAST")
     fun restore(state: Any?) {
         runs.clear()
-        (state as? Map<UUID, List<Long>> ?: return).forEach { (s, r) -> runs[s] = ArrayList(r) }
+        // A pre-computenet-vhlm checkpoint stored `source -> runs` with no element
+        // key. There is no element to attribute those runs to, so they are DROPPED
+        // rather than guessed at: an empty fence re-admits a replayed frame exactly
+        // as an unfenced replica does (the pre-computenet-pay7 behaviour), whereas a
+        // guessed key would fence the wrong element — the very failure this key
+        // exists to prevent. The restoring replica re-fills its fence from its own
+        // next `compactBelow`.
+        val outer = state as? Map<*, *> ?: return
+        outer.forEach { (element, perSource) ->
+            val inner = perSource as? Map<*, *> ?: return@forEach
+            val rebuilt = HashMap<UUID, ArrayList<Long>>()
+            inner.forEach { (source, r) ->
+                if (source is UUID && r is List<*>) rebuilt[source] = ArrayList(r.filterIsInstance<Long>())
+            }
+            if (rebuilt.isNotEmpty()) runs[element as E] = rebuilt
+        }
     }
 }
 
@@ -246,7 +303,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * Written only by [compactBelow]; read only by [applyRemote]. See
      * [ReclaimedDots] for the shape argument and its cost.
      */
-    private val reclaimed = ReclaimedDots()
+    private val reclaimed = ReclaimedDots<E>()
 
     override fun onDeliver(listener: (source: UUID, thru: Long) -> Unit) = synchronized(stateLock) {
         deliveryListeners += listener
@@ -369,13 +426,13 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // What the fence rejected — and, crucially, what this replica must
             // now REPAIR. See the "silent fence" note below.
             val fenced = novelAdds
-                .mapValues { (_, tags) -> tags.filterTo(mutableSetOf()) { it in reclaimed } }
+                .mapValues { (e, tags) -> tags.filterTo(mutableSetOf()) { reclaimed.holds(e, it) } }
                 .filterValues { it.isNotEmpty() }
             val newAdds = novelAdds
                 .mapValues { (e, tags) -> tags - fenced[e].orEmpty() }
                 .filterValues { it.isNotEmpty() }
             val newDels = delta.dels
-                .mapValues { (e, tags) -> (tags - (dels[e] ?: emptySet())).filterTo(mutableSetOf()) { it !in reclaimed } }
+                .mapValues { (e, tags) -> (tags - (dels[e] ?: emptySet())).filterTo(mutableSetOf()) { !reclaimed.holds(e, it) } }
                 .filterValues { it.isNotEmpty() }
             if (newAdds.isEmpty() && newDels.isEmpty() && fenced.isEmpty()) return // echo terminates here
             newAdds.forEach { (e, tags) -> adds.getOrPut(e) { mutableSetOf() } += tags }
@@ -540,7 +597,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // add-tags it covered, and nothing else. A live add-tag is never in
             // `covered`, so it can never enter the fence, which is the whole
             // difference from the per-source floor this bead's acceptance forbids.
-            covered.forEach(reclaimed::record)
+            covered.forEach { reclaimed.record(element, it) }
             delTags -= covered
             discarded += covered.size
             adds[element]?.let { addTags ->
@@ -586,8 +643,8 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * empty result on every such replica is the fence being exonerated, by
      * measurement rather than by ordinal parity. See [liveTagsOf].
      */
-    internal fun fencedAmong(tags: Set<Timestamp>): Set<Timestamp> = synchronized(stateLock) {
-        tags.filterTo(mutableSetOf()) { it in reclaimed }
+    internal fun fencedAmong(element: E, tags: Set<Timestamp>): Set<Timestamp> = synchronized(stateLock) {
+        tags.filterTo(mutableSetOf()) { reclaimed.holds(element, it) }
     }
 
     /**
