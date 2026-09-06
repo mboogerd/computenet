@@ -820,7 +820,8 @@ that is what the per-rule notes below now say instead of one blanket line.)*
   Nothing yet stops a duplicated, reordered or replayed frame carrying a
   discarded tag from being re-admitted as new information — novelty is
   `tags − adds[e]`, and a discarded tag is absent from `adds[e]` again. The
-  residual is 8-9 of 200 sweep seeds. computenet-v2ka **measured that a
+  residual is 8-10 of 200 sweep seeds, across three independent 200-seed runs
+  (8, 9, 10; `concord/corpus/DISPUTES.md` `## KE3-GC-DEL-LANE`). computenet-v2ka **measured that a
   per-source re-admission floor does not close it safely**: it drives the
   resurrections to zero and fences *live* add-tags in the process, leaving
   31-33 of 200 seeds with permanently diverged memberships against a

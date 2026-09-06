@@ -432,14 +432,16 @@ class BoundedReadProbeTest {
                 // Reported because the original E3's List<Int> stand-in carried no
                 // frontier at all, so this is a fact only the real walk can produce — and
                 // reported with its limit attached: for an OR-set, equal endpoint stamps
-                // are necessary but NOT sufficient for "the union is a snapshot", because
-                // an observed-remove mints no tag (SetCell.readBounded's KDoc). Under a
-                // concurrent add drive the expected answer is UNSTABLE, and an unstable
-                // stamp is the walk working, not failing.
+                // are necessary but NOT sufficient for "the union is a snapshot" — since
+                // computenet-v2ka a local remove mints a del-dot and is caught, but a
+                // REORDERED remote del below a per-source max still is not
+                // (SetCell.readBounded's KDoc). Under a concurrent add drive the expected
+                // answer is UNSTABLE, and an unstable stamp is the walk working, not failing.
                 "frontier stable (opening stamp == closing stamp): " +
                     "$frontierStableTrials/${BoundedReadFixtures.TRIALS} trials — " +
                     "instability is expected under a concurrent add drive, and stability " +
-                    "would NOT prove the union is a snapshot (observed-remove mints no tag)",
+                    "would NOT prove the union is a snapshot (a reordered remote del can " +
+                    "still evade it)",
             ),
         )
     }

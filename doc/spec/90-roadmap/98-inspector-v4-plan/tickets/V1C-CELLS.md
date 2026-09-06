@@ -97,9 +97,12 @@ them, and do not invent a second mechanism beside them.**
 One inherited-decision correction, from the same audit. `StatePage`'s
 across-page contract now reads "equal endpoint frontiers ⇒ the union is exactly
 a snapshot **for a family in which every state change mints or absorbs a tag**",
-because the check detects tag *gains* and only tag gains. `SetCell`'s
-observed-remove mints no tag, so a mid-walk removal is invisible to it. Two
-consequences for you: the frontier need only be **exact on the first and last
+because the check detects tag *gains* and only tag gains. Since computenet-v2ka
+`SetCell`'s `remove` mints a del-dot, so a mid-walk LOCAL removal now moves the
+closing stamp and is caught; a REORDERED remote `dels` entry whose dot is below
+a tag this replica already holds from that source still evades it, because the
+frontier is a per-source max, not a set. Two consequences for you: the
+frontier need only be **exact on the first and last
 page** of a walk (an intermediate page may carry the opening stamp plus
 `ReadCaveat.STALE_FRONTIER`, which is what `SetCell` does, precisely because a
 per-page exact frontier costs an O(n) rescan per page and `ShardCell`'s

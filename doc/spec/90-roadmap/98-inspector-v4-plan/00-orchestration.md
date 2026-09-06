@@ -326,11 +326,14 @@ so all three downstream tickets were edited, plus a path typo in `V4-PEERID`:
 
 One repair the evaluator made rather than flagged: `StatePage`'s across-page
 contract claimed, unqualified, that equal endpoint frontiers imply the union is
-exactly a snapshot. A `TagFrontier` measures tag *gains*, and an OR-set
-observed-remove mints no tag — so a remove-only mid-walk mutation is invisible
-to the check. Both KDocs now say the check is necessary but not sufficient for
-such a family, and a kernel test pins it. `V1C-CONCORD` must not write a
-`[21-PULL-03]`-style stability scenario over a removal.
+exactly a snapshot. A `TagFrontier` measures tag *gains*. Since
+computenet-v2ka, `SetCell`'s `remove` mints a del-dot, so a LOCAL remove-only
+mid-walk mutation now moves the closing stamp and is caught by the check; the
+surviving counterexample is a REORDERED remote `dels` entry whose dot is below
+a tag this replica already holds from that source, because the frontier is a
+per-source max and not a set. Both KDocs now say the check is necessary but
+not sufficient for such a family, and a kernel test pins it. `V1C-CONCORD`
+must not write a `[21-PULL-03]`-style stability scenario over a removal.
 
 ## Wave 9 — cell coverage and stable peer identity · branches from `main` after C8
 
@@ -588,9 +591,12 @@ Four rulings this checkpoint records.
    KDoc.
 2. **`[21-PULL-03]` gained a family qualification, and it is load-bearing rather
    than a hedge.** `StatePage`'s shipped KDoc says the stability check "detects
-   tag gains, and only tag gains", and an OR-set observed-remove mints nothing —
-   so the *unqualified* drafted requirement is simply false for every
-   tag-frontier family in the catalog. The correction is the C8 and C9 rulings
+   tag gains, and only tag gains". Since computenet-v2ka, `SetCell`'s `remove`
+   mints a del-dot and is caught for a LOCAL removal, but a REORDERED remote
+   `dels` entry below a per-source max still is not — and every other
+   tag-frontier family in the catalog still mints no tag on remove at all — so
+   the *unqualified* drafted requirement is simply false for every tag-frontier
+   family in the catalog. The correction is the C8 and C9 rulings
    ("`V1C-CONCORD` must not write a `[21-PULL-03]`-style stability scenario over
    a removal"; "must not write a stability scenario that assumes monotonicity")
    being honoured in the requirement text rather than only in the corpus.

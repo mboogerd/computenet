@@ -134,13 +134,17 @@ internal class GcTotals(val label: String) {
  *
  * ## What the deterministic pins already settled, and what this sweep therefore asks
  *
- * `CompactionTriggerPinTest` (computenet-9sm.4.2) MEASURED that `SetCell.foldDelivered` is fed only
- * from `add()` and from `applyRemote()`'s `newAdds` — `remove()` mints and folds nothing — so the
- * stable frontier certifies ADD delivery only, and a straggler that missed a REMOVE can resurrect
- * the element even under STABLE. That is settled deterministically and is not re-litigated here.
- * This sweep asks the SEEDED question instead: does the churn adversary reach that state on its
- * own, and how often, under partition, duplicate and reorder — and does the wrong seam (LOCAL)
- * reach it strictly more often.
+ * `CompactionTriggerPinTest` (computenet-9sm.4.2) MEASURED that, before computenet-v2ka's del-dot,
+ * `SetCell.foldDelivered` was fed only from `add()` and from `applyRemote()`'s `newAdds` —
+ * `remove()` minted and folded nothing — so the stable frontier certified ADD delivery only, and a
+ * straggler that missed a REMOVE could resurrect the element even under STABLE. computenet-v2ka
+ * closed that half: `remove()` now mints a del-dot into its `dels` entry and `applyRemote` folds the
+ * del lane too, so the stable frontier now certifies the REMOVE as well (`SetCell.remove`'s KDoc).
+ * What is still settled deterministically and not re-litigated here is that this leaves the
+ * RE-ADMISSION half open — a duplicated or reordered frame re-delivering a tag the reclaimer already
+ * discarded (`concord/corpus/DISPUTES.md` `## KE3-GC-DEL-LANE`). This sweep asks the SEEDED question:
+ * does the churn adversary reach that re-admission state on its own, and how often, under partition,
+ * duplicate and reorder — and does the wrong seam (LOCAL) reach it strictly more often.
  *
  * ## What was MEASURED (seeds 1..200, budget 40_000, 16-core macOS; ~5.0 s + ~4.3 s)
  *
@@ -156,12 +160,16 @@ internal class GcTotals(val label: String) {
  * qualitatively safer seam a superset relation would imply. It is a *seeded* corroboration of a
  * deterministically settled fact, at rates this range can see.
  *
- * ## The rig is not reproducible, and that is not this task's doing
+ * ## The rig is not reproducible on a healed partition, and that is not this task's doing
  *
- * The per-seed failing sets differ from run to run, and `DstRun.assertDeterministic()` fails on
- * every churn-mesh configuration tried — including with **both** of this sweep's step hooks removed,
- * and again with both installed but **no** folded faults. See the pin test's KDoc for the 2x2 and
- * for what is pinned instead. Filed separately; nothing here is weakened to accommodate it.
+ * `DstRun.assertDeterministic()` does not fail on every churn-mesh configuration tried — it fails
+ * only on a plan containing a `DepartureMode.PARTITION_SUSPEND` departure that is later rejoined or
+ * healed (`doc/dst-rig.md` §"A peering that re-opens mid-run is outside the determinism contract",
+ * computenet-l0gd): `Peering.Loopback.heal()`'s announcement sweep re-runs over hash-ordered maps
+ * keyed by `UUID.randomUUID()`, so the re-announcement order is a fresh draw every run. A plan
+ * drawing only `EVICT_CLEAN`/`EVICT_NO_CLOSE`/`CRASH_UNCLEAN` departures IS trace-reproducible. See
+ * the pin test's KDoc for the 2x2 corner measurement that first localized the cause on this graph,
+ * and for what is pinned instead. Filed separately; nothing here is weakened to accommodate it.
  *
  * ## Honesty (feature rule 6, harness half)
  *
@@ -520,6 +528,10 @@ class GcSafetySweepTest {
         //   del-dot only               F-B on 8 seeds  [25, 75, 121, 126, 154, 166, 168, 172]
         //   del-dot + re-admission floor   F-B on 0 seeds, and 31-33 of 200 MEMBERSHIP-DIVERGING
         //
+        // Two independent re-runs of the "del-dot only" row (computenet-jy06) found 9 and 10
+        // resurrecting seeds — see `concord/corpus/DISPUTES.md` `## KE3-GC-DEL-LANE` — so the band
+        // is 8-10 of 200 across three 200-seed runs, not the single-run 8 above.
+        //
         // The third row is why no floor is in the tree: it bought branch G by fencing LIVE
         // add-tags, against a no-reclaimer CONTROL floor of 2-5 diverging seeds. A per-source
         // high-water cannot tell "this tag was reclaimed" from "this tag is below a position I
@@ -529,7 +541,7 @@ class GcSafetySweepTest {
             stableResurrecting.isNotEmpty(),
             "[KE3-23] branch F-B: no seed resurrected under the STABLE trigger. The del-dot " +
                 "removes the DEL-DELIVERY half of the hazard and MEASURABLY does not remove the " +
-                "RE-ADMISSION half (8-9 of 200 on this base), so an empty set here means either " +
+                "RE-ADMISSION half (8-10 of 200 across three independent runs), so an empty set here means either " +
                 "the fence landed — in which case this assertion is the one to update, together " +
                 "with the divergence assertion below — or the rig stopped reaching the state. " +
                 "Do not narrow SEEDS to reach it. failures=" + sweep.failures.map { it.seed to it.message },

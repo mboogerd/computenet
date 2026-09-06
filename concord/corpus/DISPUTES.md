@@ -1427,11 +1427,16 @@ The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
      qualification in the requirement is load-bearing, not decoration: comparing
      a walk's opening and closing stamps detects *tag gains, and only tag gains*.
      Every tag-frontier-carrying family in the standard library is an
-     observed-remove set, whose retraction copies the add-tags it already holds
-     into its del-map and mints nothing — so a mid-walk retraction of an element
-     the walk has already paged leaves both stamps equal while the union still
-     names that element present. For those families equal stamps are *necessary
-     but not sufficient*, and the shipped primitive says so on its own read
+     observed-remove set. Since computenet-v2ka, `SetCell`'s retraction mints a
+     del-dot into its del-map, so a mid-walk LOCAL retraction now moves the
+     closing stamp and is caught; every other such family's retraction still
+     copies the add-tags it already holds into its del-map and mints nothing,
+     and even for `SetCell` a REORDERED remote `dels` entry whose dot is below a
+     tag this replica already holds from that source still leaves both stamps
+     equal while the union names the retracted element present, because the
+     frontier is a per-source max and not a set. For those families equal
+     stamps are *necessary but not sufficient*, and the shipped primitive says
+     so on its own read
      (`kernel/src/main/kotlin/civictech/cell/BoundedRead.kt`, `StatePage`'s
      stability contract). A scenario over `set-source` therefore could not make
      the requirement's antecedent true; it would read as covered while asserting
@@ -2635,7 +2640,7 @@ property is statable at the driver and not in the corpus.
 - **STILL OPEN — the re-admission half, and it is why this entry is not
   retired.** `[24-TAG-04]`'s second clause ("SHALL NOT re-admit it as new
   information") has no mechanism. `GcSafetySweepTest`'s BS-12 arm is still
-  branch F-B at 7-9 resurrecting seeds per 200 (down from 8-12), every one a
+  branch F-B at 8-10 resurrecting seeds per 200 (down from 8-12), every one a
   duplicated or reordered frame re-delivering a tag the reclaimer had already
   discarded. `[KE3-23]` and `[KE3-31]` therefore remain uncovered.
   **Independently re-measured 2026-09-06** on branch `feature/computenet-v2ka`
@@ -2646,6 +2651,10 @@ property is statable at the driver and not in the corpus.
   of the nine detail lines has the same shape — `adds=[n] dels=[n, n+1]`, an
   add-tag and the del-dot minted directly after it, re-delivered into an entry
   the reclaimer had discarded — which is the re-admission half naming itself.
+  **A third independent run**, by the computenet-v2ka feature reviewer at
+  `aaae37095`, measured STABLE resurrecting on **10** of 200 — so across three
+  200-seed runs (8, 9, 10) the band is 8-10, not the 7-9 or 8-9 this entry and
+  the KDoc sites once stated separately.
   So the acceptance criterion's "zero resurrecting seeds" is **NOT met**, and
   is recorded here rather than reached by relaxing the harness.
 - **What was measured and rejected, so nobody pays for it twice**: a
