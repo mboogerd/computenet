@@ -1,0 +1,71 @@
+# Concord corpus scenario (W4-A, profile: dist). Canonical schema — see concord/schema/scenario.md.
+#
+# Covers [42-WM-08]'s script-observable clause ONLY: a departed replica's
+# frozen fold is excluded from convergence, and survivors keep converging
+# under continued writes after the departure (spec 40/42 §"Departure: closed,
+# suspended, or frozen", clean-departure half). Modeled on
+# `42-REPL-DEPART-01`'s shape (`covers: [42-REPL-06]`), widened here to at
+# least five post-departure writes spread over both survivors, per
+# computenet-9sm.5's breakdown design (9sm.5-D8).
+#
+# What this scenario does NOT cover, and why it cannot honestly cover it:
+# the concord driver's `despawn` (`civictech.concord.driver.kernel.KernelDriver
+# .despawn`) unlinks the cell and calls `host.managementInlet.call.despawn`; it
+# never calls `civictech.cell.replication.Replication.evict`, and
+# `KernelDriverDist` does not override `despawn` to route `replica-of` cells
+# through it (verified at this task's base commit — no
+# `override fun despawn` in KernelDriverDist.kt). So a corpus `despawn` never
+# closes the departed replica's watermark row and never advances the
+# stability MIN — [42-WM-08]'s row-close and stability-advance clauses are
+# unobservable through this driver SPI. Those halves are pinned at the
+# kernel instead: `DepartureStabilityPinTest` (BS-8, row close/suspend/resume)
+# and `MemberDepartureFrontierTest` (clean-departure WAVE-frontier release).
+# The gap — no verb kills a host without despawn, no check observes a
+# `StallNotice`, and `despawn` does not bind to `Replication.evict` — is
+# recorded in `concord/corpus/DISPUTES.md` as `42-WM-FREEZE-01`, which
+# cross-references `CHA3-42-stall-notice-unclean-departure` (the churn-rig
+# half of the same gap). A scenario that can only pass is not filed as if it
+# proved the close.
+id: 42-WM-DEPART-01
+title: A replica that departs orderly is excluded from convergence; survivors keep converging under continued writes
+covers: [42-WM-08]
+profile: dist
+kind: example
+narrative:
+  given: three set-source replicas of one logical cell, one per host, two of them observed through their own set view
+  when: one replica departs via an orderly despawn while at least five further writes land on the two survivors
+  then: the survivors converge with each other — the departed replica's frozen fold is excluded, not compared — and no dead letters are produced
+graph:
+  hosts: [h1, h2, h3]
+  cells:
+    - {id: r1, type: set-source, of: string, host: h1, replica-of: shared}
+    - {id: r2, type: set-source, of: string, host: h2, replica-of: shared}
+    - {id: r3, type: set-source, of: string, host: h3, replica-of: shared}
+    - {id: v1, type: set-view, host: h1}
+    - {id: v2, type: set-view, host: h2}
+  links:
+    - {from: r1, to: v1}
+    - {from: r2, to: v2}
+script:
+  - {type: apply, on: r1, op: add, value: before-1}
+  - {type: apply, on: r3, op: add, value: before-3}
+  - {type: quiesce}
+  - {type: despawn, on: r3}
+  # settle the despawn (unpublish reconciles the gossip mesh, spec 42 G-45)
+  # before any further write — otherwise a survivor's write can race the
+  # despawn's own management call through the departed replica's host queue
+  # (enqueued while its registry location was still valid, delivered after
+  # its cell table entry is gone) and land as a spurious dead letter, an
+  # artifact of that race rather than of the departure itself (same race
+  # `42-REPL-DEPART-01` guards against).
+  - {type: quiesce}
+  - {type: apply, on: r1, op: add, value: after-1a}
+  - {type: apply, on: r2, op: add, value: after-2a}
+  - {type: apply, on: r1, op: add, value: after-1b}
+  - {type: apply, on: r2, op: add, value: after-2b}
+  - {type: apply, on: r1, op: add, value: after-1c}
+  - {type: quiesce}
+checks:
+  - {type: replicas-converge, logical: shared}
+  - {type: views-converge, views: [v1, v2]}
+  - {type: no-dead-letters}

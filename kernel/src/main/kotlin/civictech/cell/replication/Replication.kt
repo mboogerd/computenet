@@ -5,11 +5,14 @@ import civictech.cell.TagFrontier
 import civictech.cell.consistency.CausalStability
 import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.consistency.ReplicaQuorum
+import civictech.cell.consistency.StabilityFreezeDetector
+import civictech.cell.control.StallNotice
 import civictech.cell.Propagate
 import civictech.cell.data.Replicable
 import civictech.cell.data.WatermarkCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.notifyDownstream
 import civictech.cell.port.FanOutlet
 import civictech.cell.link.Interest
 import civictech.cell.link.Link
@@ -189,6 +192,82 @@ class Replication(
             if (rises) {
                 last = now
                 listener(now)
+            }
+        }, PortRef.generate()))
+    }
+
+    /**
+     * One [StabilityFreezeDetector] per logical id, created lazily by the
+     * first [onStabilityStall] registration and shared by every listener of
+     * that id — the latch is per **id**, not per listener, so a second
+     * listener registering mid-freeze does not re-arm the counter.
+     */
+    private val stabilityFreeze = mutableMapOf<UUID, StabilityFreezeDetector>()
+
+    /** App listeners registered through [onStabilityStall], per logical id. */
+    private val stabilityStallListeners = mutableMapOf<UUID, MutableList<(StallNotice) -> Unit>>()
+
+    /**
+     * Hand [listener] every stability-freeze notice for [logicalId] — the
+     * stall analogue of [onStabilityAdvance] and built the same way
+     * (decisions 9sm.5-D1/D7, [KE3-27]): a tap on the local companion's
+     * outlet, evaluated on every companion delta. Returns silently when no
+     * replica of [logicalId] has been [replicate]d here, exactly as
+     * [onStabilityAdvance] does.
+     *
+     * What arrives is a `Stall(STABILITY_FROZEN, timestamp, slot)` naming the
+     * replica slot the causal-stability MIN is pinned on, and later exactly
+     * one [StallNotice.Resume] retracting it. The predicate, the threshold
+     * and the latch live entirely in [StabilityFreezeDetector]; see its KDoc.
+     *
+     * **One snapshot per evaluation** ([KE3-24]): `rows()`, `closed()`,
+     * `members()` and
+     * [civictech.cell.host.InstanceIndex.instancesOf] are each read exactly
+     * once per delta, and the WAIT open set is derived from them the way
+     * [CausalStability.stableFrontier] derives its own — announced members ∪
+     * instance-derived slots, minus `closed`. Suspended slots stay IN: the
+     * WAIT read is frozen on them (9sm.5-D6).
+     *
+     * **Also fanned downstream** (9sm.5-D7): every notice is additionally
+     * pushed through [civictech.cell.host.notifyDownstream] for each local
+     * replica of [logicalId], so a downstream `WaveFrontier` consumer
+     * receives it on its Suspension protocol edge exactly as an ordinary
+     * `Stall` and applies the 9sm.5-D3 disposition (WAIT: no action; DEGRADE:
+     * the local-replica edge joins the suspended set). A consumer with no
+     * Suspension handler ignores it — delivery is `handlers[id]?.invoke`.
+     *
+     * **Known conflation, not redesigned here** (9sm.5-D7): [StallNotice.Resume]
+     * is not keyed by reason, so a stability Resume also clears a
+     * SUSPENDED- or RESTARTING-caused suspension of the same edge. That
+     * conflation already exists between the shipped reasons; this path
+     * inherits it.
+     *
+     * **This path mutates nothing** ([KE3-28]): it never calls `close`,
+     * `suspend`, `resume` or [evict] on any slot or replica. The notice is a
+     * diagnostic; unfreezing is an operator action.
+     */
+    fun onStabilityStall(logicalId: UUID, listener: (StallNotice) -> Unit) {
+        val companion = watermarks[logicalId] ?: return
+        val listeners = stabilityStallListeners.getOrPut(logicalId) { mutableListOf() }
+        listeners += listener
+        // The tap and the detector are installed once per id; later listeners
+        // join the existing one so the latch stays per id.
+        if (listeners.size > 1) return
+        val detector = stabilityFreeze.getOrPut(logicalId) { StabilityFreezeDetector() }
+        companion.outlet.tap(Use.fixed(Propagate<WatermarkDelta> {
+            // ONE snapshot per evaluation ([KE3-24]).
+            val rows = companion.rows()
+            val closed = companion.closed()
+            val announced = companion.members()
+            val instances = registry.instances.instancesOf(logicalId)
+            val open = buildSet {
+                instances.mapTo(this) { WatermarkCell.slotId(watermarkRef(it)) }
+                addAll(announced)
+                removeAll(closed)
+            }
+            for (notice in detector.evaluate(rows, open, closed)) {
+                stabilityStallListeners[logicalId]?.toList()?.forEach { it(notice) }
+                localReplicas[logicalId]?.toList()?.forEach { replica -> notifyDownstream(replica, notice) }
             }
         }, PortRef.generate()))
     }

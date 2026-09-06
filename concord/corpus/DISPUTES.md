@@ -2629,3 +2629,59 @@ property is statable at the driver and not in the corpus.
   resurrecting to not.
 - **Revisit trigger**: a del-side delivered lane, or removes minting their
   own dot, lands on `Replication`/`SetCell`/`TagState`.
+
+## `42-WM-FREEZE-01` — an unclean departure's frozen-stability notice, and the clean-departure row close, are not observable through the driver SPI (`schema-gap` + `check-vocabulary-gap` + `driver-binding-gap`)
+
+- **Requirement it would cover**: `[42-WM-08]`
+  (`doc/spec/40-distribution/42-replication.md` §"Departure: closed,
+  suspended, or frozen") — both its unclean-departure half (freeze the
+  stability MIN and surface a `Stall`-family notice, not work around it) and
+  its clean-departure row-close/stability-advance half; epic `computenet-9sm`
+  `[KE3-27]`/`[KE3-28]` (BS-9).
+- **Why it cannot be pinned honestly**:
+  1. **No verb kills a host without despawn.** The closed step vocabulary
+     (`concord/schema/scenario.md` §script) is apply, quiesce, connect,
+     disconnect, snapshot, restore, restart, despawn, read-state, retransmit,
+     drive-contextless, drive-stamped — none of them models an unclean
+     departure (a host vanishing without an orderly despawn). `despawn` is
+     itself the *clean* path.
+  2. **No check observes a `StallNotice`.** The closed check vocabulary
+     (same file §checks) has no evaluator that reads
+     `civictech.cell.control.StallNotice` or any `Stall`-family value; a
+     frozen-stability notice has nothing to be asserted against even if a
+     kill verb existed.
+  3. **`despawn` does not bind to `Replication.evict`.**
+     `civictech.concord.driver.kernel.KernelDriver.despawn` (anchor
+     `override fun despawn(cellId: CellId)`) unlinks the cell and calls
+     `bound.host.managementInlet.call.despawn(bound.ref)` — a *management*
+     despawn, never `civictech.cell.replication.Replication.evict`. `git grep
+     -n 'override fun despawn' -- concord/src/main/kotlin/civictech/concord/driver/kernel/KernelDriverDist.kt`
+     is empty: `KernelDriverDist` does not override it for `replica-of`
+     cells either. So even the clean-departure half — the watermark row's
+     close and the stability MIN's consequent advance — is unreachable from
+     the corpus: a scripted `despawn` on a `replica-of` cell never touches
+     the row `Replication.evict` would have closed.
+- **What was NOT done instead**: no driver verb was added (out of scope per
+  computenet-9sm.5-D4/this task's non-goals: no `concord/src` or
+  `concord/schema` edits), and `42-WM-DEPART-01` was not stretched to claim
+  either half — its own header states exactly the script-observable clause
+  it covers (survivors exclude the departed replica's frozen fold and keep
+  converging under continued writes) and names this gap for the rest.
+- **Where each half IS pinned today**: the unclean-departure notice and its
+  no-silent-unfreeze control — `UncleanDepartureStabilityTest`; the
+  clean-departure row close/suspend/resume — `DepartureStabilityPinTest`
+  (BS-8) and `MemberDepartureFrontierTest` (WAVE-frontier release).
+- **Check to restore**: a `crash`/`kill` step verb (kills a host without an
+  orderly despawn — shape only, not built here) paired with a
+  `stall-observed` check reading a `Stall`-family notice off a named cell's
+  reads (shape only, not built here); and a `despawn` binding that routes a
+  `replica-of` cell's departure through `Replication.evict` rather than only
+  the management despawn, so the clean-departure row close becomes
+  script-observable too.
+- **Revisit trigger**: a schema-change ticket adds the kill verb and the
+  `Stall`-observing check (both a deliberate corpus-vocabulary growth,
+  `concord/schema/scenario.md`'s own P5 seam rule), or the kernel driver's
+  `despawn` is rebound to reach `Replication.evict` for `replica-of` cells.
+  Cross-reference: `CHA3-42-stall-notice-unclean-departure` records the
+  churn-rig half of this same gap (no mechanism reaches a churn peer's crash
+  at all, a distinct but related negative result).
