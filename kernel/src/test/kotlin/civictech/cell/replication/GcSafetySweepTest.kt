@@ -513,12 +513,20 @@ class GcSafetySweepTest {
      * a convenience. See [BS13_SEED].
      *
      * `DstRun.assertDeterministic()` (trace-digest reproduction) is what the bead prescribes. It
-     * **cannot pass on any churn-mesh graph**, and the cause is not this task's: a 2x2 corner
-     * measurement on seeds 1/8/9/19 at budget 40_000 found the digest differing between two
-     * back-to-back runs with **both** step hooks removed and the full fault plan in place, and
-     * again with both hooks installed and **no** folded faults at all (bare `churnPlan`). Neither
-     * hook and neither fault is the cause; the mesh graph itself is not trace-reproducible. It is
-     * filed as its own item rather than papered over here.
+     * **does not pass on this graph under a `ChurnGenerator`-drawn plan**, and the cause is not
+     * this task's: a 2x2 corner measurement on seeds 1/8/9/19 at budget 40_000 found the digest
+     * differing between two back-to-back runs with **both** step hooks removed and the full fault
+     * plan in place, and again with both hooks installed and **no** folded faults at all (bare
+     * `churnPlan`). Neither hook and neither fault is the cause.
+     *
+     * **Scope of that claim, MEASURED in the 9sm.4.4 review** and narrower than "the churn mesh
+     * is not reproducible": the sibling BS-5 graph — none of this task's hooks — is likewise not
+     * deterministic on seed 62, which is what puts the cause upstream of this task. But
+     * `ChurnMeshTest."two runs of one churn plan produce the same trace digest"` PASSES today on a
+     * hand-built `ChurnPlan`, and the bare-`churnPlan` corner is **seed-dependent** (of seeds
+     * 1/8/9/19/62/87/107 at `runs = 3`, seeds 62 and 87 reproduced and the rest did not). So what
+     * is unreproducible is a generated churn plan on this mesh, not `ChurnMesh` as such. Filed as
+     * its own item (computenet-l0gd) rather than papered over here.
      *
      * What IS reproducible is the **verdict**, which is the property rule 5 exists to protect: the
      * recorded seed must still be the seed that resurrects, run after run, so the pin is a pin and
