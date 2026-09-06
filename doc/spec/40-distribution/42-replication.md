@@ -479,6 +479,38 @@ disposition; none is silently absent.
 The epoch-hygiene question (when a `ReBaseline`-superseded source's watermark
 column may be dropped) is 95 §R14, likewise named and not resolved.
 
+### Wire compatibility of additive fields (KE3-39)
+
+`civictech.cell.wire.WireCodec` documents payload versioning as additive: a
+new nullable field on a `@Serializable` payload — e.g.
+`StallNotice.Stall.slot` (9sm.5-D5, `computenet-9sm.5`) — needs no `VERSION`
+bump because it defaults to `null`, and `WireCodec`'s `Json` never sets
+`encodeDefaults` so kotlinx.serialization's default (`false`) omits an unset
+field entirely. That claim is true, but **only in the direction it is usually
+read**: an older peer decoding a newer peer's bytes, where the newer peer left
+the field unset.
+
+**The reverse is not safe.** `WireCodec.build` never sets
+`ignoreUnknownKeys` either, so it stands on kotlinx.serialization's default of
+`false`. Once an upgraded peer emits a frame that actually populates a field
+an older peer's build predates — e.g. a `STABILITY_FROZEN` `Stall` carrying a
+non-null `slot` — the older peer's decode throws
+`kotlinx.serialization.SerializationException` on the unknown key rather than
+ignoring it. Pinned concretely in
+`kernel/src/test/kotlin/civictech/cell/wire/StallNoticeWireCompatTest.kt`.
+
+**Consequence: a mixed-version mesh must not populate a newly-added optional
+field until every peer has upgraded past the version that introduced it.**
+During a rolling upgrade of a replica set, an upgraded peer emitting a
+`STABILITY_FROZEN` `Stall` with `slot` set to a not-yet-upgraded peer breaks
+that peer's decode of the whole frame, not just the new field. This is a
+property of the wire codec's configuration, not of any one field's KDoc, so it
+governs every future additive field the same way until decided otherwise.
+Setting `ignoreUnknownKeys = true` would close the asymmetry but silences
+every unknown key on every decode, trading a loud failure on a malformed or
+version-mismatched frame for a silent one everywhere — a wire-behaviour change
+out of scope here; not adopted.
+
 ### Open interactions
 
 The R14 superseded-source-column rule and the FRM1/G-36 two-hop-cut interaction

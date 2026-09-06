@@ -269,6 +269,36 @@ object WireCodec {
     @Volatile
     private var json: Json = build(emptyList())
 
+    /**
+     * ## Additive fields are forward-compatible only, not both ways (KE3-39)
+     *
+     * A new nullable field on a `@Serializable` payload (e.g.
+     * [civictech.cell.control.StallNotice.Stall.slot]) needs no [VERSION]
+     * bump when it defaults to `null`: this [Json] never sets
+     * `encodeDefaults`, so kotlinx.serialization's default (`false`) omits an
+     * unset field entirely, and an OLDER reader decoding a NEWER writer's
+     * bytes — where the newer writer left the field unset — decodes
+     * unchanged.
+     *
+     * The reverse is **not** safe. This [Json] never sets
+     * `ignoreUnknownKeys` either, so it stands on kotlinx.serialization's
+     * default of `false`. Once an upgraded peer emits a frame that actually
+     * populates a field an older peer's build predates, the older peer's
+     * decode throws [kotlinx.serialization.SerializationException] on the
+     * unknown key rather than ignoring it — pinned concretely in
+     * `kernel/src/test/kotlin/civictech/cell/wire/StallNoticeWireCompatTest.kt`.
+     * Consequence: a mixed-version mesh MUST NOT populate a newly-added
+     * optional field until every peer has upgraded past the version that
+     * introduced it (`doc/spec/40-distribution/42-replication.md`
+     * §"Wire compatibility of additive fields (KE3-39)").
+     *
+     * Setting `ignoreUnknownKeys = true` would close the asymmetry but
+     * silences every unknown key on every decode, not just a deliberately
+     * additive one — trading a loud failure on a malformed or
+     * version-mismatched frame for a silent one everywhere. That is a
+     * broader wire-behaviour change than this note authorizes; not done
+     * here.
+     */
     private fun build(live: List<WireSerializers>): Json = Json {
         // `plus` fails fast if a contribution collides with a kernel type (or
         // with an earlier contribution) — unchanged from the once-built codec.
