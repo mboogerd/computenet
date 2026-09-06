@@ -486,6 +486,88 @@ the churn rig itself diverges on 2-5 seeds with no compaction at all, and that
 floor moves between runs because the rig is not reproducible (see
 `GcSafetySweepTest`'s pin-test KDoc).
 
+### computenet-pay7 — the re-admission fence that closes it, and the one that did not
+
+Base commit `b1180c935` (`main`, three commits past the row above). Host:
+16-core macOS, load average ~9-16 (concurrent agents). Same seeds, same budget,
+same harness.
+
+**Re-measured baseline first, and it is OUTSIDE the band this entry recorded.**
+On `b1180c935` the `+ del-dot` row reads **6** STABLE resurrecting
+`[110, 117, 126, 144, 168, 197]`, **3** membership-diverging `[78, 165, 181]`,
+CONTROL diverging **2** `[108, 149]`; LOCAL resurrecting 8, diverging 0. Six is
+below the 8-10 band recorded above from three runs at `aaae37095`. The band was
+never a bound — the rig is not reproducible and three commits touching these
+files landed in between — so this is recorded as a fifth data point, not as a
+contradiction. Every one of the six detail lines still reads `adds=[n]
+dels=[n, n+1]`.
+
+**The design.** `SetCell.compactBelow` records the exact dots it discards, in
+`ReclaimedDots` — a per-source **dot set**, compressed as sorted contiguous
+counter runs. `applyRemote` subtracts that set from the novelty it computes on
+both lanes. A live add-tag can never enter the set (only a discarded `dels`
+entry's tags do), which is the structural difference from the per-source floor:
+a floor rejects everything below a position, and below any position reclaimed
+and live counters interleave.
+
+**A fence that only DROPS the replayed frame is not safe, and this is the
+record of it.** The first build did exactly that. Measured:
+
+| build | STABLE resurrecting | STABLE diverging | CONTROL diverging |
+|---|---|---|---|
+| `+ del-dot` (base `b1180c935`) | 6 | 3 | 2 |
+| `+ dot-set fence`, no repair emission | **0** | **30** | 3 |
+| `+ dot-set fence + repair emission` | **0** | 5-8 | 1-4 |
+
+Thirty is the same order as the per-source floor's 31-33, and the mechanism is
+related: a replica whose frame is fenced is one that still holds the add-tag
+LIVE with no tombstone for it, so dropping the frame leaves the element live
+there and absent here for ever. The resurrection is converted into a permanent
+divergence rather than removed — visible only to
+`GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE`.
+
+**The repair emission.** A fenced add-tag is answered with a minimal `dels`
+entry naming exactly that tag. The fence is itself the evidence the tag was
+covered by a remove this replica saw certified delivered, so the covering entry
+is reconstructible from the tag alone; no del-dot is minted, because no new
+remove happened. The receiver folds it, drops the element, and later reclaims
+and fences the tag in turn — the fence spreads rather than fragmenting the
+mesh. It cannot loop: the repair fires only for a tag novel against `adds`
+here, and a peer answering with a `dels` frame carries only tags this replica
+already fences.
+
+**The last row's figures**, seeds 1..200 at budget 40_000, four independent
+runs: STABLE resurrecting `[]` in all four; STABLE diverging 5, 7, 7, 8 (the
+recurring core `{18, 103, 114, 159, 169}`); CONTROL diverging 1, 2, 3, 4;
+LOCAL resurrecting `[]`, LOCAL diverging 3-6.
+
+**The excess over the control is recorded, not explained away.** It is bounded
+evidence and it is not zero. What can be said checkably: `removeSchedule`
+removes only ODD-ordinal writes, so an EVEN-ordinal element's add-tag never
+enters a `dels` entry, can never be recorded by `compactBelow`, and cannot be
+in the fence. Four of the seven seeds diverging on the last run differ by
+exactly one such element (`peer1-22`, `peer2-20`, `peer1-16`); the other three
+differ by `peer2-23`, the last-write straggler shape the CONTROL arm itself
+produces. What compaction changes is the traffic: the fence removes the
+discard/re-admit/re-emit churn, so `discarded` falls from ~64_000 to ~5_900
+over the sweep and the rig's own late-write floor is reached on more seeds.
+`GcSafetySweepTest`'s `MAX_STABLE_DIVERGING` was raised 10 → 12 on that
+reading, with the band recorded in its KDoc.
+
+**Cost.** The fence is not free and not a bound: reclamation exchanges
+per-element tombstone maps for a per-source run list, which coalesces well on a
+workload that removes what it adds and degrades to one run per reclaimed tag
+under an adversarial interleaving. A bounded form needs epoch hygiene (G-42),
+research-gated.
+
+**Pins.** `BS13_SEED` was re-derived `126` → `18`: the LOCAL arm no longer
+resurrects at all (the fence applies to whatever frontier the reclaimer is
+driven from), so the wrong seam's observable harm is now a membership
+divergence, and `18` is the one seed in every LOCAL diverging set taken on this
+base. `BS12_SEED` deliberately STAYS `126` with its verdict inverted — it was
+chosen because it resurrected on 5 of 5 dedicated re-runs, and it now
+resurrects on none of them.
+
 ### Rig note
 
 `BS12_SEED`/`BS13_SEED` were re-derived from `62` to `126`. The del-dot
