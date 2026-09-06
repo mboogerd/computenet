@@ -25,9 +25,13 @@
 # source cell in this package that was in NEITHER the catalog NOR the ledger; this gate does not
 # itself decide registration-vs-exclusion, it only keeps this list, and therefore the fact of any
 # such gap, from drifting silently. The remaining names are *Api/*Ops/*Base/*Ports companions of
-# the above, or the non-cell helper types described above.
+# the above, or the non-cell helper types described above. ReclaimedDots (added by
+# computenet-pay7) is another such non-cell helper: SetCell's re-admission fence, an internal
+# per-source dot set written only by SetCell.compactBelow. It is neither a source cell nor an
+# operator, so it needs no OperatorCatalog registration and no HONEST-02 ledger entry — it is
+# listed here for the same reason PageBudget and KeyWalk are, because it is on the classpath.
 #
-# 41 lines below, each confirmed to have `kind == CLASS_KIND` (not a file facade) via
+# 42 lines below, each confirmed to have `kind == CLASS_KIND` (not a file facade) via
 # isKotlinFileFacade, from a :kernel:compileKotlin build against commit 7b917c3b
 # (computenet-4ru.19, #364).
 #
@@ -73,6 +77,7 @@ PageBudget
 PnCounterCell
 PnCounterCellPorts
 PnCounterOps
+ReclaimedDots
 Replicable
 SetApi
 SetCell
