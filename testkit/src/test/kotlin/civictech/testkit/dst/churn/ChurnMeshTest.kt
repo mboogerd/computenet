@@ -355,4 +355,72 @@ class ChurnMeshTest {
         )
         assertEquals(false, MeshPeers.require(world, "peer2").lastEvictClosedRow)
     }
+
+    // -------------------------------------------------------------------- MeshPeer.remove
+
+    /**
+     * [MeshPeer.remove]: a `SET`-payload peer can undo an add it (or any peer) issued, the
+     * removal gossips to the rest of the mesh, a non-member peer refuses it exactly like
+     * [MeshPeer.write] does, and — the property [BatchReference]'s KDoc and [MeshPeer.remove]'s
+     * own KDoc both call out — the accepted-op ledger never learns about it, so it still names
+     * only the one add after the remove has run.
+     *
+     * The mesh here carries no generated write schedule: the write and the remove are issued
+     * directly against the quiesced world the join-only plan produces, the same pattern
+     * `doc/dst-rig.md` §1 seam 4 describes for a graph builder's own step-hook workload.
+     */
+    @Test
+    fun `MeshPeer#remove undoes a SET add, gossips it, and is refused for a non-member without touching the accepted-op ledger`() {
+        val peers = roster(2)
+        val plan = ChurnPlan(
+            seed = 13L,
+            config = config(peers = 2, stepBudget = 4000),
+            peers = peers,
+            events = joinsAt(1, peers),
+        )
+
+        val (report, world) = execute(plan, budget = BUDGET)
+        assertEquals(DstOutcome.PASSED, report.outcome, report.summary())
+        assertEquals(plan.events.map { it.id }.toSet(), firedIds(report), report.summary())
+
+        val peer0 = MeshPeers.require(world, "peer0")
+        val peer1 = MeshPeers.require(world, "peer1")
+
+        assertTrue(peer0.write(0), "peer0 is a member, so the write is issued")
+        world.controller.runToIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val afterWrite0 = peer0.foldSnapshot() as List<String>
+
+        @Suppress("UNCHECKED_CAST")
+        val afterWrite1 = peer1.foldSnapshot() as List<String>
+        assertTrue("peer0-0" in afterWrite0, "peer0's own replica carries the add: $afterWrite0")
+        assertTrue("peer0-0" in afterWrite1, "the add gossiped to peer1: $afterWrite1")
+
+        assertTrue(peer0.remove("peer0-0"), "peer0 is a member, so the removal is issued")
+        world.controller.runToIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val afterRemove0 = peer0.foldSnapshot() as List<String>
+
+        @Suppress("UNCHECKED_CAST")
+        val afterRemove1 = peer1.foldSnapshot() as List<String>
+        assertFalse("peer0-0" in afterRemove0, "the remove is applied to the issuing replica: $afterRemove0")
+        assertFalse("peer0-0" in afterRemove1, "the remove gossiped to peer1: $afterRemove1")
+
+        // MeshPeer.remove is deliberately not an AcceptedOp (see its KDoc): the ledger must
+        // still show only the one write, never a second entry for the removal.
+        assertEquals(
+            listOf(AcceptedOp(peer = "peer0", ordinal = 0, element = "peer0-0")),
+            AcceptedOps.of(world),
+            "the accepted-op ledger does not learn about a removal",
+        )
+
+        assertTrue(peer1.evictClean(), "the only other replica remains reachable, so the eviction despawns")
+        assertFalse(peer1.member, "the eviction despawned peer1's replica")
+        assertFalse(
+            peer1.remove("anything"),
+            "a non-member peer refuses a remove, same contract as write",
+        )
+    }
 }
