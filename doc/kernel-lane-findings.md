@@ -766,9 +766,17 @@ sweeps of each adversary back to back (the unwidened half taken by removing
     UNWIDENED  2 of 8 sweeps red
 
 Over every sweep taken for this item the totals are 7 of 22 widened and 3 of 15
-unwidened. **The widening does not move this rate**, and the unwidened
-reproduction at the merge base is the evidence that it is not this change's
-doing. A dedicated 5-run pin on seed 12 under STABLE scored **0/5**, so it is a
+unwidened. **The unwidened reproduction at the merge base is the evidence that
+it is not this change's doing** — a failure that occurs without the widening
+was not caused by it, and that conclusion does not depend on the comparison.
+**The comparison itself is too small to conclude anything** (task review,
+computenet-nwnl): 32% against 20% on n=22 and n=15 is far from separable, the
+observed direction is *upward* under the widening, and a real doubling of the
+rate would not be detectable at these sample sizes. Read it as "not shown to
+move the rate", never as "shown not to". There is also a mechanistic reason to
+expect some increase: both new parks touch `peer2`, and every observed
+occurrence is `peer2`/`peer2-23`. Sizing that belongs to computenet-dwkp.
+A dedicated 5-run pin on seed 12 under STABLE scored **0/5**, so it is a
 rare schedule rather than a property of that seed — which is also why
 computenet-vhlm's eight consecutive green runs are consistent with a ~20-30%
 per-sweep failure rate rather than evidence against it.
