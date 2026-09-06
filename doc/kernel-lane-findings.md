@@ -486,6 +486,88 @@ the churn rig itself diverges on 2-5 seeds with no compaction at all, and that
 floor moves between runs because the rig is not reproducible (see
 `GcSafetySweepTest`'s pin-test KDoc).
 
+### computenet-pay7 — the re-admission fence that closes it, and the one that did not
+
+Base commit `b1180c935` (`main`, three commits past the row above). Host:
+16-core macOS, load average ~9-16 (concurrent agents). Same seeds, same budget,
+same harness.
+
+**Re-measured baseline first, and it is OUTSIDE the band this entry recorded.**
+On `b1180c935` the `+ del-dot` row reads **6** STABLE resurrecting
+`[110, 117, 126, 144, 168, 197]`, **3** membership-diverging `[78, 165, 181]`,
+CONTROL diverging **2** `[108, 149]`; LOCAL resurrecting 8, diverging 0. Six is
+below the 8-10 band recorded above from three runs at `aaae37095`. The band was
+never a bound — the rig is not reproducible and three commits touching these
+files landed in between — so this is recorded as a fifth data point, not as a
+contradiction. Every one of the six detail lines still reads `adds=[n]
+dels=[n, n+1]`.
+
+**The design.** `SetCell.compactBelow` records the exact dots it discards, in
+`ReclaimedDots` — a per-source **dot set**, compressed as sorted contiguous
+counter runs. `applyRemote` subtracts that set from the novelty it computes on
+both lanes. A live add-tag can never enter the set (only a discarded `dels`
+entry's tags do), which is the structural difference from the per-source floor:
+a floor rejects everything below a position, and below any position reclaimed
+and live counters interleave.
+
+**A fence that only DROPS the replayed frame is not safe, and this is the
+record of it.** The first build did exactly that. Measured:
+
+| build | STABLE resurrecting | STABLE diverging | CONTROL diverging |
+|---|---|---|---|
+| `+ del-dot` (base `b1180c935`) | 6 | 3 | 2 |
+| `+ dot-set fence`, no repair emission | **0** | **30** | 3 |
+| `+ dot-set fence + repair emission` | **0** | 5-8 | 1-4 |
+
+Thirty is the same order as the per-source floor's 31-33, and the mechanism is
+related: a replica whose frame is fenced is one that still holds the add-tag
+LIVE with no tombstone for it, so dropping the frame leaves the element live
+there and absent here for ever. The resurrection is converted into a permanent
+divergence rather than removed — visible only to
+`GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE`.
+
+**The repair emission.** A fenced add-tag is answered with a minimal `dels`
+entry naming exactly that tag. The fence is itself the evidence the tag was
+covered by a remove this replica saw certified delivered, so the covering entry
+is reconstructible from the tag alone; no del-dot is minted, because no new
+remove happened. The receiver folds it, drops the element, and later reclaims
+and fences the tag in turn — the fence spreads rather than fragmenting the
+mesh. It cannot loop: the repair fires only for a tag novel against `adds`
+here, and a peer answering with a `dels` frame carries only tags this replica
+already fences.
+
+**The last row's figures**, seeds 1..200 at budget 40_000, four independent
+runs: STABLE resurrecting `[]` in all four; STABLE diverging 5, 7, 7, 8 (the
+recurring core `{18, 103, 114, 159, 169}`); CONTROL diverging 1, 2, 3, 4;
+LOCAL resurrecting `[]`, LOCAL diverging 3-6.
+
+**The excess over the control is recorded, not explained away.** It is bounded
+evidence and it is not zero. What can be said checkably: `removeSchedule`
+removes only ODD-ordinal writes, so an EVEN-ordinal element's add-tag never
+enters a `dels` entry, can never be recorded by `compactBelow`, and cannot be
+in the fence. Four of the seven seeds diverging on the last run differ by
+exactly one such element (`peer1-22`, `peer2-20`, `peer1-16`); the other three
+differ by `peer2-23`, the last-write straggler shape the CONTROL arm itself
+produces. What compaction changes is the traffic: the fence removes the
+discard/re-admit/re-emit churn, so `discarded` falls from ~64_000 to ~5_900
+over the sweep and the rig's own late-write floor is reached on more seeds.
+`GcSafetySweepTest`'s `MAX_STABLE_DIVERGING` was raised 10 → 12 on that
+reading, with the band recorded in its KDoc.
+
+**Cost.** The fence is not free and not a bound: reclamation exchanges
+per-element tombstone maps for a per-source run list, which coalesces well on a
+workload that removes what it adds and degrades to one run per reclaimed tag
+under an adversarial interleaving. A bounded form needs epoch hygiene (G-42),
+research-gated.
+
+**Pins.** `BS13_SEED` was re-derived `126` → `18`: the LOCAL arm no longer
+resurrects at all (the fence applies to whatever frontier the reclaimer is
+driven from), so the wrong seam's observable harm is now a membership
+divergence, and `18` is the one seed in every LOCAL diverging set taken on this
+base. `BS12_SEED` deliberately STAYS `126` with its verdict inverted — it was
+chosen because it resurrected on 5 of 5 dedicated re-runs, and it now
+resurrects on none of them.
+
 ### Rig note
 
 `BS12_SEED`/`BS13_SEED` were re-derived from `62` to `126`. The del-dot
@@ -493,3 +575,220 @@ consumes tag counters, so every schedule downstream of a remove shifts and the
 old pin no longer reproduces. `126` is the one seed present in the resurrecting
 set of every 200-seed run taken on this base, on both arms, and reproduced on
 5 of 5 dedicated re-runs.
+
+## KE3-GC-FENCE-KEY — the re-admission fence was keyed on the tag alone, and tag counters are reused across a replica's incarnations
+
+**computenet-vhlm, 2026-09-06, darwin/arm64 16-core, `GcSafetySweepTest`, seeds
+1..200, budget 40_000.** Filed against computenet-pay7's acceptance criterion 2
+("membership divergence no worse than the Trigger.NONE control arm's, measured
+in the same run"), which the shipped harness never checked: `MAX_STABLE_DIVERGING`
+is an absolute bound and was raised 10 -> 12 rather than the gap closed.
+
+### The measurement that replaced the inference
+
+computenet-pay7 argued the 3x excess over the control was not the fence's harm,
+from the workload: `GcSafetySweep.removeSchedule` removes only ODD-ordinal
+writes, so an EVEN-ordinal element's add-tag never enters a `dels` entry, can
+never be recorded by `compactBelow`, and is structurally un-fenceable. That
+argument is CORRECT. It is also insufficient, and the difference was invisible
+until it was measured rather than reasoned about.
+
+`GcSafetySweep` now performs the read directly
+(`FENCE_ATTRIBUTED_DIVERGENCE_FAILURE`): for every element the live replicas
+disagree on at quiescence, take the tags making it live where it IS live and ask
+every replica that LACKS it whether any is in that replica's own `ReclaimedDots`
+(`SetCell.liveTagsOf` / `SetCell.fencedAmong`, two internal diagnostic reads).
+
+    STABLE diverging        [43, 103, 145, 149, 173]  attribution NONE
+    STABLE fence-attributed [18, 114, 159, 169]       attribution (all), every lacking replica
+    CONTROL diverging       [43, 108, 173]            attribution NONE
+
+All four attributed seeds differ by an EVEN-ordinal element — `peer1-22`,
+`peer2-20`, `peer2-20`, `peer1-16` — the exact class the inference exonerated.
+
+### The mechanism: tag-source counter reuse
+
+`SetCell.tagSource` is `nameUUIDFromBytes("set-tags:${ref.id}:${ref.instanceId}")`
+— derived, not random, so a recovered instance replaying its journal re-mints the
+tags the network already observed. `tagCounter` restarts at 0 on any construction
+that does not `restore()`. In the churn rig `MeshPeer.index` IS the `instanceId`
+of every ref the peer owns, and a rejoin reuses the same `CellRef` by
+construction (`MeshPeer`'s KDoc, "Rejoin determinism"), while a generation > 0
+starts from a fresh `Replication` and no replica.
+
+So a peer that departs and rejoins re-mints counters its previous incarnation
+spent. `ReclaimedDots` was keyed on `(sourceId, counter)`, so a dot reclaimed
+from the departed incarnation fenced a DIFFERENT, LIVE element minted by the
+rejoin — permanently, at every replica holding that dot. Seed 18's `peer1-22` is
+peer1's eighth write and carries counter 4.
+
+### The fix, and what it measured
+
+`ReclaimedDots` is keyed on `(element, tag)`. Nothing is lost: a replayed frame
+carries the same pair that was discarded. Four 200-seed runs after the change:
+
+    STABLE resurrecting     []  []  []  []     (branch G, unchanged)
+    STABLE fence-attributed []  []  []  []
+    STABLE diverging         2   3   1   4
+    CONTROL diverging        3   3   3   1
+
+and four more taken independently in the task review on the same host (load1
+4.6-10.4, same date):
+
+    STABLE resurrecting     []  []  []  []
+    STABLE fence-attributed []  []  []  []
+    STABLE diverging         1   5   3   4
+    CONTROL diverging        3   3   3   4
+
+Every remaining STABLE divergence differs by `peer2-23` with attribution NONE,
+and the CONTROL arm (which now prints its own per-seed DIVERGE lines) produces
+that shape and nothing else. `MAX_STABLE_DIVERGING` was NOT raised and `SEEDS`
+was NOT narrowed.
+
+**What that does and does not settle.** The two arms are now in ONE BAND — 1-5
+STABLE against 1-4 CONTROL, where before the re-key they were 5-8 against 1-4 —
+so the ~3x excess this item was filed over is gone. The per-run INEQUALITY
+computenet-pay7's criterion 2 words ("no worse than the Trigger.NONE control
+arm's, measured in the same run") nevertheless does not hold on every run: run 4
+of the first table is 4 against 1, run 2 of the second is 5 against 3. On a rig
+that is not reproducible and whose two arms each move by several seeds between
+runs, a per-run count comparison is not assertable and the harness never
+asserted it. What carries criterion 2 is the ATTRIBUTION assertion — empty on
+8 of 8 runs above — with the absolute count bound behind it.
+
+### Residual holes, stated rather than left to be discovered
+
+- **Same element, colliding counter.** A rejoining incarnation that re-mints a
+  colliding counter for *the same* element is still wrongly fenced. Closing that
+  needs the tag source to be incarnation-unique, which is a change to the
+  journal-replay contract `tagSource` exists to keep. Out of scope.
+- **BS-13 lost its witness, and no friendlier seed was substituted.** The LOCAL
+  arm — the wrong seam, `[KE3-20]` — no longer resurrects (the fence applies to
+  whatever frontier drives the reclaimer) and, with the collision removed,
+  diverges on 0-3 of 200 rather than 3-6. Its recorded pin `BS13_SEED = 18` no
+  longer reproduces, and NO seed does: dedicated 5-run pins on the four
+  candidates observed across four sweeps scored 2/5 (70), 3/5 (146), 0/5 (181)
+  and 0/5 (90). The seed was left at 18 and the pin left RED rather than replaced
+  by a seed that happens to fail today. What survives is a sweep-level
+  discriminator that is arguably sharper than the pin was: every LOCAL divergence
+  is `FENCE_ATTRIBUTED`, and every STABLE divergence is not.
+
+## KE3-GC-WITNESS — BS-13's per-seed pin is retired onto a sweep-level discriminator, and the adversary is widened to make it reliable
+
+computenet-nwnl, residual of computenet-pay7 / computenet-vhlm (`[KE3-20]`).
+Ships inside PR #725. All numbers below are darwin/arm64, 16-core, load1 6-13,
+seeds `1..200`, budget 40_000, 2026-09-06. **The churn rig is explicitly not
+reproducible across hosts (computenet-l0gd), so every seed set here is ONE
+host's sample.**
+
+### The problem this closes
+
+`GcSafetySweepTest` carried two RED assertions, both in the BS-13 / LOCAL arm,
+both left red honestly by computenet-vhlm rather than papered over:
+
+1. the sweep arm's "no seed was observably harmed by compacting at the LOCAL
+   delivered frontier" — INTERMITTENTLY red; and
+2. the per-seed pin `BS13_SEED = 18` — DETERMINISTICALLY red.
+
+Both are the `(element, tag)` re-key's doing and not a regression: seed 18's
+LOCAL harm WAS the tag-counter collision, so removing the collision removed the
+witness. See `## KE3-GC-FENCE-KEY`.
+
+### What was done, and why both routes were needed
+
+**Route 1 — widen the adversary**, which is what `[KE3-20]`'s own failure
+message prescribes. `GcSafetySweep.plan` folded ONE `PartitionFault.park` on
+ONE of the mesh's three links for 600 of ~7000 steps, enclosing exactly two of
+the twelve scheduled removes. Two more parks were added on the other two links,
+in their own windows (`gc-park-b` on `peer0<->peer2` at 2400..3000,
+`gc-park-c` on `peer1<->peer2` at 3600..4200), taking the enclosed removes from
+two to six.
+
+**The windows are DISJOINT, and that is load-bearing.** The obvious stronger
+adversary — park both of one peer's links over one window so it is genuinely
+severed — was built, measured and REJECTED, because it destroys the
+distinction the sweep exists to measure. `ChurnMesh` declares
+`LinkControl.severing` per pair, and severing un-mirrors each side's MEMBERSHIP
+entry for the duration. An isolated peer is therefore not a straggler the
+others still wait on; it is a NON-MEMBER, so `stableFrontier` stops requiring
+its ack and advances exactly as `localDeliveredFrontier` does. Measured over
+four sweeps with `peer2` severed from both neighbours at 2400..3000: the LOCAL
+arm's harm rose (7, 1, 4, 3 of 200) and the STABLE arm went fence-attributed on
+1 of the 4 — the widening made the RIGHT seam look wrong too. A sharper
+adversary that blunts the discriminator is not a sharper adversary.
+
+**Route 2 — promote the fence-attribution discriminator to an assertion**, and
+retire the per-seed pin onto it. The BS-13 arm now asserts
+`fenceAttributed.isNotEmpty()` alongside (never instead of) the existing
+any-harm assertion, and the pin test keeps only its STABLE half.
+
+### Why the pin could not be re-derived a fourth time
+
+Dedicated 5-run pins on EVERY candidate observed across the widened sweeps:
+
+    seed   4 -> 4/5     seed 132 -> 4/5     seed 145 -> 1/5     seed 181 -> 1/5
+    seed  12 -> 0/5     seed  89 -> 0/5     seed 154 -> 0/5     seed 149 -> 0/5
+    seed 165 -> 0/5
+
+plus computenet-vhlm's own four on this host: 70 -> 2/5, 146 -> 3/5,
+181 -> 0/5, 90 -> 0/5. **Nothing reaches 5 of 5**, and the bead forbids
+recording a seed below that bar — rightly, since a 4-of-5 seed is a 20%-flaky
+required check. The provenance now lives in `GcSafetySweepTest.BS13_PIN_RETIRED`
+so the next reader finds the measurement rather than an absence.
+
+### The measurement that justifies the replacement
+
+Fence-attributed LOCAL seeds per 200-seed sweep:
+
+    WIDENED   (ten sweeps)   5  3  3  5  4  3  3  5  3  4    non-empty 10/10, min 3
+    UNWIDENED (seven sweeps) 2  2  1  1  0  2  2               non-empty  6/7
+
+In all ten widened sweeps EVERY LOCAL divergence was fence-attributed, and the
+LOCAL arm resurrected on none. The unwidened zero is exactly the intermittent
+redness this item was filed for, which is why the widening is part of the fix
+rather than optional polish. The STABLE arm's absolute divergence bound was
+untouched and never approached: its counts over the same ten sweeps were
+5, 3, 5, 2, 3, 4, 6, 3, 6, 2 against `MAX_STABLE_DIVERGING = 12`. `SEEDS` was
+not narrowed, no assertion was deleted or weakened, and the diff only adds
+assertions.
+
+### Residual, NEWLY MEASURED and NOT this item's to fix
+
+**BS-12's `stableFenceAttributed` assertion is itself intermittently red, and
+it was already red before this change.** It fires on seed 12, differing element
+`peer2-23`, `fencedAtLacking=peer2:[8](all)`.
+
+MEASURED head-to-head in one session, the BS-12 arm alone, eight 200-seed
+sweeps of each adversary back to back (the unwidened half taken by removing
+`gc-park-b`/`gc-park-c` under a `.mutation-in-progress` marker, then reverted):
+
+    WIDENED    3 of 8 sweeps red
+    UNWIDENED  2 of 8 sweeps red
+
+Over every sweep taken for this item the totals are 7 of 22 widened and 3 of 15
+unwidened. **The unwidened reproduction at the merge base is the evidence that
+it is not this change's doing** — a failure that occurs without the widening
+was not caused by it, and that conclusion does not depend on the comparison.
+**The comparison itself is too small to conclude anything** (task review,
+computenet-nwnl): 32% against 20% on n=22 and n=15 is far from separable, the
+observed direction is *upward* under the widening, and a real doubling of the
+rate would not be detectable at these sample sizes. Read it as "not shown to
+move the rate", never as "shown not to". There is also a mechanistic reason to
+expect some increase: both new parks touch `peer2`, and every observed
+occurrence is `peer2`/`peer2-23`. Sizing that belongs to computenet-dwkp.
+A dedicated 5-run pin on seed 12 under STABLE scored **0/5**, so it is a
+rare schedule rather than a property of that seed — which is also why
+computenet-vhlm's eight consecutive green runs are consistent with a ~20-30%
+per-sweep failure rate rather than evidence against it.
+
+The shape is consistent with the same-element residual recorded under
+`## KE3-GC-FENCE-KEY`: `peer2-23` is peer2's own last write, and a rejoining
+incarnation replaying its journal re-mints the exact tag its previous
+incarnation spent — which its own `ReclaimedDots` has already fenced. That is
+the hole `tagSource`'s derivation deliberately keeps open, and closing it
+changes the journal-replay contract. **Consequence for PR #725: `kernel-test`
+is not yet reliably green** — a full `:kernel:test` can go red on this
+assertion roughly one run in four. Filed as **computenet-dwkp** with the
+head-to-head measurement, the candidate mechanism as an explicit hypothesis,
+and the first step that would turn it into one. Not closed here, and not
+weakened here.

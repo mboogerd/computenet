@@ -258,11 +258,16 @@ class CompactionTriggerPinTest {
      * asserted unchanged.
      *
      * Step 8 (the heal) is `unverified:` in the breakdown and is asserted here
-     * exactly as measured, in two halves: healing A<->B alone DOES re-admit
-     * `e` at A (the prescribed observation, 8a), and healing B<->C afterwards
-     * REPAIRS it (8b, the measured alternative) — C never compacted, so its
-     * surviving tombstone reaches A through B. A one-replica compaction is
-     * self-healing while any peer still holds the tombstone.
+     * exactly as measured. **Its 8a half was FLIPPED by computenet-pay7**, and
+     * the flip is the deterministic form of that bead's whole result: healing
+     * A<->B alone used to RE-ADMIT `e` at A — the prescribed observation, and
+     * `[24-TAG-04]` clause 2 failing in three steps — because `compactBelow`
+     * recorded nothing and the tag was novel again. A now carries a
+     * causal-context fence over exactly the dots it discarded, so the frame is
+     * rejected AND answered with a covering `dels` entry for (sA,1), which is
+     * what makes B (the only replica that never held a tombstone) drop `e`
+     * rather than keep it live for ever. 8b, the heal of B<->C, is then a
+     * no-op restated: everything was already dead.
      */
     @Test
     fun `P1 the LOCAL trigger discards a tombstone the STABLE trigger declines on the same state`() {
@@ -356,11 +361,18 @@ class CompactionTriggerPinTest {
         secondStableDiscards shouldBe 0
 
         // 8a. Lift the loss and heal A<->B ONLY. B's catch-up carries
-        //     adds={e:(sA,1)} and no del; the tag is novel at A again
-        //     (compactBelow recorded no floor and no fence), so `e` is
-        //     re-admitted at A — the prescribed step-8 observation. C, which
-        //     never compacted, still holds its tombstone and stays dead: the
-        //     mesh is now three-way divided.
+        //     adds={e:(sA,1)} and no del.
+        //
+        //     **FLIPPED by computenet-pay7, not deleted.** This step used to
+        //     observe a RE-ADMISSION at A — the tag was novel at A again,
+        //     because `compactBelow` recorded nothing, and `e` came back. That
+        //     is `[24-TAG-04]`'s second clause failing deterministically, and it
+        //     is the same defect the sweep saw on 6 of 200 seeds. A now holds a
+        //     causal-context fence over exactly the dots it discarded, so B's
+        //     catch-up is rejected AND answered with a covering `dels` entry
+        //     naming (sA,1); B drops `e` instead of keeping it live for ever.
+        //     C, which never compacted, was already dead. The three-way division
+        //     the old step recorded does not form at all.
         mesh.loseB(false)
         mesh.ab.heal()
         controller.runToIdle()
@@ -379,23 +391,25 @@ class CompactionTriggerPinTest {
         )
         // Non-vacuity for converged(): fewer than two live streams converges trivially.
         mesh.a.registry.instances.replicasOf(logicalId).size shouldBe 3
-        mesh.ra.membership() shouldBe setOf("e")
-        resurrected(mesh.ra, foldA8a) shouldBe setOf("e")
+        mesh.ra.membership() shouldBe emptySet()
+        resurrected(mesh.ra, foldA8a) shouldBe emptySet()
         mesh.rc.membership() shouldBe emptySet()
         resurrected(mesh.rc, foldC8a) shouldBe emptySet()
+        // and the repair reached B, which had the add and no tombstone at all —
+        // a fence that merely dropped the frame would have left `e` live here
+        // for ever (MEASURED: 30 of 200 sweep seeds permanently diverged).
+        mesh.rb.membership() shouldBe emptySet()
 
         // 8b. **The measured alternative to the breakdown's step 8, recorded.**
-        //     Heal B<->C too and the re-admission is REPAIRED: C's catch-up
-        //     hands B the tombstone C never discarded, B absorbs it as novel
-        //     and re-emits it, and A — which has no fence against a tag it
-        //     already compacted — takes the del back. Everything is dead again
-        //     and `resurrected` is empty everywhere.
-        //
-        //     So a LOCAL-trigger compaction on ONE replica is self-healing
-        //     while any peer still holds the tombstone. What makes the
-        //     resurrection permanent is every tombstone-holder compacting,
-        //     which is exactly the `P2 LOST del` schedule — and there the
-        //     trigger is the STABLE one.
+        //     Heal B<->C too. Before computenet-pay7 this step is what REPAIRED
+        //     8a's re-admission — C's surviving tombstone reached A through B —
+        //     and it was kept as the measured alternative to the breakdown's
+        //     prescribed step 8. With the fence it asserts the same end state
+        //     for a stronger reason: nothing was ever resurrected, so there is
+        //     nothing left for C's tombstone to repair. It is retained rather
+        //     than deleted because it still shows the mesh QUIET afterwards —
+        //     the fence's repair emission does not start a tombstone ping-pong
+        //     once every replica agrees.
         mesh.bc.heal()
         controller.runToIdle()
         val foldA8b = folds.state(mesh.ra.ref)!!
