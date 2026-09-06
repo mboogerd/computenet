@@ -779,5 +779,8 @@ incarnation replaying its journal re-mints the exact tag its previous
 incarnation spent — which its own `ReclaimedDots` has already fenced. That is
 the hole `tagSource`'s derivation deliberately keeps open, and closing it
 changes the journal-replay contract. **Consequence for PR #725: `kernel-test`
-is not yet reliably green.** Filed separately; not closed here, and not
+is not yet reliably green** — a full `:kernel:test` can go red on this
+assertion roughly one run in four. Filed as **computenet-dwkp** with the
+head-to-head measurement, the candidate mechanism as an explicit hypothesis,
+and the first step that would turn it into one. Not closed here, and not
 weakened here.
