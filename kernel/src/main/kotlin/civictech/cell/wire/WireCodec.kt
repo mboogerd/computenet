@@ -338,6 +338,28 @@ object WireCodec {
      * mesh must not emit a newly-added enum constant, any more than it may
      * populate a newly-added optional field, until every peer has upgraded
      * past the version that introduced it.
+     *
+     * ### That constraint is DECIDED to stay operational, not mechanised
+     *
+     * It is enforced by nothing — no [VERSION] bump, no negotiation, no gate,
+     * no failing test — and that is a decision (computenet-5zba), recorded
+     * with its full reasoning and its reopening trigger in
+     * `doc/spec/40-distribution/42-replication.md` §"Wire compatibility of
+     * additive fields (KE3-39)" → "Decision: the constraint stays operational
+     * — no mechanism". Do not re-document these hazards; the next move on
+     * them is that decision's reopening trigger (cross-peer capability/
+     * version negotiation, or a supported rolling upgrade).
+     *
+     * The one point that belongs next to the code: **a [VERSION] bump cannot
+     * be the mechanism, because [WireFrame.version] never reaches the wire.**
+     * It carries a default and this [Json] never sets `encodeDefaults`, so it
+     * is omitted from every frame encoded here; a reader supplies its own
+     * default for the absent key, and [decodeFrame]'s
+     * `check(frame.version == VERSION)` therefore compares `VERSION` against
+     * itself and passes whatever the writer's `VERSION` was. Measured and
+     * pinned in `WireCodecTest`'s "VERSION is omitted from every encoded
+     * frame" test; that the check is thereby unreachable is filed separately
+     * as computenet-u5gb.
      */
     private fun build(live: List<WireSerializers>): Json = Json {
         // `plus` fails fast if a contribution collides with a kernel type (or
