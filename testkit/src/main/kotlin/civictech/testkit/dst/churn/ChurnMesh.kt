@@ -188,6 +188,20 @@ object ChurnMesh {
     /**
      * Build a [GraphSpec] for [plan].
      *
+     * **Determinism caveat — read before asserting a trace digest over this graph.** A run of
+     * this mesh is trace-reproducible *unless* [plan] contains a
+     * [civictech.testkit.dst.DepartureMode.PARTITION_SUSPEND] departure that is later rejoined
+     * or healed. That path calls `Peering.Loopback.heal()`, whose catch-up sweep announces in
+     * the hash order of `ConcurrentHashMap` views keyed by `UUID.randomUUID()`-minted kernel
+     * identities — unseeded entropy `:testkit` cannot remove. On such a plan
+     * [civictech.testkit.dst.DstRun.assertDeterministic] fails, and the SET of seeds that fail a
+     * sweep over this graph moves between runs, so pinning a failing seed set by number is
+     * unsound (pinning one recorded seed by repeated re-run is). Mechanism, measurement and the
+     * full consequence: `doc/dst-rig.md` §4 and
+     * [civictech.testkit.dst.DstRun.assertDeterministic]'s own KDoc (computenet-l0gd). A suite
+     * that needs a reproducible digest restricts [ChurnConfig.departureWeights] to the other
+     * three modes, as `ChurnReconvergenceTest` and `GossipInstrumentsTest` already do.
+     *
      * @param payload what the mesh replicates. See [MeshPayload].
      * @param maxPeers how many peer slots to pre-declare. Defaults to [ChurnConfig.peerCount]'s
      *   upper bound, which is the largest roster any seed can draw for this config — so a plan

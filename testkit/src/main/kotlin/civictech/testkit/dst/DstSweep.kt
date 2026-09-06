@@ -98,6 +98,27 @@ data class SweepEntry(
  *
  * [nonDeterministic] is [CHA1-40]: a sweep driven across JVMs is marked, and makes no
  * replay-reproducibility claim for any of its artifacts.
+ *
+ * ## What a recorded seed range does and does not let a consumer assert
+ *
+ * Recording the range makes a narrowing detectable. It does **not** make the *contents* of
+ * [failed] stable across runs, and over a graph that re-opens a peering mid-run they are not:
+ *
+ *  - **Pinning a failing seed SET by number is unsound** over such a graph — "seeds {3, 17, 41}
+ *    fail" is a run-local observation, not a property. Four 200-seed runs of one identical
+ *    churn-mesh sweep produced failing sets of 12, 12, 15 and 14 seeds agreeing on only 6
+ *    members (computenet-l0gd). Asserting an exact failing set, or an exact failure density,
+ *    over such a sweep is flaky by construction.
+ *  - **Pinning ONE recorded seed by repeated re-run is sound.** A single seed re-run in
+ *    isolation reproduces its own outcome (measured 8 of 8 for each of six candidates), so
+ *    "seed 41 still fails" is a legitimate regression pin even where "exactly these seeds
+ *    fail" is not. That is the form a consumer should record.
+ *  - A sweep that asserts only [assertAllPassed] is unaffected: it names no seed.
+ *
+ * Which graphs are affected, the mechanism, and how to tell: [DstRun.assertDeterministic]'s
+ * KDoc and `doc/dst-rig.md` §4. Short test: if the run can `heal()` a partitioned
+ * `Peering.Loopback` — on the churn mesh, if the drawn plan can contain a
+ * `DepartureMode.PARTITION_SUSPEND` that is later rejoined — assume it is affected.
  */
 data class DstSweepReport(
     val suite: String,

@@ -120,6 +120,27 @@ class DstRun(
      * Available to every consumer suite, and cheap enough to be the first thing a new rig-driven
      * test asserts: a suite whose runs are not reproducible cannot support any of the claims the
      * rest of the rig makes.
+     *
+     * ## One graph shape is outside this guarantee: a peering that RE-OPENS mid-run
+     *
+     * **A graph whose run re-opens a `Peering.Loopback` — `heal()` after `partition()`, which on
+     * the churn mesh is every `DepartureMode.PARTITION_SUSPEND` departure that is later rejoined
+     * or healed — is not trace-reproducible, and this assertion will fail on it.** It is not a
+     * defect in the plan, the seed fan-out or this rig's drive loop; it is unseeded entropy the
+     * kernel's reconnect path reads, and `:testkit` cannot remove it. Full mechanism, the
+     * measurement that established it, and the consequence for recorded seeds:
+     * `doc/dst-rig.md` §4 "A peering that re-opens mid-run is outside the determinism contract"
+     * (computenet-l0gd).
+     *
+     * In one line: `Peering.Loopback.heal()` re-runs `Peering.announceTo`'s catch-up sweep, which
+     * iterates `LocationRegistry.localRefs()` and `localLinks()` — `ConcurrentHashMap` views keyed
+     * by `CellRef`s and `TopologyLink` ids that the kernel mints with `UUID.randomUUID()`. The
+     * announcement ORDER is therefore a fresh draw per run, and reordered announcements reorder
+     * the gossip relinking they cause, which moves later trace events by a few controller steps.
+     *
+     * A consumer whose graph can draw that shape should assert what it can honestly assert — the
+     * per-seed OUTCOME by repeated re-run of one recorded seed, which IS stable — rather than a
+     * digest pin. `DstBaseline`/`DstReplay` inherit the same limitation for the same reason.
      */
     fun assertDeterministic(runs: Int = 2): DstReport {
         val reports = mutableListOf<DstReport>()
