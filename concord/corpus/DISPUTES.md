@@ -2545,3 +2545,87 @@ property is statable at the driver and not in the corpus.
 - **Revisit trigger**: a fenced-source lattice lands on the gossip mesh (the
   KE3 decision on building one belongs to feature `computenet-9sm.8`, not to
   this entry), or 95 §R14 is otherwise closed.
+
+## `KE3-GC-PROOF` — the GC safety property is a bounded seeded check, not a proof (`proof-gap`)
+
+- **Requirement it would cover**: `[KE3-23]` (epic `computenet-9sm`, 96 §E3.5(iii)) — the
+  universally-quantified form: "a mock reclaimer discarding del-tags
+  `≤ stableFrontier` never breaks convergence (no later delta ever
+  references a reclaimed tag as *new* information) across seeded
+  partition/heal/churn schedules", read as a claim over ALL schedules
+  rather than the ones a generator happens to draw.
+- **Why it cannot be pinned honestly**: `GcSafetySweepTest`
+  (`kernel/src/test/kotlin/civictech/cell/replication/GcSafetySweepTest.kt`,
+  `computenet-9sm.4.4`) explores `SEEDS = 1L..200L` over one adversary — a
+  fixed churn config, a fixed reclaimer period, three folded faults — and
+  says so in its own KDoc ("a bounded-schedule check over a finite seed
+  range, not a proof"). No scenario in `concord/corpus/` can state a seeded
+  sweep at all: the script model has no seed, churn-generator or
+  compaction-period verb, only fixed step sequences. Consequently no
+  `[42-WM-nn]` or `[24-TAG-nn]` id is claimed covered by this harness, and
+  nothing in `CONCORDANCE.md` names it.
+- **Missing capability**: FRM1's model checker (epic `computenet-9sm` names
+  it as this KE3-F4 item's proof instrument for the universally-quantified
+  form) — the mechanism that could check "for all schedules" rather than
+  "for these 200 seeds".
+- **What was NOT done instead**: no `concord/corpus/*.yaml` scenario was
+  authored as a weakened stand-in for `[KE3-23]`, and `[KE3-23]` is not
+  marked covered anywhere. The seeded result is instead reported as-is —
+  see `doc/kernel-lane-findings.md`'s `KE3-GC` entry — including the fact
+  that it currently **falsifies** the feature's own containment claim
+  (branch F-B below), which a weakened scenario would have had to paper
+  over to pass.
+- **Check to restore**: the model-checked universally-quantified form over
+  the KE3 lattice, once FRM1 lands; until then, the sweep's recorded
+  `SEEDS` range and adversary are the full extent of what has been
+  checked, and `GcSafetySweepTest`'s pinned seeds (`BS12_SEED`/`BS13_SEED
+  = 62`) are re-run, never widened after a green result, per AGENTS.md.
+- **Revisit trigger**: FRM1 (`computenet-7fe`) lands a model-checker
+  instrument KE3 can drive over `SetCell.compactBelow`, or 96 E3.5/E3.7 is
+  otherwise re-scoped to accept a bounded check as sufficient evidence (a
+  decision for the epic, not this entry).
+
+## `KE3-GC-DEL-LANE` — compaction at the stable frontier resurrects a removed element, because the stable frontier certifies ADD delivery only (`kernel-gap`)
+
+- **Requirement it would cover**: `[24-TAG-04]`
+  (`doc/spec/20-dataflow-semantics/24-data-cells.md` §Tag continuity,
+  compaction paragraph) — "reclaiming at the stable frontier cannot
+  [resurrect a removed element], because every covering replica has
+  already converged past it" — and `[KE3-31]` (epic `computenet-9sm`: "WHEN
+  a checkpoint is taken for a `Replicable` tagged cell, THEN `dels` entries
+  whose every tag is `≤ stableFrontier` … SHALL be discarded").
+- **Why it cannot be pinned honestly as a passing check**: it is FALSE on
+  the shipped mechanism, measured both seeded (`GcSafetySweepTest`'s BS-12,
+  branch F-B, `BS12_SEED = 62` and 7-10 other seeds per 200-seed run) and
+  deterministically (`CompactionTriggerPinTest`'s `P2 LOST del` scenario).
+  `SetCell.foldDelivered` is fed only from `add()`'s local mint and from
+  `applyRemote()`'s `newAdds` — `remove()` mints and folds nothing into the
+  delivered lane. So `del-tag ≤ stableFrontier` certifies that every open
+  member has delivered the matching *add*, never that any member has
+  delivered the matching *remove*. A member that held the add but missed
+  the remove (a partition opened between the two) re-ships the add-only
+  state at heal, and a replica that already compacted the tombstone below
+  what it read as the stable frontier re-admits the element as new
+  information. Full detail, including the falsified "LOCAL's set is a
+  strict superset of STABLE's" empirical claim this displaces, is in
+  `doc/kernel-lane-findings.md`'s `KE3-GC` entry.
+- **Missing capability**: a delivered signal for the REMOVE side of a
+  tagged cell's state, symmetric to `foldDelivered`'s ADD-only feed — either
+  a del-side delivered lane on `WatermarkCell`/`Replication`, or removes
+  minting their own dot so a remove has something to be "delivered" as.
+  Neither exists on the shipped `Replication`/`SetCell`/`TagState` surface.
+- **What was NOT done instead**: `[KE3-23]`/`[KE3-31]` are not marked
+  covered, and no scenario or code change narrows `compactBelow`'s
+  coverage predicate to work around the gap — a workaround here is a
+  design decision for the epic (computenet-9sm.6, OR-map half
+  computenet-9sm.8 are the consumers that will wire the reclaimer against
+  this rule), not something this entry or its harness task should decide
+  unilaterally.
+- **Check to restore**: once a remove is certified delivered (either
+  missing capability above lands), re-run `GcSafetySweepTest`'s BS-12 arm
+  (STABLE trigger) and expect branch **G** — zero resurrecting seeds across
+  the same `SEEDS` range and adversary — in place of today's branch F-B.
+  `CompactionTriggerPinTest`'s `P2 LOST del` should likewise flip from
+  resurrecting to not.
+- **Revisit trigger**: a del-side delivered lane, or removes minting their
+  own dot, lands on `Replication`/`SetCell`/`TagState`.
