@@ -375,6 +375,40 @@ object GcSafetySweep {
      */
     const val MEMBERSHIP_DIVERGENCE_FAILURE: String = "live replicas' memberships diverge after compaction"
 
+    /**
+     * The strictly stronger half of [MEMBERSHIP_DIVERGENCE_FAILURE] (computenet-vhlm): a
+     * divergence the RE-ADMISSION FENCE ITSELF caused, established by a direct read of
+     * `SetCell`'s `ReclaimedDots` rather than by an inference about the workload.
+     *
+     * ## Why this class exists
+     *
+     * computenet-pay7's acceptance asked that the STABLE arm's divergence be "no worse than the
+     * Trigger.NONE control arm's, measured in the same run". It is not, in COUNT — the fence
+     * measures ~3x the control (see [GcSafetySweepTest.MAX_STABLE_DIVERGING]'s KDoc for the
+     * amendment and its measurement). The argument that the excess is nevertheless not the
+     * fence's harm was an ordinal-parity inference: [GcSafetySweep.removeSchedule] removes only
+     * ODD-ordinal writes, so an EVEN-ordinal element's add-tag never enters a `dels` entry,
+     * `compactBelow` can never record it, and it is structurally un-fenceable. That argument is
+     * true and checkable, but it is a statement about the RIG, and it says nothing at all about
+     * the odd-ordinal elements that DO diverge.
+     *
+     * This check replaces it with the measurement. At quiescence, for every element the live
+     * replicas disagree on, it takes the tags that make the element live at the replicas that
+     * HOLD it (`SetCell.liveTagsOf`) and asks every replica that LACKS it whether any of those
+     * tags is in its own fence (`SetCell.fencedAmong`). A hit means that replica cannot ever
+     * admit the element — the frame carrying it is inadmissible by construction — so the
+     * divergence is the fence's, and the repair emission that exists to prevent exactly this
+     * did not reach the straggler. No hit means the fence is not why the memberships differ.
+     *
+     * It is a SEPARATE failure message, not a strengthening of the old one, so that the two
+     * populations stay countable against each other in one run: `MEMBERSHIP_DIVERGENCE_FAILURE`
+     * keeps measuring the rig's late-write floor (the CONTROL arm's own class), and this one
+     * measures the fence. The STABLE arm asserts this is EMPTY; the divergence count keeps its
+     * own, unchanged, absolute bound.
+     */
+    const val FENCE_ATTRIBUTED_DIVERGENCE_FAILURE: String =
+        "a diverging element's live tag is in the lacking replica's ReclaimedDots"
+
     @Suppress("UNCHECKED_CAST")
     fun check(trigger: Trigger): DstCheck = CheckRegistry.register(trigger.checkId) { world ->
         val observations = GcObservationRegistry.of(world)
@@ -415,17 +449,49 @@ object GcSafetySweep {
         // The cross-replica membership check — see [MEMBERSHIP_DIVERGENCE_FAILURE]. It runs
         // BEFORE the fold check so a genuinely diverged mesh is diagnosed as such rather than
         // absorbed into the tolerated F-A class.
-        val membershipsByPeer = live.mapNotNull { peer ->
-            (peer.replica as? SetCell<String>)?.let { peer.name to it.membership() }
+        val cellsByPeer = live.mapNotNull { peer ->
+            (peer.replica as? SetCell<String>)?.let { peer.name to it }
         }
+        val membershipsByPeer = cellsByPeer.map { (name, cell) -> name to cell.membership() }
         if (membershipsByPeer.map { it.second }.distinct().size > 1) {
             totals.getValue(trigger).absorb(observations)
-            throw ChurnCheckFailure(
-                MEMBERSHIP_DIVERGENCE_FAILURE,
-                detail = "live replicas disagree on membership at quiescence: " +
-                    membershipsByPeer.joinToString { "${it.first}=${it.second}" } +
-                    "; discarded=${observations.discarded}",
-            )
+            // THE ATTRIBUTION READ (computenet-vhlm) — see [FENCE_ATTRIBUTED_DIVERGENCE_FAILURE].
+            // Per element the live replicas disagree on: the tags that make it live where it IS
+            // live, checked against the fence of every replica where it is NOT. This is a direct
+            // read of `ReclaimedDots`, not an inference from the remove schedule's ordinal parity.
+            val union = membershipsByPeer.flatMap { it.second }.toSet()
+            val agreed = membershipsByPeer.map { it.second }.reduce { a, b -> a intersect b }
+            val differing = union - agreed
+            val attributions = differing.map { element ->
+                val holders = membershipsByPeer.filter { element in it.second }.map { it.first }
+                val liveTags = cellsByPeer
+                    .filter { it.first in holders }
+                    .flatMap { it.second.liveTagsOf(element) }
+                    .toSet()
+                val fencedAt = cellsByPeer
+                    .filterNot { it.first in holders }
+                    .mapNotNull { (name, cell) ->
+                        val fenced = cell.fencedAmong(liveTags)
+                        if (fenced.isEmpty()) null else {
+                            name to (fenced.map { it.counter }.sorted() to (fenced.size == liveTags.size))
+                        }
+                    }
+                Triple(element, "$element held=$holders liveTags=${liveTags.map { it.counter }.sorted()} " +
+                    "fencedAtLacking=" + (
+                    if (fencedAt.isEmpty()) "NONE"
+                    else fencedAt.joinToString { "${it.first}:${it.second.first}${if (it.second.second) "(all)" else "(partial)"}" }
+                    ),
+                    fencedAt.isNotEmpty())
+            }
+            val detail = "live replicas disagree on membership at quiescence: " +
+                membershipsByPeer.joinToString { "${it.first}=${it.second}" } +
+                "; differing=$differing" +
+                "; attribution=[" + attributions.joinToString("; ") { it.second } + "]" +
+                "; discarded=${observations.discarded}"
+            if (attributions.any { it.third }) {
+                throw ChurnCheckFailure(FENCE_ATTRIBUTED_DIVERGENCE_FAILURE, detail = detail)
+            }
+            throw ChurnCheckFailure(MEMBERSHIP_DIVERGENCE_FAILURE, detail = detail)
         }
 
         val disagreeing = MeshPeers.all(world).mapNotNull { peer ->
@@ -480,6 +546,9 @@ class GcSafetySweepTest {
             .map { it.seed }.toSet()
         stableDiverging = sweep.failures.filter { it.message == GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE }
             .map { it.seed }.toSet()
+        stableFenceAttributed = sweep.failures
+            .filter { it.message == GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE }
+            .map { it.seed }.toSet()
         val other = sweep.failures.filterNot { it.message in CLASSIFIED }
 
         // The seed range is RECORDED and NEVER narrowed after a failure: a red seed is reported
@@ -503,6 +572,15 @@ class GcSafetySweepTest {
                 .joinToString("") { e ->
                     "[BS-12] DIVERGE seed=${e.seed} ${(e.cause as? ChurnCheckFailure)?.detail}\n"
                 } +
+                // computenet-vhlm: the attribution read. Every DIVERGE line above carries an
+                // `attribution=[...]` clause naming, per differing element, the tags that make it
+                // live and whether any replica LACKING it has one of those tags fenced. This list
+                // is the seeds where one did — the fence's own harm, and it must be empty.
+                "[BS-12] FENCE-ATTRIBUTED diverging seeds=$stableFenceAttributed\n" +
+                sweep.failures.filter { it.message == GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE }
+                    .joinToString("") { e ->
+                        "[BS-12] FENCED-DIVERGE seed=${e.seed} ${(e.cause as? ChurnCheckFailure)?.detail}\n"
+                    } +
                 "[BS-12] artifacts=${sweep.artifactPaths}",
         )
         assertTrue(
@@ -550,18 +628,49 @@ class GcSafetySweepTest {
                 "narrow SEEDS to reach it. resurrecting=$stableResurrecting failures=" +
                 sweep.failures.map { it.seed to it.message },
         )
+        // THE ATTRIBUTION ASSERTION (computenet-vhlm) — the one that carries computenet-pay7's
+        // criterion 2 now that its "no worse in COUNT than the control" half has been amended
+        // (see [MAX_STABLE_DIVERGING]'s KDoc for the amendment, its measurement, host and date).
+        //
+        // It is strictly stronger than the count bound below on the question the criterion was
+        // actually about — "does reclamation cost membership convergence?" — because it names a
+        // MECHANISM instead of a number: every element the live replicas disagree on is checked,
+        // by a direct read of `ReclaimedDots`, against every replica that lacks it. A seed here
+        // is a replica that can never admit the element, whatever is re-delivered to it, which is
+        // exactly the silent-fence failure the repair emission exists to prevent (measured at 30
+        // of 200 before that emission — see [GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE]).
+        //
+        // It replaces the ordinal-parity INFERENCE that stood here. That inference is still true
+        // and still recorded, but it could only ever exonerate the even-ordinal elements, and it
+        // is the odd-ordinal ones (`peer2-23` in the feature review's run) that the fence could
+        // in principle touch. This assertion covers both, on every seed, in the same run.
+        assertTrue(
+            stableFenceAttributed.isEmpty(),
+            "[KE3-23] the re-admission fence CAUSED a membership divergence: on these seeds a " +
+                "live replica is missing an element whose live tag is in that replica's own " +
+                "`ReclaimedDots`, so no re-delivery can ever admit it and the repair emission " +
+                "did not reach the straggler that still holds it. This is the silent-fence " +
+                "failure, not the rig's late-write floor — read the FENCED-DIVERGE detail lines' " +
+                "`attribution=` clause. Do not absorb it into MAX_STABLE_DIVERGING. seeds=" +
+                "$stableFenceAttributed",
+        )
         // The divergence bound is read against the no-reclaimer CONTROL arm, not against zero:
         // the rig diverges on a few seeds with no compaction at all. What this asserts is that
         // compaction does not make it MATERIALLY worse — which is exactly the assertion that
         // fails for a per-source re-admission floor (31-33 of 200 against a floor of 2-4), and
         // the reason this bead did not ship one. See SetCell.compactBelow's KDoc.
         assertTrue(
-            stableDiverging.size <= MAX_STABLE_DIVERGING,
-            "[KE3-23]: compacting at the STABLE frontier left ${stableDiverging.size} seeds with " +
+            // computenet-vhlm reads the bound against BOTH divergence classes. Splitting the
+            // attributed sub-class out must not loosen the number that was recorded before the
+            // split: a seed that moves from one class to the other is still a diverged seed.
+            (stableDiverging + stableFenceAttributed).size <= MAX_STABLE_DIVERGING,
+            "[KE3-23]: compacting at the STABLE frontier left " +
+                "${(stableDiverging + stableFenceAttributed).size} seeds with " +
                 "permanently diverged memberships, above the recorded bound of " +
                 "$MAX_STABLE_DIVERGING. Reclamation must not cost membership convergence — a " +
                 "resurrection-only observable reports this state as GREEN. diverging=" +
-                "$stableDiverging (compare the CONTROL arm, which measures the rig's own floor)",
+                "$stableDiverging fenceAttributed=$stableFenceAttributed " +
+                "(compare the CONTROL arm, which measures the rig's own floor)",
         )
         // F-A is unchanged and still expected: `ReplicaConvergence` folds emitted deltas and
         // cannot express compaction, so its disagreement is a limit of the reference fold, not of
@@ -608,7 +717,30 @@ class GcSafetySweepTest {
             "[CONTROL] seeds=$SEEDS ${sweep.summary()}\n" +
                 "[CONTROL] resurrecting seeds=$controlResurrecting\n" +
                 "[CONTROL] membership-diverging seeds=$controlDiverging " +
-                "(${controlDiverging.size} of ${sweep.total}) — the RIG's own floor, recorded not pinned",
+                "(${controlDiverging.size} of ${sweep.total}) — the RIG's own floor, recorded not pinned\n" +
+                // computenet-vhlm: the CONTROL arm prints its per-seed DIVERGE detail too. It
+                // always computed them — the same check builds them — but only its seed LIST was
+                // printed, so the STABLE arm's claim that its excess divergences are "the same
+                // late-write straggler shape the CONTROL arm itself produces" had no artifact
+                // behind it on this side. Now both arms emit the same line and the shapes are
+                // comparable in one run. Recorded, never asserted: see this test's KDoc.
+                sweep.failures.filter { it.message == GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE }
+                    .joinToString("") { e ->
+                        "[CONTROL] DIVERGE seed=${e.seed} ${(e.cause as? ChurnCheckFailure)?.detail}\n"
+                    } +
+                "[CONTROL] artifacts=${sweep.artifactPaths}",
+        )
+        // A run that reclaims nothing writes nothing into `ReclaimedDots`, so the attribution
+        // read must be structurally silent here. This is the CONTROL for the attribution check
+        // itself (computenet-vhlm): a hit would mean the read is reporting something other than
+        // the fence.
+        assertTrue(
+            sweep.failures.none { it.message == GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE },
+            "[KE3-23] control: nothing is reclaimed here, so no diverging element's live tag can " +
+                "be in any replica's `ReclaimedDots`. A hit means the attribution read is wrong, " +
+                "not the system: " +
+                sweep.failures.filter { it.message == GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE }
+                    .map { it.seed },
         )
         assertTrue(other.isEmpty(), "unclassified control failures: ${other.joinToString { "${it.seed}:${it.message}" }}")
         assertTrue(
@@ -641,11 +773,20 @@ class GcSafetySweepTest {
             .map { it.seed }.toSet()
         val disagreeing = sweep.failures.filter { it.message == GcSafetySweep.DISAGREEMENT_FAILURE }
             .map { it.seed }.toSet()
-        val diverging = sweep.failures.filter { it.message == GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE }
-            .map { it.seed }.toSet()
+        // computenet-vhlm: BOTH divergence classes. The LOCAL arm is the WRONG seam by design, so
+        // a fence-attributed divergence here is expected harm, not a defect — but it must still
+        // count towards the harm this arm asserts, or splitting the class would let the arm read
+        // GREEN on a strictly worse outcome than the one it was recorded for.
+        val diverging = sweep.failures.filter {
+            it.message == GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE ||
+                it.message == GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE
+        }.map { it.seed }.toSet()
         val other = sweep.failures.filterNot { it.message in CLASSIFIED }
         println(
-            "[BS-13] membership-diverging seeds=$diverging (${diverging.size} of ${sweep.total})",
+            "[BS-13] membership-diverging seeds=$diverging (${diverging.size} of ${sweep.total}); " +
+                "of which fence-attributed=" +
+                sweep.failures.filter { it.message == GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE }
+                    .map { it.seed }.toSet(),
         )
         println(
             "[BS-13] seeds=$SEEDS elapsedMs=$elapsedMs artifacts=$localRoot totals=$totals " +
@@ -903,6 +1044,9 @@ class GcSafetySweepTest {
         private var stableDisagreeing: Set<Long> = emptySet()
         private var stableDiverging: Set<Long> = emptySet()
 
+        /** Seeds where the fence itself caused the divergence — computenet-vhlm. Asserted EMPTY. */
+        private var stableFenceAttributed: Set<Long> = emptySet()
+
         /** Set by the no-reclaimer control arm; the floor the other arms are read against. */
         private var controlResurrecting: Set<Long> = emptySet()
         private var controlDiverging: Set<Long> = emptySet()
@@ -947,11 +1091,16 @@ class GcSafetySweepTest {
         private val HARMED: Set<String> = setOf(
             GcSafetySweep.RESURRECTION_FAILURE,
             GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE,
+            // computenet-vhlm: the attributed sub-class of a divergence is still a divergence, so
+            // a pin that accepted the parent class must accept it, or the pin would go green on a
+            // STRICTLY WORSE outcome than the one it was recorded for.
+            GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE,
         )
 
         private val CLASSIFIED: Set<String> = setOf(
             GcSafetySweep.RESURRECTION_FAILURE,
             GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE,
+            GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE,
             GcSafetySweep.DISAGREEMENT_FAILURE,
         )
 

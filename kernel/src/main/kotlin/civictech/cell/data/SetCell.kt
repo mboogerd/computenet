@@ -558,6 +558,39 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     }
 
     /**
+     * The tags that make [element] live here: `adds[element] − dels[element]`.
+     *
+     * A **diagnostic read of the fence's input**, paired with [fencedAmong]
+     * (computenet-vhlm). It exists so a harness can ask the attribution
+     * question directly — "is this replica missing an element *because* the
+     * fence rejected the tag that would have admitted it?" — instead of
+     * inferring it from the shape of the workload. `GcSafetySweepTest`'s
+     * membership-divergence check previously argued that from the sweep's
+     * remove schedule (only odd ordinals are ever removed, so an even-ordinal
+     * tag is structurally un-fenceable); that argument is real but is an
+     * inference about the rig, and the acceptance it stood under asked for a
+     * measurement of the replica.
+     *
+     * Read-only and takes no lock the caller can observe; it is not part of
+     * the replication protocol and nothing in [applyRemote] or [compactBelow]
+     * consults it.
+     */
+    internal fun liveTagsOf(element: E): Set<Timestamp> = liveTags(element)
+
+    /**
+     * Which of [tags] this replica has reclaimed — the direct read of
+     * [ReclaimedDots], the fence's own state (computenet-vhlm).
+     *
+     * A non-empty result on a replica that is MISSING the element those tags
+     * make live elsewhere is the fence being the cause of that divergence; an
+     * empty result on every such replica is the fence being exonerated, by
+     * measurement rather than by ordinal parity. See [liveTagsOf].
+     */
+    internal fun fencedAmong(tags: Set<Timestamp>): Set<Timestamp> = synchronized(stateLock) {
+        tags.filterTo(mutableSetOf()) { it in reclaimed }
+    }
+
+    /**
      * Highest tag counter observed per tag source, restricted to the keys
      * [scope] admits (spec 20/21 §Pull, 93 I-24; PN-3c). `null`/[Interest.Total]
      * scope iterates every key — byte-identical to the pre-scope frontier — so a
