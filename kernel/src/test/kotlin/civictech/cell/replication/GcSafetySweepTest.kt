@@ -175,6 +175,28 @@ object GcSafetySweep {
     /** Compaction period, in controller steps. ESTIMATED per 9sm.4-D4. */
     private const val K: Int = 25
 
+    /**
+     * The last step the reclaimer fires on — the mesh's own `aliveUntil` horizon, past which the
+     * heartbeat has stopped and the run is supposed to be draining towards quiescence.
+     *
+     * **MEASURED, not stylistic.** An UNBOUNDED reclaimer makes the run non-terminating whenever
+     * removals are also issued: `compactBelow` "records nothing" (its KDoc) and deliberately
+     * re-admits a straggler carrying a discarded tag, so a compaction point that discards a
+     * tombstone lets the next gossip frame re-deliver that tag as novel, the cell emits, the next
+     * compaction point 25 steps later discards it again, and the world never goes idle. It is a
+     * property of the pair: with seeds 1..10 at budget 40_000, removes-only and reclaimer-only
+     * each exhausted 0 of 10, both-unbounded exhausted 6 of 10, and both-with-this-bound exhausted
+     * 0 of 10. Raising the budget does not help — the sweep at 200_000 exhausted the same 19 of 30
+     * as at 40_000 (bd comment on computenet-9sm.4.4). A reclaimer that runs for ever after the
+     * workload has stopped is not the thing under test; one that runs across the whole workload
+     * and its drain is.
+     *
+     * It does **not** blunt the observable: every compaction point inside the workload still
+     * fires, and a re-admission that happened there is still live in `membership()` at quiescence,
+     * which is where `resurrected(...)` reads it.
+     */
+    private const val RECLAIM_UNTIL: Int = STEP_BUDGET + DRAIN_MARGIN
+
     val faultIds: Set<String> = setOf("gc-park", "gc-dup", "gc-reorder")
 
     /** Sizes the graph only: roster length and the strided write schedule. */
@@ -204,7 +226,7 @@ object GcSafetySweep {
         ).builder.build(world)
         // Installed INSIDE the builder so every seed's freshly-built world carries both hooks.
         world.steps.onStep { w, step -> issueRemoves(w, step) }
-        world.steps.onStep { w, step -> compact(w, step, trigger) }
+        world.steps.onStep { w, step -> if (step <= RECLAIM_UNTIL) compact(w, step, trigger) }
     }
 
     private val stableGraph: GraphSpec by lazy { graphOf(Trigger.STABLE) }
@@ -357,7 +379,7 @@ class GcSafetySweepTest {
                 seeds = SEEDS,
                 graph = GcSafetySweep.graph(GcSafetySweep.Trigger.STABLE),
                 checkId = GcSafetySweep.Trigger.STABLE.checkId,
-                budget = 200_000,
+                budget = 40_000,
                 artifactRoot = stableRoot,
                 planFor = GcSafetySweep::plan,
             )
@@ -402,7 +424,7 @@ class GcSafetySweepTest {
                 seeds = SEEDS,
                 graph = GcSafetySweep.graph(GcSafetySweep.Trigger.LOCAL),
                 checkId = GcSafetySweep.Trigger.LOCAL.checkId,
-                budget = 200_000,
+                budget = 40_000,
                 artifactRoot = localRoot,
                 planFor = GcSafetySweep::plan,
             )
@@ -530,3 +552,4 @@ class GcSafetySweepTest {
         }
     }
 }
+
