@@ -236,6 +236,26 @@ class StabilityAdvanceTest {
     }
 
     @Test
+    fun `KE3-21 a source becoming present at all is a rise - absent reads as bottom`() {
+        val rig = Rig()
+
+        // C is announced with no row, so every source reads as bottom for the open
+        // set {L, C} and the frontier is empty — the baseline this listener takes.
+        rig.inject(WatermarkDelta(members = setOf(rig.slotC)))
+        rig.stable() shouldBe emptyMap()
+
+        val calls = rig.record()
+
+        // C gossips its first row. `s` goes from ABSENT (bottom) to present at 3.
+        // Nothing was strictly greater than a previous value — there was no previous
+        // value — so only the "present now, absent before" half of the rise test can
+        // catch this, and it must fire exactly once.
+        rig.inject(WatermarkDelta(rows = mapOf(rig.slotC to mapOf(rig.s to 3L))))
+        rig.stable() shouldBe mapOf(rig.s to 3L)
+        calls.map { it.perSource } shouldBe listOf(mapOf(rig.s to 3L))
+    }
+
+    @Test
     fun `KE3-22 a stability read is inert - no emission, no tag, no lattice movement`() {
         val rig = Rig()
         rig.phantoms(a = 5L, b = 5L)
