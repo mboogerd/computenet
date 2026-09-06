@@ -256,15 +256,17 @@ frontier resurrects a removed element on at least one seed") is therefore
 
 The feature's empirical expectation was that LOCAL's resurrecting-seed set
 strictly contains STABLE's — i.e. that reclaiming at the stable frontier is
-qualitatively safer, only slower to prove. **That is falsified.** Five
-independent 200-seed sweeps (implementer x4, reviewer x1) agree: the STABLE
+qualitatively safer, only slower to prove. **That is falsified.** Six
+independent 200-seed sweeps (implementer x4, reviewer x2) agree: the STABLE
 and LOCAL resurrecting sets overlap WITHOUT one containing the other, at
-comparable rates. STABLE resurrected on 8, 10, 10, 11 seeds (implementer)
-and 9 (reviewer, `[5, 20, 62, 70, 120, 136, 138, 154, 184]`); LOCAL
-resurrected on 12, 12, 15, 14 (implementer) and 8 (reviewer,
-`[14, 62, 87, 107, 138, 170, 175, 181]`). The reviewer's own two sets
-intersect at `{62, 138}` — two seeds resurrect under BOTH triggers, which a
-strict-superset relation forbids.
+comparable rates. STABLE resurrected on 8, 10, 10, 11 seeds (implementer),
+9 (reviewer, `[5, 20, 62, 70, 120, 136, 138, 154, 184]`) and 12 (reviewer's
+sixth sweep, `[12, 43, 53, 54, 62, 63, 120, 133, 138, 154, 173, 184]`, recorded
+on `computenet-9sm.4`); LOCAL resurrected on 12, 12, 15, 14 (implementer), 8
+(reviewer, `[14, 62, 87, 107, 138, 170, 175, 181]`) and 11 (the same sixth
+sweep, `[13, 26, 35, 62, 87, 93, 107, 131, 138, 170, 175]`). Both reviewer
+runs' STABLE and LOCAL sets intersect at `{62, 138}` — two seeds resurrect
+under BOTH triggers, which a strict-superset relation forbids.
 
 STABLE branches into two failure classes, both required to be present by
 the sweep's own assertions:
