@@ -545,19 +545,23 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * walk, which is what [StatePage]'s stability contract asks of a caller.
      *
      * **What that check does not catch, stated because it is this family's
-     * limit and not the paging design's.** An observed-remove mints no tag: it
-     * copies the add-tags it already holds into `dels` (effective-only removal,
-     * 21), so `currentFrontier` — a max over `adds ∪ dels` — is unchanged by
-     * it. A removal applied mid-walk to an element the walk has already paged
-     * therefore leaves the opening and closing stamps equal while the union
-     * still names that element present. Equal endpoint stamps are consequently
-     * *necessary but not sufficient* for "the union is a snapshot" here, and
-     * the same holds for the `since` escalation path, which filters the
-     * tombstone's re-used tags out along with the adds they cover. This is a
-     * pre-existing property of the family's tag algebra — the pull reply at
-     * [currentFrontier]'s other call site has always reported currency the same
-     * way — not something the bounded read introduced, and it is filed as
-     * research rather than papered over here.
+     * limit and not the paging design's.** This paragraph used to read "an
+     * observed-remove mints no tag", which made every mid-walk removal invisible
+     * to the check; since computenet-v2ka a `remove` mints a **del-dot** (see
+     * [inletHandler]'s `remove`) and `currentFrontier` is a max over `adds ∪
+     * dels`, so a locally applied remove-only mutation now DOES move the closing
+     * stamp and the caller's check reports it.
+     *
+     * The verdict is unchanged, on a narrower counterexample: the frontier is a
+     * per-source **max**, not a set, so a *reordered* remote `dels` entry whose
+     * dot counter is below a tag this replica already holds from that source
+     * changes membership while moving no maximum. Equal endpoint stamps are
+     * consequently still *necessary but not sufficient* for "the union is a
+     * snapshot" here, and the same holds for the `since` escalation path. This
+     * is a property of the family's tag algebra — the pull reply at
+     * [currentFrontier]'s other call site reports currency the same way — not
+     * something the bounded read introduced, and it is filed as research rather
+     * than papered over here.
      *
      * **Ownership.** An element that is itself an `Owned`/`Leased` payload is
      * never copied into a page: it is replaced by an [ExclusiveEntry]

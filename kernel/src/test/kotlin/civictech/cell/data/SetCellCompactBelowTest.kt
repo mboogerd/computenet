@@ -14,14 +14,20 @@ import org.junit.jupiter.api.Test
 import java.util.UUID
 
 /**
- * Pins `SetCell.compactBelow` (computenet-9sm.4.1, decision 9sm.4-D1/D2): the
- * minimal safe discard — tags at or below a per-source frontier are dropped
- * from `dels` and the `adds` tags they cover, membership is unchanged by
- * construction, an absent source is bottom (`[KE3-30]`), and nothing is
- * recorded — no floor, no fence, no emission. `delivered`/`tagCounter` survive
- * compaction, and a later delta carrying a discarded tag is re-admitted as new
- * information (deliberate, load-bearing — feature computenet-9sm.6 must add a
- * fence before this seam is wired to a checkpoint).
+ * Pins `SetCell.compactBelow` (computenet-9sm.4.1, decision 9sm.4-D1/D2, as
+ * amended by computenet-v2ka): the minimal safe discard — a `dels` **entry**
+ * every one of whose tags is at or below a per-source frontier is dropped
+ * whole, together with the `adds` tags it covers, and an entry that is only
+ * partly covered is left alone in full. Since `remove` mints a **del-dot**
+ * into the entry, "every tag ≤ frontier" reaches the dot, which is what makes
+ * the rule certify that the REMOVE was delivered and not merely the add
+ * (`[KE3-23]`). Membership is unchanged by construction, an absent source is
+ * bottom (`[KE3-30]`), and nothing is recorded — no floor, no fence, no
+ * emission. `delivered`/`tagCounter` survive compaction, and a later delta
+ * carrying a discarded tag is re-admitted as new information (deliberate,
+ * load-bearing — feature computenet-9sm.6 must add a fence before this seam is
+ * wired to a checkpoint, and computenet-v2ka MEASURED that a per-source
+ * high-water floor is not that fence).
  *
  * Every expected count below was hand-evaluated against the rule in the
  * bead's description and re-derived here rather than merely copied.
@@ -44,8 +50,23 @@ class SetCellCompactBelowTest {
         cell.outlet.subscribe(Use.fixed(buffering<Propagate<SetDelta<String>>>(into), PortRef.generate()))
     }
 
+    /**
+     * The discard is **per entry, not per tag** (`[KE3-31]` as written —
+     * "`dels` entries whose every tag is ≤ `stableFrontier` … SHALL be
+     * discarded" — restored by computenet-v2ka; the shipped 9sm.4 seam
+     * implemented the weaker per-tag reading and this test pinned it).
+     *
+     * Two arms, and the first is the safety property rather than a stale
+     * literal: at a frontier that covers only *part* of a tombstone the
+     * reclaimer discards NOTHING, because a partly-covered entry is not
+     * certified delivered and dropping half of it is what resurrects the
+     * element. At a frontier that covers the whole entry — the del-dot
+     * included — it reclaims the entry and the add-tags under it, so
+     * reclamation is demonstrably still happening and the first arm's zero is
+     * a fence, not a broken reclaimer.
+     */
     @Test
-    fun `drops covered pairs, keeps the live tag, membership unchanged`() {
+    fun `discards an entry only when every tag including the del-dot is covered, and membership is unchanged`() {
         val cell = SetCell<String>()
         val invocationBuffer = mutableListOf<Invocation>()
         buffer(cell, invocationBuffer)
@@ -53,23 +74,31 @@ class SetCellCompactBelowTest {
         cell.inlet.call.add("x") // (s, 1)
         cell.inlet.call.add("x") // (s, 2)
         cell.inlet.call.add("x") // (s, 3)
-        cell.inlet.call.remove("x") // dels[x] = {1,2,3}
-        cell.inlet.call.add("x") // (s, 4), live
+        cell.inlet.call.remove("x") // dels[x] = {1,2,3} + del-dot (s, 4)
+        cell.inlet.call.add("x") // (s, 5), live
 
         @Suppress("UNCHECKED_CAST")
         val s = (invocationBuffer[0].args[0] as SetDelta<String>).adds.getValue("x").single().sourceId
 
         assertEquals(setOf("x"), cell.membership())
+        assertEquals(setOf(1L, 2L, 3L, 4L), delsOf(cell).getValue("x").map { it.counter }.toSet())
+        assertEquals(setOf(1L, 2L, 3L, 5L), addsOf(cell).getValue("x").map { it.counter }.toSet())
 
-        val discarded1 = cell.compactBelow(TagFrontier(mapOf(s to 2L)))
-        assertEquals(4, discarded1)
-        assertEquals(setOf(3L, 4L), addsOf(cell).getValue("x").map { it.counter }.toSet())
-        assertEquals(setOf(3L), delsOf(cell).getValue("x").map { it.counter }.toSet())
+        // ARM 1 — the frontier covers 1 and 2 but neither the covered add-tag 3
+        // nor the del-dot 4: the entry is untouched, in full.
+        val addsBefore = addsOf(cell)
+        val delsBefore = delsOf(cell)
+        assertEquals(0, cell.compactBelow(TagFrontier(mapOf(s to 2L))))
+        assertEquals(addsBefore, addsOf(cell))
+        assertEquals(delsBefore, delsOf(cell))
         assertEquals(setOf("x"), cell.membership())
 
-        val discarded2 = cell.compactBelow(TagFrontier(mapOf(s to 10L)))
-        assertEquals(2, discarded2)
-        assertEquals(setOf(4L), addsOf(cell).getValue("x").map { it.counter }.toSet())
+        // ARM 2 — the frontier reaches the dot, so the whole entry goes: four
+        // del-tags plus the three add-tags they cover. The LIVE add-tag (s,5),
+        // which no del names, is never touched even though it is ≤ frontier.
+        val discarded = cell.compactBelow(TagFrontier(mapOf(s to 10L)))
+        assertEquals(7, discarded)
+        assertEquals(setOf(5L), addsOf(cell).getValue("x").map { it.counter }.toSet())
         assertTrue("x" !in delsOf(cell), "dels should have no key for x once its tombstone set empties")
         assertEquals(setOf("x"), cell.membership())
     }
@@ -127,18 +156,27 @@ class SetCellCompactBelowTest {
         cell.onDeliver { _, _ -> delivered++ }
 
         cell.inlet.call.add("z") // the first mint on a fresh cell: (s, 1)
-        cell.inlet.call.remove("z")
+        cell.inlet.call.remove("z") // covers (s,1), mints the del-dot (s, 2)
 
         @Suppress("UNCHECKED_CAST")
         val s = (invocationBuffer[0].args[0] as SetDelta<String>).adds.getValue("z").single().sourceId
 
         assertEquals(2, invocationBuffer.size)
-        assertEquals(1, delivered)
+        // TWO delivered advances, not one: the local remove mints a del-dot and
+        // folds it into the delivered lane, which is the whole del-dot
+        // mechanism (computenet-v2ka). What this test pins is that COMPACTION
+        // moves neither counter, so the figure is captured here and compared
+        // across the discard rather than asserted as a literal.
+        assertEquals(2, delivered)
+        val deliveredBeforeCompaction = delivered
 
-        val discarded = cell.compactBelow(TagFrontier(mapOf(s to 1L)))
-        assertEquals(2, discarded)
+        // the frontier must reach the dot at (s,2), or the entry is not
+        // certified delivered and nothing is discarded
+        assertEquals(0, cell.compactBelow(TagFrontier(mapOf(s to 1L))))
+        val discarded = cell.compactBelow(TagFrontier(mapOf(s to 2L)))
+        assertEquals(3, discarded) // dels {1,2} plus the add-tag 1 they cover
         assertEquals(2, invocationBuffer.size) // nothing emitted by compaction
-        assertEquals(1, delivered) // untouched
+        assertEquals(deliveredBeforeCompaction, delivered) // untouched
 
         // the straggler: a delta re-asserting the discarded add-tag
         val propagate = Propagate::class.java.getMethod("propagate", Any::class.java)
@@ -150,11 +188,11 @@ class SetCellCompactBelowTest {
 
         assertEquals(setOf("z"), cell.membership()) // re-admitted
         assertEquals(3, invocationBuffer.size) // re-emission of the novel add
-        assertEquals(1, delivered) // DeliveredFrontier.deliver(s, 1) returns null: prefix survived
+        assertEquals(deliveredBeforeCompaction, delivered) // deliver(s,1) is below the prefix: it survived
 
-        cell.inlet.call.add("w") // must mint (s, 2), not (s, 1): tagCounter survived compaction
+        cell.inlet.call.add("w") // must mint (s, 3), not (s, 1): tagCounter survived compaction
         @Suppress("UNCHECKED_CAST")
         val lastDelta = invocationBuffer.last().args[0] as SetDelta<String>
-        assertEquals(2L, lastDelta.adds.getValue("w").single().counter)
+        assertEquals(3L, lastDelta.adds.getValue("w").single().counter)
     }
 }

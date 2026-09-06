@@ -8,6 +8,7 @@ import civictech.cell.port.LinkFrom
 import civictech.cell.link.LinkResult
 import civictech.cell.port.Use
 import io.kotest.matchers.booleans.shouldBeTrue
+import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
@@ -118,6 +119,15 @@ class LateJoinCatchUpTest {
         tagFold(observer.arrivals) shouldBe setOf("y")
         val added = observer.arrivals.first { "x" in it.adds }.adds.getValue("x")
         val removed = observer.arrivals.first { "x" in it.dels }.dels.getValue("x")
-        removed shouldBe added
+        // the pre-migration add-tag is covered: the tag maps round-tripped
+        removed shouldContainAll added
+        // ... and so did the MINTING COUNTER. The remove mints a del-dot from it
+        // (`[24-TAG-04]`, computenet-v2ka), so the dot's counter is a direct read
+        // of the restored counter: two adds before the migration means the dot
+        // must be 3. A counter that reset on restore would mint 1 here and this
+        // assertion — not the coverage one above — is what would catch it.
+        val dot = (removed - added).single()
+        dot.counter shouldBe 3L
+        dot.sourceId shouldBe added.single().sourceId
     }
 }

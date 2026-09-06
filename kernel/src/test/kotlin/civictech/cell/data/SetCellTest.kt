@@ -52,8 +52,27 @@ class SetCellTest {
         assertEquals(2, tags.toSet().size) // re-adding mints a new tag
     }
 
+    /**
+     * The observed-remove's coverage, and the **del-dot** that rides with it
+     * (`[24-TAG-04]`, computenet-v2ka).
+     *
+     * The emitted `dels` entry is the observed add-tags *plus exactly one*
+     * fresh tag minted from this cell's own source counter — the dot that
+     * stands for the REMOVE itself, so that a remove is something a peer can
+     * be certified to have DELIVERED. What is asserted is the pair of
+     * properties the mechanism rests on, not the literal set: the entry covers
+     * every observed add-tag and no other add-tag, and the one tag it carries
+     * beyond them is from this source, above every counter this source has
+     * minted so far, and is in **no** `adds` set — so it covers nothing and
+     * `membership()` is what it was without it.
+     *
+     * The pre-v2ka form of this test asserted `dels == minted` exactly. That
+     * equality pinned the *absence* of the dot, which was the defect
+     * (`[KE3-23]`: a del-tag ≤ the stable frontier certified ADD delivery
+     * only), not a property worth keeping.
+     */
     @Test
-    fun `SetCell remove emits exactly the observed tags`() {
+    fun `SetCell remove emits the observed tags and exactly one fresh del-dot that covers nothing`() {
         val cell = SetCell<Int>()
 
         val invocationBuffer = mutableListOf<Invocation>()
@@ -68,7 +87,26 @@ class SetCellTest {
         @Suppress("UNCHECKED_CAST")
         val deltas = invocationBuffer.map { it.args[0] as SetDelta<Int> }
         val minted = deltas.take(2).flatMap { it.adds.getValue(1) }.toSet()
-        assertEquals(minted, deltas[2].dels.getValue(1))
+        val emitted = deltas[2].dels.getValue(1)
+
+        // every observed add-tag is covered ...
+        assertTrue(emitted.containsAll(minted), "the remove must cover every tag it observed: $emitted vs $minted")
+        // ... and exactly one tag beyond them: the dot
+        val extra = emitted - minted
+        assertEquals(1, extra.size, "a remove mints exactly one del-dot, got $extra")
+        val dot = extra.single()
+        assertEquals(minted.first().sourceId, dot.sourceId) // this cell's own tag source
+        assertTrue(
+            dot.counter > minted.maxOf { it.counter },
+            "the dot draws from the same monotone counter, so no add can ever re-mint it: $dot vs $minted",
+        )
+
+        // the dot covers nothing: it is in no `adds` set, and membership is what
+        // the pre-dot algebra said it was
+        @Suppress("UNCHECKED_CAST")
+        val adds = (cell.snapshot() as Map<String, Any>)["adds"] as Map<Int, Set<Timestamp>>
+        assertTrue(adds.values.none { dot in it }, "the del-dot must never enter `adds`")
+        assertEquals(emptySet<Int>(), cell.membership())
     }
 
     @Test
