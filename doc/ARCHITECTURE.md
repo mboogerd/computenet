@@ -120,7 +120,9 @@ All under `kernel/src/main/kotlin/civictech/cell/`.
 - `.consistency` — glitch freedom: `WaveFrontier` (ALIGN-tier wave-completeness
   fold), `GlitchFreeCell`, `ReplicaFrontier`, `ReplicaQuorum` (the R13/PN-19/
   FU-2 cross-replica settlement predicate; `Replication.replicaFrontier` is a
-  one-line factory over it).
+  one-line factory over it), `CausalStability` (the `[42-WM-05]` stability
+  read: pointwise MIN over every open membership row, a GC/compaction trigger
+  rather than a per-wave predicate).
 
 **Execution and operations**
 
