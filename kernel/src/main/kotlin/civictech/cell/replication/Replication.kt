@@ -56,6 +56,15 @@ class Replication(
      * partitioning are one slice-and-route mechanism ([sliceTo]), not two.
      */
     private val keyOf: (Any?) -> Any? = { it },
+    /**
+     * Enable the heartbeat cadence's effect (9sm.2-D3, [KE3-15]): defaulted
+     * `true` so every existing `Replication(registry)` / `Replication(registry,
+     * keyOf = …)` call site compiles unchanged and, because nothing yet ticks
+     * [heartbeat], behaves byte-identically. `false` makes [heartbeat] a
+     * no-op — the flag half of [KE3-15]'s "heartbeat disabled by
+     * configuration" control.
+     */
+    private val heartbeat: Boolean = true,
 ) {
 
     interface ReplicaDeltaInlet {
@@ -313,6 +322,43 @@ class Replication(
     fun onWatermarkAdvance(logicalId: UUID, listener: () -> Unit) {
         val companion = watermarks[logicalId] ?: return
         companion.outlet.tap(Use.fixed(Propagate<WatermarkDelta> { listener() }, PortRef.generate()))
+    }
+
+    /**
+     * The idle-liveness cadence entry point ([42-WM-06], spec 40/42
+     * §"Idle liveness: heartbeat rows", authored by 9sm.1; [KE3-11]–[KE3-15]):
+     * re-[civictech.cell.data.WatermarkCell.republish] every local
+     * delivered-watermark companion this `Replication` tracks. No-op when
+     * [heartbeat] (the constructor flag) is `false` — [KE3-15]'s "heartbeat
+     * disabled by configuration".
+     *
+     * **This is the WHOLE kernel surface for the heartbeat — no cadence
+     * driver ships (9sm.2-D5).** `HostScheduler` exposes `submit`/`await`/
+     * `shutdown` only, with no timer or delayed-submit primitive; a
+     * self-resubmitting task would keep [civictech.cell.host.SimulationController.runToIdle]
+     * from ever returning (`hasWork()` reads the queue as non-empty forever)
+     * and would spin a `VirtualThreadScheduler` at idle for no reason; and
+     * `ManagedHost` exposes no submit/post/schedule hook a cadence could hang
+     * off. So a deployment ticks this method from its OWN periodic source —
+     * outside any cell, submitting the call onto the host scheduler like any
+     * other management-band action — and no cell ever reads a clock (96
+     * §E3.3(c)'s constraint, unbroken). Tests tick it directly between
+     * `runToIdle()` drains, or from a DST `StepHooks.onStep` hook.
+     *
+     * **What a heartbeat can and cannot do.** It repairs a peer's view of
+     * this replica's row when that peer's earlier view was LOST — a dropped
+     * frame, a missed catch-up — by re-emitting the unchanged row so the
+     * peer's stale view is corrected on the next delivery. It never raises
+     * the causal-stability MIN above this replica's own row: an unchanged
+     * row is a fixpoint everywhere it already arrived
+     * ([civictech.cell.data.WatermarkCell.republish]'s "echo terminates
+     * here"), so in a lossless mesh — where `advance`/`applyRemote`/
+     * `catchUpOnLinked` already deliver every row to every peer without
+     * this call — a heartbeat changes no read at all ([KE3-12]).
+     */
+    fun heartbeat() {
+        if (!heartbeat) return
+        watermarks.values.forEach { it.republish() }
     }
 
     init {
