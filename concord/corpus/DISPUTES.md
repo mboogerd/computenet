@@ -1412,7 +1412,7 @@ The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
 `21-PULL-02` by `21-PULL-02.yaml`, `24-BOUND-01` by `24-BOUND-01.yaml`, and
 `24-BOUND-02` by `24-BOUND-02.yaml`'s limit sweep. The fourth is filed here.
 
-### `21-PULL-03` (cross-page stability) — **`cell-catalog-gap` + `script-model-gap`**
+### `21-PULL-03` (cross-page stability) — **`frontier-representation-gap` + `script-model-gap`**
 
 - **Requirement** (`doc/spec/20-dataflow-semantics/21-propagation.md` §Pull):
   *WHEN a bounded read over a state family in which every state change mints or
@@ -1423,26 +1423,45 @@ The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
   a walk is in flight, then the assertion that equal opening and closing stamps
   imply the union is exactly the snapshot at that frontier.
 - **Why it cannot be checked honestly — two independent reasons.**
-  1. **No qualifying state family exists in the cell catalog.** The family
-     qualification in the requirement is load-bearing, not decoration: comparing
-     a walk's opening and closing stamps detects *tag gains, and only tag gains*.
-     Every tag-frontier-carrying family in the standard library is an
-     observed-remove set. Since computenet-v2ka, `SetCell`'s retraction mints a
-     del-dot into its del-map, so a mid-walk LOCAL retraction now moves the
-     closing stamp and is caught; every other such family's retraction still
-     copies the add-tags it already holds into its del-map and mints nothing,
-     and even for `SetCell` a REORDERED remote `dels` entry whose dot is below a
-     tag this replica already holds from that source still leaves both stamps
-     equal while the union names the retracted element present, because the
-     frontier is a per-source max and not a set. For those families equal
-     stamps are *necessary but not sufficient*, and the shipped primitive says
-     so on its own read
+  1. **The one qualifying family violates the requirement it qualifies for.**
+     The antecedent is *satisfiable* — this entry previously said it was not,
+     and that is no longer true. Since computenet-v2ka, `SetCell` reaches it on
+     the antecedent's own words: an `add` mints a tag, an *effective* `remove`
+     mints its own del-dot into the `dels` entry (an ineffective remove changes
+     no state, so it is not a state change the antecedent quantifies over), and
+     the remote fold absorbs every novel add- **and** del-tag in one atomic
+     step. So "every state change mints or absorbs a tag" now holds of
+     `set-source`.
+
+     What fails is the consequent's *"at that frontier"*. `SetCell`'s frontier
+     is a per-source **max** over the add- and del-tags, so a frontier does not
+     name a state: a tag set with a gap and the same set with the gap filled
+     carry identical maxima. A REORDERED remote `dels` entry whose dot counter
+     sits below a tag this replica already holds from that source is therefore
+     *absorbed* (the antecedent holds), changes membership, and leaves both
+     stamps equal while the union names the retracted element present. Equal
+     stamps are *necessary but not sufficient* here, and the shipped primitive
+     says so on its own read
      (`kernel/src/main/kotlin/civictech/cell/BoundedRead.kt`, `StatePage`'s
-     stability contract). A scenario over `set-source` therefore could not make
-     the requirement's antecedent true; it would read as covered while asserting
-     something the requirement does not claim. The derived (operator) families
-     are further away, not closer: their frontier is not even monotone, so a
-     retraction can *lower* the stamp.
+     stability contract). A scenario over `set-source` would therefore not be
+     asserting something merely unproven — it would be asserting something
+     **false** of that family. The derived (operator) families are further away,
+     not closer: their frontier is not even monotone, so a retraction can
+     *lower* the stamp.
+
+     **The alternative reading was considered and rejected.** One could scope
+     the antecedent to families whose *frontier can detect* their own state
+     changes, rather than to families whose state changes touch the tag space —
+     which would make the antecedent unreachable again and the requirement
+     vacuously safe. That reading is circular: the consequent **is** the claim
+     that comparing endpoint stamps is sound, so an antecedent admitting only
+     the families where it is sound reduces the requirement to "when the check
+     works, the check works" and it stops constraining any implementation. It
+     would also relocate a *representation* defect — the frontier is a max and
+     not a set — into the requirement's scope condition, where it would no
+     longer read as the open research question the frontier design owns. The
+     requirement's family qualification is kept as an algebraic property of the
+     family, and the defect is named as what it is.
   2. **The script model cannot interleave a mutation with a walk.** A
      `read-state` step is a *whole walk* by construction (the harness loops the
      driver until the cursor terminates), and steps on one cell apply in file
@@ -1455,17 +1474,20 @@ The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
   scenario would pass, and would appear as `covered` in `CONCORDANCE.md`, while
   asserting only the requirement's trivial instance and nothing about the
   mid-walk case the requirement exists for. The requirement text was likewise
-  not softened to drop its family qualification — that qualification is what
-  makes it true.
+  not softened to match the representation — neither by dropping its family
+  qualification nor by narrowing that qualification to families the frontier
+  check can already police. What the requirement asserts of `set-source` is
+  currently false, and the repair is the frontier, not the sentence.
 - **What is not lost.** The property is pinned implementation-side by
   `V1C-KERNEL`'s own kernel tests (`BoundedReadWaveNeutralityTest` and the
   bounded-read suite around it). What this filing forgoes is the
   *cross-implementation* obligation: a second, non-kernel binding would not be
   held to it by the corpus.
-- **Resolves**: either (a) a state family whose retraction mints or absorbs a
-  tag (the research item the shipped `StatePage` contract names — an OR-set
-  variant whose observed-remove moves the frontier), bound as a catalog cell,
-  **and** (b) a way for a scenario to order an operation against a page boundary
+- **Resolves**: either (a) a frontier that *names* a state — a set, or any
+  gap-free witness, rather than a per-source max (the research item the shipped
+  `StatePage` contract names), after which absorbing a reordered remote del-tag
+  moves the stamp and the requirement becomes true of `set-source`; **and** (b) a
+  way for a scenario to order an operation against a page boundary
   — e.g. a paged form of the step (`{type: read-page, on: s, limit: N, as: w}`
   plus a `resume` step) that the current whole-walk form deliberately does not
   provide. (a) alone would still leave only the quiescent instance reachable.
