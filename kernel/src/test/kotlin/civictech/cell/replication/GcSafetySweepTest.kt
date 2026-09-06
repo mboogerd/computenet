@@ -1111,8 +1111,10 @@ class GcSafetySweepTest {
         private const val BS12_SEED: Long = 126L
 
         /**
-         * The two folded CHA1 faults asserted PER SEED in [assertAdversaryFired] — MEASURED to fire
-         * on 200 of 200 seeds on both arms, unlike [SWEEP_WIDE_FAULT_ID].
+         * The four folded CHA1 faults asserted PER SEED in [assertAdversaryFired] — the three parks
+         * and the reorderer — MEASURED to fire on 200 of 200 seeds on both arms, unlike
+         * [SWEEP_WIDE_FAULT_ID]. (`gc-park-b` and `gc-park-c` were added by computenet-nwnl; the
+         * count in this sentence said "two" until then.)
          */
         private val PER_SEED_FAULT_IDS: Set<String> =
             setOf("gc-park", "gc-park-b", "gc-park-c", "gc-reorder")
