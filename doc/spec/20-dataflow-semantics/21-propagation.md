@@ -240,10 +240,15 @@ per-source max) is a state-family question filed as research.
 
 ⚠ EARS-GAP ([21-PULL-03]): the requirement's antecedent is unreachable from the
 conformance boundary as it stands. Every tag-frontier-carrying family in the
-standard library is an observed-remove set, so none satisfies "every state
-change mints or absorbs a tag"; and a conformance script cannot interleave a
-mutation with a walk, so even for a qualifying family only the trivial
-(quiescent) instance would be exercised. Filed in `concord/corpus/DISPUTES.md`
+standard library is an observed-remove set. Since computenet-v2ka `SetCell`'s
+retraction mints a del-dot, so a *locally applied* retraction is caught; every
+other such family's retraction still copies the add-tags it already holds into
+its del-map and mints nothing, and even for `SetCell` a *reordered remote*
+`dels` entry whose dot is below a per-source max changes membership while
+raising no maximum. A scenario over `set-source` therefore still could not make
+"every state change mints or absorbs a tag" true of the walk's check; and a
+conformance script cannot interleave a mutation with a walk, so even for a
+qualifying family only the trivial (quiescent) instance would be exercised. Filed in `concord/corpus/DISPUTES.md`
 rather than covered by a scenario that would read as covered while asserting
 only the trivial instance. The at-rest half of the property is separately
 carried, and covered, by requirement 24-BOUND-02 (24).
