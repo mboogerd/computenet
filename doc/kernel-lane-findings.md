@@ -403,3 +403,74 @@ re-link does — `linkAC.heal()`/`linkBC.heal()`, after which the read settles
 at `t+6`. The test pins the outcome; which mechanism holds C's set back
 (inlet frontier alignment over the missing tag prefix is the obvious
 candidate) was not verified here.
+
+## KE3-GC-DEL-DOT — the del-dot: what it fixed, and what a re-admission floor costs
+
+Recorded by: `computenet-v2ka` (epic `computenet-9sm`). Base commit:
+`8d65b542b` (`main`). Host: 16-core macOS, load average ~5-7 (concurrent
+agents). All figures below are seeds `1..200` at budget `40_000` through
+`kernel/src/test/kotlin/civictech/cell/replication/GcSafetySweepTest.kt`.
+
+### The mechanism
+
+`SetCell.remove` mints a **del-dot** from the cell's own tag-source counter and
+ships it inside the `dels` entry beside the tags it covers. `applyRemote` feeds
+the del lane into the delivered frontier as well as the add lane, so the dot
+rides the existing per-origin max-contiguous prefix. `compactBelow` discards an
+entry all-or-nothing, so `[KE3-31]`'s "every tag `≤ stableFrontier`" reaches
+the dot for free. `sinceFilter` ships a `dels` entry whole, so a since-pull
+cannot hand a peer the dot without its covers.
+
+### What moved
+
+| build | STABLE resurrecting | STABLE membership-diverging | control diverging |
+|---|---|---|---|
+| unfixed (`8d65b542b`) | 10 of 200 | not measured | — |
+| + del-dot | 7-9 of 200 | 1-2 of 200 | 3-5 of 200 |
+| + del-dot + per-source re-admission floor | **0** of 200 | **31-33** of 200 | 2-5 of 200 |
+
+Deterministically, `CompactionTriggerPinTest`'s `P2 LOST del` went from
+`discardedA=2 discardedC=2` → `memberships=[[e],[e],[e]]`, `resurrected=[e]` at
+A and C, `converged=false`; to `discardedA=0 discardedC=0` →
+`memberships=[[],[],[]]`, nothing resurrected, `converged=true`. The stable
+frontier reads `sA → 1` in **both** runs. The frontier did not move; the rule's
+reach did.
+
+### The per-source re-admission floor is not safe, and this is the record of it
+
+`[24-TAG-04]`'s second clause is still open, and computenet-9sm.6-D2 plans a
+persisted per-source floor for it. Measured here in three variants:
+
+1. floor raised to the discarded counter — 33 of 200 diverging;
+2. the same, capped at the replica's own max-contiguous delivered prefix — 31;
+3. (2) with the del-dot made self-covering (present in `adds` as well as
+   `dels`) so the delivered frontier can only advance on tags the replica
+   actually holds — 31.
+
+All three drove resurrections to zero. All three fenced **live** add-tags —
+elements that were never removed went missing from one replica and stayed
+missing. Disabling only the fence while keeping the discard returns divergence
+to 2 of 200, the control floor: it is the fence, not the reclamation. A
+per-source high-water cannot express "this tag was reclaimed" as distinct from
+"this tag is below a position I have reached"; the fence needs a causal context.
+
+### The observable that would have hidden all of it
+
+`resurrected(cell, fold) = membership() − project(the cell's OWN emitted fold)`
+cannot see a diverged mesh: where the tombstone-holders reclaim and a straggler
+keeps the element live, every replica agrees with its own fold and the set is
+empty at all of them. Every one of the 31-33 diverging seeds above reported
+`resurrecting=[]`. `GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE` and the
+no-reclaimer `Trigger.NONE` control arm were added by this bead for that
+reason. **The divergence count is only meaningful against the control arm** —
+the churn rig itself diverges on 2-5 seeds with no compaction at all, and that
+floor moves between runs because the rig is not reproducible (see
+`GcSafetySweepTest`'s pin-test KDoc).
+
+### Rig note
+
+`BS12_SEED`/`BS13_SEED` were re-derived from `62` to `126`. The del-dot
+consumes tag counters, so every schedule downstream of a remove shifts and the
+old pin no longer reproduces. `126` is the one seed present in the resurrecting
+set of every 200-seed run taken on this base, on both arms, and reproduced on
+5 of 5 dedicated re-runs.

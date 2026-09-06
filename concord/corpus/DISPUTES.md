@@ -2621,14 +2621,49 @@ property is statable at the driver and not in the corpus.
   computenet-9sm.8 are the consumers that will wire the reclaimer against
   this rule), not something this entry or its harness task should decide
   unilaterally.
-- **Check to restore**: once a remove is certified delivered (either
-  missing capability above lands), re-run `GcSafetySweepTest`'s BS-12 arm
-  (STABLE trigger) and expect branch **G** — zero resurrecting seeds across
-  the same `SEEDS` range and adversary — in place of today's branch F-B.
-  `CompactionTriggerPinTest`'s `P2 LOST del` should likewise flip from
-  resurrecting to not.
-- **Revisit trigger**: a del-side delivered lane, or removes minting their
-  own dot, lands on `Replication`/`SetCell`/`TagState`.
+- **PARTLY CLOSED 2026-09-06 by computenet-v2ka — the del-side half.**
+  `SetCell.remove` now mints a **del-dot** from the cell's own tag counter,
+  ships it in the `dels` entry beside the tags it covers, and feeds it to
+  `foldDelivered`; `applyRemote` folds the del lane as well as the add lane;
+  and `compactBelow` discards an entry all-or-nothing, so `[KE3-31]`'s
+  every-tag rule reaches the dot. `[24-TAG-04]` is amended to state it, with
+  the superseded sentence kept verbatim. The DETERMINISTIC half of this
+  entry's evidence has flipped: `CompactionTriggerPinTest`'s `P2 LOST del`
+  went from `discardedA=2 discardedC=2` and `resurrected=[e]` at A and C, to
+  `discardedA=0 discardedC=0` and nothing resurrected, on the same schedule
+  and the same stable-frontier value.
+- **STILL OPEN — the re-admission half, and it is why this entry is not
+  retired.** `[24-TAG-04]`'s second clause ("SHALL NOT re-admit it as new
+  information") has no mechanism. `GcSafetySweepTest`'s BS-12 arm is still
+  branch F-B at 7-9 resurrecting seeds per 200 (down from 8-12), every one a
+  duplicated or reordered frame re-delivering a tag the reclaimer had already
+  discarded. `[KE3-23]` and `[KE3-31]` therefore remain uncovered.
+- **What was measured and rejected, so nobody pays for it twice**: a
+  **per-source re-admission floor** — the obvious fix, and the one
+  computenet-9sm.6-D2 plans — drives the resurrections to ZERO and is not
+  safe. In each of three variants (floor raised to the discarded counter; the
+  same capped at the replica's own max-contiguous delivered prefix; that cap
+  with the delivered frontier restricted so it can only advance on tags the
+  replica holds in `adds`) it fenced *live* add-tags and left **31-33 of 200
+  seeds with permanently diverged memberships**, against a no-reclaimer
+  control arm that diverges on 2-5. Disabling only the fence and keeping the
+  discard returns divergence to that control floor, so it is the fence and not
+  the reclamation. A per-source high-water is the wrong shape; the fence needs
+  a causal context.
+- **A weaker observable would have called that GREEN**, which is the other
+  finding here: `resurrected(cell, fold)` compares a cell against its OWN
+  emitted fold, so a mesh in which the tombstone-holders reclaimed and a
+  straggler kept the element live reads as `{}` at every replica.
+  computenet-v2ka added `GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE` (a
+  cross-replica membership check at quiescence) and a no-reclaimer CONTROL
+  arm for exactly this reason. Any future attempt at the fence must be read
+  against both, or branch G will be reported reached on evidence that cannot
+  see the failure.
+- **Check to restore**: `GcSafetySweepTest`'s BS-12 arm reaches branch **G**
+  — zero resurrecting seeds AND membership divergence no worse than the
+  CONTROL arm's, across the same `SEEDS` range and adversary.
+- **Revisit trigger**: a re-admission fence with causal-context shape (not a
+  per-source floor) lands on `SetCell`/`TagState`.
 
 ## `42-WM-FREEZE-01` — an unclean departure's frozen-stability notice, and the clean-departure row close, are not observable through the driver SPI (`schema-gap` + `check-vocabulary-gap` + `driver-binding-gap`)
 

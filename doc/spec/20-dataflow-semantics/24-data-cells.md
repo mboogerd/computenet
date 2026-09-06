@@ -684,8 +684,10 @@ layer G-62 — both cited from those gaps, neither owed by this section.
 
 Four tag-algebra rules govern replication, RESTART, instance swap, and
 compaction. They are decided design (93 I-14, I-22, I-27, 96 E3.7);
-`[24-TAG-02]` is implemented (W2.1), `[24-TAG-01]`, `[24-TAG-03]`, and
-`[24-TAG-04]` are not.
+`[24-TAG-02]` is implemented (W2.1), `[24-TAG-04]` is **half** implemented
+(its del-dot and every-tag discard rule landed with computenet-v2ka; its
+re-admission clause is open — see that bullet), and `[24-TAG-01]` and
+`[24-TAG-03]` are not.
 
 *(The ⚠ EARS-GAP that used to stand here asked a spec editor with fuller
 context to confirm or retract the `[24-TAG-*]` ids, on the suspicion that the
@@ -777,20 +779,56 @@ that is what the per-rule notes below now say instead of one blanket line.)*
   no supersession signal. The drain-window export snapshot is the same
   `Stateful.snapshot()` that G-25 journals — one capture serves the
   handoff, the rollback checkpoint, and the journal.
-- **Compaction below the stable frontier** (decided in 96 E3.7; unbuilt —
-  feature computenet-9sm.6, OR-map half computenet-9sm.8). `[24-TAG-04]`
-  WHEN a convergent cell compacts its tag state, it SHALL discard a tag
-  only if that tag is at or below the stable frontier (`[42-WM-05]`) at the
-  moment of discard, and IF a later delta, baseline or catch-up carries a
-  discarded tag, THEN the cell SHALL NOT re-admit it as new information
-  (Event-driven / Unwanted). Stability, not local delivery, is the trigger:
-  reclaiming at the locally delivered frontier can resurrect a removed
-  element on some schedule (96 E3.5's control), where reclaiming at the
-  stable frontier cannot, because every covering replica has already
-  converged past it. Compaction rides the G-25 checkpoint path, never the
-  emission hot path; a `StateRequest(since)` that asks for state below the
-  compaction floor is answered with full state rather than a since-delta
-  (E3.7, 40/42 §Scatter-gather pull `RetainedFrontiers`).
+- **Compaction below the stable frontier** (decided in 96 E3.7; partly built
+  — the del-dot landed with computenet-v2ka, the re-admission fence is open
+  under feature computenet-9sm.6, OR-map half computenet-9sm.8).
+  `[24-TAG-04]` WHEN a convergent cell compacts its tag state, it SHALL
+  discard a `dels` entry only if **every** tag in that entry — the covered
+  add-tags **and the del-dot the remove minted** — is at or below the stable
+  frontier (`[42-WM-05]`) at the moment of discard, and IF a later delta,
+  baseline or catch-up carries a discarded tag, THEN the cell SHALL NOT
+  re-admit it as new information (Event-driven / Unwanted). A remove SHALL
+  mint a **del-dot** from the removing cell's own tag-source counter, carry it
+  in the `dels` entry beside the tags it covers, and fold it into the
+  per-origin delivered frontier as an ordinary tag, so that a remove is
+  something a replica can be observed to have DELIVERED.
+  Compaction rides the G-25 checkpoint path, never the emission hot path; a
+  `StateRequest(since)` that asks for state below the compaction floor is
+  answered with full state rather than a since-delta (E3.7, 40/42
+  §Scatter-gather pull `RetainedFrontiers`), and a since-filtered reply SHALL
+  ship a `dels` entry whole or not at all, never splitting the dot from the
+  tags it covers.
+
+  **Superseded 2026-09-06 by computenet-v2ka** — the sentence that stood here,
+  verbatim: *"Stability, not local delivery, is the trigger: reclaiming at the
+  locally delivered frontier can resurrect a removed element on some schedule
+  (96 E3.5's control), where reclaiming at the stable frontier cannot, because
+  every covering replica has already converged past it."* Its second half was
+  **false for the shipped tag algebra and is the defect this rule was amended
+  to close**. `SetCell.foldDelivered` was fed only from `add()`'s local mint
+  and `applyRemote()`'s `newAdds`; `remove()` minted and folded nothing. So a
+  del-tag at or below the stable frontier certified that every open member had
+  delivered the ADD, never the REMOVE — and a member holding the add while
+  missing the remove re-shipped add-only state at heal into replicas that had
+  already reclaimed the tombstone. MEASURED across six independent 200-seed
+  sweeps before the fix (`doc/kernel-lane-findings.md` `## KE3-GC`) and
+  deterministically by `CompactionTriggerPinTest`'s `P2 LOST del`. The
+  del-dot restores the sentence's intent by making "converged past it" mean
+  past the remove.
+
+  **Still open, and this rule is not safe without it: the second clause.**
+  Nothing yet stops a duplicated, reordered or replayed frame carrying a
+  discarded tag from being re-admitted as new information — novelty is
+  `tags − adds[e]`, and a discarded tag is absent from `adds[e]` again. The
+  residual is 8-9 of 200 sweep seeds. computenet-v2ka **measured that a
+  per-source re-admission floor does not close it safely**: it drives the
+  resurrections to zero and fences *live* add-tags in the process, leaving
+  31-33 of 200 seeds with permanently diverged memberships against a
+  no-reclaimer control floor of 2-5, in each of three variants (raised to the
+  discarded counter; capped at the replica's own delivered prefix; and that
+  cap with the delivered frontier restricted to tags the replica holds). The
+  fence needs a causal context, not a per-source high-water. Until it exists,
+  a reclaimer built on this rule is unsafe under duplicate/reorder faults.
 
 ⚠ GAP (G-42): Epoch source-ids and restart generations accrete unboundedly:
 OR-set/PN source columns, stale glitch-free partial-wave buffers, and
