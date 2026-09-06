@@ -200,13 +200,16 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
                                    //           torn at entry granularity, never returns an entry twice. LATCHES.
                                    //   true  — the closing stamp equalled the opening one. NECESSARY, NOT
                                    //           SUFFICIENT for "the union is a snapshot". A TagFrontier measures tag
-                                   //           GAINS and only tag gains, so an observed-remove (which mints no tag)
-                                   //           is invisible to it everywhere; and in the NON-RETAINING families —
-                                   //           every cell under civictech.cell.data.op, plus ShardCell — the stamp
-                                   //           can also FALL, so a mid-walk gain can be masked by a mid-walk loss
-                                   //           and equality excludes nothing at all. Render "true" as "not observed
-                                   //           to change", NEVER as "this is a snapshot". True on page 1, which
-                                   //           compares the opening stamp with itself.
+                                   //           GAINS and only tag gains, so a remove that mints no tag is invisible
+                                   //           to it — true of every family except SetCell, whose remove mints a
+                                   //           del-dot (since computenet-v2ka) and so IS caught for a LOCAL removal;
+                                   //           even there a REORDERED remote del below a per-source max still evades
+                                   //           it, because the frontier is a max, not a set. In the NON-RETAINING
+                                   //           families — every cell under civictech.cell.data.op, plus ShardCell —
+                                   //           the stamp can also FALL, so a mid-walk gain can be masked by a
+                                   //           mid-walk loss and equality excludes nothing at all. Render "true" as
+                                   //           "not observed to change", NEVER as "this is a snapshot". True on
+                                   //           page 1, which compares the opening stamp with itself.
                                    //   null  — NOT DETERMINED, and this is the value an INTERMEDIATE page of a
                                    //           multi-page walk carries: such a page holds only the opening stamp
                                    //           (see caveats "staleFrontier"), so the verdict is not available until

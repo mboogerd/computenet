@@ -230,11 +230,14 @@ data class DriveOutcome(
  * @param pageLatenciesMs per-page wall time, in walk order.
  * @param frontierStable whether the walk's opening and closing `TagFrontier` stamps are
  *   equal — `StatePage`'s own stability check. **Necessary but not sufficient for this
- *   family**: an OR-set's observed-remove mints no tag, so a mid-walk removal of an
- *   already-paged element leaves both stamps equal (`SetCell.readBounded`'s KDoc states
- *   this, and it is the family's tag algebra rather than a paging defect). Reported
- *   because it is a fact the original E3 could not observe at all — its `List<Int>`
- *   stand-in carried no frontier — never as evidence the union is a snapshot.
+ *   family**: since computenet-v2ka a local `remove` mints a del-dot, so a mid-walk local
+ *   removal now moves the closing stamp and the check reports it — but the frontier is
+ *   still a per-source max, not a set, so a REORDERED remote `dels` entry whose dot counter
+ *   is below a tag this replica already holds from that source changes membership while
+ *   moving no maximum (`SetCell.readBounded`'s KDoc states this, and it is the family's tag
+ *   algebra rather than a paging defect). Reported because it is a fact the original E3
+ *   could not observe at all — its `List<Int>` stand-in carried no frontier — never as
+ *   evidence the union is a snapshot.
  * @param caveats the union of every `ReadCaveat` any page declared.
  */
 data class PagedWalkOutcome(

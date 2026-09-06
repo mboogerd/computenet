@@ -366,12 +366,16 @@ data class StatePageView(
      * - `true` — the closing stamp equalled the opening one. **Necessary, not
      *   sufficient**, for "the union is a snapshot", and how far short it falls
      *   depends on the cell family: a `TagFrontier` measures tag *gains* only,
-     *   so an OR-set observed-remove (which mints no tag) is invisible to it in
-     *   every family; and in the non-retaining families — every cell under
-     *   `civictech.cell.data.op` and `ShardCell` — the stamp can also *fall*, so
-     *   a mid-walk gain can be masked by a mid-walk loss and equality excludes
-     *   nothing at all. Render `true` as "not observed to change", never as
-     *   "this is a snapshot".
+     *   so a remove that mints no tag is invisible to it — still true of every
+     *   family except `SetCell`, whose `remove` mints a del-dot (since
+     *   computenet-v2ka) and so is caught for a LOCAL removal; even there a
+     *   REORDERED remote del whose dot is below a tag this replica already
+     *   holds from that source still evades it, because the frontier is a
+     *   per-source max, not a set. And in the non-retaining families — every
+     *   cell under `civictech.cell.data.op` and `ShardCell` — the stamp can
+     *   also *fall*, so a mid-walk gain can be masked by a mid-walk loss and
+     *   equality excludes nothing at all. Render `true` as "not observed to
+     *   change", never as "this is a snapshot".
      * - `null` — not determined: the walk has not closed and this page carries
      *   only the opening stamp ([STALE_FRONTIER]), or the cell reports no tag
      *   frontier at all. Render it as neither; it is not a `false`.

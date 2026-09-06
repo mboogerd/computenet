@@ -288,8 +288,9 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      *
      * **What computenet-v2ka measured about that fence, because it tried to
      * build it here and could not make it safe.** With the del-dot in place the
-     * residual under the sweep's `gc-dup`/`gc-reorder` adversary is 8-9 of 200
-     * seeds, every one a duplicated or reordered frame re-delivering a tag this
+     * residual under the sweep's `gc-dup`/`gc-reorder` adversary is 8-10 of 200
+     * seeds across three independent 200-seed runs (8, 9, 10 — `concord/corpus/DISPUTES.md`
+     * `## KE3-GC-DEL-LANE`), every one a duplicated or reordered frame re-delivering a tag this
      * method had already discarded. A **per-source re-admission floor** — the
      * obvious fix, and the one computenet-9sm.6-D2 plans — does drive those to
      * ZERO, and is nonetheless **not safe**: in all three variants tried (floor

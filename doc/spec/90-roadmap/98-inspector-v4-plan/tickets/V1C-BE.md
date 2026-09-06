@@ -97,11 +97,14 @@ the wire. Treat these as ticket text, not as background.
    advanced frontier is still the documented smear.
 2. **`walkStable: true` is necessary, not sufficient, for the OR-set family.**
    `StatePage`'s KDoc now says the check detects tag *gains* and only tag gains.
-   An OR-set observed-remove mints no tag, so a mid-walk removal of an
-   already-paged element leaves both endpoint stamps equal while the union still
-   names that element present. Your wire comment for `true` must not promise
-   more than the kernel does — "no tag was gained during this walk", not "this
-   is certainly a snapshot".
+   Since computenet-v2ka, `SetCell`'s `remove` mints a del-dot, so a mid-walk
+   LOCAL removal now moves the closing stamp and IS caught; the surviving
+   counterexample is a REORDERED remote `dels` entry whose dot is below a tag
+   this replica already holds from that source — the frontier is a per-source
+   max, not a set, so that still leaves both endpoint stamps equal while the
+   union names the element present. Your wire comment for `true` must not
+   promise more than the kernel does — "no tag was gained during this walk",
+   not "this is certainly a snapshot".
 3. **`StatePage.attributes` exists**, and carries cell-level state that is not a
    per-entry row and rides *every* page — `SetCell`'s tag `counter`, and (from
    `V1C-CELLS`) `ShardCell`'s `interest`/`assignedEpoch`. Decide and state
