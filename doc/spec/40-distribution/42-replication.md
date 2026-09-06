@@ -503,13 +503,56 @@ ignoring it. Pinned concretely in
 field until every peer has upgraded past the version that introduced it.**
 During a rolling upgrade of a replica set, an upgraded peer emitting a
 `STABILITY_FROZEN` `Stall` with `slot` set to a not-yet-upgraded peer breaks
-that peer's decode of the whole frame, not just the new field. This is a
-property of the wire codec's configuration, not of any one field's KDoc, so it
-governs every future additive field the same way until decided otherwise.
-Setting `ignoreUnknownKeys = true` would close the asymmetry but silences
-every unknown key on every decode, trading a loud failure on a malformed or
-version-mismatched frame for a silent one everywhere — a wire-behaviour change
-out of scope here; not adopted.
+that peer's decode of the whole frame, not just the new field. (That example
+understates the damage: a *genuinely* pre-KE3 peer fails on the frame's
+`STABILITY_FROZEN` reason before it reaches `slot` at all — the second hazard
+below. The unknown-*key* failure described here is the one that fires whenever
+the reason is a constant the older peer already knows.) This is a property of
+the wire codec's configuration, not of any one field's KDoc, so it governs
+every future additive field the same way until decided otherwise.
+Setting `ignoreUnknownKeys = true` would close **this** asymmetry — the
+unknown-*key* one — but not the second, distinct hazard below; it is not a
+general fix for mixed-version safety, and is not adopted here.
+
+**A second, independent hazard: an unknown enum CONSTANT.** Adding a case to
+an existing `@Serializable` enum is exactly as much a wire change as adding a
+field, and `ignoreUnknownKeys` does **not** cover it — that setting governs
+unrecognised JSON object keys, not unrecognised values of a key the reader
+already knows. `StallReason.STABILITY_FROZEN` is again the concrete case: it
+was added by the same change that added `slot` (9sm.5-D5,
+`computenet-9sm.5`), so at `ea84150f5` — one commit before that change —
+`StallReason` held only `SUSPENDED` / `RESTARTING` / `DEAD_LETTERED`. A
+genuinely pre-KE3 peer decoding a `Stall(STABILITY_FROZEN)` frame throws on
+the unrecognised `"reason":"STABILITY_FROZEN"` value *before it ever reaches
+the `slot` key* — the failure fires even when `slot` is left `null` and is
+therefore altogether absent from the encoded object, so this hazard exists
+independently of the additive-field one above. Pinned concretely in
+`kernel/src/test/kotlin/civictech/cell/wire/StallNoticeWireCompatTest.kt`'s
+"unknown enum constant hazard" test, which also shows the same real frame
+decodes cleanly against a pre-KE3 reader when the reason is one it already
+knows (`SUSPENDED`) — isolating the failure to the unrecognised constant, not
+some other mismatch in the reconstructed legacy shape.
+
+Closing this hole would need either `coerceInputValues = true` **plus a
+change at the use site** — that setting substitutes the *declaring
+property's* default value (or `null`, for a nullable property), not anything
+belonging to the enum, so on its own it is inert here: `Stall.reason` is
+neither nullable nor default-valued, and a decode of this frame under
+`coerceInputValues = true` still throws (measured 2026-09-06; the same decode
+against a `reason` that carries a default, or a nullable one, does coerce) —
+or a dedicated `UNKNOWN`/fallback constant on the enum with a custom
+serializer that maps any unrecognised name to it. Either is a separate, deliberate wire-behaviour
+decision with its own blast radius (a peer that keeps running while
+misreading a control-plane notice, rather than failing loudly) and is named
+here only as the option — not taken.
+
+**The constraint above therefore covers newly-added enum constants as well as
+newly-added optional fields**: a mixed-version mesh must not populate a
+newly-added optional field, and must not emit a newly-added enum constant,
+until every peer has upgraded past the version that introduced it. Both
+failure modes have the same shape (an older reader's decode of the whole
+payload breaks, not just the new part) and the same non-fix
+(`ignoreUnknownKeys` addresses only the field case).
 
 ### Open interactions
 

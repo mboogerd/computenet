@@ -9,6 +9,7 @@ import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContainIgnoringCase
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -44,6 +45,20 @@ import java.util.UUID
  * `./gradlew :kernel:test --tests '<throwaway>' --rerun`, printing the
  * result. The worktree was removed after capture; it contributed no commit.
  */
+
+/**
+ * Stand-in for [StallReason] at `ea84150f5` (pre-KE3): exactly `SUSPENDED` /
+ * `RESTARTING` / `DEAD_LETTERED`, missing `STABILITY_FROZEN`. Used only by
+ * the "unknown enum constant" test below — kept top-level because Kotlin
+ * does not allow a local `enum class`.
+ */
+@Serializable
+private enum class LegacyStallReason { SUSPENDED, RESTARTING, DEAD_LETTERED }
+
+/** Stand-in for pre-KE3 `StallNotice.Stall`, paired with [LegacyStallReason]. */
+@Serializable
+private data class LegacyStallWithLegacyReason(val reason: LegacyStallReason, val timestamp: Timestamp? = null)
+
 class StallNoticeWireCompatTest {
 
     private val fixedCellRef = CellRef(UUID.fromString("00000000-0000-0000-0000-000000000042"))
@@ -189,5 +204,70 @@ class StallNoticeWireCompatTest {
         shouldThrow<SerializationException> {
             Json.decodeFromJsonElement(LegacyStall.serializer(), stallPayload)
         }
+    }
+
+    /**
+     * Second, distinct mixed-version hazard (computenet-b2i0, filed from this
+     * item's review of KE3-39): an unknown ENUM CONSTANT, independent of any
+     * unknown KEY. `STABILITY_FROZEN` was added to [StallReason] by the same
+     * predecessor task (`570a704a9`) that added `slot` — at `ea84150f5`,
+     * `StallReason` held exactly `SUSPENDED` / `RESTARTING` / `DEAD_LETTERED`.
+     * So a genuinely pre-KE3 peer throws on `"reason":"STABILITY_FROZEN"`
+     * before it ever reaches the `slot` key — and it does so even when `slot`
+     * is `null` and therefore *absent* from the encoded object entirely,
+     * which is what isolates this from the `slot`-key hazard pinned above.
+     *
+     * The tests above all reconstruct their "pre-KE3" reader with TODAY's
+     * [StallReason], which already contains `STABILITY_FROZEN` — a fair
+     * bound on what they pin (the additive-*field* claim), but it means none
+     * of them exercises the enum half at all. This test uses a
+     * `LegacyStallReason` missing `STABILITY_FROZEN`, standing in for the
+     * pre-KE3 enum shape, so the hazard is actually exercised.
+     *
+     * Two cases, both driven through the real [WireCodec.encode] path (never
+     * a hand-spliced JSON literal):
+     *
+     * 1. Encoding `Stall(STABILITY_FROZEN)` (no `slot`) and decoding the
+     *    lifted payload fragment against the legacy shape throws — and the
+     *    control below rules out every other explanation Gradle's own
+     *    `mutation-check` guidance warns a green run can silently be
+     *    passing for (a missing `slot` key, a missing serializers module
+     *    entry, the `Timestamp` shape): the exception message names the
+     *    unrecognised enum value, not a missing/unknown key.
+     * 2. The **control**: the same real encode/decode path with a pre-KE3
+     *    reason (`SUSPENDED`) — same method, same payload shape, same
+     *    legacy reader — decodes cleanly. That rules out the legacy reader
+     *    itself being broken (wrong serializers module, wrong `Timestamp`
+     *    shape, etc.): only the unrecognised constant fails, not the
+     *    plumbing around it.
+     */
+    @Test
+    fun `unknown enum constant hazard - a pre-KE3 reader rejects STABILITY_FROZEN even with slot absent, but decodes a pre-KE3 reason cleanly`() {
+
+        fun legacyPayloadFragment(notice: StallNotice): kotlinx.serialization.json.JsonElement {
+            val encoded = encodeStall(notice)
+            return Json.parseToJsonElement(encoded).jsonObject["args"]!!.jsonArray[0].jsonArray[1]
+        }
+
+        // Case 1: STABILITY_FROZEN, slot left null/absent — isolates the enum
+        // hazard from the slot-key hazard pinned in the test above.
+        val frozenPayload = legacyPayloadFragment(StallNotice.Stall(StallReason.STABILITY_FROZEN))
+        frozenPayload.jsonObject.containsKey("slot") shouldBe false
+
+        val thrown = shouldThrow<SerializationException> {
+            Json.decodeFromJsonElement(LegacyStallWithLegacyReason.serializer(), frozenPayload)
+        }
+        // The message names the unrecognised enum value, not a key — proof
+        // this is the enum hazard and not a mis-set-up control.
+        thrown.message.orEmpty() shouldContainIgnoringCase "STABILITY_FROZEN"
+
+        // Case 2 (control): a pre-KE3 reason, same real encode/decode path,
+        // same legacy reader — decodes cleanly. If this failed too, the test
+        // would be pinning something about the legacy reader's plumbing
+        // (serializers module, Timestamp shape) rather than the enum
+        // constant, and would prove nothing about the hazard.
+        val suspendedPayload = legacyPayloadFragment(StallNotice.Stall(StallReason.SUSPENDED))
+        val decodedControl = Json.decodeFromJsonElement(LegacyStallWithLegacyReason.serializer(), suspendedPayload)
+        decodedControl shouldBe LegacyStallWithLegacyReason(LegacyStallReason.SUSPENDED)
     }
 }

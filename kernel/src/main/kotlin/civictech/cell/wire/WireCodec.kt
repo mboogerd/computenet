@@ -287,17 +287,57 @@ object WireCodec {
      * decode throws [kotlinx.serialization.SerializationException] on the
      * unknown key rather than ignoring it — pinned concretely in
      * `kernel/src/test/kotlin/civictech/cell/wire/StallNoticeWireCompatTest.kt`.
+     * (A *genuinely* older peer receiving a `STABILITY_FROZEN` `Stall` fails
+     * earlier still, on the reason itself — the second hazard below; the
+     * unknown-key failure is the one that fires when the reason is a constant
+     * the older peer already knows.)
      * Consequence: a mixed-version mesh MUST NOT populate a newly-added
      * optional field until every peer has upgraded past the version that
      * introduced it (`doc/spec/40-distribution/42-replication.md`
      * §"Wire compatibility of additive fields (KE3-39)").
      *
-     * Setting `ignoreUnknownKeys = true` would close the asymmetry but
-     * silences every unknown key on every decode, not just a deliberately
-     * additive one — trading a loud failure on a malformed or
-     * version-mismatched frame for a silent one everywhere. That is a
-     * broader wire-behaviour change than this note authorizes; not done
-     * here.
+     * Setting `ignoreUnknownKeys = true` would close **this** asymmetry — the
+     * unknown-*key* one — but silences every unknown key on every decode, not
+     * just a deliberately additive one, trading a loud failure on a malformed
+     * or version-mismatched frame for a silent one everywhere. That is a
+     * broader wire-behaviour change than this note authorizes; not done here.
+     * It also would not touch the second hazard below.
+     *
+     * ### A second, independent hazard: an unknown enum CONSTANT
+     *
+     * Adding a case to an existing `@Serializable` enum is exactly as much a
+     * wire change as adding a field, and `ignoreUnknownKeys` does **not**
+     * cover it — that setting governs unrecognised JSON object *keys*, not an
+     * unrecognised *value* of a key the reader already knows.
+     * [civictech.cell.control.StallReason.STABILITY_FROZEN] is the concrete
+     * case: it was added by the same change that added
+     * [civictech.cell.control.StallNotice.Stall.slot], so a genuinely pre-KE3
+     * peer decoding a `Stall(STABILITY_FROZEN)` frame throws on the
+     * unrecognised `"reason":"STABILITY_FROZEN"` value before it ever reaches
+     * the `slot` key — the failure fires even when `slot` is `null` and
+     * therefore absent from the encoded object entirely, so this hazard is
+     * independent of the additive-field one above. Pinned concretely in
+     * `kernel/src/test/kotlin/civictech/cell/wire/StallNoticeWireCompatTest.kt`'s
+     * "unknown enum constant hazard" test.
+     *
+     * Closing this would need `coerceInputValues = true` **plus a change at
+     * the use site** — that setting substitutes the *declaring property's*
+     * default value (or `null`, for a nullable property), not anything
+     * belonging to the enum, so on its own it is inert here: `Stall.reason`
+     * is neither nullable nor default-valued, and this frame still throws
+     * under `coerceInputValues = true` (measured 2026-09-06) — or a dedicated
+     * fallback constant with a custom serializer. Either
+     * is a separate, deliberate wire-behaviour decision — trading a loud
+     * rolling-upgrade failure for a peer that keeps running while quietly
+     * misreading the reason on a control-plane notice — named here only as
+     * the option, not taken.
+     *
+     * **Consequence: the additive-field constraint above covers newly-added
+     * enum constants as well** (`doc/spec/40-distribution/42-replication.md`
+     * §"Wire compatibility of additive fields (KE3-39)"): a mixed-version
+     * mesh must not emit a newly-added enum constant, any more than it may
+     * populate a newly-added optional field, until every peer has upgraded
+     * past the version that introduced it.
      */
     private fun build(live: List<WireSerializers>): Json = Json {
         // `plus` fails fast if a contribution collides with a kernel type (or
