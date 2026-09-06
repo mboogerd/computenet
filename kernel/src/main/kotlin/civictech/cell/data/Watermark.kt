@@ -118,6 +118,41 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         outlet.call.propagate(WatermarkDelta(rows = mapOf(slotId to mapOf(source to thru))))
     }
 
+    /**
+     * Re-emit this replica's own row verbatim, unconditionally — the heartbeat
+     * mechanism ([42-WM-06], spec 40/42 §"Idle liveness: heartbeat rows",
+     * authored by 9sm.1). Emits nothing when this replica's own row has never
+     * been advanced ([KE3-11]: "a row that has never been advanced emits
+     * nothing") or when this slot has cleanly [close]d (9sm.2-D6, [42-WM-08]):
+     * a departed row constrains no read, so keeping it live buys nothing.
+     *
+     * Safe to call unconditionally, repeatedly, and at any cadence: because
+     * [applyRemote] merges by pointwise max, a re-emitted unchanged row is a
+     * fixpoint on every receiver — "echo terminates here" absorbs it in one
+     * hop, exactly as a redelivered [advance] or catch-up would. This is what
+     * repairs a peer whose earlier view of this row was lost (a dropped
+     * frame, a missed catch-up) without silence alone being mistaken for that
+     * loss: an idle-but-heartbeating replica keeps proving it is merely idle.
+     *
+     * Detached ([CurrentContext.with] `null`), like [trackDeliveriesOf]'s
+     * advance ([KE3-14]): the emission mints its own wave from this cell's
+     * [outlet] instead of welding onto whatever wave happens to be on the
+     * ambient [CurrentContext] stack when this is called.
+     *
+     * The cadence is entirely the caller's — this cell reads no clock and
+     * drives no timer. [civictech.cell.replication.Replication.heartbeat]
+     * is the entry point a deployment drives from its own periodic source
+     * (9sm.2-D5); nothing here resubmits or repeats on its own.
+     */
+    fun republish() {
+        val row = rows[slotId]
+        if (row.isNullOrEmpty()) return // [KE3-11]: never advanced, nothing to republish
+        if (slotId in closed) return // 9sm.2-D6: a departed row constrains no read
+        CurrentContext.with(null) {
+            outlet.call.propagate(WatermarkDelta(rows = mapOf(slotId to row.toMap())))
+        }
+    }
+
     /** Mark this replica cleanly departed: its row stops constraining reads. */
     fun close() {
         if (!closed.add(slotId)) return // effective-only
