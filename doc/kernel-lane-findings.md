@@ -784,3 +784,78 @@ assertion roughly one run in four. Filed as **computenet-dwkp** with the
 head-to-head measurement, the candidate mechanism as an explicit hypothesis,
 and the first step that would turn it into one. Not closed here, and not
 weakened here.
+
+## KE3-23-PROVENANCE — the BS-12 residual is NOT computenet-vhlm's cross-incarnation re-mint: the fencing replica minted the fenced tag itself, in the same incarnation, having never departed
+
+**computenet-dwkp, 2026-09-06, darwin/arm64 16-core, load1 9-11, `GcSafetySweepTest`
+BS-12 (STABLE), seeds 1..200, budget 40_000, branch `task/computenet-dwkp` at
+`c657d1f8a` (cut from `task/computenet-nwnl` `d21ce1c7d`). Twelve consecutive
+200-seed sweeps of the whole `GcSafetySweepTest` class in one session; **1 of 12
+caught the signature**, run 10, seed 12 — consistent with the ~20-30% per-sweep
+rate computenet-nwnl measured, and a reminder that a green sweep is not evidence
+here.**
+
+### The hypothesis under test, and why it was a hypothesis
+
+computenet-dwkp's filing proposed that the residual is the SAME-ELEMENT hole
+`KE3-GC-FENCE-KEY` above recorded as out of scope: `SetCell.tagSource` is derived
+so a recovered instance re-mints the tags the network already observed, so a
+*rejoining* peer2 would re-add `peer2-23` carrying counter 8 that peer2's own
+`ReclaimedDots` had already fenced. That is plausible, and it is exactly the kind
+of inference this chain has twice had overturned by a direct read (computenet-pay7's
+ordinal parity, computenet-vhlm's "criterion 2 met in count").
+
+### The measurement
+
+`SetCell.fenceProvenance(element, tag)` — a third `internal` diagnostic read beside
+`liveTagsOf`/`fencedAmong`, additive and consulted by no protocol path — reports, for
+a tag the lacking replica fences: whether the tag's source is that replica's own
+`tagSource`, that instance's `restore()` count, and **the element THIS instance
+minted that counter for**. `GcSafetySweep`'s attribution detail prints it for every
+fenced tag, together with the peer's own `lastDeparture`. Caught reading, verbatim
+from run 10's `<system-out>`:
+
+    [BS-12] FENCED-DIVERGE seed=12 live replicas disagree on membership at quiescence:
+      peer0=[peer0-6, peer1-4, peer2-8, peer1-10, peer0-12, peer2-14, peer0-18, peer2-20, peer2-23],
+      peer2=[peer1-4, peer0-6, peer2-8, peer1-10, peer2-14, peer0-12, peer0-18, peer2-20];
+      differing=[peer2-23];
+      attribution=[peer2-23 held=[peer0] liveTags=[8]
+        provenance=[peer2{tag=8 own=true inc=11/11 restores=0 mintedHere=peer2-23
+                    sameElement=true lastDeparture=null suspended=false}]
+        fencedAtLacking=peer2:[8](all)]; discarded=39
+
+### What that settles
+
+**REFUTED, on three independent facts in one line:**
+
+- `mintedHere=peer2-23 sameElement=true` — the very instance that holds the fence
+  minted counter 8 for `peer2-23` itself. There is no second incarnation's tag.
+- `restores=0` — that instance never ran `restore()`, so nothing it holds was
+  re-minted by a journal or checkpoint replay.
+- `lastDeparture=null` — peer2 never departed in that run, so it never rejoined and
+  `MeshPeer.spawn` constructed its `SetCell` exactly once. (The rig re-derives its
+  ids from the seed, so `inc=11/11` counts constructions for that `tagSource` across
+  the BS-12 and BS-13 arms in one JVM; it is not a rejoin count, and the KDoc now
+  says so. `lastDeparture` is the reliable read.)
+
+So the fence is at the RIGHT seam and holds the RIGHT pair: peer2 added `peer2-23`,
+removed it, and reclaimed its own `(element, del-dot + covered add-tag)` below the
+stable frontier. `peer2-23` is peer2's ordinal-23 write, ODD — the class
+`GcSafetySweep.removeSchedule` does remove — which is consistent with a legitimate
+local remove and not with the even-ordinal shape `KE3-GC-FENCE-KEY` found.
+
+### The question this moves the residual to, and what it does NOT settle
+
+The open question is now on the HOLDER side: peer0 still has `peer2-23` live while
+peer2 compacted it, and `compactBelow`'s every-tag rule means peer2's del-dot was
+`<= stableFrontier` — i.e. certified delivered by every OPEN member. Either peer0 was
+not an open member when that certificate was taken and later came back holding the
+add without the del, or the open-member set the frontier is computed over does not
+match the set that ends up live at quiescence. That is a membership/watermark
+question, not a `tagSource` uniqueness one, and **disposition (a) in computenet-dwkp
+(make `tagSource` incarnation-unique) would not address the case measured here.**
+
+Not settled: whether every occurrence of this signature has this provenance. One
+occurrence was caught in twelve sweeps and it is the only one read so far; the
+instrumentation is committed so the next occurrence carries its own answer,
+including the holders' departure history (`holderState=`), which run 10 predates.

@@ -532,7 +532,16 @@ object GcSafetySweep {
                                 "lastDeparture=${peer?.lastDeparture} suspended=${peer?.suspended}}"
                         }
                     }
-                Triple(element, "$element held=$holders liveTags=${liveTags.map { it.counter }.sorted()} " +
+                // The HOLDER side of the same question (computenet-dwkp): the measurement showed
+                // the lacking replica minted and fenced the tag itself, which moves the open
+                // question to why the holder still has the element live — so the holders'
+                // departure history is printed beside the fence's.
+                val holderState = holders.map { name ->
+                    val peer = live.firstOrNull { it.name == name }
+                    "$name{lastDeparture=${peer?.lastDeparture} suspended=${peer?.suspended}}"
+                }
+                Triple(element, "$element held=$holders holderState=$holderState " +
+                    "liveTags=${liveTags.map { it.counter }.sorted()} " +
                     (if (provenance.isEmpty()) "" else "provenance=$provenance ") +
                     "fencedAtLacking=" + (
                     if (fencedAt.isEmpty()) "NONE"

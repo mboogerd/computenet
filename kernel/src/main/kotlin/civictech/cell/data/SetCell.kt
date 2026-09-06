@@ -681,7 +681,12 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      *
      *  - **Is the fencing incarnation a rejoin?** `inc` is this instance's 1-based
      *    construction ordinal for its `tagSource`, and `incTotal` how many exist now.
-     *    `inc > 1` means an earlier incarnation of this same replica ref existed.
+     *    It is a PROCESS-WIDE count and a weak signal on its own: a sweep harness that
+     *    derives its ids from the seed (`ChurnMesh`: `churn-mesh-data:${'$'}{plan.seed}`)
+     *    re-uses one `tagSource` across every arm and every re-execution of that seed in
+     *    the same JVM, so `inc > 1` counts those too and not only rejoins. The unambiguous
+     *    reads are `restores` and `mintedHere` below, plus the harness's own departure
+     *    history for the peer.
      *  - **Was the fenced tag minted by a replay?** `restores` counts [restore] calls on
      *    this instance (a replayed instance has `restores > 0`), and `mintedHere` names the
      *    element THIS instance minted that counter for, or `ABSENT` when this instance never
