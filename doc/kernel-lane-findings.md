@@ -918,8 +918,9 @@ the holder was not an open member at certification time — and it is NOT shape 
 
 ### Rate
 
-Five sweeps at `9bafc27b0` produced two catches; six at `a961dfa4b` produced one. Eleven
-sweeps, three catches — roughly 1 in 4, against the 1-in-12 the previous session saw at
-the same commit. Full-class sweeps ran in 8-13s each on this host, not the minutes an
+Eleven sweeps at `9bafc27b0` produced two catches; fifteen at `a961dfa4b` produced two.
+**26 sweeps, 4 catches — roughly 1 in 6**, against the 1-in-12 the previous session saw
+at `9bafc27b0`. The two occurrences carrying the sharpened print are byte-identical to
+each other, and all four agree on seed, element, holder and provenance. Full-class sweeps ran in 8-13s each on this host, not the minutes an
 earlier note assumed. Seed-pinning remains a dead end (a dedicated 5-run pin on seed 12
 scored 0/5); the schedule, not the seed, is what is rare.
