@@ -690,7 +690,11 @@ class GcSafetySweepTest {
      * a convenience. See [BS13_SEED].
      *
      * `DstRun.assertDeterministic()` (trace-digest reproduction) is what the bead prescribes. It
-     * **does not pass on this graph under a `ChurnGenerator`-drawn plan**, and the cause is not
+     * **does not pass on this graph under a `ChurnGenerator`-drawn plan that contains a
+     * `DepartureMode.PARTITION_SUSPEND` departure later rejoined or healed** — computenet-l0gd
+     * later localized it to exactly that condition (see this class's KDoc and `doc/dst-rig.md`
+     * §"A peering that re-opens mid-run is outside the determinism contract"); the seed-dependence
+     * recorded below is that condition showing through before it was named. The cause is not
      * this task's: a 2x2 corner measurement on seeds 1/8/9/19 at budget 40_000 found the digest
      * differing between two back-to-back runs with **both** step hooks removed and the full fault
      * plan in place, and again with both hooks installed and **no** folded faults at all (bare
