@@ -183,9 +183,12 @@ object GcSafetySweep {
          * question the other two arms cannot: is a failure this sweep reports a property of
          * COMPACTION, or of the churn rig underneath it?
          *
-         * It was added because the cross-replica membership check
+         * It was added while a per-source re-admission floor was on the branch (built, measured
+         * unsafe, reverted in 5bfc85b91), where the cross-replica membership check
          * ([MEMBERSHIP_DIVERGENCE_FAILURE]) fired on ~36 of 200 STABLE seeds and a nearly
-         * identical ~39 under LOCAL. A failure class that does not discriminate between the
+         * identical ~39 under LOCAL. Those two figures are from THAT build, not this one: on the
+         * shipped tree STABLE diverges on ~2 and the control on ~2-4. A failure class that does
+         * not discriminate between the
          * right seam and the wrong one is evidence about the rig, not about the trigger — and
          * asserting it empty on the STABLE arm would have failed good work for a defect it did
          * not cause. This arm measures that baseline instead of guessing at it.
@@ -646,17 +649,21 @@ class GcSafetySweepTest {
         // The control that passes by OBSERVING the failure: the wrong seam must be able to make
         // the observable fire, or the observable is inert and BS-12's arm proves nothing.
         //
-        // **The FORM of the failure changed with computenet-v2ka's fix, and the change is the
-        // finding.** Before it, LOCAL resurrected on 8-15 seeds per 200-seed run. The
-        // re-admission floor now fences the straggler's re-ship, so LOCAL no longer RESURRECTS —
-        // it leaves the mesh permanently DIVERGED instead: the tombstone-holders reclaim a del
-        // the straggler never delivered, the straggler keeps the element live, and no path
-        // repairs it. `resurrected(...)` reads `{}` at every replica in that state (each cell
-        // agrees with its OWN fold), which is exactly why
-        // [GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE] had to be added to this harness. So the
-        // control asserts the UNION: reclaiming at the locally-delivered frontier must still be
-        // observably wrong, in one form or the other. Asserting only the old form would have
-        // silently retired `[KE3-20]`'s control the day the fix landed.
+        // **The control asserts the UNION of the two harm classes, and the widening is
+        // deliberate — read it as forward cover, not as a description of the shipped tree.** On
+        // THIS tree LOCAL still RESURRECTS (measured 12 of 200 at head; the pre-v2ka band was
+        // 8-15), so the `resurrecting` half alone is what currently fires and the union costs
+        // nothing today. What the union buys is the case computenet-v2ka MEASURED on a build
+        // that is NOT in this tree: with a per-source re-admission floor in place (built,
+        // measured unsafe, reverted in 5bfc85b91 — see `SetCell.compactBelow`'s KDoc) LOCAL's
+        // resurrections vanish and are replaced by permanent membership DIVERGENCE — the
+        // tombstone-holders reclaim a del the straggler never delivered, the straggler keeps the
+        // element live, and no path repairs it. `resurrected(...)` reads `{}` at every replica
+        // in that state (each cell agrees with its OWN fold), which is why
+        // [GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE] had to be added to this harness at all.
+        // Asserting only the old form would silently retire `[KE3-20]`'s control the day a fence
+        // lands. A clean run — neither class — still fails this assertion, which is the property
+        // the control exists to hold.
         assertTrue(
             (resurrecting + diverging).isNotEmpty(),
             "[KE3-20]: no seed in $SEEDS was observably harmed by compacting at the LOCAL " +
@@ -705,9 +712,10 @@ class GcSafetySweepTest {
                 }
             }.map { it.failingCheck?.message ?: it.outcome.name }
 
-        // The LOCAL pin — the wrong seam, still observably wrong on every run. Since
-        // computenet-v2ka the form is a membership divergence rather than a resurrection (see
-        // the BS-13 arm), so the pin accepts either and rejects a clean run.
+        // The LOCAL pin — the wrong seam, still observably wrong on every run. On this tree the
+        // form is still a RESURRECTION; the pin accepts a membership divergence too, for the
+        // same forward-cover reason the BS-13 arm's union does (a re-admission fence turns the
+        // one class into the other), and rejects a clean run either way.
         val localMessages = run(GcSafetySweep.Trigger.LOCAL, BS13_SEED)
         println("[PIN] LOCAL seed=$BS13_SEED -> $localMessages")
         assertTrue(
