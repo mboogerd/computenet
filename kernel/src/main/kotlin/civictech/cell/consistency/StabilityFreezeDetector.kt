@@ -42,10 +42,15 @@ import java.util.UUID
  * **Which source the timestamp names.** More than one source can witness the
  * lag. The witness reported is the one on which `S` sits *lowest* (absent
  * first), ties broken by source id, so the notice is deterministic across
- * runs and names the source the MIN is most obviously pinned on. When `S`
- * has no row at all the witness has no value for it and `timestamp` is
- * **null** — an announced-but-rowless member (BS-7) is frozen with no wave
- * position to report.
+ * runs and names the source the MIN is most obviously pinned on.
+ *
+ * `timestamp` is **null** whenever `S` has no row *for the reported witness*.
+ * That is always so for an announced-but-rowless member (BS-7, the case
+ * 9sm.5-D5 spells out), and — because "absent first" deliberately prefers the
+ * source `S` lags most deeply on — it is also so for a slot that *does* hold
+ * rows on other sources but is absent on the chosen one. The notice then
+ * names the frozen slot with no wave position, which is what 9sm.5-D5 permits
+ * in as many words: null "when the frozen slot has no row for that source".
  *
  * **[threshold] is ESTIMATED, not measured.** The default of 3 consecutive
  * evaluations is a guess at "long enough that this is not ordinary gossip
