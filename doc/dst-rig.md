@@ -229,6 +229,20 @@ re-run in isolation reproduces its own outcome (8 of 8 for each of six candidate
 seed and re-run it; never assert "exactly these seeds fail", and never assert an exact failure
 density. A sweep that asserts only `assertAllPassed()` names no seed and is unaffected.
 
+**What the audit of existing sweeps found** (computenet-l0gd, same commit). No suite pins an
+exact failing seed set or an exact failure density over a `PARTITION_SUSPEND`-capable churn
+sweep. The exposed sweeps — `StableFrontierChurnSweepTest`, `GcSafetySweepTest`,
+`ChurnSweepTest`, `ExclusiveChurnTest`, `ChurnShrinkTest` — all assert `assertAllPassed()`, a
+non-emptiness, or a seed discovered at runtime. `GcSafetySweepTest`'s
+`the recorded seeds reproduce their resurrection verdict_BS12_BS13` is the exemplar of the sound
+form: it re-runs ONE recorded seed five times and requires the same failure message each time.
+The nearest thing to a residual risk is that file's `assertTrue(resurrecting.isNotEmpty())` —
+population-dependent, though not an exact-set pin, so it fails only if the region moves to empty.
+Suites that restrict `departureWeights` to the other three modes (`ChurnReconvergenceTest`,
+`ReconvergenceCheckTest`, `GossipInstrumentsTest`) are immune by construction, and the one suite
+that does pin an exact failing set — `SweepTest`'s `"failed on 7 of 100"` — runs on the
+churn-free synthetic self-test graph.
+
 **Not fixable from `:testkit`.** Every entropy source above is a `UUID.randomUUID()` inside
 `:kernel` main (`BridgeCells`, `Peering`, `Link`, `ManagedHost`), consumed by hash-ordered
 `ConcurrentHashMap` views in `LocationRegistry`/`TopologyIndex`. Making the reconnect sweep
