@@ -12,6 +12,9 @@ import io.kotest.matchers.shouldBe
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import org.junit.jupiter.api.Test
 import java.util.UUID
 
@@ -142,6 +145,49 @@ class StallNoticeWireCompatTest {
 
         shouldThrow<SerializationException> {
             legacyJson.decodeFromString(LegacyStall.serializer(), staleWithSlotSpliced)
+        }
+    }
+
+    /**
+     * Pins the constraint recorded in `WireCodec.build`'s KDoc and in
+     * `doc/spec/40-distribution/42-replication.md` §"Wire compatibility of
+     * additive fields (KE3-39)": **a mixed-version mesh must not populate a
+     * newly-added optional field until every peer has upgraded**, because
+     * doing so breaks the older peer's decode of the whole payload, not just
+     * the new field.
+     *
+     * Unlike the `unverified` test above — which hand-splices a `slot` key
+     * into a JSON literal to demonstrate the mechanism — this one drives the
+     * real [WireCodec.encode] path: it encodes an actual
+     * `STABILITY_FROZEN` `Stall` with `slot` set, exactly as a KE3-upgraded
+     * peer would emit it onto the wire, then reconstructs only the fragment a
+     * pre-KE3 peer's `Stall` payload class would see (the `["Stall", {...}]`
+     * args entry's object half) and decodes that fragment with the pre-KE3
+     * shape. The failure is therefore reproduced from real wire bytes this
+     * codec actually produces, not asserted from kotlinx.serialization's
+     * documented default.
+     */
+    @Test
+    fun `KE3-39 pinned - a real KE3 frame with slot set breaks a pre-KE3 reader's decode`() {
+        @Serializable
+        data class LegacyStall(val reason: StallReason, val timestamp: Timestamp? = null)
+
+        val slot = UUID.fromString("00000000-0000-0000-0000-0000000000aa")
+        val upgradedPeerFrame = encodeStall(
+            StallNotice.Stall(
+                reason = StallReason.STABILITY_FROZEN,
+                timestamp = Timestamp(UUID(0L, 2L), 3L),
+                slot = slot,
+            ),
+        )
+
+        // The pre-KE3 peer's Stall payload object, as it appears inside the
+        // real frame's ["Stall", {...}] args entry.
+        val stallPayload = Json.parseToJsonElement(upgradedPeerFrame)
+            .jsonObject["args"]!!.jsonArray[0].jsonArray[1]
+
+        shouldThrow<SerializationException> {
+            Json.decodeFromJsonElement(LegacyStall.serializer(), stallPayload)
         }
     }
 }
