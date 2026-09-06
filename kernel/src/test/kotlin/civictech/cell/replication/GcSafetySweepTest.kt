@@ -503,23 +503,25 @@ class GcSafetySweepTest {
         assertNonVacuous("BS-12", sweep.total, totals)
         assertAdversaryFired("BS-12", sweep)
 
-        // BRANCH G — and this arm's assertion is INVERTED from what 9sm.4 recorded, deliberately
-        // and as the point of computenet-v2ka. It used to assert F-B (`isNotEmpty`), because the
-        // stable frontier certified ADD delivery only and reclaiming at it genuinely resurrected
-        // removed elements. `SetCell.remove` now mints a DEL-DOT into its `dels` entry and
-        // `applyRemote` feeds the del lane into the delivered frontier, so
-        // `[KE3-31]`'s every-tag rule certifies the REMOVE; and `compactBelow` records a
-        // re-admission floor, so a duplicated or reordered frame carrying a discarded tag is not
-        // re-admitted. Both halves were needed and both were MEASURED on this base
-        // (8d65b542b, 16-core macOS, seeds 1..200, budget 40_000):
+        // STILL BRANCH F-B, and deliberately so — read this with the assertion message below.
+        // `[KE3-23]`'s hazard has TWO halves and computenet-v2ka closed one of them. The del-dot
+        // (`SetCell.remove` mints a dot into its `dels` entry; `applyRemote` feeds the del lane
+        // into the delivered frontier; `[KE3-31]`'s every-tag rule then certifies the REMOVE and
+        // not merely the add) removes the DEL-DELIVERY half. The RE-ADMISSION half —
+        // `[24-TAG-04]` clause 2, a duplicated or reordered frame re-delivering a tag the
+        // reclaimer already discarded — is open, and is computenet-9sm.6's.
+        //
+        // MEASURED on this base (8d65b542b, 16-core macOS, seeds 1..200, budget 40_000):
         //
         //   unfixed                    F-B on 10 seeds [12, 33, 35, 43, 62, 110, 120, 138, 167, 184]
         //   del-dot only               F-B on 8 seeds  [25, 75, 121, 126, 154, 166, 168, 172]
-        //   del-dot + re-admission floor   F-B on 0 seeds
+        //   del-dot + re-admission floor   F-B on 0 seeds, and 31-33 of 200 MEMBERSHIP-DIVERGING
         //
-        // The middle row is the evidence that the floor is not optional: every one of those 8 was
-        // an add-tag whose `dels` entry the reclaimer HAD already discarded, re-delivered by the
-        // `gc-dup`/`gc-reorder` adversary.
+        // The third row is why no floor is in the tree: it bought branch G by fencing LIVE
+        // add-tags, against a no-reclaimer CONTROL floor of 2-5 diverging seeds. A per-source
+        // high-water cannot tell "this tag was reclaimed" from "this tag is below a position I
+        // reached"; the fence needs a causal context. See `SetCell.compactBelow`'s KDoc,
+        // `concord/corpus/DISPUTES.md` and `doc/kernel-lane-findings.md ## KE3-GC-DEL-DOT`.
         assertTrue(
             stableResurrecting.isNotEmpty(),
             "[KE3-23] branch F-B: no seed resurrected under the STABLE trigger. The del-dot " +

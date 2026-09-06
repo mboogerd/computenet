@@ -2638,6 +2638,16 @@ property is statable at the driver and not in the corpus.
   branch F-B at 7-9 resurrecting seeds per 200 (down from 8-12), every one a
   duplicated or reordered frame re-delivering a tag the reclaimer had already
   discarded. `[KE3-23]` and `[KE3-31]` therefore remain uncovered.
+  **Independently re-measured 2026-09-06** on branch `feature/computenet-v2ka`
+  by a second session, seeds 1..200, budget 40_000, darwin/arm64: STABLE
+  resurrecting on **9** of 200 `[43, 99, 116, 126, 149, 154, 166, 168, 180]`,
+  membership-diverging on 2 `[78, 181]` against a no-reclaimer CONTROL arm
+  diverging on 3 `[108, 149, 173]`; LOCAL (BS-13) resurrecting on 12. Every one
+  of the nine detail lines has the same shape — `adds=[n] dels=[n, n+1]`, an
+  add-tag and the del-dot minted directly after it, re-delivered into an entry
+  the reclaimer had discarded — which is the re-admission half naming itself.
+  So the acceptance criterion's "zero resurrecting seeds" is **NOT met**, and
+  is recorded here rather than reached by relaxing the harness.
 - **What was measured and rejected, so nobody pays for it twice**: a
   **per-source re-admission floor** — the obvious fix, and the one
   computenet-9sm.6-D2 plans — drives the resurrections to ZERO and is not

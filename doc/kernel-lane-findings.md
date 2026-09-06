@@ -429,6 +429,18 @@ cannot hand a peer the dot without its covers.
 | + del-dot | 7-9 of 200 | 1-2 of 200 | 3-5 of 200 |
 | + del-dot + per-source re-admission floor | **0** of 200 | **31-33** of 200 | 2-5 of 200 |
 
+Independently re-measured 2026-09-06 by a second session on
+`feature/computenet-v2ka` after the five inherited expectation failures were
+resolved (same seeds, same budget, same host class): the `+ del-dot` row reads
+**9** resurrecting `[43, 99, 116, 126, 149, 154, 166, 168, 180]`, **2**
+membership-diverging `[78, 181]`, control **3** `[108, 149, 173]`; LOCAL
+(BS-13) resurrecting 12, diverging 0. Inside the recorded bands. Every
+resurrecting detail line reads `adds=[n] dels=[n, n+1]` — an add-tag and the
+del-dot minted immediately after it, re-delivered into an entry the reclaimer
+had already discarded. That shape is the re-admission half and nothing else:
+the del-dot IS present in each of them and IS below the frontier, so the entry
+was legitimately certified delivered before the duplicate arrived.
+
 Deterministically, `CompactionTriggerPinTest`'s `P2 LOST del` went from
 `discardedA=2 discardedC=2` → `memberships=[[e],[e],[e]]`, `resurrected=[e]` at
 A and C, `converged=false`; to `discardedA=0 discardedC=0` →
