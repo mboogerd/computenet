@@ -212,6 +212,7 @@ proxy -> link
 proxy -> protocol
 replication -> cell
 replication -> consistency
+replication -> control
 replication -> data
 replication -> host
 replication -> link
