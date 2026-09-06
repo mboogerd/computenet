@@ -145,11 +145,11 @@ internal class GcTotals(val label: String) {
  * ## What was MEASURED (seeds 1..200, budget 40_000, 16-core macOS; ~5.0 s + ~4.3 s)
  *
  * **BS-12 is branch F, and its F-B arm is the headline result: compaction at the STABLE frontier
- * resurrects removed elements too.** `doc/kernel-lane-findings.md` `## KE3-GC` records five
- * independent 200-seed STABLE sweeps — 8, 10, 10, 11 (implementer) and 9 (reviewer) — and a later
- * run raised the observed ceiling to 12, so the band actually measured so far is 8-12 resurrecting
- * seeds, and 122-126 fold-disagreeing (F-A) seeds. The LOCAL arm's five runs found 8, 12, 12, 14
- * and 15. So `[KE3-20]` is reproduced — and the feature's empirical claim that LOCAL's set is a
+ * resurrects removed elements too.** `doc/kernel-lane-findings.md` `## KE3-GC` records six
+ * independent 200-seed STABLE sweeps — 8, 10, 10, 11 (implementer) and 9, 12 (reviewer) — so the
+ * band measured so far is 8-12 resurrecting seeds, and 122-126 fold-disagreeing (F-A) seeds. The
+ * LOCAL arm's same six runs found 8, 11, 12, 12, 14 and 15. So `[KE3-20]` is reproduced — and the
+ * feature's empirical claim that LOCAL's set is a
  * **strict superset** of STABLE's is **falsified**: the two sets overlap without either containing
  * the other. That is consistent with `CompactionTriggerPinTest`'s P2 mechanism rather than
  * surprising given it — the stable frontier certifies ADD delivery only, so it is not the
@@ -441,14 +441,14 @@ class GcSafetySweepTest {
         // BRANCH F, and the branch is decided by the MEASUREMENT. Both classes must be present:
         // F-B is the `[KE3-23]` finding itself and F-A is `ReplicaConvergence`'s expressiveness
         // limit; a run showing only one of them is a different experiment from the one recorded.
-        // MEASURED over (at least) five independent 200-seed runs, per doc/kernel-lane-findings.md
-        // `## KE3-GC`: F-B on 8, 9, 10, 10 and 11 seeds, and a later run at 12 — band 8-12 so far;
+        // MEASURED over six independent 200-seed runs, per doc/kernel-lane-findings.md
+        // `## KE3-GC`: F-B on 8, 9, 10, 10, 11 and 12 seeds — band 8-12 so far;
         // F-A on 122-126. The FAILING SET IS NOT PINNED BY NUMBER — the bead asks for that and the
         // rig cannot deliver it (see the pin test's KDoc); the recorded seed is pinned instead,
         // by a dedicated repeated run.
         assertTrue(
             stableResurrecting.isNotEmpty(),
-            "[KE3-23] branch F-B: no seed resurrected under the STABLE trigger. At least five prior " +
+            "[KE3-23] branch F-B: no seed resurrected under the STABLE trigger. Six prior " +
                 "200-seed runs found 8-12, so an empty set is a change in the system or in the rig, " +
                 "not a green result — do not narrow SEEDS to reach it. failures=" +
                 sweep.failures.map { it.seed to it.message },
@@ -502,8 +502,8 @@ class GcSafetySweepTest {
 
         // The control that passes by OBSERVING the failure: the wrong seam must be able to make
         // the observable fire, or the observable is inert and BS-12's arm proves nothing. MEASURED
-        // over five independent 200-seed runs (doc/kernel-lane-findings.md `## KE3-GC`): 8, 12, 12,
-        // 14 and 15 seeds resurrected.
+        // over six independent 200-seed runs (doc/kernel-lane-findings.md `## KE3-GC`): 8, 11, 12,
+        // 12, 14 and 15 seeds resurrected.
         assertTrue(
             resurrecting.isNotEmpty(),
             "[KE3-20]: no seed in $SEEDS resurrected a removed element under the LOCAL trigger. " +
