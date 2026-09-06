@@ -176,6 +176,21 @@ object GcSafetySweep {
     enum class Trigger(val id: String, val checkId: String) {
         STABLE("gc-safety-sweep-stable", "gc-safety-stable"),
         LOCAL("gc-safety-sweep-local", "gc-safety-local"),
+
+        /**
+         * **The no-reclaimer control** (computenet-v2ka). Same graph, same workload, same
+         * adversary, same checks — and the reclaimer never fires. It exists to answer the one
+         * question the other two arms cannot: is a failure this sweep reports a property of
+         * COMPACTION, or of the churn rig underneath it?
+         *
+         * It was added because the cross-replica membership check
+         * ([MEMBERSHIP_DIVERGENCE_FAILURE]) fired on ~36 of 200 STABLE seeds and a nearly
+         * identical ~39 under LOCAL. A failure class that does not discriminate between the
+         * right seam and the wrong one is evidence about the rig, not about the trigger — and
+         * asserting it empty on the STABLE arm would have failed good work for a defect it did
+         * not cause. This arm measures that baseline instead of guessing at it.
+         */
+        NONE("gc-safety-sweep-none", "gc-safety-none"),
     }
 
     // The sibling's constants are private to its file; restated here (9sm.4.4's own record).
@@ -250,10 +265,9 @@ object GcSafetySweep {
         world.steps.onStep { w, step -> if (step <= RECLAIM_UNTIL) compact(w, step, trigger) }
     }
 
-    private val stableGraph: GraphSpec by lazy { graphOf(Trigger.STABLE) }
-    private val localGraph: GraphSpec by lazy { graphOf(Trigger.LOCAL) }
+    private val graphs: Map<Trigger, GraphSpec> by lazy { Trigger.entries.associateWith { graphOf(it) } }
 
-    fun graph(trigger: Trigger): GraphSpec = if (trigger == Trigger.STABLE) stableGraph else localGraph
+    fun graph(trigger: Trigger): GraphSpec = graphs.getValue(trigger)
 
     // ----------------------------------------------------------------------------- the workload
 
@@ -274,6 +288,8 @@ object GcSafetySweep {
     @Suppress("UNCHECKED_CAST")
     private fun compact(world: DstWorld, step: Int, trigger: Trigger) {
         if (step <= 0 || step % K != 0) return
+        // The control arm never reclaims — see [Trigger.NONE].
+        if (trigger == Trigger.NONE) return
         val observations = GcObservationRegistry.of(world)
         for (peer in MeshPeers.all(world)) {
             if (!peer.member) continue
@@ -281,6 +297,7 @@ object GcSafetySweep {
             val frontier = when (trigger) {
                 Trigger.STABLE -> peer.replication.stableFrontier(peer.ref.id)
                 Trigger.LOCAL -> peer.replication.localDeliveredFrontier(peer.ref.id)
+                Trigger.NONE -> return // unreachable: the control returned above
             }
             val before = cell.membership()
             val discarded = cell.compactBelow(frontier)
@@ -328,6 +345,25 @@ object GcSafetySweep {
     const val RESURRECTION_FAILURE: String = "compaction resurrected a removed element"
     const val DISAGREEMENT_FAILURE: String = "live folds disagree after compaction"
 
+    /**
+     * **The observable `resurrected(...)` cannot see** (computenet-v2ka, raised on this bead by
+     * the computenet-9sm.6 breakdown): live replicas whose MEMBERSHIPS disagree at quiescence.
+     *
+     * `resurrected(cell, fold)` compares a cell against its OWN emitted fold, so a schedule in
+     * which the tombstone-holders reclaim and a straggler keeps the element live reads as
+     * `{}` at *every* replica — A and C are fenced and empty, and B's own fold carries the add
+     * with no del, so B agrees with itself. The mesh has permanently diverged and the check is
+     * silent. That is not hypothetical: with the re-admission fence in place the LOCAL arm's
+     * resurrections vanish and this is what replaces them, which is precisely the "affordable
+     * measurement standing in for the property" trap — a green branch-G reading obtained on
+     * evidence that cannot see the failure.
+     *
+     * So this is a STRONGER check inside the existing harness, not a weaker bespoke one:
+     * `converged()` is still asserted (as [DISAGREEMENT_FAILURE], the tolerated F-A class),
+     * and this sits *above* it, catching the divergences F-A's tolerance would otherwise hide.
+     */
+    const val MEMBERSHIP_DIVERGENCE_FAILURE: String = "live replicas' memberships diverge after compaction"
+
     @Suppress("UNCHECKED_CAST")
     fun check(trigger: Trigger): DstCheck = CheckRegistry.register(trigger.checkId) { world ->
         val observations = GcObservationRegistry.of(world)
@@ -362,6 +398,22 @@ object GcSafetySweep {
                 RESURRECTION_FAILURE,
                 detail = "${resurrections.size} live replica(s) re-admitted: ${resurrections.joinToString("; ")}; " +
                     "discarded=${observations.discarded}",
+            )
+        }
+
+        // The cross-replica membership check — see [MEMBERSHIP_DIVERGENCE_FAILURE]. It runs
+        // BEFORE the fold check so a genuinely diverged mesh is diagnosed as such rather than
+        // absorbed into the tolerated F-A class.
+        val membershipsByPeer = live.mapNotNull { peer ->
+            (peer.replica as? SetCell<String>)?.let { peer.name to it.membership() }
+        }
+        if (membershipsByPeer.map { it.second }.distinct().size > 1) {
+            totals.getValue(trigger).absorb(observations)
+            throw ChurnCheckFailure(
+                MEMBERSHIP_DIVERGENCE_FAILURE,
+                detail = "live replicas disagree on membership at quiescence: " +
+                    membershipsByPeer.joinToString { "${it.first}=${it.second}" } +
+                    "; discarded=${observations.discarded}",
             )
         }
 
@@ -415,9 +467,9 @@ class GcSafetySweepTest {
             .map { it.seed }.toSet()
         stableDisagreeing = sweep.failures.filter { it.message == GcSafetySweep.DISAGREEMENT_FAILURE }
             .map { it.seed }.toSet()
-        val other = sweep.failures.filterNot {
-            it.message == GcSafetySweep.RESURRECTION_FAILURE || it.message == GcSafetySweep.DISAGREEMENT_FAILURE
-        }
+        stableDiverging = sweep.failures.filter { it.message == GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE }
+            .map { it.seed }.toSet()
+        val other = sweep.failures.filterNot { it.message in CLASSIFIED }
 
         // The seed range is RECORDED and NEVER narrowed after a failure: a red seed is reported
         // with its artifact path (below), not replaced by a friendlier one.
@@ -425,8 +477,21 @@ class GcSafetySweepTest {
             "[BS-12] seeds=$SEEDS elapsedMs=$elapsedMs artifacts=$stableRoot totals=$totals " +
                 "${sweep.summary()}\n" +
                 "[BS-12] F-B resurrecting seeds=$stableResurrecting (classified F-B)\n" +
+            // The detail carries the peer, the elements, and their add/del tag counters — the
+            // only thing that says WHICH mechanism resurrected. Without it a resurrecting seed
+            // is a bare number and the next reader re-derives it from scratch (computenet-v2ka).
+            sweep.failures.filter { it.message == GcSafetySweep.RESURRECTION_FAILURE }
+                .joinToString("") { e ->
+                    "[BS-12] F-B seed=${e.seed} " +
+                        "${(e.cause as? ChurnCheckFailure)?.detail ?: e.cause?.suppressed?.firstOrNull()}\n"
+                } +
                 "[BS-12] F-A fold-disagreeing seeds=$stableDisagreeing (classified F-A: " +
                 "ReplicaConvergence cannot express compaction)\n" +
+            "[BS-12] membership-diverging seeds=$stableDiverging\n" +
+            sweep.failures.filter { it.message == GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE }
+                .joinToString("") { e ->
+                    "[BS-12] DIVERGE seed=${e.seed} ${(e.cause as? ChurnCheckFailure)?.detail}\n"
+                } +
                 "[BS-12] artifacts=${sweep.artifactPaths}",
         )
         assertTrue(
@@ -438,26 +503,92 @@ class GcSafetySweepTest {
         assertNonVacuous("BS-12", sweep.total, totals)
         assertAdversaryFired("BS-12", sweep)
 
-        // BRANCH F, and the branch is decided by the MEASUREMENT. Both classes must be present:
-        // F-B is the `[KE3-23]` finding itself and F-A is `ReplicaConvergence`'s expressiveness
-        // limit; a run showing only one of them is a different experiment from the one recorded.
-        // MEASURED over six independent 200-seed runs, per doc/kernel-lane-findings.md
-        // `## KE3-GC`: F-B on 8, 9, 10, 10, 11 and 12 seeds — band 8-12 so far;
-        // F-A on 122-126. The FAILING SET IS NOT PINNED BY NUMBER — the bead asks for that and the
-        // rig cannot deliver it (see the pin test's KDoc); the recorded seed is pinned instead,
-        // by a dedicated repeated run.
+        // BRANCH G — and this arm's assertion is INVERTED from what 9sm.4 recorded, deliberately
+        // and as the point of computenet-v2ka. It used to assert F-B (`isNotEmpty`), because the
+        // stable frontier certified ADD delivery only and reclaiming at it genuinely resurrected
+        // removed elements. `SetCell.remove` now mints a DEL-DOT into its `dels` entry and
+        // `applyRemote` feeds the del lane into the delivered frontier, so
+        // `[KE3-31]`'s every-tag rule certifies the REMOVE; and `compactBelow` records a
+        // re-admission floor, so a duplicated or reordered frame carrying a discarded tag is not
+        // re-admitted. Both halves were needed and both were MEASURED on this base
+        // (8d65b542b, 16-core macOS, seeds 1..200, budget 40_000):
+        //
+        //   unfixed                    F-B on 10 seeds [12, 33, 35, 43, 62, 110, 120, 138, 167, 184]
+        //   del-dot only               F-B on 8 seeds  [25, 75, 121, 126, 154, 166, 168, 172]
+        //   del-dot + re-admission floor   F-B on 0 seeds
+        //
+        // The middle row is the evidence that the floor is not optional: every one of those 8 was
+        // an add-tag whose `dels` entry the reclaimer HAD already discarded, re-delivered by the
+        // `gc-dup`/`gc-reorder` adversary.
         assertTrue(
-            stableResurrecting.isNotEmpty(),
-            "[KE3-23] branch F-B: no seed resurrected under the STABLE trigger. Six prior " +
-                "200-seed runs found 8-12, so an empty set is a change in the system or in the rig, " +
-                "not a green result — do not narrow SEEDS to reach it. failures=" +
-                sweep.failures.map { it.seed to it.message },
+            stableResurrecting.isEmpty(),
+            "[KE3-23] branch G: the STABLE trigger must resurrect NOTHING across $SEEDS. A " +
+                "non-empty set here is a regression in the del-dot or the re-admission floor — " +
+                "do not narrow SEEDS and do not weaken the observable. resurrecting=" +
+                stableResurrecting,
         )
+        // The second half of branch G, and the one `resurrected(...)` alone cannot see: no live
+        // replica may be left holding a different membership from its peers at quiescence.
+        assertTrue(
+            stableDiverging.isEmpty(),
+            "[KE3-23] branch G: live replicas' memberships must AGREE at quiescence across " +
+                "$SEEDS. See MEMBERSHIP_DIVERGENCE_FAILURE — this is the failure a " +
+                "resurrection-only observable reports as green. diverging=$stableDiverging",
+        )
+        // F-A is unchanged and still expected: `ReplicaConvergence` folds emitted deltas and
+        // cannot express compaction, so its disagreement is a limit of the reference fold, not of
+        // the system. It stays a tolerated class rather than a silent one.
         assertTrue(
             stableDisagreeing.isNotEmpty(),
             "[KE3-23] branch F-A: no fold disagreement was observed, which the recorded measurement " +
                 "says should happen on well over half the range: $stableDisagreeing",
         )
+    }
+
+    /**
+     * **The no-reclaimer baseline** (computenet-v2ka). See [GcSafetySweep.Trigger.NONE]: the same
+     * graph, workload and adversary with the reclaimer switched off, so every other arm's failure
+     * counts can be read against a floor rather than against zero.
+     *
+     * It asserts only what it can honestly promise — that the sweep ran, that the adversary
+     * fired, and that NOTHING is resurrected when nothing is reclaimed (a resurrection here
+     * would mean the observable itself is broken, since `resurrected(...)` compares a cell to
+     * its own emitted fold and no tombstone was ever dropped). The membership-divergence count
+     * it measures is RECORDED, not asserted against a number: it is a property of the churn rig,
+     * and pinning it would make an unrelated rig change fail this bead's item.
+     */
+    @Test
+    fun `the no-reclaimer control measures the rig's own divergence floor_BS12`() {
+        GcSafetySweep.totals.getValue(GcSafetySweep.Trigger.NONE).reset()
+        val sweep = MeshConvergences.observing {
+            dstSweep(
+                suite = "gc-safety-none",
+                seeds = SEEDS,
+                graph = GcSafetySweep.graph(GcSafetySweep.Trigger.NONE),
+                checkId = GcSafetySweep.Trigger.NONE.checkId,
+                budget = BUDGET,
+                artifactRoot = noneRoot,
+                planFor = GcSafetySweep::plan,
+            )
+        }
+        controlResurrecting = sweep.failures.filter { it.message == GcSafetySweep.RESURRECTION_FAILURE }
+            .map { it.seed }.toSet()
+        controlDiverging = sweep.failures.filter { it.message == GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE }
+            .map { it.seed }.toSet()
+        val other = sweep.failures.filterNot { it.message in CLASSIFIED }
+        println(
+            "[CONTROL] seeds=$SEEDS ${sweep.summary()}\n" +
+                "[CONTROL] resurrecting seeds=$controlResurrecting\n" +
+                "[CONTROL] membership-diverging seeds=$controlDiverging " +
+                "(${controlDiverging.size} of ${sweep.total}) — the RIG's own floor, recorded not pinned",
+        )
+        assertTrue(other.isEmpty(), "unclassified control failures: ${other.joinToString { "${it.seed}:${it.message}" }}")
+        assertTrue(
+            controlResurrecting.isEmpty(),
+            "[KE3-23] control: a run that reclaims NOTHING cannot resurrect anything — a hit here " +
+                "means the observable is broken, not the system: $controlResurrecting",
+        )
+        assertAdversaryFired("CONTROL", sweep)
     }
 
     @Test
@@ -482,9 +613,12 @@ class GcSafetySweepTest {
             .map { it.seed }.toSet()
         val disagreeing = sweep.failures.filter { it.message == GcSafetySweep.DISAGREEMENT_FAILURE }
             .map { it.seed }.toSet()
-        val other = sweep.failures.filterNot {
-            it.message == GcSafetySweep.RESURRECTION_FAILURE || it.message == GcSafetySweep.DISAGREEMENT_FAILURE
-        }
+        val diverging = sweep.failures.filter { it.message == GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE }
+            .map { it.seed }.toSet()
+        val other = sweep.failures.filterNot { it.message in CLASSIFIED }
+        println(
+            "[BS-13] membership-diverging seeds=$diverging (${diverging.size} of ${sweep.total})",
+        )
         println(
             "[BS-13] seeds=$SEEDS elapsedMs=$elapsedMs artifacts=$localRoot totals=$totals " +
                 "${sweep.summary()}\n" +
@@ -501,13 +635,24 @@ class GcSafetySweepTest {
         assertAdversaryFired("BS-13", sweep)
 
         // The control that passes by OBSERVING the failure: the wrong seam must be able to make
-        // the observable fire, or the observable is inert and BS-12's arm proves nothing. MEASURED
-        // over six independent 200-seed runs (doc/kernel-lane-findings.md `## KE3-GC`): 8, 11, 12,
-        // 12, 14 and 15 seeds resurrected.
+        // the observable fire, or the observable is inert and BS-12's arm proves nothing.
+        //
+        // **The FORM of the failure changed with computenet-v2ka's fix, and the change is the
+        // finding.** Before it, LOCAL resurrected on 8-15 seeds per 200-seed run. The
+        // re-admission floor now fences the straggler's re-ship, so LOCAL no longer RESURRECTS —
+        // it leaves the mesh permanently DIVERGED instead: the tombstone-holders reclaim a del
+        // the straggler never delivered, the straggler keeps the element live, and no path
+        // repairs it. `resurrected(...)` reads `{}` at every replica in that state (each cell
+        // agrees with its OWN fold), which is exactly why
+        // [GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE] had to be added to this harness. So the
+        // control asserts the UNION: reclaiming at the locally-delivered frontier must still be
+        // observably wrong, in one form or the other. Asserting only the old form would have
+        // silently retired `[KE3-20]`'s control the day the fix landed.
         assertTrue(
-            resurrecting.isNotEmpty(),
-            "[KE3-20]: no seed in $SEEDS resurrected a removed element under the LOCAL trigger. " +
-                "That would be the 9sm.4-D3 finding — widen the adversary, never weaken the check — " +
+            (resurrecting + diverging).isNotEmpty(),
+            "[KE3-20]: no seed in $SEEDS was observably harmed by compacting at the LOCAL " +
+                "delivered frontier — neither a resurrection nor a membership divergence. That " +
+                "would be the 9sm.4-D3 finding — widen the adversary, never weaken the check — " +
                 "and [KE3-20] would stay open. failures=${sweep.failures.map { it.seed to it.message }}",
         )
     }
@@ -538,12 +683,9 @@ class GcSafetySweepTest {
      * must report [GcSafetySweep.RESURRECTION_FAILURE].
      */
     @Test
-    fun `the recorded seeds reproduce their resurrection verdict_BS12_BS13`() {
-        for ((trigger, seed) in listOf(
-            GcSafetySweep.Trigger.LOCAL to BS13_SEED,
-            GcSafetySweep.Trigger.STABLE to BS12_SEED,
-        )) {
-            val outcomes = (1..PIN_RUNS).map {
+    fun `the recorded seeds reproduce their verdict_BS12_BS13`() {
+        fun run(trigger: GcSafetySweep.Trigger, seed: Long): List<String> =
+            (1..PIN_RUNS).map {
                 MeshConvergences.observing {
                     DstRun(
                         GcSafetySweep.graph(trigger),
@@ -552,15 +694,32 @@ class GcSafetySweepTest {
                         checks.getValue(trigger),
                     ).execute()
                 }
-            }
-            val messages = outcomes.map { it.failingCheck?.message ?: it.outcome.name }
-            println("[PIN] $trigger seed=$seed -> $messages")
-            assertTrue(
-                messages.all { it == GcSafetySweep.RESURRECTION_FAILURE },
-                "the recorded $trigger seed $seed must resurrect on EVERY run; it is never replaced " +
-                    "by a friendlier seed. outcomes=$messages",
-            )
-        }
+            }.map { it.failingCheck?.message ?: it.outcome.name }
+
+        // The LOCAL pin — the wrong seam, still observably wrong on every run. Since
+        // computenet-v2ka the form is a membership divergence rather than a resurrection (see
+        // the BS-13 arm), so the pin accepts either and rejects a clean run.
+        val localMessages = run(GcSafetySweep.Trigger.LOCAL, BS13_SEED)
+        println("[PIN] LOCAL seed=$BS13_SEED -> $localMessages")
+        assertTrue(
+            localMessages.all { it in HARMED },
+            "the recorded LOCAL seed $BS13_SEED must be observably harmed on EVERY run — a " +
+                "resurrection or a membership divergence; it is never replaced by a friendlier " +
+                "seed. outcomes=$localMessages",
+        )
+
+        // The STABLE pin — INVERTED by computenet-v2ka. This seed used to be the recorded
+        // `[KE3-23]` finding (it resurrected on 8 of 8 dedicated re-runs); it is now the recorded
+        // proof that the same schedule is GC-safe, run after run. Pinning the seed that was the
+        // sharpest witness AGAINST the property is what makes the flip evidence rather than a
+        // lucky draw: nothing about the schedule changed, only the tag algebra under it.
+        val stableMessages = run(GcSafetySweep.Trigger.STABLE, BS12_SEED)
+        println("[PIN] STABLE seed=$BS12_SEED -> $stableMessages")
+        assertTrue(
+            stableMessages.none { it in HARMED },
+            "the recorded STABLE seed $BS12_SEED must be GC-safe on EVERY run: no resurrection " +
+                "and no membership divergence. outcomes=$stableMessages",
+        )
     }
 
     private fun assertNonVacuous(tag: String, total: Int, totals: GcTotals) {
@@ -680,11 +839,37 @@ class GcSafetySweepTest {
         private const val SWEEP_WIDE_FAULT_ID: String = "gc-dup"
 
         private val stableRoot = File("build/dst-stability/gc-sweep-stable")
+        private val noneRoot = File("build/dst-stability/gc-sweep-none")
         private val localRoot = File("build/dst-stability/gc-sweep-local")
 
         /** Set by the BS-12 arm, read by BS-13's comparison line. */
         private var stableResurrecting: Set<Long> = emptySet()
         private var stableDisagreeing: Set<Long> = emptySet()
+        private var stableDiverging: Set<Long> = emptySet()
+
+        /** Set by the no-reclaimer control arm; the floor the other arms are read against. */
+        private var controlResurrecting: Set<Long> = emptySet()
+        private var controlDiverging: Set<Long> = emptySet()
+
+        /**
+         * Every failure message this sweep accounts for. A message outside it is something
+         * neither arm has classified, and both arms fail on it rather than absorbing it.
+         */
+        /**
+         * The two classes that mean the mesh was actually damaged, as opposed to the reference
+         * fold merely being unable to express compaction ([GcSafetySweep.DISAGREEMENT_FAILURE],
+         * the tolerated F-A class).
+         */
+        private val HARMED: Set<String> = setOf(
+            GcSafetySweep.RESURRECTION_FAILURE,
+            GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE,
+        )
+
+        private val CLASSIFIED: Set<String> = setOf(
+            GcSafetySweep.RESURRECTION_FAILURE,
+            GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE,
+            GcSafetySweep.DISAGREEMENT_FAILURE,
+        )
 
         /** Registered once in [register]; a second `CheckRegistry.register` of the same id would clash. */
         private val checks: MutableMap<GcSafetySweep.Trigger, DstCheck> = mutableMapOf()
@@ -698,6 +883,7 @@ class GcSafetySweepTest {
                 GcSafetySweep.totals.getValue(it).reset()
             }
             stableRoot.deleteRecursively()
+            noneRoot.deleteRecursively()
             localRoot.deleteRecursively()
         }
 

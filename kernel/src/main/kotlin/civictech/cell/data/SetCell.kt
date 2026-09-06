@@ -53,6 +53,38 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     private val dels = mutableMapOf<E, MutableSet<Timestamp>>()
 
     /**
+     * The **re-admission floor** — `[24-TAG-04]`'s second clause ("IF a later
+     * delta, baseline or catch-up carries a discarded tag, THEN the cell SHALL
+     * NOT re-admit it as new information"), per tag source.
+     *
+     * [compactBelow] raises it to the highest counter it discarded for a
+     * source; [applyRemote] then treats an incoming ADD-tag at or below it as
+     * already observed rather than as novelty. Without it reclamation is not
+     * merely un-done but *unsafe*: a discarded add-tag is absent from [adds]
+     * again, so a duplicated or reordered old frame carrying it reads as new
+     * information and the element comes back to life (MEASURED — this is the
+     * residual that survived the del-dot alone: 8 of 200 seeds under the
+     * `gc-dup`/`gc-reorder` adversary, every one of them a tag whose entry the
+     * reclaimer had already discarded; computenet-v2ka).
+     *
+     * **Why it cannot fence a live tag.** It is only ever raised to a counter
+     * at or below the frontier a discard ran at, and a discard runs at the
+     * *stable* frontier — a pointwise MIN over the open membership rows, this
+     * replica's own included. So `floor[s]` never exceeds this replica's own
+     * max-contiguous delivered prefix for `s`, and every tag at or below it has
+     * already been absorbed here: it is either still live in [adds] (where
+     * novelty is empty anyway) or discarded (where fencing is the point).
+     *
+     * **The DEL lane is deliberately NOT fenced.** A tag below the floor can
+     * still be live here while its remove is in flight — the covering del names
+     * the add-tag's counter, not the del-dot's — so fencing dels would drop a
+     * genuine tombstone and strand the element live for ever. Re-admitting a
+     * tombstone merely re-grows `dels`, which the next compaction reclaims
+     * again; re-admitting an add resurrects.
+     */
+    private val readmissionFloor = mutableMapOf<UUID, Long>()
+
+    /**
      * Guards **every** access to [adds], [dels], [tagCounter], [delivered] and
      * [deliveryListeners] — the read accessors as much as the writers. The
      * element-shaped twin of `OrMapCell.stateLock` (computenet-yk5r), taken
@@ -176,13 +208,38 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         }
 
         override fun remove(element: E) {
-            val observed = synchronized(stateLock) {
-                // effective-only (21): removing an unobserved element is a no-op
+            // THE DEL-DOT (`[24-TAG-04]`, computenet-v2ka). The remove mints its
+            // OWN dot from this cell's source counter — the same counter space
+            // add-tags are drawn from — and ships it inside the `dels` entry
+            // beside the tags it covers. Nothing else about the OR-set changes:
+            // the dot never enters `adds`, so it covers no add and `membership()`
+            // is bit-for-bit what it was.
+            //
+            // What the dot buys is the one thing the shipped algebra could not
+            // express: **a remove that can be DELIVERED**. Before it, a del
+            // carried only the add-tags it covered, so a del-tag `≤
+            // stableFrontier` certified that every open member had delivered the
+            // ADD and said nothing about the REMOVE — a member holding the add
+            // and missing the remove re-shipped add-only state at heal and a
+            // replica that had already reclaimed the tombstone re-admitted the
+            // element (computenet-v2ka, measured; `CompactionTriggerPinTest`'s
+            // `P2 LOST del`). The dot rides the delivered lane like any other
+            // tag ([foldDelivered], fed from [applyRemote]'s `newDels` as well
+            // as its `newAdds`), so `dot ≤ stableFrontier` DOES certify that
+            // every open member delivered this remove. [compactBelow]'s
+            // every-tag rule then reaches the dot for free, because the dot is a
+            // member of the `dels` entry it guards.
+            val (observed, advanced) = synchronized(stateLock) {
+                // effective-only (21): removing an unobserved element is a no-op,
+                // and mints no dot — there is no remove to deliver.
                 val seen = liveTags(element)
                 if (seen.isEmpty()) return
-                dels.getOrPut(element) { mutableSetOf() } += seen
-                seen
+                val dot = Timestamp(tagSource, ++tagCounter)
+                val entry = seen + dot
+                dels.getOrPut(element) { mutableSetOf() } += entry
+                entry to foldDelivered(listOf(dot)) // a local mint is trivially contiguous
             }
+            notifyDelivered(advanced)
             outlet.call.propagate(SetDelta(dels = mapOf(element to observed)))
         }
     }
@@ -194,7 +251,12 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // monitor — neither the listener notification nor the re-emission.
         val (effective, advanced) = synchronized(stateLock) {
             val newAdds = delta.adds
-                .mapValues { (e, tags) -> tags - (adds[e] ?: emptySet()) }
+                .mapValues { (e, tags) ->
+                    // the re-admission fence (`[24-TAG-04]` clause 2): a tag at or
+                    // below the floor was discarded here, not missed here.
+                    tags.filterNot { it.counter <= (readmissionFloor[it.sourceId] ?: Long.MIN_VALUE) }
+                        .toSet() - (adds[e] ?: emptySet())
+                }
                 .filterValues { it.isNotEmpty() }
             val newDels = delta.dels
                 .mapValues { (e, tags) -> tags - (dels[e] ?: emptySet()) }
@@ -205,44 +267,69 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // advance the per-origin delivered frontier before re-emitting: membership
             // now reflects these tags, so a peer reading the watermark that this
             // advance gossips will also see the element live here (E3.3(a)/E3.4).
-            SetDelta(newAdds, newDels) to foldDelivered(newAdds.values.flatten())
+            //
+            // **The del lane feeds it too** (the del-dot half, computenet-v2ka —
+            // see `remove`). Without this the frontier certified ADD delivery
+            // only and reclaiming at it resurrected removed elements. Both maps
+            // of a `SetDelta` arrive in ONE fold, so absorbing a del-tag is
+            // absorbing that tag's information as surely as absorbing an add is;
+            // the dot minted by the remove rides in the same entry, and folding
+            // the entry is what makes `dot ≤ stableFrontier` mean "every open
+            // member delivered this remove".
+            SetDelta(newAdds, newDels) to
+                foldDelivered(newAdds.values.flatten() + newDels.values.flatten())
         }
         notifyDelivered(advanced)
         outlet.originate { propagate(effective) }
     }
 
     /**
-     * Discard tags at or below [frontier], per source, and nothing else
-     * (decision 9sm.4-D1/D2; the epic's §2 table names `TagState.compactBelow`
-     * as the eventual OR-map home — this is the `SetCell` half only). The
-     * minimal safe discard: for each element `e`, `D = dels[e] ∩ { t : t ≤
-     * frontier }` is removed from both `dels[e]` and `adds[e]` (a del-tag IS
-     * the add-tag it covers — same [Timestamp] — so "add-tags ≤ frontier that
-     * a del-tag covered" is exactly `adds[e] ∩ D`), and an element key whose
-     * set became empty is dropped from that map. A LIVE add-tag (present in
-     * `adds`, absent from `dels`) is never a member of any `D` and is never
-     * touched, even when it is ≤ frontier — so [membership] is unchanged by
-     * construction: `D ⊆ dels[e]` is removed from both sides, never from one.
-     * A tombstone with no matching add (`dels` holds a key `adds` lacks — the
-     * remote-tombstone-before-add case [openWalk]'s KDoc names) is discarded
-     * like any other.
+     * Discard `dels` **entries** whose EVERY tag is at or below [frontier], per
+     * source, and nothing else (decision 9sm.4-D1/D2 as amended by
+     * computenet-v2ka; `[KE3-31]`; the epic's §2 table names
+     * `TagState.compactBelow` as the eventual OR-map home — this is the
+     * `SetCell` half only). For each element `e`, the whole of `dels[e]` is
+     * discarded — and with it `adds[e] ∩ dels[e]` (a covering del-tag IS the
+     * add-tag it covers, same [Timestamp]) — **iff every tag in `dels[e]` is ≤
+     * [frontier]**; otherwise the entry is left untouched in full. An element
+     * key whose set became empty is dropped from that map. A LIVE add-tag
+     * (present in `adds`, absent from `dels`) is never in `dels[e]` and is
+     * never touched, even when it is ≤ frontier — so [membership] is unchanged
+     * by construction. A tombstone with no matching add (`dels` holds a key
+     * `adds` lacks — the remote-tombstone-before-add case [openWalk]'s KDoc
+     * names) is discarded like any other.
+     *
+     * **Every-tag, not per-tag, and that is the whole safety argument**
+     * (computenet-v2ka). Since `remove` mints a **del-dot** into the entry
+     * (see [inletHandler]'s `remove`), the entry's tag set contains not only
+     * the add-tags the remove covered but a dot standing for the REMOVE
+     * itself. Requiring *every* tag ≤ [frontier] therefore requires the dot ≤
+     * [frontier], and — because the delivered frontier is a max-CONTIGUOUS
+     * per-source prefix fed from both lanes ([applyRemote]) — that means every
+     * open member has delivered the remove, not merely the add. The previous
+     * per-tag discard could not see the difference: it dropped a tombstone as
+     * soon as the ADD under it was everywhere, which is exactly the state a
+     * straggler holding the add and missing the remove resurrects from.
      *
      * The `[KE3-30]` interlock / `[42-WM-05]` absent-row-is-bottom: a tag
      * source with no entry in [frontier] reads as bottom, so nothing of that
      * source is ever discarded.
      *
-     * **This records nothing.** No floor, no fence: [delivered], [tagCounter]
-     * and [deliveryListeners] are untouched, nothing is emitted, and a later
-     * delta carrying a discarded tag is re-admitted as new information by
-     * [applyRemote] (novelty there is `tags − adds[e]`, and a discarded tag is
-     * absent from `adds[e]` again). **That re-admission is deliberate and
-     * load-bearing** — it is what lets feature computenet-9sm.4's BS-13
-     * control resurrect an element — **and it is why feature computenet-9sm.6
-     * must add the re-admission fence (`[24-TAG-04]`'s second clause) before
-     * anything wires this seam to a checkpoint.** No checkpoint wiring, no
-     * floor/fence, no snapshot persistence, no `StateRequest(since)` fallback,
-     * no `OrMapCell`/`TagState` reclamation belong here; those are out of
-     * scope for this task.
+     * **This records the re-admission floor, and nothing else**
+     * (computenet-v2ka; the KDoc that stood here said "records nothing", which
+     * was true of 9sm.4's harness-only seam and is no longer). [delivered],
+     * [tagCounter] and [deliveryListeners] are untouched and nothing is
+     * emitted, but every discarded tag raises [readmissionFloor] for its
+     * source, so a later delta, baseline or catch-up carrying that tag is NOT
+     * re-admitted as new information — `[24-TAG-04]`'s second clause, which
+     * this rule's first clause is unsafe without. **MEASURED:** the del-dot
+     * alone left 8 of 200 sweep seeds resurrecting, every one of them a
+     * duplicated or reordered frame re-delivering a tag this method had
+     * already discarded.
+     *
+     * Still out of scope here: checkpoint wiring, the `StateRequest(since)`
+     * below-the-floor full-state fallback, and `OrMapCell`/`TagState`
+     * reclamation (computenet-9sm.6, computenet-9sm.8).
      *
      * `internal`: reachable from `:kernel` tests only. `:testkit` must not see
      * this — it is a harness seam, not a public capability.
@@ -256,12 +343,21 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         var discarded = 0
         val emptiedDels = mutableListOf<E>()
         for ((element, delTags) in dels) {
-            val covered = delTags.filterTo(mutableSetOf()) { tag ->
+            // EVERY tag, or none: an entry one of whose tags — the del-dot
+            // included — is above the frontier is not certified delivered, and
+            // discarding any part of it is what resurrects the element.
+            val allCovered = delTags.isNotEmpty() && delTags.all { tag ->
                 (frontier.perSource[tag.sourceId] ?: Long.MIN_VALUE) >= tag.counter
             }
-            if (covered.isEmpty()) continue
+            if (!allCovered) continue
+            val covered = delTags.toSet()
             delTags -= covered
             discarded += covered.size
+            // raise the re-admission floor to what was actually discarded, per
+            // source ([readmissionFloor]; `[24-TAG-04]` clause 2)
+            covered.forEach { tag ->
+                readmissionFloor.merge(tag.sourceId, tag.counter, ::maxOf)
+            }
             adds[element]?.let { addTags ->
                 val addCovered = addTags.intersect(covered)
                 if (addCovered.isNotEmpty()) {
@@ -308,14 +404,31 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         if (scope == null || scope is civictech.cell.link.Interest.Total) source
         else source.filterKeys { scope.admits(it) }
 
-    /** Only the tags a [since] frontier has not yet observed; unfiltered when [since] is null. */
+    /**
+     * Only the tags a [since] frontier has not yet observed; unfiltered when
+     * [since] is null.
+     *
+     * [wholeEntry] is the `dels` mode and exists for the **del-dot**
+     * (computenet-v2ka): a del entry is one indivisible fact — the dot standing
+     * for the remove, plus the add-tags that remove covered. Split by counter,
+     * a since-pull could ship the dot alone (its counter is the highest in the
+     * entry, so it is the tag most likely to be novel) while withholding the
+     * covers, and the requester would advance its delivered frontier PAST the
+     * dot without holding the tombstone — telling the mesh it had delivered a
+     * remove whose effect it had not applied, which is precisely the
+     * certification the dot exists to make honest. So for `dels` the filter
+     * decides per ENTRY: ship all of it, or none of it.
+     */
     private fun sinceFilter(
         source: Map<E, MutableSet<Timestamp>>,
         since: TagFrontier?,
+        wholeEntry: Boolean = false,
     ): Map<E, Set<Timestamp>> = synchronized(stateLock) {
+        if (since == null) return@synchronized source.mapValues { it.value.toSet() }.filterValues { it.isNotEmpty() }
+        val novel: (Timestamp) -> Boolean = { (since.perSource[it.sourceId] ?: -1L) < it.counter }
         source.mapValues { (_, tags) ->
-            if (since == null) tags.toSet()
-            else tags.filterTo(mutableSetOf()) { (since.perSource[it.sourceId] ?: -1L) < it.counter }
+            if (wholeEntry) (if (tags.any(novel)) tags.toSet() else emptySet())
+            else tags.filterTo(mutableSetOf(), novel)
         }.filterValues { it.isNotEmpty() }
     }
 
@@ -350,7 +463,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // under the monitor, shipped after it is released.
             val reply = synchronized(stateLock) {
                 val addsOut = scopedTo(sinceFilter(adds, request.since), request.scope)
-                val delsOut = scopedTo(sinceFilter(dels, request.since), request.scope)
+                val delsOut = scopedTo(sinceFilter(dels, request.since, wholeEntry = true), request.scope)
                 if (addsOut.isEmpty() && delsOut.isEmpty()) null
                 else Triple(addsOut, delsOut, currentFrontier(request.scope))
             } ?: return@pullServe
@@ -369,6 +482,13 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
                 "adds" to HashMap(adds.mapValues { HashSet(it.value) }),
                 "dels" to HashMap(dels.mapValues { HashSet(it.value) }),
                 "counter" to tagCounter,
+                // ADDITIVE (`[24-TAG-04]` clause 2, computenet-v2ka): the
+                // re-admission floor is state — a restored instance that lost it
+                // would re-admit every tag it had reclaimed the moment a
+                // journal-tail replay or an anti-entropy catch-up re-delivered
+                // one. `restore` defaults it to empty, so an older checkpoint
+                // reads exactly as it did.
+                "floor" to HashMap(readmissionFloor),
             )
         )
     }
@@ -381,6 +501,8 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         (maps.getValue("adds") as Map<E, Set<Timestamp>>).forEach { (e, tags) -> adds[e] = tags.toMutableSet() }
         (maps.getValue("dels") as Map<E, Set<Timestamp>>).forEach { (e, tags) -> dels[e] = tags.toMutableSet() }
         tagCounter = maps["counter"] as? Long ?: 0L
+        readmissionFloor.clear()
+        (maps["floor"] as? Map<UUID, Long>)?.let { readmissionFloor.putAll(it) }
         Unit
     }
 
