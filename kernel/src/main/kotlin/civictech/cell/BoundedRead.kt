@@ -194,14 +194,18 @@ data class StateRead(
  *   what a [TagFrontier] measures. A family whose mutations do not all mint
  *   tags therefore has a stability check that is *necessary but not
  *   sufficient*, and must say so on its own `readBounded`. The known instance
- *   is the OR-set: [civictech.cell.data.SetCell]'s observed-remove tombstones
- *   an element by copying the add-tags it already holds into its del-map
- *   (`21`, effective-only removal), minting nothing — so a mid-walk removal of
- *   an element the walk has already paged leaves both endpoint stamps equal
- *   while the union names that element present. A caller that must not be
- *   wrong about removals cannot get that from the stamp alone; the `since`
- *   escalation path below has the same limit, and closing it is a state-family
- *   question filed as research, not a property this page can carry.
+ *   is the OR-set: [civictech.cell.data.SetCell]'s observed-remove now mints
+ *   its own del-dot alongside the add-tags it already holds (`21`,
+ *   effective-only removal), so a *locally applied* mid-walk removal moves the
+ *   closing frontier and the check catches it. The surviving counterexample is
+ *   narrower: a *reordered remote* `dels` entry whose dot counter is below a
+ *   tag this replica already holds from that source changes membership while
+ *   raising no maximum, because the frontier is a per-source **max**, not a
+ *   set. Equal endpoint stamps are consequently still *necessary but not
+ *   sufficient* for "the union is a snapshot" on that counterexample; the
+ *   `since` escalation path below has the same limit, and closing it is a
+ *   state-family question filed as research, not a property this page can
+ *   carry.
  * - **If it advanced, the union is a smeared read**: it contains every entry
  *   present for the whole walk, may contain entries added mid-walk, and may
  *   miss entries added or removed mid-walk after the walk had already passed

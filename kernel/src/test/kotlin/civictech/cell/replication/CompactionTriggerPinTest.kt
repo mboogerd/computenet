@@ -61,13 +61,19 @@ import java.util.concurrent.atomic.AtomicBoolean
  * [SetCell.compactBelow] drops those tombstones from the cell itself.
  *
  * ## The two facts the pins were built on — one confirmed, one FALSIFIED
- * 1. **CONFIRMED. The delivered lane certifies ADD delivery only.** `SetCell`'s
- *    `foldDelivered` is called on the locally minted add-tag and on
- *    `newAdds.values.flatten()` in `applyRemote`; `remove` mints nothing and
- *    folds nothing. So `stableFrontier[s] >= t` means every open member
- *    delivered the ADD `(s,t)`; it says nothing about whether any member holds
- *    the DEL that reuses that same tag. The `P2 LOST del` test below is the
- *    executable form of this fact, and it resurrects.
+ * 1. **CONFIRMED, on the pre-del-dot tag algebra; SUPERSEDED by computenet-v2ka
+ *    for the shipped one.** Originally: the delivered lane certified ADD
+ *    delivery only. `SetCell`'s `foldDelivered` was called on the locally
+ *    minted add-tag and on `newAdds.values.flatten()` in `applyRemote`;
+ *    `remove` minted nothing and folded nothing. So `stableFrontier[s] >= t`
+ *    meant every open member delivered the ADD `(s,t)`; it said nothing about
+ *    whether any member held the DEL that reused that same tag. Since
+ *    computenet-v2ka, `remove` mints its own del-dot and folds it through
+ *    `foldDelivered` exactly like an add-tag, so the frontier now certifies
+ *    REMOVE delivery as well: `stableFrontier[s] >= t` for a del-dot `(s,t)`
+ *    means every open member delivered that remove. The `P2 LOST del` test
+ *    below is the executable form of the CURRENT behaviour and does not
+ *    resurrect — see its KDoc immediately above it.
  * 2. **FALSIFIED, and this is a substitution recorded rather than a friendlier
  *    state.** The breakdown's fact 2 asserted that "a severed loopback
  *    ([Peering.Loopback.partition] = `closeInstance()`) drops in-flight

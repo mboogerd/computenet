@@ -272,10 +272,11 @@ STABLE branches into two failure classes, both required to be present by
 the sweep's own assertions:
 
 - **F-B (the headline): compaction at the STABLE frontier resurrects
-  removed elements too**, on `BS12_SEED = 62` and 7-10 other seeds per
-  200-seed run. Mechanism: `SetCell.foldDelivered` is fed only from
-  `add()`'s local mint and from `applyRemote()`'s `newAdds` — `remove()`
-  mints and folds nothing into the delivered lane. So
+  removed elements too**, on `BS12_SEED = 62` and 7-11 other seeds per
+  200-seed run (8-12 total, matching the per-run figures listed above) — this
+  is the pre-del-dot (unfixed) build, where `SetCell.foldDelivered` is fed
+  only from `add()`'s local mint and from `applyRemote()`'s `newAdds` —
+  `remove()` mints and folds nothing into the delivered lane. So
   `del-tag ≤ stableFrontier` certifies that every open member has *delivered
   the add*, not that any member has delivered the matching remove. A member
   that held the add but missed the remove (a partition opened between the
@@ -426,8 +427,14 @@ cannot hand a peer the dot without its covers.
 | build | STABLE resurrecting | STABLE membership-diverging | control diverging |
 |---|---|---|---|
 | unfixed (`8d65b542b`) | 10 of 200 | not measured | — |
-| + del-dot | 7-9 of 200 | 1-2 of 200 | 3-5 of 200 |
+| + del-dot | 8-10 of 200 | 1-2 of 200 | 3-5 of 200 |
 | + del-dot + per-source re-admission floor | **0** of 200 | **31-33** of 200 | 2-5 of 200 |
+
+The `+ del-dot` STABLE-resurrecting figure is a band across **three**
+independent 200-seed runs (8, 9, 10), not a single run — same band as
+`concord/corpus/DISPUTES.md`'s `## KE3-GC-DEL-LANE` entry,
+`SetCell.compactBelow`'s KDoc, `GcSafetySweepTest` and
+`doc/spec/20-dataflow-semantics/24-data-cells.md`.
 
 Independently re-measured 2026-09-06 by a second session on
 `feature/computenet-v2ka` after the five inherited expectation failures were
