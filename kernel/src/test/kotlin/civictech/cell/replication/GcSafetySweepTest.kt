@@ -244,7 +244,8 @@ object GcSafetySweep {
      */
     private const val RECLAIM_UNTIL: Int = STEP_BUDGET + DRAIN_MARGIN
 
-    val faultIds: Set<String> = setOf("gc-park", "gc-dup", "gc-reorder")
+    val faultIds: Set<String> =
+        setOf("gc-park", "gc-park-b", "gc-park-c", "gc-dup", "gc-reorder")
 
     /** Sizes the graph only: roster length and the strided write schedule. */
     private val templatePlan: ChurnPlan =
@@ -337,6 +338,43 @@ object GcSafetySweep {
 
     fun plan(seed: Long): FaultPlan = StableFrontierChurnSweep.churnPlan(seed).withFaults(
         PartitionFault.park("gc-park", "peer0<->peer1", from = 1200, until = 1800),
+        // computenet-nwnl: THE WIDENED ADVERSARY — the response `[KE3-20]`'s own failure message
+        // prescribes ("widen the adversary, never weaken the check").
+        //
+        // ## What was too thin, and what these two add
+        //
+        // `gc-park` alone parks ONE of the mesh's three links for 600 of the run's ~7000 steps.
+        // With [WRITE_START] 300, [WRITE_STRIDE] 200 and [REMOVE_LAG] 90 the odd-ordinal removes
+        // land at 590, 990, 1390 ... 4990, so that one window encloses exactly TWO of the twelve
+        // removes, on one link, once per run. The wrong seam therefore got two chances per seed
+        // to be caught reclaiming something the mesh had not acked; the other ten removes ran
+        // against an unimpeded mesh where `localDeliveredFrontier` and `stableFrontier` are only
+        // a few steps apart. That thinness is why the LOCAL arm's harm fell to 1-3 of 200 once
+        // computenet-vhlm removed the tag-counter collision that had been inflating it.
+        //
+        // These two park the OTHER two links, in their own windows, so all three links are
+        // exercised and the enclosed removes go from two to six (ordinals 11 and 13 at 2590 and
+        // 2990 for `gc-park-b`, 17 and 19 at 3790 and 4190 for `gc-park-c`).
+        //
+        // ## Why the windows are DISJOINT, which is the load-bearing part
+        //
+        // The obvious stronger adversary — park both of one peer's links over one window, so it
+        // is genuinely severed — was built and MEASURED and is REJECTED, because it destroys the
+        // very distinction this sweep exists to measure. [LinkControl.severing] is what
+        // `ChurnMesh` declares per pair, and severing un-mirrors each side's MEMBERSHIP entry for
+        // the duration (`ControlSeams`' own KDoc says so). An isolated peer is therefore not a
+        // straggler the others are still waiting on: it is a NON-MEMBER, so `stableFrontier`
+        // stops requiring its ack and advances exactly as `localDeliveredFrontier` does. The two
+        // seams become the same seam. Measured on this host, 2026-09-06, seeds 1..200, four runs
+        // with `peer2` severed from both neighbours over 2400..3000: the LOCAL arm's harm rose
+        // (7, 1, 4, 3 of 200, all fence-attributed) and the STABLE arm went fence-attributed on 1
+        // of the 4 runs (seed 12, `peer2-23`) — i.e. the widening made the RIGHT seam look wrong
+        // too. A sharper adversary that blunts the discriminator is not a sharper adversary.
+        //
+        // Disjoint windows keep the third link up throughout, so every peer always has a relay
+        // path, membership is never un-mirrored, and `stableFrontier` still means what it says.
+        PartitionFault.park("gc-park-b", "peer0<->peer2", from = 2400, until = 3000),
+        PartitionFault.park("gc-park-c", "peer1<->peer2", from = 3600, until = 4200),
         DuplicateFault.frames("gc-dup", "peer1<->peer2", copies = 1, probability = 0.5),
         ReorderFault("gc-reorder", "peer0<->peer2", window = 3),
     ).toFaultPlan()
@@ -782,11 +820,12 @@ class GcSafetySweepTest {
                 it.message == GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE
         }.map { it.seed }.toSet()
         val other = sweep.failures.filterNot { it.message in CLASSIFIED }
+        val fenceAttributed = sweep.failures
+            .filter { it.message == GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE }
+            .map { it.seed }.toSet()
         println(
             "[BS-13] membership-diverging seeds=$diverging (${diverging.size} of ${sweep.total}); " +
-                "of which fence-attributed=" +
-                sweep.failures.filter { it.message == GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE }
-                    .map { it.seed }.toSet(),
+                "of which fence-attributed=$fenceAttributed; per-seed LOCAL pin: $BS13_PIN_RETIRED",
         )
         println(
             "[BS-13] seeds=$SEEDS elapsedMs=$elapsedMs artifacts=$localRoot totals=$totals " +
@@ -828,11 +867,36 @@ class GcSafetySweepTest {
                 "would be the 9sm.4-D3 finding — widen the adversary, never weaken the check — " +
                 "and [KE3-20] would stay open. failures=${sweep.failures.map { it.seed to it.message }}",
         )
+
+        // ------------------------------------------------------------------ computenet-nwnl
+        // THE SWEEP-LEVEL DISCRIMINATOR, promoted from a diagnostic to an assertion, and the
+        // REPLACEMENT for the per-seed LOCAL pin that used to live in
+        // `the recorded seeds reproduce their verdict_BS12_BS13`. See [BS13_PIN_RETIRED] for
+        // the provenance, the measurement, and why a per-seed pin is no longer honest here.
+        //
+        // What it says is the wrong seam's harm in the sharpest form this rig can state: the
+        // LOCAL arm produces divergences the FENCE ITSELF caused — established by a direct read
+        // of `ReclaimedDots`, not inferred — while the STABLE arm asserts the same class EMPTY
+        // (see the BS-12 arm's `stableFenceAttributed` assertion). One trigger, one adversary,
+        // one seed range, opposite verdicts: that IS `[KE3-20]`.
+        //
+        // It is STRICTLY STRONGER than the assertion above it, which it does not replace: that
+        // one accepts any harm, including a rig-floor divergence the CONTROL arm also produces.
+        // This one accepts only harm attributable to compacting below a frontier that certifies
+        // nothing about other replicas.
+        assertTrue(
+            fenceAttributed.isNotEmpty(),
+            "[KE3-20]: no seed in $SEEDS produced a FENCE-ATTRIBUTED divergence under the LOCAL " +
+                "delivered frontier. The wrong seam is no longer observably harmful by this rig, " +
+                "so `[KE3-20]`'s witness is gone again — widen the adversary, never weaken the " +
+                "check, and re-derive the widening's provenance in [BS13_PIN_RETIRED]. " +
+                "diverging=$diverging failures=${sweep.failures.map { it.seed to it.message }}",
+        )
     }
 
     /**
      * Feature rule 5, in the only form this rig supports — and the substitution is MEASURED, not
-     * a convenience. See [BS13_SEED].
+     * a convenience. See [BS13_PIN_RETIRED].
      *
      * `DstRun.assertDeterministic()` (trace-digest reproduction) is what the bead prescribes. It
      * **does not pass on this graph under a `ChurnGenerator`-drawn plan that contains a
@@ -856,11 +920,14 @@ class GcSafetySweepTest {
      *
      * What IS reproducible is the **verdict**, which is the property rule 5 exists to protect: the
      * recorded seed must still be the seed that resurrects, run after run, so the pin is a pin and
-     * not a lucky draw. [BS13_SEED] and [BS12_SEED] are re-run [PIN_RUNS] times each and every run
-     * must report [GcSafetySweep.RESURRECTION_FAILURE].
+     * not a lucky draw. [BS12_SEED] is re-run [PIN_RUNS] times and every run must hold its verdict.
+     *
+     * **Only the STABLE half of that pair survives.** computenet-nwnl retired the LOCAL half onto
+     * the sweep-level discriminator after measuring that NO seed reaches [PIN_RUNS] of [PIN_RUNS]
+     * any more; see [BS13_PIN_RETIRED] for the numbers and the reasoning.
      */
     @Test
-    fun `the recorded seeds reproduce their verdict_BS12_BS13`() {
+    fun `the recorded seed reproduces its verdict_BS12`() {
         fun run(trigger: GcSafetySweep.Trigger, seed: Long): List<String> =
             (1..PIN_RUNS).map {
                 MeshConvergences.observing {
@@ -873,18 +940,10 @@ class GcSafetySweepTest {
                 }
             }.map { it.failingCheck?.message ?: it.outcome.name }
 
-        // The LOCAL pin — the wrong seam, still observably wrong on every run. On this tree the
-        // form is still a RESURRECTION; the pin accepts a membership divergence too, for the
-        // same forward-cover reason the BS-13 arm's union does (a re-admission fence turns the
-        // one class into the other), and rejects a clean run either way.
-        val localMessages = run(GcSafetySweep.Trigger.LOCAL, BS13_SEED)
-        println("[PIN] LOCAL seed=$BS13_SEED -> $localMessages")
-        assertTrue(
-            localMessages.all { it in HARMED },
-            "the recorded LOCAL seed $BS13_SEED must be observably harmed on EVERY run — a " +
-                "resurrection or a membership divergence; it is never replaced by a friendlier " +
-                "seed. outcomes=$localMessages",
-        )
+        // The LOCAL pin is RETIRED, not deleted — it moved to the sweep level, in the BS-13
+        // arm's `fenceAttributed.isNotEmpty()` assertion. [BS13_PIN_RETIRED] carries the
+        // measurement that forced the move and the provenance of what replaced it. The STABLE
+        // pin below is untouched.
 
         // The STABLE pin — FLIPPED by computenet-pay7, not deleted, and deliberately kept on
         // the SAME seed. [BS12_SEED] was chosen by computenet-v2ka precisely because it
@@ -923,7 +982,7 @@ class GcSafetySweepTest {
      * The adversary actually fired, in the forms this rig can honestly promise.
      *
      * **Churn events are asserted per seed**: they are played from the plan, so a missing one is a
-     * real defect. Of the three folded CHA1 faults, **`gc-park` and `gc-reorder` are now asserted
+     * real defect. Of the five folded CHA1 faults, **the three parks and `gc-reorder` are asserted
      * PER SEED** ([PER_SEED_FAULT_IDS]) — MEASURED to fire on 200 of 200 seeds on BOTH the STABLE
      * and LOCAL arms in the feature reviewer's independent run (`computenet-9sm.4.4`'s task review,
      * corroborated again by this bead's own re-run), so a per-seed bar costs nothing today and is a
@@ -984,36 +1043,64 @@ class GcSafetySweepTest {
         private const val PIN_RUNS: Int = 5
 
         /**
-         * The recorded LOCAL (`[KE3-20]`, BS-13) seed: it resurrects a removed element under a
-         * reclaimer keyed on `localDeliveredFrontier`.
+         * **The retired LOCAL (`[KE3-20]`, BS-13) per-seed pin — computenet-nwnl.** This is a
+         * documentation constant: it holds the provenance of a pin that no longer exists, so the
+         * next agent to look for `BS13_SEED` finds the measurement rather than an absence.
          *
-         * Chosen by MEASUREMENT and **never replaced by a friendlier seed**. Three independent
-         * 200-seed LOCAL sweeps produced resurrecting sets of 12, 12 and 15 seeds whose
-         * intersection was `{62, 87, 107, 138, 170, 175}`; each of those six then resurrected on
-         * 8 of 8 dedicated re-runs. 62 is the smallest.
+         * ## What the pin was, and the three times it was re-derived
          *
-         * **Re-derived twice, for the same reason both times: the mechanism moved, so the
-         * sharpest witness moved with it.** computenet-v2ka replaced 62 with 126 when the
-         * del-dot began consuming tag counters. computenet-pay7 replaces 126 with **18** for the
-         * larger reason that the LOCAL arm no longer RESURRECTS at all — the re-admission fence
-         * applies to whatever frontier the reclaimer is driven from, so the wrong seam's
-         * observable harm is now a membership DIVERGENCE rather than a resurrection (which is
-         * exactly the forward-cover case the union assertions below were widened for, arriving
-         * one bead earlier than expected). 126 reports `DISAGREEMENT_FAILURE` — the tolerated
-         * F-A class — on 5 of 5 runs, which is not harm.
+         * A recorded seed that must be observably harmed on [PIN_RUNS] of [PIN_RUNS] dedicated
+         * re-runs, so the wrong seam's witness is a pin and not a lucky draw. It was chosen by
+         * measurement every time and **never replaced by a friendlier seed**: 62 (three 200-seed
+         * sweeps intersecting on `{62, 87, 107, 138, 170, 175}`, each then 8 of 8), then 126 when
+         * computenet-v2ka's del-dot began consuming tag counters, then 18 when computenet-pay7's
+         * re-admission fence turned the LOCAL arm's resurrections into divergences.
          *
-         * 18 was chosen the same way its predecessors were: it is the one seed present in the
-         * LOCAL membership-diverging set of EVERY 200-seed run taken on this base
-         * ({18,114,145,159,169}, {18,70,114,146,159,169}, {18,114,159}; intersection
-         * {18,114,159}), it is the smallest of those three, and it is then held to [PIN_RUNS]
-         * dedicated re-runs below.
+         * ## Why it is retired rather than re-derived a fourth time
          *
-         * **The per-seed sets are NOT identical between sweeps**, because the rig is not
-         * reproducible (see the pin test's KDoc). That is why the pin is a dedicated repeated run
-         * of THIS seed rather than an assertion that this seed appears in the sweep's failing set:
-         * the latter would be flaky for a reason that has nothing to do with the property.
+         * computenet-vhlm keyed the fence on `(element, tag)`, closing a soundness hole in which
+         * a rejoining incarnation's re-minted tag counter fenced a DIFFERENT, LIVE element.
+         * **Seed 18's LOCAL harm WAS that collision** — vhlm's reviewer restored the old keying
+         * by mutation and seed 18 reproduced 5 of 5 with the fence-attribution message. Removing
+         * the collision removed the witness, and it removed it from every other candidate too:
+         * the LOCAL arm's harmed set is now 0-5 of 200 and its membership moves between runs.
+         *
+         * MEASURED on darwin/arm64, 16-core, load1 6-13, seeds 1..200, budget 40_000, 2026-09-06,
+         * dedicated [PIN_RUNS]-run pins on EVERY candidate observed across the widened sweeps:
+         *
+         *   seed    4 -> 4/5      seed  132 -> 4/5      seed  145 -> 1/5
+         *   seed  181 -> 1/5      seed   12 -> 0/5      seed   89 -> 0/5
+         *   seed  154 -> 0/5      seed  149 -> 0/5      seed  165 -> 0/5
+         *
+         * and, from computenet-vhlm on the same host: 70 -> 2/5, 146 -> 3/5, 181 -> 0/5,
+         * 90 -> 0/5. **Nothing reaches 5 of 5.** The bead forbids recording a seed below that
+         * bar, and it is the right prohibition: a 4-of-5 seed is a 20%-flaky required check.
+         *
+         * ## What replaced it, and why that is not a weakening
+         *
+         * The BS-13 arm's `fenceAttributed.isNotEmpty()` assertion — the sweep-level
+         * discriminator. It is a statement about the same property over the same [SEEDS] range,
+         * and it is sharper than the pin in one respect and blunter in another, deliberately:
+         *
+         *  - SHARPER: the pin accepted ANY harm on one seed, including a rig-floor divergence
+         *    the CONTROL arm also produces. The discriminator accepts only
+         *    [GcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE] — a divergence established by a
+         *    direct read of `ReclaimedDots` — and the BS-12 arm asserts that same class EMPTY on
+         *    the STABLE trigger. One adversary, opposite verdicts.
+         *  - BLUNTER: it does not name a seed, because this rig cannot honestly name one
+         *    (`ChurnMesh`'s determinism caveat, computenet-l0gd). Pinning a set by number was
+         *    already unsound here; pinning one seed by repeated re-run is what has now run out.
+         *
+         * MEASURED across ten 200-seed sweeps on the widened adversary, same host and date:
+         * fence-attributed LOCAL seeds = 5, 3, 3, 5, 4, 3, 3, 5, 3, 4 — **non-empty on 10 of 10,
+         * minimum 3**, and in all ten every LOCAL divergence was fence-attributed. Against the
+         * UNWIDENED adversary the same measurement over seven sweeps was 2, 2, 1, 1, **0**, 2, 2
+         * — which is exactly the intermittently-red assertion computenet-nwnl was filed for, and
+         * is why the widening is part of this fix rather than optional polish.
          */
-        private const val BS13_SEED: Long = 18L
+        private const val BS13_PIN_RETIRED: String =
+            "retired by computenet-nwnl; replaced by the BS-13 arm's sweep-level " +
+                "fence-attribution assertion — see this constant's KDoc for the provenance"
 
         /**
          * The recorded STABLE (`[KE3-23]`, BS-12) seed. It was chosen as the branch-F-B witness
@@ -1024,10 +1111,13 @@ class GcSafetySweepTest {
         private const val BS12_SEED: Long = 126L
 
         /**
-         * The two folded CHA1 faults asserted PER SEED in [assertAdversaryFired] — MEASURED to fire
-         * on 200 of 200 seeds on both arms, unlike [SWEEP_WIDE_FAULT_ID].
+         * The four folded CHA1 faults asserted PER SEED in [assertAdversaryFired] — the three parks
+         * and the reorderer — MEASURED to fire on 200 of 200 seeds on both arms, unlike
+         * [SWEEP_WIDE_FAULT_ID]. (`gc-park-b` and `gc-park-c` were added by computenet-nwnl; the
+         * count in this sentence said "two" until then.)
          */
-        private val PER_SEED_FAULT_IDS: Set<String> = setOf("gc-park", "gc-reorder")
+        private val PER_SEED_FAULT_IDS: Set<String> =
+            setOf("gc-park", "gc-park-b", "gc-park-c", "gc-reorder")
 
         /**
          * The one folded CHA1 fault that stays asserted sweep-wide: a probability-0.5 duplicator

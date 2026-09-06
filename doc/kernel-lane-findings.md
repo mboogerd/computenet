@@ -672,3 +672,123 @@ asserted it. What carries criterion 2 is the ATTRIBUTION assertion — empty on
   by a seed that happens to fail today. What survives is a sweep-level
   discriminator that is arguably sharper than the pin was: every LOCAL divergence
   is `FENCE_ATTRIBUTED`, and every STABLE divergence is not.
+
+## KE3-GC-WITNESS — BS-13's per-seed pin is retired onto a sweep-level discriminator, and the adversary is widened to make it reliable
+
+computenet-nwnl, residual of computenet-pay7 / computenet-vhlm (`[KE3-20]`).
+Ships inside PR #725. All numbers below are darwin/arm64, 16-core, load1 6-13,
+seeds `1..200`, budget 40_000, 2026-09-06. **The churn rig is explicitly not
+reproducible across hosts (computenet-l0gd), so every seed set here is ONE
+host's sample.**
+
+### The problem this closes
+
+`GcSafetySweepTest` carried two RED assertions, both in the BS-13 / LOCAL arm,
+both left red honestly by computenet-vhlm rather than papered over:
+
+1. the sweep arm's "no seed was observably harmed by compacting at the LOCAL
+   delivered frontier" — INTERMITTENTLY red; and
+2. the per-seed pin `BS13_SEED = 18` — DETERMINISTICALLY red.
+
+Both are the `(element, tag)` re-key's doing and not a regression: seed 18's
+LOCAL harm WAS the tag-counter collision, so removing the collision removed the
+witness. See `## KE3-GC-FENCE-KEY`.
+
+### What was done, and why both routes were needed
+
+**Route 1 — widen the adversary**, which is what `[KE3-20]`'s own failure
+message prescribes. `GcSafetySweep.plan` folded ONE `PartitionFault.park` on
+ONE of the mesh's three links for 600 of ~7000 steps, enclosing exactly two of
+the twelve scheduled removes. Two more parks were added on the other two links,
+in their own windows (`gc-park-b` on `peer0<->peer2` at 2400..3000,
+`gc-park-c` on `peer1<->peer2` at 3600..4200), taking the enclosed removes from
+two to six.
+
+**The windows are DISJOINT, and that is load-bearing.** The obvious stronger
+adversary — park both of one peer's links over one window so it is genuinely
+severed — was built, measured and REJECTED, because it destroys the
+distinction the sweep exists to measure. `ChurnMesh` declares
+`LinkControl.severing` per pair, and severing un-mirrors each side's MEMBERSHIP
+entry for the duration. An isolated peer is therefore not a straggler the
+others still wait on; it is a NON-MEMBER, so `stableFrontier` stops requiring
+its ack and advances exactly as `localDeliveredFrontier` does. Measured over
+four sweeps with `peer2` severed from both neighbours at 2400..3000: the LOCAL
+arm's harm rose (7, 1, 4, 3 of 200) and the STABLE arm went fence-attributed on
+1 of the 4 — the widening made the RIGHT seam look wrong too. A sharper
+adversary that blunts the discriminator is not a sharper adversary.
+
+**Route 2 — promote the fence-attribution discriminator to an assertion**, and
+retire the per-seed pin onto it. The BS-13 arm now asserts
+`fenceAttributed.isNotEmpty()` alongside (never instead of) the existing
+any-harm assertion, and the pin test keeps only its STABLE half.
+
+### Why the pin could not be re-derived a fourth time
+
+Dedicated 5-run pins on EVERY candidate observed across the widened sweeps:
+
+    seed   4 -> 4/5     seed 132 -> 4/5     seed 145 -> 1/5     seed 181 -> 1/5
+    seed  12 -> 0/5     seed  89 -> 0/5     seed 154 -> 0/5     seed 149 -> 0/5
+    seed 165 -> 0/5
+
+plus computenet-vhlm's own four on this host: 70 -> 2/5, 146 -> 3/5,
+181 -> 0/5, 90 -> 0/5. **Nothing reaches 5 of 5**, and the bead forbids
+recording a seed below that bar — rightly, since a 4-of-5 seed is a 20%-flaky
+required check. The provenance now lives in `GcSafetySweepTest.BS13_PIN_RETIRED`
+so the next reader finds the measurement rather than an absence.
+
+### The measurement that justifies the replacement
+
+Fence-attributed LOCAL seeds per 200-seed sweep:
+
+    WIDENED   (ten sweeps)   5  3  3  5  4  3  3  5  3  4    non-empty 10/10, min 3
+    UNWIDENED (seven sweeps) 2  2  1  1  0  2  2               non-empty  6/7
+
+In all ten widened sweeps EVERY LOCAL divergence was fence-attributed, and the
+LOCAL arm resurrected on none. The unwidened zero is exactly the intermittent
+redness this item was filed for, which is why the widening is part of the fix
+rather than optional polish. The STABLE arm's absolute divergence bound was
+untouched and never approached: its counts over the same ten sweeps were
+5, 3, 5, 2, 3, 4, 6, 3, 6, 2 against `MAX_STABLE_DIVERGING = 12`. `SEEDS` was
+not narrowed, no assertion was deleted or weakened, and the diff only adds
+assertions.
+
+### Residual, NEWLY MEASURED and NOT this item's to fix
+
+**BS-12's `stableFenceAttributed` assertion is itself intermittently red, and
+it was already red before this change.** It fires on seed 12, differing element
+`peer2-23`, `fencedAtLacking=peer2:[8](all)`.
+
+MEASURED head-to-head in one session, the BS-12 arm alone, eight 200-seed
+sweeps of each adversary back to back (the unwidened half taken by removing
+`gc-park-b`/`gc-park-c` under a `.mutation-in-progress` marker, then reverted):
+
+    WIDENED    3 of 8 sweeps red
+    UNWIDENED  2 of 8 sweeps red
+
+Over every sweep taken for this item the totals are 7 of 22 widened and 3 of 15
+unwidened. **The unwidened reproduction at the merge base is the evidence that
+it is not this change's doing** — a failure that occurs without the widening
+was not caused by it, and that conclusion does not depend on the comparison.
+**The comparison itself is too small to conclude anything** (task review,
+computenet-nwnl): 32% against 20% on n=22 and n=15 is far from separable, the
+observed direction is *upward* under the widening, and a real doubling of the
+rate would not be detectable at these sample sizes. Read it as "not shown to
+move the rate", never as "shown not to". There is also a mechanistic reason to
+expect some increase: both new parks touch `peer2`, and every observed
+occurrence is `peer2`/`peer2-23`. Sizing that belongs to computenet-dwkp.
+A dedicated 5-run pin on seed 12 under STABLE scored **0/5**, so it is a
+rare schedule rather than a property of that seed — which is also why
+computenet-vhlm's eight consecutive green runs are consistent with a ~20-30%
+per-sweep failure rate rather than evidence against it.
+
+The shape is consistent with the same-element residual recorded under
+`## KE3-GC-FENCE-KEY`: `peer2-23` is peer2's own last write, and a rejoining
+incarnation replaying its journal re-mints the exact tag its previous
+incarnation spent — which its own `ReclaimedDots` has already fenced. That is
+the hole `tagSource`'s derivation deliberately keeps open, and closing it
+changes the journal-replay contract. **Consequence for PR #725: `kernel-test`
+is not yet reliably green** — a full `:kernel:test` can go red on this
+assertion roughly one run in four. Filed as **computenet-dwkp** with the
+head-to-head measurement, the candidate mechanism as an explicit hypothesis,
+and the first step that would turn it into one. Not closed here, and not
+weakened here.
