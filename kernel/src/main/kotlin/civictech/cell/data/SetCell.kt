@@ -16,6 +16,7 @@ import civictech.cell.data.delta.DeliveredFrontier
 import civictech.cell.data.delta.DeliveryTracking
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.StabilityReclaim
+import civictech.cell.data.delta.TagLaneContinuity
 import civictech.gen.wire.CellBase
 import civictech.gen.wire.Contract
 import java.io.Serializable
@@ -219,7 +220,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // BoundedStateful extends Stateful (V1C-KERNEL): the drain/migration/
     // promotion/durability seam this cell already had is untouched, and the
     // paged read is added beside it.
-    SetCellBase<E>(ref), BoundedStateful, Replicable<SetDelta<E>>, DeliveryTracking, StabilityReclaim {
+    SetCellBase<E>(ref), BoundedStateful, Replicable<SetDelta<E>>, DeliveryTracking, StabilityReclaim, TagLaneContinuity {
     /**
      * Replica gossip intake (spec 42, M7.3): another replica's effective
      * deltas merge here; only *new* tag information re-emits (effective-only,
@@ -297,6 +298,29 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     private val tagSource: UUID =
         UUID.nameUUIDFromBytes("set-tags:${ref.id}:${ref.instanceId}".toByteArray())
     private var tagCounter = 0L
+
+    // ------------------------------------------------------------------ computenet-uju5
+    // TAG-LANE CONTINUITY across a reincarnation of this ref. `tagSource` is derived and
+    // `tagCounter` is per instance, so a replica that despawns and returns on the same
+    // CellRef re-mints counters its previous incarnation already spent — for DIFFERENT
+    // elements. A peer's delivered row for this source already stands at the pre-departure
+    // high-water and cannot move for those tags (`deliver` returns null at or below the
+    // prefix), so the row certifies a del-dot the peer never applied. See
+    // [TagLaneContinuity]'s KDoc and `doc/kernel-lane-findings.md` `## KE3-23-ROWCONTENT`.
+    //
+    // `Replication` is what knows a returning ref is a return; it remembers the departing
+    // instance's high-water and installs it here at `replicate`. Raising the counter is the
+    // whole fix: mints stay per-source monotone and strictly above every prefix any peer
+    // holds, so the holdback in `DeliveredFrontier` answers honestly again.
+
+    override fun tagLaneHighWater(): Long = synchronized(stateLock) { tagCounter }
+
+    override fun continueTagLaneAbove(counter: Long) = synchronized(stateLock) {
+        // never lowers: a restored checkpoint already carries its own counter, and a
+        // re-installation must be idempotent.
+        if (counter > tagCounter) tagCounter = counter
+        Unit
+    }
 
     // ------------------------------------------------------------------ computenet-dwkp
     // TEST-SUPPORT PROVENANCE, additive and read-only from the protocol's point of view.
