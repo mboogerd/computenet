@@ -151,19 +151,36 @@ names the assertion, not just the test.
 you mutate it, and copy it back after:
 
 ```bash
-cp <file> "$SCRATCH/pre-mutation"     # BEFORE the mutation
+PRE="$SCRATCH/pre-mutation-$(basename <file>)"   # per file: successive
+cp <file> "$PRE"                      # mutations of different files collide on one name
 # ... mutate, run, watch the named test FAIL ...
-cp "$SCRATCH/pre-mutation" <file>     # after — byte-for-byte what you had
-git -C <your-worktree> status --short # MUST be empty for <file>. Not advice: a step.
+cp "$PRE" <file>                      # after — byte-for-byte what you had
+diff "$PRE" <file>                    # MUST print nothing. Not advice: a step.
 ```
 
-Use this unless you have a reason not to. It is immune to all three ways the
-git forms have actually failed here, because it touches neither the index nor
-`HEAD`: it does not matter whether the file is tracked, whether your mutation
-staged anything, or whether you hold uncommitted edits of your own. The git
-forms below are correct and remain documented — they are what you need when
-the mutation spans files or you did not capture the file first — but they have
-now cost three agents in a single session, so reach for them second.
+Use this unless you have a reason not to. It restores the WORKTREE regardless
+of how the file got mutated, because it touches neither the index nor `HEAD`:
+it does not matter whether the file is tracked, or whether you hold
+uncommitted edits of your own that a git revert would eat.
+
+**Two things it does not do, and both have bitten:**
+
+- **It does not unstage.** If the mutation was itself a `git checkout <sha> --
+  <file>` — "back to base" — that STAGED what it wrote, and `cp` leaves the
+  mutation sitting in the index, where a later `git checkout -- <file>`
+  resurrects it. Add `git reset -q HEAD -- <file>`. Measured: after a correct
+  `cp` revert, `git status --short` reads `MM <file>`.
+- **`git status --short` is therefore NOT expected to be empty**, and requiring
+  that would be unsatisfiable in the two cases this form exists for — an
+  implementer holding a legitimate uncommitted deliverable reads ` M <file>`
+  after a perfect revert. The check is that it reads **as it did before you
+  mutated**, which is why `diff "$PRE" <file>` above is the assertion that
+  actually discriminates.
+
+If the mutation CREATED the file there is nothing to copy aside: `rm <file>`
+is the revert. The git forms below remain correct and documented — they are
+what you need when you did not capture the file first — but they have now cost
+three agents in a single session, so reach for them second.
 
 Two ways `git checkout` lies:
 

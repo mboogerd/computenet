@@ -15,8 +15,16 @@
 # The five git branches that avoid all three are why agents get it wrong. Copy
 # the file aside before mutating and copy it back after is immune to all three
 # at once — it touches neither the index nor HEAD — and needs no branch. The git
-# forms stay documented for the cases it does not cover (a multi-file mutation,
-# or not having captured the file), demoted to second.
+# forms stay documented for the case it does not cover — not having captured
+# the file first — demoted to second. (cp scales to N files trivially, so "a
+# multi-file mutation" is NOT a reason to reach for git; a reviewer measured
+# that.) Two things cp does not do are stated with it: it does not UNSTAGE, so
+# a mutation made with `git checkout <sha> --` needs `git reset -q HEAD --`
+# as well or a later checkout resurrects it; and `git status --short` is
+# therefore not expected to be EMPTY — requiring that would be unsatisfiable
+# for an implementer holding a legitimate uncommitted deliverable, which is a
+# case this form exists for. `diff "$PRE" <file>` silent is the assertion that
+# actually discriminates.
 #
 # The bead's own success test is that an orchestrator stops hand-carrying the
 # warning into individual dispatch prompts — it hand-carried it into five, which
@@ -24,5 +32,5 @@
 # of USE, not only in the reference: task.md where an implementer is sent to the
 # procedure, review-task.md's revert line itself, and review-feature.md's.
 #
-# +20 mutation-check.md, +4 task.md, +3 review-task.md, +3 review-feature.md.
-work +30
+# +35 mutation-check.md, +4 task.md, +3 review-task.md, +3 review-feature.md.
+work +45
