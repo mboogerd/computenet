@@ -1219,6 +1219,110 @@ a counter that survives a despawn, or a frontier that will not certify across a
 reincarnation, is a design decision no bead has taken — and all three touch `SetCell` or
 `WatermarkCell`, outside this bead's claim.
 
+**Taken since, by computenet-uju5**: the second of those three — a counter that survives a
+despawn. See `## KE3-23-LANECONT` below for the disposition, its reasoning against the other
+two, and the regression the first test above became.
+
+## KE3-23-LANECONT — the disposition of candidate (2): the tag COUNTER is carried across a reincarnation, and the tag SOURCE is not touched
+
+`computenet-uju5`, the disposition `computenet-mahx` deliberately did not take. Closes the
+false-certificate shape recorded in `## KE3-23-ROWCONTENT`.
+
+### What was chosen
+
+**(b) — a `tagCounter` that survives a despawn and rejoin on the same ref.**
+`Replication` records a departing replica's tag-lane high-water against its `CellRef`
+(`departedTagLanes`, written at `evict` on the despawn path and at `supersedeLocalInstance`
+for the crash-and-rebuild shape) and installs it on the next incarnation of that ref at
+`replicate`. The cell side is `civictech.cell.data.delta.TagLaneContinuity`
+(`tagLaneHighWater()` / `continueTagLaneAbove(counter)`), implemented by `SetCell`.
+
+The direction is inverted exactly as it is for `StabilityReclaim`, and for the same reason:
+the cell cannot see its own past incarnations, because `tagSource` is *derived from the ref*
+and the second instance is indistinguishable from the first from inside. Only the component
+that owns the ref's lifecycle across a departure knows a returning ref is a return — and it
+is already the component that retains that ref's delivered-watermark companion across the
+same departure. So `civictech.cell.data` acquires no dependency on
+`civictech.cell.replication`; the seam is declared in `data/delta/StabilityReclaim.kt` beside
+the other Replication-installed seam.
+
+The mechanism is one line of arithmetic: mints from the returning incarnation are now
+strictly above every counter any peer's row already covers, so
+`DeliveredFrontier.deliver`'s contiguity holdback — which was doing its job all along —
+answers honestly again, and `stableFrontier`'s MIN stops certifying a del-dot nobody
+delivered.
+
+### Why not (a), and whether computenet-dwkp's prohibition reaches this lattice
+
+(a) is *an incarnation-distinct tag lane* — making `tagSource` itself unique per incarnation.
+
+**computenet-dwkp's clause 5 forbids it, and the question this bead's acceptance asks is
+whether that prohibition reaches HERE. It does not — but the answer changes nothing,
+because (a) is rejected on its own merits anyway.** The prohibition's stated reason is
+relevance, not cost: *"it does not address the case measured"*. What dwkp measured was
+`mintedHere=peer2-23 sameElement=true restores=0 lastDeparture=null` — a fencing replica
+that had NEVER departed, so its counters were never re-used and an incarnation-unique source
+would have changed nothing about that occurrence. That premise is FALSE of this lattice: here
+the reincarnation is the mechanism, established deterministically, and (a) would in fact
+close it. The prohibition is therefore not binding on this bead by its own terms. It is
+recorded that way rather than silently stretched or silently ignored.
+
+(a) is nonetheless not taken, for the reason `SetCell.tagSource`'s own comment and
+`ReclaimedDots`' KDoc both already give: the derivation exists so that *a recovered instance
+replaying its journal re-mints the exact tags the network already observed* (M10.1). An
+incarnation-unique source breaks that contract — a pre-crash remove could no longer cover a
+re-minted add, which resurrects removed elements — and it is the wire-visible half of the
+identity, where (b) is local bookkeeping. (b) reaches the same place at a fraction of the
+blast radius, so (a) buys nothing here that (b) does not.
+
+### Why not (c)
+
+(c) is *a frontier that refuses to certify across a reincarnation*. It leaves the lying row
+in place and teaches every reader of it to distrust it, which needs the reincarnation to be
+visible in the watermark lattice — new row state, and a wire-format question — and it is a
+refusal, so it degrades reclamation for every replica that has ever rejoined rather than
+repairing the fact the row asserts. (b) makes the row's claim TRUE instead. `## KE3-23-OPENSET`
+already settled that the `closed` term is the only exclusion the open set has; (c) would be a
+second, weaker one beside it.
+
+### Compatibility, stated where the acceptance asks for it
+
+No frame, delta or snapshot key changes. The counter was *already* snapshot state — `"counter"`
+in `SetCell.snapshotLocked`, and `restore` already reads it as `maps["counter"] as? Long ?: 0L`,
+so an absent key is today's behaviour and a pre-existing checkpoint loads unchanged.
+`continueTagLaneAbove` never LOWERS a lane, so a cell restored from a checkpoint (which carries
+its own counter) is not disturbed by a stale `departedTagLanes` entry, and re-installation is
+idempotent. `Replication.rebind`'s `carryTagState = false` control seam is untouched: `rebind`
+does not go through `evict`, so it records nothing, and the PN-14 T2 fresh-epoch collision it
+exists to reproduce still reproduces.
+
+### What it costs, stated where the number is
+
+One `Long` per `CellRef` that has departed or been superseded on this peer, never pruned — the
+entry IS the fix, and the return can come at any time. `O(local replicas ever retired)`, beside
+the `watermarks` companion this peer already retains across the same departure for the same
+reason. It is not the unbounded-per-mint retention `computenet-fzd3` was filed against.
+
+### Scope, stated as a limit
+
+- This closes the shape `## KE3-23-ROWCONTENT` measured. It does **not** close
+  computenet-dwkp's seed-12 BS-12 occurrence, which ROWCONTENT already states it does not
+  account for (`lastDeparture=null` there) — and that is **observed, not assumed**: six
+  consecutive `GcSafetySweepTest` sweeps at the fix (darwin/arm64 16-core, load1 5.7-9.4,
+  2026-09-07) went 2 red, both `stableFenceAttributed … seeds=[12]`, the same signature and a
+  rate indistinguishable from the ~20-30%/sweep recorded on computenet-dwkp. n=6 bounds
+  nothing and is recorded as an occurrence, not a measurement: the class is unmoved, as
+  expected, and computenet-dwkp stays open.
+- The continuation is per `Replication` instance, i.e. per peer process. A replica that departs
+  and returns in a DIFFERENT process carries its lane the way it always did — through
+  `restore`, from a checkpoint. A process that loses its `Replication` and rebuilds a replica
+  from nothing has no lane to continue and no checkpoint either; that is the pre-existing
+  unclean-departure disposition (E3.6(c)), untouched here.
+- `KeyedSetCell` re-uses its counter space across incarnations in exactly the same way and is
+  deliberately NOT changed: it is not `Replicable`, has no `DeliveredFrontier`, no watermark row
+  and no `Replication` lifecycle, so the lattice this closes does not exist for it. If it ever
+  becomes replicable it needs the same seam.
+
 ## KE3-BS16-RETAINED — reclamation is an EXCHANGE: retained state as a whole is `O(elements ever reclaimed)`, and no `O(in-flight window)` bound over the whole is reachable without G-42
 
 **Bead**: `computenet-9sm.6.5`, under feature `computenet-9sm.6`, clause

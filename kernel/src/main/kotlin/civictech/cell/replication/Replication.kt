@@ -25,6 +25,7 @@ import java.util.*
 import civictech.cell.data.delta.WatermarkDelta
 import civictech.cell.data.delta.DeliveryTracking
 import civictech.cell.data.delta.StabilityReclaim
+import civictech.cell.data.delta.TagLaneContinuity
 
 /**
  * Replica wiring (spec 42, G-7, M7.3). A replica is an instance of the same
@@ -87,6 +88,27 @@ class Replication(
 
     /** Established gossip links per (local replica → remote replica) pair. */
     private val linked = mutableMapOf<Pair<CellRef, CellRef>, Pair<Replicable<*>, Link>>()
+
+    /**
+     * The tag-lane high-water of a replica that LEFT this peer, kept against the
+     * ref it may return on (computenet-uju5,
+     * [civictech.cell.data.delta.TagLaneContinuity]).
+     *
+     * A cell's tag source is derived from its ref and its counter is per instance,
+     * so a second incarnation on the same ref restarts the counter and re-mints
+     * tags peers have already delivered — under which a peer's delivered row
+     * certifies a del-dot it never applied ([stableFrontier]'s MIN then licences a
+     * reclamation that diverges permanently). This peer is the only party that can
+     * see the return, exactly as it is the only party that keeps the departed
+     * replica's watermark companion, so it carries the lane forward: recorded at
+     * [evict] and at [supersedeLocalInstance], re-installed at [replicate].
+     *
+     * **What it retains**: one `Long` per ref that has departed or been superseded
+     * here, never pruned — the entry is the whole point and a return can come at
+     * any time. That is `O(local replicas ever retired)`, alongside the
+     * [watermarks] companion this peer already retains for the same reason.
+     */
+    private val departedTagLanes = mutableMapOf<CellRef, Long>()
 
     /**
      * The local delivered-watermark companion per replicated logical id (spec
@@ -442,6 +464,12 @@ class Replication(
             )
         }
         val superseded = supersedeLocalInstance(cell)
+        // computenet-uju5: a ref that returns here continues the tag lane its previous
+        // incarnation left, instead of restarting the counter and re-minting tags peers
+        // have already delivered. Absent entry = first replication of this ref = today's
+        // behaviour, unchanged. `continueTagLaneAbove` never lowers, so a cell restored
+        // from a checkpoint (which carries its own counter) is not disturbed.
+        departedTagLanes[cell.ref]?.let { high -> (cell as? TagLaneContinuity)?.continueTagLaneAbove(high) }
         localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += cell
         hostOf[cell.ref] = host
         host.managementInlet.call.spawn(cell)
@@ -502,9 +530,25 @@ class Replication(
      * plain re-replicate of the same object never reaches this and no live
      * partition-suspend is resumed out from under [evict].
      */
+    /**
+     * Record [cell]'s tag-lane high-water against its ref, for a later incarnation on
+     * that ref to continue from (computenet-uju5). Monotone — a departure never lowers a
+     * lane a previous departure recorded higher, so the order in which incarnations
+     * retire cannot lose ground. A cell that does not mint a ref-derived lane
+     * ([civictech.cell.data.delta.TagLaneContinuity]) records nothing.
+     */
+    private fun rememberTagLane(cell: Replicable<*>) {
+        val high = (cell as? TagLaneContinuity)?.tagLaneHighWater() ?: return
+        departedTagLanes[cell.ref] = maxOf(departedTagLanes[cell.ref] ?: 0L, high)
+    }
+
     private fun supersedeLocalInstance(cell: Replicable<*>): Boolean {
         val locals = localReplicas[cell.ref.id] ?: return false
         if (!locals.any { it !== cell && it.ref == cell.ref }) return false
+        // computenet-uju5: the superseded instance is a departing incarnation of this ref
+        // — the crash-and-rebuild shape — so its tag lane is carried the same way
+        // [evict]'s is. See [departedTagLanes].
+        locals.filter { it !== cell && it.ref == cell.ref }.forEach { rememberTagLane(it) }
         locals.removeAll { it !== cell && it.ref == cell.ref }
         linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
         if (partitionSuspended.remove(cell.ref)) watermarks[cell.ref.id]?.resume()
@@ -748,6 +792,13 @@ class Replication(
                 (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(link)
             }
         }
+        // computenet-uju5: the replica is leaving on a ref that may come back here. Carry
+        // its tag-lane high-water so the returning incarnation mints ABOVE what peers have
+        // already delivered under this ref's derived source, rather than re-minting a
+        // counter space their rows already cover. Recorded on the DESPAWN path only — the
+        // suspend branch above returns early and keeps the very same object, so its lane
+        // never restarts. See [departedTagLanes].
+        rememberTagLane(cell)
         localReplicas[cell.ref.id]?.remove(cell)
         // clean-departure watermark close: only once the last local replica of
         // this id leaves (the companion carries this peer's single row).

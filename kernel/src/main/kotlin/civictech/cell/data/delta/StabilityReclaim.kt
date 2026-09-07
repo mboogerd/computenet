@@ -64,3 +64,66 @@ interface StabilityReclaim {
      */
     fun onStability(read: () -> TagFrontier?)
 }
+
+/**
+ * A cell that mints tags from a **ref-derived source and a per-instance
+ * counter**, and whose counter must therefore be carried across a
+ * reincarnation of its [civictech.cell.CellRef] (computenet-uju5,
+ * `doc/kernel-lane-findings.md` `## KE3-23-ROWCONTENT`).
+ *
+ * ## The defect this closes
+ *
+ * `SetCell.tagSource` is `nameUUIDFromBytes("set-tags:{id}:{instanceId}")` —
+ * derived, so a recovered instance replaying its journal re-mints the exact
+ * tags the network already observed (M10.1). The *counter* is per instance and
+ * restarts at 0 on any construction that does not `restore`. A replica that
+ * despawns and returns on the same ref therefore re-mints `(T,1) (T,2) …`
+ * **for different elements**, and the delivered lane cannot tell:
+ * `DeliveredFrontier.deliver` returns null for a counter at or below the
+ * prefix it already holds, so a peer whose row for `T` stands at the
+ * pre-departure high-water absorbs the second incarnation's tags as "already
+ * covered". Its row does not move — and it already stands above a del-dot the
+ * second incarnation has just minted and the peer never applied.
+ * `CausalStability.stableFrontier`'s MIN then certifies that dot,
+ * `SetCell.compactBelow` reclaims and fences it, and the peer still holding
+ * the element live diverges permanently. The contiguity holdback is working
+ * correctly; it is the re-used counter space that defeats it.
+ *
+ * ## Why the continuation is installed rather than computed
+ *
+ * The cell cannot see its own past incarnations: `tagSource` is derived, so
+ * the second instance is indistinguishable from the first from inside. Only
+ * the component that owns the ref's lifecycle across a departure —
+ * `Replication`, which already retains the delivered-watermark companion
+ * across the same departure — knows that a returning ref is a *return*. So the
+ * direction is inverted exactly as it is for [StabilityReclaim]: the cell
+ * exposes its lane position and accepts a continuation, and `Replication`
+ * remembers and re-installs it. `civictech.cell.data` acquires no dependency
+ * on `civictech.cell.replication`.
+ *
+ * ## What it is NOT
+ *
+ * It is not an incarnation-distinct tag *source*: `tagSource` is untouched, so
+ * the journal-replay contract it exists to keep is untouched, and a restored
+ * checkpoint continues to re-mint what the network saw. The counter is already
+ * snapshot state — `Replication.rebind`'s `carryTagState` continues the same
+ * lane through a replicated promotion by restoring the incumbent's snapshot —
+ * so this is that continuation extended to the despawn/rejoin path, which had
+ * none. No frame, delta or snapshot key changes.
+ */
+interface TagLaneContinuity {
+    /**
+     * The highest counter this instance has minted under its ref-derived tag
+     * source, or 0 if it has minted nothing.
+     */
+    fun tagLaneHighWater(): Long
+
+    /**
+     * Continue this instance's tag lane strictly above [counter]: the next
+     * mint yields a counter greater than [counter]. Never *lowers* the lane —
+     * a value at or below the current high-water is ignored, so a restored
+     * checkpoint (which already carries the counter) is not disturbed and a
+     * re-installation is idempotent.
+     */
+    fun continueTagLaneAbove(counter: Long)
+}

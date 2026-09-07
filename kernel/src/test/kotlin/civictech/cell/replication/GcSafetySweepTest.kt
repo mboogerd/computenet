@@ -1741,6 +1741,26 @@ class StabilityOpenSetOnRejoinTest {
  * `lastDeparture=null`, so its counters were never re-used, and candidate (1) already explains that
  * reading. Candidate (2) is a second live defect at the same seam, not a competing account of the
  * first.
+ *
+ * ## computenet-uju5 — the disposition, and what these two tests now assert
+ *
+ * Candidate (2) is CLOSED by disposition (b), *a tag counter that survives a despawn and rejoin on
+ * the same ref*: `Replication` records a departing replica's tag-lane high-water against its
+ * [CellRef] (`departedTagLanes`, written at `evict` and at `supersedeLocalInstance`) and installs it
+ * on the returning incarnation at `replicate`, through
+ * [civictech.cell.data.delta.TagLaneContinuity]. `tagSource` is UNTOUCHED — disposition (a), an
+ * incarnation-unique source, was not taken; see `doc/kernel-lane-findings.md`
+ * `## KE3-23-LANECONT` for why, including whether computenet-dwkp's clause-5 prohibition reaches
+ * this lattice.
+ *
+ * The first test is therefore no longer a demonstration of the defect but the REGRESSION against
+ * it: same schedule, same lost frame, and the reincarnation's del-dot is now minted at `(T, 5)` —
+ * above every peer's prefix — so the open, present row answers `BELOW`, `stableFrontier` declines
+ * to certify, `compactBelow` leaves the dot, and the divergence is not reached. A restart of the
+ * lane fails it at the `dot.counter shouldBe 5L` read, which is taken off the checkpoint rather
+ * than assumed. The control is unchanged and still passes, so the fix does not work by making every
+ * certificate refuse: the same lost remove at a fresh counter behaved honestly before and behaves
+ * identically now.
  */
 class StabilityRowCoverageOnReincarnationTest {
 
@@ -1792,7 +1812,7 @@ class StabilityRowCoverageOnReincarnationTest {
     }
 
     @Test
-    fun `computenet-mahx an open watermark row certifies a del-dot the replica never applied - the counter space is reused across incarnations`() {
+    fun `computenet-uju5 the reincarnated replica continues its tag lane, so no open row certifies a del-dot it never applied`() {
         val controller = SimulationController(3L)
         val p0 = Peer(controller)
         val p1 = Peer(controller)
@@ -1824,18 +1844,22 @@ class StabilityRowCoverageOnReincarnationTest {
 
         // The reincarnation. closeDepartedRow = false DELIBERATELY: closing the row is
         // candidate (1)'s mechanism, and the point here is a slot that stays OPEN. The new
-        // instance takes the same CellRef, hence the same ref-derived `tagSource`, with its
-        // own `tagCounter` back at zero.
+        // instance takes the same CellRef, hence the same ref-derived `tagSource`; its own
+        // `tagCounter` starts at zero and computenet-uju5's fix is that `Replication`
+        // CONTINUES the departed lane into it (`departedTagLanes`, installed at `replicate`).
         assertTrue(p1.replication.evict(r1, p1.host, closeDepartedRow = false), "evict suspended instead of despawning")
         controller.runToIdle()
         val r1b = SetCell<String>(CellRef(logicalId, 1)).also { p1.replication.replicate(it, p1.host) }
         r1b.ref shouldBe r1.ref
         controller.runToIdle()
 
-        // Incarnation 2 re-mints (T,1) — for a DIFFERENT element — and then (T,2) as its
-        // del-dot. p0 gets the add and, with the link dropped, never the remove.
+        // Incarnation 2 mints ABOVE incarnation 1's high-water — (T,4) for the add, not the
+        // (T,1) the counter space would otherwise be re-used for. Read off the tag rather
+        // than assumed, so the test fails if the lane restarts. p0 gets the add and, with
+        // the link dropped, never the remove.
         r1b.inlet.call.add("z")
         controller.runToIdle()
+        r1b.liveTagsOf("z").single().counter shouldBe 4L
         assertTrue("z" in r0.membership(), "p0 never saw the add, so the drop below proves nothing")
         dropToP0.set(true)
         r1b.inlet.call.remove("z")
@@ -1849,7 +1873,7 @@ class StabilityRowCoverageOnReincarnationTest {
         val delsOfR1b = delTagsOf(r1b)
         val dot = delsOfR1b.getValue("z").maxByOrNull { t -> t.counter }!!
         dot.sourceId shouldBe tagSource
-        dot.counter shouldBe 2L
+        dot.counter shouldBe 5L // the continued lane; 2L is the re-used counter space this closes
 
         // GROUND TRUTH, established against the replica's own state and not against any
         // watermark: p0 still holds "z" live, so it demonstrably never applied the del-dot.
@@ -1859,12 +1883,18 @@ class StabilityRowCoverageOnReincarnationTest {
             "p0 reclaimed the dot rather than never receiving it — that is a different story",
         )
 
-        // THE READ (computenet-mahx). p0's slot is present and OPEN — this is not candidate
-        // (1) — and its row nonetheless COVERS the dot it never applied.
+        // THE READ (computenet-mahx, now the regression assertion for computenet-uju5). p0's
+        // slot is present and OPEN — the fix does NOT work by excluding a slot, which would
+        // be candidate (1)'s machinery — and its row now answers BELOW on the dot it never
+        // applied, where before the lane was continued it answered COVERS.
         val read = p0.replication.openSlots(logicalId)
         assertTrue(slot0 in read.open, "p0's own slot left the open set; read=$read")
         read.exclusionOf(slot0) shouldBe null
         read.coverageOf(slot0, tagSource, dot.counter) shouldBe
+            CausalStability.OpenSlots.RowCoverage.BELOW
+        // The row still MOVED for what p0 did apply — the add at (T,4) — so the honest answer
+        // is not "this row is stuck". Only the lost del-dot is uncovered.
+        read.coverageOf(slot0, tagSource, 4L) shouldBe
             CausalStability.OpenSlots.RowCoverage.COVERS
 
         // …and the other half of the acceptance clause, which the same read separates: a row
@@ -1878,26 +1908,34 @@ class StabilityRowCoverageOnReincarnationTest {
             unknownSource !in p0.replication.stableFrontier(logicalId).perSource,
             "a source no row carries should be absent from the frontier, not present at a value",
         )
-        // Every open slot agrees the dot is covered — the false certificate is unanimous, not
-        // one peer's local view.
-        read.coverageAt(tagSource, dot.counter).values.toSet() shouldBe
-            setOf(CausalStability.OpenSlots.RowCoverage.COVERS)
+        // Not every open slot claims the dot: p1's own row covers it (p1 minted it locally),
+        // p0's does not, and the MIN over the open set is what `stableFrontier` takes. Before
+        // the fix this set was unanimously COVERS.
+        val coverage = read.coverageAt(tagSource, dot.counter)
+        coverage[slot0] shouldBe CausalStability.OpenSlots.RowCoverage.BELOW
+        assertTrue(
+            CausalStability.OpenSlots.RowCoverage.BELOW in coverage.values,
+            "every open slot claims the dot again; coverage=$coverage",
+        )
         assertTrue(slot1 in read.open, "the reincarnated slot was excluded, which would be candidate (1)")
 
-        // THE CONSEQUENCE. The frontier certifies the dot, compaction acts on it, and the run
-        // ends in the BS-12 membership divergence — reached deterministically.
+        // THE CONSEQUENCE, inverted. The frontier no longer certifies the dot, so compaction
+        // leaves it alone and the BS-12 FENCED-DIVERGE shape is not reached. `fencedAmong` is
+        // the fence's own record of what `compactBelow` discarded, so an empty answer for the
+        // dot is a read of the reclaimer rather than an inference from a count.
         val frontier = p1.replication.stableFrontier(logicalId)
         assertTrue(
-            (frontier.perSource[tagSource] ?: Long.MIN_VALUE) >= dot.counter,
-            "the false certificate was not issued; frontier=${frontier.perSource}",
+            (frontier.perSource[tagSource] ?: Long.MIN_VALUE) < dot.counter,
+            "the false certificate was issued anyway; frontier=${frontier.perSource}",
         )
-        assertTrue(r1b.compactBelow(frontier) > 0, "compaction discarded nothing, so nothing was certified")
+        r1b.compactBelow(frontier)
         assertTrue(
-            r1b.fencedAmong("z", setOf(dot)).isNotEmpty(),
-            "the del-dot itself was not among what compaction reclaimed",
+            r1b.fencedAmong("z", setOf(dot)).isEmpty(),
+            "an uncertified del-dot was reclaimed anyway; frontier=${frontier.perSource}",
         )
-        assertTrue("z" !in r1b.membership(), "the compacting replica still holds the removed element")
-        assertTrue("z" in r0.membership(), "expected the surviving divergence: p0 holds what p1 compacted")
+        // The disagreement that remains is the ordinary transient one the control also ends
+        // on — p0 is missing a frame, not permanently fenced out of re-admitting the element.
+        assertTrue("z" !in r1b.membership() && "z" in r0.membership(), "the transient disagreement is expected")
     }
 
     /**
