@@ -32,5 +32,5 @@
 # of USE, not only in the reference: task.md where an implementer is sent to the
 # procedure, review-task.md's revert line itself, and review-feature.md's.
 #
-# +35 mutation-check.md, +4 task.md, +3 review-task.md, +3 review-feature.md.
-work +45
+# +37 mutation-check.md, +4 task.md, +7 review-task.md, +3 review-feature.md.
+work +51
