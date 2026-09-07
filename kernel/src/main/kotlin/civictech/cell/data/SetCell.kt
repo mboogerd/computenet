@@ -728,6 +728,57 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     internal fun fencesAny(element: E): Boolean = synchronized(stateLock) { reclaimed.anyFor(element) }
 
     /**
+     * Retained reclaimable state, **as a whole** — computenet-9sm.6.5's BS-16 accounting
+     * (`[KE3-37]`), and the fifth read of the [liveTagsOf]/[fencedAmong]/[fencesAny]/
+     * [fenceProvenance] diagnostic family.
+     *
+     * The three components are reported SEPARATELY and summed by [RetainedState.total], and that
+     * separation is the whole point of the read. Reclamation as landed is an **exchange**: a
+     * discarded `dels` entry becomes a fence element key plus one or more counter runs
+     * ([ReclaimedDots]'s KDoc: "a reduction, not a bound"). So a bound stated over
+     * [RetainedState.tombstoneTags] alone is satisfiable by moving the growth into the fence, and
+     * `[KE3-37]` therefore requires the bound to be stated over [RetainedState.total].
+     *
+     * **What is counted, and why exactly this:**
+     *
+     *  - [RetainedState.tombstoneTags] — every tag in `dels`, plus the `adds` tags *under* a
+     *    `dels` entry (`adds[e] ∩ dels[e]`). Those are exactly the tags [compactBelow] can ever
+     *    discard: it takes a whole `dels` entry and the intersection of `adds[e]` with it.
+     *  - [RetainedState.fenceRuns] — [ReclaimedDots.runCount], the per-`(element, source)`
+     *    contiguous counter runs the discard exchanged those tags for.
+     *  - [RetainedState.fenceElements] — [ReclaimedDots.elementCount], one entry per element ever
+     *    reclaimed here. Nothing prunes it; that needs epoch hygiene (G-42, research-gated).
+     *
+     * **What is deliberately NOT counted**, stated here because it will otherwise be attributed to
+     * the reclaimer: live add-tags with no `dels` entry (`O(live elements)` and legitimately
+     * irreducible — an element that is present must carry the tag that makes it present), and the
+     * computenet-dwkp diagnostic maps `mintedHere`/`incarnations`, which are unpruned,
+     * unreclaimable by [compactBelow] and `O(local mints)`. Bounding or build-gating those is
+     * computenet-fzd3, a separate open bead, and their growth is not this reclaimer's.
+     *
+     * Read-only, additive, takes [stateLock] and makes no outbound call; no protocol path consults
+     * it, exactly as its four siblings. `internal`: `:kernel` tests only.
+     */
+    internal fun retainedState(): RetainedState = synchronized(stateLock) {
+        var tombstoneTags = 0
+        for ((element, delTags) in dels) {
+            tombstoneTags += delTags.size
+            adds[element]?.let { addTags -> tombstoneTags += addTags.count { it in delTags } }
+        }
+        RetainedState(tombstoneTags, reclaimed.runCount, reclaimed.elementCount)
+    }
+
+    /** The three components of [retainedState]; see its KDoc for what each one is and is not. */
+    internal data class RetainedState(
+        val tombstoneTags: Int,
+        val fenceRuns: Int,
+        val fenceElements: Int,
+    ) {
+        /** Retained state as a whole — the quantity `[KE3-37]` requires the BS-16 bound over. */
+        val total: Int get() = tombstoneTags + fenceRuns + fenceElements
+    }
+
+    /**
      * The PROVENANCE of a fenced tag — computenet-dwkp's measurement, and the third
      * diagnostic read of this family after [liveTagsOf] and [fencedAmong].
      *
