@@ -1272,7 +1272,10 @@ whole is asserted**. What is asserted in
    across a 16x op sweep, and ≤ 24 (measured 15) against the control's 36 on
    the churn rig;
 2. the control arm shows growth and never writes the fence;
-3. **the negative result itself**, as a live assertion: retained state as a
+3. the accounting's own definition — a LIVE re-added tag is not a tombstone tag,
+   pinned deterministically because the churn workload cannot exercise it (see
+   the mutation record below);
+4. **the negative result itself**, as a live assertion: retained state as a
    whole rises with op count at a fixed window (`retainedRatio ≥ 0.9 ×
    opRatio`). If that assertion ever goes red because retained state stopped
    growing, the fence has acquired a pruning rule — that is G-42 landing, and
@@ -1286,17 +1289,38 @@ reduction, not a bound. That file is not edited by this bead.
 
 ### Mutation evidence — that the assertions discriminate
 
-Both production-side mutations were confined to `SetCell.retainedState`, this
+Every production-side mutation was confined to `SetCell.retainedState`, this
 bead's only production edit; `compactBelow`, `applyRemote` and the fence were
-not touched. Verbatim messages and the commands are in the bead's report.
+not touched (they are outside the claim, so "reclamation stopped" is simulated
+at the test arm rather than by breaking the reclaimer). Each mutation was
+applied after the deliverable was committed, its landing proved by a non-empty
+`git diff HEAD -- <file>`, and reverted by `git checkout --` with `git status`
+verified clean.
 
-1. **The window bound**: the churn arm's STABLE sample source switched to the
-   no-reclaimer `Trigger.NONE` (a test-side substitution — the production
-   reclaimer is outside this bead's claim, so "reclamation stopped" is
-   simulated at the arm rather than by breaking `compactBelow`). The tombstone
-   assertion goes red at 36 > 24, and the control-exceeds-STABLE assertion goes
-   red too. Restored.
-2. **The finding**: `retainedState` made to report a *pruned* fence
-   (`minOf(elementCount, 25)`, likewise for the runs), i.e. the G-42 outcome
-   simulated. The `retainedRatio ≥ 0.9 × opRatio` assertion goes red.
-   Restored.
+1. **"Reclamation stopped"** — the churn arm's STABLE sample source switched to
+   the no-reclaimer `Trigger.NONE`. **RED**, on the non-vacuity assertion, which
+   fires first: `[KE3-37]: the reclaimer never discarded anything on the STABLE
+   arm, so this run proves nothing about reclamation: [BS-16] STABLE
+   samples=16318 total(min/median/max)=0/21/36
+   tombstoneTags(min/median/max)=0/21/36 maxFenceElements=0 maxFenceRuns=0
+   runs/elements=n/a`. Note the report it prints: the tombstone max in that
+   state is **36**, above the bound's 24, so the bound assertion is violated too
+   — the non-vacuity line simply reaches it first.
+2. **The accessor's live-tag filter** — `adds[e] ∩ dels[e]` replaced by
+   `adds[e]`. **INERT on the churn arm**: the sweep's numbers came back
+   byte-identical (`tombstoneTags` max 15, control 36, STABLE total max 26). The
+   cause is the workload — `GcSafetySweep` never re-adds a removed element and
+   `SetCell.remove` leaves every folded add-tag in `adds[e]`, so `adds[e] ⊆
+   dels[e]` there and the filter cannot fire. **A surviving mutation is a
+   property left unproven**, so it was proven directly instead: `the tombstone
+   component excludes a live re-added tag` is a deterministic add/remove/re-add
+   pin, and re-running the same mutation against it is **RED** — `…the tombstone
+   component is 2 (the two `dels` tags) + 1 (the `adds` tag under them) minus
+   nothing, and the live tag is NOT counted. Counting it would report 4.
+   state=RetainedState(tombstoneTags=4, fenceRuns=0, fenceElements=0)`.
+3. **The finding itself** — `retainedState` made to report a *pruned* fence
+   (`minOf(reclaimed.runCount, 25)`), i.e. the G-42 outcome simulated. **RED**
+   on the `retainedRatio ≥ 0.9 × opRatio` assertion: `…25 pairs -> total=50, 400
+   pairs -> total=425 (opRatio=16.0 retainedRatio=8.5)`. So the finding is a
+   live measurement, not an unexamined comment: the day the fence acquires a
+   pruning rule, this test says so.
