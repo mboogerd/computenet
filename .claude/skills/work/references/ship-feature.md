@@ -122,6 +122,7 @@ nothing.
 | the feature has gaps, and the reviewer filed tasks for them | the task ids it created | ready work → **5b** |
 | the reviewer's own repairs were substantive ([review-feature.md](review-feature.md) §5) | the repair commit shas and their per-commit `--stat` | independent check of *those commits* → §4 below |
 | a required check is red | the check name and conclusion it quoted from `gh pr checks` | [red-check-attribution.md](red-check-attribution.md) — attribute, re-run, or park as blocked-on-infrastructure |
+| none of the above | nothing actionable named | dead end: leave `in_progress`, set `parked_at`, go to **5f** |
 
 **A draft whose SOLE blocker is an unrelated red is not a draft about the
 work.** The reviewer cannot clear it — `gh run rerun` is refused for a subagent
@@ -131,9 +132,7 @@ on the substantive certification the reviewer already gave** rather than
 re-dispatching it to say the same thing about a check it never doubted. The
 reviewer's verdict names this case in as many words ("the substantive review is
 complete and passes; what would most change the verdict is one re-run going
-green"). If the re-run stays red, it was never the flake and the row above
-applies.
-| none of the above | nothing actionable named | dead end: leave `in_progress`, set `parked_at`, go to **5f** |
+green"). If it stays red, spend the second re-run or park per the row above.
 
 ## 4. The substantive-repair draft: a finished feature with no second reader
 

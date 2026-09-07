@@ -15,9 +15,13 @@
 # the next one does not have to invent it. The mechanism behind the asymmetry
 # is deliberately NOT asserted; it was observed, never tested.
 #
-# +11 in ship-feature.md §3, the table the SKILL.md 5e draft-verdict route
+# +5 in red-check-attribution.md, which review-feature.md §4 SENDS the reviewer
+# to and which still prescribed the command to it directly — so the refused
+# call stayed a way a reviewer learns this, the exact cost the fix removes.
+#
+# +10 in ship-feature.md §3, the table the SKILL.md 5e draft-verdict route
 # already delegates to, saying what the orchestrator does with such a draft:
 # spend one re-run from the at-most-two budget, and on green ship on the
 # substantive certification already given rather than re-dispatching the
 # reviewer to repeat it.
-work +30
+work +34
