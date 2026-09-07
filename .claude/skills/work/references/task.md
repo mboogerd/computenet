@@ -189,7 +189,11 @@ A bug's reproduction must fail unfixed; a measurement must be sized before it is
    mutation check — follow [mutation-check.md](mutation-check.md)**, which is
    the one written procedure: commit first, marker, mutate (through Bash when
    the Edit tool refuses), `--rerun --no-build-cache`, verify the revert, then
-   the confirming run. **Leave the marker first**, so an agent that inherits your
+   the confirming run. **Revert with `cp "$SCRATCH/pre-mutation" <file>`, having
+   copied the file aside before mutating — not a git command.** The git forms
+   stage what they write, or assume `HEAD`, or eat your own uncommitted edits,
+   and cost three agents in one session; `git status --short` empty is the step
+   that proves it (mutation-check.md step 5, computenet-0s1k). **Leave the marker first**, so an agent that inherits your
    worktree after a crash can tell a live mutation from finished work. The two
    are indistinguishable from the diff alone. **A red run is only evidence if
    you say WHICH assertion went red**: in a test with several assertions an

@@ -786,7 +786,10 @@ of these is true:
   test you added, mutate the production code it covers (code you did not
   write), show the test failing, revert the mutation, show it passing, and
   quote the assertion message from the failing run. Name the mutation in the
-  verdict, following [mutation-check.md](mutation-check.md). That is the same
+  verdict, following [mutation-check.md](mutation-check.md) — whose revert is
+  `cp "$SCRATCH/pre-mutation" <file>`, the file having been copied aside before
+  the mutation, never a git command, with `git status --short` empty as the
+  proof (computenet-0s1k). That is the same
   mutation check review-task.md applies to an
   implementer's tests. **Two conditions on the mutation**, because a red run
   proves less than it looks like:

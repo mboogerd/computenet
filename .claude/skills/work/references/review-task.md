@@ -383,7 +383,10 @@ Beyond that standard, a reviewer owes the stronger signal:
   git -C <task-worktree> diff -- <file> > "$SCRATCH/my-repairs.patch"
   git -C <task-worktree> checkout HEAD -- <file>   # now only HEAD's content
   # ... mutate, re-run, watch the named test FAIL ...
-  git -C <task-worktree> checkout HEAD -- <file>   # undo the mutation — HEAD, not the index (mutation-check.md step 5)
+  cp "$SCRATCH/pre-mutation" <file>               # undo it: copy back what you copied aside BEFORE mutating.
+                                                  # Not `git checkout` — it stages, or assumes HEAD, or eats
+                                                  # your own uncommitted edits (mutation-check.md step 5,
+                                                  # computenet-0s1k). Then `git status --short` MUST be empty.
   git -C <task-worktree> apply "$SCRATCH/my-repairs.patch"
   ```
 

@@ -145,7 +145,27 @@ discriminate on its own** — disable the earlier assertions under the same
 mutation, or choose a mutation only that assertion can catch — and the report
 names the assertion, not just the test.
 
-**5. Revert — and verify it, do not assume it.** Two ways `git checkout` lies:
+**5. Revert — and verify it, do not assume it.**
+
+**THE CANONICAL FORM, and it is not a git command.** Copy the file aside before
+you mutate it, and copy it back after:
+
+```bash
+cp <file> "$SCRATCH/pre-mutation"     # BEFORE the mutation
+# ... mutate, run, watch the named test FAIL ...
+cp "$SCRATCH/pre-mutation" <file>     # after — byte-for-byte what you had
+git -C <your-worktree> status --short # MUST be empty for <file>. Not advice: a step.
+```
+
+Use this unless you have a reason not to. It is immune to all three ways the
+git forms have actually failed here, because it touches neither the index nor
+`HEAD`: it does not matter whether the file is tracked, whether your mutation
+staged anything, or whether you hold uncommitted edits of your own. The git
+forms below are correct and remain documented — they are what you need when
+the mutation spans files or you did not capture the file first — but they have
+now cost three agents in a single session, so reach for them second.
+
+Two ways `git checkout` lies:
 
 - **An untracked file cannot be checked out at all**, and *how* you name it
   decides whether you find out. Measured on this host (git 2.50.1): naming
