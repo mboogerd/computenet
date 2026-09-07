@@ -2,6 +2,7 @@ package civictech.cell.replication
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.StateRead
 import civictech.cell.Timestamp
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
@@ -19,7 +20,6 @@ import civictech.testkit.dst.churn.MeshConvergences
 import civictech.testkit.dst.churn.ReferenceFold
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
-import java.io.Serializable
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -230,13 +230,34 @@ class CompactionTriggerPinTest {
             fold: SetDelta<String>,
         ): Set<String> = cell.membership() - (MeshConvergences.project(fold) as ReferenceFold.Elements).elements
 
-        /** Raw tag state, for the per-step trace the task's non-vacuousness route asks for. */
+        /**
+         * Raw tag state, for the per-step trace the task's non-vacuousness route asks for.
+         *
+         * Read through [SetCell.readBounded], NOT through `snapshot()`
+         * (computenet-9sm.6.1): `snapshot()` is now the single production caller
+         * of [SetCell.compactBelow], so a diagnostic snapshot would itself fire
+         * the reclaimer and move reclamation one line earlier than the schedule
+         * this file pins. `readBounded` mints nothing, emits nothing and
+         * reclaims nothing. Every assertion, expected value and schedule
+         * constant below is unchanged; only the instrument is.
+         */
         @Suppress("UNCHECKED_CAST")
         fun tags(cell: SetCell<String>): String {
-            val snap = cell.snapshot() as Map<String, Serializable>
-            fun render(m: Any?) = (m as Map<String, Set<Timestamp>>)
-                .mapValues { (_, ts) -> ts.map { it.counter }.sorted() }
-            return "adds=${render(snap["adds"])} dels=${render(snap["dels"])}"
+            val adds = LinkedHashMap<String, List<Long>>()
+            val dels = LinkedHashMap<String, List<Long>>()
+            var request = StateRead(limit = 64)
+            while (true) {
+                val page = cell.readBounded(request)
+                page.entries.forEach { entry ->
+                    val e = entry as SetCell.SetStateEntry<String>
+                    fun render(ts: Set<Timestamp>) = ts.map { it.counter }.sorted()
+                    if (e.addTags.isNotEmpty()) adds[e.element] = render(e.addTags)
+                    if (e.delTags.isNotEmpty()) dels[e.element] = render(e.delTags)
+                }
+                val next = page.next ?: break
+                request = StateRead(cursor = next, limit = 64)
+            }
+            return "adds=$adds dels=$dels"
         }
 
         fun trace(step: String, vararg pairs: Pair<String, Any?>) {

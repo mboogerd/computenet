@@ -24,6 +24,7 @@ import civictech.cell.host.HostedCellProxy
 import java.util.*
 import civictech.cell.data.delta.WatermarkDelta
 import civictech.cell.data.delta.DeliveryTracking
+import civictech.cell.data.delta.StabilityReclaim
 
 /**
  * Replica wiring (spec 42, G-7, M7.3). A replica is an instance of the same
@@ -550,6 +551,24 @@ class Replication(
         // the origin tags survive — the substrate E3.4's cross-track read needs.
         if (cell is DeliveryTracking) {
             cell.onDeliver { source, thru -> companion.advance(source, thru) }
+        }
+        // THE RECLAIMER'S ARMING POINT (`[KE3-30]`, decision 9sm.6-D1,
+        // computenet-9sm.6.1). The same inversion as `onDeliver` above, in the
+        // other direction: a tagged replica cannot discard a tombstone until
+        // every open member has delivered it, and only THIS class knows the
+        // logical id and owns the causal-stability read that answers. So the
+        // read is installed here rather than the cell reaching for it —
+        // `civictech.cell.data` has no edge to `civictech.cell.replication`
+        // and this seam exists so it never acquires one.
+        //
+        // [stableFrontier] is inert ([KE3-22], `[24-BOUND-01]`): it emits
+        // nothing, mints no tag and enters no wave, so a checkpoint or GC pass
+        // outside any wave may call it. And a cell with no read installed —
+        // anything not replicated here — never reclaims, which is the
+        // fail-safe default the seam is shaped around ([StabilityReclaim]).
+        if (cell is StabilityReclaim) {
+            val logicalId = cell.ref.id
+            cell.onStability { stableFrontier(logicalId) }
         }
         // CP-B2 re-emission tracking (spec 40/42 §Delivered watermarks, E3.3):
         // retained — its per-outlet-epoch watermark is a distinct key space from
