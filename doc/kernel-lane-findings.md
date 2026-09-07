@@ -962,10 +962,9 @@ The last field is the load-bearing one. `compactBelow` discards only what the fr
 certifies delivered to **every open member**, so a non-empty `stillHeldBy` is a direct
 read that the certificate was false about a member that was live at the instant it was
 acted on — not a deduction from the fact that the holder once departed. **Read with the
-caveat below**: `stillHeldBy` filters on `member`, not on openness, so it also names
-suspended peers, which are legitimately outside `open`; it is 51-of-2007 common even on
-a green sweep, and it carries its weight here only in conjunction with the holder's
-`suspended=false` and the ordering.
+caveat below**: it is 51-of-2007 common even on a green sweep (55 of 2014 on the feature
+review's independent re-run), so it carries its weight here only in conjunction with the
+holder's `suspended=false` and the ordering.
 
 ### The reading
 
@@ -1013,12 +1012,21 @@ member**, not yet which half of `open` produced it.
 Reviewer measurement on the same branch (`09a4d6b68`, darwin/arm64 16-core, 2026-09-07,
 temporary counters reverted before commit): in ONE GREEN STABLE sweep the instrument
 stamped **2007** `(peer, element)` fences, **51** of them with a non-empty `stillHeldBy`.
+The feature review re-ran the same probe at `f3a838bbf` on a green sweep and measured
+**55 of 2014** — the same rate, on a rig that is not reproducible seed-for-seed.
 So a non-empty `stillHeldBy` is a *common* reading, not a rare one, and on its own it
 does not distinguish the schedule that diverges permanently from the ~200 seeds that
-converge. Two reasons, both worth carrying forward: the filter admits any peer with
-`member == true` and does not exclude a **suspended** peer, which is legitimately outside
-`open` and therefore not a false certificate at all; and a certificate that is false
-momentarily is usually repaired by a later delivery. What makes the occurrence above
+converge. The reason that survives measurement is that a certificate which is false
+momentarily is usually repaired by a later delivery.
+
+A second reason was recorded here and **does not hold as stated** (feature review): the
+filter is indeed `member`-only and does not test `suspended`, but suspended peers are not
+what produces the 55. The same probe counted **0** of the 55 naming a peer suspended at
+the instant of the stamp; and `CausalStability.stableFrontier` removes suspended slots
+from `open` only under `degrade = true`, which the sweep's reclaimer
+(`peer.replication.stableFrontier(peer.ref.id)`) does not pass — so a suspended member
+would remain inside `open` at this call site and naming one would need its own argument
+rather than being benign by construction. What makes the occurrence above
 evidence is the *conjunction* — `stillHeldBy=[peer0]` **together with** the holder's
 `suspended=false member=true` and a departure window disjoint from the element's whole
 life — not the `stillHeldBy` field by itself.

@@ -91,13 +91,19 @@ internal class GcObservations {
      *
      * **How much it discriminates, measured** (reviewer, `09a4d6b68`, darwin/arm64, 2026-09-07):
      * one GREEN STABLE sweep stamped 2007 `(peer, element)` fences, 51 with a non-empty
-     * `stillHeldBy`. So this field is COMMON, not rare, and on its own it does not separate the
-     * diverging schedule from the converging ones. Two reasons: the filter admits any peer with
-     * `member == true` and does NOT exclude a **suspended** peer, which is legitimately outside
-     * `CausalStability`'s `open` set and therefore not a false certificate at all; and a
-     * momentarily false certificate is usually repaired by a later delivery. Read it in
-     * CONJUNCTION with `holderState=`'s `suspended`/`member` and the two `membership=` logs —
-     * that conjunction is the evidence, not this field alone.
+     * `stillHeldBy`. Independently reproduced by the feature review at `f3a838bbf` (same host,
+     * same day, a temporary counter reverted before commit): **2014** fences, **55** with a
+     * non-empty `stillHeldBy`. So this field is COMMON, not rare, and on its own it does not
+     * separate the diverging schedule from the converging ones — a momentarily false certificate
+     * is usually repaired by a later delivery. Read it in CONJUNCTION with `holderState=`'s
+     * `suspended`/`member` and the two `membership=` logs — that conjunction is the evidence, not
+     * this field alone.
+     *
+     * The filter *is* `member`-only and does not test `suspended`, but that is NOT why the base
+     * rate is 55: the same probe counted **0** of those 55 naming a peer that was suspended at
+     * the instant of the stamp, and `CausalStability.stableFrontier` drops suspended slots from
+     * `open` only under `degrade = true`, which this reclaimer does not pass. A suspended holder
+     * would still have to be argued about; none occurred here.
      */
     val fencedAtStep: MutableMap<Pair<String, String>, String> = linkedMapOf()
 }

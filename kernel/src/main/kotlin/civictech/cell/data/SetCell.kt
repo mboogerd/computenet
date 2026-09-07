@@ -858,6 +858,15 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
                 // would re-admit the next replayed frame exactly as an unfenced
                 // one does. Additive — [restore] treats an absent key as an empty
                 // fence, so a pre-fence checkpoint still loads.
+                //
+                // ADDING A KEY HERE IS NOT LOCAL (feature review, computenet-pay7):
+                // `civictech.inspect.ValueEncoder.orSetMembership` recognises an
+                // OR-set snapshot by its key set, tolerating only the names it
+                // lists in `OR_SET_OPTIONAL_KEYS`. `"reclaimed"` arriving without
+                // that pairing is what turned five `:inspect` tests red on a diff
+                // that touched no `:inspect` file. A new key here must be added
+                // there in the same change — the pairing is deliberate, and this
+                // is its other half.
                 "reclaimed" to reclaimed.save(),
             )
         )
