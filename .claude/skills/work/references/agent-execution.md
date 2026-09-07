@@ -210,7 +210,9 @@ change, this is why.
 ## Commands that fail QUIETLY in this shell and on this host
 
 Each of these fails in a way indistinguishable from a clean negative result,
-which is what makes them worth naming rather than leaving to be rediscovered.
+which is what makes them worth naming rather than leaving to be rediscovered —
+except the last, which does not fail at all: it succeeds at a question you did
+not ask.
 
 - **`grep --include` must be QUOTED under zsh** — this repo's session shell.
   Bare `grep -rn --include=*.kt Foo .` dies with `zsh: no matches found:

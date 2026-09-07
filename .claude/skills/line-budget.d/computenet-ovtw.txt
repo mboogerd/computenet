@@ -15,12 +15,16 @@
 # truth. That is why it is a new member rather than an instance on
 # computenet-i9u8.
 #
-# +15 in agent-execution.md, which is handed to every dispatched implementer
+# +17 in agent-execution.md, which is handed to every dispatched implementer
 # and reviewer — the role that hit it — beside the zsh-glob and git-regex
-# warnings it belongs with. AGENTS.md's family narration is left alone: it
-# describes five members accurately and the failing role does not read it.
+# warnings it belongs with, plus two lines so the section intro stops
+# describing every member as a wrong zero. AGENTS.md's family narration is
+# left alone: nothing there claims the family is complete, and its one general
+# remedy is already conditioned on a ZERO result, so no sentence becomes false.
+# (AGENTS.md IS read by dispatched agents — it reaches them through CLAUDE.md —
+#  so the reason to leave it is accuracy, not reach.)
 #
 # +8 in direct-child.md's "your read-back IS the review": the mechanics were
 # flawless and the verdict was still wrong, and seven right verdicts out of
 # eight is exactly what makes the eighth invisible to a sampling read-back.
-work +23
+work +25
