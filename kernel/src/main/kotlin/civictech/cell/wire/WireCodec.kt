@@ -49,7 +49,20 @@ import java.util.UUID
  */
 @Serializable
 data class WireFrame(
-    /** Format version — bump on layout change; reserves the G-8 CellRef retrofit. */
+    /**
+     * Format version — **not a wire gate, and deliberately so**
+     * (computenet-u5gb). It is default-valued and [WireCodec.build] never
+     * sets `encodeDefaults`, so it is omitted from every frame this codec
+     * emits: a reader supplies its own default for the absent key and
+     * [WireCodec.decodeFrame]'s `check(frame.version == VERSION)` compares
+     * [WireCodec.VERSION] against itself. Bumping [WireCodec.VERSION] is
+     * therefore invisible to a peer and changes no frame's bytes; it records
+     * a layout generation for humans (v2 reserves the G-8 CellRef retrofit)
+     * and nothing more. Decided in
+     * `doc/spec/40-distribution/42-replication.md` §"Wire compatibility of
+     * additive fields (KE3-39)" → "Decision: the frame version stays
+     * unemitted, and the check stays a foreign-frame guard".
+     */
     val version: Int = WireCodec.VERSION,
     val contractId: Long,
     val methodId: Long,
@@ -150,6 +163,15 @@ data class WireEdge(
 data class DecodedWireFrame(val invocation: HostedPortInvocation, val frame: WireFrame)
 
 object WireCodec {
+    /**
+     * The layout generation this build was written against — a HUMAN marker,
+     * not a wire gate. It never reaches the wire (see [WireFrame.version]),
+     * so bumping it neither changes a frame's bytes nor causes any peer to
+     * refuse anything. Decided, with the alternative weighed and declined, in
+     * `doc/spec/40-distribution/42-replication.md` §"Wire compatibility of
+     * additive fields (KE3-39)" → "Decision: the frame version stays
+     * unemitted, and the check stays a foreign-frame guard" (computenet-u5gb).
+     */
     const val VERSION = 2 // v2 (M7.1): CellRef carries instanceId (G-8)
 
     private val polyAny = PolymorphicSerializer(Any::class)
@@ -358,8 +380,17 @@ object WireCodec {
      * `check(frame.version == VERSION)` therefore compares `VERSION` against
      * itself and passes whatever the writer's `VERSION` was. Measured and
      * pinned in `WireCodecTest`'s "VERSION is omitted from every encoded
-     * frame" test; that the check is thereby unreachable is filed separately
-     * as computenet-u5gb.
+     * frame" test.
+     *
+     * **That omission is itself now a decision** (computenet-u5gb): `version`
+     * stays unemitted, `decodeFrame`'s check stays a guard on explicitly
+     * versioned foreign frames rather than becoming a mixed-version gate, and
+     * `encodeDefaults` therefore stays unset here for a second, independent
+     * reason beyond the additive-field policy above. Recorded in the same
+     * spec file, §"Wire compatibility of additive fields (KE3-39)" →
+     * "Decision: the frame version stays unemitted, and the check stays a
+     * foreign-frame guard". Adding `encodeDefaults = true` to this [Json]
+     * would silently reverse it; the test named above reddens if anyone does.
      */
     private fun build(live: List<WireSerializers>): Json = Json {
         // `plus` fails fast if a contribution collides with a kernel type (or
@@ -541,7 +572,11 @@ object WireCodec {
         return json.encodeToString(WireFrame.serializer(), frame).toByteArray()
     }
 
-    /** @throws IllegalStateException on unknown version or ids (caller dead-letters). */
+    /**
+     * @throws IllegalStateException on unknown ids, or on a frame that
+     * EXPLICITLY carries a differing `version` — which no encoder in this repo
+     * produces (see [decodeFrame]). Caller dead-letters.
+     */
     fun decode(bytes: ByteArray): HostedPortInvocation = decodeFrame(bytes).invocation
 
     /**
@@ -553,10 +588,34 @@ object WireCodec {
      * resulting [HostedPortInvocation]) is unchanged for every existing
      * caller — this is purely an additional entry point, not a replacement.
      *
-     * @throws IllegalStateException on unknown version or ids (caller dead-letters).
+     * ## The version check below is NOT a mixed-version gate
+     *
+     * [WireFrame.version] is omitted from every frame this codec encodes, so
+     * for any frame produced by a `WireCodec` — at whatever [VERSION] that
+     * writer was built — the key is absent, this reader supplies its own
+     * default, and the `check` compares [VERSION] against itself and passes.
+     * Two peers at different [VERSION]s interoperate at the frame level, by
+     * decision, not by accident (computenet-u5gb; the alternative — emitting
+     * `version` so this hard equality gates real frames — was weighed and
+     * declined, because it would make an older peer refuse EVERY frame from a
+     * differently-versioned peer rather than only the frames carrying whatever
+     * new thing motivated the bump). What survives is a guard on FOREIGN
+     * frames: bytes that explicitly carry a differing `version` — a
+     * hand-built frame, a future encoder that does emit the field — are
+     * refused loudly rather than misread. Full reasoning:
+     * `doc/spec/40-distribution/42-replication.md` §"Wire compatibility of
+     * additive fields (KE3-39)" → "Decision: the frame version stays
+     * unemitted, and the check stays a foreign-frame guard". Pinned by
+     * `WireCodecTest`'s "the version check's domain is exactly an explicitly
+     * differing version" test.
+     *
+     * @throws IllegalStateException on unknown ids, or on a frame that
+     * explicitly carries a differing `version` (caller dead-letters).
      */
     fun decodeFrame(bytes: ByteArray): DecodedWireFrame {
         val frame = json.decodeFromString(WireFrame.serializer(), bytes.decodeToString())
+        // Unreachable from any frame this codec encodes (see the KDoc above):
+        // a foreign-frame guard, not a mixed-version gate.
         check(frame.version == VERSION) { "unsupported wire version ${frame.version}" }
         return DecodedWireFrame(invocation(frame), frame)
     }

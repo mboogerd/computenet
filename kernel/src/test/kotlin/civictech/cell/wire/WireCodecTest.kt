@@ -305,6 +305,53 @@ class WireCodecTest {
         }
         thrown.message.orEmpty() shouldContain "unsupported wire version"
     }
+
+    /**
+     * computenet-u5gb: the omission above is a DECISION, not an accident, and
+     * this pins what `decodeFrame`'s `check(frame.version == VERSION)` is
+     * therefore for. Its domain is exactly one case — a frame that
+     * EXPLICITLY carries a differing `version` — so it is a guard on foreign
+     * frames (hand-built, corrupted, or from a future encoder that does emit
+     * the field), not a mixed-version gate between peers.
+     *
+     * All three cases are fixed together because the claim is about the
+     * boundary, not about any one of them: absent key accepted (so two peers
+     * at different `VERSION`s interoperate), explicit MATCHING version
+     * accepted (so the guard does not reject a frame that merely names this
+     * build's version — which is what makes "unreachable-by-design, retained
+     * as a guard" coherent rather than dead code), explicit DIFFERING version
+     * refused. Decided in `doc/spec/40-distribution/42-replication.md`
+     * §"Wire compatibility of additive fields (KE3-39)" → "Decision: the
+     * frame version stays unemitted, and the check stays a foreign-frame
+     * guard".
+     */
+    @Test
+    fun `u5gb - the version check's domain is exactly an explicitly differing version`() {
+        val add = SetOps::class.java.getMethod("add", Any::class.java)
+        val bytes = WireCodec.encode(frame(add, "milk"))
+        val encoded = Json.parseToJsonElement(bytes.decodeToString()).jsonObject
+
+        fun withVersion(v: Int?): ByteArray {
+            val fields = if (v == null) encoded else JsonObject(mapOf("version" to JsonPrimitive(v)) + encoded)
+            return Json.encodeToString(JsonObject.serializer(), fields).toByteArray()
+        }
+
+        // 1. Absent — every frame this codec emits. Accepted, whatever the
+        //    writer's VERSION was, because the key carries none of it.
+        encoded.containsKey("version") shouldBe false
+        WireCodec.decodeFrame(withVersion(null)).frame.version shouldBe WireCodec.VERSION
+
+        // 2. Explicitly this build's version — accepted. The guard is not a
+        //    blanket refusal of any frame that names a version.
+        WireCodec.decodeFrame(withVersion(WireCodec.VERSION)).frame.version shouldBe WireCodec.VERSION
+
+        // 3. Explicitly differing — the one case that is refused, in either
+        //    direction (a "newer" and an "older" foreign frame alike).
+        for (foreign in listOf(WireCodec.VERSION + 1, WireCodec.VERSION - 1)) {
+            val thrown = shouldThrow<IllegalStateException> { WireCodec.decode(withVersion(foreign)) }
+            thrown.message.orEmpty() shouldContain "unsupported wire version $foreign"
+        }
+    }
 }
 
 /**

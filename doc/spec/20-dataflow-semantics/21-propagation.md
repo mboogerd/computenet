@@ -238,19 +238,32 @@ tag algebra, not of paging — the pull reply has always reported currency the
 same way — and closing it fully (making the frontier a set rather than a
 per-source max) is a state-family question filed as research.
 
-⚠ EARS-GAP ([21-PULL-03]): the requirement's antecedent is unreachable from the
-conformance boundary as it stands. Every tag-frontier-carrying family in the
-standard library is an observed-remove set. Since computenet-v2ka `SetCell`'s
-retraction mints a del-dot, so a *locally applied* retraction is caught; every
-other such family's retraction still copies the add-tags it already holds into
-its del-map and mints nothing, and even for `SetCell` a *reordered remote*
-`dels` entry whose dot is below a per-source max changes membership while
-raising no maximum. A scenario over `set-source` therefore still could not make
-"every state change mints or absorbs a tag" true of the walk's check; and a
-conformance script cannot interleave a mutation with a walk, so even for a
-qualifying family only the trivial (quiescent) instance would be exercised. Filed in `concord/corpus/DISPUTES.md`
+⚠ EARS-GAP ([21-PULL-03]): the requirement's antecedent is **satisfiable — and
+the requirement is violated where it is satisfied**. This is a
+frontier-representation gap, not an absence of qualifying families. Since
+computenet-v2ka `SetCell` reaches the antecedent on its own words: an `add`
+mints, an effective `remove` mints its del-dot (an ineffective remove changes no
+state, so it is not a state change the antecedent quantifies over), and the
+remote fold absorbs every novel add- **and** del-tag together. What fails at
+that reach is the consequent's "at that frontier". The frontier is a per-source
+**max** over the add- and del-tags, so it does not name a state: a tag set with
+a gap and the same set with the gap filled carry identical maxima. A *reordered
+remote* `dels` entry whose dot counter sits below a max this replica already
+holds from that source is therefore absorbed — the antecedent holds — changes
+membership, and moves no stamp, so equal endpoint stamps do not imply the union
+is the snapshot. Two consequences for the corpus, and they are independent. A
+scenario over `set-source` asserting this requirement would be asserting
+something **false** of that family rather than merely unproven; and a
+conformance script cannot interleave a mutation with a walk (a whole-walk step
+by construction), so the only instance it could build is the quiescent one,
+where the antecedent is trivially satisfied and the consequent is what
+24-BOUND-02 already carries. Filed in `concord/corpus/DISPUTES.md`
 rather than covered by a scenario that would read as covered while asserting
-only the trivial instance. The at-rest half of the property is separately
+only the trivial instance. The requirement is not softened to match the
+representation: the defect it exposes is that the frontier is a max and not a
+set, and the repair is the state-family research item named above, after which
+the requirement becomes true of this family and — with a paged form of the
+step — checkable. The at-rest half of the property is separately
 carried, and covered, by requirement 24-BOUND-02 (24).
 
 **RESTART re-baselines over this same path** (decided in 93 I-22; the core
