@@ -207,6 +207,31 @@ internal class GcTotals(val label: String) {
  * authority for a discard — so the wrong seam can only ever be reached by the harness reaching for
  * it. `Trigger.NONE`, the no-reclaimer control, is untouched: it calls neither.
  *
+ * MEASURED across the substitution, darwin/arm64 16-core, load1 11-16, seeds 1..200, budget
+ * 40_000, 2026-09-07, two runs, all counts read from ONE run each:
+ *
+ * ```
+ *   STABLE resurrecting          0 of 200      0 of 200
+ *   STABLE diverging             4             7        (+ fence-attributed 0 and 0)
+ *   CONTROL diverging            4             7
+ *   STABLE invocations/discarded 98192/6006    98192/5984
+ *   elapsed                      3.6 s + 2.3 s BS-12 + BS-13
+ * ```
+ *
+ * **No seed re-derivation was forced, and none is recorded**: [SEEDS], `BUDGET`, `PIN_RUNS`,
+ * `BS12_SEED` (126) and `MAX_STABLE_DIVERGING` are byte-identical to their pre-substitution values,
+ * and the `BS12_SEED` pin held 5 of 5 in both runs. That is what was expected — `snapshot()` mints
+ * no tag and emits nothing, so it perturbs no schedule; the only new work is the frontier read
+ * moving inside the cell's monitor and the serialisation itself. Read the divergence counts against
+ * the CONTROL column in the SAME run, never against zero: the two agree in both runs, which is the
+ * arm's actual claim (`[KE3-23]` — reclamation must not cost membership convergence).
+ *
+ * Non-vacuity is `invocations`/`discarded` above, and it was MUTATION-CHECKED: removing the
+ * `cell.snapshot()` call from the STABLE branch (leaving everything else, including the frontier
+ * read and the instrument, in place) takes `discarded` 5984 → 0 and reddens BS-12 on
+ * "a sweep whose reclaimer never discarded a tag proves nothing about reclamation". So the
+ * production trigger is what reclaims here, not a residue of the old direct call.
+ *
  * ## The adversary is the sibling sweep's, deliberately
  *
  * [StableFrontierChurnSweep.config] and [StableFrontierChurnSweep.churnPlan] are reused rather
