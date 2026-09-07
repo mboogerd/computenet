@@ -263,6 +263,37 @@ class RetransmitBindingTest {
         refused.message!! shouldContain "does not describe the dot"
     }
 
+    /** Two `set-source` replicas of one logical set, one per host — the `42-REPL-DELDOT-01` shape. */
+    private fun setMesh(): KernelDriver = KernelDriver(0L).also { d ->
+        d.spawn("h1", "r1", "set-source", mapOf("replica-of" to Value.StrVal("shared-set")))
+        d.spawn("h2", "r2", "set-source", mapOf("replica-of" to Value.StrVal("shared-set")))
+    }
+
+    /**
+     * Acceptance clause 2 of computenet-yyzn, pinned as a unit test because the corpus cannot carry
+     * it: `CorpusRunner.runScript()` calls `retransmit(...)` uncaught, so a driver refusal aborts the
+     * JUnit node rather than being assertable ([42-REPL-DELDOT-01]'s header comment).
+     *
+     * `r1` mints counter 1 as an add-tag (`add x`) and counter 2 as the del-dot (`remove x`, covering
+     * counter 1) — the same layout `42-REPL-DELDOT-01` uses. Naming counter 1 — a real, minted position,
+     * just not the del-dot — under `op: remove` must be refused exactly like the `TaggedMapDelta` `put`
+     * sibling above: `describes()`'s `remove` arm resolves `mintedDots[r1 to 1]` to the ADD's own delta
+     * (`dels` empty), so `delta.dels[key]?.contains(dot)` finds no entry at all for `op == "remove"` to
+     * match, and the covered add-tag is never treated as if it were the remove's own dot.
+     */
+    @Test
+    fun `a retransmit naming an add-tag's counter under op remove is refused, not treated as the del-dot`() {
+        val d = setMesh()
+        d.apply("r1", "add", s("x"))
+        d.apply("r1", "remove", s("x"))
+        d.quiesce(budget)
+
+        val refused = assertThrows<UnsupportedCatalogBinding> {
+            d.retransmit("r2", null, "r1", 1, "remove", s("x"))
+        }
+        refused.message!! shouldContain "does not describe the dot"
+    }
+
     @Test
     fun `a retransmit at a replica naming itself as source is refused`() {
         val d = mesh()
