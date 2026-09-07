@@ -1554,6 +1554,14 @@ every one of them is outside what u7fi asks about:
 - The remaining three are **this entry's own prose**, in
   `doc/kernel-lane-findings.md`, describing the grep.
 
+That count of five is **as of the text this correction replaces**. The pattern
+matches the words used to discuss it, so this correction raised its own prose
+share: re-run over the same eleven paths at this commit and the same command
+returns **eight** lines — the same two `DISPUTES.md` lines plus six in this
+file. Only the `DISPUTES.md` half of the count is a claim about the code; the
+rest is the entry citing itself, and it will keep growing if the passage is
+edited again.
+
 Restricted to the **nine `.kt` files** of the feature diff — the only ones
 where an emission could live — the grep genuinely returns nothing (exit 1).
 The bead's own instruction is the scope that matters, and it is met on it:
