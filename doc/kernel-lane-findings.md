@@ -1404,3 +1404,183 @@ verified clean.
    pairs -> total=425 (opRatio=16.0 retainedRatio=8.5)`. So the finding is a
    live measurement, not an unexamined comment: the day the fence acquires a
    pruning rule, this test says so.
+
+## KE3-CKPT-TRIGGER — the checkpoint-driven reclamation trigger: `SetCell.snapshot()` is now the sole production caller of `compactBelow`, and what it cost to prove
+
+**Feature**: `computenet-9sm.6`, close-out task `computenet-9sm.6.7`. This
+entry attributes every number to the sibling task that measured it; nothing
+here was re-measured by this task. Before this feature, `git grep -n
+'compactBelow' origin/main` showed ZERO production callers — every call site
+on `main` was a test (`SetCellCompactBelowTest`, `CompactionTriggerPinTest`,
+`GcSafetySweepTest`). After it, `git grep -n 'compactBelow' -- '*.kt'` at the
+feature's head shows exactly one: `SetCell.kt`'s `snapshot()`
+(`if (frontier != null) compactBelow(frontier)`, decision 9sm.6-D1). This is
+the `[KE3-30]` closing evidence.
+
+### What landed
+
+- **The trigger (`computenet-9sm.6.1`).** A new `StabilityReclaim` interface
+  (`kernel/src/main/kotlin/civictech/cell/data/delta/StabilityReclaim.kt`,
+  `fun onStability(read: () -> TagFrontier?)`), kept off `DeliveryTracking` so
+  `PnCounterCell` (no tags to reclaim) is not conscripted. `SetCell`
+  implements it; `Replication.trackDeliveries` installs
+  `{ stableFrontier(cell.ref.id) }` beside the existing `onDeliver`, guarded
+  `if (cell is StabilityReclaim)`. `snapshot()` reads the frontier *outside*
+  `stateLock` (a foreign call the lock's own contract forbids holding across),
+  then compacts and serialises under one hold of the monitor —
+  `compactBelow` re-enters it, reentrant `synchronized`. There is **no
+  `compact: Boolean` flag**: reclamation rides every caller of `snapshot()`
+  (`HostDurability.checkpoint`, `ManagedHost.snapshotOf`, migration,
+  promotion, the concord driver's raw `snapshot` verb) because the frontier is
+  `[KE3-30]`'s sole authority for a discard and the caller's identity is
+  exactly the "other condition" that clause forbids adding.
+- **Checkpoint-crossing (`[KE3-34]`, `computenet-9sm.6.2`).** Covered end to
+  end by `CheckpointReclaimCrashTest`: reclaim → checkpoint → 10-op journaled
+  tail → crash → restore → tail replay leaves `membership()` equal to
+  pre-crash, and a replayed delta carrying a reclaimed tag is folded as
+  already-observed and answered with the same repair `dels` entry, byte-equal
+  to the pre-crash answer. A second test pins pay7's fail-safe direction: a
+  checkpoint blob with the `"reclaimed"` key stripped restores an EMPTY fence
+  (a recoverable resurrection window), never an invented one.
+- **`[KE3-33]` BS-14 — concord scenario NOT delivered (`computenet-9sm.6.3`).**
+  `42-GC-RECLAIM-01` was authored and run in full against the kernel driver's
+  dist profile; it failed 20/20 on `emission-count(r2, since 7): expected
+  exactly 1 emission(s) but observed 0`. Root cause is structural, not
+  scenario error: `KernelDriverDist` holds one mesh-wide `Replication`, whose
+  `trackDeliveries` memoises the delivered-watermark companion keyed on the
+  *logical* cell id, so a second replica reuses the first's companion and
+  contributes no row of its own; `CausalStability.stableFrontier` then drops
+  every source with any null-slot member, so the dist frontier is
+  permanently `TagFrontier(emptyMap())` and `compactBelow` never discards
+  anything on that profile. The scenario was not weakened to pass — dropping
+  only its `emission-count` check was independently confirmed to turn it
+  green while reclaiming nothing, which is exactly the false-coverage
+  AGENTS.md forbids. Filed as DISPUTE `KE3-GC-RECLAIM-FRONTIER` in
+  `concord/corpus/DISPUTES.md`, carrying the scenario script verbatim so it
+  can be committed unchanged once the wiring gap closes. Follow-up:
+  `computenet-cthi` (give `KernelDriverDist` a per-host `Replication`).
+- **`[KE3-37]` BS-16 — a finding and a DISPUTE, not a bound
+  (`computenet-9sm.6.5`).** See `## KE3-BS16-RETAINED` above (this file) for
+  the full measurement; not duplicated here. In one sentence: reclamation as
+  landed is an EXCHANGE — it trades a tombstone entry for a `ReclaimedDots`
+  fence run plus an unpruned element key — so retained state as a whole grows
+  with op count at a fixed checkpoint window (a 16x op sweep produced a
+  16.000x rise in fence size), and no `O(in-flight window)` bound over the
+  whole is reachable without G-42. **G-42 stays open** in
+  `doc/spec/90-roadmap/91-gap-analysis.md` for exactly this reason; this
+  feature's diff does not touch that file (confirmed: `git diff
+  origin/main...HEAD -- doc/spec/90-roadmap/91-gap-analysis.md` is empty).
+- **BS-12/BS-13 substitution (`computenet-9sm.6.4`).** `GcSafetySweepTest`'s
+  STABLE arm now reclaims by calling `cell.snapshot()` (the production
+  trigger) rather than `cell.compactBelow(frontier)` directly; LOCAL keeps
+  the direct call deliberately (`[KE3-30]` makes the stable frontier the sole
+  discard authority, so there must be no production caller at the local
+  seam). One run of the module gate: STABLE 0/200 resurrecting, 7/200
+  membership-diverging (fence-attributed 0), against a `Trigger.NONE` control
+  of 7/200 in the same run — `(stableDiverging + stableFenceAttributed) = 7
+  <= MAX_STABLE_DIVERGING = 12`, not widened. `BS12_SEED` (126) held 5/5. No
+  seed was re-derived by this substitution.
+
+  **Caveat, measured by this task's review (2026-09-07, darwin/arm64, at the
+  merged feature head + this entry):** that `fence-attributed 0` is **one
+  run**, and the arm is **not deterministic**. Five runs of
+  `:kernel:test ... GcSafetySweepTest --rerun --no-build-cache` on this machine
+  failed **2 of 5**, each time on `seeds=[12]`, with the assertion the test
+  itself says must never be absorbed — *"the re-admission fence CAUSED a
+  membership divergence … Do not absorb it into MAX_STABLE_DIVERGING"*
+  (`GcSafetySweepTest.kt:973`). The pinned-seed arm
+  (`the recorded seed reproduces its verdict_BS12`, `BS12_SEED` 126) and the
+  `Trigger.NONE` control passed in every run. So the sweep's clean single-run
+  numbers above should be read as *a* sample, not as the arm's steady state,
+  and whether seed 12 is a genuine intermittent silent-fence escape or a rig
+  race is **open** — filed as `computenet-r13k`.
+- **`[KE3-38]` BS-18 (`computenet-9sm.6.6`).** `CompactionExclusiveAccountingTest`
+  shows zero consumes/releases/drops attributable to checkpoint-driven
+  compaction AND to `applyRemote`'s repair emission (a new outbound `SetDelta`
+  on a path that previously emitted nothing for a pure-duplicate frame). Key
+  finding: the repair `dels` entry's key for an `Owned` element is the
+  sender's own handle **by reference** (`=== elements[0]`), so no second live
+  handle and no new obligation is minted; a journal checkpoint of an
+  `Owned`-element replica cannot itself complete (`Owned` is not
+  `java.io.Serializable`), so the span is driven through `snapshot()` directly
+  — that is the whole of what `HostDurability.checkpoint` contributes over it
+  for this element type, and nothing about ownership accounting depends on
+  the journal write itself.
+- **One CI-only integration failure, found and fixed
+  (`computenet-9sm.6.8`).** `StabilityRowCoverageOnReincarnationTest`
+  (`computenet-mahx`'s measurement arm) broke because its diagnostic tag read
+  went through `snapshot()` — which, since `computenet-9sm.6.1`, IS the
+  reclamation trigger — so the act of reading tag state for the assertion
+  fired the reclaimer a line early and left nothing for the test's own
+  explicit `compactBelow` call to discard (`Key z is missing in the map`).
+  Fixed by paging `readBounded`'s `SetStateEntry.delTags` instead of
+  `snapshot()`, mirroring the substitution `computenet-9sm.6.4` had already
+  made for `CompactionTriggerPinTest`; every assertion, seed and schedule
+  constant is byte-identical. A reviewer additionally proved the
+  criterion-carrying assertion (`coverageOf(...) shouldBe COVERS`) actually
+  discriminates: no in-claim test mutation could reach it without tripping an
+  earlier precondition, and a single-file production mutation
+  (`DeliveredFrontier.deliver` alone, discriminating reincarnation-scale reuse
+  and poisoning the prefix) still passed both arms, because
+  `Watermark.advance`'s monotone guard (`if (thru <= row[source]) return`)
+  refuses to publish a lowered prefix. Only mutating **both**
+  `DeliveredFrontier.deliver` (to publish the poisoned, lowered prefix) **and**
+  `Watermark.advance`'s guard (to let a lowering through) turned the
+  measurement arm red at the `COVERS` assertion while the control arm stayed
+  green — establishing that the false certificate this arm exists to measure
+  requires delivered-lane absorption of reused counters AND row monotonicity
+  *together*; neither alone reproduces it.
+
+### The u7fi trigger check, re-run over the whole feature diff
+
+`computenet-9sm.6.1` posted a partial result on `computenet-u7fi` covering
+only its own five files. This task re-ran the same grep over the feature's
+complete diff (all 11 files touched across `computenet-9sm.6.1`–`.6.8`):
+`git grep -n 'reBaseline\|ReBaselineNotice\|dotSource' -- <those 11 files>`.
+
+**Corrected by the task review (2026-09-07); read the qualified result, not a
+bare zero.** That command does **not** return zero over the 11 files. Run with
+the eleven paths as eleven separate pathspecs it returns **five** hits, and
+every one of them is outside what u7fi asks about:
+
+- `concord/corpus/DISPUTES.md:378` (`ReBaselineEmitting.reBaseline(...)`) and
+  `:1165` (`restoreBaselineDischarge`, a substring match on `…toreBaseline…`)
+  are **pre-existing on `origin/main`** — verified with
+  `git grep -n '…' origin/main -- concord/corpus/DISPUTES.md`, which returns
+  the same two lines. They belong to the C-12 restart/re-baseline dispute, not
+  to this feature, and
+  `git diff origin/main...HEAD -- concord/corpus/DISPUTES.md | grep '^+'`
+  matches the pattern on **no added line**.
+- The remaining three are **this entry's own prose**, in
+  `doc/kernel-lane-findings.md`, describing the grep.
+
+That count of five is **as of the text this correction replaces**. The pattern
+matches the words used to discuss it, so this correction raised its own prose
+share: re-run over the same eleven paths at this commit and the same command
+returns **eight** lines — the same two `DISPUTES.md` lines plus six in this
+file. Only the `DISPUTES.md` half of the count is a claim about the code; the
+rest is the entry citing itself, and it will keep growing if the passage is
+edited again.
+
+Restricted to the **nine `.kt` files** of the feature diff — the only ones
+where an emission could live — the grep genuinely returns nothing (exit 1).
+The bead's own instruction is the scope that matters, and it is met on it:
+*no line this feature ADDED* introduces a `TaggedMapDelta` re-baseline
+emission or a `dotSource` supersession.
+
+The bare "zero hits" first recorded here (and in the corresponding comment on
+`computenet-u7fi`) came from an invocation whose eleven paths reached `git
+grep` as a **single** pathspec — zsh does not field-split an unquoted
+expansion — so it matched nothing for the reason AGENTS.md names: *a zero
+result from a grep is evidence about the grep before it is evidence about the
+symbol*. The `OrMapCell.kt` control did not catch it, because a control run as
+one single-path argument exercises neither the splitting nor the multi-path
+form that failed. A control only discriminates if it shares the failing
+invocation's **shape**, not just its pattern.
+
+`SetCell` implements neither
+`ReBaselineEmitting` nor anything `dotSource`-shaped; its repair emission
+(`applyRemote`'s `SetDelta(newAdds, repaired)`) is a plain `SetDelta` naming
+existing tags — not a `TaggedMapDelta`, mints no new dot, and touches no
+`dotSource`. Full result posted to `computenet-u7fi`, superseding the earlier
+partial scope.
