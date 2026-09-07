@@ -1,0 +1,21 @@
+# computenet-wd7n: bead.sh accepts -C and forwards it to bd, not to jq.
+#
+# MECHANICAL, acceptance option (a). Every reviewer dispatch carries "run bd
+# with -C <main-checkout> — only that checkout has the beads database", and
+# SKILL.md's table offers bead.sh as the reader for a large bead. Following
+# both literally died as `jq: error: C/0 is not defined` — an error naming
+# neither bd nor the checkout, so the lesson it taught was "bead.sh is broken".
+# Two reviewers hit it within an hour (epic computenet-umx, 2026-09-05); one
+# fell back to reading the full 57KB bead the script exists to avoid.
+#
+# It also closes the silent half a computenet-kzok reviewer measured the same
+# day: with no -C, bd finds its database by walking up from cwd, so from any
+# other directory bead.sh printed NOTHING and exited 1 — which its own header
+# documents as meaning the id does not exist.
+#
+# -C is accepted before or after the id, so the two instructions compose in
+# whichever order an agent types them.
+#
+# No prose delta: SKILL.md's table row is amended in place (net 0 lines) and
+# the ratchet prices only SKILL.md and references/*.md, not scripts.
+work +0

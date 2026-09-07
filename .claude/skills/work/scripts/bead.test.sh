@@ -27,6 +27,10 @@ bad() { fail=$((fail+1)); echo "  FAIL $*"; }
 mkdir -p "$ROOT/bin"
 cat > "$ROOT/bin/bd" <<'FAKE'
 #!/usr/bin/env bash
+# Records whether -C arrived, and where, so the passthrough cases can assert on
+# it. Without -C the real bd finds its database by walking up from cwd, which is
+# the whole reason the flag exists (computenet-wd7n, computenet-kzok).
+if [ "$1" = -C ]; then printf '%s\n' "$2" > "$SEEN_C"; shift 2; else : > "$SEEN_C"; fi
 [ "$1" = show ] || exit 1
 [ "$2" = known ] || { echo "no issue found" >&2; exit 1; }
 body=$(head -c "${BODY_CHARS:-100}" /dev/zero | tr '\0' 'x')
@@ -35,6 +39,7 @@ FAKE
 chmod +x "$ROOT/bin/bd"
 export PATH="$ROOT/bin:$PATH"
 export SCRATCH="$ROOT"
+export SEEN_C="$ROOT/seen-c"
 
 echo "case 1: a small bead prints inline, no file written"
 out=$(BODY_CHARS=100 bash "$SCRIPT" known 2>&1); rc=$?
@@ -81,6 +86,45 @@ grep -q 'exceeds one tool result' <<<"$out" && bad "spilled under a raised cap" 
 echo "case 5: an unknown id still exits nonzero"
 out=$(BODY_CHARS=100 bash "$SCRIPT" nosuch -r '.status' 2>&1); rc=$?
 [ $rc -ne 0 ] && ok "exit $rc" || bad "exit 0 on a missing bead -- $out"
+
+echo "case 6: -C BEFORE the id reaches bd, not the jq filter"
+out=$(BODY_CHARS=100 bash "$SCRIPT" -C /some/checkout known -r '.status' 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "exit 0" || bad "exit $rc -- $out"
+[ "$out" = open ] && ok "the value" || bad "got: $out"
+[ "$(cat "$SEEN_C")" = /some/checkout ] && ok "bd saw -C /some/checkout" \
+  || bad "bd saw '$(cat "$SEEN_C")'"
+
+echo "case 6b: -C AFTER the id works too — that is the order the dispatch line"
+echo "         and the bead.sh recommendation compose into (computenet-wd7n)"
+out=$(BODY_CHARS=100 bash "$SCRIPT" known -C /some/checkout -r '.status' 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "exit 0" || bad "exit $rc -- $out"
+[ "$out" = open ] && ok "the value, not 'jq: error: C/0 is not defined'" || bad "got: $out"
+[ "$(cat "$SEEN_C")" = /some/checkout ] && ok "bd saw it" || bad "bd saw '$(cat "$SEEN_C")'"
+
+echo "case 6c: NO -C passes no -C at all — an empty array under set -u on this"
+echo "         host's bash 3.2 aborts unless guarded with \${a[@]+...}"
+out=$(BODY_CHARS=100 bash "$SCRIPT" known -r '.status' 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "exit 0" || bad "exit $rc -- $out"
+[ "$out" = open ] && ok "unchanged for every existing caller" || bad "got: $out"
+[ -z "$(cat "$SEEN_C")" ] && ok "bd got no -C" || bad "bd got -C '$(cat "$SEEN_C")'"
+
+echo "case 6d: a bare -C with no directory is refused, not silently ignored"
+out=$(BODY_CHARS=100 bash "$SCRIPT" -C 2>&1); rc=$?
+[ $rc -ne 0 ] && ok "exit $rc" || bad "exit 0 on a bare -C -- $out"
+
+echo "case 6e: a trailing -C past the filter is REFUSED, not silently dropped —"
+echo "         dropped, it fails as an empty rc=1, the ambiguity -C exists to remove"
+out=$(BODY_CHARS=100 bash "$SCRIPT" known -r '.status' -C /some/checkout 2>&1); rc=$?
+[ $rc -eq 2 ] && ok "exit 2" || bad "exit $rc -- $out"
+grep -q 'unexpected argument' <<<"$out" && ok "says which argument" || bad "silent -- $out"
+
+echo "case 6f: the spill branch still works with -C (its dir is a separate name)"
+out=$(BODY_CHARS=40000 bash "$SCRIPT" -C /some/checkout known 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "exit 0" || bad "exit $rc -- $out"
+grep -q 'exceeds one tool result' <<<"$out" && ok "spilled" || bad "no spill -- ${out:0:80}"
+spilled=$(grep -o "$ROOT/[^ ]*" <<<"$out")
+[ -s "$spilled" ] && ok "wrote $spilled" || bad "no file"
+rm -f "$ROOT"/bead-known.*
 
 echo
 echo "$pass passed, $fail failed"
