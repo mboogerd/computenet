@@ -1,6 +1,8 @@
 package civictech.cell.replication
 
 import civictech.cell.CellRef
+import civictech.cell.Cursor
+import civictech.cell.StateRead
 import civictech.cell.data.SetCell
 import civictech.cell.data.WatermarkCell
 import civictech.cell.data.delta.SetDelta
@@ -66,10 +68,25 @@ internal class GcObservations {
     /** Removals actually issued by the removes hook (`MeshPeer.remove` returned true). */
     var removesIssued: Long = 0
 
-    /** `compactBelow` calls made. */
+    /**
+     * Reclaimer passes made — one per (compaction point, live replica).
+     *
+     * On [GcSafetySweep.Trigger.STABLE] a pass is one `SetCell.snapshot()`, the reclaimer's only
+     * production caller (computenet-9sm.6.1); on [GcSafetySweep.Trigger.LOCAL] it is one direct
+     * `compactBelow` at the wrong seam. Either way it counts *attempted* reclamations, not
+     * successful ones — [discarded] is the half that says work happened.
+     */
     var invocations: Long = 0
 
-    /** Tags discarded across all invocations — the reclaimer's own work. */
+    /**
+     * Tags discarded across all invocations — the reclaimer's own work.
+     *
+     * LOCAL takes it from `compactBelow`'s return value. STABLE cannot: `snapshot()` returns the
+     * serialised state, not a count, so the arm differences the cell's total tag count across the
+     * call (see `GcSafetySweep.tagsIn`). The two quantities are the same quantity — `compactBelow`
+     * returns exactly the number of tags it removed from `adds`/`dels`, and nothing else inside
+     * `snapshot()` touches those maps.
+     */
     var discarded: Long = 0
 
     /** `(peer)` evaluations of the `resurrected(...)` observable at quiescence. */
@@ -156,10 +173,39 @@ internal class GcTotals(val label: String) {
 }
 
 /**
- * BS-12 (`[KE3-23]`) and BS-13 (`[KE3-20]`) as ONE seeded sweep run twice: a reclaimer driving
- * [SetCell.compactBelow] from `Replication.stableFrontier` (STABLE), and the same reclaimer driven
- * from the wrong seam `Replication.localDeliveredFrontier` (LOCAL), over the CHA1/CHA3 churn rig
- * with partition, heal, churn and duplicate/reorder faults folded in.
+ * BS-12 (`[KE3-23]`) and BS-13 (`[KE3-20]`) as ONE seeded sweep run twice: the PRODUCTION
+ * reclaim trigger — [SetCell.snapshot], which reclaims at `Replication.stableFrontier` through the
+ * `StabilityReclaim` read that `Replication.trackDeliveries` installs (STABLE) — and a reclaimer
+ * driven directly from the wrong seam `Replication.localDeliveredFrontier` (LOCAL), over the
+ * CHA1/CHA3 churn rig with partition, heal, churn and duplicate/reorder faults folded in.
+ *
+ * ## What the STABLE arm exercises, and why it is `snapshot()` rather than `host.checkpoint(...)`
+ *
+ * computenet-9sm.6.4. The bead's acceptance is that BS-12/BS-13 hold "with the CHECKPOINT-DRIVEN
+ * reclaimer substituted for the sweep's direct `compactBelow` step hook — i.e. the trigger this
+ * feature adds is measured by the same rig, not by a new one". Since computenet-9sm.6.1,
+ * `SetCell.snapshot()` is that trigger and its SOLE production caller: it reads the installed
+ * stability read and runs `compactBelow` at the answered frontier *before* serialising, both under
+ * one hold of the cell's monitor. So the STABLE arm here calls `cell.snapshot()` and reclaims
+ * nothing itself — the frontier, the discard rule and the fence write are all the production
+ * path's, and a regression in the arming point (`Replication.trackDeliveries`) reddens this sweep
+ * where the old direct call could not have seen it.
+ *
+ * It is NOT `HostDurability.checkpoint(journal)`, which is the caller `snapshot()` exists for,
+ * because **this mesh has no journals**: `ChurnMesh`'s peer hosts are built as
+ * `ManagedHost(scheduler = …, registry = …)` with no `journalFor`
+ * (`testkit/.../churn/PeerHandles.kt`), so there is nothing to check point against. Adding one
+ * would change the rig under the measurement and touch testkit files this task does not claim.
+ * What `checkpoint` contributes over `snapshot()` is the journal write, which is downstream of the
+ * reclamation and cannot influence it; the management-band, outside-any-wave position a checkpoint
+ * pass occupies is what the step hook already is. The checkpoint-crossing property itself
+ * (reclaim → checkpoint → crash → restore → replay) is `CheckpointReclaimTest`'s, not this sweep's.
+ *
+ * LOCAL keeps the direct `compactBelow(localDeliveredFrontier)` call, deliberately and permanently:
+ * BS-13's trigger is a HARNESS SEAM BY DESIGN. There is no production caller that reclaims at the
+ * locally-delivered frontier and there must not be — `[KE3-30]` makes the stable frontier the sole
+ * authority for a discard — so the wrong seam can only ever be reached by the harness reaching for
+ * it. `Trigger.NONE`, the no-reclaimer control, is untouched: it calls neither.
  *
  * ## The adversary is the sibling sweep's, deliberately
  *
@@ -351,6 +397,41 @@ object GcSafetySweep {
 
     // ---------------------------------------------------------------------------- the reclaimer
 
+    /**
+     * The cell's total tag count — every add-tag plus every del-tag it currently retains — read
+     * WITHOUT reclaiming (computenet-9sm.6.4).
+     *
+     * This is the "before" half of the STABLE arm's `discarded`. It cannot be `snapshot()`, which
+     * is the very thing being measured, so it goes through the bounded read (`BoundedStateful`,
+     * V1C-KERNEL): `since = null` and `scope = null` return every tag of every entry, which is
+     * exactly `snapshot()`'s `"adds"`/`"dels"` content. Entries whose two tag sets are both empty
+     * are skipped by `readBounded` and contribute nothing either way, and no element in this mesh
+     * is an exclusive payload, so nothing is elided.
+     */
+    private fun tagsIn(cell: SetCell<String>): Int {
+        var tags = 0
+        var cursor: Cursor? = null
+        do {
+            val page = cell.readBounded(StateRead(cursor = cursor, limit = 1024, byteBudget = 1 shl 24))
+            for (entry in page.entries) {
+                @Suppress("UNCHECKED_CAST")
+                val e = entry as? SetCell.SetStateEntry<String> ?: continue
+                tags += e.addTags.size + e.delTags.size
+            }
+            cursor = page.next
+        } while (cursor != null)
+        return tags
+    }
+
+    /** The same count over what [SetCell.snapshot] returned — the "after" half. */
+    @Suppress("UNCHECKED_CAST")
+    private fun tagsIn(serialised: java.io.Serializable): Int {
+        val map = serialised as Map<String, Any?>
+        val adds = map["adds"] as Map<Any?, Set<Any?>>
+        val dels = map["dels"] as Map<Any?, Set<Any?>>
+        return adds.values.sumOf { it.size } + dels.values.sumOf { it.size }
+    }
+
     @Suppress("UNCHECKED_CAST")
     private fun compact(world: DstWorld, step: Int, trigger: Trigger) {
         if (step <= 0 || step % K != 0) return
@@ -361,12 +442,34 @@ object GcSafetySweep {
             if (!peer.member) continue
             val cell = (peer.replica ?: continue) as? SetCell<String> ?: continue
             val frontier = when (trigger) {
+                // On STABLE this is a SECOND, independent read of the same source `snapshot()`
+                // reads through the installed `StabilityReclaim` hook. It authorises nothing here
+                // — it is reported, and it is what the `[KE3-30]` empty-frontier interlock below
+                // is checked against. Per-source stability is monotone and no step runs between
+                // the two reads, so they agree.
                 Trigger.STABLE -> peer.replication.stableFrontier(peer.ref.id)
                 Trigger.LOCAL -> peer.replication.localDeliveredFrontier(peer.ref.id)
                 Trigger.NONE -> return // unreachable: the control returned above
             }
             val before = cell.membership()
-            val discarded = cell.compactBelow(frontier)
+            val discarded = when (trigger) {
+                // THE PRODUCTION TRIGGER (computenet-9sm.6.4). `snapshot()` reads the stability
+                // hook and compacts at the frontier it answers, then serialises — see the class
+                // KDoc for why this and not `HostDurability.checkpoint`. The count is differenced
+                // rather than returned, because `snapshot()` returns state and not a number.
+                //
+                // The three reads (tag count, snapshot, tag count) are separate monitor holds, and
+                // that is sound HERE for the same reason the `before`/`after` membership pair
+                // around them is: this is a `StepHooks` hook on the simulation controller, so no
+                // wave is in flight and nothing else touches the cell between them.
+                Trigger.STABLE -> {
+                    val tagsBefore = tagsIn(cell)
+                    val serialised = cell.snapshot()
+                    tagsBefore - tagsIn(serialised)
+                }
+                // The wrong seam stays a harness seam — see the class KDoc.
+                else -> cell.compactBelow(frontier)
+            }
             val after = cell.membership()
 
             observations.invocations++
