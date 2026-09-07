@@ -274,6 +274,21 @@ which is what makes them worth naming rather than leaving to be rediscovered.
   and after any KDoc edit the opener and closer counts must match:
   `grep -o '/\*' f.kt | wc -l` vs `grep -o '\*/' f.kt | wc -l` (`-o`, not
   `-c`: `-c` counts lines and reads the motivating line as 1 = 1).
+- **`git grep` answers a question about CONTENTS; it cannot answer one about
+  EXISTENCE** — and this is the one member of the family that returns a wrong
+  NON-zero. A Kotlin file need not name itself anywhere in its own text, and
+  most do not, so a contents-search for `TopologyWalks` returns only OTHER
+  files' comments about it — which reads exactly like "only stale references to
+  a planned split". Measured: an agent auditing FILE:LINE citations concluded
+  `TopologyWalks.kt` "does not exist as a file anywhere in the repo" and wrote
+  that into an epic's description, while `git ls-tree -r --name-only <sha> |
+  grep TopologyWalks` finds it at the very sha it audited (computenet-ovtw).
+  **The family's own remedy does not reach this one**: every other member
+  fails to run or matches nothing it should, so "re-run a zero-hit search in a
+  form whose failure would look different" fires on a zero — and here the
+  search ran correctly and returned true hits that support the opposite of the
+  truth. Existence is `git ls-files`, `git ls-tree -r --name-only <sha>`, or
+  `ls`; `git grep` is for what a file SAYS.
 - **`strings` cannot be trusted on `.class` files on darwin.** Java's class
   magic `0xCAFEBABE` is *also* the Mach-O universal-binary magic, so Apple's
   `strings` reads the next words as `cputype`/`cpusubtype` and fails with

@@ -1,0 +1,26 @@
+# computenet-ovtw: the sixth search trap, and the first that returns a wrong
+# NON-zero — git grep answers CONTENTS, never EXISTENCE.
+#
+# An agent auditing FILE:LINE citations in epic computenet-9sm's description
+# concluded that TopologyWalks.kt "does not exist as a file anywhere in the
+# repo" and wrote that into the governing text two in-flight features read.
+# The file is at the sha it audited. A Kotlin file need not name itself in its
+# own text, so a contents-search returns only other files' comments about it,
+# which reads as "stale references to a planned split".
+#
+# The existing five-member family's remedy CANNOT reach this one: every other
+# member fails to run or matches nothing it should, so "re-run a zero-hit
+# search in a form whose failure would look different" fires on a zero. Here
+# the search ran correctly and its true hits supported the opposite of the
+# truth. That is why it is a new member rather than an instance on
+# computenet-i9u8.
+#
+# +15 in agent-execution.md, which is handed to every dispatched implementer
+# and reviewer — the role that hit it — beside the zsh-glob and git-regex
+# warnings it belongs with. AGENTS.md's family narration is left alone: it
+# describes five members accurately and the failing role does not read it.
+#
+# +8 in direct-child.md's "your read-back IS the review": the mechanics were
+# flawless and the verdict was still wrong, and seven right verdicts out of
+# eight is exactly what makes the eighth invisible to a sampling read-back.
+work +23

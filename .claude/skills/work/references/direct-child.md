@@ -92,6 +92,14 @@ review-feature.md §7 becomes one of these.
   preserve is still there verbatim. If you nonetheless made the edit yourself,
   that sufficiency is gone: dispatch a second agent to read it against the
   acceptance before closing.
+  **When the deliverable is an AUDIT, read the verdicts against source, not
+  the edit mechanics.** A citation audit's mechanics were flawless — right
+  fields, clean diff, no truncation — and one of its eight verdicts asserted
+  that a file present at the audited sha did not exist, in the most credible
+  possible voice ("corrected against source"). Seven right verdicts is what
+  makes the eighth invisible, so spot-checking a sample is not enough: an
+  audit that removes wrong pointers can add one, and its own confidence is
+  not evidence (computenet-ovtw).
 - **Record the verification on the parent**, naming what you checked, so the
   choice is auditable by the next session rather than being invisible.
 
