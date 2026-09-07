@@ -212,6 +212,73 @@ class CausalStability(
             else -> "unexplained"
         }
 
+        /**
+         * Where one open slot's row stands against ONE del-dot position — the
+         * **row-content** read (`computenet-mahx`, [KE3-23] candidate (2)),
+         * as opposed to [exclusionOf]'s set-membership read.
+         *
+         * `computenet-typw` settled which term of `open` drops a rejoined
+         * replica, and could not touch candidate (2) because an open-set read
+         * is about MEMBERSHIP: a slot that is present and open, but whose row
+         * carries an entry at or above a del-dot that replica never applied,
+         * is invisible to it. The two are different false certificates and this
+         * is the read for the second one. Concretely, `compactBelow` discards a
+         * `dels` entry when `frontier.perSource[tag.sourceId] >= tag.counter`
+         * for its every tag, and [stableFrontier]'s MIN is taken over exactly
+         * the rows reported here — so `COVERS` for a `(source, counter)` naming
+         * a del-dot is this slot asserting it delivered that remove.
+         *
+         * The five answers separate the acceptance clause's two shapes:
+         * [RowCoverage.NO_ROW] and [RowCoverage.ABSENT_SOURCE] are the row
+         * MISSING an entry (bottom — [stableFrontier] freezes the source out of
+         * the result entirely, the conservative direction), while
+         * [RowCoverage.COVERS] is the row carrying an entry at or above the
+         * dot. [RowCoverage.BELOW] is a present, honest, not-yet-covering
+         * entry, and [RowCoverage.NOT_OPEN] says the slot never reached the MIN
+         * at all — ask [exclusionOf] which term dropped it.
+         *
+         * **This read reports the CLAIM, not its truth.** Nothing in a
+         * `WatermarkCell` row records which counters a replica actually
+         * applied — the row is a per-source position — so `COVERS` cannot by
+         * itself mean the delivery happened. Whether it did is established
+         * against the replica's own state (`SetCell.liveTagsOf`/`membership`),
+         * which is what `StabilityRowCoverageOnReincarnationTest` does.
+         * Protocol-inert like the rest of [OpenSlots]: no path consults it.
+         */
+        fun coverageOf(slot: UUID, source: UUID, counter: Long): RowCoverage = when {
+            slot !in open -> RowCoverage.NOT_OPEN
+            else -> when (val thru = rows[slot]?.get(source)) {
+                null -> if (rows[slot] == null) RowCoverage.NO_ROW else RowCoverage.ABSENT_SOURCE
+                else -> if (thru >= counter) RowCoverage.COVERS else RowCoverage.BELOW
+            }
+        }
+
+        /**
+         * [coverageOf] for every slot in [open] — the whole certificate behind
+         * one del-dot position in one read, so a caller need not re-enumerate
+         * `open` itself.
+         */
+        fun coverageAt(source: UUID, counter: Long): Map<UUID, RowCoverage> =
+            open.associateWith { coverageOf(it, source, counter) }
+
+        /** What [coverageOf] can answer. */
+        enum class RowCoverage {
+            /** The slot is not in [open] at all; [exclusionOf] names the term. */
+            NOT_OPEN,
+
+            /** Open, but with no row whatsoever — reads as bottom, freezing the MIN. */
+            NO_ROW,
+
+            /** Open with a row that has no entry for this source — also bottom. */
+            ABSENT_SOURCE,
+
+            /** A present entry strictly below the dot: this slot has not certified it. */
+            BELOW,
+
+            /** A present entry at or above the dot: this slot certifies the dot delivered. */
+            COVERS,
+        }
+
         override fun toString(): String =
             "open=${open.short()} members=${memberSlots.short()} announced=${announced.short()} " +
                 "closed=${closed.short()} suspended=${suspended.short()} degrade=$degrade " +

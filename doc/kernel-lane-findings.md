@@ -1138,3 +1138,83 @@ close *epoch*, the shape `suspendEpoch` already has), or an incarnation-distinct
 or a rejoin that must re-announce before it counts, is a **design decision this bead
 does not take** — and all three touch `WatermarkCell`, outside this bead's claim. The
 four computenet-dwkp prohibitions remain in force and untouched.
+
+## KE3-23-ROWCONTENT — candidate (2) HOLDS: an open row certifies a del-dot it never applied, because the tag counter space is re-used across incarnations
+
+`computenet-mahx`, branch `feature/computenet-mahx`, on top of `8a8aa1609`.
+
+`## KE3-23-OPENSET` settled candidate (1) — the term of `CausalStability.stableFrontier`'s
+open set that drops a rejoined replica is `closed`, and it is monotone — and left candidate
+(2) explicitly open, because an open-set read is about set MEMBERSHIP and cannot see a slot
+that is present and open but whose ROW is wrong. That is a second, independent
+false-certificate shape.
+
+**It is real.** Settled deterministically by `GcSafetySweepTest.kt`'s companion class
+`StabilityRowCoverageOnReincarnationTest` — two tests, ~2s, no dependence on the ~1-in-6 to
+~1-in-42 BS-12 flake, and no GcSafetySweep assertion, seed set, budget or `tagSource`
+touched (computenet-dwkp's four prohibitions all still in force).
+
+### The mechanism
+
+The delivered lane is contiguity-guarded, which is why the answer is not obvious.
+`DeliveredFrontier.deliver(source, counter)` holds a counter back until every counter below
+it has arrived, and returns the raised prefix only then — so `row[source] = t` normally does
+mean "counters `1..t` from `source` were applied here". `SetCell` feeds it from
+`applyRemote`'s `newAdds + newDels` and from local mints, and `Replication.trackDeliveries`
+wires `onDeliver` straight into `WatermarkCell.advance`. A plain max would lie trivially;
+this one does not.
+
+What defeats it is that the counter space is **re-used**. `SetCell.tagSource` is derived
+from the `CellRef` (replay-stable, M10.1) while `tagCounter` is per *instance* and restarts
+at zero — the same reuse `## KE3-GC-FENCE-KEY` recorded against the re-admission fence, here
+reaching a different lattice. So:
+
+1. Incarnation 1 of a replica burns `(T,1) (T,2) (T,3)`; every peer's prefix for `T` reaches 3.
+2. The replica despawns and returns on the same `CellRef` — same `T`, `tagCounter` back at 0.
+3. Incarnation 2 mints `(T,1)` for a *different* element and `(T,2)` as that element's del-dot.
+4. A peer that misses the `(T,2)` frame absorbs nothing: `deliver` returns null for
+   `counter <= current`. Its row does not move — **and it already stands at 3**.
+5. `stableFrontier`'s MIN therefore hands `compactBelow` a frontier at 3, `3 >= 2` holds for
+   every tag of the entry, the del-dot is reclaimed and fenced, and the peer that never
+   applied the remove goes on holding the element live.
+
+That is the BS-12 `FENCED-DIVERGE` shape — a fence at the right seam holding the right pair,
+under a frontier that is wrong — reached in a dozen deterministic steps.
+
+### The control, and what it excludes
+
+The second test is the same two peers, the same one-way drop of the same remove, with **no**
+reincarnation: the dot is minted at a fresh counter above every prefix. `coverageOf` then
+answers `BELOW`, the frontier does not certify the dot, `fencedAmong` shows the reclaimer
+left it alone, and no divergence follows. **Lost frames alone do not produce a lying row** —
+the holdback does its job. It is the re-used counter space that defeats it.
+
+### The read
+
+`CausalStability.OpenSlots.coverageOf(slot, source, counter)` — the ROW-CONTENT read, beside
+`exclusionOf`'s set-membership read — returns `NOT_OPEN` / `NO_ROW` / `ABSENT_SOURCE` /
+`BELOW` / `COVERS`, which separates the acceptance clause's two shapes: a row MISSING an entry
+for a source (`NO_ROW`, `ABSENT_SOURCE` — bottom, and `stableFrontier` drops the source from
+the result entirely) from a row carrying an entry at or above the dot (`COVERS`).
+`coverageAt(source, counter)` maps it over the whole open set. Both are additive and
+protocol-inert, mirroring `openSlots` itself and `SetCell.liveTagsOf` / `fencedAmong` /
+`fenceProvenance` / `fencesAny`: no path in `CausalStability`, `Replication`, `SetCell` or any
+cell consults them.
+
+**The read reports the CLAIM, not its truth**, and this limit is stated at the declaration as
+well as here. Nothing in a `WatermarkCell` row records which counters a replica actually
+applied — the row is a position — so `COVERS` alone cannot mean the delivery happened.
+Whether it did is established in the test against the replica's own state
+(`membership()` / `fencedAmong`), never against another watermark.
+
+### Scope, stated as a limit
+
+This measures that the class EXISTS and is reachable. It does **not** claim it produced
+computenet-dwkp's caught BS-12 occurrence: there the fencing replica (`peer2`) had
+`lastDeparture=null`, so its counters were never re-used, and candidate (1) already accounts
+for that reading. Candidate (2) is a second live defect at the same seam, not a competing
+account of the first. Nor is anything fixed here: whether the repair is an incarnation-distinct
+tag lane (which computenet-dwkp's acceptance forbids *pursuing as this family's disposition*),
+a counter that survives a despawn, or a frontier that will not certify across a
+reincarnation, is a design decision no bead has taken — and all three touch `SetCell` or
+`WatermarkCell`, outside this bead's claim.
