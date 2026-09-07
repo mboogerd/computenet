@@ -303,6 +303,17 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // the three fields below are written where tags are minted and where checkpoints are
     // restored, and read only by the `internal` diagnostic `fenceProvenance` at the bottom
     // of the class. See that function's KDoc for why the measurement needs them.
+    //
+    // WHAT THEY COST, stated where they are declared rather than only in the ticket: they are
+    // protocol-inert but NOT free. `mintedHere` gains one entry per tag this instance ever
+    // mints (one per local add, one per local remove) and is never pruned — not by
+    // `compactBelow`, which exists precisely to bound the tag state, and not by `restore`. Its
+    // retention is therefore O(local mints over the life of the instance) rather than
+    // O(live elements), and `incarnations` below retains one `AtomicInteger` per distinct
+    // `tagSource` the PROCESS ever constructs. Both are negligible for the sweeps and demos
+    // this runtime runs today and neither is on a protocol path, but a long-lived,
+    // write-heavy replica would grow a map that compaction cannot reclaim. Bounding or
+    // build-gating them is computenet-fzd3, filed by computenet-dwkp's review 2026-09-07.
     /** Which construction of a cell carrying THIS `tagSource` this instance is (1-based). */
     internal val diagnosticIncarnation: Int =
         incarnations.computeIfAbsent(tagSource) { java.util.concurrent.atomic.AtomicInteger() }.incrementAndGet()

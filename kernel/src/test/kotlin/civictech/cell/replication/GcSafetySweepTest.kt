@@ -88,6 +88,16 @@ internal class GcObservations {
      * that the certificate was false for a named live member at the moment it was acted on —
      * shape (ii) of the acceptance criteria measured rather than deduced from the fact that the
      * holder departed once.
+     *
+     * **How much it discriminates, measured** (reviewer, `09a4d6b68`, darwin/arm64, 2026-09-07):
+     * one GREEN STABLE sweep stamped 2007 `(peer, element)` fences, 51 with a non-empty
+     * `stillHeldBy`. So this field is COMMON, not rare, and on its own it does not separate the
+     * diverging schedule from the converging ones. Two reasons: the filter admits any peer with
+     * `member == true` and does NOT exclude a **suspended** peer, which is legitimately outside
+     * `CausalStability`'s `open` set and therefore not a false certificate at all; and a
+     * momentarily false certificate is usually repaired by a later delivery. Read it in
+     * CONJUNCTION with `holderState=`'s `suspended`/`member` and the two `membership=` logs —
+     * that conjunction is the evidence, not this field alone.
      */
     val fencedAtStep: MutableMap<Pair<String, String>, String> = linkedMapOf()
 }

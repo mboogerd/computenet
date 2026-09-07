@@ -961,7 +961,11 @@ Three additive, reporting-only reads, none consulted by any protocol path:
 The last field is the load-bearing one. `compactBelow` discards only what the frontier
 certifies delivered to **every open member**, so a non-empty `stillHeldBy` is a direct
 read that the certificate was false about a member that was live at the instant it was
-acted on — not a deduction from the fact that the holder once departed.
+acted on — not a deduction from the fact that the holder once departed. **Read with the
+caveat below**: `stillHeldBy` filters on `member`, not on openness, so it also names
+suspended peers, which are legitimately outside `open`; it is 51-of-2007 common even on
+a green sweep, and it carries its weight here only in conjunction with the holder's
+`suspended=false` and the ordering.
 
 ### The reading
 
@@ -998,8 +1002,26 @@ is excluded too, and now by a read rather than by the spawn-path inference: peer
 it to be undone.
 
 **What remains is shape (ii)**, and `stillHeldBy=[peer0]` is the direct measurement the
-acceptance clause asked for: the open-member set `stableFrontier` computed over at step
-5000 did not include peer0, while peer0 was live and retaining state.
+acceptance clause asked for: at the instant peer2 acted on the certificate, peer0 was a
+live, unsuspended, state-retaining member that still had the element. Either the open
+set `stableFrontier` computed over at step 5000 excluded peer0, or it included peer0
+with a watermark peer0 had not earned — this reading does not separate the two (see the
+next section), so the measured fact is that **the certificate was false about a live
+member**, not yet which half of `open` produced it.
+
+**How much `stillHeldBy` alone discriminates — measured, and less than it looks.**
+Reviewer measurement on the same branch (`09a4d6b68`, darwin/arm64 16-core, 2026-09-07,
+temporary counters reverted before commit): in ONE GREEN STABLE sweep the instrument
+stamped **2007** `(peer, element)` fences, **51** of them with a non-empty `stillHeldBy`.
+So a non-empty `stillHeldBy` is a *common* reading, not a rare one, and on its own it
+does not distinguish the schedule that diverges permanently from the ~200 seeds that
+converge. Two reasons, both worth carrying forward: the filter admits any peer with
+`member == true` and does not exclude a **suspended** peer, which is legitimately outside
+`open` and therefore not a false certificate at all; and a certificate that is false
+momentarily is usually repaired by a later delivery. What makes the occurrence above
+evidence is the *conjunction* — `stillHeldBy=[peer0]` **together with** the holder's
+`suspended=false member=true` and a departure window disjoint from the element's whole
+life — not the `stillHeldBy` field by itself.
 
 ### The mechanism this points at — NOT yet a measurement
 
