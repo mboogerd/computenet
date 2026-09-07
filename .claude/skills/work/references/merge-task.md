@@ -137,7 +137,9 @@ it before arming a PR-checks loop.
 **A bead untouched since the implementer's own comment is the signal** that
 the review has produced nothing durable. Then, in order — do not kill first:
 
-1. **`SendMessage` the agent**: stop verifying, state a verdict now plus a
+1. **`SendMessage` the agent** — or, where the harness has no such tool
+   (measured on an unattended run, computenet-4jay), SKILL.md 5b's
+   hand-carried resume: stop verifying, state a verdict now plus a
    `NOT VERIFIED` section for what you did not reach. Give it a short window.
    This keeps its context, which `TaskStop` discards.
 2. **No answer → `TaskStop`**, which 5e already defines as a **draft** verdict.

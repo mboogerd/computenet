@@ -288,6 +288,13 @@ from the drifting checkout, which is why only the orchestrator needs this.
 
 ## 2. Arm the budget
 
+**While you are arming things, settle whether `SendMessage` exists here** —
+one `ToolSearch "select:SendMessage"`. It is 5b's and 5c's prescribed remedy
+for an agent that stops mid-task, and on an unattended run it is absent
+(computenet-4jay); the point of asking now is that the alternative is knowing
+only once an agent has already stopped. Absent → every `SendMessage` below
+means 5b's hand-carried resume.
+
 **The subtraction below is THE budget mechanism; the monitor is a
 convenience that may or may not fire.** It has now gone permanently silent
 twice by two different routes — once after a host suspension
@@ -2068,7 +2075,30 @@ three are how you establish whether an agent that returned *without* an
 outcome still has work in flight — you never need its transcript to answer
 that, and `SendMessage` to the agent is the fourth signal and also the
 remedy, because it keeps the agent's context where `TaskStop` discards it
-(computenet-77cx). An agent that seems slow but has SOME side effect (a commit, an edit, a bead
+(computenet-77cx).
+
+**`SendMessage` may not exist in your harness — establish that once, at step 2,
+not at the moment an agent has stopped mid-task.** One `ToolSearch
+"select:SendMessage"` answers it. Measured 2026-09-07 on an unattended
+scheduled run: it returns *No matching deferred tools found*, and a keyword
+search offers only `mcp__ccd_session_mgmt__send_message`, which addresses
+another SESSION and is itself unavailable unattended — while the `Agent` tool's
+own result text still advertises "Use SendMessage with to: `<agentId>`"
+(computenet-4jay). Every `SendMessage` below therefore reads: *SendMessage if
+you have it, else the hand-carried resume.*
+
+**The hand-carried resume**, which is the fallback everywhere `SendMessage`
+appears in this file and in `merge-task.md`: re-dispatch a fresh agent whose
+prompt states, explicitly, **this is a resume, not a clean start** — prior work
+exists at `<sha>`; these files were touched; these gates ran with these
+results; here is what remains. Without that sentence a fresh agent on an
+`in_progress` bead either redoes the work or hunts for a partial. **And say
+plainly that this summary is yours**: it is orchestrator authorship nobody
+reviews, the resumed agent will treat it as fact, and a mis-statement of what
+the first agent did is built on rather than caught. Quote the first agent's own
+bead comment rather than paraphrasing it wherever you can. The cost is real —
+one measured re-dispatch spent 125k tokens re-reading what its predecessor had
+already read — so it is the fallback, not the equal. An agent that seems slow but has SOME side effect (a commit, an edit, a bead
 comment) is waited on or `TaskStop`ped at the budget deadline — there is
 nothing useful between. An agent with NO side effect on any of the three
 signals is different: it may never have started (one stalled before its first
@@ -2076,7 +2106,8 @@ tool call and occupied ~120m of a 300m slot, its watchdog notification
 arriving only afterwards — computenet-znlh). When a batch is running, arm one
 bounded Monitor (`persistent: false`, a single `sleep 1200; echo "PROGRESS
 CHECK <batch>"`); when it fires, recompute elapsed (step 2) and read the three
-signals — all still empty → `SendMessage` the agent; no substantive reply →
+signals — all still empty → `SendMessage` the agent (or the hand-carried
+resume above); no substantive reply →
 `TaskStop` and re-dispatch rather than keep waiting.
 
 **A `status=failed` notification reading "Agent stalled: no progress for Ns
@@ -2134,7 +2165,8 @@ notification looks identical whether the agent finished or stopped itself
 mid-task; one returned "I will wait for the background test run notification
 before finalizing" as its entire result — no outcome, no files, no commit, no
 bead state (computenet-itwc). Done / blocked / premise-wrong, plus the files
-touched, or it is not a report: `SendMessage` the same agent (context intact)
+touched, or it is not a report: `SendMessage` the same agent (context intact;
+no `SendMessage` → the hand-carried resume above)
 to finish and report, and run nothing downstream on that task until it does.
 
 **On batch completion** (wait for the whole batch — a staggered re-batch
@@ -2164,7 +2196,8 @@ Three things that go wrong silently if skipped, inline:
   hour and several merges ago.
 - **Find an actual verdict in the result before acting on it.** A completion
   notification looks identical whether the reviewer finished or stopped
-  itself. No stated pass/fail → `SendMessage` the same agent; agent-completed
+  itself. No stated pass/fail → `SendMessage` the same agent, or the
+  hand-carried resume (5b); agent-completed
   is not task-reviewed.
 - **The task branch is local by design and the FEATURE branch must be
   durable** — confirm the merge is on origin before `bd close`, since the
@@ -2301,7 +2334,8 @@ unchanged; the `TaskStop` case below is where that ladder lands.
   case; gaps named → gaps; nothing → say so explicitly in the summary and
   leave the PR in draft — silence is the one state to refuse).
 - **Its final message lacks the literal word READY or DRAFT**
-  (review-feature.md §8 makes this a token test) → `SendMessage` the same
+  (review-feature.md §8 makes this a token test) → `SendMessage`, or the
+  hand-carried resume (5b), to the same
   agent to state its verdict and NOT VERIFIED section; run nothing below
   until it does. `metadata.review=passed` does not settle it — the marker is
   written before §8's report, so passed-with-no-verdict is a disagreement,
