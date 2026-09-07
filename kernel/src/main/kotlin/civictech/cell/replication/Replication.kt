@@ -164,6 +164,21 @@ class Replication(
         causalStability.stableFrontier(logicalId, degrade)
 
     /**
+     * Facade over [CausalStability.openSlots] — the **protocol-inert
+     * diagnostic** companion of [stableFrontier] (`computenet-typw`,
+     * [KE3-23]): the `open` slot set that read's MIN actually ran over,
+     * together with `members`, `announced`, `closed`, `suspended` and the
+     * per-slot row consulted.
+     *
+     * No path in [Replication] consults it; it is here only so a GC or
+     * checkpoint pass that observes a surprising [stableFrontier] can print
+     * *why* the set was what it was, without reaching past this class into
+     * [watermarkOf]. Removing it changes no behaviour.
+     */
+    fun openSlots(logicalId: UUID, degrade: Boolean = false): CausalStability.OpenSlots =
+        causalStability.openSlots(logicalId, degrade)
+
+    /**
      * Poke [listener] with the new [TagFrontier] whenever [logicalId]'s
      * [stableFrontier] **rises** — the stability analogue of
      * [onWatermarkAdvance] and built the same way (decision 9sm.3-D2: a tap on
