@@ -19,9 +19,14 @@ import civictech.cell.port.registerPort
 import civictech.cell.wire.WireCodec
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldHaveSize
+import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.util.UUID
@@ -337,5 +342,79 @@ class JournalCompatibilityTest {
         withRecord.source.outlet.waveState().sourceId shouldBe withRecord.derivedEpoch()
         (withRecord.source.outlet.waveState().highWater >
             withoutRecord.source.outlet.waveState().highWater).shouldBeTrue()
+    }
+
+    /**
+     * **computenet-ldfg — cross-build journal replay is supported, and the JOURNAL
+     * HEADER is the whole of what gates it.**
+     *
+     * The question this pins: `HostDurability.journalFrame` encodes a
+     * `RECORD_FRAME` payload with the same [WireCodec] the wire uses, and
+     * `WireFrame.version` is omitted from everything that codec encodes
+     * (`WireCodecTest`'s *"KE3-39 - VERSION is omitted from every encoded frame"*;
+     * `WireCodec.build` never sets `encodeDefaults`). So a journal record carries no
+     * codec version key either — the inheritance the bead was filed about, asserted
+     * directly below rather than argued from the wire tests.
+     *
+     * What does NOT follow is that replay is ungated. The gate is
+     * [JOURNAL_FORMAT_VERSION] in [FileJournal]'s header, one generation for the
+     * whole journal, checked by [Journal.replay] before a single record is decoded.
+     * The two arms are exactly that contrast, and each falls independently:
+     *
+     * - the payload really carries no `version` key, and this build's [WireCodec]
+     *   therefore accepts it unconditionally — the codec offers no refusal of its
+     *   own, so if the header check were removed nothing downstream would replace
+     *   it. (Reddens if `encodeDefaults` is ever turned on, or if a record-level
+     *   version is added without updating this decision.)
+     * - the same single-record journal, read by a build at another generation, is
+     *   refused by name *before* [WireCodec.decode] is reached. (Reddens if the
+     *   header check is removed or made non-fatal.)
+     *
+     * Why a journal-level version rather than the record-level one the bead
+     * offered as the alternative: what a replay has to agree about is the whole
+     * journal's generation — `Stateful` snapshot shapes included, which [WireCodec]
+     * never sees — so a per-record codec version could not have carried it even had
+     * it been emitted. Within one generation, compatibility is carried by AGENTS.md's
+     * additive-encoding policy, and an unreadable frame fails closed
+     * (`RecoveryIncomplete`, never a truncated prefix). Recorded in
+     * `HostDurability`'s KDoc and in `doc/spec/30-execution-model/31-hosts.md`.
+     */
+    @Test
+    fun `a journaled frame carries no codec version, and the journal header is what refuses another build`(
+        @TempDir dir: File,
+    ) {
+        val controller = SimulationController(seed = 45)
+        val file = File(dir, "frames.journal")
+        val live = World(controller, FileJournal(file), mutableListOf())
+        controller.runToIdle()
+        live.ops().add("apple")
+        controller.runToIdle()
+
+        // ARM 1 — the inheritance claim, observed: every RECORD_FRAME payload is a
+        // WireCodec frame with no `version` key at all, so nothing in a journal
+        // records the build that wrote it. And this build's codec accepts it: the
+        // decode succeeds, which is what makes "the codec is not the gate" a
+        // measurement rather than an inference.
+        val frames = FileJournal(file).replay().filter { it[0].toInt() == 1 }
+        frames.shouldNotBeEmpty()
+        frames.forEach { record ->
+            val payload = record.copyOfRange(1, record.size)
+            Json.parseToJsonElement(payload.decodeToString()).jsonObject
+                .containsKey("version") shouldBe false
+            WireCodec.decodeFrame(payload).frame.version shouldBe WireCodec.VERSION
+        }
+
+        // ARM 2 — so the gate is the journal's own generation, not the codec's. A
+        // build at another JOURNAL_FORMAT_VERSION refuses this same journal by name,
+        // before any record (frame included) is decoded.
+        val other = JOURNAL_FORMAT_VERSION + 1
+        val refusal = assertThrows<JournalFormatMismatch> { FileJournal(file, other).replay() }
+        refusal.found shouldBe JOURNAL_FORMAT_VERSION
+        refusal.expected shouldBe other
+        refusal.message!! shouldContain "NOT migrated"
+
+        // and at the SAME generation there is no refusal — replay of a journal
+        // another build at this generation wrote is the supported path itself
+        FileJournal(file, JOURNAL_FORMAT_VERSION).replay().size shouldBe FileJournal(file).replay().size
     }
 }
