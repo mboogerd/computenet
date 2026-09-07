@@ -2486,9 +2486,14 @@ greps over `gh run view --log`). A green check on a suite that skipped
 itself is not verification of anything, and this is the last point at which
 saying so is cheap (computenet-hacm).
 
-**`gh pr ready` is the ship decision, not the ship.** The moment it returns,
-read [references/ship-feature.md](references/ship-feature.md) and follow its
-state table until `MERGED` or honestly parked. Short form: ready PRs **one at
+**`gh pr ready` is the ship decision, not the ship.** Run **both** commands —
+`gh pr ready <n> && gh pr merge <n> --auto --squash`; `--auto` is idempotent, so
+arming a PR the workflow already armed costs nothing and arming one it never
+reaches is the point. Then read
+[references/ship-feature.md](references/ship-feature.md), whose state table is a
+diagnosis for a merge that has NOT happened later — **not** a check to make
+immediately: `autoMergeRequest` reads `null` for ~45s on a PR that arms fine
+(computenet-2orw). Short form: ready PRs **one at
 a time**; `MERGED` → `bd close` the feature, leave its worktree for step 6;
 conflicts are yours and get a reviewer like any code you write.
 
