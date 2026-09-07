@@ -151,11 +151,24 @@ SKILL.md and the other references cite this file as "`bd` traps".
   stream comment bodies at all — `--include-comments` is opt-in — and
   `bead.sh`'s projection has never carried a comments field. Measured
   2026-09-07 on that epic: plain `bd show` 233KB, `--json` 218KB, `bead.sh`
-  58KB, and the epic's own **description alone 43.5KB**. The bulk is the
-  inlined dependency payload, which `bead.sh` already drops; what is left is
-  irreducible, so a big epic spills to a file and is READ from there — that is
-  the working answer, not a flag. Say so rather than proposing the flag a
-  fourth time.
+  58KB, and the epic's own **description alone 43.5KB**. On the `--json` and
+  `bead.sh` path the bulk is the inlined dependency payload — 160KB of the
+  218KB — which `bead.sh` already drops; the comment thread is 126KB of the
+  233KB **plain** view, which you must not use anyway. What is left after the
+  projection is irreducible, so a big epic spills to a file and is READ from
+  there — that is the working answer, not a flag.
+
+  **And `bead.sh` is cwd-bound: elsewhere it fails SILENTLY.** It takes no
+  `-C` and calls a bare `bd show`, which finds the database by walking up from
+  the working directory, so from any cwd but the main checkout it prints
+  nothing and exits 1 — which the script's own header documents as meaning
+  *the id does not exist*. A breakdown has no worktree, and its dispatch
+  prompt already tells it to run `bd` with `-C <main-checkout>`, so it is
+  exactly the role positioned to hit this; the natural recovery from an
+  apparent bad id is the plain `bd show` this entry exists to prevent. Run the
+  script from the main checkout (`cd` there — an absolute path alone is not
+  enough). The `-C` passthrough that would remove the hazard is
+  computenet-wd7n, which owns it.
 
   **Above ~25KB even the projection does not fit**, and `bead.sh` handles
   that itself: it writes the projected bead to `$SCRATCH/bead-<id>.json` and
