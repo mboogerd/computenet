@@ -1,0 +1,23 @@
+# computenet-tpxp: whose job the CI re-run is. Recurrence of computenet-snh6,
+# whose finding no longer holds as stated: for the ORCHESTRATOR gh run rerun
+# now works. What is left is an asymmetry nothing documented — it is refused
+# for a reviewer subagent and succeeds for the orchestrator, same host, same
+# session, same run id, minutes apart.
+#
+# The reviewer discovered it BY TRYING, having done everything §4's red-check
+# route asks, and correctly returned DRAFT on a blocker unrelated to the diff.
+# That turned a READY into a DRAFT for an infrastructure reason, and 5e's
+# draft routing assumes a draft is about the work.
+#
+# +19 in review-feature.md §4, beside the structurally identical "do not wait
+# for pending checks — you are the wrong agent for it": do not attempt the
+# re-run, and the hand-back shape the reporting reviewer improvised well, so
+# the next one does not have to invent it. The mechanism behind the asymmetry
+# is deliberately NOT asserted; it was observed, never tested.
+#
+# +11 in ship-feature.md §3, the table the SKILL.md 5e draft-verdict route
+# already delegates to, saying what the orchestrator does with such a draft:
+# spend one re-run from the at-most-two budget, and on green ship on the
+# substantive certification already given rather than re-dispatching the
+# reviewer to repeat it.
+work +30
