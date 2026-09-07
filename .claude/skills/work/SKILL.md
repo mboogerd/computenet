@@ -2069,14 +2069,19 @@ recurrence of computenet-znlh). Do not re-derive the response each time:
    `ps -eo pid,pcpu,comm | sort -k2 -rn | head`. A stall with zero side effects
    at or above the `>=5x cores` rung is EXTERNAL — not a defect in the agent,
    the prompt or the task — and re-dispatching without reading it walks back
-   into the same wall. Say it is external in the new prompt.
+   into the same wall. Say it is external in the new prompt. **The `ps` is what
+   splits the rung**: a busy java/gradle process means the load is OURS —
+   re-dispatch nothing, wait for the gate. Only with no build of ours running
+   does the HOST-load paragraph below apply.
 2. Read the three side-effect signals in the agent's worktree and on its bead.
 3. All three empty → the agent never started; **re-dispatch as a clean start**.
    Say so in the new prompt in as many words — "a previous agent stalled before
    taking any action; I verified it left NO side effects, so this is a clean
    start, not a resume — do not go looking for prior work" — because the bead is
    `in_progress` and a fresh agent will otherwise hunt for a partial that does
-   not exist.
+   not exist. If you RELEASE the claim rather than re-dispatch now, put the
+   same fact on the BEAD and not only in a prompt — an `in_progress` item whose
+   thread says nothing reads to the next session as a partial.
 4. Any signal non-empty → it is not this case; treat it as the slow agent above.
 
 **Under HOST load the live decision is WHICH unit to re-dispatch, not whether

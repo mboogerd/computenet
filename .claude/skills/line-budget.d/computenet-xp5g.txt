@@ -9,10 +9,14 @@
 # (computenet-znlh, computenet-9ofq, computenet-xp5g); the first two were
 # closed with the response table unchanged.
 #
-# +22: a step 0 that reads capacity and ps before the signals (5 lines, +1 for
-# the renumber), one paragraph naming the no-Gradle units that complete under
+# +27: a step 0 that reads capacity and ps before the signals, including what
+# the ps decides — a busy java/gradle process means the load is OURS and
+# nothing should be re-dispatched at all (8 lines, +1 for the renumber); three
+# lines saying a released claim records "external, never started" on the BEAD
+# and not only in the next prompt, since the bead is what the next session
+# reads; one paragraph naming the no-Gradle units that complete under
 # HOST load and how to shape a Gradle dispatch that must go anyway, with the
 # 2026-09-07 measurement (14 lines), and 3 lines at the dispatch-time advice
 # string so "expect it to be slow, not wrong" names the watchdog that bounds
 # "slow" rather than reading as unconditional.
-work +22
+work +27
