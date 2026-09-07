@@ -1489,6 +1489,9 @@ OURS: dispatch nothing, wait for the wide gate to finish (recovery is abrupt —
 does not touch as contention, not a finding. When no build of ours is running
 the advice says HOST load: there is nothing to wait for, so **do not idle** —
 dispatch ONE agent with a scoped gate and expect it to be slow, not wrong.
+"Slow" is bounded by the 600s stream watchdog: past the point where one tool
+call cannot finish inside it, the agent is KILLED, not slowed, and 5b's stall
+response is what applies.
 Measured 2026-09-04, MacBoo: load1 held 316/263/198 for ~25 minutes on endpoint
 security scanning a build tree, with only idle IDE daemons running, while a
 session obeying the old cause-asserting text waited for a gate that did not
@@ -2062,14 +2065,33 @@ watchdog fires at 600s, well before the ~20-minute bounded Monitor, so for this
 failure mode the Monitor is a backstop and not the detector (computenet-9ofq,
 recurrence of computenet-znlh). Do not re-derive the response each time:
 
-1. Read the three side-effect signals in the agent's worktree and on its bead.
-2. All three empty → the agent never started; **re-dispatch as a clean start**.
+1. **Read the box before you read the agent.** `next-batch.py --capacity` plus
+   `ps -eo pid,pcpu,comm | sort -k2 -rn | head`. A stall with zero side effects
+   at or above the `>=5x cores` rung is EXTERNAL — not a defect in the agent,
+   the prompt or the task — and re-dispatching without reading it walks back
+   into the same wall. Say it is external in the new prompt.
+2. Read the three side-effect signals in the agent's worktree and on its bead.
+3. All three empty → the agent never started; **re-dispatch as a clean start**.
    Say so in the new prompt in as many words — "a previous agent stalled before
    taking any action; I verified it left NO side effects, so this is a clean
    start, not a resume — do not go looking for prior work" — because the bead is
    `in_progress` and a fresh agent will otherwise hunt for a partial that does
    not exist.
-3. Any signal non-empty → it is not this case; treat it as the slow agent above.
+4. Any signal non-empty → it is not this case; treat it as the slow agent above.
+
+**Under HOST load the live decision is WHICH unit to re-dispatch, not whether
+to.** Do not idle (5b's advice string), but prefer a unit not needing the
+contended resource: tracker-text work (`direct-child.md`'s "deliverable is BEAD
+TEXT" route), bead reconciliation and review of an already-green PR need no
+Gradle and complete where an implementer will not. If the work left needs it,
+dispatch it saying tool calls will be slow, and tell it to work in FEWER, LARGER
+steps and to post its bead comment EARLY rather than polishing — so a second
+stall still leaves state behind rather than nothing. Measured 2026-09-07,
+MacBoo: at load1 128 on 16 cores from endpoint-security scanning, with only idle
+IDE daemons of ours, two agents dispatched inside one minute BOTH died with zero
+side effects; a no-Gradle tracker-text unit dispatched in their place completed,
+and the Gradle implementer ran normally ~35 minutes later at load1 6.6
+(computenet-xp5g, recurrence of computenet-9ofq and computenet-znlh).
 
 Measured: a sonnet implementer on a small, well-specified task stalled with
 zero side effects and cost ~30 minutes of one lane; the identical prompt
