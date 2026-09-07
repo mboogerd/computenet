@@ -1071,3 +1071,70 @@ consecutive greens opened this session, which alone has probability ~3% under a 
 rate and ~63% under 1-in-42. **Do not read either figure as the rate of the defect.**
 The one thing both sessions agree on is that the class is still reachable at the merge
 base and a green sweep is not evidence.
+
+## KE3-23-OPENSET — the excluding term is `closed`, and it is monotone across a rejoin
+
+`computenet-typw`, branch `feature/computenet-typw`, on top of `36b889cff`.
+
+computenet-dwkp measured that BS-12's fence-attributed divergence is a FALSE membership
+certificate — `compactBelow` discarded a del-dot below a `stableFrontier` that certified
+delivery to every open member, while `peer0`, a live and unsuspended member since its
+rejoin at step 1885, still held the element. **Which half of `open` produced that was not
+measured**, and the sweep cannot settle it: the occurrence is ~1 in 6 to 1 in 42 and a
+green sweep is not evidence.
+
+It is now settled deterministically, without the flake, by
+`GcSafetySweepTest.kt`'s companion class `StabilityOpenSetOnRejoinTest`:
+
+**Candidate (1) HOLDS.** A replica evicted with `closeDepartedRow = true` and then
+re-replicated onto the *same* `CellRef` is still absent from the `open` set
+`CausalStability.stableFrontier` runs its MIN over, and the term that excludes it is
+`closed` — not absence, not suspension. The mechanism is two independently sound
+properties meeting: `WatermarkCell.closed` is a grow-only set with no retraction (there
+is no `reopen`), and the watermark slot is *derived from the ref*
+(`WatermarkCell.slotId(watermarkRef(ref))`, replay-stable by M10.1), while
+`MeshPeer.ref` is `CellRef(dataId, index)` and therefore stable across a rejoin. So the
+slot a peer returns on is the slot already closed, and **every** subsequent
+`stableFrontier` on **every** peer silently excludes a live member. The test asserts the
+survivors agree, so this is not one peer's local view.
+
+**Candidate (3) stays refuted**, now by a test rather than only by a code read: a
+suspended slot remains INSIDE `open` at `degrade = false` — which is what
+GcSafetySweep's reclaimer passes — and leaves it only under `degrade = true`.
+
+**Candidate (2) — a present-but-lying row — is NOT excluded by this work.** It is a
+different failure (a row at or above a del-dot the peer never applied) and would be
+invisible to an open-set read, which is about set membership, not row contents. Nothing
+here measures it; it stays open.
+
+### The read
+
+`CausalStability.openSlots(logicalId, degrade)` returns `OpenSlots` — the `open` set,
+`memberSlots`, `announced`, `closed`, `suspended`, `degrade` and the per-slot row
+consulted for the MIN — plus `exclusionOf(slot)`, which names the term that dropped a
+slot. It is additive and protocol-inert: no path in `CausalStability`, `Replication`,
+`SetCell` or any cell consults it, and it recomputes `open` by the same expression
+rather than sharing a helper, so removing it changes nothing. `Replication.openSlots` is
+the one-line facade, mirroring `stableFrontier` over `CausalStability.stableFrontier`.
+
+`OpenSlots` is **nested** inside `CausalStability` rather than a top-level type in
+`civictech.cell.consistency`, deliberately: PR #544 on this epic added one top-level
+class to `civictech.cell.data` and went red in `:inspect` and `:oracle` on enumerators
+the bead never named. (Checked here: `:oracle`, `:inspect` and `:concord` all reference
+`civictech.cell.consistency` types by name, so a new top-level member of that package is
+exactly the shape that would reach them; a nested type is not.)
+
+`GcSafetySweep.compact()` now annotates its `fencedAtStep` stamp with the read, **onto
+the existing `stillHeldBy` field** — each still-holding peer is printed as
+`name(term)`, plus the whole `openSet={…}`. Not as a field of its own, because a
+non-empty `stillHeldBy` already fires ~51-55 times per ~2007-2014 fence stamps on an
+otherwise GREEN sweep; a second independently-firing field would add noise, not signal.
+The force of the reading remains the CONJUNCTION.
+
+### What this does not do
+
+Nothing here changes behaviour. Whether the fix is a retractable `closed` (a per-slot
+close *epoch*, the shape `suspendEpoch` already has), or an incarnation-distinct slot,
+or a rejoin that must re-announce before it counts, is a **design decision this bead
+does not take** — and all three touch `WatermarkCell`, outside this bead's claim. The
+four computenet-dwkp prohibitions remain in force and untouched.
