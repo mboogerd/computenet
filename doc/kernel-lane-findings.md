@@ -1480,6 +1480,20 @@ the `[KE3-30]` closing evidence.
   of 7/200 in the same run — `(stableDiverging + stableFenceAttributed) = 7
   <= MAX_STABLE_DIVERGING = 12`, not widened. `BS12_SEED` (126) held 5/5. No
   seed was re-derived by this substitution.
+
+  **Caveat, measured by this task's review (2026-09-07, darwin/arm64, at the
+  merged feature head + this entry):** that `fence-attributed 0` is **one
+  run**, and the arm is **not deterministic**. Five runs of
+  `:kernel:test ... GcSafetySweepTest --rerun --no-build-cache` on this machine
+  failed **2 of 5**, each time on `seeds=[12]`, with the assertion the test
+  itself says must never be absorbed — *"the re-admission fence CAUSED a
+  membership divergence … Do not absorb it into MAX_STABLE_DIVERGING"*
+  (`GcSafetySweepTest.kt:973`). The pinned-seed arm
+  (`the recorded seed reproduces its verdict_BS12`, `BS12_SEED` 126) and the
+  `Trigger.NONE` control passed in every run. So the sweep's clean single-run
+  numbers above should be read as *a* sample, not as the arm's steady state,
+  and whether seed 12 is a genuine intermittent silent-fence escape or a rig
+  race is **open** — filed as `computenet-r13k`.
 - **`[KE3-38]` BS-18 (`computenet-9sm.6.6`).** `CompactionExclusiveAccountingTest`
   shows zero consumes/releases/drops attributable to checkpoint-driven
   compaction AND to `applyRemote`'s repair emission (a new outbound `SetDelta`
@@ -1522,10 +1536,41 @@ the `[KE3-30]` closing evidence.
 `computenet-9sm.6.1` posted a partial result on `computenet-u7fi` covering
 only its own five files. This task re-ran the same grep over the feature's
 complete diff (all 11 files touched across `computenet-9sm.6.1`–`.6.8`):
-`git grep -n 'reBaseline\|ReBaselineNotice\|dotSource' -- <those 11 files>` —
-**zero hits**. The pattern and file set were independently sanity-checked
-against a known hit (`OrMapCell.kt`, outside this feature's diff) to rule out
-a quoting or regex false negative. `SetCell` implements neither
+`git grep -n 'reBaseline\|ReBaselineNotice\|dotSource' -- <those 11 files>`.
+
+**Corrected by the task review (2026-09-07); read the qualified result, not a
+bare zero.** That command does **not** return zero over the 11 files. Run with
+the eleven paths as eleven separate pathspecs it returns **five** hits, and
+every one of them is outside what u7fi asks about:
+
+- `concord/corpus/DISPUTES.md:378` (`ReBaselineEmitting.reBaseline(...)`) and
+  `:1165` (`restoreBaselineDischarge`, a substring match on `…toreBaseline…`)
+  are **pre-existing on `origin/main`** — verified with
+  `git grep -n '…' origin/main -- concord/corpus/DISPUTES.md`, which returns
+  the same two lines. They belong to the C-12 restart/re-baseline dispute, not
+  to this feature, and
+  `git diff origin/main...HEAD -- concord/corpus/DISPUTES.md | grep '^+'`
+  matches the pattern on **no added line**.
+- The remaining three are **this entry's own prose**, in
+  `doc/kernel-lane-findings.md`, describing the grep.
+
+Restricted to the **nine `.kt` files** of the feature diff — the only ones
+where an emission could live — the grep genuinely returns nothing (exit 1).
+The bead's own instruction is the scope that matters, and it is met on it:
+*no line this feature ADDED* introduces a `TaggedMapDelta` re-baseline
+emission or a `dotSource` supersession.
+
+The bare "zero hits" first recorded here (and in the corresponding comment on
+`computenet-u7fi`) came from an invocation whose eleven paths reached `git
+grep` as a **single** pathspec — zsh does not field-split an unquoted
+expansion — so it matched nothing for the reason AGENTS.md names: *a zero
+result from a grep is evidence about the grep before it is evidence about the
+symbol*. The `OrMapCell.kt` control did not catch it, because a control run as
+one single-path argument exercises neither the splitting nor the multi-path
+form that failed. A control only discriminates if it shares the failing
+invocation's **shape**, not just its pattern.
+
+`SetCell` implements neither
 `ReBaselineEmitting` nor anything `dotSource`-shaped; its repair emission
 (`applyRemote`'s `SetDelta(newAdds, repaired)`) is a plain `SetDelta` naming
 existing tags — not a `TaggedMapDelta`, mints no new dot, and touches no
