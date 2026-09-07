@@ -1,0 +1,18 @@
+# computenet-0lun: feature.md's cross-feature claim-collision check now reports
+# how many of the beads it examined carried NO metadata.files, so an empty
+# result is distinguishable from an all-clear.
+#
+# MECHANICAL: the summary line is emitted by the snippet the breakdown is
+# already told to run, so it fires whether or not the prose around it is read.
+# Measured under epic computenet-fpml: all three open siblings carried no
+# files claim, the check reported no collision, and that was true of the claims
+# that exist and silent about the files those three will claim once written.
+# A claimless sibling is the NORMAL state for an unscheduled bead, so the check
+# is blindest exactly at its main use case. Second way past computenet-rvmu,
+# which fixed the QUERY LEVEL (--parent reaching one level) and not this.
+#
+# +18: 5 lines of tee + awk summary in the snippet, and 13 lines saying why the
+# summary is load-bearing and what to do for each bead it counts as claimless
+# (read the description and reason about the files it will claim — what the
+# agent that noticed did anyway, and what the check cannot give you).
+work +18
