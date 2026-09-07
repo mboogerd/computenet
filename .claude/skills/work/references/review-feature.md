@@ -598,6 +598,25 @@ So:
   A **red** required check is not yours to wave
   through: report it and leave the verdict draft.
 
+- **The re-run is not yours either — do not attempt it.** `gh run rerun` is
+  refused for a reviewer subagent (*"Permission for this action was denied by
+  the Claude Code auto mode classifier"*) and succeeds for the orchestrator; the
+  same command, same host, same run id, minutes apart (computenet-tpxp). Why
+  the two differ is **not established** — do not reason from a mechanism
+  nobody has tested — but the asymmetry is measured, and attempting it costs
+  you a refused call to learn what this line already tells you. Hand it back
+  instead, and say the one thing the orchestrator needs to act:
+
+  > DRAFT — sole blocker is `<check>`, attributed to `<bead>` by
+  > red-check-attribution.md artifact 3, unrelated to this diff. The
+  > substantive review is complete and passes. What would most change the
+  > verdict: one re-run of `<check>` going green. The re-run budget is unspent
+  > and is the orchestrator's.
+
+  That shape matters because your draft is then about the INFRASTRUCTURE, not
+  the work, and 5e's draft routing otherwise reads it as the work. Do not file
+  a bead for it, park, or weaken the substantive verdict for it.
+
 ## 5. Repair by default — up to a bound
 
 A rejection forfeits everything already spent on the feature, so fix what you

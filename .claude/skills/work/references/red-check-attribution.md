@@ -156,6 +156,11 @@ guessing one here cost a reviewer 8 runs):
 
 With all four in hand and no standing instruction against it:
 
+**The re-run itself is the ORCHESTRATOR's.** A reviewer stops at the four
+artifacts and hands back per review-feature.md §4 — the command is refused for
+a subagent (computenet-tpxp), and the refusal branch below is the
+orchestrator's case, not a reviewer's.
+
 ```bash
 gh run rerun <run-id> --failed -R mboogerd/computenet
 ```

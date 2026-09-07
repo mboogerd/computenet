@@ -124,6 +124,16 @@ nothing.
 | a required check is red | the check name and conclusion it quoted from `gh pr checks` | [red-check-attribution.md](red-check-attribution.md) — attribute, re-run, or park as blocked-on-infrastructure |
 | none of the above | nothing actionable named | dead end: leave `in_progress`, set `parked_at`, go to **5f** |
 
+**A draft whose SOLE blocker is an unrelated red is not a draft about the
+work.** The reviewer cannot clear it — `gh run rerun` is refused for a subagent
+and succeeds for you (computenet-tpxp) — so its draft is a hand-back, not a
+finding. Spend one re-run from the at-most-two budget; if it goes green, **ship
+on the substantive certification the reviewer already gave** rather than
+re-dispatching it to say the same thing about a check it never doubted. The
+reviewer's verdict names this case in as many words ("the substantive review is
+complete and passes; what would most change the verdict is one re-run going
+green"). If it stays red, spend the second re-run or park per the row above.
+
 ## 4. The substantive-repair draft: a finished feature with no second reader
 
 Two verdicts route here, not one:
