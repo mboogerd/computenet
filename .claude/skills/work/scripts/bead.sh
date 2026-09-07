@@ -58,6 +58,14 @@ raw=""
 [ "${1:-}" = "-r" ] && { raw="-r"; shift; }
 filter=${1:-.}
 
+# A trailing `-C` past the filter would be silently dropped and the call would
+# then fail as an empty rc=1 — the same ambiguous silence this flag exists to
+# remove. Refuse it loudly instead.
+[ $# -gt 1 ] && {
+  echo "bead.sh: unexpected argument '$2' — -C goes before the id or right after it" >&2
+  exit 2
+}
+
 # An unset dir must NOT become `bd -C ""` (bd would chdir to the empty path),
 # so the flag is carried as an array that is empty when no -C was given. The
 # `[@]+` guard is load-bearing: this host's /bin/bash is 3.2, where `set -u`
@@ -97,11 +105,11 @@ if [ "${#out}" -gt "${BEAD_SPILL_BYTES:-25000}" ]; then
   # mktemp, not a fixed name: two agents reading the same bead in a shared
   # TMPDIR would otherwise race on one path, and a `-r` spill holds raw prose
   # rather than JSON.
-  dir=${SCRATCH:-${TMPDIR:-/tmp}}
+  spill_dir=${SCRATCH:-${TMPDIR:-/tmp}}
   # A failed mktemp must not print a success-shaped message with an empty
   # path: the output would be gone and the exit code still 0. Fall back to
   # printing it, which is at worst the old truncation.
-  f=$(mktemp "${dir%/}/bead-$id.XXXXXX") || { printf '%s\n' "$out"; exit $rc; }
+  f=$(mktemp "${spill_dir%/}/bead-$id.XXXXXX") || { printf '%s\n' "$out"; exit $rc; }
   printf '%s\n' "$out" > "$f"
   echo "bead.sh: ${#out} characters exceeds one tool result; wrote $f — read it with the Read tool (it will NOT fit in a single Bash output either)."
 elif [ -n "$out" ]; then

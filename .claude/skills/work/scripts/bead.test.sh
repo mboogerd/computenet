@@ -112,6 +112,20 @@ echo "case 6d: a bare -C with no directory is refused, not silently ignored"
 out=$(BODY_CHARS=100 bash "$SCRIPT" -C 2>&1); rc=$?
 [ $rc -ne 0 ] && ok "exit $rc" || bad "exit 0 on a bare -C -- $out"
 
+echo "case 6e: a trailing -C past the filter is REFUSED, not silently dropped —"
+echo "         dropped, it fails as an empty rc=1, the ambiguity -C exists to remove"
+out=$(BODY_CHARS=100 bash "$SCRIPT" known -r '.status' -C /some/checkout 2>&1); rc=$?
+[ $rc -eq 2 ] && ok "exit 2" || bad "exit $rc -- $out"
+grep -q 'unexpected argument' <<<"$out" && ok "says which argument" || bad "silent -- $out"
+
+echo "case 6f: the spill branch still works with -C (its dir is a separate name)"
+out=$(BODY_CHARS=40000 bash "$SCRIPT" -C /some/checkout known 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "exit 0" || bad "exit $rc -- $out"
+grep -q 'exceeds one tool result' <<<"$out" && ok "spilled" || bad "no spill -- ${out:0:80}"
+spilled=$(grep -o "$ROOT/[^ ]*" <<<"$out")
+[ -s "$spilled" ] && ok "wrote $spilled" || bad "no file"
+rm -f "$ROOT"/bead-known.*
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
