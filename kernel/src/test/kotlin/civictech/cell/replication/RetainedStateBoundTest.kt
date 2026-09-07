@@ -280,6 +280,52 @@ class RetainedStateBoundTest {
     }
 
     /**
+     * The tombstone component counts only tags a reclaim could actually discard — **a live
+     * re-added tag is not one of them.**
+     *
+     * This is a deterministic pin of `SetCell.retainedState`'s definition, and it exists because
+     * the churn arm above **cannot** exercise it. MEASURED during this bead's mutation check:
+     * removing the `adds[e] ∩ dels[e]` filter from the accessor (counting every `adds[e]` tag
+     * under a `dels[e]` entry instead) changed the sweep's numbers by **nothing at all** —
+     * `tombstoneTags` max 15, control 36, byte-identical. The reason is a property of the
+     * workload, not of the accessor: `GcSafetySweep` never re-adds an element it removed, and
+     * `SetCell.remove` folds every observed add-tag into `dels[e]` while leaving it in `adds[e]`,
+     * so on that workload `adds[e] ⊆ dels[e]` whenever `dels[e]` exists and the filter is a no-op.
+     *
+     * A mutation that survives is a property left unproven, so it is proven here instead. After
+     * `add / remove / add`, the second add-tag is LIVE — no `dels` entry covers it, `compactBelow`
+     * can never discard it, and counting it would inflate the tombstone component with state that
+     * is `O(live elements)` and irreducible. The element is a member throughout, which is what
+     * makes the tag live rather than merely present.
+     */
+    @Test
+    fun `the tombstone component excludes a live re-added tag`() {
+        val cell = SetCell<String>()
+        cell.inlet.call.add("e")
+        cell.inlet.call.remove("e")
+        cell.inlet.call.add("e") // live: minted after the remove, so no `dels` tag covers it
+
+        assertTrue(cell.membership() == setOf("e"), "the re-add must make the element live again")
+        val before = cell.retainedState()
+        assertTrue(
+            before.tombstoneTags == 3,
+            "[KE3-37]: `dels[e]` holds the first add-tag and the del-dot, and `adds[e]` holds that " +
+                "first add-tag plus the LIVE second one — so the tombstone component is 2 (the two " +
+                "`dels` tags) + 1 (the `adds` tag under them) minus nothing, and the live tag is " +
+                "NOT counted. Counting it would report 4. state=$before",
+        )
+
+        cell.compactBelow(coveringFrontier(cell))
+        val after = cell.retainedState()
+        assertTrue(
+            cell.membership() == setOf("e") && after.tombstoneTags == 0 && after.fenceElements == 1,
+            "[KE3-37]: the reclaim discards exactly the tags the tombstone component counted, " +
+                "leaves the live tag and the membership alone, and exchanges them for one fence " +
+                "element key. state=$after membership=${cell.membership()}",
+        )
+    }
+
+    /**
      * One `SetCell`, [pairs] add/remove pairs, a reclaim at a covering frontier after each pair.
      *
      * `compactBelow` rather than `snapshot()`: this arm is not under `Replication`, so no
