@@ -577,9 +577,11 @@ Each candidate mechanism was eliminated on its own merits, in this order:
    encoded frame" test, which also fires the check by splicing an explicit
    differing `version` into a frame, to show it is real code and merely
    unreachable from anything the encoder produces. So a bump is invisible to a
-   peer, not protective. (That the check is unreachable is a separate defect
-   in its own right, filed as `computenet-u5gb`; the point *here* is only that
-   the mechanism this bead named cannot be built on it.)
+   peer, not protective. (That the check is unreachable was raised as a
+   separate item, `computenet-u5gb`, and is **settled below** — see "Decision:
+   the frame version stays unemitted, and the check stays a foreign-frame
+   guard"; it is no longer an open defect. The point *here* is only that the
+   mechanism this bead named cannot be built on it.)
 2. **Even if `version` did travel, a bump would be strictly worse than the
    status quo for the operation it is meant to protect.** The check is a hard
    equality with no compatibility window, so a bump makes an older peer refuse
@@ -634,6 +636,70 @@ or a rolling upgrade of a live mesh becoming a supported operation. Either
 makes mixed-version decode a real path with a real handshake to hang a
 mechanism on; until then, re-documenting these hazards adds nothing to this
 section.
+
+#### Decision: the frame version stays unemitted, and the check stays a foreign-frame guard (computenet-u5gb)
+
+Elimination 1 above left a loose end: `WireFrame.version` never reaching the
+wire is a property of the code, not yet a choice, and `WireCodec`'s KDoc read
+as though a version gate existed. Two resolutions were open — emit `version` so
+`decodeFrame`'s existing `check(frame.version == VERSION)` gates real frames,
+or record the omission as intended and stop implying a gate. **The omission is
+intended.** `version` stays off the wire; `encodeDefaults` stays unset; the
+`check` stays, re-scoped in the code's own words to what it actually guards.
+
+**Why not emit it.** The check is a hard equality with no compatibility window.
+Emitting `version` would not create a *narrow* gate on the hazards this section
+is about — it would make an older peer refuse **every** frame from a
+differently-versioned peer, not merely the frames carrying whatever new enum
+constant or optional field motivated the bump. That is elimination 2 above,
+which reasoned from the counterfactual "even if `version` did travel"; this
+decision is that counterfactual settled in the only direction consistent with
+it. Emitting the field would build the exact mechanism the previous decision
+identified as *strictly worse than the status quo*, and would do so on the same
+day, for the same operation, on the same evidence. It is not a smaller change
+for being a one-line one: it converts a silently-passing check into a
+build-boundary refusal across a whole mesh.
+
+**What is therefore true, and is now said plainly in the code.** Two peers at
+different `WireCodec.VERSION`s interoperate at the frame level. A `VERSION`
+bump changes no frame's bytes and causes no peer to refuse anything: it is a
+human-readable layout generation and nothing more, and any future reasoning
+that treats it as a compatibility switch is mistaken. `WireFrame.version`'s
+KDoc, `WireCodec.VERSION`'s KDoc, `decodeFrame`'s KDoc and both `@throws`
+clauses now say this; the previous "bump on layout change" and "unknown
+version" wording implied a gate that does not exist.
+
+**What the check still does, and why it is kept rather than deleted.** Its
+domain is exactly *a frame that explicitly carries a differing `version`* —
+which no encoder in this repo produces, but a hand-built frame, a corrupted
+one, or a future encoder that does emit the field would. Deleting the check
+would mean such a frame is silently decoded under this build's assumptions
+instead of refused; keeping it costs one comparison and preserves the loud
+failure this section has consistently preferred over a peer that keeps running
+while misreading. Pinned by `WireCodecTest`'s "the version check's domain is
+exactly an explicitly differing version" test, which fixes all three cases
+together: absent key accepted, explicit matching version accepted, explicit
+differing version refused.
+
+**Cost, stated plainly.** The frame layer offers no version safety whatsoever,
+and this decision makes that permanent until the reopening trigger above fires.
+Everything that protects a mixed-version mesh is the operational constraint
+stated in this section — nothing in the bytes. The regression fence is
+narrow but real: `WireCodecTest`'s "VERSION is omitted from every encoded
+frame" test reddens if anyone adds `encodeDefaults = true` to `WireCodec.build`
+and so reverses this decision by accident.
+
+**Inherited by the durability path, unchanged.** `HostDurability.journalFrame`
+encodes journal records with `WireCodec.encode`, so a journal or checkpoint
+written by one build and replayed by another carries no version either, and
+replay is gated by nothing for the same reason. That path is out of scope here
+and is noted so it is not mistaken for a gate; its `WireCodec.VERSION` coupling
+comment at `HostDurability.kt` is unaffected by this decision.
+
+**Reopening trigger:** the same one as the decision above — capability/version
+negotiation landing, or a supported rolling upgrade — at which point `version`
+becomes worth emitting *alongside* a compatibility window, never as a bare
+equality.
 
 ### Open interactions
 
