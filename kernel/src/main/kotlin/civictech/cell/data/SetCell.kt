@@ -32,6 +32,188 @@ interface SetApi<E> {
     val outlet: Subscribe<Propagate<SetDelta<E>>>
 }
 
+/**
+ * The **re-admission fence** (`[24-TAG-04]` clause 2, computenet-pay7): the
+ * exact set of tags a reclaimer has discarded from this replica, as a causal
+ * context — a per-source *dot set*, not a per-source high-water.
+ *
+ * ## Why the shape matters, and why the obvious shape was rejected
+ *
+ * `SetCell.compactBelow` discards a delivered tombstone and the add-tags under
+ * it. A duplicated or reordered frame can then re-deliver one of those
+ * add-tags, and `applyRemote`'s novelty test (`tags − adds[e]`) reads it as new
+ * information, because the discard is exactly what made it absent again. So
+ * the receiver has to retain *something*; the question is what.
+ *
+ * computenet-v2ka built and measured the obvious answer — a per-source
+ * high-water FLOOR, "reject any tag ≤ the counter I reclaimed at" — in three
+ * variants, and all three are recorded as unsafe in
+ * `doc/kernel-lane-findings.md` `## KE3-GC-DEL-DOT` and
+ * `concord/corpus/DISPUTES.md` `## KE3-GC-DEL-LANE`: each drove resurrections
+ * to zero and left **31-33 of 200 sweep seeds with permanently diverged
+ * memberships** against a no-reclaimer control floor of 2-5. The mechanism of
+ * that failure is a counting argument, not an accident: below any floor a
+ * source has minted, reclaimed tags and **live** tags are interleaved. Most
+ * live add-tags are below the frontier — that is the normal state of a
+ * converged mesh — so a floor fences a replica off from add-tags it legitimately
+ * does not hold yet and can now never learn (a catch-up, an anti-entropy
+ * replay, a late join). A high-water "cannot tell *this tag was reclaimed* from
+ * *this tag is below a position I reached*".
+ *
+ * This class stores the first of those two facts and only it. A tag enters
+ * only by being discarded ([SetCell.compactBelow] is the sole writer), so a
+ * live tag is never fenced and the divergence mechanism above is unreachable
+ * by construction — the safety argument is structural, and the sweep measures
+ * it rather than establishing it.
+ *
+ * ## Why the key is (element, tag) and not the tag alone
+ *
+ * The paragraph above is only true of a tag that means what it did when it was
+ * discarded, and a `Timestamp` does **not** carry that guarantee across a
+ * replica's own restart. [SetCell.tagSource] is
+ * `nameUUIDFromBytes("set-tags:${'$'}{ref.id}:${'$'}{ref.instanceId}")` — deliberately
+ * derived, so a recovered instance replaying its journal re-mints the exact
+ * tags the network observed — while `tagCounter` restarts at 0 on any
+ * construction that does not [SetCell.restore]. A replica that crashes and
+ * rejoins under the same [civictech.cell.CellRef] therefore re-mints counters
+ * its previous incarnation already spent, and `(sourceId, counter)` names a
+ * DIFFERENT, LIVE element the second time round.
+ *
+ * Keyed on the tag alone, the fence then rejects that live element's add-tag
+ * for ever, at every replica that reclaimed the colliding dot — a permanent
+ * membership divergence, and exactly the harm the shape argument above claims
+ * is unreachable. **It was reached**: computenet-vhlm's attribution read
+ * measured it on 4 of 200 seeds of `GcSafetySweepTest`'s STABLE arm
+ * ([18, 114, 159, 169], 2026-09-06, darwin/arm64), each on an EVEN-ordinal
+ * element the sweep's `removeSchedule` never removes — structurally impossible
+ * to have been reclaimed for itself, and fenced anyway.
+ *
+ * Keying on `(element, tag)` closes it, because the collision is between two
+ * mints that name different ELEMENTS. Nothing is lost from the fence's purpose:
+ * a replayed frame carries the same `(element, tag)` pair that was discarded,
+ * which is precisely what [holds] asks about.
+ *
+ * **The residual hole, stated rather than left to be discovered**: a rejoining
+ * incarnation that re-mints a colliding counter for *the same element* is still
+ * wrongly fenced. That needs the tag source to be incarnation-unique, which is
+ * a change to the journal-replay contract [SetCell.tagSource] exists to keep
+ * and is out of scope here (filed as a follow-up on computenet-vhlm).
+ *
+ * ## What it costs, stated where the number is
+ *
+ * This is **not free**, and it is not a bounded-memory reclaimer. It converts
+ * the reclaimed state from per-element tag *maps* (an element key, a `dels`
+ * set, and the covered `adds` entries) into a per-element, per-source list of
+ * contiguous counter RUNS — so it keeps an entry per element reclaimed, and the
+ * saving over the tombstone it replaces is the tag SETS, not the element keys.
+ * (The un-keyed form dropped the element keys too; it is unsound, see above.)
+ * Within one element and source a run still coalesces: the tags covering one
+ * element are usually one add and one del-dot, minted adjacently, so the common
+ * case is one or two runs per element. An adversarial interleaving degrades to
+ * one run per reclaimed tag, as before. The reclamation is therefore a real
+ * reduction and not a bound; a bounded form needs epoch hygiene (G-42), which
+ * is research-gated and out of scope here.
+ *
+ * Runs are inclusive `[lo, hi]` pairs, kept sorted, disjoint and
+ * non-adjacent, flattened into one list per (element, source).
+ */
+internal class ReclaimedDots<E> : Serializable {
+    private val runs = HashMap<E, HashMap<UUID, ArrayList<Long>>>()
+
+    /** Distinct elements with at least one reclaimed run — the retained-size accounting. */
+    val elementCount: Int get() = runs.size
+
+    /** Total contiguous runs across every element and source. The real memory cost; see the class KDoc. */
+    val runCount: Int get() = runs.values.sumOf { perSource -> perSource.values.sumOf { it.size / 2 } }
+
+    /**
+     * Did this replica reclaim [tag] **for [element]**? Binary search over that
+     * element's runs for the tag's source.
+     *
+     * The element key is load-bearing, not an index: see the class KDoc's
+     * "Why the key is (element, tag) and not the tag alone".
+     */
+    fun holds(element: E, tag: Timestamp): Boolean {
+        val r = runs[element]?.get(tag.sourceId) ?: return false
+        var lo = 0
+        var hi = r.size / 2 - 1
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            when {
+                tag.counter < r[mid * 2] -> hi = mid - 1
+                tag.counter > r[mid * 2 + 1] -> lo = mid + 1
+                else -> return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Does this replica hold ANY reclaimed run for [element], from any source?
+     *
+     * The existence half of [holds], which needs a specific tag. A harness that wants to know
+     * *when* an element entered the fence has no tag to ask about — the del-dot it is looking
+     * for is exactly the one [SetCell.compactBelow] just discarded — so it asks this instead.
+     */
+    fun anyFor(element: E): Boolean = runs.containsKey(element)
+
+    /** Record [tag] as reclaimed **for [element]**, coalescing with an adjacent or containing run. */
+    fun record(element: E, tag: Timestamp) {
+        val r = runs.getOrPut(element) { HashMap() }.getOrPut(tag.sourceId) { ArrayList() }
+        val c = tag.counter
+        // first run whose hi >= c - 1: the only run c can touch from the left
+        var lo = 0
+        var hi = r.size / 2
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            if (r[mid * 2 + 1] < c - 1) lo = mid + 1 else hi = mid
+        }
+        val i = lo
+        if (i < r.size / 2 && r[i * 2] <= c + 1) {
+            when {
+                c in r[i * 2]..r[i * 2 + 1] -> return // already recorded
+                c < r[i * 2] -> r[i * 2] = c // extends run i downwards (c == lo - 1)
+                else -> r[i * 2 + 1] = c // extends run i upwards (c == hi + 1)
+            }
+            // the extension may have closed the gap to the run after it
+            val next = i + 1
+            if (next < r.size / 2 && r[i * 2 + 1] + 1 >= r[next * 2]) {
+                r[i * 2 + 1] = maxOf(r[i * 2 + 1], r[next * 2 + 1])
+                r.removeAt(next * 2 + 1)
+                r.removeAt(next * 2)
+            }
+            return
+        }
+        r.add(i * 2, c)
+        r.add(i * 2 + 1, c)
+    }
+
+    /** Checkpoint form: element -> source -> flattened `[lo, hi, …]` runs. Additive; see [restore]. */
+    fun save(): Serializable =
+        HashMap(runs.mapValues { (_, perSource) -> HashMap(perSource.mapValues { ArrayList(it.value) }) })
+
+    @Suppress("UNCHECKED_CAST")
+    fun restore(state: Any?) {
+        runs.clear()
+        // A pre-computenet-vhlm checkpoint stored `source -> runs` with no element
+        // key. There is no element to attribute those runs to, so they are DROPPED
+        // rather than guessed at: an empty fence re-admits a replayed frame exactly
+        // as an unfenced replica does (the pre-computenet-pay7 behaviour), whereas a
+        // guessed key would fence the wrong element — the very failure this key
+        // exists to prevent. The restoring replica re-fills its fence from its own
+        // next `compactBelow`.
+        val outer = state as? Map<*, *> ?: return
+        outer.forEach { (element, perSource) ->
+            val inner = perSource as? Map<*, *> ?: return@forEach
+            val rebuilt = HashMap<UUID, ArrayList<Long>>()
+            inner.forEach { (source, r) ->
+                if (source is UUID && r is List<*>) rebuilt[source] = ArrayList(r.filterIsInstance<Long>())
+            }
+            if (rebuilt.isNotEmpty()) runs[element as E] = rebuilt
+        }
+    }
+}
+
 class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // BoundedStateful extends Stateful (V1C-KERNEL): the drain/migration/
     // promotion/durability seam this cell already had is untouched, and the
@@ -115,6 +297,33 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         UUID.nameUUIDFromBytes("set-tags:${ref.id}:${ref.instanceId}".toByteArray())
     private var tagCounter = 0L
 
+    // ------------------------------------------------------------------ computenet-dwkp
+    // TEST-SUPPORT PROVENANCE, additive and read-only from the protocol's point of view.
+    // Nothing in `applyRemote`, `compactBelow` or the inlet handler consults any of this;
+    // the three fields below are written where tags are minted and where checkpoints are
+    // restored, and read only by the `internal` diagnostic `fenceProvenance` at the bottom
+    // of the class. See that function's KDoc for why the measurement needs them.
+    //
+    // WHAT THEY COST, stated where they are declared rather than only in the ticket: they are
+    // protocol-inert but NOT free. `mintedHere` gains one entry per tag this instance ever
+    // mints (one per local add, one per local remove) and is never pruned — not by
+    // `compactBelow`, which exists precisely to bound the tag state, and not by `restore`. Its
+    // retention is therefore O(local mints over the life of the instance) rather than
+    // O(live elements), and `incarnations` below retains one `AtomicInteger` per distinct
+    // `tagSource` the PROCESS ever constructs. Both are negligible for the sweeps and demos
+    // this runtime runs today and neither is on a protocol path, but a long-lived,
+    // write-heavy replica would grow a map that compaction cannot reclaim. Bounding or
+    // build-gating them is computenet-fzd3, filed by computenet-dwkp's review 2026-09-07.
+    /** Which construction of a cell carrying THIS `tagSource` this instance is (1-based). */
+    internal val diagnosticIncarnation: Int =
+        incarnations.computeIfAbsent(tagSource) { java.util.concurrent.atomic.AtomicInteger() }.incrementAndGet()
+
+    /** Tag counter -> the element it was minted for, by THIS instance only. Under [stateLock]. */
+    private val mintedHere = HashMap<Long, Any?>()
+
+    /** How many times [restore] has run on this instance — i.e. whether its state is replayed. */
+    private var restoreCount = 0
+
     // Per-origin delivered frontier (spec 40/42 §Delivered watermarks, E3.3(a)):
     // add-tags this replica has durably absorbed, tracked as a max-contiguous
     // prefix per ORIGIN source (the tag's minting source, still visible here in
@@ -123,6 +332,14 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // the replica set delivered" (E3.4), not "how many did each replica re-emit".
     private val delivered = DeliveredFrontier()
     private val deliveryListeners = mutableListOf<(UUID, Long) -> Unit>()
+
+    /**
+     * The re-admission fence (`[24-TAG-04]` clause 2, computenet-pay7): every
+     * tag [compactBelow] has discarded from this replica, as a causal context.
+     * Written only by [compactBelow]; read only by [applyRemote]. See
+     * [ReclaimedDots] for the shape argument and its cost.
+     */
+    private val reclaimed = ReclaimedDots<E>()
 
     override fun onDeliver(listener: (source: UUID, thru: Long) -> Unit) = synchronized(stateLock) {
         deliveryListeners += listener
@@ -169,6 +386,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // the propagation after it, never under (see stateLock's KDoc).
             val (tag, advanced) = synchronized(stateLock) {
                 val minted = Timestamp(tagSource, ++tagCounter)
+                mintedHere[minted.counter] = element // computenet-dwkp provenance; see [fenceProvenance]
                 adds.getOrPut(element) { mutableSetOf() } += minted
                 minted to foldDelivered(listOf(minted)) // a local mint is trivially contiguous
             }
@@ -204,6 +422,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
                 val seen = liveTags(element)
                 if (seen.isEmpty()) return
                 val dot = Timestamp(tagSource, ++tagCounter)
+                mintedHere[dot.counter] = element // computenet-dwkp provenance; see [fenceProvenance]
                 val entry = seen + dot
                 dels.getOrPut(element) { mutableSetOf() } += entry
                 entry to foldDelivered(listOf(dot)) // a local mint is trivially contiguous
@@ -219,13 +438,41 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // straddle another writer, and no outbound call happens under the
         // monitor — neither the listener notification nor the re-emission.
         val (effective, advanced) = synchronized(stateLock) {
-            val newAdds = delta.adds
+            // THE RE-ADMISSION FENCE (`[24-TAG-04]` clause 2, computenet-pay7).
+            // Novelty here is `tags − adds[e]` (resp. `dels[e]`), and a tag
+            // [compactBelow] discarded is absent from those maps again — which is
+            // exactly why a duplicated or reordered frame re-delivering it read as
+            // NEW information and resurrected the element. `− reclaimed` is the
+            // receiver-side memory that closes it: a tag this replica reclaimed is
+            // inadmissible however it arrives.
+            //
+            // **Both lanes, and the del lane is not incidental.** Fencing only
+            // `adds` would let a re-delivered `dels` entry rebuild a tombstone the
+            // reclaimer then discards again on its next pass, and each rebuild
+            // re-emits — the non-terminating loop `GcSafetySweep.RECLAIM_UNTIL`
+            // exists to bound. Fencing both makes a replayed frame carry no
+            // novelty at all, so the echo dies here as any other duplicate does.
+            //
+            // **Nothing is lost from the delivered frontier by not folding a
+            // fenced tag.** A tag is only ever reclaimed when its whole `dels`
+            // entry was ≤ the frontier compaction was driven from, so it was
+            // already folded before it was discarded, and [DeliveredFrontier] is
+            // monotone: re-folding it could not raise a prefix.
+            val novelAdds = delta.adds
                 .mapValues { (e, tags) -> tags - (adds[e] ?: emptySet()) }
                 .filterValues { it.isNotEmpty() }
-            val newDels = delta.dels
-                .mapValues { (e, tags) -> tags - (dels[e] ?: emptySet()) }
+            // What the fence rejected — and, crucially, what this replica must
+            // now REPAIR. See the "silent fence" note below.
+            val fenced = novelAdds
+                .mapValues { (e, tags) -> tags.filterTo(mutableSetOf()) { reclaimed.holds(e, it) } }
                 .filterValues { it.isNotEmpty() }
-            if (newAdds.isEmpty() && newDels.isEmpty()) return // echo terminates here
+            val newAdds = novelAdds
+                .mapValues { (e, tags) -> tags - fenced[e].orEmpty() }
+                .filterValues { it.isNotEmpty() }
+            val newDels = delta.dels
+                .mapValues { (e, tags) -> (tags - (dels[e] ?: emptySet())).filterTo(mutableSetOf()) { !reclaimed.holds(e, it) } }
+                .filterValues { it.isNotEmpty() }
+            if (newAdds.isEmpty() && newDels.isEmpty() && fenced.isEmpty()) return // echo terminates here
             newAdds.forEach { (e, tags) -> adds.getOrPut(e) { mutableSetOf() } += tags }
             newDels.forEach { (e, tags) -> dels.getOrPut(e) { mutableSetOf() } += tags }
             // advance the per-origin delivered frontier before re-emitting: membership
@@ -240,7 +487,36 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // the dot minted by the remove rides in the same entry, and folding
             // the entry is what makes `dot ≤ stableFrontier` mean "every open
             // member delivered this remove".
-            SetDelta(newAdds, newDels) to
+            // A SILENT FENCE IS NOT SAFE — the repair emission (computenet-pay7).
+            //
+            // MEASURED, and it is the whole difference between this design and a
+            // dead end: fencing alone drove the sweep's STABLE resurrections to 0
+            // and took membership divergence from 3 of 200 to **30 of 200** — the
+            // same order as the per-source floor's 31-33, and for the related
+            // reason. A fenced sender is a replica that still holds the add-tag
+            // LIVE and has no tombstone for it (it missed the remove, or departed
+            // across it). Dropping its frame on the floor leaves it live there and
+            // absent here, for ever: the resurrection is converted into a
+            // permanent divergence rather than removed, which is exactly the trap
+            // `GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE` exists to expose.
+            //
+            // So a fenced add-tag is answered with a minimal tombstone naming
+            // exactly that tag. The fence is the evidence that it was covered by a
+            // remove this replica saw certified delivered, so the covering `dels`
+            // entry can be reconstructed from the tag alone — no dot is minted,
+            // because no new remove happened and nothing new needs certifying.
+            // The receiver folds it, drops the element, and (once the tag is below
+            // its own frontier) reclaims and fences it in turn, so the fence
+            // spreads instead of fragmenting the mesh.
+            //
+            // It cannot loop: the repair is re-emitted only for a tag that is
+            // novel against `adds` here, and a peer that has folded the repair
+            // answers with a `dels` frame whose every tag this replica fences
+            // above, yielding no novelty at all.
+            val repaired =
+                if (fenced.isEmpty()) newDels
+                else (newDels.keys + fenced.keys).associateWith { newDels[it].orEmpty() + fenced[it].orEmpty() }
+            SetDelta(newAdds, repaired) to
                 foldDelivered(newAdds.values.flatten() + newDels.values.flatten())
         }
         notifyDelivered(advanced)
@@ -279,30 +555,56 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * source with no entry in [frontier] reads as bottom, so nothing of that
      * source is ever discarded.
      *
-     * **This still records nothing.** [delivered], [tagCounter] and
-     * [deliveryListeners] are untouched, nothing is emitted, and a later delta
-     * carrying a discarded tag is re-admitted as new information by
-     * [applyRemote] (novelty there is `tags − adds[e]`, and a discarded tag is
-     * absent from `adds[e]` again). That is `[24-TAG-04]`'s SECOND clause and
-     * it is still open — computenet-9sm.6's re-admission fence.
+     * **What it DOES record: the re-admission fence** (`[24-TAG-04]`'s SECOND
+     * clause, computenet-pay7). Every tag discarded here is recorded in
+     * [ReclaimedDots], and [applyRemote] subtracts that set from the novelty it
+     * computes on BOTH lanes. Without it, novelty is `tags − adds[e]` and a
+     * discarded tag is absent from `adds[e]` again, so a duplicated or reordered
+     * frame re-delivering it read as new information and resurrected the element
+     * — MEASURED at 6 of 200 sweep seeds on this base (see below).
+     * [delivered], [tagCounter] and [deliveryListeners] are still untouched and
+     * nothing is still emitted; only the fence is new.
      *
-     * **What computenet-v2ka measured about that fence, because it tried to
-     * build it here and could not make it safe.** With the del-dot in place the
-     * residual under the sweep's `gc-dup`/`gc-reorder` adversary is 8-10 of 200
-     * seeds across three independent 200-seed runs (8, 9, 10 — `concord/corpus/DISPUTES.md`
-     * `## KE3-GC-DEL-LANE`), every one a duplicated or reordered frame re-delivering a tag this
-     * method had already discarded. A **per-source re-admission floor** — the
-     * obvious fix, and the one computenet-9sm.6-D2 plans — does drive those to
-     * ZERO, and is nonetheless **not safe**: in all three variants tried (floor
-     * raised to the discarded counter; the same capped at this replica's own
-     * max-contiguous delivered prefix; and that cap with the delivered frontier
-     * restricted to the add lane so it can only certify tags the replica holds)
-     * it fenced *live* add-tags and left **31-33 of 200 seeds with permanently
-     * diverged memberships**, against a no-reclaimer control floor of 2-4. The
-     * resurrection observable reports all of that as GREEN — the divergence is
-     * only visible to `GcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE`, which this
-     * bead added for exactly that reason. Whoever builds the fence needs a
-     * causal context, not a per-source high-water.
+     * **Why a dot set and not a floor, which is the design constraint this bead
+     * inherited.** computenet-v2ka tried the obvious shape — a **per-source
+     * re-admission floor** — in three variants (floor raised to the discarded
+     * counter; the same capped at this replica's own max-contiguous delivered
+     * prefix; and that cap with the delivered frontier restricted to the add
+     * lane so it can only certify tags the replica holds). All three drove
+     * resurrections to ZERO and all three were **not safe**: they fenced *live*
+     * add-tags and left **31-33 of 200 seeds with permanently diverged
+     * memberships**, against a no-reclaimer control floor of 2-4. Below any
+     * floor a source has minted, reclaimed and live counters interleave, and a
+     * high-water cannot tell "this tag was reclaimed" from "this tag is below a
+     * position I reached". [ReclaimedDots] records only the former, so a live
+     * tag cannot enter the fence at all.
+     *
+     * **What this build MEASURED, seeds 1..200 at budget 40_000, 16-core macOS
+     * under load (`GcSafetySweepTest`):**
+     *
+     * | build | STABLE resurrecting | STABLE diverging | CONTROL diverging |
+     * |---|---|---|---|
+     * | del-dot only (base `b1180c935`) | 6 | 3 | 2 |
+     * | + this fence, WITHOUT the repair emission | 0 | **30** | 3 |
+     * | + this fence and its repair emission | 0 | 5-8 | 1-4 |
+     *
+     * The middle row is the finding worth carrying: a fence that only DROPS a
+     * replayed frame does not remove the failure, it converts a resurrection
+     * into a permanent divergence at the same order as the per-source floor.
+     * See [applyRemote] for the repair emission that closes it. The last row is
+     * a band across four 200-seed runs, with the control measured in each of
+     * them; the excess over the control is accounted for in
+     * `GcSafetySweepTest`'s `MAX_STABLE_DIVERGING` KDoc, and it is the rig's own
+     * late-write floor rather than a fenced live tag (an even-ordinal element in
+     * that workload is never removed, so its add-tag can never enter the fence).
+     *
+     * The resurrection observable alone would report a per-source floor as
+     * GREEN, which is why the divergence column is read beside it against the
+     * no-reclaimer `Trigger.NONE` control arm rather than against zero.
+     *
+     * **The fence is not free, and the cost is [ReclaimedDots]'s**: reclamation
+     * exchanges per-element tombstone maps for a per-source list of contiguous
+     * counter runs. That is a reduction, not a bound.
      *
      * Also still out of scope here: checkpoint wiring, the
      * `StateRequest(since)` below-the-floor full-state fallback, and
@@ -328,6 +630,12 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             }
             if (!allCovered) continue
             val covered = delTags.toSet()
+            // THE FENCE'S ONLY WRITER (`[24-TAG-04]` clause 2, computenet-pay7).
+            // Exactly what is discarded is what is remembered — the del-dot, the
+            // add-tags it covered, and nothing else. A live add-tag is never in
+            // `covered`, so it can never enter the fence, which is the whole
+            // difference from the per-source floor this bead's acceptance forbids.
+            covered.forEach { reclaimed.record(element, it) }
             delTags -= covered
             discarded += covered.size
             adds[element]?.let { addTags ->
@@ -342,6 +650,97 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         }
         emptiedDels.forEach { dels.remove(it) }
         discarded
+    }
+
+    /**
+     * The tags that make [element] live here: `adds[element] − dels[element]`.
+     *
+     * A **diagnostic read of the fence's input**, paired with [fencedAmong]
+     * (computenet-vhlm). It exists so a harness can ask the attribution
+     * question directly — "is this replica missing an element *because* the
+     * fence rejected the tag that would have admitted it?" — instead of
+     * inferring it from the shape of the workload. `GcSafetySweepTest`'s
+     * membership-divergence check previously argued that from the sweep's
+     * remove schedule (only odd ordinals are ever removed, so an even-ordinal
+     * tag is structurally un-fenceable); that argument is real but is an
+     * inference about the rig, and the acceptance it stood under asked for a
+     * measurement of the replica.
+     *
+     * Read-only and takes no lock the caller can observe; it is not part of
+     * the replication protocol and nothing in [applyRemote] or [compactBelow]
+     * consults it.
+     */
+    internal fun liveTagsOf(element: E): Set<Timestamp> = liveTags(element)
+
+    /**
+     * Which of [tags] this replica has reclaimed — the direct read of
+     * [ReclaimedDots], the fence's own state (computenet-vhlm).
+     *
+     * A non-empty result on a replica that is MISSING the element those tags
+     * make live elsewhere is the fence being the cause of that divergence; an
+     * empty result on every such replica is the fence being exonerated, by
+     * measurement rather than by ordinal parity. See [liveTagsOf].
+     */
+    internal fun fencedAmong(element: E, tags: Set<Timestamp>): Set<Timestamp> = synchronized(stateLock) {
+        tags.filterTo(mutableSetOf()) { reclaimed.holds(element, it) }
+    }
+
+    /**
+     * Whether this replica's fence holds any tag at all for [element] — the fourth diagnostic
+     * read of the [liveTagsOf]/[fencedAmong]/[fenceProvenance] family, added for
+     * computenet-dwkp's ORDERING measurement.
+     *
+     * [fencedAmong] answers "is THIS tag fenced here", which a check at quiescence can ask
+     * because it already holds the live tags from the holding replica. A step hook watching a
+     * run unfold cannot: at the compaction point where the del-dot is reclaimed, the tag it
+     * wants to name is precisely the one that has just been discarded and is therefore no
+     * longer live anywhere it can read. So the instrument asks the existence question and
+     * stamps the STEP at which the answer first turns true — which is the step
+     * [compactBelow] fenced the element, to within one compaction period.
+     *
+     * Read-only, additive, and consulted by no protocol path, exactly as its three siblings.
+     */
+    internal fun fencesAny(element: E): Boolean = synchronized(stateLock) { reclaimed.anyFor(element) }
+
+    /**
+     * The PROVENANCE of a fenced tag — computenet-dwkp's measurement, and the third
+     * diagnostic read of this family after [liveTagsOf] and [fencedAmong].
+     *
+     * [fencedAmong] says a tag is fenced HERE; it does not say *which incarnation of this
+     * replica* minted it, and that is the whole of computenet-dwkp's open question. The
+     * hypothesis under test is computenet-vhlm's recorded residual — "a rejoining
+     * incarnation that re-mints a colliding counter for *the same* element is still
+     * wrongly fenced" — which requires the fenced tag to have been minted by a DIFFERENT
+     * incarnation than the one now holding the fence, i.e. by a journal/checkpoint replay
+     * or by a re-mint after the counter restarted at 0.
+     *
+     * So the read answers exactly two questions, per the bead:
+     *
+     *  - **Is the fencing incarnation a rejoin?** `inc` is this instance's 1-based
+     *    construction ordinal for its `tagSource`, and `incTotal` how many exist now.
+     *    It is a PROCESS-WIDE count and a weak signal on its own: a sweep harness that
+     *    derives its ids from the seed (`ChurnMesh`: `churn-mesh-data:${'$'}{plan.seed}`)
+     *    re-uses one `tagSource` across every arm and every re-execution of that seed in
+     *    the same JVM, so `inc > 1` counts those too and not only rejoins. The unambiguous
+     *    reads are `restores` and `mintedHere` below, plus the harness's own departure
+     *    history for the peer.
+     *  - **Was the fenced tag minted by a replay?** `restores` counts [restore] calls on
+     *    this instance (a replayed instance has `restores > 0`), and `mintedHere` names the
+     *    element THIS instance minted that counter for, or `ABSENT` when this instance never
+     *    minted it at all. `mintedHere=<the same element>` means one incarnation both minted
+     *    and fenced the tag — no cross-incarnation collision, and the hypothesis is refuted
+     *    for that tag. `ABSENT` or a different element means the mint and the fence came from
+     *    different incarnations, which is the residual.
+     *
+     * `own` reports whether the tag's source is this replica's own `tagSource` at all; a
+     * fenced tag from another source cannot be a same-source re-mint by construction.
+     */
+    internal fun fenceProvenance(element: E, tag: Timestamp): String = synchronized(stateLock) {
+        val own = tag.sourceId == tagSource
+        val minted = if (mintedHere.containsKey(tag.counter)) "${mintedHere[tag.counter]}" else "ABSENT"
+        val total = incarnations[tagSource]?.get() ?: diagnosticIncarnation
+        "tag=${tag.counter} own=$own inc=$diagnosticIncarnation/$total restores=$restoreCount " +
+            "mintedHere=$minted sameElement=${own && mintedHere[tag.counter] == element}"
     }
 
     /**
@@ -454,6 +853,21 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
                 "adds" to HashMap(adds.mapValues { HashSet(it.value) }),
                 "dels" to HashMap(dels.mapValues { HashSet(it.value) }),
                 "counter" to tagCounter,
+                // The re-admission fence is state too (computenet-pay7): a
+                // checkpoint-restored replica that forgot what it had reclaimed
+                // would re-admit the next replayed frame exactly as an unfenced
+                // one does. Additive — [restore] treats an absent key as an empty
+                // fence, so a pre-fence checkpoint still loads.
+                //
+                // ADDING A KEY HERE IS NOT LOCAL (feature review, computenet-pay7):
+                // `civictech.inspect.ValueEncoder.orSetMembership` recognises an
+                // OR-set snapshot by its key set, tolerating only the names it
+                // lists in `OR_SET_OPTIONAL_KEYS`. `"reclaimed"` arriving without
+                // that pairing is what turned five `:inspect` tests red on a diff
+                // that touched no `:inspect` file. A new key here must be added
+                // there in the same change — the pairing is deliberate, and this
+                // is its other half.
+                "reclaimed" to reclaimed.save(),
             )
         )
     }
@@ -466,6 +880,8 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         (maps.getValue("adds") as Map<E, Set<Timestamp>>).forEach { (e, tags) -> adds[e] = tags.toMutableSet() }
         (maps.getValue("dels") as Map<E, Set<Timestamp>>).forEach { (e, tags) -> dels[e] = tags.toMutableSet() }
         tagCounter = maps["counter"] as? Long ?: 0L
+        reclaimed.restore(maps["reclaimed"]) // absent on a pre-fence checkpoint: an empty fence
+        restoreCount++ // computenet-dwkp provenance; see [fenceProvenance]
         Unit
     }
 
@@ -671,6 +1087,16 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
 
     companion object {
         fun <E> create(): SetApi<E> = SetCell()
+
+        /**
+         * Per-`tagSource` construction count — the ONLY way an instance can tell that an
+         * earlier incarnation of itself existed, since `tagSource` is derived from the ref
+         * and a rejoining replica reuses the ref by construction (computenet-dwkp). Process-
+         * wide and never pruned: it is diagnostic-only, one `AtomicInteger` per distinct
+         * (id, instanceId) a test constructs, and nothing reads it on a protocol path.
+         */
+        private val incarnations =
+            java.util.concurrent.ConcurrentHashMap<UUID, java.util.concurrent.atomic.AtomicInteger>()
 
         // Crude, deliberately: StateRead.byteBudget is advisory and
         // cell-estimated, and an estimate a cell cannot make it is free to

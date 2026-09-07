@@ -2661,9 +2661,37 @@ property is statable at the driver and not in the corpus.
   went from `discardedA=2 discardedC=2` and `resurrected=[e]` at A and C, to
   `discardedA=0 discardedC=0` and nothing resurrected, on the same schedule
   and the same stable-frontier value.
-- **STILL OPEN — the re-admission half, and it is why this entry is not
-  retired.** `[24-TAG-04]`'s second clause ("SHALL NOT re-admit it as new
-  information") has no mechanism. `GcSafetySweepTest`'s BS-12 arm is still
+- **CLOSED 2026-09-06 by computenet-pay7 — the re-admission half, with a
+  causal-context fence.** `SetCell.compactBelow` records the exact dots it
+  discards (`ReclaimedDots`, a per-source **dot set** compressed as contiguous
+  counter runs — deliberately not the high-water floor this entry rejects
+  below), `applyRemote` subtracts that set from the novelty it computes on both
+  lanes, and — the second half, and the one that is easy to miss — a fenced
+  add-tag is answered with a minimal covering `dels` entry naming exactly that
+  tag. MEASURED on `b1180c935`, seeds 1..200 at budget 40_000, four independent
+  200-seed runs: STABLE resurrecting **0 of 200** in every run (from 6 on this
+  base before the fence), membership-diverging **5-8** against a no-reclaimer
+  CONTROL arm measuring **1-4** in the same runs. `[KE3-23]`'s "Check to
+  restore" below is therefore reached, and `GcSafetySweepTest`'s two pinning
+  assertions are FLIPPED rather than deleted, on the same recorded seed.
+  **The excess over the control is recorded, not explained away**: the
+  workload removes only odd-ordinal writes, so an even-ordinal element's
+  add-tag can never enter any `dels` entry and therefore can never be fenced —
+  and the majority of the diverging seeds differ by exactly one such element,
+  the rig's own late-write floor reached on more seeds because the fence
+  removes the discard/re-admit churn (`discarded` falls ~64_000 → ~5_900).
+  What remains genuinely open here is **concord coverage**: no scenario yet
+  drives `[24-TAG-04]` or `[KE3-31]`, so they stay coverage-gap rows.
+- **A FENCE THAT ONLY DROPS THE FRAME IS NOT SAFE EITHER — measured, so
+  nobody pays for it twice.** The first build of the above fenced the replayed
+  frame and emitted nothing. It drove STABLE resurrections to 0 and took
+  membership divergence from 3 of 200 to **30 of 200** — the same order as the
+  per-source floor, and for the related reason: a fenced sender is a replica
+  that still holds the add-tag live with no tombstone, so dropping its frame
+  converts the resurrection into a permanent divergence instead of removing
+  it. Only `MEMBERSHIP_DIVERGENCE_FAILURE` can see that.
+- **What the open half WAS, before that.** `[24-TAG-04]`'s second clause
+  ("SHALL NOT re-admit it as new information") had no mechanism. `GcSafetySweepTest`'s BS-12 arm is still
   branch F-B at 8-10 resurrecting seeds per 200 (down from 8-12), every one a
   duplicated or reordered frame re-delivering a tag the reclaimer had already
   discarded. `[KE3-23]` and `[KE3-31]` therefore remain uncovered.
@@ -2679,8 +2707,9 @@ property is statable at the driver and not in the corpus.
   `aaae37095`, measured STABLE resurrecting on **10** of 200 — so across three
   200-seed runs (8, 9, 10) the band is 8-10, not the 7-9 or 8-9 this entry and
   the KDoc sites once stated separately.
-  So the acceptance criterion's "zero resurrecting seeds" is **NOT met**, and
-  is recorded here rather than reached by relaxing the harness.
+  At the time that was written the acceptance criterion's "zero resurrecting
+  seeds" was **NOT met**, and was recorded here rather than reached by relaxing
+  the harness. It is met as of computenet-pay7, above.
 - **What was measured and rejected, so nobody pays for it twice**: a
   **per-source re-admission floor** — the obvious fix, and the one
   computenet-9sm.6-D2 plans — drives the resurrections to ZERO and is not
@@ -2705,8 +2734,10 @@ property is statable at the driver and not in the corpus.
 - **Check to restore**: `GcSafetySweepTest`'s BS-12 arm reaches branch **G**
   — zero resurrecting seeds AND membership divergence no worse than the
   CONTROL arm's, across the same `SEEDS` range and adversary.
-- **Revisit trigger**: a re-admission fence with causal-context shape (not a
-  per-source floor) lands on `SetCell`/`TagState`.
+- **Revisit trigger**: LANDED (computenet-pay7, `SetCell`) — see the CLOSED
+  bullet. The remaining trigger is `OrMapCell`/`TagState` reclamation
+  (computenet-9sm.8), which has no reclaimer yet and so no fence, and a concord
+  scenario for `[24-TAG-04]`/`[KE3-31]`.
 
 ## `42-WM-FREEZE-01` — an unclean departure's frozen-stability notice, and the clean-departure row close, are not observable through the driver SPI (`schema-gap` + `check-vocabulary-gap` + `driver-binding-gap`)
 

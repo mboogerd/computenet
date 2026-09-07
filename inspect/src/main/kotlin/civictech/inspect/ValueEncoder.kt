@@ -56,6 +56,25 @@ object ValueEncoder {
     const val MAX_BYTES = 50_000
 
     /**
+     * The `SetCell.snapshot()` keys [orSetMembership] READS. All three must be
+     * present for a map to be an OR-set snapshot at all.
+     */
+    private val OR_SET_REQUIRED_KEYS = setOf("adds", "dels", "counter")
+
+    /**
+     * `SetCell.snapshot()` keys this encoder tolerates but does not read —
+     * additive kernel state that does not change what membership is. Adding a
+     * name here is the deliberate half of the pairing [orSetMembership]'s KDoc
+     * describes; anything NOT named here still disqualifies the map, so an app
+     * map keyed `"adds"`/`"dels"` is not mistaken for an OR-set.
+     *
+     * - `reclaimed` — the re-admission fence ([`24-TAG-04`] clause 2,
+     *   computenet-pay7). A per-source dot set of tags `compactBelow` discarded;
+     *   it is receiver-side memory, never membership.
+     */
+    private val OR_SET_OPTIONAL_KEYS = setOf("reclaimed")
+
+    /**
      * V1C-BE — the row allowance a *page* encode passes to
      * [encode]`(state, maxRows, maxBytes)`: none. See that overload's doc for
      * why the read's `limit` is the page's row bound and re-imposing a second
@@ -276,9 +295,26 @@ object ValueEncoder {
      * An element is live iff it holds an add-tag with no matching del-tag
      * (`SetCell`'s own rule), so tombstoned elements are absent from the
      * reported state, exactly as `SetView.current()` would report them.
+     *
+     * **The key test is REQUIRED-plus-known-optional, not equality** (repaired
+     * under computenet-pay7). It was `keys == {adds, dels, counter}`, and
+     * `SetCell`'s snapshot is ADDITIVE — its `restore` treats an absent key as
+     * a default, so the kernel may add one without a version bump. It did:
+     * `"reclaimed"` (the re-admission fence) arrived and every SetCell state
+     * panel silently stopped being an OR-set and started rendering as the raw
+     * four-row map, which is how `:inspect`'s `ValueEncoderTest`,
+     * `InspectorPagedStateTest` and `InspectorObserveTest` went red on a diff
+     * that touched no `:inspect` file. Equality on the key set makes this
+     * encoder break on every future additive snapshot field; requiring the
+     * three load-bearing keys and tolerating only keys we NAME keeps the
+     * discrimination the KDoc above promises — an app map keyed
+     * `"adds"`/`"dels"` with anything else in it is still not an OR-set.
+     * A new kernel snapshot key must be added to [OR_SET_OPTIONAL_KEYS] here,
+     * deliberately, so the pairing stays visible.
      */
     private fun orSetMembership(map: Map<*, *>): Set<Any?>? {
-        if (map.keys != setOf("adds", "dels", "counter")) return null
+        if (!map.keys.containsAll(OR_SET_REQUIRED_KEYS)) return null
+        if (!(OR_SET_REQUIRED_KEYS + OR_SET_OPTIONAL_KEYS).containsAll(map.keys)) return null
         val adds = map["adds"] as? Map<*, *> ?: return null
         val dels = map["dels"] as? Map<*, *> ?: return null
         if (map["counter"] !is Number) return null

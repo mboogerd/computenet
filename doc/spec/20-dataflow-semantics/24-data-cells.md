@@ -684,10 +684,10 @@ layer G-62 — both cited from those gaps, neither owed by this section.
 
 Four tag-algebra rules govern replication, RESTART, instance swap, and
 compaction. They are decided design (93 I-14, I-22, I-27, 96 E3.7);
-`[24-TAG-02]` is implemented (W2.1), `[24-TAG-04]` is **half** implemented
-(its del-dot and every-tag discard rule landed with computenet-v2ka; its
-re-admission clause is open — see that bullet), and `[24-TAG-01]` and
-`[24-TAG-03]` are not.
+`[24-TAG-02]` is implemented (W2.1), `[24-TAG-04]` is implemented (its del-dot
+and every-tag discard rule landed with computenet-v2ka; its re-admission fence
+with computenet-pay7 — see that bullet), and `[24-TAG-01]` and `[24-TAG-03]`
+are not.
 
 *(The ⚠ EARS-GAP that used to stand here asked a spec editor with fuller
 context to confirm or retract the `[24-TAG-*]` ids, on the suspicion that the
@@ -816,20 +816,43 @@ that is what the per-rule notes below now say instead of one blanket line.)*
   del-dot restores the sentence's intent by making "converged past it" mean
   past the remove.
 
-  **Still open, and this rule is not safe without it: the second clause.**
-  Nothing yet stops a duplicated, reordered or replayed frame carrying a
-  discarded tag from being re-admitted as new information — novelty is
-  `tags − adds[e]`, and a discarded tag is absent from `adds[e]` again. The
-  residual is 8-10 of 200 sweep seeds, across three independent 200-seed runs
-  (8, 9, 10; `concord/corpus/DISPUTES.md` `## KE3-GC-DEL-LANE`). computenet-v2ka **measured that a
-  per-source re-admission floor does not close it safely**: it drives the
-  resurrections to zero and fences *live* add-tags in the process, leaving
-  31-33 of 200 seeds with permanently diverged memberships against a
+  **The second clause landed 2026-09-06 with computenet-pay7: a causal-context
+  re-admission fence.** Before it, nothing stopped a duplicated, reordered or
+  replayed frame carrying a discarded tag from being re-admitted as new
+  information — novelty is `tags − adds[e]`, and a discarded tag is absent from
+  `adds[e]` again. `SetCell.compactBelow` now records the exact dots it
+  discards, and `applyRemote` subtracts that recorded set from the novelty it
+  computes on **both** lanes. The shape is load-bearing and is stated as a
+  requirement, not an implementation note: the retained set SHALL be the set of
+  discarded dots, and SHALL NOT be a per-source high-water floor.
+  computenet-v2ka **measured that a floor does not close this safely** — it
+  drives the resurrections to zero and fences *live* add-tags in the process,
+  leaving 31-33 of 200 seeds with permanently diverged memberships against a
   no-reclaimer control floor of 2-5, in each of three variants (raised to the
-  discarded counter; capped at the replica's own delivered prefix; and that
-  cap with the delivered frontier restricted to tags the replica holds). The
-  fence needs a causal context, not a per-source high-water. Until it exists,
-  a reclaimer built on this rule is unsafe under duplicate/reorder faults.
+  discarded counter; capped at the replica's own delivered prefix; and that cap
+  with the delivered frontier restricted to tags the replica holds). Below any
+  floor a source has minted, reclaimed and live counters interleave, and a
+  high-water cannot tell "this tag was reclaimed" from "this tag is below a
+  position I reached".
+
+  **A fence that only drops the frame is also not safe, and that is the second
+  measured finding.** A replica whose frame is fenced is one that still holds
+  the add-tag LIVE with no tombstone for it; dropping its frame silently leaves
+  the element live there and absent here for ever. MEASURED: fencing alone took
+  the sweep's STABLE resurrections to 0 and its membership divergence from 3 of
+  200 to **30 of 200** — the same order as the rejected floor. So a cell that
+  fences an add-tag SHALL answer it with a covering `dels` entry naming exactly
+  that tag: the fence is the evidence the tag was covered by a remove observed
+  delivered, so the covering entry is reconstructible from the tag alone, and
+  no new del-dot is minted because no new remove occurred. With the repair the
+  sweep reads 0 resurrecting and 5-8 membership-diverging of 200 against a
+  no-reclaimer control of 1-4 in the same runs
+  (`doc/kernel-lane-findings.md` `## KE3-GC-DEL-DOT`).
+
+  **Cost, stated where the rule is.** The retained dot set is compressed as
+  per-source contiguous counter runs, so reclamation is a real reduction in
+  retained state and **not a bound**; a bounded form needs epoch hygiene
+  (G-42, below).
 
 ⚠ GAP (G-42): Epoch source-ids and restart generations accrete unboundedly:
 OR-set/PN source columns, stale glitch-free partial-wave buffers, and
