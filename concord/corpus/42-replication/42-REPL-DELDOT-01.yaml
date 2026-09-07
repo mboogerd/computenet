@@ -1,0 +1,70 @@
+# Concord corpus scenario (computenet-yyzn, profile: dist).
+# Canonical schema — see concord/schema/scenario.md.
+#
+# computenet-yyzn's positive half: `KernelDriverDist.describes()` gained a
+# `SetDelta` `remove` arm (`concord/src/main/kotlin/civictech/concord/driver/kernel/KernelDriverDist.kt`)
+# because an OR-set `remove` has minted its own del-dot into `SetDelta.dels`
+# since computenet-v2ka — a real `(source, counter)` position beside the
+# add-tags it covers, which no `describes()` arm could previously name. This
+# scenario is the corpus-side witness that a `retransmit` step CAN now name
+# that position: `op: remove, value: x` against the del-dot `r1` minted when
+# it removed `x` is accepted (the step does not refuse), and the duplicate
+# echo-terminates at the gossip inlet exactly like `42-TMAP-REPL-01`'s `put`/
+# `add` duplicates do.
+#
+# What this scenario does NOT prove, and why not here: that naming the SAME
+# element under `op: remove` at an ADD-tag's counter (rather than the
+# del-dot's) is refused — the second half of this task's acceptance
+# criteria. The closed step vocabulary gives a `retransmit` step no way to
+# assert "this step is expected to throw" (`concord/schema/scenario.md`'s
+# `expect-failure:` names a *check* from `checks:` that must fail, evaluated
+# only after a run completes — `CorpusRunner.runScript` calls
+# `driver.retransmit(...)` with no try/catch, so a driver refusal there is an
+# uncaught exception that fails the JUnit node outright, under every `kind:`).
+# Nor does retransmit's *effect* depend on `op:`/`value:` once `describes()`
+# admits the call — it re-delivers the recorded `Emission` verbatim — so no
+# downstream `checks:` entry could distinguish a correctly- from a
+# incorrectly-guarded arm either. That half is a driver-level unit-test
+# property (`concord/src/test/kotlin/civictech/concord/driver/kernel/RetransmitBindingTest.kt`
+# already has the TaggedMapDelta-`put` sibling: "a retransmit whose op-value
+# does not describe the recorded dot is refused"); it needs a file outside
+# this task's claim and is reported on the bead rather than reached for here.
+#
+# `counter: 2` names `r1`'s del-dot deterministically: `SetCell` mints one tag
+# per local `add`/effective `remove`, in call order, and `r1` here calls
+# `add` once (counter 1) then `remove` once (counter 2) before anything else
+# touches its tag source.
+id: 42-REPL-DELDOT-01
+title: A retransmit step names an OR-set remove's del-dot, and the duplicate echo-terminates at the gossip inlet
+covers: [42-REPL-04]
+profile: dist
+kind: example
+narrative:
+  given: two set-source replicas of one logical cell, one per host, each observed through its own set view
+  when: r1 adds then removes an element, the mesh heals, and r2 is handed back a duplicate of r1's del-dot
+  then: the retransmit step is accepted (its op/value describe the del-dot) and re-emits nothing at r2
+graph:
+  hosts: [h1, h2]
+  cells:
+    - {id: r1, type: set-source, of: string, host: h1, replica-of: shared}
+    - {id: r2, type: set-source, of: string, host: h2, replica-of: shared}
+    - {id: v1, type: set-view, host: h1}
+    - {id: v2, type: set-view, host: h2}
+  links:
+    - {from: r1, to: v1}
+    - {from: r2, to: v2}
+script:
+  - {type: apply, on: r1, op: add, value: x}       # r1's counter 1 (an add-tag — NOT the position this scenario names)
+  - {type: apply, on: r1, op: remove, value: x}    # r1's counter 2 — the del-dot, covering counter 1
+  - {type: quiesce}                                # the heal: every in-flight delta is gossiped and merged
+  # duplicate delivery of the del-dot: r2 is handed back, at its gossip inlet,
+  # a dot r1 already gossiped it — same payload, same (source, counter). The
+  # `op: remove, value: x` pair must describe the RECORDED dot at counter 2
+  # (r1's del-dot for `x`) or this step refuses ([describes]); the arm added
+  # by this task is what makes that description resolve.
+  - {type: retransmit, on: r2, source: r1, counter: 2, op: remove, value: x}
+checks:
+  - {type: replicas-converge, logical: shared}
+  - {type: views-converge, views: [v1, v2]}
+  - {type: no-dead-letters}
+  - {type: emission-count, cell: r2, since: 4, exactly: 0}
