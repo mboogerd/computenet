@@ -1305,10 +1305,14 @@ reason. It is not the unbounded-per-mint retention `computenet-fzd3` was filed a
 
 ### Scope, stated as a limit
 
-- This closes the shape `## KE3-23-ROWCONTENT` measured. It does **not** assert that it closes
+- This closes the shape `## KE3-23-ROWCONTENT` measured. It does **not** close
   computenet-dwkp's seed-12 BS-12 occurrence, which ROWCONTENT already states it does not
-  account for (`lastDeparture=null` there). BS-12's rate is unmeasured against this change and
-  nothing here should be read as a claim about it.
+  account for (`lastDeparture=null` there) — and that is **observed, not assumed**: six
+  consecutive `GcSafetySweepTest` sweeps at the fix (darwin/arm64 16-core, load1 5.7-9.4,
+  2026-09-07) went 2 red, both `stableFenceAttributed … seeds=[12]`, the same signature and a
+  rate indistinguishable from the ~20-30%/sweep recorded on computenet-dwkp. n=6 bounds
+  nothing and is recorded as an occurrence, not a measurement: the class is unmoved, as
+  expected, and computenet-dwkp stays open.
 - The continuation is per `Replication` instance, i.e. per peer process. A replica that departs
   and returns in a DIFFERENT process carries its lane the way it always did — through
   `restore`, from a checkpoint. A process that loses its `Replication` and rebuilds a replica
