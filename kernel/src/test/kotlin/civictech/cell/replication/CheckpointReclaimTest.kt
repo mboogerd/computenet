@@ -248,16 +248,71 @@ class CheckpointReclaimTest {
         delTagCount(mesh.rb) shouldBe 8
         delTagCount(mesh.rc) shouldBe 8
 
-        // 4. `[KE3-31]`'s ordering constraint, observably: the maps and the
-        //    fence come out of one post-compaction state. A wiring that
-        //    compacted after serialising, or on a copy, would persist tombstones
-        //    with an empty fence (or an empty map with no fence) and re-admit on
-        //    restore.
+        // 4. The persisted result of the pass: emptied maps beside a grown
+        //    fence. NOTE (review, computenet-9sm.6.1) — this is a *state*
+        //    assertion and NOT a discriminator for `[KE3-31]`'s ordering: A has
+        //    already been reclaimed by the checkpoint above, so a wiring that
+        //    serialised before compacting would serialise the same empty maps
+        //    here and pass. Measured: inverting the two statements in
+        //    `SetCell.snapshot()` leaves every test in this file green. The
+        //    ordering discriminator is `the snapshot that reclaims serialises
+        //    the post-compaction state` below, which snapshots a cell that has
+        //    NOT yet been compacted.
         val snap = snapshotOf(mesh.ra)
         @Suppress("UNCHECKED_CAST")
         (snap["dels"] as Map<String, Set<Timestamp>>).keys.shouldBeEmpty()
         snap["reclaimed"] shouldNotBe null
         snap["reclaimed"].toString() shouldNotBe "{}"
+    }
+
+    /**
+     * `[KE3-31]`'s **ordering constraint**, as a discriminator (added at
+     * review, computenet-9sm.6.1).
+     *
+     * The requirement is not merely that a snapshot reclaims, but that the
+     * reclamation happens BEFORE the serialisation it accompanies, under one
+     * hold of `stateLock`: the persisted tag maps and the persisted
+     * `"reclaimed"` fence must come out of one post-compaction state, or a
+     * restore re-admits tags the fence says were discarded.
+     *
+     * The only way to see that is to read the return value of the SAME
+     * `snapshot()` call that does the compacting, on a cell that has not been
+     * compacted yet — which is why this cannot be folded into the tombstone
+     * test above, where the checkpoint has already emptied the maps and a
+     * serialise-then-compact wiring would serialise the same empty maps.
+     * Inverting the two statements in `SetCell.snapshot()` reddens the
+     * `dels`-empty assertion here and nothing else in this file.
+     */
+    @Test
+    fun `the snapshot that reclaims serialises the post-compaction state`() {
+        val controller = SimulationController()
+        val logicalId = UUID.randomUUID()
+        val mesh = Mesh(controller, logicalId)
+        val opA = mesh.ops(mesh.a, mesh.ra)
+
+        (1..3).forEach { opA.add("s$it") }
+        (1..2).forEach { opA.remove("s$it") }
+        controller.runToIdle()
+
+        // Non-vacuity: there ARE tombstones to reclaim at the moment of the call.
+        tombstonedElements(mesh.ra) shouldBe setOf("s1", "s2")
+        delTagCount(mesh.ra) shouldBe 4
+
+        // ONE snapshot, taken directly. It is the reclamation point and the
+        // serialisation point, in that order.
+        val snap = snapshotOf(mesh.ra)
+        trace("ordering", "dels" to snap["dels"], "reclaimed" to snap["reclaimed"])
+
+        @Suppress("UNCHECKED_CAST")
+        val dels = snap["dels"] as Map<String, Set<Timestamp>>
+        // The maps this call SERIALISED are the ones its own compaction emptied.
+        dels.values.flatten().shouldBeEmpty()
+        // ... and the fence it serialised alongside them is the matching one.
+        snap["reclaimed"].toString() shouldNotBe "{}"
+        // The call really did reclaim (so the emptiness above is compaction,
+        // not an empty cell).
+        delTagCount(mesh.ra) shouldBe 0
+        mesh.ra.membership() shouldBe setOf("s3")
     }
 
     /**
