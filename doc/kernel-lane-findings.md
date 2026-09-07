@@ -1138,3 +1138,165 @@ close *epoch*, the shape `suspendEpoch` already has), or an incarnation-distinct
 or a rejoin that must re-announce before it counts, is a **design decision this bead
 does not take** — and all three touch `WatermarkCell`, outside this bead's claim. The
 four computenet-dwkp prohibitions remain in force and untouched.
+
+## KE3-BS16-RETAINED — reclamation is an EXCHANGE: retained state as a whole is `O(elements ever reclaimed)`, and no `O(in-flight window)` bound over the whole is reachable without G-42
+
+**Bead**: `computenet-9sm.6.5`, under feature `computenet-9sm.6`, clause
+`[KE3-37]` (BS-16). **Measured 2026-09-07** on `NL-MGD6FQJW91/MacBoo`, a
+16-core Apple-silicon macOS host, with four sibling agents running
+concurrently (`uptime` 1-minute load 5.1-6.6 during the measurement runs, 18.97
+at dispatch). Reproduce with
+`./gradlew :kernel:test --tests 'civictech.cell.replication.RetainedStateBoundTest' --rerun`
+and read the `[BS-16]` lines out of
+`kernel/build/test-results/test/TEST-civictech.cell.replication.RetainedStateBoundTest.xml`
+(the run prints them to stdout, which Gradle's console swallows on a green run).
+
+### What `[KE3-37]` asks, and why the answer over the whole is negative
+
+BS-16 asks for a bound of the form `constant × (ops per checkpoint window)` — a
+constant times the in-flight window, **not** a function of wall time or op
+count — and `[KE3-37]` was rewritten to require it be stated over **retained
+state as a whole**: tombstone tags PLUS `ReclaimedDots.runCount` PLUS
+`ReclaimedDots.elementCount`. The rewrite closes a real trap: reclamation as
+landed is an **exchange**, not a removal, so a bound over tombstone count alone
+is satisfiable by moving the growth into the fence.
+
+`SetCell.compactBelow` discards a `dels` entry and the `adds` tags under it,
+and records exactly those tags in `ReclaimedDots` — **one element key per
+element ever reclaimed**, plus a per-`(element, source)` list of contiguous
+counter runs. Nothing prunes either. `compactBelow`'s own KDoc already says it:
+"a reduction, not a bound", with a bounded form needing epoch hygiene (G-42,
+research-gated, 95 R14).
+
+That is confirmed by measurement rather than by reading the code. With the
+in-flight window **pinned at one element** — add, remove, reclaim at a covering
+frontier, repeated — a `constant × ops-per-window` bound is a constant, so
+retained state must be flat as the op count rises. It is not:
+
+| add/remove pairs | tombstoneTags | fenceRuns | fenceElements | total |
+|---|---|---|---|---|
+| 25 | 0 | 25 | 25 | 50 |
+| 50 | 0 | 50 | 50 | 100 |
+| 100 | 0 | 100 | 100 | 200 |
+| 200 | 0 | 200 | 200 | 400 |
+| 400 | 0 | 400 | 400 | 800 |
+
+A **16x** rise in op count produces a **16.000x** rise in retained state, at a
+constant window. The tombstone column is the half that *is* `O(window)`: it
+returns to 0 at every reclaim point regardless of how many ops preceded it. The
+two fence columns are the half that is not, and they are the whole of the
+growth.
+
+### The churn arm — the workload `[KE3-37]` actually names
+
+The rig is `GcSafetySweep`'s, reused rather than rebuilt: 3 peers, `ChurnMesh`
+with `EVICT_CLEAN`/unclean churn and a per-step heartbeat task, 24 strided
+writes, every odd-ordinal one removed 90 steps later, and the **production
+reclaim trigger** — `SetCell.snapshot()` reading the stability hook
+(computenet-9sm.6.1/9sm.6.4) — fired every 25 controller steps. Retained state
+is sampled per member replica at every one of those points, *after* the
+reclaimer's hook at the same step. Seeds 1..20, budget 40 000.
+
+**Three consecutive runs** (a fourth, earlier run agrees), each ~16 500 samples
+per arm:
+
+| run | load (1m) | wall | STABLE total min/med/max | STABLE tombstoneTags min/med/max | CONTROL total min/med/max | runs/elements |
+|---|---|---|---|---|---|---|
+| 1 | 5.41 | 1 260 ms | 0/14/28 | 0/3/15 | 0/21/36 | 1.000 |
+| 2 | 5.38 | 1 170 ms | 0/14/26 | 0/3/15 | 0/21/36 | 1.000 |
+| 3 | 5.38 | 1 173 ms | 0/14/26 | 0/3/15 | 0/21/36 | 1.000 |
+
+The **spread is reported rather than a single number**, because
+`GcSafetySweepTest`'s reviewer measured large run-to-run variance in that rig's
+*divergence* counts (STABLE 4,5,5,5,8,9 against a control of 4,4,5,6,6,6 over
+ten 200-seed runs, and a second reader independently got STABLE 2 / CONTROL 8).
+This observable is far steadier — a retained COUNT read at a compaction point,
+not a convergence verdict — but it is not perfectly deterministic either: the
+STABLE total max moved 26/28/26/26 across four runs and the sample count moved
+16 503-16 545, so a single-run figure here is a point in a small band, not a
+constant. The tombstone max (15) and the control max (36) were identical in all
+four.
+
+**36 is the arithmetic ceiling** of the tombstone component on this workload —
+12 removes, each retaining its covered add-tag and its del-dot in `dels` plus
+the same add-tag still in `adds` — and the no-reclaimer control (`Trigger.NONE`)
+reaches it exactly. That is the growth the control is asked to show. The STABLE
+arm's 15 is a real reduction of that component.
+
+**What the churn arm does NOT establish, stated because it would otherwise be
+over-read**: 12 removes over a 5 190-step workload at a 25-step compaction
+period is ~0.17 ops per window, so at this op count no constant times the
+window is distinguishable from "every remove the workload ever issued". The
+churn arm's 15-against-36 is a *recorded ceiling and a regression pin*; the
+`O(window)` evidence for the tombstone component is the window-pinned table
+above, where the op count varies 16x and the tombstone component does not move
+off 0.
+
+### `runs / elementCount` — the number `[KE3-37]` marked `unverified:`
+
+**1.000 on both rigs**, on every run. The coalescing is total: the tags covering
+one element are one add-tag and one del-dot minted adjacently by one source, so
+they collapse into a single `[lo, hi]` run. The adversarial one-run-per-tag
+degradation `ReclaimedDots`'s KDoc warns about is not reached by this workload —
+neither by the deterministic window-pinned arm (where it is structural) nor by
+the churn arm with duplication, reordering, three parks and full
+`EVICT_CLEAN`/unclean departure churn. So the fence's cost is `2 ×` elements
+ever reclaimed (one key + one run), not `1 + tags`.
+
+**Consequence for the exchange**: at 1.000 the exchange saves the tag SETS and
+keeps the element keys, which on this workload is 36 → 26 retained units at the
+sampled maximum — a 28% reduction, permanent and non-growing in the numerator
+but linear in op count in both terms.
+
+### Excluded from the accounting, and why
+
+- **The computenet-dwkp diagnostic maps** `mintedHere` (one entry per tag this
+  instance ever mints) and `incarnations` (one counter per `tagSource` the
+  process constructs) are unpruned and unreclaimable by `compactBelow`, i.e.
+  `O(local mints)`. `SetCell.retainedState` excludes them by construction, so
+  nothing above attributes their growth to the reclaimer. Bounding or
+  build-gating them is **computenet-fzd3**, a separate open bead.
+- **Live add-tags with no `dels` entry** are excluded for the opposite reason:
+  they are `O(live elements)` and irreducible — an element that is present must
+  carry the tag that makes it present.
+
+### Disposition
+
+Per `[KE3-37]`'s own instruction — "If no `O(in-flight window)` bound over the
+whole is achievable without G-42, that SHALL be recorded as a finding and a
+DISPUTE rather than asserted as a weaker passing bound" — **no bound over the
+whole is asserted**. What is asserted in
+`kernel/src/test/kotlin/civictech/cell/replication/RetainedStateBoundTest.kt`:
+
+1. the tombstone component is `O(in-flight window)` — 0 at a pinned window
+   across a 16x op sweep, and ≤ 24 (measured 15) against the control's 36 on
+   the churn rig;
+2. the control arm shows growth and never writes the fence;
+3. **the negative result itself**, as a live assertion: retained state as a
+   whole rises with op count at a fixed window (`retainedRatio ≥ 0.9 ×
+   opRatio`). If that assertion ever goes red because retained state stopped
+   growing, the fence has acquired a pruning rule — that is G-42 landing, and
+   this finding, the DISPUTE `KE3-GC-BS16-RETAINED`, and G-42's row in
+   `91-gap-analysis.md` must all be revisited rather than the assertion
+   relaxed.
+
+**G-42 stays OPEN** in `doc/spec/90-roadmap/91-gap-analysis.md` (`[KE3-41]`),
+and this finding is the measurement of *why*: reclamation as landed is a
+reduction, not a bound. That file is not edited by this bead.
+
+### Mutation evidence — that the assertions discriminate
+
+Both production-side mutations were confined to `SetCell.retainedState`, this
+bead's only production edit; `compactBelow`, `applyRemote` and the fence were
+not touched. Verbatim messages and the commands are in the bead's report.
+
+1. **The window bound**: the churn arm's STABLE sample source switched to the
+   no-reclaimer `Trigger.NONE` (a test-side substitution — the production
+   reclaimer is outside this bead's claim, so "reclamation stopped" is
+   simulated at the arm rather than by breaking `compactBelow`). The tombstone
+   assertion goes red at 36 > 24, and the control-exceeds-STABLE assertion goes
+   red too. Restored.
+2. **The finding**: `retainedState` made to report a *pruned* fence
+   (`minOf(elementCount, 25)`, likewise for the runs), i.e. the G-42 outcome
+   simulated. The `retainedRatio ≥ 0.9 × opRatio` assertion goes red.
+   Restored.

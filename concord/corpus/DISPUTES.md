@@ -2913,3 +2913,75 @@ property is statable at the driver and not in the corpus.
   Cross-reference: `KE3-GC-DEL-LANE` (the kernel-side half of `[24-TAG-04]`,
   CLOSED by `computenet-pay7`) and `42-WM-FREEZE-01`, which records a
   different unreachability of the same dist binding.
+
+## `KE3-GC-BS16-RETAINED` — reclamation is an exchange, so no `O(in-flight window)` bound over retained state as a whole is reachable without G-42 (`proof-gap` + `kernel-gap`)
+
+- **Requirement it would cover**: `[24-TAG-04]`
+  (`doc/spec/20-dataflow-semantics/24-data-cells.md` §Tag continuity,
+  compaction paragraph), in the specific reading epic `computenet-9sm` clause
+  `[KE3-37]` (BS-16) gives it: a seeded long-running session with churn, a
+  heartbeat and periodic checkpoint-driven reclamation SHALL keep per-cell
+  retained state under a STATED bound — `constant × (ops per checkpoint
+  window)`, not a function of wall time or op count. Feature
+  `computenet-9sm.6`, task `computenet-9sm.6.5`.
+- **What is filed, and what is NOT**. The bound holds over the **tombstone
+  component** of retained state and is asserted as a bound
+  (`kernel/src/test/kotlin/civictech/cell/replication/RetainedStateBoundTest.kt`).
+  It does **not** hold over retained state as a whole, and no weaker
+  whole-state bound is asserted in its place. `[KE3-37]` requires exactly this
+  disposition, because it requires the bound be stated over *tombstone tags
+  plus fence runs plus fence element keys* — "a tombstone-only bound would now
+  be satisfiable by moving the growth into the fence".
+- **Why it cannot be pinned honestly**: reclamation as landed is an
+  **exchange**, not a removal. `SetCell.compactBelow` discards a `dels` entry
+  and the `adds` tags under it, and records exactly those tags in
+  `SetCell.ReclaimedDots` — one **element key** per element ever reclaimed,
+  plus a per-`(element, source)` list of contiguous counter runs. Nothing
+  prunes either; `compactBelow`'s own KDoc states it ("a reduction, not a
+  bound"). So retained state is `O(elements ever reclaimed)`, which is a
+  function of op count, which is exactly what the clause forbids the bound to
+  be. A bounded form needs **epoch hygiene — G-42**, research-gated under
+  `doc/spec/90-roadmap/95-research-plan.md` R14, and G-42 therefore stays OPEN
+  in `91-gap-analysis.md` (`[KE3-41]`).
+- **Measured, not inferred** (2026-09-07, 16-core Apple-silicon macOS,
+  `uptime` 1-minute load 5.1-6.6, four sibling agents concurrent). With the
+  in-flight window **pinned at one element** — add, remove, reclaim at a
+  covering frontier — a `constant × ops-per-window` bound is a constant and
+  retained state must be flat. Over 25/50/100/200/400 add-remove pairs it reads
+  50/100/200/400/800: a **16x** rise in op count against a **16.000x** rise in
+  retained state. The tombstone component reads 0 at every one of those points,
+  which is the half that *is* `O(window)`. On the churn rig
+  (`GcSafetySweep`'s: 3 peers, heartbeat, `EVICT_CLEAN`/unclean churn,
+  duplication and reorder faults, the production `snapshot()` trigger every 25
+  steps, seeds 1..20, budget 40 000) the STABLE arm's sampled retained total
+  maxes at 26-28 against the no-reclaimer control's 36 — a 28% reduction, and a
+  reduction is not a bound. `runCount / elementCount` is **1.000** on both
+  rigs, so the fence costs `2 ×` elements ever reclaimed rather than
+  `1 + tags`; the exchange saves the tag sets and keeps the keys. Full tables,
+  the three-run spread and the excluded diagnostic maps are in
+  `doc/kernel-lane-findings.md` `## KE3-BS16-RETAINED`.
+- **What was NOT done instead**: a bound over tombstone count alone was not
+  asserted as if it were the whole, and the churn arm's measured
+  15-tombstone-tag ceiling was not dressed up as `constant × window` — at ~0.17
+  ops per compaction window that workload cannot distinguish a window bound
+  from "every remove ever issued", and the `O(window)` evidence for the
+  tombstone component is the window-pinned sweep instead. The negative result is
+  itself asserted, so it cannot rot into an unexamined comment: if retained
+  state ever stops growing with op count the test goes red and points here.
+- **Not in the accounting, and named so it is not misattributed**: the
+  computenet-dwkp diagnostic maps `mintedHere`/`incarnations` are unpruned,
+  unreclaimable by `compactBelow` and `O(local mints)`; bounding or
+  build-gating them is **computenet-fzd3**, a separate open bead. Live add-tags
+  with no `dels` entry are excluded as `O(live elements)` and irreducible.
+- **Revisit trigger**: G-42 epoch hygiene lands (a per-element or per-source
+  epoch under which a fence entry can be retired once no replica can still
+  replay a frame below it), so `ReclaimedDots` acquires a pruning rule and its
+  element keys stop accumulating. At that point re-run
+  `RetainedStateBoundTest`: its window-pinned assertion is written to go RED on
+  exactly that change, and the bound over the whole becomes statable. Until
+  then `[24-TAG-04]`'s bounded-retention reading stays uncovered rather than
+  falsely covered. Cross-reference: `KE3-GC-DEL-LANE` (the re-admission half of
+  `[24-TAG-04]`, CLOSED by `computenet-pay7`), `KE3-GC-PROOF` (the GC safety
+  property is a bounded seeded check, not a proof) and
+  `KE3-GC-RECLAIM-FRONTIER` (the same reclaimer is unreachable from the dist
+  driver at all).
