@@ -145,7 +145,44 @@ discriminate on its own** — disable the earlier assertions under the same
 mutation, or choose a mutation only that assertion can catch — and the report
 names the assertion, not just the test.
 
-**5. Revert — and verify it, do not assume it.** Two ways `git checkout` lies:
+**5. Revert — and verify it, do not assume it.**
+
+**THE CANONICAL FORM, and it is not a git command.** Copy the file aside before
+you mutate it, and copy it back after:
+
+```bash
+PRE="$SCRATCH/pre-mutation-$(basename <file>)"   # per file: successive
+cp <file> "$PRE"                      # mutations of different files collide on one name
+# ... mutate, run, watch the named test FAIL ...
+cp "$PRE" <file>                      # after — byte-for-byte what you had
+diff "$PRE" <file>                    # MUST print nothing. Not advice: a step.
+```
+
+Use this unless you have a reason not to. It restores the WORKTREE regardless
+of how the file got mutated, because it touches neither the index nor `HEAD`:
+it does not matter whether the file is tracked, or whether you hold
+uncommitted edits of your own that a git revert would eat.
+
+**Two things it does not do, and both have bitten:**
+
+- **It does not unstage.** If the mutation was itself a `git checkout <sha> --
+  <file>` — "back to base" — that STAGED what it wrote, and `cp` leaves the
+  mutation sitting in the index, where a later `git checkout -- <file>`
+  resurrects it. Add `git reset -q HEAD -- <file>`. Measured: after a correct
+  `cp` revert, `git status --short` reads `MM <file>`.
+- **`git status --short` is therefore NOT expected to be empty**, and requiring
+  that would be unsatisfiable in the two cases this form exists for — an
+  implementer holding a legitimate uncommitted deliverable reads ` M <file>`
+  after a perfect revert. The check is that it reads **as it did before you
+  mutated**, which is why `diff "$PRE" <file>` above is the assertion that
+  actually discriminates.
+
+If the mutation CREATED the file there is nothing to copy aside: `rm <file>`
+is the revert. The git forms below remain correct and documented — they are
+what you need when you did not capture the file first — but they have now cost
+three agents in a single session, so reach for them second.
+
+Two ways `git checkout` lies:
 
 - **An untracked file cannot be checked out at all**, and *how* you name it
   decides whether you find out. Measured on this host (git 2.50.1): naming

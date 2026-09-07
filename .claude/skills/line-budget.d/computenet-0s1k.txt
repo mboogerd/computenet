@@ -1,0 +1,36 @@
+# computenet-0s1k: ONE canonical revert for a mutation check, and it is not a
+# git command. Recurrence of computenet-l8ju, which is closed.
+#
+# The guidance already existed and was already correct. Three dispatched agents
+# in ONE session (2026-09-05) walked into it anyway, on three different items,
+# so this is placement, not content:
+#   1. `git checkout <sha> -- <file>` STAGES, so a later `git checkout -- <file>`
+#      restores the mutation from the index. Caught only by a `git status` glance.
+#   2. `git restore --source=HEAD` reverted a legitimate uncommitted edit,
+#      because HEAD predated the change the agent was making — the mode l8ju's
+#      own instance comment already described.
+#   3. A whole-file revert on a file the agent is also authoring eats its
+#      deliverable.
+#
+# The five git branches that avoid all three are why agents get it wrong. Copy
+# the file aside before mutating and copy it back after is immune to all three
+# at once — it touches neither the index nor HEAD — and needs no branch. The git
+# forms stay documented for the case it does not cover — not having captured
+# the file first — demoted to second. (cp scales to N files trivially, so "a
+# multi-file mutation" is NOT a reason to reach for git; a reviewer measured
+# that.) Two things cp does not do are stated with it: it does not UNSTAGE, so
+# a mutation made with `git checkout <sha> --` needs `git reset -q HEAD --`
+# as well or a later checkout resurrects it; and `git status --short` is
+# therefore not expected to be EMPTY — requiring that would be unsatisfiable
+# for an implementer holding a legitimate uncommitted deliverable, which is a
+# case this form exists for. `diff "$PRE" <file>` silent is the assertion that
+# actually discriminates.
+#
+# The bead's own success test is that an orchestrator stops hand-carrying the
+# warning into individual dispatch prompts — it hand-carried it into five, which
+# is computenet-fbuo's shape. So the form is stated at each of the three points
+# of USE, not only in the reference: task.md where an implementer is sent to the
+# procedure, review-task.md's revert line itself, and review-feature.md's.
+#
+# +37 mutation-check.md, +4 task.md, +7 review-task.md, +3 review-feature.md.
+work +51

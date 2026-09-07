@@ -382,8 +382,15 @@ Beyond that standard, a reviewer owes the stronger signal:
   ```bash
   git -C <task-worktree> diff -- <file> > "$SCRATCH/my-repairs.patch"
   git -C <task-worktree> checkout HEAD -- <file>   # now only HEAD's content
+  PRE="$SCRATCH/pre-mutation-$(basename <file>)"
+  cp <file> "$PRE"                                 # BEFORE mutating — the revert reads this
   # ... mutate, re-run, watch the named test FAIL ...
-  git -C <task-worktree> checkout HEAD -- <file>   # undo the mutation — HEAD, not the index (mutation-check.md step 5)
+  cp "$PRE" <file>                                 # undo it — NOT `git checkout`, which
+  diff "$PRE" <file>                               # stages, assumes HEAD, or eats your own
+                                                   # edits. `diff` silent is the proof, not
+                                                   # `git status`: a legitimate uncommitted
+                                                   # edit still reads ` M` afterwards
+                                                   # (mutation-check.md step 5, computenet-0s1k).
   git -C <task-worktree> apply "$SCRATCH/my-repairs.patch"
   ```
 
