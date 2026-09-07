@@ -8,8 +8,8 @@
 # computenet-s62u, computenet-e23h and its own comment thread); the first two
 # were closed with the guidance never leaving step 7.
 #
-# +22 for the trap statement, the property that makes it dangerous (the write
+# +21 for the trap statement, the property that makes it dangerous (the write
 # SUCCEEDS and prints "Comment added", and what is deleted is the backticked
 # symbol the sentence is about), and the four-line safe form inline — it is
 # short enough that sending the reader to another file is what failed twice.
-work +22
+work +21

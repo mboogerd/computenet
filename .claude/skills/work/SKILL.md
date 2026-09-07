@@ -72,10 +72,10 @@ The three that bite hardest, inline because skipping them costs the most:
   sees the string and substitutes its output; `bd` then stores the mutilated
   text, prints `Comment added`, and exits 0. What gets deleted is exactly the
   symbol, predicate or flag the sentence was about, so the stored prose still
-  reads fluently and no later reader can tell. This has now bitten four
-  orchestrators writing ORDINARY mid-session comments (computenet-9w9,
-  computenet-s62u, computenet-e23h), not only friction filings — so it belongs
-  here, not only in step 7. Every body that quotes code goes through a file:
+  reads fluently and no later reader can tell. Three sessions so far: a
+  `bd create` (computenet-9w9), and two ORDINARY mid-session `bd comment`s, by
+  a dispatched agent (computenet-s62u) and by an orchestrator (computenet-e23h)
+  — not only friction filings, so it belongs here, not only in step 7. Every body that quotes code goes through a file:
 
   ```bash
   cat > "$SCRATCH/body.md" <<'EOF'
