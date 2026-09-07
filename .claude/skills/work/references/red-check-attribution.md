@@ -239,7 +239,12 @@ agent", SKILL.md step 5):
 - **Only if you cannot wait, give the fix its own worktree on the same
   branch**, and never the occupied one. **Do the `SendMessage` first, and
   wait for the reviewer's answer, before you create the worktree** — the
-  ordering below is what makes this safe, not the `--force`:
+  ordering below is what makes this safe, not the `--force`. **With no
+  `SendMessage` in your harness (computenet-4jay) this bullet is simply
+  unavailable**: take the first bullet and wait for the reviewer's
+  notification. 5b's hand-carried resume is NOT the fallback here — the
+  reviewer is still running, so there is nothing to resume — and without the
+  handshake this branch silently reverts the fix.
   ```bash
   # 1. SendMessage the still-running reviewer FIRST:
   #    "Push everything you have on feature/<feature-id> now, then make no

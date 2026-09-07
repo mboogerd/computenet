@@ -1,0 +1,37 @@
+# computenet-4jay: SendMessage is prescribed as THE remedy in five places and
+# does not exist in this harness.
+#
+# Verified 2026-09-07 on an unattended scheduled run, the same condition the
+# bead reports: ToolSearch "select:SendMessage" returns "No matching deferred
+# tools found", and a keyword search offers only
+# mcp__ccd_session_mgmt__send_message, which addresses another SESSION and is
+# itself documented "Unavailable in unattended sessions". Meanwhile the Agent
+# tool's own result text advertises "Use SendMessage with to: <agentId>", which
+# is how an orchestrator comes to believe it has the tool.
+#
+# Acceptance option (c), both halves:
+# (b) step 2 settles availability in one ToolSearch, while arming the budget —
+#     the alternative is learning it at the moment an agent has stopped
+#     mid-task, which is when the answer is most expensive.
+# (a) the hand-carried resume is written down ONCE, at 5b's first SendMessage,
+#     and the other four sites point at it. It carries the two things the
+#     reporting session had to derive under time pressure: the prompt must say
+#     "this is a resume, not a clean start; prior work exists at <sha>", or a
+#     fresh agent on an in_progress bead redoes the work or hunts a partial;
+#     and the summary is ORCHESTRATOR AUTHORSHIP NOBODY REVIEWS, which the
+#     resumed agent will treat as fact — so quote the first agent's own bead
+#     comment rather than paraphrase. The measured cost (125k tokens
+#     re-establishing context) is stated so it stays the fallback, not the equal.
+#
+# Reviewer findings folded in: the second merge-task.md site was missed; the
+# step-2 probe needed the caveat that ToolSearch searches only the DEFERRED
+# list, so a loaded SendMessage answers "not found" identically; the sweeping
+# "every SendMessage below" had to be scoped, since two sites are peer-
+# ORCHESTRATOR messaging where a hand-carried resume is meaningless; and
+# red-check-attribution.md's SendMessage handshake needs a DIFFERENT fallback —
+# the reviewer there is still running, so there is nothing to resume and the
+# bullet is simply unavailable, which matters because without the handshake it
+# silently reverts the fix.
+#
+# +38 SKILL.md, +3 merge-task.md, +5 red-check-attribution.md.
+work +46
