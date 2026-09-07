@@ -3,6 +3,7 @@ package civictech.cell.replication
 import civictech.cell.CellRef
 import civictech.cell.Cursor
 import civictech.cell.StateRead
+import civictech.cell.consistency.CausalStability
 import civictech.cell.data.SetCell
 import civictech.cell.data.WatermarkCell
 import civictech.cell.data.delta.SetDelta
@@ -1690,5 +1691,247 @@ class StabilityOpenSetOnRejoinTest {
         val degraded = p0.replication.openSlots(logicalId, degrade = true)
         assertTrue(slot1 !in degraded.open, "degrade did not drop the suspended slot; read=$degraded")
         degraded.exclusionOf(slot1) shouldBe "suspended(degrade)"
+    }
+}
+
+// ================================================================================================
+// computenet-mahx — [KE3-23] candidate (2): is a present-but-OPEN watermark row lying about a
+// del-dot it never applied?
+//
+// computenet-typw settled candidate (1) — the term that drops a rejoined replica from
+// `CausalStability.stableFrontier`'s open set is `closed`, and it is monotone — and could not
+// touch candidate (2), because an open-set read is about set MEMBERSHIP: a slot that is present
+// and open, but whose ROW carries an entry at or above a del-dot that replica never applied, is
+// invisible to it. That is a second, independent false-certificate shape, and this class settles
+// it DETERMINISTICALLY (the acceptance forbids waiting on the ~1-in-6-to-1-in-42 BS-12 flake, and
+// a green GcSafetySweepTest sweep is explicitly not evidence).
+//
+// Nothing in GcSafetySweep above is touched: no assertion relaxed, no SEEDS narrowed, nothing
+// absorbed into MAX_STABLE_DIVERGING, and no `tagSource` made incarnation-unique — computenet-dwkp's
+// four prohibitions, all still binding.
+// ================================================================================================
+
+/**
+ * Candidate (2), SETTLED — **yes**, and the mechanism is *tag-counter reuse across a replica's
+ * incarnations* meeting `DeliveredFrontier`'s per-source contiguity guard.
+ *
+ * The delivered lane is contiguity-guarded, which is what makes the answer non-obvious:
+ * [civictech.cell.data.delta.DeliveredFrontier.deliver] admits a counter into a holdback and
+ * raises a source's prefix only when every counter below it has arrived, so `row[source] = t`
+ * normally does mean "counters `1..t` from `source` were applied here". A plain max would lie
+ * trivially; this one does not.
+ *
+ * What breaks it is that the counter space is **re-used**. `SetCell.tagSource` is derived from the
+ * [CellRef] (replay-stable, M10.1) while `tagCounter` is per *instance* and restarts at zero — the
+ * same reuse `## KE3-GC-FENCE-KEY` recorded for the re-admission fence, here reaching a different
+ * lattice. A replica that despawns and returns on the same ref therefore mints `(T, 1), (T, 2), …`
+ * a second time, for different elements. A peer whose prefix for `T` already stands at the
+ * pre-departure high-water absorbs those as "already covered" ([DeliveredFrontier.deliver] returns
+ * null for `counter <= current`) — so its row does not move, and its row already claims a position
+ * at or above a del-dot the second incarnation has only just minted. The row is then *present,
+ * open, and wrong*, which is exactly candidate (2).
+ *
+ * The certificate that comes out is not a near miss: `stableFrontier` hands `compactBelow` a
+ * frontier covering a del-dot one open member never applied, that member goes on holding the
+ * element live, and the run ends in the same membership divergence BS-12 reports — reached here in
+ * a dozen deterministic steps instead of a flake.
+ *
+ * **Scope.** This measures that the class EXISTS and is reachable; it does **not** claim it is what
+ * produced computenet-dwkp's caught BS-12 occurrence. There the fencing replica (`peer2`) had
+ * `lastDeparture=null`, so its counters were never re-used, and candidate (1) already explains that
+ * reading. Candidate (2) is a second live defect at the same seam, not a competing account of the
+ * first.
+ */
+class StabilityRowCoverageOnReincarnationTest {
+
+    private class Peer(controller: SimulationController) {
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val bridgeHost = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val side = Peering.Side(registry, bridgeHost)
+        val replication = Replication(registry)
+    }
+
+    @Test
+    fun `computenet-mahx an open watermark row certifies a del-dot the replica never applied - the counter space is reused across incarnations`() {
+        val controller = SimulationController(3L)
+        val p0 = Peer(controller)
+        val p1 = Peer(controller)
+        // One-way frame loss on p1 -> p0, armed for exactly one delta. The additive
+        // FrameInterpose seam (CHA1) is the only thing that makes "never applied" a fact
+        // rather than an inference.
+        val dropToP0 = java.util.concurrent.atomic.AtomicBoolean(false)
+        Peering.loopback(
+            p0.side,
+            p1.side,
+            interposeBToA = Peering.FrameInterpose { frame -> if (dropToP0.get()) emptyList() else listOf(frame) },
+        )
+        val logicalId = java.util.UUID.randomUUID()
+
+        val r0 = SetCell<String>(CellRef(logicalId, 0)).also { p0.replication.replicate(it, p0.host) }
+        val r1 = SetCell<String>(CellRef(logicalId, 1)).also { p1.replication.replicate(it, p1.host) }
+        controller.runToIdle()
+
+        // Incarnation 1 of the replica on p1 burns three counters of its own tag lane:
+        // add "a" -> (T,1), add "b" -> (T,2), remove "a" -> del-dot (T,3).
+        r1.inlet.call.add("a")
+        r1.inlet.call.add("b")
+        r1.inlet.call.remove("a")
+        controller.runToIdle()
+        val tagSource = r1.liveTagsOf("b").single().sourceId
+        val slot0 = WatermarkCell.slotId(p0.replication.watermarkRef(r0.ref))
+        val slot1 = WatermarkCell.slotId(p0.replication.watermarkRef(r1.ref))
+        p0.replication.stableFrontier(logicalId).perSource[tagSource] shouldBe 3L
+
+        // The reincarnation. closeDepartedRow = false DELIBERATELY: closing the row is
+        // candidate (1)'s mechanism, and the point here is a slot that stays OPEN. The new
+        // instance takes the same CellRef, hence the same ref-derived `tagSource`, with its
+        // own `tagCounter` back at zero.
+        assertTrue(p1.replication.evict(r1, p1.host, closeDepartedRow = false), "evict suspended instead of despawning")
+        controller.runToIdle()
+        val r1b = SetCell<String>(CellRef(logicalId, 1)).also { p1.replication.replicate(it, p1.host) }
+        r1b.ref shouldBe r1.ref
+        controller.runToIdle()
+
+        // Incarnation 2 re-mints (T,1) — for a DIFFERENT element — and then (T,2) as its
+        // del-dot. p0 gets the add and, with the link dropped, never the remove.
+        r1b.inlet.call.add("z")
+        controller.runToIdle()
+        assertTrue("z" in r0.membership(), "p0 never saw the add, so the drop below proves nothing")
+        dropToP0.set(true)
+        r1b.inlet.call.remove("z")
+        controller.runToIdle()
+        dropToP0.set(false)
+        controller.runToIdle()
+
+        // "z" is removed here, so its del-dot is the highest-counter tag of its `dels` entry.
+        // Read off the checkpoint rather than assumed, so the test cannot pass against a
+        // counter space that stopped being re-used.
+        @Suppress("UNCHECKED_CAST")
+        val delsOfR1b = (r1b.snapshot() as Map<String, Any>)["dels"] as Map<String, Set<civictech.cell.Timestamp>>
+        val dot = delsOfR1b.getValue("z").maxByOrNull { t -> t.counter }!!
+        dot.sourceId shouldBe tagSource
+        dot.counter shouldBe 2L
+
+        // GROUND TRUTH, established against the replica's own state and not against any
+        // watermark: p0 still holds "z" live, so it demonstrably never applied the del-dot.
+        assertTrue("z" in r0.membership(), "p0 applied the remove after all — the frame was not lost")
+        assertTrue(
+            r0.fencedAmong("z", setOf(dot)).isEmpty(),
+            "p0 reclaimed the dot rather than never receiving it — that is a different story",
+        )
+
+        // THE READ (computenet-mahx). p0's slot is present and OPEN — this is not candidate
+        // (1) — and its row nonetheless COVERS the dot it never applied.
+        val read = p0.replication.openSlots(logicalId)
+        assertTrue(slot0 in read.open, "p0's own slot left the open set; read=$read")
+        read.exclusionOf(slot0) shouldBe null
+        read.coverageOf(slot0, tagSource, dot.counter) shouldBe
+            CausalStability.OpenSlots.RowCoverage.COVERS
+
+        // …and the other half of the acceptance clause, which the same read separates: a row
+        // that is simply MISSING an entry for a source. That reads as bottom, and
+        // stableFrontier drops the source from the result entirely — the conservative
+        // direction, and visibly a different answer from COVERS.
+        val unknownSource = java.util.UUID.randomUUID()
+        read.coverageOf(slot0, unknownSource, 1L) shouldBe
+            CausalStability.OpenSlots.RowCoverage.ABSENT_SOURCE
+        assertTrue(
+            unknownSource !in p0.replication.stableFrontier(logicalId).perSource,
+            "a source no row carries should be absent from the frontier, not present at a value",
+        )
+        // Every open slot agrees the dot is covered — the false certificate is unanimous, not
+        // one peer's local view.
+        read.coverageAt(tagSource, dot.counter).values.toSet() shouldBe
+            setOf(CausalStability.OpenSlots.RowCoverage.COVERS)
+        assertTrue(slot1 in read.open, "the reincarnated slot was excluded, which would be candidate (1)")
+
+        // THE CONSEQUENCE. The frontier certifies the dot, compaction acts on it, and the run
+        // ends in the BS-12 membership divergence — reached deterministically.
+        val frontier = p1.replication.stableFrontier(logicalId)
+        assertTrue(
+            (frontier.perSource[tagSource] ?: Long.MIN_VALUE) >= dot.counter,
+            "the false certificate was not issued; frontier=${frontier.perSource}",
+        )
+        assertTrue(r1b.compactBelow(frontier) > 0, "compaction discarded nothing, so nothing was certified")
+        assertTrue(
+            r1b.fencedAmong("z", setOf(dot)).isNotEmpty(),
+            "the del-dot itself was not among what compaction reclaimed",
+        )
+        assertTrue("z" !in r1b.membership(), "the compacting replica still holds the removed element")
+        assertTrue("z" in r0.membership(), "expected the surviving divergence: p0 holds what p1 compacted")
+    }
+
+    /**
+     * THE CONTROL, and what makes the test above a measurement of *counter reuse* rather than
+     * of frame loss. Same two peers, same one-way drop of the same remove — but no
+     * reincarnation, so the del-dot is minted at a FRESH counter above every row's prefix.
+     *
+     * The delivered lane then answers honestly: `coverageOf` is `BELOW`, not `COVERS`, and the
+     * frontier does not certify the dot at all, so `compactBelow` discards nothing and no
+     * divergence follows. Lost frames alone do not produce a lying row —
+     * [civictech.cell.data.delta.DeliveredFrontier]'s holdback is doing exactly its job. It is
+     * the re-used counter space that defeats it.
+     */
+    @Test
+    fun `computenet-mahx control - the same lost remove at a FRESH counter leaves the row honest and the dot uncertified`() {
+        val controller = SimulationController(4L)
+        val p0 = Peer(controller)
+        val p1 = Peer(controller)
+        val dropToP0 = java.util.concurrent.atomic.AtomicBoolean(false)
+        Peering.loopback(
+            p0.side,
+            p1.side,
+            interposeBToA = Peering.FrameInterpose { frame -> if (dropToP0.get()) emptyList() else listOf(frame) },
+        )
+        val logicalId = java.util.UUID.randomUUID()
+
+        val r0 = SetCell<String>(CellRef(logicalId, 0)).also { p0.replication.replicate(it, p0.host) }
+        val r1 = SetCell<String>(CellRef(logicalId, 1)).also { p1.replication.replicate(it, p1.host) }
+        controller.runToIdle()
+
+        r1.inlet.call.add("a")
+        r1.inlet.call.add("b")
+        r1.inlet.call.remove("a")
+        r1.inlet.call.add("z")
+        controller.runToIdle()
+        val tagSource = r1.liveTagsOf("b").single().sourceId
+        val slot0 = WatermarkCell.slotId(p0.replication.watermarkRef(r0.ref))
+        assertTrue("z" in r0.membership(), "p0 never saw the add, so the drop below proves nothing")
+
+        dropToP0.set(true)
+        r1.inlet.call.remove("z")
+        controller.runToIdle()
+        dropToP0.set(false)
+        controller.runToIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val dels = (r1.snapshot() as Map<String, Any>)["dels"] as Map<String, Set<civictech.cell.Timestamp>>
+        val dot = dels.getValue("z").maxByOrNull { t -> t.counter }!!
+        dot.sourceId shouldBe tagSource
+        dot.counter shouldBe 5L // a fresh counter — incarnation 1 never restarted
+
+        val read = p0.replication.openSlots(logicalId)
+        assertTrue(slot0 in read.open, "p0's own slot left the open set; read=$read")
+        // The same read, the same slot, the same lost remove — and the honest answer.
+        read.coverageOf(slot0, tagSource, dot.counter) shouldBe
+            CausalStability.OpenSlots.RowCoverage.BELOW
+        assertTrue("z" in r0.membership(), "p0 applied the remove after all — the frame was not lost")
+
+        val frontier = p1.replication.stableFrontier(logicalId)
+        assertTrue(
+            (frontier.perSource[tagSource] ?: Long.MIN_VALUE) < dot.counter,
+            "the frontier certified an uncertifiable dot; frontier=${frontier.perSource}",
+        )
+        // Compaction still runs — the OLD entry (`dels["a"]`, counters 1 and 3) is genuinely
+        // certified — but the uncertified dot is left alone. `fencedAmong` is the fence's own
+        // record of what `compactBelow` discarded, so an empty answer for the dot is a read of
+        // the reclaimer, not an inference from the count.
+        r1.compactBelow(frontier)
+        assertTrue(
+            r1.fencedAmong("z", setOf(dot)).isEmpty(),
+            "an uncertified del-dot was reclaimed anyway; frontier=${frontier.perSource}",
+        )
+        assertTrue("z" in r0.membership() && "z" !in r1.membership(), "the transient disagreement is expected")
     }
 }
