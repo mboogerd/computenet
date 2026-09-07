@@ -23,5 +23,15 @@
 #     comment rather than paraphrase. The measured cost (125k tokens
 #     re-establishing context) is stated so it stays the fallback, not the equal.
 #
-# +34 SKILL.md, +2 merge-task.md.
-work +36
+# Reviewer findings folded in: the second merge-task.md site was missed; the
+# step-2 probe needed the caveat that ToolSearch searches only the DEFERRED
+# list, so a loaded SendMessage answers "not found" identically; the sweeping
+# "every SendMessage below" had to be scoped, since two sites are peer-
+# ORCHESTRATOR messaging where a hand-carried resume is meaningless; and
+# red-check-attribution.md's SendMessage handshake needs a DIFFERENT fallback —
+# the reviewer there is still running, so there is nothing to resume and the
+# bullet is simply unavailable, which matters because without the handshake it
+# silently reverts the fix.
+#
+# +38 SKILL.md, +3 merge-task.md, +5 red-check-attribution.md.
+work +46

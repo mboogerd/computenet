@@ -193,7 +193,8 @@ Including the pass that carries a substantive repair, which is not final.
 **Find an actual verdict in the result before acting on it.** The completion
 notification looks identical whether the reviewer finished or stopped itself
 mid-review (one returned "Waiting on Arm A…" as its entire result). No
-pass/fail stated → `SendMessage` the same agent (context intact) to finish
+pass/fail stated → `SendMessage` the same agent (context intact; no such tool
+→ SKILL.md 5b's hand-carried resume) to finish
 and state a verdict plus a NOT VERIFIED section. Agent-completed is not
 task-reviewed; a result skimmed as done here merges unreviewed code.
 

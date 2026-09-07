@@ -292,8 +292,12 @@ from the drifting checkout, which is why only the orchestrator needs this.
 one `ToolSearch "select:SendMessage"`. It is 5b's and 5c's prescribed remedy
 for an agent that stops mid-task, and on an unattended run it is absent
 (computenet-4jay); the point of asking now is that the alternative is knowing
-only once an agent has already stopped. Absent → every `SendMessage` below
-means 5b's hand-carried resume.
+only once an agent has already stopped. **`ToolSearch` searches only the
+DEFERRED list**, so a `SendMessage` already loaded in your tool list answers
+the same way — read the list before concluding absent. Absent → every
+`SendMessage` below **that continues a dispatched agent** means 5b's
+hand-carried resume; the two peer-ORCHESTRATOR uses (twin epics, insertion
+points) have no substitute and fall back to inference.
 
 **The subtraction below is THE budget mechanism; the monitor is a
 convenience that may or may not fire.** It has now gone permanently silent
