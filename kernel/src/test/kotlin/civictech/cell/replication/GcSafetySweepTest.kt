@@ -67,6 +67,22 @@ internal class GcObservations {
 
     /** `(peer)` evaluations of the `resurrected(...)` observable at quiescence. */
     var resurrectionChecks: Long = 0
+
+    /**
+     * `(peer, element)` -> the controller step at which that peer's `ReclaimedDots` was first
+     * observed holding anything for that element. computenet-dwkp's ORDERING instrument.
+     *
+     * The fence's own state carries no step — `SetCell` has no notion of one — so the step hook
+     * that drives compaction stamps it, by asking `SetCell.fencesAny` for each scheduled element
+     * after any compaction that actually discarded. The stamp is therefore accurate to within
+     * one compaction period ([GcSafetySweep] `K`), which is far finer than the quantity it is
+     * compared against: a peer's departure/rejoin window, hundreds of steps wide.
+     *
+     * Reporting only. No assertion reads it; it is printed beside `holderState=` in the
+     * fence-attribution detail so a run that catches the rare schedule carries the ordering
+     * answer in its artifact instead of having to be caught again.
+     */
+    val fencedAtStep: MutableMap<Pair<String, String>, Int> = linkedMapOf()
 }
 
 internal object GcObservationRegistry {
@@ -263,6 +279,14 @@ object GcSafetySweep {
             .filter { it.ordinal % 2 == 1 }
             .groupBy({ it.atStep + REMOVE_LAG }, { it.peer to "${it.peer}-${it.ordinal}" })
 
+    /**
+     * The elements a fence can ever hold: the ones the removes hook actually removes, since
+     * `compactBelow` records only what it discarded from `dels`. computenet-dwkp's ordering
+     * instrument scans this set rather than the whole write schedule.
+     */
+    private val fenceableElements: List<String> =
+        removeSchedule.values.flatten().map { it.second }.distinct()
+
     internal val totals: Map<Trigger, GcTotals> = Trigger.entries.associateWith { GcTotals(it.name) }
 
     fun graphOf(trigger: Trigger): GraphSpec = GraphSpec(trigger.id) { world ->
@@ -317,6 +341,17 @@ object GcSafetySweep {
 
             observations.invocations++
             observations.discarded += discarded
+            // computenet-dwkp's ORDERING instrument — see [GcObservations.fencedAtStep]. Only a
+            // compaction that discarded can have written the fence, so the scan is bounded by
+            // the reclaimer's own work rather than run at every compaction point.
+            if (discarded > 0) {
+                for (element in fenceableElements) {
+                    val key = peer.name to element
+                    if (key !in observations.fencedAtStep && cell.fencesAny(element)) {
+                        observations.fencedAtStep[key] = step
+                    }
+                }
+            }
             // Feature rule 3: reclamation is invisible to the value.
             if (after != before) {
                 observations.violations += GcViolation(
@@ -529,7 +564,9 @@ object GcSafetySweep {
                         cell.fencedAmong(element, liveTags).sortedBy { it.counter }.map { t ->
                             val peer = live.firstOrNull { it.name == name }
                             "$name{${cell.fenceProvenance(element, t)} " +
-                                "lastDeparture=${peer?.lastDeparture} suspended=${peer?.suspended}}"
+                                "lastDeparture=${peer?.lastDeparture} suspended=${peer?.suspended} " +
+                                "fencedAtStep=${observations.fencedAtStep[name to element]} " +
+                                "membership=${peer?.membershipLog}}"
                         }
                     }
                 // The HOLDER side of the same question (computenet-dwkp): the measurement showed
@@ -550,10 +587,22 @@ object GcSafetySweep {
                 // suspended, null = the last departure was not an eviction) together with
                 // `member`; both are public reads on the testkit handle, so this stays an
                 // additive test-only print.
+                //
+                // THE ORDERING (computenet-dwkp open item 2). `lastDeparture` and
+                // `evictDespawned` establish only that the holder left and came back; they carry
+                // no step, so they cannot say whether the holder's absence STRADDLES the moment
+                // the lacking replica's del-dot crossed `stableFrontier` — which is what would
+                // make that "delivered to every open member" certificate vacuously true for the
+                // holder, and would make (i) and (ii) one thing. `membership=` is the holder's
+                // own transition log stamped with `DstWorld.step`, and `fencedAtStep=` in the
+                // provenance clause above is the compaction step at which the lacking replica's
+                // fence first held this element. Read them on one axis: a departure step before
+                // and a rejoin step after `fencedAtStep` is the straddle.
                 val holderState = holders.map { name ->
                     val peer = live.firstOrNull { it.name == name }
                     "$name{lastDeparture=${peer?.lastDeparture} suspended=${peer?.suspended} " +
-                        "evictDespawned=${peer?.lastEvictDespawned} member=${peer?.member}}"
+                        "evictDespawned=${peer?.lastEvictDespawned} member=${peer?.member} " +
+                        "membership=${peer?.membershipLog}}"
                 }
                 Triple(element, "$element held=$holders holderState=$holderState " +
                     "liveTags=${liveTags.map { it.counter }.sorted()} " +

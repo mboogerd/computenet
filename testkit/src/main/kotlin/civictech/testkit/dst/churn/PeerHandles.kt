@@ -183,6 +183,32 @@ class MeshPeer internal constructor(
     var lastEvictClosedRow: Boolean? = null
         private set
 
+    private val membershipEvents: MutableList<String> = mutableListOf()
+
+    /**
+     * Every membership transition this peer went through, stamped with the controller step it
+     * happened on: `join@<step>`, `<mode>@<step>`, `rejoin@<step>`, `heal@<step>`, and
+     * `rejoin-noop@<step>` for the refused-eviction no-op [rejoin] takes.
+     *
+     * **Why a step and not just a mode** (computenet-dwkp): [lastDeparture],
+     * [lastEvictDespawned] and [member] together say *how* a peer left and whether it came
+     * back, and that was enough to establish that a diverging element's holder really departed.
+     * They cannot say *when*, and the open question after that measurement is an ORDERING one:
+     * whether a holder's absence straddles the moment some other replica's del-dot crossed
+     * `Replication.stableFrontier` — which is what would make that "delivered to every open
+     * member" certificate vacuously true for the holder. Answering it needs both halves on one
+     * axis, so the harness stamps this half from [DstWorld.step], the same step index every
+     * [civictech.testkit.dst.TraceEvent] of the run carries.
+     *
+     * Reporting only. Nothing in this class or in the kernel branches on it, and the transitions
+     * themselves are unchanged — a step stamp is recorded where the transition already happened.
+     */
+    val membershipLog: List<String> get() = membershipEvents.toList()
+
+    private fun logMembership(event: String) {
+        membershipEvents += "$event@${world.step}"
+    }
+
     private val controls = mutableListOf<LinkControl>()
 
     private var writeProxy: Any? = null
@@ -217,6 +243,7 @@ class MeshPeer internal constructor(
 
     override fun join() {
         check(!member) { "peer \"$name\" is already a member, so a join cannot be applied to it" }
+        logMembership("join")
         spawn()
     }
 
@@ -224,6 +251,7 @@ class MeshPeer internal constructor(
         if (suspended) {
             // A suspended peer never left: healing its links is the whole return path, and
             // re-replicating would mint a second replica behind the same ref.
+            logMembership("heal")
             heal()
             return
         }
@@ -244,9 +272,11 @@ class MeshPeer internal constructor(
             // this peer is already a member with its fold intact, and the kernel's own G-45
             // heal (`Replication.linkOut`) resumes it the moment another replica of the id
             // becomes visible again. Re-spawning would mint a second replica behind one ref.
+            logMembership("rejoin-noop")
             return
         }
         check(!member) { "peer \"$name\" is already a member, so a rejoin cannot be applied to it" }
+        logMembership("rejoin")
         spawn()
     }
 
@@ -260,6 +290,7 @@ class MeshPeer internal constructor(
 
     override fun depart(mode: DepartureMode) {
         lastDeparture = mode
+        logMembership(mode.name)
         when (mode) {
             DepartureMode.EVICT_CLEAN -> evict(closeDepartedRow = true)
             DepartureMode.EVICT_NO_CLOSE -> evict(closeDepartedRow = false)

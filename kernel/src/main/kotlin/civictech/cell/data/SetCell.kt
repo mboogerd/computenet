@@ -148,6 +148,15 @@ internal class ReclaimedDots<E> : Serializable {
         return false
     }
 
+    /**
+     * Does this replica hold ANY reclaimed run for [element], from any source?
+     *
+     * The existence half of [holds], which needs a specific tag. A harness that wants to know
+     * *when* an element entered the fence has no tag to ask about — the del-dot it is looking
+     * for is exactly the one [SetCell.compactBelow] just discarded — so it asks this instead.
+     */
+    fun anyFor(element: E): Boolean = runs.containsKey(element)
+
     /** Record [tag] as reclaimed **for [element]**, coalescing with an adjacent or containing run. */
     fun record(element: E, tag: Timestamp) {
         val r = runs.getOrPut(element) { HashMap() }.getOrPut(tag.sourceId) { ArrayList() }
@@ -664,6 +673,23 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     internal fun fencedAmong(element: E, tags: Set<Timestamp>): Set<Timestamp> = synchronized(stateLock) {
         tags.filterTo(mutableSetOf()) { reclaimed.holds(element, it) }
     }
+
+    /**
+     * Whether this replica's fence holds any tag at all for [element] — the fourth diagnostic
+     * read of the [liveTagsOf]/[fencedAmong]/[fenceProvenance] family, added for
+     * computenet-dwkp's ORDERING measurement.
+     *
+     * [fencedAmong] answers "is THIS tag fenced here", which a check at quiescence can ask
+     * because it already holds the live tags from the holding replica. A step hook watching a
+     * run unfold cannot: at the compaction point where the del-dot is reclaimed, the tag it
+     * wants to name is precisely the one that has just been discarded and is therefore no
+     * longer live anywhere it can read. So the instrument asks the existence question and
+     * stamps the STEP at which the answer first turns true — which is the step
+     * [compactBelow] fenced the element, to within one compaction period.
+     *
+     * Read-only, additive, and consulted by no protocol path, exactly as its three siblings.
+     */
+    internal fun fencesAny(element: E): Boolean = synchronized(stateLock) { reclaimed.anyFor(element) }
 
     /**
      * The PROVENANCE of a fenced tag — computenet-dwkp's measurement, and the third
