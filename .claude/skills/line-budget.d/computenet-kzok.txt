@@ -1,0 +1,20 @@
+# computenet-kzok: record the MEASUREMENT that kills the flag proposal two
+# breakdown agents made independently on computenet-9sm.
+#
+# The bead asked for a way to read an epic without its comment thread, and
+# proposed adding one to bead.sh. Both halves already exist and neither is the
+# problem: `bd show --json` never streams comment bodies (--include-comments is
+# opt-in) and bead.sh's projection has never had a comments field. Measured
+# 2026-09-07 on computenet-9sm: plain 233KB, --json 218KB, bead.sh 58KB,
+# description alone 43.5KB. The bulk is the inlined dependency payload bead.sh
+# already drops; the remainder is irreducible.
+#
+# So no script changes and no new reference sections — epic.md and feature.md
+# already say "bead.sh <id>, never a plain bd show" at the exact line they tell
+# a breakdown to read the epic, and bd-traps.md already covers the task-read
+# case (a child inlining its parent's whole description). What was missing is
+# only the fact that forecloses the flag, sited in the block where the next
+# agent tempted to propose it is already reading.
+#
+# +13 for that paragraph.
+work +13

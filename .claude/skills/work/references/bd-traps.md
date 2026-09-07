@@ -144,6 +144,19 @@ SKILL.md and the other references cite this file as "`bd` traps".
   orchestrator's head (computenet-cjfd). `bead.sh` is the standing read for
   every bead, large or small.
 
+  **It is NOT the comment thread that makes an epic expensive, and no flag
+  will fix it.** Two breakdown agents on computenet-9sm independently proposed
+  "a `bd show --no-comments` or comments-only flag" (computenet-kzok); both
+  halves of that already exist and neither helps. `bd show --json` does not
+  stream comment bodies at all — `--include-comments` is opt-in — and
+  `bead.sh`'s projection has never carried a comments field. Measured
+  2026-09-07 on that epic: plain `bd show` 233KB, `--json` 218KB, `bead.sh`
+  58KB, and the epic's own **description alone 43.5KB**. The bulk is the
+  inlined dependency payload, which `bead.sh` already drops; what is left is
+  irreducible, so a big epic spills to a file and is READ from there — that is
+  the working answer, not a flag. Say so rather than proposing the flag a
+  fourth time.
+
   **Above ~25KB even the projection does not fit**, and `bead.sh` handles
   that itself: it writes the projected bead to `$SCRATCH/bead-<id>.json` and
   prints that path instead of the body, so a `Read` call pages it and
