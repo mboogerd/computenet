@@ -1,7 +1,14 @@
 package civictech.cell.replication
 
+import civictech.cell.CellRef
 import civictech.cell.data.SetCell
+import civictech.cell.data.WatermarkCell
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.host.LocationRegistry
+import civictech.cell.host.ManagedHost
+import civictech.cell.host.SimulationController
+import civictech.cell.wire.Peering
+import io.kotest.matchers.shouldBe
 import civictech.testkit.dst.CheckRegistry
 import civictech.testkit.dst.DepartEvent
 import civictech.testkit.dst.DepartureMode
@@ -375,13 +382,25 @@ object GcSafetySweep {
                         // discards only what the frontier says every open member received, so
                         // any other live member still holding the element is that certificate
                         // being false about a member that is live right now.
+                        // computenet-typw's read: the `open` set this peer's own
+                        // `stableFrontier` just ran its MIN over, plus the term that
+                        // excluded each still-holding peer's slot from it. Annotated ONTO
+                        // `stillHeldBy` rather than added as a field of its own — a
+                        // separate field would fire on all ~51-55 non-empty stillHeldBy
+                        // stamps per green sweep and carry no more signal than this one
+                        // does. The force of the reading stays the CONJUNCTION.
+                        val openSlots = peer.replication.openSlots(peer.ref.id)
                         val stillHeldBy = MeshPeers.all(world)
                             .filter { it.name != peer.name && it.member }
                             .filter { p ->
                                 (p.replica as? SetCell<String>)?.membership()?.contains(element) == true
                             }
-                            .map { it.name }
-                        observations.fencedAtStep[key] = "step=$step stillHeldBy=$stillHeldBy"
+                            .map { p ->
+                                val slot = WatermarkCell.slotId(peer.replication.watermarkRef(p.ref))
+                                "${p.name}(${openSlots.exclusionOf(slot) ?: "open"})"
+                            }
+                        observations.fencedAtStep[key] =
+                            "step=$step stillHeldBy=$stillHeldBy openSet={$openSlots}"
                     }
                 }
             }
@@ -1407,3 +1426,126 @@ class GcSafetySweepTest {
 
 
 
+
+/**
+ * `computenet-typw` ([KE3-23]): the DETERMINISTIC settlement of candidate (1) —
+ * *is `closed` monotone across a rejoin onto the same [CellRef]?*
+ *
+ * `computenet-dwkp` measured that BS-12's fence-attributed divergence is a FALSE
+ * membership certificate: `compactBelow` discarded a del-dot below a
+ * `stableFrontier` that certified delivery to every open member, while a live,
+ * unsuspended, state-retaining member still held the element. Which half of
+ * `open` produced that was NOT measured, and the sweep cannot settle it — the
+ * occurrence is ~1 in 6 to 1 in 42 and a green sweep is not evidence
+ * (`computenet-dwkp`: 19 consecutive greens on a class that then fired twice in
+ * the next 65). This class settles it without waiting for the flake, which is
+ * why it is a plain deterministic rig and not another seeded sweep.
+ *
+ * Both tests read [Replication.openSlots], the protocol-inert diagnostic
+ * `computenet-typw` added; neither asserts on the intermittent signal, and the
+ * sweep's own fence-attribution assertion is untouched.
+ */
+class StabilityOpenSetOnRejoinTest {
+
+    private class Peer(controller: SimulationController) {
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val bridgeHost = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val side = Peering.Side(registry, bridgeHost)
+        val replication = Replication(registry)
+    }
+
+    /**
+     * Candidate (1), SETTLED: [WatermarkCell.close] adds to a grow-only `closed`
+     * set and nothing retracts it, while [civictech.cell.replication.Replication]
+     * derives the watermark slot from the [CellRef] — which is stable across a
+     * rejoin. So a replica evicted with `closeDepartedRow = true` and then
+     * re-replicated onto the SAME ref returns onto the slot already closed, and
+     * every subsequent `stableFrontier` silently excludes it: the MIN certifies
+     * delivery to a set that does not contain a live, rejoined member.
+     *
+     * That is exactly the shape `computenet-dwkp` caught (`membership=[join@1088,
+     * EVICT_CLEAN@1623, rejoin@1885]`, `stillHeldBy=[peer0]`).
+     */
+    @Test
+    fun `computenet-typw a replica rejoining the same CellRef after a clean evict stays OUT of the open set - closed is monotone`() {
+        val controller = SimulationController(1L)
+        val p0 = Peer(controller)
+        val p1 = Peer(controller)
+        val p2 = Peer(controller)
+        Peering.loopback(p0.side, p1.side)
+        Peering.loopback(p1.side, p2.side)
+        Peering.loopback(p0.side, p2.side)
+        val logicalId = java.util.UUID.randomUUID()
+
+        val r0 = SetCell<String>(CellRef(logicalId, 0)).also { p0.replication.replicate(it, p0.host) }
+        SetCell<String>(CellRef(logicalId, 1)).also { p1.replication.replicate(it, p1.host) }
+        val r2 = SetCell<String>(CellRef(logicalId, 2)).also { p2.replication.replicate(it, p2.host) }
+        controller.runToIdle()
+
+        val slot2 = WatermarkCell.slotId(p0.replication.watermarkRef(r2.ref))
+
+        // Baseline: before any departure the rejoining slot IS open.
+        assertTrue(slot2 in p0.replication.openSlots(logicalId).open, "slot2 was not open before the evict")
+
+        // DepartureMode.EVICT_CLEAN: a real despawn (reachable peers remain) that
+        // closes the departed row.
+        assertTrue(p2.replication.evict(r2, p2.host, closeDepartedRow = true), "evict suspended instead of despawning")
+        controller.runToIdle()
+        assertTrue(slot2 !in p0.replication.openSlots(logicalId).open, "the cleanly evicted slot stayed open")
+
+        // The rejoin, onto the SAME CellRef — MeshPeer.ref is CellRef(dataId, index)
+        // and is stable across rejoins, so this is the same slot.
+        val rejoined = SetCell<String>(CellRef(logicalId, 2)).also { p2.replication.replicate(it, p2.host) }
+        rejoined.ref shouldBe r2.ref
+        controller.runToIdle()
+
+        val read = p0.replication.openSlots(logicalId)
+        // THE ANSWER. The rejoined replica is live and announced, and is STILL
+        // excluded — by `closed`, not by absence and not by suspension.
+        assertTrue(slot2 !in read.open, "expected the rejoined slot to be excluded from open; read=$read")
+        read.exclusionOf(slot2) shouldBe "closed"
+        assertTrue(slot2 in read.closed, "the exclusion did not come from the closed term; read=$read")
+        // Not candidate (2)-shaped and not "absent": the slot is known, it is just closed.
+        assertTrue(
+            slot2 in read.memberSlots || slot2 in read.announced,
+            "the rejoined slot was not even known to the companion; read=$read",
+        )
+        // …and the survivors' own read agrees, so this is not a peer-0-local view.
+        assertTrue(slot2 !in p1.replication.openSlots(logicalId).open, "p1 disagreed with p0")
+        r0.ref.id shouldBe logicalId
+    }
+
+    /**
+     * Candidate (3), settled the same way and in the same direction the
+     * `computenet-pay7` feature reviewer read out of the code: a SUSPENDED slot
+     * stays INSIDE `open` at `degrade = false`, which is what GcSafetySweep's
+     * reclaimer passes. So suspension cannot be the exclusion in that rig, and a
+     * future reader need not re-derive it.
+     */
+    @Test
+    fun `computenet-typw a suspended slot stays inside the open set at degrade=false and leaves it only under degrade`() {
+        val controller = SimulationController(2L)
+        val p0 = Peer(controller)
+        val p1 = Peer(controller)
+        Peering.loopback(p0.side, p1.side)
+        val logicalId = java.util.UUID.randomUUID()
+
+        SetCell<String>(CellRef(logicalId, 0)).also { p0.replication.replicate(it, p0.host) }
+        val r1 = SetCell<String>(CellRef(logicalId, 1)).also { p1.replication.replicate(it, p1.host) }
+        controller.runToIdle()
+
+        val slot1 = WatermarkCell.slotId(p0.replication.watermarkRef(r1.ref))
+        p1.replication.watermarkOf(logicalId)!!.suspend()
+        controller.runToIdle()
+
+        val plain = p0.replication.openSlots(logicalId)
+        assertTrue(slot1 in plain.suspended, "the suspend did not converge to p0; read=$plain")
+        assertTrue(slot1 in plain.open, "a suspended slot left `open` without degrade; read=$plain")
+        plain.exclusionOf(slot1) shouldBe null
+
+        val degraded = p0.replication.openSlots(logicalId, degrade = true)
+        assertTrue(slot1 !in degraded.open, "degrade did not drop the suspended slot; read=$degraded")
+        degraded.exclusionOf(slot1) shouldBe "suspended(degrade)"
+    }
+}

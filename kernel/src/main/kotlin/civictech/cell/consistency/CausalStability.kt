@@ -128,4 +128,103 @@ class CausalStability(
         }
         return TagFrontier(stable)
     }
+
+    /**
+     * A **protocol-inert diagnostic read** of the very set [stableFrontier]
+     * computes its MIN over (`computenet-typw`, [KE3-23]).
+     *
+     * Nothing in [CausalStability], `Replication`, `SetCell` or any cell
+     * consults this; it exists so a caught occurrence of the BS-12
+     * fence-attributed divergence carries *which half of `open`* dropped a
+     * live member, instead of leaving the reader to infer it. It mirrors the
+     * reads `computenet-dwkp` landed on `SetCell`
+     * ([civictech.cell.data.SetCell.liveTagsOf] / `fencedAmong` /
+     * `fenceProvenance` / `fencesAny`): read-only, consulted by no protocol
+     * path, never asserted on in the sweep.
+     *
+     * It recomputes `open` by the *same* expression [stableFrontier] uses
+     * rather than sharing a helper, deliberately: a shared helper would make
+     * this read a dependency of the protocol path, and the point of the read
+     * is that removing it changes nothing. The duplication is three lines and
+     * is pinned by `StabilityOpenSetOnRejoinTest`, the deterministic test that
+     * settles which term excludes a rejoined replica.
+     *
+     * @param degrade the same [stableFrontier] switch, so the report describes
+     *   the set the caller's own read would have used.
+     */
+    fun openSlots(logicalId: UUID, degrade: Boolean = false): OpenSlots {
+        val companion = watermarkOf(logicalId) ?: return OpenSlots.NO_COMPANION
+        val members = membersOf(logicalId)
+        val rows = companion.rows()
+        val closed = companion.closed()
+        val suspendedAll = companion.suspended()
+        val suspended = if (degrade) suspendedAll else emptySet()
+        val announced = companion.members()
+        val memberSlots = members.mapTo(mutableSetOf()) { WatermarkCell.slotId(watermarkRefOf(it)) }
+
+        val open = buildSet {
+            addAll(memberSlots)
+            addAll(announced)
+            removeAll(closed)
+            removeAll(suspended)
+        }
+        return OpenSlots(
+            open = open,
+            memberSlots = memberSlots,
+            announced = announced,
+            closed = closed,
+            suspended = suspendedAll,
+            degrade = degrade,
+            rows = open.associateWith { slot -> rows[slot] },
+        )
+    }
+
+    /**
+     * What [openSlots] reports for one logical id at one moment. Nested rather
+     * than a top-level class on purpose: adding a top-level type to
+     * `civictech.cell.consistency` puts it in front of every module that
+     * enumerates the package (PR #544 on this epic went red in `:inspect` and
+     * `:oracle` that way), and this type is a diagnostic, not vocabulary.
+     *
+     * [rows] carries the per-slot row actually consulted for the MIN — `null`
+     * for an open slot that has no row at all, which is the bottom-reading
+     * case [stableFrontier]'s KDoc describes.
+     */
+    data class OpenSlots(
+        val open: Set<UUID>,
+        val memberSlots: Set<UUID>,
+        val announced: Set<UUID>,
+        val closed: Set<UUID>,
+        val suspended: Set<UUID>,
+        val degrade: Boolean,
+        val rows: Map<UUID, Map<UUID, Long>?>,
+    ) {
+        /**
+         * Why [slot] is not in [open], named by the term that excluded it —
+         * the question `computenet-typw` exists to answer. `null` when the
+         * slot IS open.
+         */
+        fun exclusionOf(slot: UUID): String? = when {
+            slot in open -> null
+            slot in closed -> "closed"
+            slot in suspended && degrade -> "suspended(degrade)"
+            slot !in memberSlots && slot !in announced -> "absent"
+            else -> "unexplained"
+        }
+
+        override fun toString(): String =
+            "open=${open.short()} members=${memberSlots.short()} announced=${announced.short()} " +
+                "closed=${closed.short()} suspended=${suspended.short()} degrade=$degrade " +
+                "rows={${rows.entries.joinToString { (s, r) -> "${s.short()}->${r?.size ?: "none"}" }}}"
+
+        companion object {
+            /** No companion for the id here — [stableFrontier] returns an empty frontier. */
+            val NO_COMPANION = OpenSlots(
+                emptySet(), emptySet(), emptySet(), emptySet(), emptySet(), false, emptyMap(),
+            )
+
+            private fun UUID.short(): String = toString().take(8)
+            private fun Set<UUID>.short(): String = "[" + joinToString { it.short() } + "]"
+        }
+    }
 }
