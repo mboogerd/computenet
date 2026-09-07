@@ -177,9 +177,45 @@ private data class CheckpointRecord(
  * here and reads [alreadyProcessed]/[advanceAndJournalFrontier] from its own
  * `deliver` (which stays on the host).
  *
- * The wire-envelope journal encoding ([journalFrame]) moves verbatim; its
- * coupling to `WireCodec.VERSION` is a known, out-of-scope issue (unchanged
- * comment below).
+ * ## Cross-build replay IS a supported path, and the journal header is what gates it
+ *
+ * Decided under computenet-ldfg. Replaying a journal or checkpoint written by a
+ * *different build* is supported, and it is gated — by
+ * [civictech.cell.durability.JOURNAL_FORMAT_VERSION], a **journal-level** format
+ * generation in `FileJournal`'s header, checked by
+ * [civictech.cell.durability.Journal.replay] *before a single record is decoded*
+ * and refused by name ([civictech.cell.durability.JournalFormatMismatch]) when it
+ * does not match. Same generation → replay; different generation → refusal, never
+ * migration (the policy is stated in `Journal`'s KDoc and asserted in
+ * `JournalFormatVersionTest`).
+ *
+ * **This is not the mesh case, and the KE3-39 argument does not carry it.** That
+ * decision (`doc/spec/40-distribution/42-replication.md` §"Wire compatibility of
+ * additive fields (KE3-39)" → "Decision: the frame version stays unemitted, and
+ * the check stays a foreign-frame guard") accepted an *unenforced* mixed-version
+ * constraint on the grounds that a rolling mesh upgrade is a hypothetical
+ * operation here. Crash-restart across a build upgrade is not hypothetical — the
+ * journal on disk outlives the process that wrote it — so the durability path
+ * needed an enforced answer, and it has one that the mesh does not: a header, on
+ * a medium that has somewhere to put one. The frame version could not have been
+ * that answer even had it been emitted; it is per-record and per-*codec*, while
+ * what a replay has to agree about is the whole journal's generation, including
+ * `Stateful` snapshot shapes `WireCodec` never sees.
+ *
+ * **What this leaves of the `WireCodec.VERSION` coupling** ([journalFrame] encodes
+ * a `RECORD_FRAME` payload with the same `WireCodec.encode` the wire uses, so the
+ * payload carries no `version` key either — `encodeDefaults` is off; pinned in
+ * `JournalCompatibilityTest`). Within one generation that omission is harmless and
+ * deliberate: compatibility is carried by AGENTS.md's additive-encoding policy,
+ * the same policy KE3-39 relies on, and an *unreadable* frame fails closed —
+ * kotlinx rejects an unknown key, and [recoverFrom] dead-letters the record and
+ * raises [RecoveryIncomplete] rather than replaying a truncated prefix. Across
+ * generations the coupling is carried by the header, not by the codec:
+ * `JOURNAL_FORMAT_VERSION`'s own bump rule names "the wire encoding of a journaled
+ * invocation frame" as a bump trigger. So the coupling is no longer a "known,
+ * out-of-scope issue" — it is in scope of a constant that exists, and the residual
+ * is the one `JournalFormatVersionTest` asserts head-on: nothing detects a
+ * *forgotten* bump.
  *
  * Collaborators are the host's own [journalSelector] (the SAME lambda
  * instance the host keeps for its own two `enqueueHostedInvocation` journal
