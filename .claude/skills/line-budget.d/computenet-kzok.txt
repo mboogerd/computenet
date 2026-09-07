@@ -1,0 +1,30 @@
+# computenet-kzok: record the MEASUREMENT that kills the flag proposal two
+# breakdown agents made independently on computenet-9sm.
+#
+# The bead asked for a way to read an epic without its comment thread, and
+# proposed adding one to bead.sh. Both halves already exist and neither is the
+# problem: `bd show --json` never streams comment bodies (--include-comments is
+# opt-in) and bead.sh's projection has never had a comments field. Measured
+# 2026-09-07 on computenet-9sm: plain 233KB, --json 218KB, bead.sh 58KB,
+# description alone 43.5KB. The bulk is the inlined dependency payload bead.sh
+# already drops; the remainder is irreducible.
+#
+# So no script changes and no new reference sections — epic.md and feature.md
+# already say "bead.sh <id>, never a plain bd show" at the exact line they tell
+# a breakdown to read the epic, and bd-traps.md already covers the task-read
+# case (a child inlining its parent's whole description). What was missing is
+# only the fact that forecloses the flag, sited in the block where the next
+# agent tempted to propose it is already reading.
+#
+# +26: that paragraph, with the sizes scoped correctly (the dependency payload
+# is the bulk of --json/bead.sh, 160KB of 218KB; the comment thread is 126KB of
+# the 233KB PLAIN view, which is forbidden anyway — an agent who checked the
+# plain figure would otherwise find that dropping comments nearly halves it and
+# re-propose the flag), plus the silent-cwd hazard a reviewer measured: bead.sh
+# takes no -C and calls a bare bd show, so from any cwd but the main checkout it
+# prints nothing and exits 1 — which its own header documents as meaning the id
+# does not exist. That is the most likely reason three warned agents fell back
+# to plain bd show, and the natural recovery from an apparent bad id is exactly
+# the command this entry exists to prevent. The -C passthrough that removes the
+# hazard is computenet-wd7n's, not absorbed here.
+work +26
