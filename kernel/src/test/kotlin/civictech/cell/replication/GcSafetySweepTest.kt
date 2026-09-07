@@ -81,8 +81,15 @@ internal class GcObservations {
      * Reporting only. No assertion reads it; it is printed beside `holderState=` in the
      * fence-attribution detail so a run that catches the rare schedule carries the ordering
      * answer in its artifact instead of having to be caught again.
+     *
+     * The value also carries `stillHeldBy=`: which OTHER live members still had the element in
+     * their `membership()` at that very step. `compactBelow` discards only what the frontier
+     * certifies delivered to every open member, so a non-empty `stillHeldBy` is a DIRECT read
+     * that the certificate was false for a named live member at the moment it was acted on —
+     * shape (ii) of the acceptance criteria measured rather than deduced from the fact that the
+     * holder departed once.
      */
-    val fencedAtStep: MutableMap<Pair<String, String>, Int> = linkedMapOf()
+    val fencedAtStep: MutableMap<Pair<String, String>, String> = linkedMapOf()
 }
 
 internal object GcObservationRegistry {
@@ -348,7 +355,17 @@ object GcSafetySweep {
                 for (element in fenceableElements) {
                     val key = peer.name to element
                     if (key !in observations.fencedAtStep && cell.fencesAny(element)) {
-                        observations.fencedAtStep[key] = step
+                        // The certificate, read against the mesh AT THIS STEP: `compactBelow`
+                        // discards only what the frontier says every open member received, so
+                        // any other live member still holding the element is that certificate
+                        // being false about a member that is live right now.
+                        val stillHeldBy = MeshPeers.all(world)
+                            .filter { it.name != peer.name && it.member }
+                            .filter { p ->
+                                (p.replica as? SetCell<String>)?.membership()?.contains(element) == true
+                            }
+                            .map { it.name }
+                        observations.fencedAtStep[key] = "step=$step stillHeldBy=$stillHeldBy"
                     }
                 }
             }
@@ -565,7 +582,7 @@ object GcSafetySweep {
                             val peer = live.firstOrNull { it.name == name }
                             "$name{${cell.fenceProvenance(element, t)} " +
                                 "lastDeparture=${peer?.lastDeparture} suspended=${peer?.suspended} " +
-                                "fencedAtStep=${observations.fencedAtStep[name to element]} " +
+                                "fencedAt={${observations.fencedAtStep[name to element]}} " +
                                 "membership=${peer?.membershipLog}}"
                         }
                     }

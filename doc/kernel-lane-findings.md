@@ -932,3 +932,112 @@ at `9bafc27b0`. The two occurrences carrying the sharpened print are byte-identi
 each other, and all four agree on seed, element, holder and provenance. Full-class sweeps ran in 8-13s each on this host, not the minutes an
 earlier note assumed. Seed-pinning remains a dead end (a dedicated 5-run pin on seed 12
 scored 0/5); the schedule, not the seed, is what is rare.
+
+## KE3-23-ORDERING — the holder's departure does NOT straddle the fence, and the frontier's certificate is FALSE about a live member
+
+**computenet-dwkp, 2026-09-07, darwin/arm64 16-core, load1 7-11, `GcSafetySweepTest`
+(BS-12 + BS-13, seeds 1..200, budget 40_000), branch `task/computenet-dwkp` at
+`4af9a0909` then its successor. The branch descends from `feature/computenet-pay7`
+at `5cd0a7218` (main merged in), so these rates are NOT directly comparable with
+`KE3-23-HOLDER`'s, which were taken at `6448ab392`. One host, one session.**
+
+`KE3-23-HOLDER` above established that the holder really departed and left two things
+open: the ORDERING (a mode is not a step), and whether shape **(ii)** is also in play.
+Both are answered here, and the answer moves the residual off the departure entirely.
+
+### The instrument
+
+Three additive, reporting-only reads, none consulted by any protocol path:
+
+- `SetCell.fencesAny(element)` (with `ReclaimedDots.anyFor`) — the existence half of
+  `fencedAmong`. A step hook cannot name the tag it is waiting for: it is precisely the
+  del-dot `compactBelow` has just discarded, so it is live nowhere the hook can read.
+- `MeshPeer.membershipLog` — every join / depart / rejoin / heal transition stamped
+  from `DstWorld.step`, the same index every `TraceEvent` carries.
+- `GcObservations.fencedAtStep` — `(peer, element)` -> the compaction step at which
+  that peer's fence first held the element, **plus** `stillHeldBy=`: which OTHER live
+  members still had the element in `membership()` at that very step.
+
+The last field is the load-bearing one. `compactBelow` discards only what the frontier
+certifies delivered to **every open member**, so a non-empty `stillHeldBy` is a direct
+read that the certificate was false about a member that was live at the instant it was
+acted on — not a deduction from the fact that the holder once departed.
+
+### The reading
+
+```
+attribution=[peer2-23 held=[peer0]
+  holderState=[peer0{lastDeparture=EVICT_CLEAN suspended=false evictDespawned=true member=true
+              membership=[join@1088, EVICT_CLEAN@1623, rejoin@1885]}]
+  liveTags=[8]
+  provenance=[peer2{tag=8 own=true inc=11/11 restores=0 mintedHere=peer2-23 sameElement=true
+              lastDeparture=null suspended=false
+              fencedAt={step=5000 stillHeldBy=[peer0]} membership=[join@1412]}]
+  fencedAtLacking=peer2:[8](all)]
+```
+
+Two occurrences carry it (the second adds `fencedAt=`); both agree on every field, and
+both reproduce `KE3-23-HOLDER`'s provenance clause verbatim.
+
+### The ordering, and what it excludes
+
+peer0's only absence is **`[1623, 1885]`** — evicted at step 1623, back at 1885.
+`peer2-23` is peer2's ordinal-23 write, added at step **4900** (`WRITE_START=300` plus
+`23 x WRITE_STRIDE=200`) and removed at **4990** (`REMOVE_LAG=90`); peer2 fenced it at
+step **5000**, the first compaction point (`K=25`) at or after the removal.
+
+So the element did not exist until **3015 steps after peer0 was back**. The departure
+window and the fence window are disjoint by a wide margin, and peer0 was an open,
+unsuspended member for the whole life of `peer2-23`.
+
+**Shape (i) is therefore excluded as the CAUSE.** The holder did depart — that reading
+stands — but the departure is not contemporaneous with the certification, so "the
+holder was not an open member at certification time" is false as stated. Shape (iii)
+is excluded too, and now by a read rather than by the spawn-path inference: peer0 held
+`peer2-23` live at step 5000 and still holds it at quiescence, so no del ever reached
+it to be undone.
+
+**What remains is shape (ii)**, and `stillHeldBy=[peer0]` is the direct measurement the
+acceptance clause asked for: the open-member set `stableFrontier` computed over at step
+5000 did not include peer0, while peer0 was live and retaining state.
+
+### The mechanism this points at — NOT yet a measurement
+
+`CausalStability.stableFrontier` builds its open set as
+
+```
+open = members ∪ announced − closed − suspended
+```
+
+`closed` is a join-semilattice set and nothing retracts it. `DepartureMode.EVICT_CLEAN`
+evicts with `closeDepartedRow = true`, so peer0's watermark row entered `closed` at step
+1623 — and `MeshPeer.ref` is `CellRef(dataId, index)`, **stable across rejoins**, so the
+slot peer0 comes back on at 1885 is the slot that is already closed. From 1885 onward
+every `stableFrontier` peer2 computes would silently exclude peer0, which is exactly the
+observed certificate.
+
+**This is a code-path argument, not a read**, and it is the same class of inference this
+bead has twice replaced with a measurement. The competing explanation it does not
+exclude is that peer0's row is present and open but carries a watermark at or above the
+del-dot it never applied. Separating them needs a diagnostic on
+`CausalStability`/`Replication` reporting the `open` set and the per-slot row used —
+files outside computenet-dwkp's `metadata.files` claim, so it is filed rather than done
+here.
+
+The practical consequence is that the disposition menu on computenet-dwkp — (a)
+incarnation-unique `tagSource`, (b) a fence tolerance, (c) accept and amend the
+assertion — is aimed at the wrong seam. The fence is doing exactly what it is specified
+to do with a frontier that is wrong; nothing about `ReclaimedDots` or `tagSource` is
+implicated.
+
+### Rate
+
+84 full-class sweeps this session, **2 catches** (runs 29 and 84), on
+`task/computenet-dwkp` after `feature/computenet-pay7` merged main at `5cd0a7218`.
+That is ~1 in 42, against `KE3-23-HOLDER`'s 4 in 26 (~1 in 6) at `6448ab392`. The
+sessions differ in both the branch point and the instrumentation, and neither sample is
+large enough to separate a real shift from ordinary variance at these counts — 19
+consecutive greens opened this session, which alone has probability ~3% under a 1-in-6
+rate and ~63% under 1-in-42. **Do not read either figure as the rate of the defect.**
+The one thing both sessions agree on is that the class is still reachable at the merge
+base and a green sweep is not evidence.
