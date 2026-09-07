@@ -18,7 +18,9 @@ gh pr ready <n> && gh pr merge <n> --auto --squash
 nothing, and arming one it never gets to is the whole point. Doing this
 removes the race below rather than diagnosing it, which is why the
 remediate-friction lane adopted it (computenet-uot5) — this is that same
-change for /work (computenet-2orw).
+change for /work (computenet-2orw). (§1's later note that `gh pr merge
+--squash` has been refused by the sandbox classifier is about the bare HAND
+merge; the `--auto` form is permitted — it arms rather than merges.)
 
 **Do NOT read `autoMergeRequest` to decide whether arming worked.** The
 workflow has not run yet seconds after `gh pr ready`: measured on PR #707, it
@@ -29,12 +31,12 @@ was seconds from taking. The table below is a **diagnosis for a merge that has
 not happened later**, not a decision to make immediately.
 
 **And `autoMergeRequest: null` is not evidence of a hand merge.** On a MERGED
-PR it means nothing at all: of the last twelve merged PRs here, ten are null,
-and #702–#705 are `mergedBy: app/github-actions` with null — the workflow's own
-`--auto` merging an already-green PR immediately, which leaves no auto-merge
-request behind. On an OPEN PR it means "not armed YET" or "not armed EVER", and
-one read cannot tell them apart — which is the other reason to arm rather than
-read.
+PR it means nothing at all: measured 2026-09-07, eight of the last fifteen
+merged PRs are null and every one of those eight is `mergedBy:
+app/github-actions` — the workflow's own `--auto` merging an already-green PR
+immediately, which leaves no request behind. On an OPEN PR it means "not armed
+YET" or "not armed EVER", and one read cannot tell them apart — which is the
+other reason to arm rather than read.
 
 A PR can go ready and then sit open forever:
 `.github/workflows/auto-merge.yml` is `continue-on-error`, so when its
@@ -45,8 +47,8 @@ with `autoMergeRequest` null, while three sibling PRs marked ready in the
 same burst armed and merged normally.
 
 So the state check reads **`autoMergeRequest`**, not just the checks: it is
-the only field that separates "still waiting on its checks" from "never
-armed". `gh pr checks` cannot make that distinction — in exactly this case
+the only field that separates "still waiting on its checks" from "not armed
+*by now*" — and only well after the ready transition, never at t=0. `gh pr checks` cannot make that distinction — in exactly this case
 the auto-merge job appears there as a **pass**.
 
 **Cheaper than recovering it: mark PRs ready one at a time**, waiting for
