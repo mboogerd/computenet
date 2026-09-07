@@ -158,8 +158,26 @@ after a red suite:
                | select(.status != "closed")
                | "\(.id)\t\(((.metadata // {}).files // "-")
                    | if type=="array" then join(",") else tostring end)"'
-  done
+  done | tee "$SCRATCH/sibling-claims.tsv"
+  awk -F'\t' '{n++} $2=="-"||$2=="" {b++}
+       END {print "checked", n+0, "open siblings;", b+0,
+                  "carry NO files claim — this check gives no signal for those;",
+                  "read their descriptions"}' "$SCRATCH/sibling-claims.tsv"
   ```
+
+  **The `awk` line is not decoration — without it an empty result is
+  indistinguishable from an all-clear.** A claimless sibling is the NORMAL
+  state for a bead nobody has scheduled: review-filed residuals ship with no
+  claim by construction (computenet-419f) and directly-filed beads routinely
+  have none, so the check is at its blindest exactly where a breakdown files
+  new work into a partly-unscheduled epic — its main use case. Measured under
+  epic computenet-fpml: all three open siblings carried no `metadata.files`,
+  the check reported no collision, and that was true of the claims that exist
+  and said nothing about the files those three will claim once written
+  (computenet-0lun, a second way past computenet-rvmu's query-level fix).
+  **For each bead the summary counts as claimless, read its description and
+  reason about the files it will claim** — that is the signal the check cannot
+  give you, and it is what the agent that noticed did anyway.
 
   An overlap that is real gets a `blocks` edge and a comment saying the file
   will already exist and must be appended to, not created — which is what was
