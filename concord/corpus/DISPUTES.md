@@ -2794,3 +2794,122 @@ property is statable at the driver and not in the corpus.
   Cross-reference: `CHA3-42-stall-notice-unclean-departure` records the
   churn-rig half of this same gap (no mechanism reaches a churn peer's crash
   at all, a distinct but related negative result).
+
+## `KE3-GC-RECLAIM-FRONTIER` — the dist driver's stable frontier is permanently empty, so no corpus scenario can reach the checkpoint reclaimer (`driver-wiring-gap`)
+
+- **Requirement it would cover**: `[24-TAG-04]`
+  (`doc/spec/20-dataflow-semantics/24-data-cells.md` §Tag continuity,
+  compaction paragraph) — both clauses: the discard rule (a `dels` entry goes
+  only when EVERY tag in it, the del-dot included, is `≤ stableFrontier`) and
+  the re-admission rule ("IF a later delta, baseline or catch-up carries a
+  discarded tag, THEN the cell SHALL NOT re-admit it as new information").
+  Epic `computenet-9sm` `[KE3-33]` (BS-14), feature `computenet-9sm.6`, task
+  `computenet-9sm.6.3`, which asked for `42-GC-RECLAIM-01` in
+  `concord/corpus/42-replication/`.
+- **The premise that shapes the attempt, and it is correct**: `[KE3-33]`'s
+  literal wording is "a checkpoint via the driver's durability verbs", and
+  that is not expressible for a replica.
+  `civictech.concord.driver.kernel.KernelDriver.spawn` short-circuits a cell
+  on `KernelDriverDur.DUR_HOST` (or of type `journal`) to the dur capability
+  **before** the `replica-of` placement is considered — its own comment reads
+  "A durable cell is never also a dist replica" — so `host.checkpoint` can
+  never reach a `replica-of` cell. That is *not* the blocker recorded here:
+  the `snapshot` step is a legitimate substitute, because for any cell not in
+  `durCells` `KernelDriver.snapshot` lowers to the raw `Stateful` round-trip
+  `cell.snapshot()`, and since `computenet-9sm.6.1` `SetCell.snapshot()` **is**
+  the single production reclaim trigger (it reads the stable frontier through
+  the `StabilityReclaim` hook `Replication.trackDeliveries` installs, runs
+  `compactBelow` under `stateLock`, then serialises). The blocker is the
+  frontier that trigger reads.
+- **Why it cannot be pinned honestly**: on the dist profile the stable frontier
+  is `TagFrontier(emptyMap())` for every logical id, always, so `compactBelow`
+  discards nothing and no scripted `snapshot` ever reclaims. The mechanism is
+  structural, not a scheduling or quiescence artefact:
+  1. `KernelDriverDist` holds **one** `Replication` for the whole mesh
+     (`private val replication by lazy { Replication(driver.registry) }`), over
+     the driver's single shared `LocationRegistry`. The kernel's own fixtures
+     do the opposite — `CheckpointReclaimTest`, `CompactionTriggerPinTest` and
+     `GcSafetySweepTest` give **each peer** its own `Replication` and
+     `LocationRegistry`, bridged by `Peering.Loopback`.
+  2. `Replication.trackDeliveries` memoises the delivered-watermark companion
+     in `watermarks`, keyed on the **logical id** (`watermarks.getOrPut(cell.ref.id)`).
+     With one `Replication`, the second replica to be replicated reuses the
+     first's companion object, so exactly **one** `WatermarkCell` exists for
+     the mesh and exactly one slot ever acquires a row.
+  3. `CausalStability.stableFrontier`'s open set is
+     `membersOf(logicalId)` mapped through `WatermarkCell.slotId(watermarkRef(·))`,
+     unioned with the companion's announced members. `Replication.watermarkRef`
+     carries the data replica's `instanceId` and `WatermarkCell.slotId` hashes
+     `"watermark-slot:${ref.id}:${ref.instanceId}"`, so N replicas contribute N
+     **distinct** slots — by design, "every peer contributes a distinct,
+     replay-stable slot".
+  4. `stableFrontier` then drops any source for which some open slot has no
+     entry (`if (perSlot.any { it == null }) continue`) — bottom is represented
+     by absence. The N−1 rowless slots therefore drag every source to bottom
+     and the result is empty. This is the documented FU-2 conservative
+     direction (`[KE3-19]`), behaving exactly as specified; what is wrong is
+     the driver's wiring, which announces N members while providing one row.
+- **Measured, not inferred.** The scenario was authored in full (script below)
+  and run: `./gradlew :concord:test --rerun` reported
+  `42-GC-RECLAIM-01: check(s) failed on 20 of 20 run(s). First failing run (0):
+  emission-count(r2, since 7): expected exactly 1 emission(s) but observed 0`.
+  Every other check — `final-view` on both views, `views-converge`,
+  `replicas-converge`, `no-dead-letters` — passed. That combination is the
+  diagnosis: the re-delivered add-tag was absorbed as a plain duplicate against
+  a tombstone that is **still present** at `r2`, which is only possible if
+  `compactBelow` discarded nothing. Had `r2` reclaimed, `SetCell.applyRemote`
+  would have found `(r1,1)` novel against an emptied `adds[r2]`, fenced it via
+  `ReclaimedDots`, and answered with the repair `dels` emission — exactly one
+  emission. `exactly: 1` is thus a direct, corpus-expressible observation of
+  whether the reclaimer ran, and it reads 0.
+- **What was NOT done instead**: `42-GC-RECLAIM-01` was **not** committed with
+  the `emission-count` check removed. Without it every remaining check passes
+  against a mesh in which no reclamation happens at all and the retransmit is
+  absorbed by an intact tombstone — a scenario that would claim `[24-TAG-04]`
+  coverage while exercising neither of its clauses. `[24-TAG-04]` therefore
+  stays uncovered in `CONCORDANCE.md` rather than falsely covered. No
+  `concord/src` or `concord/schema` change was made (the task's non-goals bar
+  a driver design change), and no kernel change was made.
+- **Where the property IS pinned today**: the checkpoint-driven trigger and its
+  fence are kernel-side —
+  `kernel/src/test/kotlin/civictech/cell/replication/CheckpointReclaimTest.kt`
+  (`computenet-9sm.6.1`, the three-peer `Peering.Loopback` fixture with one
+  `Replication` per peer), `CompactionTriggerPinTest`, `SetCellCompactBelowTest`
+  and `GcSafetySweepTest`. The corpus half of `[KE3-33]` is what this entry
+  records as unreachable.
+- **Check to restore** — the scenario, verbatim, so it can be committed
+  unchanged once the driver is rewired. `graph`: hosts `h1`/`h2`; cells
+  `{id: r1, type: set-source, of: string, host: h1, replica-of: shared}`,
+  the same for `r2` on `h2`, plus a `set-view` `v1`/`v2` linked from each.
+  `script`:
+  1. `{type: apply, on: r1, op: add, value: a}` — r1 counter 1
+  2. `{type: apply, on: r1, op: add, value: b}` — r1 counter 2, live throughout
+  3. `{type: apply, on: r2, op: add, value: c}` — r2 counter 1
+  4. `{type: quiesce}`
+  5. `{type: apply, on: r1, op: remove, value: a}` — r1 counter 3, the del-dot
+  6. `{type: quiesce}` — both replicas must DELIVER the remove, not just the add
+  7. `{type: snapshot, on: r2, as: r2-post-reclaim}` — the production trigger
+  8. `{type: snapshot, on: r1, as: r1-post-reclaim}`
+  9. `{type: retransmit, on: r2, source: r1, counter: 1, op: add, value: a}` —
+     clause 2: a later delta carrying a discarded tag
+  10. `{type: quiesce}`
+
+  `checks`: `{type: final-view, view: v1, equals: [b, c]}`, the same for `v2`,
+  `{type: views-converge, views: [v1, v2]}`,
+  `{type: replicas-converge, logical: shared}`, `{type: no-dead-letters}`, and
+  the non-vacuity check `{type: emission-count, cell: r2, since: 7, exactly: 1}`.
+  The counters are deterministic because `SetCell` mints exactly one tag per
+  local `add` and per *effective* `remove`, in call order (the same argument
+  `42-REPL-DELDOT-01` records). Note that the two checks discriminate in
+  opposite directions: `emission-count` fails if the reclaimer never ran, and
+  `final-view`/`views-converge` fail if the discard happened without the fence
+  (the retransmitted tag would then resurrect `a` at `r2`).
+- **Revisit trigger**: `KernelDriverDist` gives each driver host its own
+  `Replication` (and the registry/bridge wiring that implies), so that each
+  replica contributes its own delivered-watermark row and
+  `CausalStability.stableFrontier` returns a non-empty MIN — the shape every
+  kernel replication fixture already uses. That is a driver design change and
+  was an explicit non-goal of `computenet-9sm.6.3`; it needs its own ticket.
+  Cross-reference: `KE3-GC-DEL-LANE` (the kernel-side half of `[24-TAG-04]`,
+  CLOSED by `computenet-pay7`) and `42-WM-FREEZE-01`, which records a
+  different unreachability of the same dist binding.
