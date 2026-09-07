@@ -223,14 +223,29 @@ internal class GcTotals(val label: String) {
  * and the `BS12_SEED` pin held 5 of 5 in both runs. That is what was expected — `snapshot()` mints
  * no tag and emits nothing, so it perturbs no schedule; the only new work is the frontier read
  * moving inside the cell's monitor and the serialisation itself. Read the divergence counts against
- * the CONTROL column in the SAME run, never against zero: the two agree in both runs, which is the
- * arm's actual claim (`[KE3-23]` — reclamation must not cost membership convergence).
+ * the CONTROL column in the SAME run, never against zero: they agreed in both runs above, which is
+ * the arm's actual claim (`[KE3-23]` — reclamation must not cost membership convergence).
+ *
+ * **That agreement is a sample, not a property, and the spread is wide.** Task review re-measured
+ * on the same host (darwin/arm64 16-core, load1 7.5-17, 2026-09-07): SIX further post-substitution
+ * runs of this class gave STABLE diverging 4, 5, 5, 5, 8, 9 against CONTROL 4, 4, 5, 6, 6, 6, and
+ * FOUR runs of the pre-substitution file (the direct `compactBelow`, at base 2d0bafe0b) gave STABLE
+ * 3, 4, 5, 7 against CONTROL 3, 5, 5, 5. The ranges overlap, the two columns do NOT track each other
+ * run to run, and the highest STABLE count seen in ten runs is 9 against [MAX_STABLE_DIVERGING] = 12.
+ * So: never read a single run's STABLE-vs-CONTROL equality as the check passing, and never read one
+ * run's excess as a regression — take several. Resurrecting was 0 in all ten.
  *
  * Non-vacuity is `invocations`/`discarded` above, and it was MUTATION-CHECKED: removing the
  * `cell.snapshot()` call from the STABLE branch (leaving everything else, including the frontier
  * read and the instrument, in place) takes `discarded` 5984 → 0 and reddens BS-12 on
  * "a sweep whose reclaimer never discarded a tag proves nothing about reclamation". So the
  * production trigger is what reclaims here, not a residue of the old direct call.
+ *
+ * And the frontier it reclaims at is the ARMING POINT's, not any read this file makes: task review
+ * mutated `Replication.trackDeliveries`' install site (`cell.onStability { stableFrontier(id) }` →
+ * `cell.onStability { null }`, kernel/src/main/.../replication/Replication.kt) and BS-12 reddened on
+ * the same non-vacuity assertion, `discarded` 5985 → 0, with the sweep's own `stableFrontier` read
+ * below still in place. A regression in the arming point therefore reddens this sweep.
  *
  * ## The adversary is the sibling sweep's, deliberately
  *
