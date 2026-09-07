@@ -15,6 +15,7 @@ import civictech.cell.port.*
 import civictech.cell.data.delta.DeliveredFrontier
 import civictech.cell.data.delta.DeliveryTracking
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.StabilityReclaim
 import civictech.gen.wire.CellBase
 import civictech.gen.wire.Contract
 import java.io.Serializable
@@ -218,7 +219,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // BoundedStateful extends Stateful (V1C-KERNEL): the drain/migration/
     // promotion/durability seam this cell already had is untouched, and the
     // paged read is added beside it.
-    SetCellBase<E>(ref), BoundedStateful, Replicable<SetDelta<E>>, DeliveryTracking {
+    SetCellBase<E>(ref), BoundedStateful, Replicable<SetDelta<E>>, DeliveryTracking, StabilityReclaim {
     /**
      * Replica gossip intake (spec 42, M7.3): another replica's effective
      * deltas merge here; only *new* tag information re-emits (effective-only,
@@ -341,8 +342,32 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      */
     private val reclaimed = ReclaimedDots<E>()
 
+    /**
+     * The stability read [snapshot] reclaims below ([StabilityReclaim],
+     * `[KE3-30]`, decision 9sm.6-D1) — installed by
+     * `Replication.trackDeliveries` beside the [onDeliver] listener, `null`
+     * for any cell that is not under `Replication`.
+     *
+     * **Null is the safety default, not a missing feature**: no read, no
+     * reclamation, and [snapshot] then serialises exactly what it always did.
+     * Guarded by [stateLock] like every other field here, but never *invoked*
+     * under it — the read walks another cell's state (see [stateLock]'s
+     * "never held across an outbound call").
+     */
+    private var stabilityRead: (() -> TagFrontier?)? = null
+
     override fun onDeliver(listener: (source: UUID, thru: Long) -> Unit) = synchronized(stateLock) {
         deliveryListeners += listener
+        Unit
+    }
+
+    /**
+     * Install the stability read [snapshot] reclaims below. Assignment, not
+     * accumulation: `Replication.trackDeliveries` runs again on a rehome, and
+     * a second install of an equivalent read must not stack.
+     */
+    override fun onStability(read: () -> TagFrontier?) = synchronized(stateLock) {
+        stabilityRead = read
         Unit
     }
 
@@ -703,6 +728,57 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     internal fun fencesAny(element: E): Boolean = synchronized(stateLock) { reclaimed.anyFor(element) }
 
     /**
+     * Retained reclaimable state, **as a whole** — computenet-9sm.6.5's BS-16 accounting
+     * (`[KE3-37]`), and the fifth read of the [liveTagsOf]/[fencedAmong]/[fencesAny]/
+     * [fenceProvenance] diagnostic family.
+     *
+     * The three components are reported SEPARATELY and summed by [RetainedState.total], and that
+     * separation is the whole point of the read. Reclamation as landed is an **exchange**: a
+     * discarded `dels` entry becomes a fence element key plus one or more counter runs
+     * ([ReclaimedDots]'s KDoc: "a reduction, not a bound"). So a bound stated over
+     * [RetainedState.tombstoneTags] alone is satisfiable by moving the growth into the fence, and
+     * `[KE3-37]` therefore requires the bound to be stated over [RetainedState.total].
+     *
+     * **What is counted, and why exactly this:**
+     *
+     *  - [RetainedState.tombstoneTags] — every tag in `dels`, plus the `adds` tags *under* a
+     *    `dels` entry (`adds[e] ∩ dels[e]`). Those are exactly the tags [compactBelow] can ever
+     *    discard: it takes a whole `dels` entry and the intersection of `adds[e]` with it.
+     *  - [RetainedState.fenceRuns] — [ReclaimedDots.runCount], the per-`(element, source)`
+     *    contiguous counter runs the discard exchanged those tags for.
+     *  - [RetainedState.fenceElements] — [ReclaimedDots.elementCount], one entry per element ever
+     *    reclaimed here. Nothing prunes it; that needs epoch hygiene (G-42, research-gated).
+     *
+     * **What is deliberately NOT counted**, stated here because it will otherwise be attributed to
+     * the reclaimer: live add-tags with no `dels` entry (`O(live elements)` and legitimately
+     * irreducible — an element that is present must carry the tag that makes it present), and the
+     * computenet-dwkp diagnostic maps `mintedHere`/`incarnations`, which are unpruned,
+     * unreclaimable by [compactBelow] and `O(local mints)`. Bounding or build-gating those is
+     * computenet-fzd3, a separate open bead, and their growth is not this reclaimer's.
+     *
+     * Read-only, additive, takes [stateLock] and makes no outbound call; no protocol path consults
+     * it, exactly as its four siblings. `internal`: `:kernel` tests only.
+     */
+    internal fun retainedState(): RetainedState = synchronized(stateLock) {
+        var tombstoneTags = 0
+        for ((element, delTags) in dels) {
+            tombstoneTags += delTags.size
+            adds[element]?.let { addTags -> tombstoneTags += addTags.count { it in delTags } }
+        }
+        RetainedState(tombstoneTags, reclaimed.runCount, reclaimed.elementCount)
+    }
+
+    /** The three components of [retainedState]; see its KDoc for what each one is and is not. */
+    internal data class RetainedState(
+        val tombstoneTags: Int,
+        val fenceRuns: Int,
+        val fenceElements: Int,
+    ) {
+        /** Retained state as a whole — the quantity `[KE3-37]` requires the BS-16 bound over. */
+        val total: Int get() = tombstoneTags + fenceRuns + fenceElements
+    }
+
+    /**
      * The PROVENANCE of a fenced tag — computenet-dwkp's measurement, and the third
      * diagnostic read of this family after [liveTagsOf] and [fencedAmong].
      *
@@ -847,7 +923,78 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // snapshot/restore (G-25 seam): elements must be Serializable. The tag
     // counter is state too (M10.2): a checkpoint-restored instance must not
     // re-mint tags it already used — journal-tail replay continues the count.
-    override fun snapshot(): Serializable = synchronized(stateLock) {
+    /**
+     * **THE RECLAIMER'S ONLY PRODUCTION CALLER** (`[KE3-30]`/`[KE3-31]`/
+     * `[KE3-32]`, decision 9sm.6-D1, computenet-9sm.6.1).
+     *
+     * Reads the installed stability read ([onStability]) and, if one is
+     * installed and answers, runs [compactBelow] at that frontier **before**
+     * serialising — both under one hold of [stateLock].
+     *
+     * ## Why compaction rides *every* snapshot, with no `compact:` flag
+     *
+     * The sub-decision 9sm.6-D1 left to the breakdown, recorded where the code
+     * is: there is **no `compact: Boolean` parameter**, and reclamation
+     * therefore rides every caller of this function —
+     * `HostDurability.checkpoint`, `ManagedHost.snapshotOf` (the inspector
+     * read), migration, promotion state transfer, and the concord driver's raw
+     * `snapshot` verb. Three reasons, none of them convenience:
+     *
+     * 1. `Stateful.snapshot()`'s signature is consumed by drain, migration,
+     *    promotion, durability and the inspector alike. A flag would conscript
+     *    every one of those call sites into expressing a distinction that
+     *    changes nothing about safety.
+     * 2. `[KE3-30]` makes the **frontier** the sole authority for a discard —
+     *    "no other condition SHALL authorise a discard". The identity of the
+     *    caller is exactly such an other condition, and making it matter would
+     *    be a second gate beside the one the requirement names.
+     * 3. Every `snapshot()` is a moment at which the persisted tag maps must
+     *    agree with the persisted `"reclaimed"` fence. Compacting first and
+     *    serialising second, under one monitor hold, is what guarantees that;
+     *    a wiring that compacted after the snapshot, or on a copy, would
+     *    persist maps that no longer match the fence and re-admit on restore.
+     *
+     * The admitted consequence, stated rather than discovered: an *observer*
+     * read (the inspector's `snapshotOf`) can therefore reclaim. That is still
+     * not a hot path, and it is still gated on causal stability, so it can
+     * discard nothing an ordinary checkpoint could not have discarded a moment
+     * later.
+     *
+     * ## Ordering, and why the frontier is read outside the lock
+     *
+     * The read is a foreign call — it walks the delivered-watermark companion
+     * — and [stateLock]'s KDoc forbids holding the monitor across one. So the
+     * frontier is read *before* the monitor is taken. That makes it a
+     * conservative under-read and never a hazard: per-source stability is
+     * monotone, so a frontier read a few instructions early can only be lower
+     * than the truth at discard time, i.e. it can only *decline* a discard the
+     * next pass will make. [compactBelow] re-enters the same monitor this
+     * function already holds (`synchronized` is reentrant), so the compaction
+     * and the serialisation observe one state with no window between them.
+     *
+     * ## 9sm.6-D4 is vacuous here
+     *
+     * The R14 interlock asks what happens when a *source* is fenced as dead by
+     * this cell (the `deadSources` mechanism of `TagState`/`OrMapCell` — a
+     * different mechanism from [ReclaimedDots], despite both being called a
+     * fence). `SetCell` has no dead-source fence at all, so there is no
+     * interaction to arbitrate and none is built; this note is the record of
+     * that, per the decision's own "record what you find".
+     */
+    override fun snapshot(): Serializable {
+        // Outside the monitor, deliberately: see "Ordering" above.
+        val read = synchronized(stateLock) { stabilityRead }
+        val frontier = read?.invoke()
+        return synchronized(stateLock) {
+            // `[KE3-30]`: the frontier is the only authority, and a null read
+            // (no `Replication`, or nothing certifiable) discards nothing.
+            if (frontier != null) compactBelow(frontier)
+            snapshotLocked()
+        }
+    }
+
+    /** The serialisation half of [snapshot]. Call under [stateLock]. */
+    private fun snapshotLocked(): Serializable =
         HashMap(
             mapOf(
                 "adds" to HashMap(adds.mapValues { HashSet(it.value) }),
@@ -870,7 +1017,6 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
                 "reclaimed" to reclaimed.save(),
             )
         )
-    }
 
     @Suppress("UNCHECKED_CAST")
     override fun restore(state: Serializable) = synchronized(stateLock) {
