@@ -80,6 +80,24 @@ the log to one snapshot record of every `Stateful` cell; `recoverFrom`
 through the ordinary decode path. Durability is a hosting decision, not a
 cell concern (24).
 
+*Cross-build replay* is a supported path — a journal on disk outlives the
+process that wrote it, so crash-restart across a build upgrade is a real
+operation, not the hypothetical rolling-mesh upgrade KE3-39 could leave
+unenforced (decided under computenet-ldfg). It is gated at the **journal**,
+not at the record: every journal that has somewhere to put a header carries
+the `JOURNAL_FORMAT_VERSION` of the build that wrote it, and `replay`
+refuses another generation by name before a single record is decoded.
+Journals are never migrated across generations — an unreadable journal is
+discarded and its state rebuilt from a peer or lost (computenet-437w). Within
+one generation, compatibility is carried by the additive-encoding policy
+alone: a journaled invocation frame is a `WireCodec` frame and so carries no
+codec version of its own, and a frame that has nonetheless become unreadable
+fails closed (the record is dead-lettered and replay aborts, never a silently
+truncated prefix). Two residuals are stated rather than closed: a *forgotten*
+generation bump is undetectable — on-disk shape is a property of arbitrary
+`Stateful.snapshot` implementations — and a pre-versioning journal, having no
+header, is assumed to belong to generation 1 rather than checked.
+
 The decided recovery-regime precedence (decided in
 [93 I-7](../90-roadmap/93-feature-interactions.md)) is one ordered pipeline:
 **checkpoint restore → journal-tail replay → re-announce + catch-up →
