@@ -13,10 +13,23 @@
 # for the two whose prompts did not carry it for the call they made. A
 # projection at the call site does not depend on anyone remembering.
 #
-# Usage: bead.sh <id> [jq-filter]
+# Usage: bead.sh [-C <dir>] <id> [-r] [jq-filter]
 #   Default filter is '.' — the projected object, pretty-printed.
 #   bead.sh <id> '.metadata.files[]'      # any field of the projection
 #   bead.sh <id> -r '.status'             # -r before the filter for raw output
+#   bead.sh -C <main-checkout> <id>       # from a worktree: only the main
+#                                         # checkout holds the beads database
+#
+# -C IS FORWARDED TO bd, NOT TO jq. It is accepted before or after the id, so
+# both orders a dispatched reviewer might type work. Without it, `bd` finds the
+# database by walking up from the working directory: run from anywhere but the
+# checkout, bead.sh printed NOTHING and exited 1 — which this header documents
+# below as meaning the id does not exist (computenet-kzok). Before this flag
+# existed, the reviewer dispatch line "run bd with -C <main-checkout>" and the
+# bead.sh recommendation could not both be followed: the flag reached the jq
+# filter and died as `jq: error: C/0 is not defined`, an error naming neither
+# bd nor the checkout, so the lesson it taught was "bead.sh is broken". Two
+# reviewers hit it within an hour (computenet-wd7n).
 #
 # Emits the bead as a single OBJECT, not `bd show`'s list of one, so no `.[0]`
 # unwrap is needed. Dependencies survive as bare ids under `.dependency_ids`,
@@ -33,16 +46,30 @@
 # scalar filter (`-r '.status'`) never spills, but `-r '.description'` will.
 set -uo pipefail
 
-id=${1:?usage: bead.sh <id> [-r] [jq-filter]}
+# -C is accepted in either position, so the two instructions a dispatched
+# reviewer is given ("-C the main checkout" and "use bead.sh") compose whichever
+# order it types them in.
+dir=""
+[ "${1:-}" = "-C" ] && { dir=${2:?-C needs a directory}; shift 2; }
+id=${1:?usage: bead.sh [-C <dir>] <id> [-r] [jq-filter]}
 shift
+[ "${1:-}" = "-C" ] && { dir=${2:?-C needs a directory}; shift 2; }
 raw=""
 [ "${1:-}" = "-r" ] && { raw="-r"; shift; }
 filter=${1:-.}
 
+# An unset dir must NOT become `bd -C ""` (bd would chdir to the empty path),
+# so the flag is carried as an array that is empty when no -C was given. The
+# `[@]+` guard is load-bearing: this host's /bin/bash is 3.2, where `set -u`
+# treats an EMPTY array's "${a[@]}" as unbound and aborts — so the no-`-C`
+# path, which is every existing caller, dies on the line added for -C.
+bd_dir=()
+[ -n "$dir" ] && bd_dir=(-C "$dir")
+
 # sed slices to the first JSON token: bd prefixes advisory lines on stderr AND
 # stdout (bd-traps.md's "malformed mid-document" note is about the tail, which
 # jq surfaces as a parse error rather than silence).
-out=$(bd show "$id" --json 2>/dev/null \
+out=$(bd ${bd_dir[@]+"${bd_dir[@]}"} show "$id" --json 2>/dev/null \
   | sed -n '/^[[{]/,/^[]}]/p' \
   | jq $raw '(if type=="array" then .[0] else . end)
              | { id, title, issue_type, status, priority, assignee, parent,
