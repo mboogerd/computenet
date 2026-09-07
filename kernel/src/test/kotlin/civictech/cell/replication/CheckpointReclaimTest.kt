@@ -63,9 +63,11 @@ import java.util.UUID
  * tag counts through it would compact the cell it was measuring. Every count
  * below therefore goes through [tagState], which walks
  * `SetCell.readBounded` — a read that mints nothing, emits nothing and
- * reclaims nothing. The one place `snapshot()` is called directly is the
- * post-checkpoint fence assertion, where the point *is* that a snapshot
- * reclaims.
+ * reclaims nothing. `snapshot()` is called directly in exactly two places,
+ * both of which mean to: the post-checkpoint fence assertion, and `the
+ * snapshot that reclaims serialises the post-compaction state`, where the
+ * point *is* that a snapshot reclaims — and, there, that it serialises what
+ * its own compaction left behind.
  *
  * The mesh fixture is the three-peer `Peering.Loopback` triangle of
  * `CompactionTriggerPinTest` (itself copied from `StableFrontierMeshTest`,
@@ -253,11 +255,13 @@ class CheckpointReclaimTest {
         //    assertion and NOT a discriminator for `[KE3-31]`'s ordering: A has
         //    already been reclaimed by the checkpoint above, so a wiring that
         //    serialised before compacting would serialise the same empty maps
-        //    here and pass. Measured: inverting the two statements in
-        //    `SetCell.snapshot()` leaves every test in this file green. The
-        //    ordering discriminator is `the snapshot that reclaims serialises
-        //    the post-compaction state` below, which snapshots a cell that has
-        //    NOT yet been compacted.
+        //    here and pass. Measured: with only the tests this file had before
+        //    the ordering discriminator was added, inverting the two statements
+        //    in `SetCell.snapshot()` left every one of them green. That
+        //    discriminator is `the snapshot that reclaims serialises the
+        //    post-compaction state` below, which snapshots a cell that has NOT
+        //    yet been compacted; under the same inversion it is now the one and
+        //    only test in this file that reddens (its `dels` assertion).
         val snap = snapshotOf(mesh.ra)
         @Suppress("UNCHECKED_CAST")
         (snap["dels"] as Map<String, Set<Timestamp>>).keys.shouldBeEmpty()
