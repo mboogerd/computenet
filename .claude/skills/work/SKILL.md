@@ -65,8 +65,29 @@ id that two machines can mint twice. They are in
 **[references/bd-traps.md](references/bd-traps.md)**, and every step below
 assumes you have read them.
 
-The two that bite hardest, inline because skipping them costs the most:
+The three that bite hardest, inline because skipping them costs the most:
 
+- **A free-text `bd` value passed as a double-quoted shell argument is
+  CORRUPTED SILENTLY.** zsh runs the backticked span (and `$(...)`) before `bd`
+  sees the string and substitutes its output; `bd` then stores the mutilated
+  text, prints `Comment added`, and exits 0. What gets deleted is exactly the
+  symbol, predicate or flag the sentence was about, so the stored prose still
+  reads fluently and no later reader can tell. Three sessions so far: a
+  `bd create` (computenet-9w9), and two ORDINARY mid-session `bd comment`s, by
+  a dispatched agent (computenet-s62u) and by an orchestrator (computenet-e23h)
+  — not only friction filings. Every body that quotes code goes through a file:
+
+  ```bash
+  cat > "$SCRATCH/body.md" <<'EOF'
+  ... prose with `backticks` ...
+  EOF
+  bd comment <id> --file "$SCRATCH/body.md"
+  ```
+
+  The quoted `<<'EOF'` is what makes the heredoc inert; an unquoted one
+  executes the backticks just the same. Same rule for `bd create`
+  (`--desc-file`/`--accept-file`, via `create-ticket.sh`) and for any
+  `bd update` free-text value.
 - **`bd show <id> --json` returns a LIST** — unwrap `.[0]` or every field reads
   `null` — and `bd` prints warnings on stdout **before** the JSON, so slice with
   `sed -n '/^[[{]/,/^[]}]/p'` before `jq`. An empty `jq` result is never evidence of

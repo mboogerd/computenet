@@ -1,0 +1,15 @@
+# computenet-e23h: the quoted-body rule for free-text `bd` values is promoted
+# out of step 7's friction-filing section into SKILL.md's top-of-file `bd
+# traps` list, which every step is told to have read.
+#
+# The rule already existed — in step 7, in bd-traps.md, in task.md — and the
+# failure kept landing on ORCHESTRATORS writing ordinary mid-session comments,
+# who go to step 7 only when filing friction. Four occurrences (computenet-9w9,
+# computenet-s62u, computenet-e23h and its own comment thread); the first two
+# were closed with the guidance never leaving step 7.
+#
+# +21 for the trap statement, the property that makes it dangerous (the write
+# SUCCEEDS and prints "Comment added", and what is deleted is the backticked
+# symbol the sentence is about), and the four-line safe form inline — it is
+# short enough that sending the reader to another file is what failed twice.
+work +21
