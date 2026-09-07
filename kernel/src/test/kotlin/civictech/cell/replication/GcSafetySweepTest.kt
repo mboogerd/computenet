@@ -1752,6 +1752,45 @@ class StabilityRowCoverageOnReincarnationTest {
         val replication = Replication(registry)
     }
 
+    /**
+     * The replica's `dels` tag map, read through [SetCell.readBounded] and **not**
+     * through `snapshot()` (computenet-9sm.6.8).
+     *
+     * Since computenet-9sm.6.1, `snapshot()` is the single production caller of
+     * [SetCell.compactBelow], so a diagnostic snapshot FIRES THE RECLAIMER. In the
+     * measurement arm below the frontier already certifies `"z"`'s del-dot at the
+     * point of the read, so the observation itself discarded the entry it was
+     * about, and the read died with `NoSuchElementException: Key z is missing in
+     * the map`. Measured across that one call, on this class's own schedule:
+     * `readBounded` dels `{a=[1, 3], z=[1, 2]}` before the snapshot and `{}`
+     * after, `fencesAny("z")` false before and true after, membership already
+     * `[b]` against p0's `[b, z]`. Nothing about the *schedule* was invalidated —
+     * the reclamation the arm asserts still happens, it had merely been pulled
+     * forward into the instrument, so the later explicit `compactBelow` found
+     * nothing left to discard.
+     *
+     * [SetCell.readBounded] mints nothing, emits nothing and reclaims nothing —
+     * the same substitution computenet-9sm.6.1 made in `CompactionTriggerPinTest`,
+     * and the read `CheckpointReclaimTest` uses for the same reason. Only the
+     * instrument changes: every assertion, expected value, seed and schedule
+     * constant in this class is untouched, and computenet-dwkp's four
+     * prohibitions hold.
+     */
+    private fun delTagsOf(cell: SetCell<String>): Map<String, Set<civictech.cell.Timestamp>> {
+        val dels = LinkedHashMap<String, Set<civictech.cell.Timestamp>>()
+        var request = StateRead(limit = 64)
+        while (true) {
+            val page = cell.readBounded(request)
+            page.entries.forEach { entry ->
+                @Suppress("UNCHECKED_CAST")
+                val e = entry as SetCell.SetStateEntry<String>
+                if (e.delTags.isNotEmpty()) dels[e.element] = e.delTags
+            }
+            request = StateRead(cursor = page.next ?: break, limit = 64)
+        }
+        return dels
+    }
+
     @Test
     fun `computenet-mahx an open watermark row certifies a del-dot the replica never applied - the counter space is reused across incarnations`() {
         val controller = SimulationController(3L)
@@ -1807,8 +1846,7 @@ class StabilityRowCoverageOnReincarnationTest {
         // "z" is removed here, so its del-dot is the highest-counter tag of its `dels` entry.
         // Read off the checkpoint rather than assumed, so the test cannot pass against a
         // counter space that stopped being re-used.
-        @Suppress("UNCHECKED_CAST")
-        val delsOfR1b = (r1b.snapshot() as Map<String, Any>)["dels"] as Map<String, Set<civictech.cell.Timestamp>>
+        val delsOfR1b = delTagsOf(r1b)
         val dot = delsOfR1b.getValue("z").maxByOrNull { t -> t.counter }!!
         dot.sourceId shouldBe tagSource
         dot.counter shouldBe 2L
@@ -1905,8 +1943,7 @@ class StabilityRowCoverageOnReincarnationTest {
         dropToP0.set(false)
         controller.runToIdle()
 
-        @Suppress("UNCHECKED_CAST")
-        val dels = (r1.snapshot() as Map<String, Any>)["dels"] as Map<String, Set<civictech.cell.Timestamp>>
+        val dels = delTagsOf(r1)
         val dot = dels.getValue("z").maxByOrNull { t -> t.counter }!!
         dot.sourceId shouldBe tagSource
         dot.counter shouldBe 5L // a fresh counter — incarnation 1 never restarted
