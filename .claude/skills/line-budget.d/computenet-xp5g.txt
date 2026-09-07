@@ -1,0 +1,22 @@
+# computenet-xp5g: 5b's stall response gains the step that reads the BOX, and
+# names which unit to re-dispatch under HOST load.
+#
+# The response table already said "all three signals empty -> re-dispatch as a
+# clean start" and stopped there. At load1 128 that is a re-dispatch into the
+# same wall: the 600s stream watchdog KILLS an agent whose single tool call
+# cannot finish, so an external condition presents identically to an agent
+# defect and the prescribed remedy makes it worse. Third occurrence
+# (computenet-znlh, computenet-9ofq, computenet-xp5g); the first two were
+# closed with the response table unchanged.
+#
+# +27: a step 0 that reads capacity and ps before the signals, including what
+# the ps decides — a busy java/gradle process means the load is OURS and
+# nothing should be re-dispatched at all (8 lines, +1 for the renumber); three
+# lines saying a released claim records "external, never started" on the BEAD
+# and not only in the next prompt, since the bead is what the next session
+# reads; one paragraph naming the no-Gradle units that complete under
+# HOST load and how to shape a Gradle dispatch that must go anyway, with the
+# 2026-09-07 measurement (14 lines), and 3 lines at the dispatch-time advice
+# string so "expect it to be slow, not wrong" names the watchdog that bounds
+# "slow" rather than reading as unconditional.
+work +27
