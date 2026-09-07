@@ -75,7 +75,7 @@ The three that bite hardest, inline because skipping them costs the most:
   reads fluently and no later reader can tell. Three sessions so far: a
   `bd create` (computenet-9w9), and two ORDINARY mid-session `bd comment`s, by
   a dispatched agent (computenet-s62u) and by an orchestrator (computenet-e23h)
-  — not only friction filings, so it belongs here, not only in step 7. Every body that quotes code goes through a file:
+  — not only friction filings. Every body that quotes code goes through a file:
 
   ```bash
   cat > "$SCRATCH/body.md" <<'EOF'
