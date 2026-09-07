@@ -8,6 +8,34 @@ verdict.
 
 ## 1. `gh pr ready` is the ship decision, not the ship
 
+**Arm it yourself, in the same breath. Both commands, always:**
+
+```bash
+gh pr ready <n> && gh pr merge <n> --auto --squash
+```
+
+`--auto` is **idempotent**, so arming a PR the workflow already armed costs
+nothing, and arming one it never gets to is the whole point. Doing this
+removes the race below rather than diagnosing it, which is why the
+remediate-friction lane adopted it (computenet-uot5) — this is that same
+change for /work (computenet-2orw).
+
+**Do NOT read `autoMergeRequest` to decide whether arming worked.** The
+workflow has not run yet seconds after `gh pr ready`: measured on PR #707, it
+was `null` at t=0 and carried `enabledAt` 45 seconds later, armed by
+`app/github-actions`. So an immediate read says NOT-ARMED about a PR that arms
+perfectly well, and an orchestrator acting on it hand-merges a PR the workflow
+was seconds from taking. The table below is a **diagnosis for a merge that has
+not happened later**, not a decision to make immediately.
+
+**And `autoMergeRequest: null` is not evidence of a hand merge.** On a MERGED
+PR it means nothing at all: of the last twelve merged PRs here, ten are null,
+and #702–#705 are `mergedBy: app/github-actions` with null — the workflow's own
+`--auto` merging an already-green PR immediately, which leaves no auto-merge
+request behind. On an OPEN PR it means "not armed YET" or "not armed EVER", and
+one read cannot tell them apart — which is the other reason to arm rather than
+read.
+
 A PR can go ready and then sit open forever:
 `.github/workflows/auto-merge.yml` is `continue-on-error`, so when its
 merge command fails the job still reports green, nothing retries it, and no
@@ -47,7 +75,7 @@ together — either alone is ambiguous:
 | object | `DIRTY` / `BEHIND` | conflicts with `main`, or needs updating | **resolve it yourself** (§2) |
 | object | `BLOCKED` / `UNSTABLE` | a required check is red or still running | red → [red-check-attribution.md](red-check-attribution.md); running → move on, it merges on its own |
 | object (`enabledAt`, `enabledBy`) | `CLEAN` | armed and waiting on the merge | move on |
-| **`null`** | **`CLEAN`** | **arming failed; nothing will retry it** | recover it, below |
+| **`null`** | **`CLEAN`** | **arming failed, OR the workflow has not run yet** — indistinguishable from one read | re-arm (`gh pr merge <n> --auto --squash`, idempotent); still open well afterwards → recover it, below |
 | `null` | anything else | undecidable yet — the checks are still running | re-check once they settle |
 
 `UNKNOWN` is the common first answer, not an error — GitHub computes

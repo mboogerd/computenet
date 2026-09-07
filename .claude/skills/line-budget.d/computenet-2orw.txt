@@ -1,0 +1,30 @@
+# computenet-2orw: /work arms auto-merge itself instead of reading a field that
+# is not yet meaningful. Split out of computenet-uot5's review (PR #708), which
+# made this change for the remediate-friction lane only and deliberately left
+# /work's route — ship-feature.md's state table — untouched.
+#
+# Two measurements, both from that review:
+# - PR #707: `gh pr view --json autoMergeRequest` immediately after
+#   `gh pr ready` returned null; re-read 45s later it carried enabledAt, armed
+#   by app/github-actions. The workflow had simply not run yet. ship-feature.md
+#   says to read it "right after running gh pr ready", so the check reads
+#   NOT-ARMED on a PR that arms perfectly well, and an orchestrator acting on
+#   that hand-merges a PR the workflow was seconds from taking. The file's own
+#   mitigation ("re-query once after ~10s") is under the observed 45s and
+#   contradicts its opening instruction.
+# - Of the last twelve merged PRs here, TEN show autoMergeRequest null, and
+#   #702-#705 are mergedBy app/github-actions with null — the workflow's own
+#   --auto merging an already-green PR, which leaves no request behind. So null
+#   on a MERGED PR means nothing, and on an OPEN one means "not armed YET" or
+#   "not armed EVER" with no way to tell from one read.
+#
+# The acceptance's preferred route: arm unconditionally with the idempotent
+# `gh pr ready <n> && gh pr merge <n> --auto --squash`, and demote the state
+# table to a diagnosis for a merge that has NOT happened later.
+#
+# +28 ship-feature.md (the arm-both instruction, why the immediate read is
+# meaningless, what null does and does not license, and the null/CLEAN row
+# restated as re-arm-then-recover), +5 SKILL.md 5e so the orchestrator gets the
+# second command at the point of use rather than only after opening the
+# reference.
+work +33
