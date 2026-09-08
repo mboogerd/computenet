@@ -32,11 +32,109 @@ import org.junit.jupiter.api.Order
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestMethodOrder
 import java.io.File
+import java.util.WeakHashMap
 import kotlin.test.assertTrue
 
 // ================================================================================================
 // computenet-9sm.8.7 — the OR-MAP GC safety sweep. See [OrMapGcSafetySweep] for the model.
+// computenet-rjue — the multi-writer-key arm. See [OrMapGcSafetySweep.Trigger.SHARED].
 // ================================================================================================
+
+/**
+ * What the contended-put hook and the quiescent contention read recorded for ONE run of
+ * [OrMapGcSafetySweep.Trigger.SHARED] (computenet-rjue).
+ *
+ * Separate from `GcObservations` rather than a field on it: that class is shared verbatim with
+ * `GcSafetySweepTest`'s OR-SET sweep (9sm.8-D10), which has no contended keys and no per-key value
+ * at all, and `GcSafetySweepTest.kt` is read-only to this lane.
+ */
+internal class ContendedObservations {
+
+    /** Contended puts the hook actually issued (`MeshPeer.put` returned true). */
+    var putsIssued: Long = 0
+
+    /**
+     * The greatest number of peers that put in ONE round — the round's writer multiplicity.
+     *
+     * This is what says whether the WORKLOAD could contend at all on this seed, as opposed to
+     * whether it did. A round's putters are the peers that were members at that step, and the churn
+     * plan decides that: on a seed whose plan leaves one member for the whole contention window,
+     * every round has a single putter and no observable could see an add-wins pick, because the run
+     * never produced one. Keeping the two apart is what lets the arm assert the strong per-seed
+     * invariant — *wherever two peers put in one round, two live dots survive to quiescence* —
+     * instead of a bare aggregate.
+     */
+    var maxPuttersInARound: Int = 0
+
+    /**
+     * The greatest number of LIVE dots any live replica held on any contended key at quiescence.
+     *
+     * This is the arm's non-vacuity witness, and it is the strict one: `value(key)` resolves an
+     * add-wins pick only when this is at least 2. A run where it is 1 has a workload whose value
+     * observable is exactly as blind as the ordinal one's, and the arm must say so rather than
+     * pass.
+     */
+    var maxLiveDotsOnAKey: Int = 0
+
+    /**
+     * The greatest number of DISTINCT live values any live replica held on any contended key —
+     * `OrMapCell.values(key).size`. Two live dots carrying the same string would be a pick no
+     * mis-resolution could get wrong, so this is the half that makes the witness discriminating
+     * rather than merely non-singleton.
+     */
+    var maxConcurrentValuesOnAKey: Int = 0
+}
+
+internal object ContendedObservationRegistry {
+    private val byWorld = WeakHashMap<DstWorld, ContendedObservations>()
+
+    @Synchronized
+    fun of(world: DstWorld): ContendedObservations = byWorld.getOrPut(world) { ContendedObservations() }
+}
+
+/** Sweep-wide contention counters, absorbed from each quiesced [OrMapGcSafetySweep.Trigger.SHARED] run. */
+internal class ContendedTotals {
+    var runs: Int = 0
+    var putsIssued: Long = 0
+    val maxLiveDotsPerRun: MutableList<Int> = mutableListOf()
+    val maxValuesPerRun: MutableList<Int> = mutableListOf()
+
+    /** Contended puts issued, per run — a seed that contended nothing is diagnosed from this. */
+    val putsPerRun: MutableList<Long> = mutableListOf()
+
+    /** [ContendedObservations.maxPuttersInARound], per run. */
+    val maxPuttersPerRun: MutableList<Int> = mutableListOf()
+
+    /** The seed indices (0-based within the sweep range) whose plan let two peers put in one round. */
+    fun contendableRuns(): List<Int> = maxPuttersPerRun.indices.filter { maxPuttersPerRun[it] >= 2 }
+
+    fun reset() {
+        runs = 0
+        putsIssued = 0
+        maxLiveDotsPerRun.clear()
+        maxValuesPerRun.clear()
+        putsPerRun.clear()
+        maxPuttersPerRun.clear()
+    }
+
+    @Synchronized
+    fun absorb(observations: ContendedObservations) {
+        runs++
+        putsIssued += observations.putsIssued
+        maxLiveDotsPerRun += observations.maxLiveDotsOnAKey
+        maxValuesPerRun += observations.maxConcurrentValuesOnAKey
+        putsPerRun += observations.putsIssued
+        maxPuttersPerRun += observations.maxPuttersInARound
+    }
+
+    override fun toString(): String =
+        "CONTENDED{runs=$runs puts=$putsIssued " +
+            "minMaxLiveDotsOnASeed=${maxLiveDotsPerRun.minOrNull() ?: -1} " +
+            "maxLiveDots=${maxLiveDotsPerRun.maxOrNull() ?: -1} " +
+            "minMaxDistinctValuesOnASeed=${maxValuesPerRun.minOrNull() ?: -1} " +
+            "contendableSeeds=${contendableRuns().size} of $runs " +
+            "seedsWithNoContention=${maxLiveDotsPerRun.count { it < 2 }}}"
+}
 
 /**
  * `[KE3-23]` / `[KE3-20]` for the **OR-MAP** reclaimer: the same seeded churn sweep
@@ -79,13 +177,24 @@ import kotlin.test.assertTrue
  * check likewise compares the cell against its own emitted `ReplicaConvergence` fold
  * (`TaggedMapDelta` merge) on membership AND on `value(key)` ([VALUE_FOLD_DRIFT_FAILURE]).
  *
- * **What that observable can and cannot see here, stated honestly.** `MeshPeer.write` puts
- * `key = "$name-$ordinal"` with `value = "$ordinal"`, and a key is written exactly once by
- * exactly one peer, so there are no CONCURRENT puts on a key in this workload and the add-wins
- * pick is never exercised on a contended key. What the value observable therefore catches is a
- * replica whose live dot set for a key is wrong — a discarded put-dot that leaves the key present
- * with a different (or no) value, or a re-admitted one — not a mis-resolved concurrent write. A
- * multi-writer key workload is a different rig and is out of this task's scope.
+ * **What that observable can and cannot see on the THREE ORIGINAL arms, stated honestly.**
+ * `MeshPeer.write` puts `key = "$name-$ordinal"` with `value = "$ordinal"`, and a key is written
+ * exactly once by exactly one peer, so there are no CONCURRENT puts on a key in that workload and
+ * the add-wins pick is never exercised on a contended key. What the value observable therefore
+ * catches on STABLE / LOCAL / NONE is a replica whose live dot set for a key is wrong — a
+ * discarded put-dot that leaves the key present with a different (or no) value, or a re-admitted
+ * one — not a mis-resolved concurrent write.
+ *
+ * **[Trigger.SHARED] is the arm that closes that hole** (computenet-rjue). It is ADDITIVE: a fourth
+ * trigger with its own graph, its own check id and its own artifact root, reclaiming at the SAME
+ * production frontier `Trigger.STABLE` does, so the seeds, budget and `K` of the three original
+ * arms — and therefore the numbers recorded in `doc/kernel-lane-findings.md`
+ * `## KE3-42-ORMAP-BS13` — are untouched. On top of the ordinal workload its step hook has EVERY
+ * member peer put the SAME key at the SAME step (one key per round), so no
+ * putter has seen any other's dot when it mints its own and the key's live dots are mutually
+ * concurrent with DISTINCT values. `value(key)` there is a real add-wins pick, and the arm asserts
+ * a per-seed non-vacuity witness ([contentionOf]) so a run in which the contention failed to
+ * materialise reddens rather than reading green on a workload that never contended.
  *
  * ## Honesty
  *
@@ -100,7 +209,18 @@ object OrMapGcSafetySweep {
 
         /** The no-reclaimer control. See [GcSafetySweep.Trigger.NONE] for why it exists. */
         NONE("ormap-gc-safety-sweep-none", "ormap-gc-safety-none"),
+
+        /**
+         * The MULTI-WRITER-KEY arm (computenet-rjue). Reclaims at the same production frontier
+         * [STABLE] does — it is the *workload* that differs, not the seam — over a graph that adds
+         * contended puts on a bounded shared key space. See the object KDoc.
+         */
+        SHARED("ormap-gc-safety-sweep-shared", "ormap-gc-safety-shared"),
     }
+
+    /** True where the trigger reclaims through the production `snapshot()` path. */
+    private val Trigger.reclaimsAtStableFrontier: Boolean
+        get() = this == Trigger.STABLE || this == Trigger.SHARED
 
     // Restated from [GcSafetySweep] (they are private to that file). Same values deliberately:
     // the two sweeps are meant to be comparable like for like.
@@ -116,6 +236,38 @@ object OrMapGcSafetySweep {
     private const val K: Int = 10
 
     private const val RECLAIM_UNTIL: Int = STEP_BUDGET + DRAIN_MARGIN
+
+    // ------------------------------------------------- the contended key space ([Trigger.SHARED])
+
+    /** First contended round. Offset from [WRITE_START] so a round never coincides with a write. */
+    private const val CONTEND_START: Int = 350
+
+    private const val CONTEND_STRIDE: Int = 100
+
+    /** Rounds of contended puts. Spans the whole churn window; see [contendedKeys]. */
+    private const val CONTEND_ROUNDS: Int = 47
+
+    /**
+     * The bounded contended key space: ONE key per round, each put by EVERY member peer at that
+     * round's step. Bounded at [CONTEND_ROUNDS] keys, and the contention is per key, not per peer —
+     * which is the whole difference from the ordinal `"$peer-$ordinal"` workload.
+     *
+     * **Why a fresh key per round rather than a smaller space cycled over.** MEASURED, not assumed:
+     * with three keys cycled over 24 rounds, 46 of 200 seeds ended quiescence with every contended
+     * key holding exactly ONE live dot, and the arm's own witness reddened on them (run
+     * `shared1.log`, 2026-09-08). `OrMapCell`'s put is a reset-remove — it tombstones every dot the
+     * putter currently sees live at the key — so once a round's deltas have been delivered, the NEXT
+     * round on the same key kills its predecessors, and what survives to quiescence is only the
+     * final round's contention on the final round's key. That leaves the witness hostage to how many
+     * peers happened to be members at one step. Distinct keys make every round's concurrency
+     * permanent: nothing later ever tombstones it, so the quiescent state carries one live dot per
+     * peer that put, on each of up to [CONTEND_ROUNDS] keys.
+     */
+    private val contendedKeys: List<String> = (0 until CONTEND_ROUNDS).map { "shared-$it" }
+
+    /** step -> the key every member peer puts at that step. */
+    private val contendSchedule: Map<Int, String> =
+        (0 until CONTEND_ROUNDS).associate { r -> (CONTEND_START + r * CONTEND_STRIDE) to contendedKeys[r] }
 
     val faultIds: Set<String> =
         setOf("ormap-gc-park", "ormap-gc-park-b", "ormap-gc-park-c", "ormap-gc-dup", "ormap-gc-reorder")
@@ -145,6 +297,9 @@ object OrMapGcSafetySweep {
 
     internal val totals: Map<Trigger, GcTotals> = Trigger.entries.associateWith { GcTotals("ORMAP-${it.name}") }
 
+    /** [Trigger.SHARED]'s own contention counters. Untouched by every other arm. */
+    internal val contendedTotals: ContendedTotals = ContendedTotals()
+
     fun graphOf(trigger: Trigger): GraphSpec = GraphSpec(trigger.id) { world ->
         ChurnMesh.spec(
             templatePlan,
@@ -153,6 +308,7 @@ object OrMapGcSafetySweep {
             aliveUntil = STEP_BUDGET + DRAIN_MARGIN,
         ).builder.build(world)
         world.steps.onStep { w, step -> issueRemoves(w, step) }
+        if (trigger == Trigger.SHARED) world.steps.onStep { w, step -> issueContendedPuts(w, step) }
         world.steps.onStep { w, step -> if (step <= RECLAIM_UNTIL) compact(w, step, trigger) }
     }
 
@@ -168,6 +324,31 @@ object OrMapGcSafetySweep {
         for ((peer, key) in due) {
             if (MeshPeers.find(world, peer)?.remove(key) == true) observations.removesIssued++
         }
+    }
+
+    /**
+     * One contended round: EVERY member peer puts the round's key, at the same step, with a value
+     * that names the putter and the round.
+     *
+     * The concurrency is structural rather than lucky. A step hook runs inside one controller step,
+     * and a peer's put is delivered to the other replicas as a *scheduled* delta — nothing is
+     * dispatched between two iterations of this loop — so no putter has folded any other putter's
+     * dot when it mints its own. `OrMapCell`'s put is a reset-remove: it tombstones only what the
+     * *putter* currently sees live at the key, which is precisely why the round's dots survive each
+     * other and the key ends the round with one live dot per member, each carrying a different
+     * value. That is the state `value(key)`'s add-wins pick resolves, and the state the ordinal
+     * workload never produces.
+     */
+    private fun issueContendedPuts(world: DstWorld, step: Int) {
+        val key = contendSchedule[step] ?: return
+        val observations = ContendedObservationRegistry.of(world)
+        var putters = 0
+        for (peer in MeshPeers.all(world)) {
+            if (peer.payload != MeshPayload.OR_MAP) continue
+            if (peer.put(key, "${peer.name}#$step")) putters++
+        }
+        observations.putsIssued += putters
+        observations.maxPuttersInARound = maxOf(observations.maxPuttersInARound, putters)
     }
 
     // ---------------------------------------------------------------------------- the reclaimer
@@ -211,23 +392,23 @@ object OrMapGcSafetySweep {
             if (!peer.member) continue
             val cell = (peer.replica ?: continue) as? OrMapCell<String, String> ?: continue
             val frontier = when (trigger) {
-                // Reported and used for the [KE3-30] interlock only; on STABLE it is a second,
-                // independent read of the same monotone source `snapshot()` reads through the
-                // installed hook, with no step between them.
-                Trigger.STABLE -> peer.replication.stableFrontier(peer.ref.id)
+                // Reported and used for the [KE3-30] interlock only; on STABLE (and on SHARED,
+                // which reclaims through the same seam) it is a second, independent read of the
+                // same monotone source `snapshot()` reads through the installed hook, with no step
+                // between them.
+                Trigger.STABLE, Trigger.SHARED -> peer.replication.stableFrontier(peer.ref.id)
                 Trigger.LOCAL -> peer.replication.localDeliveredFrontier(peer.ref.id)
                 Trigger.NONE -> return
             }
             val before = cell.membership()
             val beforeValues = before.associateWith { cell.value(it) }
-            val discarded = when (trigger) {
+            val discarded = if (trigger.reclaimsAtStableFrontier) {
                 // THE PRODUCTION TRIGGER. See the object KDoc.
-                Trigger.STABLE -> {
-                    val dotsBefore = dotsIn(cell)
-                    val serialised = cell.snapshot()
-                    dotsBefore - dotsIn(serialised)
-                }
-                else -> cell.compactBelow(frontier)
+                val dotsBefore = dotsIn(cell)
+                val serialised = cell.snapshot()
+                dotsBefore - dotsIn(serialised)
+            } else {
+                cell.compactBelow(frontier)
             }
             val after = cell.membership()
             val afterValues = after.associateWith { cell.value(it) }
@@ -319,6 +500,21 @@ object OrMapGcSafetySweep {
     fun check(trigger: Trigger): DstCheck = CheckRegistry.register(trigger.checkId) { world ->
         val observations = GcObservationRegistry.of(world)
         val live = MeshPeers.all(world).filter { it.member && it.replica != null }
+
+        // THE CONTENTION WITNESS, taken before any failure class can throw so a red seed still
+        // reports whether its workload contended at all.
+        if (trigger == Trigger.SHARED) {
+            val contended = ContendedObservationRegistry.of(world)
+            for (peer in live) {
+                val cell = peer.replica as? OrMapCell<String, String> ?: continue
+                for (key in contendedKeys) {
+                    contended.maxLiveDotsOnAKey = maxOf(contended.maxLiveDotsOnAKey, liveDotsOf(cell, key).size)
+                    contended.maxConcurrentValuesOnAKey =
+                        maxOf(contended.maxConcurrentValuesOnAKey, cell.values(key).size)
+                }
+            }
+            contendedTotals.absorb(contended)
+        }
 
         observations.violations.firstOrNull()?.let { first ->
             totals.getValue(trigger).absorb(observations)
@@ -487,6 +683,14 @@ object OrMapGcSafetySweep {
  *
  * The arms cost ~2.6-5.7 s each, matching [GcSafetySweep]'s measured 2.3-5.2 s per 200-seed arm,
  * so the three-arm class is ~10 s.
+ *
+ * **The FOURTH arm (computenet-rjue) is additive and its numbers are recorded separately**, in
+ * `doc/kernel-lane-findings.md` `## KE3-42-ORMAP-SHARED`: seeds 1..200, `K` = 10, discarded
+ * 3858-3901, wall 10.8-11.3 s, both VALUE classes empty on every seed of three runs over a
+ * workload where `value(key)` really is an add-wins pick over concurrent dots, 197 of 200 seeds
+ * contendable. The three figures above were re-measured on the same host with the fourth arm
+ * present (STABLE discarded 5512-5548, LOCAL 7382-7388) and sit inside the spread recorded here,
+ * which is what says the widening did not disturb them.
  *
  * **The BS-13 control does NOT reproduce on this payload, and that is a recorded result rather
  * than a gap.** LOCAL resurrected on 0 of 200 in all three runs and diverged on 1 of 3 runs, so
@@ -735,6 +939,145 @@ class OrMapGcSafetySweepTest {
         )
     }
 
+    /**
+     * **The multi-writer-key arm** (computenet-rjue): the same production reclaimer the STABLE arm
+     * drives, over a workload where every member peer puts the SAME key at the SAME step, so
+     * `value(key)` resolves an add-wins pick over mutually CONCURRENT dots carrying distinct
+     * values.
+     *
+     * It exists because the three original arms' value observable, though it executes and passes on
+     * every seed, cannot see a mis-resolved concurrent write: their keys are `"$peer-$ordinal"`,
+     * written once by one peer, so every live key has exactly one live dot and the pick is a
+     * singleton. That limit is stated in the object KDoc and was filed as this sweep's residual.
+     *
+     * Additive by construction: its own trigger, graph, check id and artifact root, the same seeds
+     * / budget / `K` as the others, and not one line of the STABLE, CONTROL or LOCAL arms changed —
+     * so the OR-map numbers recorded in `doc/kernel-lane-findings.md` `## KE3-42-ORMAP-BS13` stay
+     * comparable.
+     *
+     * What it asserts:
+     *
+     * - the CONTENTION witness — on every seed, some live replica held a contended key with at
+     *   least two live dots carrying at least two distinct values. Without it a green run would
+     *   mean nothing, which is the exact defect this arm was filed to remove.
+     * - both VALUE classes empty: live replicas agree on `value(key)` and each replica agrees with
+     *   its own emitted fold. This is the observable that now has teeth.
+     * - the same membership / resurrection / fence-attribution obligations the STABLE arm carries,
+     *   because the reclaimer and the frontier are the same ones.
+     */
+    @Test
+    @Order(4)
+    fun `OR-map compaction is invisible to an add-wins pick over concurrent writes to one key`() {
+        OrMapGcSafetySweep.totals.getValue(OrMapGcSafetySweep.Trigger.SHARED).reset()
+        OrMapGcSafetySweep.contendedTotals.reset()
+        val startedAt = System.nanoTime()
+        val sweep = MeshConvergences.observing {
+            dstSweep(
+                suite = "ormap-gc-safety-shared",
+                seeds = SEEDS,
+                graph = OrMapGcSafetySweep.graph(OrMapGcSafetySweep.Trigger.SHARED),
+                checkId = OrMapGcSafetySweep.Trigger.SHARED.checkId,
+                budget = BUDGET,
+                artifactRoot = sharedRoot,
+                planFor = OrMapGcSafetySweep::plan,
+            )
+        }
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+        val totals = OrMapGcSafetySweep.totals.getValue(OrMapGcSafetySweep.Trigger.SHARED)
+        val contended = OrMapGcSafetySweep.contendedTotals
+
+        val resurrecting = seedsOf(sweep, OrMapGcSafetySweep.RESURRECTION_FAILURE)
+        val diverging = seedsOf(sweep, OrMapGcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE)
+        val fenceAttributed = seedsOf(sweep, OrMapGcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE)
+        val valueDiverging = seedsOf(sweep, OrMapGcSafetySweep.VALUE_DIVERGENCE_FAILURE)
+        val valueDrift = seedsOf(sweep, OrMapGcSafetySweep.VALUE_FOLD_DRIFT_FAILURE)
+        val disagreeing = seedsOf(sweep, OrMapGcSafetySweep.DISAGREEMENT_FAILURE)
+        val other = sweep.failures.filterNot { it.message in CLASSIFIED }
+
+        println(
+            "[ORMAP-SHARED] seeds=$SEEDS elapsedMs=$elapsedMs artifacts=$sharedRoot totals=$totals " +
+                "${sweep.summary()}\n" +
+                "[ORMAP-SHARED] contention=$contended\n" +
+                "[ORMAP-SHARED] resurrecting seeds=$resurrecting\n" +
+                "[ORMAP-SHARED] membership-diverging seeds=$diverging; " +
+                "of which fence-attributed=$fenceAttributed\n" +
+                "[ORMAP-SHARED] value-diverging seeds=$valueDiverging\n" +
+                detailsOf(sweep, OrMapGcSafetySweep.VALUE_DIVERGENCE_FAILURE, "ORMAP-SHARED VALUE") +
+                "[ORMAP-SHARED] value-fold-drift seeds=$valueDrift\n" +
+                detailsOf(sweep, OrMapGcSafetySweep.VALUE_FOLD_DRIFT_FAILURE, "ORMAP-SHARED DRIFT") +
+                "[ORMAP-SHARED] F-A fold-disagreeing seeds=$disagreeing\n" +
+                "[ORMAP-SHARED] artifacts=${sweep.artifactPaths}",
+        )
+        assertTrue(
+            other.isEmpty(),
+            "unclassified SHARED failures: ${other.joinToString { "${it.seed}:${it.message}" }}",
+        )
+        assertNonVacuous("ORMAP-SHARED", sweep.total, totals)
+        assertAdversaryFired("ORMAP-SHARED", sweep)
+
+        // THE WITNESS THAT MAKES THE VALUE ASSERTION BELOW MEAN SOMETHING. Without it this arm is
+        // the ordinal workload with extra keys.
+        assertTrue(
+            contended.runs == sweep.total,
+            "ORMAP-SHARED: every seed must have absorbed its contention counters: $contended of ${sweep.total}",
+        )
+        assertTrue(
+            contended.putsIssued > 0,
+            "ORMAP-SHARED: the contended-put hook never issued a put, so no key was ever multi-written: $contended",
+        )
+        // The population the witness is asserted over: seeds whose churn plan let at least two peers
+        // put in one round. A seed the plan leaves with a single member for the whole contention
+        // window produced no concurrent dot to resolve — that is the RIG's limit, recorded rather
+        // than asserted away, and the arm says how many such seeds there were.
+        val contendable = contended.contendableRuns()
+        val singleWriter = contended.maxPuttersPerRun.indices
+            .filterNot { it in contendable.toSet() }
+            .map { SEEDS.first + it to contended.putsPerRun[it] }
+        assertTrue(
+            contendable.size >= MIN_CONTENDABLE_SEEDS,
+            "ORMAP-SHARED: only ${contendable.size} of ${contended.runs} seeds ever had two peers " +
+                "putting in one round, below the recorded floor of $MIN_CONTENDABLE_SEEDS — the " +
+                "workload has stopped contending. $contended singleWriterSeeds(seed,puts)=$singleWriter",
+        )
+        // THE PER-SEED INVARIANT, on that population: wherever two peers DID put one key in one
+        // round, two live dots with two distinct values survive to quiescence. This is the strong
+        // form — it fails if a round's concurrency is ever lost between the put and the check.
+        val lostContention = contendable
+            .filter { contended.maxLiveDotsPerRun[it] < 2 || contended.maxValuesPerRun[it] < 2 }
+            .map { SEEDS.first + it to "${contended.maxLiveDotsPerRun[it]}dots/${contended.maxValuesPerRun[it]}values" }
+        assertTrue(
+            lostContention.isEmpty(),
+            "ORMAP-SHARED: a seed where two peers put the same key in one round nonetheless ended " +
+                "quiescence with no contended key holding two live dots carrying two distinct " +
+                "values, so `value(key)` resolved a singleton and the value observable had nothing " +
+                "to pick between. $contended lost=$lostContention",
+        )
+
+        // THE PROPERTY. Now over a real add-wins pick, which is what computenet-rjue was filed for.
+        assertTrue(
+            valueDiverging.isEmpty() && valueDrift.isEmpty(),
+            "[KE3-23] OR-map reclamation must be invisible to `value(key)` even where the key's " +
+                "value is an add-wins pick over CONCURRENT dots: crossReplica=$valueDiverging " +
+                "vsOwnFold=$valueDrift",
+        )
+        assertTrue(
+            resurrecting.isEmpty(),
+            "[KE3-23] the OR-map re-admission fence must resurrect NOTHING at the STABLE frontier, " +
+                "on the contended workload as on the ordinal one. resurrecting=$resurrecting",
+        )
+        assertTrue(
+            fenceAttributed.isEmpty(),
+            "[KE3-23] the OR-map re-admission fence CAUSED a membership divergence on the contended " +
+                "workload: seeds=$fenceAttributed",
+        )
+        assertTrue(
+            (diverging + fenceAttributed).size <= MAX_SHARED_DIVERGING,
+            "[KE3-23]: the contended workload left ${(diverging + fenceAttributed).size} seeds with " +
+                "permanently diverged memberships, above the recorded bound of $MAX_SHARED_DIVERGING. " +
+                "diverging=$diverging fenceAttributed=$fenceAttributed",
+        )
+    }
+
     // ------------------------------------------------------------------------------- shared bits
 
     private fun seedsOf(sweep: civictech.testkit.dst.DstSweepReport, message: String): Set<Long> =
@@ -820,6 +1163,7 @@ class OrMapGcSafetySweepTest {
         private val stableRoot = File("build/dst-stability/ormap-gc-sweep-stable")
         private val noneRoot = File("build/dst-stability/ormap-gc-sweep-none")
         private val localRoot = File("build/dst-stability/ormap-gc-sweep-local")
+        private val sharedRoot = File("build/dst-stability/ormap-gc-sweep-shared")
 
         private var stableResurrecting: Set<Long> = emptySet()
         private var stableDisagreeing: Set<Long> = emptySet()
@@ -838,6 +1182,24 @@ class OrMapGcSafetySweepTest {
          * runtime.
          */
         private const val MAX_STABLE_DIVERGING: Int = 12
+
+        /**
+         * The SHARED arm's own membership-divergence ceiling. Recorded by measurement (see
+         * `doc/kernel-lane-findings.md` `## KE3-42-ORMAP-SHARED`) rather than inherited from
+         * [MAX_STABLE_DIVERGING]: the contended workload adds one key per round that EVERY member
+         * peer writes, so a straggler that misses a round is a membership difference the ordinal
+         * workload could not produce. A CEILING on a known rig behaviour, not a pin.
+         */
+        private const val MAX_SHARED_DIVERGING: Int = 12
+
+        /**
+         * The floor on how many of [SEEDS] must give the contended-put hook two putters in one
+         * round. MEASURED at 197 of 200 (2026-09-08, `## KE3-42-ORMAP-SHARED`): seeds 22, 37 and
+         * 191 leave a single member for the whole contention window, so their plan cannot produce a
+         * concurrent dot. A FLOOR against the workload silently ceasing to contend, not a pin on
+         * 197.
+         */
+        private const val MIN_CONTENDABLE_SEEDS: Int = 190
 
         private val CLASSIFIED: Set<String> = setOf(
             OrMapGcSafetySweep.RESURRECTION_FAILURE,
@@ -858,9 +1220,11 @@ class OrMapGcSafetySweepTest {
                 checks[it] = OrMapGcSafetySweep.check(it)
                 OrMapGcSafetySweep.totals.getValue(it).reset()
             }
+            OrMapGcSafetySweep.contendedTotals.reset()
             stableRoot.deleteRecursively()
             noneRoot.deleteRecursively()
             localRoot.deleteRecursively()
+            sharedRoot.deleteRecursively()
         }
 
         @JvmStatic
