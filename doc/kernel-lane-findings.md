@@ -2469,3 +2469,217 @@ and B needed and did not have.
   rate UP, so A and B are the conservative direction and C — the control that had
   to fire — ran at the LOWER load. That asymmetry favours a false RED, not a
   false GREEN, so it does not soften the result.
+
+## KE3-42-ORMAP-BS13 — the OR-map has no reliable BS-13 witness: the wrong seam reclaims strictly more, and harms nothing reproducibly
+
+Recorded by: `computenet-9sm.8.7` (task, parent `computenet-9sm.8`). Base
+commit: `3bdacc7e7` (`feature/computenet-9sm.8`, branch
+`task/computenet-9sm.8.7`). Host: darwin/arm64, 16 cores, load1 7–9.
+Measured 2026-09-08. All figures are whole-class runs of the new
+`OrMapGcSafetySweepTest` (`./gradlew :kernel:test --tests
+'civictech.cell.replication.OrMapGcSafetySweepTest' --rerun`), seeds `1..200`,
+budget `40_000`, compaction period `K = 10`.
+
+This is the OR-map twin of `## KE3-20`, filed for the same reason and in the
+same shape: a control that the bead required to reproduce OR to be recorded as
+unreachable. It did not reproduce. That is a result, not a gap to work around,
+and no seed range, budget or workload was searched for a friendlier one.
+
+### What was asked
+
+`computenet-9sm.8.7` clause 3 (feature decision 9sm.8-D10): the LOCAL arm —
+`OrMapCell.compactBelow(localDeliveredFrontier)`, the wrong seam — must either
+record a resurrecting seed reproducing `PIN_RUNS` of `PIN_RUNS`, or record the
+negative result here and fall back on the sweep-level discriminator that is
+observable either way.
+
+### What was measured
+
+Three consecutive whole-class runs, all three arms in each:
+
+```
+                              run 1        run 2               run 3
+  STABLE resurrecting         []           []                  []
+  STABLE fence-attributed     []           []                  []
+  STABLE membership-diverging [43,89,       [76,148,151,154]    [4,76,154,165]
+                               145,146]
+  STABLE value-diverging      []           []                  []
+  STABLE value-fold-drift     []           []                  []
+  STABLE discarded            5571         5557                5521
+  CONTROL discarded           0            0                   0
+  CONTROL membership-div.     []           [151,173]           [151,173]
+  LOCAL resurrecting          []           []                  []
+  LOCAL membership-diverging  []           [4,12,32,89,181]    []
+  LOCAL value-harmed          []           []                  []
+  LOCAL discarded             7395         7383                7408
+  wall time STABLE/LOCAL      4.8/2.6 s    5.7/2.6 s           4.7/2.6 s
+```
+
+**The resurrection witness is dead on the OR-map, 0 of 200 in all three runs** —
+the same disposition `## KE3-20` records for the OR-set, and for the same
+mechanism: `9sm.8-D6`'s `(key, dot)` re-admission fence plus its repair emission
+means a re-delivered discarded dot is fenced and repaired, never re-admitted.
+The OR-map fence landed with the payload, so unlike the OR-set there was never a
+pre-fence build here whose witness could be re-derived.
+
+**The divergence witness is present but not reproducible**: non-empty on 1 of 3
+runs, empty on the other two, and the seeds it named on that run (`4, 12, 32,
+89, 181`) do not intersect the STABLE arm's diverging seeds in any run. The bead
+forbids recording a seed below `PIN_RUNS` of `PIN_RUNS`, and a class that is
+empty on two runs in three cannot supply one. So no `BS13_SEED` is recorded.
+
+### Why the OR-map LOCAL seam finds nothing at `K = 10` — the counting argument
+
+The wrong seam's harm needs a schedule in which a replica reclaims a `dels`
+entry that a *straggler* has not delivered, AND the straggler then re-delivers
+the covered put-dot, AND nothing repairs it. On this rig the chances per seed
+are bounded by the REMOVE COUNT, not by the compaction period — the same bound
+`GcSafetySweep.K`'s KDoc derives for the OR-set, and the reason `K = 5` bought
+nothing there. `removeSchedule` issues twelve removes per seed (every
+odd-ordinal write of twenty-four), and `minRemovesOnASeed` measured 3, so the
+per-seed budget of candidate schedules is single-digit. Against that budget the
+fence removes the re-admission half outright and the repair emission removes
+most of the divergence half, leaving a residue that this seed range samples at
+roughly one run in three rather than reliably.
+
+The OR-map does not add a route the OR-set lacks. Its extra observable —
+per-key `value(key)` agreement, both across live replicas and against each
+replica's own emitted fold — fired on ZERO seeds on every arm of every run,
+including the LOCAL arm. That is expected rather than surprising for this
+workload and is recorded as a limit of the rig, not as evidence of safety: each
+key is written exactly once by exactly one peer, so the add-wins pick over
+concurrent dots is never exercised on a contended key and the value observable
+can only catch a wrong live-dot set, not a mis-resolved concurrent write. A
+multi-writer-key workload would be a different rig.
+
+### The discriminator that IS observable, and is asserted
+
+**LOCAL's summed `discarded` strictly exceeds STABLE's on the same seeds** —
+7395 > 5571, 7383 > 5557, 7408 > 5521, i.e. 3 of 3 with a ~33 % margin.
+`localDeliveredFrontier` drops the MIN over the other open members that
+`stableFrontier` takes, so a reclaimer driven from it discards at or ahead of
+the stable one by construction; the measurement says the gap is large and stable
+on this rig. The BS-13 arm asserts that inequality. It is a statement that LOCAL
+is the wrong seam — it reclaims what the mesh has not certified — that holds
+whether or not the extra discards happen to break anything on this seed range,
+which is exactly the property a witness-free control needs.
+
+`OrMapGcSafetySweepTest`'s `ORMAP_BS13_WITNESS` constant carries this
+disposition in the source, so the next reader finds the measurement rather than
+an absence.
+
+### The STABLE arm is not vacuous, and the mutation was run
+
+Non-vacuity is in-line and asserted, not printed: `discarded` summed over the
+run is 5521–5571 against a CONTROL arm whose `discarded` is **0 on every seed**,
+so a STABLE arm whose `snapshot()` found no installed stability read would
+report 0 and redden.
+
+Additionally, `OrMapCell.compactBelow`'s every-dot rule was mutated to a per-dot
+one (`delDots.all { covered }` → discard each covered dot individually) as a
+local, reverted edit, and the STABLE arm **saw it**: the run failed on
+`FENCE-ATTRIBUTED diverging seeds=[4]` — a live replica lacking a key whose live
+dot is in that replica's own `ReclaimedDots` — with `resurrecting` still empty.
+So the sweep discriminates the discard rule this feature turns on, and it does
+so through the attribution read rather than through resurrection. The
+deterministic backstop for the same rule remains
+`OrMapCellCompactBelowTest`'s LOST-del pin.
+
+### Disposition
+
+No assertion was weakened and no seed, range or budget was re-derived. The LOCAL
+arm ships with the `discarded`-inequality discriminator in place of a per-seed
+pin, and `[KE3-20]`'s OR-map half stays OPEN as a bounded-schedule negative:
+this rig, at this range, does not reach the wrong seam's harm reliably. Widening
+the adversary was NOT attempted here — `## KE3-20`'s own record has four
+widenings built, measured and rejected on the OR-set for making the rig's floor
+worse rather than the discriminator sharper, and re-running that search on the
+OR-map is its own item, not this task's.
+
+## KE3-42-ORMAP — feature close-out: what the OR-map seam + reclaimer delivered, the three corrected premises, and the u7fi trigger check restated in code
+
+Recorded by: `computenet-9sm.8.8` (task, parent `computenet-9sm.8`, close-out
+task). Base commit: `0254a53e7` (merge of `computenet-9sm.8.7`), branch
+`task/computenet-9sm.8.8`. Host: darwin/arm64. Recorded 2026-09-08.
+
+This is the feature-level companion to `## KE3-42-ORMAP-BS13` (recorded by
+sibling task `computenet-9sm.8.7`) — that entry is the BS-13 witness result;
+this one is the close-out record for the whole feature. No content is
+repeated from it beyond citation.
+
+### What the feature delivered
+
+`computenet-9sm.8` ported the OR-set's stability-scoped reclamation and
+delivered-frontier machinery to the dot-shaped `OrMapCell` across its eight
+tasks (`.1`-`.8`): the del-dot (`[24-TAG-04]`, decision 9sm.8-D5), both lanes
+of the delivered frontier (decision 9sm.8-D1), stability-scoped `compactBelow`
+reclamation with a per-key re-admission fence (`[KE3-30]`/`[KE3-31]`,
+decisions 9sm.8-D6/D7), checkpoint-driven and crash-recovery test coverage,
+an oracle-side `DotModel` correspondence check, and a churn/DST reconvergence
+harness extension.
+
+### Three corrected premises
+
+- **The del-dot.** A `[MapOps.remove]` mints its OWN dot from the cell's dot
+  counter (`OrMapCell.kt:465`, `Timestamp(dotSource, ++dotCounter)`) and a
+  `[MapOps.put]` over a key with live dots mints a retract del-dot FIRST and
+  its put-dot SECOND (`:431-432`) — a re-put therefore consumes two counters
+  for one delta. Without the del-dot a `dels` entry carried only the put-dots
+  it covered, so a stable frontier certified the PUT's delivery and said
+  nothing about the REMOVE — the reclamation hazard `computenet-v2ka` measured
+  on the element-shaped sibling (`SetCell`).
+- **The derived floor.** The compaction floor is DERIVED from the persisted
+  `reclaimed` fence (`ReclaimedDots`), never a snapshot key of its own — so
+  restart cannot desynchronize the floor from the fence that gates
+  re-admission.
+- **No `readBounded`.** Reclamation reads the causal-stability frontier
+  through the existing `StabilityReclaim`/delivered-frontier seam
+  (`Replication.trackDeliveries`, per `## KE3-CKPT-TRIGGER`); no new bounded
+  read primitive was added or is needed.
+
+### The u7fi decision and trigger-check result
+
+`computenet-u7fi`'s 2026-09-06 15:07 KE3 decision (superseding feature design
+9sm.8-D3): accept the re-baseline fence residual PROVISIONALLY, do not build
+the fenced-source lattice under KE3, do not file it as a new bead — it is
+already filed twice, in `concord/corpus/DISPUTES.md` §42-WM-R14 and
+`doc/spec/40-distribution/42-replication.md` §Open interactions (decision
+9sm.8-D11; this task files nothing new, per D11's instruction). u7fi's
+acceptance was amended the same day to require the revisit trigger be
+restated in `OrMapCell.applyReBaseline`'s KDoc (grep anchor `fenced-source`)
+before the bead closes.
+
+That restatement is now in place: a "**Revisit trigger (computenet-u7fi, KE3
+decision 2026-09-06...)**" paragraph naming the two edits that reopen u7fi
+(`ReBaselineEmitting` entering `OrMapCell`'s supertype list, or a
+superseded/rotated `dotSource`) and the lattice's filing location, committed
+at `3a005eab8`.
+
+The trigger grep over the WHOLE feature diff (`git diff --name-only
+origin/main...HEAD`, 19 files, captured into a bash array rather than
+interpolated bare — the zsh unquoted-multi-path trap this repo has hit
+before) returns real hits, all classified as pre-existing `dotSource` reads,
+KDoc prose (including this file's own `## KE3-42-ORMAP-BS13` entry describing
+the check), and test fixtures exercising the existing `reBaseline` test seam.
+None adds `ReBaselineEmitting` to any production supertype list, reassigns
+`dotSource`, or attaches a `ReBaselineNotice` to the repair/del-dot emission
+paths. Full command, hit list and classification posted to `computenet-u7fi`
+(comment of 2026-09-08); the three code facts it states — no
+`ReBaselineEmitting` supertype, `dotSource` an unassigned `val`, repair/del-dot
+deltas carrying no notice — are restated there from the code, not assumed.
+
+### Sweep numbers
+
+Cited, not restated: `## KE3-42-ORMAP-BS13` (this file) for the OR-map BS-13
+sweep result (resurrection witness dead, 0/200; divergence witness
+non-reproducible; LOCAL-vs-STABLE `discarded` discriminator holds 3/3 with a
+~33% margin). `## KE3-CKPT-TRIGGER` for the checkpoint-driven reclamation
+trigger measurement.
+
+### What this discharges
+
+Feature clauses 6 and 7 of `computenet-9sm.8.8`'s acceptance: the KDoc
+restatement, the classified trigger-check comment on `computenet-u7fi`, and
+this findings entry. `computenet-u7fi` itself is closed by the orchestrator,
+not by this task (cross-bead close is a reserved action) — see the comment
+posted there for the commit sha the closing note should cite.

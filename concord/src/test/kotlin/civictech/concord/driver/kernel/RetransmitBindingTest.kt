@@ -294,6 +294,40 @@ class RetransmitBindingTest {
         refused.message!! shouldContain "does not describe the dot"
     }
 
+    /**
+     * The `TaggedMapDelta` twin of the `SetDelta` test above — decision 9sm.8-D5's `describes()`
+     * arm, which the `KernelDriverDist.describes` KDoc previously called inexpressible for an
+     * OR-map: `OrMapCell.remove` now mints its own del-dot from its own counter, exactly like
+     * `SetCell.remove` does.
+     *
+     * `r1` mints counter 1 as the put-dot (`put k v1`, no live dot at `k` yet) and counter 2 as
+     * the del-dot (`remove k`, covering counter 1) — `OrMapCell.inletHandler().remove`'s own
+     * mint. Naming counter 1 — the covered put-dot, not the del-dot — under `op: remove` is
+     * refused exactly like the OR-set case: `describes()`'s new `TaggedMapDelta`/`remove` arm
+     * resolves `mintedDots[r1 to 1]` to the PUT's own delta (`dels` empty), so
+     * `delta.dels[key]?.contains(dot)` finds no entry at all to match. Naming counter 2 — the
+     * del-dot itself — is ACCEPTED: it re-delivers the dotted tombstone to `r2`, which already
+     * absorbed it via ordinary gossip, so the re-delivery is a duplicate and the retransmit call
+     * itself completes without throwing.
+     */
+    @Test
+    fun `a retransmit naming an OR-map remove's del-dot is accepted, and its covered put-dot's counter under op remove is refused`() {
+        val d = mesh()
+        d.apply("r1", "put", kv("k", "v1"))
+        d.apply("r1", "remove", s("k"))
+        d.quiesce(budget)
+
+        val refused = assertThrows<UnsupportedCatalogBinding> {
+            d.retransmit("r2", null, "r1", 1, "remove", s("k"))
+        }
+        refused.message!! shouldContain "does not describe the dot"
+
+        // the del-dot itself, counter 2: accepted — a duplicate re-arrival of the tombstone r2
+        // already absorbed via ordinary gossip, not a fabricated dot.
+        d.retransmit("r2", null, "r1", 2, "remove", s("k"))
+        d.quiesce(budget)
+    }
+
     @Test
     fun `a retransmit at a replica naming itself as source is refused`() {
         val d = mesh()

@@ -2,6 +2,8 @@ package civictech.testkit.dst.churn
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.data.MapOps
+import civictech.cell.data.OrMapCell
 import civictech.cell.data.PnCounterCell
 import civictech.cell.data.PnCounterOps
 import civictech.cell.data.Replicable
@@ -30,10 +32,10 @@ import java.util.WeakHashMap
 /**
  * What the mesh replicates ([CHA3-03]'s departures are the same four either way).
  *
- * Two payloads rather than one because the two mergeable families reach [Replication.evict]'s
+ * Three payloads rather than one because the mergeable families reach [Replication.evict]'s
  * `closeDepartedRow` seam through different state: a tombstoned OR-set carries per-element tag
- * lanes, a PN counter carries a per-source register. A departure that is correct for one and
- * wrong for the other would otherwise be invisible.
+ * lanes, a PN counter carries a per-source register, an OR-map carries a dot per key. A
+ * departure that is correct for one and wrong for another would otherwise be invisible.
  */
 enum class MeshPayload {
 
@@ -42,6 +44,15 @@ enum class MeshPayload {
 
     /** A replicated [PnCounterCell]; a write is `increment(1)`. */
     PN_COUNTER,
+
+    /**
+     * A replicated [OrMapCell] of `String` to `String`; a write is
+     * `put("<peer>-<ordinal>", "<ordinal>")`. The accepted-op ledger records the KEY as
+     * [AcceptedOp.element] — the reference fold for this payload is membership, exactly SET's
+     * shape (per-key value agreement is not checked by [BatchReference]/[ReconvergenceCheck]; the
+     * GC-safety sweep task asserts it).
+     */
+    OR_MAP,
 }
 
 /** The proxy surface a workload write reaches a [SetCell] replica through. */
@@ -52,6 +63,11 @@ interface SetInletProxy {
 /** The proxy surface a workload write reaches a [PnCounterCell] replica through. */
 interface PnCounterInletProxy {
     val inlet: Use<PnCounterOps>
+}
+
+/** The proxy surface a workload write reaches an [OrMapCell] replica through. */
+interface OrMapInletProxy {
+    val inlet: Use<MapOps<String, String>>
 }
 
 /**
@@ -463,20 +479,27 @@ class MeshPeer internal constructor(
                 (proxy() as PnCounterInletProxy).inlet.call.increment(1)
                 AcceptedOps.record(world, AcceptedOp(peer = name, ordinal = ordinal, increment = 1L))
             }
+
+            MeshPayload.OR_MAP -> {
+                val key = "$name-$ordinal"
+                (proxy() as OrMapInletProxy).inlet.call.put(key, "$ordinal")
+                AcceptedOps.record(world, AcceptedOp(peer = name, ordinal = ordinal, element = key))
+            }
         }
         return true
     }
 
     /**
-     * Issue one workload removal against a [MeshPayload.SET] replica. No-op — and reported as
-     * such — while this peer is not a member, same contract as [write]: the schedule that would
-     * drive this is generated against the roster, so a remove aimed at a departed peer is
-     * expected rather than an error.
+     * Issue one workload removal against a [MeshPayload.SET] or [MeshPayload.OR_MAP] replica.
+     * No-op — and reported as such — while this peer is not a member, same contract as [write]:
+     * the schedule that would drive this is generated against the roster, so a remove aimed at a
+     * departed peer is expected rather than an error.
      *
      * Returns true if the removal was issued.
      *
-     * `check(payload == MeshPayload.SET)`: a PN counter has no remove, and the message names the
-     * payload rather than throwing a bare `ClassCastException` from the proxy cast below.
+     * `check(payload != MeshPayload.PN_COUNTER)`: a PN counter has no remove, and the message
+     * names the payload rather than throwing a bare `ClassCastException` from the proxy cast
+     * below. [element] is the element for [MeshPayload.SET] and the KEY for [MeshPayload.OR_MAP].
      *
      * Issued through the SAME hosted proxy [write] uses, so a removal is scheduled and traced
      * exactly as a write is — it just does not go through [proxy]'s counter arm, because there is
@@ -489,7 +512,7 @@ class MeshPeer internal constructor(
      * would be a change to the CHA3 reference semantics that no consumer of this feature needs:
      * its reference is the replica's own emitted-delta fold ([MeshConvergences.project]), not the
      * batch reference. **A plan that calls this must not be judged by [ReconvergenceCheck] /
-     * [BatchReference]** — the reference would still count the removed element as accepted
+     * [BatchReference]** — the reference would still count the removed element/key as accepted
      * because nothing here tells it otherwise, and the comparison would read a correct removal as
      * a lost operation.
      *
@@ -502,8 +525,12 @@ class MeshPeer internal constructor(
      */
     fun remove(element: String): Boolean {
         if (!member) return false
-        check(payload == MeshPayload.SET) { "peer \"$name\" carries $payload, which has no remove" }
-        (proxy() as SetInletProxy).inlet.call.remove(element)
+        check(payload != MeshPayload.PN_COUNTER) { "peer \"$name\" carries $payload, which has no remove" }
+        when (payload) {
+            MeshPayload.SET -> (proxy() as SetInletProxy).inlet.call.remove(element)
+            MeshPayload.OR_MAP -> (proxy() as OrMapInletProxy).inlet.call.remove(element)
+            MeshPayload.PN_COUNTER -> error("unreachable: guarded by the check above")
+        }
         return true
     }
 
@@ -513,6 +540,7 @@ class MeshPeer internal constructor(
         when (payload) {
             MeshPayload.SET -> SetInletProxy::class.java
             MeshPayload.PN_COUNTER -> PnCounterInletProxy::class.java
+            MeshPayload.OR_MAP -> OrMapInletProxy::class.java
         },
     ).also { writeProxy = it }
 
@@ -520,12 +548,14 @@ class MeshPeer internal constructor(
 
     /**
      * The peer's converged fold, as a value a check can compare across peers: the sorted
-     * membership of a [SetCell], or the total of a [PnCounterCell]. Null while not a member.
+     * membership of a [SetCell] or an [OrMapCell], or the total of a [PnCounterCell]. Null while
+     * not a member.
      */
     fun foldSnapshot(): Any? = when (val cell = replica) {
         null -> null
         is SetCell<*> -> cell.membership().map { it.toString() }.sorted()
         is PnCounterCell -> cell.total()
+        is OrMapCell<*, *> -> cell.membership().map { it.toString() }.sorted()
         else -> error("unknown payload cell ${cell::class.simpleName}")
     }
 
@@ -562,6 +592,7 @@ class MeshPeer internal constructor(
         val cell: Replicable<*> = when (payload) {
             MeshPayload.SET -> SetCell<String>(ref)
             MeshPayload.PN_COUNTER -> PnCounterCell(ref)
+            MeshPayload.OR_MAP -> OrMapCell<String, String>(ref)
         }
         replication.replicate(cell, slot.host)
         replica = cell

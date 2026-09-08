@@ -9,6 +9,10 @@ import civictech.cell.ReBaselineNotice
 import civictech.cell.Stateful
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
+import civictech.cell.data.delta.DeliveredFrontier
+import civictech.cell.data.delta.DeliveryTracking
+import civictech.cell.data.delta.StabilityReclaim
+import civictech.cell.data.delta.TagLaneContinuity
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.cell.link.Interest
 import civictech.cell.link.catchUpOnLinked
@@ -35,6 +39,9 @@ interface OrMapApi<K, V> {
     val inlet: Use<MapOps<K, V>>
     val outlet: Subscribe<Propagate<TaggedMapDelta<K, V>>>
 }
+
+/** Below-floor `StateRequest(since)` diagnostics for [OrMapCell.pullServe] (decision 9sm.8-D8). */
+private val PULL_FLOOR_LOG: System.Logger = System.getLogger("civictech.cell.data.OrMapCell")
 
 /**
  * An **OR-map**: the keyed structure whose per-key *value* converges under
@@ -107,12 +114,43 @@ interface OrMapApi<K, V> {
  * so `[KE1-10]`'s link-time classification is unreachable here — that shortfall
  * and the unclassified-value residual are filed in `concord/corpus/DISPUTES.md`.
  *
- * Not here: `TaggedMapView`/`UntagCell` adapters (§E1.5) and
- * delivered-watermark tracking
- * ([civictech.cell.data.delta.DeliveryTracking], E3.3).
+ * **The del-dot (`[24-TAG-04]`, decision 9sm.8-D5).** An effective
+ * [MapOps.remove] mints a dot of its OWN from this cell's dot counter and ships
+ * it inside the `dels` entry beside the put-dots it covers; a [MapOps.put] over
+ * a key that has live dots mints that retract del-dot FIRST and its put-dot
+ * SECOND, so **a re-put consumes two counters** (`n` for the retract, `n+1` for
+ * the new value) and still ships ONE delta. A put over an absent or fully
+ * tombstoned key mints one dot, as it always did. A del-dot never enters
+ * [puts], so it covers nothing and [membership]/[value] are bit-for-bit what
+ * they were.
+ *
+ * What the del-dot buys is a remove that can be **delivered**. Without it a
+ * `dels` entry carried only the put-dots it covered, so a del-dot at or below a
+ * stable frontier certified that every open member had delivered the PUT and
+ * said nothing about the REMOVE — the reclamation hazard computenet-v2ka
+ * measured on the element-shaped sibling (`SetCell.remove`'s KDoc carries the
+ * full argument). The dot rides the delivered lane like any other, fed from
+ * local mints and from [applyRemote]'s del lane as well as its put lane.
+ *
+ * **Stability-scoped reclamation (`[KE3-30]`/`[KE3-31]`, decisions 9sm.8-D6/D7).**
+ * [compactBelow] discards a whole `dels` entry — the del-dot included — once
+ * every dot in it is at or below a causal-stability frontier, and takes the
+ * covered `puts` dots (and their values) with it; [snapshot] is its only
+ * production caller. Every discarded dot is recorded in the per-instance
+ * re-admission fence ([ReclaimedDots] keyed by MAP KEY), which [applyRemote]
+ * subtracts on BOTH lanes and answers with a minimal repair tombstone. The
+ * fence is persisted under the additive `"reclaimed"` snapshot key; the
+ * compaction floor is DERIVED from it and is never a key of its own.
+ *
+ * Not here: `TaggedMapView`/`UntagCell` adapters (§E1.5).
  */
 class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
-    OrMapCellBase<K, V>(ref), Stateful, Replicable<TaggedMapDelta<K, V>> {
+    OrMapCellBase<K, V>(ref),
+    Stateful,
+    Replicable<TaggedMapDelta<K, V>>,
+    DeliveryTracking,
+    StabilityReclaim,
+    TagLaneContinuity {
 
     /**
      * Replica gossip intake (spec 40/42 §Design as implemented, 96 §E1.3):
@@ -128,8 +166,15 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // key re-creation. `puts` holds every dot ever minted here with the value
     // that put wrote; `dels` holds the dots a remove observed live and covered.
     // A key's live dots are `puts[key]` minus `dels[key]`.
-    // ponytail: dot sets grow monotonically; compaction is future work (G-25),
-    // exactly as for SetCell's tag sets.
+    //
+    // The dot sets are RECLAIMED at causal stability (`[KE3-30]`/`[KE3-31]`,
+    // 9sm.8-D7): [compactBelow] discards a whole `dels` entry once every dot in
+    // it — the del-dot included — is at or below the installed stability read's
+    // frontier, and the `puts` dots that entry covers go with it. What that
+    // buys is an EXCHANGE, not a bound: the discarded dots become contiguous
+    // counter runs in [reclaimed] (a reduction, not a bound — see
+    // [ReclaimedDots]'s KDoc). Bounding the retained state outright needs epoch
+    // hygiene (G-42), which stays research-gated.
     private val puts = mutableMapOf<K, MutableMap<Timestamp, V>>()
     private val dels = mutableMapOf<K, MutableSet<Timestamp>>()
 
@@ -195,6 +240,121 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
      */
     private val deadSources = mutableSetOf<UUID>()
 
+    // Per-origin delivered frontier (spec 40/42 §Delivered watermarks, E3.3(a);
+    // decision 9sm.8-D1): every dot this cell mints or absorbs — put-dots AND
+    // del-dots, on BOTH lanes — folds into a max-contiguous prefix per ORIGIN
+    // source (the dot's minting source, still visible in the fold). Listeners —
+    // the replica's WatermarkCell companion, installed by
+    // `Replication.trackDeliveries` — advance on each raised prefix, so the
+    // merged lattice answers "which origin waves has the replica set delivered",
+    // not "how many did each replica re-emit" (the CP-B2 outlet tap's key
+    // space, which is a different one).
+    //
+    // Deliberately its OWN [DeliveredFrontier] instance rather than a helper
+    // shared with [SetCell]: the two cells' monitors are independent and a
+    // shared mutable helper would couple them (9sm.8-D1).
+    private val delivered = DeliveredFrontier()
+    private val deliveryListeners = mutableListOf<(UUID, Long) -> Unit>()
+
+    /**
+     * The **re-admission fence** (`[24-TAG-04]` clause 2, decision 9sm.8-D6;
+     * the dot-shaped form of `SetCell`'s, computenet-pay7): every `(key, dot)`
+     * pair [compactBelow] has discarded from this replica, kept as a causal
+     * context. Written only by [compactBelow]; read only by [novelty] (and by
+     * the [fencesAny]/[fencedAmong] diagnostics).
+     *
+     * Keyed by MAP KEY, exactly as the element key is load-bearing in
+     * [ReclaimedDots]'s own KDoc: a rejoining incarnation re-mints counters for
+     * a DIFFERENT key, so a fence indexed by the dot alone would reject a live
+     * dot of another key.
+     *
+     * **Not a per-source floor**, which is the design constraint this cell
+     * inherits rather than chooses: computenet-v2ka MEASURED all three
+     * per-source-floor variants on the element-shaped sibling and each fenced
+     * *live* tags into permanent membership divergence, 31-33 of 200 seeds
+     * against a no-reclaimer control of 2-4 (`doc/kernel-lane-findings.md`
+     * `## KE3-GC-DEL-DOT`). Only a discarded dot ever enters [ReclaimedDots], so
+     * a live dot cannot be fenced at all. The compaction floor
+     * ([ReclaimedDots.floorFor]) is DERIVED from this fence and carries no
+     * snapshot key of its own.
+     */
+    private val reclaimed = ReclaimedDots<K>()
+
+    /**
+     * The stability read [snapshot] reclaims below ([StabilityReclaim],
+     * `[KE3-30]`, decisions 9sm.6-D1/9sm.8-D7) — installed by
+     * `Replication.trackDeliveries` beside the [onDeliver] listener, `null` for
+     * any cell that is not under `Replication`.
+     *
+     * **Null is the safety default, not a missing feature**: no read, no
+     * reclamation, and [snapshot] then serialises exactly what it always did.
+     * Guarded by [stateLock] like every other field here, but never *invoked*
+     * under it — the read walks another cell's state (see [stateLock]'s "never
+     * held across an outbound call").
+     */
+    private var stabilityRead: (() -> TagFrontier?)? = null
+
+    /**
+     * Install the stability read [snapshot] reclaims below. Assignment, not
+     * accumulation: `Replication.trackDeliveries` runs again on a rehome, and a
+     * second install of an equivalent read must not stack.
+     */
+    override fun onStability(read: () -> TagFrontier?) = synchronized(stateLock) {
+        stabilityRead = read
+        Unit
+    }
+
+    override fun onDeliver(listener: (source: UUID, thru: Long) -> Unit) = synchronized(stateLock) {
+        deliveryListeners += listener
+        Unit
+    }
+
+    /**
+     * Fold [dots] into the delivered frontier and return each raised per-origin
+     * prefix. Call under [stateLock]; hand the result to [notifyDelivered]
+     * *after* releasing it.
+     */
+    private fun foldDelivered(dots: Iterable<Timestamp>): Map<UUID, Long> {
+        if (deliveryListeners.isEmpty()) return emptyMap()
+        val advanced = HashMap<UUID, Long>()
+        for (dot in dots) delivered.deliver(dot.sourceId, dot.counter)?.let { advanced[dot.sourceId] = it }
+        return advanced
+    }
+
+    /**
+     * Notify listeners of each raised per-origin prefix. **Never called under
+     * [stateLock]**: a listener is another cell's call (see [stateLock]).
+     */
+    private fun notifyDelivered(advanced: Map<UUID, Long>) {
+        if (advanced.isEmpty()) return
+        val listeners = synchronized(stateLock) { deliveryListeners.toList() }
+        for ((source, thru) in advanced) listeners.forEach { it(source, thru) }
+    }
+
+    // ------------------------------------------------------------------ 9sm.8-D9
+    // TAG-LANE CONTINUITY across a reincarnation of this ref, the dot-shaped form of
+    // `SetCell`'s (computenet-uju5, `doc/kernel-lane-findings.md` `## KE3-23-ROWCONTENT`).
+    // [dotSource] is ref-derived and [dotCounter] restarts at 0 on any construction that
+    // does not [restore], so a replica that despawns and returns on the same CellRef
+    // re-mints counters its previous incarnation already spent — for DIFFERENT keys. A
+    // peer's delivered row for this source already stands at the pre-departure high-water
+    // and cannot move for those dots ([DeliveredFrontier.deliver] returns null at or below
+    // the prefix), so the row would certify a del-dot the peer never applied.
+    //
+    // `Replication` is what knows a returning ref is a return; it remembers the departing
+    // instance's high-water and installs it here at `replicate`. Raising the counter is the
+    // whole fix: mints stay per-source monotone and strictly above every prefix any peer
+    // holds.
+
+    override fun tagLaneHighWater(): Long = synchronized(stateLock) { dotCounter }
+
+    override fun continueTagLaneAbove(counter: Long) = synchronized(stateLock) {
+        // never lowers: a restored checkpoint already carries its own counter, and a
+        // re-installation must be idempotent.
+        if (counter > dotCounter) dotCounter = counter
+        Unit
+    }
+
     /** The dots at [key] no tombstone covers. */
     private fun liveDots(key: K): Map<Timestamp, V> = synchronized(stateLock) {
         val dots = puts[key] ?: return emptyMap()
@@ -256,15 +416,27 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
             EmbeddedMergeClass.requireEmbeddable(value, "put")
             // reset-remove's local half: everything this writer currently sees
             // live at the key dies in the SAME delta that carries the fresh dot
-            // (KeyedSetCell's atomic retract+add, lifted to dots). The fold
-            // happens under `stateLock`; the propagation after it, never under.
-            val (dot, observed) = synchronized(stateLock) {
+            // (KeyedSetCell's atomic retract+add, lifted to dots). The fold and
+            // the delivered-frontier advance happen under `stateLock`; the
+            // listener notification and the propagation after it, never under.
+            //
+            // THE RETRACT DEL-DOT (`[24-TAG-04]`, 9sm.8-D5): when the key HAS
+            // live dots this put's retract half is an effective remove, so it
+            // mints its own dot — FIRST, so the retract's counter is `n` and the
+            // new value's is `n+1` and a re-put therefore consumes two. The
+            // del-dot goes into `dels` beside the dots it covers and never into
+            // `puts`, so `liveDots` is untouched by it.
+            val (dot, observed, advanced) = synchronized(stateLock) {
                 val seen = LinkedHashSet(liveDots(key).keys)
+                val delDot = if (seen.isEmpty()) null else Timestamp(dotSource, ++dotCounter)
                 val minted = Timestamp(dotSource, ++dotCounter)
                 puts.getOrPut(key) { LinkedHashMap() }[minted] = value
-                if (seen.isNotEmpty()) dels.getOrPut(key) { LinkedHashSet() } += seen
-                minted to seen
+                val entry = if (delDot == null) seen else LinkedHashSet(seen).also { it += delDot }
+                if (entry.isNotEmpty()) dels.getOrPut(key) { LinkedHashSet() } += entry
+                // a local mint is trivially contiguous
+                Triple(minted, entry, foldDelivered(listOfNotNull(delDot) + minted))
             }
+            notifyDelivered(advanced)
             outlet.call.propagate(
                 TaggedMapDelta(
                     puts = mapOf(key to mapOf(dot to value)),
@@ -277,14 +449,26 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // `[24-TMAP-04]` reset-remove, tag-precise: tombstone exactly the
             // dots observed live here and now. A concurrent put's dot is not in
             // this set and therefore survives the merge.
-            val observed = synchronized(stateLock) {
+            //
+            // THE DEL-DOT (`[24-TAG-04]`, 9sm.8-D5): the remove also mints a dot
+            // of its own, from the same counter space the put-dots come from,
+            // and ships it inside the entry. It enters `dels` only — it covers
+            // no put and `membership()`/`value()` are unchanged by it — and it
+            // is what makes `dot <= stableFrontier` certify that every open
+            // member delivered this REMOVE rather than merely the put it covers
+            // (see the class KDoc, and `SetCell.remove` for the measurement).
+            val (entry, advanced) = synchronized(stateLock) {
                 val seen = LinkedHashSet(liveDots(key).keys)
-                // effective-only (21): removing a key with no live dot is a no-op
+                // effective-only (21): removing a key with no live dot is a
+                // no-op, and mints no dot — there is no remove to deliver.
                 if (seen.isEmpty()) return
+                val delDot = Timestamp(dotSource, ++dotCounter)
+                seen += delDot
                 dels.getOrPut(key) { LinkedHashSet() } += seen
-                seen
+                seen to foldDelivered(listOf(delDot)) // a local mint is trivially contiguous
             }
-            outlet.call.propagate(TaggedMapDelta(dels = mapOf(key to observed)))
+            notifyDelivered(advanced)
+            outlet.call.propagate(TaggedMapDelta(dels = mapOf(key to entry)))
         }
     }
 
@@ -311,15 +495,40 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
      *
      * [fenced] `false` is the `ReBaseline` re-assertion path only (see
      * [applyReBaseline] step (b)): a re-baseline legitimately re-asserts dots
-     * from the very sources it supersedes.
+     * from the very sources it supersedes. It lifts **only the dead-source
+     * fence**; the re-admission fence ([reclaimed]) still applies there, because
+     * a reclaimed dot is one this replica already observed and discarded and no
+     * re-assertion makes it new information again (9sm.8-D6).
+     *
+     * **THE RE-ADMISSION FENCE, on BOTH lanes** (`[24-TAG-04]` clause 2,
+     * 9sm.8-D6). Novelty here is `dots − puts[key]` (resp. `dels[key]`), and a
+     * dot [compactBelow] discarded is absent from those maps again — which is
+     * exactly why a duplicated or reordered frame re-delivering it reads as NEW
+     * information and resurrects the key. `− reclaimed` is the receiver-side
+     * memory that closes it. Fencing only the put lane would let a re-delivered
+     * `dels` entry rebuild a tombstone the reclaimer then discards again on its
+     * next pass, and each rebuild re-emits; fencing both makes a replayed frame
+     * carry no novelty at all, so the echo dies here as any other duplicate does.
+     *
+     * The rejected PUT-dots are reported separately, in [Novelty.fencedPuts],
+     * because a silent fence is not safe: see [applyRemote]'s repair tombstone.
+     *
+     * Nothing is lost from the delivered frontier by not folding a fenced dot: a
+     * dot is only ever reclaimed when its whole `dels` entry was ≤ the frontier
+     * compaction was driven from, so it was folded before it was discarded, and
+     * [DeliveredFrontier] is monotone.
      */
-    private fun novelty(delta: TaggedMapDelta<K, V>, fenced: Boolean = true): TaggedMapDelta<K, V>? = synchronized(stateLock) {
+    private fun novelty(delta: TaggedMapDelta<K, V>, fenced: Boolean = true): Novelty<K, V> = synchronized(stateLock) {
         val freshPuts = LinkedHashMap<K, Map<Timestamp, V>>()
+        val fencedPuts = LinkedHashMap<K, Set<Timestamp>>()
         delta.puts.forEach { (key, dots) ->
             val known = puts[key]
-            val fresh = dots.filterKeys { dot ->
+            val unknown = dots.filterKeys { dot ->
                 (!fenced || dot.sourceId !in deadSources) && known?.containsKey(dot) != true
             }
+            val rejected = unknown.keys.filterTo(LinkedHashSet()) { reclaimed.holds(key, it) }
+            if (rejected.isNotEmpty()) fencedPuts[key] = rejected
+            val fresh = if (rejected.isEmpty()) unknown else unknown.filterKeys { it !in rejected }
             if (fresh.isNotEmpty()) freshPuts[key] = fresh
         }
         // Tombstones are never fenced by source: a del entry is stamped by the
@@ -331,11 +540,49 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
         val freshDels = LinkedHashMap<K, Set<Timestamp>>()
         delta.dels.forEach { (key, dots) ->
             val known = dels[key]
-            val fresh = dots.filterTo(LinkedHashSet()) { known?.contains(it) != true }
+            val fresh = dots.filterTo(LinkedHashSet()) { known?.contains(it) != true && !reclaimed.holds(key, it) }
             if (fresh.isNotEmpty()) freshDels[key] = fresh
         }
-        if (freshPuts.isEmpty() && freshDels.isEmpty()) return null
-        TaggedMapDelta(freshPuts, freshDels)
+        Novelty(
+            novel = if (freshPuts.isEmpty() && freshDels.isEmpty()) null else TaggedMapDelta(freshPuts, freshDels),
+            fencedPuts = fencedPuts,
+        )
+    }
+
+    /**
+     * **THE REPAIR TOMBSTONE** (`[24-TAG-04]` clause 2, 9sm.8-D6; the
+     * element-shaped original's argument is in `SetCell.applyRemote`, grep
+     * anchor `A SILENT FENCE IS NOT SAFE`).
+     *
+     * A fenced put-dot is answered with a minimal `dels` entry naming exactly
+     * that dot: no value, and **no dot is minted**, because no new remove
+     * happened and nothing new needs certifying. The fence is itself the
+     * evidence that the dot was covered by a remove this replica saw certified
+     * delivered, so the covering entry can be reconstructed from the dot alone.
+     *
+     * Why it is not optional: a fenced sender is a replica that still holds the
+     * put-dot LIVE with no tombstone for it. Dropping its frame on the floor
+     * leaves the key live there and absent here for ever — the resurrection is
+     * converted into a permanent DIVERGENCE rather than removed. MEASURED on the
+     * element-shaped sibling: fencing without the repair took the sweep's STABLE
+     * membership divergence from 3 of 200 to 30 of 200, the same order as the
+     * per-source floor.
+     *
+     * It cannot loop: the repair goes out only for a dot that was novel against
+     * `puts` here, and a peer that has folded it answers with a `dels` frame
+     * whose every dot this replica fences, yielding no novelty at all.
+     */
+    private fun withRepair(
+        novel: TaggedMapDelta<K, V>?,
+        fencedPuts: Map<K, Set<Timestamp>>,
+    ): TaggedMapDelta<K, V>? {
+        if (fencedPuts.isEmpty()) return novel
+        val delsOut = LinkedHashMap<K, Set<Timestamp>>()
+        novel?.dels?.forEach { (key, dots) -> delsOut[key] = dots }
+        fencedPuts.forEach { (key, dots) ->
+            delsOut.merge(key, dots) { a, b -> LinkedHashSet(a).also { it += b } }
+        }
+        return TaggedMapDelta(novel?.puts ?: emptyMap(), delsOut)
     }
 
     /**
@@ -385,12 +632,30 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // the notice must be taken off the arriving wave first.
         val notice = CurrentContext.get()?.reBaseline
         // one atomic fold: novelty and its absorption must not straddle another
-        // writer, and no outbound call happens under the monitor.
-        val effective = synchronized(stateLock) {
-            if (notice != null) applyReBaseline(delta, notice)
-            else novelty(delta)?.also { absorb(it) }
+        // writer, and no outbound call happens under the monitor — neither the
+        // listener notification nor the re-emission.
+        val (folded, advanced) = synchronized(stateLock) {
+            val outcome =
+                if (notice != null) applyReBaseline(delta, notice)
+                else novelty(delta).let { n ->
+                    val absorbed = n.novel?.also { absorb(it) }
+                    Folded(absorbed, withRepair(absorbed, n.fencedPuts))
+                }
+            // BOTH LANES feed the delivered frontier (9sm.8-D1): every put-dot
+            // of the ABSORBED delta AND every dot of its `dels` — the del lane
+            // is what makes a del-dot certify the REMOVE at the receiving
+            // replica, and dropping it would leave every non-origin peer's row
+            // short by exactly the removes it absorbed. The repair tombstone is
+            // deliberately NOT folded: its dots were reclaimed here, so they
+            // were folded before they were discarded (see [novelty]).
+            outcome to (
+                outcome.absorbed?.let { d ->
+                    foldDelivered(d.puts.values.flatMap { it.keys } + d.dels.values.flatten())
+                } ?: emptyMap()
+                )
         }
-        if (effective == null) return // echo terminates here
+        notifyDelivered(advanced)
+        val effective = folded.emitted ?: return // echo terminates here
         PendingReBaseline.with(null) { outlet.originate { propagate(effective) } }
     }
 
@@ -437,12 +702,26 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * superseding it, so no mesh source is ever fenced. Closing it properly needs
      * the notice to reach every replica as data (a fenced-source lattice on the
      * gossip mesh), which is 96 §E1 follow-on work, not this seam.
+     *
+     * **Revisit trigger (computenet-u7fi, KE3 decision 2026-09-06: residual
+     * accepted PROVISIONALLY).** WHEN any change makes `OrMapCell` emit a
+     * `TaggedMapDelta` re-baseline (`ReBaselineEmitting` entering this class's
+     * supertype list) or supersedes a replica's ref-derived [dotSource], THEN
+     * reopen `computenet-u7fi` BEFORE that change merges: the unreachability
+     * above rests on exactly those two facts. The fenced-source lattice is
+     * filed in `concord/corpus/DISPUTES.md` §42-WM-R14 and
+     * `doc/spec/40-distribution/42-replication.md` §Open interactions, not
+     * here.
      */
     private fun applyReBaseline(
         delta: TaggedMapDelta<K, V>,
         notice: ReBaselineNotice,
-    ): TaggedMapDelta<K, V>? = synchronized(stateLock) {
-        if (!notice.supersede) return novelty(delta)?.also { absorb(it) }
+    ): Folded<K, V> = synchronized(stateLock) {
+        if (!notice.supersede) {
+            val n = novelty(delta)
+            val absorbed = n.novel?.also { absorb(it) }
+            return Folded(absorbed, withRepair(absorbed, n.fencedPuts))
+        }
 
         // (a) retract — tombstone, don't delete
         val retracted = LinkedHashMap<K, Set<Timestamp>>()
@@ -456,18 +735,143 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
                 retracted[key] = doomed
             }
         }
-        // (b) union-merge the re-asserted/fresh state, past the fence
-        val novel = novelty(delta, fenced = false)?.also { absorb(it) }
+        // (b) union-merge the re-asserted/fresh state, past the DEAD-SOURCE
+        // fence only — the re-admission fence still applies (9sm.8-D6), so a
+        // reclaimed dot re-asserted by a re-baseline stays inert and is repaired
+        // exactly as it is on the ordinary path.
+        val n = novelty(delta, fenced = false)
+        val novel = n.novel?.also { absorb(it) }
         // (c) fence the superseded sources
         deadSources += notice.supersedes
 
-        if (novel == null && retracted.isEmpty()) return null
+        if (novel == null && retracted.isEmpty() && n.fencedPuts.isEmpty()) return Folded(null, null)
         val delsOut = LinkedHashMap<K, Set<Timestamp>>()
         novel?.dels?.forEach { (key, dots) -> delsOut[key] = dots }
         retracted.forEach { (key, dots) ->
             delsOut.merge(key, dots) { a, b -> LinkedHashSet(a).also { it += b } }
         }
-        TaggedMapDelta(novel?.puts ?: emptyMap(), delsOut)
+        // the retraction is absorbed state (it moved live dots into `dels`), so
+        // it feeds the delivered lane exactly as it did before the fence landed;
+        // only the repair is held back from that fold.
+        val absorbed = TaggedMapDelta(novel?.puts ?: emptyMap(), delsOut)
+        Folded(absorbed, withRepair(absorbed, n.fencedPuts))
+    }
+
+    /**
+     * [applyRemote]'s two outputs, which are NOT the same delta once the
+     * re-admission fence is in play (9sm.8-D6): [absorbed] is what this fold
+     * actually took into [puts]/[dels] and is what feeds the delivered lane;
+     * [emitted] is that plus the repair tombstone for every fenced put-dot, and
+     * is what goes out on the wire. `null` on either means "nothing".
+     */
+    private class Folded<K, V>(
+        val absorbed: TaggedMapDelta<K, V>?,
+        val emitted: TaggedMapDelta<K, V>?,
+    )
+
+    /**
+     * [novelty]'s two outputs: the new dot information ([novel], `null` when
+     * there is none) and the put-dots the re-admission fence rejected
+     * ([fencedPuts]) — which are not novelty, but are what [withRepair] answers.
+     */
+    private class Novelty<K, V>(
+        val novel: TaggedMapDelta<K, V>?,
+        val fencedPuts: Map<K, Set<Timestamp>>,
+    )
+
+    /**
+     * Discard `dels` **entries** whose EVERY dot is at or below [frontier], per
+     * source, and nothing else (decision 9sm.8-D7, `[KE3-31]` as amended by
+     * computenet-v2ka; the dot-shaped form of `SetCell.compactBelow`).
+     *
+     * For each key `k`, the whole of `dels[k]` is discarded — and with it
+     * `puts[k] ∩ dels[k]`, the covered put-dots AND THEIR VALUES, which is the
+     * memory this reclaimer actually returns — **iff every dot in `dels[k]` is ≤
+     * [frontier]**; otherwise the entry is left untouched in full. A key whose
+     * map became empty is dropped from that map. A LIVE put-dot (present in
+     * `puts`, absent from `dels`) is never in `dels[k]` and is never touched,
+     * even when it is ≤ frontier — so [membership] and [value] are unchanged by
+     * construction. A tombstone with no matching put is discarded like any other.
+     *
+     * **Every-dot, not per-dot, and that is the whole safety argument**
+     * (computenet-v2ka). Since [MapOps.remove] and a re-put's retract half mint
+     * a **del-dot** into the entry (9sm.8-D5), the entry's dot set contains not
+     * only the put-dots the remove covered but a dot standing for the REMOVE
+     * itself. Requiring *every* dot ≤ [frontier] therefore requires the del-dot
+     * ≤ [frontier], and — because the delivered frontier is a max-CONTIGUOUS
+     * per-source prefix fed from both lanes ([applyRemote]) — that means every
+     * open member has delivered the remove, not merely the put. A per-dot
+     * discard drops a tombstone as soon as the PUT under it is everywhere, which
+     * is exactly the state a straggler holding the put and missing the remove
+     * resurrects from.
+     *
+     * The `[KE3-30]` interlock / `[42-WM-05]` absent-row-is-bottom: a dot source
+     * with no entry in [frontier] reads as bottom, so nothing of that source is
+     * ever discarded.
+     *
+     * **What it DOES record: the re-admission fence.** Every dot discarded here
+     * is recorded in [reclaimed], and [novelty] subtracts that set on BOTH
+     * lanes. This function is the fence's ONLY writer — exactly what is
+     * discarded is what is remembered, which is why a live put-dot can never
+     * enter it.
+     *
+     * Nothing is emitted, and [dotCounter], [delivered] and [deliveryListeners]
+     * are untouched. Runs entirely under [stateLock] and makes no outbound call.
+     *
+     * `internal`: reachable from `:kernel` tests only — a harness seam, not a
+     * public capability.
+     *
+     * @return the total number of dots discarded (from `dels` plus the matching
+     *   dots also removed from `puts`).
+     */
+    internal fun compactBelow(frontier: TagFrontier): Int = synchronized(stateLock) {
+        var discarded = 0
+        val emptiedDels = mutableListOf<K>()
+        for ((key, delDots) in dels) {
+            // EVERY dot, or none: an entry one of whose dots — the del-dot
+            // included — is above the frontier is not certified delivered, and
+            // discarding any part of it is what resurrects the key.
+            val allCovered = delDots.isNotEmpty() && delDots.all { dot ->
+                (frontier.perSource[dot.sourceId] ?: Long.MIN_VALUE) >= dot.counter
+            }
+            if (!allCovered) continue
+            val covered = LinkedHashSet(delDots)
+            covered.forEach { reclaimed.record(key, it) }
+            delDots -= covered
+            discarded += covered.size
+            puts[key]?.let { putDots ->
+                val putCovered = putDots.keys.filterTo(LinkedHashSet()) { it in covered }
+                if (putCovered.isNotEmpty()) {
+                    putDots.keys.removeAll(putCovered)
+                    discarded += putCovered.size
+                    if (putDots.isEmpty()) puts.remove(key)
+                }
+            }
+            if (delDots.isEmpty()) emptiedDels += key
+        }
+        emptiedDels.forEach { dels.remove(it) }
+        discarded
+    }
+
+    /**
+     * Whether this replica's fence holds any dot at all for [key] — the
+     * existence half of [fencedAmong], for a harness that wants to know *when*
+     * a key entered the fence and has no dot to ask about (the del-dot it is
+     * looking for is precisely the one [compactBelow] has just discarded).
+     *
+     * Read-only, additive, and consulted by no protocol path.
+     */
+    internal fun fencesAny(key: K): Boolean = synchronized(stateLock) { reclaimed.anyFor(key) }
+
+    /**
+     * Which of [dots] this replica has reclaimed **for [key]** — the direct read
+     * of the fence's own state. A non-empty result on a replica MISSING the key
+     * those dots make live elsewhere is the fence being the cause of that
+     * divergence; an empty result on every such replica exonerates it, by
+     * measurement rather than by inference about the workload.
+     */
+    internal fun fencedAmong(key: K, dots: Set<Timestamp>): Set<Timestamp> = synchronized(stateLock) {
+        dots.filterTo(LinkedHashSet()) { reclaimed.holds(key, it) }
     }
 
     /**
@@ -496,6 +900,34 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     private fun <T> scopedTo(source: Map<K, T>, scope: Interest?): Map<K, T> =
         if (scope == null || scope is Interest.Total) source else source.filterKeys { scope.admits(it) }
 
+    /**
+     * Is [since] below this replica's compaction floor for any source (`[KE3-35]`/`[KE3-36]`,
+     * decision 9sm.8-D8, mirrored from `SetCell.belowFloor`)? Returns the first offending
+     * `(source, since[source], floor[source])`, or `null` when the request can be answered
+     * incrementally.
+     *
+     * The floor is derived from the re-admission fence — see [ReclaimedDots.floors]: `floor[s]`
+     * is the highest counter this replica has ever DISCARDED for `s` (there is no persisted
+     * per-source floor of its own — a per-source floor was MEASURED UNSAFE, `## KE3-GC-DEL-DOT`),
+     * so a `since[s]` below it names dots this replica no longer remembers and a since-filtered
+     * answer would silently omit them.
+     *
+     * "Below" is strict (`since[s] < floor[s]`), and a source ABSENT from [since] reads as `-1`
+     * — [putsSince]/[delsSince]'s own default — so it is below floor iff the fence holds any run
+     * for it. `since == null` is never below floor: it is already the full-state branch.
+     *
+     * Call under [stateLock]; the decision and the reply it governs are one snapshot (9sm.8-D8,
+     * mirroring 9sm.7-D1).
+     */
+    private fun belowFloor(since: TagFrontier?): Triple<UUID, Long, Long>? = synchronized(stateLock) {
+        if (since == null) return@synchronized null
+        for ((source, floor) in reclaimed.floors()) {
+            val asked = since.perSource[source] ?: -1L
+            if (asked < floor) return@synchronized Triple(source, asked, floor)
+        }
+        null
+    }
+
     /** Only the put-dots a [since] frontier has not observed; a copy, never an alias, when [since] is null. */
     private fun putsSince(since: TagFrontier?): Map<K, Map<Timestamp, V>> = synchronized(stateLock) {
         puts.mapValues { (_, dots) ->
@@ -504,11 +936,25 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
         }.filterValues { it.isNotEmpty() }
     }
 
-    /** Only the tombstoned dots a [since] frontier has not observed; a copy when [since] is null. */
+    /**
+     * Only the tombstoned dots a [since] frontier has not observed; a copy when [since] is null.
+     *
+     * **ENTRY-WHOLE** (`[24-TAG-04]`'s last sentence, decision 9sm.8-D8, mirrored from
+     * `SetCell.sinceFilter`'s `wholeEntry` mode): a `dels[key]` entry is one indivisible fact —
+     * the del-dot plus the put-dots it covers. Filtered per dot, a since-pull could ship the
+     * del-dot alone (its counter is the highest in the entry, so it is the dot most likely to be
+     * novel) while withholding the covers it certifies, letting the requester advance its
+     * delivered frontier past the del-dot without having applied the remove it stands for. So for
+     * a non-null [since] the filter decides per ENTRY: ship all of it if ANY dot in it is novel,
+     * else none of it.
+     */
     private fun delsSince(since: TagFrontier?): Map<K, Set<Timestamp>> = synchronized(stateLock) {
         dels.mapValues { (_, dots) ->
             if (since == null) LinkedHashSet(dots)
-            else dots.filterTo(LinkedHashSet()) { (since.perSource[it.sourceId] ?: -1L) < it.counter }
+            else {
+                val novel: (Timestamp) -> Boolean = { (since.perSource[it.sourceId] ?: -1L) < it.counter }
+                if (dots.any(novel)) LinkedHashSet(dots) else emptySet()
+            }
         }.filterValues { it.isNotEmpty() }
     }
 
@@ -528,15 +974,49 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // single-wave state-as-delta reply, since-filtered, stamped as a
         // catch-up baseline (MessageContext.baseline) and delivered only to the
         // requester — never broadcast, never admitted to wave completeness.
+        //
+        // BELOW-FLOOR FALLBACK (`[KE3-35]`/`[KE3-36]`, decision 9sm.8-D8, mirrored from
+        // `SetCell`'s pull-serve). A `since` that names, for ANY source, a counter below this
+        // replica's compaction floor cannot be answered incrementally: the floor is the highest
+        // counter this replica has DISCARDED for that source (derived from the re-admission
+        // fence — see [ReclaimedDots.floors]; exact, and carrying no snapshot key of its own),
+        // so the dots between `since` and the floor are gone and a since-filtered reply would
+        // silently omit them. The honest answer is FULL state, which the requester's idempotent
+        // merge absorbs — never a partial delta, never a per-source mix of full and partial, and
+        // never a silently widened request. `[24-TAG-04]`'s compaction paragraph: "a
+        // `StateRequest(since)` that asks for state below the compaction floor is answered with
+        // full state."
+        //
+        // The fallback IS the existing `since = null` branch, verbatim (mirroring 9sm.7-D2): the
+        // same `putsSince`/`delsSince`/`scopedTo` calls and the same `baselineTo` stamp, so there
+        // is no new reply type, no `StateRequest` field and no wire change. There is no
+        // `readBounded` half to mirror here — `OrMapCell` is `Stateful`, not `BoundedStateful`
+        // (9sm.8-D8). The decision is decided under [stateLock] in the same hold that builds the
+        // reply, and logged after the monitor is released, because logging is a foreign call.
+        //
+        // Independently of the floor, [delsSince] ships a `dels[key]` entry whole or not at all
+        // (`[24-TAG-04]`'s last sentence) — see its KDoc.
         outlet.pullServe { request ->
             // the three halves of a reply are one snapshot: taken together
             // under the monitor, shipped after it is released.
-            val reply = synchronized(stateLock) {
-                val putsOut = scopedTo(putsSince(request.since), request.scope)
-                val delsOut = scopedTo(delsSince(request.since), request.scope)
+            val outcome = synchronized(stateLock) {
+                val below = belowFloor(request.since)
+                val effectiveSince = if (below == null) request.since else null
+                val putsOut = scopedTo(putsSince(effectiveSince), request.scope)
+                val delsOut = scopedTo(delsSince(effectiveSince), request.scope)
                 if (putsOut.isEmpty() && delsOut.isEmpty()) null
-                else Triple(putsOut, delsOut, currentFrontier(request.scope))
+                else below to Triple(putsOut, delsOut, currentFrontier(request.scope))
             } ?: return@pullServe
+            val reply = outcome.second
+            outcome.first?.let { (source, asked, floor) ->
+                // 9sm.8-D8 (mirroring 9sm.7-D5): the JDK's own logger — the log line is a
+                // diagnostic, never the test oracle; the reply tap is.
+                PULL_FLOOR_LOG.log(
+                    System.Logger.Level.DEBUG,
+                    "OrMapCell ${ref.id}: StateRequest(since) below compaction floor for source " +
+                        "$source (since=$asked < floor=$floor) — answering with full state",
+                )
+            }
             baselineTo(request.replyTo, reply.third) {
                 propagate(TaggedMapDelta(reply.first, reply.second))
             }
@@ -554,16 +1034,81 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // replica's state across a promotion swap through exactly this seam, and a
     // candidate that woke without the fence would re-admit a superseded
     // source's straggler dots the incumbent had already refused.
-    override fun snapshot(): Serializable = synchronized(stateLock) {
+    /**
+     * **THE RECLAIMER'S ONLY PRODUCTION CALLER** (`[KE3-30]`/`[KE3-31]`,
+     * decisions 9sm.6-D1/9sm.8-D7).
+     *
+     * Reads the installed stability read ([onStability]) and, if one is
+     * installed and answers, runs [compactBelow] at that frontier **before**
+     * serialising — both under one hold of [stateLock].
+     *
+     * There is **no `compact: Boolean` parameter**, so reclamation rides every
+     * caller of `Stateful.snapshot()` — `HostDurability.checkpoint`,
+     * `ManagedHost.snapshotOf`, migration, promotion state transfer, the concord
+     * driver's raw `snapshot` verb. `[KE3-30]` makes the FRONTIER the sole
+     * authority for a discard ("no other condition SHALL authorise a discard"),
+     * and the identity of the caller is exactly such an other condition; and
+     * every `snapshot()` is a moment at which the persisted dot maps must agree
+     * with the persisted `"reclaimed"` fence, which compacting first and
+     * serialising second under one monitor hold is what guarantees. The admitted
+     * consequence: an observer read can reclaim — still gated on causal
+     * stability, so it discards nothing an ordinary checkpoint could not have
+     * discarded a moment later.
+     *
+     * **Why the frontier is read OUTSIDE the lock.** The read is a foreign call
+     * — it walks the delivered-watermark companion — and [stateLock]'s KDoc
+     * forbids holding the monitor across one. That makes it a conservative
+     * under-read and never a hazard: per-source stability is monotone, so a
+     * frontier read a few instructions early can only be *lower* than the truth
+     * at discard time, i.e. it can only decline a discard the next pass will
+     * make. [compactBelow] re-enters the same monitor this function already
+     * holds (`synchronized` is reentrant), so compaction and serialisation
+     * observe one state with no window between them.
+     *
+     * 9sm.6-D4's R14 interlock is NOT vacuous here, unlike on `SetCell`: this
+     * cell has [deadSources], a source-shaped fence that is a DIFFERENT
+     * mechanism from [reclaimed] despite the shared name. They do not interact —
+     * [deadSources] gates admission by source, [reclaimed] by `(key, dot)` — and
+     * neither reads the other.
+     */
+    override fun snapshot(): Serializable {
+        // Outside the monitor, deliberately: see "Why the frontier is read
+        // OUTSIDE the lock" above.
+        val read = synchronized(stateLock) { stabilityRead }
+        val frontier = read?.invoke()
+        return synchronized(stateLock) {
+            // `[KE3-30]`: the frontier is the only authority, and a null read
+            // (no `Replication`, or nothing certifiable) discards nothing.
+            if (frontier != null) compactBelow(frontier)
+            snapshotLocked()
+        }
+    }
+
+    /** The serialisation half of [snapshot]. Call under [stateLock]. */
+    private fun snapshotLocked(): Serializable =
         HashMap(
             mapOf(
                 "puts" to HashMap(puts.mapValues { LinkedHashMap(it.value) }),
                 "dels" to HashMap(dels.mapValues { LinkedHashSet(it.value) }),
                 "counter" to dotCounter,
                 "dead" to LinkedHashSet(deadSources),
+                // The re-admission fence is state too (9sm.8-D6): a
+                // checkpoint-restored replica that forgot what it had reclaimed
+                // would re-admit the next replayed frame exactly as an unfenced
+                // one does. Additive — [restore] treats an absent key as an
+                // empty fence, so a pre-fence checkpoint still loads.
+                //
+                // Adding a key here is not local on the OR-SET
+                // (`SetCell.snapshotLocked`'s "ADDING A KEY HERE IS NOT LOCAL":
+                // `civictech.inspect.ValueEncoder.orSetMembership` recognises an
+                // OR-set by its key set). It IS local here: that encoder
+                // requires `{adds, dels, counter}` and an OR-map snapshot
+                // `{puts, …}` already falls through to raw, so `"reclaimed"`
+                // conscripts no `:inspect` file (verified ValueEncoder.kt
+                // :63-75, :315-317).
+                "reclaimed" to reclaimed.save(),
             )
         )
-    }
 
     @Suppress("UNCHECKED_CAST")
     override fun restore(state: Serializable) = synchronized(stateLock) {
@@ -577,6 +1122,7 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
             .forEach { (key, dots) -> dels[key] = LinkedHashSet(dots) }
         dotCounter = maps["counter"] as? Long ?: 0L
         (maps["dead"] as? Set<UUID>)?.let { deadSources += it }
+        reclaimed.restore(maps["reclaimed"]) // absent on a pre-fence checkpoint: an empty fence
         Unit
     }
 
