@@ -2378,33 +2378,71 @@ worktree, same host, same instrument, same hour, and the class returns at 6 of 1
 is consistent with the 37.5 % this bead's history records and inconsistent with a
 dead assertion. Under a 40 % per-sweep rate, 0 of 50 has probability ~1e-11.
 
-### Secondary finding: the fix family is REDUNDANT, not single-point
+**Read that exponent with its adversary attached.** The 40 % is a K = 25
+measurement, so the strictly like-for-like arithmetic is run B alone —
+`0.6^20 ≈ 3.6e-5`. Pooling runs A and B into "0 of 50" carries the K = 25 rate
+over to a K = 10 arm that has no control of its own; that is defensible only
+because K = 10 is the STRONGER adversary (`## KE3-20`, whose K sweep is where
+that constant moved: a shorter compaction period discards the del-dot sooner), never because the two arms are
+interchangeable.
 
-Reverting individual members of the family into an otherwise-current tree did
-NOT bring the class back (all with the revert proved landed by a non-empty
-`git diff HEAD --stat` before the run, and all reverted afterwards):
+**Independently reproduced at feature review** (2026-09-08, same host, `HEAD`
+`737cd125d`): arm A re-run at 12 sweeps, 0 red, load1 6.34 → 6.62; the run C
+control re-created by the same `kernel/` + `testkit/` checkout at `311ad4f7b~1`
+returned 4 of 10 red (40 %), every red carrying `seeds=[12]`, load1
+7.74 → 10.61. The control fires and the fixed tree does not.
 
-| mutation | reverted | runs | red |
-|---|---|---|---|
-| A | `computenet-07vb` (`SetCell.kt`, −43 lines) | 12 | 0 |
-| B | `computenet-07vb` + `computenet-s0tq` (`ReplicaQuorum.kt`) | 12 | 0 |
-| C | `computenet-92ek` (`StabilityFreezeDetector.kt`) | 12 | 0 |
+### Secondary finding, WITHDRAWN at feature review: `computenet-07vb` IS load-bearing
 
-So `{92ek}` alone closes the escape, and `{07vb, s0tq}` alone closes it too:
-the members overlap rather than each carrying a distinct necessary condition.
-Do not read any single one of them as "the" fix for the seed-12 flake, and do
-not read these three rows as evidence that any of them is unnecessary — each is
-justified by its own bead's deterministic test, which this sweep does not
-supersede. n = 12 bounds each row at ~0.7 % under a 40 % rate, which is enough
-to say the revert did not restore the class and not enough to say it changed
-nothing.
+**A first version of this section claimed the fix family is REDUNDANT — that
+`{92ek}` alone and `{07vb, s0tq}` alone each close the escape. That claim is
+WITHDRAWN: it is refuted by measurement, and the section is kept, corrected,
+rather than deleted, because "these fixes are redundant" is exactly the sentence
+a later session would quote while removing one.**
+
+The withdrawn rows were three per-member reverts into an otherwise-current tree,
+each reported at 12 runs / 0 red. Row A named its mutation
+`computenet-07vb (SetCell.kt, −43 lines)` — but `computenet-07vb` (`8efd47388`)
+touches `CausalStability.kt` (+45/−4), `StabilityFreezeDetector.kt` (+15/−4) and
+`Replication.kt` (+13/−3) and **does not touch `SetCell.kt` at all**;
+`SetCell.kt +43/−6` is `computenet-fzd3`'s (`311ad4f7b`) shape. So rows A and B
+most likely reverted `fzd3` — a deliberately protocol-inert bounds/record change
+— under a `07vb` label, which makes them vacuous mutations rather than evidence.
+That is the same failure family as the merge-commit revert recorded below.
+
+**The correcting measurement** (feature review, 2026-09-08, darwin/arm64
+16-core, `main` at `5a5b455d3`, `HEAD` `737cd125d`, same instrument
+`scripts/flake-loop/run-method-loop.sh`, revert proved landed by a non-empty
+`git diff HEAD --stat` before the run and the tree restored clean after):
+
+| mutation | reverted | K | runs | red | load1 (start → end) |
+|---|---|---|---|---|---|
+| A′ | `computenet-07vb`'s `CausalStability.kt` + `Replication.kt` restored to `8efd47388~1`, with `92ek` and `s0tq` still present | 10 | 12 | **6 (50 %)** | 8.66 → 13.41 |
+
+Every red carried the identical `FENCE-ATTRIBUTED diverging seeds=[12]`
+signature. (`StabilityFreezeDetector.kt` was left at `main` because `92ek` edited
+it after `07vb`, so A′ reverts `07vb`'s two exclusively-owned production files,
+not all three — an UNDER-revert, which can only weaken the effect, not
+manufacture it.)
+
+So `{92ek}` alone does NOT close the escape and `07vb`'s frontier fix is
+load-bearing. Rows B and C of the withdrawn table are unverified and should not
+be relied on either: row B shares row A's suspect mutation, and row C's 0/12 is
+a single unreplicated sample whose companion row is now known to be wrong. Which
+members of the family are individually necessary is therefore OPEN, and is
+filed rather than answered here.
+
+Note also the withdrawn table's stated bound: "n = 12 bounds each row at ~0.7 %
+under a 40 % rate" is arithmetically wrong — `0.6^12 ≈ 0.22 %`, not 0.7 %.
 
 A first attempt at mutation A used `git revert --no-commit 0be48970f` on a MERGE
 commit; git refused for want of `-m`, the working tree stayed pristine, and the
 12 green runs that followed were an unmutated re-run wearing a mutation's label.
 It was caught only by the `git diff HEAD --stat` landed-check that
 `.claude/skills/work/references/mutation-check.md` §3 requires *before* the test
-result is read. The check earned its keep here; run it.
+result is read. The check earned its keep here; run it — and note it proves the
+mutation LANDED, never that it was the mutation you MEANT, which is what rows A
+and B needed and did not have.
 
 ### What is NOT claimed
 
