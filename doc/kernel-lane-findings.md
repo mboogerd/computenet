@@ -2218,3 +2218,90 @@ from `membersOf`, marker still in the lattice and asserted). `computenet-dwkp`'s
 four prohibitions are untouched: no BS-12 fence-attribution assertion is relaxed,
 no class is absorbed into `MAX_STABLE_DIVERGING`, no SEEDS list is narrowed, and
 no incarnation-unique `tagSource` is pursued.
+
+## KE3-20 — BS-13's resurrection witness is dead, and its divergence witness is thin
+
+Recorded by: `computenet-qbap` (bug, parent `computenet-9sm`). Base commit:
+`5ff9507f4` (`main`). Host: darwin/arm64, 16 cores, load1 3-16.
+Measured 2026-09-08. All figures below are whole-class runs of
+`GcSafetySweepTest` (`./gradlew :kernel:test --tests
+'civictech.cell.replication.GcSafetySweepTest' --rerun -i`), seeds `1..200`,
+budget `40_000`.
+
+### What was expected
+
+`GcSafetySweepTest`'s BS-13 arm — `[KE3-20]`, the WRONG-seam control — carried
+two claims about the shipped tree. First, in the KDoc of its union assertion:
+"On THIS tree LOCAL still RESURRECTS (measured 12 of 200 at head; the pre-v2ka
+band was 8-15), so the `resurrecting` half alone is what currently fires and the
+union costs nothing today." Second, in `BS13_PIN_RETIRED`'s KDoc, that the
+sweep-level `fenceAttributed.isNotEmpty()` discriminator that REPLACED the arm's
+retired per-seed pin was non-empty on 10 of 10 sweeps with a minimum of 3.
+
+### What was found
+
+**The resurrection claim is false, and has been since `computenet-pay7`.**
+LOCAL `resurrecting` was EMPTY on 31 of 31 consecutive 200-seed sweeps at head
+`5ff9507f4` — 7 with the adversary unchanged, 12 at the narrowed compaction
+period adopted here, and 12 across the widenings rejected below. The sentence
+was written by `computenet-v2ka` (`f73c8a311`) BEFORE `computenet-pay7`'s
+re-admission fence (`36b889cff`) landed. With `ReclaimedDots` in place a
+re-delivered discarded tag is fenced and repaired rather than re-admitted, so the
+LOCAL seam no longer resurrects — it only diverges. The relationship is causal
+and stated here because the bead asked for it explicitly: pay7's fence is what
+removed the witness, and the arm has been resting on its divergence half alone
+ever since. The `resurrecting` half of the union is currently dead weight; it is
+kept because the union is what makes the assertion survive a fence landing, which
+is precisely the case it was widened for.
+
+**The divergence witness is thinner than `BS13_PIN_RETIRED` records.** With the
+adversary exactly as `computenet-nwnl` left it and the compaction period at its
+original 25, fence-attributed LOCAL seeds over seven runs were 6, 4, 4, 4, **2**,
+5, 3 — non-empty on 7 of 7 here, but against `computenet-nwnl`'s recorded band of
+3-5 over ten runs this is a lower floor, and the bead was filed on a
+full-`:kernel:test` run that produced **0** at the branch head it was found on.
+
+### Disposition
+
+Widened the adversary, per `[KE3-20]`'s own failure message ("widen the
+adversary, never weaken the check"). No assertion was relaxed, no seed was
+re-derived, `SEEDS`, `BUDGET`, `BS12_SEED` and `MAX_STABLE_DIVERGING` are
+unchanged.
+
+The one widening adopted is the compaction period `GcSafetySweep.K`, 25 -> 10:
+more compaction points per seed means more chances for the wrong seam to reclaim
+below a frontier that certifies nothing while a straggler is behind, and it does
+not touch the message-level rig floor the CONTROL arm measures.
+
+    fence-attributed LOCAL seeds, seeds 1..200, budget 40000, head 5ff9507f4
+    K = 25   7 runs   6, 4, 4, 4, 2, 5, 3                        min 2
+    K = 10  12 runs   7, 4, 5, 4, 3, 5, 4, 3, 4, 6, 5, 3         min 3
+
+**The honest reading of that pair is that the floor moved by one seed.** Means
+are 4.0 and 4.4 and the ranges overlap heavily; twelve runs is not enough to
+call the difference anything stronger than a raised minimum. This is an
+improvement, not a restoration to the margin `computenet-nwnl` recorded, and the
+arm remains a low-rate witness. If it reddens again the answer is a further
+widening or a re-examination of whether a three-peer mesh can still produce this
+harm at all — not a lowered assertion.
+
+Four alternative widenings were built and measured and REJECTED. Each is
+recorded because each is a plausible next idea that makes things worse:
+
+- **Four more disjoint park windows** so all twelve removes are issued under a
+  parked link instead of six: 1, 1, 3, 5 — worse. A three-peer mesh relays
+  around a single parked link.
+- **`ReorderFault` on all three links**: fence-attributed 2, 2, 5, 5 while STABLE
+  membership divergence went to 17, 18, 18 of 200 and **reddened BS-12** against
+  `MAX_STABLE_DIVERGING` = 12. Raises the rig floor without sharpening the
+  discriminator.
+- **`DuplicateFault` on all three links**: 0, 0, 1, 0 — it repairs the mesh, since
+  a duplicated frame is a second delivery attempt.
+- **Removing every ordinal rather than every odd one** (24 removes, stacked on
+  K = 10): 6, 4, 3, 2 — no better, and it would falsify the ordinal-parity prose
+  several KDocs still quote.
+
+`K = 5` was also measured (3, 5, 6, 2) and rejected: no better than 10, and
+STABLE divergence rose to 9 of 200. The returns diminish because once K is well
+under the gossip latency the first compaction point past a remove has already
+discarded the del-dot; per-seed chances are bounded by the remove count.
