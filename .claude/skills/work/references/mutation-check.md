@@ -9,6 +9,14 @@ rather than restating it.** Three independent sessions each rediscovered a
 different way to get it wrong (computenet-9ytv, computenet-pi3h,
 computenet-qsfu).
 
+## Contents
+
+- [Who mutates what — the implementer/reviewer split](#who-mutates-what--the-implementerreviewer-split)
+- [The order is the safety](#the-order-is-the-safety)
+- [When the deliverable is a CONCORD SCENARIO](#when-the-deliverable-is-a-concord-scenario)
+- [When the task is TEST-ONLY, and the mutation is out of scope](#when-the-task-is-test-only-and-the-mutation-is-out-of-scope)
+- [What to report](#what-to-report)
+
 ## Who mutates what — the implementer/reviewer split
 
 **Production mutations belong to the REVIEWER whenever the file is outside the
@@ -250,6 +258,40 @@ marker is gone.** Removing it needs its own step and its own check — SKILL.md
 
 **6. Only now run the confirming test.** A green run against content you have
 not verified is restored is meaningless.
+
+## When the deliverable is a CONCORD SCENARIO
+
+The procedure above mutates production code and watches a Kotlin test redden. A
+corpus scenario is not that shape: the deliverable is YAML asserting properties
+over a generated run, so **you mutate the SCENARIO, not production code** — and
+you mutate it TWICE, in two different directions.
+
+A count-shaped assertion is why. `{type: emission-count, cell: r2, since: 7,
+exactly: 0}` is the most vacuous-capable assertion in the corpus: it passes when
+the property holds AND when the observation machinery is not installed at all.
+Nothing distinguishes those from the green side.
+
+- **Flip the value** (`exactly: 0` → `1`) and confirm it reddens with its own
+  message. This proves the check is EVALUATED. It is not enough on its own: a
+  dead counter also reddens here, because 0 ≠ 1 whether or not anything counts.
+- **Move the window** (`since: 7` → `1`) and confirm it reddens with a NON-ZERO
+  observed count — measured on `42-TMAP-REPL-01`: *"expected exactly 0
+  emission(s) but observed 4"*. This is the one that proves the counter
+  increments on real emissions, i.e. that the shipped zero is a live reading
+  rather than an uninstalled tap.
+
+A session running only the first ships an assertion it has not distinguished
+from a dead counter, which is the failure this whole file exists to prevent.
+
+**Read the failure COUNT, not just the failure.** A scenario runs 20 times. For
+an interleaving-independent property "failed on 20 of 20 runs" is the expected
+shape; a PARTIAL count — red on 6 of 20 — is itself the finding, and it is a
+determinism finding about the scenario, not evidence about the check.
+
+And run the corpus so it actually executes: `--rerun` on `:concord:check`
+leaves `:concord:test` FROM-CACHE (or UP-TO-DATE), because a lifecycle task has
+no work of its own to rerun. Name the concrete tasks — see
+[gradle-evidence.md](gradle-evidence.md#--rerun-semantics).
 
 ## When the task is TEST-ONLY, and the mutation is out of scope
 

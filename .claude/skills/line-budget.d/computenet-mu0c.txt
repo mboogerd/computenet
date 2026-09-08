@@ -1,0 +1,15 @@
+work +42
+# mutation-check.md gains the concord-scenario route: mutate the SCENARIO, not
+# production code, and do it TWICE. A count assertion like
+# {type: emission-count, exactly: 0} passes when the property holds AND when the
+# observation machinery is not installed; the value flip alone cannot tell those
+# apart, because a dead counter also reddens on 0 != 1. Only the window move
+# (since: 7 -> 1, "expected exactly 0 emission(s) but observed 4") proves the
+# counter increments on real emissions.
+#
+# Also: the failure COUNT is evidence (a scenario runs 20 times; a partial red
+# is a determinism finding), and a pointer to the already-documented lifecycle
+# --rerun trap rather than a second copy of it.
+#
+# 8 of the 42 are a Contents index: the new section pushed mutation-check.md
+# past 300 lines, which the rubric requires an index above.
