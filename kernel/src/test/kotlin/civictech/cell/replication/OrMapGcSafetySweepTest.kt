@@ -712,8 +712,9 @@ object OrMapGcSafetySweep {
 }
 
 /**
- * The OR-map GC safety sweep — three arms over the same seed range. See [OrMapGcSafetySweep] for
- * the model and the observables.
+ * The OR-map GC safety sweep — FIVE arms over the same seed range: STABLE, its control NONE,
+ * LOCAL, the contended SHARED (computenet-rjue) and its own control SHARED_NONE
+ * (computenet-pa5l). See [OrMapGcSafetySweep] for the model and the observables.
  *
  * ## What was MEASURED (host darwin/arm64 16-core `MacBoo`, load1 7-9, seeds 1..200, budget
  * 40_000, `K` = 10, base `3bdacc7e7`, 2026-09-08, three consecutive whole-class runs)
@@ -1015,7 +1016,9 @@ class OrMapGcSafetySweepTest {
      *   least two live dots carrying at least two distinct values. Without it a green run would
      *   mean nothing, which is the exact defect this arm was filed to remove.
      * - both VALUE classes empty: live replicas agree on `value(key)` and each replica agrees with
-     *   its own emitted fold. This is the observable that now has teeth.
+     *   its own emitted fold. This is the observable that now has teeth. ZERO tolerance, justified
+     *   by the CONTENDED no-reclaimer control below (computenet-pa5l), which measured the same
+     *   classes empty on 200 seeds x 3 runs with the reclaimer off.
      * - the same membership / resurrection / fence-attribution obligations the STABLE arm carries,
      *   because the reclaimer and the frontier are the same ones.
      */
@@ -1111,11 +1114,27 @@ class OrMapGcSafetySweepTest {
         )
 
         // THE PROPERTY. Now over a real add-wins pick, which is what computenet-rjue was filed for.
+        //
+        // ZERO tolerance, and computenet-pa5l is why it stays zero rather than becoming a measured
+        // ceiling: the CONTENDED no-reclaimer control (`@Order(5)`) runs this same workload with
+        // the reclaimer off and measured BOTH value classes empty on 200 seeds in each of three
+        // runs, so the rig's own floor under this assertion is 0 and there is no rig behaviour for
+        // a ceiling to cover. A ceiling would be a tolerance for nothing measured.
+        //
+        // If this ever reddens, run the control arm on the same seed BEFORE reading it as a
+        // reclamation defect. A permanently STRANDED reorder frame — one the adversary's buffer
+        // swallowed when traffic on its edge stopped — reproduces this exact shape (memberships
+        // agree, each replica holds only its own final-round dot, `vsOwnFold` empty) with the
+        // reclaimer OFF and `discarded == 0`; that demonstration, and the earlier 56-round seed-132
+        // occurrence it explains, are in `doc/kernel-lane-findings.md` `## KE3-42-ORMAP-SHARED`.
         assertTrue(
             valueDiverging.isEmpty() && valueDrift.isEmpty(),
             "[KE3-23] OR-map reclamation must be invisible to `value(key)` even where the key's " +
                 "value is an add-wins pick over CONCURRENT dots: crossReplica=$valueDiverging " +
-                "vsOwnFold=$valueDrift",
+                "vsOwnFold=$valueDrift. Before reading this as a reclamation defect, run the " +
+                "contended no-reclaimer control on the same seed: its measured floor on both " +
+                "classes is 0 of 200, and a stranded reorder frame reproduces this shape with " +
+                "the reclaimer off — see the stranded-frame counts printed above",
         )
         assertTrue(
             resurrecting.isEmpty(),
