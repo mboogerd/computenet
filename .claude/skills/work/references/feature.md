@@ -464,7 +464,7 @@ the second task amends what the first creates.
 
 ## What you may assert, and what a Verification section must reach
 
-Three things a breakdown writes get executed literally by two later agents,
+Four things a breakdown writes get executed literally by two later agents,
 and none of them is checked by anything today.
 
 **1. A claim that an existing test, gate or mechanism PROVES a property.**
@@ -504,6 +504,38 @@ which file to copy from. The gap is not diligence: that breakdown had verified
 its structural premises carefully. Nothing asked it to check that its own
 instructions run.
 
+**4. A prescribed CHECK — a mutation or non-vacuousness route, a fixture, a
+witness figure, or an assertion over prescribed example values — has either
+been RUN, or is labelled `unverified:`.** This is the one field still written as fact. Items 1-3
+are about claims; this is about a check whose whole job is to discriminate, and
+a check that does not discriminate is the one failure the later agents cannot
+read. It goes wrong in both directions and both look like a defect in correct
+code:
+
+- *Inert route → GREEN.* The honest reading of a green mutation run is "my fix
+  does not work" or "the assertion is vacuous". One session hit five inert
+  prescribed routes in five beads of one epic, ~15 minutes of mutation runs
+  each to establish, and one of them would have shipped a property gate with a
+  hole had the implementer followed the bead literally (computenet-bpzh).
+- *Unsatisfiable assertion → RED against correct code.* A task prescribed rows
+  whose correct pointwise MIN was `{s->5}` and, beside them, "the result is not
+  any single member's row" — but `{s->5}` **is** member B's row. It failed on
+  the implementer's first run, where the tempting repair is to "fix" correct
+  code until an impossible assertion passes.
+
+**NEGATIVE assertions are where this concentrates** — "is not X", "differs from
+Y", "equals no member's row". A coincidence in the values you chose can make the
+expected result equal to the thing being excluded, and only arithmetic reveals
+it. You are the only agent positioned to do that arithmetic: you chose both
+halves. The implementer meets the pair for the first time already inside the
+task, where a red test is ambiguous between "the example is wrong" and "my
+implementation is wrong".
+
+Prescribing concrete values is a strength — it is what stops implementers
+inventing fixtures. The rule is not to prescribe less; it is that a
+value/assertion pair gets evaluated ONCE before it ships, or says it has not
+been.
+
 **A Verification section must be able to FAIL if the acceptance clause is
 false.** An acceptance clause of the form "every existing caller compiles
 unchanged" is a statement about the whole repository; a Verification section
@@ -527,7 +559,8 @@ The bead is what declares a task test-only, and
 code the tests constrain — is forbidden by that declaration. Name the route
 (sibling mutation evidence, or per-test tracing) when you write the task, so its
 implementer does not have to choose between violating `metadata.files` and
-quietly skipping the proof (computenet-9c0r).
+quietly skipping the proof (computenet-9c0r). Item 4 applies to that route:
+name it as run, or as `unverified:`.
 
 ## Dependencies
 

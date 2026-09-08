@@ -1,0 +1,13 @@
+work +42
+# feature.md's "what you may assert" list gains a fourth item: a prescribed
+# CHECK — mutation route, non-vacuousness route, or an assertion over
+# prescribed example values — has been RUN or is labelled `unverified:`. Plus
+# the negative-assertion note (the shape where the coincidence hides), and a
+# SKILL.md 5b line relaying an UNLABELLED route as a hypothesis, since the
+# existing dating check only catches routes that WENT stale.
+#
+# What it bought: five inert prescribed routes in five beads of one epic in
+# one slot, ~15 min of mutation runs each, one of which would have shipped a
+# property gate with a hole; plus an unsatisfiable prescribed assertion that
+# went red against correct code, and two more of that shape in the next task
+# of the same feature.
