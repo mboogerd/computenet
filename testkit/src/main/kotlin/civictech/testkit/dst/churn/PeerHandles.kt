@@ -534,6 +534,37 @@ class MeshPeer internal constructor(
         return true
     }
 
+    /**
+     * Issue one put of an EXPLICIT [key] and [value] against a [MeshPayload.OR_MAP] replica — the
+     * multi-writer-key primitive (computenet-rjue). No-op — and reported as such — while this peer
+     * is not a member, same contract as [write] and [remove].
+     *
+     * Returns true if the put was issued.
+     *
+     * **Why this exists at all.** [write]'s OR-map arm puts `"$name-$ordinal"`, a key derived from
+     * the writing peer, so every key in that workload is written exactly once by exactly one peer
+     * and `OrMapCell.value(key)` never resolves an add-wins pick over CONCURRENT dots. A sweep that
+     * wants the value observable to discriminate needs two peers putting the SAME key without
+     * having seen each other's dot; this is the primitive such a sweep's step hook calls, with the
+     * key chosen by the *sweep* rather than by the peer.
+     *
+     * **Deliberately NOT an [AcceptedOp], and not a [ChurnObserver.recordWrite]** — the same two
+     * exclusions [remove] carries, for the same reasons. [BatchReference] models an add-only ledger
+     * of `(peer, ordinal)` writes whose reference fold is membership; a contended put carries no
+     * ordinal and its whole point is that the KEY is not the writer's, so recording it would make
+     * the reference expect a key under a peer that did not mint it and would say nothing about the
+     * value the reference cannot model anyway ([BatchReference]'s "per-key VALUE agreement is
+     * deliberately NOT modelled"). **A plan that calls this must not be judged by
+     * [ReconvergenceCheck] / [BatchReference]**; a sweep that calls it checks the replicas against
+     * their own emitted-delta folds ([MeshConvergences]) and against each other.
+     */
+    fun put(key: String, value: String): Boolean {
+        if (!member) return false
+        check(payload == MeshPayload.OR_MAP) { "peer \"$name\" carries $payload, which has no keyed put" }
+        (proxy() as OrMapInletProxy).inlet.call.put(key, value)
+        return true
+    }
+
     private fun proxy(): Any = writeProxy ?: HostedCellProxy.create(
         ref,
         registry,
