@@ -1,4 +1,4 @@
-work +30
+work +36
 # A parked bead's thread can hold the ANSWER and, after it, a re-park restating
 # the question as open — measured two minutes apart, with status, assignee and
 # the human label all agreeing with the newer comment. Reading tail-first is a
@@ -18,3 +18,9 @@ work +30
 # first cut's gloss read `exit 1 = no answer; park away`, which would have
 # licensed re-parking over an answer the markers missed — the original defect,
 # with a script telling the session to commit it.
+#
+# +6 more from the re-review: SKILL.md's "keep the superseded text verbatim"
+# bullet now carries the maintainer's contrary ruling ("a superseded clause
+# left in place is the defect") and names computenet-febs9 as deciding it,
+# rather than silently prescribing the thing the ruling calls the defect. /work
+# sessions read SKILL.md, not the bead.
