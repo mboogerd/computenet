@@ -2070,3 +2070,12 @@ repair (after `stableFrontier`, its `openSlots` diagnostic, and
 tracked separately as `computenet-s0tq`; it is deliberately not folded in here, so
 that this item's verdict rests on one measured rate comparison rather than on a
 measured and an unmeasured repair together.
+
+**BS-12 after the rig amendment (confirmation).** This item's last change touches
+no `src/main` file — only `StableFrontierChurnSweepTest.kt` and this document — so
+the 0/120 above stands by construction. Re-sampled anyway, same instrument, same
+method, HOTTER host: **40 iterations, 0 red = 0.0%, loadStart=[11.05 12.31 11.03]
+loadEnd=[8.93 11.36 10.91]**, every iteration reporting `FENCE-ATTRIBUTED
+diverging seeds=[]`. That is 160 consecutive greens on this branch against
+`computenet-r13k`'s 45/120 = 37.5%, the later 40 of them at a load1 above the top
+of r13k's own 4.02-8.54 range.
