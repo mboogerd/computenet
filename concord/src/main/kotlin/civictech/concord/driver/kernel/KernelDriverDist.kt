@@ -475,31 +475,35 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
     }
 
     /**
-     * Does the step's `op:`/`value:` describe [dot] as [delta] carries it? Three
-     * dot-minting ops are expressible: an OR-map `put`, an OR-set `add`, and — since
-     * computenet-v2ka — an OR-set `remove`, which mints its own del-dot into
-     * `SetDelta.dels` beside the add-tags it covers. An OR-map `remove` is still
-     * inexpressible: `OrMapCell.remove` (`OrMapCell.kt:276-287`) mints nothing — it
-     * only reuses `liveDots(key).keys`, the put-dots it already observed live — so
-     * there is no `(source, counter)` position of its own for a step to name.
+     * Does the step's `op:`/`value:` describe [dot] as [delta] carries it? Four
+     * dot-minting ops are expressible: an OR-map `put`, an OR-set `add`, an OR-set
+     * `remove` (since computenet-v2ka), and — since decision 9sm.8-D5 — an OR-map
+     * `remove`. `OrMapCell.remove` now mints a del-dot of its own from its own dot
+     * counter and ships it in `TaggedMapDelta.dels[key]` beside the put-dots it
+     * covers, exactly the shape `SetDelta`'s `remove` arm already names below — so a
+     * `retransmit` step can now re-deliver an OR-map remove's del-dot by naming its
+     * own `(source, counter)` position, the same as any other minted dot.
      *
      * **Why checking `delta.dels[key]?.contains(dot)` for the `remove` arm does not
-     * also match a covered add-tag under the same key**, even though `dels[key]`'s
-     * value is exactly `observed-add-tags + del-dot` ([SetCell.inletHandler]'s
-     * `remove`): [delta] here is never an arbitrary merged fold. It is
+     * also match a covered put-tag (OR-map) or add-tag (OR-set) under the same
+     * key**, even though `dels[key]`'s value is exactly `observed-dots + del-dot`
+     * (`OrMapCell.inletHandler().remove`, `SetCell.inletHandler`'s `remove`):
+     * [delta] here is never an arbitrary merged fold. It is
      * `mintedDots[source to counter]`'s [Emission.delta] ([retransmit]) — the delta
      * of the ONE call that *first* minted [dot], attributed by [record]'s
-     * `putIfAbsent`. A covered add-tag's counter was minted earlier, by that
-     * element's own `add()` call, so looking it up resolves to THAT add's delta
-     * (`SetDelta(adds = ..., dels = emptyMap())`) — which carries no `dels` entry at
-     * all for `op == "remove"` to match. Only the counter [dot] itself actually
+     * `putIfAbsent`. A covered put-tag's or add-tag's counter was minted earlier, by
+     * that key's own `put()`/`add()` call, so looking it up resolves to THAT call's
+     * delta (`puts`/`adds` populated, `dels` empty) — which carries no `dels` entry
+     * at all for `op == "remove"` to match. Only the counter [dot] itself actually
      * mints — the del-dot — resolves to the `remove()` call's own delta, whose
-     * `dels[key]` is the one [dot] is really a member of. So naming an add-tag's
+     * `dels[key]` is the one [dot] is really a member of. So naming a covered dot's
      * counter under `op: "remove"` refuses upstream in [retransmit] (a nonexistent
      * `dels` entry, not a wrong dot within an existing one) rather than falling
      * through to this arm at all — which is what makes it safe for this arm to key
      * only on set membership rather than re-deriving "is this specifically the
-     * del-dot" from [delta] alone.
+     * del-dot" from [delta] alone. `RetransmitBindingTest` pins both families: the
+     * `SetDelta` twin (`... names an add-tag's counter under op remove is refused`)
+     * and the `TaggedMapDelta` twin this decision adds.
      */
     @Suppress("UNCHECKED_CAST")
     private fun describes(op: String, value: Value?, dot: Timestamp, delta: Any): Boolean = when {
@@ -509,6 +513,8 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
                 dots.containsKey(dot) && dots[dot] == expected
             } == true
         }
+        delta is TaggedMapDelta<*, *> && op == "remove" ->
+            (delta.dels as Map<Any?, Set<Timestamp>>)[KernelCatalog.unwrap(value)]?.contains(dot) == true
         delta is SetDelta<*> && op == "add" ->
             (delta.adds as Map<Any?, Set<Timestamp>>)[KernelCatalog.unwrap(value)]?.contains(dot) == true
         delta is SetDelta<*> && op == "remove" ->

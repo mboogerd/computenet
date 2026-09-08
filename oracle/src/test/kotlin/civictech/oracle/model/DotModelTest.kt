@@ -58,10 +58,14 @@ class DotModelTest {
 
         val state = model.stateOf(script, a)
 
-        state.liveDots("k").keys shouldBe setOf(ModelDot(2, a))
+        // re-put over a live dot: retract del-dot 2, put-dot 3 (9sm.8-D5) — a re-put consumes
+        // TWO counters, not one.
+        state.liveDots("k").keys shouldBe setOf(ModelDot(3, a))
         withClue("the covered dot is TOMBSTONED, not deleted — that is what makes merge idempotent") {
-            state.puts.getValue("k").keys shouldBe setOf(ModelDot(1, a), ModelDot(2, a))
-            state.dels.getValue("k") shouldBe setOf(ModelDot(1, a))
+            state.puts.getValue("k").keys shouldBe setOf(ModelDot(1, a), ModelDot(3, a))
+            withClue("dot 1 is the covered put; dot 2 is the retract's OWN del-dot") {
+                state.dels.getValue("k") shouldBe setOf(ModelDot(1, a), ModelDot(2, a))
+            }
         }
     }
 
@@ -81,9 +85,10 @@ class DotModelTest {
         val converged = model.converged(script)
 
         withClue("both instances' dots survive: neither remove nor re-put observed the other") {
-            converged.liveDots("k").keys shouldBe setOf(ModelDot(2, a), ModelDot(1, b))
+            // A's re-put consumes two counters (9sm.8-D5): retract del-dot 2, put-dot 3.
+            converged.liveDots("k").keys shouldBe setOf(ModelDot(3, a), ModelDot(1, b))
         }
-        withClue("counter 2 beats counter 1 before rank is ever consulted [24-TMAP-03]") {
+        withClue("counter 3 beats counter 1 before rank is ever consulted [24-TMAP-03]") {
             model.value(converged, "k") shouldBe "fromA2"
         }
     }
@@ -167,10 +172,16 @@ class DotModelTest {
         withClue("[24-TMAP-04]: the unobserved dot survives the concurrent remove") {
             model.membership(converged) shouldBe setOf("k")
             model.value(converged, "k") shouldBe "v2"
-            converged.liveDots("k").keys shouldBe setOf(ModelDot(2, a))
+            // A's own re-put (v1 -> v2) consumes two counters (9sm.8-D5): retract del-dot 2,
+            // put-dot 3 — A's live dot is 3, not 2.
+            converged.liveDots("k").keys shouldBe setOf(ModelDot(3, a))
         }
         withClue("what B DID observe is genuinely tombstoned — the remove is not a no-op") {
-            converged.dels.getValue("k") shouldBe setOf(ModelDot(1, a))
+            // ModelDot(1, a) is A's covered first put, tombstoned twice over: by A's own
+            // re-put retract del-dot ModelDot(2, a) (9sm.8-D5, folded in at A's convergence),
+            // and by B's own del-dot ModelDot(1, b), minted for B's effective remove and
+            // covering exactly what B observed (dot 1).
+            converged.dels.getValue("k") shouldBe setOf(ModelDot(1, a), ModelDot(2, a), ModelDot(1, b))
         }
     }
 
@@ -203,7 +214,10 @@ class DotModelTest {
 
         state.puts.keys shouldBe setOf("k")
         withClue("the second remove observed nothing live and left no trace") {
-            state.dels shouldBe mapOf("k" to setOf(ModelDot(1, a)))
+            // the FIRST remove(k) is effective (observes put(k)'s dot 1) and mints its own
+            // del-dot 2 (9sm.8-D5); the SECOND remove(k) is a no-op — dot 1 is already covered,
+            // so it mints nothing and consumes no counter.
+            state.dels shouldBe mapOf("k" to setOf(ModelDot(1, a), ModelDot(2, a)))
         }
     }
 
@@ -224,7 +238,9 @@ class DotModelTest {
     private fun sampleStates(): Triple<DotState, DotState, DotState> {
         val one = DotState.EMPTY.put("k", ModelDot(1, a), "a1").put("j", ModelDot(2, a), "a2")
         val two = DotState.EMPTY.put("k", ModelDot(1, b), "b1")
-        val three = DotState.EMPTY.put("k", ModelDot(1, c), "c1").resetRemove("k")
+        // an effective remove now mints its own del-dot (9sm.8-D5); ModelDot(2, c) here is that
+        // dot, hand-supplied since this state is built directly rather than through a script.
+        val three = DotState.EMPTY.put("k", ModelDot(1, c), "c1").resetRemove("k", ModelDot(2, c))
         return Triple(one, two, three)
     }
 
@@ -392,7 +408,10 @@ class DotModelTest {
         }
         withClue("B's put observed A's dot, so only B's dot is live at the converged state") {
             model.entries(converged) shouldBe ModelState.MapState(mapOf("k" to "fromB"))
-            converged.liveDots("k").keys shouldBe setOf(ModelDot(1, b))
+            // B's put observed A's dot as already live at k (the delivery lands before B's own
+            // event runs), so B's put is itself a "re-put over a live dot": retract del-dot 1,
+            // put-dot 2 (9sm.8-D5) — B's own live dot is 2, not 1.
+            converged.liveDots("k").keys shouldBe setOf(ModelDot(2, b))
         }
     }
 
@@ -426,10 +445,17 @@ class DotModelTest {
 
     @Test
     fun `a dot counter is 1-based per instance and refuses a zero`() {
+        // put(k1) mints counter 1 (no live dot at k1 yet); remove(k1) is EFFECTIVE (k1's dot 1
+        // is live) and mints its own del-dot at counter 2 (9sm.8-D5); put(k2) mints counter 3 —
+        // a fresh key, no live dot, one counter.
         val script = Script.of(a, put("k1", "v"), remove("k1"), put("k2", "v"))
 
-        model.stateOf(script, a).puts.getValue("k2").keys shouldBe setOf(ModelDot(2, a))
-        withClue("a remove does not advance the counter — only a put mints") {
+        val state = model.stateOf(script, a)
+        state.puts.getValue("k2").keys shouldBe setOf(ModelDot(3, a))
+        withClue("an EFFECTIVE remove now advances the counter too — it mints its own del-dot") {
+            state.dels.getValue("k1") shouldBe setOf(ModelDot(1, a), ModelDot(2, a))
+        }
+        withClue("a dot counter is 1-based and refuses a zero") {
             shouldThrow<IllegalArgumentException> { ModelDot(0, a) }
         }
     }

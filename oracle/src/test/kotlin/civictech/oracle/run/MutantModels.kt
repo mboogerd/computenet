@@ -294,12 +294,12 @@ class RemoveAllDotModel(private val order: DotOrder) {
             memo[at]?.let { return it }
             var state = State()
             var counter = 0L
+            val mint = { ++counter }
             for (position in 0..prefix) {
                 state = applyDeliveries(slice, position, state)
                 if (position == prefix) break
                 val event = slice.events[position]
-                if (event is ScriptEvent.Put) counter += 1
-                state = apply(event, source, counter, state)
+                state = apply(event, source, state, mint)
             }
             memo[at] = state
             return state
@@ -310,10 +310,36 @@ class RemoveAllDotModel(private val order: DotOrder) {
                 .sortedWith(compareBy({ it.from.id }, { it.throughEvents }))
                 .fold(state) { acc, delivery -> acc.merge(stateAfter(delivery.from, delivery.throughEvents)) }
 
-        private fun apply(event: ScriptEvent, source: SourceId, counter: Long, state: State): State =
+        /**
+         * Mirrors [civictech.oracle.model.DotModel.Fold.apply]'s counter-consumption loop
+         * (9sm.8-D5), copied here verbatim per the feature's decision that this mutant's loop
+         * must keep mirroring the real model or it stops discriminating — its OWN mutation stays
+         * confined to [State.removeAll] (wipe the whole key rather than tombstone observed
+         * dots), never to how many counters an event consumes.
+         *
+         * "Live" here is the mutant's OWN liveness notion — present in [State.puts] and not yet
+         * in [State.wiped] — since this mutant has no `dels` map to consult a real [DotState]
+         * would. The retract/del counter this mints on an effective put or remove is consumed but
+         * never stored anywhere (there is nothing in [State] shaped to hold it): what matters for
+         * mirroring is that the SAME NUMBER of counters is consumed at the same script positions,
+         * so a put immediately after a live key's remove or re-put still mints the counter the
+         * real model would mint for its own next dot, keeping the two models' dot numbering
+         * comparable move for move.
+         */
+        private fun apply(event: ScriptEvent, source: SourceId, state: State, mint: () -> Long): State =
             when (event) {
-                is ScriptEvent.Put -> state.put(event.key, ModelDot(counter, source), event.element)
-                is ScriptEvent.RemoveKey -> state.removeAll(event.key)
+                is ScriptEvent.Put -> {
+                    val hasLive = state.puts[event.key]?.isNotEmpty() == true && event.key !in state.wiped
+                    if (hasLive) mint() // retract counter consumed, never stored — see KDoc above
+                    state.put(event.key, ModelDot(mint(), source), event.element)
+                }
+                is ScriptEvent.RemoveKey -> {
+                    val hasLive = state.puts[event.key]?.isNotEmpty() == true && event.key !in state.wiped
+                    if (hasLive) {
+                        mint() // del-dot counter consumed, never stored — see KDoc above
+                        state.removeAll(event.key)
+                    } else state // effective-only (21): mirrors the real model's no-op remove
+                }
                 else -> state
             }
     }
