@@ -40,6 +40,9 @@ interface OrMapApi<K, V> {
     val outlet: Subscribe<Propagate<TaggedMapDelta<K, V>>>
 }
 
+/** Below-floor `StateRequest(since)` diagnostics for [OrMapCell.pullServe] (decision 9sm.8-D8). */
+private val PULL_FLOOR_LOG: System.Logger = System.getLogger("civictech.cell.data.OrMapCell")
+
 /**
  * An **OR-map**: the keyed structure whose per-key *value* converges under
  * concurrent multi-writer puts and removes (G-23 for keyed structures; spec
@@ -887,6 +890,34 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
     private fun <T> scopedTo(source: Map<K, T>, scope: Interest?): Map<K, T> =
         if (scope == null || scope is Interest.Total) source else source.filterKeys { scope.admits(it) }
 
+    /**
+     * Is [since] below this replica's compaction floor for any source (`[KE3-35]`/`[KE3-36]`,
+     * decision 9sm.8-D8, mirrored from `SetCell.belowFloor`)? Returns the first offending
+     * `(source, since[source], floor[source])`, or `null` when the request can be answered
+     * incrementally.
+     *
+     * The floor is derived from the re-admission fence — see [ReclaimedDots.floors]: `floor[s]`
+     * is the highest counter this replica has ever DISCARDED for `s` (there is no persisted
+     * per-source floor of its own — a per-source floor was MEASURED UNSAFE, `## KE3-GC-DEL-DOT`),
+     * so a `since[s]` below it names dots this replica no longer remembers and a since-filtered
+     * answer would silently omit them.
+     *
+     * "Below" is strict (`since[s] < floor[s]`), and a source ABSENT from [since] reads as `-1`
+     * — [putsSince]/[delsSince]'s own default — so it is below floor iff the fence holds any run
+     * for it. `since == null` is never below floor: it is already the full-state branch.
+     *
+     * Call under [stateLock]; the decision and the reply it governs are one snapshot (9sm.8-D8,
+     * mirroring 9sm.7-D1).
+     */
+    private fun belowFloor(since: TagFrontier?): Triple<UUID, Long, Long>? = synchronized(stateLock) {
+        if (since == null) return@synchronized null
+        for ((source, floor) in reclaimed.floors()) {
+            val asked = since.perSource[source] ?: -1L
+            if (asked < floor) return@synchronized Triple(source, asked, floor)
+        }
+        null
+    }
+
     /** Only the put-dots a [since] frontier has not observed; a copy, never an alias, when [since] is null. */
     private fun putsSince(since: TagFrontier?): Map<K, Map<Timestamp, V>> = synchronized(stateLock) {
         puts.mapValues { (_, dots) ->
@@ -895,11 +926,25 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
         }.filterValues { it.isNotEmpty() }
     }
 
-    /** Only the tombstoned dots a [since] frontier has not observed; a copy when [since] is null. */
+    /**
+     * Only the tombstoned dots a [since] frontier has not observed; a copy when [since] is null.
+     *
+     * **ENTRY-WHOLE** (`[24-TAG-04]`'s last sentence, decision 9sm.8-D8, mirrored from
+     * `SetCell.sinceFilter`'s `wholeEntry` mode): a `dels[key]` entry is one indivisible fact —
+     * the del-dot plus the put-dots it covers. Filtered per dot, a since-pull could ship the
+     * del-dot alone (its counter is the highest in the entry, so it is the dot most likely to be
+     * novel) while withholding the covers it certifies, letting the requester advance its
+     * delivered frontier past the del-dot without having applied the remove it stands for. So for
+     * a non-null [since] the filter decides per ENTRY: ship all of it if ANY dot in it is novel,
+     * else none of it.
+     */
     private fun delsSince(since: TagFrontier?): Map<K, Set<Timestamp>> = synchronized(stateLock) {
         dels.mapValues { (_, dots) ->
             if (since == null) LinkedHashSet(dots)
-            else dots.filterTo(LinkedHashSet()) { (since.perSource[it.sourceId] ?: -1L) < it.counter }
+            else {
+                val novel: (Timestamp) -> Boolean = { (since.perSource[it.sourceId] ?: -1L) < it.counter }
+                if (dots.any(novel)) LinkedHashSet(dots) else emptySet()
+            }
         }.filterValues { it.isNotEmpty() }
     }
 
@@ -919,15 +964,49 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // single-wave state-as-delta reply, since-filtered, stamped as a
         // catch-up baseline (MessageContext.baseline) and delivered only to the
         // requester — never broadcast, never admitted to wave completeness.
+        //
+        // BELOW-FLOOR FALLBACK (`[KE3-35]`/`[KE3-36]`, decision 9sm.8-D8, mirrored from
+        // `SetCell`'s pull-serve). A `since` that names, for ANY source, a counter below this
+        // replica's compaction floor cannot be answered incrementally: the floor is the highest
+        // counter this replica has DISCARDED for that source (derived from the re-admission
+        // fence — see [ReclaimedDots.floors]; exact, and carrying no snapshot key of its own),
+        // so the dots between `since` and the floor are gone and a since-filtered reply would
+        // silently omit them. The honest answer is FULL state, which the requester's idempotent
+        // merge absorbs — never a partial delta, never a per-source mix of full and partial, and
+        // never a silently widened request. `[24-TAG-04]`'s compaction paragraph: "a
+        // `StateRequest(since)` that asks for state below the compaction floor is answered with
+        // full state."
+        //
+        // The fallback IS the existing `since = null` branch, verbatim (mirroring 9sm.7-D2): the
+        // same `putsSince`/`delsSince`/`scopedTo` calls and the same `baselineTo` stamp, so there
+        // is no new reply type, no `StateRequest` field and no wire change. There is no
+        // `readBounded` half to mirror here — `OrMapCell` is `Stateful`, not `BoundedStateful`
+        // (9sm.8-D8). The decision is decided under [stateLock] in the same hold that builds the
+        // reply, and logged after the monitor is released, because logging is a foreign call.
+        //
+        // Independently of the floor, [delsSince] ships a `dels[key]` entry whole or not at all
+        // (`[24-TAG-04]`'s last sentence) — see its KDoc.
         outlet.pullServe { request ->
             // the three halves of a reply are one snapshot: taken together
             // under the monitor, shipped after it is released.
-            val reply = synchronized(stateLock) {
-                val putsOut = scopedTo(putsSince(request.since), request.scope)
-                val delsOut = scopedTo(delsSince(request.since), request.scope)
+            val outcome = synchronized(stateLock) {
+                val below = belowFloor(request.since)
+                val effectiveSince = if (below == null) request.since else null
+                val putsOut = scopedTo(putsSince(effectiveSince), request.scope)
+                val delsOut = scopedTo(delsSince(effectiveSince), request.scope)
                 if (putsOut.isEmpty() && delsOut.isEmpty()) null
-                else Triple(putsOut, delsOut, currentFrontier(request.scope))
+                else below to Triple(putsOut, delsOut, currentFrontier(request.scope))
             } ?: return@pullServe
+            val reply = outcome.second
+            outcome.first?.let { (source, asked, floor) ->
+                // 9sm.8-D8 (mirroring 9sm.7-D5): the JDK's own logger — the log line is a
+                // diagnostic, never the test oracle; the reply tap is.
+                PULL_FLOOR_LOG.log(
+                    System.Logger.Level.DEBUG,
+                    "OrMapCell ${ref.id}: StateRequest(since) below compaction floor for source " +
+                        "$source (since=$asked < floor=$floor) — answering with full state",
+                )
+            }
             baselineTo(request.replyTo, reply.third) {
                 propagate(TaggedMapDelta(reply.first, reply.second))
             }
