@@ -1,4 +1,4 @@
-work +22
+work +23
 # wait-checks.sh now bounds every `gh` call, not just total elapsed time: at
 # host load1 132 the elapsed stop was never reached, because it is only tested
 # between rounds, and the call was auto-backgrounded — no verdict, no table,
