@@ -138,7 +138,7 @@ header.
 | `verify-branch-sync.sh` | `<worktree> <branch>` — 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
 | `merge-task.sh` | `[--dry-run] [--keep-open] <task-id> <feature-branch>` — 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
 | `session-holder.sh` | `[--check <token>]` — this session's unique holder token, and `--check <token>` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN; what tells a live sibling from a crash leftover, which `assignee` cannot |
-| `junit-count.py` | `<results-dir \| result-file.xml>...` — JUnit XML accounting (counts + newest timestamp, both glob depths); refuses to report zero result files |
+| `junit-count.py` | `[--expect-classes N] <results-dir \| result-file.xml>...` — JUnit XML accounting (counts + newest timestamp + age, both glob depths); refuses to report zero result files; `--expect-classes` catches a `--tests` filter Gradle dropped silently |
 
 (`scripts/beads-nightly-sync.sh` is the **repo-root** catch-up job; no
 scheduler runs it — never assume a sync will happen on its own.)

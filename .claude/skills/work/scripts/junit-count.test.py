@@ -90,6 +90,31 @@ with tempfile.TemporaryDirectory() as tmp:
     rc, out, err = run(d2)
     check("two depths only", "1 files: 1 tests" in out, out)
 
+    # --- the silently-dropped --tests filter (computenet-xt0b) ------------
+    # Gradle errors only when NO filter matches; with a sibling that does, a
+    # filter naming a nonexistent class is dropped and the run is green.
+    rc, out, err = run("--expect-classes", 2, d1)
+    check("expect-classes: met is exit 0", rc == 0, f"rc={rc} err={err}")
+    check("expect-classes: met says nothing about coverage",
+          "SHORT-COVERAGE" not in out, out)
+
+    rc, out, err = run("--expect-classes", 3, d1)
+    check("expect-classes: shortfall is exit 6", rc == 6, f"rc={rc}")
+    check("expect-classes: shortfall names the count",
+          "asked for 3 test classes, 2 result file(s)" in err, err)
+    check("expect-classes: shortfall is on stdout as a verdict word",
+          "SHORT-COVERAGE" in out, out)
+
+    rc, out, err = run("--expect-classes", "notanumber", d1)
+    check("expect-classes: non-numeric is bad usage", rc == 2, f"rc={rc}")
+
+    # A shortfall must not be reachable from an EMPTY tree — that is
+    # NO-RESULTS (exit 4), a different answer, and it must keep winning.
+    empty = tmp / "emptydir"
+    empty.mkdir()
+    rc, out, err = run("--expect-classes", 2, empty)
+    check("expect-classes: an empty tree is still NO-RESULTS", rc == 4, f"rc={rc}")
+
     # --- per-dir and total lines -----------------------------------------
     d3 = tmp / "results3"
     xml(d3 / "TEST-Other.xml", tests=3, failures=2)
