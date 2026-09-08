@@ -200,9 +200,19 @@ LANE_CORES = 5
 
 
 RECENT_READ_MINUTES = 6
-# Where the last --capacity reading's timestamp is remembered. $SCRATCH is the
-# session's own directory, so the memory is per-session by construction and two
-# concurrent sessions cannot see each other's dispatches through it.
+# Where the last --capacity reading's timestamp is remembered: $SCRATCH when the
+# caller exports it, otherwise the per-user temp dir. THE FALLBACK IS THE ACTUAL
+# PATH at every documented call site — SKILL.md 5b/5e and merge-task.md invoke
+# this script bare, and `$SCRATCH` is a shell variable that does not survive
+# between the orchestrator's Bash calls (SKILL.md says so itself). Measured
+# 2026-09-08: a first-ever read in a fresh process reported "5m ago" off another
+# process's write to /var/folders/.../T.
+#
+# So the memory is per-BOX, not per-session, and a concurrent /work session's
+# read resets it too. That is why the advice below is worded conditionally: it
+# errs toward over-warning and never under-warning (sharing can only make `prev`
+# more recent), and a sibling session's dispatch is committed future load as
+# much as your own — the same load `--siblings` already exists to price.
 def _recent_read_path():
     import tempfile
     d = os.environ.get("SCRATCH") or tempfile.gettempdir()
@@ -319,7 +329,8 @@ def load_advice(cores, cap, since_last_read=None):
     load1 = round(load1, 2)
     lag = None
     if since_last_read is not None and since_last_read <= RECENT_READ_MINUTES:
-        lag = (f"You read capacity {since_last_read:.0f}m ago. If you dispatched on "
+        lag = (f"Capacity was last read {since_last_read:.0f}m ago (per-box memory, so "
+               f"a concurrent session's read counts). If a dispatch followed "
                f"that reading, that agent is NOT in load1 yet — load1 lags dispatch "
                f"by minutes, so this green does not clear a second back-to-back "
                f"dispatch (computenet-2hqs). Wait for the first agent to reach its "
