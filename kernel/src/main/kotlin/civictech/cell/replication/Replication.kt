@@ -272,7 +272,10 @@ class Replication(
      * [civictech.cell.host.InstanceIndex.instancesOf] are each read exactly
      * once per delta, and the WAIT open set is derived from them the way
      * [CausalStability.stableFrontier] derives its own — announced members ∪
-     * instance-derived slots, minus `closed`. Suspended slots stay IN: the
+     * instance-derived slots, minus `closed` *that is not itself a live
+     * instance slot* ([KE3-23], `computenet-07vb`: a rejoined replica returns
+     * onto the same ref-derived slot, so its grow-only `closed` marker no
+     * longer means "can never advance again"). Suspended slots stay IN: the
      * WAIT read is frozen on them (9sm.5-D6).
      *
      * **Also fanned downstream** (9sm.5-D7): every notice is additionally
@@ -307,10 +310,17 @@ class Replication(
             val closed = companion.closed()
             val announced = companion.members()
             val instances = registry.instances.instancesOf(logicalId)
+            val instanceSlots = instances.mapTo(mutableSetOf()) { WatermarkCell.slotId(watermarkRef(it)) }
             val open = buildSet {
-                instances.mapTo(this) { WatermarkCell.slotId(watermarkRef(it)) }
+                addAll(instanceSlots)
                 addAll(announced)
-                removeAll(closed)
+                // KE3-23 (computenet-07vb): `closed` is honoured only where its
+                // premise holds — a slot with a LIVE instance can advance again,
+                // so its marker does not apply. Derived the same way
+                // [CausalStability.stableFrontier] derives its own, as this
+                // KDoc promises; the detector must not disagree with the read it
+                // reports freezes of.
+                removeAll(closed - instanceSlots)
             }
             for (notice in detector.evaluate(rows, open, closed)) {
                 stabilityStallListeners[logicalId]?.toList()?.forEach { it(notice) }

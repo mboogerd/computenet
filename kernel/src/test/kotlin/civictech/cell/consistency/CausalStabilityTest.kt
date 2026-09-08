@@ -116,12 +116,47 @@ class CausalStabilityTest {
         }
     }
 
+    /**
+     * AMENDED by `computenet-07vb` ([KE3-23]). The state this pinned was `b`
+     * closed while `membersOf` still names it as a live instance — which since
+     * `computenet-07vb` is the REJOIN state, not the departure state (see the
+     * test below and [CausalStability.stableFrontier]'s KDoc). It is modelled
+     * here the way a clean departure actually looks on the mesh: `b` is gone
+     * from `membersOf` (`evict` despawned it), still named by the grow-only
+     * announced set, and closed. PN-0c's own job is unchanged.
+     */
     @Test
-    fun `KE3-16 a closed slot stops constraining the MIN`() {
-        val wm = companion(rows = exampleRows, closed = setOf(b))
-        val stability = stabilityOf({ wm }, { setOf(a, b, c) })
+    fun `KE3-16 a closed slot that has DEPARTED stops constraining the MIN`() {
+        val wm = companion(rows = exampleRows, closed = setOf(b), knownMembers = setOf(a, b, c))
+        val stability = stabilityOf({ wm }, { setOf(a, c) })
 
         stability.stableFrontier(logicalId).perSource shouldBe mapOf(s to 7L, u to 2L)
+    }
+
+    /**
+     * [KE3-23], `computenet-07vb`: the same `closed` marker on a slot that IS a
+     * live member — the state a replica evicted with `closeDepartedRow = true`
+     * and re-replicated onto the same [CellRef] returns to, because
+     * [WatermarkCell.slotId] is ref-derived and `closed` is grow-only.
+     * `closed`'s premise ("this row can never advance again") is false there,
+     * so it does not apply and `b`'s row stays in the MIN — the difference
+     * between certifying a del-dot to a quorum of one and not.
+     *
+     * The pair with the test above is the discriminator: the qualifier is what
+     * separates them, and dropping it makes exactly one of the two red.
+     */
+    @Test
+    fun `computenet-07vb KE3-23 a closed slot that is a LIVE member keeps constraining the MIN`() {
+        val wm = companion(rows = exampleRows, closed = setOf(b), knownMembers = setOf(a, b, c))
+        val stability = stabilityOf({ wm }, { setOf(a, b, c) })
+
+        // b = {s→5} and has no `u` column, so `u` reads as bottom and is absent.
+        stability.stableFrontier(logicalId).perSource shouldBe mapOf(s to 5L)
+        // The diagnostic read agrees, and reports no exclusion for the slot.
+        val read = stability.openSlots(logicalId)
+        (slotOf(b) in read.open) shouldBe true
+        (slotOf(b) in read.closed) shouldBe true
+        read.exclusionOf(slotOf(b)) shouldBe null
     }
 
     @Test
@@ -163,8 +198,12 @@ class CausalStabilityTest {
 
     @Test
     fun `degenerate - every member closed reads as everything-bottom`() {
-        val wm = companion(rows = exampleRows, closed = setOf(a, b, c))
-        stabilityOf({ wm }, { setOf(a, b, c) }).stableFrontier(logicalId).perSource shouldBe emptyMap()
+        // `membersOf` is empty because all three despawned on eviction; the
+        // grow-only announced set still names them and `closed` removes them
+        // (computenet-07vb: a closed slot that is still a live member is the
+        // rejoin case and stays open).
+        val wm = companion(rows = exampleRows, closed = setOf(a, b, c), knownMembers = setOf(a, b, c))
+        stabilityOf({ wm }, { emptySet() }).stableFrontier(logicalId).perSource shouldBe emptyMap()
     }
 
     @Test
