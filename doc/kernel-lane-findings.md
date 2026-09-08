@@ -2331,3 +2331,90 @@ recorded because each is a plausible next idea that makes things worse:
 STABLE divergence rose to 9 of 200. The returns diminish because once K is well
 under the gossip latency the first compaction point past a remove has already
 discarded the del-dot; per-seed chances are bounded by the remove count.
+
+## KE3-23-DWKPRATE — the BS-12 `stableFenceAttributed` class is GONE at current `main`: 0 of 50 sweeps, against a same-host, same-session pre-fix control of 6 of 15
+
+Recorded by: `computenet-dwkp` (bug, epic `computenet-9sm`). Base commit:
+`5a5b455d3` (`origin/main`, "computenet-9sm.7: StateRequest(since) below the
+compaction floor answers full state (#755)"). Host: darwin/arm64, 16 cores,
+2026-09-08. Instrument: `scripts/flake-loop/run-method-loop.sh`, a FRESH JVM per
+iteration, each iteration one whole `_BS12` arm over `SEEDS = 1..200` at
+`BUDGET = 40_000` — i.e. one iteration is one 200-seed sweep.
+
+This entry discharges `computenet-dwkp` acceptance clause 3 by its FIRST branch
+("green on at least 10 consecutive 200-seed sweeps on one host"). Nothing was
+relaxed to reach it: `SEEDS`, `BUDGET`, `PIN_RUNS`, `BS12_SEED`,
+`MAX_STABLE_DIVERGING` and the `stableFenceAttributed` assertion are untouched
+by this item, and the only source edit it makes is this file plus a dated KDoc
+record. Clause 4's three prohibitions and clause 5's ruled-out dispositions are
+honoured by construction — there is no code change to weaken anything with.
+
+### The measurement
+
+| # | arm / tree | K | runs | red | load1 (start → end) |
+|---|---|---|---|---|---|
+| A | `_BS12` at `5a5b455d3`, unmodified | 10 | 30 | **0** | 12.22 → 16.76 |
+| B | `_BS12` at `5a5b455d3`, `K` restored to 25 | 25 | 20 | **0** | 10.80 → 7.64 |
+| C | `_BS12`, `kernel` + `testkit` sources checked out at `311ad4f7b~1` | 25 | 15 | **6** | 5.94 → 6.37 |
+
+Sweep wall time 4.4–4.7 s at K = 10 and 3.5–3.7 s at K = 25, JVM startup
+excluded from neither.
+
+**Run B exists because the adversary changed under the clause.** `computenet-qbap`
+(`489851bbc`) moved `GcSafetySweep.K` from 25 to 10 in this very test earlier the
+same session, so run A is measured against a DIFFERENT adversary from every rate
+previously recorded for this class — including `computenet-r13k`'s 45/120 = 37.5 %
+and `computenet-07vb`'s 160 consecutive greens, all taken at K = 25. Run B
+re-runs the clause against the historical adversary so the comparison is like for
+like. A rate quoted without its K is not comparable, which is the same defect
+`computenet-qbap` existed to fix.
+
+**Run C is the positive control, and it is what makes runs A and B mean anything.**
+A green sweep is only evidence of a fix if the detector can still fire. C checks
+out `kernel/` and `testkit/` at `311ad4f7b~1` — the last `main` commit before the
+`computenet-fzd3` / `07vb` / `zgyt` / `92ek` / `s0tq` family — into the same
+worktree, same host, same instrument, same hour, and the class returns at 6 of 15
+(40 %) with the identical signature `FENCE-ATTRIBUTED diverging seeds=[12]`. That
+is consistent with the 37.5 % this bead's history records and inconsistent with a
+dead assertion. Under a 40 % per-sweep rate, 0 of 50 has probability ~1e-11.
+
+### Secondary finding: the fix family is REDUNDANT, not single-point
+
+Reverting individual members of the family into an otherwise-current tree did
+NOT bring the class back (all with the revert proved landed by a non-empty
+`git diff HEAD --stat` before the run, and all reverted afterwards):
+
+| mutation | reverted | runs | red |
+|---|---|---|---|
+| A | `computenet-07vb` (`SetCell.kt`, −43 lines) | 12 | 0 |
+| B | `computenet-07vb` + `computenet-s0tq` (`ReplicaQuorum.kt`) | 12 | 0 |
+| C | `computenet-92ek` (`StabilityFreezeDetector.kt`) | 12 | 0 |
+
+So `{92ek}` alone closes the escape, and `{07vb, s0tq}` alone closes it too:
+the members overlap rather than each carrying a distinct necessary condition.
+Do not read any single one of them as "the" fix for the seed-12 flake, and do
+not read these three rows as evidence that any of them is unnecessary — each is
+justified by its own bead's deterministic test, which this sweep does not
+supersede. n = 12 bounds each row at ~0.7 % under a 40 % rate, which is enough
+to say the revert did not restore the class and not enough to say it changed
+nothing.
+
+A first attempt at mutation A used `git revert --no-commit 0be48970f` on a MERGE
+commit; git refused for want of `-m`, the working tree stayed pristine, and the
+12 green runs that followed were an unmutated re-run wearing a mutation's label.
+It was caught only by the `git diff HEAD --stat` landed-check that
+`.claude/skills/work/references/mutation-check.md` §3 requires *before* the test
+result is read. The check earned its keep here; run it.
+
+### What is NOT claimed
+
+- Nothing here identifies WHICH schedule the fix family closed. The mechanism is
+  recorded by `## KE3-23-CLOSEDROW`, `## KE3-23-CLOSEDPREMISE` and
+  `## KE3-23-QUORUMCLOSED`; this entry only measures that the observable escape
+  is gone.
+- darwin/arm64 only. Linux is unverified here.
+- Runs A and B were taken while the loop itself was the dominant load (load1
+  7.6–16.8); C at 5.9–8.4. Earlier records on this bead suggest load pushes this
+  rate UP, so A and B are the conservative direction and C — the control that had
+  to fire — ran at the LOWER load. That asymmetry favours a false RED, not a
+  false GREEN, so it does not soften the result.
