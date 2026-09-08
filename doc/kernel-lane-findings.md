@@ -1887,7 +1887,21 @@ rather than assumed local).
 - `CausalStability.stableFrontier` — changed, as above; frontier can only fall.
 - `Replication.onStabilityStall` — changed to match, deliberately. Its
   `StabilityFreezeDetector` will now report a freeze pinned on a rejoined slot
-  that it previously could not see, which is the true state.
+  that it previously could not see, which is the true state — **but it cannot
+  HOLD that latch, and the notice flaps.** Corrected by the feature reviewer
+  (`computenet-07vb`), who measured it rather than reading it: `evaluate`'s
+  `@param open` still documents the caller's set as "minus `closed`", and its
+  retraction arm clears a latch on `slot in closed` against the RAW grow-only
+  set. Since the repair `open` and `closed` are no longer disjoint at that call
+  site, so a rejoined slot latches `STABILITY_FROZEN` on the Hth evaluation and
+  is handed a spurious `Resume` on the very next one with its row unmoved, then
+  re-latches every H evaluations. Measured directly against
+  `StabilityFreezeDetector(threshold = 2)` with `open = {A,B,C}`,
+  `closed = {C}`, C's row pinned at 9: `e3=[Stall(STABILITY_FROZEN, slot=C)]`,
+  `e4=[Resume]`. The direction is conservative — the freeze is over-reported,
+  never hidden, and this state was unreachable before because the slot was not
+  in `open` at all — so it does not touch certification, and it is filed rather
+  than fixed here: `computenet-92ek`.
 - `Replication.replicaFrontier` / **`ReplicaQuorum.frontier` — NOT changed, and
   it carries the SAME defect.** Its per-member check is
   `slot in closed || (rows[slot]?.get(source) ?: MIN) >= counter`, and `covering`
