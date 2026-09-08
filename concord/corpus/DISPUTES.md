@@ -2970,9 +2970,15 @@ property is statable at the driver and not in the corpus.
   state ever stops growing with op count the test goes red and points here.
 - **Not in the accounting, and named so it is not misattributed**: the
   computenet-dwkp diagnostic maps `mintedHere`/`incarnations` are unpruned,
-  unreclaimable by `compactBelow` and `O(local mints)`; bounding or
-  build-gating them is **computenet-fzd3**, a separate open bead. Live add-tags
-  with no `dels` entry are excluded as `O(live elements)` and irreducible.
+  unreclaimable by `compactBelow` and `O(local mints)`; **computenet-fzd3**
+  decided they stay unbounded **on purpose** rather than bounding or
+  build-gating them — the per-entry cost (66.5 B/entry for `mintedHere`,
+  106.5 B/entry for `incarnations`, both with compressed oops) is measured and
+  recorded, together with the workload bound under which that cost is
+  acceptable, at `SetCell.kt`'s `mintedHere` declaration site. If that bound is
+  ever crossed, option (a) — pruning `mintedHere` in `compactBelow` — is the
+  repair. Live add-tags with no `dels` entry are excluded as `O(live
+  elements)` and irreducible.
 - **Revisit trigger**: G-42 epoch hygiene lands (a per-element or per-source
   epoch under which a fence entry can be retired once no replica can still
   replay a frame below it), so `ReclaimedDots` acquires a pruning rule and its
