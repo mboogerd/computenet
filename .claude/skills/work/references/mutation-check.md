@@ -11,7 +11,7 @@ computenet-qsfu).
 
 ## Contents
 
-- [Who mutates what — the implementer/reviewer split](#who-mutates-what-the-implementerreviewer-split)
+- [Who mutates what — the implementer/reviewer split](#who-mutates-what--the-implementerreviewer-split)
 - [The order is the safety](#the-order-is-the-safety)
 - [When the deliverable is a CONCORD SCENARIO](#when-the-deliverable-is-a-concord-scenario)
 - [When the task is TEST-ONLY, and the mutation is out of scope](#when-the-task-is-test-only-and-the-mutation-is-out-of-scope)
@@ -289,8 +289,8 @@ shape; a PARTIAL count — red on 6 of 20 — is itself the finding, and it is a
 determinism finding about the scenario, not evidence about the check.
 
 And run the corpus so it actually executes: `--rerun` on `:concord:check`
-reports `:concord:test UP-TO-DATE`, because a lifecycle task has no work of its
-own to rerun. Name the concrete tasks — see
+leaves `:concord:test` FROM-CACHE (or UP-TO-DATE), because a lifecycle task has
+no work of its own to rerun. Name the concrete tasks — see
 [gradle-evidence.md](gradle-evidence.md#--rerun-semantics).
 
 ## When the task is TEST-ONLY, and the mutation is out of scope
