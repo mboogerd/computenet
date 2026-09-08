@@ -43,10 +43,22 @@ import java.util.UUID
  * form of `[KE3-36]`'s "byte-equal to the `since = null` reply". The debug log line (9sm.7-D5)
  * is a diagnostic and is deliberately NOT the oracle.
  *
- * The fixture mints 80 counters from the responder's own source into reclaimable entries (40
- * adds at counters 1..40, then 40 removes whose del-dots are counters 41..80, so each `dels`
- * entry is `{add-tag, dot}` and a frontier at 80 covers every one of them), plus live elements
- * at counters 81..95 that no remove ever names.
+ * ## The fixture, and why it carries a RETAINED prefix
+ *
+ * The responder's own source mints, in order: 20 `keep*` adds at counters 1..20 that no remove
+ * ever names; 40 `e*` adds at counters 21..60, each then removed with a del-dot at counters
+ * 61..100 (so each `dels` entry is `{add-tag, dot}` and a frontier at 100 covers every one of
+ * them); and 15 `live*` adds at counters 101..115. Compacting at 100 discards the 40 `e*`
+ * entries and the add-tags under them — floor 100 — while the `keep*` add-tags survive
+ * untouched, because a live add-tag is never in a `dels` entry (`SetCellCompactBelowTest`'s
+ * "a live add-tag below a reclaimed run is still admitted").
+ *
+ * **The `keep*` prefix is load-bearing, not decoration.** Without it every retained tag sits
+ * ABOVE the floor, so a since-filtered reply at `since = 40` and the full-state reply are
+ * identical by accident and the test cannot tell the fallback from its absence. Measured: with
+ * the fallback branch mutated out, a `keep`-less fixture left arms A and B, the absent-source
+ * case and the restore case ALL GREEN. The `keep*` tags are the only thing in the reply that a
+ * partial would drop and the fallback must ship (task computenet-9sm.7.1's mutation check).
  */
 class SetCellSincePullBelowFloorTest {
 
@@ -55,15 +67,25 @@ class SetCellSincePullBelowFloorTest {
 
     private data class Reply(val delta: SetDelta<String>, val ctx: MessageContext)
 
-    /** The reclaimable prefix (1..80) plus live tail (81..95); compaction is the caller's move. */
+    /** Retained prefix, reclaimable middle, live tail; compaction is the caller's move. */
     private fun responder(): SetCell<String> {
         val cell = SetCell<String>()
         cell.outlet.linking.onLinkedListeners.clear() // isolate the pull path (StatePullTest's idiom)
-        repeat(40) { cell.inlet.call.add("e$it") } // counters 1..40
-        repeat(40) { cell.inlet.call.remove("e$it") } // del-dots, counters 41..80
-        repeat(15) { cell.inlet.call.add("live$it") } // counters 81..95, never removed
+        repeat(20) { cell.inlet.call.add("keep$it") } // counters 1..20, retained BELOW the floor
+        repeat(40) { cell.inlet.call.add("e$it") } // counters 21..60
+        repeat(40) { cell.inlet.call.remove("e$it") } // del-dots, counters 61..100
+        repeat(15) { cell.inlet.call.add("live$it") } // counters 101..115, never removed
         return cell
     }
+
+    /** The compaction the floor comes from: discards the 40 `e*` entries, floor becomes 100. */
+    private val floor = 100L
+
+    /** The `since` under test, far below [floor] and below the retained `keep*` prefix's top. */
+    private val belowFloorSince = 40L
+
+    /** A `since` at or above [floor]: the unchanged, since-filtered path. */
+    private val aboveFloorSince = 110L
 
     /** One pull from a fresh probe. Each case uses independent probes so no reply is folded twice. */
     private fun pull(responder: SetCell<String>, since: TagFrontier?): Reply {
@@ -100,18 +122,20 @@ class SetCellSincePullBelowFloorTest {
 
     /**
      * BS-15 arm A — the floor arrives through `compactBelow` directly: `since = {X→40}` is below
-     * the floor of 80, so the reply is the full-state reply and the requester's fold equals the
-     * responder's membership (`[KE3-35]`).
+     * the floor of 100, so the reply is the full-state reply — the retained `keep*` tags at
+     * counters 1..20 included, which a since-filter would have dropped — and the requester's
+     * fold equals the responder's membership (`[KE3-35]`).
      */
     @Test
     fun `arm A - a below-floor since after compactBelow is answered with the full-state reply`() {
         val responder = responder()
         val x = sourceOf(pull(responder, null))
 
-        responder.compactBelow(TagFrontier(mapOf(x to 80L))) shouldBe 120 // 80 del-tags + the 40 adds they cover
+        // 40 entries x {add-tag, del-dot} = 80 del-tags, plus the 40 add-tags they cover.
+        responder.compactBelow(TagFrontier(mapOf(x to floor))) shouldBe 120
 
         val full = pull(responder, null)
-        val below = pull(responder, TagFrontier(mapOf(x to 40L)))
+        val below = pull(responder, TagFrontier(mapOf(x to belowFloorSince)))
 
         assertSameAsFull(full, below)
         tagFold(listOf(below.delta)) shouldBe responder.membership()
@@ -126,11 +150,11 @@ class SetCellSincePullBelowFloorTest {
         val responder = responder()
         val x = sourceOf(pull(responder, null))
 
-        responder.onStability { TagFrontier(mapOf(x to 80L)) }
+        responder.onStability { TagFrontier(mapOf(x to floor)) }
         responder.snapshot()
 
         val full = pull(responder, null)
-        val below = pull(responder, TagFrontier(mapOf(x to 40L)))
+        val below = pull(responder, TagFrontier(mapOf(x to belowFloorSince)))
 
         assertSameAsFull(full, below)
         tagFold(listOf(below.delta)) shouldBe responder.membership()
@@ -145,16 +169,16 @@ class SetCellSincePullBelowFloorTest {
     fun `at or above the floor the reply is the since-filtered partial, as today`() {
         val responder = responder()
         val x = sourceOf(pull(responder, null))
-        responder.compactBelow(TagFrontier(mapOf(x to 80L)))
+        responder.compactBelow(TagFrontier(mapOf(x to floor)))
 
         val full = pull(responder, null)
-        val partial = pull(responder, TagFrontier(mapOf(x to 90L)))
+        val partial = pull(responder, TagFrontier(mapOf(x to aboveFloorSince)))
 
         val expectedAdds = full.delta.adds
-            .mapValues { (_, tags) -> tags.filter { it.counter > 90L }.toSet() }
+            .mapValues { (_, tags) -> tags.filter { it.counter > aboveFloorSince }.toSet() }
             .filterValues { it.isNotEmpty() }
         val expectedDels = full.delta.dels
-            .filterValues { tags -> tags.any { it.counter > 90L } }
+            .filterValues { tags -> tags.any { it.counter > aboveFloorSince } }
             .mapValues { it.value }
         partial.delta.adds shouldBe expectedAdds
         partial.delta.dels shouldBe expectedDels
@@ -174,15 +198,15 @@ class SetCellSincePullBelowFloorTest {
         val x = sourceOf(pull(responder, null))
         val y = UUID.randomUUID()
         deliverRemote(responder, SetDelta(adds = mapOf("y1" to setOf(Timestamp(y, 10)))))
-        responder.compactBelow(TagFrontier(mapOf(x to 80L)))
+        responder.compactBelow(TagFrontier(mapOf(x to floor)))
 
         val full = pull(responder, null)
 
         // X below its floor ⇒ FULL, even though Y is satisfied.
-        assertSameAsFull(full, pull(responder, TagFrontier(mapOf(x to 40L, y to 10L))))
+        assertSameAsFull(full, pull(responder, TagFrontier(mapOf(x to belowFloorSince, y to 10L))))
 
         // X above the floor and Y unfenced ⇒ partial, as today.
-        val partial = pull(responder, TagFrontier(mapOf(x to 90L, y to 10L)))
+        val partial = pull(responder, TagFrontier(mapOf(x to aboveFloorSince, y to 10L)))
         partial.delta shouldNotBe full.delta
         partial.delta.adds.containsKey("y1") shouldBe false
     }
@@ -192,7 +216,7 @@ class SetCellSincePullBelowFloorTest {
     fun `a source absent from since but present in the fence counts as below floor`() {
         val responder = responder()
         val x = sourceOf(pull(responder, null))
-        responder.compactBelow(TagFrontier(mapOf(x to 80L)))
+        responder.compactBelow(TagFrontier(mapOf(x to floor)))
 
         val full = pull(responder, null)
         assertSameAsFull(full, pull(responder, TagFrontier(emptyMap())))
@@ -205,9 +229,12 @@ class SetCellSincePullBelowFloorTest {
         val full = pull(responder, null)
         val x = sourceOf(full)
 
-        val partial = pull(responder, TagFrontier(mapOf(x to 40L)))
+        val partial = pull(responder, TagFrontier(mapOf(x to belowFloorSince)))
         partial.delta shouldNotBe full.delta
-        partial.delta.adds.keys shouldBe (0 until 15).map { "live$it" }.toSet()
+        // adds at counters ≤ 40 are dropped by the filter, as they always were: the whole
+        // `keep*` prefix and the first 20 `e*` add-tags.
+        partial.delta.adds.keys shouldBe
+            ((20 until 40).map { "e$it" } + (0 until 15).map { "live$it" }).toSet()
     }
 
     /**
@@ -219,14 +246,14 @@ class SetCellSincePullBelowFloorTest {
     fun `the floor survives snapshot-restore and still forces the full-state reply`() {
         val origin = responder()
         val x = sourceOf(pull(origin, null))
-        origin.compactBelow(TagFrontier(mapOf(x to 80L)))
+        origin.compactBelow(TagFrontier(mapOf(x to floor)))
 
         val restored = SetCell<String>()
         restored.outlet.linking.onLinkedListeners.clear()
         restored.restore(origin.snapshot())
 
         val full = pull(restored, null)
-        val below = pull(restored, TagFrontier(mapOf(x to 40L)))
+        val below = pull(restored, TagFrontier(mapOf(x to belowFloorSince)))
 
         assertSameAsFull(full, below)
         tagFold(listOf(below.delta)) shouldBe restored.membership()
