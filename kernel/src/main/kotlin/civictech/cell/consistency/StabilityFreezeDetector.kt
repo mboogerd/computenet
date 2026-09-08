@@ -35,9 +35,10 @@ import java.util.UUID
  *   `Stall(STABILITY_FROZEN, timestamp, slot = S)`. The counter resets
  *   whenever the conjunction fails.
  * - The latch clears — yielding exactly ONE [StallNotice.Resume] — when
- *   `rows[S]` changes on any source, when `S` enters `closed`, or when `S`
- *   leaves the open set. While latched, `S` is not re-counted and yields no
- *   further stall.
+ *   `rows[S]` changes on any source, when `S` enters `closed` *and is not
+ *   also in `open`* (a rejoined slot is in both — see [evaluate]'s `@param
+ *   closed`, [KE3-23], `computenet-92ek`), or when `S` leaves the open set.
+ *   While latched, `S` is not re-counted and yields no further stall.
  *
  * **Which source the timestamp names.** More than one source can witness the
  * lag. The witness reported is the one on which `S` sits *lowest* (absent
@@ -98,17 +99,18 @@ class StabilityFreezeDetector(private val threshold: Int = 3) {
      *   INCLUDED: the WAIT read is frozen on them, and this notice says
      *   "frozen", not "dead" (9sm.5-D6).
      * @param closed the companion's closed slots — a slot arriving here
-     *   retracts its latch. **[open] and [closed] are NO LONGER DISJOINT**
-     *   since `computenet-07vb`: a replica that rejoins onto its ref-derived
-     *   slot (M10.1) is a live member again while the grow-only marker
-     *   remains, so it is in both. The retraction arm below still tests
-     *   `slot in closed` against this raw set, so such a slot latches
-     *   `STABILITY_FROZEN` on the Hth evaluation and is handed a spurious
-     *   [StallNotice.Resume] on the next one with its row unmoved — the
-     *   notice flaps rather than latching. Measured, and filed as
-     *   `computenet-92ek`; the direction is conservative (over-reported,
-     *   never hidden) and no certification read is involved, so it is a
-     *   known bug here, not a claim that this is correct.
+     *   retracts its latch **unless it is also in [open]**. **[open] and
+     *   [closed] are NO LONGER DISJOINT** since `computenet-07vb`: a replica
+     *   that rejoins onto its ref-derived slot (M10.1) is a live member again
+     *   while the grow-only marker remains, so it is in both. The retraction
+     *   arm below only honours `closed` for a slot that has ALSO left `open`
+     *   — a slot present in both stays latched (or keeps counting) exactly as
+     *   a never-closed slot does, because `closed` here no longer means "can
+     *   never advance again" for it ([KE3-23], `computenet-92ek`). A slot
+     *   whose closure IS premise-true always left `open` too (the caller
+     *   derives `open` by removing `closed - instanceSlots`; see
+     *   [civictech.cell.replication.Replication.onStabilityStall]), so this
+     *   still retracts every genuine clean close.
      * @return the notices produced by this evaluation, in order: retractions
      *   ([StallNotice.Resume]) before new stalls. Empty on most evaluations.
      */
@@ -121,8 +123,13 @@ class StabilityFreezeDetector(private val threshold: Int = 3) {
 
         // Retractions first: a row that moved, a clean departure, or a slot
         // that left the open set. One Resume per cleared latch.
+        // `slot in closed` retracts only when the closure is premise-true —
+        // i.e. the slot has also left `open`. A slot in BOTH `open` and
+        // `closed` (a rejoined replica, KE3-23) stays latched; `slot !in
+        // open` alone already covers every closure the caller derives `open`
+        // from, so `closed` contributes no additional retraction here.
         for (slot in latched.toList()) {
-            if (rows[slot] != previousRows[slot] || slot in closed || slot !in open) {
+            if (rows[slot] != previousRows[slot] || slot !in open) {
                 latched -= slot
                 counters -= slot
                 notices += StallNotice.Resume
