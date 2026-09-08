@@ -2331,3 +2331,141 @@ recorded because each is a plausible next idea that makes things worse:
 STABLE divergence rose to 9 of 200. The returns diminish because once K is well
 under the gossip latency the first compaction point past a remove has already
 discarded the del-dot; per-seed chances are bounded by the remove count.
+
+## KE3-23-DWKPRATE — the BS-12 `stableFenceAttributed` class is GONE at current `main`: 0 of 50 sweeps (30 at `K = 10` + 20 at `K = 25`), against a same-host, same-session pre-fix control of 6 of 15 at `K = 25`
+
+Recorded by: `computenet-dwkp` (bug, epic `computenet-9sm`). Base commit:
+`5a5b455d3` (`origin/main`, "computenet-9sm.7: StateRequest(since) below the
+compaction floor answers full state (#755)"). Host: darwin/arm64, 16 cores,
+2026-09-08. Instrument: `scripts/flake-loop/run-method-loop.sh`, a FRESH JVM per
+iteration, each iteration one whole `_BS12` arm over `SEEDS = 1..200` at
+`BUDGET = 40_000` — i.e. one iteration is one 200-seed sweep.
+
+This entry discharges `computenet-dwkp` acceptance clause 3 by its FIRST branch
+("green on at least 10 consecutive 200-seed sweeps on one host"). Nothing was
+relaxed to reach it: `SEEDS`, `BUDGET`, `PIN_RUNS`, `BS12_SEED`,
+`MAX_STABLE_DIVERGING` and the `stableFenceAttributed` assertion are untouched
+by this item, and the only source edit it makes is this file plus a dated KDoc
+record. Clause 4's three prohibitions and clause 5's ruled-out dispositions are
+honoured by construction — there is no code change to weaken anything with.
+
+### The measurement
+
+| # | arm / tree | K | runs | red | load1 (start → end) |
+|---|---|---|---|---|---|
+| A | `_BS12` at `5a5b455d3`, unmodified | 10 | 30 | **0** | 12.22 → 16.76 |
+| B | `_BS12` at `5a5b455d3`, `K` restored to 25 | 25 | 20 | **0** | 10.80 → 7.64 |
+| C | `_BS12`, `kernel` + `testkit` sources checked out at `311ad4f7b~1` | 25 | 15 | **6** | 5.94 → 6.37 |
+
+Sweep wall time 4.4–4.7 s at K = 10 and 3.5–3.7 s at K = 25, JVM startup
+excluded from neither.
+
+**Run B exists because the adversary changed under the clause.** `computenet-qbap`
+(`489851bbc`) moved `GcSafetySweep.K` from 25 to 10 in this very test earlier the
+same session, so run A is measured against a DIFFERENT adversary from every rate
+previously recorded for this class — including `computenet-r13k`'s 45/120 = 37.5 %
+and `computenet-07vb`'s 160 consecutive greens, all taken at K = 25. Run B
+re-runs the clause against the historical adversary so the comparison is like for
+like. A rate quoted without its K is not comparable, which is the same defect
+`computenet-qbap` existed to fix.
+
+**Run C is the positive control, and it is what makes runs A and B mean anything.**
+A green sweep is only evidence of a fix if the detector can still fire. C checks
+out `kernel/` and `testkit/` at `311ad4f7b~1` — the last `main` commit before the
+`computenet-fzd3` / `07vb` / `zgyt` / `92ek` / `s0tq` family — into the same
+worktree, same host, same instrument, same hour, and the class returns at 6 of 15
+(40 %) with the identical signature `FENCE-ATTRIBUTED diverging seeds=[12]`. That
+is consistent with the 37.5 % this bead's history records and inconsistent with a
+dead assertion. Under a 40 % per-sweep rate, 0 of 50 has probability ~1e-11.
+
+**Read that exponent with its adversary attached.** The 40 % is a K = 25
+measurement, so the strictly like-for-like arithmetic is run B alone —
+`0.6^20 ≈ 3.6e-5`. Pooling runs A and B into "0 of 50" carries the K = 25 rate
+over to a K = 10 arm that has no control of its own; that is defensible only
+because K = 10 is the STRONGER adversary (`## KE3-20`, whose K sweep is where
+that constant moved: a shorter compaction period discards the del-dot sooner), never because the two arms are
+interchangeable.
+
+**Independently reproduced at feature review** (2026-09-08, same host, `HEAD`
+`737cd125d`): arm A re-run at 12 sweeps at `K = 10`, 0 red, load1 6.34 → 6.62;
+the run C control re-created by the same `kernel/` + `testkit/` checkout at
+`311ad4f7b~1`, at `K = 25`,
+returned 4 of 10 red (40 %), every red carrying `seeds=[12]`, load1
+7.74 → 10.61. The control fires and the fixed tree does not.
+
+### Secondary finding, WITHDRAWN at feature review: `computenet-07vb` IS load-bearing
+
+**A first version of this section claimed the fix family is REDUNDANT — that
+`{92ek}` alone and `{07vb, s0tq}` alone each close the escape. That claim is
+WITHDRAWN: it is refuted by measurement, and the section is kept, corrected,
+rather than deleted, because "these fixes are redundant" is exactly the sentence
+a later session would quote while removing one.**
+
+The withdrawn rows were three per-member reverts into an otherwise-current tree,
+each reported at 12 runs / 0 red. Row A named its mutation
+`computenet-07vb (SetCell.kt, −43 lines)` — but `computenet-07vb` (`8efd47388`)
+touches `CausalStability.kt` (+45/−4), `StabilityFreezeDetector.kt` (+15/−4) and
+`Replication.kt` (+13/−3) and **does not touch `SetCell.kt` at all**;
+`SetCell.kt +43/−6` is `computenet-fzd3`'s (`311ad4f7b`) shape. So rows A and B
+most likely reverted `fzd3` — a deliberately protocol-inert bounds/record change
+— under a `07vb` label, which makes them vacuous mutations rather than evidence.
+That is the same failure family as the merge-commit revert recorded below.
+
+**The correcting measurement** (feature review, 2026-09-08, darwin/arm64
+16-core, `main` at `5a5b455d3`, `HEAD` `737cd125d`, same instrument
+`scripts/flake-loop/run-method-loop.sh`, revert proved landed by a non-empty
+`git diff HEAD --stat` before the run and the tree restored clean after):
+
+| mutation | reverted | K | runs | red | load1 (start → end) |
+|---|---|---|---|---|---|
+| A′ | `computenet-07vb`'s `CausalStability.kt` + `Replication.kt` restored to `8efd47388~1`, with `92ek` and `s0tq` still present | 10 | 12 | **6 (50 %)** | 8.66 → 13.41 |
+
+Every red carried the identical `FENCE-ATTRIBUTED diverging seeds=[12]`
+signature. (`StabilityFreezeDetector.kt` was left at `main` because `92ek` edited
+it after `07vb`, so A′ reverts `07vb`'s two exclusively-owned production files,
+not all three — an UNDER-revert, which can only weaken the effect, not
+manufacture it.)
+
+So `{92ek}` alone does NOT close the escape and `07vb`'s frontier fix is
+load-bearing. Rows B and C of the withdrawn table are unverified and should not
+be relied on either: row B shares row A's suspect mutation, and row C's 0/12 is
+a single unreplicated sample whose companion row is now known to be wrong.
+
+**So exactly one member of the family has been measured.** `07vb` is necessary
+(A′ above). Whether `92ek` and `s0tq` are individually necessary is
+**UNMEASURED** — not "probably yes" and not "probably no"; no valid mutation of
+either exists. Do not read the withdrawal of the REDUNDANT claim as evidence
+that every member is load-bearing, and do not read a green tree as evidence that
+any member is removable. The open question is filed as `computenet-0ade`; answer
+it there, by mutation, before touching any member of the
+`fzd3`/`07vb`/`zgyt`/`92ek`/`s0tq` family.
+
+Note also the withdrawn table's stated bound: "n = 12 bounds each row at ~0.7 %
+under a 40 % rate" is arithmetically wrong — `0.6^12 ≈ 0.22 %`, not 0.7 %.
+
+A first attempt at mutation A used `git revert --no-commit 0be48970f` on a MERGE
+commit; git refused for want of `-m`, the working tree stayed pristine, and the
+12 green runs that followed were an unmutated re-run wearing a mutation's label.
+It was caught only by the `git diff HEAD --stat` landed-check that
+`.claude/skills/work/references/mutation-check.md` §3 requires *before* the test
+result is read. The check earned its keep here; run it — and note it proves the
+mutation LANDED, never that it was the mutation you MEANT, which is what rows A
+and B needed and did not have.
+
+### What is NOT claimed
+
+- Nothing here identifies WHICH schedule the fix family closed. The mechanism is
+  recorded by `## KE3-23-CLOSEDROW`, `## KE3-23-CLOSEDPREMISE` and
+  `## KE3-23-QUORUMCLOSED`; this entry only measures that the observable escape
+  is gone.
+- Mutation A′ is an UNDER-revert of `computenet-07vb`: it restores
+  `CausalStability.kt` and `Replication.kt` but leaves `StabilityFreezeDetector.kt`
+  at `main`, because `92ek` edited that file after `07vb`. It therefore shows that
+  `07vb` is necessary; it does not measure the size of `07vb`'s contribution, and
+  a full revert could only redden further.
+- darwin/arm64 only. Linux is unverified here.
+- Runs A and B were taken while the loop itself was the dominant load (load1
+  7.6–16.8); C at 5.9–8.4. Earlier records on this bead suggest load pushes this
+  rate UP, so A and B are the conservative direction and C — the control that had
+  to fire — ran at the LOWER load. That asymmetry favours a false RED, not a
+  false GREEN, so it does not soften the result.

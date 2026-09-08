@@ -1006,6 +1006,18 @@ class GcSafetySweepTest {
         // and still recorded, but it could only ever exonerate the even-ordinal elements, and it
         // is the odd-ordinal ones (`peer2-23` in the feature review's run) that the fence could
         // in principle touch. This assertion covers both, on every seed, in the same run.
+        //
+        // **This assertion was INTERMITTENTLY RED for two days and is not any more, and the
+        // difference is a code fix rather than a harness change** (`computenet-dwkp`, 2026-09-08,
+        // `main` at `5a5b455d3`; `doc/kernel-lane-findings.md` `## KE3-23-DWKPRATE`). It fired on
+        // `seeds=[12]` at 37.5 % per sweep (`computenet-r13k`, 45 of 120) until the
+        // `computenet-fzd3`/`07vb`/`zgyt`/`92ek`/`s0tq` family landed. Measured after: 0 of 30
+        // sweeps at K = 10 and 0 of 20 at the historical K = 25, against a same-host, same-hour
+        // POSITIVE CONTROL — `kernel` and `testkit` sources checked out at `311ad4f7b~1` — that
+        // returned 6 of 15 with the identical `seeds=[12]` signature. So a green run here is
+        // evidence, not a silent detector. **Nothing in this assertion, in [SEEDS], [BUDGET] or in
+        // [MAX_STABLE_DIVERGING] was changed to make it green**; if it reddens again, that is a new
+        // escape and not the old one returning to a tolerated rate.
         assertTrue(
             stableFenceAttributed.isEmpty(),
             "[KE3-23] the re-admission fence CAUSED a membership divergence: on these seeds a " +
