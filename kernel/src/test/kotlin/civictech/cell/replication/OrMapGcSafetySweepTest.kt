@@ -465,12 +465,43 @@ object OrMapGcSafetySweep {
  * The OR-map GC safety sweep — three arms over the same seed range. See [OrMapGcSafetySweep] for
  * the model and the observables.
  *
- * ## MEASURED wall time (host darwin/arm64 16-core `MacBoo`, seeds 1..200, budget 40_000,
- * `K` = 10, 2026-09-08)
+ * ## What was MEASURED (host darwin/arm64 16-core `MacBoo`, load1 7-9, seeds 1..200, budget
+ * 40_000, `K` = 10, base `3bdacc7e7`, 2026-09-08, three consecutive whole-class runs)
  *
- * See the `[ORMAP-BS-12]` / `[CONTROL]` / `[ORMAP-BS-13]` lines each arm prints; the figures
- * recorded on `computenet-9sm.8.7` at the time of writing are in this class's bead comment. The
- * arms are ~5 s each, matching [GcSafetySweep]'s measured 2.3-5.2 s per 200-seed arm.
+ * ```
+ *                               run 1        run 2               run 3
+ *   STABLE resurrecting         []           []                  []
+ *   STABLE fence-attributed     []           []                  []
+ *   STABLE membership-diverging [43,89,      [76,148,151,154]    [4,76,154,165]
+ *                                145,146]
+ *   STABLE value-diverging      []           []                  []
+ *   STABLE value-fold-drift     []           []                  []
+ *   STABLE discarded            5571         5557                5521
+ *   CONTROL discarded           0            0                   0
+ *   CONTROL membership-div.     []           [151,173]           [151,173]
+ *   LOCAL resurrecting          []           []                  []
+ *   LOCAL membership-diverging  []           [4,12,32,89,181]    []
+ *   LOCAL discarded             7395         7383                7408
+ *   wall time  STABLE / LOCAL   4.8/2.6 s    5.7/2.6 s           4.7/2.6 s
+ * ```
+ *
+ * The arms cost ~2.6-5.7 s each, matching [GcSafetySweep]'s measured 2.3-5.2 s per 200-seed arm,
+ * so the three-arm class is ~10 s.
+ *
+ * **The BS-13 control does NOT reproduce on this payload, and that is a recorded result rather
+ * than a gap.** LOCAL resurrected on 0 of 200 in all three runs and diverged on 1 of 3 runs, so
+ * no seed can meet the `PIN_RUNS`-of-`PIN_RUNS` bar the bead sets and none is recorded. The
+ * negative result, the counting argument behind it, and the mutation evidence below are filed in
+ * `doc/kernel-lane-findings.md` `## KE3-42-ORMAP-BS13`, in the shape of that file's `## KE3-20`.
+ * What the LOCAL arm asserts instead is the discriminator that IS observable either way — see
+ * that arm's KDoc.
+ *
+ * **The STABLE arm's non-vacuity was MUTATION-CHECKED**, not merely asserted: with
+ * `OrMapCell.compactBelow`'s every-dot rule mutated to a per-dot one (a local, reverted edit),
+ * the STABLE arm reddened on `FENCE-ATTRIBUTED diverging seeds=[4]`, `resurrecting` still empty.
+ * So this sweep sees the discard rule the feature turns on, through the attribution read rather
+ * than through resurrection; `OrMapCellCompactBelowTest`'s LOST-del pin is the deterministic
+ * backstop for the same rule.
  *
  * ## Method ORDER is load-bearing here, unlike on the OR-set sweep
  *
