@@ -126,6 +126,7 @@ header.
 | `next-batch.py` | `<feature-id> [--actor NAME] [--siblings N]`, or `--capacity` alone — Next set of tasks safe to run in parallel — file-disjoint AND within machine capacity |
 | `ensure-worktree.sh` | `<path> <branch> [base-ref]` — Attaches a worktree on a branch, new or resumed, or fails loudly |
 | `epic-of.sh` | `<bead-id>` — Resolves a bead's effective epic (`.parent` chain, else dotted prefix) |
+| `park-thread.sh` | `<bead-id>` — a human-parked bead's thread in FULL with a verdict: `ANSWERED at <t>, then RE-PARKED at <t>` (the newest comment is not the state), or exit 1 if the park stands |
 | `claim-epic.sh` | `<epic-id>` — Claims or takes over an epic and pushes the acquisition (the claim-as-lock bracket) |
 | `feature-branch.sh` | `<feature-id>` — Resolves a feature's branch + worktree, minting `-rN` when the old PR squash-merged |
 | `publish-beads.sh` | `(no arguments)` — Publication push with rejection recovery; fails on a nonzero exit **or** a rejection in the output |
@@ -1154,8 +1155,24 @@ finishable). List them repo-wide and keep the ones under this epic:
 ```bash
 bd list --status=blocked --limit 0 --json | sed -n '/^[[{]/,/^[]}]/p' | jq -r '.[] | .id'
 .claude/skills/work/scripts/epic-of.sh <each id>       # keep those under <epic>
-bd comments <id> --json > "$SCRATCH/parked-<id>.json"  # read the QUESTION
+.claude/skills/work/scripts/park-thread.sh <id>         # the thread, in full, with a verdict
 ```
+
+**THE NEWEST COMMENT IS NOT THE STATE.** A thread can hold the answer AND, after
+it, a re-park restating the question as open — measured two minutes apart, with
+the bead's status, assignee and `human` label all agreeing with the newer
+comment (computenet-1cuq). Reading tail-first is a reasonable way to read a
+parked bead and it gets the wrong answer; there it would have stranded ~4 hours
+of gated work behind a question answered that morning. Two rules settle it:
+
+- **A comment recording a decision and naming a person outranks any later
+  comment restating the question**, because a re-park is written by an agent and
+  an answer is not. Authorship cannot decide this for you — every comment on a
+  parked bead carries the machine actor, human answers included.
+- **If you unpark on that basis, say so on the bead, naming BOTH timestamps**, so
+  the next reader is not re-deriving it. And before you PARK anything, read the
+  thread for an existing answer: the re-park in that instance was itself written
+  by a session that had not seen the answer two minutes old.
 
 A good park names its blocker and unblocking condition — one read, one
 yes/no. **Unpark only on observable evidence**: a human answered (note

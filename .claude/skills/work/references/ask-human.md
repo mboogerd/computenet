@@ -54,6 +54,14 @@ past 120s, and a chained block that dies mid-sequence leaves the item parked
 with no question on it — visible to nobody, which is the whole point of
 parking. Two calls:
 
+**Read the thread before you park.** An item can already carry its answer —
+the measured case had a re-park written two minutes after the maintainer's
+decision, by a session that had not seen it (computenet-1cuq):
+
+```bash
+.claude/skills/work/scripts/park-thread.sh <id>   # exit 1 = no answer; park away
+```
+
 ```bash
 bd update <id> --status=blocked --add-label=human --assignee=human
 ```

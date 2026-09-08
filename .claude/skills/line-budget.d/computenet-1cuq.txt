@@ -1,0 +1,14 @@
+work +25
+# A parked bead's thread can hold the ANSWER and, after it, a re-park restating
+# the question as open — measured two minutes apart, with status, assignee and
+# the human label all agreeing with the newer comment. Reading tail-first is a
+# reasonable way to read a parked bead and gets the wrong answer; there it
+# would have stranded ~4 hours of gated benchmark work behind a question
+# answered that morning.
+#
+# park-thread.sh is the mechanical half (full bodies, since bd comments
+# truncates; a verdict naming both timestamps). The prose says which comment
+# wins and why authorship cannot decide it — every comment on a parked bead
+# carries the machine actor, human answers included. ask-human.md gets the
+# other end: read the thread before parking, since the re-park in that instance
+# was itself written over a two-minute-old answer.
