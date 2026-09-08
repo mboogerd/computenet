@@ -1441,7 +1441,7 @@ class GcSafetySweepTest {
          * has not landed badly yet.
          *
          * The response is [K] 25 -> 10, whose measurement and rationale live in that constant's
-         * KDoc: min 3 over twelve runs. **Three widenings were built and MEASURED and REJECTED**,
+         * KDoc: min 3 over twelve runs. **Four widenings were built and MEASURED and REJECTED**,
          * and they are recorded because each one is a plausible next idea that makes things worse:
          *
          *  - **Four more disjoint park windows** (400-1000, 2000-2300, 3200-3500, 4400-5000), so

@@ -2247,10 +2247,18 @@ period adopted here, and 12 across the widenings rejected below. The sentence
 was written by `computenet-v2ka` (`f73c8a311`) BEFORE `computenet-pay7`'s
 re-admission fence (`36b889cff`) landed. With `ReclaimedDots` in place a
 re-delivered discarded tag is fenced and repaired rather than re-admitted, so the
-LOCAL seam no longer resurrects — it only diverges. The relationship is causal
-and stated here because the bead asked for it explicitly: pay7's fence is what
-removed the witness, and the arm has been resting on its divergence half alone
-ever since. The `resurrecting` half of the union is currently dead weight; it is
+LOCAL seam no longer resurrects — it only diverges. `computenet-pay7`'s fence is
+recorded here as the SUSPECTED cause, because the bead asked for the relationship
+explicitly and because two pieces of evidence point at it: the chronology (v2ka's
+`12 of 200` was measured at a head that predates `36b889cff`, which
+`git merge-base --is-ancestor f73c8a311 36b889cff` confirms) and the mechanism
+above (`ReclaimedDots` fences exactly the re-delivery the resurrection witness
+needed). What was NOT done, and what would settle it: no sweep was taken with the
+fence reverted, so the attribution is inference from those two facts, not a
+bisect. The bead's own run 4 excludes a different candidate — `computenet-9sm.6`'s
+production trigger, neutralised at its arming point, left LOCAL resurrecting at
+0 of 200 — but that rules a cause out rather than ruling pay7 in. On this reading
+the arm has been resting on its divergence half alone since pay7 landed. The `resurrecting` half of the union is currently dead weight; it is
 kept because the union is what makes the assertion survive a fence landing, which
 is precisely the case it was widened for.
 
@@ -2287,7 +2295,19 @@ all green, at the same head. Fifteen runs at K = 10 in total, non-empty on 15 of
 are 4.0 and 4.4 and the ranges overlap heavily; twelve runs is not enough to
 call the difference anything stronger than a raised minimum. This is an
 improvement, not a restoration to the margin `computenet-nwnl` recorded, and the
-arm remains a low-rate witness. If it reddens again the answer is a further
+arm remains a low-rate witness.
+
+That last sentence is the conservative reading and the numbers do not compel it,
+which the feature review (`computenet-qbap`, same head, same host, load1 3.5-5.6,
+2026-09-08) recorded rather than rewrote. `computenet-nwnl`'s accepted band, read
+verbatim off `BS13_PIN_RETIRED`, is 5, 3, 3, 5, 4, 3, 3, 5, 3, 4 over ten runs —
+minimum 3, mean 3.8. K = 10's twelve runs are minimum 3, mean 4.4. Measured
+against the standard the nwnl fix was itself accepted on, the floor is EQUAL and
+the mean is higher; what has not been restored is a margin nobody ever measured.
+Three further independent whole-class runs taken during that review gave
+fence-attributed 6, 4, 3 (resurrecting 0, 0, 0; STABLE membership divergence 6 of
+200 against `MAX_STABLE_DIVERGING` = 12), which is 18 non-empty runs of 18 at
+K = 10 across two agents. If it reddens again the answer is a further
 widening or a re-examination of whether a three-peer mesh can still produce this
 harm at all — not a lowered assertion.
 
