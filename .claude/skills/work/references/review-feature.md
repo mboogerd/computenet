@@ -423,7 +423,10 @@ files this diff adds or removes — not what imports them.
 
 **[gradle-evidence.md](gradle-evidence.md) is that proof standard**: the
 task-count line, the per-task state line read as an absence, the JUnit
-XML counts + timestamp via `.claude/skills/work/scripts/junit-count.py`, the
+XML counts + timestamp via `.claude/skills/work/scripts/junit-count.py` — with
+`--expect-classes <distinct classes named>` on any multi-`--tests` run, since a
+filter that matches nothing is dropped silently and the total you re-derive is
+of a run that asked for less than the command said — the
 `--rerun` and `--no-build-cache` semantics, and the `<system-out>` block that
 holds anything a test PRINTED. That last is the one reviewers reach for
 without knowing it exists: `testLogging.showStandardStreams` is off on this

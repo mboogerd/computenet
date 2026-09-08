@@ -21,10 +21,17 @@ because the timestamp, not the count, is what separates a run from a cached
 replay: a build-cache restore leaves the previous run's XML under fresh file
 mtimes with identical counts (computenet-qsfu).
 
-Usage: junit-count.py <results-dir | result-file.xml> [<results-dir | result-file.xml>...]
+Usage: junit-count.py [--expect-classes N] <results-dir | result-file.xml> [...]
+
+``--expect-classes N`` is the SILENTLY-DROPPED-FILTER check: a ``--tests``
+filter naming a class that does not exist is IGNORED by Gradle when a sibling
+``--tests`` filter in the same invocation matches, so the run is green and
+covers less than the command asked for. Pass the number of ``--tests`` classes
+you asked for; fewer XML files than that is a dropped filter (exit 6).
 Prints one line per directory and a TOTAL line, each with
 files/tests/failures/errors/skipped and the newest timestamp seen.
-Exit: 0 = counted (failures included — read the numbers); 2 = bad usage, or a
+Exit: 0 = counted (failures included — read the numbers); 6 = fewer result
+      files than --expect-classes (SHORT-COVERAGE); 2 = bad usage, or a
       path that does not exist (NEVER reported as NO-RESULTS — see main());
       3 = an xml file would not parse (an unreadable result is not a pass);
       4 = NO xml files matched at all (NO-RESULTS).
@@ -123,7 +130,23 @@ def line(label, files, t, f, e, s, newest):
 
 
 def main(argv):
-    dirs = argv[1:]
+    argv = argv[1:]
+    expect = None
+    if argv and argv[0] == "--expect-classes":
+        # THE SILENTLY-DROPPED-FILTER CHECK (computenet-xt0b). Measured on this
+        # build: `:gen:test --tests <real> --tests <nonexistent> --rerun` prints
+        # BUILD SUCCESSFUL and exits 0. Gradle only errors when NO filter
+        # matches, so the failure needs a sibling to hide behind — which every
+        # multi-filter Verification block supplies. One XML file per class is
+        # what makes the count a usable proxy.
+        if len(argv) < 2 or not argv[1].isdigit():
+            print("usage: junit-count.py [--expect-classes N] "
+                  "<results-dir | result-file.xml> "
+                  "[<results-dir | result-file.xml>...]", file=sys.stderr)
+            return 2
+        expect = int(argv[1])
+        argv = argv[2:]
+    dirs = argv
     if not dirs:
         print("usage: junit-count.py <results-dir | result-file.xml> [<results-dir | result-file.xml>...]",
               file=sys.stderr)
@@ -179,6 +202,17 @@ def main(argv):
         print("NO-RESULTS")
         return 4
     print(line("TOTAL", *total, newest_all))
+    if expect is not None and total[0] < expect:
+        print(f"SHORT-COVERAGE: asked for {expect} test classes, "
+              f"{total[0]} result file(s) exist. Most likely a --tests filter "
+              f"matched nothing and Gradle dropped it silently, leaving a green "
+              f"run that covers less than the command asked for. Rule the "
+              f"benign cases out first: N is DISTINCT CLASSES, not filters "
+              f"(two method filters on one class = one xml), and a class whose "
+              f"every test is tag-excluded emits no xml at all.",
+              file=sys.stderr)
+        print("SHORT-COVERAGE")
+        return 6
     return 0
 
 

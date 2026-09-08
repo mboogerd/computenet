@@ -1,0 +1,19 @@
+work +53
+# gradle-evidence.md gains "A green run that covers less than you asked for" —
+# the case where the task genuinely executes and --rerun is no defence. A
+# --tests filter naming a nonexistent class is dropped SILENTLY when a sibling
+# matches (re-measured 2026-09-08: :gen:test with one real and one bogus filter
+# exits 0, BUILD SUCCESSFUL, one class run). Reached a real bead, where eight
+# sibling filters hid a required check that never ran.
+#
+# junit-count.py --expect-classes N is the mechanical half; the prose exists to
+# say when to pass it, and the two reviewer references point at it where they
+# already tell a reviewer to re-derive a count.
+#
+# +5 of the delta is the DISTINCT-CLASSES caveat: --expect-classes counts
+# classes, not --tests filters, or it false-alarms on method filters and
+# tag-excluded classes (measured 2026-09-08 in review).
+#
+# The section also records that the report's second mechanism — root
+# ./gradlew test not reaching :kernel:test — does NOT reproduce, because that
+# belief would wrongly discredit the strongest gate this repo has.

@@ -9,6 +9,7 @@ what is specific to its role. Cited beads carry the full incidents
 
 - [Why `BUILD SUCCESSFUL` proves nothing](#why-build-successful-proves-nothing)
 - [The three signals to consume, per run](#the-three-signals-to-consume-per-run)
+- [A green run that covers less than you asked for](#a-green-run-that-covers-less-than-you-asked-for)
 - [Aggregate tasks lie about their members](#aggregate-tasks-lie-about-their-members)
 - [Clearing results is denied to dispatched agents](#clearing-results-is-denied-to-dispatched-agents)
 - [Measurements whose failure mode is a PASS](#measurements-whose-failure-mode-is-a-pass)
@@ -173,6 +174,52 @@ date -u +%Y-%m-%dT%H:%M:%S     # before the run; every XML timestamp must exceed
 Quote the numbers, the module count, and `newest` in your report. An
 unquantified "suite green" is not a verification record, and nobody re-runs
 it after you: your report *is* the evidence the next session trusts.
+
+## A green run that covers less than you asked for
+
+Distinct from UP-TO-DATE/FROM-CACHE, and `--rerun` is no defence: here the task
+genuinely **executes** and the run is genuinely green. It just ran fewer tests
+than the command named, and nothing in the output says so.
+
+**A `--tests` filter naming a class that does not exist is SILENTLY IGNORED
+when a sibling `--tests` filter in the same invocation matches.** Gradle errors
+only when NO filter matches — which is why this is easy to believe impossible,
+and why it needs a sibling to hide behind. Measured on this build:
+
+```
+./gradlew :gen:test --tests 'civictech.gen.wire.ContractProcessorTest' \
+                    --tests 'civictech.gen.wire.NoSuchClassAtAll' --rerun
+→ BUILD SUCCESSFUL in 14s, exit 0, one class run, no warning
+```
+
+It reached a real bead: a Verification block named
+`civictech.cell.link.AuthLevelOrderingTest`, the class lives in
+`civictech.cell.membrane`, eight sibling filters matched, and an agent
+following the bead literally got a green run that skipped a required check
+(computenet-xt0b, computenet-y96c). **Count the classes you asked for, and let
+the script compare** — one XML file per class is what makes the count a proxy:
+
+```bash
+.claude/skills/work/scripts/junit-count.py --expect-classes 9 <results-dir>
+# exit 6 + SHORT-COVERAGE when fewer XML files exist than classes you named
+```
+
+**N is distinct CLASSES, never the filter count.** Two `--tests` filters naming
+methods of one class produce ONE xml (measured), and a class whose every test is
+tag-excluded (`-PexcludeMultiJvm`, `@Tag("bench")`) produces none — either would
+raise SHORT-COVERAGE on a run that dropped nothing.
+
+**The aggregate's own trap is the MODULE LIST, not the total.** A results
+directory left by an earlier run is counted by any tool that reads the tree, so
+a module absent from THIS run still contributes plausible files with a
+plausible timestamp. Read the module list junit-count prints against the modules
+you expected, and cross it with the per-task `test` lines from the run log —
+which is the only signal that distinguishes "this module ran" from "this module
+has results". (The stronger claim in the original report — that root `./gradlew
+test` does not reach `:kernel:test` — was **re-measured on 2026-09-08 and does
+not hold**: `./gradlew test --dry-run` lists `:kernel:test` with every other
+module's. Left recorded because "the repo-wide gate misses the kernel" is a
+belief that would wrongly discredit the strongest gate this repo has.)
 
 ## Aggregate tasks lie about their members
 

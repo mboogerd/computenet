@@ -285,7 +285,10 @@ build is indistinguishable from a real one in the output you normally read.
 task-count line, the per-task state line read as an absence (four states,
 only two marked), the `| tail -N` and `-q` traps that destroy it, `--rerun`
 binding and the build-cache restore it does not show, the JUnit XML
-counts + `timestamp` via `.claude/skills/work/scripts/junit-count.py`, and the
+counts + `timestamp` via `.claude/skills/work/scripts/junit-count.py` (pass
+`--expect-classes N` for the N distinct CLASSES a multi-`--tests` run named,
+never the filter COUNT — a filter matching nothing is dropped SILENTLY when a
+sibling matches, and re-deriving a total cannot see it), and the
 `<system-out>` block — `testLogging.showStandardStreams` is off (except
 `:bench` under `-PbenchOnly`), so a test's `println` otherwise reaches the
 Gradle console never, and an empty console grep is not evidence that it
