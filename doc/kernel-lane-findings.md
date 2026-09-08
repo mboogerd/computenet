@@ -2688,9 +2688,13 @@ agreeing on membership, each holding only its OWN final-round dot, with
 `value-fold-drift` empty (so each cell agreed with its own emitted history: a
 delta had not arrived, nothing was mis-resolved). Moving the last round back to
 4950, where the ordinal write script ends, removes it in three runs of three.
-The reading is that this is the rig's drain window, not a reclamation defect —
-stated as a reading, not as proof, since no separate no-reclaimer control of the
-contended workload was run.
+The reading recorded here was that this is the rig's DRAIN WINDOW, not a
+reclamation defect — stated as a reading, not as proof, since no separate
+no-reclaimer control of the contended workload was run. **That reading is
+CORRECTED, and the control has now been run: see `### The contended workload's
+own divergence floor` below (computenet-pa5l). The conclusion — a rig artifact,
+not a reclamation defect — survives; the MECHANISM in the words "drain window"
+does not.**
 
 **An earlier shape also cost 46 of 200 seeds their witness, for a mechanism worth
 recording**: with a small key space cycled over (3 keys, 24 rounds), each round
@@ -2698,6 +2702,122 @@ tombstones its predecessors on the same key — put IS a reset-remove — so the
 contention surviving to quiescence is the final round's, on one key, hostage to
 how many peers happened to be members at that one step. One key per round makes
 every round's concurrency permanent.
+
+### The contended workload's own divergence floor, and what the seed-132 shape really was (computenet-pa5l)
+
+Recorded by: `computenet-pa5l` (bug, direct child of epic `computenet-9sm`), the
+residual the feature review of `computenet-rjue` (PR #760) filed against the
+paragraph above. Base commit: `ffc2f3ebb` (`origin/main`), branch
+`feature/computenet-pa5l`. Host: darwin/arm64, 16 cores, load1 7.3–10.3.
+Measured 2026-09-08, whole-class runs of `OrMapGcSafetySweepTest`, seeds
+`1..200`, budget `40_000`, `K = 10`.
+
+**Why the reading above was in tension with the harness.** `DstRun.execute()`
+sets `quiesced` only when `world.controller.step()` returns `false` — the
+controller has nothing left to DISPATCH — and the check runs only on a quiesced
+run. So on a quiesced run a delta cannot be merely "in flight", and "the rig's
+drain window" cannot be the mechanism. Two candidates remained, and they are
+different findings: an adversary-withheld frame (the class the arms already
+tolerate on MEMBERSHIP at `MAX_STABLE_DIVERGING = 12`), or a genuinely dropped
+live dot.
+
+**What was built to tell them apart** (both in
+`kernel/src/test/kotlin/civictech/cell/replication/OrMapGcSafetySweepTest.kt`):
+
+- `Trigger.SHARED_NONE`, the **contended no-reclaimer control** — the SHARED
+  arm's workload, the same contended-put hook on the same key schedule, with the
+  reclaimer off (`discarded == 0`, asserted). `Trigger.NONE` could not do this
+  job: it controls the ORDINAL workload, whose every key holds one live dot, so
+  its VALUE classes are unreachable by construction and it bounds nothing about
+  the SHARED arm's zero-tolerance value assertion.
+- two reads on every divergence: the per-replica **live dot sets** on the
+  disagreeing key, and the per-seed **stranded frame** count of the
+  `ormap-gc-reorder` fault. `ReorderFault.strandedFrames` is `held − released`:
+  frames the reorder buffer swallowed and never let go of because traffic on its
+  edge stopped inside the window. A stranded frame is a PERMANENT withholding
+  and it is invisible to the quiescence test — a frame in an interposer's buffer
+  is not dispatchable — which is exactly how a quiesced run can look like a delta
+  that "had not arrived".
+
+**The floor, at the shipped 47-round shape** (three whole-class runs; the
+control is `@Order(5)`, `ORMAP-SHARED-CONTROL`):
+
+```
+                                   run 1     run 2     run 3
+  CONTENDED-CONTROL discarded      0         0         0
+  CONTENDED-CONTROL contendable    197/200   197/200   197/200
+  CONTENDED-CONTROL membership-div []        [24]      []
+  CONTENDED-CONTROL value-div      []        []        []
+  CONTENDED-CONTROL value-drift    []        []        []
+  CONTENDED-CONTROL wall           5.7 s     6.2 s     5.7 s
+  reorder-stranded seeds           107/200   109/200   109/200   (max 2 frames)
+  (the SHARED arm, same runs)
+  SHARED membership-diverging      [89]      []        []
+  SHARED value-div / value-drift   [] / []   [] / []   [] / []
+  SHARED discarded                 3903      3922      3911
+```
+
+So **the contended workload's own divergence floor on both VALUE classes is
+0 of 200**, measured with the reclaimer off, in each of three runs — and its
+membership floor is 0–1 of 200, well inside the `MAX_SHARED_DIVERGING = 12`
+ceiling the arm already carries. Note the reorder buffer strands at least one
+frame on more than half the seeds even at the shipped shape: permanent
+withholding is ordinary in this rig and by itself does not produce a value
+divergence.
+
+**The 56-round shape does NOT reproduce at this base.** With `CONTEND_ROUNDS`
+put back to 56 (last round at step 5850, keys `shared-0..shared-55` — the exact
+shape the paragraph above describes), three whole-class runs gave
+`value-diverging=[]` and `value-fold-drift=[]` on both the SHARED arm and the
+contended control, on every one of 200 seeds: 0 of 600 seed-runs, seed 132
+included. The sweep is not run-to-run deterministic (see the membership columns
+above), so this bounds the per-seed-run rate of that class at roughly 0.5% at
+95% confidence rather than excluding it.
+
+**But the withheld-frame mechanism was reproduced directly, and it is
+sufficient.** A diagnostic run widened `ormap-gc-reorder`'s window from 3 to 64
+on `peer0<->peer2` — the same edge, the same fault, more stranding — at 56
+rounds. The **contended control**, with `discarded=0`, then reddened on seed 61
+with exactly the recorded signature:
+
+```
+[ORMAP-SHARED-CONTROL VALUE] seed=61 live replicas agree on membership but not
+on value: shared-55={peer0=peer0#5850, peer2=peer2#5850}
+liveDots={peer0=[6ad7101a#48], peer2=[2aa3a97d#62]}; discarded=0
+... reorder stranded frames on VALUE-diverging seeds={61=48}
+```
+
+Same key `shared-55`, same step 5850, memberships agreeing, `value-fold-drift`
+empty, each replica holding ONLY its own final-round dot — produced with the
+reclaimer switched off entirely, on a run where 48 frames were permanently
+stranded in the adversary's reorder buffer. (The SHARED arm of the same
+diagnostic reddened on seed 12, a partial form of the same shape.)
+
+**Disposition of the two hypotheses.** The seed-132 occurrence is an
+ADVERSARY-WITHHELD FRAME, not a dropped live dot: the mechanism is demonstrably
+sufficient without any reclamation, it is the same class the arms already
+tolerate on membership, and the contended control shows reclamation contributes
+nothing to it at the shipped shape. What is corrected is the mechanism's name —
+the frame is not draining, it is **permanently stranded** in a reorder buffer
+that stopped seeing traffic on its edge, which is why moving the last contended
+round back to 4950 (where the ordinal write script still generates traffic that
+flushes the buffer) removes it. "Drain window" implied a delta that would have
+arrived given more steps; no number of steps would have delivered it.
+
+**The zero-tolerance VALUE assertion is KEPT, with this control as its stated
+justification**, rather than replaced by a measured ceiling: the rig's own floor
+under it is 0 of 200 on three runs, so a ceiling would be a tolerance for
+nothing measured. The assertion now names the control in its own failure message
+and in the comment above it, so a future red run is routed to the control arm
+and to the printed stranded-frame counts before it is read as a reclamation
+defect. The membership class keeps its measured ceiling
+(`MAX_SHARED_DIVERGING = 12`) unchanged — the control's 0–1 of 200 does not
+justify tightening a ceiling that exists for a non-reproducible rig behaviour.
+
+What is NOT claimed: that no schedule can produce a value divergence here. The
+diagnostic above shows one can, under a widened adversary; the claim is that at
+this arm's adversary and range the floor is measured at zero and the one
+recorded occurrence is attributed.
 
 ### The arm is not vacuous — the mutation evidence
 

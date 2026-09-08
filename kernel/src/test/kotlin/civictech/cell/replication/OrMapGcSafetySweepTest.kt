@@ -216,7 +216,21 @@ object OrMapGcSafetySweep {
          * contended puts on a bounded shared key space. See the object KDoc.
          */
         SHARED("ormap-gc-safety-sweep-shared", "ormap-gc-safety-shared"),
+
+        /**
+         * The CONTENDED no-reclaimer control (computenet-pa5l). [SHARED]'s workload — the same
+         * contended-put hook, on the same key schedule — with the reclaimer switched OFF, exactly
+         * as [NONE] is [STABLE]'s control. It exists because [NONE] measures the ORDINAL workload's
+         * divergence floor, and the ordinal workload cannot produce a VALUE divergence at all (one
+         * live dot per key), so it says nothing about the floor under which [SHARED]'s
+         * zero-tolerance value assertion sits.
+         */
+        SHARED_NONE("ormap-gc-safety-sweep-shared-none", "ormap-gc-safety-shared-none"),
     }
+
+    /** True where the workload installs the contended-put hook. */
+    internal val Trigger.contends: Boolean
+        get() = this == Trigger.SHARED || this == Trigger.SHARED_NONE
 
     /** True where the trigger reclaims through the production `snapshot()` path. */
     private val Trigger.reclaimsAtStableFrontier: Boolean
@@ -297,8 +311,15 @@ object OrMapGcSafetySweep {
 
     internal val totals: Map<Trigger, GcTotals> = Trigger.entries.associateWith { GcTotals("ORMAP-${it.name}") }
 
-    /** [Trigger.SHARED]'s own contention counters. Untouched by every other arm. */
-    internal val contendedTotals: ContendedTotals = ContendedTotals()
+    /**
+     * The contended arms' own contention counters, one per arm. Untouched by the ordinal arms.
+     * Per-trigger since computenet-pa5l added [Trigger.SHARED_NONE], so the control's contention
+     * witness cannot be confused with [Trigger.SHARED]'s.
+     */
+    internal val contendedTotals: Map<Trigger, ContendedTotals> =
+        Trigger.entries.filter { it.contends }.associateWith { ContendedTotals() }
+
+    internal fun contendedTotalsOf(trigger: Trigger): ContendedTotals = contendedTotals.getValue(trigger)
 
     fun graphOf(trigger: Trigger): GraphSpec = GraphSpec(trigger.id) { world ->
         ChurnMesh.spec(
@@ -308,7 +329,7 @@ object OrMapGcSafetySweep {
             aliveUntil = STEP_BUDGET + DRAIN_MARGIN,
         ).builder.build(world)
         world.steps.onStep { w, step -> issueRemoves(w, step) }
-        if (trigger == Trigger.SHARED) world.steps.onStep { w, step -> issueContendedPuts(w, step) }
+        if (trigger.contends) world.steps.onStep { w, step -> issueContendedPuts(w, step) }
         world.steps.onStep { w, step -> if (step <= RECLAIM_UNTIL) compact(w, step, trigger) }
     }
 
@@ -386,7 +407,7 @@ object OrMapGcSafetySweep {
     @Suppress("UNCHECKED_CAST")
     private fun compact(world: DstWorld, step: Int, trigger: Trigger) {
         if (step <= 0 || step % K != 0) return
-        if (trigger == Trigger.NONE) return
+        if (trigger == Trigger.NONE || trigger == Trigger.SHARED_NONE) return
         val observations = GcObservationRegistry.of(world)
         for (peer in MeshPeers.all(world)) {
             if (!peer.member) continue
@@ -398,7 +419,7 @@ object OrMapGcSafetySweep {
                 // between them.
                 Trigger.STABLE, Trigger.SHARED -> peer.replication.stableFrontier(peer.ref.id)
                 Trigger.LOCAL -> peer.replication.localDeliveredFrontier(peer.ref.id)
-                Trigger.NONE -> return
+                Trigger.NONE, Trigger.SHARED_NONE -> return
             }
             val before = cell.membership()
             val beforeValues = before.associateWith { cell.value(it) }
@@ -460,7 +481,29 @@ object OrMapGcSafetySweep {
 
     // ---------------------------------------------------------------------------------- the plan
 
-    fun plan(seed: Long): FaultPlan = StableFrontierChurnSweep.churnPlan(seed).withFaults(
+    /**
+     * The [ReorderFault] instance [plan] built for each seed, so a run's STRANDED frame count is
+     * readable after the sweep (computenet-pa5l).
+     *
+     * `ReorderFault.strandedFrames` is `held - released`: frames the reorder buffer swallowed and
+     * never let go of because traffic on its edge stopped inside the window. That is a PERMANENT
+     * withholding, and it is invisible to the harness's quiescence test — `DstRun` quiesces when
+     * `world.controller.step()` has nothing left to DISPATCH, and a frame sitting in an
+     * interposer's buffer is not dispatchable — so it is exactly the mechanism that can make a
+     * quiesced run look like a delta "in flight". The map is overwritten arm by arm (the sweeps
+     * are sequential and share [plan]); read it immediately after the arm whose seeds you want.
+     */
+    internal val reorderBySeed: MutableMap<Long, ReorderFault> = java.util.concurrent.ConcurrentHashMap()
+
+    fun plan(seed: Long): FaultPlan = planWith(seed, ReorderFault("ormap-gc-reorder", "peer0<->peer2", window = 3))
+
+    private fun planWith(seed: Long, reorder: ReorderFault): FaultPlan = run {
+        reorderBySeed[seed] = reorder
+        churnPlanWithFaults(seed, reorder)
+    }
+
+    private fun churnPlanWithFaults(seed: Long, reorder: ReorderFault): FaultPlan =
+        StableFrontierChurnSweep.churnPlan(seed).withFaults(
         // The adversary is [GcSafetySweep.plan]'s, verbatim except for the fault ids (which must
         // be unique per sweep). Its disjoint-window construction and the four widenings measured
         // and REJECTED are recorded in that function's comments; nothing is re-derived here.
@@ -468,7 +511,7 @@ object OrMapGcSafetySweep {
         PartitionFault.park("ormap-gc-park-b", "peer0<->peer2", from = 2400, until = 3000),
         PartitionFault.park("ormap-gc-park-c", "peer1<->peer2", from = 3600, until = 4200),
         DuplicateFault.frames("ormap-gc-dup", "peer1<->peer2", copies = 1, probability = 0.5),
-        ReorderFault("ormap-gc-reorder", "peer0<->peer2", window = 3),
+        reorder,
     ).toFaultPlan()
 
     // --------------------------------------------------------------------------------- the check
@@ -503,7 +546,7 @@ object OrMapGcSafetySweep {
 
         // THE CONTENTION WITNESS, taken before any failure class can throw so a red seed still
         // reports whether its workload contended at all.
-        if (trigger == Trigger.SHARED) {
+        if (trigger.contends) {
             val contended = ContendedObservationRegistry.of(world)
             for (peer in live) {
                 val cell = peer.replica as? OrMapCell<String, String> ?: continue
@@ -513,7 +556,7 @@ object OrMapGcSafetySweep {
                         maxOf(contended.maxConcurrentValuesOnAKey, cell.values(key).size)
                 }
             }
-            contendedTotals.absorb(contended)
+            contendedTotalsOf(trigger).absorb(contended)
         }
 
         observations.violations.firstOrNull()?.let { first ->
@@ -628,7 +671,18 @@ object OrMapGcSafetySweep {
         val commonKeys = membershipsByPeer.firstOrNull()?.second.orEmpty()
         val valueDisagreements = commonKeys.mapNotNull { key ->
             val byPeer = cellsByPeer.associate { (name, cell) -> name to cell.value(key) }
-            if (byPeer.values.distinct().size > 1) "$key=$byPeer" else null
+            if (byPeer.values.distinct().size > 1) {
+                // THE LIVE DOT SETS, per replica, on the disagreeing key (computenet-pa5l). Without
+                // them a value divergence cannot be told apart from a withheld frame: identical
+                // dot sets resolving to different values is a mis-RESOLUTION, whereas disjoint dot
+                // sets are a replica that never received the other's dot at all.
+                val dotsByPeer = cellsByPeer.associate { (name, cell) ->
+                    name to liveDotsOf(cell, key).map { "${it.sourceId.toString().take(8)}#${it.counter}" }.sorted()
+                }
+                "$key=$byPeer liveDots=$dotsByPeer"
+            } else {
+                null
+            }
         }
         if (valueDisagreements.isNotEmpty()) {
             totals.getValue(trigger).absorb(observations)
@@ -658,8 +712,9 @@ object OrMapGcSafetySweep {
 }
 
 /**
- * The OR-map GC safety sweep — three arms over the same seed range. See [OrMapGcSafetySweep] for
- * the model and the observables.
+ * The OR-map GC safety sweep — FIVE arms over the same seed range: STABLE, its control NONE,
+ * LOCAL, the contended SHARED (computenet-rjue) and its own control SHARED_NONE
+ * (computenet-pa5l). See [OrMapGcSafetySweep] for the model and the observables.
  *
  * ## What was MEASURED (host darwin/arm64 16-core `MacBoo`, load1 7-9, seeds 1..200, budget
  * 40_000, `K` = 10, base `3bdacc7e7`, 2026-09-08, three consecutive whole-class runs)
@@ -961,7 +1016,9 @@ class OrMapGcSafetySweepTest {
      *   least two live dots carrying at least two distinct values. Without it a green run would
      *   mean nothing, which is the exact defect this arm was filed to remove.
      * - both VALUE classes empty: live replicas agree on `value(key)` and each replica agrees with
-     *   its own emitted fold. This is the observable that now has teeth.
+     *   its own emitted fold. This is the observable that now has teeth. ZERO tolerance, justified
+     *   by the CONTENDED no-reclaimer control below (computenet-pa5l), which measured the same
+     *   classes empty on 200 seeds x 3 runs with the reclaimer off.
      * - the same membership / resurrection / fence-attribution obligations the STABLE arm carries,
      *   because the reclaimer and the frontier are the same ones.
      */
@@ -969,7 +1026,7 @@ class OrMapGcSafetySweepTest {
     @Order(4)
     fun `OR-map compaction is invisible to an add-wins pick over concurrent writes to one key`() {
         OrMapGcSafetySweep.totals.getValue(OrMapGcSafetySweep.Trigger.SHARED).reset()
-        OrMapGcSafetySweep.contendedTotals.reset()
+        OrMapGcSafetySweep.contendedTotalsOf(OrMapGcSafetySweep.Trigger.SHARED).reset()
         val startedAt = System.nanoTime()
         val sweep = MeshConvergences.observing {
             dstSweep(
@@ -984,7 +1041,7 @@ class OrMapGcSafetySweepTest {
         }
         val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
         val totals = OrMapGcSafetySweep.totals.getValue(OrMapGcSafetySweep.Trigger.SHARED)
-        val contended = OrMapGcSafetySweep.contendedTotals
+        val contended = OrMapGcSafetySweep.contendedTotalsOf(OrMapGcSafetySweep.Trigger.SHARED)
 
         val resurrecting = seedsOf(sweep, OrMapGcSafetySweep.RESURRECTION_FAILURE)
         val diverging = seedsOf(sweep, OrMapGcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE)
@@ -1006,6 +1063,9 @@ class OrMapGcSafetySweepTest {
                 "[ORMAP-SHARED] value-fold-drift seeds=$valueDrift\n" +
                 detailsOf(sweep, OrMapGcSafetySweep.VALUE_FOLD_DRIFT_FAILURE, "ORMAP-SHARED DRIFT") +
                 "[ORMAP-SHARED] F-A fold-disagreeing seeds=$disagreeing\n" +
+                "[ORMAP-SHARED] reorder stranded frames on VALUE-diverging seeds=" +
+                strandedOn(valueDiverging + valueDrift) + "; on membership-diverging seeds=" +
+                strandedOn(diverging + fenceAttributed) + "; sweep-wide=" + strandedSummary() + "\n" +
                 "[ORMAP-SHARED] artifacts=${sweep.artifactPaths}",
         )
         assertTrue(
@@ -1054,11 +1114,27 @@ class OrMapGcSafetySweepTest {
         )
 
         // THE PROPERTY. Now over a real add-wins pick, which is what computenet-rjue was filed for.
+        //
+        // ZERO tolerance, and computenet-pa5l is why it stays zero rather than becoming a measured
+        // ceiling: the CONTENDED no-reclaimer control (`@Order(5)`) runs this same workload with
+        // the reclaimer off and measured BOTH value classes empty on 200 seeds in each of three
+        // runs, so the rig's own floor under this assertion is 0 and there is no rig behaviour for
+        // a ceiling to cover. A ceiling would be a tolerance for nothing measured.
+        //
+        // If this ever reddens, run the control arm on the same seed BEFORE reading it as a
+        // reclamation defect. A permanently STRANDED reorder frame — one the adversary's buffer
+        // swallowed when traffic on its edge stopped — reproduces this exact shape (memberships
+        // agree, each replica holds only its own final-round dot, `vsOwnFold` empty) with the
+        // reclaimer OFF and `discarded == 0`; that demonstration, and the earlier 56-round seed-132
+        // occurrence it explains, are in `doc/kernel-lane-findings.md` `## KE3-42-ORMAP-SHARED`.
         assertTrue(
             valueDiverging.isEmpty() && valueDrift.isEmpty(),
             "[KE3-23] OR-map reclamation must be invisible to `value(key)` even where the key's " +
                 "value is an add-wins pick over CONCURRENT dots: crossReplica=$valueDiverging " +
-                "vsOwnFold=$valueDrift",
+                "vsOwnFold=$valueDrift. Before reading this as a reclamation defect, run the " +
+                "contended no-reclaimer control on the same seed: its measured floor on both " +
+                "classes is 0 of 200, and a stranded reorder frame reproduces this shape with " +
+                "the reclaimer off — see the stranded-frame counts printed above",
         )
         assertTrue(
             resurrecting.isEmpty(),
@@ -1078,7 +1154,123 @@ class OrMapGcSafetySweepTest {
         )
     }
 
+    /**
+     * **The CONTENDED no-reclaimer control** (computenet-pa5l): [Trigger.SHARED]'s workload with
+     * the reclaimer switched off, standing to the SHARED arm exactly as [Trigger.NONE] stands to
+     * STABLE.
+     *
+     * Why the ordinal control could not do this job. [Trigger.NONE] measures the rig's divergence
+     * floor on the ORDINAL workload, whose every key has exactly one live dot — so its VALUE
+     * classes are unreachable by construction and it bounds nothing about the contended arm's
+     * zero-tolerance value assertion. This arm produces the same concurrent dots the SHARED arm
+     * does, under the same adversary, and reclaims NOTHING (`discarded == 0`, asserted). Any value
+     * or membership divergence it records therefore belongs to the RIG — the churn plan and the
+     * five faults — and cannot be attributed to reclamation.
+     *
+     * Recorded, never pinned, for the same reason the ordinal control's count is: it is a property
+     * of the rig, and pinning it would convert a measurement into a tripwire on someone else's
+     * schedule. The figures are in `doc/kernel-lane-findings.md` `## KE3-42-ORMAP-SHARED`.
+     */
+    @Test
+    @Order(5)
+    fun `the contended no-reclaimer control measures the contended workload's own divergence floor`() {
+        OrMapGcSafetySweep.totals.getValue(OrMapGcSafetySweep.Trigger.SHARED_NONE).reset()
+        OrMapGcSafetySweep.contendedTotalsOf(OrMapGcSafetySweep.Trigger.SHARED_NONE).reset()
+        val startedAt = System.nanoTime()
+        val sweep = MeshConvergences.observing {
+            dstSweep(
+                suite = "ormap-gc-safety-shared-none",
+                seeds = SEEDS,
+                graph = OrMapGcSafetySweep.graph(OrMapGcSafetySweep.Trigger.SHARED_NONE),
+                checkId = OrMapGcSafetySweep.Trigger.SHARED_NONE.checkId,
+                budget = BUDGET,
+                artifactRoot = sharedNoneRoot,
+                planFor = OrMapGcSafetySweep::plan,
+            )
+        }
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
+        val totals = OrMapGcSafetySweep.totals.getValue(OrMapGcSafetySweep.Trigger.SHARED_NONE)
+        val contended = OrMapGcSafetySweep.contendedTotalsOf(OrMapGcSafetySweep.Trigger.SHARED_NONE)
+
+        val resurrecting = seedsOf(sweep, OrMapGcSafetySweep.RESURRECTION_FAILURE)
+        val diverging = seedsOf(sweep, OrMapGcSafetySweep.MEMBERSHIP_DIVERGENCE_FAILURE)
+        val valueDiverging = seedsOf(sweep, OrMapGcSafetySweep.VALUE_DIVERGENCE_FAILURE)
+        val valueDrift = seedsOf(sweep, OrMapGcSafetySweep.VALUE_FOLD_DRIFT_FAILURE)
+        val other = sweep.failures.filterNot { it.message in CLASSIFIED }
+
+        println(
+            "[ORMAP-SHARED-CONTROL] seeds=$SEEDS elapsedMs=$elapsedMs artifacts=$sharedNoneRoot " +
+                "totals=$totals ${sweep.summary()}\n" +
+                "[ORMAP-SHARED-CONTROL] contention=$contended\n" +
+                "[ORMAP-SHARED-CONTROL] membership-diverging seeds=$diverging " +
+                "(${diverging.size} of ${sweep.total}) — the CONTENDED rig's own floor, recorded not pinned\n" +
+                "[ORMAP-SHARED-CONTROL] value-diverging seeds=$valueDiverging\n" +
+                detailsOf(sweep, OrMapGcSafetySweep.VALUE_DIVERGENCE_FAILURE, "ORMAP-SHARED-CONTROL VALUE") +
+                "[ORMAP-SHARED-CONTROL] value-fold-drift seeds=$valueDrift\n" +
+                detailsOf(sweep, OrMapGcSafetySweep.VALUE_FOLD_DRIFT_FAILURE, "ORMAP-SHARED-CONTROL DRIFT") +
+                "[ORMAP-SHARED-CONTROL] reorder stranded frames on VALUE-diverging seeds=" +
+                strandedOn(valueDiverging + valueDrift) + "; on membership-diverging seeds=" +
+                strandedOn(diverging) + "; sweep-wide=" + strandedSummary() + "\n" +
+                "[ORMAP-SHARED-CONTROL] artifacts=${sweep.artifactPaths}",
+        )
+        assertTrue(
+            other.isEmpty(),
+            "unclassified SHARED-CONTROL failures: ${other.joinToString { "${it.seed}:${it.message}" }}",
+        )
+        assertAdversaryFired("ORMAP-SHARED-CONTROL", sweep)
+        // It is a CONTROL: the reclaimer must never have run.
+        assertTrue(
+            totals.runs == sweep.total,
+            "ORMAP-SHARED-CONTROL: every seed must have absorbed its counters: $totals of ${sweep.total}",
+        )
+        assertTrue(
+            totals.discarded == 0L,
+            "the contended no-reclaimer control reclaimed something, so it is not a control: $totals",
+        )
+        assertTrue(
+            resurrecting.isEmpty(),
+            "[KE3-23] contended control: a run that reclaims NOTHING cannot resurrect anything — a " +
+                "hit here means the observable is broken, not the system: $resurrecting",
+        )
+        assertTrue(
+            sweep.failures.none { it.message == OrMapGcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE },
+            "[KE3-23] contended control: nothing is reclaimed here, so no diverging key's live dot " +
+                "can be in any replica's `ReclaimedDots`: " +
+                seedsOf(sweep, OrMapGcSafetySweep.FENCE_ATTRIBUTED_DIVERGENCE_FAILURE),
+        )
+        // It is the CONTENDED workload: the same witness the SHARED arm carries, or the control
+        // controls for a workload the SHARED arm does not run.
+        assertTrue(
+            contended.runs == sweep.total,
+            "ORMAP-SHARED-CONTROL: every seed must have absorbed its contention counters: " +
+                "$contended of ${sweep.total}",
+        )
+        assertTrue(
+            contended.contendableRuns().size >= MIN_CONTENDABLE_SEEDS,
+            "ORMAP-SHARED-CONTROL: only ${contended.contendableRuns().size} of ${contended.runs} " +
+                "seeds ever had two peers putting in one round, below the recorded floor of " +
+                "$MIN_CONTENDABLE_SEEDS — the control is no longer controlling for the contended " +
+                "workload. $contended",
+        )
+    }
+
     // ------------------------------------------------------------------------------- shared bits
+
+    /**
+     * The reorder buffer's STRANDED frame count on each of [seeds] — frames `ormap-gc-reorder`
+     * swallowed on `peer0<->peer2` and never released, because traffic on that edge stopped inside
+     * its window. Read from the per-seed [ReorderFault] instances the arm that just ran built
+     * (computenet-pa5l); it must be read before the NEXT arm's sweep overwrites them.
+     */
+    private fun strandedOn(seeds: Set<Long>): String =
+        if (seeds.isEmpty()) "{}"
+        else seeds.sorted().associateWith { OrMapGcSafetySweep.reorderBySeed[it]?.strandedFrames }.toString()
+
+    /** How many seeds of the arm just run stranded at least one frame, and the worst count. */
+    private fun strandedSummary(): String {
+        val stranded = OrMapGcSafetySweep.reorderBySeed.values.map { it.strandedFrames }
+        return "seedsStranding=${stranded.count { it > 0 }} of ${stranded.size} max=${stranded.maxOrNull() ?: -1}"
+    }
 
     private fun seedsOf(sweep: civictech.testkit.dst.DstSweepReport, message: String): Set<Long> =
         sweep.failures.filter { it.message == message }.map { it.seed }.toSet()
@@ -1164,6 +1356,7 @@ class OrMapGcSafetySweepTest {
         private val noneRoot = File("build/dst-stability/ormap-gc-sweep-none")
         private val localRoot = File("build/dst-stability/ormap-gc-sweep-local")
         private val sharedRoot = File("build/dst-stability/ormap-gc-sweep-shared")
+        private val sharedNoneRoot = File("build/dst-stability/ormap-gc-sweep-shared-none")
 
         private var stableResurrecting: Set<Long> = emptySet()
         private var stableDisagreeing: Set<Long> = emptySet()
@@ -1220,11 +1413,12 @@ class OrMapGcSafetySweepTest {
                 checks[it] = OrMapGcSafetySweep.check(it)
                 OrMapGcSafetySweep.totals.getValue(it).reset()
             }
-            OrMapGcSafetySweep.contendedTotals.reset()
+            OrMapGcSafetySweep.contendedTotals.values.forEach { it.reset() }
             stableRoot.deleteRecursively()
             noneRoot.deleteRecursively()
             localRoot.deleteRecursively()
             sharedRoot.deleteRecursively()
+            sharedNoneRoot.deleteRecursively()
         }
 
         @JvmStatic
