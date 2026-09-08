@@ -18,6 +18,23 @@
 //        --package civictech.wire --runs 400 --out /path/to/evidence \
 //        [--label linux] [--expect-tests N]
 //
+// --method <fqcn#methodName> narrows the selector to ONE test method instead of a
+// whole package (computenet-r13k). It is mutually exclusive with --package, and it
+// exists because the thing being sampled is sometimes a single long-running
+// parameter sweep — GcSafetySweepTest's STABLE arm is one @Test that itself runs
+// 200 seeds — and running its two sibling arms 100 times alongside it triples the
+// wall clock without adding anything to the sample. JUnit's method-selector syntax
+// is the same one Gradle's --tests uses after the '#': for a Kotlin backticked
+// name, pass the name with its spaces, quoted for the shell, e.g.
+//   --method 'civictech.cell.replication.GcSafetySweepTest#compaction at the stable frontier is GC-safe across a churn sweep_BS12'
+//
+// NOTE on --runs with --method: this harness reuses ONE JVM across iterations,
+// which is what makes a 400-run :wire sample affordable. For a sweep that leans on
+// process-wide statics — GcSafetySweepTest's reclaim diagnostics keep unpruned
+// per-tagSource maps — prefer --runs 1 in a fresh JVM per iteration, driven from a
+// shell loop, and pass --expect-tests explicitly (1 for a single method) so a JVM
+// that matched nothing is still loud rather than scoring a clean zero.
+//
 // --expect-tests is OPTIONAL (computenet-dqy.56). Omit it and iteration 1's own
 // executed-test count becomes the baseline every later iteration is checked
 // against, so there is no literal here to fall out of sync when civictech.wire
@@ -140,6 +157,8 @@ public final class SuiteLoop {
 
     public static void main(String[] args) throws Exception {
         String pkg = "civictech.wire";
+        boolean pkgGiven = false;
+        String method = null; // null: select the package; else <fqcn>#<method name>
         int runs = 100;
         Path out = Path.of("suite-loop-evidence");
         String label = "run";
@@ -150,15 +169,27 @@ public final class SuiteLoop {
         // measurement, and a wrong n is worse than no n.
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
-                case "--package" -> pkg = value(args, ++i, "--package");
+                case "--package" -> { pkg = value(args, ++i, "--package"); pkgGiven = true; }
+                case "--method" -> method = value(args, ++i, "--method");
                 case "--runs" -> runs = Integer.parseInt(value(args, ++i, "--runs"));
                 case "--out" -> out = Path.of(value(args, ++i, "--out"));
                 case "--label" -> label = value(args, ++i, "--label");
                 case "--expect-tests" -> expectTests = Integer.parseInt(value(args, ++i, "--expect-tests"));
                 default -> throw new IllegalArgumentException(
                         "unknown argument: " + args[i]
-                                + " (expected --package/--runs/--out/--label/--expect-tests)");
+                                + " (expected --package/--method/--runs/--out/--label/--expect-tests)");
             }
+        }
+
+        // Mutually exclusive on purpose. Silently letting one win would produce a
+        // sample of something other than what the command line says — the same class
+        // of lie the unknown-flag check above exists to prevent.
+        if (method != null && pkgGiven) {
+            throw new IllegalArgumentException("--package and --method are mutually exclusive");
+        }
+        if (method != null && !method.contains("#")) {
+            throw new IllegalArgumentException(
+                    "--method needs <fully.qualified.Class>#<method name>, got: " + method);
         }
 
         // expectTests stays at its -1 sentinel here when --expect-tests was omitted;
@@ -169,8 +200,9 @@ public final class SuiteLoop {
         Files.createDirectories(failureDir);
         Path log = out.resolve(label + ".log");
 
-        System.out.printf("SuiteLoop label=%s package=%s runs=%d out=%s java=%s os=%s/%s%n",
-                label, pkg, runs, out.toAbsolutePath(),
+        System.out.printf("SuiteLoop label=%s %s runs=%d out=%s java=%s os=%s/%s%n",
+                label, method != null ? "method=" + method : "package=" + pkg,
+                runs, out.toAbsolutePath(),
                 System.getProperty("java.version"),
                 System.getProperty("os.name"), System.getProperty("os.arch"));
 
@@ -187,7 +219,9 @@ public final class SuiteLoop {
             AtomicInteger skipped = new AtomicInteger();
 
             LauncherDiscoveryRequest request = LauncherDiscoveryRequestBuilder.request()
-                    .selectors(DiscoverySelectors.selectPackage(pkg))
+                    .selectors(method != null
+                            ? DiscoverySelectors.selectMethod(method)
+                            : DiscoverySelectors.selectPackage(pkg))
                     .build();
 
             Launcher launcher = LauncherFactory.create();
@@ -226,7 +260,7 @@ public final class SuiteLoop {
                             "iteration 1 executed 0 tests; refusing to derive an "
                                     + "--expect-tests baseline of 0 from it, since that would "
                                     + "make every future zero-test iteration look expected. "
-                                    + "Check --package/the classpath, or pass --expect-tests "
+                                    + "Check --package|--method/the classpath, or pass --expect-tests "
                                     + "explicitly if 0 is genuinely the count you want.");
                 }
                 expectTests = executed.get();
