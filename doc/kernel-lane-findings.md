@@ -2093,3 +2093,128 @@ loadEnd=[8.93 11.36 10.91]**, every iteration reporting `FENCE-ATTRIBUTED
 diverging seeds=[]`. That is 160 consecutive greens on this branch against
 `computenet-r13k`'s 45/120 = 37.5%, the later 40 of them at a load1 above the top
 of r13k's own 4.02-8.54 range.
+
+## KE3-23-QUORUMCLOSED — the per-wave read carries candidate (1)'s defect too, it is REACHABLE, and the repair here degenerates to deleting the `closed` arm
+
+`computenet-s0tq`, 2026-09-08, base `0d2fd04d6`. `## KE3-23-CLOSEDPREMISE`
+disposed of candidate (1) on `CausalStability.stableFrontier` and, under its
+clause-5 inventory of the other readers of `closed`, recorded that
+`ReplicaQuorum.frontier` — the per-wave settlement read — carries the same shape
+but was outside that item's file claim and had been READ, not measured. This
+entry settles it.
+
+**NOT MEASURED, AND NOT PRESENTED AS MEASURED.** No sweep, no rate and no flake
+was run for this. `computenet-07vb`'s 0/120-against-45/120 comparison is evidence
+for the stable-frontier repair and is **not** evidence for this one; nothing below
+leans on it. The instrument here is deterministic tests, which is what the item
+asked for.
+
+**REACHABLE — settled against the real mesh, not read off the code.**
+`ReplicaQuorumTest`'s
+`computenet-s0tq a replica rejoining the same CellRef is consulted by the covering
+quorum, not excused by its stale closed marker` drives three peers over
+`Peering.loopback` on a seeded `SimulationController` (seed 17, no faults) through
+the three states, reading `Replication.replicaFrontier` at each:
+
+1. **Before departure.** p2 is a covering member with no row for the wave's
+   source, so the R13 creation fence reads it as bottom and the wave HOLDS.
+2. **After `evict(closeDepartedRow = true)`.** p2 despawns and leaves
+   `instancesOf`, so it is not in `covering` at all and the wave settles. PN-0c
+   doing its job.
+3. **After re-`replicate` onto the same `CellRef`.** The precondition is asserted
+   off the mesh rather than assumed: the slot is back in `memberSlots` and the
+   grow-only marker is still in `closed`. p2 still has no row for the source, so
+   this is state (1) again — and against the unrepaired code the quorum returned
+   `true`.
+
+That third read is the false certificate. Against the unrepaired code the test
+failed `expected:<false> but was:<true>`, together with three synthetic pins in
+the same file (a live member whose row is at 3 for a wave at 5; a rowless
+rejoined member under the R13 fence; a departed member `instancesOf` has not yet
+dropped). The mechanism is the one `## KE3-23-CLOSEDPREMISE` established for the
+sibling read and is a property of the marker, not of the reader:
+`WatermarkCell.slotId` is ref-derived and replay-stable (M10.1), `closed` is
+grow-only and nothing retracts it, so a rejoin lands on a slot already closed —
+and `covering` is derived from `membersOf`, i.e. LIVE instances. The per-member
+check `slot in closed || (rows[slot]?.get(source) ?: MIN) >= counter` then passed
+on its left arm with the row never consulted. Note which switch this defeats: the
+R13 creation fence exists precisely so a rowless covering member holds the wave,
+and a rejoined member is rowless, so the vacuous arm defeated the fence in the
+one case the fence was built for.
+
+**THE REPAIR IS `computenet-07vb`'s SHAPE, AND HERE IT DEGENERATES TO DELETION.**
+That shape is "honour `closed` only where no live instance contradicts it" —
+subtract `closed - memberSlots` rather than `closed`. Applied here it is
+unreachable rather than merely rare: `covering` is a filter over `members`, so
+every slot the arm is ever evaluated against is a member slot, and
+`(closed - memberSlots)` is disjoint from the covering set BY CONSTRUCTION. So
+the arm is removed from both places it appeared (the `creationFence` filter and
+the settlement `all`) rather than written as a branch that provably never fires.
+The shape does real work in `CausalStability.stableFrontier` only because that
+read unions the announced `members` set, which holds slots `instancesOf` does
+not; this read has no such union. **This is the adoption answer the acceptance
+clause asks for: the same shape, with its degenerate form stated rather than a
+different one chosen.**
+
+Nothing else changes. No lattice change, no delta field, no wire change,
+`slotId` stays replay-stable, and `closed` stays grow-only and terminal — the
+repair is entirely at this read, exactly as `computenet-07vb`'s was at its own.
+
+**DIRECTION AND COST.** Strictly CONSERVATIVE for certification: a member that
+previously passed on the marker alone must now show a row at or past the counter,
+so `covering.all` can only become harder and no `(source, counter)` this read
+previously refused becomes certified. The false-certificate family this whole
+line has been chasing cannot be introduced by it. The price is the mirror image
+of the stability freeze `## KE3-23-CLOSEDPREMISE` accepted: while this node's
+`instancesOf` view still lags a genuinely departed replica, its `closed` marker
+no longer excuses it and the wave HOLDS until the view converges. A hold under
+WAIT semantics, never a premature release, and self-healing — a despawned replica
+leaves `instancesOf` and stays out of `covering`. Both halves are pinned:
+`computenet-s0tq a departed member this node has not yet dropped from instancesOf
+holds the wave` for the cost, `a cleanly-departed member no longer constrains`
+for PN-0c's unchanged job.
+
+**WHAT `closed` NOW MEANS TO OTHER READERS** (the acceptance clause carried over
+from `computenet-07vb`'s clause 5).
+
+- `ReplicaQuorum.frontier`'s settlement check and its `creationFence` filter —
+  changed, as above; the predicate can only get harder.
+- `ReplicaQuorum.frontier`'s FU-2 `membershipBarrier` — **UNCHANGED, by
+  derivation and not by omission.** Its `accounted` set is
+  `known + closed + suspended`; the same shape gives
+  `known + (closed - known) + suspended`, which is the same set. An announced
+  slot that is closed and not a live instance still counts as accounted and still
+  does not hold a keyed wave. Pinned by `computenet-s0tq the FU-2 barrier still
+  accounts for an announced-but-closed non-member slot`.
+- `Replication.replicaFrontier` — a one-line facade over the above; its call
+  sites are unchanged and its four switches keep their meanings.
+- `CausalStability.stableFrontier`, its `openSlots` diagnostic,
+  `Replication.onStabilityStall` and `StableFrontierChurnSweepTest`'s rig — the
+  four readers `computenet-07vb` already reconciled. Untouched here; this repair
+  neither depends on nor alters them.
+- `Replication.onStabilityStall`'s freeze-notice flap (`computenet-92ek`) — not
+  reached by this change, and since FIXED on `main` by its own item. The defect
+  WAS in `StabilityFreezeDetector`'s retraction arm testing the raw `closed` set
+  on the STABILITY path; `computenet-92ek` merged as `2edab2990` and deleted that
+  `slot in closed` disjunct, so the arm now retracts on `slot !in open` alone and
+  never reads `closed`. The quorum has no latch and no notice, so neither repair
+  touches the other's read. The two items were dispatched concurrently and are
+  independent, as both beads state; nothing found here contradicts that, and this
+  branch carries `2edab2990` by merge.
+- `WatermarkCell` / `WatermarkDelta` / the journal and the wire — untouched.
+  `closed` is still grow-only, still gossiped as a `Set<UUID>`, still terminal.
+  No `:oracle` mirror is needed because no lane was added.
+- `WatermarkCell.republish`'s `if (slotId in closed) return` — a replica's own
+  local heartbeat suppression, not a membership read; unchanged, and a rejoin
+  constructs a new cell with an empty `closed` anyway.
+
+**TESTS.** `ReplicaQuorumTest` gains the mesh reachability/regression test above
+and four synthetic pins, and its pre-existing `a cleanly-departed member no
+longer constrains` was AMENDED in place the way `computenet-07vb` amended
+`CausalStabilityTest`'s two: it named the departed member in BOTH `closed` and
+`membersOf`, which is the REJOIN state rather than the departure state, so it now
+models a clean departure the way the mesh actually presents one (despawned, gone
+from `membersOf`, marker still in the lattice and asserted). `computenet-dwkp`'s
+four prohibitions are untouched: no BS-12 fence-attribution assertion is relaxed,
+no class is absorbed into `MAX_STABLE_DIVERGING`, no SEEDS list is narrowed, and
+no incarnation-unique `tagSource` is pursued.
