@@ -35,6 +35,13 @@ interface SetApi<E> {
 }
 
 /**
+ * The below-floor pull decision's diagnostic sink (9sm.7-D5, `[KE3-36]`'s "logged at debug
+ * level"). `:kernel` has no logging dependency and gains none for this — the JDK's own
+ * `System.Logger` is used, so the line is silent unless a host wires a `System.LoggerFinder`.
+ */
+private val PULL_FLOOR_LOG: System.Logger = System.getLogger("civictech.cell.data.SetCell")
+
+/**
  * The **re-admission fence** (`[24-TAG-04]` clause 2, computenet-pay7): the
  * exact set of tags a reclaimer has discarded from this replica, as a causal
  * context — a per-source *dot set*, not a per-source high-water.
@@ -119,13 +126,6 @@ interface SetApi<E> {
  * Runs are inclusive `[lo, hi]` pairs, kept sorted, disjoint and
  * non-adjacent, flattened into one list per (element, source).
  */
-/**
- * The below-floor pull decision's diagnostic sink (9sm.7-D5, `[KE3-36]`'s "logged at debug
- * level"). `:kernel` has no logging dependency and gains none for this — the JDK's own
- * `System.Logger` is used, so the line is silent unless a host wires a `System.LoggerFinder`.
- */
-private val PULL_FLOOR_LOG: System.Logger = System.getLogger("civictech.cell.data.SetCell")
-
 internal class ReclaimedDots<E> : Serializable {
     private val runs = HashMap<E, HashMap<UUID, ArrayList<Long>>>()
 
@@ -1006,21 +1006,6 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         else source.filterKeys { scope.admits(it) }
 
     /**
-     * Only the tags a [since] frontier has not yet observed; unfiltered when
-     * [since] is null.
-     *
-     * [wholeEntry] is the `dels` mode and exists for the **del-dot**
-     * (computenet-v2ka): a del entry is one indivisible fact — the dot standing
-     * for the remove, plus the add-tags that remove covered. Split by counter,
-     * a since-pull could ship the dot alone (its counter is the highest in the
-     * entry, so it is the tag most likely to be novel) while withholding the
-     * covers, and the requester would advance its delivered frontier PAST the
-     * dot without holding the tombstone — telling the mesh it had delivered a
-     * remove whose effect it had not applied, which is precisely the
-     * certification the dot exists to make honest. So for `dels` the filter
-     * decides per ENTRY: ship all of it, or none of it.
-     */
-    /**
      * Is [since] below this replica's compaction floor for any source (`[KE3-35]`, decision
      * 9sm.7-D1/D4)? Returns the first offending `(source, since[source], floor[source])`, or
      * `null` when the request can be answered incrementally.
@@ -1045,6 +1030,21 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         null
     }
 
+    /**
+     * Only the tags a [since] frontier has not yet observed; unfiltered when
+     * [since] is null.
+     *
+     * [wholeEntry] is the `dels` mode and exists for the **del-dot**
+     * (computenet-v2ka): a del entry is one indivisible fact — the dot standing
+     * for the remove, plus the add-tags that remove covered. Split by counter,
+     * a since-pull could ship the dot alone (its counter is the highest in the
+     * entry, so it is the tag most likely to be novel) while withholding the
+     * covers, and the requester would advance its delivered frontier PAST the
+     * dot without holding the tombstone — telling the mesh it had delivered a
+     * remove whose effect it had not applied, which is precisely the
+     * certification the dot exists to make honest. So for `dels` the filter
+     * decides per ENTRY: ship all of it, or none of it.
+     */
     private fun sinceFilter(
         source: Map<E, MutableSet<Timestamp>>,
         since: TagFrontier?,
