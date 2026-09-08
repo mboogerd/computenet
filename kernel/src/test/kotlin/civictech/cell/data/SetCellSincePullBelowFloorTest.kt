@@ -211,14 +211,35 @@ class SetCellSincePullBelowFloorTest {
         partial.delta.adds.containsKey("y1") shouldBe false
     }
 
-    /** A source absent from `since` reads as -1, so it is below any floor the fence holds. */
+    /**
+     * A source absent from `since` reads as `-1` — `sinceFilter`'s own default — so it is below
+     * any floor the fence holds, and the whole reply goes full.
+     *
+     * **This needs a SECOND source to be observable at all.** An absent source already receives
+     * every one of its tags from the plain filter (`-1 < every counter`), so a `since` naming
+     * nothing (`TagFrontier(emptyMap())`) yields the full reply whether or not the fallback
+     * fires — it cannot tell the two apart, and the mutation check measured it staying green.
+     * The discriminating form pins the *consequence* of the decision instead: X is absent and
+     * fenced, Y is named and satisfied, and the fallback is what makes Y's own below-`since`
+     * tags ship too, because the fallback replaces the whole `since`, never one source's entry.
+     */
     @Test
     fun `a source absent from since but present in the fence counts as below floor`() {
         val responder = responder()
         val x = sourceOf(pull(responder, null))
+        val y = UUID.randomUUID()
+        deliverRemote(responder, SetDelta(adds = mapOf("y1" to setOf(Timestamp(y, 10)))))
         responder.compactBelow(TagFrontier(mapOf(x to floor)))
 
         val full = pull(responder, null)
+
+        // X unnamed ⇒ below floor ⇒ FULL, so Y's tag at exactly its `since` ships as well.
+        val below = pull(responder, TagFrontier(mapOf(y to 10L)))
+        assertSameAsFull(full, below)
+        below.delta.adds.containsKey("y1") shouldBe true
+
+        // The degenerate form is kept for the criterion's literal words, and is deliberately
+        // not the oracle: an empty `since` is indistinguishable from full either way.
         assertSameAsFull(full, pull(responder, TagFrontier(emptyMap())))
     }
 
