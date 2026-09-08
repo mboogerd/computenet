@@ -7,6 +7,7 @@ import civictech.oracle.gen.GeneratorConfig
 import civictech.oracle.model.Delivery
 import civictech.oracle.model.DotModel
 import civictech.oracle.model.DotOrder
+import civictech.oracle.model.ModelDot
 import civictech.oracle.model.Script
 import civictech.oracle.model.ScriptEvent
 import civictech.oracle.model.SourceId
@@ -316,6 +317,91 @@ class TaggedControlsTest {
         ) {
             mutantValue shouldNotBe real.value(realState, "k")
             mutantValue.shouldBeNull() // remove-all: the key is wiped outright, not just reset
+        }
+    }
+
+    // =====================================================================
+    // computenet-1383 — MEASURED: wiped is not revival-aware, undercounts mints
+    // =====================================================================
+
+    /**
+     * computenet-1383: the reviewer of computenet-9sm.8.2 read `RemoveAllDotModel`'s permanent
+     * `wiped` flag and hypothesised it under-counts mints relative to [DotModel] in a
+     * `put -> remove -> put -> remove` chain on ONE source, because the second remove after a
+     * revival is misread as a no-op. This test is the measurement the bead required BEFORE any
+     * remedy: it constructs exactly that chain (plus a fifth event, a put, to make the
+     * divergence observable — see below) and compares the mint counts each model actually
+     * reports, rather than trusting the hypothesis.
+     *
+     * **MEASURED, on source `s`, key `k`, `put(v1) -> remove -> put(v2) -> remove -> put(v3)`:**
+     *
+     * - [DotModel] consumes all five counters in order: put(v1)=1 (no live dot yet, one
+     *   counter), remove=2 (effective: k's dot 1 is live, one counter), put(v2)=3 (k's dot 1 is
+     *   COVERED by dels at this point, so no live dot — one counter, not a re-put's two),
+     *   remove=4 (effective: dot 3 is live again post-revival, one counter), put(v3)=5 (dot 3 is
+     *   now covered, no live dot — one counter). Final live dot at k: `ModelDot(5, s)`.
+     * - `RemoveAllDotModel` consumes only FOUR: put(v1)=1 (hasLive false, one counter),
+     *   remove=2 (hasLive true: k has a put and is not yet wiped — one counter, and `wiped`
+     *   gains k PERMANENTLY), put(v2)=3 (hasLive false: `wiped` still contains k, so the
+     *   revival is invisible to the counting rule even though `puts[k]` regained a live-looking
+     *   entry — one counter, correctly matching DotModel's put(v2) by coincidence), remove=NOTHING
+     *   (hasLive false: `wiped` still contains k from the FIRST remove, which never left it — so
+     *   this is misread as the effective-only no-op case and consumes NO counter at all, unlike
+     *   DotModel's effective remove(4)), put(v3)=4 (one counter, landing where DotModel's
+     *   counter 4 sits rather than where DotModel's counter 5 sits).
+     *
+     * **The divergence is real and reproduces**, confirming the bead's hypothesis: the mutant's
+     * dot numbering runs one counter BEHIND DotModel's from the second remove onward. It is a
+     * pure numbering defect — `RemoveAllDotModel.value`/membership already read `null` at `k`
+     * both before and after this chain regardless of the miscount (`wiped` alone decides value,
+     * independently of the counter), so no *currently* wired script observes it: CTL-03's own
+     * script above never re-removes a revived key, exactly as the bead says.
+     *
+     * **Remedy: documented at the mutant's definition site ([RemoveAllDotModel]'s KDoc), not
+     * fixed.** Making `wiped` revival-aware for counting purposes without also touching its
+     * value/membership semantics (which must stay permanently wiped once ANY instance's remove
+     * is observed — that permanence is BS-3/4's whole point, and CTL-03 above pins it) needs a
+     * counting-only liveness notion independent of `wiped`, whose merge behaviour across
+     * multiple *instances* is unexercised by any script in this suite and would ship unproven.
+     * Since the only current consumer (CTL-03) never reaches this path, the safer, smaller
+     * change is the warning this test backs, so a future script author who DOES write a
+     * re-removing scenario is told rather than silently miscounted.
+     */
+    @Test
+    fun `computenet-1383 wiped is not revival-aware and undercounts mints after a re-remove on one source`() {
+        val source = SourceId("s")
+        val writer = WriterId("w")
+        val order = DotOrder.ranked(source)
+
+        val chain = Script.of(
+            source,
+            ScriptEvent.Put(writer, "k", "v1"),
+            ScriptEvent.RemoveKey(writer, "k"),
+            ScriptEvent.Put(writer, "k", "v2"),
+            ScriptEvent.RemoveKey(writer, "k"),
+            ScriptEvent.Put(writer, "k", "v3"),
+        )
+
+        val real = DotModel(order)
+        val realState = real.stateOf(chain, source)
+        withClue("DotModel: five effective events on one source consume counters 1..5 in order") {
+            realState.puts.getValue("k").keys shouldBe
+                setOf(ModelDot(1, source), ModelDot(3, source), ModelDot(5, source))
+            realState.dels.getValue("k") shouldBe
+                setOf(ModelDot(1, source), ModelDot(2, source), ModelDot(3, source), ModelDot(4, source))
+        }
+
+        val mutant = RemoveAllDotModel(order)
+        val mutantState = mutant.stateOf(chain, source)
+        withClue(
+            "computenet-1383, MEASURED: RemoveAllDotModel's permanent wiped flag reads the SECOND " +
+                "remove as a no-op (k never left `wiped` after the FIRST remove) and consumes no " +
+                "counter there, so put(v3)'s dot lands on counter 4 -- one behind DotModel's 5. " +
+                "Reproduces the bead's hypothesis; see the KDoc above for the full measurement and " +
+                "why this is documented rather than fixed.",
+        ) {
+            mutantState.puts.getValue("k").keys shouldBe
+                setOf(ModelDot(1, source), ModelDot(3, source), ModelDot(4, source))
         }
     }
 
