@@ -1922,3 +1922,35 @@ semantics. `DepartureStabilityPinTest`, `MemberDepartureFrontierTest` and
 `ShardedReplicationTest` — the three integration pins on departure/frontier
 behaviour — required NO change and stayed green, which is the strongest evidence
 that PN-0c's real path is unaffected.
+
+**OPEN AND MEASURED, NOT SPECULATIVE — this repair turns `StableFrontierChurnSweepTest`
+(BS-5) RED on 8 of 60 seeds, and the file that pins it is outside
+`computenet-07vb`'s claim.** The check is "stableFrontier regressed under fixed
+membership": a per-peer sample recording `(open, stable)` each time it reads, and
+comparing successive reads **only when the `open` SET compares equal**. First
+occurrence, seed 12: `step=1886 peer=peer0 source=d08c0e45 3 -> 2`, with a
+`dst-crash` on `peer2` at step 1414 in the same plan — i.e. a crash-restart, which
+is a rejoin onto the same `CellRef` and therefore exactly the state this repair
+changes.
+
+ATTRIBUTION IS MEASURED, not inferred, and it is not a pre-existing flake: with
+`CausalStability.kt` and `Replication.kt` checked out at the base `eec4a4cdf` and
+**every test file from this branch left in place**, `:kernel:test --tests
+'…StableFrontierChurnSweepTest' --rerun --no-build-cache` is GREEN (60/60); with
+the two source files restored it fails 8/60. The two runs differ only in the
+repair.
+
+WHAT IT MEANS, stated at the strength it is actually established. The repair
+lowers the frontier when a rejoined slot re-enters `open` — that is its intent and
+its safe direction (§ above) — and BS-5's guard only suppresses comparisons where
+`open` compares *equal*, so a fall that is invisible to the guard reads as a
+regression. Whether that makes BS-5's invariant WRONG for a rejoining mesh (the
+frontier is not monotone once a member can re-enter, and the guard's set-equality
+test cannot see a departure/rejoin round trip between two samples) or makes the
+REPAIR wrong (some path really does lower the MIN at a genuinely fixed open set)
+is **NOT settled here**: settling it means reading the rig's observation cadence
+and amending its check, and `StableFrontierChurnSweepTest.kt` is not in this
+item's `metadata.files`. Reported rather than worked around, per the item's own
+clause 5 and its dispatch. Nothing in this entry should be read as licence to
+relax that check; it is a live question, and the shape of the answer decides
+whether the repair ships as written.
