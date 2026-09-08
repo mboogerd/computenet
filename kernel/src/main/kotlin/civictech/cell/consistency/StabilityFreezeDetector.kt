@@ -110,7 +110,12 @@ class StabilityFreezeDetector(private val threshold: Int = 3) {
      *   whose closure IS premise-true always left `open` too (the caller
      *   derives `open` by removing `closed - instanceSlots`; see
      *   [civictech.cell.replication.Replication.onStabilityStall]), so this
-     *   still retracts every genuine clean close.
+     *   still retracts every genuine clean close. **The body consequently
+     *   never reads [closed] at all** — `slot !in open` alone decides every
+     *   closure-driven retraction. The parameter stays in the signature
+     *   because it is part of the one-snapshot contract ([KE3-24]) and
+     *   because it names the precondition: a caller that passed an `open` NOT
+     *   premise-qualified this way would get no closure retraction from here.
      * @return the notices produced by this evaluation, in order: retractions
      *   ([StallNotice.Resume]) before new stalls. Empty on most evaluations.
      */
