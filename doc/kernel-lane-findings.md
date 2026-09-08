@@ -1954,3 +1954,24 @@ item's `metadata.files`. Reported rather than worked around, per the item's own
 clause 5 and its dispatch. Nothing in this entry should be read as licence to
 relax that check; it is a live question, and the shape of the answer decides
 whether the repair ships as written.
+
+**THE RE-MEASUREMENT (acceptance clause 3).** Same instrument, same method, same
+n as `## KE3-23-CLOSEDROW`'s 45/120, on the same host (darwin/arm64 16-core), one
+fresh JVM per iteration:
+
+    scripts/flake-loop/run-method-loop.sh 120 c07vb-fix \
+      'civictech.cell.replication.GcSafetySweepTest#compaction at the stable frontier is GC-safe across a churn sweep_BS12'
+
+    120 iterations, 0 red = 0.0%, loadStart=[5.13 8.13 8.98] loadEnd=[9.07 8.24 8.47]
+
+against `computenet-r13k`'s **45/120 = 37.5% at load1 4.02 -> 8.54** on the same
+class and arm. The load ranges overlap (this sample ran slightly HOTTER, and a
+reviewer's independent n=14 at load1 10.4-13.4 scored 50%, so load moves this
+number UPWARD — the hotter sample is the more conservative comparison, not the
+more flattering one). Every one of the 120 iterations reported
+`FENCE-ATTRIBUTED diverging seeds=[]`. If the rate were still 37.5%, 120
+consecutive greens has probability `0.625^120` — of order `1e-24`; this is not the
+"19 consecutive greens" hazard `computenet-dwkp` warned about, which was 19 at a
+~20-30% rate (`0.75^19` ~ 0.4%, i.e. unremarkable). The deterministic tests, not
+this sample, remain the primary evidence per clause 2; this is the corroboration
+clause 3 asks for, and it is stated as a rate with its load, not as a green run.
