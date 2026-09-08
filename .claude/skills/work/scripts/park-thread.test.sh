@@ -69,8 +69,9 @@ thread <<'T'
 2026-08-26T17:26:14Z|STATUS CHANGE, recorded by the orchestrator. No decision is made here
 T
 out=$(run); rc=$?
-[ "$rc" -eq 1 ] && ok "no answer exits 1" || bad "exits $rc, wanted 1"
-has "$out" "NO ANSWER-SHAPED COMMENT" "it says the park stands"
+[ "$rc" -eq 1 ] && ok "no marker match exits 1" || bad "exits $rc, wanted 1"
+has "$out" "NO COMMENT MATCHED THE ANSWER MARKERS" "it reports a miss, not an absence"
+has "$out" "not the same as" "exit 1 does not assert that no answer exists"
 hasnt "$out" "ANSWERED at" "it does not manufacture an answer"
 
 echo
@@ -83,6 +84,70 @@ T
 out=$(run); rc=$?
 [ "$rc" -eq 0 ] && ok "answered exits 0" || bad "exits $rc"
 has "$out" "nothing re-parked after it" "it distinguishes the safe shape"
+
+echo
+echo "EVERY answer wording this tracker actually uses is recognised"
+# Fitting the markers to ONE bead's wording reported four of five real answers
+# as "the park stands" — the tool's own failure mode, wearing its uniform.
+while IFS= read -r wording; do
+  [ -n "$wording" ] || continue
+  fixture
+  { printf '['
+    printf '{"created_at":"2026-01-01T00:00:00Z","author":"m","text":"QUESTION: which option?"},'
+    printf '{"created_at":"2026-01-02T00:00:00Z","author":"m","text":%s}' \
+      "$(printf '%s' "$wording" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().rstrip("\n")))')"
+    printf ']\n'; } > "$CTRL/comments.json"
+  out=$(run); rc=$?
+  [ "$rc" -eq 0 ] && ok "recognised: ${wording:0:44}" || bad "MISSED: $wording"
+done <<'WORDINGS'
+ANSWERED by the maintainer (2026-09-03, via sync report): ACCEPT the interface
+Decided 2026-08-31 (sync-report follow-up): self-host a relay.
+Human decision 2026-08-25: adopt OPTION 1 — a stable identity key
+MAINTAINER DECISION (mlboogerd, 2026-08-29): OPTION 4
+AMENDMENT TO THE DECISION (mlboogerd, 2026-08-29): WHY AN ANCHOR IS THE
+HUMAN DECISION 2026-08-14 (sync-report): answered and closed.
+WORDINGS
+
+echo
+echo "a QUESTION carrying the answer vocabulary is NOT its own answer"
+# ask-human.md's own park template invites "not a call I should make
+# unilaterally"; an unanchored match made a pure question read as ANSWERED,
+# with the reassuring verdict.
+fixture
+thread <<'T'
+2026-01-01T00:00:00Z|QUESTION: which of the three — this needs a maintainer decision, not a call I should make unilaterally
+T
+out=$(run); rc=$?
+[ "$rc" -eq 1 ] && ok "a question is not its own answer" || bad "exits $rc, wanted 1"
+hasnt "$out" "ANSWER-SHAPED" "no reassuring verdict on a bare question"
+
+echo
+echo "it FAILS CLOSED on a payload it cannot read"
+fixture
+# Raw control characters inside bd JSON bodies (computenet-9n60) used to make
+# jq fail and the script fall through to `ANSWERED at , ...` and exit 0.
+printf '[{"created_at":"2026-01-01T00:00:00Z","author":"m","text":"Decided 2026-01-01 (x): go\u0001ahead"}]\n' \
+  | python3 -c 'import sys; sys.stdout.write(sys.stdin.read().replace("\\u0001", chr(1)))' > "$CTRL/comments.json"
+out=$(run); rc=$?
+[ "$rc" -eq 0 ] && ok "control characters are stripped, not fatal" || bad "exits $rc, wanted 0"
+
+fixture
+echo 'not json at all {' > "$CTRL/comments.json"
+out=$(run); rc=$?
+[ "$rc" -eq 2 ] && ok "an unparseable payload is exit 2, never a verdict" || bad "exits $rc, wanted 2"
+hasnt "$out" "ANSWERED at " "it never reports an answer it could not read"
+
+fixture
+echo '[]' > "$CTRL/comments.json"
+out=$(run); rc=$?
+[ "$rc" -eq 2 ] && ok "an empty thread is exit 2, not a claim about the park" || bad "exits $rc, wanted 2"
+
+echo
+echo "an ANSWER with no timestamp is still an answer"
+fixture
+printf '[{"author":"m","text":"MAINTAINER DECISION (mlboogerd): OPTION 4"}]\n' > "$CTRL/comments.json"
+out=$(run); rc=$?
+[ "$rc" -eq 0 ] && ok "a timestamp-less answer is not dropped" || bad "exits $rc, wanted 0"
 
 echo
 echo "an UNPARKED record is bookkeeping, not an answer"

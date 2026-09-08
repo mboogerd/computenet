@@ -1,4 +1,4 @@
-work +25
+work +30
 # A parked bead's thread can hold the ANSWER and, after it, a re-park restating
 # the question as open — measured two minutes apart, with status, assignee and
 # the human label all agreeing with the newer comment. Reading tail-first is a
@@ -12,3 +12,9 @@ work +25
 # carries the machine actor, human answers included. ask-human.md gets the
 # other end: read the thread before parking, since the re-park in that instance
 # was itself written over a two-minute-old answer.
+#
+# +5 of the 30 are the review's repair: exit 1 now says "no marker matched",
+# not "no answer", in the script, the table row and ask-human.md's gloss. The
+# first cut's gloss read `exit 1 = no answer; park away`, which would have
+# licensed re-parking over an answer the markers missed — the original defect,
+# with a script telling the session to commit it.

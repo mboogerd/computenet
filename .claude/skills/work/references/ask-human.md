@@ -59,8 +59,13 @@ the measured case had a re-park written two minutes after the maintainer's
 decision, by a session that had not seen it (computenet-1cuq):
 
 ```bash
-.claude/skills/work/scripts/park-thread.sh <id>   # exit 1 = no answer; park away
+.claude/skills/work/scripts/park-thread.sh <id>
 ```
+
+Exit 1 means **no comment matched the answer markers**, which is not the same as
+no answer — an answer worded unlike the known forms is invisible to it. Read the
+thread it printed before you park anyway; the script narrows the reading, it
+does not replace it.
 
 ```bash
 bd update <id> --status=blocked --add-label=human --assignee=human

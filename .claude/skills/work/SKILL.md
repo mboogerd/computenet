@@ -126,7 +126,7 @@ header.
 | `next-batch.py` | `<feature-id> [--actor NAME] [--siblings N]`, or `--capacity` alone — Next set of tasks safe to run in parallel — file-disjoint AND within machine capacity |
 | `ensure-worktree.sh` | `<path> <branch> [base-ref]` — Attaches a worktree on a branch, new or resumed, or fails loudly |
 | `epic-of.sh` | `<bead-id>` — Resolves a bead's effective epic (`.parent` chain, else dotted prefix) |
-| `park-thread.sh` | `<bead-id>` — a human-parked bead's thread in FULL with a verdict: `ANSWERED at <t>, then RE-PARKED at <t>` (the newest comment is not the state), or exit 1 if the park stands |
+| `park-thread.sh` | `<bead-id>` — a human-parked bead's thread in FULL with a verdict: `ANSWERED at <t>, then RE-PARKED at <t>` (the newest comment is not the state); exit 1 = no marker matched (read it anyway), exit 2 = unreadable, never a claim about the park |
 | `claim-epic.sh` | `<epic-id>` — Claims or takes over an epic and pushes the acquisition (the claim-as-lock bracket) |
 | `feature-branch.sh` | `<feature-id>` — Resolves a feature's branch + worktree, minting `-rN` when the old PR squash-merged |
 | `publish-beads.sh` | `(no arguments)` — Publication push with rejection recovery; fails on a nonzero exit **or** a rejection in the output |
