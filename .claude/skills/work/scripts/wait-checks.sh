@@ -142,13 +142,31 @@ esac
 [ "$GH_CALL_TIMEOUT_SECONDS" -ge 1 ] || { echo "wait-checks: WAIT_CHECKS_GH_TIMEOUT_SECONDS must be at least 1" >&2; exit 2; }
 
 gh() {
-  local pid ticks=0 limit=$(( GH_CALL_TIMEOUT_SECONDS * 5 )) rc
+  local pid rc now lim deadline
+  now=$(date +%s)
+  # WALL CLOCK, NOT A TICK COUNT. Counting 0.2s sleeps makes the bound stretch
+  # with the load it exists to survive — measured 20% over nominal on a QUIET
+  # box, and each tick's fork costs more as load climbs. A deadline captured
+  # before the fork is load-immune and costs the same.
+  lim=$GH_CALL_TIMEOUT_SECONDS
+  # AND NEVER MORE THAN THE LOOP'S OWN REMAINING BUDGET. Otherwise the call
+  # bound and the loop bound compose the wrong way: a round starting just
+  # inside the deadline could make five bounded calls and still put the whole
+  # invocation past the 600s foreground cap — the same gap this wrapper closes
+  # one level down, re-opened one level up. 5s is the floor; below that a
+  # healthy call cannot finish and every round would report a false timeout.
+  if [ -n "${started_at_epoch:-}" ] && [ -n "${DEADLINE_SECONDS:-}" ]; then
+    local remain=$(( DEADLINE_SECONDS - (now - started_at_epoch) ))
+    [ "$remain" -lt 5 ] && remain=5
+    [ "$remain" -lt "$lim" ] && lim=$remain
+  fi
+  deadline=$(( now + lim ))
   command gh "$@" &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
-    if [ "$ticks" -ge "$limit" ]; then
+    if [ "$(date +%s)" -ge "$deadline" ]; then
       kill -9 "$pid" 2>/dev/null
-      echo "gh $* exceeded ${GH_CALL_TIMEOUT_SECONDS}s and was killed" >&2
+      echo "gh $* exceeded ${lim}s and was killed" >&2
       wait "$pid" 2>/dev/null
       return 124
     fi
@@ -156,7 +174,6 @@ gh() {
     # count ROUND sleeps and make 28 rounds take milliseconds. This one is not
     # a round sleep, and counting it broke two of that suite's assertions.
     /bin/sleep 0.2 2>/dev/null || sleep 0.2
-    ticks=$(( ticks + 1 ))
   done
   wait "$pid"; rc=$?
   return $rc

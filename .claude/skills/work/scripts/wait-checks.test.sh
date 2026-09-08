@@ -453,6 +453,26 @@ rc=$(cat "$CTRL/hang.rc" 2>/dev/null || echo 99)
   || bad "exit $rc is not a verdict"
 has "$out" "exceeded 2s and was killed" "the killed call names itself as the cause"
 
+# The per-call bound never exceeds the LOOP's remaining budget: otherwise a
+# round starting just inside the deadline composes five bounded calls into an
+# invocation past the 600s foreground cap — the same gap, one level up.
+started=$(date +%s)
+( PATH="$CTRL/bin:$PATH" WAIT_CHECKS_GH_TIMEOUT_SECONDS=300 \
+    WAIT_CHECKS_DEADLINE_SECONDS=6 WAIT_CHECKS_COLD_ROUNDS=0 \
+    "$SCRIPT" "https://github.com/mboogerd/computenet/pull/1" 2 >"$CTRL/cap.out" 2>&1 ) &
+capped=$!
+waited=0
+while kill -0 "$capped" 2>/dev/null && [ "$waited" -lt 60 ]; do
+  /bin/sleep 1; waited=$((waited+1))
+done
+if kill -0 "$capped" 2>/dev/null; then
+  pkill -P "$capped" 2>/dev/null; kill -9 "$capped" 2>/dev/null
+  bad "a 300s per-call bound was not capped by the 6s loop budget"
+else
+  ok "the per-call bound is capped by the loop's remaining budget ($(( $(date +%s) - started ))s)"
+fi
+wait "$capped" 2>/dev/null
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

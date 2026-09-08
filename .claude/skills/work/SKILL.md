@@ -514,8 +514,9 @@ Three standing disciplines:
   the run's start times out on a healthy PR by construction (computenet-hil5).
   Sizing the window AT the cap is what got the call auto-backgrounded twice
   (computenet-tl8q); a round count cannot bound wall clock, so the script now
-  stops on elapsed time, and bounds each `gh` call at 45s so an invocation that
-  hangs cannot outlive the loop's own deadline (computenet-9szqn: at load1 132
+  stops on elapsed time, and bounds each `gh` call at 45s — never past the
+  loop's own remaining budget — so an invocation that hangs cannot hang
+  indefinitely (computenet-9szqn: at load1 132
   the elapsed stop was never reached, because the stop is only tested BETWEEN
   rounds). On exhaustion the script names each pending check with
   its age and prints `ORDINARY` (re-run it) or `STUCK`; only `STUCK` is a
