@@ -1,0 +1,13 @@
+work +19
+# bead.sh's spill notice now goes to stderr with an EMPTY stdout and exit 3.
+# The notice used to be prose on stdout, which greps cleanly: an orchestrator
+# ran `bead.sh <epic> .description > f` and four greps over f, and every one
+# returned 0 — searching a 214-byte notice, not a 43,846-character description.
+# Read literally that said a concurrent agent's amendment had been destroyed.
+# It had not. Both natural reactions (re-dispatch, escalate) are expensive and
+# wrong, and the zero is indistinguishable from the most alarming possible TRUE
+# result.
+#
+# The prose says so in the three places a reader meets it: SKILL.md's table
+# row, bd-traps.md's spill paragraph, and direct-child.md's bead-text route —
+# where the read-back is the ONLY verification the work ever gets.

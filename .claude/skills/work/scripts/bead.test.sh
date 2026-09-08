@@ -47,14 +47,27 @@ out=$(BODY_CHARS=100 bash "$SCRIPT" known 2>&1); rc=$?
 grep -q '"id": "known"' <<<"$out" && ok "the bead itself is on stdout" || bad "no bead -- $out"
 [ -z "$(ls "$ROOT"/bead-known.* 2>/dev/null)" ] && ok "no file written" || bad "spilled a small bead"
 
-echo "case 2: a bead over the cap spills to a file and says so"
+echo "case 2: a bead over the cap spills to a file and says so, on STDERR"
 out=$(BODY_CHARS=40000 bash "$SCRIPT" known 2>&1); rc=$?
-[ $rc -eq 0 ] && ok "exit 0" || bad "exit $rc -- $out"
+[ $rc -eq 3 ] && ok "exit 3" || bad "exit $rc -- $out"
 grep -q 'exceeds one tool result' <<<"$out" && ok "names the reason" || bad "silent -- $out"
 spilled=$(grep -o "$ROOT/[^ ]*" <<<"$out")
 [ -s "$spilled" ] && ok "wrote $spilled" || bad "no file"
 grep -q '"id": "known"' "$spilled" && ok "the file holds the projection" || bad "file is not the bead"
 [ "$(wc -c <<<"$out")" -lt 500 ] && ok "stdout stayed small" || bad "printed the body anyway"
+# THE POINT OF THE WHOLE CHANGE (computenet-rnvi): a redirect must capture an
+# EMPTY stdout, not prose that greps cleanly. The notice used to land in the
+# caller's file, where four greps searched a 214-byte notice instead of a
+# 43,846-character description and every one returned 0 — indistinguishable
+# from the content genuinely being absent, which is the most alarming possible
+# true result.
+onlyout=$(BODY_CHARS=40000 bash "$SCRIPT" known 2>/dev/null); rc=$?
+[ -z "$onlyout" ] && ok "stdout is EMPTY on a spill" || bad "stdout carried: ${onlyout:0:80}"
+[ $rc -eq 3 ] && ok "a chained caller short-circuits on the nonzero exit" || bad "exit $rc"
+onlyerr=$(BODY_CHARS=40000 bash "$SCRIPT" known 2>&1 >/dev/null)
+grep -q 'exceeds one tool result' <<<"$onlyerr" && ok "the notice is on stderr" || bad "not on stderr -- ${onlyerr:0:80}"
+grep -q 'NOTHING was written to stdout' <<<"$onlyerr" \
+  && ok "stderr says the empty stdout is the spill, not a failed read" || bad "no such line"
 rm -f "$ROOT"/bead-known.*
 
 echo "case 3: a SCALAR field filter never spills, however big the bead"
@@ -120,7 +133,7 @@ grep -q 'unexpected argument' <<<"$out" && ok "says which argument" || bad "sile
 
 echo "case 6f: the spill branch still works with -C (its dir is a separate name)"
 out=$(BODY_CHARS=40000 bash "$SCRIPT" -C /some/checkout known 2>&1); rc=$?
-[ $rc -eq 0 ] && ok "exit 0" || bad "exit $rc -- $out"
+[ $rc -eq 3 ] && ok "exit 3" || bad "exit $rc -- $out"
 grep -q 'exceeds one tool result' <<<"$out" && ok "spilled" || bad "no spill -- ${out:0:80}"
 spilled=$(grep -o "$ROOT/[^ ]*" <<<"$out")
 [ -s "$spilled" ] && ok "wrote $spilled" || bad "no file"

@@ -86,6 +86,12 @@ review-feature.md §7 becomes one of these.
   explicitly. This is the whole reason the route is safe: it keeps the
   orchestrator out of the seat SKILL.md warns about, where what you write
   yourself is the one thing nobody reviews.
+- **A read-back through `bead.sh` can SPILL, and a spill is not content.** On a
+  large epic it writes the bead to a file, prints the path on stderr and exits
+  3 with an empty stdout — so `bead.sh <id> .description > f` leaves `f` EMPTY
+  and every grep over it returns 0. Read the printed path with the Read tool.
+  This bites hardest exactly here, where the read-back is the only verification
+  the work ever gets (computenet-rnvi).
 - **Your read-back IS the review**, and it is sufficient *because you are not
   the author*. Read the amended fields back against the bead's acceptance —
   each clause it required, and that every superseded wording it promised to

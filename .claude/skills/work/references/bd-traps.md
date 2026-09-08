@@ -171,13 +171,26 @@ SKILL.md and the other references cite this file as "`bd` traps".
   computenet-wd7n, which owns it.
 
   **Above ~25KB even the projection does not fit**, and `bead.sh` handles
-  that itself: it writes the projected bead to `$SCRATCH/bead-<id>.json` and
-  prints that path instead of the body, so a `Read` call pages it and
-  nothing is silently missing. Paging it back through Bash does not work —
-  the harness re-persists a large Bash output too. A caller that PIPES
-  `bead.sh` into another command raises `BEAD_SPILL_BYTES`: a scalar filter
-  (`-r '.status'`) never spills, but `-r '.description'` is
+  that itself: it writes the projected bead to `$SCRATCH/bead-<id>.json`,
+  prints that path **on stderr**, leaves stdout EMPTY and **exits 3**, so a
+  `Read` call pages it and nothing is silently missing. Paging it back through
+  Bash does not work — the harness re-persists a large Bash output too. A
+  caller that PIPES `bead.sh` into another command raises `BEAD_SPILL_BYTES`:
+  a scalar filter (`-r '.status'`) never spills, but `-r '.description'` is
   description-sized and does.
+
+  The stderr-and-exit-3 shape is deliberate. The notice used to go to stdout,
+  where it is prose that GREPS CLEANLY: an orchestrator ran
+  `bead.sh <epic> .description > f` and four greps over `f`, and every one
+  returned 0 — searching a 214-byte notice, not a 43,846-character
+  description. Read literally that said a concurrent agent's amendment had
+  been destroyed. It had not (computenet-rnvi). A zero from a search that
+  never ran is the same false-negative class as zsh's unquoted
+  `--include=*.kt` and `git grep`'s missing `\s`, and here it is
+  indistinguishable from the most alarming possible TRUE result, so both
+  natural reactions — re-dispatch, or escalate destroyed work — are expensive
+  and wrong. On stderr the redirect captures an empty file, which fails
+  loudly.
 - **`bd comment` executes backticks in its free text and reports success.**
   Backticks inside a double-quoted shell argument are command substitution,
   so the word vanishes from the stored comment while `bd` prints "Comment
