@@ -299,4 +299,129 @@ class SetCellCompactBelowTest {
         assertEquals(emissionsAfterCompaction, invocationBuffer.size, "a fully fenced frame re-emits nothing")
         assertEquals(emptySet<String>(), cell.membership())
     }
+
+    /**
+     * **A repair entry carries no del-dot, and that is safe on the receiver**
+     * (`[KE3-23]`, computenet-684h — the open question computenet-pay7's review
+     * raised, settled here by construction rather than by sampling).
+     *
+     * THE SEAM. `applyRemote`'s repair emission answers a fenced add-tag with a
+     * `dels` entry naming exactly that tag and mints no dot ("no new remove
+     * happened and nothing new needs certifying"). A receiver folding that entry
+     * therefore holds a tombstone whose every tag is an ADD-tag, so
+     * [SetCell.compactBelow]'s every-tag rule — which for a `remove`-minted entry
+     * reaches the del-dot and thereby certifies REMOVE delivery — certifies only
+     * that the ADD was delivered. The receiver can consequently reclaim the
+     * repair entry at a **strictly lower** frontier than the originating
+     * tombstone needed. Arm 2 measures exactly that gap: at `o -> 1` the repair
+     * entry is fully discarded while the dotted entry it was reconstructed from
+     * discards nothing.
+     *
+     * THE ANSWER, and it is the FIRST of the bead's two admissible outcomes: the
+     * early reclaim is harmless, because what guards the receiver against the
+     * replayed add is not the tombstone but the **fence**, and the discard is the
+     * fence's only writer. Reclaiming the repair entry *records* `(o,1)` in
+     * [ReclaimedDots] in the same step that drops it, and a fenced tag is
+     * inadmissible however it later arrives. The del-dot's job is upstream and
+     * different — it stops a straggler that holds the add and missed the remove
+     * from resurrecting the element at a replica that reclaimed on ADD delivery
+     * alone. A repair-entry receiver does not need that guarantee, because it
+     * does not drop the straggler's frame: arm 3 shows the replayed add is
+     * answered with the receiver's OWN repair, so the straggler is repaired
+     * instead of stranded and the fence spreads rather than fragmenting.
+     *
+     * Arm 4 closes the last branch: the ORIGINAL dotted entry, replayed to a
+     * receiver that only ever reclaimed the undotted repair, rebuilds a tombstone
+     * from the one tag it never fenced (the dot). That is a tombstone, not a
+     * resurrection — membership stays empty — and it terminates, since the
+     * rebuilt entry carries no add-tag novelty for any peer.
+     *
+     * Nothing here is hand-rolled: the repair delta is captured from a real
+     * emitter driven through the real fence path, so a change to the emission
+     * shape reaches this test.
+     */
+    @Test
+    fun `a receiver that compacts an undotted repair entry does not re-admit the add it covered`() {
+        val o = UUID.randomUUID()
+        val propagate = Propagate::class.java.getMethod("propagate", Any::class.java)
+        fun deliverTo(target: SetCell<String>, delta: SetDelta<String>) =
+            Invocation.of(propagate, arrayOf(delta), null).invoke(target.deltaInlet.call)
+
+        // ARM 1 — obtain a REAL repair emission. The emitter folds the origin's
+        // add (o,1) and its dotted tombstone {(o,1),(o,2)}, reclaims the entry,
+        // and is then handed the straggler's replay of (o,1); the fence answers.
+        val emitter = SetCell<String>()
+        val emitted = mutableListOf<Invocation>()
+        buffer(emitter, emitted)
+        val dottedEntry = setOf(Timestamp(o, 1), Timestamp(o, 2)) // (o,2) is the origin's del-dot
+        deliverTo(emitter, SetDelta(adds = mapOf("r" to setOf(Timestamp(o, 1)))))
+        deliverTo(emitter, SetDelta(dels = mapOf("r" to dottedEntry)))
+        assertEquals(3, emitter.compactBelow(TagFrontier(mapOf(o to 2L))))
+        val beforeStraggler = emitted.size
+        deliverTo(emitter, SetDelta(adds = mapOf("r" to setOf(Timestamp(o, 1)))))
+        assertEquals(beforeStraggler + 1, emitted.size, "a fenced add-tag must be answered, not dropped")
+
+        @Suppress("UNCHECKED_CAST")
+        val repair = emitted.last().args[0] as SetDelta<String>
+        assertTrue(repair.adds.isEmpty(), "the repair re-admits nothing: $repair")
+        // The premise of this bead, ASSERTED rather than assumed: the entry is
+        // exactly the fenced add-tag. No dot rides with it, so nothing in it
+        // certifies that any remove was delivered.
+        assertEquals(setOf(Timestamp(o, 1)), repair.dels.getValue("r"))
+
+        // ARM 2 — the receiver folds the repair, and can compact it at a frontier
+        // BELOW the origin del-dot, which the dotted entry would refuse.
+        val receiver = SetCell<String>()
+        val received = mutableListOf<Invocation>()
+        buffer(receiver, received)
+        deliverTo(receiver, SetDelta(adds = mapOf("r" to setOf(Timestamp(o, 1)))))
+        assertEquals(setOf("r"), receiver.membership())
+        deliverTo(receiver, repair)
+        assertEquals(emptySet<String>(), receiver.membership())
+        assertEquals(setOf(Timestamp(o, 1)), delsOf(receiver).getValue("r"))
+
+        val control = SetCell<String>() // the same element, tombstoned WITH the dot
+        deliverTo(control, SetDelta(adds = mapOf("r" to setOf(Timestamp(o, 1)))))
+        deliverTo(control, SetDelta(dels = mapOf("r" to dottedEntry)))
+        assertEquals(
+            0,
+            control.compactBelow(TagFrontier(mapOf(o to 1L))),
+            "a dotted entry is not certified at a frontier short of its dot",
+        )
+        assertEquals(
+            2,
+            receiver.compactBelow(TagFrontier(mapOf(o to 1L))),
+            "the undotted repair entry IS reclaimable on the add-tag alone — the seam under test",
+        )
+        assertTrue("r" !in delsOf(receiver))
+        assertTrue("r" !in addsOf(receiver))
+
+        // ARM 3 — THE ACCEPTANCE ASSERTION. Replay the original add into the
+        // receiver that just compacted the repair entry. The element must not
+        // become live; the discard recorded (o,1) in the fence as it dropped it.
+        val beforeReplay = received.size
+        deliverTo(receiver, SetDelta(adds = mapOf("r" to setOf(Timestamp(o, 1)))))
+        assertEquals(
+            emptySet<String>(),
+            receiver.membership(),
+            "compacting an undotted repair entry must not let the add it covered resurrect the element",
+        )
+        assertTrue("r" !in addsOf(receiver), "the fenced tag is not absorbed into adds either")
+        // …and the receiver repairs the straggler in turn rather than dropping
+        // its frame, so the early reclaim strands nobody.
+        assertEquals(beforeReplay + 1, received.size)
+        @Suppress("UNCHECKED_CAST")
+        val onward = received.last().args[0] as SetDelta<String>
+        assertTrue(onward.adds.isEmpty(), "the receiver's answer re-admits nothing: $onward")
+        assertEquals(setOf(Timestamp(o, 1)), onward.dels.getValue("r"))
+
+        // ARM 4 — the original DOTTED entry replayed into that receiver. (o,2)
+        // was never fenced here (this receiver only ever saw the undotted
+        // repair), so it rebuilds a tombstone carrying the dot alone. A
+        // tombstone, not a resurrection, and it carries no add novelty onward.
+        deliverTo(receiver, SetDelta(dels = mapOf("r" to dottedEntry)))
+        assertEquals(emptySet<String>(), receiver.membership())
+        assertEquals(setOf(Timestamp(o, 2)), delsOf(receiver).getValue("r"))
+        assertTrue("r" !in addsOf(receiver))
+    }
 }
