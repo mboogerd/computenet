@@ -53,9 +53,12 @@ import kotlin.test.assertTrue
  * ## What is deliberately NOT in the accounting
  *
  * The computenet-dwkp diagnostic maps `mintedHere`/`incarnations` are unpruned, unreclaimable by
- * `compactBelow` and `O(local mints)`. They are **not** the reclaimer's growth and bounding or
- * build-gating them is computenet-fzd3, a separate open bead. `SetCell.retainedState` excludes
- * them by construction, and this test's numbers are therefore about the reclaimer only. Live
+ * `compactBelow` and `O(local mints)`. They are **not** the reclaimer's growth, and computenet-fzd3
+ * decided they stay unbounded on purpose rather than bounding or build-gating them — the per-entry
+ * cost is measured and recorded, together with the workload bound under which that cost is
+ * acceptable, at `SetCell.kt`'s `mintedHere` declaration site; if that bound is ever crossed,
+ * option (a) — pruning `mintedHere` in `compactBelow` — is the repair. `SetCell.retainedState`
+ * excludes them by construction, and this test's numbers are therefore about the reclaimer only. Live
  * add-tags with no `dels` entry are excluded for the opposite reason: they are `O(live elements)`
  * and irreducible — an element that is present must carry the tag that makes it present.
  *
