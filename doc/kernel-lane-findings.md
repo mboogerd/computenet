@@ -2093,3 +2093,241 @@ loadEnd=[8.93 11.36 10.91]**, every iteration reporting `FENCE-ATTRIBUTED
 diverging seeds=[]`. That is 160 consecutive greens on this branch against
 `computenet-r13k`'s 45/120 = 37.5%, the later 40 of them at a load1 above the top
 of r13k's own 4.02-8.54 range.
+
+## KE3-23-QUORUMCLOSED — the per-wave read carries candidate (1)'s defect too, it is REACHABLE, and the repair here degenerates to deleting the `closed` arm
+
+`computenet-s0tq`, 2026-09-08, base `0d2fd04d6`. `## KE3-23-CLOSEDPREMISE`
+disposed of candidate (1) on `CausalStability.stableFrontier` and, under its
+clause-5 inventory of the other readers of `closed`, recorded that
+`ReplicaQuorum.frontier` — the per-wave settlement read — carries the same shape
+but was outside that item's file claim and had been READ, not measured. This
+entry settles it.
+
+**NOT MEASURED, AND NOT PRESENTED AS MEASURED.** No sweep, no rate and no flake
+was run for this. `computenet-07vb`'s 0/120-against-45/120 comparison is evidence
+for the stable-frontier repair and is **not** evidence for this one; nothing below
+leans on it. The instrument here is deterministic tests, which is what the item
+asked for.
+
+**REACHABLE — settled against the real mesh, not read off the code.**
+`ReplicaQuorumTest`'s
+`computenet-s0tq a replica rejoining the same CellRef is consulted by the covering
+quorum, not excused by its stale closed marker` drives three peers over
+`Peering.loopback` on a seeded `SimulationController` (seed 17, no faults) through
+the three states, reading `Replication.replicaFrontier` at each:
+
+1. **Before departure.** p2 is a covering member with no row for the wave's
+   source, so the R13 creation fence reads it as bottom and the wave HOLDS.
+2. **After `evict(closeDepartedRow = true)`.** p2 despawns and leaves
+   `instancesOf`, so it is not in `covering` at all and the wave settles. PN-0c
+   doing its job.
+3. **After re-`replicate` onto the same `CellRef`.** The precondition is asserted
+   off the mesh rather than assumed: the slot is back in `memberSlots` and the
+   grow-only marker is still in `closed`. p2 still has no row for the source, so
+   this is state (1) again — and against the unrepaired code the quorum returned
+   `true`.
+
+That third read is the false certificate. Against the unrepaired code the test
+failed `expected:<false> but was:<true>`, together with three synthetic pins in
+the same file (a live member whose row is at 3 for a wave at 5; a rowless
+rejoined member under the R13 fence; a departed member `instancesOf` has not yet
+dropped). The mechanism is the one `## KE3-23-CLOSEDPREMISE` established for the
+sibling read and is a property of the marker, not of the reader:
+`WatermarkCell.slotId` is ref-derived and replay-stable (M10.1), `closed` is
+grow-only and nothing retracts it, so a rejoin lands on a slot already closed —
+and `covering` is derived from `membersOf`, i.e. LIVE instances. The per-member
+check `slot in closed || (rows[slot]?.get(source) ?: MIN) >= counter` then passed
+on its left arm with the row never consulted. Note which switch this defeats: the
+R13 creation fence exists precisely so a rowless covering member holds the wave,
+and a rejoined member is rowless, so the vacuous arm defeated the fence in the
+one case the fence was built for.
+
+**THE REPAIR IS `computenet-07vb`'s SHAPE, AND HERE IT DEGENERATES TO DELETION.**
+That shape is "honour `closed` only where no live instance contradicts it" —
+subtract `closed - memberSlots` rather than `closed`. Applied here it is
+unreachable rather than merely rare: `covering` is a filter over `members`, so
+every slot the arm is ever evaluated against is a member slot, and
+`(closed - memberSlots)` is disjoint from the covering set BY CONSTRUCTION. So
+the arm is removed from both places it appeared (the `creationFence` filter and
+the settlement `all`) rather than written as a branch that provably never fires.
+The shape does real work in `CausalStability.stableFrontier` only because that
+read unions the announced `members` set, which holds slots `instancesOf` does
+not; this read has no such union. **This is the adoption answer the acceptance
+clause asks for: the same shape, with its degenerate form stated rather than a
+different one chosen.**
+
+Nothing else changes. No lattice change, no delta field, no wire change,
+`slotId` stays replay-stable, and `closed` stays grow-only and terminal — the
+repair is entirely at this read, exactly as `computenet-07vb`'s was at its own.
+
+**DIRECTION AND COST.** Strictly CONSERVATIVE for certification: a member that
+previously passed on the marker alone must now show a row at or past the counter,
+so `covering.all` can only become harder and no `(source, counter)` this read
+previously refused becomes certified. The false-certificate family this whole
+line has been chasing cannot be introduced by it. The price is the mirror image
+of the stability freeze `## KE3-23-CLOSEDPREMISE` accepted: while this node's
+`instancesOf` view still lags a genuinely departed replica, its `closed` marker
+no longer excuses it and the wave HOLDS until the view converges. A hold under
+WAIT semantics, never a premature release, and self-healing — a despawned replica
+leaves `instancesOf` and stays out of `covering`. Both halves are pinned:
+`computenet-s0tq a departed member this node has not yet dropped from instancesOf
+holds the wave` for the cost, `a cleanly-departed member no longer constrains`
+for PN-0c's unchanged job.
+
+**WHAT `closed` NOW MEANS TO OTHER READERS** (the acceptance clause carried over
+from `computenet-07vb`'s clause 5).
+
+- `ReplicaQuorum.frontier`'s settlement check and its `creationFence` filter —
+  changed, as above; the predicate can only get harder.
+- `ReplicaQuorum.frontier`'s FU-2 `membershipBarrier` — **UNCHANGED, by
+  derivation and not by omission.** Its `accounted` set is
+  `known + closed + suspended`; the same shape gives
+  `known + (closed - known) + suspended`, which is the same set. An announced
+  slot that is closed and not a live instance still counts as accounted and still
+  does not hold a keyed wave. Pinned by `computenet-s0tq the FU-2 barrier still
+  accounts for an announced-but-closed non-member slot`.
+- `Replication.replicaFrontier` — a one-line facade over the above; its call
+  sites are unchanged and its four switches keep their meanings.
+- `CausalStability.stableFrontier`, its `openSlots` diagnostic,
+  `Replication.onStabilityStall` and `StableFrontierChurnSweepTest`'s rig — the
+  four readers `computenet-07vb` already reconciled. Untouched here; this repair
+  neither depends on nor alters them.
+- `Replication.onStabilityStall`'s freeze-notice flap (`computenet-92ek`) — not
+  reached by this change, and since FIXED on `main` by its own item. The defect
+  WAS in `StabilityFreezeDetector`'s retraction arm testing the raw `closed` set
+  on the STABILITY path; `computenet-92ek` merged as `2edab2990` and deleted that
+  `slot in closed` disjunct, so the arm now retracts on `slot !in open` alone and
+  never reads `closed`. The quorum has no latch and no notice, so neither repair
+  touches the other's read. The two items were dispatched concurrently and are
+  independent, as both beads state; nothing found here contradicts that, and this
+  branch carries `2edab2990` by merge.
+- `WatermarkCell` / `WatermarkDelta` / the journal and the wire — untouched.
+  `closed` is still grow-only, still gossiped as a `Set<UUID>`, still terminal.
+  No `:oracle` mirror is needed because no lane was added.
+- `WatermarkCell.republish`'s `if (slotId in closed) return` — a replica's own
+  local heartbeat suppression, not a membership read; unchanged, and a rejoin
+  constructs a new cell with an empty `closed` anyway.
+
+**TESTS.** `ReplicaQuorumTest` gains the mesh reachability/regression test above
+and four synthetic pins, and its pre-existing `a cleanly-departed member no
+longer constrains` was AMENDED in place the way `computenet-07vb` amended
+`CausalStabilityTest`'s two: it named the departed member in BOTH `closed` and
+`membersOf`, which is the REJOIN state rather than the departure state, so it now
+models a clean departure the way the mesh actually presents one (despawned, gone
+from `membersOf`, marker still in the lattice and asserted). `computenet-dwkp`'s
+four prohibitions are untouched: no BS-12 fence-attribution assertion is relaxed,
+no class is absorbed into `MAX_STABLE_DIVERGING`, no SEEDS list is narrowed, and
+no incarnation-unique `tagSource` is pursued.
+
+## KE3-20 — BS-13's resurrection witness is dead, and its divergence witness is thin
+
+Recorded by: `computenet-qbap` (bug, parent `computenet-9sm`). Base commit:
+`5ff9507f4` (`main`). Host: darwin/arm64, 16 cores, load1 3-16.
+Measured 2026-09-08. All figures below are whole-class runs of
+`GcSafetySweepTest` (`./gradlew :kernel:test --tests
+'civictech.cell.replication.GcSafetySweepTest' --rerun -i`), seeds `1..200`,
+budget `40_000`.
+
+### What was expected
+
+`GcSafetySweepTest`'s BS-13 arm — `[KE3-20]`, the WRONG-seam control — carried
+two claims about the shipped tree. First, in the KDoc of its union assertion:
+"On THIS tree LOCAL still RESURRECTS (measured 12 of 200 at head; the pre-v2ka
+band was 8-15), so the `resurrecting` half alone is what currently fires and the
+union costs nothing today." Second, in `BS13_PIN_RETIRED`'s KDoc, that the
+sweep-level `fenceAttributed.isNotEmpty()` discriminator that REPLACED the arm's
+retired per-seed pin was non-empty on 10 of 10 sweeps with a minimum of 3.
+
+### What was found
+
+**The resurrection claim is false, and has been since `computenet-pay7`.**
+LOCAL `resurrecting` was EMPTY on 31 of 31 consecutive 200-seed sweeps at head
+`5ff9507f4` — 7 with the adversary unchanged, 12 at the narrowed compaction
+period adopted here, and 12 across the widenings rejected below. The sentence
+was written by `computenet-v2ka` (`f73c8a311`) BEFORE `computenet-pay7`'s
+re-admission fence (`36b889cff`) landed. With `ReclaimedDots` in place a
+re-delivered discarded tag is fenced and repaired rather than re-admitted, so the
+LOCAL seam no longer resurrects — it only diverges. `computenet-pay7`'s fence is
+recorded here as the SUSPECTED cause, because the bead asked for the relationship
+explicitly and because two pieces of evidence point at it: the chronology (v2ka's
+`12 of 200` was measured at a head that predates `36b889cff`, which
+`git merge-base --is-ancestor f73c8a311 36b889cff` confirms) and the mechanism
+above (`ReclaimedDots` fences exactly the re-delivery the resurrection witness
+needed). What was NOT done, and what would settle it: no sweep was taken with the
+fence reverted, so the attribution is inference from those two facts, not a
+bisect. The bead's own run 4 excludes a different candidate — `computenet-9sm.6`'s
+production trigger, neutralised at its arming point, left LOCAL resurrecting at
+0 of 200 — but that rules a cause out rather than ruling pay7 in. On this reading
+the arm has been resting on its divergence half alone since pay7 landed. The `resurrecting` half of the union is currently dead weight; it is
+kept because the union is what makes the assertion survive a fence landing, which
+is precisely the case it was widened for.
+
+**The divergence witness is thinner than `BS13_PIN_RETIRED` records.** With the
+adversary exactly as `computenet-nwnl` left it and the compaction period at its
+original 25, fence-attributed LOCAL seeds over seven runs were 6, 4, 4, 4, **2**,
+5, 3 — non-empty on 7 of 7 here, but against `computenet-nwnl`'s recorded band of
+3-5 over ten runs this is a lower floor, and the bead was filed on a
+full-`:kernel:test` run that produced **0** at the branch head it was found on.
+
+### Disposition
+
+Widened the adversary, per `[KE3-20]`'s own failure message ("widen the
+adversary, never weaken the check"). No assertion was relaxed, no seed was
+re-derived, `SEEDS`, `BUDGET`, `BS12_SEED` and `MAX_STABLE_DIVERGING` are
+unchanged.
+
+The one widening adopted is the compaction period `GcSafetySweep.K`, 25 -> 10:
+more compaction points per seed means more chances for the wrong seam to reclaim
+below a frontier that certifies nothing while a straggler is behind, and it does
+not touch the message-level rig floor the CONTROL arm measures.
+
+    fence-attributed LOCAL seeds, seeds 1..200, budget 40000, head 5ff9507f4
+    K = 25   7 runs   6, 4, 4, 4, 2, 5, 3                        min 2
+    K = 10  12 runs   7, 4, 5, 4, 3, 5, 4, 3, 4, 6, 5, 3         min 3
+
+Measured again in the context the bead's zero was actually observed in — a whole
+`./gradlew :kernel:test --rerun` run, where this class competes with the rest of
+the module for the host — three runs at K = 10 gave fence-attributed 4, 3, 3,
+all green, at the same head. Fifteen runs at K = 10 in total, non-empty on 15 of
+15, minimum 3.
+
+**The honest reading of that pair is that the floor moved by one seed.** Means
+are 4.0 and 4.4 and the ranges overlap heavily; twelve runs is not enough to
+call the difference anything stronger than a raised minimum. This is an
+improvement, not a restoration to the margin `computenet-nwnl` recorded, and the
+arm remains a low-rate witness.
+
+That last sentence is the conservative reading and the numbers do not compel it,
+which the feature review (`computenet-qbap`, same head, same host, load1 3.5-5.6,
+2026-09-08) recorded rather than rewrote. `computenet-nwnl`'s accepted band, read
+verbatim off `BS13_PIN_RETIRED`, is 5, 3, 3, 5, 4, 3, 3, 5, 3, 4 over ten runs —
+minimum 3, mean 3.8. K = 10's twelve runs are minimum 3, mean 4.4. Measured
+against the standard the nwnl fix was itself accepted on, the floor is EQUAL and
+the mean is higher; what has not been restored is a margin nobody ever measured.
+Three further independent whole-class runs taken during that review gave
+fence-attributed 6, 4, 3 (resurrecting 0, 0, 0; STABLE membership divergence 6 of
+200 against `MAX_STABLE_DIVERGING` = 12), which is 18 non-empty runs of 18 at
+K = 10 across two agents. If it reddens again the answer is a further
+widening or a re-examination of whether a three-peer mesh can still produce this
+harm at all — not a lowered assertion.
+
+Four alternative widenings were built and measured and REJECTED. Each is
+recorded because each is a plausible next idea that makes things worse:
+
+- **Four more disjoint park windows** so all twelve removes are issued under a
+  parked link instead of six: 1, 1, 3, 5 — worse. A three-peer mesh relays
+  around a single parked link.
+- **`ReorderFault` on all three links**: fence-attributed 2, 2, 5, 5 while STABLE
+  membership divergence went to 17, 18, 18 of 200 and **reddened BS-12** against
+  `MAX_STABLE_DIVERGING` = 12. Raises the rig floor without sharpening the
+  discriminator.
+- **`DuplicateFault` on all three links**: 0, 0, 1, 0 — it repairs the mesh, since
+  a duplicated frame is a second delivery attempt.
+- **Removing every ordinal rather than every odd one** (24 removes, stacked on
+  K = 10): 6, 4, 3, 2 — no better, and it would falsify the ordinal-parity prose
+  several KDocs still quote.
+
+`K = 5` was also measured (3, 5, 6, 2) and rejected: no better than 10, and
+STABLE divergence rose to 9 of 200. The returns diminish because once K is well
+under the gossip latency the first compaction point past a remove has already
+discarded the del-dot; per-seed chances are bounded by the remove count.

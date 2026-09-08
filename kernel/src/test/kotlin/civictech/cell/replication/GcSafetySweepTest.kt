@@ -352,8 +352,44 @@ object GcSafetySweep {
      */
     private const val REMOVE_LAG: Int = 90
 
-    /** Compaction period, in controller steps. ESTIMATED per 9sm.4-D4. */
-    private const val K: Int = 25
+    /**
+     * Compaction period, in controller steps. ESTIMATED per 9sm.4-D4 at 25; **narrowed to 10 by
+     * computenet-qbap as a WIDENING OF THE ADVERSARY, and it is measured, not guessed.**
+     *
+     * The BS-13 arm's `fenceAttributed.isNotEmpty()` assertion had gone intermittently red again
+     * (see [BS13_PIN_RETIRED]'s computenet-qbap section for the numbers). `[KE3-20]`'s own failure
+     * message prescribes one response — widen the adversary, never weaken the check — and the
+     * compaction PERIOD is the sharpest knob this rig has for it, because it multiplies the
+     * chances the wrong seam gets to reclaim below a frontier that certifies nothing while a
+     * straggler is still behind, WITHOUT touching the message-level rig floor the CONTROL arm
+     * measures. Every rejected alternative below moved that floor instead.
+     *
+     * MEASURED, darwin/arm64 16-core, 2026-09-08, at `main` head 5ff9507f4, seeds 1..200,
+     * budget 40_000, whole-class runs — LOCAL fence-attributed seed counts per run:
+     *
+     *   K = 25 (before), 7 runs:   6, 4, 4, 4, 2, 5, 3        min 2
+     *   K = 10 (this),  12 runs:   7, 4, 5, 4, 3, 5, 4, 3, 4, 6, 5, 3   min 3
+     *
+     * and, in the context the bead's 0 was actually observed in — a whole `:kernel:test` run,
+     * where this class competes with the rest of the module for the host — three further runs at
+     * K = 10 gave 4, 3, 3, all green.
+     *
+     * The lift is real but modest and the honest reading is recorded as such in
+     * `doc/kernel-lane-findings.md`: this raises the floor, it does not restore the witness to
+     * the margin computenet-nwnl recorded.
+     *
+     * **K = 5 was measured and REJECTED**: 3, 5, 6, 2 over four runs — no better than 10, while
+     * STABLE membership divergence rose to 9 of 200 against [MAX_STABLE_DIVERGING] = 12. The
+     * returns diminish because once K is well under the gossip latency the FIRST compaction point
+     * past a remove has already discarded the del-dot and the later points add nothing: the
+     * per-seed chances are bounded by the REMOVE COUNT, not by K.
+     *
+     * **Cost.** Per-arm sweep wall time over the twelve K = 10 runs was 2.3-5.2 s against 2.2-3.4 s
+     * at K = 25 on the same host, so the class stays far inside the ~60 s budget the 9sm.6 bead
+     * set. The wall-time and `discarded` figures quoted in this class's KDoc and in
+     * [MAX_STABLE_DIVERGING]'s were all taken at K = 25 and are left as the dated records they are.
+     */
+    private const val K: Int = 10
 
     /**
      * The last step the reclaimer fires on — the mesh's own `aliveUntil` horizon, past which the
@@ -1133,11 +1169,19 @@ class GcSafetySweepTest {
         // The control that passes by OBSERVING the failure: the wrong seam must be able to make
         // the observable fire, or the observable is inert and BS-12's arm proves nothing.
         //
-        // **The control asserts the UNION of the two harm classes, and the widening is
-        // deliberate — read it as forward cover, not as a description of the shipped tree.** On
-        // THIS tree LOCAL still RESURRECTS (measured 12 of 200 at head; the pre-v2ka band was
-        // 8-15), so the `resurrecting` half alone is what currently fires and the union costs
-        // nothing today. What the union buys is the case computenet-v2ka MEASURED on a build
+        // **The control asserts the UNION of the two harm classes, and the union is now the only
+        // reason this assertion can pass at all.** The sentence that stood here until
+        // computenet-qbap said the opposite — "On THIS tree LOCAL still RESURRECTS (measured 12
+        // of 200 at head; the pre-v2ka band was 8-15), so the `resurrecting` half alone is what
+        // currently fires and the union costs nothing today". That was computenet-v2ka's
+        // measurement, taken BEFORE computenet-pay7's re-admission fence landed, and it has been
+        // false ever since: with the fence in place a re-delivered discarded tag is fenced and
+        // repaired rather than re-admitted, so the LOCAL seam no longer resurrects — it only
+        // diverges. RE-MEASURED, darwin/arm64 16-core, 2026-09-08, at `main` head 5ff9507f4,
+        // seeds 1..200 budget 40_000: `resurrecting` was EMPTY on 31 of 31 consecutive
+        // 200-seed LOCAL sweeps (7 at K=25, 12 at K=10, 12 across rejected widenings). The
+        // `resurrecting` half is dead; the `diverging` half carries this assertion alone.
+        // What the union ALSO buys is the case computenet-v2ka MEASURED on a build
         // that is NOT in this tree: with a per-source re-admission floor in place (built,
         // measured unsafe, reverted in 5bfc85b91 — see `SetCell.compactBelow`'s KDoc) LOCAL's
         // resurrections vanish and are replaced by permanent membership DIVERGENCE — the
@@ -1385,6 +1429,40 @@ class GcSafetySweepTest {
          * UNWIDENED adversary the same measurement over seven sweeps was 2, 2, 1, 1, **0**, 2, 2
          * — which is exactly the intermittently-red assertion computenet-nwnl was filed for, and
          * is why the widening is part of this fix rather than optional polish.
+         *
+         * ## computenet-qbap, 2026-09-08 — the discriminator went thin again, and by how much
+         *
+         * The ten-sweep band above (3-5, min 3) did NOT hold. RE-MEASURED at `main` head
+         * 5ff9507f4, same host, seeds 1..200, budget 40_000, whole-class runs, with the adversary
+         * exactly as computenet-nwnl left it and [K] still 25: fence-attributed LOCAL seeds =
+         * 6, 4, 4, 4, **2**, 5, 3 over seven runs. Non-empty on 7 of 7 here, but computenet-qbap
+         * was filed on a **full-`:kernel:test` run that produced 0** at the branch head it was
+         * found on — a margin of two seeds out of two hundred is not a witness, it is a coin that
+         * has not landed badly yet.
+         *
+         * The response is [K] 25 -> 10, whose measurement and rationale live in that constant's
+         * KDoc: min 3 over twelve runs. **Four widenings were built and MEASURED and REJECTED**,
+         * and they are recorded because each one is a plausible next idea that makes things worse:
+         *
+         *  - **Four more disjoint park windows** (400-1000, 2000-2300, 3200-3500, 4400-5000), so
+         *    that every one of the twelve removes is issued while exactly one link is parked
+         *    instead of only six of them — computenet-nwnl's construction, extended. Measured
+         *    1, 1, 3, 5: WORSE than the unwidened arm. A three-peer mesh relays around a single
+         *    parked link, so a longer parked total does not manufacture stragglers; it only
+         *    delays the compaction points along with everything else.
+         *  - **`ReorderFault(window = 3)` on all three links** instead of one. Measured
+         *    fence-attributed 2, 2, 5, 5 while STABLE membership divergence went to 17, 18, 18 of
+         *    200 and **reddened the BS-12 arm** against [MAX_STABLE_DIVERGING] = 12. It raises the
+         *    rig's own floor, which is the CONTROL arm's quantity, without sharpening the
+         *    discriminator — the same failure mode as computenet-nwnl's rejected severing variant,
+         *    reached by a different route.
+         *  - **`DuplicateFault` on all three links** instead of one. Measured 0, 0, 1, 0 — it
+         *    REPAIRS the mesh. A duplicated frame is a second delivery attempt, so duplicating
+         *    everywhere removes stragglers rather than making them.
+         *  - **Removing every ordinal instead of every odd one** (24 removes, not 12), stacked on
+         *    K = 10, on the reasoning that per-seed chances are bounded by the remove count.
+         *    Measured 6, 4, 3, 2 — no better, and it would have falsified the ordinal-parity
+         *    prose several KDocs in this file still quote. Reverted.
          */
         private const val BS13_PIN_RETIRED: String =
             "retired by computenet-nwnl; replaced by the BS-13 arm's sweep-level " +

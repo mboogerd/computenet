@@ -49,9 +49,11 @@ class ReplicaQuorum(
      * unfiltered — every member — byte-identical to pre-PN-7.
      *
      * Membership is the [civictech.cell.host.InstanceIndex.instancesOf] fold;
-     * a member's row is read at its derived [WatermarkCell.slotId]. A `closed`
-     * slot (cleanly departed) stops constraining; a member whose row has not yet
-     * gossiped in holds the wave (WAIT), never releases it early.
+     * a member's row is read at its derived [WatermarkCell.slotId]. A cleanly
+     * departed replica is despawned and so leaves the fold — that is how a
+     * `closed` slot stops constraining here (see the KE3-23 note below, which
+     * settled that this read must NOT honour the marker itself). A member whose
+     * row has not yet gossiped in holds the wave (WAIT), never releases it early.
      *
      * **R13 creation fence** ([creationFence], default on — promoted from optional
      * to blocking in PN-7). Because filtering *shrinks* the quorum, a joining
@@ -82,6 +84,54 @@ class ReplicaQuorum(
      * `null` [key] (no covering quorum) is never held, so the default settlement
      * stays byte-identical; a converged membership never holds, so a
      * covering-quorum graph settles exactly as it did once everyone is known.
+     *
+     * **KE3-23 — this read does NOT honour `closed`, and that is settled, not
+     * assumed** (`computenet-s0tq`; disposition recorded in
+     * `doc/kernel-lane-findings.md` §`KE3-23-QUORUMCLOSED`, sibling of
+     * `computenet-07vb`'s §`KE3-23-CLOSEDPREMISE` on the stable-frontier read).
+     * The settlement check used to read
+     * `slot in closed || (rows[slot]?.get(source) ?: MIN) >= counter`, and the
+     * `covering` filter carried the same disjunct. Because
+     * [WatermarkCell.slotId] is derived from the [CellRef] and replay-stable
+     * across a rejoin (M10.1) while [WatermarkCell.closed] is grow-only and
+     * retracted by nothing, a replica evicted with `closeDepartedRow = true`
+     * that re-replicates onto the same ref returns onto the slot already closed
+     * — and it is then a LIVE instance, so it is in `members`, in `covering`,
+     * and it satisfied the predicate VACUOUSLY, its row never consulted. That
+     * defeats the R13 creation fence in exactly the case the fence exists for: a
+     * rejoined member is rowless. It is a false certificate of the same family
+     * `computenet-07vb` fixed on [CausalStability.stableFrontier], reached by
+     * the per-wave read. Reachability is SETTLED against the real mesh by
+     * `ReplicaQuorumTest`'s rejoin test, not read off the code.
+     *
+     * **The repair is `computenet-07vb`'s shape, and here it degenerates to
+     * deletion.** That repair is "honour `closed` only where no live instance
+     * contradicts it", i.e. subtract `closed - memberSlots` instead of `closed`.
+     * `covering` is a filter over `members`, so every slot the arm could ever be
+     * evaluated against is a member slot — `(closed - memberSlots)` and the
+     * covering set are disjoint by construction, and the arm is unreachable
+     * under the corrected term. So it is removed rather than written as a branch
+     * that provably never fires. (The shape does real work in
+     * [CausalStability.stableFrontier] because that read unions the announced
+     * `members` set, which contains slots `instancesOf` does not; this read has
+     * no such union.)
+     *
+     * The [membershipBarrier] above is deliberately UNCHANGED: its `accounted`
+     * set is `known + closed + suspended`, and applying the same shape gives
+     * `known + (closed - known) + suspended` — the same set. An announced slot
+     * that is closed and not live still counts as accounted and still does not
+     * hold a keyed wave.
+     *
+     * **Direction and cost.** The change is strictly CONSERVATIVE for
+     * certification: a member that previously passed on the marker alone must
+     * now show a row at or past the counter, so `covering.all` can only become
+     * harder and no `(source, counter)` that this read previously refused
+     * becomes certified. The price is the mirror image of the stability freeze
+     * `computenet-07vb` accepted: while this node's `instancesOf` view still
+     * lags a genuinely departed replica, the marker no longer excuses it and the
+     * wave HOLDS until the view converges — a hold under WAIT semantics, never a
+     * premature release, and self-healing, since a despawned replica leaves
+     * `instancesOf`. Both halves are pinned in `ReplicaQuorumTest`.
      */
     fun frontier(
         logicalId: UUID,
@@ -131,13 +181,18 @@ class ReplicaQuorum(
                     // rowless one holds on bottom); with it off, a member is only
                     // required once it has published a row for this source, so a
                     // freshly-joined covering member is skipped — the premature hazard.
+                    // KE3-23 (computenet-s0tq): no `slot in closed` arm here — see
+                    // the settlement note in this method's KDoc.
                     creationFence ||
-                        WatermarkCell.slotId(watermarkRefOf(ref)) in closed ||
                         rows[WatermarkCell.slotId(watermarkRefOf(ref))]?.containsKey(source) == true
                 }
+            // KE3-23 (computenet-s0tq): the settlement check consults the member's
+            // ROW, with no `slot in closed ||` short circuit. Every member reaching
+            // here is a LIVE instance, and `closed`'s premise ("this row can never
+            // advance again") is false for a live instance — see the KDoc.
             covering.isNotEmpty() && covering.all { ref ->
                 val slot = WatermarkCell.slotId(watermarkRefOf(ref))
-                slot in closed || (rows[slot]?.get(source) ?: Long.MIN_VALUE) >= counter
+                (rows[slot]?.get(source) ?: Long.MIN_VALUE) >= counter
             }
         }
 }

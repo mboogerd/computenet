@@ -93,6 +93,25 @@ class StabilityFreezeDetectorTest {
     }
 
     @Test
+    fun `a rejoined slot in both open and closed keeps its latch, unlike a never-closed slot`() {
+        // KE3-23 (computenet-92ek): `closed` is grow-only and slotId is
+        // ref-derived (M10.1), so a replica that rejoins onto its old slot is
+        // in BOTH `open` and `closed` at once. `evaluate`'s retraction arm
+        // must not treat that stale `closed` marker as a clean departure —
+        // the slot's row is unmoved, so the freeze it already reported is
+        // still true and must not flap into a spurious Resume.
+        val detector = StabilityFreezeDetector(threshold = 2)
+        val closed = setOf(slotC)
+
+        detector.evaluate(rows(10, 10, 9), open, closed).shouldBeEmpty()
+        detector.evaluate(rows(11, 11, 9), open, closed).shouldBeEmpty()
+        detector.evaluate(rows(12, 12, 9), open, closed) shouldBe listOf(frozen(slotC, 9L))
+
+        // C's row still has not moved: the latch must survive, not retract.
+        detector.evaluate(rows(13, 13, 9), open, closed).shouldBeEmpty()
+    }
+
+    @Test
     fun `a slot leaving the open set retracts the latch with exactly one Resume`() {
         val detector = StabilityFreezeDetector(threshold = 2)
         detector.evaluate(rows(10, 10, 9), open, emptySet()).shouldBeEmpty()
