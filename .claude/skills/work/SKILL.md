@@ -1821,11 +1821,11 @@ verdict. (`parked` is only meaningful on an empty batch.)
   dating check above catches a route that WENT stale; it cannot catch one that
   was never valid, and that is the commoner kind — five in one epic in one slot
   (computenet-bpzh). feature.md item 4 requires the breakdown to mark a route it
-  only reasoned out `unverified:`; where the mark is simply absent you cannot
-  tell a run route from a guess, so relay it the same way: "verify it
-  discriminates before trusting a negative result; substituting a working form
-  is the expected outcome, not a deviation." Restating an unrun route as
-  MANDATORY is what makes an implementer apologise for the bead being wrong.
+  only reasoned out `unverified:`; where the mark is absent you cannot tell a run
+  route from a guess, so set `${repoAge}` anyway — the dating check comes back
+  empty in exactly this case: "verify it discriminates before trusting a negative
+  result; substituting a working form is the expected outcome, not a deviation."
+  Restating an unrun route as MANDATORY is what makes an implementer apologise.
 - **Restate any cross-bead write the bead's criteria demand — ids and
   action — in the dispatch prompt. Read it from the batch entry's
   `cross_bead`, not from the prose.** `next-batch.py` surfaces the field the
@@ -2003,8 +2003,8 @@ re-prioritise, reassign, re-parent or claim any bead other than your own.
 If this is a bug fix, task.md step 3 is not optional: run the reproduction
 against the UNFIXED code first and quote the failing test name and assertion
 message. A prescribed reproduction that passes unfixed is a false lead — and
-the likeliest reason is that it went stale, not that your fix failed, so
-check what landed since the bead was filed, substitute a mutation that
+the likeliest reason is a defect in the route — stale, or never valid — not
+that your fix failed, so check what landed, substitute a mutation that
 demonstrably discriminates, and report the substitution on the bead rather
 than making it quietly. ${repoAge}
 Mutate only files inside your metadata.files claim. If the mutation needs a

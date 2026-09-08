@@ -504,9 +504,9 @@ which file to copy from. The gap is not diligence: that breakdown had verified
 its structural premises carefully. Nothing asked it to check that its own
 instructions run.
 
-**4. A prescribed CHECK — a mutation route, a non-vacuousness route, or an
-assertion written over prescribed example values — has either been RUN, or is
-labelled `unverified:`.** This is the one field still written as fact. Items 1-3
+**4. A prescribed CHECK — a mutation or non-vacuousness route, a fixture, a
+witness figure, or an assertion over prescribed example values — has either
+been RUN, or is labelled `unverified:`.** This is the one field still written as fact. Items 1-3
 are about claims; this is about a check whose whole job is to discriminate, and
 a check that does not discriminate is the one failure the later agents cannot
 read. It goes wrong in both directions and both look like a defect in correct
