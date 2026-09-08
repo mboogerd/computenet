@@ -2595,3 +2595,91 @@ the adversary was NOT attempted here — `## KE3-20`'s own record has four
 widenings built, measured and rejected on the OR-set for making the rig's floor
 worse rather than the discriminator sharper, and re-running that search on the
 OR-map is its own item, not this task's.
+
+## KE3-42-ORMAP — feature close-out: what the OR-map seam + reclaimer delivered, the three corrected premises, and the u7fi trigger check restated in code
+
+Recorded by: `computenet-9sm.8.8` (task, parent `computenet-9sm.8`, close-out
+task). Base commit: `0254a53e7` (merge of `computenet-9sm.8.7`), branch
+`task/computenet-9sm.8.8`. Host: darwin/arm64. Recorded 2026-09-08.
+
+This is the feature-level companion to `## KE3-42-ORMAP-BS13` (recorded by
+sibling task `computenet-9sm.8.7`) — that entry is the BS-13 witness result;
+this one is the close-out record for the whole feature. No content is
+repeated from it beyond citation.
+
+### What the feature delivered
+
+`computenet-9sm.8` ported the OR-set's stability-scoped reclamation and
+delivered-frontier machinery to the dot-shaped `OrMapCell` across its eight
+tasks (`.1`-`.8`): the del-dot (`[24-TAG-04]`, decision 9sm.8-D5), both lanes
+of the delivered frontier (decision 9sm.8-D1), stability-scoped `compactBelow`
+reclamation with a per-key re-admission fence (`[KE3-30]`/`[KE3-31]`,
+decisions 9sm.8-D6/D7), checkpoint-driven and crash-recovery test coverage,
+an oracle-side `DotModel` correspondence check, and a churn/DST reconvergence
+harness extension.
+
+### Three corrected premises
+
+- **The del-dot.** A `[MapOps.remove]` mints its OWN dot from the cell's dot
+  counter (`OrMapCell.kt:465`, `Timestamp(dotSource, ++dotCounter)`) and a
+  `[MapOps.put]` over a key with live dots mints a retract del-dot FIRST and
+  its put-dot SECOND (`:431-432`) — a re-put therefore consumes two counters
+  for one delta. Without the del-dot a `dels` entry carried only the put-dots
+  it covered, so a stable frontier certified the PUT's delivery and said
+  nothing about the REMOVE — the reclamation hazard `computenet-v2ka` measured
+  on the element-shaped sibling (`SetCell`).
+- **The derived floor.** The compaction floor is DERIVED from the persisted
+  `reclaimed` fence (`ReclaimedDots`), never a snapshot key of its own — so
+  restart cannot desynchronize the floor from the fence that gates
+  re-admission.
+- **No `readBounded`.** Reclamation reads the causal-stability frontier
+  through the existing `StabilityReclaim`/delivered-frontier seam
+  (`Replication.trackDeliveries`, per `## KE3-CKPT-TRIGGER`); no new bounded
+  read primitive was added or is needed.
+
+### The u7fi decision and trigger-check result
+
+`computenet-u7fi`'s 2026-09-06 15:07 KE3 decision (superseding feature design
+9sm.8-D3): accept the re-baseline fence residual PROVISIONALLY, do not build
+the fenced-source lattice under KE3, do not file it as a new bead — it is
+already filed twice, in `concord/corpus/DISPUTES.md` §42-WM-R14 and
+`doc/spec/40-distribution/42-replication.md` §Open interactions (decision
+9sm.8-D11; this task files nothing new, per D11's instruction). u7fi's
+acceptance was amended the same day to require the revisit trigger be
+restated in `OrMapCell.applyReBaseline`'s KDoc (grep anchor `fenced-source`)
+before the bead closes.
+
+That restatement is now in place: a "**Revisit trigger (computenet-u7fi, KE3
+decision 2026-09-06...)**" paragraph naming the two edits that reopen u7fi
+(`ReBaselineEmitting` entering `OrMapCell`'s supertype list, or a
+superseded/rotated `dotSource`) and the lattice's filing location, committed
+at `3a005eab8`.
+
+The trigger grep over the WHOLE feature diff (`git diff --name-only
+origin/main...HEAD`, 19 files, captured into a bash array rather than
+interpolated bare — the zsh unquoted-multi-path trap this repo has hit
+before) returns real hits, all classified as pre-existing `dotSource` reads,
+KDoc prose (including this file's own `## KE3-42-ORMAP-BS13` entry describing
+the check), and test fixtures exercising the existing `reBaseline` test seam.
+None adds `ReBaselineEmitting` to any production supertype list, reassigns
+`dotSource`, or attaches a `ReBaselineNotice` to the repair/del-dot emission
+paths. Full command, hit list and classification posted to `computenet-u7fi`
+(comment of 2026-09-08); the three code facts it states — no
+`ReBaselineEmitting` supertype, `dotSource` an unassigned `val`, repair/del-dot
+deltas carrying no notice — are restated there from the code, not assumed.
+
+### Sweep numbers
+
+Cited, not restated: `## KE3-42-ORMAP-BS13` (this file) for the OR-map BS-13
+sweep result (resurrection witness dead, 0/200; divergence witness
+non-reproducible; LOCAL-vs-STABLE `discarded` discriminator holds 3/3 with a
+~33% margin). `## KE3-CKPT-TRIGGER` for the checkpoint-driven reclamation
+trigger measurement.
+
+### What this discharges
+
+Feature clauses 6 and 7 of `computenet-9sm.8.8`'s acceptance: the KDoc
+restatement, the classified trigger-check comment on `computenet-u7fi`, and
+this findings entry. `computenet-u7fi` itself is closed by the orchestrator,
+not by this task (cross-bead close is a reserved action) — see the comment
+posted there for the commit sha the closing note should cite.
