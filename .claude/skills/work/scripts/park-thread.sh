@@ -90,7 +90,7 @@ ts() { printf '%s' "$1" | awk '{print $2}'; }
 echo "----"
 if [ -z "$answer" ]; then
   echo "park-thread: NO COMMENT MATCHED THE ANSWER MARKERS. That is not the same as" \
-       "'no answer' — an answer worded unlike the six known forms is invisible here." \
+       "'no answer' — an answer worded unlike the known forms is invisible here." \
        "Read the thread above before you park or re-park."
   exit 1
 fi
