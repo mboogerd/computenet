@@ -1197,7 +1197,13 @@ decision (computenet-wv9c). Concretely:
 
 - `bd update <id> --acceptance=…` (and `--description=…` where it prescribes
   the rejected approach), **keeping the superseded text verbatim under a
-  `Superseded <date> by human answer:` label** so provenance survives. For a
+  `Superseded <date> by human answer:` label** so provenance survives. (This
+  half is DISPUTED and the dispute is open: the maintainer's ruling on
+  computenet-1cuq is that "a superseded clause left in place is the defect" —
+  an answered item that still READS as a question is what makes a later session
+  re-park it. Where the two pull apart, make the field read as work to be done
+  and put the superseded wording where it stays auditable without being read as
+  live. computenet-febs9 decides where that is.) For a
   body too long to inline the flag is **`--body-file`** — NOT the wrappers'
   `--desc-file`, and there is no acceptance-from-file flag at all; guessing
   aborts the whole call and discards the `--title` beside it

@@ -23,12 +23,22 @@
 # classification is textual, ANCHORED at the start of the comment's first line,
 # and ADVISORY — the verdict says which comments to read, never what to do.
 #
-# The markers are drawn from this tracker's real answers, not from one bead:
-# `ANSWERED by the maintainer (…)`, `Decided 2026-08-31 (…)`, `Human decision
-# 2026-08-25:`, `MAINTAINER DECISION (mlboogerd, …)`, `AMENDMENT TO THE
-# DECISION (…)`, `HUMAN DECISION 2026-08-14 (…)`. A first cut fitted to one
-# bead's wording reported four of five real answers as "the park stands", which
-# is the failure this tool exists to prevent, wearing its own uniform.
+# The markers are drawn from a sweep of this tracker's real answers, not from
+# one bead: `ANSWERED by the maintainer (…)`, `ANSWER to the … QUESTION`,
+# `Decided 2026-08-31 (…)`, `Human decision 2026-08-25:`, `HUMAN ANSWER
+# (Merlijn, …)`, `HUMAN CLARIFICATION (…)`, `MAINTAINER DECISION (mlboogerd,
+# …)`, `Maintainer confirmation (…)`, `AMENDMENT TO THE DECISION (…)`,
+# `APPROVED 2026-08-19 by the maintainer (…)`. A first cut fitted to ONE bead's
+# wording reported four of five real answers as "the park stands" — the failure
+# this tool exists to prevent, wearing its own uniform — and the second cut
+# still missed computenet-em9i, the bead the maintainer cites as the four-times
+# recurrence.
+#
+# COVERAGE IS NOT COMPLETE AND CANNOT BE. A date-prefixed answer —
+# `2026-08-13: user approved the Linux re-run` (computenet-dqy.44, dqy.31) —
+# is out of reach of any start-anchored matcher, and unanchoring is what made
+# a QUESTION its own answer. That is why exit 1 says "no comment matched the
+# markers", never "no answer": the miss is a known, structural residue.
 #
 # ANCHORED, AND PARK IS TESTED FIRST, because a question legitimately contains
 # the answer vocabulary: ask-human.md's own template invites "not a call I
@@ -53,7 +63,7 @@ CLASSIFY='
   def first_line: (.text // .body // .content // "") | split("\n")[0];
   def kind: (first_line | ascii_downcase) as $l
     | if   ($l | test("^(question|parked|re-park)"))                             then "PARK"
-      elif ($l | test("^(answered|human decision|maintainer decision|decided |decision |amendment to the decision|human respond)")) then "ANSWER"
+      elif ($l | test("^(answered|answer to |human answer|human clarification|human decision|maintainer|decided |decision |amendment to the decision|approved |human respond)")) then "ANSWER"
       else "note" end;
   (if type=="array" then . else (.comments // []) end)
   | sort_by(.created_at // "")'

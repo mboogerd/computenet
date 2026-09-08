@@ -106,6 +106,11 @@ Human decision 2026-08-25: adopt OPTION 1 — a stable identity key
 MAINTAINER DECISION (mlboogerd, 2026-08-29): OPTION 4
 AMENDMENT TO THE DECISION (mlboogerd, 2026-08-29): WHY AN ANCHOR IS THE
 HUMAN DECISION 2026-08-14 (sync-report): answered and closed.
+APPROVED 2026-08-19 by the maintainer (mlboogerd): option A
+Maintainer confirmation (mlboogerd, 2026-08-27): the approval REAFFIRMED
+HUMAN ANSWER (Merlijn, 2026-08-10): take the second form
+HUMAN CLARIFICATION (Merlijn, 2026-08-10): the constraint is per-key
+ANSWER to the 2026-08-19 07:45 QUESTION — resolved, option (a)/(b) combined
 WORDINGS
 
 echo
@@ -120,6 +125,21 @@ T
 out=$(run); rc=$?
 [ "$rc" -eq 1 ] && ok "a question is not its own answer" || bad "exits $rc, wanted 1"
 hasnt "$out" "ANSWER-SHAPED" "no reassuring verdict on a bare question"
+
+echo
+echo "a date-prefixed answer is a KNOWN miss, and exit 1 must not deny it"
+# `2026-08-13: user approved the Linux re-run` (computenet-dqy.44) is out of
+# reach of any start-anchored matcher, and unanchoring is what made a QUESTION
+# its own answer. Pinned so the miss stays a documented residue rather than
+# being "fixed" by removing the anchor.
+fixture
+thread <<'T'
+2026-01-01T00:00:00Z|QUESTION: which option?
+2026-01-02T00:00:00Z|2026-08-13: user approved the Linux re-run
+T
+out=$(run); rc=$?
+[ "$rc" -eq 1 ] && ok "a date-prefixed answer is missed, as documented" || bad "exits $rc, wanted 1"
+has "$out" "not the same as" "and exit 1 does not deny that an answer exists"
 
 echo
 echo "it FAILS CLOSED on a payload it cannot read"
