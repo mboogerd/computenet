@@ -2193,10 +2193,14 @@ from `computenet-07vb`'s clause 5).
   four readers `computenet-07vb` already reconciled. Untouched here; this repair
   neither depends on nor alters them.
 - `Replication.onStabilityStall`'s freeze-notice flap (`computenet-92ek`) — not
-  reached by this change. That defect is in `StabilityFreezeDetector`'s retraction
-  arm against the raw `closed` set on the STABILITY path; the quorum has no latch
-  and no notice. The two items were dispatched concurrently and are independent,
-  as both beads state; nothing found here contradicts that.
+  reached by this change, and since FIXED on `main` by its own item. The defect
+  WAS in `StabilityFreezeDetector`'s retraction arm testing the raw `closed` set
+  on the STABILITY path; `computenet-92ek` merged as `2edab2990` and deleted that
+  `slot in closed` disjunct, so the arm now retracts on `slot !in open` alone and
+  never reads `closed`. The quorum has no latch and no notice, so neither repair
+  touches the other's read. The two items were dispatched concurrently and are
+  independent, as both beads state; nothing found here contradicts that, and this
+  branch carries `2edab2990` by merge.
 - `WatermarkCell` / `WatermarkDelta` / the journal and the wire — untouched.
   `closed` is still grow-only, still gossiped as a `Set<UUID>`, still terminal.
   No `:oracle` mirror is needed because no lane was added.
