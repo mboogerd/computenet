@@ -335,10 +335,44 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     // `compactBelow`, which exists precisely to bound the tag state, and not by `restore`. Its
     // retention is therefore O(local mints over the life of the instance) rather than
     // O(live elements), and `incarnations` below retains one `AtomicInteger` per distinct
-    // `tagSource` the PROCESS ever constructs. Both are negligible for the sweeps and demos
-    // this runtime runs today and neither is on a protocol path, but a long-lived,
-    // write-heavy replica would grow a map that compaction cannot reclaim. Bounding or
-    // build-gating them is computenet-fzd3, filed by computenet-dwkp's review 2026-09-07.
+    // `tagSource` the PROCESS ever constructs — O(distinct (id, instanceId) pairs the process
+    // constructs), outliving the instances themselves.
+    //
+    // THE DECISION (computenet-fzd3, 2026-09-08): both stay UNBOUNDED, deliberately. This is
+    // option (c) of the three that bead offered, chosen over (a) pruning `mintedHere` in
+    // `compactBelow` and (b) build-gating both, because either of those changes what
+    // `fenceProvenance` reports — a compacted tag would read `mintedHere=ABSENT`, and a gated
+    // build would report nothing at all — and that reading is the instrument computenet-dwkp's
+    // and computenet-typw's fence-attribution measurements are stated over. Bounding is worth
+    // doing only once those measurements no longer depend on the unpruned map; until then the
+    // cheaper defect is silently moving the instrument under a live measurement, not the bytes.
+    //
+    // THE COST, MEASURED rather than estimated (JDK 25, `-XX:+UseSerialGC`, `-Xmx4g`;
+    // used-heap delta after six `System.gc()` rounds, taken as the MARGINAL slope over
+    // n = 200k…1.6M entries, which was linear to four significant figures at every n):
+    //
+    //   `mintedHere`   66.5 B/entry with compressed oops (the default below a 32 GiB heap),
+    //                  85.0 B/entry without — a `HashMap` node, a boxed `Long` key (tag
+    //                  counters run past the `Long` cache, so every key boxes) and a table slot.
+    //   `incarnations` 106.5 B/entry compressed, 149.0 B/entry uncompressed — a
+    //                  `ConcurrentHashMap` node plus the retained `UUID` key and `AtomicInteger`.
+    //
+    // Plus a retention the byte count does not show: `mintedHere`'s VALUE is the element
+    // reference, so a tag minted by `remove` keeps the removed element reachable for the life
+    // of the instance. For an element type with a large payload that term dominates the 66.5 B.
+    //
+    // THE BOUND under which that is acceptable, stated so a future reader can check it rather
+    // than re-derive it: while an instance mints fewer than ~10^6 tags over its life (≈66 MB)
+    // and the process constructs fewer than ~10^5 distinct (id, instanceId) pairs (≈11 MB),
+    // with small elements. Everything this runtime runs today — sweeps, demos, the test suite —
+    // is orders of magnitude under both: instances are per-test and mint thousands of tags at
+    // most. A long-lived, write-heavy replica is what breaks the bound, and there is none. When
+    // one appears, or when an element type gets a large payload, option (a) is the repair —
+    // and it must then be named on computenet-dwkp and computenet-typw and reflected in
+    // `doc/kernel-lane-findings.md`'s KE3-23-PROVENANCE / KE3-23-ORDERING sections, because
+    // it changes what `fenceProvenance` can report. `SetCellCompactBelowTest`'s
+    // `compactBelow leaves the dwkp diagnostic maps alone` pins the status quo so that repair
+    // cannot land silently.
     /** Which construction of a cell carrying THIS `tagSource` this instance is (1-based). */
     internal val diagnosticIncarnation: Int =
         incarnations.computeIfAbsent(tagSource) { java.util.concurrent.atomic.AtomicInteger() }.incrementAndGet()
@@ -818,8 +852,9 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * the reclaimer: live add-tags with no `dels` entry (`O(live elements)` and legitimately
      * irreducible — an element that is present must carry the tag that makes it present), and the
      * computenet-dwkp diagnostic maps `mintedHere`/`incarnations`, which are unpruned,
-     * unreclaimable by [compactBelow] and `O(local mints)`. Bounding or build-gating those is
-     * computenet-fzd3, a separate open bead, and their growth is not this reclaimer's.
+     * unreclaimable by [compactBelow] and `O(local mints)`. computenet-fzd3 decided to keep
+     * them unbounded on purpose — the measured per-entry cost and the workload bound are at
+     * their declaration site — and their growth is not this reclaimer's either way.
      *
      * Read-only, additive, takes [stateLock] and makes no outbound call; no protocol path consults
      * it, exactly as its four siblings. `internal`: `:kernel` tests only.
@@ -1305,6 +1340,8 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
          * and a rejoining replica reuses the ref by construction (computenet-dwkp). Process-
          * wide and never pruned: it is diagnostic-only, one `AtomicInteger` per distinct
          * (id, instanceId) a test constructs, and nothing reads it on a protocol path.
+         * Unbounded deliberately (computenet-fzd3); the measured 106.5 B/entry and the
+         * workload bound that makes it acceptable are stated at `mintedHere`'s declaration.
          */
         private val incarnations =
             java.util.concurrent.ConcurrentHashMap<UUID, java.util.concurrent.atomic.AtomicInteger>()

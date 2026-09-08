@@ -424,4 +424,54 @@ class SetCellCompactBelowTest {
         assertEquals(setOf(Timestamp(o, 2)), delsOf(receiver).getValue("r"))
         assertTrue("r" !in addsOf(receiver))
     }
+
+    /**
+     * Pins computenet-fzd3's DECISION, not a protocol property: the computenet-dwkp
+     * provenance maps are deliberately unbounded, so `compactBelow` — which discards the
+     * tag state precisely to bound it — must leave `mintedHere` alone, and
+     * [SetCell.fenceProvenance] must still name the element a discarded tag was minted for.
+     *
+     * The bead offered pruning `mintedHere` in `compactBelow` as option (a); option (c) was
+     * chosen because pruning changes this reading to `ABSENT` under computenet-dwkp's and
+     * computenet-typw's live fence-attribution measurements. This test is what stops (a)
+     * from landing silently: it fails the moment a discard starts pruning the map, which
+     * forces whoever does it to re-state the decision recorded at the declaration site and
+     * to name the change on those two beads. The measured per-entry cost and the workload
+     * bound that make the retention acceptable live in `SetCell.kt`, not here.
+     *
+     * Read-only in both directions: nothing here asserts anything a protocol path consults.
+     */
+    @Test
+    fun `compactBelow leaves the dwkp diagnostic maps alone`() {
+        val cell = SetCell<String>()
+        val invocationBuffer = mutableListOf<Invocation>()
+        buffer(cell, invocationBuffer)
+
+        cell.inlet.call.add("x") // (s, 1)
+        cell.inlet.call.add("x") // (s, 2)
+        cell.inlet.call.remove("x") // dels[x] = {1,2} + del-dot (s, 3)
+
+        @Suppress("UNCHECKED_CAST")
+        val s = (invocationBuffer[0].args[0] as SetDelta<String>).adds.getValue("x").single().sourceId
+        val incarnationBefore = cell.diagnosticIncarnation
+
+        // the whole entry is covered, so the discard takes both add-tags and all three
+        // del-tags — exactly the tags whose provenance is asserted to survive below.
+        assertEquals(5, cell.compactBelow(TagFrontier(mapOf(s to 10L))))
+        assertTrue("x" !in delsOf(cell), "precondition: the tombstone really was discarded")
+
+        for (counter in listOf(1L, 2L, 3L)) {
+            val provenance = cell.fenceProvenance("x", Timestamp(s, counter))
+            assertTrue(
+                "mintedHere=x" in provenance,
+                "compactBelow must not prune mintedHere for the discarded tag ($counter): $provenance",
+            )
+            assertTrue(
+                "mintedHere=ABSENT" !in provenance,
+                "a locally minted tag must not read ABSENT after compaction ($counter): $provenance",
+            )
+            assertTrue("own=true" in provenance, "the tag was minted here ($counter): $provenance")
+        }
+        assertEquals(incarnationBefore, cell.diagnosticIncarnation, "compaction is not a reincarnation")
+    }
 }
