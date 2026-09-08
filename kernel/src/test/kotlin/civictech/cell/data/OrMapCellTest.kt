@@ -296,10 +296,20 @@ class OrMapCellTest {
         val emitted = record(cell)
         cell.inlet.call.remove("k")
 
-        // exactly the dots observed LIVE — the already-covered one is not re-shipped
-        emitted.single().dels.getValue("k") shouldBe setOf(foreign, own)
+        // exactly the dots observed LIVE, plus this remove's OWN del-dot
+        // (`[24-TAG-04]`, 9sm.8-D5) — the already-covered `stale` is not re-shipped.
+        val shipped = emitted.single().dels.getValue("k")
         emitted.single().puts shouldBe emptyMap()
-        cell.membership() shouldBe emptySet<String>()
+        // name the del-dot rather than loosening the pin: a later put reveals
+        // this cell's own dot source, and the restored counter was 2, so the
+        // remove minted counter 3 (and the probe put below, 4).
+        cell.inlet.call.put("probe", "p")
+        val mine = emitted[1].puts.getValue("probe").keys.single().sourceId
+        val delDot = Timestamp(mine, 3L)
+        shipped shouldBe setOf(foreign, own, delDot)
+        // a del-dot never enters `puts`
+        emitted.flatMap { e -> e.puts.values.flatMap { it.keys } }.contains(delDot) shouldBe false
+        cell.membership() shouldBe setOf("probe")
     }
 
     @Test
@@ -315,8 +325,14 @@ class OrMapCellTest {
 
         val aDots = sa.flatMap { it.puts["k"]?.keys ?: emptySet() }.toSet()
         val bDot = sb.single().puts.getValue("k").keys.single()
-        // the remove carried only a's own live dot; b's dot is nowhere in a's dels
-        sa.flatMap { it.dels["k"] ?: emptySet() }.toSet() shouldBe aDots
+        // the remove carried only a's own live dot; b's dot is nowhere in a's dels.
+        // a's dels ALSO carry a's own del-dots (`[24-TAG-04]`, 9sm.8-D5): counter 2
+        // is the re-put's retract half (put a1 = 1, retract = 2, put a2 = 3) and
+        // counter 4 is the remove's.
+        val aSource = aDots.first().sourceId
+        val aDelDots = setOf(Timestamp(aSource, 2L), Timestamp(aSource, 4L))
+        aDots shouldBe setOf(Timestamp(aSource, 1L), Timestamp(aSource, 3L))
+        sa.flatMap { it.dels["k"] ?: emptySet() }.toSet() shouldBe aDots + aDelDots
         (bDot in sa.flatMap { it.dels["k"] ?: emptySet() }) shouldBe false
 
         listOf(sa + sb, sb + sa).forEach { schedule ->
@@ -364,14 +380,21 @@ class OrMapCellTest {
 
         // the atomic halves ride together
         emitted[1].puts.getValue("k").size shouldBe 1
-        emitted[1].dels.getValue("k") shouldBe emitted[0].puts.getValue("k").keys
+        // the retract half carries the dots it covers AND its own del-dot
+        // (`[24-TAG-04]`, 9sm.8-D5): the v1 dot is counter 1, so the retract
+        // mints 2 and v2's put-dot is 3.
+        val src = emitted[0].puts.getValue("k").keys.single().sourceId
+        emitted[1].dels.getValue("k") shouldBe
+            emitted[0].puts.getValue("k").keys + Timestamp(src, 2L)
         // a re-put of the SAME value still mints: the fresh dot is the
         // last-writer-wins evidence a later [24-TMAP-03] comparison needs
         cell.inlet.call.put("k", "v3")
         emitted.size shouldBe 4
-        emitted[3].puts.getValue("k").keys.single() shouldBe Timestamp(
-            emitted[0].puts.getValue("k").keys.single().sourceId, 4L,
-        )
+        // a re-put consumes TWO counters, del-dot then put-dot: v1 -> 1;
+        // v2 -> del 2, put 3; v3 -> del 4, put 5; v3 again -> del 6, put 7.
+        emitted[3].puts.getValue("k").keys.single() shouldBe Timestamp(src, 7L)
+        emitted[3].dels.getValue("k") shouldBe
+            emitted[2].puts.getValue("k").keys + Timestamp(src, 6L)
     }
 
     // -----------------------------------------------------------------
@@ -428,7 +451,10 @@ class OrMapCellTest {
         restored.inlet.call.put("k", "v4")
         val fresh = emitted.single().puts.getValue("k").keys.single()
         (fresh in spent) shouldBe false
-        fresh.counter shouldBe 4L // the counter continued; 1..3 are not reused
+        // the counter continued; 1..4 are not reused. Two of the original's four
+        // counters are put-dots at "k" (1, then 4 after the re-put's del-dot 3)
+        // and one is "j"'s (2); the restored re-put mints del-dot 5 then put-dot 6.
+        fresh.counter shouldBe 6L
         // and the derived source is replay-stable: same ref ⇒ same dot source
         fresh.sourceId shouldBe spent.first().sourceId
     }

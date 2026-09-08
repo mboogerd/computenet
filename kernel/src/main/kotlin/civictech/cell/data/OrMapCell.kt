@@ -9,6 +9,9 @@ import civictech.cell.ReBaselineNotice
 import civictech.cell.Stateful
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
+import civictech.cell.data.delta.DeliveredFrontier
+import civictech.cell.data.delta.DeliveryTracking
+import civictech.cell.data.delta.TagLaneContinuity
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.cell.link.Interest
 import civictech.cell.link.catchUpOnLinked
@@ -107,12 +110,28 @@ interface OrMapApi<K, V> {
  * so `[KE1-10]`'s link-time classification is unreachable here — that shortfall
  * and the unclassified-value residual are filed in `concord/corpus/DISPUTES.md`.
  *
- * Not here: `TaggedMapView`/`UntagCell` adapters (§E1.5) and
- * delivered-watermark tracking
- * ([civictech.cell.data.delta.DeliveryTracking], E3.3).
+ * **The del-dot (`[24-TAG-04]`, decision 9sm.8-D5).** An effective
+ * [MapOps.remove] mints a dot of its OWN from this cell's dot counter and ships
+ * it inside the `dels` entry beside the put-dots it covers; a [MapOps.put] over
+ * a key that has live dots mints that retract del-dot FIRST and its put-dot
+ * SECOND, so **a re-put consumes two counters** (`n` for the retract, `n+1` for
+ * the new value) and still ships ONE delta. A put over an absent or fully
+ * tombstoned key mints one dot, as it always did. A del-dot never enters
+ * [puts], so it covers nothing and [membership]/[value] are bit-for-bit what
+ * they were.
+ *
+ * What the del-dot buys is a remove that can be **delivered**. Without it a
+ * `dels` entry carried only the put-dots it covered, so a del-dot at or below a
+ * stable frontier certified that every open member had delivered the PUT and
+ * said nothing about the REMOVE — the reclamation hazard computenet-v2ka
+ * measured on the element-shaped sibling (`SetCell.remove`'s KDoc carries the
+ * full argument). The dot rides the delivered lane like any other, fed from
+ * local mints and from [applyRemote]'s del lane as well as its put lane.
+ *
+ * Not here: `TaggedMapView`/`UntagCell` adapters (§E1.5).
  */
 class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
-    OrMapCellBase<K, V>(ref), Stateful, Replicable<TaggedMapDelta<K, V>> {
+    OrMapCellBase<K, V>(ref), Stateful, Replicable<TaggedMapDelta<K, V>>, DeliveryTracking, TagLaneContinuity {
 
     /**
      * Replica gossip intake (spec 40/42 §Design as implemented, 96 §E1.3):
@@ -195,6 +214,73 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
      */
     private val deadSources = mutableSetOf<UUID>()
 
+    // Per-origin delivered frontier (spec 40/42 §Delivered watermarks, E3.3(a);
+    // decision 9sm.8-D1): every dot this cell mints or absorbs — put-dots AND
+    // del-dots, on BOTH lanes — folds into a max-contiguous prefix per ORIGIN
+    // source (the dot's minting source, still visible in the fold). Listeners —
+    // the replica's WatermarkCell companion, installed by
+    // `Replication.trackDeliveries` — advance on each raised prefix, so the
+    // merged lattice answers "which origin waves has the replica set delivered",
+    // not "how many did each replica re-emit" (the CP-B2 outlet tap's key
+    // space, which is a different one).
+    //
+    // Deliberately its OWN [DeliveredFrontier] instance rather than a helper
+    // shared with [SetCell]: the two cells' monitors are independent and a
+    // shared mutable helper would couple them (9sm.8-D1).
+    private val delivered = DeliveredFrontier()
+    private val deliveryListeners = mutableListOf<(UUID, Long) -> Unit>()
+
+    override fun onDeliver(listener: (source: UUID, thru: Long) -> Unit) = synchronized(stateLock) {
+        deliveryListeners += listener
+        Unit
+    }
+
+    /**
+     * Fold [dots] into the delivered frontier and return each raised per-origin
+     * prefix. Call under [stateLock]; hand the result to [notifyDelivered]
+     * *after* releasing it.
+     */
+    private fun foldDelivered(dots: Iterable<Timestamp>): Map<UUID, Long> {
+        if (deliveryListeners.isEmpty()) return emptyMap()
+        val advanced = HashMap<UUID, Long>()
+        for (dot in dots) delivered.deliver(dot.sourceId, dot.counter)?.let { advanced[dot.sourceId] = it }
+        return advanced
+    }
+
+    /**
+     * Notify listeners of each raised per-origin prefix. **Never called under
+     * [stateLock]**: a listener is another cell's call (see [stateLock]).
+     */
+    private fun notifyDelivered(advanced: Map<UUID, Long>) {
+        if (advanced.isEmpty()) return
+        val listeners = synchronized(stateLock) { deliveryListeners.toList() }
+        for ((source, thru) in advanced) listeners.forEach { it(source, thru) }
+    }
+
+    // ------------------------------------------------------------------ 9sm.8-D9
+    // TAG-LANE CONTINUITY across a reincarnation of this ref, the dot-shaped form of
+    // `SetCell`'s (computenet-uju5, `doc/kernel-lane-findings.md` `## KE3-23-ROWCONTENT`).
+    // [dotSource] is ref-derived and [dotCounter] restarts at 0 on any construction that
+    // does not [restore], so a replica that despawns and returns on the same CellRef
+    // re-mints counters its previous incarnation already spent — for DIFFERENT keys. A
+    // peer's delivered row for this source already stands at the pre-departure high-water
+    // and cannot move for those dots ([DeliveredFrontier.deliver] returns null at or below
+    // the prefix), so the row would certify a del-dot the peer never applied.
+    //
+    // `Replication` is what knows a returning ref is a return; it remembers the departing
+    // instance's high-water and installs it here at `replicate`. Raising the counter is the
+    // whole fix: mints stay per-source monotone and strictly above every prefix any peer
+    // holds.
+
+    override fun tagLaneHighWater(): Long = synchronized(stateLock) { dotCounter }
+
+    override fun continueTagLaneAbove(counter: Long) = synchronized(stateLock) {
+        // never lowers: a restored checkpoint already carries its own counter, and a
+        // re-installation must be idempotent.
+        if (counter > dotCounter) dotCounter = counter
+        Unit
+    }
+
     /** The dots at [key] no tombstone covers. */
     private fun liveDots(key: K): Map<Timestamp, V> = synchronized(stateLock) {
         val dots = puts[key] ?: return emptyMap()
@@ -256,15 +342,27 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
             EmbeddedMergeClass.requireEmbeddable(value, "put")
             // reset-remove's local half: everything this writer currently sees
             // live at the key dies in the SAME delta that carries the fresh dot
-            // (KeyedSetCell's atomic retract+add, lifted to dots). The fold
-            // happens under `stateLock`; the propagation after it, never under.
-            val (dot, observed) = synchronized(stateLock) {
+            // (KeyedSetCell's atomic retract+add, lifted to dots). The fold and
+            // the delivered-frontier advance happen under `stateLock`; the
+            // listener notification and the propagation after it, never under.
+            //
+            // THE RETRACT DEL-DOT (`[24-TAG-04]`, 9sm.8-D5): when the key HAS
+            // live dots this put's retract half is an effective remove, so it
+            // mints its own dot — FIRST, so the retract's counter is `n` and the
+            // new value's is `n+1` and a re-put therefore consumes two. The
+            // del-dot goes into `dels` beside the dots it covers and never into
+            // `puts`, so `liveDots` is untouched by it.
+            val (dot, observed, advanced) = synchronized(stateLock) {
                 val seen = LinkedHashSet(liveDots(key).keys)
+                val delDot = if (seen.isEmpty()) null else Timestamp(dotSource, ++dotCounter)
                 val minted = Timestamp(dotSource, ++dotCounter)
                 puts.getOrPut(key) { LinkedHashMap() }[minted] = value
-                if (seen.isNotEmpty()) dels.getOrPut(key) { LinkedHashSet() } += seen
-                minted to seen
+                val entry = if (delDot == null) seen else LinkedHashSet(seen).also { it += delDot }
+                if (entry.isNotEmpty()) dels.getOrPut(key) { LinkedHashSet() } += entry
+                // a local mint is trivially contiguous
+                Triple(minted, entry, foldDelivered(listOfNotNull(delDot) + minted))
             }
+            notifyDelivered(advanced)
             outlet.call.propagate(
                 TaggedMapDelta(
                     puts = mapOf(key to mapOf(dot to value)),
@@ -277,14 +375,26 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // `[24-TMAP-04]` reset-remove, tag-precise: tombstone exactly the
             // dots observed live here and now. A concurrent put's dot is not in
             // this set and therefore survives the merge.
-            val observed = synchronized(stateLock) {
+            //
+            // THE DEL-DOT (`[24-TAG-04]`, 9sm.8-D5): the remove also mints a dot
+            // of its own, from the same counter space the put-dots come from,
+            // and ships it inside the entry. It enters `dels` only — it covers
+            // no put and `membership()`/`value()` are unchanged by it — and it
+            // is what makes `dot <= stableFrontier` certify that every open
+            // member delivered this REMOVE rather than merely the put it covers
+            // (see the class KDoc, and `SetCell.remove` for the measurement).
+            val (entry, advanced) = synchronized(stateLock) {
                 val seen = LinkedHashSet(liveDots(key).keys)
-                // effective-only (21): removing a key with no live dot is a no-op
+                // effective-only (21): removing a key with no live dot is a
+                // no-op, and mints no dot — there is no remove to deliver.
                 if (seen.isEmpty()) return
+                val delDot = Timestamp(dotSource, ++dotCounter)
+                seen += delDot
                 dels.getOrPut(key) { LinkedHashSet() } += seen
-                seen
+                seen to foldDelivered(listOf(delDot)) // a local mint is trivially contiguous
             }
-            outlet.call.propagate(TaggedMapDelta(dels = mapOf(key to observed)))
+            notifyDelivered(advanced)
+            outlet.call.propagate(TaggedMapDelta(dels = mapOf(key to entry)))
         }
     }
 
@@ -385,11 +495,24 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // the notice must be taken off the arriving wave first.
         val notice = CurrentContext.get()?.reBaseline
         // one atomic fold: novelty and its absorption must not straddle another
-        // writer, and no outbound call happens under the monitor.
-        val effective = synchronized(stateLock) {
-            if (notice != null) applyReBaseline(delta, notice)
-            else novelty(delta)?.also { absorb(it) }
+        // writer, and no outbound call happens under the monitor — neither the
+        // listener notification nor the re-emission.
+        val (effective, advanced) = synchronized(stateLock) {
+            val novel =
+                if (notice != null) applyReBaseline(delta, notice)
+                else novelty(delta)?.also { absorb(it) }
+            // BOTH LANES feed the delivered frontier (9sm.8-D1): every put-dot
+            // of the effective delta AND every dot of its `dels` — the del lane
+            // is what makes a del-dot certify the REMOVE at the receiving
+            // replica, and dropping it would leave every non-origin peer's row
+            // short by exactly the removes it absorbed.
+            novel to (
+                novel?.let { d ->
+                    foldDelivered(d.puts.values.flatMap { it.keys } + d.dels.values.flatten())
+                } ?: emptyMap()
+                )
         }
+        notifyDelivered(advanced)
         if (effective == null) return // echo terminates here
         PendingReBaseline.with(null) { outlet.originate { propagate(effective) } }
     }
