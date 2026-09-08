@@ -114,6 +114,54 @@ case "$rounds" in
 esac
 [ "$rounds" -ge 1 ] || { echo "wait-checks: max-rounds must be at least 1" >&2; exit 2; }
 
+# EVERY `gh` CALL IS BOUNDED, not just the total elapsed time. The wall-clock
+# deadline below stops the LOOP; it cannot stop a single `gh` invocation that
+# never comes back, because the deadline is only tested between rounds. Under
+# host load1 132 on 16 cores this script ran past the 600s foreground cap and
+# was AUTO-BACKGROUNDED — which is not one of the four verdicts and is not a
+# reading of the PR at all; the reviewer that hit it recovered with the bare
+# `gh pr checks` poll the skill spends two paragraphs warning against
+# (computenet-9szqn, recurrence of computenet-tl8q, which sized the window and
+# stopped there).
+#
+# Shadowing `gh` as a function bounds all six call sites at one place, and
+# `command gh` inside it is what stops the recursion. There is no `timeout(1)`
+# on macOS and no `--timeout` flag on `gh`, hence the poll: 0.2s granularity so
+# a normal ~0.5s call pays at most 0.2s, against a per-call ceiling that no
+# healthy call approaches.
+#
+# A killed call prints nothing and writes its cause to stderr, which every call
+# site already routes to $REST_ERR or /dev/null. That is deliberate: the round
+# then reads as zero-rows — cold-start or query-failed — and the loop reaches
+# QUERY-FAILED or TIMEOUT-PENDING on its own. A verdict is the contract; the
+# exit status is still never tested (see the top of this file).
+GH_CALL_TIMEOUT_SECONDS=${WAIT_CHECKS_GH_TIMEOUT_SECONDS:-45}
+case "$GH_CALL_TIMEOUT_SECONDS" in
+  ''|*[!0-9]*) echo "wait-checks: WAIT_CHECKS_GH_TIMEOUT_SECONDS must be a positive integer, got '$GH_CALL_TIMEOUT_SECONDS'" >&2; exit 2 ;;
+esac
+[ "$GH_CALL_TIMEOUT_SECONDS" -ge 1 ] || { echo "wait-checks: WAIT_CHECKS_GH_TIMEOUT_SECONDS must be at least 1" >&2; exit 2; }
+
+gh() {
+  local pid ticks=0 limit=$(( GH_CALL_TIMEOUT_SECONDS * 5 )) rc
+  command gh "$@" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$ticks" -ge "$limit" ]; then
+      kill -9 "$pid" 2>/dev/null
+      echo "gh $* exceeded ${GH_CALL_TIMEOUT_SECONDS}s and was killed" >&2
+      wait "$pid" 2>/dev/null
+      return 124
+    fi
+    # /bin/sleep, not `sleep`: the test harness shadows `sleep` on PATH to
+    # count ROUND sleeps and make 28 rounds take milliseconds. This one is not
+    # a round sleep, and counting it broke two of that suite's assertions.
+    /bin/sleep 0.2 2>/dev/null || sleep 0.2
+    ticks=$(( ticks + 1 ))
+  done
+  wait "$pid"; rc=$?
+  return $rc
+}
+
 # THE REQUIRED SET IS READ FROM THE RULESET, NOT CARRIED HERE. This script's
 # whole reason to exist over a bare `gh pr checks` is that it requires every
 # required row PRESENT — i.e. it is the thing that catches an ABSENT required

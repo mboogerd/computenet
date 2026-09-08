@@ -407,5 +407,52 @@ out=$(run); rc=$?
 hasnt "$out" "REST said:" "a healthy run never mentions a REST error"
 
 echo
+echo "a hanging gh call cannot outlive the per-call bound (computenet-9szqn)"
+fixture
+# The stub gh hangs forever on the poll. Without a per-call bound the script
+# never returns at all — which is the defect: an auto-backgrounded call is not
+# one of the four verdicts. `timeout` does not exist on macOS, so the guard is
+# this test's own watchdog: if the script outlives it, the bound is gone.
+cat > "$CTRL/hang-gh" <<'HANG'
+#!/usr/bin/env bash
+case "$*" in
+  *check-runs*) exec /bin/sleep 600 ;;
+  *rules/branches*) printf '%s\n' build-test-fast; exit 0 ;;
+  *pulls/*) echo deadbeefcafe; exit 0 ;;
+  *) echo 1; exit 0 ;;
+esac
+HANG
+chmod +x "$CTRL/hang-gh"
+mkdir -p "$CTRL/bin"; cp "$CTRL/hang-gh" "$CTRL/bin/gh"
+# The suite watchdogs ITSELF here. Run under the mutation that removes the
+# bound, an inline call hangs for as long as the stalled `gh` does — and a test
+# suite that hangs under its own mutation is unusable as a check (it looks like
+# a stalled agent, which is the very shape this bead is about). So: background,
+# poll, kill, FAIL.
+started=$(date +%s)
+( PATH="$CTRL/bin:$PATH" WAIT_CHECKS_GH_TIMEOUT_SECONDS=2 WAIT_CHECKS_COLD_ROUNDS=0 \
+    "$SCRIPT" "https://github.com/mboogerd/computenet/pull/1" 2 >"$CTRL/hang.out" 2>&1
+  echo $? > "$CTRL/hang.rc" ) &
+watched=$!
+waited=0
+while kill -0 "$watched" 2>/dev/null && [ "$waited" -lt 30 ]; do
+  /bin/sleep 1; waited=$((waited+1))
+done
+if kill -0 "$watched" 2>/dev/null; then
+  pkill -P "$watched" 2>/dev/null; kill -9 "$watched" 2>/dev/null
+  bad "still running after ${waited}s — the per-call bound did not fire"
+  echo 99 > "$CTRL/hang.rc"
+else
+  ok "returned in $(( $(date +%s) - started ))s rather than hanging on the stalled call"
+fi
+wait "$watched" 2>/dev/null
+out=$(cat "$CTRL/hang.out" 2>/dev/null)
+rc=$(cat "$CTRL/hang.rc" 2>/dev/null || echo 99)
+[ "$rc" -eq 3 ] || [ "$rc" -eq 4 ] || [ "$rc" -eq 5 ] \
+  && ok "a hung call still ends in one of the four verdicts (exit $rc)" \
+  || bad "exit $rc is not a verdict"
+has "$out" "exceeded 2s and was killed" "the killed call names itself as the cause"
+
+echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -488,6 +488,15 @@ Three standing disciplines:
   .claude/skills/work/scripts/wait-checks.sh <pr-url>
   ```
 
+  **AND NO RESULT AT ALL IS NOT A READING EITHER.** A call the harness
+  auto-backgrounds returns no verdict and no table — it is not one of the four
+  states, and improvising past it means the bare `gh pr checks` poll this
+  section exists to forbid. If it happens: the wait is unfinished, nothing is
+  known about the PR, and the move is to **run the same command again** (it is
+  idempotent, and two calls is the normal cold start anyway). If a second call
+  also fails to return, the box is the problem, not the PR — say so and hand
+  back rather than classifying on a hand-rolled poll.
+
   **`SETTLED` is not a verdict.** It means no required row is PENDING — a
   FAILED required check settles exactly like a passing one, exits 0, and
   prints the same last line (computenet-2jyq). The exit code is no help
@@ -505,7 +514,10 @@ Three standing disciplines:
   the run's start times out on a healthy PR by construction (computenet-hil5).
   Sizing the window AT the cap is what got the call auto-backgrounded twice
   (computenet-tl8q); a round count cannot bound wall clock, so the script now
-  stops on elapsed time and always returns a verdict. On exhaustion the script names each pending check with
+  stops on elapsed time, and bounds each `gh` call at 45s so an invocation that
+  hangs cannot outlive the loop's own deadline (computenet-9szqn: at load1 132
+  the elapsed stop was never reached, because the stop is only tested BETWEEN
+  rounds). On exhaustion the script names each pending check with
   its age and prints `ORDINARY` (re-run it) or `STUCK`; only `STUCK` is a
   defect.
 
