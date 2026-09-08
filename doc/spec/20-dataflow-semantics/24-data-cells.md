@@ -849,6 +849,23 @@ that is what the per-rule notes below now say instead of one blanket line.)*
   no-reclaimer control of 1-4 in the same runs
   (`doc/kernel-lane-findings.md` `## KE3-GC-DEL-DOT`).
 
+  **Why the dotless repair entry does not weaken the every-tag rule**
+  (settled 2026-09-08, computenet-684h — an open question raised by
+  computenet-pay7's review). Every tag of a repair entry is an add-tag, so on a
+  receiver the every-tag rule reaches no dot and certifies only that the ADD was
+  delivered: the receiver may reclaim a repair entry at a strictly lower
+  frontier than the dotted tombstone it was reconstructed from would have
+  permitted. That is admitted rather than an oversight, because the receiver's
+  protection against a replayed add is the fence and not the tombstone, and
+  compaction is the fence's only writer — the step that drops the repair entry
+  is the step that records its tag, so the earlier reclaim exchanges the
+  tombstone for a fence entry rather than losing it, and the replaying peer is
+  answered with a repair rather than dropped. Pinned deterministically by
+  `SetCellCompactBelowTest`'s `a receiver that compacts an undotted repair entry
+  does not re-admit the add it covered`, and consistent with the sweep evidence
+  above. The del-dot's guarantee therefore remains what `[24-TAG-04]` requires
+  of a `remove`-minted entry; a repair entry mints no remove and needs none.
+
   **Cost, stated where the rule is.** The retained dot set is compressed as
   per-source contiguous counter runs, so reclamation is a real reduction in
   retained state and **not a bound**; a bounded form needs epoch hygiene
