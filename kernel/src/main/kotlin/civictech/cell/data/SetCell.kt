@@ -562,6 +562,41 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // novel against `adds` here, and a peer that has folded the repair
             // answers with a `dels` frame whose every tag this replica fences
             // above, yielding no novelty at all.
+            //
+            // **THE DOTLESS REPAIR IS SAFE ON THE RECEIVER — measured, and this
+            // is outcome (1) of the two computenet-684h admitted** (`[KE3-23]`,
+            // the open question computenet-pay7's review raised). The worry was
+            // precise: a repair entry's every tag is an ADD-tag, so
+            // [compactBelow]'s every-tag rule reaches no dot and certifies only
+            // that the ADD was delivered — the receiver may therefore reclaim a
+            // repair entry at a strictly LOWER frontier than the dotted
+            // tombstone it was reconstructed from would have permitted, and does
+            // so without any dot having certified the remove to it.
+            //
+            // It does not re-open the hazard the del-dot closed, for a reason
+            // that is structural rather than statistical: what guards a receiver
+            // against a replayed add is not the tombstone but the FENCE, and
+            // [compactBelow] is the fence's only writer. The step that drops the
+            // repair entry is the same step that records its tag in
+            // [ReclaimedDots], so the early reclaim converts the tombstone into a
+            // fence entry rather than losing it, and a fenced tag is
+            // inadmissible however it later arrives. Nor is the straggler
+            // stranded: its replayed add is answered by this very repair path,
+            // so it is repaired instead of dropped.
+            //
+            // Pinned deterministically by `SetCellCompactBelowTest`'s
+            // `a receiver that compacts an undotted repair entry does not
+            // re-admit the add it covered`, whose four arms capture a real
+            // repair from a real emitter, show it reclaimable at `o -> 1` where
+            // the dotted entry it came from discards nothing, replay the add and
+            // assert the element stays dead while the receiver repairs onward,
+            // and replay the original DOTTED entry (whose dot this receiver never
+            // fenced) to show it rebuilds a tombstone, not a resurrection.
+            // Mutation-checked: recording into the fence only tags absent from
+            // `adds[element]` — the "only a dot certifies" variant — leaves arms
+            // 1 and 2 green and turns the third arm's membership assertion red.
+            // Consistent with the sweep evidence the bead cites (10 consecutive
+            // 200-seed `GcSafetySweepTest` runs, zero STABLE resurrections).
             val repaired =
                 if (fenced.isEmpty()) newDels
                 else (newDels.keys + fenced.keys).associateWith { newDels[it].orEmpty() + fenced[it].orEmpty() }
