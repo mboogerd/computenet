@@ -576,6 +576,16 @@ So:
   # NO-RUN (5 — GitHub never built this head; never waited out, computenet-a5in)
   ```
 
+  **If the call does not return at all** — the harness auto-backgrounds it —
+  you have no verdict and no table, which is not one of those four states.
+  Under pathological host load that happened to a feature reviewer even with
+  the script's own deadline in place (computenet-9szqn). Treat it as your one
+  invocation spent: certify draft, say *"the check wait did not return"* in
+  your verdict, and STOP. Do NOT recover with a hand-rolled `gh pr checks`
+  poll — that is the classification this whole section forbids, and it is
+  where an unbounded improvisation lands under exactly the conditions that
+  make improvising worst.
+
   **But do not wait for pending checks — you are the wrong agent for it.**
   One invocation is your budget. If it comes back `TIMEOUT-PENDING`, say so
   in your verdict — *"verdict conditional on `build-test-fast`, pending at
