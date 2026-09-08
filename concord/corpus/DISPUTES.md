@@ -2991,3 +2991,127 @@ property is statable at the driver and not in the corpus.
   property is a bounded seeded check, not a proof) and
   `KE3-GC-RECLAIM-FRONTIER` (the same reclaimer is unreachable from the dist
   driver at all).
+
+## `42-GC-FALLBACK-01` — the same empty dist frontier, plus a schema-level absence, together bar the below-floor `[24-TAG-04]` fallback clause from the corpus (`schema-gap` + `driver-wiring-gap`)
+
+- **Requirement it would cover**: `[24-TAG-04]`
+  (`doc/spec/20-dataflow-semantics/24-data-cells.md`, grep anchor `below the
+  compaction floor`) — the fallback clause: "a `StateRequest(since)` that asks
+  for state below the compaction floor is answered with full state." The
+  feature's own text names this a `[42-WM-nn]`/`[24-TAG-04]` id; re-verified at
+  `origin/main` `0d2fd04d6` that no `[42-WM-01]`..`[42-WM-08]` in
+  `doc/spec/40-distribution/42-replication.md` names the fallback — the clause
+  lives only in `[24-TAG-04]`, so this row cites `24-TAG-04`, not a WM id.
+  `[24-CATCHUP-01]` (the other id the scenario's `covers:` names) is already
+  covered by `24-GEN-01` (`doc/spec/CONCORDANCE.md`); nothing new is claimed
+  for it here. Epic `computenet-9sm` `[KE3-35]`/`[KE3-36]` (feature
+  `computenet-9sm.7`, task `computenet-9sm.7.3`).
+- **Two missing capabilities, both required, neither present**:
+  1. **The dist stable frontier is permanently empty** — the identical
+     structural blocker `KE3-GC-RECLAIM-FRONTIER` above records in full:
+     `KernelDriverDist` holds ONE `Replication` for the whole mesh
+     (`concord/src/main/kotlin/civictech/concord/driver/kernel/KernelDriverDist.kt`,
+     anchor `private val replication by lazy { Replication(driver.registry) }`),
+     so `CausalStability.stableFrontier` is always empty and no scripted
+     `snapshot` ever runs `compactBelow`'s discard branch. Tracked as
+     `computenet-cthi` (open, unclaimed) — cite, do not touch.
+  2. **The corpus has no `since`-carrying pull step.** `concord/schema/scenario.md`
+     §retransmit, grep anchor `would need a real`: "a scenario needing THAT
+     [incremental-pull currency] would need a real `StateRequest` path," which
+     the corpus does not have. The only late-linking step is `connect`, served
+     by `catchUpOnLinked` (`kernel/src/main/kotlin/civictech/cell/data/SetCell.kt`,
+     anchor `outlet.catchUpOnLinked`), which is `since = null` by construction
+     (full state, never a since-bounded pull). So even a reclaiming driver
+     could never be driven into the below-floor branch `[KE3-35]`/`[KE3-36]`
+     added to `SetCell.pullServe` through this scenario's own late-join step —
+     only through `retransmit`, which injects a duplicate delta rather than a
+     bounded pull and therefore cannot exercise the `since`-comparison branch
+     either. Both gaps have to close for this row to become codeable: (1)
+     without (2) still has no request the fallback branch fires on; (2)
+     without (1) still has an always-empty floor for the comparison to be
+     below.
+- **Measured, not inferred** (2026-09-08, macOS, contended — sibling agent
+  running 200-seed `:kernel` sweeps concurrently). The scenario below was
+  authored in the `42-REPL-LATE-01` shape per 9sm.7-D7's example, and run via
+  `./gradlew :concord:test --rerun`. Convergence held: `late-join-equals-early`,
+  `replicas-converge`, and `no-dead-letters` all passed on 20 of 20 runs (no
+  failure message for any of them — the runner's assertion message lists only
+  the checks that failed for the first failing run, and only one is named).
+  The non-vacuity witness failed on 20 of 20 runs:
+  `42-GC-FALLBACK-01: check(s) failed on 20 of 20 run(s). First failing run
+  (0): emission-count(r1, since 11): expected exactly 1 emission(s) but
+  observed 0`. The diagnosis matches `KE3-GC-RECLAIM-FRONTIER`'s exactly: the
+  retransmitted duplicate of r2's discarded add-tag is absorbed silently
+  against a tombstone still present at r1 (0 emissions), which is only
+  possible if `compactBelow` discarded nothing — had r1 reclaimed, the
+  duplicate would have been fenced by `ReclaimedDots` and answered with the
+  repair emission `exactly: 1` asks for. A prior run of the same script with
+  the window opened at the checkpoint step (`since: 7` instead of `since: 11`)
+  read `observed 2` instead of `0` — the wider window also counts the late
+  `connect`'s own `catchUpOnLinked` emission from r1 to `vl`, which is
+  unrelated to the retransmit; narrowing the window to `since: 11` (just
+  before the `retransmit` step) isolates the retransmit's own effect and is
+  the version recorded below.
+- **What was NOT done instead**: `42-GC-FALLBACK-01` was **not** committed
+  with the `emission-count` check removed or weakened, and the scenario's
+  `covers:` claim was not left standing anywhere `CONCORDANCE.md` reads from —
+  it exists only as the block quoted below. Without the non-vacuity check,
+  every remaining check passes against a mesh that never reclaims and a
+  late-join step that never issues a `since`-bounded request — a scenario that
+  would claim `[24-TAG-04]` fallback coverage while exercising neither of its
+  two clauses (below-floor detection or full-state fallback reply). `[24-TAG-04]`
+  therefore stays uncovered in `CONCORDANCE.md` rather than falsely covered.
+  No `concord/src` or `concord/schema` change was made (single-writer,
+  schema-change-gated, and both are non-goals of `computenet-9sm.7.3`), and no
+  kernel change was made.
+- **Where the property IS pinned today**: kernel-side, directly at the unit
+  the fallback lives in —
+  `kernel/src/test/kotlin/civictech/cell/data/SetCellSincePullBelowFloorTest.kt`
+  (`computenet-9sm.7.1`), which compacts a responder below its floor, has a
+  peer request `since` below it, and asserts the reply is byte-equal to the
+  `since = null` reply ([KE3-35]/[KE3-36]'s own oracle) — landed on this
+  branch's base commit (`adf893e9a`, "Merge computenet-9sm.7.1"). The corpus
+  half of `[24-TAG-04]`'s fallback clause is what this entry records as
+  unreachable.
+- **Check to restore** — the scenario, verbatim, so it can be committed
+  unchanged once both blockers close. `graph`: hosts `h1`/`h2`; cells
+  `{id: r1, type: set-source, of: string, host: h1, replica-of: shared}`, the
+  same for `r2` on `h2`, an early view `ve` on `h1` linked to `r1` from the
+  start, and a late view `vl` on `h1` linked to `r1` mid-script. `script`:
+  1. `{type: apply, on: r2, op: add, value: a}` — r2 counter 1, the tag r1
+     will later discard
+  2. `{type: apply, on: r2, op: add, value: b}` — r2 counter 2, live throughout
+  3. `{type: apply, on: r1, op: add, value: c}` — r1 counter 1
+  4. `{type: quiesce}`
+  5. `{type: apply, on: r2, op: remove, value: a}` — r2 counter 3, the del-dot
+  6. `{type: quiesce}` — both replicas must deliver the remove
+  7. `{type: snapshot, on: r1, as: r1-post-reclaim}` — the production reclaim
+     trigger, on the replica under test
+  8. `{type: apply, on: r1, op: add, value: d}` — further add on r1
+  9. `{type: apply, on: r2, op: add, value: e}` — further add on r2
+  10. `{type: quiesce}`
+  11. `{type: connect, from: r1, to: vl}` — late join: link a view to the
+      checkpoint-compacted replica after deltas have flowed
+  12. `{type: retransmit, on: r1, source: r2, counter: 1, op: add, value: a}` —
+      a later delta carrying r2's discarded tag, addressed to r1 (the driver
+      refuses a self-addressed `retransmit`, so the discarded tag must belong
+      to the peer, not the replica under test)
+  13. `{type: quiesce}`
+
+  `checks`: `{type: late-join-equals-early, early: ve, late: vl}`,
+  `{type: replicas-converge, logical: shared}`, `{type: no-dead-letters}`, and
+  the non-vacuity check `{type: emission-count, cell: r1, since: 11, exactly: 1}`.
+  `since: 11` opens the window just before the `retransmit` step so it counts
+  only the retransmit's own effect, not the late `connect`'s unrelated
+  catch-up emission.
+- **Revisit trigger**: BOTH close, together:
+  1. `computenet-cthi` lands (`KernelDriverDist` gives each driver host its
+     own `Replication`, per `KE3-GC-RECLAIM-FRONTIER`'s revisit trigger above),
+     so a scripted `snapshot` can actually reclaim on the dist profile; AND
+  2. a `since`-carrying pull step is admitted to `concord/schema/scenario.md`
+     (a real `StateRequest(since)` verb, not `connect`/`catchUpOnLinked`) —
+     this is a gated schema change (single-writer, `concord/schema/*.md`'s own
+     contract) and is named here, not made. Until both hold, `[24-TAG-04]`'s
+     fallback clause stays uncovered rather than falsely covered. Cross-reference:
+     `KE3-GC-RECLAIM-FRONTIER` (blocker 1, in full) and `KE3-GC-DEL-LANE` (the
+     re-admission half of `[24-TAG-04]`, CLOSED by `computenet-pay7`).
