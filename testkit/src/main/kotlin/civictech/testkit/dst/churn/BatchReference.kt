@@ -18,8 +18,9 @@ import java.util.WeakHashMap
  *
  * @property peer the accepting replica's declared name.
  * @property ordinal the write's position in the plan's op script ([ChurnWrite.ordinal]).
- * @property element what a [MeshPayload.SET] write added, or null for a counter write.
- * @property increment what a [MeshPayload.PN_COUNTER] write added, or 0 for a set write.
+ * @property element what a [MeshPayload.SET] write added, or the KEY a [MeshPayload.OR_MAP]
+ *   write put, or null for a counter write.
+ * @property increment what a [MeshPayload.PN_COUNTER] write added, or 0 for a set/map write.
  */
 data class AcceptedOp(
     val peer: String,
@@ -96,23 +97,27 @@ sealed interface ReferenceFold {
  * The batch-mode reference fold ([CHA3-11]): what a mesh's converged state **must** be, computed
  * from the ledger of operations replicas actually accepted rather than from the replicas.
  *
- * ## Scope: set and counter only, by decision (umx.2-D6)
+ * ## Scope: set, counter, and OR-map MEMBERSHIP only, by decision (umx.2-D6, 9sm.8-D10)
  *
  * [MeshPayload.SET] folds to the OR-set outcome of the accepted adds and [MeshPayload.PN_COUNTER]
  * to their sum, because for both the batch outcome is a function of the *multiset of accepted
  * operations alone*: an add-only OR-set converges to the set of added elements whatever the
- * interleaving, and a PN counter to the sum whatever the interleaving. Nothing here models tags,
- * dots or causal order, and that is the boundary.
+ * interleaving, and a PN counter to the sum whatever the interleaving.
+ * [MeshPayload.OR_MAP] folds like [MeshPayload.SET] — the accepted **keys** — for the same
+ * reason: [ReconvergenceCheck]/[MeshConvergences.project] only asks for OR-map *membership*
+ * (`ReferenceFold.Elements`), never a per-key value, so the batch outcome is again a function of
+ * the accepted key set alone and needs no causal/dot model. Nothing here models tags, dots or
+ * causal order, and that is the boundary.
  *
- * **Tagged meshes (`OrMapCell`'s dot order) are deliberately NOT covered.** Their batch outcome
- * depends on which writes are *causally* concurrent, so a reference for them is a dot model, not
- * a fold over a flat ledger — and one already exists in the making: ORA2's `DotModel` in
- * `:oracle`, which composes with the same `civictech.cell.verify.ReplicaConvergence` this check
- * composes with. Building a second, weaker dot model here would put two disagreeing references
- * in the repo and make neither trustworthy (feature §9 risk 3). Extending this file to OR-maps
- * means joining ORA2's model, not adding a third arm to [ReferenceFold]. Note also what this
- * file does NOT import: no `civictech.cell.data.op` type appears anywhere in it, so the
- * reference cannot silently become a second copy of the implementation.
+ * **Per-key VALUE agreement (`OrMapCell`'s dot order deciding a tie) is deliberately NOT
+ * covered.** That outcome depends on which writes are *causally* concurrent, so a reference for
+ * it is a dot model, not a fold over a flat ledger — and one already exists in the making: ORA2's
+ * `DotModel` in `:oracle`, which composes with the same `civictech.cell.verify.ReplicaConvergence`
+ * this check composes with. Building a second, weaker dot model here would put two disagreeing
+ * references in the repo and make neither trustworthy (feature §9 risk 3). A sweep that needs
+ * per-key value agreement joins ORA2's model rather than widening [ReferenceFold] with a value
+ * arm here. Note also what this file does NOT import: no `civictech.cell.data.op` type appears
+ * anywhere in it, so the reference cannot silently become a second copy of the implementation.
  *
  * ## What "surviving" means, and why the reference is a pair of bounds
  *
@@ -165,7 +170,7 @@ class BatchReference private constructor(
     fun foldOf(peers: Set<String>): ReferenceFold {
         val mine = ops.filter { it.peer in peers }
         return when (payload) {
-            MeshPayload.SET -> ReferenceFold.Elements(mine.mapNotNull { it.element }.toSet())
+            MeshPayload.SET, MeshPayload.OR_MAP -> ReferenceFold.Elements(mine.mapNotNull { it.element }.toSet())
             MeshPayload.PN_COUNTER -> ReferenceFold.Total(mine.sumOf { it.increment })
         }
     }

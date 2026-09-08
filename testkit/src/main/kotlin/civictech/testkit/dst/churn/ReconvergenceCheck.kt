@@ -4,6 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.data.Replicable
 import civictech.cell.data.delta.PnCounterDelta
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.TaggedMapDelta
 import civictech.cell.verify.ReplicaConvergence
 import civictech.testkit.dst.CheckRegistry
 import civictech.testkit.dst.DepartureMode
@@ -92,12 +93,14 @@ object MeshConvergences {
     private fun initialFold(payload: MeshPayload): Any = when (payload) {
         MeshPayload.SET -> SetDelta<String>()
         MeshPayload.PN_COUNTER -> PnCounterDelta()
+        MeshPayload.OR_MAP -> TaggedMapDelta<String, String>()
     }
 
     @Suppress("UNCHECKED_CAST")
     private fun mergeFold(state: Any, delta: Any): Any = when (state) {
         is SetDelta<*> -> (state as SetDelta<Any>).merge(delta as SetDelta<Any>)
         is PnCounterDelta -> state.merge(delta as PnCounterDelta)
+        is TaggedMapDelta<*, *> -> (state as TaggedMapDelta<Any, Any>).merge(delta as TaggedMapDelta<Any, Any>)
         else -> error("unknown churn-mesh fold state ${state::class.simpleName}")
     }
 
@@ -105,9 +108,12 @@ object MeshConvergences {
      * Project a folded delta stream onto the value the batch reference speaks in.
      *
      * The projection is the mergeable family's own outcome rule — an OR-set element is present
-     * iff it holds an add-tag no del-tag covers, a PN counter is increments minus decrements —
-     * and nothing else. It is not a second implementation of the cells: the *state* being
-     * projected was produced by merging the cells' own emitted deltas.
+     * iff it holds an add-tag no del-tag covers, a PN counter is increments minus decrements, an
+     * OR-map key is present iff it holds a live (non-tombstoned) dot — and nothing else. It is
+     * not a second implementation of the cells: the *state* being projected was produced by
+     * merging the cells' own emitted deltas. The OR-map projection is membership only, exactly
+     * SET's shape ([TaggedMapDelta.membership] already subtracts [TaggedMapDelta.dels]); per-key
+     * value agreement is not checked here — see [MeshPayload.OR_MAP]'s KDoc.
      */
     @Suppress("UNCHECKED_CAST")
     fun project(state: Any): ReferenceFold = when (state) {
@@ -124,6 +130,11 @@ object MeshConvergences {
         }
 
         is PnCounterDelta -> ReferenceFold.Total(state.incs.values.sum() - state.decs.values.sum())
+
+        is TaggedMapDelta<*, *> -> ReferenceFold.Elements(
+            state.membership().map { it.toString() }.toSet(),
+        )
+
         else -> error("unknown churn-mesh fold state ${state::class.simpleName}")
     }
 }

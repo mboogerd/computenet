@@ -423,4 +423,148 @@ class ChurnMeshTest {
             "a non-member peer refuses a remove, same contract as write",
         )
     }
+
+    // ----------------------------------------------------------------------- the OR-map variant
+
+    /**
+     * [MeshPayload.OR_MAP] (computenet-9sm.8.6): the churn mesh replicates an [civictech.cell.data.OrMapCell]
+     * and an EVICT_NO_CLOSE departure reaches the same seam the SET/PN variants exercise above.
+     *
+     * **Divergence from the bead's prescribed verification** (task.md §3): the bead's Verification
+     * section asked for `ReconvergenceCheck.of(MeshPayload.OR_MAP).verify(world)` to pass over a
+     * plan that includes a remove after a write. It cannot: [MeshPeer.remove]'s own KDoc — and the
+     * SET-payload remove test right above — establish that a removal is deliberately **not**
+     * recorded as an [AcceptedOp], so [BatchReference]'s ledger-derived `required`/`permitted`
+     * folds still contain a key that a correct [OrMapCell] no longer carries once it is removed.
+     * Calling `ReconvergenceCheck.verify` with a remove baked into the plan would therefore throw
+     * `LOST` **on correct code**, not only on the mutant the bead means to catch — the same
+     * "must not be judged by ReconvergenceCheck/BatchReference" rule [MeshPeer.remove]'s KDoc
+     * states for SET already applies to OR_MAP, unchanged. So this test exercises the mutation the
+     * bead cares about — `MeshConvergences.project`'s OR_MAP arm forgetting to subtract `dels` —
+     * directly against the folded convergence state instead of through `ReconvergenceCheck.verify`:
+     * a `project` that read `puts.keys` without subtracting `dels` would report the removed key
+     * present in [ReferenceFold.Elements], which the assertion below catches on every peer's
+     * folded state. [OrMapCell.membership] itself is asserted too, via [MeshPeer.foldSnapshot],
+     * as the independent kernel-level witness that the remove actually took effect.
+     */
+    @Test
+    fun `the OrMap mesh carries an EVICT_NO_CLOSE departure`() {
+        val peers = roster(3)
+        val plan = ChurnPlan(
+            seed = 17L,
+            config = config(peers = 3, stepBudget = 4000),
+            peers = peers,
+            events = joinsAt(1, peers) + listOf(
+                DepartEvent("depart-peer2", "peer2", 600, DepartureMode.EVICT_NO_CLOSE),
+            ),
+            writeSchedule = writes(peers, count = 40),
+        )
+
+        val (report, world) = MeshConvergences.observing {
+            execute(plan, budget = BUDGET, payload = MeshPayload.OR_MAP)
+        }
+
+        assertEquals(DstOutcome.PASSED, report.outcome, report.summary())
+        assertEquals(plan.events.map { it.id }.toSet(), firedIds(report), report.summary())
+        assertEquals(false, MeshPeers.require(world, "peer2").lastEvictClosedRow)
+
+        val peer0 = MeshPeers.require(world, "peer0")
+        val peer1 = MeshPeers.require(world, "peer1")
+
+        // A removal after a batch of writes: the case that discriminates a project() that forgot
+        // to subtract dels (see the KDoc above).
+        val removedKey = AcceptedOps.of(world).first { it.peer != "peer2" }.element!!
+        assertTrue(peer0.remove(removedKey), "peer0 is a member, so the removal is issued")
+        world.controller.runToIdle()
+
+        val expected = (AcceptedOps.of(world).mapNotNull { it.element }.toSet() - removedKey).sorted()
+
+        @Suppress("UNCHECKED_CAST")
+        val fold0 = peer0.foldSnapshot() as List<String>
+
+        @Suppress("UNCHECKED_CAST")
+        val fold1 = peer1.foldSnapshot() as List<String>
+        assertEquals(expected, fold0, "peer0's own replica reflects the remove: $fold0")
+        assertEquals(expected, fold1, "the remove gossiped to peer1: $fold1")
+
+        // The reconvergence projection must agree with the kernel's own membership() — this is
+        // exactly what a dels-forgetting project() would get wrong. Only the two LIVE peers'
+        // states are checked: peer2 departed at step 600, well before the remove below, so its
+        // own frozen delta-outlet history never learns about it and is not a divergence — the
+        // same departed-stream exclusion ReconvergenceCheck itself applies.
+        val convergence = MeshConvergences.of(world, "peer0")
+            ?: fail("no reconvergence observation was declared — the run was not wrapped in MeshConvergences.observing")
+        val liveRefs = setOf(peer0.ref, peer1.ref)
+        val liveStates = convergence.states().filterKeys { it in liveRefs }
+        assertEquals(liveRefs, liveStates.keys, "expected exactly the two live peers' states: ${liveStates.keys}")
+        liveStates.values.forEach { state ->
+            val projected = MeshConvergences.project(state) as ReferenceFold.Elements
+            assertFalse(
+                removedKey in projected.elements,
+                "project must subtract dels, not just read puts.keys: ${projected.elements}",
+            )
+        }
+    }
+
+    // -------------------------------------------------------------------- MeshPeer.remove (OR-map)
+
+    /**
+     * Mirror of [MeshPeer.remove]'s SET-payload test above, for [MeshPayload.OR_MAP]: a `put` can
+     * be undone by [MeshPeer.remove], the removal gossips, a non-member refuses it, and the
+     * accepted-op ledger stays unaware of it — the property [MeshPeer.remove]'s own KDoc calls out.
+     */
+    @Test
+    fun `MeshPeer#remove undoes an OR_MAP put, gossips it, and is refused for a non-member without touching the accepted-op ledger`() {
+        val peers = roster(2)
+        val plan = ChurnPlan(
+            seed = 19L,
+            config = config(peers = 2, stepBudget = 4000),
+            peers = peers,
+            events = joinsAt(1, peers),
+        )
+
+        val (report, world) = execute(plan, budget = BUDGET, payload = MeshPayload.OR_MAP)
+        assertEquals(DstOutcome.PASSED, report.outcome, report.summary())
+        assertEquals(plan.events.map { it.id }.toSet(), firedIds(report), report.summary())
+
+        val peer0 = MeshPeers.require(world, "peer0")
+        val peer1 = MeshPeers.require(world, "peer1")
+
+        assertTrue(peer0.write(0), "peer0 is a member, so the write is issued")
+        world.controller.runToIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val afterWrite0 = peer0.foldSnapshot() as List<String>
+
+        @Suppress("UNCHECKED_CAST")
+        val afterWrite1 = peer1.foldSnapshot() as List<String>
+        assertTrue("peer0-0" in afterWrite0, "peer0's own replica carries the put: $afterWrite0")
+        assertTrue("peer0-0" in afterWrite1, "the put gossiped to peer1: $afterWrite1")
+
+        assertTrue(peer0.remove("peer0-0"), "peer0 is a member, so the removal is issued")
+        world.controller.runToIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val afterRemove0 = peer0.foldSnapshot() as List<String>
+
+        @Suppress("UNCHECKED_CAST")
+        val afterRemove1 = peer1.foldSnapshot() as List<String>
+        assertFalse("peer0-0" in afterRemove0, "the remove is applied to the issuing replica: $afterRemove0")
+        assertFalse("peer0-0" in afterRemove1, "the remove gossiped to peer1: $afterRemove1")
+
+        // MeshPeer.remove is deliberately not an AcceptedOp (see its KDoc): the ledger must
+        // still show only the one write, never a second entry for the removal.
+        assertEquals(
+            listOf(AcceptedOp(peer = "peer0", ordinal = 0, element = "peer0-0")),
+            AcceptedOps.of(world),
+            "the accepted-op ledger does not learn about a removal",
+        )
+
+        assertTrue(peer1.evictClean(), "the only other replica remains reachable, so the eviction despawns")
+        assertFalse(peer1.member, "the eviction despawned peer1's replica")
+        assertFalse(
+            peer1.remove("anything"),
+            "a non-member peer refuses a remove, same contract as write",
+        )
+    }
 }
