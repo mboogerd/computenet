@@ -56,6 +56,7 @@ was held behind.
 """
 import json
 import os
+import time
 import re
 import subprocess
 import sys
@@ -198,7 +199,74 @@ def overlaps(files, taken):
 LANE_CORES = 5
 
 
-def load_advice(cores, cap):
+RECENT_READ_MINUTES = 6
+# Where the last --capacity reading's timestamp is remembered: $SCRATCH when the
+# caller exports it, otherwise the per-user temp dir. THE FALLBACK IS THE ACTUAL
+# PATH at every documented call site — SKILL.md 5b/5e and merge-task.md invoke
+# this script bare, and `$SCRATCH` is a shell variable that does not survive
+# between the orchestrator's Bash calls (SKILL.md says so itself). Measured
+# 2026-09-08: a first-ever read in a fresh process reported "5m ago" off another
+# process's write to /var/folders/.../T.
+#
+# So the memory is per-BOX, not per-session, and a concurrent /work session's
+# read resets it too. That is why the advice below is worded conditionally: it
+# errs toward over-warning and never under-warning (sharing can only make `prev`
+# more recent), and a sibling session's dispatch is committed future load as
+# much as your own — the same load `--siblings` already exists to price.
+def _recent_read_path():
+    import tempfile
+    d = os.environ.get("SCRATCH") or tempfile.gettempdir()
+    return os.path.join(d, "next-batch-last-capacity-read")
+
+
+def recent_capacity_read(now=None, path=None):
+    """Minutes since the previous --capacity reading, or None if there was none.
+
+    LOAD1 LAGS DISPATCH BY MINUTES, BY CONSTRUCTION. It is a one-minute
+    exponentially damped average of run-queue length, and a dispatched agent
+    contributes nothing to it until it starts, reads its bead and its
+    references, and actually launches Gradle. So the reading taken before a
+    SECOND back-to-back dispatch cannot see the first: every reading is green,
+    each dispatch is individually justified by "read capacity before EVERY
+    dispatch", and the box is oversubscribed anyway.
+
+    Measured 2026-09-06: two dispatches ~4 minutes apart, both on load1 4.53
+    with a null advice, both agents dead at 600s on the stream watchdog, load1
+    19.09 by the time it showed. ~33 minutes lost from a 300m slot, with the
+    documented procedure followed exactly (computenet-2hqs, a defect in
+    computenet-lx7t's remedy rather than a re-report of its disease).
+
+    The script remembers its own previous call rather than being told what was
+    dispatched: an orchestrator that has to pass a flag is an orchestrator that
+    can forget to, and the whole failure here was a correct procedure followed
+    correctly.
+    """
+    path = path or _recent_read_path()
+    now = now if now is not None else time.time()
+    try:
+        with open(path) as fh:
+            prev = float(fh.read().strip())
+    except (OSError, ValueError):
+        prev = None
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(str(now))
+    except OSError:
+        pass                                # advisory: never take the read down
+    if prev is None or now < prev:
+        return None
+    return (now - prev) / 60.0
+
+
+def _join(*parts):
+    """Non-empty advice strings, joined. `None` when they are all empty, because
+    an empty string would make the advice assert 'nothing to report'."""
+    kept = [p for p in parts if p]
+    return " ".join(kept) or None
+
+
+def load_advice(cores, cap, since_last_read=None):
     """Advisory only: is this box ALREADY too busy to fill `cap`?
 
     capacity_limit() sizes a lane from a quiet box, and deliberately does not
@@ -259,6 +327,14 @@ def load_advice(cores, cap):
     except (OSError, AttributeError):      # not available on this platform
         return None, None
     load1 = round(load1, 2)
+    lag = None
+    if since_last_read is not None and since_last_read <= RECENT_READ_MINUTES:
+        lag = (f"Capacity was last read {since_last_read:.0f}m ago (per-box memory, so "
+               f"a concurrent session's read counts). If a dispatch followed "
+               f"that reading, that agent is NOT in load1 yet — load1 lags dispatch "
+               f"by minutes, so this green does not clear a second back-to-back "
+               f"dispatch (computenet-2hqs). Wait for the first agent to reach its "
+               f"gate, or dispatch this one only if it does not run a build.")
     # The pathological rung is NOT gated on `cap`: it is advice about
     # dispatching ANYTHING, including the single reviewer that has no cap.
     if load1 >= 5 * cores:
@@ -287,14 +363,16 @@ def load_advice(cores, cap):
                        f"`ps -eo pid,pcpu,comm | sort -k2 -rn | head` before "
                        f"overriding either way.")
     if cap <= 1:
-        return load1, None
+        return load1, lag
     if load1 >= 2 * cores:
-        return load1, (f"load1 {load1} is >=2x the {cores} cores: dispatch ONE "
-                       f"agent, not {cap}, and wait for it")
+        return load1, _join(lag, f"load1 {load1} is >=2x the {cores} cores: dispatch "
+                                 f"ONE agent, not {cap}, and wait for it")
     if load1 >= cores:
-        return load1, (f"load1 {load1} already meets the {cores} cores: go "
-                       f"under the cap of {cap}")
-    return load1, None
+        return load1, _join(lag, f"load1 {load1} already meets the {cores} cores: go "
+                                 f"under the cap of {cap}")
+    # The LAG warning is the whole point on a QUIET box: that is exactly the
+    # state in which both back-to-back dispatches read green.
+    return load1, lag
 
 
 def busy_builds(ps_output=None):
@@ -646,7 +724,7 @@ def main():
         # The cap is per-session on a shared box, so honour --siblings here too
         # or --capacity would name a cap the caller may not actually have.
         cap = capacity_limit(cores, _siblings())
-        load1, advice = load_advice(cores, cap)
+        load1, advice = load_advice(cores, cap, recent_capacity_read())
         print(json.dumps({"capacity": {"cores": cores, "max_parallel": cap,
                                        "load1": load1, "advice": advice}},
                          indent=2))

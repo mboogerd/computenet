@@ -479,6 +479,70 @@ for load1, cores, cap, want in load_cases:
     if (got_advice is not None) is not want:
         failed += 1
         print(f"FAIL: load1={load1} cores={cores} cap={cap} advice={got_advice!r}, wanted advice={want}")
+# THE DISPATCH LAG (computenet-2hqs). load1 is a one-minute damped average, so
+# a dispatched agent is not in it for minutes: the reading before a SECOND
+# back-to-back dispatch cannot see the first. Both readings are green, both
+# dispatches are individually justified, and the box is oversubscribed.
+lag_cases = 0
+import tempfile as _tf, time as _time
+with _tf.TemporaryDirectory() as _d:
+    _path = _d + "/mem"
+    nb.os.getloadavg = lambda: (4.53, 0, 0)     # the measured quiet-box reading
+    try:
+        lag_cases += 1
+        if nb.recent_capacity_read(now=1000.0, path=_path) is not None:
+            failed += 1
+            print("FAIL: the first read has no previous reading to report")
+
+        lag_cases += 1
+        gap = nb.recent_capacity_read(now=1000.0 + 240, path=_path)
+        if gap is None or abs(gap - 4.0) > 0.01:
+            failed += 1
+            print(f"FAIL: a 240s gap must read as 4 minutes, got {gap!r}")
+
+        # The warning has to fire on a GREEN box: that is the whole failure.
+        lag_cases += 1
+        _, lag = nb.load_advice(16, 3, 4.0)
+        if not lag or "lags dispatch" not in lag:
+            failed += 1
+            print(f"FAIL: a recent read on a quiet box must warn, got {lag!r}")
+
+        lag_cases += 1
+        _, quiet = nb.load_advice(16, 3, 30.0)
+        if quiet is not None:
+            failed += 1
+            print(f"FAIL: a 30-minute-old read is not back-to-back, got {quiet!r}")
+
+        lag_cases += 1
+        _, none_yet = nb.load_advice(16, 3, None)
+        if none_yet is not None:
+            failed += 1
+            print(f"FAIL: no previous read must not warn, got {none_yet!r}")
+
+        # It must not REPLACE a graded rung — both facts matter at once.
+        nb.os.getloadavg = lambda: (40.0, 0, 0)
+        lag_cases += 1
+        _, both = nb.load_advice(16, 3, 1.0)
+        if not both or "lags dispatch" not in both or "ONE" not in both:
+            failed += 1
+            print(f"FAIL: the lag warning must ADD to a graded rung, got {both!r}")
+
+        # A clock that went backwards must not produce a negative gap.
+        lag_cases += 1
+        if nb.recent_capacity_read(now=1.0, path=_path) is not None:
+            failed += 1
+            print("FAIL: a backwards clock must read as no previous reading")
+
+        # An unwritable memory is advisory: it must never take the read down.
+        lag_cases += 1
+        try:
+            nb.recent_capacity_read(now=1000.0, path="/proc/nonexistent/x/mem")
+        except Exception as exc:
+            failed += 1
+            print(f"FAIL: an unwritable memory must not raise, got {exc!r}")
+    finally:
+        nb.os.getloadavg = _real_getloadavg
+
 # a 2x-core reading must name ONE agent, not merely 'go under'
 nb.os.getloadavg = lambda: (40.0, 0, 0)
 try:
@@ -754,6 +818,7 @@ total = (load_advice_cases + merged_cases + len(cases) + len(branch_cases) + ent
          + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
          + len(capacity_cases) + len(cap_cases) + capacity_reason_cases
          + len(claim_shape_cases) + len(claim_error_cases) + dir_claim_cases_n
+         + lag_cases
          + elsewhere_cases)
 print(f"{total - failed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
