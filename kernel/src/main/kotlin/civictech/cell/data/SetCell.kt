@@ -35,6 +35,13 @@ interface SetApi<E> {
 }
 
 /**
+ * The below-floor pull decision's diagnostic sink (9sm.7-D5, `[KE3-36]`'s "logged at debug
+ * level"). `:kernel` has no logging dependency and gains none for this — the JDK's own
+ * `System.Logger` is used, so the line is silent unless a host wires a `System.LoggerFinder`.
+ */
+private val PULL_FLOOR_LOG: System.Logger = System.getLogger("civictech.cell.data.SetCell")
+
+/**
  * The **re-admission fence** (`[24-TAG-04]` clause 2, computenet-pay7): the
  * exact set of tags a reclaimer has discarded from this replica, as a causal
  * context — a per-source *dot set*, not a per-source high-water.
@@ -122,6 +129,40 @@ interface SetApi<E> {
 internal class ReclaimedDots<E> : Serializable {
     private val runs = HashMap<E, HashMap<UUID, ArrayList<Long>>>()
 
+    /**
+     * The **compaction floor**, per source: the highest counter this fence holds for that
+     * source across every element (decision 9sm.7-D4, `[24-TAG-04]`'s compaction paragraph —
+     * "a `StateRequest(since)` that asks for state below the compaction floor is answered with
+     * full state").
+     *
+     * It is **derived, not stored**: maintained here as a running per-source max in [record]
+     * and rebuilt from the runs in [restore], so it survives `snapshot()`/`restore` with **no
+     * new snapshot key** ([SetCell.snapshot]'s "ADDING A KEY HERE IS NOT LOCAL" — a new key
+     * conscripts `civictech.inspect.ValueEncoder.orSetMembership`). [save] is unchanged.
+     *
+     * It is **exact** in the only direction that matters: every tag ever discarded from source
+     * `s` is ≤ `floor[s]`, so a `since` at or above the floor for every source can be answered
+     * incrementally with no discarded tag omitted, and every retained tag is shipped by
+     * [SetCell.sinceFilter] exactly as today. A source with no run in the fence has no floor
+     * and never triggers the fallback.
+     *
+     * This is NOT a per-source discard authority — [SetCell.compactBelow] still discards whole
+     * `dels` entries and a live add-tag below this max is still admitted by [holds]. The floor
+     * is a read over the fence, never a gate on it.
+     */
+    private val floors = HashMap<UUID, Long>()
+
+    /**
+     * The highest counter reclaimed for [source], or `null` if this fence holds nothing for it.
+     *
+     * Consumed by [SetCell]'s pull-serve below-floor fallback (`[KE3-35]`/`[KE3-36]`) and by
+     * the bounded read. See [floors] for what "floor" means and why it carries no snapshot key.
+     */
+    fun floorFor(source: UUID): Long? = floors[source]
+
+    /** Every source with a floor, for the diagnostic log line (9sm.7-D5). */
+    fun floors(): Map<UUID, Long> = HashMap(floors)
+
     /** Distinct elements with at least one reclaimed run — the retained-size accounting. */
     val elementCount: Int get() = runs.size
 
@@ -163,6 +204,10 @@ internal class ReclaimedDots<E> : Serializable {
     fun record(element: E, tag: Timestamp) {
         val r = runs.getOrPut(element) { HashMap() }.getOrPut(tag.sourceId) { ArrayList() }
         val c = tag.counter
+        // The derived compaction floor (9sm.7-D4) — a running per-source max over everything
+        // this fence has ever held. Updated before the run bookkeeping so the early returns
+        // below cannot skip it.
+        floors[tag.sourceId] = maxOf(floors[tag.sourceId] ?: c, c)
         // first run whose hi >= c - 1: the only run c can touch from the left
         var lo = 0
         var hi = r.size / 2
@@ -197,6 +242,10 @@ internal class ReclaimedDots<E> : Serializable {
     @Suppress("UNCHECKED_CAST")
     fun restore(state: Any?) {
         runs.clear()
+        // The floor is derived, so it is rebuilt from the restored runs rather than read from
+        // a key of its own (9sm.7-D4). A dropped pre-computenet-vhlm run contributes no floor,
+        // exactly as it contributes no fence.
+        floors.clear()
         // A pre-computenet-vhlm checkpoint stored `source -> runs` with no element
         // key. There is no element to attribute those runs to, so they are DROPPED
         // rather than guessed at: an empty fence re-admits a replayed frame exactly
@@ -211,7 +260,12 @@ internal class ReclaimedDots<E> : Serializable {
             inner.forEach { (source, r) ->
                 if (source is UUID && r is List<*>) rebuilt[source] = ArrayList(r.filterIsInstance<Long>())
             }
-            if (rebuilt.isNotEmpty()) runs[element as E] = rebuilt
+            if (rebuilt.isNotEmpty()) {
+                runs[element as E] = rebuilt
+                rebuilt.forEach { (source, r) ->
+                    r.maxOrNull()?.let { hi -> floors[source] = maxOf(floors[source] ?: hi, hi) }
+                }
+            }
         }
     }
 }
@@ -952,6 +1006,31 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         else source.filterKeys { scope.admits(it) }
 
     /**
+     * Is [since] below this replica's compaction floor for any source (`[KE3-35]`, decision
+     * 9sm.7-D1/D4)? Returns the first offending `(source, since[source], floor[source])`, or
+     * `null` when the request can be answered incrementally.
+     *
+     * The floor is derived from the re-admission fence — see [ReclaimedDots.floors]: `floor[s]`
+     * is the highest counter this replica has ever DISCARDED for `s`, so a `since[s]` below it
+     * names tags this replica no longer remembers and a since-filtered answer would silently
+     * omit them (the R10 direction-2 hazard, 96 §E3.7).
+     *
+     * "Below" is strict (`since[s] < floor[s]`), and a source ABSENT from `since` reads as `-1`
+     * — [sinceFilter]'s own default — so it is below floor iff the fence holds any run for it.
+     * `since == null` is never below floor: it is already the full-state branch.
+     *
+     * Call under [stateLock]; the decision and the reply it governs are one snapshot (9sm.7-D1).
+     */
+    private fun belowFloor(since: TagFrontier?): Triple<UUID, Long, Long>? = synchronized(stateLock) {
+        if (since == null) return@synchronized null
+        for ((source, floor) in reclaimed.floors()) {
+            val asked = since.perSource[source] ?: -1L
+            if (asked < floor) return@synchronized Triple(source, asked, floor)
+        }
+        null
+    }
+
+    /**
      * Only the tags a [since] frontier has not yet observed; unfiltered when
      * [since] is null.
      *
@@ -1008,12 +1087,44 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // frontier are the pre-scope values, so the reply is verbatim.
             // the three halves of a reply are one snapshot: taken together
             // under the monitor, shipped after it is released.
-            val reply = synchronized(stateLock) {
-                val addsOut = scopedTo(sinceFilter(adds, request.since), request.scope)
-                val delsOut = scopedTo(sinceFilter(dels, request.since, wholeEntry = true), request.scope)
+            //
+            // BELOW-FLOOR FALLBACK (`[KE3-35]`/`[KE3-36]`, decisions 9sm.7-D1/D2/D4/D5).
+            // A `since` that names, for ANY source, a counter below this replica's compaction
+            // floor cannot be answered incrementally: the floor is the highest counter this
+            // replica has DISCARDED for that source (derived from the re-admission fence — see
+            // [ReclaimedDots.floors]; exact, and carrying no snapshot key of its own), so the
+            // tags between `since` and the floor are gone and a since-filtered reply would
+            // silently omit them. The honest answer is FULL state, which the requester's
+            // idempotent fold absorbs — never a partial delta, never a per-source mix of full
+            // and partial, and never a silently widened request. `[24-TAG-04]`'s compaction
+            // paragraph: "a `StateRequest(since)` that asks for state below the compaction floor
+            // is answered with full state."
+            //
+            // The fallback IS the existing `since = null` branch, verbatim (9sm.7-D2): the same
+            // `sinceFilter`/`scopedTo`/`currentFrontier` calls and the same `baselineTo` stamp,
+            // so there is no new reply type, no `StateRequest` field and no wire change
+            // (`[KE3-39]`). The requester needs no change — `RetainedFrontiers.record` takes the
+            // reply's reported frontier exactly as today. The decision is decided under
+            // [stateLock] in the same hold that builds the reply (9sm.7-D1) and logged after the
+            // monitor is released, because logging is a foreign call.
+            val outcome = synchronized(stateLock) {
+                val below = belowFloor(request.since)
+                val effectiveSince = if (below == null) request.since else null
+                val addsOut = scopedTo(sinceFilter(adds, effectiveSince), request.scope)
+                val delsOut = scopedTo(sinceFilter(dels, effectiveSince, wholeEntry = true), request.scope)
                 if (addsOut.isEmpty() && delsOut.isEmpty()) null
-                else Triple(addsOut, delsOut, currentFrontier(request.scope))
+                else below to Triple(addsOut, delsOut, currentFrontier(request.scope))
             } ?: return@pullServe
+            val reply = outcome.second
+            outcome.first?.let { (source, asked, floor) ->
+                // 9sm.7-D5: the JDK's own logger — `:kernel` has no logging dependency and gains
+                // none. The log line is a diagnostic, never the test oracle; the reply tap is.
+                PULL_FLOOR_LOG.log(
+                    System.Logger.Level.DEBUG,
+                    "SetCell ${ref.id}: StateRequest(since) below compaction floor for source " +
+                        "$source (since=$asked < floor=$floor) — answering with full state",
+                )
+            }
             baselineTo(request.replyTo, reply.third) {
                 propagate(SetDelta(reply.first, reply.second))
             }
