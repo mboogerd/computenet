@@ -2550,7 +2550,11 @@ workload and is recorded as a limit of the rig, not as evidence of safety: each
 key is written exactly once by exactly one peer, so the add-wins pick over
 concurrent dots is never exercised on a contended key and the value observable
 can only catch a wrong live-dot set, not a mis-resolved concurrent write. A
-multi-writer-key workload would be a different rig.
+multi-writer-key workload would be a different rig. **It was since built, as the
+sweep's fourth arm** (`computenet-rjue`): see `## KE3-42-ORMAP-SHARED`, which
+records the measurement and the mutation showing the widened observable
+discriminates where this one cannot. The figures in THIS entry are unchanged by
+it — the arm is additive and shares no counter with the three recorded here.
 
 ### The discriminator that IS observable, and is asserted
 
@@ -2595,6 +2599,149 @@ the adversary was NOT attempted here — `## KE3-20`'s own record has four
 widenings built, measured and rejected on the OR-set for making the rig's floor
 worse rather than the discriminator sharper, and re-running that search on the
 OR-map is its own item, not this task's.
+
+## KE3-42-ORMAP-SHARED — the OR-map value observable now resolves a REAL add-wins pick: a multi-writer-key arm, and what it found
+
+Recorded by: `computenet-rjue` (bug, direct child of epic `computenet-9sm`),
+the residual the feature review of `computenet-9sm.8` (PR #758) filed against
+its own value observable. Base commit: `cbe3ca90b` (`origin/main`), branch
+`feature/computenet-rjue`. Host: darwin/arm64, 16 cores, load1 4.8–8.6.
+Measured 2026-09-08. All figures are whole-class runs of
+`OrMapGcSafetySweepTest` (`./gradlew :kernel:test --tests
+'civictech.cell.replication.OrMapGcSafetySweepTest' --rerun`), seeds `1..200`,
+budget `40_000`, compaction period `K = 10` — the same range, budget and `K`
+the three original arms use, and none of their numbers moved.
+
+### What was asked, and why
+
+`## KE3-42-ORMAP-BS13` records, honestly, that the OR-map sweep's per-key VALUE
+observable fired on zero seeds on every arm of every run and that this was a
+LIMIT OF THE RIG rather than evidence of safety: `MeshPeer.write` puts
+`key = "$name-$ordinal"`, so each key is written exactly once by exactly one
+peer, every live key has exactly one live dot, and `value(key)`'s add-wins pick
+over CONCURRENT dots is never exercised. What that observable could still catch
+was a wrong live-dot set; what it could not catch was a mis-resolved concurrent
+write. The residual asked for a workload where at least two peers write the SAME
+key concurrently, ADDITIVELY, so the recorded OR-map numbers stay comparable.
+
+### What was built
+
+`OrMapGcSafetySweep.Trigger.SHARED`, a FOURTH arm: its own graph, check id and
+artifact root, reclaiming at the same production frontier `Trigger.STABLE` does
+(`OrMapCell.snapshot()` through the installed stability read) — it is the
+WORKLOAD that differs, not the seam. On top of the ordinal write script its step
+hook has EVERY member peer put the SAME key at the SAME step, one fresh key per
+round, 47 rounds at stride 100 from step 350 (last round 4950). A step hook runs
+inside one controller step and a put is delivered as a scheduled delta, so no
+putter has folded another's dot when it mints its own; `OrMapCell`'s put is a
+reset-remove that tombstones only what the PUTTER sees live, so the round's dots
+survive each other and the key carries one live dot per putter, each with a
+distinct value. `MeshPeer.put(key, value)` is the new testkit primitive — like
+`remove`, deliberately NOT an `AcceptedOp` and not a `recordWrite`, because
+`BatchReference` models an add-only per-`(peer, ordinal)` ledger that a contended
+key does not fit.
+
+Nothing in the STABLE, CONTROL or LOCAL arms changed. Their figures below sit
+inside the run-to-run spread `## KE3-42-ORMAP-BS13` recorded, which is the check
+that the widening was additive.
+
+### What was measured — three consecutive whole-class runs
+
+```
+                                  run 1        run 2        run 3
+  SHARED contendable seeds        197/200      197/200      197/200
+  SHARED contended puts issued    16388        16388        16388
+  SHARED max live dots on a key   3            3            3
+  SHARED resurrecting             []           []           []
+  SHARED fence-attributed         []           []           []
+  SHARED membership-diverging     []           [78]         []
+  SHARED value-diverging          []           []           []
+  SHARED value-fold-drift         []           []           []
+  SHARED discarded                3879         3901         3858
+  SHARED wall time                11.1 s       11.3 s       10.8 s
+  (unchanged arms, for comparison)
+  STABLE discarded                5547         5512         5548
+  LOCAL  discarded                7387         7388         7382
+```
+
+**The property holds on a real pick: both VALUE classes are empty on every seed
+of every run, now over keys whose value IS an add-wins resolution over mutually
+concurrent dots.** That is the result the residual asked for, and unlike the
+previous recording it is not vacuous — see the mutation below.
+
+**Three seeds cannot contend at all, and the arm says so rather than passing
+quietly.** On seeds `22`, `37` and `191` the churn plan leaves a SINGLE member
+for the whole contention window (52–53 puts issued against a possible 141, i.e.
+one putter per round), so no two peers ever put one key and no concurrent dot
+exists to resolve. The arm therefore splits the witness in two: it asserts the
+strong per-seed invariant — *wherever two peers put one key in one round, two
+live dots carrying two distinct values survive to quiescence* — over the 197
+CONTENDABLE seeds, and separately holds a floor (`MIN_CONTENDABLE_SEEDS = 190`)
+against the workload silently ceasing to contend. This split was measured, not
+designed: an earlier form asserting contention on every seed reddened on those
+three.
+
+**A contended round issued too late to drain produces a real-looking value
+divergence.** An earlier shape ran 56 rounds to step 5850. It reddened on seed
+132 with `shared-55={peer0=peer0#5850, peer2=peer2#5850}` — the two live replicas
+agreeing on membership, each holding only its OWN final-round dot, with
+`value-fold-drift` empty (so each cell agreed with its own emitted history: a
+delta had not arrived, nothing was mis-resolved). Moving the last round back to
+4950, where the ordinal write script ends, removes it in three runs of three.
+The reading is that this is the rig's drain window, not a reclamation defect —
+stated as a reading, not as proof, since no separate no-reclaimer control of the
+contended workload was run.
+
+**An earlier shape also cost 46 of 200 seeds their witness, for a mechanism worth
+recording**: with a small key space cycled over (3 keys, 24 rounds), each round
+tombstones its predecessors on the same key — put IS a reset-remove — so the only
+contention surviving to quiescence is the final round's, on one key, hostage to
+how many peers happened to be members at that one step. One key per round makes
+every round's concurrency permanent.
+
+### The arm is not vacuous — the mutation evidence
+
+The add-wins resolution has exactly one implementation, `TaggedMapDelta.value`,
+which `OrMapCell.value` delegates to; both are `kernel/main` and outside this
+item's file claim. Two things follow, the first of which matters more than the
+scope limit:
+
+**The obvious production mutation would not discriminate anyway.** Replacing
+`ordered.last()` with `ordered.first()` in `TaggedMapDelta.value` is
+deterministic in `DOT_ORDER`, so every replica mis-resolves IDENTICALLY and a
+cross-replica comparison stays green. The mis-resolution class this observable
+can catch is a FOLD-ORDER-dependent pick, which differs per replica.
+
+So the mutation was applied in-claim, at the check's read site, and is exactly
+that class: `cell.value(key)` → `cell.values(key).firstOrNull()`, i.e. the
+first-folded live value instead of the `DOT_ORDER` maximum. Result (a local,
+reverted edit, `--rerun --no-build-cache`):
+
+```
+[KE3-23] OR-map reclamation must be invisible to `value(key)` even where the
+key's value is an add-wins pick over CONCURRENT dots:
+crossReplica=[1, 2, 5, 6, 7, 8, 9, 10, ... 197, 199, 200]   (153 of 200 seeds)
+vsOwnFold=[]
+```
+
+**and the three original arms PASSED under the same mutated read.** That is the
+whole finding in one line: a fold-order-dependent resolution is invisible to the
+ordinal workload and visible on 153 of 200 seeds to this one. The property left
+unproven by the substitute is that a defect introduced INSIDE
+`TaggedMapDelta.value` propagates here; the delegation is single-sourced
+(`[KE1-08]`, `j2x.1-D4`) so the two sites read the same live dots, but this
+mutation does not itself exercise the kernel edit.
+
+### Disposition
+
+The residual is closed as a POSITIVE result: the value observable now resolves a
+real add-wins pick, is demonstrably discriminating, and finds no harm at this
+range. `## KE3-42-ORMAP-BS13`'s figures and its BS-13 disposition are untouched —
+the fourth arm neither shares their seeds' schedules nor their counters. What is
+NOT claimed: that the OR-map's add-wins pick is safe in general. This is a
+bounded-schedule check over 200 seeds with three peers, the same honesty clause
+`## KE3-42-ORMAP-BS13` and `GcSafetySweep` carry, filed under the same DISPUTES
+entry.
 
 ## KE3-42-ORMAP — feature close-out: what the OR-map seam + reclaimer delivered, the three corrected premises, and the u7fi trigger check restated in code
 

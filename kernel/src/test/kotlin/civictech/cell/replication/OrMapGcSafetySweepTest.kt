@@ -684,6 +684,14 @@ object OrMapGcSafetySweep {
  * The arms cost ~2.6-5.7 s each, matching [GcSafetySweep]'s measured 2.3-5.2 s per 200-seed arm,
  * so the three-arm class is ~10 s.
  *
+ * **The FOURTH arm (computenet-rjue) is additive and its numbers are recorded separately**, in
+ * `doc/kernel-lane-findings.md` `## KE3-42-ORMAP-SHARED`: seeds 1..200, `K` = 10, discarded
+ * 3858-3901, wall 10.8-11.3 s, both VALUE classes empty on every seed of three runs over a
+ * workload where `value(key)` really is an add-wins pick over concurrent dots, 197 of 200 seeds
+ * contendable. The three figures above were re-measured on the same host with the fourth arm
+ * present (STABLE discarded 5512-5548, LOCAL 7382-7388) and sit inside the spread recorded here,
+ * which is what says the widening did not disturb them.
+ *
  * **The BS-13 control does NOT reproduce on this payload, and that is a recorded result rather
  * than a gap.** LOCAL resurrected on 0 of 200 in all three runs and diverged on 1 of 3 runs, so
  * no seed can meet the `PIN_RUNS`-of-`PIN_RUNS` bar the bead sets and none is recorded. The
