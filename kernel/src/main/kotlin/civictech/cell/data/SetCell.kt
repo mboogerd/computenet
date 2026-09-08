@@ -1346,6 +1346,27 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * is cell-level state rather than an entry, and rides every page so that a
      * caller joining a walk mid-way still sees it. With it, the union of a
      * walk's pages is exactly [snapshot]'s content.
+     *
+     * **Below-floor `since` (9sm.7-D3/D4/D6).** A [StateRead.since] that names, for any
+     * source, a counter below this replica's compaction floor for that source
+     * ([ReclaimedDots.floors]) cannot be answered incrementally: the tags between `since`
+     * and the floor have already been discarded, and a since-filtered page would silently
+     * omit them — precisely the partial-page hazard `[24-TAG-04]`'s compaction paragraph and
+     * [civictech.cell.BoundedRead] rule 5 ("never silently widen a bound") both forbid. Unlike
+     * the pull path (9sm.7-D3), this cell does not REFUSE the read — `supportsSince` stays
+     * `true` and [civictech.cell.host.ManagedHost] keeps routing it, because refusing would
+     * change observable behaviour for inspector reads that never cared about `since` — it
+     * ESCALATES: every page of the walk is built as if `since` were `null` (the full walk,
+     * verbatim [tagsBeyond]'s `since == null` branch), and 9sm.7-D6 requires the escalation to
+     * be DECLARED rather than silent, so every page — first, intermediate and last — carries
+     * `attributes["sinceEscalated"] = true`. A new [ReadCaveat] constant was considered and
+     * rejected: `inspect`'s [civictech.inspect] `PagedState` holds an exhaustive `when` over
+     * `ReadCaveat`, and a new constant would pull `:inspect` into this kernel-lane change for a
+     * fact the attributes map already carries adequately. The decision is evaluated once per
+     * page from the live fence (not cached on the walk): floors are monotone under [stateLock],
+     * so re-evaluating per page is consistent across a multi-page walk — a page opened before a
+     * concurrent [compactBelow] cannot see a lower floor than one opened after it. A
+     * non-escalated walk is byte-identical to today: no new key is added to `attributes`.
      */
     override fun readBounded(request: StateRead): StatePage = synchronized(stateLock) {
         // one page is assembled under the monitor: it walks the frozen order but
@@ -1356,6 +1377,13 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         @Suppress("UNCHECKED_CAST")
         val walk = (request.cursor?.token as? SetWalk<E>) ?: openWalk(scope)
         val order = walk.order
+
+        // below-floor escalation (9sm.7-D3/D4/D6): shares [belowFloor], the same predicate
+        // [outlet.pullServe]'s below-floor fallback uses, so the two `since` paths agree on
+        // what "below floor" means. `since == null` is never below floor ([belowFloor]'s own
+        // contract), so this is a no-op for the already-unbounded case.
+        val escalated = belowFloor(request.since) != null
+        val effectiveSince = if (escalated) null else request.since
 
         val entries = ArrayList<Serializable>(minOf(request.limit, 64))
         var elided = 0
@@ -1375,8 +1403,8 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
                 elided++
                 bytes += EXCLUSIVE_ENTRY_BYTES
             } else {
-                val addTags = tagsBeyond(liveAdds, request.since)
-                val delTags = tagsBeyond(liveDels, request.since)
+                val addTags = tagsBeyond(liveAdds, effectiveSince)
+                val delTags = tagsBeyond(liveDels, effectiveSince)
                 if (addTags.isEmpty() && delTags.isEmpty()) continue // nothing beyond `since`
                 entries += SetStateEntry(element, addTags, delTags)
                 bytes += ENTRY_OVERHEAD_BYTES + TAG_BYTES * (addTags.size + delTags.size)
@@ -1388,6 +1416,9 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
 
         val complete = index >= order.size
         val opening = walk.next == 0
+        val attributes: Map<String, Serializable> =
+            if (escalated) mapOf("counter" to java.lang.Long.valueOf(tagCounter), "sinceEscalated" to true)
+            else mapOf("counter" to java.lang.Long.valueOf(tagCounter))
         StatePage(
             entries = entries,
             next = if (complete) null else Cursor(SetWalk(order, index, walk.opening)),
@@ -1395,7 +1426,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // this same invocation when this is the first page
             frontier = if (complete && !opening) currentFrontier(scope) else walk.opening,
             exclusivesElided = elided,
-            attributes = mapOf("counter" to java.lang.Long.valueOf(tagCounter)),
+            attributes = attributes,
             caveats = if (complete || opening) emptySet() else setOf(ReadCaveat.STALE_FRONTIER),
         )
     }
