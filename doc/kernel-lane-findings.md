@@ -2332,7 +2332,7 @@ STABLE divergence rose to 9 of 200. The returns diminish because once K is well
 under the gossip latency the first compaction point past a remove has already
 discarded the del-dot; per-seed chances are bounded by the remove count.
 
-## KE3-23-DWKPRATE — the BS-12 `stableFenceAttributed` class is GONE at current `main`: 0 of 50 sweeps, against a same-host, same-session pre-fix control of 6 of 15
+## KE3-23-DWKPRATE — the BS-12 `stableFenceAttributed` class is GONE at current `main`: 0 of 50 sweeps (30 at `K = 10` + 20 at `K = 25`), against a same-host, same-session pre-fix control of 6 of 15 at `K = 25`
 
 Recorded by: `computenet-dwkp` (bug, epic `computenet-9sm`). Base commit:
 `5a5b455d3` (`origin/main`, "computenet-9sm.7: StateRequest(since) below the
@@ -2387,8 +2387,9 @@ that constant moved: a shorter compaction period discards the del-dot sooner), n
 interchangeable.
 
 **Independently reproduced at feature review** (2026-09-08, same host, `HEAD`
-`737cd125d`): arm A re-run at 12 sweeps, 0 red, load1 6.34 → 6.62; the run C
-control re-created by the same `kernel/` + `testkit/` checkout at `311ad4f7b~1`
+`737cd125d`): arm A re-run at 12 sweeps at `K = 10`, 0 red, load1 6.34 → 6.62;
+the run C control re-created by the same `kernel/` + `testkit/` checkout at
+`311ad4f7b~1`, at `K = 25`,
 returned 4 of 10 red (40 %), every red carrying `seeds=[12]`, load1
 7.74 → 10.61. The control fires and the fixed tree does not.
 
@@ -2428,9 +2429,16 @@ manufacture it.)
 So `{92ek}` alone does NOT close the escape and `07vb`'s frontier fix is
 load-bearing. Rows B and C of the withdrawn table are unverified and should not
 be relied on either: row B shares row A's suspect mutation, and row C's 0/12 is
-a single unreplicated sample whose companion row is now known to be wrong. Which
-members of the family are individually necessary is therefore OPEN, and is
-filed rather than answered here.
+a single unreplicated sample whose companion row is now known to be wrong.
+
+**So exactly one member of the family has been measured.** `07vb` is necessary
+(A′ above). Whether `92ek` and `s0tq` are individually necessary is
+**UNMEASURED** — not "probably yes" and not "probably no"; no valid mutation of
+either exists. Do not read the withdrawal of the REDUNDANT claim as evidence
+that every member is load-bearing, and do not read a green tree as evidence that
+any member is removable. The open question is filed as `computenet-0ade`; answer
+it there, by mutation, before touching any member of the
+`fzd3`/`07vb`/`zgyt`/`92ek`/`s0tq` family.
 
 Note also the withdrawn table's stated bound: "n = 12 bounds each row at ~0.7 %
 under a 40 % rate" is arithmetically wrong — `0.6^12 ≈ 0.22 %`, not 0.7 %.
@@ -2450,6 +2458,11 @@ and B needed and did not have.
   recorded by `## KE3-23-CLOSEDROW`, `## KE3-23-CLOSEDPREMISE` and
   `## KE3-23-QUORUMCLOSED`; this entry only measures that the observable escape
   is gone.
+- Mutation A′ is an UNDER-revert of `computenet-07vb`: it restores
+  `CausalStability.kt` and `Replication.kt` but leaves `StabilityFreezeDetector.kt`
+  at `main`, because `92ek` edited that file after `07vb`. It therefore shows that
+  `07vb` is necessary; it does not measure the size of `07vb`'s contribution, and
+  a full revert could only redden further.
 - darwin/arm64 only. Linux is unverified here.
 - Runs A and B were taken while the loop itself was the dominant load (load1
   7.6–16.8); C at 5.9–8.4. Earlier records on this bead suggest load pushes this
