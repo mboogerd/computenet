@@ -29,6 +29,7 @@ import civictech.cell.protocol.StateRequest
 import civictech.cell.wire.Peering
 import civictech.testkit.forEachSeed
 import io.kotest.assertions.withClue
+import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.nulls.shouldBeNull
@@ -36,6 +37,7 @@ import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 96 §E1.3 (E1-REPL): the OR-map joins the mergeable class. `SetCell`'s
@@ -652,6 +654,117 @@ class OrMapConvergenceTest {
         mesh.controller.runToIdle() // quiesces — asserted by runToIdle's own budget
         streams.sumOf { it.size } shouldBe 3
         filtered.forEach { it.value("milk") shouldBe "2L" }
+    }
+
+    // =====================================================================
+    // the LOST-del pin (computenet-9sm.8.3): stability-scoped reclamation over
+    // a real three-peer mesh
+    // =====================================================================
+
+    /**
+     * **The OR-map twin of `CompactionTriggerPinTest`'s `P2 LOST del`**
+     * (computenet-9sm.8.3; the element-shaped original carries the full
+     * argument). It lives HERE rather than in `OrMapCellCompactBelowTest`
+     * because it needs a real replicated mesh — `Replication.stableFrontier`
+     * over three peers, and a frame-plane loss — which that unit-level file has
+     * no rig for; this file already owns the three-peer OR-map fixture.
+     *
+     * The schedule: A puts `k` and all three converge, so every peer's stable
+     * frontier genuinely reads `sA → 1` — B DID deliver the put. B's frames are
+     * then LOST (not parked: nothing replays when the loss is lifted) and A
+     * removes `k`. A and C hold the tombstone `{put-dot 1, del-dot 2}`; B holds
+     * the put and no tombstone at all.
+     *
+     * The pin: compacting A and C at their own stable frontier discards
+     * **nothing**, because `[KE3-31]`'s every-dot rule reaches the del-dot at 2
+     * and the frontier stands at 1. The frontier's VALUE is exactly what it
+     * would have been without the del-dot; only the rule's reach changed. Heal,
+     * and A's and C's surviving tombstones kill `k` at B instead of B's live put
+     * reviving it at A and C.
+     *
+     * **The counter-witness, stated rather than executed** (mutating `remove`'s
+     * mint is a production edit this task's file claim does not cover): with the
+     * del-dot deleted from the entry, `dels[k]` is `{put-dot 1}`, every dot in
+     * it is ≤ the frontier of 1, and the same two calls discard the entry plus
+     * the put-dot it covers — **2 each at A and C**, not 0 — after which the
+     * heal re-ships B's add-only state into two replicas with no tombstone left
+     * and `membership()` reads `{k}` at A. (The bead's description predicts `1`
+     * for that arm; the arithmetic is 2, because the discard count includes the
+     * covered `puts` dot as well as the `dels` dot. Recorded rather than copied
+     * forward.)
+     *
+     * The final call is the non-vacuity: with the dot delivered everywhere the
+     * same compaction reclaims the entry in full, so the deferral above is a
+     * deferral and not a deadlock.
+     */
+    @Test
+    fun `LOST del - the del-dot keeps the STABLE frontier from discarding an undelivered remove`() {
+        val controller = SimulationController()
+        val logicalId = UUID(0x105E, 0xDE1)
+        val peers = List(3) { Peer(controller) }
+        val dropping = AtomicBoolean(false)
+        // Both directions of both of B's links share one gate: every schedule
+        // here isolates B entirely.
+        val gate = Peering.FrameInterpose { frame -> if (dropping.get()) emptyList() else listOf(frame) }
+        val ab = Peering.loopback(peers[0].side, peers[1].side, gate, gate)
+        val bc = Peering.loopback(peers[1].side, peers[2].side, gate, gate)
+        Peering.loopback(peers[0].side, peers[2].side)
+        val replicas = peers.mapIndexed { i, peer ->
+            OrMapCell<String, String>(CellRef(logicalId, i.toLong()))
+                .also { peer.replication.replicate(it, peer.host) }
+        }
+        controller.runToIdle()
+        val (ra, rb, rc) = replicas
+        val emitted = record(ra)
+        val opA = (HostedCellProxy.create(ra.ref, peers[0].registry, OrMapInletProxy::class.java)
+                as OrMapInletProxy).inlet.call
+
+        // 1. Converge on the put: every peer's stable frontier reads sA -> 1,
+        //    i.e. every open member genuinely delivered the PUT.
+        opA.put("k", "v")
+        controller.runToIdle()
+        val sA = emitted[0].delta.puts.getValue("k").keys.single().sourceId
+        peers.map { it.replication.stableFrontier(logicalId).perSource[sA] } shouldBe listOf(1L, 1L, 1L)
+
+        // 2. Lose B's frames, remove at A. A and C hold the tombstone; B does
+        //    not, and nothing is parked to hand it to B later.
+        dropping.set(true)
+        opA.remove("k")
+        controller.runToIdle()
+        ra.membership() shouldBe emptySet()
+        rc.membership() shouldBe emptySet()
+        rb.membership() shouldBe setOf("k")
+        // the entry the rule has to reach: the put-dot AND the remove's own dot
+        ra.state().dels.getValue("k") shouldBe setOf(Timestamp(sA, 1L), Timestamp(sA, 2L))
+
+        // 3. Compact A and C at their OWN stable frontier. B's row still reads
+        //    sA -> 1 — rows never regress, and B genuinely delivered the put.
+        val stableA = peers[0].replication.stableFrontier(logicalId)
+        val stableC = peers[2].replication.stableFrontier(logicalId)
+        withClue("the frontier value is unchanged by the del-dot; only the rule's reach is") {
+            stableA.perSource[sA] shouldBe 1L
+            stableC.perSource[sA] shouldBe 1L
+        }
+        ra.compactBelow(stableA) shouldBe 0
+        rc.compactBelow(stableC) shouldBe 0
+        ra.fencesAny("k").shouldBeFalse()
+        rc.fencesAny("k").shouldBeFalse()
+
+        // 4. Lift the loss and heal: `k` is dead on all three, and B's fold
+        //    converged onto A's and C's tombstones rather than the reverse.
+        dropping.set(false)
+        ab.heal()
+        bc.heal()
+        controller.runToIdle()
+        replicas.map { it.membership() } shouldBe listOf(emptySet(), emptySet(), emptySet())
+        replicas.map { it.value("k") } shouldBe listOf(null, null, null)
+
+        // 5. Non-vacuity: with the dot delivered everywhere the entry goes in
+        //    full — two `dels` dots plus the one `puts` dot they cover.
+        ra.compactBelow(peers[0].replication.stableFrontier(logicalId)) shouldBe 3
+        ra.membership() shouldBe emptySet()
+        ra.fencesAny("k").shouldBeTrue()
+        peers.flatMap { it.deadLetters }.shouldBeEmpty()
     }
 
     private companion object {
