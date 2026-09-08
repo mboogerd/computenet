@@ -238,6 +238,34 @@ object NaiveArrivalOrderMapModel {
  * for any wiped key, which is what makes BS-3/BS-4's scenario — writer A's second, unobserved
  * put surviving writer B's reset-remove — come out wrong here: once B removes the key, this
  * mutant wipes it for good, so A's later concurrent put at the same key never resurrects it.
+ *
+ * ## KNOWN LIMITATION (computenet-1383, MEASURED, not fixed): `wiped` is not revival-aware for
+ * ## MINT COUNTING, only for VALUE
+ *
+ * `State.wiped` is permanent by design for value/membership purposes — that permanence is
+ * the point of the mutation above, and `TaggedControlsTest`'s CTL-03 pins it. But `Fold.apply`
+ * (below) also reads `wiped` to decide whether a put/remove is "effective" for MINT-COUNTING
+ * purposes, and there it is wrong: once a key enters `wiped` it never leaves, so a **second**
+ * remove of a key that was revived by an intervening put — `put -> remove -> put -> remove` on
+ * ONE source — is misread as the effective-only no-op case (`ORA2 §MODEL-06`'s "a remove of an
+ * absent key mints nothing") and consumes NO counter, where the real [civictech.oracle.model.DotModel]
+ * correctly sees the revival (its own `dels`-vs-`puts` liveness) and mints its own del-dot. The
+ * revived put after the first remove still gets the right counter (the wrongness starts at the
+ * chain's SECOND remove), so from that point on this mutant's dot numbering runs one counter
+ * behind `DotModel`'s — measured and reproduced by
+ * `TaggedControlsTest`'s `computenet-1383 wiped is not revival-aware and undercounts mints after
+ * a re-remove on one source` test, which quotes the exact counters both models report.
+ *
+ * **Left as a documented limitation, not fixed**, because a faithful fix needs a counting-only
+ * liveness notion kept separate from the permanent `wiped` (so value/membership semantics stay
+ * untouched), and its MERGE behaviour across multiple *instances* — as opposed to the
+ * single-source case this KDoc measures — is exercised by no script in this suite and would ship
+ * unproven. `RemoveAllDotModel`'s only current consumer, CTL-03's test below, never re-removes a
+ * revived key and so never reaches this path. **A future script that does would get silently
+ * wrong dot numbering from this mutant, for a reason that has nothing to do with its intended
+ * remove-all semantics** — if you are about to write one, either avoid re-removing a revived key
+ * on one source, or fix `Fold.apply`'s `hasLive` to track counting-liveness independently of
+ * `wiped` (and add coverage for the cross-instance merge case before trusting it).
  */
 class RemoveAllDotModel(private val order: DotOrder) {
 
@@ -324,7 +352,12 @@ class RemoveAllDotModel(private val order: DotOrder) {
          * mirroring is that the SAME NUMBER of counters is consumed at the same script positions,
          * so a put immediately after a live key's remove or re-put still mints the counter the
          * real model would mint for its own next dot, keeping the two models' dot numbering
-         * comparable move for move.
+         * comparable move for move — **for a key that is removed at most once**. It does NOT hold
+         * across a second remove of a key that was revived by an intervening put: `event.key !in
+         * state.wiped` never becomes true again once a key is wiped, so a re-remove after a
+         * revival is misread as the no-live-dot no-op case and consumes no counter, one behind
+         * where the real model's dot numbering would be. See [RemoveAllDotModel]'s class KDoc,
+         * "KNOWN LIMITATION (computenet-1383)", for the measured counters.
          */
         private fun apply(event: ScriptEvent, source: SourceId, state: State, mint: () -> Long): State =
             when (event) {
