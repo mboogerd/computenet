@@ -98,6 +98,28 @@ class OrMapCellSincePullBelowFloorTest {
         return got.single()
     }
 
+    /**
+     * A pull that may legitimately draw NO reply at all — `pullServe` ships nothing when both
+     * `puts` and `dels` come back empty (`OrMapConvergenceTest`'s "a pull that has nothing beyond
+     * the frontier answers nothing at all"), which is exactly what a `since` that already covers
+     * every dot in an entry produces once entry-whole hides that entry.
+     */
+    private fun pullOptional(responder: OrMapCell<String, String>, since: TagFrontier?): Reply? {
+        val probe = FanInlet(propagateTaggedMapDelta)
+        val got = mutableListOf<Reply>()
+        probe.serve(object : Propagate<TaggedMapDelta<String, String>> {
+            override fun propagate(value: TaggedMapDelta<String, String>) {
+                got += Reply(value, CurrentContext.get()!!)
+            }
+        })
+        val link = (
+            responder.outlet.linkTo(probe as LinkFrom<Propagate<TaggedMapDelta<String, String>>>) as LinkResult.Connected
+            ).link
+        Protocols.sendUpstream(link, Protocols.StateRequest, StateRequest(probe.ref, since))
+        (got.size <= 1) shouldBe true
+        return got.singleOrNull()
+    }
+
     /** The responder's own dot source, read off a dot of its full-state reply. */
     private fun sourceOf(reply: Reply): UUID =
         (reply.delta.puts.values.flatMap { it.keys } + reply.delta.dels.values.flatten()).first().sourceId
@@ -280,7 +302,10 @@ class OrMapCellSincePullBelowFloorTest {
      *
      * `since = {X->3}`: only dot 4 is novel, but the per-dot filter this task replaces would ship
      * `{4}` alone — the datum. The entry-whole filter ships the WHOLE entry because any dot in it
-     * is novel. `since = {X->4}`: no dot is novel, so `dels` carries no `"k"` entry at all.
+     * is novel. `since = {X->4}`: no dot in `k`'s entry is novel and `puts["k"]`'s own dots (1, 3)
+     * are not novel either, so `putsOut`/`delsOut` both come back empty and `pullServe` ships NO
+     * reply at all — the same "nothing beyond the frontier" behaviour `OrMapConvergenceTest`
+     * already pins, not a defect of this test.
      */
     @Test
     fun `a dels entry ships whole or not at all, never split by dot`() {
@@ -297,7 +322,7 @@ class OrMapCellSincePullBelowFloorTest {
         val partialAtThree = pull(responder, TagFrontier(mapOf(x to 3L)))
         partialAtThree.delta.dels.getValue("k") shouldBe setOf(Timestamp(x, 1), Timestamp(x, 2), Timestamp(x, 3), Timestamp(x, 4))
 
-        val partialAtFour = pull(responder, TagFrontier(mapOf(x to 4L)))
-        partialAtFour.delta.dels.containsKey("k") shouldBe false
+        val partialAtFour = pullOptional(responder, TagFrontier(mapOf(x to 4L)))
+        partialAtFour shouldBe null
     }
 }
