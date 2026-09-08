@@ -2469,3 +2469,129 @@ and B needed and did not have.
   rate UP, so A and B are the conservative direction and C — the control that had
   to fire — ran at the LOWER load. That asymmetry favours a false RED, not a
   false GREEN, so it does not soften the result.
+
+## KE3-42-ORMAP-BS13 — the OR-map has no reliable BS-13 witness: the wrong seam reclaims strictly more, and harms nothing reproducibly
+
+Recorded by: `computenet-9sm.8.7` (task, parent `computenet-9sm.8`). Base
+commit: `3bdacc7e7` (`feature/computenet-9sm.8`, branch
+`task/computenet-9sm.8.7`). Host: darwin/arm64, 16 cores, load1 7–9.
+Measured 2026-09-08. All figures are whole-class runs of the new
+`OrMapGcSafetySweepTest` (`./gradlew :kernel:test --tests
+'civictech.cell.replication.OrMapGcSafetySweepTest' --rerun`), seeds `1..200`,
+budget `40_000`, compaction period `K = 10`.
+
+This is the OR-map twin of `## KE3-20`, filed for the same reason and in the
+same shape: a control that the bead required to reproduce OR to be recorded as
+unreachable. It did not reproduce. That is a result, not a gap to work around,
+and no seed range, budget or workload was searched for a friendlier one.
+
+### What was asked
+
+`computenet-9sm.8.7` clause 3 (feature decision 9sm.8-D10): the LOCAL arm —
+`OrMapCell.compactBelow(localDeliveredFrontier)`, the wrong seam — must either
+record a resurrecting seed reproducing `PIN_RUNS` of `PIN_RUNS`, or record the
+negative result here and fall back on the sweep-level discriminator that is
+observable either way.
+
+### What was measured
+
+Three consecutive whole-class runs, all three arms in each:
+
+```
+                              run 1        run 2               run 3
+  STABLE resurrecting         []           []                  []
+  STABLE fence-attributed     []           []                  []
+  STABLE membership-diverging [43,89,       [76,148,151,154]    [4,76,154,165]
+                               145,146]
+  STABLE value-diverging      []           []                  []
+  STABLE value-fold-drift     []           []                  []
+  STABLE discarded            5571         5557                5521
+  CONTROL discarded           0            0                   0
+  CONTROL membership-div.     []           [151,173]           [151,173]
+  LOCAL resurrecting          []           []                  []
+  LOCAL membership-diverging  []           [4,12,32,89,181]    []
+  LOCAL value-harmed          []           []                  []
+  LOCAL discarded             7395         7383                7408
+  wall time STABLE/LOCAL      4.8/2.6 s    5.7/2.6 s           4.7/2.6 s
+```
+
+**The resurrection witness is dead on the OR-map, 0 of 200 in all three runs** —
+the same disposition `## KE3-20` records for the OR-set, and for the same
+mechanism: `9sm.8-D6`'s `(key, dot)` re-admission fence plus its repair emission
+means a re-delivered discarded dot is fenced and repaired, never re-admitted.
+The OR-map fence landed with the payload, so unlike the OR-set there was never a
+pre-fence build here whose witness could be re-derived.
+
+**The divergence witness is present but not reproducible**: non-empty on 1 of 3
+runs, empty on the other two, and the seeds it named on that run (`4, 12, 32,
+89, 181`) do not intersect the STABLE arm's diverging seeds in any run. The bead
+forbids recording a seed below `PIN_RUNS` of `PIN_RUNS`, and a class that is
+empty on two runs in three cannot supply one. So no `BS13_SEED` is recorded.
+
+### Why the OR-map LOCAL seam finds nothing at `K = 10` — the counting argument
+
+The wrong seam's harm needs a schedule in which a replica reclaims a `dels`
+entry that a *straggler* has not delivered, AND the straggler then re-delivers
+the covered put-dot, AND nothing repairs it. On this rig the chances per seed
+are bounded by the REMOVE COUNT, not by the compaction period — the same bound
+`GcSafetySweep.K`'s KDoc derives for the OR-set, and the reason `K = 5` bought
+nothing there. `removeSchedule` issues twelve removes per seed (every
+odd-ordinal write of twenty-four), and `minRemovesOnASeed` measured 3, so the
+per-seed budget of candidate schedules is single-digit. Against that budget the
+fence removes the re-admission half outright and the repair emission removes
+most of the divergence half, leaving a residue that this seed range samples at
+roughly one run in three rather than reliably.
+
+The OR-map does not add a route the OR-set lacks. Its extra observable —
+per-key `value(key)` agreement, both across live replicas and against each
+replica's own emitted fold — fired on ZERO seeds on every arm of every run,
+including the LOCAL arm. That is expected rather than surprising for this
+workload and is recorded as a limit of the rig, not as evidence of safety: each
+key is written exactly once by exactly one peer, so the add-wins pick over
+concurrent dots is never exercised on a contended key and the value observable
+can only catch a wrong live-dot set, not a mis-resolved concurrent write. A
+multi-writer-key workload would be a different rig.
+
+### The discriminator that IS observable, and is asserted
+
+**LOCAL's summed `discarded` strictly exceeds STABLE's on the same seeds** —
+7395 > 5571, 7383 > 5557, 7408 > 5521, i.e. 3 of 3 with a ~33 % margin.
+`localDeliveredFrontier` drops the MIN over the other open members that
+`stableFrontier` takes, so a reclaimer driven from it discards at or ahead of
+the stable one by construction; the measurement says the gap is large and stable
+on this rig. The BS-13 arm asserts that inequality. It is a statement that LOCAL
+is the wrong seam — it reclaims what the mesh has not certified — that holds
+whether or not the extra discards happen to break anything on this seed range,
+which is exactly the property a witness-free control needs.
+
+`OrMapGcSafetySweepTest`'s `ORMAP_BS13_WITNESS` constant carries this
+disposition in the source, so the next reader finds the measurement rather than
+an absence.
+
+### The STABLE arm is not vacuous, and the mutation was run
+
+Non-vacuity is in-line and asserted, not printed: `discarded` summed over the
+run is 5521–5571 against a CONTROL arm whose `discarded` is **0 on every seed**,
+so a STABLE arm whose `snapshot()` found no installed stability read would
+report 0 and redden.
+
+Additionally, `OrMapCell.compactBelow`'s every-dot rule was mutated to a per-dot
+one (`delDots.all { covered }` → discard each covered dot individually) as a
+local, reverted edit, and the STABLE arm **saw it**: the run failed on
+`FENCE-ATTRIBUTED diverging seeds=[4]` — a live replica lacking a key whose live
+dot is in that replica's own `ReclaimedDots` — with `resurrecting` still empty.
+So the sweep discriminates the discard rule this feature turns on, and it does
+so through the attribution read rather than through resurrection. The
+deterministic backstop for the same rule remains
+`OrMapCellCompactBelowTest`'s LOST-del pin.
+
+### Disposition
+
+No assertion was weakened and no seed, range or budget was re-derived. The LOCAL
+arm ships with the `discarded`-inequality discriminator in place of a per-seed
+pin, and `[KE3-20]`'s OR-map half stays OPEN as a bounded-schedule negative:
+this rig, at this range, does not reach the wrong seam's harm reliably. Widening
+the adversary was NOT attempted here — `## KE3-20`'s own record has four
+widenings built, measured and rejected on the OR-set for making the rig's floor
+worse rather than the discriminator sharper, and re-running that search on the
+OR-map is its own item, not this task's.
