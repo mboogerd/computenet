@@ -93,11 +93,22 @@ class StabilityFreezeDetector(private val threshold: Int = 3) {
      *
      * @param rows the companion's merged per-(slot, source) delivered rows.
      * @param open the WAIT open set — announced members ∪ instance-derived
-     *   slots, minus `closed`. Suspended slots are deliberately INCLUDED: the
-     *   WAIT read is frozen on them, and this notice says "frozen", not
-     *   "dead" (9sm.5-D6).
+     *   slots, minus `closed` *that is not itself a live instance slot*
+     *   ([KE3-23], `computenet-07vb`). Suspended slots are deliberately
+     *   INCLUDED: the WAIT read is frozen on them, and this notice says
+     *   "frozen", not "dead" (9sm.5-D6).
      * @param closed the companion's closed slots — a slot arriving here
-     *   retracts its latch.
+     *   retracts its latch. **[open] and [closed] are NO LONGER DISJOINT**
+     *   since `computenet-07vb`: a replica that rejoins onto its ref-derived
+     *   slot (M10.1) is a live member again while the grow-only marker
+     *   remains, so it is in both. The retraction arm below still tests
+     *   `slot in closed` against this raw set, so such a slot latches
+     *   `STABILITY_FROZEN` on the Hth evaluation and is handed a spurious
+     *   [StallNotice.Resume] on the next one with its row unmoved — the
+     *   notice flaps rather than latching. Measured, and filed as
+     *   `computenet-92ek`; the direction is conservative (over-reported,
+     *   never hidden) and no certification read is involved, so it is a
+     *   known bug here, not a claim that this is correct.
      * @return the notices produced by this evaluation, in order: retractions
      *   ([StallNotice.Resume]) before new stalls. Empty on most evaluations.
      */

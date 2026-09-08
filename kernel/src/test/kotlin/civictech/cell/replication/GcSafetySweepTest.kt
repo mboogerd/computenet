@@ -1600,19 +1600,32 @@ class StabilityOpenSetOnRejoinTest {
     }
 
     /**
-     * Candidate (1), SETTLED: [WatermarkCell.close] adds to a grow-only `closed`
+     * Candidate (1), SETTLED by `computenet-typw` and REPAIRED by
+     * `computenet-07vb` — this test was that settlement's characterisation of the
+     * defect and is now INVERTED into its regression (the inversion is the whole
+     * diff: the rig, the seed and the eviction are unchanged).
+     *
+     * What it characterised: [WatermarkCell.close] adds to a grow-only `closed`
      * set and nothing retracts it, while [civictech.cell.replication.Replication]
      * derives the watermark slot from the [CellRef] — which is stable across a
      * rejoin. So a replica evicted with `closeDepartedRow = true` and then
-     * re-replicated onto the SAME ref returns onto the slot already closed, and
-     * every subsequent `stableFrontier` silently excludes it: the MIN certifies
-     * delivery to a set that does not contain a live, rejoined member.
-     *
-     * That is exactly the shape `computenet-dwkp` caught (`membership=[join@1088,
+     * re-replicated onto the SAME ref returned onto the slot already closed, and
+     * every subsequent `stableFrontier` silently excluded it: the MIN certified
+     * delivery to a set that did not contain a live, rejoined member. That is
+     * exactly the shape `computenet-dwkp` caught (`membership=[join@1088,
      * EVICT_CLEAN@1623, rejoin@1885]`, `stillHeldBy=[peer0]`).
+     *
+     * What it now asserts: the rejoined slot is back INSIDE `open`, and the
+     * `closed` marker is *still present in the lattice* — the repair is at the
+     * READ (`closed` is honoured only where its premise holds), not a retraction
+     * of a grow-only CRDT set. See [CausalStability.stableFrontier].
+     *
+     * Its control is `a cleanly departed slot that does NOT rejoin stays out of
+     * the open set` below: together they show the repair does not work by
+     * ignoring `closed`.
      */
     @Test
-    fun `computenet-typw a replica rejoining the same CellRef after a clean evict stays OUT of the open set - closed is monotone`() {
+    fun `computenet-07vb a replica rejoining the same CellRef after a clean evict is back INSIDE the open set`() {
         val controller = SimulationController(1L)
         val p0 = Peer(controller)
         val p1 = Peer(controller)
@@ -1645,19 +1658,57 @@ class StabilityOpenSetOnRejoinTest {
         controller.runToIdle()
 
         val read = p0.replication.openSlots(logicalId)
-        // THE ANSWER. The rejoined replica is live and announced, and is STILL
-        // excluded — by `closed`, not by absence and not by suspension.
-        assertTrue(slot2 !in read.open, "expected the rejoined slot to be excluded from open; read=$read")
-        read.exclusionOf(slot2) shouldBe "closed"
-        assertTrue(slot2 in read.closed, "the exclusion did not come from the closed term; read=$read")
-        // Not candidate (2)-shaped and not "absent": the slot is known, it is just closed.
-        assertTrue(
-            slot2 in read.memberSlots || slot2 in read.announced,
-            "the rejoined slot was not even known to the companion; read=$read",
-        )
+        // THE REPAIR. The rejoined replica is live and known as an instance, so
+        // `closed`'s premise — "this row can never advance again" — is false for
+        // it, and it is back in `open`.
+        assertTrue(slot2 in read.open, "expected the rejoined slot back in open; read=$read")
+        read.exclusionOf(slot2) shouldBe null
+        // The grow-only lattice is UNTOUCHED: the marker is still there, and the
+        // slot is a live member. The repair is at the read, not a retraction.
+        assertTrue(slot2 in read.closed, "the closed marker was retracted; read=$read")
+        assertTrue(slot2 in read.memberSlots, "the rejoined slot was not a live instance slot; read=$read")
         // …and the survivors' own read agrees, so this is not a peer-0-local view.
-        assertTrue(slot2 !in p1.replication.openSlots(logicalId).open, "p1 disagreed with p0")
+        assertTrue(slot2 in p1.replication.openSlots(logicalId).open, "p1 disagreed with p0")
         r0.ref.id shouldBe logicalId
+    }
+
+    /**
+     * The CONTROL for the regression above (`computenet-07vb`): `closed` must
+     * still do its PN-0c job. A replica evicted with `closeDepartedRow = true`
+     * that does **not** rejoin stays out of `open`, so the repair cannot be
+     * passing by ignoring the `closed` term altogether.
+     *
+     * This is the discriminating half of the pair: deleting the repair's
+     * `- memberSlots` qualifier turns the regression red and leaves this green;
+     * deleting the `removeAll(closed …)` line entirely turns this red.
+     */
+    @Test
+    fun `computenet-07vb a cleanly departed slot that does NOT rejoin stays out of the open set`() {
+        val controller = SimulationController(3L)
+        val p0 = Peer(controller)
+        val p1 = Peer(controller)
+        val p2 = Peer(controller)
+        Peering.loopback(p0.side, p1.side)
+        Peering.loopback(p1.side, p2.side)
+        Peering.loopback(p0.side, p2.side)
+        val logicalId = java.util.UUID.randomUUID()
+
+        SetCell<String>(CellRef(logicalId, 0)).also { p0.replication.replicate(it, p0.host) }
+        SetCell<String>(CellRef(logicalId, 1)).also { p1.replication.replicate(it, p1.host) }
+        val r2 = SetCell<String>(CellRef(logicalId, 2)).also { p2.replication.replicate(it, p2.host) }
+        controller.runToIdle()
+
+        val slot2 = WatermarkCell.slotId(p0.replication.watermarkRef(r2.ref))
+        assertTrue(slot2 in p0.replication.openSlots(logicalId).open, "slot2 was not open before the evict")
+
+        assertTrue(p2.replication.evict(r2, p2.host, closeDepartedRow = true), "evict suspended instead of despawning")
+        controller.runToIdle()
+
+        val read = p0.replication.openSlots(logicalId)
+        assertTrue(slot2 !in read.open, "a cleanly departed, non-rejoining slot stayed open; read=$read")
+        read.exclusionOf(slot2) shouldBe "closed"
+        assertTrue(slot2 !in read.memberSlots, "the departed slot was still a live instance slot; read=$read")
+        assertTrue(slot2 !in p1.replication.openSlots(logicalId).open, "p1 disagreed with p0")
     }
 
     /**
