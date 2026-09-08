@@ -201,8 +201,13 @@ the script compare** — one XML file per class is what makes the count a proxy:
 
 ```bash
 .claude/skills/work/scripts/junit-count.py --expect-classes 9 <results-dir>
-# exit 6 + SHORT-COVERAGE if fewer files exist than filters you passed
+# exit 6 + SHORT-COVERAGE when fewer XML files exist than classes you named
 ```
+
+**N is distinct CLASSES, never the filter count.** Two `--tests` filters naming
+methods of one class produce ONE xml (measured), and a class whose every test is
+tag-excluded (`-PexcludeMultiJvm`, `@Tag("bench")`) produces none — either would
+raise SHORT-COVERAGE on a run that dropped nothing.
 
 **The aggregate's own trap is the MODULE LIST, not the total.** A results
 directory left by an earlier run is counted by any tool that reads the tree, so

@@ -204,9 +204,13 @@ def main(argv):
     print(line("TOTAL", *total, newest_all))
     if expect is not None and total[0] < expect:
         print(f"SHORT-COVERAGE: asked for {expect} test classes, "
-              f"{total[0]} result file(s) exist — a --tests filter matched "
-              f"nothing and Gradle dropped it silently. The run is green and "
-              f"covers less than the command asked for.", file=sys.stderr)
+              f"{total[0]} result file(s) exist. Most likely a --tests filter "
+              f"matched nothing and Gradle dropped it silently, leaving a green "
+              f"run that covers less than the command asked for. Rule the "
+              f"benign cases out first: N is DISTINCT CLASSES, not filters "
+              f"(two method filters on one class = one xml), and a class whose "
+              f"every test is tag-excluded emits no xml at all.",
+              file=sys.stderr)
         print("SHORT-COVERAGE")
         return 6
     return 0
