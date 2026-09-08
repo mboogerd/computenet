@@ -1,0 +1,8 @@
+work +19
+# Step 6's abnormal-ending block now says what happens to work IN FLIGHT when a
+# session arrives at Finalize from an expired clock — a host suspension can put
+# it there from a healthy-looking rung in one turn (189m of wall clock between
+# two consecutive turns, arriving at 426m of a 300m slot). The split is
+# certification, not how nearly done something looks. slot-elapsed.sh's EXPIRED
+# rung carries the same disposition in the line itself, which is the half that
+# works without step 6 being re-read under an expired clock.

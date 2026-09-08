@@ -2592,6 +2592,25 @@ the publication push FIRST and skip the rest:**
 Everything else here is bookkeeping a later session reconstructs from the
 tracker; unpushed tracker state is the one thing it cannot.
 
+**Work in flight when you arrive here does not all get the same treatment**, and
+the split is CERTIFICATION, not how nearly done something looks. A host
+suspension can put you here from a healthy-looking rung in one turn — 189m of
+wall clock between two consecutive turns, arriving at 426m of a 300m slot
+(computenet-9u8e) — so this is a state you reach with agents running, not only
+one you walk into:
+
+- **Certified and green → ship it.** A reviewer's PASS is spent work; `gh pr
+  ready` costs one command and the alternative is re-reviewing it next session.
+- **Uncertified → leave it.** No shipping on your own say-so because the clock
+  ran out. Draft PRs are already safe; push what is committed so the branch is
+  not stranded on this machine.
+- **Still-running agents → do not wait for them.** Their worktrees survive and
+  `reclaim-worktrees.sh` finds them next session. Waiting is what turned the
+  overrun into 126 minutes.
+- **Release what you hold** (claims, the epic) before publishing, or the next
+  session sees this machine still holding it and waits out the stale-claim
+  window.
+
 Otherwise, in order:
 
 **1. The epic decision.** One query, three branches:

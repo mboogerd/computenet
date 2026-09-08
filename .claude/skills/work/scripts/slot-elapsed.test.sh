@@ -128,6 +128,11 @@ says "$d" "800m of wall clock passed between turns" "a suspension gap beyond the
 d=$(slot 210 300); says "$d" "rung: T-90m"   "left == 90 is inside T-90m"
 d=$(slot 255 300); says "$d" "rung: T-45m"   "left == 45 is inside T-45m"
 d=$(slot 300 300); says "$d" "rung: EXPIRED" "left == 0 is EXPIRED"
+# The EXPIRED line carries its own disposition — the reading a session takes on
+# resume is where it acts, and it resumes with agents running (computenet-9u8e).
+says "$d" "publish beads FIRST" "EXPIRED names the publication push"
+says "$d" "already certified"   "EXPIRED says what may still ship"
+says "$d" "do not wait on running agents" "EXPIRED says not to wait"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
