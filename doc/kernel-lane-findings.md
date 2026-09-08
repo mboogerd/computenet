@@ -1415,6 +1415,20 @@ counts), all of which touch `kernel/src/main/kotlin/civictech/cell/data/Watermar
 Filed as **`computenet-07vb`** with this measurement as its motivation and
 `StabilityOpenSetOnRejoinTest` as its existing minimal reproducer.
 
+**THE CI CONSEQUENCE, which follows from the rate and is worth stating plainly.**
+The same class fired 3 of 5 full `./gradlew :kernel:test --rerun` runs taken as
+this bead's own gate (load1 9-18; the sole failure in each was BS-12
+`seeds=[12]`, everything else green — 1417 tests, 1 failure, 0 errors, 9
+skipped). A 37.5%-per-sweep class sits underneath the `kernel-test` required
+check, so **any** PR touching this repo has roughly a one-in-three chance of a
+red check that has nothing to do with its diff. That is not a new defect and
+this bead does not fix it, but it explains why red `kernel-test` runs keep being
+re-attributed to whatever diff happened to be under them: `computenet-9sm.6.6`'s
+reviewer isolated exactly that (the failure persisted with its own new test file
+removed), and `computenet-9sm.6.4`'s reviewer saw it at both revisions of a
+harness-only change. Read a red `kernel-test` whose only failure is BS-12
+`seeds=[12]` as this class until shown otherwise.
+
 **WHAT MUST NOT HAPPEN, unchanged and still binding** (`computenet-dwkp`'s four
 prohibitions): the BS-12 attribution assertion is not relaxed, the class is not
 absorbed into `MAX_STABLE_DIVERGING`, `SEEDS` is not narrowed, and
