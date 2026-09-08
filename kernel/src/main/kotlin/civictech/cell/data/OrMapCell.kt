@@ -702,6 +702,16 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * superseding it, so no mesh source is ever fenced. Closing it properly needs
      * the notice to reach every replica as data (a fenced-source lattice on the
      * gossip mesh), which is 96 §E1 follow-on work, not this seam.
+     *
+     * **Revisit trigger (computenet-u7fi, KE3 decision 2026-09-06: residual
+     * accepted PROVISIONALLY).** WHEN any change makes `OrMapCell` emit a
+     * `TaggedMapDelta` re-baseline (`ReBaselineEmitting` entering this class's
+     * supertype list) or supersedes a replica's ref-derived [dotSource], THEN
+     * reopen `computenet-u7fi` BEFORE that change merges: the unreachability
+     * above rests on exactly those two facts. The fenced-source lattice is
+     * filed in `concord/corpus/DISPUTES.md` §42-WM-R14 and
+     * `doc/spec/40-distribution/42-replication.md` §Open interactions, not
+     * here.
      */
     private fun applyReBaseline(
         delta: TaggedMapDelta<K, V>,
