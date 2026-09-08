@@ -1323,6 +1323,105 @@ reason. It is not the unbounded-per-mint retention `computenet-fzd3` was filed a
   and no `Replication` lifecycle, so the lattice this closes does not exist for it. If it ever
   becomes replicable it needs the same seam.
 
+## KE3-23-CLOSEDROW — the BS-12 seed-12 flake is a REAL escape at 37.5% per sweep, and candidate (1) — the monotone `closed` row — is its excluding term in 45 of 45 occurrences
+
+**Bead**: `computenet-r13k`, under epic `computenet-9sm`. **Measured 2026-09-08**
+on `NL-MGD6FQJW91/MacBoo`, a 16-core Apple-silicon macOS host, deliberately with
+**no sibling agent running**: `uptime` load1 **4.02 at the start and 8.54 at the
+end** (load5 7.52 → 8.36). That band matters and is why it is recorded here —
+`computenet-dwkp`'s ~20-30% was taken at load1 4-13 and a later corroboration
+read ~40% at load1 8-23, so a rate quoted without its load is not comparable
+with either. The load on this host is host endpoint-security scanning
+(`computenet-91xn`), not a build: Microsoft Defender and ManageEngine were the
+only processes above 10% CPU and the only JVMs alive were idle Gradle/Kotlin
+keepalive daemons.
+
+**THE SAMPLE.** 120 iterations of the STABLE arm **alone** — one fresh JVM per
+iteration, `scripts/flake-loop/run-method-loop.sh` driving
+`SuiteLoop --method`, at base `87d46c4ee` (`computenet-uju5`'s `TagLaneContinuity`
+fix merged):
+
+    120 iterations, 45 red  =  37.5%
+
+Every red is the same assertion and the same seed — `FENCE-ATTRIBUTED diverging
+seeds=[12]` 45 times, `seeds=[]` 75 times, and no other failure of any kind in
+the sample. Reproduce with:
+
+    CP=$(./gradlew -q --no-configuration-cache \
+          -I scripts/flake-loop/print-test-classpath.init.gradle.kts \
+          :kernel:printTestClasspath | grep -v '^WARNING' | tr '\n' ':') \
+    scripts/flake-loop/run-method-loop.sh 120 r13k-base \
+      'civictech.cell.replication.GcSafetySweepTest#compaction at the stable frontier is GC-safe across a churn sweep_BS12'
+
+One iteration costs ~3.6s against a Gradle sweep's ~40s, which is what makes
+n=120 affordable at all; that ratio, not any new insight, is why the earlier
+figures on this class were all n<=12.
+
+**THE CLASSIFICATION: a REAL silent-fence escape, not a rig race.** This answers
+the question `computenet-r13k` was filed to answer, and it answers it the same
+way in 45 of 45 occurrences. The detail line, byte-identical across all 45 except
+the fence step (5000 ×40, 5025 ×4, 5050 ×1 — which compaction point first held
+the element, a scheduling detail):
+
+    [BS-12] FENCED-DIVERGE seed=12 ... differing=[peer2-23]; attribution=[peer2-23
+      held=[peer0]
+      holderState=[peer0{lastDeparture=EVICT_CLEAN suspended=false evictDespawned=true
+                         member=true membership=[join@1088, EVICT_CLEAN@1623, rejoin@1885]}]
+      liveTags=[8]
+      provenance=[peer2{tag=8 own=true inc=11/11 restores=0 mintedHere=peer2-23
+                        sameElement=true lastDeparture=null suspended=false
+        fencedAt={step=5000 stillHeldBy=[peer0(closed)]
+                  openSet={open=[654381a9] members=[82f0e182, 654381a9]
+                           announced=[654381a9, 82f0e182, 448a5f68]
+                           closed=[82f0e182, 448a5f68] suspended=[] degrade=false
+                           rows={654381a9->3}}}
+                        membership=[join@1412]}]
+      fencedAtLacking=peer2:[8](all)]; discarded=36
+
+**READ IT TERM BY TERM, because the answer is one word.** `stillHeldBy=[peer0(closed)]`
+— the annotation `computenet-typw` put on that field is the exclusion term, and it
+says `closed`, not absence and not suspension. The `openSet` read confirms it
+independently: peer0 (`82f0e182`) is in `members` **and** in `closed`, so
+`open = members ∪ announced − closed − suspended` drops it, leaving
+`open=[654381a9]` — peer2 alone. `rows={654381a9->3}` is the whole input to the
+MIN. So `stableFrontier` handed `compactBelow` peer2's **own** delivered frontier
+wearing the name of a quorum, and it certified peer2's del-dot as delivered to
+"every open member" when the only open member was the sender. peer0, live and
+holding the element, was not consulted because a `closed` entry from its
+`EVICT_CLEAN` at step 1623 was never retracted by its `rejoin` at 1885.
+
+**THIS IS `computenet-typw`'s CANDIDATE (1), reproduced in the sweep.** typw
+settled candidate (1) deterministically (`StabilityOpenSetOnRejoinTest`, see
+`## KE3-23-OPENSET`) but could not say it was the term operating in the wild;
+this is that reading, at n=45. Note what it is **not**: `degrade=false` and
+`suspended=[]` exclude candidate (3), and the exclusion is a **missing slot**,
+not a lying row, so it is not candidate (2) either.
+
+**CONSEQUENCE FOR `computenet-uju5`, stated carefully.** uju5's
+`TagLaneContinuity` (candidate (2)'s disposition, `## KE3-23-LANECONT`) is in
+this base and the class still fires at 37.5%. That is **not** evidence against
+uju5 — the two are different defects on different terms of the same expression,
+and uju5's own implementer read its 2-of-6 post-fix reds as this known class
+rather than as a regression. This measurement upgrades that reading from a
+plausible attribution at n=6 to a measured one at n=120: the residual uju5 left
+behind is candidate (1), and uju5 was never scoped to touch it.
+
+**THE FIX IS NOT TAKEN HERE, and this bead was scoped not to take it** — its
+`metadata.files` covers the test, the churn rig, `scripts/flake-loop` and this
+document, and deliberately not kernel production sources. typw named the three
+candidate repairs (a retractable close epoch of the shape `suspendEpoch` already
+has; an incarnation-distinct slot; a rejoin that must re-announce before it
+counts), all of which touch `kernel/src/main/kotlin/civictech/cell/data/Watermark.kt`.
+Filed as **`computenet-07vb`** with this measurement as its motivation and
+`StabilityOpenSetOnRejoinTest` as its existing minimal reproducer.
+
+**WHAT MUST NOT HAPPEN, unchanged and still binding** (`computenet-dwkp`'s four
+prohibitions): the BS-12 attribution assertion is not relaxed, the class is not
+absorbed into `MAX_STABLE_DIVERGING`, `SEEDS` is not narrowed, and
+incarnation-unique `tagSource` is not pursued. Nothing in this bead touched an
+assertion, a seed range, a budget or a bound; the diff is a harness selector, a
+loop script and this document.
+
 ## KE3-BS16-RETAINED — reclamation is an EXCHANGE: retained state as a whole is `O(elements ever reclaimed)`, and no `O(in-flight window)` bound over the whole is reachable without G-42
 
 **Bead**: `computenet-9sm.6.5`, under feature `computenet-9sm.6`, clause
@@ -1595,9 +1694,16 @@ the `[KE3-30]` closing evidence.
   (`GcSafetySweepTest.kt:973`). The pinned-seed arm
   (`the recorded seed reproduces its verdict_BS12`, `BS12_SEED` 126) and the
   `Trigger.NONE` control passed in every run. So the sweep's clean single-run
-  numbers above should be read as *a* sample, not as the arm's steady state,
-  and whether seed 12 is a genuine intermittent silent-fence escape or a rig
-  race is **open** — filed as `computenet-r13k`.
+  numbers above should be read as *a* sample, not as the arm's steady state.
+
+  **Answered 2026-09-08 by `computenet-r13k` (see `## KE3-23-CLOSEDROW` below):
+  seed 12 is a REAL escape, not a rig race**, and the caveat above should now be
+  read as settled rather than open. 120 iterations of the STABLE arm alone at
+  `87d46c4ee` failed **45**, all on `seeds=[12]`, and all 45 name the same
+  excluding term: `stillHeldBy=[peer0(closed)]`. The `fence-attributed 0` figure
+  above remains a truthful single sample and is left as recorded; what has
+  changed is that the arm's steady state is now measured (37.5%) rather than
+  guessed, and the mechanism is upstream of the fence rather than in it.
 - **`[KE3-38]` BS-18 (`computenet-9sm.6.6`).** `CompactionExclusiveAccountingTest`
   shows zero consumes/releases/drops attributable to checkpoint-driven
   compaction AND to `applyRemote`'s repair emission (a new outbound `SetDelta`
