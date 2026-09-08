@@ -1,0 +1,7 @@
+work +4
+# junit-count.py now prints an age beside every `newest` timestamp, and
+# gradle-evidence.md's UTC paragraph points at that age instead of at the
+# manual `date -u` reading. Four lines bought the mechanical fix for a trap
+# whose earlier prose-only fix (computenet-8dtq) did not hold: a run that had
+# just finished read two hours stale on a CEST host, and a reviewer nearly
+# spent a repo-wide `./gradlew test` disproving a timezone offset.

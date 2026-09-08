@@ -9,6 +9,7 @@ reads, so the tests exercise them the way a shell would.
 
 Run: python3 .claude/skills/work/scripts/junit-count.test.py
 """
+import datetime
 import os
 import pathlib
 import subprocess
@@ -60,6 +61,26 @@ with tempfile.TemporaryDirectory() as tmp:
           "2 files: 10 tests, 1 failures, 2 errors, 1 skipped" in out, out)
     check("newest timestamp wins",
           "newest 2026-08-14T12:40:45.016Z" in out, out)
+    # THE ZONE GUARD: the timestamp is UTC and the host clock is not, so a
+    # run that just finished reads hours stale to the eye. An age relative to
+    # now cannot be misread across zones (computenet-072a).
+    check("stale timestamp carries an age",
+          "2026-08-14T12:40:45.016Z (" in out and " ago)" in out, out)
+
+    d_fresh = tmp / "fresh"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    xml(d_fresh / "TEST-Fresh.xml", tests=1,
+        ts=now.strftime("%Y-%m-%dT%H:%M:%S.000Z"))
+    rc, out, err = run(d_fresh)
+    check("a seconds-old run reads as seconds old, not hours",
+          "s ago)" in out, out)
+
+    # A timestamp with no zone marker is ambiguous; no age beats a wrong one.
+    d_naive = tmp / "naive"
+    xml(d_naive / "TEST-Naive.xml", tests=1, ts="2026-08-14T12:40:45")
+    rc, out, err = run(d_naive)
+    check("zoneless timestamp gets no age",
+          "newest 2026-08-14T12:40:45" in out and " ago)" not in out, out)
 
     # depth THREE is deliberately not counted: the contract is *.xml and
     # */*.xml under each given dir, nothing deeper.
