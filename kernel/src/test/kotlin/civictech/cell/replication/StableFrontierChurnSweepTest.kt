@@ -95,6 +95,17 @@ internal class StabilityObservations {
      */
     var regressionComparisons: Long = 0
 
+    /**
+     * Steps on which `closed ∩ memberSlots` was NON-EMPTY — a slot carrying a `closed` marker whose
+     * premise this node's own instance view contradicts, i.e. a rejoined replica back on its
+     * ref-derived slot ([KE3-23], `computenet-07vb`). Counted because it is the whole reason this
+     * rig's open-slot derivation had to be corrected: while the derivation subtracted `closed`
+     * unqualified, every one of these steps was a step at which the rig's set could NOT see the
+     * membership change that the production read saw. A sweep in which this is zero has not
+     * exercised the corrected term at all.
+     */
+    var premiseContradictions: Long = 0
+
     /** Per peer: the open-slot set and the frontier as of the previous step it was read on. */
     val previous: MutableMap<String, Pair<Set<UUID>, Map<UUID, Long>>> = mutableMapOf()
 }
@@ -112,6 +123,7 @@ internal object StabilityTotals {
     var nonEmptyFrontierReads: Long = 0
     var triplesChecked: Long = 0
     var regressionComparisons: Long = 0
+    var premiseContradictions: Long = 0
     var runs: Int = 0
 
     fun reset() {
@@ -119,6 +131,7 @@ internal object StabilityTotals {
         nonEmptyFrontierReads = 0
         triplesChecked = 0
         regressionComparisons = 0
+        premiseContradictions = 0
         runs = 0
     }
 
@@ -128,12 +141,14 @@ internal object StabilityTotals {
         nonEmptyFrontierReads += observations.nonEmptyFrontierReads
         triplesChecked += observations.triplesChecked
         regressionComparisons += observations.regressionComparisons
+        premiseContradictions += observations.premiseContradictions
         runs++
     }
 
     override fun toString(): String =
         "runs=$runs frontierReads=$frontierReads nonEmptyFrontierReads=$nonEmptyFrontierReads " +
-            "triplesChecked=$triplesChecked regressionComparisons=$regressionComparisons"
+            "triplesChecked=$triplesChecked regressionComparisons=$regressionComparisons " +
+            "premiseContradictions=$premiseContradictions"
 }
 
 /**
@@ -316,8 +331,37 @@ object StableFrontierChurnSweep {
      * The open-slot set is re-derived here, independently of `CausalStability`, from exactly the
      * two reads spec 42 §"The stability read" names: this peer's `replicasOf` mapped through
      * `WatermarkCell.slotId(watermarkRef(...))`, unioned with the companion's announced
-     * `members()`, minus `closed()`. `degrade = false`, so a PN-19 *suspended* row stays open —
-     * the WAIT reading, which is the conservative one and the one BS-9/BS-10 want.
+     * `members()`, minus `closed()` **that is not itself a live replica slot**. `degrade = false`,
+     * so a PN-19 *suspended* row stays open — the WAIT reading, which is the conservative one and
+     * the one BS-9/BS-10 want.
+     *
+     * ## Why the subtraction is premise-qualified, and what the unqualified form was blind to
+     *
+     * `[KE3-23]` / `computenet-07vb`: `WatermarkCell.slotId` is ref-derived and replay-stable
+     * (M10.1), so a replica evicted with `closeDepartedRow = true` that later re-replicates onto
+     * the same `CellRef` **returns onto the slot already in `closed`** — and `closed` is grow-only.
+     * `CausalStability.stableFrontier` therefore now subtracts `closed - memberSlots` rather than
+     * `closed`, honouring the marker only where its premise ("this row can never advance again")
+     * still holds.
+     *
+     * This hook subtracted `closed` unqualified, and that is a defect in the RIG, not in the read.
+     * A rejoined slot could never enter this set at all, in either of two consecutive samples — so
+     * at the exact step where the production open set GREW by the rejoining member, this set
+     * compared EQUAL, `[KE3-18]`'s exemption clause did not fire, and the frontier's legitimate
+     * FU-2 dip onto the returning member's row was recorded as a regression. Measured: 8 of the 60
+     * seeds, first `step=1886 peer=peer0 3 -> 2`, one step after that seed's `rejoin@1885`, on a
+     * plan carrying a `dst-crash` on `peer2`. The blindness is structural rather than probabilistic
+     * — set-equality over a set that by construction omits the slot whose membership changed cannot
+     * see a departure/rejoin round trip — so the fix is to re-derive the set the way the read the
+     * oracle checks derives it. [StabilityObservations.premiseContradictions] counts the steps on
+     * which the two forms differ, and the sweep asserts it non-zero, so the correction cannot go
+     * vacuous.
+     *
+     * Note the direction: the qualified form makes this set **larger**, so `[KE3-17]`'s arm compares
+     * strictly MORE `(peer, slot, source)` triples than before — the rejoined slot's row is now
+     * checked against the frontier, where previously it was not checked at all. Only `[KE3-18]`'s
+     * arm is relaxed, and only by exempting a step on which membership genuinely changed, which is
+     * the exemption that arm already documents.
      *
      * A peer whose companion is absent is skipped rather than failed: a crash rebuild replaces
      * `MeshPeer.replication` with a fresh instance, so `watermarkOf` is legitimately null until
@@ -329,12 +373,15 @@ object StableFrontierChurnSweep {
             val replication = peer.replication
             val companion = replication.watermarkOf(peer.ref.id) ?: continue
             val rows = companion.rows()
+            val closed = companion.closed()
+            val memberSlots = peer.registry.replicasOf(peer.ref.id).mapTo(mutableSetOf()) {
+                WatermarkCell.slotId(replication.watermarkRef(it))
+            }
+            if (closed.any { it in memberSlots }) observations.premiseContradictions++
             val open = buildSet {
-                peer.registry.replicasOf(peer.ref.id).mapTo(this) {
-                    WatermarkCell.slotId(replication.watermarkRef(it))
-                }
+                addAll(memberSlots)
                 addAll(companion.members())
-                removeAll(companion.closed())
+                removeAll(closed - memberSlots) // KE3-23, computenet-07vb — see the KDoc above
             }
             val stable = replication.stableFrontier(peer.ref.id).perSource
 
@@ -463,6 +510,13 @@ class StableFrontierChurnSweepTest {
             StabilityTotals.regressionComparisons > 0,
             "[KE3-18]'s arm never ran: no source was ever present in two consecutive reads under an " +
                 "unchanged open-slot set, so the no-drop property was never actually compared: $StabilityTotals",
+        )
+        assertTrue(
+            StabilityTotals.premiseContradictions > 0,
+            "no step in the whole sweep carried a `closed` marker on a slot this peer's own replica " +
+                "view reports as LIVE, so [KE3-23]'s premise-qualified subtraction was never " +
+                "exercised and this rig would pass identically with the unqualified `removeAll(closed)` " +
+                "it used to have: $StabilityTotals",
         )
     }
 

@@ -1955,6 +1955,11 @@ clause 5 and its dispatch. Nothing in this entry should be read as licence to
 relax that check; it is a live question, and the shape of the answer decides
 whether the repair ships as written.
 
+> **SETTLED** — see `## KE3-23-BS5-BLINDSPOT` at the end of this file. The
+> invariant is right; the RIG's independent re-derivation of `open` was stale.
+> The answer is not "relax the check": the amended rig is strictly STRONGER, and
+> now catches the KE3-23 defect itself at sweep scale.
+
 **THE RE-MEASUREMENT (acceptance clause 3).** Same instrument, same method, same
 n as `## KE3-23-CLOSEDROW`'s 45/120, on the same host (darwin/arm64 16-core), one
 fresh JVM per iteration:
@@ -1975,3 +1980,93 @@ consecutive greens has probability `0.625^120` — of order `1e-24`; this is not
 ~20-30% rate (`0.75^19` ~ 0.4%, i.e. unremarkable). The deterministic tests, not
 this sample, remain the primary evidence per clause 2; this is the corroboration
 clause 3 asks for, and it is stated as a rate with its load, not as a green run.
+
+## KE3-23-BS5-BLINDSPOT — BS-5's rig re-derived `open` with the term the repair corrected
+
+`computenet-07vb`, settling the open question left in `## KE3-23-CLOSEDPREMISE`.
+Two readings were named there and neither chosen: **(i)** BS-5's `[KE3-18]`
+invariant is wrong for a mesh where a member can re-enter, or **(ii)** the repair
+really does lower the MIN at a genuinely fixed open set. It is **(i)**, and more
+precisely than that reading stated it: the invariant is fine, the **rig's own
+open-slot derivation was stale**, and the fix makes the sweep strictly stronger
+rather than weaker.
+
+**What the rig does.** `StableFrontierChurnSweep.observe` deliberately re-derives
+the open-slot set *independently of `CausalStability`* — that independence is what
+makes the sweep a check on the read rather than a copy of it — from the two reads
+spec 42 §"The stability read" names. It derived:
+
+    open = replicasOf-slots ∪ companion.members() − companion.closed()
+
+which is `stableFrontier`'s formula **as it was before this item**. The repair
+changed that read to subtract `closed − memberSlots`. Independent re-derivation
+means deriving the same *quantity* by a different route, not freezing a formula:
+once the read changed, this hook was computing a different set from the one it was
+asked to be the oracle for.
+
+**The blind spot is structural, not probabilistic.** `[KE3-18]` compares two
+consecutive frontier samples only when the open-slot set compares EQUAL — a
+membership change exempts the step it lands on, because the FU-2 union makes the
+frontier legitimately dip when membership grows. But a rejoined replica returns
+onto its **ref-derived, replay-stable** slot (M10.1), which is already in the
+grow-only `closed`; under the unqualified subtraction that slot could never enter
+the rig's set, in either sample. So at the exact step where the production open
+set GREW by the returning member, the rig's set compared equal, the exemption did
+not fire, and the frontier's intended FU-2 dip onto that member's row was recorded
+as a regression. Set-equality over a set that by construction omits the slot whose
+membership changed cannot see a departure/rejoin round trip. That is why the
+8 of 60 failures all sat one step after a rejoin — first `step=1886 peer=peer0
+3 -> 2`, on a plan whose `dst-crash` on `peer2` fires at 1414.
+
+**The amendment.** `observe` now derives `open` the way the read does, subtracting
+`closed − memberSlots`, with the reasoning in its KDoc. Direction matters and is
+the answer to "did you weaken the check": the qualified form makes the set
+**LARGER**, so `[KE3-17]`'s arm compares strictly MORE `(peer, slot, source)`
+triples — a rejoined slot's row is now checked against the frontier where before it
+was not checked at all. Only `[KE3-18]`'s arm is relaxed, and only by exempting a
+step on which membership genuinely changed, which is the exemption that arm
+already documents in its own KDoc.
+
+**Measured, one fresh Gradle run per figure, `--rerun`, on darwin/arm64 16-core:**
+
+| rig | source | BS-5 result |
+| --- | --- | --- |
+| unqualified (before) | repaired | **8/60 red**, `[KE3-18]` regression arm |
+| unqualified (before) | base `eec4a4cdf` | 60/60 green |
+| **premise-qualified (now)** | **repaired** | **60/60 green**, load1 8.53 → 7.57, elapsedMs=5023 |
+| premise-qualified (now) | base `eec4a4cdf` (mutation) | **RED — `[KE3-17]` violation arm** |
+
+The last row is the load-bearing one and it settles (ii) as well as (i). With the
+rig corrected and the DEFECT restored, the sweep fails on
+`stableFrontier exceeded an open member's delivered row` — the *violation* arm, not
+the regression arm. That is the KE3-23 false certificate itself, caught at sweep
+scale: the frontier running ahead of a live, rejoined member's delivered row. The
+unqualified rig could not see it at all. So the amendment did not buy a green by
+softening BS-5; it gave BS-5 sight of the very defect this item repairs. (Mutation
+discipline: the base checkout was proved to land with a non-empty
+`git diff HEAD --stat -- kernel/src/main/kotlin/`, `BUILD FAILED` read from the
+log, and both files restored from a pre-mutation copy with `git status --short`
+verified clean afterwards.)
+
+**And (ii) is refuted directly, not merely by absence.** If the repair genuinely
+lowered the MIN at a fixed open set, the corrected rig — whose set now tracks the
+production set step for step — would still record `[KE3-18]` regressions. Across
+60 seeds it recorded zero over **1,779,655** actual `(peer, source)` comparisons.
+The reason is structural: at a fixed open set the MIN runs over a fixed slot set
+whose rows are join-monotone, so it cannot fall.
+
+**Non-vacuity, so the corrected term cannot rot.** A new sweep-wide counter,
+`premiseContradictions`, counts steps carrying a `closed` marker on a slot the
+peer's own replica view reports as LIVE — exactly the state the qualified
+subtraction exists for — and the test asserts it non-zero. Measured
+**167,355** such steps out of 757,174 frontier reads (22%). Without that assertion
+the rig would pass identically with the unqualified form restored, which is how
+this staleness arose in the first place.
+
+**Clause 5 note.** This is the fourth reader of `closed` to be reconciled with the
+repair (after `stableFrontier`, its `openSlots` diagnostic, and
+`Replication.onStabilityStall`), and the only one that is a test rig. The fifth,
+`ReplicaQuorum.frontier`, carries the same defect READ but not measured and is
+tracked separately as `computenet-s0tq`; it is deliberately not folded in here, so
+that this item's verdict rests on one measured rate comparison rather than on a
+measured and an unmeasured repair together.
