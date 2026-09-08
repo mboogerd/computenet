@@ -2604,12 +2604,16 @@ one you walk into:
 - **Uncertified → leave it.** No shipping on your own say-so because the clock
   ran out. Draft PRs are already safe; push what is committed so the branch is
   not stranded on this machine.
-- **Still-running agents → do not wait for them.** Their worktrees survive and
-  `reclaim-worktrees.sh` finds them next session. Waiting is what turned the
-  overrun into 126 minutes.
-- **Release what you hold** (claims, the epic) before publishing, or the next
-  session sees this machine still holding it and waits out the stale-claim
-  window.
+- **Still-running agents → do not wait for them.** Their worktrees and branches
+  survive, and the bead stays `in_progress`, so the next session's 5a/5b resume
+  query picks the unit up where it stands — `reclaim-worktrees.sh` is not that
+  instrument and will not report it, its first guard being a CLOSED bead; it
+  reclaims the directory only later, once the item closes. Waiting is what
+  turned the overrun into 126 minutes.
+- **Release what you hold** (claims, the epic). This is the one piece of
+  bookkeeping that goes BEFORE the publication push above rather than after it:
+  the release is itself a bead write, so a push that precedes it leaves the
+  claim on this machine and the next session waits out the stale-claim window.
 
 Otherwise, in order:
 
