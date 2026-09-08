@@ -158,9 +158,13 @@ reviewer hit exactly that and had to work it out mid-report — `newest
 2026-08-18T15:07:16.653Z` against a local clock reading 17:07 (computenet-8dtq).
 The asymmetry is what makes it worth a line: misreading *fresh as stale* costs
 a wasted re-run, or an agent debugging a build that works; the reverse error
-this confusion cannot produce. Take the reference reading yourself, in UTC,
-immediately before the Gradle call, and compare against that — then no timezone
-reasoning is needed at all:
+this confusion cannot produce. **Read the age, not the timestamp**:
+`junit-count.py` prints one beside every `newest` value — `newest
+2026-09-05T16:05:46.101Z (42s ago)` — and an age relative to now needs no
+timezone reasoning at all. That is the mechanical answer to this trap; the
+prose above it did not stop the recurrence (computenet-072a). A tool that
+prints no age (npm, cargo) still needs the reference reading taken yourself,
+in UTC, immediately before the call:
 
 ```bash
 date -u +%Y-%m-%dT%H:%M:%S     # before the run; every XML timestamp must exceed it

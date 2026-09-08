@@ -29,6 +29,7 @@ Exit: 0 = counted (failures included — read the numbers); 2 = bad usage, or a
       3 = an xml file would not parse (an unreadable result is not a pass);
       4 = NO xml files matched at all (NO-RESULTS).
 """
+import datetime
 import glob
 import os
 import sys
@@ -83,8 +84,40 @@ def count_dir(d):
     return len(paths), t, f, e, s, newest
 
 
+def _age(newest):
+    """" (42s ago)" for a JUnit timestamp, or "" if it will not parse.
+
+    The timestamp is UTC; the host clock is not (CEST here). A run that had
+    just finished therefore read two hours stale, and a reviewer nearly spent
+    a repo-wide `./gradlew test` disproving a timezone offset
+    (computenet-072a, recurrence of computenet-8dtq's prose-only fix). An age
+    relative to now is what the reader actually wants and cannot be misread
+    across zones, so it is printed beside the raw value rather than instead
+    of it.
+    """
+    try:
+        # Gradle writes "2026-09-05T16:05:46.101Z"; fromisoformat takes the Z
+        # only on 3.11+, so normalise it. A timestamp without a zone is
+        # ambiguous by definition — no age is better than a wrong one.
+        if not newest.endswith("Z"):
+            return ""
+        when = datetime.datetime.fromisoformat(newest[:-1]).replace(
+            tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return ""
+    secs = int((datetime.datetime.now(datetime.timezone.utc) - when)
+               .total_seconds())
+    if abs(secs) < 90:
+        return f" ({secs}s ago)"
+    if abs(secs) < 90 * 60:
+        return f" ({secs // 60}m ago)"
+    if abs(secs) < 48 * 3600:
+        return f" ({secs // 3600}h ago)"
+    return f" ({secs // 86400}d ago)"
+
+
 def line(label, files, t, f, e, s, newest):
-    tail = f", newest {newest}" if newest else ""
+    tail = f", newest {newest}{_age(newest)}" if newest else ""
     return (f"{label}: {files} files: {t} tests, {f} failures, "
             f"{e} errors, {s} skipped{tail}")
 
