@@ -2592,6 +2592,29 @@ the publication push FIRST and skip the rest:**
 Everything else here is bookkeeping a later session reconstructs from the
 tracker; unpushed tracker state is the one thing it cannot.
 
+**Work in flight when you arrive here does not all get the same treatment**, and
+the split is CERTIFICATION, not how nearly done something looks. A host
+suspension can put you here from a healthy-looking rung in one turn — 189m of
+wall clock between two consecutive turns, arriving at 426m of a 300m slot
+(computenet-9u8e) — so this is a state you reach with agents running, not only
+one you walk into:
+
+- **Certified and green → ship it.** A reviewer's PASS is spent work; `gh pr
+  ready` costs one command and the alternative is re-reviewing it next session.
+- **Uncertified → leave it.** No shipping on your own say-so because the clock
+  ran out. Draft PRs are already safe; push what is committed so the branch is
+  not stranded on this machine.
+- **Still-running agents → do not wait for them.** Their worktrees and branches
+  survive, and the bead stays `in_progress`, so the next session's 5a/5b resume
+  query picks the unit up where it stands — `reclaim-worktrees.sh` is not that
+  instrument and will not report it, its first guard being a CLOSED bead; it
+  reclaims the directory only later, once the item closes. Waiting is what
+  turned the overrun into 126 minutes.
+- **Release what you hold** (claims, the epic). This is the one piece of
+  bookkeeping that goes BEFORE the publication push above rather than after it:
+  the release is itself a bead write, so a push that precedes it leaves the
+  claim on this machine and the next session waits out the stale-claim window.
+
 Otherwise, in order:
 
 **1. The epic decision.** One query, three branches:

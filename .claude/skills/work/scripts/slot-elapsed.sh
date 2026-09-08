@@ -47,7 +47,13 @@ rung_of() {
 }
 name=$(rung_of "$usable")
 case "$name" in
-  EXPIRED) rung="EXPIRED — go to Finalize now" ;;
+  # The disposition is IN THE LINE, not only in SKILL.md step 6: this reading is
+  # what a session takes when it resumes, and it resumes with agents running.
+  # A 189m gap between two consecutive turns landed one session at 426m of a
+  # 300m slot; it then improvised the disposition, correctly, from first
+  # principles (computenet-9u8e). Printing it costs nothing and works whether
+  # or not step 6 is re-read under an expired clock.
+  EXPIRED) rung="EXPIRED — go to Finalize now: publish beads FIRST, ship only what a reviewer already certified, leave the rest, do not wait on running agents" ;;
   T-45m)   rung="T-45m — no new dispatches; review and merge what is in flight" ;;
   T-90m)   rung="T-90m — finish the current feature; start no new one" ;;
   *)       rung="OPEN — new units allowed" ;;
