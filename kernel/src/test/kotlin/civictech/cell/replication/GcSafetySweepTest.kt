@@ -370,6 +370,10 @@ object GcSafetySweep {
      *   K = 25 (before), 7 runs:   6, 4, 4, 4, 2, 5, 3        min 2
      *   K = 10 (this),  12 runs:   7, 4, 5, 4, 3, 5, 4, 3, 4, 6, 5, 3   min 3
      *
+     * and, in the context the bead's 0 was actually observed in — a whole `:kernel:test` run,
+     * where this class competes with the rest of the module for the host — three further runs at
+     * K = 10 gave 4, 3, 3, all green.
+     *
      * The lift is real but modest and the honest reading is recorded as such in
      * `doc/kernel-lane-findings.md`: this raises the floor, it does not restore the witness to
      * the margin computenet-nwnl recorded.

@@ -2277,6 +2277,12 @@ not touch the message-level rig floor the CONTROL arm measures.
     K = 25   7 runs   6, 4, 4, 4, 2, 5, 3                        min 2
     K = 10  12 runs   7, 4, 5, 4, 3, 5, 4, 3, 4, 6, 5, 3         min 3
 
+Measured again in the context the bead's zero was actually observed in — a whole
+`./gradlew :kernel:test --rerun` run, where this class competes with the rest of
+the module for the host — three runs at K = 10 gave fence-attributed 4, 3, 3,
+all green, at the same head. Fifteen runs at K = 10 in total, non-empty on 15 of
+15, minimum 3.
+
 **The honest reading of that pair is that the floor moved by one seed.** Means
 are 4.0 and 4.4 and the ranges overlap heavily; twelve runs is not enough to
 call the difference anything stronger than a raised minimum. This is an
