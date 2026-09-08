@@ -91,6 +91,22 @@ class OrMapDeliveredSeamTest {
         val logicalId: UUID = UUID.randomUUID()
         val replicas: List<OrMapCell<String, String>>
 
+        /**
+         * What each replica's OWN [civictech.cell.data.delta.DeliveryTracking]
+         * fold reported, per replica — the per-cell datum the merged companion
+         * lattice cannot give back.
+         *
+         * The companion row is a **gossiped pointwise max**, so
+         * `watermarkOf(id).watermark(origin)` on a peer that folded nothing
+         * still reads the origin's own figure the moment the companions
+         * exchange. That makes the companion read the right witness for "the
+         * row is origin-keyed and it converges" and the WRONG one for "this
+         * replica's fold absorbed the dot" (measured: dropping the `dels` lane
+         * from `applyRemote`'s fold leaves every companion assertion in this
+         * file green). This listener is that second witness.
+         */
+        val folded: List<MutableList<Pair<UUID, Long>>>
+
         init {
             Peering.loopback(peers[0].side, peers[1].side)
             Peering.loopback(peers[1].side, peers[2].side)
@@ -99,11 +115,20 @@ class OrMapDeliveredSeamTest {
                 OrMapCell<String, String>(CellRef(logicalId, i.toLong()))
                     .also { peer.replication.replicate(it, peer.host) }
             }
+            folded = replicas.map { replica ->
+                mutableListOf<Pair<UUID, Long>>().also { seen ->
+                    replica.onDeliver { source, thru -> seen += source to thru }
+                }
+            }
             controller.runToIdle()
         }
 
         fun watermarks(source: UUID): List<Long?> =
             peers.map { it.replication.watermarkOf(logicalId)!!.watermark(source) }
+
+        /** The highest prefix each replica's own fold reported for [source]. */
+        fun foldedThru(source: UUID): List<Long?> =
+            folded.map { seen -> seen.filter { it.first == source }.maxOfOrNull { it.second } }
     }
 
     /** Record a replica's broadcast emissions (`OrMapConvergenceTest`'s recorder). */
@@ -165,11 +190,15 @@ class OrMapDeliveredSeamTest {
         val removeEntry = emitted[1].dels.getValue("k")
         removeEntry shouldBe setOf(Timestamp(aDotSource, 1L), Timestamp(aDotSource, 2L))
         emitted[1].puts shouldBe emptyMap()
-        // …and every peer's row advanced through it. This is the assertion the
-        // del-dot exists for: without the mint the row stays at 1 everywhere;
-        // with the mint but without the del lane in `applyRemote`'s fold, it
-        // stays at 1 on peers 1 and 2 only.
+        // …and every peer's row advanced through it. Without the mint the row
+        // stays at 1 everywhere.
         mesh.watermarks(aDotSource) shouldBe listOf(2L, 2L, 2L)
+        // Each replica's OWN fold reached 2 as well — the non-origin two by
+        // folding the `dels` lane of the delta they absorbed. This is the
+        // assertion that discriminates that lane: the companion read above does
+        // NOT, because the companion rows gossip a pointwise max and a replica
+        // that folded nothing still reads the origin's figure (see [Mesh.folded]).
+        mesh.foldedThru(aDotSource) shouldBe listOf(2L, 2L, 2L)
 
         // a remove that mints nothing (no live dot) leaves the row where it was
         ops.remove("k")
