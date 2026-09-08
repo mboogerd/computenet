@@ -40,8 +40,9 @@
 # null-valued object, NOT nothing: `bead.sh <typo> -r '.status'` prints the
 # string `null`. Read the exit code, not the text.
 #
-# Output over BEAD_SPILL_BYTES (default 25000) is written to a FILE and the
-# path printed instead — see the SPILL note below. A caller that PIPES this
+# Output over BEAD_SPILL_BYTES (default 25000) is written to a FILE, the path
+# printed ON STDERR, and the script exits 3 with an EMPTY stdout — see the
+# SPILL note below. A caller that PIPES this
 # into another command sets BEAD_SPILL_BYTES high enough to disable it: a
 # scalar filter (`-r '.status'`) never spills, but `-r '.description'` will.
 set -uo pipefail
@@ -111,7 +112,23 @@ if [ "${#out}" -gt "${BEAD_SPILL_BYTES:-25000}" ]; then
   # printing it, which is at worst the old truncation.
   f=$(mktemp "${spill_dir%/}/bead-$id.XXXXXX") || { printf '%s\n' "$out"; exit $rc; }
   printf '%s\n' "$out" > "$f"
-  echo "bead.sh: ${#out} characters exceeds one tool result; wrote $f — read it with the Read tool (it will NOT fit in a single Bash output either)."
+  # STDERR AND EXIT 3, NOT STDOUT AND 0. The notice used to go to stdout, where
+  # it is PROSE THAT GREPS CLEANLY: an orchestrator ran
+  # `bead.sh <epic> .description > f` and then four greps over `f`, and every
+  # one returned 0 — searching the 214-byte notice, not the 43,846-character
+  # description. Read literally that said a concurrent agent's amendment had
+  # been destroyed, which for a bead-text item (where the read-back IS the
+  # review) routes straight to a re-dispatch or a destroyed-work escalation
+  # that did not happen. The zero is indistinguishable from the most alarming
+  # possible true result — the same false-negative class as the unquoted
+  # `--include=*.kt` glob and git grep's missing `\s` (computenet-rnvi).
+  #
+  # On stderr the redirect captures an EMPTY file, which fails loudly; the
+  # nonzero exit short-circuits `bead.sh ... > f && grep ...` for any caller
+  # that chains. A human at a terminal still sees the notice.
+  echo "bead.sh: ${#out} characters exceeds one tool result; wrote $f — read it with the Read tool (it will NOT fit in a single Bash output either)." >&2
+  echo "bead.sh: NOTHING was written to stdout — this exit 3 is the spill, not a failed read." >&2
+  exit 3
 elif [ -n "$out" ]; then
   printf '%s\n' "$out"
 fi
