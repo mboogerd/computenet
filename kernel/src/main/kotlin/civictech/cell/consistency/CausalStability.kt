@@ -81,11 +81,48 @@ class CausalStability(
      *
      * **Open slots** = (`membersOf` mapped through [WatermarkCell.slotId] of
      * [watermarkRefOf]) ∪ companion [WatermarkCell.members], minus
-     * [WatermarkCell.closed], minus (under [degrade]) [WatermarkCell.suspended].
+     * [WatermarkCell.closed] *that is not itself a live member slot*, minus
+     * (under [degrade]) [WatermarkCell.suspended].
      * The union is the FU-2 asymmetry in its conservative direction: a slot
      * known ONLY through the announced `members` set still counts, has no
      * row, and therefore drags every source to bottom until its row gossips
      * in ([KE3-19]).
+     *
+     * **`closed` is honoured only where its premise holds** ([KE3-23],
+     * `computenet-07vb`; disposition recorded in `doc/kernel-lane-findings.md`
+     * §`KE3-23-CLOSEDPREMISE`). `closed` (PN-0c) means exactly one thing —
+     * *this row can never advance again* ([WatermarkCell.close]'s KDoc: "its
+     * row stops constraining reads") — and it is grow-only, while
+     * [WatermarkCell.slotId] is DERIVED from the [CellRef] and therefore
+     * **stable across a rejoin** (M10.1 replay-stability). So a replica
+     * evicted with `closeDepartedRow = true` that later re-replicates onto the
+     * same ref returns onto the slot already closed, and a plain
+     * `removeAll(closed)` drops a live, unsuspended, state-retaining member
+     * from the MIN forever: the frontier then certifies a del-dot "delivered
+     * to every open member" when the only open member is the sender, and
+     * `compactBelow` discards it. `computenet-typw` settled that this is the
+     * excluding term; `computenet-r13k` measured it firing at 37.5% per
+     * `GcSafetySweepTest` sweep.
+     *
+     * The repair subtracts `closed - memberSlots` rather than `closed`: a slot
+     * this node's own [civictech.cell.host.InstanceIndex.instancesOf] view
+     * reports as a LIVE instance contradicts `closed`'s premise, so the marker
+     * does not apply to it. Note what is NOT done — the grow-only `closed` set
+     * is not retracted, no epoch lane is added, no delta field changes and
+     * [WatermarkCell.slotId] stays replay-stable; the lattice and the wire are
+     * untouched and the repair is entirely at this read.
+     *
+     * **The correction is in the conservative direction**, which is what makes
+     * it safe for every other consumer of `closed`: `open` can only GROW, so
+     * the MIN runs over at least as many rows, so the frontier can only fall.
+     * No `(source, counter)` that this read previously refused to certify
+     * becomes certified. The cost is the mirror-image staleness the FU-2 union
+     * already carries: while `instancesOf` still lags on a genuinely departed
+     * replica, its `closed` marker is ignored and stability FREEZES on its row
+     * until the view converges — a freeze, never a premature release, and
+     * self-healing. A departed replica that does not return leaves
+     * `instancesOf` on despawn and stays excluded, so PN-0c's own job is
+     * unchanged (pinned by `StabilityOpenSetOnRejoinTest`'s control).
      *
      * **Bottom is represented by ABSENCE.** An open slot with no entry for a
      * source reads as bottom, so the result contains exactly the sources
@@ -107,10 +144,11 @@ class CausalStability(
         val suspended = if (degrade) companion.suspended() else emptySet()
         val announced = companion.members()
 
+        val memberSlots = members.mapTo(mutableSetOf()) { WatermarkCell.slotId(watermarkRefOf(it)) }
         val open = buildSet {
-            members.mapTo(this) { WatermarkCell.slotId(watermarkRefOf(it)) }
+            addAll(memberSlots)
             addAll(announced)
-            removeAll(closed)
+            removeAll(closed - memberSlots) // KE3-23, computenet-07vb — see below
             removeAll(suspended)
         }
         if (open.isEmpty()) return TagFrontier(emptyMap())
@@ -165,7 +203,7 @@ class CausalStability(
         val open = buildSet {
             addAll(memberSlots)
             addAll(announced)
-            removeAll(closed)
+            removeAll(closed - memberSlots) // KE3-23, computenet-07vb (see [stableFrontier])
             removeAll(suspended)
         }
         return OpenSlots(
@@ -205,6 +243,9 @@ class CausalStability(
          * slot IS open.
          */
         fun exclusionOf(slot: UUID): String? = when {
+            // A live member slot is never excluded BY `closed` (computenet-07vb),
+            // so this arm reports the term that actually applied, not the marker
+            // that happens to be present.
             slot in open -> null
             slot in closed -> "closed"
             slot in suspended && degrade -> "suspended(degrade)"

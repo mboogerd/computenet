@@ -1808,3 +1808,117 @@ invocation's **shape**, not just its pattern.
 existing tags — not a `TaggedMapDelta`, mints no new dot, and touches no
 `dotSource`. Full result posted to `computenet-u7fi`, superseding the earlier
 partial scope.
+
+## KE3-23-CLOSEDPREMISE — the disposition of candidate (1): `closed` is HONOURED ONLY WHERE ITS PREMISE HOLDS, and no lattice changes
+
+`computenet-07vb`, 2026-09-08, base `eec4a4cdf`. `computenet-typw` settled that
+`closed` is the term excluding a rejoined replica from `open`
+(`## KE3-23-OPENSET`) and `computenet-r13k` measured it firing at 37.5% per
+`GcSafetySweepTest` sweep, 45 of 45 occurrences byte-identical
+(`## KE3-23-CLOSEDROW`). Neither took the repair. This is it.
+
+**THE DISPOSITION IS A FOURTH**, argued against the three `computenet-typw`
+named. `closed` (PN-0c) asserts exactly one proposition — *this row can never
+advance again* (`WatermarkCell.close`: "its row stops constraining reads") — and
+the defect is not that the proposition is recorded monotonically. It is that the
+proposition became FALSE and the read kept applying it, because
+`WatermarkCell.slotId` is derived from the `CellRef` (M10.1 replay-stability) and
+is therefore stable across a rejoin. So the repair is to stop applying `closed`
+where its premise is contradicted, at the read:
+
+    open = memberSlots u announced - (closed - memberSlots) - suspended
+
+`memberSlots` is this node's own `InstanceIndex.instancesOf` view. A slot backed
+by a LIVE instance can advance again, so `closed`'s marker does not describe it.
+Three lines in `CausalStability.stableFrontier`, mirrored in its `openSlots`
+diagnostic and in `Replication.onStabilityStall`'s inline derivation of the same
+set (whose KDoc already promised it derives the set "the way
+`CausalStability.stableFrontier` derives its own" — it now does).
+
+**Why not (a), a retractable close epoch of the shape `suspendEpoch` has.**
+Two independent objections. It is a WIRE change: `WatermarkDelta.closed` is a
+grow-only `Set<UUID>` and would become a per-slot epoch map, and the file's own
+KDoc names `closed` "the degenerate terminal case (an epoch that never turns even
+again)" — retractability is the property that distinguishes the two lanes, so
+this is not an additive encoding but a redefinition of one. And it is
+unnecessary: the CRDT is not wrong. Every replica correctly recorded that the
+row closed; only the reader over-applied it. Repairing a correct lattice to
+compensate for a reader is the more invasive of the two, and it would have to
+converge a retraction across the mesh where the read already has the answer
+locally.
+
+**Why not (b), an incarnation-distinct slot.** `WatermarkCell.slotId`'s
+replay-stability is a documented contract with a stated failure mode — "a
+recovered instance replaying its journal credits the SAME row the network already
+saw ... A random slot would resurrect a phantom replica row" (M10.1, mirroring
+`PnCounterCell`). Making the slot incarnation-distinct breaks journal replay for
+the watermark companion itself, which is a strictly larger blast radius than the
+defect. **On whether `computenet-dwkp`'s fourth prohibition reaches this
+lattice**, asked explicitly by this bead and by `computenet-uju5` before it: it
+does NOT. dwkp forbids incarnation-unique `tagSource` on the ground that it "does
+not address the case measured" — a statement about the FENCE question and the TAG
+lattice. Here the analogous change WOULD address the case measured, so the
+prohibition's own reasoning does not transfer, and (b) is ruled out on M10.1, not
+on dwkp. Recorded so nobody re-derives the question a third time.
+
+**Why not (c), a rejoin that must re-announce before counting toward `open`.**
+It is (a) wearing different clothes. `members` is grow-only and the slot is
+ref-derived, so `announceMember` on rejoin is already a no-op — making a
+re-announce COUNT requires an announce epoch that outranks `closed`, i.e. a new
+monotone lane and a new delta field, with the same wire cost as (a) and none of
+its clarity. It also inverts the FU-2 asymmetry: `announced` exists to make the
+open set larger than `instancesOf` alone, never to gate it.
+
+**The correction is in the CONSERVATIVE direction, and that is what makes it
+safe for every other reader.** `open` can only GROW under this change, so the
+MIN runs over at least as many rows and the frontier can only FALL. No
+`(source, counter)` that the read previously refused to certify becomes
+certified — the failure mode this whole line has been chasing cannot be
+introduced by it. The price is the mirror image of the FU-2 union's existing
+staleness: while `instancesOf` still lags on a genuinely departed replica, its
+`closed` marker is ignored and stability FREEZES on its row until the view
+converges. A freeze, never a premature release, and self-healing. A departed
+replica that does not return leaves `instancesOf` on despawn and stays excluded,
+so PN-0c's own job is unchanged.
+
+**WHAT `closed` NOW MEANS TO OTHER READERS** (acceptance clause 5, reported
+rather than assumed local).
+
+- `CausalStability.stableFrontier` — changed, as above; frontier can only fall.
+- `Replication.onStabilityStall` — changed to match, deliberately. Its
+  `StabilityFreezeDetector` will now report a freeze pinned on a rejoined slot
+  that it previously could not see, which is the true state.
+- `Replication.replicaFrontier` / **`ReplicaQuorum.frontier` — NOT changed, and
+  it carries the SAME defect.** Its per-member check is
+  `slot in closed || (rows[slot]?.get(source) ?: MIN) >= counter`, and `covering`
+  is derived from `membersOf`, i.e. LIVE instances — so a rejoined member's stale
+  `closed` marker makes it vacuously satisfy the covering-quorum predicate, and
+  its `membershipBarrier` counts the same slot as `accounted`. That is a false
+  certificate of the same family, on the per-wave settlement read rather than the
+  GC read. `ReplicaQuorum.kt` is outside `computenet-07vb`'s file claim and the
+  defect there has NOT been measured (only read), so it is filed rather than
+  fixed. It is NOT a regression from this change: it behaved this way before.
+- `WatermarkCell` / `WatermarkDelta` / the journal and the wire — untouched.
+  `closed` is still grow-only, still gossiped as a `Set<UUID>`, still terminal in
+  the lattice. Nothing about compatibility changes, and the `:oracle` reference
+  model needs no mirror because no lane was added.
+- `WatermarkCell.republish`'s `if (slotId in closed) return` — a replica's own
+  local suppression of its heartbeat, not a membership read. Left alone: it is
+  reached only while this replica is itself closed, and a rejoin constructs a new
+  cell with an empty `closed`.
+
+**TESTS.** `StabilityOpenSetOnRejoinTest`'s first test was INVERTED in place
+(same rig, same seed, same eviction) from a characterisation of the defect into
+its regression, and is joined by a new control — a cleanly departed slot that
+does NOT rejoin stays out of `open` — so the repair cannot pass by ignoring
+`closed`. Its pre-existing sibling (a suspended slot stays inside `open` at
+`degrade=false`) is untouched and still green, keeping candidate (3) refuted.
+`CausalStabilityTest`'s two synthetic pins were AMENDED: both built a state where
+a slot is closed AND still named by `membersOf`, which since this change is the
+REJOIN state rather than the departure state, so they now model a clean departure
+the way the mesh actually presents one (gone from `membersOf`, still in the
+grow-only announced set) and are joined by a live-member case pinning the new
+semantics. `DepartureStabilityPinTest`, `MemberDepartureFrontierTest` and
+`ShardedReplicationTest` — the three integration pins on departure/frontier
+behaviour — required NO change and stayed green, which is the strongest evidence
+that PN-0c's real path is unaffected.
