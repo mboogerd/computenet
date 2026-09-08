@@ -592,9 +592,15 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
             // assert the element stays dead while the receiver repairs onward,
             // and replay the original DOTTED entry (whose dot this receiver never
             // fenced) to show it rebuilds a tombstone, not a resurrection.
-            // Mutation-checked: recording into the fence only tags absent from
-            // `adds[element]` — the "only a dot certifies" variant — leaves arms
-            // 1 and 2 green and turns the third arm's membership assertion red.
+            // Mutation-checked: guarding the fence write to fire only for an
+            // ENTRY that holds a tag absent from `adds[element]` — the "only a
+            // dot certifies" variant — leaves arms 1 and 2 green, leaves all six
+            // pre-existing tests in the file green, and turns the third arm's
+            // membership assertion red (`SetCellCompactBelowTest.kt:404`). The
+            // guard is per ENTRY and not per TAG: skipping individual add-tags
+            // instead disarms the emitter's own fence in arm 1 and reddens four
+            // of the seven, which demonstrates less (reviewer, 2026-09-08 —
+            // both variants run).
             // Consistent with the sweep evidence the bead cites (10 consecutive
             // 200-seed `GcSafetySweepTest` runs, zero STABLE resurrections).
             val repaired =
