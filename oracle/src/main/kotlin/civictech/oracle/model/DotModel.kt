@@ -52,18 +52,30 @@ import java.io.Serializable
  *
  * Per instance `s`, in its own event order, interleaved with its [SourceScript.deliveries]:
  *
- * - `put(k, v)`: mint `dot = (nth put of s, s)`; tombstone every dot `s` currently holds live
- *   at `k`; record `dot -> v`. (Kernel: `OrMapCell.inletHandler().put`, which ships the fresh
- *   dot and the tombstones in one delta.)
- * - `remove(k)`: tombstone exactly the dots `s` currently holds live at `k` — reset-remove,
- *   `[24-TMAP-04]`. A key with no live dot is a **no-op**, effective-only (21).
+ * - `put(k, v)` over a key with **no** live dot: mint `dot = (nth mint of s, s)`; record
+ *   `dot -> v`. One counter consumed.
+ * - `put(k, v)` over a key that **has** a live dot (a re-put): mint the retract del-dot FIRST
+ *   — `(nth mint of s, s)`, folded into `dels[k]` beside the dots it covers — then the put-dot
+ *   SECOND, one past it; record the put-dot `-> v`. **Two counters consumed**, in that order —
+ *   `[24-TAG-04]`, decision 9sm.8-D5, mirroring `OrMapCell.inletHandler().put`'s retract del-dot
+ *   read FIRST so the retract's counter is `n` and the new value's is `n+1`.
+ * - `remove(k)` over a key with a live dot (**effective**): mint a del-dot of its own —
+ *   `(nth mint of s, s)` — and fold it into `dels[k]` beside the dots it observed live. One
+ *   counter consumed. (Kernel: `OrMapCell.inletHandler().remove`'s own del-dot mint.)
+ * - `remove(k)` over a key with **no** live dot: a **no-op**, effective-only (21) — no dot
+ *   minted, no counter consumed, `dels` untouched.
  * - a [Delivery] from `t` through `n` events: merge in the state `t` held after its own first
  *   `n` events. That is the only way `s` learns anything about `t`.
  *
- * The dot **counter** advances on puts only, and never on a delivery — mirroring the kernel,
- * where `applyRemote` folds a peer's dots in without touching `dotCounter`. That is what makes
- * a dot's counter a pure function of the script position that minted it, computable before any
- * delivery is resolved.
+ * A del-dot never enters `puts` — it covers nothing and [DotState.membership]/`value` are
+ * unchanged by it, exactly as the kernel's del-dot leaves `liveDots`/`membership`/`value`
+ * bit-for-bit unchanged (see `OrMapCell`'s class KDoc, "The del-dot").
+ *
+ * The dot **counter** advances on an EFFECTIVE put or remove only — never on a delivery, and
+ * never on a no-op remove — mirroring the kernel, where `applyRemote` folds a peer's dots in
+ * without touching `dotCounter` and a remove of an absent key mints nothing. That is what makes
+ * a dot's counter a pure function of the script position that minted it (and, for a re-put, of
+ * whether the key was live going in) — computable before any delivery is resolved.
  *
  * ## Cost
  *
@@ -152,12 +164,12 @@ class DotModel(private val order: DotOrder) : Serializable {
             try {
                 var state = DotState.EMPTY
                 var counter = 0L
+                val mint = { ++counter }
                 for (position in 0..prefix) {
                     state = applyDeliveries(slice, position, state)
                     if (position == prefix) break
                     val event = slice.events[position]
-                    if (event is ScriptEvent.Put) counter += 1
-                    state = apply(event, source, counter, state)
+                    state = apply(event, source, state, mint)
                 }
                 memo[at] = state
                 return state
@@ -178,10 +190,28 @@ class DotModel(private val order: DotOrder) : Serializable {
                 .sortedWith(compareBy({ it.from.id }, { it.throughEvents }))
                 .fold(state) { acc, delivery -> acc.merge(stateAfter(delivery.from, delivery.throughEvents)) }
 
-        private fun apply(event: ScriptEvent, source: SourceId, counter: Long, state: DotState): DotState =
+        /**
+         * Decides, from [state]'s OWN current liveness at the event's key, whether this event
+         * mints one counter or two (a put) / one or zero (a remove) — the D5 counting rule,
+         * mirrored from `OrMapCell.inletHandler()`. [mint] is called exactly as many times as
+         * the kernel would mint dots for the equivalent call.
+         */
+        private fun apply(event: ScriptEvent, source: SourceId, state: DotState, mint: () -> Long): DotState =
             when (event) {
-                is ScriptEvent.Put -> state.put(event.key, ModelDot(counter, source), event.element)
-                is ScriptEvent.RemoveKey -> state.resetRemove(event.key)
+                is ScriptEvent.Put -> {
+                    // THE RETRACT DEL-DOT (9sm.8-D5): read BEFORE the put-dot, so a re-put's
+                    // retract carries the lower counter — mirrors `OrMapCell.put`'s ordering.
+                    val hasLive = state.liveDots(event.key).isNotEmpty()
+                    val delDot = if (hasLive) ModelDot(mint(), source) else null
+                    val putDot = ModelDot(mint(), source)
+                    state.put(event.key, putDot, event.element, delDot)
+                }
+                is ScriptEvent.RemoveKey -> {
+                    // effective-only (21): a remove of a key with no live dot mints nothing and
+                    // consumes no counter — mirrors `OrMapCell.remove`'s early return.
+                    if (state.liveDots(event.key).isEmpty()) state
+                    else state.resetRemove(event.key, ModelDot(mint(), source))
+                }
                 // Everything else is another cell family's vocabulary in a mixed script, and is
                 // ignored here exactly as `Membership.live` ignores keyed events: the model that
                 // owns a slice decides what it accepts.
@@ -349,32 +379,52 @@ data class DotState(
      * `put(key, value)` minting [dot]: the fresh dot goes live and **everything this state
      * currently holds live at [key] is tombstoned in the same step** — the kernel's atomic
      * retract-then-add lifted to dots (`OrMapCell.put`).
+     *
+     * **The retract del-dot (`[24-TAG-04]`, 9sm.8-D5).** [delDot] is non-null exactly when the
+     * caller minted one — i.e. when [key] had a live dot going in — and folds into [dels]
+     * beside the observed dots it covers; it is `null` for a put over an absent/dead key, where
+     * nothing is retracted and nothing needs covering. A non-null [delDot] is only ever added
+     * when [key] actually has an observed live dot: a caller-supplied delDot for an already-dead
+     * key is silently dropped rather than fabricating a `dels` entry with no covered dot inside
+     * it, mirroring the kernel's own `if (delDot == null) seen else ...`.
      */
-    fun put(key: Any?, dot: ModelDot, value: Any?): DotState {
+    fun put(key: Any?, dot: ModelDot, value: Any?, delDot: ModelDot? = null): DotState {
         val observed = liveDots(key).keys
         val nextPuts = LinkedHashMap(puts)
         nextPuts[key] = LinkedHashMap(puts[key] ?: emptyMap()).also { it[dot] = value }
         val nextDels = if (observed.isEmpty()) dels else LinkedHashMap(dels).also {
-            it[key] = LinkedHashSet(dels[key] ?: emptySet()).apply { addAll(observed) }
+            it[key] = LinkedHashSet(dels[key] ?: emptySet()).apply {
+                addAll(observed)
+                delDot?.let(::add)
+            }
         }
         return DotState(nextPuts, nextDels)
     }
 
     /**
      * `[24-TMAP-04]` reset-remove: tombstone **exactly** the dots this state observes live at
-     * [key], and nothing else. A dot this state has not seen — a concurrent put at another
-     * instance — is simply not in the tombstone set and survives the merge, which is add-wins.
+     * [key], and nothing else, PLUS [delDot] — the remove's own dot, minted from the removing
+     * instance's counter (`[24-TAG-04]`, 9sm.8-D5, mirroring `OrMapCell.remove`'s own mint). A
+     * dot this state has not seen — a concurrent put at another instance — is simply not in the
+     * tombstone set and survives the merge, which is add-wins. [delDot] never enters [puts]: it
+     * covers nothing, so [liveDots]/[membership] are unchanged by it.
      *
-     * A key with no live dot is a no-op, returning `this` unchanged (effective-only, 21). The
-     * mutant this method exists to be distinguishable from is *remove-all* — tombstoning the
-     * key's dots at the converged state instead of at this instance's — and `ORA2 §CTL-03`
-     * requires the suite to catch that substitution.
+     * A key with no live dot is a no-op, returning `this` unchanged — effective-only (21),
+     * regardless of [delDot]: no dot is minted for a dead key by the caller (`DotModel.Fold.apply`
+     * mints [delDot] only after checking liveness itself), but this method also guards it
+     * defensively rather than trusting the caller. The mutant this method exists to be
+     * distinguishable from is *remove-all* — tombstoning the key's dots at the converged state
+     * instead of at this instance's — and `ORA2 §CTL-03` requires the suite to catch that
+     * substitution.
      */
-    fun resetRemove(key: Any?): DotState {
+    fun resetRemove(key: Any?, delDot: ModelDot): DotState {
         val observed = liveDots(key).keys
         if (observed.isEmpty()) return this
         val nextDels = LinkedHashMap(dels)
-        nextDels[key] = LinkedHashSet(dels[key] ?: emptySet()).apply { addAll(observed) }
+        nextDels[key] = LinkedHashSet(dels[key] ?: emptySet()).apply {
+            addAll(observed)
+            add(delDot)
+        }
         return DotState(puts, nextDels)
     }
 
