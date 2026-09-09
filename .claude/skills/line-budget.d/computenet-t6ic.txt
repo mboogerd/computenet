@@ -1,0 +1,14 @@
+work +16
+
+# A fourth widening shape in SKILL.md 5b, and the one that is af9q's OWN remedy
+# failing: the grep SYMBOL rather than the grep target. A type-keyed grep is
+# systematically blind in Kotlin, where a consumer imports top-level functions
+# individually and never names the declaring type — on computenet-x9e.18 a
+# 14-file claim derived from two such greps missed the only production consumer
+# of the resolution the task re-keyed.
+#
+# Prose is the only route: which symbols constitute an API surface is a reading
+# of the change, not something a script can enumerate from the bead. Most of the
+# lines are the reason and the worked contrast, because the failure mode is a
+# claim that looks well-derived and is short — indistinguishable at dispatch
+# time from a correct one, and check-files-claim.sh passes it CLEAN, correctly.
