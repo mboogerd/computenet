@@ -1,0 +1,53 @@
+# Concord CONTROL scenario (computenet-23z3). kind: control — it MUST fail;
+# the runner asserts its failure (Concord P7 — the harness must be able to
+# fail).
+#
+# The wrongness is in the CHECK'S OWN ID: two replicas of logical id 'shared'
+# are declared, driven to genuine agreement, and then `replicas-converge` is
+# asked about a DIFFERENT, nonexistent logical id ('shared-x') — a typo, a
+# renamed logical, or a copy-paste from another scenario. Before
+# computenet-23z3, `Checks.replicasConverge` filtered the graph's cells by
+# `replicaOf == check.logical`, found nothing, and returned `Passed` — the
+# same code path a genuinely correct scenario takes when fewer than two
+# *live* replicas remain (the departed-replica case, `42-WM-DEPART-01`). That
+# conflated "no such logical id" with "nothing left to compare" and let a
+# typo'd `logical:` id go green having verified nothing (measured 2026-09-06:
+# mutating `42-WM-DEPART-01`'s `logical: shared` to `logical: shared-x` did
+# NOT turn it red).
+#
+# r1 and r2 are made to agree deliberately, so the control fails ONLY because
+# 'shared-x' cannot be resolved — not because of a genuine divergence between
+# r1 and r2, which `views-converge` here is not even asked to police. A fix
+# that merely widened the existing `live.size < 2` short-circuit to fail
+# unconditionally (rather than distinguishing "declared empty" from "declared
+# non-empty but live < 2") would still make this control fail, but for the
+# wrong reason on `42-WM-DEPART-01`'s own shape — this control's r1/r2
+# agreement is what keeps the two cases separable.
+id: CTL-REPLCONV-ID-01
+title: Control — replicas-converge asserted of a logical id that matches no cell
+covers: [42-REPL-06]
+profile: dist
+kind: control
+narrative:
+  given: two set-source replicas declared under logical id 'shared', each observed through its own set view, driven to genuine agreement
+  when: the same element is added on both replicas
+  then: replicas-converge is asked about the DIFFERENT, nonexistent logical id 'shared-x' — the deliberate typo the harness must catch rather than silently pass over as "nothing to compare"
+graph:
+  hosts: [h1, h2]
+  cells:
+    - {id: r1, type: set-source, of: string, host: h1, replica-of: shared}
+    - {id: r2, type: set-source, of: string, host: h2, replica-of: shared}
+    - {id: v1, type: set-view, host: h1}
+    - {id: v2, type: set-view, host: h2}
+  links:
+    - {from: r1, to: v1}
+    - {from: r2, to: v2}
+script:
+  - {type: apply, on: r1, op: add, value: agreed}
+  - {type: apply, on: r2, op: add, value: agreed}
+checks:
+  - {type: replicas-converge, logical: shared-x}
+  - {type: no-dead-letters}
+expect-failure:
+  check: replicas-converge
+  message-contains: "no cell in the graph declares replica-of 'shared-x'"

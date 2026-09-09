@@ -260,9 +260,28 @@ object Checks {
      * (`cell.verify.ReplicaConvergence.liveRefs`, which intersects the
      * attached set against `LocationRegistry.replicasOf`) using only the
      * neutral SPI this package is allowed to touch.
+     *
+     * **`check.logical` must name at least one declared replica** (computenet-23z3).
+     * Filtering the graph's cells by `replicaOf == check.logical` and finding
+     * nothing is not "zero live replicas to compare" — it is "no cell in the
+     * graph declares this logical id at all", almost always a typo, a renamed
+     * logical, or a copy-paste from another scenario. Treating that the same as
+     * "fewer than two live replicas" (the legitimate single-replica or
+     * all-but-one-departed case) let a scenario naming a nonexistent `logical:`
+     * id go green having compared nothing — the vacuous-coverage failure mode
+     * concord exists to rule out. So the two are distinguished: an empty
+     * *declared* set fails, naming the unmatched id; an empty or singleton
+     * *live* set (declared is non-empty) still passes, exactly as before.
      */
     fun replicasConverge(check: ReplicasConverge, ctx: CheckContext): CheckResult {
         val declared = ctx.scenario.graph?.cells.orEmpty().filter { it.replicaOf == check.logical }.map { it.id }
+        if (declared.isEmpty()) {
+            return CheckResult.Failed(
+                "replicas-converge(${check.logical}): no cell in the graph declares replica-of " +
+                    "'${check.logical}' — the logical id does not match any cell (check for a typo or a " +
+                    "stale rename)",
+            )
+        }
         val live = declared.mapNotNull { id ->
             try {
                 id to ctx.driver.readView(id)

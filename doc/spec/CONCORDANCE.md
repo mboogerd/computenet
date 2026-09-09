@@ -152,7 +152,7 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 42-INT-01 | 42-INTEREST-01 | covered |
 | 42-REPL-04 | 42-REPL-01, 42-REPL-DELDOT-01, 42-REPL-LATE-01, 42-TMAP-REPL-01 | covered |
 | 42-REPL-05 | 42-REPL-LATE-01 | covered |
-| 42-REPL-06 | 42-REPL-DEPART-01 | covered |
+| 42-REPL-06 | 42-REPL-DEPART-01, CTL-REPLCONV-ID-01 | covered |
 | 42-WM-01 | — | gap |
 | 42-WM-02 | — | gap |
 | 42-WM-03 | — | gap |
