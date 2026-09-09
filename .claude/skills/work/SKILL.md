@@ -1828,6 +1828,37 @@ verdict. (`parked` is only meaningful on an empty batch.)
   cannot see other modules at all, so a green module suite is not evidence the
   claim is complete. The walk above is the only pre-CI check there is.
 
+  **A fourth shape: the grep SYMBOL, and the hit list you PRUNE.** When the
+  change re-keys a resolution, alters a signature or moves any public API
+  surface, grep the union of the PUBLIC MEMBER NAMES it touches — each
+  top-level function, constant and property — never the declaring type alone.
+  In Kotlin a consumer imports top-level functions individually, so a
+  type-keyed grep can miss the callers a re-keying task conscripts outright.
+
+  Measured at computenet-x9e.18's dispatch-time tree, where the miss was
+  `ThroughputReport.kt`, the only production consumer of the floor resolution
+  being re-keyed (computenet-t6ic):
+
+  ```bash
+  git grep -l -F 'ClassNoiseFloor'                    #  10 hits, consumer ABSENT
+  git grep -l -e classFloorStatistic -e NOISE_FLOOR   #  31 hits, consumer buried
+  git grep -l -e noiseFloorFor -e describeFloor       #   8 hits, consumer present
+  ```
+
+  (`-e A -e B` rather than `-E 'A|B'`, so these are copyable: inside a markdown
+  table the pipe has to be escaped and `\|` under `-E` is a LITERAL pipe that
+  matches nothing — a zero-returning grep in a block about zero-returning greps.)
+
+  **The type-keyed grep cannot see it; the constant-keyed one returns it inside
+  a 31-file list that got pruned to four.** Both halves have to change: grep the
+  surface, and when a hit list is long enough to prune, prune it by READING the
+  hits — "an import is not an enumeration" three paragraphs up is the rule that
+  was skipped, and it is the half that actually lost this file. Recording the
+  derivation on the bead, as that session did, does not catch it: the record
+  showed four files where the grep had returned thirty-one, and nothing compares
+  the two. `check-files-claim.sh` passes such a bead CLEAN, correctly — its text
+  never names the consumer.
+
   Never let a
   task take a nominal claim over files it merely reads: a claim is a lock, so
   a read-only lock blocks a sibling for no benefit. A *descriptive string*

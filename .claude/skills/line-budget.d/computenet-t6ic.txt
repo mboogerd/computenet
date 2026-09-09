@@ -1,0 +1,16 @@
+work +31
+
+# A fourth widening shape in SKILL.md 5b. The bead filed it as af9q's own remedy
+# failing — a type-keyed grep blind to callers that import top-level functions by
+# name. Review re-measured the dispatch-time tree and found that only HALF true:
+# the type grep does miss ThroughputReport.kt (10 hits, absent), but the
+# constant-keyed grep the same session ran RETURNED it, inside 31 hits that were
+# pruned to four. So the rule as first written would not have prevented the
+# incident it cites.
+#
+# What ships is both halves, with the measured table: grep the API SURFACE (8
+# hits, readable), and prune a long hit list by READING it. The second half is
+# the rule already three paragraphs above ("an import is not an enumeration"),
+# and naming the case where it was skipped is what these lines buy — recording
+# the derivation on the bead does not catch it, because the record showed four
+# files where the grep had returned thirty-one and nothing compares the two.
