@@ -1037,9 +1037,35 @@ EOF
 bd update <feature-id> --set-metadata review=passed
 ```
 
-`review=passed` goes **last**: it is the flag the orchestrator ships on, so a
-sequence that dies earlier leaves the feature uncertified rather than
-certified with nothing behind it.
+`review=passed` goes **last**: it is the durable record that this review
+finished, so a sequence that dies earlier leaves the feature uncertified rather
+than certified with nothing behind it. (It is not by itself 5e's ship gate —
+your VERDICT TOKEN is — and 5e says so: `metadata.review=passed` does not
+settle it.)
+
+**If that write is REFUSED by the permission classifier, hand it back — do not
+retry, and do not leave the verdict in the comment alone.** `bd update
+--set-metadata` has been denied to a reviewer subagent the same way §6
+documents `git merge` being denied, and the same way
+[feature.md](feature.md) documents it for a breakdown's own `--set-metadata`
+(computenet-mwun, computenet-dhwe).
+This is the mirror image of the half-recorded state above: a full
+certification comment with no machine-readable flag. Use the convention
+feature.md already established — put the **exact command** in your FINAL
+MESSAGE under the literal heading **REQUIRED ORCHESTRATOR ACTION**:
+
+```
+REQUIRED ORCHESTRATOR ACTION
+bd update <feature-id> --set-metadata review=passed
+(denied to me by the permission classifier; verdict is READY)
+```
+
+A comment can be read past; a final message is what the orchestrator reads to
+route, and one literal heading is a token it can look for. The flag is not
+5e's ship gate — the verdict TOKEN is — but it is what step 5's feature
+SELECTION reads ("A resumed feature carrying `metadata.review=passed` was
+certified last session ... don't re-review"), so an unset flag on merged,
+certified work sends a later session back over work already certified.
 
 ### Ready with residual — the honest negative result
 
@@ -1130,7 +1156,8 @@ Then, **one `bd` write per call**, in order:
 3. `bd update <feature-id> --set-metadata residual=$RES`;
 4. **last**, `bd update <feature-id> --set-metadata review=passed` — a
    sequence that dies earlier leaves the feature uncertified rather than
-   certified with a residual nobody recorded.
+   certified with a residual nobody recorded. Denied? The REQUIRED
+   ORCHESTRATOR ACTION hand-back above, same as on the plain path.
 
 **A criterion waiting on an out-of-band measurement is a third shape**, and
 it is neither met nor unmet: the code is right and the number is not in yet
