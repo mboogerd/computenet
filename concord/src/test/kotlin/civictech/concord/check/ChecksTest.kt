@@ -335,6 +335,43 @@ class ChecksTest {
         fail(Checks.replicasConverge(ReplicasConverge("shared"), ctx))
     }
 
+    /**
+     * computenet-23z3: a `logical:` id that matches no cell in the graph — a
+     * typo, a renamed logical, a copy-paste from another scenario — must FAIL,
+     * naming the unmatched id, rather than silently passing on "fewer than two
+     * live replicas". Before this fix, `declared` filtered to empty and
+     * `live.size < 2` returned `Passed` unconditionally, so this scenario shape
+     * went green having compared nothing (measured 2026-09-06 against
+     * `42-WM-DEPART-01` with `logical: shared` mutated to `logical: shared-x`).
+     */
+    @Test
+    fun `replicas-converge fails when the logical id matches no cell in the graph`() {
+        val sc = scenario(
+            listOf(
+                cell("r1", "set-source").copy(replicaOf = "shared"),
+                cell("r2", "set-source").copy(replicaOf = "shared"),
+            ),
+            emptyList(),
+        )
+        val ctx = FakeContext(FakeDriver(views = mapOf("r1" to list(s("a")), "r2" to list(s("a")))), sc)
+        val r = Checks.replicasConverge(ReplicasConverge("shared-x"), ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "shared-x"
+    }
+
+    /**
+     * A `logical:` id with no `replica-of` declaration anywhere in the graph at
+     * all (not merely a mismatch against sibling replicas) fails the same way.
+     */
+    @Test
+    fun `replicas-converge fails when no cell in the graph declares replica-of at all`() {
+        val sc = scenario(listOf(cell("v", "set-view")), emptyList())
+        val ctx = FakeContext(FakeDriver(views = mapOf("v" to list(s("a")))), sc)
+        val r = Checks.replicasConverge(ReplicasConverge("shared"), ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "shared"
+    }
+
     // --- no-dead-letters ----------------------------------------------------
 
     @Test
