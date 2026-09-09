@@ -275,6 +275,102 @@ class LocationRegistryHooksTest {
         awaitUntil("the replayed invocation arrived") { cell.received == listOf(1) }
     }
 
+    // ------------------------------------------------------- LeaderMark hooks
+
+    /**
+     * f7h.1-D3: [LocationRegistry.markLeader] (local) fires both
+     * [LocationRegistry.onLocalLeaderMark] and [LocationRegistry.onLeaderMark]
+     * exactly once with the adopted mark; [LocationRegistry.mirrorLeaderMark]
+     * fires only [LocationRegistry.onLeaderMark] — the same local/mirror
+     * asymmetry [publish]/[LocationRegistry.publish] (sink form) has, so F2's
+     * announcer never re-announces a mirrored adoption onward.
+     */
+    @Test
+    fun `markLeader fires both leader-mark hooks locally, mirrorLeaderMark fires only the any-scope hook`() {
+        val registry = LocationRegistry()
+        val id = UUID.randomUUID()
+        val local = mutableListOf<LeaderMark>()
+        val any = mutableListOf<LeaderMark>()
+        registry.onLocalLeaderMark { local += it }
+        registry.onLeaderMark { any += it }
+
+        val localMark = LeaderMark(id, epoch = 1, leaderRef = CellRef(id, instanceId = 1))
+        registry.markLeader(localMark) shouldBe true
+        local shouldContainExactly listOf(localMark)
+        any shouldContainExactly listOf(localMark)
+
+        val mirroredMark = LeaderMark(id, epoch = 2, leaderRef = CellRef(id, instanceId = 2))
+        registry.mirrorLeaderMark(mirroredMark) shouldBe true
+        local shouldContainExactly listOf(localMark)
+        any shouldContainExactly listOf(localMark, mirroredMark)
+    }
+
+    /**
+     * A rejected mark — lower epoch, equal-epoch lower instanceId, or a
+     * refold of the identical mark — fires neither hook and both entry
+     * points return false, whether local or mirrored.
+     */
+    @Test
+    fun `a rejected leader mark fires neither leader-mark hook, whether local or mirrored`() {
+        val registry = LocationRegistry()
+        val id = UUID.randomUUID()
+        val current = LeaderMark(id, epoch = 5, leaderRef = CellRef(id, instanceId = 5))
+        registry.markLeader(current) shouldBe true
+
+        val local = mutableListOf<LeaderMark>()
+        val any = mutableListOf<LeaderMark>()
+        registry.onLocalLeaderMark { local += it }
+        registry.onLeaderMark { any += it }
+
+        registry.markLeader(LeaderMark(id, epoch = 2, leaderRef = CellRef(id, instanceId = 99))) shouldBe false
+        registry.mirrorLeaderMark(LeaderMark(id, epoch = 5, leaderRef = CellRef(id, instanceId = 1))) shouldBe false
+        registry.markLeader(current) shouldBe false
+        registry.mirrorLeaderMark(current) shouldBe false
+
+        local.shouldBeEmpty()
+        any.shouldBeEmpty()
+    }
+
+    @Test
+    fun `a closed onLeaderMark handle stops receiving while an open one keeps receiving`() {
+        val registry = LocationRegistry()
+        val id = UUID.randomUUID()
+        val detached = mutableListOf<LeaderMark>()
+        val attached = mutableListOf<LeaderMark>()
+        val handle = registry.onLeaderMark { detached += it }
+        registry.onLeaderMark { attached += it }
+
+        val first = LeaderMark(id, epoch = 1, leaderRef = CellRef(id, instanceId = 1))
+        registry.markLeader(first)
+        handle.close()
+        val second = LeaderMark(id, epoch = 2, leaderRef = CellRef(id, instanceId = 2))
+        registry.markLeader(second)
+
+        detached shouldContainExactly listOf(first)
+        attached shouldContainExactly listOf(first, second)
+    }
+
+    /**
+     * Hooks are notifications, not participants (M10.4, mirroring the
+     * publish-hook contract): a throwing [LocationRegistry.onLeaderMark]
+     * listener never stops the next listener from firing, and never changes
+     * [LocationRegistry.markLeader]'s returned verdict.
+     */
+    @Test
+    fun `a throwing onLeaderMark listener does not prevent the next listener nor change the verdict`() {
+        val registry = LocationRegistry()
+        val id = UUID.randomUUID()
+        val seenAfterThrow = mutableListOf<LeaderMark>()
+        registry.onLeaderMark { throw RuntimeException("boom") }
+        registry.onLeaderMark { seenAfterThrow += it }
+
+        val mark = LeaderMark(id, epoch = 1, leaderRef = CellRef(id, instanceId = 1))
+        val adopted = registry.markLeader(mark)
+
+        adopted shouldBe true
+        seenAfterThrow shouldContainExactly listOf(mark)
+    }
+
     // ------------------------------------------------------------------ fixtures
 
     private fun edge(): TopologyLink =

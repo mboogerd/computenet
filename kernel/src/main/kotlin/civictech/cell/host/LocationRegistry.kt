@@ -134,6 +134,21 @@ class LocationRegistry {
     private val onUnlink = java.util.concurrent.CopyOnWriteArrayList<(java.util.UUID) -> Unit>()
     private val localLinkIds = ConcurrentHashMap.newKeySet<java.util.UUID>()
 
+    /**
+     * Fire after a *local* [markLeader] adopts — mirrors [onLocalPublish]
+     * (f7h.1-D3): F2's `announceTo` subscribes here to announce local
+     * adoptions onward.
+     */
+    private val onLocalLeaderMark = java.util.concurrent.CopyOnWriteArrayList<(LeaderMark) -> Unit>()
+
+    /**
+     * Fire after *any* adopted fold — local ([markLeader]) or mirrored
+     * ([mirrorLeaderMark]) — mirrors [onPublish]. `SingleWriterReplication`
+     * subscribes here (not [onLocalLeaderMark]) so a mark folded by ANY path
+     * applies its role exactly once.
+     */
+    private val onLeaderMark = java.util.concurrent.CopyOnWriteArrayList<(LeaderMark) -> Unit>()
+
     /** Returns a deregistration handle — reconnecting transports replace their announcement hook (M10.3). */
     fun onLocalPublish(listener: (CellRef) -> Unit): AutoCloseable {
         onLocalPublish += listener
@@ -161,6 +176,18 @@ class LocationRegistry {
     fun onUnpublish(listener: (CellRef) -> Unit): AutoCloseable {
         onUnpublish += listener
         return AutoCloseable { onUnpublish -= listener }
+    }
+
+    /** Returns a deregistration handle — mirrors [onLocalPublish] (f7h.1-D3). */
+    fun onLocalLeaderMark(listener: (LeaderMark) -> Unit): AutoCloseable {
+        onLocalLeaderMark += listener
+        return AutoCloseable { onLocalLeaderMark -= listener }
+    }
+
+    /** Returns a deregistration handle — mirrors [onPublish] (f7h.1-D3). */
+    fun onLeaderMark(listener: (LeaderMark) -> Unit): AutoCloseable {
+        onLeaderMark += listener
+        return AutoCloseable { onLeaderMark -= listener }
     }
 
     fun onLocalTopology(linked: (TopologyLink) -> Unit, unlinked: (java.util.UUID) -> Unit): AutoCloseable {
@@ -441,6 +468,51 @@ class LocationRegistry {
             listener(ref)
         } catch (e: Exception) {
             System.err.println("[LocationRegistry] publish hook failed for $ref: $e")
+        }
+    }
+
+    /**
+     * Fold a *local* [LeaderMark] — the manual/orchestrated designation path
+     * (spec 42 §Single-writer replication) — into [instances]' fold. On
+     * adoption, notifies [onLocalLeaderMark] then [onLeaderMark] (f7h.1-D3),
+     * mirroring [publish]'s local announcement pair; a rejected mark
+     * (lower/equal/duplicate) notifies neither. Returns the fold's verdict.
+     */
+    fun markLeader(mark: LeaderMark): Boolean {
+        val adopted = instances.markLeader(mark)
+        if (adopted) {
+            onLocalLeaderMark.forEach { notify(it, mark) }
+            onLeaderMark.forEach { notify(it, mark) }
+        }
+        return adopted
+    }
+
+    /**
+     * Fold an announcement-fed [LeaderMark] — F2's mirror cell. Deliberately
+     * does not re-announce *onward*: only [onLeaderMark] fires, never
+     * [onLocalLeaderMark] (f7h.1-D3) — the same local/mirror asymmetry that
+     * stops [publish]'s mirrored form re-announcing a peer's own publish
+     * back onward. Returns the fold's verdict.
+     */
+    fun mirrorLeaderMark(mark: LeaderMark): Boolean {
+        val adopted = instances.markLeader(mark)
+        if (adopted) {
+            onLeaderMark.forEach { notify(it, mark) }
+        }
+        return adopted
+    }
+
+    /**
+     * Hooks are notifications, not participants (M10.4, mirroring the
+     * [CellRef] overload above): a failing [onLocalLeaderMark]/[onLeaderMark]
+     * listener never breaks the fold, never stops the next listener, and
+     * never changes [markLeader]/[mirrorLeaderMark]'s returned verdict.
+     */
+    private fun notify(listener: (LeaderMark) -> Unit, mark: LeaderMark) {
+        try {
+            listener(mark)
+        } catch (e: Exception) {
+            System.err.println("[LocationRegistry] leader-mark hook failed for ${mark.logicalId}: $e")
         }
     }
 

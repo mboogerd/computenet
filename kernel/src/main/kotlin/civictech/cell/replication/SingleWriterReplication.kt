@@ -22,17 +22,13 @@ import civictech.cell.proxy.Proxy
 import java.util.UUID
 
 /**
- * Leadership announcement for a single-writer logical cell (spec 42
- * §Single-writer replication, decided 93 I-25, not built until this
- * ticket). Folded into an eventually-consistent membership index the same
- * way as an ordinary [LocationRegistry] publish (P4) — no view number, no
- * quorum, no barrier: `leaderOf(id)` is simply the mark with the greatest
- * epoch this peer has folded. Automatic election that *mints* these marks
- * is the deferred liveness half (G-44 residual, 95 §R1); this ticket ships
- * EXPLICIT/orchestrated designation only — [SingleWriterReplication.designateLeader]
- * is the manual-failover hook the spec declares the default.
+ * Relocated to `civictech.cell.host` (f7h.1-D1): the fold now lives on
+ * [civictech.cell.host.InstanceIndex], the membership lane, not here. This
+ * `typealias` keeps every existing caller in this package — and testkit's
+ * `import civictech.cell.replication.LeaderMark` — compiling unmodified; see
+ * [civictech.cell.host.LeaderMark] for the type's KDoc.
  */
-data class LeaderMark(val logicalId: UUID, val epoch: Long, val leaderRef: CellRef)
+typealias LeaderMark = civictech.cell.host.LeaderMark
 
 /**
  * An epoch-stamped unit on the leader→follower log (spec 42): "every leader
