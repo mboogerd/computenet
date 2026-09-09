@@ -1,0 +1,12 @@
+work +13
+
+# Thirteen lines in mutation-check.md's landed-proof rule, closing the
+# NARROWING an agent actually made: it filtered `git diff HEAD -- <file>` through
+# `grep '^[+-]@Timeout'`, which anchors at column 1 and cannot match an indented
+# Kotlin annotation. Its mutation had landed; the proof said it had not.
+#
+# Prose is the only route here — the check is a human judgment run by hand in a
+# reviewer's own shell, with no script to change. The lines are spent mostly on
+# the REASON, because a false negative on this step reads as "my mutation did not
+# apply", which is the opposite of the cautious conclusion, and an agent that is
+# not told why will re-narrow it the same way.

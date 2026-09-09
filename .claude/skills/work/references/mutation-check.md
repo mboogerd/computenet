@@ -93,7 +93,20 @@ will not:
   prints the same green transcript as a suite that fails to catch the
   mutation — the false answer is the one that fails good work
   (computenet-isde). Require a NON-empty `git diff HEAD -- <file>` (or, for
-  an untracked file, a grep hit on the mutated phrase) before the run. Escape-
+  an untracked file, a grep hit on the mutated phrase) before the run.
+  **EMPTINESS is the test; do not narrow it to a grep for the mutated
+  construct.** One reviewer improvised
+  `git diff HEAD -- <file> | grep '^[+-]@Timeout'`, which anchors the pattern
+  to column 1 of the diff body and so cannot match an INDENTED line — and
+  Kotlin puts almost every annotation and every statement at an indent. Its
+  mutation had landed; the proof said it had not (computenet-fw1y). That
+  inverts the safest reading: an agent trusting a false negative here
+  concludes its mutation never applied and re-applies it or abandons it,
+  rather than doubting the grep. Same silent false-zero family as the `git
+  grep` pathspec and POSIX-class traps in AGENTS.md — the failure reads as
+  information about the code when it is information about the command. If you
+  want the construct confirmed as well, that is a second command
+  (`grep -n '@Timeout' <file>`), not a filter on the first. Escape-
   heavy perl patterns (`\Q…\E`) have arrived mangled through the Bash tool in
   at least one harness — for replacement of a metacharacter-heavy line, prefer
   line-addressed sed: `sed -i '' '<N>s|.*|<new line>|' <file>`.
