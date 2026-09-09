@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for claim-epic.sh. Stubs `bd` on PATH; every case gets a fresh control
-# dir. Exits 0 if all cases pass. Expect "28 passed, 0 failed".
+# dir. Exits 0 if all cases pass. Expect "31 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claim-epic.sh"}
@@ -273,6 +273,34 @@ fixture; old_show open ""
 [ "$(grep -c '^show ' "$BD_LOG")" -ge 1 ] \
   && ok "the claim re-reads state from bd before writing" \
   || bad "no show at claim time — log: $(tr '\n' '|' < "$BD_LOG")"
+
+# ci6c5: a sequencing constraint stated in the epic's BODY refuses the claim
+# before any write, and names the two ways out.
+fixture
+printf '[{"id":"computenet-e","status":"open","assignee":"","updated_at":"2020-01-01T00:00:00Z","description":"## 4. Scheduling\\nIt queues behind KX -> MEM2 and cannot be worked autonomously in parallel with them."}]' > "$CTRL/show.json"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 1 ] && grep -q "queues behind" <<<"$out" \
+  && grep -q "CLAIM_BLOCKERS_CHECKED=1" <<<"$out" \
+  && ! grep -qE -- "--claim|dolt push" "$BD_LOG"; } \
+  && ok "a stated sequencing constraint refuses before any write or push" \
+  || bad "stated blocker: rc=$rc out=$out log=$(tr '\n' '|' < "$BD_LOG")"
+
+# ...and CLAIM_BLOCKERS_CHECKED=1 is the escape once the predecessors are resolved.
+fixture
+printf '[{"id":"computenet-e","status":"open","assignee":"","updated_at":"2020-01-01T00:00:00Z","description":"It queues behind KX -> MEM2."}]' > "$CTRL/show.json"
+out=$(CLAIM_BLOCKERS_CHECKED=1 "$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q -- "--claim" "$BD_LOG"; } \
+  && ok "CLAIM_BLOCKERS_CHECKED=1 proceeds past the stated-blocker refusal" \
+  || bad "blockers-checked escape: rc=$rc out=$out"
+
+# The phrase set is narrow ON PURPOSE: "depends on" matched 27 of 44 open
+# epics when it was measured, so it is NOT in the set and must not refuse.
+fixture
+printf '[{"id":"computenet-e","status":"open","assignee":"","updated_at":"2020-01-01T00:00:00Z","description":"This depends on the operator algebra and is a prerequisite for GOS2; land only after review."}]' > "$CTRL/show.json"
+out=$("$SCRIPT" computenet-e 2>&1); rc=$?
+{ [ "$rc" = 0 ] && grep -q -- "--claim" "$BD_LOG"; } \
+  && ok "a body saying only 'depends on'/'prerequisite'/'only after' still claims" \
+  || bad "narrowness: rc=$rc out=$out"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

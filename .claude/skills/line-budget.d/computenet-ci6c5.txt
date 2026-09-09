@@ -1,0 +1,10 @@
+work +10
+
+# Ten lines in step 3 for a refusal a session cannot otherwise discover.
+# computenet-ci6c5 claimed and PUSHED an epic whose body said it "queues behind
+# KX -> KE1 -> KE3 -> MEM1 -> MEM2", two of those open — every readiness query
+# answered READY, correctly, because the edges that existed were satisfied.
+# The enforcement itself is mechanical (claim-epic.sh refuses before any write);
+# these lines exist only so the agent that meets the refusal knows the two ways
+# out, one of which — add the missing blocking edges — is the repair that stops
+# the next session needing any prose at all.

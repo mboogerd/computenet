@@ -802,6 +802,16 @@ released the epic at its Finalize and is still inside a child (computenet-hl8x).
 Take the next row and say which signal fired; `CLAIM_SKIP_HOT=1` only when
 the hot child is your own crash leftover.
 
+**A `REFUSED: … body states a sequencing constraint` is the same shape.** No
+readiness query can see a blocker that lives in the epic's prose and not in
+its edges — `verify-ready.sh` reads the real edges and correctly says READY —
+so `claim-epic.sh` greps the body for it before writing anything
+(computenet-ci6c5, which claimed and *pushed* an epic that "queues behind KX →
+KE1 → KE3 → MEM1 → MEM2", two of them open). Resolve each name it prints:
+any open one means take the next row; all closed means add the missing
+blocking edges so the graph and the prose agree, then re-run with
+`CLAIM_BLOCKERS_CHECKED=1`.
+
 **Among the non-resumable remainder: candidates that appear in
 `$SCRATCH/bv-rank.txt` first, in that file's order; the rest by priority.**
 `bd ready` stays the candidate set —
