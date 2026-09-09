@@ -16,7 +16,8 @@ work +35
 #
 # The same diff corrects two claims review found overstated: `review=passed` is
 # not 5e's ship gate (the verdict token is), and 5e is silent on the
-# verdict-present/marker-absent direction rather than resolving it.
+# verdict-present/marker-absent direction rather than resolving it — which is
+# the gap the SKILL.md half of this same diff closes.
 #
 # Prose is the only route: an agent cannot script its way around a classifier
 # denial, and the remedy is a message to a different actor.
