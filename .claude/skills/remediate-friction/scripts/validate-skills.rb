@@ -263,10 +263,40 @@ missing.each do |d|
   puts "#{File.basename(d)}: FAIL directory has no SKILL.md"
 end
 
+# AGENTS.md is priced on the same ratchet although it is not a skill
+# (computenet-vvq5). reachability.py models it as the ORCHESTRATOR'S ENTRY
+# DOCUMENT alongside work/SKILL.md, this lane edits it, and beads under the SDLC
+# epic name it in their acceptance — yet neither gate reached it, so growth in
+# the file every orchestrator reads FIRST and reads IN FULL was free while
+# growth in the skill it feeds was priced. That is backwards. It takes deltas
+# from line-budget.d like any other entry; only its shape differs (one file, no
+# body/references split), which is why it is here and not in the loop.
+AGENTS_MD = File.join(repo_root, 'AGENTS.md')
+agents_checked = File.exist?(AGENTS_MD)
+if agents_checked
+  lines = File.readlines(AGENTS_MD, encoding: 'UTF-8').length
+  budget = BUDGETS['AGENTS.md']
+  if budget.nil?
+    failures += 1
+    puts 'AGENTS.md: FAIL no line budget — add one to .claude/skills/line-budget.txt ' \
+         "(set it at the current #{lines} so it starts even)"
+  elsif lines > budget
+    failures += 1
+    puts "AGENTS.md: FAIL is #{lines} lines, over its #{budget} budget by " \
+         "#{lines - budget}. Remove as much as you added, or add " \
+         ".claude/skills/line-budget.d/<bead-id>.txt holding `AGENTS.md " \
+         "+#{lines - budget}` and say what it bought."
+  else
+    note = DELTAS['AGENTS.md'] != 0 ? "  (note: budget #{budget} = #{BASE_BUDGETS['AGENTS.md']} " \
+           "base #{format('%+d', DELTAS['AGENTS.md'])} in line-budget.d)" : ''
+    puts "AGENTS.md: OK#{note}"
+  end
+end
+
 UNKNOWN_DELTAS.each do |n|
   failures += 1
   puts "line-budget.d: FAIL delta names '#{n}', which has no entry in line-budget.txt"
 end
 
-puts "#{files.length + missing.length} skill(s) checked, #{failures} failing"
+puts "#{files.length + missing.length} skill(s) checked#{agents_checked ? ' (plus AGENTS.md)' : ''}, #{failures} failing"
 exit(failures.zero? ? 0 : 1)

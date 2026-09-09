@@ -591,3 +591,14 @@ remediate-friction   397
 # behavioural holes, not only stale wording.
 sync-report          276
 work-unsupervised     59
+
+# AGENTS.md is NOT a skill — it is the repository's contributor document, and
+# reachability.py models it as the orchestrator's entry document alongside
+# work/SKILL.md. It is priced here because this lane edits it, beads under the
+# SDLC epic name it in their acceptance, and until computenet-vvq5 neither gate
+# reached it: validate-skills.rb walked `.claude/skills/` only, and this ledger
+# counts "SKILL.md's body plus every references/*.md", which AGENTS.md is
+# neither. So growth in the file every orchestrator reads FIRST and reads IN
+# FULL was free while growth in the skill it feeds was priced.
+# Counted whole — it has no frontmatter and no references directory.
+AGENTS.md            654

@@ -1,0 +1,9 @@
+remediate-friction +5
+
+# Five lines in remediate-friction/SKILL.md step 4, where the validator is
+# invoked, saying that AGENTS.md is now priced and what its budget looks like.
+# The acceptance asks for the decision to be recorded exactly there, because
+# that is where an agent editing AGENTS.md from this lane reads.
+#
+# The enforcement is mechanical: validate-skills.rb fails over budget, proven by
+# appending 5 lines to AGENTS.md and reading the FAIL.

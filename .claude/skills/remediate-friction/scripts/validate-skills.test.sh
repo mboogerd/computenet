@@ -144,6 +144,44 @@ out=$(ruby "$SCRIPT" "$r" 2>&1)
 grep -q 'line-budget.d: FAIL directory has no SKILL.md' <<<"$out" \
   && bad "treated the data dir as a skill -- $out" || ok "quiet"
 
+echo "case 17: AGENTS.md is priced (computenet-vvq5)"
+# Needs a real repo shape: the script derives repo_root two levels above the
+# skills dir, so the fixture is <repo>/.claude/skills with AGENTS.md at <repo>.
+repo="$ROOT/repo"; sk="$repo/.claude/skills"
+mkdir -p "$sk/demo/references"
+{ printf -- '---\nname: demo\ndescription: A demo skill for tests.\n---\n\n'
+  for i in $(seq 1 10); do echo "body $i"; done; } > "$sk/demo/SKILL.md"
+printf 'demo 15\n' > "$sk/line-budget.txt"
+for i in $(seq 1 20); do echo "agents $i"; done > "$repo/AGENTS.md"
+
+out=$(ruby "$SCRIPT" "$sk" 2>&1); rc=$?
+{ [ $rc -eq 1 ] && grep -q 'AGENTS.md: FAIL no line budget' <<<"$out"; } \
+  && ok "an unpriced AGENTS.md FAILS rather than being invisible" \
+  || bad "exit $rc -- $out"
+
+printf 'demo 15\nAGENTS.md 20\n' > "$sk/line-budget.txt"
+out=$(ruby "$SCRIPT" "$sk" 2>&1); rc=$?
+{ [ $rc -eq 0 ] && grep -q 'AGENTS.md: OK' <<<"$out"; } \
+  && ok "at budget it passes" || bad "exit $rc -- $out"
+
+echo "agents 21" >> "$repo/AGENTS.md"
+out=$(ruby "$SCRIPT" "$sk" 2>&1); rc=$?
+{ [ $rc -eq 1 ] && grep -q 'AGENTS.md: FAIL is 21 lines, over its 20 budget by 1' <<<"$out"; } \
+  && ok "one line over FAILS, naming the overage" || bad "exit $rc -- $out"
+
+mkdir -p "$sk/line-budget.d"
+printf '# bought: nothing, this is a test\nAGENTS.md +1\n' > "$sk/line-budget.d/computenet-test.txt"
+out=$(ruby "$SCRIPT" "$sk" 2>&1); rc=$?
+{ [ $rc -eq 0 ] && grep -q '20 base +1 in line-budget.d' <<<"$out"; } \
+  && ok "a delta clears it and the base+delta is printed" || bad "exit $rc -- $out"
+
+echo "case 18: a repo with no AGENTS.md is silent, not a failure"
+rm "$repo/AGENTS.md" "$sk/line-budget.d/computenet-test.txt"
+printf 'demo 15\n' > "$sk/line-budget.txt"
+out=$(ruby "$SCRIPT" "$sk" 2>&1); rc=$?
+{ [ $rc -eq 0 ] && ! grep -q 'AGENTS.md' <<<"$out"; } \
+  && ok "absent file says nothing" || bad "exit $rc -- $out"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

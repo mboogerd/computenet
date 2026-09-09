@@ -266,6 +266,11 @@ ruby .claude/skills/remediate-friction/scripts/validate-skills.rb
 .claude/skills/work/scripts/usage-table.test.sh   # work/SKILL.md's script table
 ```
 
+**It also prices `AGENTS.md`** (computenet-vvq5), which is not a skill but is
+the orchestrator's entry document — read first and read in full — and is inside
+this lane's surface. Its budget is one whole-file line in `line-budget.txt` and
+it takes deltas like any other entry; expect `AGENTS.md: OK` in the output.
+
 It checks every skill under `.claude/skills/` against Anthropic's
 skill-creator structural criteria — frontmatter parses, keys are known, name
 is kebab-case and <=64 chars, description <=1024 chars with no angle brackets
