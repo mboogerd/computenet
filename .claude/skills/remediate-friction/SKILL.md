@@ -266,10 +266,15 @@ ruby .claude/skills/remediate-friction/scripts/validate-skills.rb
 .claude/skills/work/scripts/usage-table.test.sh   # work/SKILL.md's script table
 ```
 
+**It also prices `AGENTS.md`** (computenet-vvq5), which is not a skill but is
+the orchestrator's entry document — read first and read in full — and is inside
+this lane's surface. Its budget is one whole-file line in `line-budget.txt` and
+it takes deltas like any other entry; expect `AGENTS.md: OK` in the output.
+
 It checks every skill under `.claude/skills/` against Anthropic's
 skill-creator structural criteria — frontmatter parses, keys are known, name
 is kebab-case and <=64 chars, description <=1024 chars with no angle brackets
-— and exits non-zero on any failure. Expect `4 skill(s) checked, 0 failing`.
+— and exits non-zero on any failure. Expect `4 skill(s) checked (plus AGENTS.md), 0 failing`.
 It deliberately does **not** run skill-creator's behavioural eval
 (`run_eval.py` and the grader agents): that spawns with-skill and baseline
 runs over authored test cases and takes hours, so it belongs on a cadence or
