@@ -165,9 +165,10 @@ SKILL.md and the other references cite this file as "`bd` traps".
   bead (`rc=0`) with no `-C`, because `git rev-parse --git-common-dir` points
   at the main checkout's `.git` and `bd where` resolves to its `.beads`. The
   worktrees are SIBLINGS of that checkout, so no upward walk could reach it.
-  From outside the repo — a scratch dir, `/tmp`, any cwd outside a checkout — it prints
-  nothing and exits 1, which the script's own header documents as meaning *the
-  id does not exist*: the natural recovery from an apparent bad id is the plain
+  From outside a checkout — a scratch dir, `/tmp`, or a clone carrying the
+  tracked `.beads/config.yaml` but no Dolt database (all three measured at
+  rc=1, empty stdout) — it prints nothing and exits 1, which the script's own
+  header documents as meaning *the id does not exist*: the natural recovery from an apparent bad id is the plain
   `bd show` this entry exists to prevent. **The fix is `-C`, which `bead.sh`
   accepts** (computenet-wd7n, landed): `bead.sh -C <main-checkout> <id>`, in
   either position — before the id or right after it — so it composes with the
