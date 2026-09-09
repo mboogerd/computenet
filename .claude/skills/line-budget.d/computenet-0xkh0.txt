@@ -1,0 +1,12 @@
+work +19
+
+# +16 in SKILL.md (14 for the stopping rule in 5b, 2 where step 5's advice
+# narration repeats "do not idle" without a bound) and +3 in merge-task.md,
+# whose sentence said a hold under HOST load "would be an indefinite idle" —
+# which is what a session followed twice, losing both agents.
+#
+# The rule itself is delivered mechanically: next-batch.py's HOST-load advice
+# string now carries it, so the orchestrator reads it at every capacity read.
+# These lines exist because both prose sites NARRATE the old rule, and
+# computenet-y30d is the bead about shipping a change while leaving its
+# predecessor's explanation standing.

@@ -578,9 +578,23 @@ try:
 finally:
     nb.busy_builds = _real_busy
     nb.os.getloadavg = _real_getloadavg
-if "NOTHING" in (host or "") or "HOST load" not in (host or ""):
+# The UNCONDITIONAL advice here is still "do not idle, dispatch ONE scoped
+# agent" (computenet-91xn). The only "NOTHING" allowed in this string is the
+# conditional stopping rule, which is gated on TWO agents already dead
+# (computenet-0xkh0) — so this checks the gate, not the absence of the word.
+if ("HOST load" not in (host or "")
+        or "do not idle" not in (host or "")
+        or "TWO dispatches have already died" not in (host or "")
+        or "STOPPING RULE" not in (host or "")):
     failed += 1
-    print(f"FAIL: 5x load with no build of ours must not say dispatch NOTHING, got {host!r}")
+    print(f"FAIL: 5x load with no build of ours must say do-not-idle plus the "
+          f"two-deaths stopping rule, got {host!r}")
+# ...and the stop must stay CONDITIONAL: an unconditional hold here is the
+# indefinite idle 91xn measured. The word "NOTHING" must not appear before the
+# rule that gates it.
+if (host or "").find("NOTHING") < (host or "").find("STOPPING RULE"):
+    failed += 1
+    print(f"FAIL: HOST-load advice holds unconditionally, got {host!r}")
 if "NOTHING" not in (ours or "") or "OURS" not in (ours or ""):
     failed += 1
     print(f"FAIL: 5x load with a busy build must still hold, got {ours!r}")

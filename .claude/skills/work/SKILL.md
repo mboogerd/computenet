@@ -1559,7 +1559,9 @@ the advice says HOST load: there is nothing to wait for, so **do not idle** —
 dispatch ONE agent with a scoped gate and expect it to be slow, not wrong.
 "Slow" is bounded by the 600s stream watchdog: past the point where one tool
 call cannot finish inside it, the agent is KILLED, not slowed, and 5b's stall
-response is what applies.
+response is what applies — including its STOPPING RULE, which is the upper
+bound on "do not idle": two consecutive deaths with no side effects and you
+dispatch nothing more until load1 is under 2x cores (computenet-0xkh0).
 Measured 2026-09-04, MacBoo: load1 held 316/263/198 for ~25 minutes on endpoint
 security scanning a build tree, with only idle IDE daemons running, while a
 session obeying the old cause-asserting text waited for a gate that did not
@@ -2198,6 +2200,20 @@ IDE daemons of ours, two agents dispatched inside one minute BOTH died with zero
 side effects; a no-Gradle tracker-text unit dispatched in their place completed,
 and the Gradle implementer ran normally ~35 minutes later at load1 6.6
 (computenet-xp5g, recurrence of computenet-9ofq and computenet-znlh).
+
+**But "do not idle" has an upper bound, keyed on observed agent DEATHS rather
+than on the load number: after TWO consecutive dispatches killed by the 600s
+watchdog leaving no durable side effects, stop dispatching and say so.** At
+that load ANY tool call can exceed 600s, so neither remedy above is available:
+the second death was on a `bd` comments lookup, not Gradle — exactly the
+no-Gradle fallback unit this paragraph offers (computenet-0xkh0, recurrence of
+computenet-xp5g, whose advice that session followed twice and lost both
+agents). Scoping the gate buys nothing once a plain `bd` or `git` call cannot
+finish. Then either arm a bounded Monitor and re-dispatch when load1 falls
+under 2x cores, or go to Finalize if the budget cannot absorb the wait. The
+session is not dead — the orchestrator's own Bash calls keep completing
+throughout; only dispatch is, so orchestrator-local work (bookkeeping, friction
+filing) is still yours while you wait.
 
 Measured: a sonnet implementer on a small, well-specified task stalled with
 zero side effects and cost ~30 minutes of one lane; the identical prompt
