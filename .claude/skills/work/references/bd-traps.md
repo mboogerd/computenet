@@ -158,17 +158,23 @@ SKILL.md and the other references cite this file as "`bd` traps".
   projection is irreducible, so a big epic spills to a file and is READ from
   there — that is the working answer, not a flag.
 
-  **And `bd` finds the database by walking UP from the working directory, so
-  `bead.sh` from a worktree reads no database at all.** Left to itself it
-  prints nothing and exits 1 — which the script's own header documents as
-  meaning *the id does not exist*, so the natural recovery from an apparent
-  bad id is the plain `bd show` this entry exists to prevent. **The fix is
-  `-C`, which `bead.sh` accepts** (computenet-wd7n, landed): `bead.sh -C
-  <main-checkout> <id>`, in either position — before the id or right after it
-  — so it composes with the `-C <main-checkout>` a dispatched reviewer is
-  already told to pass `bd`. A breakdown has no worktree and is the role most
-  positioned to hit this. `cd`-ing to the main checkout also works; an
-  absolute path to the script alone does not.
+  **And `bd` resolves the database through GIT, not through the filesystem**,
+  so where `bead.sh` works is decided by whether your cwd is inside the
+  repository at all — not by whether it is the main checkout. Measured
+  2026-09-09: from four `/work` worktrees, plain `bead.sh <id>` returned the
+  bead (`rc=0`) with no `-C`, because `git rev-parse --git-common-dir` points
+  at the main checkout's `.git` and `bd where` resolves to its `.beads`. The
+  worktrees are SIBLINGS of that checkout, so no upward walk could reach it.
+  From outside the repo — a scratch dir, a sandbox clone, `/tmp` — it prints
+  nothing and exits 1, which the script's own header documents as meaning *the
+  id does not exist*: the natural recovery from an apparent bad id is the plain
+  `bd show` this entry exists to prevent. **The fix is `-C`, which `bead.sh`
+  accepts** (computenet-wd7n, landed): `bead.sh -C <main-checkout> <id>`, in
+  either position — before the id or right after it — so it composes with the
+  `-C <main-checkout>` a dispatched reviewer is already told to pass `bd`.
+  Passing it from a worktree is harmless, so pass it always rather than
+  reasoning about your cwd. `cd`-ing into the repo also works; an absolute path
+  to the script alone does not.
 
   **Above ~25KB even the projection does not fit**, and `bead.sh` handles
   that itself: it writes the projected bead to `$SCRATCH/bead-<id>.json`,

@@ -17,14 +17,15 @@
 #   Default filter is '.' — the projected object, pretty-printed.
 #   bead.sh <id> '.metadata.files[]'      # any field of the projection
 #   bead.sh <id> -r '.status'             # -r before the filter for raw output
-#   bead.sh -C <main-checkout> <id>       # from a worktree: only the main
-#                                         # checkout holds the beads database
+#   bead.sh -C <main-checkout> <id>       # from outside the repo, where bd
+#                                         # cannot resolve the database
 #
 # -C IS FORWARDED TO bd, NOT TO jq. It is accepted before or after the id, so
-# both orders a dispatched reviewer might type work. Without it, `bd` finds the
-# database by walking up from the working directory: run from anywhere but the
-# checkout, bead.sh printed NOTHING and exited 1 — which this header documents
-# below as meaning the id does not exist (computenet-kzok). Before this flag
+# both orders a dispatched reviewer might type work. Without it, `bd` resolves
+# the database through GIT: inside the repo — a worktree included, via the git
+# common dir — it finds it; from outside, bead.sh printed NOTHING and exited 1,
+# which this header documents below as meaning the id does not exist
+# (computenet-kzok; the cwd rule corrected by measurement, computenet-4e0oq). Before this flag
 # existed, the reviewer dispatch line "run bd with -C <main-checkout>" and the
 # bead.sh recommendation could not both be followed: the flag reached the jq
 # filter and died as `jq: error: C/0 is not defined`, an error naming neither
