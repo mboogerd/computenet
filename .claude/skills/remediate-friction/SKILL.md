@@ -274,7 +274,7 @@ it takes deltas like any other entry; expect `AGENTS.md: OK` in the output.
 It checks every skill under `.claude/skills/` against Anthropic's
 skill-creator structural criteria — frontmatter parses, keys are known, name
 is kebab-case and <=64 chars, description <=1024 chars with no angle brackets
-— and exits non-zero on any failure. Expect `4 skill(s) checked, 0 failing`.
+— and exits non-zero on any failure. Expect `4 skill(s) checked (plus AGENTS.md), 0 failing`.
 It deliberately does **not** run skill-creator's behavioural eval
 (`run_eval.py` and the grader agents): that spawns with-skill and baseline
 runs over authored test cases and takes hours, so it belongs on a cadence or
