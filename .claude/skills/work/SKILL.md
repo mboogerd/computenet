@@ -2546,6 +2546,13 @@ mid-review, and treat the reviewer's "origin/main unchanged at `<sha>`" as
 expired the moment it was written: the `log` above, not that line, is what
 settles it.
 
+**A verdict carrying a `REQUIRED ORCHESTRATOR ACTION` heading is the same
+shape**: the reviewer's own `bd update --set-metadata review=passed` was
+refused by the classifier, so run the command it names before you ship
+(computenet-mwun). The flag is not what you ship on — the verdict token is —
+but step 4's resume check and Finalize read it, so leaving it unset on merged,
+certified work sends a later session back over work already certified.
+
 **A verdict naming a pending measurement is not shippable yet.** `review=passed`
 means the review is finished, not that the feature may ship: a criterion
 riding an out-of-band measurement (a soak, a CI matrix run, an overnight job)
