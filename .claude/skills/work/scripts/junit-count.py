@@ -22,6 +22,7 @@ replay: a build-cache restore leaves the previous run's XML under fresh file
 mtimes with identical counts (computenet-qsfu).
 
 Usage: junit-count.py [--expect-classes N] <results-dir | result-file.xml> [...]
+(``--expect-classes`` may appear before or after the paths.)
 
 ``--expect-classes N`` is the SILENTLY-DROPPED-FILTER check: a ``--tests``
 filter naming a class that does not exist is IGNORED by Gradle when a sibling
@@ -132,20 +133,32 @@ def line(label, files, t, f, e, s, newest):
 def main(argv):
     argv = argv[1:]
     expect = None
-    if argv and argv[0] == "--expect-classes":
-        # THE SILENTLY-DROPPED-FILTER CHECK (computenet-xt0b). Measured on this
-        # build: `:gen:test --tests <real> --tests <nonexistent> --rerun` prints
-        # BUILD SUCCESSFUL and exits 0. Gradle only errors when NO filter
-        # matches, so the failure needs a sibling to hide behind — which every
-        # multi-filter Verification block supplies. One XML file per class is
-        # what makes the count a usable proxy.
-        if len(argv) < 2 or not argv[1].isdigit():
+    # THE SILENTLY-DROPPED-FILTER CHECK (computenet-xt0b). Measured on this
+    # build: `:gen:test --tests <real> --tests <nonexistent> --rerun` prints
+    # BUILD SUCCESSFUL and exits 0. Gradle only errors when NO filter matches,
+    # so the failure needs a sibling to hide behind — which every multi-filter
+    # Verification block supplies. One XML file per class is what makes the
+    # count a usable proxy.
+    #
+    # The flag is accepted in ANY position, not only first. It used to be read
+    # only at argv[0], so `junit-count.py <dir> --expect-classes 5` left both
+    # tokens in `dirs` and the run printed NO-SUCH-PATH twice — and NO-SUCH-PATH
+    # is what this tool prints when a path does not resolve, which an agent
+    # reads as "no results exist", i.e. as evidence the suite did NOT run. A
+    # check whose MISUSE mode resembles its negative result stops being a check.
+    # Two agents in one slot hit it (computenet-eqc0y); position-independence
+    # removes the mode rather than improving its error text.
+    if "--expect-classes" in argv:
+        i = argv.index("--expect-classes")
+        if i + 1 >= len(argv) or not argv[i + 1].isdigit():
             print("usage: junit-count.py [--expect-classes N] "
                   "<results-dir | result-file.xml> "
                   "[<results-dir | result-file.xml>...]", file=sys.stderr)
+            print("  --expect-classes takes a COUNT, not a class list, and may "
+                  "go before or after the paths", file=sys.stderr)
             return 2
-        expect = int(argv[1])
-        argv = argv[2:]
+        expect = int(argv[i + 1])
+        argv = argv[:i] + argv[i + 2:]
     dirs = argv
     if not dirs:
         print("usage: junit-count.py <results-dir | result-file.xml> [<results-dir | result-file.xml>...]",

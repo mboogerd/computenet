@@ -108,6 +108,22 @@ with tempfile.TemporaryDirectory() as tmp:
     rc, out, err = run("--expect-classes", "notanumber", d1)
     check("expect-classes: non-numeric is bad usage", rc == 2, f"rc={rc}")
 
+    # computenet-eqc0y: the flag is accepted in ANY position. Read only at
+    # argv[0], `<dir> --expect-classes N` left both tokens in `dirs` and the
+    # run printed NO-SUCH-PATH twice — which is what this tool prints for a
+    # path that does not resolve, so the MISUSE mode was indistinguishable from
+    # "no results exist". Two agents hit it in one slot.
+    rc, out, err = run(d1, "--expect-classes", 2)
+    check("expect-classes: accepted AFTER the paths", rc == 0, f"rc={rc} err={err}")
+    check("expect-classes after the paths: not read as a path",
+          "NO-SUCH-PATH" not in err, err)
+    rc, out, err = run(d1, "--expect-classes", 3)
+    check("expect-classes after the paths: shortfall still exit 6",
+          rc == 6 and "SHORT-COVERAGE" in out, f"rc={rc} out={out}")
+    rc, out, err = run(d1, "--expect-classes")
+    check("expect-classes with no count is bad usage, not a path",
+          rc == 2 and "NO-SUCH-PATH" not in err, f"rc={rc} err={err}")
+
     # A shortfall must not be reachable from an EMPTY tree — that is
     # NO-RESULTS (exit 4), a different answer, and it must keep winning.
     empty = tmp / "emptydir"

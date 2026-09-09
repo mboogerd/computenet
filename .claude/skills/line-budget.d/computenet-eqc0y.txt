@@ -1,0 +1,10 @@
+work +4
+
+# Two lines each in review-feature.md and review-task.md, turning a prose
+# mention of --expect-classes into a runnable example. Both agents that
+# mis-invoked the flag had been pointed at it by a reference or a dispatch
+# prompt, not by the script's header, so the header alone was not reaching them.
+#
+# The ordering trap itself is fixed MECHANICALLY — the flag is now accepted on
+# either side of the paths — so these four lines buy a copyable command, not the
+# enforcement.
