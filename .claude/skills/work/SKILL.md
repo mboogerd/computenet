@@ -1839,19 +1839,23 @@ verdict. (`parked` is only meaningful on an empty batch.)
   `ThroughputReport.kt`, the only production consumer of the floor resolution
   being re-keyed (computenet-t6ic):
 
-  | grep | hits | consumer present? |
-  |---|---|---|
-  | `-F 'ClassNoiseFloor'` (the type) | 10 | **no** |
-  | `-E 'classFloorStatistic\|0\.953\|NOISE_FLOOR'` (a constant) | 32 | yes, buried |
-  | `-E 'noiseFloorFor\|describeFloor'` (the surface) | 8 | yes |
+  ```bash
+  git grep -l -F 'ClassNoiseFloor'                    #  10 hits, consumer ABSENT
+  git grep -l -e classFloorStatistic -e NOISE_FLOOR   #  31 hits, consumer buried
+  git grep -l -e noiseFloorFor -e describeFloor       #   8 hits, consumer present
+  ```
+
+  (`-e A -e B` rather than `-E 'A|B'`, so these are copyable: inside a markdown
+  table the pipe has to be escaped and `\|` under `-E` is a LITERAL pipe that
+  matches nothing — a zero-returning grep in a block about zero-returning greps.)
 
   **The type-keyed grep cannot see it; the constant-keyed one returns it inside
-  a 32-file list that got pruned to four.** Both halves have to change: grep the
+  a 31-file list that got pruned to four.** Both halves have to change: grep the
   surface, and when a hit list is long enough to prune, prune it by READING the
   hits — "an import is not an enumeration" three paragraphs up is the rule that
   was skipped, and it is the half that actually lost this file. Recording the
   derivation on the bead, as that session did, does not catch it: the record
-  showed four files where the grep had returned thirty-two, and nothing compares
+  showed four files where the grep had returned thirty-one, and nothing compares
   the two. `check-files-claim.sh` passes such a bead CLEAN, correctly — its text
   never names the consumer.
 
