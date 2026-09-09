@@ -1,0 +1,13 @@
+work +14
+
+# Fourteen lines giving section 7 the hand-back section 6 already has. The
+# reviewer's `bd update --set-metadata review=passed` was DENIED by the
+# permission classifier, the same class of denial section 6 documents for
+# `git merge` — and section 7 offered no sanctioned move, so the reviewer could
+# only leave the verdict half-recorded or exceed its mandate by retrying.
+#
+# Prose is the only route: an agent cannot script its way around a classifier
+# denial, and the remedy is a message to a different actor. The lines are spent
+# on WHERE the hand-back goes (first line of the report) and on the cost when it
+# is missed, because the failure is silent — merged, certified work whose
+# metadata.review is unset, which 5e reads as "not certified".

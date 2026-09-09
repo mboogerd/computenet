@@ -1039,6 +1039,20 @@ bd update <feature-id> --set-metadata review=passed
 sequence that dies earlier leaves the feature uncertified rather than
 certified with nothing behind it.
 
+**If that write is REFUSED by the permission classifier, hand it back — do not
+retry, and do not leave the verdict in the comment alone.** `bd update
+--set-metadata` has been denied to a reviewer subagent the same way §6
+documents `git merge` being denied (computenet-mwun). This is the mirror image
+of the half-recorded state above: a full certification comment with no
+machine-readable flag. Put the hand-back in the **FIRST line** of your report —
+`review=passed was DENIED by the classifier; run
+`bd update <feature-id> --set-metadata review=passed` yourself` — because an
+orchestrator that skims a READY verdict and misses the line ships without the
+flag, and the next session reading `metadata.review` finds it unset on merged,
+certified work, which 5e treats as *not certified*. A verdict stated in prose
+that cannot be recorded in metadata is exactly the disagreement 5e resolves
+AGAINST shipping.
+
 ### Ready with residual — the honest negative result
 
 The diff is sound and mergeable **and** a named criterion is genuinely not
