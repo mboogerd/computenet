@@ -2470,6 +2470,66 @@ and B needed and did not have.
   to fire — ran at the LOWER load. That asymmetry favours a false RED, not a
   false GREEN, so it does not soften the result.
 
+### Update (`computenet-0ade`): `92ek` and `s0tq` are each measured — neither is individually necessary for the BS-12 rate at `n = 20`
+
+This answers the open question left above ("`92ek` and `s0tq` are
+**UNMEASURED**"). Host: this machine, darwin/arm64 16-core, 2026-09-09. Base
+`item/computenet-0ade` at `095980199` (`origin/main`,
+"computenet-1cuq: the newest comment on a parked bead is not the state
+(#768)"). Same instrument, same test method, same `K = 10` BS-12 arm as A′
+above. Every reverted file list was compared against `git show --numstat
+<sha>` for that member before the run, and every revert's landed-check
+(`git diff HEAD --stat`, non-empty) was read before the result was read, per
+`.claude/skills/work/references/mutation-check.md` §3.
+
+**First, the overlap A′ left open was resolved rather than repeated.**
+`git diff 8efd47388~1..8efd47388 -- .../StabilityFreezeDetector.kt` shows
+`07vb`'s entire contribution to that file is KDoc prose — zero executable
+lines; its executable changes are wholly in `CausalStability.kt`
+(`removeAll(closed - memberSlots)`, both `stableFrontier` and `openSlots`)
+and `Replication.kt` (`removeAll(closed - instanceSlots)`). A plain reverse
+apply of `07vb`'s `StabilityFreezeDetector.kt` diff against a tree that also
+carries `92ek` conflicts (`git apply -R`, exit 1); a 3-way reverse apply
+(`git apply -3 -R`) resolves but leaves inline conflict markers inside a doc
+comment, confirming the collision is comment-only. So this measurement's
+`07vb` row reverts `CausalStability.kt` + `Replication.kt` in full — the same
+files as A′ — and leaves `StabilityFreezeDetector.kt` at `HEAD`; unlike A′
+this is a full FUNCTIONAL revert of `07vb` (only non-executable KDoc prose
+diverges from a byte-for-byte revert), not a partial one.
+
+| mutation | reverted | K | runs | red | load1 (start → end) |
+|---|---|---|---|---|---|
+| `07vb` alone (`92ek`, `s0tq` present) | `CausalStability.kt` + `Replication.kt` restored to `8efd47388~1` | 10 | 20 | **7 (35 %)** | 7.35 → 6.17 |
+| `92ek` alone (`07vb`, `s0tq` present) | `StabilityFreezeDetector.kt`'s `92ek` diff reverse-applied (`git apply -R`; `92ek` is the LAST commit to touch this file, so no overlap) | 10 | 20 | **0** | 10.42 → 7.31 |
+| `s0tq` alone (`07vb`, `92ek` present) | `ReplicaQuorum.kt` restored to `5ff9507f4~1` (only commit touching this file since) | 10 | 20 | **0** | 12.13 → 14.57 |
+
+Every `07vb` red carried the identical `FENCE-ATTRIBUTED diverging
+seeds=[12]` signature. This reproduces A′'s reading (6/12, 50 %) at a larger
+`n` and with the `StabilityFreezeDetector.kt` overlap resolved rather than
+left as an under-revert: **`07vb` is individually necessary** — the class
+returns at a rate consistent with this bead's own positive control
+(run C above, 40 % at `K = 25`; A′, 50 % at `K = 10`) once `07vb` alone is
+removed.
+
+**`92ek` and `s0tq` each land at 0 of 20.** Under a control rate anywhere
+near 35–50 %, `P(0/20 | rate = 0.4) ≈ 3.7e-5`, so this is a real bound, not
+an underpowered null: at `n = 20`, neither member's removal reopens the
+BS-12 escape on its own. That is NOT the same claim as "these members do
+nothing" — `92ek` fixes a distinct, deterministically-reproduced flap
+(`StabilityFreezeDetectorTest`'s `open`/`closed`-overlap case, unrelated to
+this sweep's `stableFenceAttributed` assertion) and `s0tq` fixes a distinct,
+deterministically-reproduced quorum defect (`## KE3-23-QUORUMCLOSED`'s
+three-peer mesh reproduction) — both reachable and verified by their own
+targeted tests, neither exercised by the BS-12 rate this table measures.
+The honest statement is the bound: at `n = 20`, reverting `92ek` alone, or
+`s0tq` alone, does not reopen the BS-12 `stableFenceAttributed` class that
+`{07vb}` closes.
+
+No assertion was relaxed, `stableFenceAttributed` is untouched, the class was
+not absorbed into `MAX_STABLE_DIVERGING`, and `SEEDS` was not narrowed to
+reach any of the three rows above — `computenet-dwkp` clause 4's prohibitions
+bind here exactly as they did at `08efd47388`/`5a5b455d3`.
+
 ## KE3-42-ORMAP-BS13 — the OR-map has no reliable BS-13 witness: the wrong seam reclaims strictly more, and harms nothing reproducibly
 
 Recorded by: `computenet-9sm.8.7` (task, parent `computenet-9sm.8`). Base
