@@ -28,8 +28,9 @@ mkdir -p "$ROOT/bin"
 cat > "$ROOT/bin/bd" <<'FAKE'
 #!/usr/bin/env bash
 # Records whether -C arrived, and where, so the passthrough cases can assert on
-# it. Without -C the real bd finds its database by walking up from cwd, which is
-# the whole reason the flag exists (computenet-wd7n, computenet-kzok).
+# it. Without -C the real bd resolves its database through git, so it works from
+# a worktree and fails only from OUTSIDE the repo — which is where the flag
+# earns its keep (computenet-wd7n, computenet-kzok, computenet-4e0oq).
 if [ "$1" = -C ]; then printf '%s\n' "$2" > "$SEEN_C"; shift 2; else : > "$SEEN_C"; fi
 [ "$1" = show ] || exit 1
 [ "$2" = known ] || { echo "no issue found" >&2; exit 1; }

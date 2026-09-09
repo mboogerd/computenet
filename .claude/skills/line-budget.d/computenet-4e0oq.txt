@@ -1,4 +1,4 @@
-work +6
+work +10
 
 # Six lines in bd-traps.md. The entry did not just NAME a stale flag — its whole
 # premise was wrong, and review of the first attempt showed the obvious rewrite
@@ -8,3 +8,9 @@ work +6
 # The lines are the measurement that establishes it — four worktrees at rc=0,
 # `git rev-parse --git-common-dir`, the sibling-directory argument — because a
 # reference asserting current behaviour is what an agent will not re-measure.
+
+# +4 more after review: the same falsified mechanism survived 170 lines further
+# down the file ("a worktree without its own database walks up and reaches the
+# real one" — whose own cited evidence, a SIBLING worktree, refutes it), and the
+# entry's composition clause had been re-pointed at the reviewer, which no
+# reviewer dispatch supports. One file must not hand a reader two rules.

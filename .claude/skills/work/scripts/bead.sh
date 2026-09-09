@@ -25,9 +25,10 @@
 # the database through GIT: inside the repo — a worktree included, via the git
 # common dir — it finds it; from outside, bead.sh printed NOTHING and exited 1,
 # which this header documents below as meaning the id does not exist
-# (computenet-kzok; the cwd rule corrected by measurement, computenet-4e0oq). Before this flag
-# existed, the reviewer dispatch line "run bd with -C <main-checkout>" and the
-# bead.sh recommendation could not both be followed: the flag reached the jq
+# (computenet-kzok; the cwd rule corrected by measurement, computenet-4e0oq).
+# Before this flag existed, the task implementer's dispatch line "run bd with
+# -C <main-checkout>" and the bead.sh recommendation could not both be
+# followed: the flag reached the jq
 # filter and died as `jq: error: C/0 is not defined`, an error naming neither
 # bd nor the checkout, so the lesson it taught was "bead.sh is broken". Two
 # reviewers hit it within an hour (computenet-wd7n).

@@ -2018,8 +2018,8 @@ way. To diff your own work, use git merge-base <feature-branch> HEAD,
 computed inside your worktree.
 Read it: .claude/skills/work/scripts/bead.sh ${id} (never a plain
 bd show — bd-traps.md), then bd comments ${id} --json — an AMENDS
-comment there supersedes the description (run bd with -C <main-checkout>;
-only that checkout has the beads database)
+comment there supersedes the description (run bd with -C <main-checkout>; it
+is harmless from a worktree and required if you leave the repo)
 Then read the skill files FROM YOUR OWN WORKTREE — ${taskWorktree}/.claude/
 skills/work/references/task.md — and follow it. Do NOT read them from the
 main checkout: it is where bd lives, and its local branch is stale.

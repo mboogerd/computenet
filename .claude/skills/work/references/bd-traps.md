@@ -171,7 +171,9 @@ SKILL.md and the other references cite this file as "`bd` traps".
   `bd show` this entry exists to prevent. **The fix is `-C`, which `bead.sh`
   accepts** (computenet-wd7n, landed): `bead.sh -C <main-checkout> <id>`, in
   either position — before the id or right after it — so it composes with the
-  `-C <main-checkout>` a dispatched reviewer is already told to pass `bd`.
+  `-C <main-checkout>` the TASK IMPLEMENTER's dispatch prompt tells it to pass
+  `bd` (SKILL.md 5b). No reviewer dispatch says that; reviewers are given bare
+  `bead.sh <id>`, which is correct from a worktree.
   Passing it from a worktree is harmless, so pass it always rather than
   reasoning about your cwd. `cd`-ing into the repo also works; an absolute path
   to the script alone does not.
@@ -335,9 +337,11 @@ SKILL.md and the other references cite this file as "`bd` traps".
 - **An EMPTY database answers every read successfully.** The database `bd`
   opens is chosen by cwd (or `-C`) — *not* by "only the main checkout has
   one", which is false in both directions now measured. A worktree **without**
-  its own database walks up and reaches the real one: measured 2026-08-19
-  from a clean sibling worktree, bare `bd stats` returned 852/129/700,
-  identical to `bd -C <main-checkout> bd stats`. And a worktree that has
+  its own database reaches the real one through the GIT common dir, not by
+  walking up the filesystem (the entry above; a sibling worktree has nothing
+  above it to find): measured 2026-08-19 from a clean sibling worktree, bare
+  `bd stats` returned 852/129/700, identical to `bd -C <main-checkout> bd
+  stats`. And a worktree that has
   somehow **acquired** one answers from *that*: `bd list --limit 3 --json` →
   `[]` (exit 0), `bd stats` → `Total Issues: 0`, `bd show <known-id>` → "no
   issue found", against 702 issues in the main checkout (computenet-8mb3).
