@@ -1018,6 +1018,20 @@ class GcSafetySweepTest {
         // evidence, not a silent detector. **Nothing in this assertion, in [SEEDS], [BUDGET] or in
         // [MAX_STABLE_DIVERGING] was changed to make it green**; if it reddens again, that is a new
         // escape and not the old one returning to a tolerated rate.
+        //
+        // **Per-member necessity within the `fzd3`/`07vb`/`zgyt`/`92ek`/`s0tq` family is now
+        // measured** (`computenet-0ade`, 2026-09-09; `doc/kernel-lane-findings.md`
+        // `## KE3-23-DWKPRATE`'s "Update (`computenet-0ade`)" subsection). Reverting `07vb`
+        // ALONE (with `92ek` and `s0tq` present) reopens this class at 7 of 20 sweeps (35 %),
+        // every red carrying `seeds=[12]` — `07vb` is individually necessary. Reverting `92ek`
+        // alone, or `s0tq` alone (each with the other two present), does NOT reopen it at
+        // `n = 20` (0 of 20 both times) — a real bound against the ~35-50 % control rate, not
+        // evidence those fixes do nothing: each closes its own deterministically-reproduced
+        // defect outside this sweep's reach (`92ek`: `StabilityFreezeDetectorTest`'s
+        // open/closed-overlap flap; `s0tq`: `## KE3-23-QUORUMCLOSED`'s three-peer mesh
+        // reproduction). Nothing here relaxes this assertion, narrows [SEEDS] or touches
+        // [MAX_STABLE_DIVERGING] — those reverts were made and undone on a scratch tree, never
+        // landed on this branch.
         assertTrue(
             stableFenceAttributed.isEmpty(),
             "[KE3-23] the re-admission fence CAUSED a membership divergence: on these seeds a " +
