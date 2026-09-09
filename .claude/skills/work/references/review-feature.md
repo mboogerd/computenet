@@ -1060,9 +1060,10 @@ bd update <feature-id> --set-metadata review=passed
 
 A comment can be read past; a final message is what the orchestrator reads to
 route, and one literal heading is a token it can look for. The flag is not
-5e's ship gate — the verdict TOKEN is — but it is what SKILL.md step 4's
-resume check and Finalize read, so an unset flag on merged, certified work
-sends a later session back over work already certified.
+5e's ship gate — the verdict TOKEN is — but it is what step 5's feature
+SELECTION reads ("A resumed feature carrying `metadata.review=passed` was
+certified last session ... don't re-review"), so an unset flag on merged,
+certified work sends a later session back over work already certified.
 
 ### Ready with residual — the honest negative result
 

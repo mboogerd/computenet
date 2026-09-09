@@ -2550,8 +2550,9 @@ settles it.
 shape**: the reviewer's own `bd update --set-metadata review=passed` was
 refused by the classifier, so run the command it names before you ship
 (computenet-mwun). The flag is not what you ship on — the verdict token is —
-but step 4's resume check and Finalize read it, so leaving it unset on merged,
-certified work sends a later session back over work already certified.
+but step 5's feature selection reads it to skip re-reviewing a resumed feature,
+so leaving it unset on merged, certified work sends a later session back over
+work already certified.
 
 **A verdict naming a pending measurement is not shippable yet.** `review=passed`
 means the review is finished, not that the feature may ship: a criterion

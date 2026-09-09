@@ -1,12 +1,12 @@
-work +33
+work +35
 
-# Thirty-three lines giving section 7 the hand-back section 6 already has, on both
+# Thirty-five lines giving section 7 the hand-back section 6 already has, on both
 # sides. The reviewer's `bd update --set-metadata review=passed` was DENIED by
 # the permission classifier, the same class of denial section 6 documents for
 # `git merge` — and section 7 offered no sanctioned move, so the reviewer could
 # only leave the verdict half-recorded or exceed its mandate by retrying.
 #
-# +26 in review-feature.md, +7 in SKILL.md 5e. The SKILL.md half is what review
+# +27 in review-feature.md, +8 in SKILL.md 5e. The SKILL.md half is what review
 # insisted on and it is right: section 6's hand-back works because 5e carries
 # the other half and calls it the NORMAL path. A reviewer-side instruction with
 # no orchestrator-side counterpart rests on the orchestrator reading the
