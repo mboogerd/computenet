@@ -2317,7 +2317,10 @@ call, which is how the agent that took a 16-core box to ~25x was the one
 dispatched without anyone reading the advice (computenet-lx7t). At the
 PATHOLOGICAL rung, hold the dispatch — unless the advice says the load is HOST
 load rather than ours, in which case there is no gate to wait for and holding
-is an indefinite idle (5b; computenet-91xn). "Slow, not wrong" was measured on
+is an indefinite idle (5b; computenet-91xn) — *unless* 5b's stopping rule has
+already fired here, two reviewer dispatches dead on the watchdog with no side
+effects, which is the one case where holding IS right and is where both agents
+in computenet-0xkh0 were lost. "Slow, not wrong" was measured on
 SCOPED runs, so dispatch under HOST load only with the reviewer's gate scoped —
 this is the one unscoped gate the session emits. Below the rung, if an
 implementer is still live, say so in the prompt and scope the reviewer's gate

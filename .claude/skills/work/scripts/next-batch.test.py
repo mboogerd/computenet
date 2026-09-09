@@ -592,7 +592,7 @@ if ("HOST load" not in (host or "")
 # ...and the stop must stay CONDITIONAL: an unconditional hold here is the
 # indefinite idle 91xn measured. The word "NOTHING" must not appear before the
 # rule that gates it.
-if (host or "").find("NOTHING") < (host or "").find("STOPPING RULE"):
+if "NOTHING" in (host or "") and (host or "").find("NOTHING") < (host or "").find("STOPPING RULE"):
     failed += 1
     print(f"FAIL: HOST-load advice holds unconditionally, got {host!r}")
 if "NOTHING" not in (ours or "") or "OURS" not in (ours or ""):
