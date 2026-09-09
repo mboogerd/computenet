@@ -158,17 +158,17 @@ SKILL.md and the other references cite this file as "`bd` traps".
   projection is irreducible, so a big epic spills to a file and is READ from
   there — that is the working answer, not a flag.
 
-  **And `bead.sh` is cwd-bound: elsewhere it fails SILENTLY.** It takes no
-  `-C` and calls a bare `bd show`, which finds the database by walking up from
-  the working directory, so from any cwd but the main checkout it prints
-  nothing and exits 1 — which the script's own header documents as meaning
-  *the id does not exist*. A breakdown has no worktree, and its dispatch
-  prompt already tells it to run `bd` with `-C <main-checkout>`, so it is
-  exactly the role positioned to hit this; the natural recovery from an
-  apparent bad id is the plain `bd show` this entry exists to prevent. Run the
-  script from the main checkout (`cd` there — an absolute path alone is not
-  enough). The `-C` passthrough that would remove the hazard is
-  computenet-wd7n, which owns it.
+  **And `bd` finds the database by walking UP from the working directory, so
+  `bead.sh` from a worktree reads no database at all.** Left to itself it
+  prints nothing and exits 1 — which the script's own header documents as
+  meaning *the id does not exist*, so the natural recovery from an apparent
+  bad id is the plain `bd show` this entry exists to prevent. **The fix is
+  `-C`, which `bead.sh` accepts** (computenet-wd7n, landed): `bead.sh -C
+  <main-checkout> <id>`, in either position — before the id or right after it
+  — so it composes with the `-C <main-checkout>` a dispatched reviewer is
+  already told to pass `bd`. A breakdown has no worktree and is the role most
+  positioned to hit this. `cd`-ing to the main checkout also works; an
+  absolute path to the script alone does not.
 
   **Above ~25KB even the projection does not fit**, and `bead.sh` handles
   that itself: it writes the projected bead to `$SCRATCH/bead-<id>.json`,
