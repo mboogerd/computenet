@@ -121,7 +121,7 @@ bead "rework the operators" "" "$OPDIR/"
 check "add-only silent on a directory claim" 0 ""
 
 # The existence test is repo-root-relative, not CWD-relative: run from a
-# subdirectory it must give the same answer (bd walks up on its own, so a
+# subdirectory it must give the same answer (bd resolves the workspace on its own, so a
 # CWD-relative check misfires with nothing else in the run to show it).
 bead "fix tag semantics" "" "$OPDIR/UntagCell.kt"
 sub_out=$(cd "$(git rev-parse --show-toplevel)/kernel" && "$SCRIPT" computenet-x 2>/dev/null); sub_rc=$?

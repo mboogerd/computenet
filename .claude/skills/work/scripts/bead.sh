@@ -21,7 +21,7 @@
 #                                         # cannot resolve the database
 #
 # -C IS FORWARDED TO bd, NOT TO jq. It is accepted before or after the id, so
-# both orders a dispatched reviewer might type work. Without it, `bd` resolves
+# both orders a dispatched agent might type work. Without it, `bd` resolves
 # the database through GIT: inside the repo — a worktree included, via the git
 # common dir — it finds it; from outside, bead.sh printed NOTHING and exited 1,
 # which this header documents below as meaning the id does not exist
@@ -49,9 +49,10 @@
 # scalar filter (`-r '.status'`) never spills, but `-r '.description'` will.
 set -uo pipefail
 
-# -C is accepted in either position, so the two instructions a dispatched
-# reviewer is given ("-C the main checkout" and "use bead.sh") compose whichever
-# order it types them in.
+# -C is accepted in either position, so the two instructions a dispatched TASK
+# IMPLEMENTER or BREAKDOWN is given ("-C the main checkout" and "use bead.sh",
+# both in SKILL.md 5b) compose whichever order it types them in. Reviewers are
+# given bare `bead.sh <id>`, which is correct from a worktree.
 dir=""
 [ "${1:-}" = "-C" ] && { dir=${2:?-C needs a directory}; shift 2; }
 id=${1:?usage: bead.sh [-C <dir>] <id> [-r] [jq-filter]}
