@@ -428,7 +428,7 @@ XML counts + timestamp via `.claude/skills/work/scripts/junit-count.py` — with
 filter that matches nothing is dropped silently and the total you re-derive is
 of a run that asked for less than the command said — runnable, and the flag
 goes either side of the paths:
-`junit-count.py --expect-classes 5 kernel/build/test-results/test` — the
+`.claude/skills/work/scripts/junit-count.py --expect-classes 5 kernel/build/test-results/test` — the
 `--rerun` and `--no-build-cache` semantics, and the `<system-out>` block that
 holds anything a test PRINTED. That last is the one reviewers reach for
 without knowing it exists: `testLogging.showStandardStreams` is off on this

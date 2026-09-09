@@ -290,7 +290,7 @@ counts + `timestamp` via `.claude/skills/work/scripts/junit-count.py` (pass
 never the filter COUNT — a filter matching nothing is dropped SILENTLY when a
 sibling matches, and re-deriving a total cannot see it; runnable, flag either
 side of the paths:
-`junit-count.py --expect-classes 5 kernel/build/test-results/test`), and the
+`.claude/skills/work/scripts/junit-count.py --expect-classes 5 kernel/build/test-results/test`), and the
 `<system-out>` block — `testLogging.showStandardStreams` is off (except
 `:bench` under `-PbenchOnly`), so a test's `println` otherwise reaches the
 Gradle console never, and an empty console grep is not evidence that it
