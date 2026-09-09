@@ -1,14 +1,16 @@
-work +16
+work +27
 
-# A fourth widening shape in SKILL.md 5b, and the one that is af9q's OWN remedy
-# failing: the grep SYMBOL rather than the grep target. A type-keyed grep is
-# systematically blind in Kotlin, where a consumer imports top-level functions
-# individually and never names the declaring type — on computenet-x9e.18 a
-# 14-file claim derived from two such greps missed the only production consumer
-# of the resolution the task re-keyed.
+# A fourth widening shape in SKILL.md 5b. The bead filed it as af9q's own remedy
+# failing — a type-keyed grep blind to callers that import top-level functions by
+# name. Review re-measured the dispatch-time tree and found that only HALF true:
+# the type grep does miss ThroughputReport.kt (10 hits, absent), but the
+# constant-keyed grep the same session ran RETURNED it, inside 32 hits that were
+# pruned to four. So the rule as first written would not have prevented the
+# incident it cites.
 #
-# Prose is the only route: which symbols constitute an API surface is a reading
-# of the change, not something a script can enumerate from the bead. Most of the
-# lines are the reason and the worked contrast, because the failure mode is a
-# claim that looks well-derived and is short — indistinguishable at dispatch
-# time from a correct one, and check-files-claim.sh passes it CLEAN, correctly.
+# What ships is both halves, with the measured table: grep the API SURFACE (8
+# hits, readable), and prune a long hit list by READING it. The second half is
+# the rule already three paragraphs above ("an import is not an enumeration"),
+# and naming the case where it was skipped is what these lines buy — recording
+# the derivation on the bead does not catch it, because the record showed four
+# files where the grep had returned thirty-two and nothing compares the two.

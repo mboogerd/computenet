@@ -1828,21 +1828,32 @@ verdict. (`parked` is only meaningful on an empty batch.)
   cannot see other modules at all, so a green module suite is not evidence the
   claim is complete. The walk above is the only pre-CI check there is.
 
-  **A fourth shape, and it is af9q's own remedy failing: the grep SYMBOL, not
-  the grep TARGET.** When the change re-keys a resolution, alters a signature
-  or moves any public API surface, grep every PUBLIC MEMBER NAME it touches —
-  each top-level function, constant and property — never the declaring type
-  alone: `git grep -ln -E 'noiseFloorFor|describeFloor|classFloorStatistic'`,
-  not `git grep -ln -F 'ClassNoiseFloor'`. In Kotlin a consumer imports
-  top-level functions individually and never mentions the declaring type, so a
-  type-keyed grep is systematically blind to exactly the callers a re-keying
-  task conscripts: on computenet-x9e.18 a 14-file claim derived from two such
-  greps missed `ThroughputReport.kt`, the ONLY production consumer of the floor
-  resolution being re-keyed (computenet-t6ic). **The union is the candidate set
-  even when the type-keyed grep already returned a plausible-looking one** —
-  a claim that looks well-derived and is short is indistinguishable at dispatch
-  time from a correct one, and `check-files-claim.sh` passes it CLEAN,
-  correctly, because the bead's text never names the consumer.
+  **A fourth shape: the grep SYMBOL, and the hit list you PRUNE.** When the
+  change re-keys a resolution, alters a signature or moves any public API
+  surface, grep the union of the PUBLIC MEMBER NAMES it touches — each
+  top-level function, constant and property — never the declaring type alone.
+  In Kotlin a consumer imports top-level functions individually, so a
+  type-keyed grep can miss the callers a re-keying task conscripts outright.
+
+  Measured at computenet-x9e.18's dispatch-time tree, where the miss was
+  `ThroughputReport.kt`, the only production consumer of the floor resolution
+  being re-keyed (computenet-t6ic):
+
+  | grep | hits | consumer present? |
+  |---|---|---|
+  | `-F 'ClassNoiseFloor'` (the type) | 10 | **no** |
+  | `-E 'classFloorStatistic\|0\.953\|NOISE_FLOOR'` (a constant) | 32 | yes, buried |
+  | `-E 'noiseFloorFor\|describeFloor'` (the surface) | 8 | yes |
+
+  **The type-keyed grep cannot see it; the constant-keyed one returns it inside
+  a 32-file list that got pruned to four.** Both halves have to change: grep the
+  surface, and when a hit list is long enough to prune, prune it by READING the
+  hits — "an import is not an enumeration" three paragraphs up is the rule that
+  was skipped, and it is the half that actually lost this file. Recording the
+  derivation on the bead, as that session did, does not catch it: the record
+  showed four files where the grep had returned thirty-two, and nothing compares
+  the two. `check-files-claim.sh` passes such a bead CLEAN, correctly — its text
+  never names the consumer.
 
   Never let a
   task take a nominal claim over files it merely reads: a claim is a lock, so
