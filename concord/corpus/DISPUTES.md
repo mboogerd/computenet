@@ -3115,3 +3115,52 @@ property is statable at the driver and not in the corpus.
      fallback clause stays uncovered rather than falsely covered. Cross-reference:
      `KE3-GC-RECLAIM-FRONTIER` (blocker 1, in full) and `KE3-GC-DEL-LANE` (the
      re-admission half of `[24-TAG-04]`, CLOSED by `computenet-pay7`).
+
+## `KE3-GC-PROOF-BS13` — the wrong-seam control's universal form is a bounded seeded check, not a proof (`proof-gap`)
+
+- **Requirement it would cover**: `[KE3-20]` (epic `computenet-9sm`, 96
+  §E3.5(iii); BS-13, epic §7) — the universally-quantified reading of "reclaiming
+  at the merely-locally-delivered frontier is the WRONG trigger, not the stable
+  one" — a claim over ALL seeded partition/heal/churn schedules, not the ones a
+  generator happens to draw. `KE3-GC-PROOF` above covers `[KE3-23]`'s
+  universally-quantified form for the STABLE (correct) trigger; this entry is
+  the same gap for the paired LOCAL (wrong-seam) control, and `KE3-GC-PROOF`'s
+  own text does not name `[KE3-20]` (checked: `grep -n 'KE3-20'
+  concord/corpus/DISPUTES.md` before this entry returns nothing).
+- **Why it cannot be pinned honestly**: `GcSafetySweepTest`'s BS-13 arm
+  (`kernel/src/test/kotlin/civictech/cell/replication/GcSafetySweepTest.kt`,
+  method `compaction at the local delivered frontier resurrects a removed
+  element_BS13`, `computenet-9sm.4.4`) explores the same `SEEDS = 1L..200L`
+  range over the same fixed adversary as the BS-12 arm — a bounded, seeded,
+  per-run empirical measurement, not a universally-quantified proof. Per
+  `doc/kernel-lane-findings.md`'s `## KE3-GC-WITNESS` and `## KE3-20` entries,
+  the arm's per-seed resurrection witness went dead once `computenet-pay7`'s
+  re-admission fence landed and was retired onto a sweep-level
+  `fenceAttributed.isNotEmpty()` discriminator, re-measured non-empty across
+  repeated 200-seed runs with a low, still-monitored floor (minimum 2-3
+  fence-attributed seeds per run as of the most recent measurements) — a
+  reproduced empirical result over a finite seed range and one fixed adversary,
+  exactly the shape `KE3-GC-PROOF` describes for `[KE3-23]`. No scenario in
+  `concord/corpus/` can state a seeded sweep at all: the script model has no
+  seed, churn-generator or compaction-period verb, the same script-model gap
+  `KE3-GC-PROOF` records.
+- **Missing capability**: FRM1's model checker (`computenet-7fe`), same as
+  `KE3-GC-PROOF` — the mechanism that could check "for all schedules" rather
+  than "for these 200 seeds", for the LOCAL/wrong-seam trigger just as for the
+  STABLE trigger.
+- **What was NOT done instead**: no `concord/corpus/*.yaml` scenario was
+  authored as a weakened stand-in for `[KE3-20]`, and `[KE3-20]` is not marked
+  covered anywhere. The seeded, repeatedly re-measured result is reported as-is
+  in `doc/kernel-lane-findings.md`'s `## KE3-20` and `## KE3-GC-WITNESS`
+  entries, including the still-open finding that the fence-attributed floor is
+  a low-rate witness rather than a restored margin.
+- **Check to restore**: the model-checked universally-quantified form over the
+  KE3 lattice, once FRM1 lands; until then, `GcSafetySweepTest`'s recorded
+  `SEEDS` range, adversary and `fenceAttributed` discriminator are the full
+  extent of what has been checked for the LOCAL trigger, and its pinned seed
+  (`BS13_SEED`, most recently re-derived per `doc/kernel-lane-findings.md`) is
+  re-run, never widened after a green result, per AGENTS.md.
+- **Revisit trigger**: FRM1 (`computenet-7fe`) lands a model-checker instrument
+  KE3 can drive over `SetCell.compactBelow`, or 96 E3.5/E3.7 is otherwise
+  re-scoped to accept a bounded check as sufficient evidence for `[KE3-20]` as
+  it was for `[KE3-23]` (a decision for the epic, not this entry).
