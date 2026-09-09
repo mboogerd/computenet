@@ -7,6 +7,10 @@
 #
 # Encodes step 3's rules:
 #   - refuses computenet-wpvy: the SDLC epic is never /work's to claim;
+#   - refuses an epic whose BODY states a sequencing constraint its dependency
+#     edges may not express — the names there are often milestone codenames no
+#     query resolves. CLAIM_BLOCKERS_CHECKED=1 once each named predecessor is
+#     resolved and closed (computenet-ci6c5);
 #   - `bd update --claim` refuses any issue that carries an assignee. On an
 #     OPEN epic that assignee is residue, not a live claim (Finalize clears it
 #     now; older releases and crashes did not): take the epic over IF its
@@ -51,6 +55,40 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 if [ "$id" = computenet-wpvy ]; then
   echo "REFUSED: $id is the SDLC epic and never /work's to claim" >&2
   exit 1
+fi
+
+# ci6c5: a sequencing constraint stated in the epic's BODY but absent from its
+# dependency EDGES is invisible to every readiness query — verify-ready.sh
+# reads the real edges and correctly answers READY, because the edges that
+# exist genuinely are satisfied. One session claimed and PUSHED computenet-yk6
+# before reading its section 4: "queues behind KX -> KE1 -> KE3 -> MEM1 ->
+# MEM2 and cannot be worked autonomously in parallel with them" — five names,
+# two of them expressed as edges, two of them open. Cost: a claim, a push, a
+# release, a second push, and a window in which the other machine saw an epic
+# claimed that nobody was working. 5b already applies exactly this test to a
+# TASK's stated blocker (computenet-rjyl); epic selection is one layer up,
+# where the names are most likely to be milestone codenames no query resolves
+# and where the claim is PUBLISHED before any body text has been read.
+#
+# So it runs here, before any write. The phrase set is deliberately narrow —
+# measured against all 44 non-closed epics when it was chosen, it matched 2,
+# one of them yk6 itself; the broad candidates ("depends on", "prerequisite",
+# "only after") each matched 9-27 and would have made the refusal noise.
+# Narrow means it misses phrasings, which is the right failure: this is a
+# backstop, not the only reading of the body.
+if [ "${CLAIM_BLOCKERS_CHECKED:-}" != 1 ]; then
+  stated=$(bd show "$id" --json 2>/dev/null | sed -n '/^[[{]/,/^[]}]/p' \
+    | jq -r '.[0].description // ""' \
+    | grep -inE 'queues behind|cannot be worked|in parallel with|sequenced after|must land after|must be admitted alone|blocked by ' \
+    | cut -c1-200 | head -5)
+  if [ -n "$stated" ]; then
+    echo "REFUSED: $id's body states a sequencing constraint, and its edges may not express it:" >&2
+    printf '  %s\n' "$stated" >&2
+    echo "Resolve each predecessor NAMED there (milestone codenames resolve to beads; edges may not exist for them)." >&2
+    echo "  any open  -> select another epic;" >&2
+    echo "  all closed -> add the missing blocking edges so the graph and the prose agree, then re-run with CLAIM_BLOCKERS_CHECKED=1." >&2
+    exit 1
+  fi
 fi
 
 # hl8x: the tracker cannot show the OTHER machine inside this subtree — its
