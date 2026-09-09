@@ -134,7 +134,7 @@ header.
 | `file-friction.sh` | `--type bug\|feature --title T --desc D\|--desc-file F --accept A\|--accept-file F [--parent computenet-wpvy] [--priority N] [--skill-version <sha>]` — Files a friction item collision-free under the SDLC epic, open and unclaimed |
 | `resumable-epics.sh` | `(no arguments)` — Epics holding a feature left `in_progress` — step 3 ranks these above priority |
 | `claim-item.sh` | `<id>` — `bd update <id> --claim` plus the session holder token, so a live sibling's claim is not swept as a crash leftover (`claim-epic.sh` does this for epics) |
-| `bead.sh` | `[-C <dir>] <id> [-r] [jq-filter]` — projected `bd show`: the bead's own fields as one object, `dependencies` dropped (57KB -> 7KB); no `.[0]` unwrap. Output over 25KB is written to a file, the path printed ON STDERR, stdout left EMPTY and the exit 3 (a redirect of a spill captures nothing, never prose that greps cleanly). `-C` is forwarded to `bd`, and is required from a worktree — only the main checkout holds the database |
+| `bead.sh` | `[-C <dir>] <id> [-r] [jq-filter]` — projected `bd show`: the bead's own fields as one object, `dependencies` dropped (57KB -> 7KB); no `.[0]` unwrap. Output over 25KB is written to a file, the path printed ON STDERR, stdout left EMPTY and the exit 3 (a redirect of a spill captures nothing, never prose that greps cleanly). `-C` is forwarded to `bd`, and is required from OUTSIDE the repository — a worktree resolves through the git common dir and needs none, but passing it is harmless |
 | `wait-checks.sh` | `<pr-url> [max-rounds]` — THE settle loop, sha-bound over `commits/<sha>/check-runs` (`gh pr checks` is the fallback) — classifies on output, never `$?`; ends `SETTLED`/`TIMEOUT-PENDING`/`NO-RUN`/`QUERY-FAILED` |
 | `verify-branch-sync.sh` | `<worktree> <branch>` — 5a's worktree-contains-origin check plus the squash-leftover classification, as one enumerated verdict |
 | `merge-task.sh` | `[--dry-run] [--keep-open] <task-id> <feature-branch>` — 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
@@ -2030,8 +2030,8 @@ way. To diff your own work, use git merge-base <feature-branch> HEAD,
 computed inside your worktree.
 Read it: .claude/skills/work/scripts/bead.sh ${id} (never a plain
 bd show — bd-traps.md), then bd comments ${id} --json — an AMENDS
-comment there supersedes the description (run bd with -C <main-checkout>;
-only that checkout has the beads database)
+comment there supersedes the description (run bd with -C <main-checkout>; it
+is harmless from a worktree and required if you leave the repo)
 Then read the skill files FROM YOUR OWN WORKTREE — ${taskWorktree}/.claude/
 skills/work/references/task.md — and follow it. Do NOT read them from the
 main checkout: it is where bd lives, and its local branch is stale.

@@ -79,7 +79,7 @@ oracle/src/main/kotlin/civictech/oracle/bind/OperatorCatalog.kt=>oracle/src/test
 # The add-only arm below asks "does this claimed path exist yet", and a claim
 # entry is repo-root-relative. Resolve the root rather than trusting the CWD:
 # measured, running the script from `<worktree>/kernel` fired all three census
-# rows on a bead whose files all exist (bd itself walks up to the workspace, so
+# rows on a bead whose files all exist (bd itself resolves the workspace, so
 # nothing else in the run gives the mistake away).
 ROOT_PREFIX=$(git rev-parse --show-toplevel 2>/dev/null)
 [ -n "$ROOT_PREFIX" ] && ROOT_PREFIX="$ROOT_PREFIX/"

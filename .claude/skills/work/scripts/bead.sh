@@ -17,16 +17,18 @@
 #   Default filter is '.' — the projected object, pretty-printed.
 #   bead.sh <id> '.metadata.files[]'      # any field of the projection
 #   bead.sh <id> -r '.status'             # -r before the filter for raw output
-#   bead.sh -C <main-checkout> <id>       # from a worktree: only the main
-#                                         # checkout holds the beads database
+#   bead.sh -C <main-checkout> <id>       # from outside the repo, where bd
+#                                         # cannot resolve the database
 #
 # -C IS FORWARDED TO bd, NOT TO jq. It is accepted before or after the id, so
-# both orders a dispatched reviewer might type work. Without it, `bd` finds the
-# database by walking up from the working directory: run from anywhere but the
-# checkout, bead.sh printed NOTHING and exited 1 — which this header documents
-# below as meaning the id does not exist (computenet-kzok). Before this flag
-# existed, the reviewer dispatch line "run bd with -C <main-checkout>" and the
-# bead.sh recommendation could not both be followed: the flag reached the jq
+# both orders a dispatched agent might type work. Without it, `bd` resolves
+# the database through GIT: inside the repo — a worktree included, via the git
+# common dir — it finds it; from outside, bead.sh printed NOTHING and exited 1,
+# which this header documents below as meaning the id does not exist
+# (computenet-kzok; the cwd rule corrected by measurement, computenet-4e0oq).
+# Before this flag existed, the task implementer's dispatch line "run bd with
+# -C <main-checkout>" and the bead.sh recommendation could not both be
+# followed: the flag reached the jq
 # filter and died as `jq: error: C/0 is not defined`, an error naming neither
 # bd nor the checkout, so the lesson it taught was "bead.sh is broken". Two
 # reviewers hit it within an hour (computenet-wd7n).
@@ -47,9 +49,10 @@
 # scalar filter (`-r '.status'`) never spills, but `-r '.description'` will.
 set -uo pipefail
 
-# -C is accepted in either position, so the two instructions a dispatched
-# reviewer is given ("-C the main checkout" and "use bead.sh") compose whichever
-# order it types them in.
+# -C is accepted in either position, so the two instructions a dispatched TASK
+# IMPLEMENTER or BREAKDOWN is given ("-C the main checkout" and "use bead.sh",
+# both in SKILL.md 5b) compose whichever order it types them in. Reviewers are
+# given bare `bead.sh <id>`, which is correct from a worktree.
 dir=""
 [ "${1:-}" = "-C" ] && { dir=${2:?-C needs a directory}; shift 2; }
 id=${1:?usage: bead.sh [-C <dir>] <id> [-r] [jq-filter]}

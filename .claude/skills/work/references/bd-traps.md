@@ -158,17 +158,26 @@ SKILL.md and the other references cite this file as "`bd` traps".
   projection is irreducible, so a big epic spills to a file and is READ from
   there — that is the working answer, not a flag.
 
-  **And `bead.sh` is cwd-bound: elsewhere it fails SILENTLY.** It takes no
-  `-C` and calls a bare `bd show`, which finds the database by walking up from
-  the working directory, so from any cwd but the main checkout it prints
-  nothing and exits 1 — which the script's own header documents as meaning
-  *the id does not exist*. A breakdown has no worktree, and its dispatch
-  prompt already tells it to run `bd` with `-C <main-checkout>`, so it is
-  exactly the role positioned to hit this; the natural recovery from an
-  apparent bad id is the plain `bd show` this entry exists to prevent. Run the
-  script from the main checkout (`cd` there — an absolute path alone is not
-  enough). The `-C` passthrough that would remove the hazard is
-  computenet-wd7n, which owns it.
+  **And `bd` resolves the database through GIT, not through the filesystem**,
+  so where `bead.sh` works is decided by whether your cwd is inside the
+  repository at all — not by whether it is the main checkout. Measured
+  2026-09-09: from four `/work` worktrees, plain `bead.sh <id>` returned the
+  bead (`rc=0`) with no `-C`, because `git rev-parse --git-common-dir` points
+  at the main checkout's `.git` and `bd where` resolves to its `.beads`. The
+  worktrees are SIBLINGS of that checkout, so no upward walk could reach it.
+  From outside a checkout — a scratch dir, `/tmp`, or a clone carrying the
+  tracked `.beads/config.yaml` but no Dolt database (all three measured at
+  rc=1, empty stdout) — it prints nothing and exits 1, which the script's own
+  header documents as meaning *the id does not exist*: the natural recovery from an apparent bad id is the plain
+  `bd show` this entry exists to prevent. **The fix is `-C`, which `bead.sh`
+  accepts** (computenet-wd7n, landed): `bead.sh -C <main-checkout> <id>`, in
+  either position — before the id or right after it — so it composes with the
+  `-C <main-checkout>` the TASK IMPLEMENTER's dispatch prompt tells it to pass
+  `bd` (SKILL.md 5b). No reviewer dispatch says that; reviewers are given bare
+  `bead.sh <id>`, which is correct from a worktree.
+  Passing it from a worktree is harmless, so pass it always rather than
+  reasoning about your cwd. `cd`-ing into the repo also works; an absolute path
+  to the script alone does not.
 
   **Above ~25KB even the projection does not fit**, and `bead.sh` handles
   that itself: it writes the projected bead to `$SCRATCH/bead-<id>.json`,
@@ -329,9 +338,11 @@ SKILL.md and the other references cite this file as "`bd` traps".
 - **An EMPTY database answers every read successfully.** The database `bd`
   opens is chosen by cwd (or `-C`) — *not* by "only the main checkout has
   one", which is false in both directions now measured. A worktree **without**
-  its own database walks up and reaches the real one: measured 2026-08-19
-  from a clean sibling worktree, bare `bd stats` returned 852/129/700,
-  identical to `bd -C <main-checkout> bd stats`. And a worktree that has
+  its own database reaches the real one through the GIT common dir, not by
+  walking up the filesystem (the entry above; a sibling worktree has nothing
+  above it to find): measured 2026-08-19 from a clean sibling worktree, bare
+  `bd stats` returned 852/129/700, identical to `bd -C <main-checkout> bd
+  stats`. And a worktree that has
   somehow **acquired** one answers from *that*: `bd list --limit 3 --json` →
   `[]` (exit 0), `bd stats` → `Total Issues: 0`, `bd show <known-id>` → "no
   issue found", against 702 issues in the main checkout (computenet-8mb3).
