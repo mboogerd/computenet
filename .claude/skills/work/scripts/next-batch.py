@@ -359,7 +359,15 @@ def load_advice(cores, cap, since_last_read=None):
                        f"scanning our build tree is the measured cause, and it stays "
                        f"high long after the build exits). There is nothing to wait "
                        f"for, so do not idle. Dispatch ONE agent with a SCOPED gate "
-                       f"and expect it to be slow, not wrong. Confirm with "
+                       f"and expect it to be slow, not wrong. STOPPING RULE: if TWO "
+                       f"dispatches have already died here on the 600s watchdog "
+                       f"leaving no side effects, dispatch NOTHING more — at this "
+                       f"load ANY tool call can exceed 600s, so scoping the gate "
+                       f"buys nothing and the no-Gradle fallback units are not "
+                       f"available either (one agent died on a `bd` comments "
+                       f"lookup). Hold on a bounded monitor until load1 < "
+                       f"{2 * cores} (2x cores), or go to Finalize if the budget "
+                       f"cannot absorb the wait. Confirm with "
                        f"`ps -eo pid,pcpu,comm | sort -k2 -rn | head` before "
                        f"overriding either way.")
     if cap <= 1:

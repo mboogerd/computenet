@@ -30,7 +30,10 @@ reviewer dispatch has no batch call of its own and so never sees
 that window has been observed stalling outright (computenet-lx7t). Read the
 whole advice string, not the rung name: the same reading with no build of ours
 running is reported as HOST load, where there is nothing to wait for and the
-hold would be an indefinite idle (computenet-91xn).
+hold would be an indefinite idle (computenet-91xn) — *unless* two reviewer
+dispatches have already died there on the 600s watchdog with no side effects,
+which is the one case where holding is right (SKILL.md 5b's stopping rule,
+computenet-0xkh0).
 
 `${featureBranchOnOrigin}` below is one line, and it saves the reviewer a
 failed command: either `The feature branch ${featureBranch} IS on origin.` or

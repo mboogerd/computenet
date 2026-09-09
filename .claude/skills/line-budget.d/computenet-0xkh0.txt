@@ -1,0 +1,14 @@
+work +22
+
+# +19 in SKILL.md and +3 in merge-task.md. THREE prose sites narrate the old
+# rule, not two: 5b (the stopping rule itself, 14), step 5's advice summary (2),
+# and 5e's feature-reviewer dispatch (3) — which is the exact site both agents
+# in this incident were dispatched from, and which said holding under HOST load
+# "is an indefinite idle" with no exception. merge-task.md carried the same
+# sentence for the same dispatch.
+#
+# The rule itself is delivered mechanically: next-batch.py's HOST-load advice
+# string now carries it, so the orchestrator reads it at every capacity read.
+# These lines exist because both prose sites NARRATE the old rule, and
+# computenet-y30d is the bead about shipping a change while leaving its
+# predecessor's explanation standing.
