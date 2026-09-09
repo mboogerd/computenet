@@ -3010,3 +3010,193 @@ restatement, the classified trigger-check comment on `computenet-u7fi`, and
 this findings entry. `computenet-u7fi` itself is closed by the orchestrator,
 not by this task (cross-bead close is a reserved action) — see the comment
 posted there for the commit sha the closing note should cite.
+
+## KE3 — epic close-out: corrected premises, dispositions, and what the pins showed
+
+Recorded by: `computenet-9sm.9.5` (task, feature `computenet-9sm.9`, epic
+`computenet-9sm`). Base commit: `301c91ad2` (merge of main into
+`feature/computenet-9sm.9`). This entry is append-only and touches no other
+entry; it records what the epic's own tasks and their sibling comments already
+established, citing rather than re-deriving.
+
+### Corrected premises
+
+Six premises the epic's breakdowns or feature reviews found false or weaker
+than filed, corrected in the tasks that found them rather than inherited
+silently:
+
+1. **`MapCell` is untagged.** `OrMapCell` is the tagged, dot-shaped map type;
+   plain `MapCell` carries no `TagState`. (computenet-9sm.8's breakdown.)
+2. **`SetCell` is not on `TagState`.** The tag-shaped lattice lives on the
+   element-shaped `SetCell`/`OrMapCell` pair via their own dot machinery, not
+   through a shared `TagState` supertype. (computenet-9sm.8's breakdown.)
+3. **`StallReason` had three values before `computenet-9sm.5`** —
+   `SUSPENDED`, `RESTARTING`, `DEAD_LETTERED` (`Suspension.kt`) — and
+   `computenet-9sm.5` added the fourth, `STABILITY_FROZEN`. Confirmed again at
+   this epic's own base by computenet-9sm.9's breakdown ("`StallReason` has
+   four values at head, three pre-9sm.5").
+4. **There is no scheduler timer.** The `computenet-9sm.2` heartbeat rides
+   `SimWorld`/host cadence rather than a dedicated scheduler primitive — see
+   `## KE3-HB` below, which is itself the measurement of what that heartbeat
+   does and does not do.
+5. **The findings path.** The epic's own citation of `doc/kernel/findings.md`
+   was wrong; that file does not exist. This file, `doc/kernel-lane-findings.md`,
+   is the actual kernel-lane findings log — corrected by `computenet-9sm.10`.
+6. **[KE3-10]'s "existing `DeliveredWatermarkTest` assertion" does not exist.**
+   [KE3-10] claims a test re-run pins "every replicated logical id has exactly
+   one companion". `DeliveredWatermarkTest`'s three tests assert watermark
+   VALUES only, via `watermarkOf(logicalId)!!.watermark(src)`; none assert
+   "exactly one" or "a `WatermarkCell` is not itself tracked". Verified at this
+   task's own base: `git grep -n 'replicate(.*WatermarkCell|not itself tracked|
+   itself be tracked' HEAD -- 'kernel/src/*'` returns exactly one hit,
+   `Replication.kt:576`, which is KDoc, not a test. What actually holds
+   [KE3-10] in code is `Replication.watermarks` (a `Map<logicalId,
+   WatermarkCell>`, `:118`) read by `watermarkOf` (`:126`) and the derived
+   `watermarkRef` (`:135`). Established by computenet-9sm.9.3's evidence
+   comment on computenet-9sm.9 and independently confirmed by its reviewer.
+   computenet-9sm.9.4 judged [KE3-10] does not map onto any of BS-1..BS-20 (it
+   names a requirement clause, not a BS-n behaviour, and `DeliveredWatermarkTest`
+   is pre-KE3 CP-B2/E3.3 scope, not a BS-n test) — so it earns no DISPUTES row,
+   and this entry is where the corrected premise is recorded.
+
+### R14 disposition
+
+`concord/corpus/DISPUTES.md` `` `42-WM-R14` `` — a `ReBaseline`-superseded
+source's watermark column cannot be excluded from the stability MIN — is filed
+as `kernel-gap`, unbounded-but-correct: the frozen column under-reports
+stability rather than over-reporting it. Spec
+`doc/spec/40-distribution/42-replication.md` §Open interactions carries the
+same disposition. `## KE3-D4` below is the same shape recurring under sharding
+rather than re-baseline.
+
+### The BS-13 seed history
+
+- `## KE3-GC` (original witness, `computenet-9sm.4.5`): `BS13_SEED = 62`
+  reproduced [KE3-20] on the LOCAL (wrong-seam) trigger, chosen as the smallest
+  of a stable multi-run intersection; not to be replaced with a friendlier seed.
+- `## KE3-20` / `## KE3-GC-WITNESS` (computenet-qbap / computenet-nwnl): the
+  per-seed pin died — the re-admission fence (`computenet-pay7`) fenced the
+  exact re-delivery the witness needed, so LOCAL stopped resurrecting (0 of 31
+  consecutive 200-seed sweeps at `computenet-qbap`'s head) and only diverges.
+  Retired onto the sweep-level `fenceAttributed.isNotEmpty()` discriminator;
+  the adversary was widened (disjoint parks on all three links, `K` moved
+  25→10) per [KE3-20]'s own "widen the adversary, never weaken the check".
+  **`## KE3-GC-WITNESS` supersedes `## KE3-GC`'s per-seed pin; `## KE3-20` is
+  the current widening and rate.**
+- `## KE3-42-ORMAP-BS13` (computenet-9sm.8.7): the OR-map has no reliable BS-13
+  witness either — resurrection dead at 0/200 across three runs (same fence
+  mechanism), divergence witness non-reproducible (1 of 3 runs). No
+  `BS13_SEED` recorded for the OR-map; the asserted discriminator is LOCAL's
+  summed `discarded` strictly exceeding STABLE's, 3 of 3 with a ~33% margin.
+
+### The sharded-interest stability limitation
+
+`## KE3-D4` (decision 9sm.3-D4, computenet-9sm.3.1): `CausalStability` takes
+three injected reads and deliberately omits `interestOf` — the stability read
+is per logical id, not per key, so there is no key to evaluate an `Interest`
+against. Consequence: under PN-6 sharding, a member never delivers waves
+outside its own slice, so every cross-slice source reads permanently bottom
+and `stableFrontier` freezes for the whole logical id the moment the instance
+set is sharded — conservative (under-reports, never over-reports) and
+documented at the site, not fixed. An interest-scoped stability read is filed
+as a design question, not an implementation gap; no spec section answers it.
+
+### The u7fi decision
+
+`computenet-u7fi`'s 2026-09-06 decision (superseding feature design 9sm.8-D3):
+accept the re-baseline fence residual PROVISIONALLY, build no fenced-source
+lattice under KE3, file no new bead — already filed twice, at `42-WM-R14` and
+42-replication.md §Open interactions (decision 9sm.8-D11). Amended the same
+day to require the revisit trigger restated in `OrMapCell.applyReBaseline`'s
+KDoc (grep anchor `fenced-source`) before close; that restatement landed
+(`3a005eab8`, per `## KE3-42-ORMAP`) naming the two edits that would reopen it
+— `ReBaselineEmitting` entering `OrMapCell`'s supertype list, or a
+superseded/rotated `dotSource`. A whole-feature-diff trigger grep at close-out
+found no such edit.
+
+### Pins
+
+Five landed-half pins (`kernel/src/test/kotlin/civictech/cell/replication/`):
+`ShardedReplicaFrontierTest`, `GlitchFreeReplicaFrontierTest`,
+`UnknownJoinerFenceTest`, `DeliveredWatermarkTest`,
+`MemberDepartureFrontierTest` — **all PASS**. computenet-9sm.9.3's evidence
+comment on computenet-9sm.9 (2026-09-09) ran all five bound to one
+`:kernel:test` invocation with `--rerun`: `BUILD SUCCESSFUL in 39s`, 14/14
+tests green, 0 failures, 0 errors, `junit-count.py` confirming 5 files for 5
+requested classes and a newest timestamp 49s old (not a cached replay). The
+pins diff `053540fd8..HEAD` at that task's own head was EMPTY — unmodified
+since the epic base.
+
+BS-1 (`DeliveredFrontierTest`, [KE3-08]/[KE3-09]) — **PASS**.
+computenet-9sm.9.1's closing comment: 3/3 tests green
+(`./gradlew :kernel:test --tests
+'civictech.cell.data.delta.DeliveredFrontierTest' --rerun`), unit and
+integrated halves both present, no production defect found. Its reviewer's
+mutation check (holdback loop's `while (pending.remove(thru + 1)) thru++`
+replaced with an unconditional admit) turned all three assertions red with
+distinct, traced failure messages — confirmed non-vacuous, `metadata.review=passed`.
+
+BS-19 (`PreKe3WireFixtureTest`, [KE3-39]) — **PASS**. computenet-9sm.9.2's
+closing comment: four byte fixtures captured at the epic base `053540fd8`
+still decode/re-encode byte-identically; `WireCodec.VERSION` unchanged (`2`)
+at both ends; `./gradlew :wire:test --tests
+'civictech.wire.PreKe3WireFixtureTest' --rerun` → 4/4 PASSED. Its own mutation
+check (flipping a decoded epoch byte in a fixture) turned the decode assertion
+red with the expected diff, then reverted clean. The Stall half of [KE3-39]'s
+premise ("WatermarkDelta changed under KE3") was itself corrected — only
+`StallNotice.Stall.slot`/`StallReason.STABILITY_FROZEN` changed; `WatermarkDelta`
+is byte-unchanged since `053540fd8`, already independently pinned by
+`StallNoticeWireCompatTest`.
+
+BS-20 (the `[KE3-05]` citation grep) — **PASS**, run by computenet-9sm.9.3:
+`git grep -n 'Delivered watermarks' -- ':!doc/archive'` at that task's HEAD
+returns 34 hits (37 at the epic's own breakdown observation, a drift explained
+by the bead's own caveat, not a regression); every hit resolves to
+`doc/spec/40-distribution/42-replication.md:223 ## Delivered watermarks and
+causal stability` by section number or quoted heading text — no dangling
+citation.
+
+### Also worth recording
+
+- **The KE3-23 fence-escape family.** `## KE3-23-*` entries
+  (computenet-dwkp/07vb/s0tq/92ek) trace the BS-12 `stableFenceAttributed`
+  escape from reproduction (`## KE3-23-DWKPRATE`: 0 of 50 sweeps at current
+  `main` against a 6-of-15 pre-fix control) through mechanism
+  (`## KE3-23-CLOSEDROW`, `## KE3-23-CLOSEDPREMISE`, `## KE3-23-QUORUMCLOSED`).
+  A first redundancy claim in `## KE3-23-DWKPRATE` was WITHDRAWN after a
+  mislabelled mutation; the corrected measurement (`## KE3-23-DWKPRATE`'s
+  "Update (`computenet-0ade`)" subsection) found `computenet-07vb` is
+  individually NECESSARY — reverting it alone returns the class at 7 of 20,
+  all `seeds=[12]` — while `computenet-92ek` and `computenet-s0tq` are each
+  BOUNDED AT 0 of 20 on their own: a statistical bound at that sample size, not
+  a claim that either does nothing, since each fixes its own
+  separately-reproduced, deterministically-triggered defect outside this
+  sweep's reach.
+- **Mint-count and SHARED-arm notes from `computenet-9sm.8`'s siblings.**
+  `computenet-1383` measured and documented `RemoveAllDotModel`'s mint-count
+  divergence from `DotModel` after a revive-then-re-remove sequence (latent
+  today; `CTL-03`'s own script never exercises it). `computenet-rjue` built the
+  OR-map sweep's fourth arm, `Trigger.SHARED`, giving the per-key `value(key)`
+  observable a real multi-writer-key pick to resolve (`## KE3-42-ORMAP-SHARED`);
+  `computenet-pa5l`'s residual on that arm resolved an apparent value
+  divergence to an adversary-withheld (permanently stranded) frame, not a
+  reclamation defect, and kept the zero-tolerance VALUE assertion rather than
+  replacing it with a measured ceiling — the arm's own floor is 0 of 200.
+
+### Cross-references
+
+Every `## KE3*` entry in this file, in file order:
+
+`## KE3-D4`, `## KE3-GC`, `## KE3-HB`, `## KE3-GC-DEL-DOT`,
+`## KE3-GC-FENCE-KEY`, `## KE3-GC-WITNESS`, `## KE3-23-PROVENANCE`,
+`## KE3-23-HOLDER`, `## KE3-23-ORDERING`, `## KE3-23-OPENSET`,
+`## KE3-23-ROWCONTENT`, `## KE3-23-LANECONT`, `## KE3-23-CLOSEDROW`,
+`## KE3-BS16-RETAINED`, `## KE3-CKPT-TRIGGER`, `## KE3-23-CLOSEDPREMISE`,
+`## KE3-23-BS5-BLINDSPOT`, `## KE3-23-QUORUMCLOSED`, `## KE3-20`,
+`## KE3-23-DWKPRATE`, `## KE3-42-ORMAP-BS13`, `## KE3-42-ORMAP-SHARED`,
+`## KE3-42-ORMAP`, and this entry.
+
+### Not resolved by KE3
+
+G-25, G-39, G-40, G-42 and G-45 are not marked resolved by this entry or by
+anything it cites.
