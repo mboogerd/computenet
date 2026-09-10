@@ -201,7 +201,12 @@ attempt diagnosing it (computenet-l0jf). The fix, any of:
 ./gradlew --no-daemon <task>
 ```
 
-or run the Gradle call with `dangerouslyDisableSandbox`. **This gets worse with
+or run the Gradle call with `dangerouslyDisableSandbox`. **That is the Bash
+TOOL's boolean parameter, not a gradle command-line flag** — an agent that
+appended it to `./gradlew` got `BUILD FAILED in 2s` with `9 actionable tasks:
+9 up-to-date`, which greps almost identically to a real cached failure, so the
+mistake does not announce itself and cost a full Gradle cycle
+(computenet-7sfp). **This gets worse with
 parallelism**, which this skill actively encourages: the more concurrent
 worktrees, the likelier one sandboxed call poisons the shared daemon for
 everyone. If a sibling agent's run starts failing this way and yours did not
