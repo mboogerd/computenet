@@ -3200,3 +3200,335 @@ Every `## KE3*` entry in this file, in file order:
 
 G-25, G-39, G-40, G-42 and G-45 are not marked resolved by this entry or by
 anything it cites.
+
+## MEM1 — epic close-out: corrected premises, dispositions, and what the pins showed
+
+Recorded by: `computenet-f7h.7.4` (task, feature `computenet-f7h.7`, epic
+`computenet-f7h` = MEM1). Base commit: `48ba82309` (`computenet-f7h.6:
+election safety and seeded leader-churn suites (#793)`, then `origin/main`).
+Every line number, constant and count below was re-resolved against that sha
+rather than copied from the epic or the breakdown; where the two disagree,
+the observed value is what is written and the disagreement is the finding.
+This entry is append-only and edits no other entry, no spec file, and no
+production or test source: it reports, per this file's head note.
+
+Every figure is labelled MEASURED (with the run and the machine that produced
+it) or ESTIMATED. Every "landed" names its PR and sha.
+
+### Corrected premises
+
+Ten premises the epic, its breakdowns or its feature reviews carried that are
+false, stale or weaker than filed at `48ba82309`. Each names the bead that
+found it; those marked **found here** were falsified by this task while
+re-resolving the epic's citations.
+
+1. **The spec still says single-writer replication is "not built", and so does
+   `LeaderMark`'s KDoc.** `doc/spec/40-distribution/42-replication.md:844`
+   (MEASURED at `48ba82309` by `grep -n '^## Single-writer replication'`)
+   reads `## Single-writer replication (decided in 93 I-25, not built)` while
+   `SingleWriterReplication.kt` and `LeaderElection.kt` ship — landed by F1
+   `ff52712c1` (#785) through F6 `48ba82309` (#793). The epic cited the same
+   header at `:300`. Same family, one layer down:
+   `kernel/src/main/kotlin/civictech/cell/host/LeaderMark.kt:14-16` still says
+   "Automatic election that *mints* these marks is the deferred liveness half
+   (G-44 residual, 95 §R1); explicit/orchestrated designation is the spec's
+   declared default" — stale since F4 `41c702fff` (#789) landed opt-in
+   `LeaderElection.EpochClaim`. **Neither is fixed here**: the spec header is
+   barred by AGENTS.md's plan-editing exclusion and this feature's own
+   out-of-scope clause, and the KDoc sits in a production file outside this
+   feature's documentation-only diff. Recorded, not repaired; a later item
+   owns both.
+2. **The epic's findings path does not exist.** Epic §6 cites
+   `doc/replication/findings.md`; `git cat-file -e 48ba823:doc/replication/findings.md`
+   answers `fatal: path 'doc/replication/findings.md' does not exist in
+   'HEAD'`. This file, `doc/kernel-lane-findings.md`, is the kernel lane's log
+   (f7h.7-D1), and `doc/replication/` is deliberately **not** created. The KE3
+   close-out above (`## KE3 — epic close-out`, premise 5) records the
+   identical mistake made against `doc/kernel/findings.md` — the second epic
+   in a row to cite a findings path that was never created, which is worth
+   more than either instance alone.
+3. **`Peering.Loopback.partition()` is symmetric, and the frame interposer
+   already existed.** Epic §5.3 prescribes "asymmetric partition via
+   `Peering.Loopback.partition()` on one side";
+   `kernel/src/main/kotlin/civictech/cell/wire/Peering.kt:752` is
+   `fun partition() = closeInstance()` — it closes the connection instance for
+   both directions, so no one-sided fault is expressible through it. F6 used a
+   one-direction `Peering.FrameInterpose` drop instead (f7h.6-D3), pinned by
+   `SplitBrainReconciliationTest`'s `5_3` test; found by computenet-f7h.6's
+   breakdown and its `computenet-f7h.6.1`. The neighbouring premise in epic
+   §5.8.4 — announcement loss "needs CHA1's frame interposer and is
+   unestablished until it lands" — is stale in the other direction: the
+   interposer seam is `Peering.kt:863` (`fun interface FrameInterpose`) with
+   the composable set in `testkit/src/main/kotlin/civictech/testkit/dst/FrameInterposers.kt`,
+   both present at this sha. The corrected dispute is `MEM1-WIRE-LOSS`, which
+   narrows the gap to loss over a real socket.
+4. **CHA3's churn rig is landed, and MEM1 consumed only a corner of it.** Epic
+   §4 says "MEM2 consumes it"; `testkit/src/main/kotlin/civictech/testkit/dst/churn/`
+   holds 11 files at `48ba82309` (`BatchReference`, `ChurnConfig`,
+   `ChurnGenerator`, `ChurnMesh`, `ChurnPlan`, `ControlSeams`,
+   `GossipInstruments`, `LastReplicaProbe`, `PeerHandles`,
+   `ReconvergenceCheck`, `StabilityObservables`). MEM1 consumed it for seeds
+   and for `SingleWriterChurnTest` only — F1's claim included that test file,
+   and `computenet-f7h.8` `2d7ab11ed` (#792) fixed its KDoc. Its own class
+   KDoc records why it drives the mesh directly rather than through
+   `ChurnMesh`.
+5. **BS-14's measured demoted-total duplication is repaired — and the epic's
+   expected value is right for only one of the two arms.**
+   `SingleWriterChurnTest`'s class KDoc (L99-111) records what
+   `computenet-yqgd` found: read at *every* instance rather than at the
+   successor alone, the DEMOTED instance duplicated exactly its 2
+   pre-transition writes in both orders — promote-first 6 against an expected
+   4, demote-first 4 against an expected 2. F3 `f72d3e6f6` (#788) repaired it
+   (f7h.3-D1): the successor's catch-up now ships a `Stamped(baseline = true)`
+   routed through `applyTo`'s `onBaseline` to `adoptState`, which REPLACES the
+   demoted instance's state instead of adding to it, and the ex-leader's stale
+   outbound link is unlinked at step-down. Quoted from the file at
+   `48ba82309`, not from the bead:
+   `const val MEASURED_DEMOTED_TOTAL_PROMOTE_FIRST: Long = 4` (L634) and
+   `const val MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST: Long = 2` (L663), each
+   asserted equal to `report.expectedTotal` for its own arm with
+   `peerAReading.duplicated(report.expectedTotal)` MEASURED 0 (L409-412,
+   L502-505).
+
+   **Found here — two corrections to the bead that scheduled this entry.**
+   (a) The bead states both constants "equal `report.expectedTotal` (4)". They
+   do not: `expectedTotal` is 4 in the promote-first arm (L392) and 2 in the
+   demote-first arm, which has no post-transition write, so the demote-first
+   constant is **2**, not 4. The property that holds in both arms is
+   *demoted == successor*, which is exactly how `computenet-f7h.3`'s own
+   acceptance-correction comment (2026-09-10) reads its literal "4 == 4 in
+   both orders". (b) The file is
+   `testkit/src/test/kotlin/civictech/testkit/dst/churn/SingleWriterChurnTest.kt`
+   (665 lines), in `:testkit`, not under `kernel/src/test/`.
+6. **`ReplicaConvergence` is typed over `Replicable`, so it could not be the
+   seeded suite's invariant cell.** Epic §1.6 names
+   `civictech.cell.verify.ReplicaConvergence` as "the right invariant cell for
+   the seeded churn suite";
+   `kernel/src/main/kotlin/civictech/cell/verify/ReplicaConvergence.kt:32` is
+   `class ReplicaConvergence<D : Any, S>` bound to the mergeable `Replicable`
+   contract, which a single-writer cell does not satisfy. F6 used a
+   test-local single-writer fold harness instead (f7h.6-D2).
+7. **`[MEM1-26]` (ack-from-k durability) is REFUSED, not deferred.** Two spec
+   surfaces leave it open — G-44's proposal column at
+   `doc/spec/90-roadmap/91-gap-analysis.md:95` ("an optional ack-from-k
+   durability tier") and 93 I-25 §8's follow-on list, "Synchronous-ack
+   durability tier (optional)" — while 93 I-25 §4.4 decides it "would be a
+   second protocol and is explicitly **not** adopted". AGENTS.md's authority
+   order puts an integrated decision in `93-feature-interactions.md` above
+   both the gap-table prose and a §8 follow-on list, so the decision governs
+   and there is nothing to test (f7h.6-D5). `ElectionIsolationTest:59` cites
+   the id in KDoc only, saying so.
+8. **`[MEM1-30]`'s composability evidence is the sealed hierarchy, not a
+   test.** `kernel/src/main/kotlin/civictech/cell/replication/LeaderElection.kt:18`
+   is `sealed interface LeaderElection` with exactly two arms — `object Manual`
+   (the default: arms nothing, counts nothing, `observe` is a no-op) and
+   `data class EpochClaim(val window: DetectionWindow)` (f7h.4-D1). Sealedness
+   is the evidence: a G-67 park posture would be a third arm the claim rule
+   must exhaust, which the compiler enforces rather than a test. Deliberately
+   not tested (f7h.6-D5).
+9. **Epic-vs-repo line drift.** Every line number the epic cites, against the
+   number MEASURED at `48ba82309` by `git grep -n` in this worktree. The epic
+   was written against an earlier tree; none of these is a defect, and the
+   table exists so the next reader resolves a symbol rather than a number.
+
+   | Epic cited | At `48ba82309` | Note |
+   | --- | --- | --- |
+   | `42-replication.md:300` — single-writer header | `:844` | moved; still says "not built" (premise 1) |
+   | `91-gap-analysis.md:95` — G-44 row | `:95` | unchanged |
+   | `91-gap-analysis.md:21` — C-13 row | `:21` | unchanged |
+   | `SingleWriterReplication.kt:35` — `data class LeaderMark` | `host/LeaderMark.kt:32` | moved to the membership lane (f7h.1-D1); `SingleWriterReplication.kt:31` keeps a `typealias` |
+   | `SingleWriterReplication.kt:161` — `leaderMarks` | `host/InstanceIndex.kt:87` | moved with the fold (f7h.1-D2); `markLeader` at `:102`, `leaderOf` at `:120` |
+   | `SingleWriterReplication.kt:214` — `designateLeader` | `SingleWriterReplication.kt:637` | now `= registry.markLeader(mark)` — one write path (f7h.4-D4) |
+   | `SingleWriterReplication.kt:44` — `Stamped` | `:61` | now carries `baseline: Boolean = false` (f7h.3-D1) |
+   | `SingleWriterReplication.kt:246` — interest gate | `:966` | `registry.instances.interestOf(leader.ref).overlaps(targetInterest)` |
+   | `Peering.kt:22-37` — `RegistryAnnounce` | `wire/Peering.kt:29` | fifth variant `leaderMarked` added by F2 `a3493440b` (#786) |
+   | `Peering.kt:97` — mirror serve | `wire/Peering.kt:165` | `inlet.serve(object : RegistryAnnounce { … })` |
+   | `Peering.kt:199` — `announceTo` | `wire/Peering.kt:1094` | |
+   | `Replication.kt:285` — `evict` | `replication/Replication.kt:777` | |
+   | `ManagedHost L1098-1124` — RESTART branch | `:1123` | `SupervisionPolicy.RESTART ->` |
+   | `WireCodec L228` — `Stamped` subclass | `:228` | unchanged; `LeaderMark` registered at `:231` (F2) |
+
+10. **The seeded sweep's wall time, MEASURED here.**
+    `./gradlew :kernel:test --tests 'civictech.cell.replication.LeaderElectionTest' --rerun`
+    at `48ba82309`: **MEASURED 29s wall** (`BUILD SUCCESSFUL in 29s`; 31
+    actionable tasks, 16 executed, 15 from cache), of which the test class
+    itself is **MEASURED 0.861s** across 11 tests, 0 failures, 0 skipped —
+    read from `kernel/build/test-results/test/TEST-civictech.cell.replication.LeaderElectionTest.xml`,
+    JUnit `timestamp="2026-09-10T15:35:53.222Z"`. The three 50-seed sweeps are
+    **MEASURED 0.134s** (`two simultaneous claims converge on the greater
+    instanceId across fifty seeds`), **0.207s** (`a parked write under two
+    claims in flight is applied exactly once at the winner across fifty
+    seeds`) and **0.146s** (`a parked write leaves the loser diverged from the
+    winner on some seeds`). Machine: `NL-MGD6FQJW91`, `uname -sm` =
+    `Darwin arm64`, load1 **7.81** at launch (`uptime`, 17:35 CEST
+    2026-09-10) with sibling agents building concurrently on 16 cores. The
+    wall figure is therefore an upper bound under contention, not a clean
+    measurement; the class time is unaffected by it. Comparable figure from
+    `computenet-f7h.6.2` on the same machine: MEASURED 33s wall, class time
+    0.899s, sweeps 0.139s / 0.198s / 0.150s. ESTIMATED cost of a warm re-run
+    with no contention: well under a minute.
+
+### Also worth recording
+
+- **F6's three falsified predicted counts**, each now pinned as a measurement
+  rather than a prediction (`computenet-f7h.6.1`'s comment;
+  `SplitBrainReconciliationTest` at `48ba82309`):
+  - **(a) The §5.1 stale-baseline fence is MEASURED 1 at B and 0 at C**
+    (L392-410), not the "one per rebuilt A→peer link" the breakdown predicted.
+    Under this interleaving A re-links only to B before it folds `(2, bRef)`
+    and steps down; by the time A's registry learns `cRef`, A is a follower
+    and `onPeerPublished(cRef)` builds no A→C link, so nothing epoch-1 ever
+    arrives at C. The epic's §5.1 fence clause therefore holds at C **by
+    construction** — the fence itself is measured by the bridged arm
+    (`5_1 bridged …`, L444), where A demonstrably still reaches C. This is the
+    whole content of that pin, and it is why the bridged arm exists.
+  - **(b) A send-counting interposer reports 1 for a frame delivered twice.**
+    The shared `Counting` interposer records inside `apply`, i.e. per SEND
+    (`SplitBrainReconciliationTest:188`), so §5.4's question — how many times
+    the duplicated mark reached D — needs `Duplicating` (`:230`), which
+    records once per emitted copy. Both are private test-local classes in that
+    file, **not** in `testkit`'s `FrameInterposers.kt` (found here, correcting
+    the bead's citation).
+  - **(c) §5.3's follower shipments are MEASURED 2 and 2**, not the predicted
+    3 and 2 (L659-660): one shipment per write at each of A and C. A's rebuild
+    baseline is not among them — it was delivered during the `heal()` +
+    `runToIdle` before the counters were read. The §5.3 `shipCountAmong`
+    reading is MEASURED 2 at B and 0 at A (L634). The recorded verdict stands:
+    a false positive costs 1 unnecessary failover, 0 lost, 0 duplicated.
+- **`[MEM1-16]`'s "epoch-confirmed" shipped weaker than either the epic or the
+  feature stated.** Epic §5.6 requires the parked write be "released only once
+  a single epoch-confirmed leader exists"; the feature's own acceptance
+  rendered that as "local-max + reachable". What F5 `31018ab6e` (#791) shipped
+  (f7h.5-D2, `[SHIPPED]`) is a release on the FIRST fold-maximal mark with **no
+  reachability gate at all**, with the apply-time epoch fence covering
+  mistiming — `releaseParked`'s KDoc (`SingleWriterReplication.kt:750-776`,
+  the function at `:777`) states the reasoning: a mark can be adopted for a ref
+  this registry has not republished yet and D2 named no retry, so a
+  reachability pre-check would strand the writes at a dead ref forever.
+  "Epoch-confirmed" is rendered as two weaker facts — the mark is the fold's
+  local maximum at release time, and every delivery is epoch-fenced at apply
+  (93 I-25 §4.6). Both the epic's clause and the feature's own restatement of
+  it are stale against what shipped. Filed as `MEM1-PARK-CONFIRM`.
+- **`ElectionIsolationTest`'s grep-of-record defect is already fixed at this
+  sha (found here).** The orchestrator's note on `computenet-f7h.6`
+  (2026-09-10 12:27) records a KDoc printing a basic `grep -in
+  'watermark|frontier|quorum'` — which reads `|` literally and answers a false
+  ZERO — beside a stated count of 1. At `48ba82309` the KDoc
+  (`ElectionIsolationTest:463-469`) already reads `grep -inE`, states the
+  count as "exactly ONE hit", and explains the trap in line: "`-E` is
+  load-bearing: basic `grep` reads `|` as a literal and answers a false ZERO,
+  which is how the original '0 hits' claim arose". Re-MEASURED here:
+  `grep -cinE 'watermark|frontier|quorum' SingleWriterReplication.kt` = **1**,
+  the KDoc sentence about an unrelated per-inlet processed-frontier. So the
+  entry records a *repaired* defect, not an outstanding one; nothing is left
+  to fix. (It is the same `\s`/`|` family AGENTS.md documents for `git grep`,
+  reached this time through plain `grep`.)
+
+### Dispositions
+
+One line per dispute id and per findings entry, naming what each files. The
+five `concord/corpus/DISPUTES.md` entries are written by sibling tasks of
+`computenet-f7h.7` concurrently with this one; at the moment this entry was
+written `grep -n 'MEM1' concord/corpus/DISPUTES.md` at `48ba82309` returns
+nothing, so each is cited **by id only** — the text is filed by
+`computenet-f7h.7`'s DISPUTES tasks and is not quoted here.
+
+- **`MEM1-CONCURRENCY`** files epic §5.8.1: `SimulationController` is
+  single-threaded and step-ordered, so §5.2's "simultaneous claims" are
+  interleavings, not races; the fold's behaviour under genuine parallel
+  mutation is unestablished by anything in this epic.
+- **`MEM1-LIVENESS`** files epic §5.8.2 and §5.8.3 together: no clock in
+  kernel, wire or testkit and no `advanceTime`, so no "converges within T"
+  statement is checkable here, and the dual-leader window has no bound without
+  a synchrony assumption (93 I-25 §2). `[MEM1-07]`'s detection window is
+  consequently specified in membership observations, never milliseconds — as
+  `DetectionWindow`'s own KDoc says — and a wedged leader still holding its
+  socket is undetectable (f7h.4-D6).
+- **`MEM1-WIRE-LOSS`** files epic §5.8.4 **as corrected** (premise 3): the
+  interposer exists, in-process announcement loss IS covered by F6's §5.3 and
+  §5.4 arms, and what remains unestablished is loss over a real socket —
+  retirement path is `:wire`'s two-JVM rig.
+- **`MEM1-SPEC-ID`** files epic §5.8.5: no `[42-LEAD-nn]` id exists for the
+  election rule and there is no single-writer binding in `KernelDriverDist`,
+  so `[MEM1-07]`/`[MEM1-11]`/`[MEM1-22]` cannot become concord scenarios.
+  Retired by a spec ticket minting the id **and** a driver binding; this epic
+  edits no spec (§4), so it is a dispute-with-named-blocker rather than a
+  scenario authored against an invented id.
+- **`MEM1-PARK-CONFIRM`** files f7h.5-D2, above: "epoch-confirmed" is rendered
+  as fold-local-max plus an apply-time fence, and no stronger guarantee is
+  available without consensus.
+- **`MEM1-52`** (this file, anchor `#mem1-52-dual-claim-divergence`) files the
+  dual-claim divergence at an equal counter that `LeaderElectionTest`'s
+  `@ExpectedFailure(signature = "MEM1-52-DUAL-CLAIM-DIVERGENCE", owner =
+  "computenet-f7h.7")` cites: `Stamped.applyTo` fences on the counter alone
+  and carries no instance-id tiebreak, so on the write-first branch the loser
+  is left diverged from the winner without loss and without duplication —
+  `[MEM1-20]`'s "the loser's deltas SHALL be fenced inert" does not hold at an
+  equal counter. The entry itself is written by a sibling task of
+  `computenet-f7h.7` (filed as `computenet-azro3`, which measured 42 of 50
+  seeds diverging); this entry does not restate its figures.
+
+### Pins
+
+Epic §5's seven behaviours against the test that pins each, at `48ba82309`.
+All five files are under
+`kernel/src/test/kotlin/civictech/cell/replication/`. The per-`[MEM1-nn]`
+requirement trace is **not** part of this task; it is appended by a dependent
+task after `### Cross-references` below.
+
+| Epic § | Test file | Test name |
+| --- | --- | --- |
+| 5.1 split brain | `SplitBrainReconciliationTest` | `5_1 split brain — the lower epoch loses completely and its writes surface as divergent` (:274); `5_1 bridged — a live epoch-1 delta reaching a folded peer is fenced, and surfaces on the heal` (:444) |
+| 5.2 simultaneous claims | `LeaderElectionTest` | `two simultaneous claims converge on the greater instanceId across fifty seeds` (:1041) |
+| 5.3 false-positive detection | `SplitBrainReconciliationTest` | `5_3 false-positive failover costs one failover and no write` (:545) |
+| 5.4 epoch regression | `SplitBrainReconciliationTest` | `5_4 a returning peer's stale mark is inert and the canonical mark folds exactly once` (:686) |
+| 5.5 RESTART is not an election | `SingleWriterReplicationTest`; `LeaderElectionRefusalTest` | `a RESTART of an ELECTED leader mints no claim and recovers by donor catch-up` (:779); `with no follower reachable a RESTART falls back to the checkpoint and re-baselines the follower on heal` (:907); `a supervised RESTART of the leader is invisible to the detection window` (:437) with its control `control - despawning the leader instead is visible and does claim` (:512) |
+| 5.6 parked write in a contested window | `LeaderElectionTest` | `a parked write under two claims in flight is applied exactly once at the winner across fifty seeds` (:1101); the divergence half is `a parked write leaves the loser diverged from the winner on some seeds` (:1187), which is `@ExpectedFailure`-marked under `MEM1-52-DUAL-CLAIM-DIVERGENCE` and is a recorded finding, not a green pin |
+| 5.7 last-reachable-peer refusal | `LeaderElectionRefusalTest` | `a sole survivor refuses to claim, and claims on the first observation that makes somebody reachable` (:274), with its control `control - the same partition and the same observe with one reachable peer does claim` (:370) |
+
+`ElectionIsolationTest`'s four tests (:133, :182, :365, :480) are not one of
+the seven; they pin the isolation properties `[MEM1-19]`/`[MEM1-33]` and the
+rig premise the other arms rest on.
+
+### Not resolved by MEM1
+
+- **`MEM1-52`** — the dual-claim divergence at an equal counter. Recorded, not
+  fixed: `Stamped` would need an instance-id tiebreak, which is a wire-format
+  change no MEM1 item authorises. The fix bead is filed by the sibling task
+  that writes the `## MEM1-52` entry; `computenet-azro3` is the bead that
+  established the anchor was dangling and measured the rate.
+- **`computenet-03kz7`'s three unasserted bounds** from F5's feature review —
+  `LocationRegistry.forwardedWritePorts` grows and is never cleared; no
+  release runs on a registry that hosts no replica of the id (a pure client),
+  because nothing there subscribes to `onLeaderMark`; and a leader armed but
+  despawned without stepping down leaves its `Divergence` entry and tap in
+  place, since only `surfaceDivergentWrites` removes them. Bounds, not
+  defects — the reviewer declined to file them as residuals.
+- **The two stale headers in premise 1** — `42-replication.md:844`'s "not
+  built" and `LeaderMark.kt:14-16`'s "deferred liveness half". Both need an
+  owner outside this feature's documentation-only diff.
+- **MEM2's last-replica handoff**, the `[MEM1-23]` boundary. §5.7 pins the
+  refusal (the follower does not claim; writes park and the situation surfaces
+  as the shipped suspend-when-partitioned condition); what happens *next* is
+  MEM2's decision and G-25/G-45's residual, untouched here.
+- **The failure-detector shape** (93 I-25 §8). The detection window counts
+  membership observations by construction; a real detector — and with it any
+  real-time liveness bound — is out of scope and is what `MEM1-LIVENESS`
+  files.
+
+### Cross-references
+
+- DISPUTES ids filed by this feature: `MEM1-CONCURRENCY`, `MEM1-LIVENESS`,
+  `MEM1-WIRE-LOSS`, `MEM1-SPEC-ID`, `MEM1-PARK-CONFIRM` — all in
+  `concord/corpus/DISPUTES.md`, written by sibling tasks of
+  `computenet-f7h.7`.
+- `## MEM1-52` in this file, anchor `#mem1-52-dual-claim-divergence` — the
+  string `LeaderElectionTest`'s `@ExpectedFailure(filedAs = …)` points at.
+- `## KE3 — epic close-out: corrected premises, dispositions, and what the
+  pins showed` (this file, L3014) — the exemplar this entry follows, and the
+  first instance of premise 2's non-existent-findings-path mistake.
+- MEM1's landed set, in order: F1 `ff52712c1` (#785), F2 `a3493440b` (#786),
+  `computenet-rdh4q` `c577712da` (#787), F3 `f72d3e6f6` (#788), F4
+  `41c702fff` (#789), `computenet-hu1ie` `f1eb2668c` (#790), F5 `31018ab6e`
+  (#791), `computenet-f7h.8` `2d7ab11ed` (#792), F6 `48ba82309` (#793).
+- Open at the time of writing: `computenet-03kz7`, `computenet-azro3`.
