@@ -144,6 +144,80 @@ SKILL.md and the other references cite this file as "`bd` traps".
   prompt — it held for every agent that was warned and failed for the two
   whose prompt did not carry it for the call they made. That is why the
   projection is a script.
+
+  **A truncated bead read is a truncated ACCEPTANCE LIST**, and nothing in
+  the output says it was truncated, so the review proceeds against criteria
+  it never saw (computenet-h0dj). The general rule, of which `bd comments`
+  and `bd ready --type=epic --json` are the already-known cases: **any `bd`
+  read whose size is not bounded by construction goes to a file first.**
+
+  **The PLAIN (non-`--json`) `bd show` view is not the safe alternative** —
+  it is the same trap wearing the smaller number. `bd show computenet-9sm`
+  is 114KB against the epic's own 36KB description, and the harness elides
+  the MIDDLE of a tool result that big with a `... [N characters truncated]
+  ...` marker sitting inside prose: well-formed text before it, well-formed
+  text after it, and a spec read in halves. Measured 2026-09-05: one
+  breakdown agent hit it, and the workaround then had to be hand-carried
+  into **nine consecutive dispatch prompts** because it lived only in an
+  orchestrator's head (computenet-cjfd). `bead.sh` is the standing read for
+  every bead, large or small.
+
+  **It is NOT the comment thread that makes an epic expensive, and no flag
+  will fix it.** Two breakdown agents on computenet-9sm independently proposed
+  "a `bd show --no-comments` or comments-only flag" (computenet-kzok); both
+  halves of that already exist and neither helps. `bd show --json` does not
+  stream comment bodies at all — `--include-comments` is opt-in — and
+  `bead.sh`'s projection has never carried a comments field. Measured
+  2026-09-07 on that epic: plain `bd show` 233KB, `--json` 218KB, `bead.sh`
+  58KB, and the epic's own **description alone 43.5KB**. On the `--json` and
+  `bead.sh` path the bulk is the inlined dependency payload — 160KB of the
+  218KB — which `bead.sh` already drops; the comment thread is 126KB of the
+  233KB **plain** view, which you must not use anyway. What is left after the
+  projection is irreducible, so a big epic spills to a file and is READ from
+  there — that is the working answer, not a flag.
+
+  **And `bd` resolves the database through GIT, not through the filesystem**,
+  so where `bead.sh` works is decided by whether your cwd is inside the
+  repository at all — not by whether it is the main checkout. Measured
+  2026-09-09: from four `/work` worktrees, plain `bead.sh <id>` returned the
+  bead (`rc=0`) with no `-C`, because `git rev-parse --git-common-dir` points
+  at the main checkout's `.git` and `bd where` resolves to its `.beads`. The
+  worktrees are SIBLINGS of that checkout, so no upward walk could reach it.
+  From outside a checkout — a scratch dir, `/tmp`, or a clone carrying the
+  tracked `.beads/config.yaml` but no Dolt database (all three measured at
+  rc=1, empty stdout) — it prints nothing and exits 1, which the script's own
+  header documents as meaning *the id does not exist*: the natural recovery from an apparent bad id is the plain
+  `bd show` this entry exists to prevent. **The fix is `-C`, which `bead.sh`
+  accepts** (computenet-wd7n, landed): `bead.sh -C <main-checkout> <id>`, in
+  either position — before the id or right after it — so it composes with the
+  `-C <main-checkout>` the TASK IMPLEMENTER's dispatch prompt tells it to pass
+  `bd` (SKILL.md 5b). No reviewer dispatch says that; reviewers are given bare
+  `bead.sh <id>`, which is correct from a worktree.
+  Passing it from a worktree is harmless, so pass it always rather than
+  reasoning about your cwd. `cd`-ing into the repo also works; an absolute path
+  to the script alone does not.
+
+  **Above ~25KB even the projection does not fit**, and `bead.sh` handles
+  that itself: it writes the projected bead to `$SCRATCH/bead-<id>.json`,
+  prints that path **on stderr**, leaves stdout EMPTY and **exits 3**, so a
+  `Read` call pages it and nothing is silently missing. Paging it back through
+  Bash does not work — the harness re-persists a large Bash output too. A
+  caller that PIPES `bead.sh` into another command raises `BEAD_SPILL_BYTES`:
+  a scalar filter (`-r '.status'`) never spills, but `-r '.description'` is
+  description-sized and does.
+
+  The stderr-and-exit-3 shape is deliberate. The notice used to go to stdout,
+  where it is prose that GREPS CLEANLY: an orchestrator ran
+  `bead.sh <epic> .description > f` and four greps over `f`, and every one
+  returned 0 — searching a 214-byte notice, not a 43,846-character
+  description. Read literally that said a concurrent agent's amendment had
+  been destroyed. It had not (computenet-rnvi). A zero from a search that
+  never ran is the same false-negative class as zsh's unquoted
+  `--include=*.kt` and `git grep`'s missing `\s`, and here it is
+  indistinguishable from the most alarming possible TRUE result, so both
+  natural reactions — re-dispatch, or escalate destroyed work — are expensive
+  and wrong. On stderr the redirect captures an empty file, which fails
+  loudly.
 - **`bd comment` executes backticks in its free text and reports success.**
   Backticks inside a double-quoted shell argument are command substitution,
   so the word vanishes from the stored comment while `bd` prints "Comment
