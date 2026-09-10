@@ -3,6 +3,7 @@ package civictech.cell.wire
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
+import civictech.cell.host.LeaderMark
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -101,14 +102,24 @@ class MirrorCloseFenceTest {
         // covers, and a mirrored eviction would be a removal on behalf of a
         // peer this connection no longer speaks for
         val laterLink = TopologyLink(UUID.randomUUID(), PortRef.of(theirs, "outlet"), PortRef.of(theirs, "inlet"))
+        val lateMark = LeaderMark(theirs.id, 1L, theirs)
         mirror.inlet.call.linked(laterLink)
         mirror.inlet.call.unlinked(link.id)
         mirror.inlet.call.unpublished(theirs)
+        mirror.inlet.call.leaderMarked(lateMark)
 
         // the fence dropped the edge the peer's departure orphaned…
         registry.all().map { it.id } shouldContainExactly listOf(link.id)
         // …and added nothing on its behalf afterwards
         registry.all().none { it.id == laterLink.id } shouldBe true
+        // …including a leadership mark: nothing folded (computenet-f7h.2.1)
+        registry.instances.leaderOf(theirs.id).shouldBeNull()
+
+        // the control: the SAME call on an attached mirror does fold, so the
+        // assertion above is the gate's doing and not the call's
+        val fresh = mirror(registry, egress)
+        fresh.inlet.call.leaderMarked(lateMark)
+        registry.instances.leaderOf(theirs.id) shouldBe lateMark
     }
 
     @Test

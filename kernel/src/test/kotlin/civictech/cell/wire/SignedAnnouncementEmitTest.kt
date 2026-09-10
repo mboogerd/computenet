@@ -3,6 +3,7 @@ package civictech.cell.wire
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.data.SetOps
+import civictech.cell.host.LeaderMark
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -156,7 +157,7 @@ class SignedAnnouncementEmitTest {
     private fun methodId(name: String, vararg params: Class<*>): Long =
         ContractRegistry.idsOf(RegistryAnnounce::class.java.getMethod(name, *params))!!.second
 
-    // ------------------------------------------------------- the four methods
+    // ------------------------------------------------------- the five methods
 
     @Test
     fun `every RegistryAnnounce method is signed over exactly the specified eight fields`() {
@@ -168,21 +169,23 @@ class SignedAnnouncementEmitTest {
 
         val published = CellRef(UUID.randomUUID())
         val link = TopologyLink(UUID.randomUUID(), PortRef.generate(), PortRef.generate())
+        val mark = LeaderMark(published.id, 3L, CellRef(published.id, 1L))
         announce.published(published)
         announce.linked(link)
         announce.unlinked(link.id)
         announce.unpublished(published)
+        announce.leaderMarked(mark)
 
         val frames = capture.frames
-        frames shouldHaveSize 4
+        frames shouldHaveSize 5
 
-        // all four carry the full set — none of the four methods is exempt
+        // all five carry the full set — none of the five methods is exempt
         frames.forEach { frame ->
             frame.signature.shouldNotBeNull()
             frame.signerKeyId shouldBe "key-1"
             frame.notAfter shouldBe clock.now + 60_000L
         }
-        frames.map { it.sigCounter } shouldContainExactly listOf(1L, 2L, 3L, 4L)
+        frames.map { it.sigCounter } shouldContainExactly listOf(1L, 2L, 3L, 4L, 5L)
 
         // the signed region committed to (mintingPeerId, counter, notAfter,
         // contractId, methodId, cellRef, portName, args) — read back, field by
@@ -211,11 +214,24 @@ class SignedAnnouncementEmitTest {
                 args = listOf(link),
             ),
         ) + ")"
+        // the fifth method (computenet-f7h.2.1) signs over the same eight fields
+        signedRegion(frames[4]) shouldBe "SIG(" + transcript(
+            SignableAnnouncement(
+                mintingPeerId = PeerId("a"),
+                counter = 5L,
+                notAfter = clock.now + 60_000L,
+                contractId = announceContractId,
+                methodId = methodId("leaderMarked", LeaderMark::class.java),
+                cellRef = mirror,
+                portName = "inlet",
+                args = listOf(mark),
+            ),
+        ) + ")"
 
         // the args of every method reached the encoder, so nothing signs a
         // truncated announcement
         encoded.map { it.args } shouldContainExactly listOf(
-            listOf(published), listOf(link), listOf(link.id), listOf(published),
+            listOf(published), listOf(link), listOf(link.id), listOf(published), listOf(mark),
         )
     }
 
