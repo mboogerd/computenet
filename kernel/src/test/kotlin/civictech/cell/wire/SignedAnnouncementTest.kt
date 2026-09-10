@@ -5,6 +5,7 @@ import civictech.cell.DenialReason
 import civictech.cell.Propagate
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.LeaderMark
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -302,6 +303,21 @@ class SignedAnnouncementTest {
                 as Peering.AnnounceInletProxy).inlet.call.published(ref)
             return bytes.last()
         }
+
+        /**
+         * One signed `leaderMarked(mark)` addressed at [mirror]; returns the
+         * frame bytes. The fifth `RegistryAnnounce` method, riding the identical
+         * signing path [publish] does — which is only possible because
+         * `:identity`'s canonical encoder admits `LeaderMark` under tag `0x04`
+         * (`computenet-f7h.2.2`). Before that this call threw
+         * `IllegalArgumentException` inside `canonicalBytes` and no frame was
+         * ever produced.
+         */
+        fun leaderMark(mirror: CellRef, mark: LeaderMark): ByteArray {
+            (HostedCellProxy.create(mirror, egress, Peering.AnnounceInletProxy::class.java)
+                as Peering.AnnounceInletProxy).inlet.call.leaderMarked(mark)
+            return bytes.last()
+        }
     }
 
     // =========================================================== BS-02, accept
@@ -429,6 +445,72 @@ class SignedAnnouncementTest {
             rig.feed(frame)
 
             rig.lastDenial().reason shouldBe DenialReason.BAD_SIGNATURE
+            rig.registrySnapshot() shouldBe before
+            rig.rejected shouldBe 1L
+        }
+    }
+
+    // ============================ BS-02/BS-05 shape, the fifth announcement
+
+    /**
+     * The fifth `RegistryAnnounce` method through the same gate, accept half
+     * (`computenet-f7h.2.2`, feature `computenet-f7h.2` rule 5).
+     *
+     * Deliberately next to BS-02 and BS-05 rather than in a file of its own:
+     * the claim is that `leaderMarked` is signed and admitted **identically**
+     * to `published`, and the way to assert "identically" is to run the same
+     * rig, the same real Ed25519 keys and the same real
+     * [civictech.identity.announce.canonicalBytes] over it, then read the same
+     * observables.
+     *
+     * [LocationRegistry.instances] is `internal` to `:kernel`; this file is
+     * in-module, so [civictech.cell.host.InstanceIndex.leaderOf] is readable
+     * here. It has to be read *explicitly* — [Rig.registrySnapshot] covers
+     * locations and topology, so a mark that was folded (or wrongly folded)
+     * moves nothing it looks at.
+     */
+    @Test
+    fun `a signed leaderMarked is admitted and folded, like any other announcement`() {
+        val rig = Rig(boundPeer = peerB)
+        val sender = Sender(Keys(identityB))
+        val logicalId = UUID.randomUUID()
+        val mark = LeaderMark(logicalId, 1L, CellRef(logicalId, 0L))
+
+        rig.registry.instances.leaderOf(logicalId) shouldBe null
+        rig.feed(sender.leaderMark(rig.mirror.ref, mark))
+
+        rig.registry.instances.leaderOf(logicalId) shouldBe mark
+        rig.deadLetters.shouldBeEmpty()
+        rig.rejected shouldBe 0L
+    }
+
+    /**
+     * BS-05's shape on `leaderMarked`: the same two forgeries, the same three
+     * observables, plus the fourth this announcement has of its own — the mark
+     * was not folded.
+     *
+     * A gate that verified `published` and waved `leaderMarked` through would
+     * pass every assertion in BS-05 and fail here, which is the point of
+     * repeating the shape rather than trusting that the gate is generic.
+     */
+    @Test
+    fun `a tampered or impostor-signed leaderMarked is BAD_SIGNATURE and folds nothing`() {
+        val overDifferentBytes = Sender(
+            Keys(identityB),
+            signingConfig(encode = { a -> canonicalBytes(input(a.copy(counter = a.counter + 1))) }),
+        )
+        val byADifferentKey = Sender(Keys(peerB, impostorOfB))
+
+        listOf(overDifferentBytes, byADifferentKey).forEach { sender ->
+            val rig = Rig(boundPeer = peerB)
+            val logicalId = UUID.randomUUID()
+            val mark = LeaderMark(logicalId, 1L, CellRef(logicalId, 0L))
+            val frame = sender.leaderMark(rig.mirror.ref, mark)
+            val before = rig.registrySnapshot()
+            rig.feed(frame)
+
+            rig.lastDenial().reason shouldBe DenialReason.BAD_SIGNATURE
+            rig.registry.instances.leaderOf(logicalId) shouldBe null
             rig.registrySnapshot() shouldBe before
             rig.rejected shouldBe 1L
         }
