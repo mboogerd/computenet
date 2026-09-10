@@ -460,9 +460,12 @@ class ElectionIsolationTest {
      * [MEM1-19] and [MEM1-33] (96 §E3.4 PN-7 amendment, §E3.6): a
      * single-writer election does not disturb a mergeable replica set that
      * happens to share the registry. `SingleWriterReplication` has no
-     * watermark, frontier or quorum coupling at all — `grep -n
-     * 'watermark|frontier|quorum' SingleWriterReplication.kt` is 0 hits on
-     * this branch — so the properties hold by construction; what is pinned
+     * watermark, frontier or quorum coupling at all — `grep -in
+     * 'watermark|frontier|quorum' SingleWriterReplication.kt` returns exactly
+     * ONE hit on this branch, and it is a KDoc sentence about an unrelated
+     * per-inlet *processed*-frontier (L1057); no declaration, call or import
+     * in the file names any of the three — so the properties hold by
+     * construction; what is pinned
      * here is that the identical covering-quorum read survives an election
      * driven on the same registries, read at three moments including one
      * *mid-flight*.
@@ -556,10 +559,19 @@ class ElectionIsolationTest {
         // `leaderMarked` — and none of them carries a watermark. Watermark
         // gossip rides ordinary delta links between `WatermarkCell`s, not a
         // `RegistryAnnounce` frame, so there is no method id to count and the
-        // clause's own escape hatch applies. The substitute is stronger where it
-        // matters and is asserted instead: each peer's mesh membership view is
-        // byte-identical across the election, so no watermark row was created,
-        // closed or moved by it.
+        // clause's own escape hatch applies. The substitute asserted instead:
+        // each peer's whole `OpenSlots` view is identical across the election —
+        // and that carries `rows`, the per-slot per-source watermark positions
+        // actually consulted for the MIN, not just membership — so no watermark
+        // row was created, closed or MOVED by it.
+        //
+        // Its one limit, next to the claim: this is a read of STATE, not of
+        // FRAME TRAFFIC. A `WatermarkDelta` emitted by the election that
+        // re-sent a value already held would leave both this view and the
+        // `completeAt` pair above unchanged and would go unseen here. The
+        // dropped `Counting` clause would have seen it; nothing reachable on
+        // this branch can, because watermark gossip rides ordinary delta links
+        // between `WatermarkCell`s and carries no countable method id.
         withClue("the mesh's own membership view is untouched by the SW election") {
             listOf(p0, p1, p2).map { mergeable.getValue(it).openSlots(meshId) } shouldBe slotsBefore
         }
