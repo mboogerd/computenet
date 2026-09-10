@@ -150,14 +150,29 @@ class ParkedWriteReleaseTest {
     private fun List<DeadLetter>.divergent(): List<DeadLetter> =
         filter { it.description.startsWith("single-writer divergent write:") }
 
-    /** A non-write invocation aimed at the ex-leader's own delta inlet, built as `surfaceDivergentWrites` builds one. */
+    /**
+     * A non-write invocation aimed at the ex-leader's own delta inlet, hand-built
+     * as `surfaceDivergentWrites` builds one — with one deliberate difference.
+     *
+     * That one declares `parameterTypes = [Stamped]`, which is the *source*
+     * signature and not the erased one: `Propagate.propagate` erases to
+     * `(Object)`, so `Invocation.invoke`'s method lookup finds nothing and the
+     * unit dead-letters instead of landing. Harmless there — nothing redelivers
+     * a surfaced record — and fatal here, because it would make this example's
+     * "and it never reached B" half pass for the wrong reason: a misrouted unit
+     * would fail to apply anyway. Measured (computenet-f7h.5.3 mutation M2b):
+     * with `[Stamped]` and the release's port filter dropped, the
+     * `receivedDeltas` assertion stayed GREEN. `[Object]` is what
+     * `HostedCellProxy` actually puts on the wire for this port, so a unit that
+     * this task's filter wrongly re-addressed WOULD be applied at B.
+     */
     private fun deltaInletInvocation(target: CellRef, unit: Stamped<Long>) = HostedPortInvocation(
         cellRef = target,
         portName = "deltaInlet",
         type = HostedPortInvocation.Type.PORT_API,
         invocation = Invocation(
             methodName = "propagate",
-            parameterTypes = listOf(Stamped::class.java.name),
+            parameterTypes = listOf(Any::class.java.name),
             args = listOf(unit),
             context = null,
         ),
