@@ -332,6 +332,54 @@ class DivergentWriteSurfacingTest {
         t.b.total shouldBe 1L
     }
 
+    /**
+     * The closing half of the recording window, and the one the retained
+     * buffer makes easy to get wrong: **recording stops when the departed
+     * member returns**, even though what was already recorded is kept.
+     *
+     * Example 6 covers the opening half (a write made BEFORE the departure is
+     * not divergent, because the tap does not exist yet). Neither of the two
+     * mechanisms that close the window — the tap being unlinked on the disarm,
+     * and the sink's `departed.isNotEmpty()` gate — is observable without a
+     * write made in the gap between a return and the next supersession, which
+     * no other example here has. Measured: with BOTH removed, this test
+     * reddens and no other does.
+     */
+    @Test
+    fun `a write made after the departed member returned is not divergent`() {
+        val t = Triangle()
+        val letters = t.p.deadLetters()
+
+        // Arm: B leaves, A writes 5 while it is away.
+        t.pq.partition()
+        t.controller.runToIdle()
+        t.p.ops(t.a).increment(5)
+        t.controller.runToIdle()
+
+        // Disarm: B is back, and A keeps leading and keeps writing.
+        t.pq.heal()
+        t.controller.runToIdle()
+        t.a.leading shouldBe true
+        t.p.ops(t.a).increment(9)
+        t.controller.runToIdle()
+        t.b.total shouldBe t.a.total
+
+        // Only NOW is A superseded — over the R leg, so the mark reaches P by
+        // the same partition/heal route the other examples use.
+        t.pr.partition()
+        t.controller.runToIdle()
+        t.q.replication.designateLeader(LeaderMark(t.id, epoch = 2, leaderRef = t.bRef))
+        t.controller.runToIdle()
+        t.controller.runToIdle()
+        t.a.leading shouldBe false
+
+        val divergent = letters.divergent()
+        withClue("the 5 written while B was away is divergent; the 9 written after B returned is not") {
+            divergent shouldHaveSize 1
+            divergent.single().stamped() shouldBe Stamped(1L, 5L)
+        }
+    }
+
     // ------------------------------------------ a throwing handler is caught
 
     @Test
