@@ -5,12 +5,16 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.wire.Peering
+import civictech.cell.wire.RegistryAnnounce
+import civictech.cell.wire.WireCodec
+import civictech.nature.ContractRegistry
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * `computenet-f7h.4.1` — the **posture** half of automatic leader election
@@ -312,7 +316,298 @@ class LeaderElectionTest {
         b.registry.parkedFor(aY).size shouldBe 1
     }
 
+    // ------------------------------------------- [MEM1-07] claim after the window
+
+    /**
+     * Feature example 1. Three [LeaderElection.EpochClaim] peers with a
+     * two-observation window; A leads at epoch 1. Partitioning A away from
+     * both survivors is observation 1 on B and on C (the `onUnpublish` naming
+     * the folded leaderRef arms the window, f7h.4.1-D1); one [observe] on B is
+     * observation 2, and B claims epoch 2 for itself **synchronously**
+     * (f7h.4-D5) — read before the next `runToIdle`.
+     *
+     * Non-vacuity: the "nothing happened yet" half after the partitions is
+     * paired with `missCount == 1` on both survivors, which is the only signal
+     * that distinguishes "armed and counting" from "never noticed"; the claim
+     * half is paired with the crossing frame count, the fold deltas, the role
+     * deltas, the shipping-link count and a write that actually lands.
+     */
+    @Test
+    fun `a follower claims the next epoch once the window closes, and the claim reaches its surviving peer`() {
+        val controller = SimulationController()
+        val posture = LeaderElection.EpochClaim(DetectionWindow(2))
+        val a = Peer(controller, posture)
+        val b = Peer(controller, posture)
+        val c = Peer(controller, posture)
+        val id = UUID.randomUUID()
+        val aRef = CellRef(id, 0)
+        val bRef = CellRef(id, 1)
+        val cRef = CellRef(id, 2)
+        val mark1 = LeaderMark(id, 1, aRef)
+
+        // replicas FIRST, peering second (see the class KDoc)
+        a.replica(id, 0, mark1)
+        val onB = b.replica(id, 1, mark1)
+        val onC = c.replica(id, 2, mark1)
+
+        val aToB = Counting()
+        val bToA = Counting()
+        val aToC = Counting()
+        val cToA = Counting()
+        val bToC = Counting()
+        val cToB = Counting()
+        val abLoop = Peering.loopback(a.side, b.side, interposeAToB = aToB, interposeBToA = bToA)
+        val acLoop = Peering.loopback(a.side, c.side, interposeAToB = aToC, interposeBToA = cToA)
+        Peering.loopback(b.side, c.side, interposeAToB = bToC, interposeBToA = cToB)
+        controller.runToIdle()
+
+        val directions = listOf(aToB, bToA, aToC, cToA, bToC, cToB)
+        directions.forEach { it.reset() }
+        val firesBefore = Triple(a.leaderMarkFires, b.leaderMarkFires, c.leaderMarkFires)
+        val bLeaderCallsBefore = onB.becomeLeaderCalls
+        val cFollowerCallsBefore = onC.becomeFollowerCalls
+
+        // observation 1: A departs from both survivors at once
+        abLoop.partition()
+        acLoop.partition()
+        controller.runToIdle()
+
+        b.replication.missCount(id) shouldBe 1
+        c.replication.missCount(id) shouldBe 1
+        // A itself never arms: the refs that left ITS index are the followers',
+        // not the folded leaderRef, so the departure is not a leader failure
+        a.replication.missCount(id) shouldBe 0
+        b.replication.leaderOf(id) shouldBe mark1
+        c.replication.leaderOf(id) shouldBe mark1
+        a.replication.leaderOf(id) shouldBe mark1
+        directions.forEach { it.count(leaderMarkedId) shouldBe 0 }
+
+        // observation 2, on B only — the claim is folded before this returns
+        b.replication.observe()
+        b.replication.leaderOf(id) shouldBe LeaderMark(id, 2, bRef)
+        b.replication.missCount(id) shouldBe 0
+
+        controller.runToIdle()
+
+        c.replication.leaderOf(id) shouldBe LeaderMark(id, 2, bRef)
+        // adopting B's mark disarmed C, whose own count stood at 1
+        c.replication.missCount(id) shouldBe 0
+        // A is cut off from both survivors and cannot learn: its fold is
+        // untouched. Nothing is asserted about A's ROLE — the dual-leader
+        // window is F6's subject, not this test's.
+        a.replication.leaderOf(id) shouldBe mark1
+
+        // announced once, over the only direction still open from B
+        bToC.count(leaderMarkedId) shouldBe 1
+        listOf(aToB, bToA, aToC, cToA, cToB).forEach { it.count(leaderMarkedId) shouldBe 0 }
+
+        (b.leaderMarkFires - firesBefore.second) shouldBe 1
+        (c.leaderMarkFires - firesBefore.third) shouldBe 1
+        (a.leaderMarkFires - firesBefore.first) shouldBe 0
+
+        onB.leading shouldBe true
+        (onB.becomeLeaderCalls - bLeaderCallsBefore) shouldBe 1
+        onC.leading shouldBe false
+        (onC.becomeFollowerCalls - cFollowerCallsBefore) shouldBe 1
+
+        // one shipping link, not two: aRef left B's membership index at the
+        // partition, so `applyRoles` never targets it
+        b.replication.shipCountAmong(setOf(aRef, bRef, cRef)) shouldBe 1
+
+        // the functional half — C's follower write is forwarded to the NEW
+        // leader, applied once there, and shipped back
+        c.ops(onC).increment(5)
+        controller.runToIdle()
+        onB.total shouldBe 5L
+        onC.total shouldBe 5L
+    }
+
+    // --------------------------------- [MEM1-17] a present leader never triggers
+
+    /**
+     * Feature example 2. Ten [observe] calls on a follower whose leader is
+     * present arm nothing, count nothing, fold nothing and send nothing:
+     * [SingleWriterReplication.observe] counts only ids armed by a witnessed
+     * departure (f7h.4.1-D1), and no departure has happened.
+     *
+     * Non-vacuity: a suite of "nothing happened" assertions is exactly what a
+     * broken, inert engine also satisfies, so the test closes with a CONTROL —
+     * the same three peers, the same posture and one more [observe] call, but
+     * with A actually gone — and shows that this configuration does elect. The
+     * ten inert observations are therefore a statement about the leader's
+     * presence, not about a fixture that could never do anything.
+     */
+    @Test
+    fun `ten observations while the leader is present neither arm, count nor claim`() {
+        val controller = SimulationController()
+        val posture = LeaderElection.EpochClaim(DetectionWindow(2))
+        val a = Peer(controller, posture)
+        val b = Peer(controller, posture)
+        val c = Peer(controller, posture)
+        val id = UUID.randomUUID()
+        val aRef = CellRef(id, 0)
+        val bRef = CellRef(id, 1)
+        val mark1 = LeaderMark(id, 1, aRef)
+
+        a.replica(id, 0, mark1)
+        val onB = b.replica(id, 1, mark1)
+        c.replica(id, 2, mark1)
+
+        val aToB = Counting()
+        val bToA = Counting()
+        val aToC = Counting()
+        val cToA = Counting()
+        val bToC = Counting()
+        val cToB = Counting()
+        val abLoop = Peering.loopback(a.side, b.side, interposeAToB = aToB, interposeBToA = bToA)
+        val acLoop = Peering.loopback(a.side, c.side, interposeAToB = aToC, interposeBToA = cToA)
+        Peering.loopback(b.side, c.side, interposeAToB = bToC, interposeBToA = cToB)
+        controller.runToIdle()
+
+        val directions = listOf(aToB, bToA, aToC, cToA, bToC, cToB)
+        directions.forEach { it.reset() }
+        val firesBefore = Triple(a.leaderMarkFires, b.leaderMarkFires, c.leaderMarkFires)
+
+        repeat(10) { b.replication.observe() }
+        controller.runToIdle()
+
+        a.replication.missCount(id) shouldBe 0
+        b.replication.missCount(id) shouldBe 0
+        c.replication.missCount(id) shouldBe 0
+        (a.leaderMarkFires - firesBefore.first) shouldBe 0
+        (b.leaderMarkFires - firesBefore.second) shouldBe 0
+        (c.leaderMarkFires - firesBefore.third) shouldBe 0
+        a.replication.leaderOf(id) shouldBe mark1
+        b.replication.leaderOf(id) shouldBe mark1
+        c.replication.leaderOf(id) shouldBe mark1
+        directions.forEach { it.count(leaderMarkedId) shouldBe 0 }
+        onB.leading shouldBe false
+
+        // CONTROL: identical peers, identical posture, one more observe() —
+        // only the leader's presence differs, and now it elects.
+        abLoop.partition()
+        acLoop.partition()
+        controller.runToIdle()
+        b.replication.missCount(id) shouldBe 1
+        b.replication.observe()
+        b.replication.leaderOf(id) shouldBe LeaderMark(id, 2, bRef)
+        b.replication.missCount(id) shouldBe 0
+        onB.leading shouldBe true
+    }
+
+    // ------------------------------- [MEM1-17] the leader's return resets the count
+
+    /**
+     * Feature example 3. A single claimant — B with a three-observation
+     * window, A and C [LeaderElection.Manual] (default-constructed) — so the
+     * outcome is deterministic and the count readings are B's alone.
+     *
+     * The sequence and B's count after each step:
+     * `partition(A-B)` → 1, `observe()` → 2, `heal()` → 0 (the heal replays
+     * `published(aRef)`, and a publish that restores the folded leaderRef
+     * DISARMS), `partition(A-B)` → 1, `observe()` → 2, `observe()` → the
+     * claim.
+     *
+     * Non-vacuity: each "no claim yet" reading is paired with the count that
+     * proves the window really is advancing, and the heal step additionally
+     * asserts that A's replayed mark crossed (`aToB.count == 1`) while B's
+     * fold count did not move — the replay is inert as a mark and decisive as
+     * a membership observation.
+     */
+    @Test
+    fun `the leader's return resets the detection window, and a later departure claims from scratch`() {
+        val controller = SimulationController()
+        val a = Peer(controller) // Manual, by the production default
+        val b = Peer(controller, LeaderElection.EpochClaim(DetectionWindow(3)))
+        val c = Peer(controller) // Manual
+        val id = UUID.randomUUID()
+        val aRef = CellRef(id, 0)
+        val bRef = CellRef(id, 1)
+        val mark1 = LeaderMark(id, 1, aRef)
+
+        a.replica(id, 0, mark1)
+        val onB = b.replica(id, 1, mark1)
+        c.replica(id, 2, mark1)
+
+        val aToB = Counting()
+        val bToA = Counting()
+        val bToC = Counting()
+        val cToB = Counting()
+        val abLoop = Peering.loopback(a.side, b.side, interposeAToB = aToB, interposeBToA = bToA)
+        Peering.loopback(a.side, c.side)
+        Peering.loopback(b.side, c.side, interposeAToB = bToC, interposeBToA = cToB)
+        controller.runToIdle()
+
+        listOf(aToB, bToA, bToC, cToB).forEach { it.reset() }
+        val bFiresBefore = b.leaderMarkFires
+
+        abLoop.partition()
+        b.replication.missCount(id) shouldBe 1
+        b.replication.leaderOf(id) shouldBe mark1
+        bToC.count(leaderMarkedId) shouldBe 0
+
+        b.replication.observe()
+        b.replication.missCount(id) shouldBe 2
+        b.replication.leaderOf(id) shouldBe mark1
+        bToC.count(leaderMarkedId) shouldBe 0
+
+        abLoop.heal()
+        controller.runToIdle()
+        // the replayed `published(aRef)` restored the folded leader, and that
+        // observation disarmed the window outright
+        b.replication.missCount(id) shouldBe 0
+        b.replication.leaderOf(id) shouldBe mark1
+        bToC.count(leaderMarkedId) shouldBe 0
+        // A's mark was replayed across the healed peering and was inert
+        aToB.count(leaderMarkedId) shouldBe 1
+        b.leaderMarkFires shouldBe bFiresBefore
+
+        abLoop.partition()
+        b.replication.missCount(id) shouldBe 1
+        b.replication.leaderOf(id) shouldBe mark1
+
+        b.replication.observe()
+        b.replication.missCount(id) shouldBe 2
+        b.replication.leaderOf(id) shouldBe mark1
+        bToC.count(leaderMarkedId) shouldBe 0
+
+        // the third observation closes the window; C is Manual but still
+        // peered with B, so `reachable` is {cRef} and the claim fires
+        b.replication.observe()
+        b.replication.leaderOf(id) shouldBe LeaderMark(id, 2, bRef)
+        b.replication.missCount(id) shouldBe 0
+        onB.leading shouldBe true
+
+        controller.runToIdle()
+        c.replication.leaderOf(id) shouldBe LeaderMark(id, 2, bRef)
+        bToC.count(leaderMarkedId) shouldBe 1
+    }
+
     // ---------------------------------------------------------------- helpers
+
+    private val leaderMarkedId: Long =
+        ContractRegistry.idsOf(RegistryAnnounce::class.java.getMethod("leaderMarked", LeaderMark::class.java))!!.second
+
+    /** One frame's identity, as [Counting] records it. */
+    private data class FrameId(val contractId: Long, val methodId: Long)
+
+    /**
+     * Records every frame that crosses one direction and passes it through
+     * unchanged. Copied from [LeaderMarkAnnounceTest], where it is private and
+     * in another task's claim.
+     */
+    private class Counting : Peering.FrameInterpose {
+        private val frames = CopyOnWriteArrayList<FrameId>()
+
+        override fun apply(frame: ByteArray): List<ByteArray> {
+            val decoded = WireCodec.decodeFrame(frame).frame
+            frames += FrameId(decoded.contractId, decoded.methodId)
+            return listOf(frame)
+        }
+
+        fun count(methodId: Long): Int = frames.count { it.methodId == methodId }
+        fun reset() = frames.clear()
+    }
 
     private fun repoRoot(): File {
         var dir = File(System.getProperty("user.dir")).absoluteFile
