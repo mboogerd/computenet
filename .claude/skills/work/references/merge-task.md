@@ -457,8 +457,8 @@ wc -l "$SCRATCH/ci.log"   # zero lines = wrong run id, not a clean run
 Read the two greps only after `wc -l` shows a non-empty log:
 
 ```bash
-grep -E 'SKIPPED|NO-SOURCE' "$SCRATCH/ci.log" | grep -v '> Task '          # tests that skipped
-grep -E '> Task [^ ]*:test (SKIPPED|NO-SOURCE|UP-TO-DATE|FROM-CACHE)' "$SCRATCH/ci.log"   # suites never run
+grep -aE 'SKIPPED|NO-SOURCE' "$SCRATCH/ci.log" | grep -v '> Task '          # tests that skipped
+grep -aE '> Task [^ ]*:test (SKIPPED|NO-SOURCE|UP-TO-DATE|FROM-CACHE)' "$SCRATCH/ci.log"   # suites never run
 ```
 
 **Both filters are load-bearing; the naive grep hides exactly the line you

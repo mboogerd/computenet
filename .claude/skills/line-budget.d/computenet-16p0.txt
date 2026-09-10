@@ -1,0 +1,13 @@
+work +11
+# Every documented log-grep recipe omitted `-a`, so on a Gradle console log —
+# which carries terminal control characters — grep answers `Binary file ...
+# matches` in ONE line and exits 0, the matched lines never shown. Hit
+# independently by two agents in one session, and it corrupts BOTH readings: a
+# presence test sees no BUILD line and reads a run that never got there, while
+# mutation-check.md step 4's absence test cannot tell WHICH alternative of
+# `^e:|BUILD` matched, which is exactly the compile-failure-vs-test-failure
+# distinction it exists to make (computenet-16p0). Six recipes across five files
+# gained `-a`; the lines are the note, stated once where the first recipe
+# appears, with the measured contrast. The reporter had hand-carried "use grep
+# -a" into six dispatch prompts — the same non-mechanism that let the
+# --include='*.kt' trap recur twice after its first fix.

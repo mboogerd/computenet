@@ -69,8 +69,22 @@ no marker (it ran), no line at all (never in the graph, or the log lost it).
 
 ```bash
 ./gradlew :<module>:test --tests '<TestName>' > "$SCRATCH/run.log" 2>&1
-grep -E '^> Task :<module>:test( |$)' "$SCRATCH/run.log"; tail -3 "$SCRATCH/run.log"
+grep -aE '^> Task :<module>:test( |$)' "$SCRATCH/run.log"; tail -3 "$SCRATCH/run.log"
 ```
+
+**`-a` on every log grep, and it is not decoration.** A Gradle console log
+carries terminal control characters, so plain `grep` treats it as binary and
+prints ONE line — `Binary file "$SCRATCH/run.log" matches` — exiting 0 with the
+matched lines never shown. Measured: `grep -E '^e:|BUILD'` over such a log
+prints that single line, while `grep -aE` prints `BUILD SUCCESSFUL` and the
+`e:` lines. Both readings you came for are then wrong. A presence test sees no
+`BUILD` line and reads it as a run that never got there; an ABSENCE test — the
+one mutation-check.md step 4 leans on to tell a real test failure from a
+compile failure — sees `matches` without knowing WHICH alternative matched, so
+`^e:|BUILD` cannot say whether it compiled. Same family as AGENTS.md's
+false-zero list: the command succeeds and answers about itself rather than
+about the log. Every log grep in this skill carries `-a` for this reason
+(computenet-16p0).
 
 Two habits destroy that line while leaving `BUILD SUCCESSFUL` intact, so the
 run still looks verifiable: **`| tail -N`** (measured: the task line sat 88
@@ -235,7 +249,7 @@ per-task compile lines to disprove it (computenet-ymv4).
 aggregate.** Same for `:build`, `:check`, `:classes`, `:assemble`.
 
 ```bash
-grep -E '^> Task :[^ ]*:(compileTestKotlin|compileKotlin|test)( |$)' "$SCRATCH/run.log"
+grep -aE '^> Task :[^ ]*:(compileTestKotlin|compileKotlin|test)( |$)' "$SCRATCH/run.log"
 ```
 
 This also means a repo-wide `./gradlew testClasses` reporting `79 up-to-date`

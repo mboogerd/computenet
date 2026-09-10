@@ -103,7 +103,7 @@ guessing one here cost a reviewer 8 runs):
    6,359 lines are source):
 
    ```bash
-   grep 'MARKER' "$SCRATCH/<run-id>.log" | grep -vF '^[[36;1m'   # real output only
+   grep -a 'MARKER' "$SCRATCH/<run-id>.log" | grep -vF '^[[36;1m'   # real output only
    ```
 
    Each line is `<job>\t<step name>\t<timestamp> <content>`, so filtering by
