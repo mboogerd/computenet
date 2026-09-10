@@ -3164,3 +3164,128 @@ property is statable at the driver and not in the corpus.
   KE3 can drive over `SetCell.compactBelow`, or 96 E3.5/E3.7 is otherwise
   re-scoped to accept a bounded check as sufficient evidence for `[KE3-20]` as
   it was for `[KE3-23]` (a decision for the epic, not this entry).
+
+## `MEM1-WIRE-LOSS` — in-process announcement loss IS covered (corrected premise); loss over a real socket is not (`proof-gap`)
+
+- **Requirement it would cover**: epic `computenet-f7h` §5.8.4, and
+  `[MEM1-22]`/`[MEM1-21]` under frame loss of a `leaderMarked` announcement.
+- **Why it cannot be pinned honestly — but the premise it is filed under is
+  false and is corrected here first**: the epic (2026-08-08, §5.8.4) states
+  "Loopback is a park, not a loss ... Election behaviour under genuine
+  announcement *loss* needs CHA1's frame interposer and is unestablished
+  until it lands." At `48ba823097642d2b26e1002018265bc3ebbf2e05` (this
+  entry's own HEAD, `f7h.7-D3`) that second sentence is **false**:
+  `Peering.FrameInterpose` exists
+  (`kernel/src/main/kotlin/civictech/cell/wire/Peering.kt`, the `fun
+  interface FrameInterpose` block and its `PASS_THROUGH` default, and
+  `loopback(a, b, interposeAToB, interposeBToA)`), and it is landed and used,
+  not merely present. `SplitBrainReconciliationTest`
+  (`kernel/src/test/kotlin/civictech/cell/replication/SplitBrainReconciliationTest.kt`)
+  drives two of its scenarios through it: `` `5_3 false-positive failover
+  costs one failover and no write` `` (L545) installs a one-direction `Gate`
+  interposer (L209-217, a hand-rolled `Peering.FrameInterpose` local to this
+  test file, not `testkit`'s `FrameInterposers.kt`) on `interposeAToB` that
+  drops every frame while `dropping = true` — a genuine one-way announcement
+  loss, not `Peering.Loopback.partition()`'s symmetric park; and `` `5_4 a
+  returning peer's stale mark is inert and the canonical mark folds exactly
+  once` `` (L686) installs a `Duplicating` interposer (also local to this
+  test file, L230-241, subclassing the same `Counting`/`Peering.FrameInterpose`
+  base) that delivers a frame twice. **Correction to this entry's own source
+  material**: the breakdown's citation of "a `Duplicating` interposer, L230
+  of that file" meant `testkit/src/main/kotlin/civictech/testkit/dst/FrameInterposers.kt`;
+  the `Duplicating`/`Gate`/`Counting` classes these two tests actually use are
+  hand-rolled inside `SplitBrainReconciliationTest.kt` itself and implement
+  `Peering.FrameInterpose` directly — the test does not import
+  `civictech.testkit.dst` at all. `testkit/dst/FrameInterposers.kt` and its
+  sibling `DuplicateFault.kt`/`PartitionFault.kt`/`ReorderFault.kt` exist and
+  are used by the DST rig (`civictech.testkit.dst`) for a different, `Fault`
+  based composition; they are not what F6 wired into these two tests. Both
+  corrections stand together: the epic's "needs CHA1's frame interposer" is
+  false (the seam is landed and exercised), and the exemplar's own pointer
+  into *which* interposer type does the exercising was imprecise. What
+  remains genuinely unestablished is the residual this entry is actually
+  filed for: loss, duplication or reordering of a `leaderMarked` frame over a
+  **real socket**, where no interposer seam exists. `git grep -c
+  'FrameInterpose' -- wire/` returns **0** matches at this sha — `:wire`'s
+  transport (`WsTransport` and friends) has no fault-injection point
+  equivalent to `Peering.loopback`'s.
+- **Missing capability**: a fault-injecting seam at the socket transport (a
+  `:wire`-side analogue of `Peering.FrameInterpose`), or a two-JVM rig that
+  can drive a `leaderMarked` announcement through a real socket and drop,
+  duplicate or reorder it there.
+  `wire/src/test/kotlin/civictech/wire/PreKe3WireFixtureTest.kt` (145 lines,
+  exists at this sha) is named by the breakdown as the retirement path's
+  *style* — two real JVMs peering over the wire transport — but whether its
+  fixture can host a `SingleWriterReplication`-style engine at all is
+  **unverified**: no such engine exists anywhere in the tree yet (see
+  `MEM1-SPEC-ID` below), so the fixture cannot be exercised against one to
+  find out, and reading its 145 lines shows a fixture built around the
+  existing mergeable-replication path, not a single-writer one.
+- **What was NOT done instead**: no scenario was authored, and no
+  in-process result (5_3, 5_4, or any other loopback-based test) is presented
+  here as socket evidence — the residual above is left open, not covered by
+  a weakened stand-in.
+- **Check to restore**: `SplitBrainReconciliationTest`'s 5_3 (one-direction
+  drop) and 5_4 (duplicate-and-fold-once) re-run over two real JVMs with the
+  same drop/duplicate fault applied at the socket instead of at
+  `Peering.loopback`'s in-process seam.
+- **Revisit trigger**: a `:wire`-side fault-injection seam lands, or
+  `PreKe3WireFixtureTest`'s two-JVM rig gains a single-writer engine to drive
+  (both currently absent, per this entry and `MEM1-SPEC-ID`).
+
+## `MEM1-SPEC-ID` — no normative election id exists and the kernel driver binds no single-writer engine, so no corpus scenario can cover the election rule (`schema-gap` + `driver-binding-gap`)
+
+- **Requirement it would cover**: `[MEM1-07]`/`[MEM1-11]`/`[MEM1-22]` (epic
+  `computenet-f7h` §5.8.5), which a `concord/corpus/` scenario would `cover:`
+  as some future `[42-LEAD-nn]` requirement id.
+- **Why it cannot be pinned honestly**: the complete set of requirement ids
+  in `doc/spec/40-distribution/42-replication.md` at
+  `48ba823097642d2b26e1002018265bc3ebbf2e05` (`f7h.7-D3`), from `git grep -h
+  -o -E '\[42-[A-Z]+-[0-9]+\]' HEAD -- doc/spec/40-distribution/42-replication.md
+  | sort -u`, is exactly: `[42-INT-01]`, `[42-REPL-04]`, `[42-REPL-05]`,
+  `[42-REPL-06]`, `[42-WM-01]` through `[42-WM-08]`. None of these states an
+  election rule, a leader id, or a single-writer mark protocol. `git grep -ln
+  '42-LEAD' HEAD` returns nothing — no `[42-LEAD-nn]` id exists anywhere in
+  the repository. The section that would carry one,
+  `doc/spec/40-distribution/42-replication.md:844`, still reads `##
+  Single-writer replication (decided in 93 I-25, not built)` — recorded by
+  the sibling findings task, not fixed here (out of scope: no `doc/spec/`
+  edit, per this task's non-goals). Separately, the concord kernel driver
+  binds only the mergeable-replication mesh:
+  `concord/src/main/kotlin/civictech/concord/driver/kernel/KernelDriverDist.kt`
+  L56, `private val replication by lazy { Replication(driver.registry) }` —
+  there is no second mesh or engine for single-writer/leader-mark semantics.
+  `git grep -ln 'SingleWriterReplication\|LeaderMark' HEAD -- concord/`
+  returns nothing: neither type is referenced anywhere under `concord/`.
+  Since only `civictech.concord.driver.kernel` may import `civictech.cell.*`
+  (AGENTS.md), no scenario file can reach a single-writer engine without
+  that binding existing first. A third, independent gap: the closed script
+  step vocabulary in `concord/schema/scenario.md` §script (`apply`,
+  `quiesce`, `connect`, `disconnect`, `snapshot`, `restore`, `restart`,
+  `despawn`, `read-state`, `retransmit`, `drive-contextless`,
+  `drive-stamped`) has no verb that could express "announce a mark" or any
+  leader-election action — the file's few uses of the word "announce" (L244,
+  L253, L688, L732) are all existing catch-up/re-announce semantics of the
+  mergeable-set mesh, unrelated to a leader mark. Confirmed by re-reading
+  `concord/schema/scenario.md` §script and §checks at this sha: **verified**,
+  not `unverified:` — no mark-announcement verb and no leader-related check
+  evaluator exist in the closed vocabulary.
+- **Missing capability**: BOTH (1) a spec ticket minting a `[42-LEAD-nn]` id
+  in `42-replication.md` normatively describing the election rule, AND (2) a
+  `SingleWriterReplication`-shaped binding added to `KernelDriverDist`
+  alongside the existing `Replication` mesh, AND (3) scenario schema
+  vocabulary (a script step verb, and a check evaluator) that can express and
+  assert a leader-mark announcement — three independent gaps, any one of
+  which alone still leaves no scenario coverable.
+- **What was NOT done instead**: no `[42-LEAD-nn]` id was minted, no scenario
+  was authored against an invented or borrowed id, no `covers:` claim was
+  added anywhere, and no `KernelDriverDist` binding or `concord/schema/`
+  change was made — all out of scope for this task per its non-goals.
+- **Check to restore**: a `concord/corpus/42-replication/` scenario for the
+  5.4 epoch-regression property (the epic calls it "concord-eligible as an
+  idempotence property once a normative id exists") once all three missing
+  capabilities above land.
+- **Revisit trigger**: the spec ticket that mints `[42-LEAD-nn]` — named here
+  as not filed by this feature; the epic's plan-editing exclusion applies —
+  lands, together with a `SingleWriterReplication` driver binding and the
+  corresponding schema vocabulary.
