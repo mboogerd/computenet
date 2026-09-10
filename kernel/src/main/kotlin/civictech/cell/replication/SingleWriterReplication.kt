@@ -280,6 +280,14 @@ class SingleWriterReplication(
      * exactly when the step-down that must surface it is next. So [departed]
      * disarms on a return (recording stops) but [buffer] is retained, and both
      * are cleared only by the flush at step-down.
+     *
+     * Which test pins the retention, measured (computenet-f7h.5.2): reinstating
+     * clear-on-return reddens `DivergentWriteSurfacingTest`'s **example 6**
+     * only, not example 4. Example 4 partitions the leader from BOTH peers, so
+     * the first heal's `publish` leaves [departed] still non-empty and the
+     * superseding mark arrives before the second — it survives the unrefined
+     * rule by an ordering accident. The single-partition shape is the one that
+     * genuinely constrains this.
      */
     private class Divergence {
         var tap: Link? = null
@@ -701,8 +709,19 @@ class SingleWriterReplication(
      * - **The tap ignores baselines.** [SingleWriterReplicable]'s catch-up
      *   contract emits the leader's WHOLE state as a `baseline` unit whenever a
      *   link forms while leading — including on this very link, the instant it
-     *   is installed. Without the guard the tap would record the leader's
-     *   entire state as a "divergent write" on every promotion.
+     *   is installed. **This guard is defensive, and as of computenet-f7h.5.2
+     *   it is not reachable**: the only baseline that ever arrives here is the
+     *   tap's own formation baseline, and a tap is armed exclusively at
+     *   promotion, when [Divergence.departed] is necessarily empty (a fresh
+     *   record, or an early return on an existing tap) — so the
+     *   `departed.isNotEmpty()` gate already drops it. Measured, not assumed:
+     *   removing `&& !stamped.baseline` leaves all seven tests of
+     *   `DivergentWriteSurfacingTest` green. It is kept because it states the
+     *   tap's contract against a future arming order that does not hold
+     *   `departed` empty at formation, and because the alternative — relying on
+     *   that coincidence — is silently wrong the day the order changes. What
+     *   IS pinned is the gate itself: dropping `departed.isNotEmpty()` reddens
+     *   the two tests below.
      * - **The tap records only while [Divergence.departed] is non-empty**, so a
      *   leader that never witnessed a departure buffers nothing at all.
      *
