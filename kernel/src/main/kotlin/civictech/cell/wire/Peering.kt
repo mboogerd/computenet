@@ -37,6 +37,17 @@ interface RegistryAnnounce {
      * (`Replication`) reconciles — no ack, no round trip.
      */
     fun unpublished(ref: CellRef)
+
+    /**
+     * A locally adopted single-writer leadership mark ([MEM1-11], spec 42
+     * §Single-writer replication): "this instance leads this logical cell at
+     * this epoch". Ids only — logical id, epoch, leader ref — like every other
+     * announcement here; no state and no ack. The peer folds it into its own
+     * membership index as a *mirrored* mark
+     * ([civictech.cell.host.LocationRegistry.mirrorLeaderMark]), so it is not
+     * re-announced onward (f7h.2-D4).
+     */
+    fun leaderMarked(mark: civictech.cell.host.LeaderMark)
 }
 
 /**
@@ -166,6 +177,18 @@ class RegistryMirrorCell(
 
             override fun unpublished(ref: CellRef) = synchronized(gate) {
                 if (attached) registry.mirrorUnpublish(ref) else refuse()
+            }
+
+            // `mirrorLeaderMark`, never `markLeader`: a mirrored mark is folded
+            // but not re-announced onward (f7h.2-D4). Its Boolean adoption
+            // verdict is discarded — an announcement has no ack.
+            override fun leaderMarked(mark: civictech.cell.host.LeaderMark) = synchronized(gate) {
+                if (attached) {
+                    registry.mirrorLeaderMark(mark)
+                    Unit
+                } else {
+                    refuse()
+                }
             }
         })
     }
@@ -1051,7 +1074,7 @@ object Peering {
      *    and carries on — so there is no close, no reconnect, no re-hello and
      *    therefore no second catch-up to repair it: the loss is permanent on a
      *    connection that looks healthy;
-     * 3. `announceTo` never returned, so the three hooks it had already
+     * 3. `announceTo` never returned, so the hooks it had already
      *    registered were never handed back to the caller and could not be
      *    closed — a leaked announcer per occurrence, on a `via` that had just
      *    failed.
@@ -1074,11 +1097,23 @@ object Peering {
         val registration = side.registry.onLocalPublish { announce.published(it) }
         val unpublishRegistration = side.registry.onLocalUnpublish { announce.unpublished(it) }
         val topologyRegistration = side.registry.onLocalTopology(announce::linked, announce::unlinked)
+        val leaderMarkRegistration = side.registry.onLocalLeaderMark { announce.leaderMarked(it) }
         side.onCatchUpWindowOpen?.invoke() // test-only seam; null everywhere else
         // catch-up for pre-peering spawns
         side.registry.localRefs().forEach { ref -> catchUp("published $ref") { announce.published(ref) } }
         side.registry.localLinks().forEach { link -> catchUp("linked ${link.id}") { announce.linked(link) } }
-        return AutoCloseable { registration.close(); unpublishRegistration.close(); topologyRegistration.close() }
+        // Every folded mark, local or mirrored (f7h.2-D5) — and AFTER the two
+        // loops above, so a peer holds the ref before the mark naming it
+        // (f7h.2-D2).
+        side.registry.instances.leaderMarks().forEach { mark ->
+            catchUp("leaderMarked ${mark.logicalId}@${mark.epoch}") { announce.leaderMarked(mark) }
+        }
+        return AutoCloseable {
+            registration.close()
+            unpublishRegistration.close()
+            topologyRegistration.close()
+            leaderMarkRegistration.close()
+        }
     }
 
     /** One catch-up announcement, isolated from its siblings — see [announceTo]. */

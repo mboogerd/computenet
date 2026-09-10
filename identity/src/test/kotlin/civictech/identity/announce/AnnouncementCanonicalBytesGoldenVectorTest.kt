@@ -1,6 +1,7 @@
 package civictech.identity.announce
 
 import civictech.cell.CellRef
+import civictech.cell.host.LeaderMark
 import civictech.cell.host.TopologyLink
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
@@ -45,8 +46,16 @@ class AnnouncementCanonicalBytesGoldenVectorTest {
     /**
      * Chosen to exercise every branch of the grammar in one input: a non-ASCII
      * port name (pins UTF-8, not UTF-16 or the platform charset), negative
-     * longs (pins two's complement big-endian), all three argument tags, and
-     * both states of the nullable [PortRef.cell].
+     * longs (pins two's complement big-endian), the first three argument tags,
+     * and both states of the nullable [PortRef.cell].
+     *
+     * **Deliberately left byte-for-byte as it was** when tag `0x04`
+     * ([LeaderMark]) joined the domain (`computenet-f7h.2.2`). That is the
+     * compatibility claim, and leaving this input and [goldenHex] alone is how
+     * it is pinned: adding a *new* tag must not perturb the bytes of anything
+     * already encodable, or every signature already in the field is silently
+     * invalidated. The mark's own bytes are pinned by [leaderMarkGoldenInput]
+     * below, which appends one to this input rather than replacing it.
      */
     private val goldenInput = AnnouncementSigningInput(
         mintingPeerId = PeerId("ed25519:Zm9vYmFy"),
@@ -120,6 +129,89 @@ class AnnouncementCanonicalBytesGoldenVectorTest {
         // 1+24 CellRef arg, 1+16+(16+1+24)+(16+1) TopologyLink arg, 1+16 UUID arg.
         assertEquals(213, canonicalBytes(goldenInput).size)
         assertEquals(213 * 2, goldenHex.length)
+    }
+
+    // ------------------------------------------------ tag 0x04, LeaderMark
+
+    /**
+     * [goldenInput] with one [LeaderMark] appended as a fourth argument — the
+     * second golden vector (`computenet-f7h.2.2`).
+     *
+     * Appending rather than substituting is the point: the first 209 bytes of
+     * [leaderMarkGoldenHex] are [goldenHex]'s first 209 bytes verbatim, and the
+     * only pre-existing byte that moves is the four-byte argument count. That
+     * relationship is itself asserted below, so this vector pins both the mark's
+     * bytes and the claim that tag `0x04` disturbs nothing that came before it.
+     */
+    private val leaderMarkGoldenInput = goldenInput.copy(
+        args = goldenInput.args + LeaderMark(
+            logicalId = UUID.fromString("77777777-6666-4555-8444-333333333333"),
+            epoch = 5L,
+            leaderRef = CellRef(UUID.fromString("11111111-2222-4333-8444-555555555555"), 2L),
+        ),
+    )
+
+    /**
+     * [goldenHex] with `00000003` -> `00000004` and 49 bytes appended:
+     *
+     * ```
+     * 00000004                          args: 4 elements follow
+     * ... the three arguments of goldenHex, unchanged ...
+     * 04                                  tag LeaderMark
+     *   7777777766664555 8444333333333333    .logicalId
+     *   0000000000000005                     .epoch = 5
+     *   1111111122224333 8444555555555555    .leaderRef.id
+     *   0000000000000002                     .leaderRef.instanceId = 2
+     * ```
+     *
+     * Derived by hand from the grammar first (1 + 16 + 8 + 24 = 49 bytes,
+     * 213 + 49 = 262) and then observed from the function; the two agreed.
+     */
+    private val leaderMarkGoldenHex =
+            "00000010656432353531393a5a6d3976596d467900000000000000070000018b" +
+            "cfe568000102030405060708fffffffffffffffe000000000000400080000000" +
+            "0000002a000000000000002a0000000c6f72646572732fc3bc62657200000004" +
+            "0111111111222243338444555555555555ffffffffffffffff02aaaaaaaabbbb" +
+            "4ccc8dddeeeeeeeeeeee0123456789ab4cde8f01234567890abc01deadbeef00" +
+            "00400080000000000000010000000000000009fedcba98765443218fedcba987" +
+            "6543210003999999998888477786665555444433330477777777666645558444" +
+            "3333333333330000000000000005111111112222433384445555555555550000" +
+            "000000000002"
+
+    @Test
+    fun `the canonical encoding of the LeaderMark golden input is byte-for-byte the pinned literal`() {
+        assertEquals(leaderMarkGoldenHex, canonicalBytes(leaderMarkGoldenInput).toHex())
+    }
+
+    @Test
+    fun `the LeaderMark golden encoding has the length its grammar predicts`() {
+        // 213 as above, plus 1 tag + 16 logicalId + 8 epoch + 24 leaderRef = 49.
+        assertEquals(262, canonicalBytes(leaderMarkGoldenInput).size)
+        assertEquals(262 * 2, leaderMarkGoldenHex.length)
+    }
+
+    /**
+     * The compatibility claim, stated as bytes rather than as prose: adding tag
+     * `0x04` moved **nothing** except the argument count. Everything up to and
+     * including the port name is identical, and so is every byte of the three
+     * pre-existing arguments.
+     *
+     * This is the assertion that would go red if a later change to the encoding
+     * were smuggled in alongside a domain widening — the case the class KDoc
+     * says must never be quietly accepted.
+     */
+    @Test
+    fun `appending a LeaderMark leaves every pre-existing byte where it was`() {
+        // Up to the argument count: the prefix is shared verbatim.
+        val countAt = goldenHex.indexOf("00000003", goldenHex.indexOf("6f72646572732fc3bc626572"))
+        assertEquals(goldenHex.substring(0, countAt), leaderMarkGoldenHex.substring(0, countAt))
+        // The count itself, and only it, changes.
+        assertEquals("00000003", goldenHex.substring(countAt, countAt + 8))
+        assertEquals("00000004", leaderMarkGoldenHex.substring(countAt, countAt + 8))
+        // The three original arguments, then the 49 new bytes and nothing else.
+        val originalArgs = goldenHex.substring(countAt + 8)
+        assertEquals(originalArgs, leaderMarkGoldenHex.substring(countAt + 8, countAt + 8 + originalArgs.length))
+        assertEquals(49 * 2, leaderMarkGoldenHex.length - (countAt + 8 + originalArgs.length))
     }
 }
 
