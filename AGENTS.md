@@ -240,7 +240,11 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   one Bash call to save round trips and `&&` is the natural joiner. Remedy:
   join independent searches with `;` or newlines, never `&&`, and treat any
   command whose absence of output is evidence as one that must run
-  unconditionally.
+  unconditionally. **Keep `&&` where the left command ESTABLISHES the search's
+  context** — `cd "$WT" && git grep X` joined with `;` greps the wrong tree
+  when the `cd` fails, manufacturing this same false zero from the other
+  direction. The rule is about chaining PEER searches, not about dropping
+  `&&` from a guard.
 
 ## Verification
 
