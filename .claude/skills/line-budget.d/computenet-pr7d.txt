@@ -1,6 +1,7 @@
-work +12
-# `bd show <id> --json` carries a `comments` key that is present and ALWAYS null,
-# immediately beside an accurate `comment_count` under a near-identical name. The
+work +14
+# `bd show <id> --json` has NO `comments` key, so `.comments` reads null exactly
+# as a missing key does — immediately beside an accurate `comment_count` under a
+# near-identical name. The
 # failure is silent and self-consistent: null is indistinguishable from a bead
 # with no comments (computenet-pr7d). It matters because step 6 prescribes
 # re-reading your own writes after a recovered push and treats a lost write as an
@@ -9,3 +10,7 @@ work +12
 # not say is that the WRONG field exists and answers null, which is the whole
 # trap. Step 6's bullet now names the right instruments inline, since that is the
 # step where the misreading becomes a false alarm to a person.
+# Corrected in review: the first draft said the key was present-and-null, which
+# is wrong (has("comments") is false on all 40 beads measured) and contradicted
+# the parent_id bullet ten lines below on the identical distinction. The entry
+# now cites that bullet as the general rule it is an instance of.

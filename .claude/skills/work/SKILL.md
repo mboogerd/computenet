@@ -2854,7 +2854,7 @@ bd comments <id> --json > "$SCRATCH/c-<id>.json"         # per bead you commente
 ```
 
 **`bd comments`, or `comment_count` — never `.comments` from `bd show --json`,
-which is present and always `null`** whether or not your write landed. That
+a field that does not exist and so reads `null`** whether or not your write landed. That
 reads as a lost comment, and a lost write here escalates to a human
 (computenet-pr7d; bd-traps.md).
 
