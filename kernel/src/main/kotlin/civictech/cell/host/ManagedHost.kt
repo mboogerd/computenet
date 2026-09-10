@@ -604,6 +604,31 @@ open class ManagedHost(
     private fun deadLetter(cause: Throwable?, description: String, invocation: HostedPortInvocation? = null) =
         deadLetters.deadLetter(cause, description, invocation)
 
+    /**
+     * The single-writer **divergent-write** report seam (f7h.5-D4, G-44;
+     * [civictech.cell.replication.SingleWriterReplication.onDivergentWrite]).
+     * A superseded leader surfaces each delta it produced after it witnessed a
+     * member depart, once, as an ordinary dead letter — so a write that the
+     * winner may never have received is reported on the channel operators
+     * already read rather than silently dropped.
+     *
+     * `internal`, and deliberately narrower than the `private` [deadLetter] it
+     * forwards to: it takes a **required** [invocation], because a divergent
+     * write is always describable as the synthetic `deltaInlet.propagate` it
+     * would have been, and there is no reason for another kernel caller to
+     * reach the general form through this name. No public API on this host
+     * widens.
+     *
+     * [cause] is null for the write itself (it is not a fault — nothing threw)
+     * and carries the exception when an `onDivergentWrite` handler threw and
+     * its failure is being reported as its own record.
+     */
+    internal fun deadLetterDivergent(
+        cause: Throwable?,
+        description: String,
+        invocation: HostedPortInvocation,
+    ) = deadLetter(cause, description, invocation)
+
     private fun enqueue(priority: Int, action: suspend () -> Any?) {
         scheduler.submit(priority) {
             try {
