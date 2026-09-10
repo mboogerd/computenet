@@ -736,6 +736,15 @@ class SingleWriterReplication(
      *   divergent, and a leader that never witnessed a departure has no tap at
      *   all.
      *
+     * Note that the closing edge of that window is now defended **twice** — by
+     * the gate above and by [disarmDivergence] unlinking the tap — and neither
+     * alone mutates to a red test, because each covers for the other. What is
+     * pinned (measured, computenet-f7h.5.2) is the window itself: removing BOTH
+     * reddens `DivergentWriteSurfacingTest`'s "a write made after the departed
+     * member returned is not divergent". The opening edge has no such
+     * duplication — it is the tap's late install, and reinstating a
+     * promotion-time tap reddens example 6 at 1-vs-2.
+     *
      * The subscription rides its own `divergence:` [PortRef] namespace, which
      * cannot collide with [shipRef]'s `ship:`, and is never entered in
      * [shipped] — nothing ships anywhere and no follower is involved.
