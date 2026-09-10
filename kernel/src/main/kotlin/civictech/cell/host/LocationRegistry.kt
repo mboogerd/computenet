@@ -71,6 +71,19 @@ class LocationRegistry {
     private val parked = ConcurrentHashMap<CellRef, ParkQueue<HostedPortInvocation>>()
 
     /**
+     * Port names whose invocations are command-forwarded to another instance
+     * of the same logical id (single-writer writes, f7h.5-D2). Written by
+     * `forwardWrites` (`civictech.cell.replication.SingleWriterReplication`),
+     * read by the release rule that decides which parked invocations a
+     * superseded leader may re-address on step-down (f7h.5-D2, task 3).
+     * Keyed by **logical** id, not by ref: a `leaderRef.id` is the logical
+     * id, and the record must survive the leader instance changing. Never
+     * cleared — a port that was once a forwarded write port stays one for
+     * the life of the registry, because the record tracks names, not refs.
+     */
+    private val forwardedPortsByLogicalId = ConcurrentHashMap<java.util.UUID, MutableSet<String>>()
+
+    /**
      * Instances-by-logical-id index (PN-7 perf cliff): see [InstanceIndex]'s
      * kdoc. Maintained in lockstep with [locations] on every install/removal.
      *
@@ -282,6 +295,26 @@ class LocationRegistry {
     fun replicasOf(logicalId: java.util.UUID): Set<CellRef> = instances.replicasOf(logicalId)
 
     /**
+     * Record that [portName] is a command-forwarded write for [logicalId]
+     * (f7h.5-D2): written by `forwardWrites`
+     * (`civictech.cell.replication.SingleWriterReplication`) the first time
+     * it forwards that port for that id. `internal` — kernel-only, the same
+     * visibility posture as [instances]/[holds] (OQ-1). Idempotent: noting
+     * the same port twice for one id is a no-op past the first call.
+     */
+    internal fun noteForwardedPort(logicalId: java.util.UUID, portName: String) {
+        forwardedPortsByLogicalId.computeIfAbsent(logicalId) { ConcurrentHashMap.newKeySet() }.add(portName)
+    }
+
+    /**
+     * Port names ever recorded as command-forwarded writes for [logicalId]
+     * (f7h.5-D2), or the empty set if [noteForwardedPort] was never called
+     * for it. `internal`, alongside [noteForwardedPort].
+     */
+    internal fun forwardedPorts(logicalId: java.util.UUID): Set<String> =
+        forwardedPortsByLogicalId[logicalId] ?: emptySet()
+
+    /**
      * What a locally published ref *is*: the concrete [Cell] class captured at
      * [publish] time (M0 inspector seam). Held [WeakReference]ly so the table
      * pins nothing — the entry is dropped on [unpublish] anyway, this only
@@ -326,6 +359,25 @@ class LocationRegistry {
     /** Parked invocations awaiting a [publish] for [ref] (test/introspection surface). */
     fun parkedFor(ref: CellRef): List<HostedPortInvocation> =
         parked[ref]?.let { synchronized(it) { it.snapshot() } } ?: emptyList()
+
+    /**
+     * Drain everything parked at [ref] and return it, in park order, leaving
+     * [parkedFor] empty for [ref] afterwards (f7h.5-D1). Built for one caller:
+     * the superseded single-writer leader (task 3), which re-addresses its
+     * own parked writes to the new leader on step-down rather than leaving
+     * them stranded for a republish of the dead ref. A plain drain on the
+     * parking lane this registry already owns (C-13's "where a ref lives +
+     * parking") — it changes nothing about park semantics for any other ref,
+     * and does not itself re-deliver anything.
+     *
+     * The queue object stays registered in [parked], emptied rather than
+     * removed, so a concurrent [deliver] racing this call finds the existing
+     * queue via `computeIfAbsent` instead of installing a second one under
+     * the same [ref] (the same reasoning [parkedFor] and [deliver] already
+     * rely on via the per-ref `synchronized` monitor).
+     */
+    fun unpark(ref: CellRef): List<HostedPortInvocation> =
+        parked[ref]?.let { synchronized(it) { it.drain() } } ?: emptyList()
 
     /**
      * Optimistic send with lazy re-resolution: enqueue on the located host or
