@@ -1,0 +1,11 @@
+work +12
+# `bd show <id> --json` carries a `comments` key that is present and ALWAYS null,
+# immediately beside an accurate `comment_count` under a near-identical name. The
+# failure is silent and self-consistent: null is indistinguishable from a bead
+# with no comments (computenet-pr7d). It matters because step 6 prescribes
+# re-reading your own writes after a recovered push and treats a lost write as an
+# ESCALATION to a human — so the wrong field there manufactures one. bd-traps.md
+# already said "never includes comment bodies, only comment_count"; what it did
+# not say is that the WRONG field exists and answers null, which is the whole
+# trap. Step 6's bullet now names the right instruments inline, since that is the
+# step where the misreading becomes a false alarm to a person.
