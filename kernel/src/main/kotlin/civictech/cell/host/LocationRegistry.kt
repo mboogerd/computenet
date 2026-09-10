@@ -81,7 +81,7 @@ class LocationRegistry {
      * cleared — a port that was once a forwarded write port stays one for
      * the life of the registry, because the record tracks names, not refs.
      */
-    private val forwardedPortsByLogicalId = ConcurrentHashMap<java.util.UUID, MutableSet<String>>()
+    private val forwardedWritePorts = ConcurrentHashMap<java.util.UUID, MutableSet<String>>()
 
     /**
      * Instances-by-logical-id index (PN-7 perf cliff): see [InstanceIndex]'s
@@ -303,7 +303,7 @@ class LocationRegistry {
      * the same port twice for one id is a no-op past the first call.
      */
     internal fun noteForwardedPort(logicalId: java.util.UUID, portName: String) {
-        forwardedPortsByLogicalId.computeIfAbsent(logicalId) { ConcurrentHashMap.newKeySet() }.add(portName)
+        forwardedWritePorts.computeIfAbsent(logicalId) { ConcurrentHashMap.newKeySet() }.add(portName)
     }
 
     /**
@@ -312,7 +312,7 @@ class LocationRegistry {
      * for it. `internal`, alongside [noteForwardedPort].
      */
     internal fun forwardedPorts(logicalId: java.util.UUID): Set<String> =
-        forwardedPortsByLogicalId[logicalId] ?: emptySet()
+        forwardedWritePorts[logicalId] ?: emptySet()
 
     /**
      * What a locally published ref *is*: the concrete [Cell] class captured at
