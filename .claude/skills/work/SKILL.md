@@ -1483,10 +1483,16 @@ Otherwise ask for the next batch:
 # dispatching (git log in the worktree, bd comments on the bead) and route to 5c
 # rather than to an implementer, or you put a second implementer onto a branch
 # that already carries the deliverable (computenet-jw9x).
-# `merged_into_feature` TRUE with both of those FALSE is the cross-machine
-# twin: a dead session elsewhere merged the task into the feature branch and
-# never closed it. No task worktree exists here — route to 5c review against
-# the merged range, the feature worktree standing in (computenet-kklt).
+# `merged_into_feature` TRUE with both of those FALSE is a CANDIDATE for the
+# cross-machine twin — a dead session elsewhere merged the task into the
+# feature branch and never closed it (computenet-kklt). The script gates the
+# flag on a `task/<id>` ref existing somewhere, which the twin always has;
+# CONFIRM before routing, because the look-alike is a create-then-amend
+# sibling whose predecessor put commits naming it on the branch while its own
+# work is unwritten (computenet-g0hg). Open + unassigned + `comment_count` 0
+# means nobody worked it, and the branch's tree lacking the task's own named
+# deliverable settles it. Confirmed — no task worktree here — route to 5c
+# review against the merged range, the feature worktree standing in.
 # --siblings N if step 3 found N live sibling sessions on this box, or the
 # operator sanctioned concurrent running: the capacity cap is PER SESSION and
 # the machine is shared (computenet-arow). The verdict echoes what it used

@@ -425,13 +425,24 @@ if "branch_has_commits" not in nb._entry({"id": "t"}, False, []):
 
 # kklt: the task's work can sit on the FEATURE branch with no local task
 # branch at all (a dead session on another machine merged and pushed it).
-merged_cases = 3
+merged_cases = 5
 # the grep is anchored: a sibling's `.10` commit must not read as `.1` merged
 import subprocess as _sp, tempfile as _tf, os as _os
 _d = _tf.mkdtemp(); _sp.run(["git", "init", "-q", _d], check=True)
+# An `origin` that answers: ls-remote is the last resort of the branch gate,
+# and it must be able to answer "no such branch" rather than error.
+_origin = _tf.mkdtemp(); _sp.run(["git", "init", "-q", "--bare", _origin], check=True)
+_sp.run(["git", "-C", _d, "remote", "add", "origin", _origin], check=True)
 _sp.run(["git", "-C", _d, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
          "--allow-empty", "-m", "Merge computenet-f.10 into feature"], check=True)
 _sp.run(["git", "-C", _d, "branch", "feature/computenet-f"], check=True)
+_sp.run(["git", "-C", _d, "branch", "task/computenet-f.10"], check=True)
+# The create-then-amend sibling (computenet-g0hg): .11's id appears in a commit
+# on the feature branch, but no `task/computenet-f.11` branch exists anywhere,
+# so nobody has ever worked it and the flag must stay FALSE.
+_sp.run(["git", "-C", _d, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+         "--allow-empty", "-m", "computenet-f.11 groundwork landed with .10"], check=True)
+_sp.run(["git", "-C", _d, "branch", "-f", "feature/computenet-f", "HEAD"], check=True)
 _cwd = _os.getcwd(); _os.chdir(_d)
 try:
     if nb.merged_into_feature("computenet-f.1", "computenet-f") is not False:
@@ -440,6 +451,19 @@ try:
     if nb.merged_into_feature("computenet-f.10", "computenet-f") is not True:
         failed += 1
         print("FAIL: task .10 must match its own merge commit")
+    if nb.merged_into_feature("computenet-f.11", "computenet-f") is not False:
+        failed += 1
+        print("FAIL: a commit naming .11 with no task/ branch is a create-then-amend"
+              " sibling, not the cross-machine twin (computenet-g0hg)")
+    # The gate itself, directly: the twin always has a branch, so a branch that
+    # exists must not be read as absent.
+    if nb._task_branch_exists("computenet-f.10") is not True:
+        failed += 1
+        print("FAIL: _task_branch_exists must see a local task/ branch")
+    if nb._task_branch_exists("computenet-f.11") is not False:
+        failed += 1
+        print("FAIL: _task_branch_exists must answer False when no task/ branch"
+              " exists locally, remote-tracking, or on origin")
 finally:
     _os.chdir(_cwd)
 if nb.merged_into_feature("computenet-nope", "definitely-not-a-feature") is not False:

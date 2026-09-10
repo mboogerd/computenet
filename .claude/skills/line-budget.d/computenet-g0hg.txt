@@ -1,0 +1,9 @@
+work +6
+# SKILL.md 5b's `merged_into_feature` sentence stopped asserting the
+# cross-machine twin classification and now states the confirmation first. The
+# look-alike is a create-then-amend sibling whose predecessor put commits
+# naming it on the feature branch while its own work is unwritten; following
+# the old sentence literally dispatched a reviewer to certify work nobody had
+# done (computenet-g0hg). The six lines are the discriminator — open,
+# unassigned, zero comments, and the absent named deliverable — without which
+# the sentence is a route with no check.
