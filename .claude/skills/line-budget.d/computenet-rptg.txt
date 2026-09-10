@@ -1,0 +1,18 @@
+work +41
+# The FROM-CACHE/SKIPPED check's only documented instrument, `gh run view --log`,
+# refuses while ANY job in the run is in progress — and a run here spans 14s to
+# 9m17s, so for most of the window a reviewer works in the check is simply
+# unavailable. The file already recorded the refusal (computenet-4dip) but gave
+# no way through it, leaving two reviewers in one session each choosing between
+# waiting out the slowest job, skipping the check, or inferring execution from a
+# green conclusion (computenet-rptg). The lines add the per-JOB REST form, which
+# works while siblings are pending and is cheaper, plus where the job id comes
+# from — and restate that a refusal is reported as NOT PERFORMED, never as
+# passed. The check is not decorative: ten consecutive green runs once had
+# :wire:test FROM-CACHE and proved nothing.
+# Review added the rest: a one-row guard on $JOB, because an empty one fetches
+# `.../jobs//logs` and lands a 4-line 404 JSON body in the log that survives the
+# `wc -l` precondition and matches neither grep — the false clean the `.[0]`
+# warning already covers, in a new place; and the measured line-shape difference
+# between the two logs (job name in column 1 vs an ISO timestamp), settling that
+# both greps survive the swap unchanged.
