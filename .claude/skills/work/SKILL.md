@@ -2365,6 +2365,9 @@ gh pr view <url> --json body -q .body | head -5   # confirm what landed
 bd update <feature-id> --set-metadata pr=<url>
 ```
 
+Early so CI runs while the feature is built; recorded so a later session
+finds it. It stays **draft** until 5e's verdict — you mark ready only there.
+
 **Any long prose body containing code goes to a FILE, whatever command
 consumes it** — `--body-file` here, `--desc-file`/`--accept-file` for
 `create-ticket.sh` (step 7), `-F body=@file` for the `gh api` REST fallback
@@ -2381,9 +2384,6 @@ and created NO PR — at the ship gate, after the branch was pushed
 view --json body` here, `bd comments --json` for a comment. The bd variants of
 this bug SUCCEED while silently dropping the backticked text, which is the
 quieter and worse failure.
-
-Early so CI runs while the feature is built; recorded so a later session
-finds it. It stays **draft** until 5e's verdict — you mark ready only there.
 
 **On the direct-child route (step 5's no-feature-layer shape) the trigger is
 the implementer's first commit instead**, because no task ever merges into
