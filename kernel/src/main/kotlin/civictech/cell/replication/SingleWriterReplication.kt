@@ -34,10 +34,58 @@ typealias LeaderMark = civictech.cell.host.LeaderMark
  * An epoch-stamped unit on the leader→follower log (spec 42): "every leader
  * stamps its produced deltas with the epoch it applied under; deltas or
  * commands stamped below the current epoch are fenced (inert)".
+ *
+ * [baseline] distinguishes the two kinds of unit that ride this one stream
+ * ([MEM1-32], f7h.3-D1). A **baseline** is the leader's WHOLE state at
+ * [epoch] and is *adopted* — it replaces the replica's local state. A
+ * non-baseline (the default) is a *delta* and is applied by the replica's
+ * ordinary apply. The distinction exists because a claimant's first
+ * shipment on a fresh link used to be the current state expressed as a
+ * from-zero delta, which is correct only for a follower that holds nothing:
+ * a follower that already held state ADDED the leader's total onto its own
+ * (testkit's BS-14 measured the demoted ex-leader at 6 where the successor
+ * held 4). Route every incoming unit through [applyTo] rather than reading
+ * this flag directly (f7h.3-D2).
+ *
+ * The field is **additive on the wire**: it is the third positional
+ * parameter and defaults to `false`, so every pre-existing two-argument
+ * construction compiles unchanged, and `WireCodec`'s `Json` never sets
+ * `encodeDefaults` — so a `baseline = false` unit encodes to exactly the
+ * bytes it encoded to before this field existed. `WireCodec.VERSION` is
+ * therefore unchanged. Pinned, not merely asserted, by
+ * `civictech.cell.wire.StampedWireCompatTest` over two fixtures captured
+ * before the field existed.
  */
 @kotlinx.serialization.Serializable
 @kotlinx.serialization.SerialName("Stamped")
-data class Stamped<D>(val epoch: Long, val delta: D)
+data class Stamped<D>(val epoch: Long, val delta: D, val baseline: Boolean = false)
+
+/**
+ * The **one** fence-and-route rule for an incoming [Stamped] at a replica
+ * holding [currentEpoch] ([MEM1-04], [MEM1-31], [MEM1-32], f7h.3-D2).
+ *
+ * Fenced when `epoch < currentEpoch`: returns `null` and calls neither
+ * lambda — the unit is inert, and in particular the replica's epoch does
+ * NOT move. Otherwise exactly one of [onBaseline] (iff [Stamped.baseline],
+ * adopt: replace local state) and [onDelta] (apply) is called, and the
+ * epoch the replica now holds — `maxOf(currentEpoch, epoch)` — is returned
+ * for the caller to assign:
+ *
+ * ```kotlin
+ * currentEpoch = value.applyTo(currentEpoch, ::adoptState) { total += it } ?: currentEpoch
+ * ```
+ *
+ * It lives here, and every reference cell calls it, so the rule cannot
+ * drift between fixtures (f7h.3-D2). The fence stays in the CELL rather
+ * than in [SingleWriterReplication] because the engine never sees a
+ * follower's inlet — deltas arrive by [HostedCellProxy] straight at the
+ * cell's port.
+ */
+fun <D> Stamped<D>.applyTo(currentEpoch: Long, onBaseline: (D) -> Unit, onDelta: (D) -> Unit): Long? {
+    if (epoch < currentEpoch) return null
+    if (baseline) onBaseline(delta) else onDelta(delta)
+    return maxOf(currentEpoch, epoch)
+}
 
 /**
  * Contract for a single-writer replicated cell (spec 42 §Single-writer
@@ -63,7 +111,22 @@ interface SingleWriterReplicable<D> : Cell {
     /** Leader→follower shipping outlet — one direction, no gossip back. */
     val deltaOutlet: FanOutlet<Propagate<Stamped<D>>>
 
-    /** Follower apply inlet — FIFO per link; a below-current-epoch delta is fenced (inert). */
+    /**
+     * Follower apply inlet — FIFO per link.
+     *
+     * Normative ([MEM1-04], [MEM1-31], [MEM1-32]): an implementor SHALL
+     * apply an incoming [Stamped] only if its [Stamped.epoch] is **at or
+     * above** the replica's current epoch, and SHALL fence the remainder —
+     * a below-epoch unit is inert, applies nothing and does not move the
+     * replica's epoch. Of the units that pass the fence, one carrying
+     * [Stamped.baseline] `true` SHALL be adopted via [adoptState]
+     * (replacing local state) and one carrying `false` SHALL be applied by
+     * the ordinary apply.
+     *
+     * f7h.3-D2: implementors realize this rule by calling [applyTo] rather
+     * than open-coding the comparison, so the rule has exactly one
+     * definition and the reference cells cannot drift from it.
+     */
     val deltaInlet: Use<Propagate<Stamped<D>>>
 
     /** Current applied state — used for late-join catch-up and RESTART peer catch-up. */
@@ -72,6 +135,16 @@ interface SingleWriterReplicable<D> : Cell {
     /**
      * Adopt a peer's state wholesale, replacing whatever local state was
      * restored — the RESTART-by-peer-catch-up path (spec 42 §RESTART).
+     *
+     * Normative ([MEM1-32], f7h.3-D6): this is also the apply path for a
+     * **baseline** unit on [deltaInlet]. A claimant's first shipment on
+     * every fresh link is `Stamped(epoch, currentState(), baseline = true)`
+     * — the "announce as a re-baseline" half of [MEM1-32] — and a follower
+     * that receives it SHALL adopt, not add. Implementors MUST therefore
+     * make this REPLACE local state rather than merge into it; a
+     * merge-shaped `adoptState` re-introduces exactly the duplication the
+     * baseline flag exists to remove. Reached through [applyTo]'s
+     * `onBaseline` (f7h.3-D2), never by testing [Stamped.baseline] inline.
      */
     fun adoptState(state: D)
 }
@@ -158,8 +231,69 @@ class SingleWriterReplication(
     /** Established leader→follower shipping links (one direction only). */
     private val shipped = mutableMapOf<Pair<CellRef, CellRef>, Link>()
 
+    /**
+     * The last [LeaderMark] this engine actually APPLIED, per logical id
+     * (f7h.3-D3). [LocationRegistry.onLeaderMark] hands over only the new
+     * mark, and neither [LeaderMark] nor [Stamped] carries a role, so this map
+     * is the only way [applyRoles] can know which local replica WAS leading
+     * and therefore has to step down.
+     *
+     * Inferring "was leading" from `shipped.keys.any { it.first == local.ref }`
+     * was considered and rejected: a leader with no followers yet holds no
+     * links at all, and the step-down seam below needs the OLD mark, not a
+     * boolean. Written at the END of [applyRoles], so the whole pass reads a
+     * consistent `previous`.
+     */
+    private val applied = mutableMapOf<UUID, LeaderMark>()
+
+    /** Step-down observers ([onStepDown]). */
+    private val stepDownListeners = mutableListOf<(StepDown) -> Unit>()
+
     interface DeltaInletHolder {
         val deltaInlet: Use<Propagate<Stamped<Any?>>>
+    }
+
+    /**
+     * One replica's demotion out of leadership, as observed by [onStepDown]
+     * (f7h.3-D3): [replica] led under [from] and has just been demoted by the
+     * adoption of [to], which is strictly greater under the fold's total
+     * order. [logicalId] is `to.logicalId`, carried explicitly so a listener
+     * need not destructure a mark to route.
+     */
+    internal data class StepDown(
+        val logicalId: UUID,
+        val from: LeaderMark,
+        val to: LeaderMark,
+        val replica: SingleWriterReplicable<*>,
+    )
+
+    /**
+     * Observe local step-downs — the seam F5 (divergent-write surfacing)
+     * subscribes to; nothing in F3 subscribes, deliberately. Fires exactly
+     * once per demoted ex-leader, AFTER its outbound shipping links are
+     * unlinked and after its [SingleWriterReplicable.becomeFollower] has run,
+     * so a listener observes a replica that already forwards writes and can
+     * emit nothing to a follower.
+     *
+     * Detachment follows [LocationRegistry.onPublish]'s contract: close the
+     * returned handle to unsubscribe. A listener is a *notification, not a
+     * participant* (f7h.1-D3's precedent, [LocationRegistry.notify]): its
+     * exception is swallowed and printed, never propagated into the fold and
+     * never allowed to stop the next listener or the promotion pass.
+     */
+    internal fun onStepDown(listener: (StepDown) -> Unit): AutoCloseable {
+        stepDownListeners += listener
+        return AutoCloseable { stepDownListeners -= listener }
+    }
+
+    private fun notifyStepDown(event: StepDown) {
+        stepDownListeners.toList().forEach { listener ->
+            try {
+                listener(event)
+            } catch (e: Exception) {
+                System.err.println("[SingleWriterReplication] step-down hook failed for ${event.logicalId}: $e")
+            }
+        }
     }
 
     init {
@@ -233,20 +367,80 @@ class SingleWriterReplication(
 
     /**
      * Apply [mark]'s roles to every local replica of its logical id — the
-     * single subscriber's body, run once per adopted fold (see `init`). The
-     * designated replica promotes and then ships to every other known
-     * instance; every other local replica demotes to command-forwarding.
+     * single subscriber's body, run once per adopted fold (see `init`).
+     *
+     * **Two passes, demotions before the promotion** (f7h.3-D3). The order is
+     * load-bearing twice over:
+     *
+     * - Within a demoted ex-leader: unlink → [SingleWriterReplicable.becomeFollower]
+     *   → [onStepDown]. Unlinking first means nothing the ex-leader emits
+     *   during its own demotion can still reach a follower ([MEM1-15]); the
+     *   `becomeFollower` call is the SAME single call a non-leading local
+     *   gets, not an extra one, so the exactly-once role-call accounting
+     *   ([MEM1-08], pinned by [LeaderMarkFoldTest]) is unchanged.
+     * - Between passes: the loser's links are gone before the winner's are
+     *   formed, whatever order `localReplicas` happens to hold — a
+     *   three-replica set can visit the new leader before the ex-leader in a
+     *   single pass, so relying on list order would leave the outcome
+     *   spawn-order dependent.
+     *
+     * The between-pass half is **defensive, and not currently observable**:
+     * measured on computenet-f7h.3.2's branch and re-measured in its review,
+     * moving the promotion pass ahead of the demotion pass leaves the WHOLE
+     * of `:kernel:test` green (1510 tests), not merely `StepDownTest`,
+     * `LeaderMarkFoldTest` and `ShippingLinkIdempotenceTest` — because the
+     * two passes touch disjoint key sets today: the demotion removes only
+     * links SOURCED at the ex-leader and the promotion adds only links
+     * sourced at the winner. Nor does the emission order rescue it:
+     * promote-first EMITS the winner's baseline while the ex-leader is still
+     * marked leading, but that catch-up crosses `registry.deliver` and is
+     * applied only when the scheduler drains, by which time `applyRoles` has
+     * returned and the demotion has run. So the swap is not an unasserted
+     * behavioural difference — it has no observable consequence at all under
+     * today's `shipTo`. The order is kept because it is the one that is
+     * correct under a future
+     * `shipTo` whose teardown and construction can collide (and under
+     * f7h.3-D3), not because a test would catch losing it. The
+     * WITHIN-demotion order — unlink before `becomeFollower` — *is* pinned:
+     * dropping the unlink turns `StepDownTest`'s stale-emission control red
+     * (b's `receivedDeltas` 2 → 3).
+     *
+     * Which local WAS leading comes from [applied], not from the hook, which
+     * carries only the new mark.
      */
     private fun applyRoles(mark: LeaderMark) {
-        localReplicas[mark.logicalId]?.forEach { local ->
-            if (local.cell.ref == mark.leaderRef) {
-                local.cell.becomeLeader(mark.epoch)
-                registry.instances.replicasOf(mark.logicalId).filter { it != mark.leaderRef }
-                    .forEach { follower -> shipTo(local.cell, follower) }
-            } else {
-                local.cell.becomeFollower(mark.leaderRef, mark.epoch, registry)
+        val previous = applied[mark.logicalId]
+        val locals = localReplicas[mark.logicalId]
+
+        // Pass 1 — demotions.
+        locals?.toList()?.forEach { local ->
+            if (local.cell.ref == mark.leaderRef) return@forEach
+            val steppingDown = previous != null && previous.leaderRef == local.cell.ref
+            if (steppingDown) {
+                // [MEM1-15]: every outbound shipping link this replica holds as
+                // SOURCE is unlinked AND dropped from bookkeeping. `unlink()` on
+                // a `streamTo`-built link unsubscribes at the outlet and drops
+                // the source-side LinkSupport record (T21), so the ex-leader's
+                // deltaOutlet genuinely has no consumer for that target
+                // afterwards. Until F3 nothing tore these down: only
+                // `onUnpublish` unlinked, and only by TARGET.
+                shipped.keys.filter { it.first == local.cell.ref }.toList()
+                    .forEach { key -> shipped.remove(key)?.unlink() }
             }
+            local.cell.becomeFollower(mark.leaderRef, mark.epoch, registry)
+            if (steppingDown) notifyStepDown(StepDown(mark.logicalId, previous!!, mark, local.cell))
         }
+
+        // Pass 2 — the promotion, and the winner's outbound links. The
+        // winner→ex-leader link formed here is what carries T1's baseline back
+        // to the replica that just stepped down.
+        locals?.toList()?.firstOrNull { it.cell.ref == mark.leaderRef }?.let { local ->
+            local.cell.becomeLeader(mark.epoch)
+            registry.instances.replicasOf(mark.logicalId).filter { it != mark.leaderRef }
+                .forEach { follower -> shipTo(local.cell, follower) }
+        }
+
+        applied[mark.logicalId] = mark
     }
 
     private fun onPeerPublished(ref: CellRef) {
@@ -283,13 +477,51 @@ class SingleWriterReplication(
         // partial-interest follower has no interest in never crosses. Total
         // interest short-circuits to the bare routed sink, so the default
         // shipping path is unwrapped and byte-identical.
+        //
+        // `stamped.baseline` rides through the re-wrap (f7h.3-D1): a sliced
+        // baseline is still a baseline — the leader's whole state RESTRICTED
+        // to what this follower wants — so dropping the flag here would turn
+        // every partial-interest follower's catch-up back into an additive
+        // delta, which is the exact defect the flag removes. Note the one
+        // asymmetry this creates for an EMPTY winner: `sliceTo` of an empty
+        // `SetDelta` under a non-Total interest returns null (SetDelta.within
+        // refuses an empty restriction), so a partial-interest follower
+        // receives no baseline frame at all for an empty leader, while a
+        // Total-interest one does (Interest.Total short-circuits). Accepted
+        // per f7h.3.1: the empty-baseline convergence guarantee holds for
+        // Total interest only.
         val sink: Propagate<Stamped<Any?>> = if (targetInterest is Interest.Total) routed
         else Propagate { stamped ->
-            sliceTo(stamped.delta, targetInterest, keyOf)?.let { routed.propagate(Stamped(stamped.epoch, it)) }
+            sliceTo(stamped.delta, targetInterest, keyOf)?.let {
+                routed.propagate(Stamped(stamped.epoch, it, stamped.baseline))
+            }
         }
         @Suppress("UNCHECKED_CAST")
-        shipped[key] = (leader.deltaOutlet as FanOutlet<Propagate<Stamped<Any?>>>).streamTo(sink)
+        shipped[key] = (leader.deltaOutlet as FanOutlet<Propagate<Stamped<Any?>>>)
+            .streamTo(sink, at = shipRef(leader.ref, followerRef))
     }
+
+    /**
+     * The stable identity of the shipping subscription `leader → follower`
+     * carried on the leader's delta outlet (f7h.3-D4, closing the epic §3.2
+     * open question "`shipTo` has no derived `PortRef`").
+     *
+     * `streamTo`'s default is `PortRef.generate()` — a fresh random ref per
+     * call — so a rebuilt link ADDS a second consumer at the outlet wherever a
+     * teardown did not happen to run first, and a single-writer follower's
+     * apply is explicitly not idempotent. Deriving the ref from the pair makes
+     * `consumers[ref] = port` REPLACE a stale attachment instead of joining
+     * it, so re-linking is idempotent at the outlet itself, independent of
+     * which teardown route (unpublish reconciliation, step-down unlink, none
+     * at all) ran — the same self-healing property, and the same derivation
+     * idiom, as [Replication]'s `gossipRef`, under its own `"ship:"` namespace
+     * so the two can never collide.
+     */
+    private fun shipRef(leader: CellRef, follower: CellRef): PortRef = PortRef(
+        UUID.nameUUIDFromBytes(
+            "ship:${leader.id}:${leader.instanceId}:${follower.id}:${follower.instanceId}".toByteArray(),
+        ),
+    )
 
     /**
      * How many leader→follower shipping links exist among [refs] (T07 finding
@@ -298,8 +530,18 @@ class SingleWriterReplication(
      * unpublish and rebuilds to 1 on its re-announce, rather than leaving a
      * stale entry forever.
      */
-    internal fun shipCountAmong(refs: Set<CellRef>): Int =
-        shipped.keys.count { it.first in refs && it.second in refs }
+    internal fun shipCountAmong(refs: Set<CellRef>): Int = shippedPairs(refs).size
+
+    /**
+     * The shipping links among [refs] themselves, not just how many
+     * ([shipCountAmong]'s companion seam, f7h.3). [MEM1-18]'s steady-state
+     * half is a statement about the SOURCE of every surviving link — "every
+     * link's first element is the current leaderRef" — which a bare count
+     * cannot express: 2 links is the right count both when they run
+     * `B→A, B→C` and when they run `B→C, A→C`.
+     */
+    internal fun shippedPairs(refs: Set<CellRef>): Set<Pair<CellRef, CellRef>> =
+        shipped.keys.filter { it.first in refs && it.second in refs }.toSet()
 
     companion object {
         /**

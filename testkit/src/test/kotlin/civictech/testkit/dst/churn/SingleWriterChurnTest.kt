@@ -14,6 +14,7 @@ import civictech.cell.replication.LeaderMark
 import civictech.cell.replication.SingleWriterReplicable
 import civictech.cell.replication.SingleWriterReplication
 import civictech.cell.replication.Stamped
+import civictech.cell.replication.applyTo
 import civictech.cell.replication.forwardWrites
 import java.util.UUID
 import kotlin.test.Test
@@ -103,6 +104,9 @@ import kotlin.test.assertTrue
  * hold in both is duplicated-at-demoted == 2, and this file's arms pin that, with the discrepancy
  * reported on the bead rather than carried forward silently.)
  * `LeaderChurnReport.instanceReadings` carries that reading and both arms below pin it.
+ * **The duplication this paragraph describes was repaired by computenet-f7h.3 (the successor's
+ * catch-up now ships a baseline that replaces the demoted instance's state instead of adding to
+ * it) and is measured at 0 below, in both orders.**
  *
  * That dependency is stated rather than hidden, because it bounds the claim: the numbers below
  * are what happens *with that fencing implementation*, and a cell that stamped its outbound
@@ -166,14 +170,19 @@ class SingleWriterChurnTest {
         init {
             deltaInletPort.serve(object : Propagate<Stamped<Long>> {
                 override fun propagate(value: Stamped<Long>) {
-                    // fencing (spec 42): a delta stamped below the current epoch is inert
-                    if (value.epoch < currentEpoch) return
-                    currentEpoch = maxOf(currentEpoch, value.epoch)
-                    total += value.delta
+                    // fencing + baseline routing through the ONE rule (f7h.3-D2,
+                    // [MEM1-04]/[MEM1-31]/[MEM1-32]) — no local epoch comparison. Mirrors
+                    // :kernel's SingleWriterReplicationTest.SwCounterCell; kept in step by
+                    // computenet-f7h.3 (T4), which re-measures this file's constants below.
+                    val next = value.applyTo(currentEpoch, onBaseline = { total = it }) { total += it }
+                    if (next != null) currentEpoch = next
                 }
             })
+            // late-join / re-announce catch-up ([MEM1-32], f7h.3-D6): the leader's whole
+            // state as a BASELINE, unconditionally while leading — the old `total != 0L`
+            // guard is gone, matching the kernel copy (computenet-f7h.3, T1/T4).
             deltaOutlet.linking.onLinked = { link ->
-                if (leading && total != 0L) deltaOutlet.at(link.to).propagate(Stamped(currentEpoch, total))
+                if (leading) deltaOutlet.at(link.to).propagate(Stamped(currentEpoch, total, baseline = true))
             }
         }
 
@@ -384,29 +393,25 @@ class SingleWriterChurnTest {
         assertEquals(MEASURED_DUPLICATED, report.duplicatedWrites, report.summary())
 
         // computenet-yqgd's decision: [CHA3-51]'s "duplicated across the transition" is read at
-        // EVERY instance, not the successor alone. Unchanged by computenet-f7h.1: the demoted
-        // leader (peerA) still measurably duplicates exactly the 2 pre-transition writes on top
-        // of the state it already held — the successor's from-zero catch-up still ships the
-        // leader's CURRENT total (2, at the moment of designation) back onto an already-populated
-        // ex-leader rather than a fresh follower (mechanism: `onLinked`'s
-        // `Stamped(currentEpoch, total)`); only the SEQUENCING that produces it moved from two
-        // designateLeader calls to one folded step (see the class KDoc).
-        //
-        // NOTE ON THE BEAD'S OWN WORDING: computenet-yqgd's description states the demoted
-        // instance ends "exactly twice the successor's total" in both orders. That holds for the
-        // demote-first arm (4 == 2*2) but NOT here: 6 != 2*4. The raw numbers the bead reports
-        // (6 and 4) are exactly what this arm measures; only the "twice" characterization is
-        // wrong for this arm. What actually holds in both arms is duplicated-at-demoted == 2,
-        // the pre-transition write count — see the demote-first arm below and the discrepancy
-        // reported on the bead.
+        // EVERY instance, not the successor alone. **Re-measured under computenet-f7h.3: the
+        // duplication computenet-yqgd found is repaired.** The successor's catch-up now ships a
+        // BASELINE ([Stamped.baseline] true), routed through `applyTo`'s `onBaseline` to
+        // `adoptState`, which REPLACES the demoted instance's state instead of adding to it —
+        // where the old from-zero delta landed a second copy of peerA's own 2 pre-transition
+        // writes on top of state peerA already held, the baseline now overwrites that state with
+        // the successor's total outright. The ex-leader's stale outbound link is also unlinked at
+        // step-down (computenet-f7h.3, T2: `applyRoles`'s demotions-first pass), so there is no
+        // second path a stale delta could still arrive on. Mechanism and history in the class
+        // KDoc's "computenet-yqgd decided…" paragraph.
         val peerAReading = report.instanceReadings.single { it.instance == "peerA" }
         assertEquals(MEASURED_DEMOTED_TOTAL_PROMOTE_FIRST, peerAReading.total, report.summary())
         assertEquals(
-            2L,
+            0L,
             peerAReading.duplicated(report.expectedTotal),
-            "the demoted instance duplicated exactly the 2 pre-transition writes: ${report.summary()}",
+            "the demoted instance now equals the successor's total — the baseline REPLACES rather than " +
+                "adds (computenet-f7h.3): ${report.summary()}",
         )
-        assertTrue(report.instancesWithDuplicates.map { it.instance } == listOf("peerA"), report.summary())
+        assertEquals(emptyList(), report.instancesWithDuplicates, report.summary())
     }
 
     // -------------------------------------------------------------- BS-14, demote-first arm
@@ -480,22 +485,26 @@ class SingleWriterChurnTest {
         assertEquals(0L, report.lostWrites, report.summary())
         assertEquals(0L, report.duplicatedWrites, report.summary())
 
-        // computenet-yqgd's decision, measured in this order too, unchanged by computenet-f7h.1:
-        // the demoted leader (peerA) again duplicates exactly the 2 pre-transition writes, even
-        // though the successor-only accounting above reads clean. Same mechanism as the
-        // promote-first arm — demote-first only changes WHICH call the transition rides in on,
-        // not what the catch-up does to the demoted instance. Here (and only here) that
-        // duplication happens to make peerA's total exactly twice the successor's (4 == 2*2); see
-        // the promote-first arm's comment for why that ratio is not the invariant —
-        // duplicated == 2 (the pre-transition write count) is.
+        // computenet-yqgd's decision, measured in this order too. **Re-measured under
+        // computenet-f7h.3: repaired here as well.** Same mechanism as the promote-first arm's
+        // comment above — the successor's catch-up now ships a baseline that REPLACES the demoted
+        // instance's state via `adoptState` rather than adding to it. Demote-first only ever
+        // changes WHICH call the transition rides in on, not what the catch-up now does to the
+        // demoted instance, so the repair applies identically in both orders. This arm's successor
+        // total is 2 (only the 2 pre-transition writes exist — no post-transition write in this
+        // arm), so the invariant this file now measures in both arms is demoted == successor
+        // (4 == 4 promote-first, 2 == 2 here) rather than the feature's literal "4 == 4 in both
+        // orders", which cannot hold for this arm's successor total; see computenet-f7h.3's
+        // acceptance-correction comment.
         val peerAReading = report.instanceReadings.single { it.instance == "peerA" }
         assertEquals(MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST, peerAReading.total, report.summary())
         assertEquals(
-            2L,
+            0L,
             peerAReading.duplicated(report.expectedTotal),
-            "the demoted instance duplicated exactly the 2 pre-transition writes: ${report.summary()}",
+            "the demoted instance now equals the successor's total — the baseline REPLACES rather than " +
+                "adds (computenet-f7h.3): ${report.summary()}",
         )
-        assertTrue(report.instancesWithDuplicates.map { it.instance } == listOf("peerA"), report.summary())
+        assertEquals(emptyList(), report.instancesWithDuplicates, report.summary())
     }
 
     // ----------------------------------------------------------------------------- boundary
@@ -606,8 +615,21 @@ class SingleWriterChurnTest {
          * but it ships the same total (2, peerA's pre-transition state at the moment of
          * designation) onto the same already-populated instance — nothing about the fold being
          * atomic changes what gets shipped or when relative to peerA's own writes.
+         *
+         * **Re-measured under computenet-f7h.3: repaired, now 4 (was 6).** T1 replaced the
+         * successor's from-zero delta catch-up with a [Stamped] carrying `baseline = true`, routed
+         * through [civictech.cell.replication.applyTo]'s `onBaseline` to `adoptState`, which
+         * REPLACES the demoted instance's local state instead of adding a second copy of its own
+         * writes on top of it. T2's step-down (`applyRoles`'s demotions-first pass) also unlinks
+         * the ex-leader's stale outbound link, so there is no remaining path for a second delta to
+         * arrive on. The measured value now equals `report.expectedTotal` (4), i.e. the demoted
+         * instance and the successor agree — the property
+         * computenet-f7h.3's corrected acceptance clause states (demoted == successor in both
+         * orders), verified by running against the updated mirror and reading the failure (see
+         * this file's own history: 6 was the value at c491bd6a1..ff52712c1, 4 is what T1+T2
+         * produce).
          */
-        const val MEASURED_DEMOTED_TOTAL_PROMOTE_FIRST: Long = 6
+        const val MEASURED_DEMOTED_TOTAL_PROMOTE_FIRST: Long = 4
 
         /**
          * The same accounting, demote-first arm: the demoted leader again duplicates exactly its
@@ -623,7 +645,19 @@ class SingleWriterChurnTest {
          * duplication is untouched by either: the same from-zero catch-up ships the same total
          * regardless of which registry hook subscriber runs it or in what order the two
          * `designateLeader` calls arrived.
+         *
+         * **Re-measured under computenet-f7h.3: repaired, now 2 (was 4).** Same mechanism as
+         * [MEASURED_DEMOTED_TOTAL_PROMOTE_FIRST]'s addendum — the successor's baseline now
+         * REPLACES the demoted instance's state via `adoptState` instead of adding to it, and the
+         * ex-leader's stale outbound link is unlinked at step-down (T2). This arm's successor total
+         * is 2 (no post-transition write in this arm, unlike promote-first), so the measured
+         * demoted total is 2, not 4: the demoted instance again equals the successor
+         * (`report.expectedTotal`), which is the property this file now measures in both arms.
+         * computenet-f7h.3's own acceptance clause states that property literally as "4 == 4 in
+         * both orders", which cannot hold for this arm's successor total of 2 — read as "demoted
+         * == successor in both orders" per computenet-f7h.3's acceptance-correction comment
+         * (2026-09-10), not as a literal 4.
          */
-        const val MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST: Long = 4
+        const val MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST: Long = 2
     }
 }

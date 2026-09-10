@@ -196,13 +196,13 @@ class LeaderMarkFoldTest {
         a.becomeLeaderCalls shouldBe 1
         b.becomeFollowerCalls shouldBe 0 // b never demoted: its epoch-0 replicate refolded a duplicate
 
-        // Two shipping links: a→b built when b published under a's epoch-0
-        // leadership, plus the new b→a built by this handoff. The outgoing
-        // leader's stale outbound link is NOT unlinked here — step-down
-        // unlink is F3's, deliberately out of this feature's scope — so the
-        // count is 2, not 1. It is inert regardless: a no longer leads, so
-        // nothing is ever emitted down it.
-        r.replication.shipCountAmong(setOf(a.ref, b.ref)) shouldBe 2
+        // ONE shipping link, b→a. The a→b link built when b published under
+        // a's epoch-0 leadership is gone: F3 (computenet-f7h.3.2, [MEM1-15])
+        // made a step-down unlink and drop every `shipped` entry whose SOURCE
+        // is the demoted replica, in `applyRoles`' demotion pass. Until F3 it
+        // survived as an inert stale entry and the count here was 2.
+        r.replication.shipCountAmong(setOf(a.ref, b.ref)) shouldBe 1
+        r.replication.shippedPairs(setOf(a.ref, b.ref)) shouldBe setOf(b.ref to a.ref)
     }
 
     /**
