@@ -371,7 +371,7 @@ Beyond that standard, a reviewer owes the stronger signal:
   ```bash
   ./gradlew :<module>:test --tests '<TestName>' --rerun --no-build-cache \
     > "$SCRATCH/mut.log" 2>&1
-  grep -E '^e:|BUILD' "$SCRATCH/mut.log"     # 'e:' lines = it never compiled
+  grep -aE '^e:|BUILD' "$SCRATCH/mut.log"     # 'e:' lines = it never compiled
   ```
 
   A `BUILD FAILED` with `e:` lines is **not** a red test. Fix the mutation
