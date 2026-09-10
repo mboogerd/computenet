@@ -72,9 +72,9 @@ no marker (it ran), no line at all (never in the graph, or the log lost it).
 grep -aE '^> Task :<module>:test( |$)' "$SCRATCH/run.log"; tail -3 "$SCRATCH/run.log"
 ```
 
-**`-a` on every log grep, and it is not decoration.** A Gradle console log
-carries terminal control characters, so plain `grep` treats it as binary and
-prints ONE line — `Binary file "$SCRATCH/run.log" matches` — exiting 0 with the
+**`-a` on every log grep, and it is not decoration.** A Gradle console log can
+carry a NUL byte — that specific byte, not ESC sequences or `\r`, which are
+harmless — and plain `grep` then treats the file as binary and prints ONE line — `Binary file "$SCRATCH/run.log" matches` — exiting 0 with the
 matched lines never shown. Measured: `grep -E '^e:|BUILD'` over such a log
 prints that single line, while `grep -aE` prints `BUILD SUCCESSFUL` and the
 `e:` lines. Both readings you came for are then wrong. A presence test sees no
