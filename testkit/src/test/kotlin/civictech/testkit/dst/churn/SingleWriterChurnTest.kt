@@ -75,9 +75,11 @@ import kotlin.test.assertTrue
  *
  * [CHA3-51] asks whether an accepted write is lost or duplicated across the transition. Epoch
  * *fencing* — "deltas stamped below the current epoch are inert" (spec 42) — is implemented by
- * the **cell**, not by [SingleWriterReplication]: it is the `if (value.epoch < currentEpoch)
- * return` in the replicable's own delta inlet. `:testkit`'s main source set ships no
- * [SingleWriterReplicable], so [SwCounterCell] below mirrors `:kernel`'s own
+ * the **cell**, not by [SingleWriterReplication]: every reference cell's delta inlet fences by
+ * calling [civictech.cell.replication.applyTo] — the shared `Stamped.applyTo` helper in
+ * `SingleWriterReplication.kt` that returns `null` (applying neither lambda) when
+ * `epoch < currentEpoch` — rather than open-coding the comparison itself. `:testkit`'s main
+ * source set ships no [SingleWriterReplicable], so [SwCounterCell] below mirrors `:kernel`'s own
  * `SingleWriterReplicationTest.SwCounterCell`, deliberately, so that the accounting is measured
  * against the reference implementation the kernel tests its fencing rule with rather than against
  * a fixture written to produce a result. The mirror is exact in every part the accounting reads —
