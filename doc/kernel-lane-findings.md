@@ -3533,6 +3533,116 @@ rig premise the other arms rest on.
   (#791), `computenet-f7h.8` `2d7ab11ed` (#792), F6 `48ba82309` (#793).
 - Open at the time of writing: `computenet-03kz7`, `computenet-azro3`.
 
+### Requirement trace
+
+Task `computenet-f7h.7.5`, resolved at `e53d5408c` (`Merge computenet-f7h.7.3`,
+this branch's base). The citation set below is a re-run
+`grep -rn 'MEM1-[0-9]' --include='*.kt'` at this sha; a repo-wide grep confirms
+the only Kotlin roots that cite a MEM1 id are `kernel/src/main/`,
+`kernel/src/test/` and `testkit/src/test/` — nothing under `demo/`, `wire/`,
+`oracle/` or `identity/` — with the remaining citations in
+`concord/corpus/DISPUTES.md` and `doc/`. Every named test was confirmed present
+with `grep -n -F '<name>'` against the file named.
+
+**What "pinned by a named test" means here, precisely.** A citation of a MEM1
+id in these files lands in one of four places: a class KDoc, a
+`// ---- [MEM1-nn] ...` section comment that heads one or more tests, a test's
+own KDoc, or an in-body comment on an assertion. A row's named test is the
+test that *encloses or is headed by* the citation — checked case by case, not
+inferred from the breakdown's map, which predates this sha and disagrees with
+it in places noted below. The `note` column says which of the four kinds the
+citation is, so a row that rests on a class-KDoc mention shared by several
+tests can be told apart from one whose citation sits on the assertion itself.
+Where an id is pinned only by mechanism, with no by-name citation anywhere,
+the row says so instead of naming a test — `[MEM1-01]` is the sole such case,
+and `[MEM1-26]`/`[MEM1-30]` are the two deliberate non-tests. No row names a
+test that does not carry, or is not headed by, a citation of that row's id.
+
+One row per `[MEM1-01]`..`[MEM1-33]`: the feature that shipped the mechanism,
+the test whose assertion most directly pins it (or the DISPUTES/findings id
+that files the gap), and a note where more than one citation exists or the
+pin is partial.
+
+| id | feature | test / dispute | note |
+| --- | --- | --- | --- |
+| [MEM1-01] | f7h.1 + f7h.2 + f7h.4 | pinned by mechanism, no test names the id | See "Ids with no by-name citation" below. |
+| [MEM1-02] | f7h.1 | `LeaderMarkFoldTest."total order, same counter"` | Also `SingleWriterReplicationTest."a fenced stale LeaderMark epoch is rejected"` (f7h.1-D2). |
+| [MEM1-03] | f7h.1 | `LeaderMarkFoldTest."leaderOf is the membership index's own mark, not an engine-side copy"` | Test KDoc (line 49): "[MEM1-03]: `SingleWriterReplication.leaderOf` is a delegation, not a copy". Also `InstanceIndexTest."markLeader adopts the strictly greater mark under the total order, same counter either way"` (test KDoc, line 117: "`leaderOf` before any fold is null ([MEM1-03])") and `InstanceIndexTest."leaderMarks snapshots every folded mark and is unaffected by a later fold"` (test KDoc, line 160). |
+| [MEM1-04] | f7h.3 | `StepDownTest."the fence admits a unit at the replica's own epoch and refuses one below it"` | Also `StepDownTest."a delta applied under the old epoch and in flight at the fold never reaches the follower's state"` (mid-shipment arm, f7h.3.3). |
+| [MEM1-05] | f7h.4 | `LeaderElectionTest."a Manual engine observing the leader's departure past any window neither claims nor arms"` | Section comment (line 191): "[MEM1-05] the default path is inert", heading this test (line 207) — the opt-in rule's direct pin. The class KDoc (line 35) names [MEM1-05] alongside [MEM1-25]; the clock/thread/timer scan test is [MEM1-25]'s, headed by its own section comment at line 125. |
+| [MEM1-06] | f7h.2 | `LeaderMarkAnnounceTest."a late joiner converges from catch-up alone and its stale mark changes nothing"` | Also pinned by consequence in `SplitBrainReconciliationTest`'s §5.4 arm (`"5_4 a returning peer's stale mark is inert and the canonical mark folds exactly once"`, f7h.6). |
+| [MEM1-07] | f7h.4 + f7h.7 | `LeaderElectionTest."a follower claims the next epoch once the window closes, and the claim reaches its surviving peer"` + `MEM1-LIVENESS` + `MEM1-SPEC-ID` | Section comment (line 333): "[MEM1-07] claim after the window", heading this test (line 350); the file's only other citation is the class KDoc (lines 42-43). `MEM1-LIVENESS` files that the window is event-counted with no real-time bound; `MEM1-SPEC-ID` files that no normative election id exists for a corpus scenario to claim. |
+| [MEM1-08] | f7h.6 | `SplitBrainReconciliationTest."5_3 false-positive failover costs one failover and no write"` | Also cited by consequence in `StepDownTest` — class KDoc line 33 and the in-body assertion at line 122, "exactly one, not one per pass" (that file has no § sections). |
+| [MEM1-09] | f7h.1 | `SingleWriterChurnTest."BS-14 promote-first designation leaves no in-process split-brain window under one fold per registry"` | In-body: "a duplicate of the already-folded mark is rejected ([MEM1-09])". Also cited at `InstanceIndexTest`, `LeaderMarkFoldTest`, and by consequence in `SplitBrainReconciliationTest`'s §5.4 arm. |
+| [MEM1-10] | f7h.3 | `StepDownTest."a superseded leader unlinks its shipping, catches up, and forwards its writes"` | Synchronous half, in-body comment "[MEM1-10], synchronous half". |
+| [MEM1-11] | f7h.2 + f7h.7 | `LeaderMarkAnnounceTest."adoption announces once per direction and peers apply roles from the mirrored mark"` + `MEM1-SPEC-ID` | Section comment directly above the test reads "[MEM1-11] adoption announces once per direction". Also `LeaderMarkWireTest."a LeaderMark round-trips through the codec, and its encoding is ids-only and additive"`. |
+| [MEM1-12] | f7h.6 | `SplitBrainReconciliationTest."5_1 split brain — the lower epoch loses completely and its writes surface as divergent"` | Cited only in the class KDoc's §5.1 line, not in a per-test comment; the class KDoc names this test as the §5.1 example (matching the "### Pins" table above). |
+| [MEM1-13] | f7h.5 | `DivergentWriteSurfacingTest."divergent writes are surfaced once each on the dead-letter outlet and to every handler"` | Section comment (line 152): "[MEM1-13] example 4". Also cited in `SplitBrainReconciliationTest` (§5.1 arm) and `StepDownTest`. |
+| [MEM1-14] | f7h.4 (`computenet-hu1ie`) | `LeaderElectionRefusalTest."a supervised RESTART of the leader is invisible to the detection window"` | Section comment: "[MEM1-14] RESTART invisible". Also `InstanceIndexTest`, `LeaderElectionTest`, `SingleWriterReplicationTest`. |
+| [MEM1-15] | f7h.3 | `ShippingLinkIdempotenceTest."after a step-down the new leader keeps one attachment per cycle and the ex-leader none"` | Test KDoc (line 112): the ex-leader's shipping link "unlinked and dropped by the step-down ([MEM1-15])", heading this test (line 117) — that file's only [MEM1-15] citation, and a step-down arm, which the rule is about. Also `StepDownTest` (class KDoc line 35, test KDoc line 96 on `"a superseded leader unlinks its shipping, catches up, and forwards its writes"`, in-body lines 124/147), `LeaderElectionTest` (in-body lines 992/1001, section comment line 1015) and `LeaderMarkFoldTest` (in-body line 200). |
+| [MEM1-16] | f7h.5 | `ParkedWriteReleaseTest."a write parked at a superseded leaderRef is released onto the winner exactly once"` + `MEM1-PARK-CONFIRM` | Class KDoc: "Owns feature rules [MEM1-16] (both clauses...)", section comment "[MEM1-16] example 1". `MEM1-PARK-CONFIRM` files that "epoch-confirmed" shipped weaker than the epic's release gate (corrected premise, "Also worth recording"). |
+| [MEM1-17] | f7h.6 | `SplitBrainReconciliationTest."5_3 false-positive failover costs one failover and no write"` | Class KDoc's §5.3 line. Also `LeaderElectionTest`. |
+| [MEM1-18] | f7h.3 | `StepDownTest."a delta applied under the old epoch and in flight at the fold never reaches the follower's state"` | In-body: "[MEM1-18], mid-shipment half". Also the steady-state arm, `StepDownTest."a superseded leader unlinks its shipping, catches up, and forwards its writes"`. |
+| [MEM1-19] | f7h.6 | `ElectionIsolationTest."an election on a co-hosted single-writer set leaves the mergeable covering quorum unmoved"` | Class KDoc: "[MEM1-19]/[MEM1-33] (quorum non-interference)". |
+| [MEM1-20] | f7h.4 | `LeaderElectionTest."two simultaneous claims converge on the greater instanceId across fifty seeds"` | Section comment: "[MEM1-02]/[MEM1-20]/[MEM1-15] — 5.2". **Does not hold at an equal counter**: `MEM1-52` (this file, `## MEM1-52 dual-claim divergence`) measures 42/50 seeds diverging on the write-first branch of `"a parked write leaves the loser diverged from the winner on some seeds"`, where the same KDoc states "[MEM1-20]'s 'the loser's deltas SHALL be fenced inert' does not hold". Also filed by `MEM1-CONCURRENCY` (interleavings, not races) and, at fold level, `SingleWriterChurnTest`. |
+| [MEM1-21] | f7h.5 | `DivergentWriteSurfacingTest."a write the departed member already received is not counted as divergent"` | Section comment (line 292): "[MEM1-21] example 6". Also cited in `SplitBrainReconciliationTest`'s §5.1 and §5.3 arms; the frame-loss variant is filed by `MEM1-WIRE-LOSS`. |
+| [MEM1-22] | f7h.2 + f7h.7 | `LeaderMarkWireTest."a local markLeader crosses once, folds on the peer, and is not re-announced back"` + `MEM1-WIRE-LOSS` + `MEM1-SPEC-ID` | In-body: "the fold is idempotent at registry level ([MEM1-22])". Also `InstanceIndexTest`, `LeaderMarkAnnounceTest`, `LeaderMarkFoldTest`, and consequence in `SplitBrainReconciliationTest`'s §5.3/§5.4 arms. |
+| [MEM1-23] | f7h.4 (`computenet-hu1ie`) | `LeaderElectionRefusalTest."a sole survivor refuses to claim, and claims on the first observation that makes somebody reachable"` | Matches the "### Pins" table's §5.7 row above. Also `ElectionIsolationTest`, `LeaderElectionTest`, `SingleWriterReplicationTest`. MEM2's follow-on is out of scope (see "Not resolved by MEM1"). |
+| [MEM1-24] | f7h.5 | `ParkedWriteReleaseTest."a Leased write mid-election is rejected, never parked and never released"` | Section comment (`ParkedWriteReleaseTest` line 348): "[MEM1-24] example 7". |
+| [MEM1-25] | f7h.4 | `LeaderElectionTest."every replication source is free of clock, thread and timer identifiers"` | Section comment (line 125): "[MEM1-25] no clock, thread or timer here", heading this test. The class KDoc (line 35) names [MEM1-05] alongside it; [MEM1-05]'s own pin is a different test (see that row). |
+| [MEM1-26] | f7h.7 | `MEM1 findings §7` (corrected premise 7, above) | **Refused, not tested.** `ElectionIsolationTest:59` cites the id in KDoc only ("f7h.6-D5: [MEM1-26] and [MEM1-30] are deliberately NOT tested here; F7 records them"); 93 I-25 §4.4 decides ack-from-k durability is a second protocol and not adopted. No test names this id. |
+| [MEM1-27] | f7h.6 | `ElectionIsolationTest."an election on one shard leaves the other shard's leadership, links and writes untouched"` | Class KDoc: "[MEM1-27] (per-shard leadership)". |
+| [MEM1-28] | f7h.5 | `DivergentWriteSurfacingTest."the dead-letter path stands alone, and a closed handle stops only its own handler"` | Section comment (line 237): "[MEM1-28] example 5". Also `SplitBrainReconciliationTest`'s §5.1 arm. |
+| [MEM1-29] | f7h.6 | `ElectionIsolationTest."the effect authority stays exactly-once across a claimed handoff"` | Class KDoc: "[MEM1-29] (effect authority across a claimed handoff, spec 31 §Effects on instance sets / PN-17)". |
+| [MEM1-30] | f7h.7 | `MEM1 findings §8` (corrected premise 8, above) | **Sealed-hierarchy evidence, not tested.** Same `f7h.6-D5` KDoc line as [MEM1-26]; sealedness of `LeaderElection` is the evidence the compiler enforces, not a test assertion. No test names this id. |
+| [MEM1-31] | f7h.3 | `StepDownTest."a delta applied under the old epoch and in flight at the fold never reaches the follower's state"` | Test KDoc (line 321): "**Fenced branch** ([MEM1-31], [MEM1-04], [MEM1-18]'s mid-shipment half)". Also `LeaderElectionTest`, `ReplicatedEffectTest`, `SingleWriterReplicationTest`, `SplitBrainReconciliationTest`'s §5.1 arm, `SingleWriterChurnTest`. |
+| [MEM1-32] | f7h.3 | `SingleWriterReplicationTest."a rebuilt link's catch-up REPLACES a follower's state instead of adding to it"` | In-body: "catch-up is now a BASELINE ([MEM1-32], f7h.3-D6)" — this is the corrected-premise-5 mechanism (`Stamped(baseline = true)` routed through `onBaseline` to `adoptState`). Also `ReplicatedEffectTest`, `SingleWriterChurnTest`. |
+| [MEM1-33] | f7h.6 | `ElectionIsolationTest."an election on a co-hosted single-writer set leaves the mergeable covering quorum unmoved"` | Same test and KDoc line as [MEM1-19]. |
+
+**Ids with no by-name citation: `[MEM1-01]`, `[MEM1-26]`, `[MEM1-30]`.**
+`[MEM1-26]` and `[MEM1-30]` are both explicit, deliberate non-tests
+(`f7h.6-D5`) with their disposition recorded in corrected premises 7 and 8
+above — they are not gaps, they are decided-out. `[MEM1-01]` ("a claim SHALL
+be an ordinary LeaderMark announcement folded into the membership index —
+never a vote, quorum, view number, lease, or second protocol") is different:
+no test or main source cites it by id at all, at this sha or at `48ba82309`.
+It is pinned by mechanism instead —
+
+- F1's fold onto `InstanceIndex` rather than a separate election data
+  structure (f7h.1-D1), asserted by
+  `LeaderMarkFoldTest."leaderOf is the membership index's own mark, not an
+  engine-side copy"`;
+- F2's `RegistryAnnounce.leaderMarked` as a fifth, ids-only wire variant
+  rather than a new message class (f7h.2-D1), asserted by
+  `LeaderMarkWireTest."a leaderMarked announcement is a plain wire type -
+  nothing else changed shape"`;
+- the absence of clock, thread, timer, or quorum-count identifiers anywhere
+  in the replication sources, asserted by
+  `LeaderElectionTest."every replication source is free of clock, thread and
+  timer identifiers"` (the same test that pins [MEM1-05]/[MEM1-25]).
+
+No test asserts the negative ("this is not a second protocol") directly, and
+none should be expected to — the claim is a design constraint on what the
+implementation does NOT introduce, checked by these three tests collectively
+showing what it DOES do instead.
+
+**Tally**, counted off the table above rather than carried over: of 33 ids,
+**30** are pinned by a named test (`[MEM1-02]`..`[MEM1-25]`, `[MEM1-27]`..`[MEM1-29]`,
+`[MEM1-31]`..`[MEM1-33]`), **2** (`[MEM1-26]`, `[MEM1-30]`) by an explicit
+deliberate-non-test disposition recorded in this entry's corrected premises 7
+and 8, and **1** (`[MEM1-01]`) by mechanism across three tests with no by-name
+citation. 30 + 2 + 1 = 33.
+
+**6** ids carry a `DISPUTES` id alongside their test — `[MEM1-07]`
+(`MEM1-LIVENESS`, `MEM1-SPEC-ID`), `[MEM1-11]` (`MEM1-SPEC-ID`), `[MEM1-16]`
+(`MEM1-PARK-CONFIRM`), `[MEM1-20]` (`MEM1-CONCURRENCY`), `[MEM1-21]`
+(`MEM1-WIRE-LOSS`) and `[MEM1-22]` (`MEM1-WIRE-LOSS`, `MEM1-SPEC-ID`,
+`MEM1-CONCURRENCY`) — which is every id named in a "Requirement it would
+cover" line of the five MEM1 entries in `concord/corpus/DISPUTES.md`.
+`MEM1-52` is a findings entry in this file, not a `DISPUTES` id, and rides on
+the `[MEM1-20]` row. None of the 33 is pinned by a dispute *alone* with no
+test at all.
+
 ## MEM1-52 dual-claim divergence
 
 **at an equal counter: what the seeded sweep measured, and what it does not
