@@ -589,7 +589,8 @@ So:
   make improvising worst.
 
   **But do not wait for pending checks — you are the wrong agent for it.**
-  One invocation is your budget. If it comes back `TIMEOUT-PENDING`, say so
+  The two sentences are about different things: *waiting* is the prohibition,
+  and *one invocation* is the budget for the head you were given. If it comes back `TIMEOUT-PENDING`, say so
   in your verdict — *"verdict conditional on `build-test-fast`, pending at
   the time of writing"* — and STOP. The orchestrator settles checks before
   shipping anyway (SKILL.md 5e), so your wait is duplicated work even when it
@@ -609,6 +610,23 @@ So:
   like nothing at all rather than like a timeout (computenet-tl8q). Exhaustion prints
   each pending check's age plus `ORDINARY` or `STUCK`; only `STUCK` is a
   finding worth reporting.
+
+  **A repair earns a second invocation — spend it.** §5 and §6 authorise you
+  to fix things and push, and a push here MOVES THE HEAD: all seven required
+  checks restart, at ~9-12 minutes for the cycle (computenet-678u,
+  computenet-7wd6). The head you first checked no longer exists, so the budget
+  above has nothing left to say about the one you created — re-run
+  `wait-checks.sh` on it and give an unconditional verdict. Two independent
+  feature reviewers in one session stopped mid-review to adjudicate this,
+  reaching the right answer both times but paying for it twice
+  (computenet-3dn3). The budget is one invocation **per head**, and a repair
+  push is the only thing that mints a new one; it is not a licence to poll,
+  and a second `TIMEOUT-PENDING` is still a conditional verdict, not a wait.
+
+  Which is why a repair is a real cost and not a free tidy-up: computenet-7wd6
+  measured a reviewer's zero-code prose repair costing a full check cycle. §5's
+  bound is where that trade is made — this line only says that once you have
+  decided to repair, you are not also asked to certify a head you never saw.
 
   A **red** required check is not yours to wave
   through: report it and leave the verdict draft.

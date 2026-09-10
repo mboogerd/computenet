@@ -1,0 +1,10 @@
+work +18
+# review-feature.md §4 budgeted a reviewer ONE wait-checks.sh invocation while
+# §§5/6 authorise repairs whose push restarts all seven required checks. Two
+# independent feature reviewers in one session stopped to adjudicate that pair;
+# one spent a second invocation, the other noted the two adjacent sentences read
+# as a contradiction (computenet-3dn3). The lines make the budget per HEAD, grant
+# the second invocation to a reviewer that repaired, and price the repair at the
+# ~9-12m cycle it actually costs — none of which is inferable from the old text,
+# whose two available readings were "exceed the stated budget" and "certify
+# against checks you never read".
