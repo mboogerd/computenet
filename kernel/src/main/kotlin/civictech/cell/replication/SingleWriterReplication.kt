@@ -385,15 +385,20 @@ class SingleWriterReplication(
      *   spawn-order dependent.
      *
      * The between-pass half is **defensive, and not currently observable**:
-     * measured on computenet-f7h.3.2's branch, moving the promotion pass
-     * ahead of the demotion pass leaves `StepDownTest`,
-     * `LeaderMarkFoldTest` and `ShippingLinkIdempotenceTest` all green,
-     * because the two passes touch disjoint key sets today — the demotion
-     * removes only links SOURCED at the ex-leader and the promotion adds
-     * only links sourced at the winner. What survives the swap is a
-     * behavioural difference nothing asserts: promote-first delivers the
-     * winner's baseline into a replica that has not yet been demoted. The
-     * order is kept because it is the one that is correct under a future
+     * measured on computenet-f7h.3.2's branch and re-measured in its review,
+     * moving the promotion pass ahead of the demotion pass leaves the WHOLE
+     * of `:kernel:test` green (1510 tests), not merely `StepDownTest`,
+     * `LeaderMarkFoldTest` and `ShippingLinkIdempotenceTest` — because the
+     * two passes touch disjoint key sets today: the demotion removes only
+     * links SOURCED at the ex-leader and the promotion adds only links
+     * sourced at the winner. Nor does the emission order rescue it:
+     * promote-first EMITS the winner's baseline while the ex-leader is still
+     * marked leading, but that catch-up crosses `registry.deliver` and is
+     * applied only when the scheduler drains, by which time `applyRoles` has
+     * returned and the demotion has run. So the swap is not an unasserted
+     * behavioural difference — it has no observable consequence at all under
+     * today's `shipTo`. The order is kept because it is the one that is
+     * correct under a future
      * `shipTo` whose teardown and construction can collide (and under
      * f7h.3-D3), not because a test would catch losing it. The
      * WITHIN-demotion order — unlink before `becomeFollower` — *is* pinned:
