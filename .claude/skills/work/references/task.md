@@ -337,8 +337,10 @@ The smallest coherent change, and proof the tests actually executed.
    green local gates missed exactly this and `build-test-fast` caught it after
    four merges (computenet-uxr8). Ask what READS the files you add or remove,
    not what imports them.
-   - **Your FIRST Gradle or npm call, and every one after it, passes
-     `dangerouslyDisableSandbox`.** The default Bash sandbox fails KSP with
+   - **Your FIRST Gradle or npm call, and every one after it, sets the Bash
+     TOOL parameter `dangerouslyDisableSandbox` — it is not a gradle
+     command-line flag** (appended to `./gradlew` it yields a 2s `BUILD
+     FAILED` that reads like a cached one, computenet-7sfp). The default Bash sandbox fails KSP with
      `Operation not permitted`, and the daemon it starts can stay poisoned
      for later calls until `./gradlew --stop` — one agent lost its first
      three builds to this in a fresh worktree and a second needed the flag

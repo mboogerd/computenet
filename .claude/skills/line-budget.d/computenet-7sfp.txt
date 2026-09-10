@@ -1,0 +1,9 @@
+work +8
+# The sandbox requirement was stated in prose that reads like a CLI flag ("every
+# Gradle call passes `dangerouslyDisableSandbox`"), and a task reviewer appended
+# it to ./gradlew. Gradle answered `BUILD FAILED in 2s` with an all-up-to-date
+# actionable-tasks line, which greps almost identically to a real cached failure,
+# so the documented tells do not separate them — one full Gradle cycle lost
+# (computenet-7sfp). The lines name it as the Bash TOOL's parameter at all three
+# sites an agent reads before invoking, and record the observed failure once, in
+# agent-execution.md, where the mechanism already lives.
