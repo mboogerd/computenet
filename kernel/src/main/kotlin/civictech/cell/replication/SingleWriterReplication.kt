@@ -231,8 +231,69 @@ class SingleWriterReplication(
     /** Established leader→follower shipping links (one direction only). */
     private val shipped = mutableMapOf<Pair<CellRef, CellRef>, Link>()
 
+    /**
+     * The last [LeaderMark] this engine actually APPLIED, per logical id
+     * (f7h.3-D3). [LocationRegistry.onLeaderMark] hands over only the new
+     * mark, and neither [LeaderMark] nor [Stamped] carries a role, so this map
+     * is the only way [applyRoles] can know which local replica WAS leading
+     * and therefore has to step down.
+     *
+     * Inferring "was leading" from `shipped.keys.any { it.first == local.ref }`
+     * was considered and rejected: a leader with no followers yet holds no
+     * links at all, and the step-down seam below needs the OLD mark, not a
+     * boolean. Written at the END of [applyRoles], so the whole pass reads a
+     * consistent `previous`.
+     */
+    private val applied = mutableMapOf<UUID, LeaderMark>()
+
+    /** Step-down observers ([onStepDown]). */
+    private val stepDownListeners = mutableListOf<(StepDown) -> Unit>()
+
     interface DeltaInletHolder {
         val deltaInlet: Use<Propagate<Stamped<Any?>>>
+    }
+
+    /**
+     * One replica's demotion out of leadership, as observed by [onStepDown]
+     * (f7h.3-D3): [replica] led under [from] and has just been demoted by the
+     * adoption of [to], which is strictly greater under the fold's total
+     * order. [logicalId] is `to.logicalId`, carried explicitly so a listener
+     * need not destructure a mark to route.
+     */
+    internal data class StepDown(
+        val logicalId: UUID,
+        val from: LeaderMark,
+        val to: LeaderMark,
+        val replica: SingleWriterReplicable<*>,
+    )
+
+    /**
+     * Observe local step-downs — the seam F5 (divergent-write surfacing)
+     * subscribes to; nothing in F3 subscribes, deliberately. Fires exactly
+     * once per demoted ex-leader, AFTER its outbound shipping links are
+     * unlinked and after its [SingleWriterReplicable.becomeFollower] has run,
+     * so a listener observes a replica that already forwards writes and can
+     * emit nothing to a follower.
+     *
+     * Detachment follows [LocationRegistry.onPublish]'s contract: close the
+     * returned handle to unsubscribe. A listener is a *notification, not a
+     * participant* (f7h.1-D3's precedent, [LocationRegistry.notify]): its
+     * exception is swallowed and printed, never propagated into the fold and
+     * never allowed to stop the next listener or the promotion pass.
+     */
+    internal fun onStepDown(listener: (StepDown) -> Unit): AutoCloseable {
+        stepDownListeners += listener
+        return AutoCloseable { stepDownListeners -= listener }
+    }
+
+    private fun notifyStepDown(event: StepDown) {
+        stepDownListeners.toList().forEach { listener ->
+            try {
+                listener(event)
+            } catch (e: Exception) {
+                System.err.println("[SingleWriterReplication] step-down hook failed for ${event.logicalId}: $e")
+            }
+        }
     }
 
     init {
@@ -306,20 +367,59 @@ class SingleWriterReplication(
 
     /**
      * Apply [mark]'s roles to every local replica of its logical id — the
-     * single subscriber's body, run once per adopted fold (see `init`). The
-     * designated replica promotes and then ships to every other known
-     * instance; every other local replica demotes to command-forwarding.
+     * single subscriber's body, run once per adopted fold (see `init`).
+     *
+     * **Two passes, demotions before the promotion** (f7h.3-D3). The order is
+     * load-bearing twice over:
+     *
+     * - Within a demoted ex-leader: unlink → [SingleWriterReplicable.becomeFollower]
+     *   → [onStepDown]. Unlinking first means nothing the ex-leader emits
+     *   during its own demotion can still reach a follower ([MEM1-15]); the
+     *   `becomeFollower` call is the SAME single call a non-leading local
+     *   gets, not an extra one, so the exactly-once role-call accounting
+     *   ([MEM1-08], pinned by [LeaderMarkFoldTest]) is unchanged.
+     * - Between passes: the loser's links are gone before the winner's are
+     *   formed, whatever order `localReplicas` happens to hold — a
+     *   three-replica set can visit the new leader before the ex-leader in a
+     *   single pass, so relying on list order would leave the outcome
+     *   spawn-order dependent.
+     *
+     * Which local WAS leading comes from [applied], not from the hook, which
+     * carries only the new mark.
      */
     private fun applyRoles(mark: LeaderMark) {
-        localReplicas[mark.logicalId]?.forEach { local ->
-            if (local.cell.ref == mark.leaderRef) {
-                local.cell.becomeLeader(mark.epoch)
-                registry.instances.replicasOf(mark.logicalId).filter { it != mark.leaderRef }
-                    .forEach { follower -> shipTo(local.cell, follower) }
-            } else {
-                local.cell.becomeFollower(mark.leaderRef, mark.epoch, registry)
+        val previous = applied[mark.logicalId]
+        val locals = localReplicas[mark.logicalId]
+
+        // Pass 1 — demotions.
+        locals?.toList()?.forEach { local ->
+            if (local.cell.ref == mark.leaderRef) return@forEach
+            val steppingDown = previous != null && previous.leaderRef == local.cell.ref
+            if (steppingDown) {
+                // [MEM1-15]: every outbound shipping link this replica holds as
+                // SOURCE is unlinked AND dropped from bookkeeping. `unlink()` on
+                // a `streamTo`-built link unsubscribes at the outlet and drops
+                // the source-side LinkSupport record (T21), so the ex-leader's
+                // deltaOutlet genuinely has no consumer for that target
+                // afterwards. Until F3 nothing tore these down: only
+                // `onUnpublish` unlinked, and only by TARGET.
+                shipped.keys.filter { it.first == local.cell.ref }.toList()
+                    .forEach { key -> shipped.remove(key)?.unlink() }
             }
+            local.cell.becomeFollower(mark.leaderRef, mark.epoch, registry)
+            if (steppingDown) notifyStepDown(StepDown(mark.logicalId, previous!!, mark, local.cell))
         }
+
+        // Pass 2 — the promotion, and the winner's outbound links. The
+        // winner→ex-leader link formed here is what carries T1's baseline back
+        // to the replica that just stepped down.
+        locals?.toList()?.firstOrNull { it.cell.ref == mark.leaderRef }?.let { local ->
+            local.cell.becomeLeader(mark.epoch)
+            registry.instances.replicasOf(mark.logicalId).filter { it != mark.leaderRef }
+                .forEach { follower -> shipTo(local.cell, follower) }
+        }
+
+        applied[mark.logicalId] = mark
     }
 
     private fun onPeerPublished(ref: CellRef) {
@@ -376,8 +476,31 @@ class SingleWriterReplication(
             }
         }
         @Suppress("UNCHECKED_CAST")
-        shipped[key] = (leader.deltaOutlet as FanOutlet<Propagate<Stamped<Any?>>>).streamTo(sink)
+        shipped[key] = (leader.deltaOutlet as FanOutlet<Propagate<Stamped<Any?>>>)
+            .streamTo(sink, at = shipRef(leader.ref, followerRef))
     }
+
+    /**
+     * The stable identity of the shipping subscription `leader → follower`
+     * carried on the leader's delta outlet (f7h.3-D4, closing the epic §3.2
+     * open question "`shipTo` has no derived `PortRef`").
+     *
+     * `streamTo`'s default is `PortRef.generate()` — a fresh random ref per
+     * call — so a rebuilt link ADDS a second consumer at the outlet wherever a
+     * teardown did not happen to run first, and a single-writer follower's
+     * apply is explicitly not idempotent. Deriving the ref from the pair makes
+     * `consumers[ref] = port` REPLACE a stale attachment instead of joining
+     * it, so re-linking is idempotent at the outlet itself, independent of
+     * which teardown route (unpublish reconciliation, step-down unlink, none
+     * at all) ran — the same self-healing property, and the same derivation
+     * idiom, as [Replication]'s `gossipRef`, under its own `"ship:"` namespace
+     * so the two can never collide.
+     */
+    private fun shipRef(leader: CellRef, follower: CellRef): PortRef = PortRef(
+        UUID.nameUUIDFromBytes(
+            "ship:${leader.id}:${leader.instanceId}:${follower.id}:${follower.instanceId}".toByteArray(),
+        ),
+    )
 
     /**
      * How many leader→follower shipping links exist among [refs] (T07 finding
@@ -386,8 +509,18 @@ class SingleWriterReplication(
      * unpublish and rebuilds to 1 on its re-announce, rather than leaving a
      * stale entry forever.
      */
-    internal fun shipCountAmong(refs: Set<CellRef>): Int =
-        shipped.keys.count { it.first in refs && it.second in refs }
+    internal fun shipCountAmong(refs: Set<CellRef>): Int = shippedPairs(refs).size
+
+    /**
+     * The shipping links among [refs] themselves, not just how many
+     * ([shipCountAmong]'s companion seam, f7h.3). [MEM1-18]'s steady-state
+     * half is a statement about the SOURCE of every surviving link — "every
+     * link's first element is the current leaderRef" — which a bare count
+     * cannot express: 2 links is the right count both when they run
+     * `B→A, B→C` and when they run `B→C, A→C`.
+     */
+    internal fun shippedPairs(refs: Set<CellRef>): Set<Pair<CellRef, CellRef>> =
+        shipped.keys.filter { it.first in refs && it.second in refs }.toSet()
 
     companion object {
         /**
