@@ -39,6 +39,24 @@ SKILL.md and the other references cite this file as "`bd` traps".
   prints those). And `.parent` is absent-not-null when genuinely unset
   (computenet-wpvy.32), so `.claude/skills/work/scripts/epic-of.sh` remains the way to resolve an
   *effective* epic rather than one hop.
+- **The same trap, one field over: `dependency_ids` exists only in
+  `bead.sh`'s projection.** Raw `bd show <id> --json` calls the field
+  `dependencies` and answers `null` to `.dependency_ids` — so the `has()` rule
+  above is what catches it. The data is NOT absent, which is the correction
+  worth stating plainly: the edges are fully readable through JSON, under the
+  other name. Measured 2026-09-10 on `computenet-f7h.3.2`: `.dependency_ids`
+  null, `.dependencies` carrying the same two edges `bd dep list` prints (a
+  `blocks` and a parent-child), `.dependency_count` 2. The trap is the NAME —
+  an agent that has read a `bead.sh` output, or this file, reaches for the
+  projection's field against the raw command and gets a well-formed wrong
+  answer, in the false-negative direction: no edges, therefore unblocked and
+  unlinked. Read `.dependencies` from raw `bd show` (each entry is a full bead
+  object, which is why the projection reduces it to ids — see the inlining
+  trap below), `.dependency_ids` from `bead.sh`, and cross-check
+  `.dependency_count`, which both paths carry and which is non-zero exactly
+  when edges exist. It bit a breakdown agent verifying its own `bd dep add`
+  calls, which is the worst place for it: blockedness decides what the next
+  session picks up (computenet-amray).
 - Epic- and feature-sized output overflows the inline tool-result limit
   (`bd show` on one epic: ~83KB; `bd ready --type=epic --json`: ~43KB) and
   gets truncated or persisted. Redirect any `--json` call that *can* be big

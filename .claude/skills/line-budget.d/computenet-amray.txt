@@ -1,0 +1,25 @@
+work +28
+# `dependency_ids` is a name bead.sh invents; raw `bd show --json` calls the
+# field `dependencies` and answers null to `.dependency_ids` — a well-formed
+# confident wrong answer in the false-negative direction, and the trap is the
+# NAME, since an agent that has seen a bead.sh output reaches for it against the
+# raw command (computenet-amray). It bit a breakdown agent verifying its own
+# `bd dep add` calls. The entry names both fields, points at `.dependency_count`
+# as the cross-check that is correct in both, and connects to the inlining trap
+# directly above that explains why the projection drops the full objects.
+# Reworked after review: the entry moved up beside the
+# `parent_id` trap it is an instance of (where it had orphaned 30 lines of the
+# inlining bullet's continuation), leans on that entry's general `has("<field>")`
+# rule instead of restating it, and states plainly that the data is NOT absent —
+# the bead's premise. feature.md's Dependencies section gained the verify line,
+# which is the site the defect was found at. bead.sh now carries
+# `dependency_count` through, so the cross-check the entry prescribes reads the
+# same on both paths; it answered `null` there before, which handed the reader
+# the exact false negative the entry warns against.
+# Re-review repair: the move had DELETED, not relocated, 56 lines of the
+# inlining bullet's continuation (the truncated-ACCEPTANCE-LIST rule, the plain
+# `bd show` trap, the no-flag-will-fix-it measurement, `bd`'s git-not-filesystem
+# db resolution and `bead.sh -C`, and the spill/exit-3 shape with its
+# stderr rationale). Restored verbatim from the merge-base; bd-traps.md is now
+# +18 against base with zero deletions, and this delta reads +28, not the
+# +15 a net-line-neutral rework was assumed to be.
