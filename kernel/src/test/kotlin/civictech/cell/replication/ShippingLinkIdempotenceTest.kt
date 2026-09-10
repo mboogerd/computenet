@@ -151,13 +151,25 @@ class ShippingLinkIdempotenceTest {
         consumerRefs(newLeader.deltaOutlet).size shouldBe 1
         q.replication.shipCountAmong(setOf(leaderRef, followerRef)) shouldBe 1
 
+        // The DERIVED ref itself, not merely the count (f7h.3-D4). The count
+        // alone does not discriminate: measured on this branch, reverting
+        // `shipTo` to `streamTo(sink)`'s random default leaves every count
+        // assertion in this file green, because the only path that rebuilds a
+        // shipping link is one that first REMOVED it from `shipped`, and every
+        // removal — the unpublish reconciliation, the step-down — unlinks and
+        // therefore unsubscribes. The derived ref is what makes re-linking
+        // idempotent *at the outlet*, independent of that; the observable
+        // consequence is that the attachment keeps the SAME PortRef across
+        // every rebuild, which a random default cannot.
+        val shipAttachment = consumerRefs(newLeader.deltaOutlet)
+
         repeat(3) { cycle ->
             loopback.partition()
             controller.runToIdle()
             loopback.heal()
             controller.runToIdle()
 
-            withClue(cycle) { consumerRefs(newLeader.deltaOutlet).size shouldBe 1 }
+            withClue(cycle) { consumerRefs(newLeader.deltaOutlet) shouldBe shipAttachment }
             withClue(cycle) { newLeader.deltaOutlet.linking.links.size shouldBe 1 }
             withClue(cycle) { q.replication.shipCountAmong(setOf(leaderRef, followerRef)) shouldBe 1 }
             withClue(cycle) { consumerRefs(exLeader.deltaOutlet).shouldBeEmpty() }

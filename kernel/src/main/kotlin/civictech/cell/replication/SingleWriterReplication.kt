@@ -384,6 +384,22 @@ class SingleWriterReplication(
      *   single pass, so relying on list order would leave the outcome
      *   spawn-order dependent.
      *
+     * The between-pass half is **defensive, and not currently observable**:
+     * measured on computenet-f7h.3.2's branch, moving the promotion pass
+     * ahead of the demotion pass leaves `StepDownTest`,
+     * `LeaderMarkFoldTest` and `ShippingLinkIdempotenceTest` all green,
+     * because the two passes touch disjoint key sets today — the demotion
+     * removes only links SOURCED at the ex-leader and the promotion adds
+     * only links sourced at the winner. What survives the swap is a
+     * behavioural difference nothing asserts: promote-first delivers the
+     * winner's baseline into a replica that has not yet been demoted. The
+     * order is kept because it is the one that is correct under a future
+     * `shipTo` whose teardown and construction can collide (and under
+     * f7h.3-D3), not because a test would catch losing it. The
+     * WITHIN-demotion order — unlink before `becomeFollower` — *is* pinned:
+     * dropping the unlink turns `StepDownTest`'s stale-emission control red
+     * (b's `receivedDeltas` 2 → 3).
+     *
      * Which local WAS leading comes from [applied], not from the hook, which
      * carries only the new mark.
      */
