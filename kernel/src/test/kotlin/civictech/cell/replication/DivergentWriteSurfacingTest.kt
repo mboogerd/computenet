@@ -372,14 +372,9 @@ class DivergentWriteSurfacingTest {
 
     // ------------------------------------------ nothing to surface
 
-    /**
-     * The tap subscribes to the leader's own outlet, and the leader emits its
-     * WHOLE state as a `baseline` unit the instant any link forms while it
-     * leads — including on the tap's own link. Without the `!baseline` guard
-     * that state would be recorded as a divergent write on every promotion.
-     */
+    /** A leader that never witnessed a departure has no tap at all, and nothing is divergent. */
     @Test
-    fun `the divergence tap never records the leader's own baseline`() {
+    fun `a leader that witnessed no departure surfaces nothing at its step-down`() {
         val controller = SimulationController()
         val registry = LocationRegistry()
         val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
@@ -417,12 +412,29 @@ class DivergentWriteSurfacingTest {
         }
     }
 
+    /**
+     * The armed half, and the `!baseline` guard's own pin.
+     *
+     * The tap is installed on the first departure, and
+     * [SingleWriterReplicable]'s catch-up contract emits the leader's WHOLE
+     * state as a `baseline` unit the instant any link forms while it leads —
+     * so A's total of 7 arrives at the tap immediately, INSIDE the armed
+     * window. Without the guard it is recorded and surfaced as a divergent
+     * write of 7 that A never made. A's non-zero state before the partition is
+     * therefore load-bearing here, not incidental.
+     */
     @Test
     fun `a leader that witnessed a departure but produced no writes surfaces nothing`() {
         val t = Triangle()
         val letters = t.p.deadLetters()
         val surfaced = mutableListOf<Surfaced>()
         t.p.replication.onDivergentWrite { i, f, c, pay -> surfaced += Surfaced(i, f, c, pay) }
+
+        // Non-zero state BEFORE the partition, so the tap's formation baseline
+        // is a value that would be visible if it were ever recorded.
+        t.p.ops(t.a).increment(7)
+        t.controller.runToIdle()
+        t.a.total shouldBe 7L
 
         t.pq.partition()
         t.pr.partition()

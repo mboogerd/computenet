@@ -250,8 +250,11 @@ class SingleWriterReplication(
      * computenet-f7h.5.2; [MEM1-13], [MEM1-21], [MEM1-28], G-44).
      *
      * [tap] is a subscription on the leader's own `deltaOutlet` that exists for
-     * exactly as long as the replica leads. It ships nowhere, is never entered
-     * in [shipped], and appends `(epoch, delta)` to [buffer] only while
+     * exactly as long as this leader is ARMED — installed on the first
+     * departure, dropped when the last departed member returns, and dropped
+     * again by the flush at step-down (see [armDivergence] for why it is not
+     * simply held for the whole of the leadership). It ships nowhere, is never
+     * entered in [shipped], and appends `(epoch, delta)` to [buffer] only while
      * [departed] is non-empty — i.e. only for deltas produced after this leader
      * WITNESSED a member leave and before it saw that member return.
      *
@@ -690,9 +693,6 @@ class SingleWriterReplication(
         // to the replica that just stepped down.
         locals?.toList()?.firstOrNull { it.cell.ref == mark.leaderRef }?.let { local ->
             local.cell.becomeLeader(mark.epoch)
-            // f7h.5-D3: the divergence tap goes on FIRST, before any follower
-            // link, so no delta this leader produces can slip past it.
-            armDivergenceTap(local)
             registry.instances.replicasOf(mark.logicalId).filter { it != mark.leaderRef }
                 .forEach { follower -> shipTo(local.cell, follower) }
         }
@@ -701,46 +701,62 @@ class SingleWriterReplication(
     }
 
     /**
-     * f7h.5-D3: subscribe the divergence tap on a freshly promoted leader's
-     * own delta outlet.
+     * f7h.5-D3 arming: [ref] has left the membership index. Record it against
+     * every local replica of the same logical id that this engine believes is
+     * currently leading — `applied[id]?.leaderRef` is the engine's own view of
+     * who leads, the same source [applyRoles] steps down from — and subscribe
+     * the divergence tap on that leader's own delta outlet.
      *
-     * Two properties the sink depends on:
+     * ## The tap exists only while the leader is armed
+     *
+     * f7h.5-D3's text put the tap on at PROMOTION and took it off at
+     * step-down. That is a permanent second attachment on every leader's
+     * `deltaOutlet`, and it breaks an invariant this engine already pins:
+     * `ShippingLinkIdempotenceTest` reads `deltaOutlet`'s raw consumer set and
+     * `linking.links` and requires **exactly one** — the shipping link — at a
+     * leader in steady state (measured: both of its examples fail 1 vs 2 with a
+     * promotion-time tap). Nothing about the divergence record needs the tap
+     * outside the armed window: while [Divergence.departed] is empty the sink
+     * discards everything it sees. So the tap is installed on the first
+     * departure and dropped again by [disarmDivergence] when the last one
+     * returns — invisible in every steady state, and identical inside the
+     * window. The BUFFER's lifetime is unchanged and independent: it is
+     * retained across a disarm and cleared only by the flush ([Divergence]).
+     *
+     * ## Two properties the sink depends on
      *
      * - **The tap ignores baselines.** [SingleWriterReplicable]'s catch-up
      *   contract emits the leader's WHOLE state as a `baseline` unit whenever a
      *   link forms while leading — including on this very link, the instant it
-     *   is installed. **This guard is defensive, and as of computenet-f7h.5.2
-     *   it is not reachable**: the only baseline that ever arrives here is the
-     *   tap's own formation baseline, and a tap is armed exclusively at
-     *   promotion, when [Divergence.departed] is necessarily empty (a fresh
-     *   record, or an early return on an existing tap) — so the
-     *   `departed.isNotEmpty()` gate already drops it. Measured, not assumed:
-     *   removing `&& !stamped.baseline` leaves all seven tests of
-     *   `DivergentWriteSurfacingTest` green. It is kept because it states the
-     *   tap's contract against a future arming order that does not hold
-     *   `departed` empty at formation, and because the alternative — relying on
-     *   that coincidence — is silently wrong the day the order changes. What
-     *   IS pinned is the gate itself: dropping `departed.isNotEmpty()` reddens
-     *   the two tests below.
+     *   is installed, which is now inside the armed window. Without the guard
+     *   the tap records the leader's entire state as a "divergent write" on
+     *   every arming.
      * - **The tap records only while [Divergence.departed] is non-empty**, so a
-     *   leader that never witnessed a departure buffers nothing at all.
+     *   delta produced between a return and the next departure is not
+     *   divergent, and a leader that never witnessed a departure has no tap at
+     *   all.
      *
      * The subscription rides its own `divergence:` [PortRef] namespace, which
      * cannot collide with [shipRef]'s `ship:`, and is never entered in
      * [shipped] — nothing ships anywhere and no follower is involved.
      */
-    private fun armDivergenceTap(local: Local) {
-        val ref = local.cell.ref
-        val record = divergences.getOrPut(ref) { Divergence() }
-        if (record.tap != null) return
-        val sink = Propagate<Stamped<Any?>> { stamped ->
-            if (record.departed.isNotEmpty() && !stamped.baseline) {
-                record.buffer += stamped.epoch to stamped.delta
+    private fun armDivergence(ref: CellRef) {
+        val leading = applied[ref.id]?.leaderRef ?: return
+        if (ref == leading) return
+        localReplicas[ref.id].orEmpty().filter { it.cell.ref == leading }.forEach { local ->
+            val record = divergences.getOrPut(local.cell.ref) { Divergence() }
+            record.departed += ref
+            if (record.tap == null) {
+                val sink = Propagate<Stamped<Any?>> { stamped ->
+                    if (record.departed.isNotEmpty() && !stamped.baseline) {
+                        record.buffer += stamped.epoch to stamped.delta
+                    }
+                }
+                @Suppress("UNCHECKED_CAST")
+                record.tap = (local.cell.deltaOutlet as FanOutlet<Propagate<Stamped<Any?>>>)
+                    .streamTo(sink, at = divergenceRef(local.cell.ref))
             }
         }
-        @Suppress("UNCHECKED_CAST")
-        record.tap = (local.cell.deltaOutlet as FanOutlet<Propagate<Stamped<Any?>>>)
-            .streamTo(sink, at = divergenceRef(ref))
     }
 
     /** The divergence tap's stable [PortRef], under its own namespace ([shipRef]'s reasoning). */
@@ -749,22 +765,20 @@ class SingleWriterReplication(
     )
 
     /**
-     * f7h.5-D3 arming: [ref] has left the membership index. Record it against
-     * every local replica of the same logical id that this engine believes is
-     * currently leading — `applied[id]?.leaderRef` is the engine's own view of
-     * who leads, the same source [applyRoles] steps down from.
+     * f7h.5-D3 disarming: [ref] is back, so recording stops and the tap comes
+     * off once the last departed member has returned ([armDivergence]'s
+     * "exactly one attachment in steady state"). The BUFFER is retained —
+     * that retention is the refinement of D3, and [Divergence] carries why.
      */
-    private fun armDivergence(ref: CellRef) {
-        val leading = applied[ref.id]?.leaderRef ?: return
-        if (ref == leading) return
-        localReplicas[ref.id].orEmpty().filter { it.cell.ref == leading }.forEach { local ->
-            divergences.getOrPut(local.cell.ref) { Divergence() }.departed += ref
-        }
-    }
-
-    /** f7h.5-D3 disarming: [ref] is back, so recording stops. The buffer is retained ([Divergence]). */
     private fun disarmDivergence(ref: CellRef) {
-        localReplicas[ref.id].orEmpty().forEach { local -> divergences[local.cell.ref]?.departed?.remove(ref) }
+        localReplicas[ref.id].orEmpty().forEach { local ->
+            val record = divergences[local.cell.ref] ?: return@forEach
+            record.departed -= ref
+            if (record.departed.isEmpty()) {
+                record.tap?.unlink()
+                record.tap = null
+            }
+        }
     }
 
     /**
