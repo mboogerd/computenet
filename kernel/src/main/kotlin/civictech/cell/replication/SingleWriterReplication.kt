@@ -209,6 +209,16 @@ fun <D> restartCatchUp(leader: SingleWriterReplicable<D>, donor: SingleWriterRep
  * discovered via [civictech.cell.host.InstanceIndex.replicasOf] / `onPublish` — reusing the
  * same membership-discovery machinery the mergeable mesh already built
  * (M7.2), just wired asymmetrically instead of into a full mesh.
+ *
+ * **Election posture** ([MEM1-05], f7h.4-D1). By default the engine only
+ * *folds* marks somebody else decided: [designateLeader] is the sole path to
+ * `LocationRegistry.markLeader`, and a leader that vanishes stays folded
+ * forever. Constructed with [LeaderElection.EpochClaim] it additionally
+ * *mints* one — when a witnessed departure of the folded leader persists for
+ * the configured [DetectionWindow] of membership observations, a surviving
+ * local replica claims the next epoch through that same single fold
+ * (f7h.4-D4). The window is counted in observations, never in time
+ * ([MEM1-25]): this package reads no clock and starts no thread.
  */
 class SingleWriterReplication(
     private val registry: LocationRegistry,
@@ -222,6 +232,15 @@ class SingleWriterReplication(
      * second slicing mechanism.
      */
     private val keyOf: (Any?) -> Any? = { it },
+    /**
+     * Election posture ([MEM1-05], f7h.4-D1). [LeaderElection.Manual] — the
+     * default — is exactly the pre-F4 engine: nothing here arms, counts or
+     * claims, and [observe] returns immediately. Positioned THIRD, after
+     * [keyOf], so a positional `(registry, keyOf)` construction is untouched;
+     * that ordering is the compatibility guarantee, not an accident of the
+     * diff.
+     */
+    private val election: LeaderElection = LeaderElection.Manual,
 ) {
 
     private data class Local(val cell: SingleWriterReplicable<*>)
@@ -248,6 +267,26 @@ class SingleWriterReplication(
 
     /** Step-down observers ([onStepDown]). */
     private val stepDownListeners = mutableListOf<(StepDown) -> Unit>()
+
+    /**
+     * The detection window's state, per logical id (f7h.4-D2 as refined by
+     * f7h.4.1-D1). A key's PRESENCE is the arming bit and its value is the
+     * number of observations made since; an id with no key is **unarmed** and
+     * is never counted by anything, including [observe].
+     *
+     * Arming is deliberately narrower than "the leader is absent": only an
+     * `onUnpublish` naming the currently folded `leaderRef`, for a logical id
+     * this engine hosts a replica of, arms. **An absence never witnessed as a
+     * departure is not a failure observation** — and without that narrowing a
+     * freshly spawned follower whose leader has not yet been announced (the
+     * spawn-first/peer-second ordering every fixture uses) would see its own
+     * and its siblings' `onPublish` with the leaderRef absent and, at a window
+     * no larger than the sibling count, claim against a live leader. `window =
+     * 1` still means "claim on the unpublish itself".
+     *
+     * Empty and untouched under [LeaderElection.Manual].
+     */
+    private val misses = mutableMapOf<UUID, Int>()
 
     interface DeltaInletHolder {
         val deltaInlet: Use<Propagate<Stamped<Any?>>>
@@ -297,7 +336,14 @@ class SingleWriterReplication(
     }
 
     init {
-        registry.onPublish { ref -> onPeerPublished(ref) }
+        registry.onPublish { ref ->
+            onPeerPublished(ref)
+            // f7h.4-D2(b): a publish for an ARMED id is an observation like any
+            // other — it disarms when it restores the leaderRef and counts when
+            // it does not. After [onPeerPublished], so a re-announced follower
+            // is already linked when a claim evaluated here promotes somebody.
+            observeIfArmed(ref.id)
+        }
         // T07 finding 1 (Divergence B): mirrors Replication.kt's onUnpublish
         // reconciliation (G-45) — a follower's despawn/eviction drops the now-
         // stale outbound shipping link rather than leaving it targeting a gone
@@ -310,6 +356,10 @@ class SingleWriterReplication(
         // up a live subscription and double-applies future shipments.
         registry.onUnpublish { ref ->
             shipped.keys.filter { it.second == ref }.toList().forEach { key -> shipped.remove(key)?.unlink() }
+            // f7h.4-D2(a)/(b), and f7h.4-D7's ordering requirement: the
+            // detector runs AFTER the unlink above, so a claim evaluated
+            // inside this same notification sees the stale link already gone.
+            onMembershipDeparture(ref)
         }
         // f7h.1-D4: role application hangs off the registry's ANY-scope
         // leader-mark hook, not off [designateLeader]'s body, so a mark that
@@ -324,7 +374,109 @@ class SingleWriterReplication(
         // [becomeFollower] therefore no longer propagates out of
         // [designateLeader], which now returns purely the fold's verdict. No
         // shipped call site asserted such a throw.
-        registry.onLeaderMark { mark -> applyRoles(mark) }
+        registry.onLeaderMark { mark ->
+            // f7h.4-D2, rule 5: ANY adopted mark ends the window for that
+            // logical id — this engine's own claim, another engine's
+            // designation, or a peer's mirrored mark alike. The new leader's
+            // presence is witnessed from scratch afterwards.
+            misses.remove(mark.logicalId)
+            applyRoles(mark)
+        }
+    }
+
+    /**
+     * Explicitly step the detection window ([MEM1-25], f7h.4-D2(c)) — the
+     * management-band cadence hook, mirroring [Replication.heartbeat]: the
+     * kernel ships the step and the caller decides when steps happen, because
+     * a step driven from a clock or a background thread is exactly what
+     * [DetectionWindow] exists to avoid.
+     *
+     * Counts one observation for every **armed** logical id, disarming any
+     * whose folded leaderRef is present again. An id that was never witnessed
+     * departing is untouched, however many times this is called, and under
+     * [LeaderElection.Manual] this returns immediately having done nothing.
+     */
+    fun observe() {
+        if (election !is LeaderElection.EpochClaim) return
+        misses.keys.toList().forEach { id -> observeIfArmed(id) }
+    }
+
+    /**
+     * The detection window's count for [logicalId] — 0 both when the id is
+     * unarmed and when an observation disarmed it (f7h.4-D2). The internal
+     * seam the F4 behavioural tasks read: `leaderOf` alone cannot tell "the
+     * count was reset" from "the id was never counted", and a totals-only
+     * assertion in this subsystem is vacuous precisely because the fold
+     * swallows the difference.
+     */
+    internal fun missCount(logicalId: UUID): Int = misses[logicalId] ?: 0
+
+    /**
+     * f7h.4-D2(a): arm on a witnessed departure of the folded leader, or —
+     * when already armed — treat this departure as one more observation.
+     */
+    private fun onMembershipDeparture(ref: CellRef) {
+        if (election !is LeaderElection.EpochClaim) return
+        val id = ref.id
+        if (misses.containsKey(id)) {
+            observeIfArmed(id)
+            return
+        }
+        if (localReplicas[id].isNullOrEmpty()) return
+        val mark = registry.instances.leaderOf(id) ?: return
+        if (ref != mark.leaderRef) return
+        misses[id] = 1
+        evaluateClaim(id)
+    }
+
+    /** f7h.4-D2(b)/(c): one observation for an armed id; a no-op for any other. */
+    private fun observeIfArmed(logicalId: UUID) {
+        if (election !is LeaderElection.EpochClaim) return
+        if (!misses.containsKey(logicalId)) return
+        val mark = registry.instances.leaderOf(logicalId)
+        if (mark == null || mark.leaderRef in registry.instances.replicasOf(logicalId)) {
+            misses.remove(logicalId)
+            return
+        }
+        misses[logicalId] = (misses[logicalId] ?: 0) + 1
+        evaluateClaim(logicalId)
+    }
+
+    /**
+     * The claim rule (f7h.4-D3, guarded per f7h.4.1-D2). Runs
+     * **synchronously** on the observing caller's thread (f7h.4-D5): no hop,
+     * no queue, no thread is added, so the claim is folded — and, through
+     * `onLocalLeaderMark`, announced — before the membership notification that
+     * triggered it returns.
+     *
+     * Two guards, and both KEEP the count rather than resetting it:
+     *
+     * - `local` is this engine's **published** local replicas of the id.
+     *   [localReplicas] is never pruned on despawn, so a stale [Local] entry
+     *   for a replica that is gone from the membership index must not become a
+     *   claimant. An engine that hosted the leader and despawned it therefore
+     *   arms (on its own `onUnpublish`) and then refuses here.
+     * - `reachable` is [MEM1-23]: a claimant with nobody to lead mints
+     *   nothing.
+     *
+     * The count is kept so a later observation — a new peer's `onPublish` for
+     * this id, or another [observe] — re-evaluates and claims as soon as
+     * somebody is reachable. Only the leaderRef's return (an observation) or
+     * an adopted mark resets it.
+     */
+    private fun evaluateClaim(logicalId: UUID) {
+        val window = (election as? LeaderElection.EpochClaim)?.window ?: return
+        if ((misses[logicalId] ?: 0) < window.observations) return
+        val mark = registry.instances.leaderOf(logicalId) ?: return
+        val replicas = registry.instances.replicasOf(logicalId)
+        val local = localReplicas[logicalId].orEmpty().map { it.cell.ref }.filter { it in replicas }
+        val reachable = replicas - local.toSet()
+        if (local.isEmpty() || reachable.isEmpty()) return
+        val selfRef = local.minByOrNull { it.instanceId } ?: return
+        // f7h.4-D3: the folded mark's epoch is the only epoch this engine has
+        // ever seen — there is no separate maxSeenEpoch. f7h.4-D4: the SAME
+        // fold [designateLeader] uses; no second write path exists.
+        registry.markLeader(LeaderMark(logicalId, mark.epoch + 1, selfRef))
     }
 
     /**
