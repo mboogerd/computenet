@@ -1,11 +1,22 @@
-work +20
-# Artifact 2 tests module-path disjointness, which is sound for a red in a
-# module the change does not touch at all — and has no answer for a
-# documentation-and-KDoc diff INSIDE the flaky test's own module, where the
-# artifact fails literally while the attribution is airtight (computenet-wugj,
-# measured on computenet-zgyt). review-feature.md §7's residual route generates
-# that shape routinely, and the honest options left to a reviewer were to report
-# an unsatisfied artifact — landing a DRAFT verdict on a provably innocent change
-# — or to reason past it silently. The lines name the file-and-causation
-# substitute, state the three things a reviewer must SHOW to use it, and require
-# an unsatisfied artifact to be reported as unsatisfied rather than either.
+work +39
+# Artifact 2 tests module-path disjointness, which is sound for a red in a module
+# the change does not touch at all — and had no answer for a documentation-and-
+# KDoc diff INSIDE the flaky test's own module, where the artifact fails
+# literally while the attribution is airtight (computenet-wugj, measured on
+# computenet-zgyt). review-feature.md §7's residual route generates that shape
+# routinely, and the honest options left to a reviewer were to report an
+# unsatisfied artifact — landing a DRAFT verdict on a provably innocent change —
+# or to reason past it silently.
+#
+# The lines name the file-and-causation substitute and what a reviewer must SHOW
+# to use it. Review found three conditions insufficient ON THIS REPO and the
+# fourth is why the entry is as long as it is: prose here is asserted-on INPUT to
+# real tests (oracle's MarkerFormTest walks all of kernel/src/test plus
+# concord/corpus/DISPUTES.md and matches regexes against comment and KDoc text;
+# kernel-test's own ModuleInventoryTest reads doc/ARCHITECTURE.md), so a
+# documentation-only diff can genuinely redden kernel-test with zero executable
+# lines. Both cited tests verified by reading them. The closing clause exists
+# because the first draft's "never let an unsatisfied artifact produce a DRAFT
+# verdict" contradicted §4's "a red required check is not yours to wave through",
+# read at exactly the READY/DRAFT moment: attribution changes what the draft is
+# ABOUT, never whether there is one.
