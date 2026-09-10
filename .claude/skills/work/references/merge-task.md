@@ -394,6 +394,25 @@ run, every job — **once the whole run has finished**: it refuses with
 even for a job that completed minutes ago. So the read waits on the slowest
 required check (~8m `build-test-fast`), not on the lane you need; the refusal
 is not an error and not a reason to skip this step (computenet-4dip) — measured on #254's run 32008091003: 7553 lines, 828 KB, 3s.
+
+**Meeting that refusal, drop to the per-JOB REST form, which works while
+siblings are still pending** and is cheaper besides — it fetches one job's log
+instead of the whole run's:
+
+```bash
+JOB=$(gh pr checks <pr-url> --json name,link \
+        -q '.[]|select(.name=="concord-full")|.link' | grep -oE '[0-9]+$')
+gh api repos/mboogerd/computenet/actions/jobs/"$JOB"/logs > "$SCRATCH/ci.log"
+```
+
+The job id is the trailing path segment of a check row's `link`. Two reviewers
+in one session hit the refusal independently and were each left choosing
+between waiting out an ~9m job, skipping the check, or inferring execution from
+a green conclusion — with agora-ui-test at 14s and build-test-fast at 9m17s in
+the same run, the run-level form is unavailable for most of the window a
+reviewer works in (computenet-rptg). **A refusal is still not a reading**: a
+reviewer that cannot fetch the log by either form reports the check as NOT
+PERFORMED, never as passed.
 Column 1 of each line is the job name, so the output also says *which lane*
 skipped. Save it, then read it with two greps:
 

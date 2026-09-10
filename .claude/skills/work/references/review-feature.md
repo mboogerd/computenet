@@ -566,7 +566,9 @@ So:
   checks actually exercised the changed modules — an `assumeTrue`-guarded
   suite reports `SKIPPED` under a green check, and only the job log says so;
   merge-task.md §4 carries the two greps that find it in `gh run view
-  <run-id> --log` (computenet-hacm). A check still `pending` is not a pass —
+  <run-id> --log` — and the per-JOB form to reach for when that refuses
+  because a sibling job is still pending, which is most of the window you work
+  in (computenet-hacm, computenet-rptg). A check still `pending` is not a pass —
   wait for it or certify draft, and wait with the script, never a hand-rolled
   loop or anything gated on `gh pr checks`' exit status (it exits 8 while
   pending, and its rows can be legitimately absent for the first minute —
