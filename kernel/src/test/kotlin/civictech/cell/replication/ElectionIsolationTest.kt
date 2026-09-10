@@ -460,9 +460,11 @@ class ElectionIsolationTest {
      * [MEM1-19] and [MEM1-33] (96 §E3.4 PN-7 amendment, §E3.6): a
      * single-writer election does not disturb a mergeable replica set that
      * happens to share the registry. `SingleWriterReplication` has no
-     * watermark, frontier or quorum coupling at all — `grep -in
+     * watermark, frontier or quorum coupling at all — `grep -inE
      * 'watermark|frontier|quorum' SingleWriterReplication.kt` returns exactly
-     * ONE hit on this branch, and it is a KDoc sentence about an unrelated
+     * ONE hit on this branch (`-E` is load-bearing: basic `grep` reads `|` as
+     * a literal and answers a false ZERO, which is how the original "0 hits"
+     * claim arose), and it is a KDoc sentence about an unrelated
      * per-inlet *processed*-frontier (L1057); no declaration, call or import
      * in the file names any of the three — so the properties hold by
      * construction; what is pinned
