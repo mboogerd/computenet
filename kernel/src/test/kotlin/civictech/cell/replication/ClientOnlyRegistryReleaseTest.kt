@@ -2,8 +2,11 @@ package civictech.cell.replication
 
 import civictech.cell.CellRef
 import civictech.cell.host.LocationRegistry
+import civictech.gen.wire.Contract
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContain
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.UUID
@@ -38,8 +41,32 @@ import java.util.UUID
  * superseding mark folds and updates `applied` exactly as it would on a
  * registry that does host a replica, and the release step is a genuine no-op
  * because there is nothing to drain.
+ *
+ * **Positive control.** The negative arm above asserts three empty queues
+ * from end to end, which passes identically whether `releaseParked` runs a
+ * genuine no-op drain or is never called at all (a feature-review mutation —
+ * deleting the `releaseParked(...)` call from [SingleWriterReplication]'s
+ * `onLeaderMark` fold entirely — leaves it green). It cannot by itself
+ * distinguish "found nothing to drain" from "never looked". The second test
+ * below is the discriminating control: it command-forwards a real write
+ * through [forwardWrites] so the registry's parked queue for the old leader
+ * is non-empty, then asserts the superseding mark actually drains it and
+ * re-addresses it to the new leader. Deleting or neutering `releaseParked`
+ * reddens that assertion, which is what makes the negative arm's silence
+ * trustworthy rather than merely consistent.
  */
 class ClientOnlyRegistryReleaseTest {
+
+    /** A tiny write API, `@Contract`-annotated purely so [forwardWrites] can
+     * build a KSP-generated proxy for it (spec 10/14 §Reflection budget,
+     * pinned by `ProxyGenerationTest`) — its single method is never asserted
+     * on, only that an invocation through it lands in the registry's parked
+     * queue.
+     */
+    @Contract
+    interface WriteOp {
+        fun write(amount: Long)
+    }
 
     @Test
     fun `a registry that never forwarded a write for the id releases nothing on a superseding leader mark`() {
@@ -68,6 +95,42 @@ class ClientOnlyRegistryReleaseTest {
         withClue("the release ran and found nothing to drain — not a skipped subscription") {
             registry.parkedFor(aRef).shouldBeEmpty()
             registry.parkedFor(bRef).shouldBeEmpty()
+        }
+    }
+
+    @Test
+    fun `a registry that did forward a write for the id releases it to the new leader on a superseding mark`() {
+        val registry = LocationRegistry()
+        SingleWriterReplication(registry)
+
+        val id = UUID.randomUUID()
+        val aRef = CellRef(id, 0)
+        val bRef = CellRef(id, 1)
+
+        registry.markLeader(LeaderMark(id, epoch = 1, leaderRef = aRef)) shouldBe true
+
+        // Command-forward a write for `id` through `aRef`, exactly as a real
+        // follower's `becomeFollower` would via `forwardWrites`. Neither `aRef`
+        // nor `bRef` is ever published locally on this registry, so the write
+        // parks (`LocationRegistry.deliver`'s no-location branch) instead of
+        // being delivered anywhere.
+        val forwarder = forwardWrites(WriteOp::class.java, "writeInlet", aRef, registry)
+        forwarder.call.write(42)
+
+        withClue("the forwarded write is recorded as a forwarded write port and parked at aRef") {
+            registry.forwardedPorts(id) shouldContain "writeInlet"
+            registry.parkedFor(aRef) shouldHaveSize 1
+        }
+
+        // A superseding mark: `releaseParked` drains aRef's queue and, because
+        // the parked invocation's port is a recorded forwarded write,
+        // re-addresses it to the new leader (bRef) instead of leaving it
+        // stranded at the superseded one.
+        registry.markLeader(LeaderMark(id, epoch = 2, leaderRef = bRef)) shouldBe true
+
+        withClue("the release drained aRef's parked write and re-delivered it to the new leader, where it re-parks (bRef is unpublished too)") {
+            registry.parkedFor(aRef).shouldBeEmpty()
+            registry.parkedFor(bRef) shouldHaveSize 1
         }
     }
 }
