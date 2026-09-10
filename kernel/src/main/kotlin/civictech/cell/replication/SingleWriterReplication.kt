@@ -306,6 +306,25 @@ class SingleWriterReplication(
      * superseding mark arrives before the second — it survives the unrefined
      * rule by an ordering accident. The single-partition shape is the one that
      * genuinely constrains this.
+     *
+     * **Despawn without step-down, deliberately accepted (computenet-03kz7).**
+     * A local leader with a live [Divergence] entry that is despawned
+     * ([civictech.cell.host.ManagedHost]'s `despawn`, which unpublishes the
+     * ref but runs no [LeaderMark]/step-down) is not visited by
+     * [surfaceDivergentWrites] at all — that function only runs from
+     * [applyRoles]'s demotion pass, itself only reachable via an adopted mark.
+     * Nothing else clears a [Divergence] entry or unlinks its [tap]. So the
+     * entry, its buffered deltas, and the live subscription on the (now
+     * despawned) cell's `deltaOutlet` all survive the despawn indefinitely,
+     * exactly as [localReplicas] itself is never pruned on despawn (see
+     * [evaluateClaim]'s KDoc for that established precedent). This is a
+     * leak bound of the same shape and the same acceptance, not a new kind
+     * of defect: nothing in this feature's model runs cleanup off despawn,
+     * only off the mark-driven step-down it defines. Left undocumented by a
+     * test because reaching it requires driving despawn independent of any
+     * later leader mark for the same logical id, which is not a shape this
+     * engine's public API is exercised through elsewhere and would need new
+     * scaffolding whose own correctness this bead's slot cannot also absorb.
      */
     private class Divergence {
         var tap: Link? = null
@@ -767,6 +786,15 @@ class SingleWriterReplication(
      * races a further supersession can land at a replica that is no longer
      * leading; what it cannot do is apply below the canonical epoch. No
      * stronger guarantee is claimed here, and F7 carries its absence.
+     *
+     * **This release is registry-local, not id-global (computenet-03kz7).**
+     * [LocationRegistry.unpark] drains only [registry]'s own parked queue.
+     * A "pure client" registry — one whose engine folds marks but never
+     * installs a local replica or calls `forwardWrites` for [mark]'s logical
+     * id — always finds that queue empty and releases nothing, silently.
+     * That is not a skipped subscription (the `onLeaderMark` hook still
+     * fires and `applied` still updates) but an empty drain; pinned in
+     * `ClientOnlyRegistryReleaseTest`.
      *
      * **Two engines on one registry** (testkit's `SingleWriterChurnTest`
      * builds this) both subscribe to the one fold and both run this rule: the
