@@ -61,6 +61,17 @@ class SingleWriterReplicationTest {
         var currentEpoch: Long = -1
             private set
 
+        /**
+         * Role-application counters (f7h.1 F1): the fold must apply a role
+         * exactly ONCE per adopted mark, which a boolean `leading` cannot
+         * distinguish from applying it twice. [LeaderMarkFoldTest] pins the
+         * count; nothing in this file reads them.
+         */
+        var becomeLeaderCalls = 0
+            private set
+        var becomeFollowerCalls = 0
+            private set
+
         private val realApi = object : SwCounterOps {
             override fun increment(amount: Long) {
                 check(leading) { "not the leader" }
@@ -91,12 +102,14 @@ class SingleWriterReplicationTest {
         }
 
         override fun becomeLeader(epoch: Long) {
+            becomeLeaderCalls++
             leading = true
             currentEpoch = epoch
             writeInlet.serve(realApi)
         }
 
         override fun becomeFollower(leaderRef: CellRef, epoch: Long, registry: LocationRegistry) {
+            becomeFollowerCalls++
             leading = false
             currentEpoch = epoch
             writeInlet.delegate(forwardWrites(writeInlet.clazz, "writeInlet", leaderRef, registry))
@@ -310,28 +323,44 @@ class SingleWriterReplicationTest {
         (cause as IllegalStateException).message shouldContain "Rejected"
     }
 
+    /**
+     * Fencing under the fold's TOTAL order over `(epoch,
+     * leaderRef.instanceId)` (f7h.1-D2, [MEM1-02]) — not the epoch-only,
+     * not-total order this test pinned before F1. The leader sits at
+     * instance 5 so the equal-counter case has both directions to show: a
+     * challenger BELOW it at the same counter loses the tiebreak, one ABOVE
+     * it wins. A strictly greater counter still supersedes regardless of
+     * instance id.
+     */
     @Test
     fun `a fenced stale LeaderMark epoch is rejected`() {
         val controller = SimulationController()
         val p = Peer(controller)
         val logicalId = UUID.randomUUID()
-        val leaderRef = CellRef(logicalId, 0)
+        val leaderRef = CellRef(logicalId, 5)
         val challengerRef = CellRef(logicalId, 1)
 
         val mark2 = LeaderMark(logicalId, epoch = 2, leaderRef = leaderRef)
-        p.replica(logicalId, 0, mark2)
+        p.replica(logicalId, 5, mark2)
         p.replication.leaderOf(logicalId) shouldBe mark2
 
-        // a stale (lower/equal) epoch is fenced — inert, never adopted
+        // a lower counter is fenced — inert, never adopted
         val staleLower = LeaderMark(logicalId, epoch = 1, leaderRef = challengerRef)
         p.replication.designateLeader(staleLower) shouldBe false
         p.replication.leaderOf(logicalId) shouldBe mark2
 
+        // equal counter, LOWER instance id (1 < 5) — loses the tiebreak
         val staleEqual = LeaderMark(logicalId, epoch = 2, leaderRef = challengerRef)
         p.replication.designateLeader(staleEqual) shouldBe false
         p.replication.leaderOf(logicalId) shouldBe mark2
 
-        // a strictly greater epoch is adopted — the winner supersedes
+        // equal counter, HIGHER instance id (9 > 5) — strictly greater under
+        // the total order, so it is adopted
+        val equalHigherInstance = LeaderMark(logicalId, epoch = 2, leaderRef = CellRef(logicalId, 9))
+        p.replication.designateLeader(equalHigherInstance) shouldBe true
+        p.replication.leaderOf(logicalId) shouldBe equalHigherInstance
+
+        // a strictly greater counter is adopted whatever the instance id — the winner supersedes
         val higher = LeaderMark(logicalId, epoch = 3, leaderRef = challengerRef)
         p.replication.designateLeader(higher) shouldBe true
         p.replication.leaderOf(logicalId) shouldBe higher

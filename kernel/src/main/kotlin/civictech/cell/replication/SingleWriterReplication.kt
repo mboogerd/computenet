@@ -22,17 +22,13 @@ import civictech.cell.proxy.Proxy
 import java.util.UUID
 
 /**
- * Leadership announcement for a single-writer logical cell (spec 42
- * §Single-writer replication, decided 93 I-25, not built until this
- * ticket). Folded into an eventually-consistent membership index the same
- * way as an ordinary [LocationRegistry] publish (P4) — no view number, no
- * quorum, no barrier: `leaderOf(id)` is simply the mark with the greatest
- * epoch this peer has folded. Automatic election that *mints* these marks
- * is the deferred liveness half (G-44 residual, 95 §R1); this ticket ships
- * EXPLICIT/orchestrated designation only — [SingleWriterReplication.designateLeader]
- * is the manual-failover hook the spec declares the default.
+ * Relocated to `civictech.cell.host` (f7h.1-D1): the fold now lives on
+ * [civictech.cell.host.InstanceIndex], the membership lane, not here. This
+ * `typealias` keeps every existing caller in this package — and testkit's
+ * `import civictech.cell.replication.LeaderMark` — compiling unmodified; see
+ * [civictech.cell.host.LeaderMark] for the type's KDoc.
  */
-data class LeaderMark(val logicalId: UUID, val epoch: Long, val leaderRef: CellRef)
+typealias LeaderMark = civictech.cell.host.LeaderMark
 
 /**
  * An epoch-stamped unit on the leader→follower log (spec 42): "every leader
@@ -158,7 +154,6 @@ class SingleWriterReplication(
     private data class Local(val cell: SingleWriterReplicable<*>)
 
     private val localReplicas = mutableMapOf<UUID, MutableList<Local>>()
-    private val leaderMarks = mutableMapOf<UUID, LeaderMark>()
 
     /** Established leader→follower shipping links (one direction only). */
     private val shipped = mutableMapOf<Pair<CellRef, CellRef>, Link>()
@@ -182,9 +177,29 @@ class SingleWriterReplication(
         registry.onUnpublish { ref ->
             shipped.keys.filter { it.second == ref }.toList().forEach { key -> shipped.remove(key)?.unlink() }
         }
+        // f7h.1-D4: role application hangs off the registry's ANY-scope
+        // leader-mark hook, not off [designateLeader]'s body, so a mark that
+        // arrives by any path — this engine's own [designateLeader], another
+        // engine on the same registry, or F2's `mirrorLeaderMark` fed from a
+        // peer announcement — applies roles identically. Exactly one fold per
+        // registry, therefore exactly one role application per adopted mark.
+        //
+        // Known behavioural delta (f7h.1-D3), accepted: [LocationRegistry]
+        // treats hooks as notifications, not participants — it swallows and
+        // prints a listener exception. A throw from [becomeLeader]/
+        // [becomeFollower] therefore no longer propagates out of
+        // [designateLeader], which now returns purely the fold's verdict. No
+        // shipped call site asserted such a throw.
+        registry.onLeaderMark { mark -> applyRoles(mark) }
     }
 
-    fun leaderOf(logicalId: UUID): LeaderMark? = leaderMarks[logicalId]
+    /**
+     * The folded leader for [logicalId] — read straight off the membership
+     * index ([MEM1-03]). The engine keeps no [LeaderMark] map of its own:
+     * [civictech.cell.host.InstanceIndex] is the single fold ([civictech.cell.host.LocationRegistry.markLeader]
+     * its single writer), so an engine and its registry can never disagree.
+     */
+    fun leaderOf(logicalId: UUID): LeaderMark? = registry.instances.leaderOf(logicalId)
 
     /**
      * Spawn [cell] as one replica of a single-writer logical cell and fold
@@ -203,18 +218,26 @@ class SingleWriterReplication(
     }
 
     /**
-     * Fold a [LeaderMark] announcement (spec 42 §Leadership is a
-     * `LeaderMark` epoch fold): a mark at or below the currently-folded
-     * epoch is fenced — inert, rejected outright — exactly the split-brain
-     * guard the spec requires ("a leader that folds a strictly greater
-     * epoch steps down ... and a leader that folds a strictly greater
-     * epoch steps down to a command-forwarding follower"). Returns `true`
-     * if adopted.
+     * Fold a *local* [LeaderMark] announcement (spec 42 §Leadership is a
+     * `LeaderMark` epoch fold). The verdict is the registry's, verbatim: a
+     * mark not strictly greater under the fold's total order over `(epoch,
+     * leaderRef.instanceId)` is fenced — inert, rejected outright — exactly
+     * the split-brain guard the spec requires. Returns `true` if adopted.
+     *
+     * Roles are NOT applied here; adoption notifies
+     * [civictech.cell.host.LocationRegistry.onLeaderMark], and this engine's
+     * subscriber (see `init`) applies them. The signature and the verdict are
+     * unchanged for callers.
      */
-    fun designateLeader(mark: LeaderMark): Boolean {
-        val current = leaderMarks[mark.logicalId]
-        if (current != null && mark.epoch <= current.epoch) return false
-        leaderMarks[mark.logicalId] = mark
+    fun designateLeader(mark: LeaderMark): Boolean = registry.markLeader(mark)
+
+    /**
+     * Apply [mark]'s roles to every local replica of its logical id — the
+     * single subscriber's body, run once per adopted fold (see `init`). The
+     * designated replica promotes and then ships to every other known
+     * instance; every other local replica demotes to command-forwarding.
+     */
+    private fun applyRoles(mark: LeaderMark) {
         localReplicas[mark.logicalId]?.forEach { local ->
             if (local.cell.ref == mark.leaderRef) {
                 local.cell.becomeLeader(mark.epoch)
@@ -224,11 +247,10 @@ class SingleWriterReplication(
                 local.cell.becomeFollower(mark.leaderRef, mark.epoch, registry)
             }
         }
-        return true
     }
 
     private fun onPeerPublished(ref: CellRef) {
-        val mark = leaderMarks[ref.id] ?: return
+        val mark = registry.instances.leaderOf(ref.id) ?: return
         if (ref == mark.leaderRef) return
         val leaderLocal = localReplicas[ref.id]?.firstOrNull { it.cell.ref == mark.leaderRef } ?: return
         shipTo(leaderLocal.cell, ref)

@@ -107,4 +107,92 @@ class InstanceIndexTest {
         index.setInterest(ref, partial)
         index.interestOf(ref) shouldBe partial
     }
+
+    // ------------------------------------------------------- LeaderMark fold
+
+    /**
+     * [MEM1-02]: the fold's order is TOTAL over `(epoch, leaderRef.instanceId)`,
+     * not epoch-only — at an EQUAL epoch the greater instanceId wins, and the
+     * result is the same regardless of fold order. `leaderOf` before any fold
+     * is null ([MEM1-03]).
+     */
+    @Test
+    fun `markLeader adopts the strictly greater mark under the total order, same counter either way`() {
+        val forward = InstanceIndex()
+        val id = UUID.randomUUID()
+        forward.leaderOf(id) shouldBe null
+        val low = LeaderMark(id, epoch = 2, leaderRef = CellRef(id, instanceId = 7))
+        val high = LeaderMark(id, epoch = 2, leaderRef = CellRef(id, instanceId = 9))
+
+        forward.markLeader(low) shouldBe true
+        forward.markLeader(high) shouldBe true
+        forward.leaderOf(id)!!.leaderRef.instanceId shouldBe 9L
+
+        val reverse = InstanceIndex()
+        reverse.markLeader(high) shouldBe true
+        reverse.markLeader(low) shouldBe false
+        reverse.leaderOf(id)!!.leaderRef.instanceId shouldBe 9L
+    }
+
+    /**
+     * [MEM1-09]/[MEM1-22], fold half: a lower epoch, an equal-epoch lower
+     * instanceId, and a refold of the identical mark are each rejected and
+     * leave [InstanceIndex.leaderOf] unchanged.
+     */
+    @Test
+    fun `a lower epoch, an equal-epoch lower instanceId, and a duplicate mark are all rejected`() {
+        val index = InstanceIndex()
+        val id = UUID.randomUUID()
+        val current = LeaderMark(id, epoch = 5, leaderRef = CellRef(id, instanceId = 3))
+        index.markLeader(current) shouldBe true
+
+        index.markLeader(LeaderMark(id, epoch = 2, leaderRef = CellRef(id, instanceId = 99))) shouldBe false
+        index.leaderOf(id) shouldBe current
+
+        val lowerInstanceAtSameEpoch = LeaderMark(id, epoch = 5, leaderRef = CellRef(id, instanceId = 1))
+        index.markLeader(lowerInstanceAtSameEpoch) shouldBe false
+        index.leaderOf(id) shouldBe current
+
+        index.markLeader(current) shouldBe false
+        index.leaderOf(id) shouldBe current
+    }
+
+    /** [MEM1-03]: [InstanceIndex.leaderMarks] is a snapshot, one per logical id. */
+    @Test
+    fun `leaderMarks snapshots every folded mark and is unaffected by a later fold`() {
+        val index = InstanceIndex()
+        val idA = UUID.randomUUID()
+        val idB = UUID.randomUUID()
+        val markA = LeaderMark(idA, epoch = 1, leaderRef = CellRef(idA, instanceId = 1))
+        val markB = LeaderMark(idB, epoch = 1, leaderRef = CellRef(idB, instanceId = 1))
+        index.markLeader(markA)
+        index.markLeader(markB)
+
+        val snapshot = index.leaderMarks()
+        index.markLeader(LeaderMark(idA, epoch = 2, leaderRef = CellRef(idA, instanceId = 2)))
+
+        snapshot.toSet() shouldBe setOf(markA, markB)
+        index.leaderMarks().toSet() shouldBe setOf(index.leaderOf(idA), markB)
+    }
+
+    /**
+     * f7h.1-D6 / [MEM1-14]: removing the leaderRef instance from [InstanceIndex]
+     * (an unpublish) does not clear its [LeaderMark] — the mark stays folded
+     * until superseded, independent of the leaderRef's continued presence in
+     * [InstanceIndex.replicasOf].
+     */
+    @Test
+    fun `remove(leaderRef) leaves leaderOf intact`() {
+        val index = InstanceIndex()
+        val id = UUID.randomUUID()
+        val leaderRef = CellRef(id, instanceId = 1)
+        val mark = LeaderMark(id, epoch = 1, leaderRef = leaderRef)
+        index.add(leaderRef)
+        index.markLeader(mark) shouldBe true
+
+        index.remove(leaderRef)
+
+        index.leaderOf(id) shouldBe mark
+        index.instancesOf(id).shouldBeEmpty()
+    }
 }

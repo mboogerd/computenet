@@ -18,14 +18,15 @@ import civictech.cell.replication.forwardWrites
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * BS-14 — leader churn on a single-writer replica set ([CHA3-50], [CHA3-51], [CHA3-52];
  * feature computenet-umx.2 §4.6, §9 risk 5).
  *
- * ## The branch this file took, and the reason
+ * ## The branch this file took, and why it changed under computenet-f7h.1
  *
  * Feature §9 risk 5 flags the honest-outcome fork: `SingleWriterReplication` ships
  * EXPLICIT/orchestrated designation only (its own KDoc, `SingleWriterReplication.kt`: "this
@@ -33,25 +34,41 @@ import kotlin.test.assertTrue
  * hook the spec declares the default"), so if explicit-only failover admits no interleaving that
  * produces a split-brain window, the measurement is vacuous and the finding is a measured zero.
  *
- * **It is not vacuous. There is a real window, and it is measured below.** The mechanism is
- * `designateLeader`'s scope: a [LeaderMark] is folded into **one peer's** own `leaderMarks` map
- * by a direct call and is *not* gossiped — there is no announcement path between peers for it
- * (contrast `Replication`'s membership, which rides `LocationRegistry.onPublish`). Failing over a
- * two-peer set therefore takes **two** calls, one per peer, and the state between them is a
- * state of the system, not a race: whichever call goes first decides what that state is.
+ * **Before computenet-f7h.1, it was not vacuous: there was a real, non-zero in-process window,
+ * measured here.** The mechanism was `designateLeader`'s scope: a [LeaderMark] folded into
+ * **one peer's own** `leaderMarks` map by a direct call and was *not* gossiped — no announcement
+ * path between peers for it (contrast `Replication`'s membership, which rides
+ * `LocationRegistry.onPublish`). Failing over a two-peer set took **two** calls, one per peer,
+ * and the state between them was a state of the system, not a race: whichever call went first
+ * decided what that state was — promote-first left both peers believing they led; demote-first
+ * left neither.
  *
- *  - **Promote-first** (`designateLeader` on the incoming leader, then on the outgoing one):
- *    both instances report `leading == true` for the whole gap. That is the split-brain window
- *    95 §R1 asks for, and the first test measures it.
- *  - **Demote-first** (the outgoing leader first): **no** instance reports `leading == true` for
- *    the gap — the window is zero and the cost has moved to unavailability instead. The second
- *    test measures that.
+ * **computenet-f7h.1 removed that per-engine fold.** The [LeaderMark] fold now lives on
+ * [civictech.cell.host.InstanceIndex] — one fold per [LocationRegistry], not one per
+ * [SingleWriterReplication] engine — and role application hangs off the registry's
+ * `onLeaderMark` hook, so every engine sharing a registry applies its own role from the SAME
+ * adopted fold, in the SAME step, regardless of which engine's `designateLeader` call triggered
+ * it (`SingleWriterReplication.kt`'s `init`, f7h.1-D4). This file's two peers share one
+ * [LocationRegistry] (see [SwSet]'s KDoc), so **in process the window is now zero by
+ * construction, on both orders** — there is no longer an interleaving between "the incoming
+ * leader is up" and "the outgoing leader is down" for a driver to land a write in, and the order
+ * of the two `designateLeader` calls no longer decides anything observable. That is measured
+ * directly below rather than argued: both arms assert `splitBrainWindow == 0`, and one assertion
+ * pins that the two orders now produce the IDENTICAL belief sequence.
  *
- * So the measured quantity is a property of the **orchestration order**, not of the kernel, and
- * that is the whole finding: with explicit failover, the split-brain window is exactly as long as
- * the operator leaves it, and one of the two orders makes it zero. Reporting it does not choose
- * between 95 §R1's directions and implements no election ([CHA3-52], [CHA3-84]) — see
- * [NO_ELECTION_DEFINED], asserted at the bottom of this file.
+ * **The window did not vanish from the spec — it moved.** [LeaderMark] still folds on ONE
+ * registry at a time; a real deployment folds it on every peer's OWN registry, over the wire, and
+ * nothing about computenet-f7h.1 makes a fold ATOMIC ACROSS registries. That cross-registry
+ * window belongs to feature computenet-f7h.2 (`MEM1` epic) — a `Peering` bridge between two
+ * `:kernel` hosts, which `:testkit`'s main source set cannot build: there is no KSP configuration
+ * here to generate the `@Contract` codecs a wire bridge needs (the same reason [SwSet] gives for
+ * sharing one registry rather than bridging two). That is a stated LIMITATION on what this file
+ * can measure, not a vacuous zero: the zero below is exactly correct for the shared-registry,
+ * in-process case this file drives, and computenet-f7h.2 is where the cross-registry case has to
+ * be measured instead. No `MEM1` requirement id is claimed as covered here.
+ *
+ * Reporting this does not choose between 95 §R1's directions and implements no election
+ * ([CHA3-52], [CHA3-84]) — see [NO_ELECTION_DEFINED], asserted at the bottom of this file.
  *
  * ## What the write accounting measures, and what it depends on
  *
@@ -68,11 +85,13 @@ import kotlin.test.assertTrue
  * implements `Stateful.snapshot()` and a `mark(Leased<String>)` write method.
  *
  * The measured answer for the promote-first transition is **4 accepted, 4 at the successor: no
- * accepted write lost, none duplicated** — despite one of them being accepted inside the window.
- * The mechanism is asserted mid-test rather than narrated (the successor's catch-up raises the
- * outgoing leader's epoch before its in-window write is stamped, so the write is not fenced), and
- * its limits are stated on `MEASURED_OBSERVED_TOTAL`. A zero here is a result about **this**
- * interleaving; 95 §R1's "in every interleaving" is research-gated and is not answered.
+ * accepted write lost, none duplicated** — unchanged by computenet-f7h.1, and re-measured against
+ * the new one-fold engine rather than copied forward: the successor's catch-up still raises the
+ * outgoing leader's epoch (asserted mid-test) before its post-transition write is stamped, so the
+ * write is still not fenced; only WHEN peerA steps down moved (before that write now, instead of
+ * after), which does not change what gets counted. Its limits are stated on
+ * `MEASURED_OBSERVED_TOTAL`. A zero here is a result about **this** interleaving; 95 §R1's "in
+ * every interleaving" is research-gated and is not answered.
  *
  * **computenet-yqgd decided that "duplicated across the transition" must be read at every
  * instance, not the successor alone**, because the successor-only zero above is true and
@@ -183,9 +202,17 @@ class SingleWriterChurnTest {
      * `Peering` bridge would add a wire-encoding requirement (`@Contract`-generated codecs) that
      * `:testkit` has no KSP configuration to satisfy. Membership visibility is not what is under
      * measurement here — every instance is visible to every other throughout — so the shared
-     * directory removes a variable rather than hiding one. Each peer still keeps its **own**
-     * [SingleWriterReplication], which is what makes the per-peer `leaderMarks` fold, and
-     * therefore the window, real.
+     * directory removes a variable rather than hiding one.
+     *
+     * **Each peer still keeps its own [SingleWriterReplication] engine, but computenet-f7h.1
+     * moved the [LeaderMark] fold off that engine and onto this shared [LocationRegistry]**
+     * ([civictech.cell.host.InstanceIndex]). One fold per registry, not one per engine, is
+     * exactly why the in-process window measured below is zero: every engine sharing this
+     * registry applies its role from the SAME adopted mark, in the SAME step. Bridging two
+     * SEPARATE registries — one per peer, over the wire — would restore two independent folds and
+     * a real window again; that is feature computenet-f7h.2's case, which `:testkit` cannot build
+     * here (no KSP configuration for a `Peering` bridge, same limitation as above — see the class
+     * KDoc).
      */
     private class SwSet(seed: Long) {
         val controller = SimulationController()
@@ -240,10 +267,36 @@ class SingleWriterChurnTest {
         }
     }
 
+    /**
+     * Re-run the baseline and the two `designateLeader` calls, in the given order, on a FRESH
+     * [SwSet] with none of an arm's own extra write ticks, and return the belief sample at each
+     * of the four resulting ticks (baseline, 2 writes, first call, second call) — the shape
+     * [MEM1-20]'s local half compares: one fold per registry, so which engine's call goes first
+     * no longer changes what either arm believes at any of these four points. Used by the
+     * demote-first arm to pin that its own sequence is identical to the promote-first order's.
+     */
+    private fun beliefsAfterDesignation(
+        firstCall: (SwSet) -> Unit,
+        secondCall: (SwSet) -> Unit,
+    ): List<List<String>> {
+        val set = SwSet(ChurnSeeds.plans(101L..101L).single().seed)
+        val measurement = LeaderChurnMeasurement(set::believedLeaders)
+        measurement.tick("baseline: designateLeader(epoch=0, peerA) on both peers")
+        repeat(2) { i -> set.issue(set.a)?.let { measurement.acceptedWrite(i, it) } }
+        measurement.tick("2 writes applied by the epoch-0 leader")
+        firstCall(set)
+        set.drain()
+        measurement.tick("first designateLeader call")
+        secondCall(set)
+        set.drain()
+        measurement.tick("second designateLeader call")
+        return measurement.report(observedTotal = set.b.total).samples.map { it.believedLeaders }
+    }
+
     // ------------------------------------------------------------- BS-14, promote-first arm
 
     @Test
-    fun `BS-14 promote-first designation opens a real split-brain window, and it is measured`() {
+    fun `BS-14 promote-first designation leaves no in-process split-brain window under one fold per registry`() {
         // [CHA3-53]'s stream, consumed rather than duplicated — but only for its seed: the
         // interleaving below is constructed, not drawn from the plan. See the class KDoc.
         val plan = ChurnSeeds.plans(101L..101L).single()
@@ -254,28 +307,37 @@ class SingleWriterChurnTest {
         repeat(2) { i -> set.issue(set.a)?.let { measurement.acceptedWrite(i, it) } }
         measurement.tick("2 writes applied by the epoch-0 leader")
 
-        // The failover, promote-first: the INCOMING leader folds the new mark first.
+        // The failover, promote-first: the INCOMING leader's engine folds the new mark. Under
+        // computenet-f7h.1's one-fold-per-registry, that single call is the WHOLE transition:
+        // the registry's onLeaderMark hook (SingleWriterReplication.kt's `init`) notifies every
+        // engine sharing this registry, including peerA's — so peerA steps down in the SAME step
+        // peerB is promoted, not two calls apart. See the class KDoc for the pre-f7h.1 mechanism
+        // this used to measure.
         set.bReplication.designateLeader(set.epoch1)
         set.drain()
         measurement.tick("designateLeader(epoch=1, peerB) on peerB")
 
-        // Why the in-window write below turns out NOT to be fenced — pinned here rather than
-        // narrated, so the explanation is checked: designating the incoming leader runs its
-        // `deltaOutlet.linking.onLinked` catch-up, which ships `Stamped(epoch = 1, total)` to the
-        // OUTGOING leader. Spec 42's fencing rule raises `currentEpoch` on every delta it does
-        // apply, so the outgoing leader — still serving the real write API, since nobody has told
-        // it to step down — now stamps its own next write at the NEW epoch, and the successor
-        // accepts it. Nothing here is designed or repaired; it is the measured mechanism behind
-        // the accounting below.
-        assertEquals(1L, set.a.currentEpoch, "the successor's catch-up raised the outgoing leader's epoch")
-        assertTrue(set.a.leading, "and the outgoing leader is still serving the real write API")
+        // Pinned here rather than narrated: BOTH roles flip in this one step, so there is no gap
+        // where the outgoing leader is "still serving" — peerA's own onLeaderMark subscriber runs
+        // `becomeFollower` from the identical fold that promotes peerB. `currentEpoch` still rises
+        // to 1 (spec 42's fencing rule), because that follows from the SAME fold's role
+        // application, not from a separate catch-up step.
+        assertEquals(1L, set.a.currentEpoch, "the fold raises every subscriber's applied epoch together")
+        assertFalse(set.a.leading, "the outgoing leader already stepped down in the same fold (computenet-f7h.1)")
+        assertTrue(set.b.leading, "and the incoming leader is already promoted in the same fold")
 
-        // A write issued inside the window, where two instances believe they lead.
+        // A write issued right after the transition. There is no window left for it to land in:
+        // it is issued at peerA, which is already a follower, so it is forwarded by peerA's
+        // delegate (`SingleWriterReplication.kt`'s `forwardWrites`) to peerB and applied there.
         set.issue(set.a)?.let { measurement.acceptedWrite(2, it) }
-        measurement.tick("write issued inside the window")
+        measurement.tick("write issued immediately after the transition")
 
-        // The failover completes: the OUTGOING leader folds the same mark and steps down.
-        set.aReplication.designateLeader(set.epoch1)
+        // The second call folds nothing new: [MEM1-09] reads it as a duplicate of the mark
+        // already adopted by the first call, so no roles are re-applied.
+        assertFalse(
+            set.aReplication.designateLeader(set.epoch1),
+            "a duplicate of the already-folded mark is rejected ([MEM1-09])",
+        )
         set.drain()
         measurement.tick("designateLeader(epoch=1, peerB) on peerA")
 
@@ -290,14 +352,12 @@ class SingleWriterChurnTest {
             ),
         )
 
-        // [CHA3-50] — a MEASURED window, not a vacuous zero. Feature §9 risk 5's other branch.
-        assertTrue(report.splitBrainWindow > 0, "explicit-only designation DOES admit a window: ${report.summary()}")
-        assertEquals(2, report.splitBrainWindow, report.summary())
-        assertEquals(
-            listOf(listOf("peerA", "peerB"), listOf("peerA", "peerB")),
-            report.splitBrainSamples.map { it.believedLeaders },
-            "both instances report leading == true for the whole gap: ${report.summary()}",
-        )
+        // [CHA3-50] — computenet-f7h.1 closed the window this arm used to measure: one fold per
+        // registry means both peers change belief in the same step, on either order. See the
+        // class KDoc for where the window moved (computenet-f7h.2, the wire) and why `:testkit`
+        // cannot drive that half.
+        assertEquals(0, report.splitBrainWindow, report.summary())
+        assertEquals(emptyList(), report.splitBrainSamples, report.summary())
 
         // [CHA3-51] — the interleaving that produced it, reported alongside the accounting.
         assertEquals(
@@ -305,17 +365,18 @@ class SingleWriterChurnTest {
                 "baseline: designateLeader(epoch=0, peerA) on both peers",
                 "2 writes applied by the epoch-0 leader",
                 "designateLeader(epoch=1, peerB) on peerB",
-                "write issued inside the window",
+                "write issued immediately after the transition",
                 "designateLeader(epoch=1, peerB) on peerA",
                 "post-transition write",
             ),
             report.interleaving,
         )
-        assertEquals(1, report.acceptedDuringSplitBrain.size, report.summary())
+        assertEquals(0, report.acceptedDuringSplitBrain.size, report.summary())
 
         // The accounting itself is asserted exactly, whatever it says — see the class KDoc on what
         // it depends on. It is a measurement of this transition, not a property claim about the
-        // kernel.
+        // kernel. computenet-f7h.1 changed WHEN peerA steps down (before the "inside window"
+        // write now, not after) but not the totals below: they measure the same as at c491bd6a1.
         assertEquals(4, report.accepted.size, report.summary())
         assertEquals(4L, report.expectedTotal, report.summary())
         assertEquals(MEASURED_OBSERVED_TOTAL, report.observedTotal, report.summary())
@@ -323,12 +384,13 @@ class SingleWriterChurnTest {
         assertEquals(MEASURED_DUPLICATED, report.duplicatedWrites, report.summary())
 
         // computenet-yqgd's decision: [CHA3-51]'s "duplicated across the transition" is read at
-        // EVERY instance, not the successor alone. Pinned here rather than only asserted-zero: the
-        // demoted leader (peerA) measurably duplicates exactly the 2 pre-transition writes on top
-        // of the state it already held — the successor's from-zero catch-up ships the leader's
-        // CURRENT total (2, at the moment of designation) back onto an already-populated
+        // EVERY instance, not the successor alone. Unchanged by computenet-f7h.1: the demoted
+        // leader (peerA) still measurably duplicates exactly the 2 pre-transition writes on top
+        // of the state it already held — the successor's from-zero catch-up still ships the
+        // leader's CURRENT total (2, at the moment of designation) back onto an already-populated
         // ex-leader rather than a fresh follower (mechanism: `onLinked`'s
-        // `Stamped(currentEpoch, total)`).
+        // `Stamped(currentEpoch, total)`); only the SEQUENCING that produces it moved from two
+        // designateLeader calls to one folded step (see the class KDoc).
         //
         // NOTE ON THE BEAD'S OWN WORDING: computenet-yqgd's description states the demoted
         // instance ends "exactly twice the successor's total" in both orders. That holds for the
@@ -350,7 +412,7 @@ class SingleWriterChurnTest {
     // -------------------------------------------------------------- BS-14, demote-first arm
 
     @Test
-    fun `BS-14 demote-first designation closes the window and opens a no-leader gap instead`() {
+    fun `BS-14 demote-first designation leaves neither a window nor a leaderless gap, and is indistinguishable from promote-first`() {
         val plan = ChurnSeeds.plans(101L..101L).single()
         val set = SwSet(plan.seed)
         val measurement = LeaderChurnMeasurement(set::believedLeaders)
@@ -359,12 +421,21 @@ class SingleWriterChurnTest {
         repeat(2) { i -> set.issue(set.a)?.let { measurement.acceptedWrite(i, it) } }
         measurement.tick("2 writes applied by the epoch-0 leader")
 
-        // The same failover, the other order: the OUTGOING leader steps down first.
+        // The same failover, the other order: the OUTGOING leader's engine folds the mark first.
+        // Under computenet-f7h.1's one-fold-per-registry this no longer matters: the same
+        // registry hook notifies both engines from whichever call adopts the mark, so this call
+        // already performs the whole transition — promoting peerB in the same step peerA steps
+        // down.
         set.aReplication.designateLeader(set.epoch1)
         set.drain()
         measurement.tick("designateLeader(epoch=1, peerB) on peerA")
 
-        set.bReplication.designateLeader(set.epoch1)
+        // The second call folds nothing new — the same duplicate rejection as the promote-first
+        // arm, order no longer matters ([MEM1-09]).
+        assertFalse(
+            set.bReplication.designateLeader(set.epoch1),
+            "a duplicate of the already-folded mark is rejected ([MEM1-09]) — order no longer matters",
+        )
         set.drain()
         measurement.tick("designateLeader(epoch=1, peerB) on peerB")
 
@@ -383,24 +454,40 @@ class SingleWriterChurnTest {
         )
         assertEquals(emptyList(), report.splitBrainSamples, report.summary())
 
-        // The cost moved rather than vanishing: for one orchestration step nobody leads at all.
+        // computenet-f7h.1 closed the gap this arm used to open, too: the fold that used to leave
+        // this order with a step where NOBODY led (the demoted leader stepped down one call
+        // before its successor stepped up) now flips both roles in the same step peerA's call
+        // adopts the mark, so there is never a leaderless sample either. See the class KDoc for
+        // where the real (cross-registry) gap now lives.
         val gap = report.samples.singleOrNull { it.believedLeaders.isEmpty() }
-        assertNotNull(gap, "the demoted leader stepped down before its successor stepped up: ${report.summary()}")
-        assertEquals("designateLeader(epoch=1, peerB) on peerA", report.interleaving[gap.at])
+        assertNull(gap, "no orchestration step is ever leaderless: one fold flips both roles at once (${report.summary()})")
 
-        // No write was issued in the gap, and the pre-transition writes are intact at the
-        // successor: nothing is lost by this ordering, on this transition.
+        // [MEM1-20]'s local half, pinned directly rather than argued: one fold per registry means
+        // the belief sequence this order produces is IDENTICAL to the promote-first order's, not
+        // merely equally window-free. Re-run with the calls reversed on a fresh set and compare.
+        assertEquals(
+            beliefsAfterDesignation(
+                firstCall = { it.bReplication.designateLeader(it.epoch1) },
+                secondCall = { it.aReplication.designateLeader(it.epoch1) },
+            ),
+            report.samples.map { it.believedLeaders },
+            "designation order is unobservable in-process now: ${report.summary()}",
+        )
+
+        // No write was issued around the transition, and the pre-transition writes are intact at
+        // the successor: nothing is lost by this ordering, on this transition.
         assertEquals(2, report.accepted.size, report.summary())
         assertEquals(0L, report.lostWrites, report.summary())
         assertEquals(0L, report.duplicatedWrites, report.summary())
 
-        // computenet-yqgd's decision, measured in this order too: the demoted leader (peerA)
-        // again duplicates exactly the 2 pre-transition writes, even though the successor-only
-        // accounting above reads clean. Same mechanism as the promote-first arm — demote-first
-        // only changes WHEN the outgoing leader steps down, not what its catch-up does to it.
-        // Here (and only here) that duplication happens to make peerA's total exactly twice the
-        // successor's (4 == 2*2); see the promote-first arm's comment for why that ratio is not
-        // the invariant — duplicated == 2 (the pre-transition write count) is.
+        // computenet-yqgd's decision, measured in this order too, unchanged by computenet-f7h.1:
+        // the demoted leader (peerA) again duplicates exactly the 2 pre-transition writes, even
+        // though the successor-only accounting above reads clean. Same mechanism as the
+        // promote-first arm — demote-first only changes WHICH call the transition rides in on,
+        // not what the catch-up does to the demoted instance. Here (and only here) that
+        // duplication happens to make peerA's total exactly twice the successor's (4 == 2*2); see
+        // the promote-first arm's comment for why that ratio is not the invariant —
+        // duplicated == 2 (the pre-transition write count) is.
         val peerAReading = report.instanceReadings.single { it.instance == "peerA" }
         assertEquals(MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST, peerAReading.total, report.summary())
         assertEquals(
@@ -461,10 +548,17 @@ class SingleWriterChurnTest {
          *
          * The measured result, stated plainly because it is counter-intuitive: **4 writes
          * accepted, 4 present at the successor — no accepted write was lost or duplicated across
-         * this transition**, even though one of them was accepted while two instances believed
-         * they were leading. The reason is the epoch bump asserted mid-test: the successor's
-         * catch-up raises the outgoing leader's `currentEpoch` before its in-window write is
-         * stamped, so the write ships at the new epoch and is not fenced.
+         * this transition**. The reason is the epoch bump asserted mid-test: the successor's
+         * catch-up raises the outgoing leader's `currentEpoch` in the same fold that demotes it,
+         * so its next write ships at the new epoch and is not fenced.
+         *
+         * **Re-measured under computenet-f7h.1** (one fold per registry, replacing the two-call
+         * per-engine fold — class KDoc): this figure is UNCHANGED from before that ticket. What
+         * moved is WHEN the outgoing leader steps down — in the same step as the promotion now,
+         * rather than one `designateLeader` call later, so it is no longer "accepted while two
+         * instances believed they were leading" (the window that produced is now zero) but
+         * "accepted immediately after the fold, forwarded by the already-demoted instance". The
+         * same delta shipments happen either way, so the count did not change.
          *
          * The limit of that result, in the file rather than only in a report: it is **one
          * transition, on a two-instance set, with writes issued only at the outgoing leader**,
@@ -481,9 +575,16 @@ class SingleWriterChurnTest {
          * [MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST] below are that accounting, read via
          * `LeaderChurnReport.instanceReadings` in both arms of this test.
          *
-         * None of this is evidence that the split-brain window is harmless in general — the window itself is
-         * real and non-zero, and 95 §R1's "prove or refute ... in every interleaving" is a
-         * research-gated question this measurement does not answer.
+         * None of this is evidence that the split-brain window is harmless in general. Since
+         * computenet-f7h.1 the window this arm *drives* is the IN-PROCESS one, and that is zero by
+         * construction — one fold per [civictech.cell.host.LocationRegistry], class KDoc — so the
+         * accounting above no longer spans a dual-leader window at all. The window did not stop
+         * being real: it moved to the CROSS-REGISTRY case, folded independently on each peer's own
+         * registry over the wire, which feature computenet-f7h.2 owns and `:testkit` cannot build
+         * here. *That* window is real, and unbounded without a synchrony assumption (epic
+         * computenet-f7h §5.8 item 3 — a `DISPUTES.md` entry owned by computenet-f7h.7, not a
+         * requirement claimed anywhere in this file). 95 §R1's "prove or refute ... in every
+         * interleaving" is a research-gated question this measurement does not answer.
          */
         const val MEASURED_OBSERVED_TOTAL: Long = 4
         const val MEASURED_LOST: Long = 0
@@ -499,6 +600,12 @@ class SingleWriterChurnTest {
          * filed this describes the result as the demoted total ending "exactly twice the
          * successor's" in both orders; that arithmetic does not hold here (6 != 2*4) — see the
          * class KDoc for the correction and the invariant that does hold (duplicated == 2).
+         *
+         * **Re-measured under computenet-f7h.1: unchanged (still 6).** The from-zero catch-up
+         * fires from the same fold that demotes peerA rather than from a later, separate call,
+         * but it ships the same total (2, peerA's pre-transition state at the moment of
+         * designation) onto the same already-populated instance — nothing about the fold being
+         * atomic changes what gets shipped or when relative to peerA's own writes.
          */
         const val MEASURED_DEMOTED_TOTAL_PROMOTE_FIRST: Long = 6
 
@@ -507,8 +614,15 @@ class SingleWriterChurnTest {
          * own 2 pre-transition writes, landing at 4 — even though the successor-only reading for
          * this arm is clean (`lostWrites=0`, `duplicatedWrites=0`). Here the result also happens
          * to equal twice the successor's total (4 == 2*2, unlike the promote-first arm); see the
-         * class KDoc. The order of designation calls changes the split-brain window (0 here vs 2
-         * promote-first) but not the demoted instance's duplication.
+         * class KDoc.
+         *
+         * **Re-measured under computenet-f7h.1: unchanged (still 4).** computenet-f7h.1 closed
+         * the split-brain window this arm's designation order used to open (2, promote-first) as
+         * well as the leaderless gap this order used to open (both now 0, class KDoc) — order no
+         * longer distinguishes the two arms' belief sequences at all — but the demoted instance's
+         * duplication is untouched by either: the same from-zero catch-up ships the same total
+         * regardless of which registry hook subscriber runs it or in what order the two
+         * `designateLeader` calls arrived.
          */
         const val MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST: Long = 4
     }
