@@ -1,6 +1,7 @@
 package civictech.cell.host
 
 import civictech.cell.CellRef
+import civictech.cell.UuidSerializer
 import java.util.UUID
 
 /**
@@ -19,5 +20,16 @@ import java.util.UUID
  * (`SingleWriterReplication.kt` keeps a `typealias` at that name for source
  * compatibility). It is membership vocabulary: "one more announcement kind,
  * folded into the same membership index" (93 I-25 §4.1).
+ *
+ * A **wire type** (f7h.2-D3): registered in `WireCodec`'s `polymorphic(Any)`
+ * block so it can cross a bridge as the argument of
+ * `RegistryAnnounce.leaderMarked`. Ids only — [logicalId], [epoch] and
+ * [leaderRef] — never state, exactly as the other four announcements are.
  */
-data class LeaderMark(val logicalId: UUID, val epoch: Long, val leaderRef: CellRef)
+@kotlinx.serialization.Serializable
+@kotlinx.serialization.SerialName("LeaderMark")
+data class LeaderMark(
+    @kotlinx.serialization.Serializable(with = UuidSerializer::class) val logicalId: UUID,
+    val epoch: Long,
+    val leaderRef: CellRef,
+)

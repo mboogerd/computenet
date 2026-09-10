@@ -226,6 +226,9 @@ object WireCodec {
                 // single-writer leader→follower log unit (spec 42 §Single-writer replication, W4.3)
                 @Suppress("UNCHECKED_CAST")
                 subclass(Stamped::class, Stamped.serializer(polyAny) as KSerializer<Stamped<*>>)
+                // single-writer leadership announcement (spec 42 §Single-writer
+                // replication, computenet-f7h.2): ids only, additive — no VERSION bump.
+                subclass(civictech.cell.host.LeaderMark::class)
                 // ownership wrappers (spec 23): Owned moves, Frozen/Borrowed copy; Leased never crosses
                 @Suppress("UNCHECKED_CAST")
                 subclass(Owned::class, Owned.serializer(polyAny) as KSerializer<Owned<*>>)
