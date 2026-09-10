@@ -18,6 +18,7 @@ import civictech.cell.port.registerPort
 import civictech.cell.wire.Peering
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Key
+import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -72,6 +73,21 @@ class SingleWriterReplicationTest {
         var becomeFollowerCalls = 0
             private set
 
+        /**
+         * Delta-inlet counters (f7h.3.1, same style as [becomeLeaderCalls]):
+         * [receivedDeltas] counts every inlet invocation, [fencedDeltas] the
+         * ones [applyTo] refused as below-epoch, [baselinesAdopted] the ones
+         * routed to [adoptState]. computenet-f7h.3.2 and .3 read them to make
+         * their step-down and mid-shipment interleaving tests non-vacuous;
+         * only the baseline test below reads them in this file.
+         */
+        var receivedDeltas = 0
+            private set
+        var fencedDeltas = 0
+            private set
+        var baselinesAdopted = 0
+            private set
+
         private val realApi = object : SwCounterOps {
             override fun increment(amount: Long) {
                 check(leading) { "not the leader" }
@@ -88,16 +104,28 @@ class SingleWriterReplicationTest {
         init {
             deltaInletPort.serve(object : Propagate<Stamped<Long>> {
                 override fun propagate(value: Stamped<Long>) {
-                    // fencing (spec 42): a delta stamped below the current epoch is inert
-                    if (value.epoch < currentEpoch) return
-                    currentEpoch = maxOf(currentEpoch, value.epoch)
-                    total += value.delta
+                    // fencing + baseline routing through the ONE rule (f7h.3-D2,
+                    // [MEM1-04]/[MEM1-31]/[MEM1-32]) — no local epoch comparison
+                    receivedDeltas++
+                    val next = value.applyTo(
+                        currentEpoch,
+                        onBaseline = { baselinesAdopted++; adoptState(it) },
+                        onDelta = { total += it },
+                    )
+                    if (next == null) fencedDeltas++ else currentEpoch = next
                 }
             })
-            // late-join catch-up (G-22 idiom, mirrors CounterCell): current
-            // total as a from-zero delta for a freshly-linked follower
+            // late-join / re-announce catch-up ([MEM1-32], f7h.3-D6): the
+            // leader's WHOLE state as a BASELINE, unconditionally while
+            // leading. The old `total != 0L` guard is gone deliberately — it
+            // was sound only while the catch-up was a from-zero delta (a
+            // zero delta being a no-op); a baseline of the empty state is
+            // exactly what makes a follower holding STALE state converge to
+            // an empty winner.
             deltaOutlet.linking.onLinked = { link ->
-                if (leading && total != 0L) deltaOutlet.at(link.to).propagate(Stamped(currentEpoch, total))
+                if (leading) {
+                    deltaOutlet.at(link.to).propagate(Stamped(currentEpoch, currentState(), baseline = true))
+                }
             }
         }
 
@@ -175,25 +203,23 @@ class SingleWriterReplicationTest {
         init {
             deltaInletPort.serve(object : Propagate<Stamped<SetDelta<String>>> {
                 override fun propagate(value: Stamped<SetDelta<String>>) {
-                    if (value.epoch < currentEpoch) return
-                    currentEpoch = maxOf(currentEpoch, value.epoch)
-                    elements += value.delta.adds.keys
+                    // the one rule (f7h.3-D2) — see [Stamped.applyTo]
+                    currentEpoch = value.applyTo(
+                        currentEpoch,
+                        onBaseline = { adoptState(it) },
+                        onDelta = { elements += it.adds.keys },
+                    ) ?: currentEpoch
                 }
             })
-            // late-join / re-announce catch-up (G-22 idiom): the current
-            // membership as a from-empty baseline, funneled through the SAME
-            // per-target `at(link.to)` path shipTo's interest slice wraps —
-            // so a partial-interest follower's catch-up is sliced exactly
-            // like its live stream (CP-D2).
+            // late-join / re-announce catch-up ([MEM1-32], f7h.3-D6): the
+            // current membership as an explicit BASELINE, funneled through
+            // the SAME per-target `at(link.to)` path shipTo's interest slice
+            // wraps — so a partial-interest follower's catch-up is sliced
+            // exactly like its live stream (CP-D2), baseline flag intact.
+            // The old `elements.isNotEmpty()` guard is gone: see SwCounterCell.
             deltaOutlet.linking.onLinked = { link ->
-                if (leading && elements.isNotEmpty()) {
-                    deltaOutlet.at(link.to)
-                        .propagate(
-                            Stamped(
-                                currentEpoch,
-                                SetDelta(adds = elements.associateWith { emptySet<civictech.cell.Timestamp>() }),
-                            ),
-                        )
+                if (leading) {
+                    deltaOutlet.at(link.to).propagate(Stamped(currentEpoch, currentState(), baseline = true))
                 }
             }
         }
@@ -394,6 +420,55 @@ class SingleWriterReplicationTest {
 
         restartCatchUp(restarted, donor = onQ)
         restarted.total shouldBe 42 // peer catch-up wins over the stale checkpoint
+    }
+
+    @Test
+    fun `a rebuilt link's catch-up REPLACES a follower's state instead of adding to it`() {
+        val controller = SimulationController()
+        val p = Peer(controller)
+        val q = Peer(controller)
+        Peering.loopback(p.side, q.side)
+        val logicalId = UUID.randomUUID()
+        val leaderRef = CellRef(logicalId, 0)
+        val followerRef = CellRef(logicalId, 1)
+        val mark = LeaderMark(logicalId, epoch = 0, leaderRef = leaderRef)
+
+        val leader = p.replica(logicalId, 0, mark)
+        val follower = q.replica(logicalId, 1, mark)
+        controller.runToIdle()
+
+        p.ops(leader).increment(5)
+        controller.runToIdle()
+        follower.total shouldBe 5
+
+        // the follower departs (finding-1b idiom): the shipping link drops
+        q.registry.unpublish(followerRef)
+        controller.runToIdle()
+        p.replication.shipCountAmong(setOf(leaderRef, followerRef)) shouldBe 0
+
+        // a write the departed follower never sees
+        p.ops(leader).increment(3)
+        controller.runToIdle()
+        leader.total shouldBe 8
+        follower.total shouldBe 5
+
+        val adoptedBeforeRejoin = follower.baselinesAdopted
+
+        // the follower re-announces: shipTo rebuilds the link, whose onLinked
+        // catch-up is now a BASELINE ([MEM1-32], f7h.3-D6)
+        q.registry.publish(followerRef, q.host)
+        controller.runToIdle()
+
+        p.replication.shipCountAmong(setOf(leaderRef, followerRef)) shouldBe 1
+        withClue("replaced, not added: the rebuilt link's catch-up is a baseline, so the follower ADOPTS the leader's 8 rather than adding it onto the 5 it already held (which would read 13)") {
+            follower.total shouldBe 8
+        }
+        // exactly one baseline crossed on the REJOIN itself. The absolute
+        // count is deliberately measured as a delta rather than pinned at a
+        // literal: the initial link also ships a baseline, so the total is
+        // link-count-dependent and computenet-f7h.3.1's predicted `== 1`
+        // for the absolute counter does not hold (see the bead comment).
+        (follower.baselinesAdopted - adoptedBeforeRejoin) shouldBe 1
     }
 
     // ---- T07 finding 1: SWR minimal-correctness patch (Divergence A + B) ----
