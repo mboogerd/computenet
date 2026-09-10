@@ -121,6 +121,26 @@ guessing one here cost a reviewer 8 runs):
    ```
    The failing test's module path must not appear in that list. If it does,
    the red is yours: file the task per 5c and stop here.
+
+   **Unless the diff cannot have caused it, which module granularity cannot
+   see.** A documentation-and-KDoc diff inside the flaky test's own module
+   fails this artifact literally while the attribution is airtight — measured
+   on computenet-zgyt, whose diff was `concord/corpus/DISPUTES.md` plus a
+   class KDoc in `kernel/src/test/.../RetainedStateBoundTest.kt`, against a
+   `kernel-test` red on `GcSafetySweepTest`. review-feature.md §7's residual
+   route generates that shape routinely, so it is not a corner. The
+   admissible substitute is **file-and-causation granularity**, and to use it
+   you must SHOW all three: a different test class from the failing one; the
+   change confined to comment or KDoc text; and zero executable lines, which
+   `gh pr diff <pr-url>` makes checkable line by line.
+
+   **Either way, say which artifact you are standing on.** An artifact that
+   does not hold is REPORTED as unsatisfied with the substitute reasoning
+   shown — "the diff *does* touch `kernel/`, so module-disjointness is not
+   literally satisfied; it holds only at the granularity that can carry
+   causation" is the form. Never reason past it silently, and never let an
+   unsatisfied artifact alone produce a DRAFT verdict on a change that is
+   provably innocent.
 3. **A prior occurrence that already exists** — found, not remembered:
    ```bash
    bd search "<failing test class>" --status all --json    # titles + ids
