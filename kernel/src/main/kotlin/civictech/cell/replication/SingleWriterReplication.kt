@@ -162,8 +162,21 @@ interface SingleWriterReplicable<D> : Cell {
  * follower rather than silently forwarded and dropped downstream; every
  * other write, including `Owned` (which crosses by move-by-serialize), is
  * an ordinary redirect.
+ *
+ * **The forwarded-port record** ([LocationRegistry.noteForwardedPort],
+ * f7h.5-D2, [MEM1-16]). Building the forwarder records `portName` as a
+ * command-forwarded write port for this logical id, which is what lets
+ * `SingleWriterReplication`'s release rule tell a *write* parked at a
+ * superseded leaderRef from any other parked invocation. It is noted here —
+ * at construction, i.e. inside `becomeFollower` — rather than on the first
+ * forwarded call, so the record exists before any write is attempted: the
+ * release rule can otherwise be reached by a mark that lands before this
+ * follower has ever written, and a write parked by a DIFFERENT engine on the
+ * same registry would then not be recognized. The note is idempotent, so
+ * repeated demotions cost nothing.
  */
 fun <Api : Any> forwardWrites(clazz: Class<Api>, portName: String, leaderRef: CellRef, registry: LocationRegistry): Use<Api> {
+    registry.noteForwardedPort(leaderRef.id, portName)
     val sink = InvocationSink(registry::deliver)
     val api: Api = Proxy.fromClass(clazz) { _, method, args ->
         check(args?.none { it is Leased<*> } != false) {
@@ -243,7 +256,97 @@ class SingleWriterReplication(
     private val election: LeaderElection = LeaderElection.Manual,
 ) {
 
-    private data class Local(val cell: SingleWriterReplicable<*>)
+    private data class Local(val cell: SingleWriterReplicable<*>, val host: ManagedHost)
+
+    /**
+     * Per-leading-replica divergence record (f7h.5-D3 as refined by
+     * computenet-f7h.5.2; [MEM1-13], [MEM1-21], [MEM1-28], G-44).
+     *
+     * [tap] is a subscription on the leader's own `deltaOutlet` that exists for
+     * exactly as long as this leader is ARMED — installed on the first
+     * departure, dropped when the last departed member returns, and dropped
+     * again by the flush at step-down (see [armDivergence] for why it is not
+     * simply held for the whole of the leadership). It ships nowhere, is never
+     * entered in [shipped], and appends `(epoch, delta)` to [buffer] only while
+     * [departed] is non-empty — i.e. only for deltas produced after this leader
+     * WITNESSED a member leave and before it saw that member return.
+     *
+     * ## What the buffer is, and is not
+     *
+     * It is "deltas this leader produced while a member of its instance set was
+     * away", surfaced at step-down as G-44's *writes the winner did not
+     * receive*. The no-ack design (93 I-25 §4.4) admits no stronger reading,
+     * and the resulting record is imprecise in both directions — state the
+     * bound rather than the intent:
+     *
+     * - **Over-inclusive** by deltas the departed member later received anyway.
+     *   In-process a `Peering` partition is a park, not a loss, so a delta
+     *   buffered during it can still be delivered on the heal; and a leader
+     *   that survives a partition intact and steps down much later surfaces
+     *   partition-era deltas the returned member already took in its baseline.
+     * - **Under-inclusive** by deltas in flight at a socket close.
+     *
+     * ## Why the buffer is retained until step-down
+     *
+     * f7h.5's original D3 cleared the buffer once `replicasOf(id)` again
+     * contained every ref present at arming. That cannot work against the
+     * observed catch-up order: `Peering`'s heal announces refs BEFORE marks, so
+     * the departed member's `publish` reaches the ex-leader one notification
+     * ahead of the superseding mark — clear-on-return would empty the buffer
+     * exactly when the step-down that must surface it is next. So [departed]
+     * disarms on a return (recording stops) but [buffer] is retained, and both
+     * are cleared only by the flush at step-down.
+     *
+     * Which test pins the retention, measured (computenet-f7h.5.2, re-measured
+     * in review): reinstating clear-on-return reddens
+     * `DivergentWriteSurfacingTest`'s **example 6** and "a write made after the
+     * departed member returned is not divergent" — the two single-partition
+     * shapes — and **not example 4**. Example 4 partitions the leader from BOTH peers, so
+     * the first heal's `publish` leaves [departed] still non-empty and the
+     * superseding mark arrives before the second — it survives the unrefined
+     * rule by an ordering accident. The single-partition shape is the one that
+     * genuinely constrains this.
+     */
+    private class Divergence {
+        var tap: Link? = null
+        val departed = mutableSetOf<CellRef>()
+        val buffer = mutableListOf<Pair<Long, Any?>>()
+    }
+
+    /** [Divergence] per LEADING local replica ref; absent for a replica that does not lead. */
+    private val divergences = mutableMapOf<CellRef, Divergence>()
+
+    /** [onDivergentWrite] subscribers. Copy-on-write: a handler may detach from inside the flush. */
+    private val divergentWriteHandlers =
+        java.util.concurrent.CopyOnWriteArrayList<(UUID, Long, Long, Any?) -> Unit>()
+
+    /**
+     * Observe **divergent writes** — the application-level hook G-44 asks for
+     * ([MEM1-13], f7h.5-D4). Fires once per buffered delta at the moment the
+     * local leader that produced it steps down, with the logical id, the
+     * `fencedEpoch` it was produced under, the `canonicalEpoch` of the mark
+     * that superseded it, and the raw delta payload (not its [Stamped]
+     * envelope).
+     *
+     * The same deltas are simultaneously reported on the host's dead-letter
+     * outlet, so an application that registers nothing still loses nothing.
+     * Detachment follows [LocationRegistry.onPublish]'s contract: close the
+     * returned handle to unsubscribe. A handler is a *notification, not a
+     * participant*: its exception is caught, reported as its own dead letter,
+     * and never propagated — the next handler and the rest of the step-down
+     * run regardless.
+     *
+     * **Delivery, not replay.** The hook hands the write over; re-applying it
+     * is the application's decision. Surfacing runs AFTER
+     * [SingleWriterReplicable.becomeFollower] precisely so that a handler which
+     * chooses to re-apply through the ordinary write API reaches the winner.
+     */
+    fun onDivergentWrite(
+        handler: (logicalId: UUID, fencedEpoch: Long, canonicalEpoch: Long, payload: Any?) -> Unit,
+    ): AutoCloseable {
+        divergentWriteHandlers += handler
+        return AutoCloseable { divergentWriteHandlers -= handler }
+    }
 
     private val localReplicas = mutableMapOf<UUID, MutableList<Local>>()
 
@@ -337,6 +440,9 @@ class SingleWriterReplication(
 
     init {
         registry.onPublish { ref ->
+            // f7h.5-D3 disarm: the member is back, so recording stops. The
+            // BUFFER is deliberately not cleared here — see [Divergence].
+            disarmDivergence(ref)
             onPeerPublished(ref)
             // f7h.4-D2(b): a publish for an ARMED id is an observation like any
             // other — it disarms when it restores the leaderRef and counts when
@@ -356,6 +462,11 @@ class SingleWriterReplication(
         // up a live subscription and double-applies future shipments.
         registry.onUnpublish { ref ->
             shipped.keys.filter { it.second == ref }.toList().forEach { key -> shipped.remove(key)?.unlink() }
+            // f7h.5-D3 arm: a local replica that currently LEADS this logical
+            // id has just witnessed a member of its own instance set depart.
+            // Every delta it produces from here until that member returns is
+            // recorded, and surfaced at its step-down.
+            armDivergence(ref)
             // f7h.4-D2(a)/(b), and f7h.4-D7's ordering requirement: the
             // detector runs AFTER the unlink above, so a claim evaluated
             // inside this same notification sees the stale link already gone.
@@ -380,7 +491,15 @@ class SingleWriterReplication(
             // designation, or a peer's mirrored mark alike. The new leader's
             // presence is witnessed from scratch afterwards.
             misses.remove(mark.logicalId)
+            // f7h.5-D2, [MEM1-16]: the OLD leaderRef, read before [applyRoles]
+            // overwrites [applied]. [applyRoles] reads the same value for its
+            // own step-down decision; capturing it here rather than having
+            // [applyRoles] return it keeps that function's contract unchanged.
+            val previous = applied[mark.logicalId]
             applyRoles(mark)
+            if (previous != null && previous.leaderRef != mark.leaderRef) {
+                releaseParked(previous.leaderRef, mark)
+            }
         }
     }
 
@@ -498,7 +617,7 @@ class SingleWriterReplication(
         host: ManagedHost,
         mark: LeaderMark,
     ) {
-        localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += Local(cell)
+        localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += Local(cell, host)
         host.managementInlet.call.spawn(cell)
         designateLeader(mark)
     }
@@ -580,7 +699,16 @@ class SingleWriterReplication(
                     .forEach { key -> shipped.remove(key)?.unlink() }
             }
             local.cell.becomeFollower(mark.leaderRef, mark.epoch, registry)
-            if (steppingDown) notifyStepDown(StepDown(mark.logicalId, previous!!, mark, local.cell))
+            if (steppingDown) {
+                // f7h.5-D4, and the ORDER is the contract: unlink shipping →
+                // becomeFollower → surface → notifyStepDown. Surfacing after
+                // `becomeFollower` means a handler that re-applies through the
+                // ordinary write API reaches the WINNER; surfacing before
+                // `notifyStepDown` means an `onStepDown` listener observes a
+                // dead-letter count that already includes these records.
+                surfaceDivergentWrites(local, mark)
+                notifyStepDown(StepDown(mark.logicalId, previous!!, mark, local.cell))
+            }
         }
 
         // Pass 2 — the promotion, and the winner's outbound links. The
@@ -593,6 +721,229 @@ class SingleWriterReplication(
         }
 
         applied[mark.logicalId] = mark
+    }
+
+    /**
+     * Release the writes parked at a **superseded** leaderRef onto the winner
+     * (f7h.5-D2, [MEM1-16]). Run once per adopted mark whose `leaderRef`
+     * differs from the previously applied one, immediately after
+     * [applyRoles] — so the winner has already been promoted locally (if it is
+     * local) by the time anything is re-addressed to it.
+     *
+     * [LocationRegistry.deliver] parks an invocation whose target ref has no
+     * location — which is exactly what a partition leaves behind on a
+     * follower's registry: `unpublishRemotes` removes the far leader, and the
+     * writes this follower command-forwarded sit in `parkedFor(oldRef)` with
+     * no trigger that would ever move them to a DIFFERENT ref. (The registry's
+     * own `install` drain releases them into whatever location `oldRef` next
+     * gets, which is correct for a RESTART preserving `instanceId` and useless
+     * for a new leader.) So: drain, and re-address the *writes* — in park
+     * order, and once each, because [LocationRegistry.unpark] empties the
+     * queue as it reads it.
+     *
+     * **Only command-forwarded write ports are re-addressed.** A parked
+     * invocation whose port is not in [LocationRegistry.forwardedPorts] for
+     * this logical id — a delta shipment, a management call, anything aimed at
+     * the old *instance* rather than at whoever leads — is redelivered
+     * unchanged, which re-parks it at [oldRef] when that ref still has no
+     * location. Re-addressing those would send a unit meant for one replica to
+     * a different one.
+     *
+     * ## Why there is no `leaderRef ∈ replicasOf(id)` gate
+     *
+     * f7h.5's D2 text gated the release on the winner already being published
+     * here. It is dropped deliberately: a mark can be adopted for a ref this
+     * registry has not (re)published yet, and D2 names no later trigger that
+     * would retry — the writes would stay at the dead ref forever. Releasing
+     * unconditionally is safe by construction, because `deliver` to a ref with
+     * no location parks AT THE NEW REF, where the registry's ordinary `install`
+     * drain delivers it the moment that ref publishes; and if a higher mark
+     * supersedes first, this same rule runs again from that ref.
+     *
+     * "Epoch-confirmed" is therefore rendered as two weaker facts rather than a
+     * pre-check: [mark] is the fold's local maximum at release time (the fold
+     * guarantees it), and every delivery is epoch-fenced at apply — 93 I-25
+     * §4.6's "the epoch fence makes a mis-timed release inert". A release that
+     * races a further supersession can land at a replica that is no longer
+     * leading; what it cannot do is apply below the canonical epoch. No
+     * stronger guarantee is claimed here, and F7 carries its absence.
+     *
+     * **Two engines on one registry** (testkit's `SingleWriterChurnTest`
+     * builds this) both subscribe to the one fold and both run this rule: the
+     * first [LocationRegistry.unpark] drains the queue and the second finds it
+     * empty, so the release is idempotent by construction rather than by
+     * agreement between the engines.
+     */
+    private fun releaseParked(oldRef: CellRef, mark: LeaderMark) {
+        val drained = registry.unpark(oldRef)
+        if (drained.isEmpty()) return
+        val writePorts = registry.forwardedPorts(mark.logicalId)
+        drained.forEach { parked ->
+            val isForwardedWrite = parked.type == HostedPortInvocation.Type.PORT_API &&
+                parked.portName in writePorts
+            registry.deliver(if (isForwardedWrite) parked.copy(cellRef = mark.leaderRef) else parked)
+        }
+    }
+
+    /**
+     * f7h.5-D3 arming: [ref] has left the membership index. Record it against
+     * every local replica of the same logical id that this engine believes is
+     * currently leading — `applied[id]?.leaderRef` is the engine's own view of
+     * who leads, the same source [applyRoles] steps down from — and subscribe
+     * the divergence tap on that leader's own delta outlet.
+     *
+     * ## The tap exists only while the leader is armed
+     *
+     * f7h.5-D3's text put the tap on at PROMOTION and took it off at
+     * step-down. That is a permanent second attachment on every leader's
+     * `deltaOutlet`, and it breaks an invariant this engine already pins:
+     * `ShippingLinkIdempotenceTest` reads `deltaOutlet`'s raw consumer set and
+     * `linking.links` and requires **exactly one** — the shipping link — at a
+     * leader in steady state (measured: both of its examples fail 1 vs 2 with a
+     * promotion-time tap). Nothing about the divergence record needs the tap
+     * outside the armed window: while [Divergence.departed] is empty the sink
+     * discards everything it sees. So the tap is installed on the first
+     * departure and dropped again by [disarmDivergence] when the last one
+     * returns — invisible in every steady state, and identical inside the
+     * window. The BUFFER's lifetime is unchanged and independent: it is
+     * retained across a disarm and cleared only by the flush ([Divergence]).
+     *
+     * ## Two properties the sink depends on
+     *
+     * - **The tap ignores baselines.** [SingleWriterReplicable]'s catch-up
+     *   contract emits the leader's WHOLE state as a `baseline` unit whenever a
+     *   link forms while leading — including on this very link, the instant it
+     *   is installed, which is now inside the armed window. Without the guard
+     *   the tap records the leader's entire state as a "divergent write" on
+     *   every arming.
+     * - **The tap records only while [Divergence.departed] is non-empty**, so a
+     *   delta produced between a return and the next departure is not
+     *   divergent, and a leader that never witnessed a departure has no tap at
+     *   all.
+     *
+     * Note that the closing edge of that window is now defended **twice** — by
+     * the gate above and by [disarmDivergence] unlinking the tap — and neither
+     * alone mutates to a red test, because each covers for the other. What is
+     * pinned (measured, computenet-f7h.5.2) is the window itself: removing BOTH
+     * reddens `DivergentWriteSurfacingTest`'s "a write made after the departed
+     * member returned is not divergent".
+     *
+     * The opening edge is doubly defended in the same way — the tap's late
+     * install AND the same gate — and the consequence is worth stating plainly,
+     * because it bounds what this task's own suite proves. Re-measured in
+     * review: restoring D3's prescribed lifetime *faithfully* (tap installed at
+     * promotion, gate and `!baseline` guard both kept, [disarmDivergence] no
+     * longer unlinking) leaves all eight of `DivergentWriteSurfacingTest`
+     * GREEN — the two lifetimes are observationally identical on every example
+     * here. What that lifetime does redden is `ShippingLinkIdempotenceTest`,
+     * both examples, at 1-vs-2 attachments: the permanent second attachment on
+     * every leader's `deltaOutlet` is the whole reason the tap is armed-window
+     * scoped, and that test is its pin. (Under the prescribed lifetime the
+     * `!baseline` guard is dead code — also measured: dropping it there leaves
+     * all eight green, where dropping it here reddens seven.)
+     *
+     * The subscription rides its own `divergence:` [PortRef] namespace, which
+     * cannot collide with [shipRef]'s `ship:`, and is never entered in
+     * [shipped] — nothing ships anywhere and no follower is involved.
+     */
+    private fun armDivergence(ref: CellRef) {
+        val leading = applied[ref.id]?.leaderRef ?: return
+        if (ref == leading) return
+        localReplicas[ref.id].orEmpty().filter { it.cell.ref == leading }.forEach { local ->
+            val record = divergences.getOrPut(local.cell.ref) { Divergence() }
+            record.departed += ref
+            if (record.tap == null) {
+                val sink = Propagate<Stamped<Any?>> { stamped ->
+                    if (record.departed.isNotEmpty() && !stamped.baseline) {
+                        record.buffer += stamped.epoch to stamped.delta
+                    }
+                }
+                @Suppress("UNCHECKED_CAST")
+                record.tap = (local.cell.deltaOutlet as FanOutlet<Propagate<Stamped<Any?>>>)
+                    .streamTo(sink, at = divergenceRef(local.cell.ref))
+            }
+        }
+    }
+
+    /** The divergence tap's stable [PortRef], under its own namespace ([shipRef]'s reasoning). */
+    private fun divergenceRef(leader: CellRef): PortRef = PortRef(
+        UUID.nameUUIDFromBytes("divergence:${leader.id}:${leader.instanceId}".toByteArray()),
+    )
+
+    /**
+     * f7h.5-D3 disarming: [ref] is back, so recording stops and the tap comes
+     * off once the last departed member has returned ([armDivergence]'s
+     * "exactly one attachment in steady state"). The BUFFER is retained —
+     * that retention is the refinement of D3, and [Divergence] carries why.
+     */
+    private fun disarmDivergence(ref: CellRef) {
+        localReplicas[ref.id].orEmpty().forEach { local ->
+            val record = divergences[local.cell.ref] ?: return@forEach
+            record.departed -= ref
+            if (record.departed.isEmpty()) {
+                record.tap?.unlink()
+                record.tap = null
+            }
+        }
+    }
+
+    /**
+     * f7h.5-D4: surface every recorded divergent write of a stepping-down
+     * [local], once each, then clear the record and drop the tap.
+     *
+     * Each write goes to two places, in this order: the host's dead-letter
+     * outlet (so an application that registered nothing still loses nothing),
+     * then every [onDivergentWrite] handler. A throwing handler is caught and
+     * reported as its OWN dead letter — it never stops the next handler, the
+     * next write, or the step-down.
+     */
+    private fun surfaceDivergentWrites(local: Local, mark: LeaderMark) {
+        val record = divergences[local.cell.ref] ?: return
+        record.buffer.toList().forEach { (epoch, delta) ->
+            // The fold's total order guarantees it; assert rather than filter,
+            // so a future path that buffers an at-or-above-epoch delta is a
+            // loud failure and not a silently dropped record.
+            check(epoch < mark.epoch) {
+                "divergent write for ${mark.logicalId} stamped at epoch $epoch is not below the " +
+                    "superseding mark's epoch ${mark.epoch} — the fold's total order was violated"
+            }
+            val invocation = HostedPortInvocation(
+                cellRef = local.cell.ref,
+                portName = "deltaInlet",
+                type = HostedPortInvocation.Type.PORT_API,
+                invocation = Invocation(
+                    methodName = "propagate",
+                    parameterTypes = listOf(Stamped::class.java.name),
+                    args = listOf(Stamped(epoch, delta)),
+                    context = null,
+                ),
+            )
+            local.host.deadLetterDivergent(
+                cause = null,
+                description = "single-writer divergent write: id=${mark.logicalId} " +
+                    "fencedEpoch=$epoch canonicalEpoch=${mark.epoch}",
+                invocation = invocation,
+            )
+            divergentWriteHandlers.forEach { handler ->
+                try {
+                    handler(mark.logicalId, epoch, mark.epoch, delta)
+                } catch (e: Exception) {
+                    System.err.println(
+                        "[SingleWriterReplication] divergent-write hook failed for ${mark.logicalId}: $e",
+                    )
+                    local.host.deadLetterDivergent(
+                        cause = e,
+                        description = "divergent-write handler failed: $e",
+                        invocation = invocation,
+                    )
+                }
+            }
+        }
+        record.buffer.clear()
+        record.departed.clear()
+        record.tap?.unlink()
+        record.tap = null
+        divergences.remove(local.cell.ref)
     }
 
     private fun onPeerPublished(ref: CellRef) {
