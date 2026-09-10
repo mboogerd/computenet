@@ -2,6 +2,7 @@ package civictech.cell.host
 
 import civictech.cell.CellRef
 import civictech.cell.UuidSerializer
+import java.io.Serializable
 import java.util.UUID
 
 /**
@@ -32,4 +33,8 @@ data class LeaderMark(
     @kotlinx.serialization.Serializable(with = UuidSerializer::class) val logicalId: UUID,
     val epoch: Long,
     val leaderRef: CellRef,
-)
+) : Serializable {
+    companion object {
+        private const val serialVersionUID: Long = 1L
+    }
+}

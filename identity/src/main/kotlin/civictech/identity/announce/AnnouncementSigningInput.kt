@@ -33,18 +33,8 @@ import java.util.UUID
  * construction — this type is a plain record, and the encoder is the gate.
  *
  * `java.io.Serializable` so the whole input survives a round trip unchanged;
- * every component type ([PeerId], [CellRef], [TopologyLink], [PortRef], [UUID])
- * already is — **with one exception**: [LeaderMark], admitted to the argument
- * domain by `computenet-f7h.2.2`, is a kotlinx-serializable wire type that does
- * NOT implement `java.io.Serializable`, so an input carrying one cannot go
- * through `ObjectOutputStream`. That is a gap in this record's Serializable
- * claim, not in the encoding: fixing it is a one-line change to
- * `civictech.cell.host.LeaderMark` in `:kernel`, outside that task's file
- * claim, and is filed as its own item. BS-17 asserts round-trip stability over
- * the Java-serializable args and, for [LeaderMark] arguments, over freshly
- * rebuilt structurally-equal instances — which is the property the round trip
- * exists to check (no per-process incident, no identity hash, in the signed
- * region).
+ * every component type ([PeerId], [CellRef], [TopologyLink], [PortRef], [UUID],
+ * [LeaderMark]) already is.
  */
 data class AnnouncementSigningInput(
     val mintingPeerId: PeerId,
