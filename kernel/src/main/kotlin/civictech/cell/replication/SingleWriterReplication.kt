@@ -284,9 +284,11 @@ class SingleWriterReplication(
      * disarms on a return (recording stops) but [buffer] is retained, and both
      * are cleared only by the flush at step-down.
      *
-     * Which test pins the retention, measured (computenet-f7h.5.2): reinstating
-     * clear-on-return reddens `DivergentWriteSurfacingTest`'s **example 6**
-     * only, not example 4. Example 4 partitions the leader from BOTH peers, so
+     * Which test pins the retention, measured (computenet-f7h.5.2, re-measured
+     * in review): reinstating clear-on-return reddens
+     * `DivergentWriteSurfacingTest`'s **example 6** and "a write made after the
+     * departed member returned is not divergent" — the two single-partition
+     * shapes — and **not example 4**. Example 4 partitions the leader from BOTH peers, so
      * the first heal's `publish` leaves [departed] still non-empty and the
      * superseding mark arrives before the second — it survives the unrefined
      * rule by an ordering accident. The single-partition shape is the one that
@@ -741,9 +743,21 @@ class SingleWriterReplication(
      * alone mutates to a red test, because each covers for the other. What is
      * pinned (measured, computenet-f7h.5.2) is the window itself: removing BOTH
      * reddens `DivergentWriteSurfacingTest`'s "a write made after the departed
-     * member returned is not divergent". The opening edge has no such
-     * duplication — it is the tap's late install, and reinstating a
-     * promotion-time tap reddens example 6 at 1-vs-2.
+     * member returned is not divergent".
+     *
+     * The opening edge is doubly defended in the same way — the tap's late
+     * install AND the same gate — and the consequence is worth stating plainly,
+     * because it bounds what this task's own suite proves. Re-measured in
+     * review: restoring D3's prescribed lifetime *faithfully* (tap installed at
+     * promotion, gate and `!baseline` guard both kept, [disarmDivergence] no
+     * longer unlinking) leaves all eight of `DivergentWriteSurfacingTest`
+     * GREEN — the two lifetimes are observationally identical on every example
+     * here. What that lifetime does redden is `ShippingLinkIdempotenceTest`,
+     * both examples, at 1-vs-2 attachments: the permanent second attachment on
+     * every leader's `deltaOutlet` is the whole reason the tap is armed-window
+     * scoped, and that test is its pin. (Under the prescribed lifetime the
+     * `!baseline` guard is dead code — also measured: dropping it there leaves
+     * all eight green, where dropping it here reddens seven.)
      *
      * The subscription rides its own `divergence:` [PortRef] namespace, which
      * cannot collide with [shipRef]'s `ship:`, and is never entered in
