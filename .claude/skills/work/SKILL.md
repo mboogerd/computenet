@@ -2112,9 +2112,12 @@ background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
 ${gateScope — either "" for the one wide-gate dispatch, or: "Scope your final
 gate to <modules>; the repo-wide evidence comes from the feature PR's required
-checks. Before any long Gradle run read `uptime`; a timeout in a module you
+checks. Read `uptime` before EACH long Gradle run, not once at the start: it is
+a point reading and you are an interval, and load1 went 5.05 to 123 DURING one
+agent's run (computenet-kmoh). A timeout in a module you
 did not touch under high load is machine contention, not a failure — re-run
-that suite in isolation before reporting it."}
+that suite in isolation before reporting it, and read a run that takes minutes
+where it normally takes seconds the same way."}
 If you won't finish within ~45-60 minutes, stop at a clean point and leave
 the task in_progress with a bd comment saying what's done and what's left.
 State any NEXT STEP with the state it depends on — the branch and sha, or the
@@ -2232,7 +2235,14 @@ recurrence of computenet-znlh). Do not re-derive the response each time:
 to.** Do not idle (5b's advice string), but prefer a unit not needing the
 contended resource: tracker-text work (`direct-child.md`'s "deliverable is BEAD
 TEXT" route), bead reconciliation and review of an already-green PR need no
-Gradle and complete where an implementer will not. If the work left needs it,
+Gradle and complete where an implementer will not — **at the load xp5g measured
+it at, load1 128, and not above.** That is a bound, not a hedge: at load1 127.63
+a tracker-text feature breakdown — no worktree, no branch, no Gradle, only `bd`
+reads and writes — was killed by the 600s watchdog with zero side effects, while
+`bd list --parent` and `next-batch.py --capacity` each blew the orchestrator's
+own 300s Bash timeout (computenet-kmoh). `bd` is on the contended path, so
+tracker-text work is not load-free work; it is Gradle-free work, which is a
+weaker claim. If the work left needs it,
 dispatch it saying tool calls will be slow, and tell it to work in FEWER, LARGER
 steps and to post its bead comment EARLY rather than polishing — so a second
 stall still leaves state behind rather than nothing. Measured 2026-09-07,
@@ -2255,6 +2265,27 @@ under 2x cores, or go to Finalize if the budget cannot absorb the wait. The
 session is not dead — the orchestrator's own Bash calls keep completing
 throughout; only dispatch is, so orchestrator-local work (bookkeeping, friction
 filing) is still yours while you wait.
+
+**When your OWN instruments time out, fall back to `uptime` and hold.** The
+dispatch decision 5b prescribes is computed by `next-batch.py --capacity`, and
+that command has itself exceeded the 300s Bash timeout and been auto-backgrounded
+— twice in a row, along with a plain `bd list --parent`, in the same slot
+(computenet-kmoh). A capacity read that cannot return is a measurement of the box
+rather than of anything you asked it, and you cannot compute the prescribed
+decision at all. `uptime` alone completed in under a second throughout, so read
+it, treat load1 at or above the `>=5x cores` rung as the answer, and act on 5b's
+stopping rule directly: dispatch nothing until it falls under 2x cores. Do not
+retry the capacity read to get a number you already have.
+
+**Holding every dispatch is legitimate when ONE live agent is the session's most
+valuable outstanding unit.** "Do not idle" is advice about an idle session, not a
+duty to add load to a contended box while a long agent is mid-flight: xp5g
+measured two agents dispatched inside one minute BOTH dying at this load, so the
+marginal unit is more likely to kill the live one than to finish itself. A
+session that held all dispatches for ~50 minutes to protect a 104-minute review
+— which went on to certify a shipped PR — made the right call
+(computenet-kmoh). Record the decision on the epic at the time, so a hold is
+auditable rather than indistinguishable from a stall.
 
 Measured: a sonnet implementer on a small, well-specified task stalled with
 zero side effects and cost ~30 minutes of one lane; the identical prompt
@@ -2397,6 +2428,12 @@ Children left open as ask-human.md parks, deferred by design rather than
 missed (5b's parked-residue): ${parkedChildren or "none"}. Confirm each is
 really a park and not a child blocked on a real dependency that inherited the
 human label from its parent; a real block means work remains.
+Read `uptime` before EACH long run, not once at the start. You are the longest
+agent this session dispatches, and a pre-check is a point reading over an
+interval: one reviewer read 5.05 as instructed and finished 104 minutes later,
+load1 having reached 123 in between, with a 12-second class sweep taking 56
+minutes (computenet-kmoh). A run that takes minutes where it takes seconds
+normally is contention, not a finding — say so rather than reporting it.
 Run every verification command — Gradle above all — in ONE foreground Bash
 call with an explicit timeout, up to 600000 ms. If you already know the suite
 outruns that 10-minute cap, COMMIT AND PUSH FIRST, then background it and

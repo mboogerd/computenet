@@ -1,0 +1,16 @@
+work +37
+# Four gaps a single slot on epic computenet-9sm exposed at once, none of which
+# the existing host-load text answered (computenet-kmoh, recurrence of
+# computenet-xp5g). (1) The `uptime` pre-check was a one-time form in both
+# dispatch templates; a reviewer read 5.05 as instructed and finished 104
+# minutes later at load1 123, so the templates now say read it before EACH long
+# run and name what a pathologically slow run means. (2) The tracker-text escape
+# hatch was unbounded; a no-Gradle breakdown died at load1 127.63 while `bd`
+# itself blew a 300s timeout, so the claim is now bounded to the load xp5g
+# measured it at, with `bd` named as on the contended path. (3) Nothing said
+# what an orchestrator does when `next-batch.py --capacity` cannot return —
+# `uptime` is the sub-second fallback, and 5b's stopping rule applies directly.
+# (4) Nothing said whether holding all dispatches to protect one live long agent
+# is legitimate; read literally, "do not idle" directed the opposite, and
+# following it would most likely have killed a review that certified a shipped
+# PR. Each is a measured instance, not a restatement.
