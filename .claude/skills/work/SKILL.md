@@ -2110,14 +2110,14 @@ nothing (computenet-v5ah).
 The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
 background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
+Read `uptime` before EACH long Gradle run, not once at the start: it is a point
+reading and you are an interval, and load1 went 5.05 to 123 DURING one agent's
+run (computenet-kmoh). A run taking minutes where it normally takes seconds is
+contention, not a finding.
 ${gateScope — either "" for the one wide-gate dispatch, or: "Scope your final
 gate to <modules>; the repo-wide evidence comes from the feature PR's required
-checks. Read `uptime` before EACH long Gradle run, not once at the start: it is
-a point reading and you are an interval, and load1 went 5.05 to 123 DURING one
-agent's run (computenet-kmoh). A timeout in a module you
-did not touch under high load is machine contention, not a failure — re-run
-that suite in isolation before reporting it, and read a run that takes minutes
-where it normally takes seconds the same way."}
+checks. A timeout in a module you did not touch under high load is machine
+contention, not a failure — re-run that suite in isolation before reporting it."}
 If you won't finish within ~45-60 minutes, stop at a clean point and leave
 the task in_progress with a bd comment saying what's done and what's left.
 State any NEXT STEP with the state it depends on — the branch and sha, or the
@@ -2269,7 +2269,7 @@ filing) is still yours while you wait.
 **When your OWN instruments time out, fall back to `uptime` and hold.** The
 dispatch decision 5b prescribes is computed by `next-batch.py --capacity`, and
 that command has itself exceeded the 300s Bash timeout and been auto-backgrounded
-— twice in a row, along with a plain `bd list --parent`, in the same slot
+— it and a plain `bd list --parent`, on two consecutive reads in one slot
 (computenet-kmoh). A capacity read that cannot return is a measurement of the box
 rather than of anything you asked it, and you cannot compute the prescribed
 decision at all. `uptime` alone completed in under a second throughout, so read
