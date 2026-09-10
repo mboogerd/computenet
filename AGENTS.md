@@ -228,6 +228,19 @@ Treat these as system-wide constraints even when a ticket touches one seam:
   step 3 would pass. It is step 4's `grep -E '^e:|BUILD' "$SCRATCH/mut.log"`
   that catches this one — a command that exited 127 writes no `BUILD` line at
   all.
+- Sixth member, and the only one where every command is correct: **never
+  `&&`-chain two searches whose absence of output is evidence.** `grep -q A
+  <files> && grep B <files>` short-circuits when the FIRST grep legitimately
+  finds nothing — grep exits 1 on no-match, which is its contract — so the
+  SECOND GREP NEVER RUNS, and its missing output is indistinguishable from a
+  search that ran and found nothing. Nothing in the transcript looks wrong;
+  a feature reviewer caught its own instance only because it was tracking
+  which searches it had run (computenet-i9u8). This one is likelier in agent
+  transcripts than in human ones, because agents batch related commands into
+  one Bash call to save round trips and `&&` is the natural joiner. Remedy:
+  join independent searches with `;` or newlines, never `&&`, and treat any
+  command whose absence of output is evidence as one that must run
+  unconditionally.
 
 ## Verification
 
