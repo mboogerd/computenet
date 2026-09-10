@@ -583,6 +583,96 @@ class LeaderElectionTest {
         bToC.count(leaderMarkedId) shouldBe 1
     }
 
+    // ------------------------------------------- f7h.4.1-D1 unarmed ids never count
+
+    /**
+     * f7h.4.1-D1's own hazard, reproduced directly. B folds `mark1` — whose
+     * `leaderRef` is A's — locally through [SingleWriterReplication.replicate]
+     * (design happens before any peering, exactly the "mark folded before the
+     * peering that would carry the leaderRef" case the KDoc on
+     * [SingleWriterReplication]'s `misses` map names), but B and A are NEVER
+     * peered: A's ref never once appears in B's `replicasOf(id)`. The absence
+     * is real — A is alive and holds the fold, elsewhere — and is never a
+     * *witnessed departure*, so B must never arm on it.
+     *
+     * C peering with B afterwards is the event this pins: C's replica of the
+     * SAME logical id publishing into B's registry drives
+     * [LocationRegistry.onPublish], which calls `observeIfArmed` for that id
+     * UNCONDITIONALLY, regardless of arming — the only guard standing between
+     * that call and an evaluation is `observeIfArmed`'s own
+     * `misses.containsKey` check. `window = 1` makes the hazard immediate
+     * under the mutation this task pins against (deleting that guard): C's
+     * arrival would supply both the arm and the window's one required
+     * observation in the same call, and B would claim epoch 2 against A while
+     * A is still leading, live, unpartitioned. Under the fix, C's arrival is
+     * inert for this id because B was never armed.
+     *
+     * Non-vacuity: a suite of "nothing happened" readings is exactly what an
+     * engine that can never claim also produces, so the test closes with a
+     * CONTROL on the SAME `b.replication` — peer B with A, then partition
+     * them. That drives a genuine witnessed departure and B claims exactly as
+     * F1's test shows, proving the earlier zero readings were about the
+     * missing witness, not a b.replication that never claims anything.
+     */
+    @Test
+    fun `an id whose leader was never witnessed departing stays unarmed through repeated observations`() {
+        val controller = SimulationController()
+        val a = Peer(controller) // Manual — A just holds the fold; never elects itself
+        val b = Peer(controller, LeaderElection.EpochClaim(DetectionWindow(1)))
+        val c = Peer(controller) // Manual — a live peer for B to be announced to/from
+        val id = UUID.randomUUID()
+        val aRef = CellRef(id, 0)
+        val bRef = CellRef(id, 1)
+        val mark1 = LeaderMark(id, 1, aRef)
+
+        // A exists and holds mark1, but is NEVER peered with B — A's ref never
+        // appears in B's membership index, so the departure B would need to
+        // arm on never happens.
+        a.replica(id, 0, mark1)
+        // B folds mark1 locally BEFORE any peering (replicate() designates it
+        // synchronously) — the second f7h.4.1-D1 hazard shape.
+        val onB = b.replica(id, 1, mark1)
+        c.replica(id, 2, mark1)
+
+        b.replication.missCount(id) shouldBe 0
+        val bFiresBefore = b.leaderMarkFires
+
+        // B and C peer — C's onPublish for the SAME logical id is exactly the
+        // event `observeIfArmed`'s guard exists to make inert for an unarmed id.
+        Peering.loopback(b.side, c.side)
+        controller.runToIdle()
+
+        (aRef in b.registry.replicasOf(id)) shouldBe false
+        b.replication.missCount(id) shouldBe 0
+        b.replication.leaderOf(id) shouldBe mark1
+        b.leaderMarkFires shouldBe bFiresBefore
+        onB.leading shouldBe false
+        onB.becomeLeaderCalls shouldBe 0
+
+        // Repeated observe() calls and more membership events change nothing:
+        // the id was never armed, so there is nothing for either to count.
+        repeat(10) { b.replication.observe() }
+        controller.runToIdle()
+        b.replication.missCount(id) shouldBe 0
+        b.replication.leaderOf(id) shouldBe mark1
+        b.leaderMarkFires shouldBe bFiresBefore
+        onB.leading shouldBe false
+        onB.becomeLeaderCalls shouldBe 0
+
+        // CONTROL: this SAME b.replication elects once it actually WITNESSES
+        // A's departure — peer B with A, then partition them.
+        val abLoop = Peering.loopback(a.side, b.side)
+        controller.runToIdle()
+        (aRef in b.registry.replicasOf(id)) shouldBe true
+
+        abLoop.partition()
+        controller.runToIdle()
+        b.replication.leaderOf(id) shouldBe LeaderMark(id, 2, bRef)
+        b.replication.missCount(id) shouldBe 0
+        onB.leading shouldBe true
+        onB.becomeLeaderCalls shouldBe 1
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private val leaderMarkedId: Long =
