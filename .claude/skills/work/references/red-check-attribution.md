@@ -121,6 +121,69 @@ guessing one here cost a reviewer 8 runs):
    ```
    The failing test's module path must not appear in that list. If it does,
    the red is yours: file the task per 5c and stop here.
+
+   **Unless the diff cannot have caused it, which module granularity cannot
+   see.** A documentation-or-KDoc diff inside the flaky test's own module
+   fails this artifact literally while the attribution is airtight — measured
+   on computenet-zgyt, whose diff was `concord/corpus/DISPUTES.md` plus a
+   class KDoc in `kernel/src/test/.../RetainedStateBoundTest.kt`, against a
+   `kernel-test` red on `GcSafetySweepTest`. review-feature.md §7's residual
+   route generates that shape routinely, so it is not a corner. The
+   admissible substitute is **file-and-causation granularity**, and it takes
+   FOUR things shown, not three:
+
+   - a different test class from the failing one;
+   - the change confined to comment, KDoc or standalone documentation text;
+   - zero executable lines, checkable line by line in `gh pr diff <pr-url>`;
+   - **and no test READS the prose you edited.** This is the one that is not
+     obvious and the one that makes the other three insufficient here. This
+     repo gates prose with real tests: `oracle`'s `MarkerFormTest` walks all
+     of `kernel/src/test` plus `concord/corpus/DISPUTES.md` and matches
+     regexes against *comment and KDoc text*; `HonestyLedgerTest` asserts on
+     DISPUTES.md's sections; inside `kernel-test` itself,
+     `C12AdjudicationRecordTest` reads `doc/` markdown and
+     `ModuleInventoryTest` reads `doc/ARCHITECTURE.md`. So a
+     documentation-only diff CAN redden `kernel-test`, comment-confined and
+     with zero executable lines. Show it did not — and **a name search is
+     not enough to show it**. `MarkerFormTest`, the reader named just above,
+     walks `kernel/src/test` as a DIRECTORY and writes no test file's name,
+     so a KDoc edit to an arbitrary kernel test answers a clean zero:
+     measured, `git grep -l 'RetainedStateBoundTest.kt' -- '*/src/test/*'`
+     is 0 hits for the file whose KDoc that walker reads on every run — the
+     entry's own worked example. Search the ANCESTOR PATHS as well:
+
+     ```bash
+     git grep -l '<edited basename>' -- '*/src/test/*'   # and the full path
+     # then its ancestor directories, stopping at the module's own src/test:
+     # go higher and `kernel` alone matches half the repo's tests.
+     d=$(dirname '<repo-relative path of the edited file>')
+     while :; do
+       git grep -l "$d" -- '*/src/test/*'
+       case "$d" in */src/test) break;; esac
+       d=$(dirname "$d")
+     done | sort -u
+     ```
+
+     The second form does find `MarkerFormTest`, on `kernel/src/test` — 21
+     files for that worked example, against 0 from the name search. Read
+     each hit rather than counting them: a walker that matches regexes
+     against comment or KDoc text reads your prose, while one that filters on
+     file or function NAMES (`C12AdjudicationRecordTest`) does not. The
+     pathspec must end in `/*` — `-- '*/src/test'` matches a file called
+     `test` and nothing under it (AGENTS.md's pathspec trap) — and in that
+     form it does reach `oracle/src/test` and `concord/src/test`, where two
+     of the four readers live.
+
+   **Either way, say which artifact you are standing on.** An artifact that
+   does not hold is REPORTED as unsatisfied with the substitute reasoning
+   shown — "the diff *does* touch `kernel/`, so module-disjointness is not
+   literally satisfied; it holds only at the granularity that can carry
+   causation" is the form. Never reason past it silently. And **innocence
+   does not lift the draft**: §4's rule that a red required check is not
+   yours to wave through is untouched here. What attribution changes is what
+   the draft is ABOUT — infrastructure rather than the work, with the
+   sole-blocker shape §4 prescribes — never whether there is one.
+
 3. **A prior occurrence that already exists** — found, not remembered:
    ```bash
    bd search "<failing test class>" --status all --json    # titles + ids
