@@ -2853,6 +2853,11 @@ bd show <id> --json                                      # each acquisition outs
 bd comments <id> --json > "$SCRATCH/c-<id>.json"         # per bead you commented on
 ```
 
+**`bd comments`, or `comment_count` — never `.comments` from `bd show --json`,
+a field that does not exist and so reads `null`** whether or not your write landed. That
+reads as a lost comment, and a lost write here escalates to a human
+(computenet-pr7d; bd-traps.md).
+
 A missing write is an **escalation**: say which vanished, at the top of the
 summary, and park it for a human — never re-apply blind. If the recovery
 itself failed (exit 2), the summary's top line says the session's tracker

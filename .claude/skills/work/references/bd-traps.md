@@ -26,6 +26,18 @@ SKILL.md and the other references cite this file as "`bd` traps".
   hand-set `--status=blocked` (an ask-human park) is invisible to it.
 - `bd show <id> --json` returns a **list** — unwrap `.[0]` or every field
   reads `null`. It never includes comment bodies, only `comment_count`.
+  **`.comments` is the `parent_id` trap again**: there is NO `comments` key —
+  `has("comments")` is false on every bead — so `.comments` reads `null`
+  exactly as a missing key does, indistinguishably from a bead with none, while
+  `comment_count` beside it under a near-identical name is accurate. Measured
+  2026-09-10 across 40 beads: `has("comments")` false throughout, including
+  `computenet-fpml.3`, whose `comment_count` is 2 and whose
+  `bd comments <id> --json | jq length` is 2. This is a FALSE
+  NEGATIVE on a step this skill actively prescribes — step 6 tells you to
+  re-read your own writes after a recovered push, and a lost write is an
+  ESCALATION to a human, so reading `.comments` there manufactures one. Confirm
+  a comment landed with `comment_count`, or read the bodies with
+  `bd comments <id> --json`; never with `.comments` (computenet-pr7d).
 - **There is no `parent_id` field at all** — the parent lives under
   **`.parent`**, and `jq` answers a *missing* key with `null` exactly as it
   answers an empty one. So the natural `.[0].parent_id` reads every bead as
