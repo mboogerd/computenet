@@ -1,0 +1,11 @@
+work +20
+# 5d's template DEMONSTRATED the unsafe inline `--body "..."` a few hundred lines
+# from step 7's careful warning against exactly that shape for bd. A PR body here
+# quotes code by convention, and one carrying a Gradle verdict and a test
+# identifier died on `(eval):1: command not found: BUILD` and created NO PR — at
+# the ship gate, after the branch was pushed (computenet-0w58). The template is
+# now file-based, and the rule is stated ONCE as a discipline across every
+# command that takes a prose body, because three closed beads fixed it for three
+# bd entry points one at a time and the fourth was still unguarded — a
+# per-command fix predicts a fifth. The verify-what-landed line is there because
+# the bd variants of this bug succeed while dropping text silently.
