@@ -1,0 +1,10 @@
+remediate-friction +16
+# Step 4 gains budget-delta.py, the FLOOR the ratchet never had. Two shapes got
+# past the ceiling in one drain: an edit that silently deleted 56 lines of
+# unrelated prose (deleting puts you under budget, so the ceiling reported it as
+# healthy), and a declared `work +14` against a measured +17 that quietly ate
+# three lines of pre-existing headroom. Both were caught by a reviewer diffing
+# the merge-base, not by a gate (computenet-3yvbd). The lines say what the new
+# script compares, why the ceiling cannot see either shape, and that a NEGATIVE
+# declaration passes — the point is to make removal a decision rather than a
+# side effect. The script and its 9-case suite are unpriced.
