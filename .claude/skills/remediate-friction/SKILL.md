@@ -291,6 +291,22 @@ neither is recomputed. **A delta may be negative — write one whenever a drain
 removes text.** (The old `ideal <=500` warning was computed and read past on
 every run while `work/SKILL.md` went 668 → 2236 lines.)
 
+**The ratchet is a ceiling, so the declared number is checked separately:**
+
+```bash
+.claude/skills/remediate-friction/scripts/budget-delta.py   # defaults to origin/main
+```
+
+`validate-skills.rb` asserts `total <= budget` and nothing else, which leaves
+two shapes invisible. A restructuring edit that silently DELETED 56 lines of
+unrelated prose passed every gate — deleting puts you comfortably under budget,
+so the ceiling reports it as healthy. And a declared `+14` against a measured
++17 passed too, by quietly consuming three lines of pre-existing headroom. Both
+happened in the 2026-09-10 drain, both were caught by a reviewer diffing the
+merge-base rather than by any gate (computenet-3yvbd). This compares the two
+numbers and fails when they differ, in either direction. A negative declaration
+passes: the point is to make removal a DECISION rather than a side effect.
+
 **And check the fix is in a file the reporting role reads.** The bead names the
 role that hit the wall; pass that role and the files you touched:
 
