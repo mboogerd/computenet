@@ -575,9 +575,16 @@ class SingleWriterChurnTest {
          * [MEASURED_DEMOTED_TOTAL_DEMOTE_FIRST] below are that accounting, read via
          * `LeaderChurnReport.instanceReadings` in both arms of this test.
          *
-         * None of this is evidence that the split-brain window is harmless in general — the window itself is
-         * real and non-zero, and 95 §R1's "prove or refute ... in every interleaving" is a
-         * research-gated question this measurement does not answer.
+         * None of this is evidence that the split-brain window is harmless in general. Since
+         * computenet-f7h.1 the window this arm *drives* is the IN-PROCESS one, and that is zero by
+         * construction — one fold per [civictech.cell.host.LocationRegistry], class KDoc — so the
+         * accounting above no longer spans a dual-leader window at all. The window did not stop
+         * being real: it moved to the CROSS-REGISTRY case, folded independently on each peer's own
+         * registry over the wire, which feature computenet-f7h.2 owns and `:testkit` cannot build
+         * here. *That* window is real, and unbounded without a synchrony assumption (epic
+         * computenet-f7h §5.8 item 3 — a `DISPUTES.md` entry owned by computenet-f7h.7, not a
+         * requirement claimed anywhere in this file). 95 §R1's "prove or refute ... in every
+         * interleaving" is a research-gated question this measurement does not answer.
          */
         const val MEASURED_OBSERVED_TOTAL: Long = 4
         const val MEASURED_LOST: Long = 0
