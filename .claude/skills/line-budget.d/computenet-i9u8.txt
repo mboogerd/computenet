@@ -1,0 +1,13 @@
+AGENTS.md +17
+# A sixth member of the false-zero family, and the only one in which every
+# command is correct: `&&`-chaining two searches. The first grep's legitimate
+# no-match exits 1, the chain short-circuits, and the second grep never runs —
+# its missing output indistinguishable from a search that ran and found nothing
+# (computenet-i9u8). It belongs in AGENTS.md rather than only in the agent-facing
+# references for the reason that section already gives about itself: dispatched
+# agents read the references, the orchestrator does not, and this bit an agent
+# whose findings the orchestrator then relied on.
+# +4 from review: an adversarial read found the remedy could itself produce a
+# false zero if skimmed as a blanket ban — `cd "$WT"; git grep X` searches the
+# wrong tree when the `cd` fails. The rule is now scoped to PEER searches, with
+# the guard case named, since the four sibling entries are unqualified bans.
