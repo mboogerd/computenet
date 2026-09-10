@@ -1,4 +1,4 @@
-work +18
+work +19
 # review-feature.md §4 budgeted a reviewer ONE wait-checks.sh invocation while
 # §§5/6 authorise repairs whose push restarts all seven required checks. Two
 # independent feature reviewers in one session stopped to adjudicate that pair;
@@ -8,3 +8,7 @@ work +18
 # ~9-12m cycle it actually costs — none of which is inferable from the old text,
 # whose two available readings were "exceed the stated budget" and "certify
 # against checks you never read".
+# +1 from the review repair: §4's own rule forbids writing the required-check
+# COUNT down (it was wrong in both directions before removal, computenet-9p3y /
+# computenet-s6x5), so the new paragraph says "every required check" and points
+# at that rule rather than reinstating the staleness.

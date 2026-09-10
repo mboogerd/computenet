@@ -612,14 +612,15 @@ So:
   finding worth reporting.
 
   **A repair earns a second invocation — spend it.** §5 and §6 authorise you
-  to fix things and push, and a push here MOVES THE HEAD: all seven required
-  checks restart, at ~9-12 minutes for the cycle (computenet-678u,
+  to fix things and push, and a push here MOVES THE HEAD: every required
+  check restarts, at ~9-12 minutes for the cycle (computenet-678u,
   computenet-7wd6). The head you first checked no longer exists, so the budget
   above has nothing left to say about the one you created — re-run
   `wait-checks.sh` on it and give an unconditional verdict. Two independent
   feature reviewers in one session stopped mid-review to adjudicate this,
   reaching the right answer both times but paying for it twice
-  (computenet-3dn3). The budget is one invocation **per head**, and a repair
+  (computenet-3dn3). §4 above is why the count is not written down here.
+  The budget is one invocation **per head**, and a repair
   push is the only thing that mints a new one; it is not a licence to poll,
   and a second `TIMEOUT-PENDING` is still a conditional verdict, not a wait.
 
@@ -1003,7 +1004,7 @@ git -C <worktree> rev-parse HEAD
 gh pr checks <pr-url>                                    # re-read on the NEW head
 ```
 
-**Budget for the wait.** A fresh Linux run is roughly 3–5 minutes, and two
+**Budget for the wait.** A fresh run costs §5's ~9-12 minutes, and two
 reviewers in one session each spent it rediscovering this. Plan it rather than
 discovering it; a `pending` check is not a pass, so if you cannot wait, certify
 draft and say the checks were still running on the post-merge head.
