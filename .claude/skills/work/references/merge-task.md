@@ -402,19 +402,39 @@ instead of the whole run's:
 ```bash
 JOB=$(gh pr checks <pr-url> --json name,link \
         -q '.[]|select(.name=="concord-full")|.link' | grep -oE '[0-9]+$')
+[ "$(printf '%s' "$JOB" | grep -c .)" = 1 ] \
+  || { echo "NOT CHECKED: no single concord-full row — rows not up yet, or a duplicated name"; }
 gh api repos/mboogerd/computenet/actions/jobs/"$JOB"/logs > "$SCRATCH/ci.log"
 ```
 
-The job id is the trailing path segment of a check row's `link`. Two reviewers
-in one session hit the refusal independently and were each left choosing
-between waiting out an ~9m job, skipping the check, or inferring execution from
-a green conclusion — with agora-ui-test at 14s and build-test-fast at 9m17s in
-the same run, the run-level form is unavailable for most of the window a
-reviewer works in (computenet-rptg). **A refusal is still not a reading**: a
+The job id is the trailing path segment of a check row's `link`; selecting by
+`name` keeps the auto-merge row out, as the `.[0]` warning below requires.
+**The one-row guard is the part you cannot drop**: an empty `$JOB` — a PR whose
+rows are not up yet — requests `.../jobs//logs`, and `gh` puts its error on
+stderr while writing the **4-line 404 JSON body** to the log, which is
+non-empty, survives the `wc -l` precondition below, and matches neither grep:
+"nothing skipped, all good" out of a file that is not a log (measured
+2026-09-10). A duplicated name instead makes `$JOB` two lines and fails loudly
+(`invalid control character in URL`, zero bytes) — that one `wc -l` catches.
+
+**Both greps below survive the swap even though the line shape differs**
+(verified 2026-09-10 on PR #805's `concord-full`): the run-level log is
+tab-separated with the job name in column 1, while the per-job log's column 1
+is an ISO timestamp — `2026-09-10T20:00:08.9Z > Task :gen:test FROM-CACHE`.
+The patterns are unanchored substrings and `grep -v '> Task '` filters either.
+What the per-job form loses is only the *which lane* column, and by then you
+have already named the lane.
+
+Two reviewers in one session hit the refusal independently and were each left
+choosing between waiting out an ~9m job, skipping the check, or inferring
+execution from a green conclusion — with agora-ui-test at 14s and
+build-test-fast at 9m17s in the same run, the run-level form is unavailable for
+most of the window a reviewer works in (computenet-rptg). **A refusal is still not a reading**: a
 reviewer that cannot fetch the log by either form reports the check as NOT
 PERFORMED, never as passed.
-Column 1 of each line is the job name, so the output also says *which lane*
-skipped. Save it, then read it with two greps:
+
+For the run-level form, column 1 of each line is the job name, so the output
+also says *which lane* skipped. Save it, then read it with two greps:
 
 **Get `<run-id>` from a REQUIRED check's row, never from `.[0]`.** The
 auto-merge workflow appears in `gh pr checks` as an ordinary row (conclusion
