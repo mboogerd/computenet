@@ -296,7 +296,7 @@ class SingleWriterChurnTest {
     // ------------------------------------------------------------- BS-14, promote-first arm
 
     @Test
-    fun `BS-14 promote-first designation opens a real split-brain window, and it is measured`() {
+    fun `BS-14 promote-first designation leaves no in-process split-brain window under one fold per registry`() {
         // [CHA3-53]'s stream, consumed rather than duplicated — but only for its seed: the
         // interleaving below is constructed, not drawn from the plan. See the class KDoc.
         val plan = ChurnSeeds.plans(101L..101L).single()
@@ -330,7 +330,7 @@ class SingleWriterChurnTest {
         // it is issued at peerA, which is already a follower, so it is forwarded by peerA's
         // delegate (`SingleWriterReplication.kt`'s `forwardWrites`) to peerB and applied there.
         set.issue(set.a)?.let { measurement.acceptedWrite(2, it) }
-        measurement.tick("write issued inside the window")
+        measurement.tick("write issued immediately after the transition")
 
         // The second call folds nothing new: [MEM1-09] reads it as a duplicate of the mark
         // already adopted by the first call, so no roles are re-applied.
@@ -365,7 +365,7 @@ class SingleWriterChurnTest {
                 "baseline: designateLeader(epoch=0, peerA) on both peers",
                 "2 writes applied by the epoch-0 leader",
                 "designateLeader(epoch=1, peerB) on peerB",
-                "write issued inside the window",
+                "write issued immediately after the transition",
                 "designateLeader(epoch=1, peerB) on peerA",
                 "post-transition write",
             ),
@@ -412,7 +412,7 @@ class SingleWriterChurnTest {
     // -------------------------------------------------------------- BS-14, demote-first arm
 
     @Test
-    fun `BS-14 demote-first designation closes the window and opens a no-leader gap instead`() {
+    fun `BS-14 demote-first designation leaves neither a window nor a leaderless gap, and is indistinguishable from promote-first`() {
         val plan = ChurnSeeds.plans(101L..101L).single()
         val set = SwSet(plan.seed)
         val measurement = LeaderChurnMeasurement(set::believedLeaders)
