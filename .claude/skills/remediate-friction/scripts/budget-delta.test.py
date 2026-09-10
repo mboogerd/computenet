@@ -148,5 +148,68 @@ case("uncommitted new reference file counts",
                 write(r, ".claude/skills/line-budget.d/b.txt", "w +2\n")),
      0, "OK        w: +2 measured, +2 declared")
 
+# The declaration is the CHANGE in the declared budget, not the value of the
+# delta files this branch touched. These six cases are the difference, and each
+# was a false alarm found by running both gates over the same repo.
+
+# FOLD-BACK — delete the delta file, raise the base row by the same amount. The
+# README and validate-skills.rb both prescribe it, and nothing about it moves a
+# line of prose, so it must be a no-op here.
+case("fold-back into the base ledger declares nothing",
+     lambda r: (write(r, ".claude/skills/line-budget.d/old.txt", "w +5\n"),
+                commit(r, "pre-existing delta"),
+                sh(r, "git", "branch", "-f", "base-ref", "HEAD"),
+                os.remove(os.path.join(r, ".claude/skills/line-budget.d/old.txt")),
+                write(r, ".claude/skills/line-budget.txt", "w 11\nAGENTS.md 3\n"),
+                commit(r, "fold back")),
+     0, "0 priced name(s) changed")
+
+# A delta file DELETED with the prose it bought is a real negative declaration —
+# the case the fold-back must not be confused with.
+case("deleting a delta file with its prose is a declared deletion",
+     lambda r: (write(r, ".claude/skills/w/references/a.md", "a1\na2\na3\na4\nn1\nn2\n"),
+                write(r, ".claude/skills/line-budget.d/old.txt", "w +2\n"),
+                commit(r, "grow, declared"),
+                sh(r, "git", "branch", "-f", "base-ref", "HEAD"),
+                write(r, ".claude/skills/w/references/a.md", "a1\na2\na3\na4\n"),
+                os.remove(os.path.join(r, ".claude/skills/line-budget.d/old.txt")),
+                commit(r, "revert both")),
+     0, "OK        w: -2 measured, -2 declared")
+
+# Rewording an OLD delta file's comment does not re-declare its number.
+case("editing an old delta file's prose is not a new declaration",
+     lambda r: (write(r, ".claude/skills/line-budget.d/old.txt", "w +5\n# why\n"),
+                write(r, ".claude/skills/w/references/a.md",
+                      "a1\na2\na3\na4\nn1\nn2\nn3\nn4\nn5\n"),
+                commit(r, "delta already spent"),
+                sh(r, "git", "branch", "-f", "base-ref", "HEAD"),
+                write(r, ".claude/skills/line-budget.d/old.txt", "w +5\n# why, reworded\n"),
+                commit(r, "reword")),
+     0, "0 priced name(s) changed")
+
+# A NEW skill declares itself with its first line-budget.txt row, never a delta.
+case("a new skill's ledger row is its declaration",
+     lambda r: (write(r, ".claude/skills/z/SKILL.md", "---\nname: z\n---\nz1\nz2\n"),
+                write(r, ".claude/skills/line-budget.txt", "w 6\nz 2\nAGENTS.md 3\n"),
+                commit(r, "new skill")),
+     0, "OK        z: +2 measured, +2 declared")
+
+# Parsed as validate-skills.rb parses it: first two fields, Ruby to_i. A looser
+# line the ceiling reads as +1 must not read as no declaration here, or the two
+# gates disagree about one file.
+case("a delta line with trailing prose is read as the ceiling reads it",
+     lambda r: (write(r, ".claude/skills/w/references/a.md", "a1\na2\na3\na4\nn1\n"),
+                write(r, ".claude/skills/line-budget.d/b.txt", "w +1 for the new trap\n"),
+                commit(r, "loose line")),
+     0, "OK        w: +1 measured, +1 declared")
+
+# README.txt is skipped by the ruby parser, so it is not a declaration surface
+# here either.
+case("README.txt is not a declaration surface",
+     lambda r: (write(r, ".claude/skills/w/references/a.md", "a1\na2\na3\na4\nn1\n"),
+                write(r, ".claude/skills/line-budget.d/README.txt", "# notes\nw +1\n"),
+                commit(r, "declare in the README")),
+     1, "MISMATCH  w: +1 measured, +0 declared")
+
 print(f"{cases - failed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

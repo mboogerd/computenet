@@ -55,15 +55,58 @@ def at_base(base, path):
     return r.stdout if r.returncode == 0 else None
 
 
-def priced_names(root):
-    """The names line-budget.txt prices — the authority on what is measured."""
-    names = []
-    with open(os.path.join(root, ".claude/skills/line-budget.txt"), encoding="utf-8") as fh:
-        for line in fh:
-            line = line.split("#", 1)[0].strip()
-            if line:
-                names.append(line.split()[0])
-    return names
+LEDGER = ".claude/skills/line-budget.txt"
+DELTA_DIR = ".claude/skills/line-budget.d"
+
+
+def to_i(tok):
+    """Ruby's String#to_i, which is what validate-skills.rb parses these with.
+
+    It takes the leading integer and ignores the rest, so `+1x` is 1 and `abc`
+    is 0. Being stricter would let the two gates read one malformed ledger line
+    differently — measured: on `w +1x` the ceiling grants +1 of headroom that a
+    strict int() reads as no declaration at all, and the change then fails one
+    gate and passes the other.
+    """
+    m = re.match(r"\A\s*([+-]?\d+)", tok)
+    return int(m.group(1)) if m else 0
+
+
+def parse_ledger(text):
+    """`<name> <signed-int>` rows, parsed exactly as validate-skills.rb does: a
+    line is a comment only when it STARTS with `#` (an inline `#` is not one),
+    and only the first two whitespace-separated fields are read."""
+    out = {}
+    for line in (text or "").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        parts = line.split()
+        out[parts[0]] = out.get(parts[0], 0) + (to_i(parts[1]) if len(parts) > 1 else 0)
+    return out
+
+
+def ledger_files(root, base):
+    """(base-side, head-side) ledger paths: line-budget.txt plus every
+    line-budget.d/*.txt except README.txt, which the ruby parser also skips."""
+    at = [p for p in git("ls-tree", "-r", "--name-only", base).stdout.splitlines()
+          if p == LEDGER or (p.startswith(DELTA_DIR + "/") and p.endswith(".txt")
+                             and os.path.basename(p) != "README.txt")]
+    # The head side is globbed, not listed from the index: a delta file written
+    # but not yet `git add`ed is the normal state when this runs before the
+    # commit, and reading only the tracked half would report every honest
+    # declaration as missing — the false alarm that gets a gate ignored.
+    here = [LEDGER] if os.path.exists(os.path.join(root, LEDGER)) else []
+    here += sorted(os.path.relpath(str(q), root)
+                   for q in pathlib.Path(root, DELTA_DIR).glob("*.txt")
+                   if q.name != "README.txt")
+    return at, here
+
+
+def priced_names(root, base):
+    """Every name EITHER side of the ledger prices: a row this branch added (a
+    new skill) and a row it removed (a deleted one) both have to be measured."""
+    return sorted(set(parse_ledger(at_base(base, LEDGER)))
+                  | set(parse_ledger(_worktree(root, LEDGER))))
 
 
 def measure(root, name, base):
@@ -104,35 +147,34 @@ def _worktree(root, path):
 
 
 def declared(root, base):
-    """Sum the deltas in line-budget.d files this branch added or changed."""
-    # Tracked changes AND untracked additions. A delta file written but not
-    # yet `git add`ed is the normal state when this runs before the commit,
-    # and reading only the tracked half would report every honest declaration
-    # as missing — the false alarm that gets a gate ignored.
-    changed = set(git("diff", "--name-only", base, "--",
-                      ".claude/skills/line-budget.d").stdout.split())
-    changed |= {q for q in git("ls-files", "--others", "--exclude-standard", "--",
-                               ".claude/skills/line-budget.d").stdout.split()}
-    changed = sorted(changed)
-    out = {}
-    for rel in changed:
-        text = _worktree(root, rel)
-        if text is None:          # deleted by this branch: its lines leave the budget
-            text = at_base(base, rel) or ""
-            sign = -1
-        else:
-            sign = 1
-        for line in text.splitlines():
-            line = line.split("#", 1)[0].strip()
-            if not line:
-                continue
-            parts = line.split()
-            if len(parts) == 2:
-                try:
-                    out[parts[0]] = out.get(parts[0], 0) + sign * int(parts[1])
-                except ValueError:
-                    pass
-    return out
+    """The CHANGE in the declared budget between base and worktree.
+
+    The declared budget is line-budget.txt plus every line-budget.d delta —
+    exactly the sum validate-skills.rb ceilings against. Differencing that
+    whole sum, rather than reading the delta files this branch happens to
+    TOUCH, is what keeps three honest changes from being cried wolf at:
+
+      - a FOLD-BACK (delete the delta file, raise the base row by the same
+        amount), which this skill's README and the validator's own message
+        both prescribe: -N and +N cancel instead of reading as -N declared
+        against 0 measured;
+      - editing an OLD delta file's comment prose, which does not re-declare
+        its number;
+      - a NEW skill, whose declaration is its first line-budget.txt row and
+        never a delta file at all.
+
+    An untouched delta file still counts for nothing: it is identical on both
+    sides and cancels.
+    """
+    at, here = ledger_files(root, base)
+    before, after = {}, {}
+    for paths, texts, acc in ((at, (at_base(base, p) for p in at), before),
+                              (here, (_worktree(root, p) for p in here), after)):
+        for text in texts:
+            for name, value in parse_ledger(text).items():
+                acc[name] = acc.get(name, 0) + value
+    return {n: after.get(n, 0) - before.get(n, 0)
+            for n in set(before) | set(after)}
 
 
 def main():
@@ -150,7 +192,7 @@ def main():
     dec = declared(root, base)
     failures = 0
     checked = 0
-    for name in priced_names(root):
+    for name in priced_names(root, base):
         b, h = measure(root, name, base)
         measured = h - b
         d = dec.get(name, 0)

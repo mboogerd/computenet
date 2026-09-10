@@ -7,4 +7,4 @@ remediate-friction +16
 # the merge-base, not by a gate (computenet-3yvbd). The lines say what the new
 # script compares, why the ceiling cannot see either shape, and that a NEGATIVE
 # declaration passes — the point is to make removal a decision rather than a
-# side effect. The script and its 9-case suite are unpriced.
+# side effect. The script and its 18-case suite are unpriced.
