@@ -26,17 +26,13 @@ import kotlin.test.assertTrue
  *
  * 1. **Determinism** — encoding the same input twice is byte-identical.
  * 2. **Round-trip stability** — encoding an input that has been through a Java
- *    serialize/deserialize cycle gives the same bytes. This is the property
- *    that catches an encoding leaking identity hashes, iteration order, or any
- *    other per-process incident into the signed region. [LeaderMark] arguments
- *    (tag `0x04`, `computenet-f7h.2.2`) take the *rebuild* route instead: the
- *    type is a kotlinx-serializable wire type and does not implement
- *    `java.io.Serializable`, so `ObjectOutputStream` refuses an input carrying
- *    one. Rebuilding structurally-equal instances from their components checks
- *    the same thing the round trip checks — that no per-process incident
- *    reaches the bytes — and is what this file can do without editing `:kernel`.
- *    Making [LeaderMark] `java.io.Serializable` is a one-line change outside
- *    that task's file claim and is filed as its own item.
+ *    serialize/deserialize cycle gives the same bytes, [LeaderMark] arguments
+ *    (tag `0x04`, `computenet-f7h.2.2`) included. This is the property that
+ *    catches an encoding leaking identity hashes, iteration order, or any
+ *    other per-process incident into the signed region. It is additionally
+ *    checked by rebuilding every argument as a freshly constructed,
+ *    structurally-equal instance, which the same encoding-must-not-move
+ *    assertion covers.
  * 3. **Injectivity** — distinct inputs give distinct bytes, checked both
  *    pairwise across the whole sample and by single-field mutation, which is
  *    the sharper of the two: random samples differ in many fields at once and
@@ -76,17 +72,15 @@ class AnnouncementCanonicalBytesPropertyTest {
 
             assertEquals(once.toHex(), canonicalBytes(input).toHex(), "not deterministic for $input")
 
-            // Java round trip over the args that are `java.io.Serializable`.
-            val serializablePart = input.copy(args = input.args.filterNot { it is LeaderMark })
-            val serializableBytes = canonicalBytes(serializablePart).toHex()
-            val revived = javaRoundTrip(serializablePart)
-            assertEquals(serializablePart, revived, "round trip changed the input")
-            assertEquals(serializableBytes, canonicalBytes(revived).toHex(), "round trip changed the bytes for $input")
+            // Java round trip over the whole input, LeaderMark args included.
+            val revived = javaRoundTrip(input)
+            assertEquals(input, revived, "round trip changed the input")
+            assertEquals(once.toHex(), canonicalBytes(revived).toHex(), "round trip changed the bytes for $input")
 
-            // The rebuild route, for the whole input including any LeaderMark:
-            // every argument replaced by a freshly constructed, structurally
-            // equal instance. Nothing about the originals — their identity
-            // hashes, their allocation order — may reach the bytes.
+            // The rebuild route, as an additional check: every argument
+            // replaced by a freshly constructed, structurally equal instance.
+            // Nothing about the originals — their identity hashes, their
+            // allocation order — may reach the bytes.
             val rebuilt = input.copy(args = input.args.map { rebuild(it) })
             assertEquals(input, rebuilt, "rebuild changed the input")
             assertEquals(once.toHex(), canonicalBytes(rebuilt).toHex(), "rebuild changed the bytes for $input")
@@ -322,10 +316,10 @@ class AnnouncementCanonicalBytesPropertyTest {
 }
 
 /**
- * A structurally equal, freshly allocated copy of an accepted argument — the
- * substitute for [javaRoundTrip] on [LeaderMark], which is not
- * `java.io.Serializable` (see the class KDoc). Every id is rebuilt from its two
- * `Long` halves, so nothing of the original instance survives except its value.
+ * A structurally equal, freshly allocated copy of an accepted argument — an
+ * additional check alongside [javaRoundTrip] (see the class KDoc). Every id is
+ * rebuilt from its two `Long` halves, so nothing of the original instance
+ * survives except its value.
  */
 private fun rebuild(arg: Any?): Any? = when (arg) {
     is CellRef -> CellRef(rebuildUuid(arg.id), arg.instanceId)
