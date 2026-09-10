@@ -42,16 +42,28 @@ class LeaderElectionTest {
      * that file is not this task's claim), plus an [election] parameter and
      * [engine], which builds an ADDITIONAL engine on this same registry:
      * f7h.4-D7's coexistence pin needs two postures behind one fold.
+     *
+     * [election] is **nullable, and null means "construct the way every
+     * pre-F4 call site does"** — `SingleWriterReplication(registry)`, with no
+     * third argument at all — rather than passing
+     * [LeaderElection.Manual] explicitly. That distinction is load-bearing
+     * and was measured: with the fixture passing `Manual` explicitly, flipping
+     * the production default to `EpochClaim(DetectionWindow(1))` left all four
+     * tests here green, because nothing exercised the default. Clause 1 of
+     * this task is a statement about the DEFAULT, so the default is what the
+     * fixture has to construct.
      */
     private class Peer(
         controller: SimulationController,
-        election: LeaderElection = LeaderElection.Manual,
+        election: LeaderElection? = null,
     ) {
         val registry = LocationRegistry()
         val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
         val bridgeHost = ManagedHost(scheduler = controller.scheduler(), registry = registry)
         val side = Peering.Side(registry, bridgeHost)
-        val replication = SingleWriterReplication(registry, election = election)
+        val replication =
+            if (election == null) SingleWriterReplication(registry)
+            else SingleWriterReplication(registry, election = election)
 
         /** Every adopted fold on this registry — local designation, claim, or mirrored announcement. */
         var leaderMarkFires = 0
@@ -263,6 +275,23 @@ class LeaderElectionTest {
         acLoop.partition()
         controller.runToIdle()
 
+        // The MANUAL half comes first deliberately. Both criteria are checked
+        // here, but a mutation that makes Manual elect also makes the
+        // default-constructed peers A and C elect, and if X were asserted
+        // first that broader consequence would redden the X assertions and the
+        // Manual criterion below would never be evaluated at all — the
+        // mutation would "discriminate" while proving nothing about f7h.4-D7.
+        // Measured: with the X block first, removing the posture guards failed
+        // this test at `leaderOf(x)`, not here.
+        //
+        // Y did not elect: the Manual engine on the SAME registry saw the same
+        // departure and arms nothing.
+        b.replication.leaderOf(y) shouldBe markY1
+        c.replication.leaderOf(y) shouldBe markY1
+        onBY.leading shouldBe false
+        onBY.becomeLeaderCalls shouldBe 0
+        manual.missCount(y) shouldBe 0
+
         // X elected: B claimed the next epoch for its own replica, and the
         // claim reached C over the surviving B–C loopback
         val claimed = LeaderMark(x, 2, bX)
@@ -270,17 +299,8 @@ class LeaderElectionTest {
         c.replication.leaderOf(x) shouldBe claimed
         onBX.leading shouldBe true
         onBX.becomeLeaderCalls shouldBe 1
-
-        // Y did not: the Manual engine on the SAME registry saw the same
-        // departure and arms nothing
-        b.replication.leaderOf(y) shouldBe markY1
-        c.replication.leaderOf(y) shouldBe markY1
-        onBY.leading shouldBe false
-        onBY.becomeLeaderCalls shouldBe 0
-
-        // the adoption disarmed X's window; Y's was never armed
+        // the adoption disarmed X's window
         elects.missCount(x) shouldBe 0
-        manual.missCount(y) shouldBe 0
 
         // control for the Manual half: Y's leader really is gone, so a write
         // through B's Y replica parks rather than being applied anywhere
