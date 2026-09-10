@@ -1,13 +1,20 @@
 package civictech.cell.replication
 
 import civictech.cell.CellRef
+import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.port.PortRef
+import civictech.cell.port.Use
+import civictech.cell.repro.ExpectedFailure
+import civictech.cell.repro.withSignature
 import civictech.cell.wire.Peering
 import civictech.cell.wire.RegistryAnnounce
 import civictech.cell.wire.WireCodec
 import civictech.nature.ContractRegistry
+import civictech.testkit.forEachSeed
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -15,6 +22,13 @@ import org.junit.jupiter.api.Test
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
+
+/**
+ * The stable token `computenet-f7h.6.2`'s expected failure carries — the
+ * dual-claim divergence recorded for computenet-f7h.7. A `const val` because
+ * an annotation argument must be one.
+ */
+private const val MEM1_52_DUAL_CLAIM_DIVERGENCE = "MEM1-52-DUAL-CLAIM-DIVERGENCE"
 
 /**
  * `computenet-f7h.4.1` — the **posture** half of automatic leader election
@@ -671,6 +685,518 @@ class LeaderElectionTest {
         b.replication.missCount(id) shouldBe 0
         onB.leading shouldBe true
         onB.becomeLeaderCalls shouldBe 1
+    }
+
+    // ================================================ computenet-f7h.6.2 — the seeded dual-claim sweep
+
+    /**
+     * The total order two claims are decided by (f7h.1-D2), recomputed here
+     * because `InstanceIndex.ORDER` is private.
+     */
+    private val markOrder: Comparator<LeaderMark> =
+        compareBy({ it.epoch }, { it.leaderRef.instanceId })
+
+    /** Everything one peer shows at one observation point. */
+    private class PeerView(
+        val adopted: List<LeaderMark>,
+        val leaderOf: LeaderMark?,
+        val leading: Boolean,
+        val total: Long,
+        val realWrites: Int,
+        val currentEpoch: Long,
+        val becomeLeaderCalls: Int,
+        val becomeFollowerCalls: Int,
+        val receivedDeltas: Int,
+        val fencedDeltas: Int,
+        val baselinesAdopted: Int,
+        val shippedPairs: Set<Pair<CellRef, CellRef>>,
+        val parkedAtOld: Int,
+    ) {
+        override fun toString(): String =
+            "leaderOf=$leaderOf leading=$leading total=$total realWrites=$realWrites epoch=$currentEpoch " +
+                "L=$becomeLeaderCalls F=$becomeFollowerCalls recv=$receivedDeltas fenced=$fencedDeltas " +
+                "base=$baselinesAdopted ships=$shippedPairs parked@old=$parkedAtOld adopted=$adopted"
+    }
+
+    /** One seed's whole timeline, as measured. */
+    private class DualClaim(
+        val seed: Long,
+        val park: Boolean,
+        val aRef: CellRef,
+        val bRef: CellRef,
+        val cRef: CellRef,
+        val bMisses: Int,
+        val cMisses: Int,
+        val parkedAfterPark: Int,
+        val bTotalAfterPark: Long,
+        val bClaim: LeaderMark?,
+        val cClaim: LeaderMark?,
+        val parkedAtClaim: Int,
+        val bRealWritesAtClaim: Int,
+        val a: PeerView,
+        val b: PeerView,
+        val c: PeerView,
+        val aHealed: PeerView,
+        val bHealed: PeerView,
+        val cHealed: PeerView,
+        val aFinal: PeerView?,
+        val bFinal: PeerView?,
+        val cFinal: PeerView?,
+        val emittedB: List<Stamped<Long>>,
+        val emittedC: List<Stamped<Long>>,
+        val bToCMarks: Int,
+        val cToBMarks: Int,
+    ) {
+        /** The clue every assertion below carries — a failing seed is unreadable without it. */
+        override fun toString(): String = buildString {
+            append("seed=$seed park=$park\n")
+            append("  step1 misses b=$bMisses c=$cMisses\n")
+            append("  step2 parked@aRef=$parkedAfterPark bTotal=$bTotalAfterPark\n")
+            append("  step3 bClaim=$bClaim cClaim=$cClaim parked@aRef=$parkedAtClaim bRealWrites=$bRealWritesAtClaim\n")
+            append("  quiesced A: $a\n  quiesced B: $b\n  quiesced C: $c\n")
+            append("  emittedB=$emittedB emittedC=$emittedC bToCMarks=$bToCMarks cToBMarks=$cToBMarks\n")
+            append("  healed   A: $aHealed\n  healed   B: $bHealed\n  healed   C: $cHealed\n")
+            if (aFinal != null) append("  final    A: $aFinal\n  final    B: $bFinal\n  final    C: $cFinal\n")
+        }
+    }
+
+    /**
+     * The rig both dual-claim sweeps drive, built fresh per [seed].
+     *
+     * Three peers on one seeded [SimulationController]: **A** default-
+     * constructed (so [LeaderElection.Manual] — A is the leader that vanishes
+     * and must never re-elect itself), **B** and **C** on
+     * `EpochClaim(DetectionWindow(2))`. A leads `id` at `LeaderMark(id, 1,
+     * aRef)`; instanceIds are A=0, B=1, C=2, so C is the one the total order
+     * (f7h.1-D2) picks when both claim at counter 2. Replicas are spawned
+     * BEFORE the three loopbacks, per this class's KDoc.
+     *
+     * **Fault model (f7h.6-D3): a symmetric `partition()`** on the A–B and A–C
+     * loopbacks — both directions close at once, so A leaves B's and C's
+     * membership index simultaneously and neither survivor can reach A. The
+     * B–C loopback stays open throughout, which is what makes the two claims
+     * *contested* rather than two independent partitions.
+     *
+     * The steps, in order:
+     *
+     * 1. partition A away from both survivors — observation 1 on B and on C.
+     *    `missCount` is captured: it is the only signal that separates "armed
+     *    and counting" from "nothing happened".
+     * 2. if [park], a write of 7 through B's replica. B is a follower, so it
+     *    command-forwards to `aRef`, which has no location on B's registry any
+     *    more, so the invocation parks. This is the ONE moment F5's shipped
+     *    release rule leaves it parked — no mark has been folded yet.
+     * 3. `b.replication.observe()` then `c.replication.observe()`, with **no
+     *    controller step between them**. Claims are synchronous on the
+     *    observing thread (f7h.4-D5), so both are minted and folded before
+     *    either announcement is drained: B holds `(2, bRef)` and C holds
+     *    `(2, cRef)` at the same instant. That reading is the sweep's control
+     *    — without it the sweep could be exercising one claim and be vacuous.
+     * 4. `runToIdle()` — the seed decides how the two `leaderMarked` frames,
+     *    the two promotion baselines and (under [park]) B's application of the
+     *    released 7 interleave across the six hosts.
+     * 5. everything is read at quiescence.
+     * 6. `heal()` both loopbacks and read again; when NOT [park], a further
+     *    write of 3 through B measures convergence directly (f7h.6-D2).
+     *
+     * Recording is by two mechanisms, both installed after the initial
+     * `runToIdle` (so `mark1`'s own fold is not recorded) and before any
+     * fault: `registry.onLeaderMark` per peer for the adopted sequence, and a
+     * plain `deltaOutlet.subscribe` on B's and C's replicas for the [Stamped]
+     * units they emit. A plain `subscribe` does not go through `linking`, fires
+     * no catch-up baseline and is not a shipping attachment (f7h.6-D2), so it
+     * does not perturb what it measures.
+     */
+    private fun dualClaimRig(seed: Long, park: Boolean): DualClaim {
+        val controller = SimulationController(seed)
+        val posture = LeaderElection.EpochClaim(DetectionWindow(2))
+        val a = Peer(controller)
+        val b = Peer(controller, posture)
+        val c = Peer(controller, posture)
+        val id = UUID.randomUUID()
+        val aRef = CellRef(id, 0)
+        val bRef = CellRef(id, 1)
+        val cRef = CellRef(id, 2)
+        val mark1 = LeaderMark(id, 1, aRef)
+
+        val onA = a.replica(id, 0, mark1)
+        val onB = b.replica(id, 1, mark1)
+        val onC = c.replica(id, 2, mark1)
+
+        val bToA = Counting()
+        val cToA = Counting()
+        val bToC = Counting()
+        val cToB = Counting()
+        val abLoop = Peering.loopback(a.side, b.side, interposeBToA = bToA)
+        val acLoop = Peering.loopback(a.side, c.side, interposeBToA = cToA)
+        Peering.loopback(b.side, c.side, interposeAToB = bToC, interposeBToA = cToB)
+        controller.runToIdle()
+        listOf(bToA, cToA, bToC, cToB).forEach { it.reset() }
+
+        val adoptedA = CopyOnWriteArrayList<LeaderMark>()
+        val adoptedB = CopyOnWriteArrayList<LeaderMark>()
+        val adoptedC = CopyOnWriteArrayList<LeaderMark>()
+        a.registry.onLeaderMark { adoptedA += it }
+        b.registry.onLeaderMark { adoptedB += it }
+        c.registry.onLeaderMark { adoptedC += it }
+
+        val emittedB = CopyOnWriteArrayList<Stamped<Long>>()
+        val emittedC = CopyOnWriteArrayList<Stamped<Long>>()
+        onB.deltaOutlet.subscribe(Use.fixed(Propagate<Stamped<Long>> { emittedB += it }, PortRef.generate()))
+        onC.deltaOutlet.subscribe(Use.fixed(Propagate<Stamped<Long>> { emittedC += it }, PortRef.generate()))
+
+        fun view(peer: Peer, cell: SingleWriterReplicationTest.SwCounterCell, adopted: List<LeaderMark>) = PeerView(
+            adopted = adopted.toList(),
+            leaderOf = peer.replication.leaderOf(id),
+            leading = cell.leading,
+            total = cell.total,
+            realWrites = cell.realWrites,
+            currentEpoch = cell.currentEpoch,
+            becomeLeaderCalls = cell.becomeLeaderCalls,
+            becomeFollowerCalls = cell.becomeFollowerCalls,
+            receivedDeltas = cell.receivedDeltas,
+            fencedDeltas = cell.fencedDeltas,
+            baselinesAdopted = cell.baselinesAdopted,
+            shippedPairs = peer.replication.shippedPairs(setOf(aRef, bRef, cRef)),
+            parkedAtOld = peer.registry.parkedFor(aRef).size,
+        )
+
+        // 1 — symmetric partition (f7h.6-D3)
+        abLoop.partition()
+        acLoop.partition()
+        controller.runToIdle()
+        val bMisses = b.replication.missCount(id)
+        val cMisses = c.replication.missCount(id)
+
+        // 2 — the parked write
+        var parkedAfterPark = -1
+        var bTotalAfterPark = -1L
+        if (park) {
+            b.ops(onB).increment(7)
+            controller.runToIdle()
+            parkedAfterPark = b.registry.parkedFor(aRef).size
+            bTotalAfterPark = onB.total
+        }
+
+        // 3 — both claims minted synchronously, read before any scheduler turn
+        b.replication.observe()
+        c.replication.observe()
+        val bClaim = b.replication.leaderOf(id)
+        val cClaim = c.replication.leaderOf(id)
+        val parkedAtClaim = b.registry.parkedFor(aRef).size
+        val bRealWritesAtClaim = onB.realWrites
+
+        // 4/5 — the seed decides the interleaving; read at quiescence
+        controller.runToIdle()
+        val quiescedA = view(a, onA, adoptedA)
+        val quiescedB = view(b, onB, adoptedB)
+        val quiescedC = view(c, onC, adoptedC)
+        val emittedAtQuiescence = emittedB.toList() to emittedC.toList()
+        val bToCMarks = bToC.count(leaderMarkedId)
+        val cToBMarks = cToB.count(leaderMarkedId)
+
+        // 6 — heal, then (park = false only) a convergence write through the loser
+        abLoop.heal()
+        acLoop.heal()
+        controller.runToIdle()
+        val healedA = view(a, onA, adoptedA)
+        val healedB = view(b, onB, adoptedB)
+        val healedC = view(c, onC, adoptedC)
+
+        var finalA: PeerView? = null
+        var finalB: PeerView? = null
+        var finalC: PeerView? = null
+        if (!park) {
+            b.ops(onB).increment(3)
+            controller.runToIdle()
+            finalA = view(a, onA, adoptedA)
+            finalB = view(b, onB, adoptedB)
+            finalC = view(c, onC, adoptedC)
+        }
+
+        return DualClaim(
+            seed = seed,
+            park = park,
+            aRef = aRef,
+            bRef = bRef,
+            cRef = cRef,
+            bMisses = bMisses,
+            cMisses = cMisses,
+            parkedAfterPark = parkedAfterPark,
+            bTotalAfterPark = bTotalAfterPark,
+            bClaim = bClaim,
+            cClaim = cClaim,
+            parkedAtClaim = parkedAtClaim,
+            bRealWritesAtClaim = bRealWritesAtClaim,
+            a = quiescedA,
+            b = quiescedB,
+            c = quiescedC,
+            aHealed = healedA,
+            bHealed = healedB,
+            cHealed = healedC,
+            aFinal = finalA,
+            bFinal = finalB,
+            cFinal = finalC,
+            emittedB = emittedAtQuiescence.first,
+            emittedC = emittedAtQuiescence.second,
+            bToCMarks = bToCMarks,
+            cToBMarks = cToBMarks,
+        )
+    }
+
+    /** The per-seed premise: two claims really were in flight, and the window really was armed. */
+    private fun DualClaim.assertDualClaimPremise() {
+        bMisses shouldBe 1
+        cMisses shouldBe 1
+        bClaim shouldBe LeaderMark(bRef.id, 2, bRef)
+        cClaim shouldBe LeaderMark(cRef.id, 2, cRef)
+    }
+
+    /** Every peer's adopted sequence is strictly increasing under the total order (f7h.1-D2). */
+    private fun assertStrictlyIncreasing(vararg views: PeerView) {
+        views.forEach { v ->
+            v.adopted.zipWithNext().forEach { (older, newer) ->
+                assertTrue(markOrder.compare(older, newer) < 0) {
+                    "adopted sequence is not strictly increasing: $older then $newer in ${v.adopted}"
+                }
+            }
+        }
+    }
+
+    /**
+     * The half of a dual-claim outcome that holds on EVERY seed in both arms:
+     * who won, that the loser really led and then stepped all the way down,
+     * that no peer ever adopted a mark out of order, and that the loser holds
+     * no outbound shipping link. Measured, not predicted — every count here
+     * was read off the rig before it was asserted.
+     */
+    private fun DualClaim.assertWinnerIsGreaterInstanceId() {
+        val id = aRef.id
+        val winner = LeaderMark(id, 2, cRef)
+        val loserClaim = LeaderMark(id, 2, bRef)
+
+        // [MEM1-02]/f7h.1-D2: same counter, greater instanceId takes it.
+        b.leaderOf shouldBe winner
+        c.leaderOf shouldBe winner
+        c.leading shouldBe true
+        b.leading shouldBe false
+        // B DID lead, briefly — a `leading == false` that never flipped would
+        // satisfy the line above while proving nothing about a step-down.
+        b.becomeLeaderCalls shouldBe 1
+        // one more than mark1's own demotion, inside the same runToIdle
+        b.becomeFollowerCalls shouldBe 2
+        // C won, so C never stepped down: still mark1's single demotion
+        c.becomeFollowerCalls shouldBe 1
+        c.becomeLeaderCalls shouldBe 1
+
+        // [MEM1-15]: B folded its own claim and then C's; C REJECTED B's, so
+        // its fold moved exactly once.
+        b.adopted shouldBe listOf(loserClaim, winner)
+        c.adopted shouldBe listOf(winner)
+        // A is cut off from both survivors and learns nothing until the heal.
+        a.leaderOf shouldBe LeaderMark(id, 1, aRef)
+        a.adopted shouldBe emptyList()
+        assertStrictlyIncreasing(a, b, c)
+
+        // [MEM1-15]: the loser's outbound shipping links are torn down by its
+        // own step-down, and the winner holds exactly the one link to it. A
+        // is not in either survivor's membership index at this point, so no
+        // link is ever formed towards aRef.
+        assertTrue(b.shippedPairs.none { it.first == bRef }) {
+            "the loser still sources shipping links: ${b.shippedPairs}"
+        }
+        c.shippedPairs shouldBe setOf(cRef to bRef)
+
+        // one announcement each way, over the only surviving loopback
+        bToCMarks shouldBe 1
+        cToBMarks shouldBe 1
+    }
+
+    // -------------------------------------- [MEM1-02]/[MEM1-20]/[MEM1-15] — 5.2
+
+    /**
+     * Epic §5.2. Fifty seeds, and on each of them B and C mint a claim at the
+     * SAME counter with no scheduler turn between them; the total order
+     * (f7h.1-D2) settles it on `instanceId`, and the loser steps down inside
+     * the same `runToIdle`.
+     *
+     * The seed range is `1L..50L` and stays that way: AGENTS.md forbids
+     * replacing a discovered failing seed with a friendlier one, and that
+     * applies to the range as much as to a single seed. It is green on all
+     * fifty as of this task.
+     *
+     * **Non-vacuity.** The sweep's own control is
+     * [assertDualClaimPremise]: `missCount == 1` on both survivors proves
+     * the detection windows were armed rather than nothing having happened,
+     * and reading `(2, bRef)` at B and `(2, cRef)` at C *before* any
+     * scheduler turn proves the sweep exercised TWO claims. Without it every
+     * assertion below is also satisfied by a run in which only C ever
+     * claimed. The assertions trace to
+     * `InstanceIndex.markLeader`'s total order (strictly-increasing, the
+     * winner), `SingleWriterReplication.applyRoles` pass 1 (the loser's
+     * torn-down outbound links, `becomeFollowerCalls`) and pass 2 (the
+     * winner's link, `becomeLeaderCalls`).
+     */
+    @Test
+    fun `two simultaneous claims converge on the greater instanceId across fifty seeds`() {
+        forEachSeed(1L..50L) { seed ->
+            val r = dualClaimRig(seed, park = false)
+            withClue("$r") {
+                r.assertDualClaimPremise()
+                r.assertWinnerIsGreaterInstanceId()
+
+                val winner = LeaderMark(r.aRef.id, 2, r.cRef)
+                // After the heal the catch-up replays each peer's FOLDED mark,
+                // which is (2, cRef) everywhere — B does not re-announce its
+                // superseded claim, so A adopts exactly one mark, not two.
+                r.aHealed.leaderOf shouldBe winner
+                r.aHealed.adopted shouldBe listOf(winner)
+                r.aHealed.leading shouldBe false
+
+                // Convergence by direct state comparison (f7h.6-D2): a write
+                // through the LOSER is forwarded to the winner, applied by
+                // exactly one real api, and shipped to both followers.
+                r.cFinal!!.realWrites shouldBe 1
+                r.bFinal!!.realWrites shouldBe 0
+                r.aFinal!!.realWrites shouldBe 0
+                r.aFinal.total shouldBe 3L
+                r.bFinal.total shouldBe 3L
+                r.cFinal.total shouldBe 3L
+                r.aFinal.currentEpoch shouldBe 2L
+                r.bFinal.currentEpoch shouldBe 2L
+                r.cFinal.currentEpoch shouldBe 2L
+            }
+        }
+    }
+
+    // -------------------------------------- [MEM1-16]/[MEM1-04]/[MEM1-31] — 5.6
+
+    /**
+     * Epic §5.6, the half that holds on every seed: a write command-forwarded
+     * through B while the leader is gone parks at the dead ref, is released
+     * onto the winner's ref, and is applied by **exactly one** real api.
+     *
+     * **What "stays parked while two claims are in flight" actually means
+     * here.** The feature's acceptance (a) reads as though the write stays
+     * parked for the whole contested window. F5 as SHIPPED does not do that
+     * (f7h.5-D2, amended 2026-09-10): `releaseParked` runs on the FIRST
+     * fold-maximal mark, unconditionally, which is B's own claim — before C's
+     * claim exists. So the parked window pinned here is the honest one:
+     * parked from the write until the first fold ([parkedAfterPark] == 1),
+     * released synchronously by `b.observe()` ([parkedAtClaim] == 0) and not
+     * yet applied at that instant ([bRealWritesAtClaim] == 0). The contested
+     * window is covered by the apply-time epoch fence, not by the park.
+     *
+     * **"Stamped under the winning epoch" can only be asserted on the
+     * counter.** Both claims are at counter 2 and [Stamped] carries no
+     * tiebreak, so `Stamped(2, 7)` from B and from C are indistinguishable at
+     * any inlet. The discriminator for "applied once" is therefore
+     * `realWrites`, not the stamp — see [SingleWriterReplicationTest.SwCounterCell.realWrites].
+     *
+     * The clause this test does NOT carry is `b.total == c.total`; it fails on
+     * some seeds and lives in
+     * [`a parked write leaves the loser diverged from the winner on some seeds`].
+     */
+    @Test
+    fun `a parked write under two claims in flight is applied exactly once at the winner across fifty seeds`() {
+        forEachSeed(1L..50L) { seed ->
+            val r = dualClaimRig(seed, park = true)
+            withClue("$r") {
+                r.assertDualClaimPremise()
+
+                // [MEM1-16] the park, and the shipped release rule
+                r.parkedAfterPark shouldBe 1
+                r.bTotalAfterPark shouldBe 0L
+                r.parkedAtClaim shouldBe 0
+                r.bRealWritesAtClaim shouldBe 0
+
+                r.assertWinnerIsGreaterInstanceId()
+
+                // Applied by exactly one real api. BOTH branches are
+                // admissible and both occur across these fifty seeds: B
+                // applied it under (2, bRef) before C's mark demoted it, or B
+                // was demoted first and its delegate forwarded it to C.
+                (r.b.realWrites + r.c.realWrites) shouldBe 1
+                // the winner holds it either way
+                r.c.total shouldBe 7L
+
+                // [MEM1-04]/[MEM1-31]: nothing carries a counter below the
+                // contested one, anywhere.
+                (r.emittedB + r.emittedC).forEach { it.epoch shouldBe 2L }
+                r.b.currentEpoch shouldBe 2L
+                r.c.currentEpoch shouldBe 2L
+
+                // after the heal the departed leader adopts the winner's
+                // baseline rather than replaying anything of its own
+                r.aHealed.total shouldBe 7L
+                r.aHealed.realWrites shouldBe 0
+                assertTrue(r.aHealed.baselinesAdopted >= 1) {
+                    "A adopted no baseline after the heal: ${r.aHealed}"
+                }
+            }
+        }
+    }
+
+    /**
+     * The one clause of epic §5.6 that **does not hold**, recorded as a
+     * standing expected failure rather than weakened or deleted
+     * (`MEM1-52-DUAL-CLAIM-DIVERGENCE`, owner computenet-f7h.7).
+     *
+     * ## What fails, and on which branch
+     *
+     * `dualClaimRig(seed, park = true)` reaches quiescence by one of two
+     * scheduler interleavings, and the seed picks which:
+     *
+     * - **"forward-first"** — B's bridge host folds `(2, cRef)` and demotes B
+     *   before B's application host dequeues the released write. B's delegate
+     *   forwards it to C, C applies it (`c.realWrites == 1`) and ships
+     *   `Stamped(2, 7)` back, so `b.total == c.total == 7`. Converged.
+     * - **"write-first"** — B's application host runs first. B applies the 7
+     *   under its own `(2, bRef)` (`b.realWrites == 1`, `b.total == 7`) and
+     *   emits `Stamped(2, 7)`, which C applies at ITS epoch 2 because
+     *   [applyTo] compares the COUNTER only and `Stamped` carries no
+     *   tiebreak. C's promotion baseline `Stamped(2, 0, baseline = true)` then
+     *   reaches B and replaces B's 7 with 0. B folds `(2, cRef)`, steps down,
+     *   and nothing re-baselines it — C's C→B link already existed, so no
+     *   `onLinked` fires again. Quiescent state: **`c.total == 7`,
+     *   `b.total == 0`.**
+     *
+     * ## What kind of finding this is
+     *
+     * **Divergence without loss, and without duplication.** The write is
+     * applied by exactly one real api on every seed and the winner always
+     * holds it (both pinned, green, in the test above); what fails is that the
+     * loser's replica state does not equal the winner's, and stays unequal
+     * until C's next write. [MEM1-20]'s "the loser's deltas SHALL be fenced
+     * inert at every follower" does not hold AT THE SAME COUNTER, because
+     * `Stamped` carries only the counter — which is exactly the R1 question
+     * (95 §R1) this suite exists to answer.
+     *
+     * The seed range is kept at `1L..50L` deliberately: a range chosen so the
+     * failing seeds fell out would turn a real finding into a green suite.
+     */
+    @Test
+    @ExpectedFailure(
+        signature = MEM1_52_DUAL_CLAIM_DIVERGENCE,
+        reason = "write-first branch: B applies the released write under its own (2,bRef), " +
+            "C's promotion baseline then zeroes B, leaving b.total 0 against c.total 7 — " +
+            "Stamped's counter-only fence has no tiebreak at an equal counter",
+        owner = "computenet-f7h.7",
+        filedAs = "doc/kernel-lane-findings.md#mem1-52-dual-claim-divergence",
+    )
+    fun `a parked write leaves the loser diverged from the winner on some seeds`() {
+        val diverged = mutableListOf<Long>()
+        try {
+            withSignature(MEM1_52_DUAL_CLAIM_DIVERGENCE) {
+                forEachSeed(1L..50L) { seed ->
+                    val r = dualClaimRig(seed, park = true)
+                    if (r.b.total != r.c.total) diverged += seed
+                    withClue("$r") { r.b.total shouldBe r.c.total }
+                }
+            }
+        } finally {
+            println("MEM1-52 write-first (diverged) seeds: ${diverged.size} of 50 — $diverged")
+        }
     }
 
     // ---------------------------------------------------------------- helpers
