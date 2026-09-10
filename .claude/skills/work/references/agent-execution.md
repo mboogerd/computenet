@@ -115,7 +115,7 @@ file is not for you.
 
 ```bash
 i=0
-until grep -qE 'BUILD (SUCCESSFUL|FAILED)' "$SCRATCH/run.log" 2>/dev/null; do
+until grep -qaE 'BUILD (SUCCESSFUL|FAILED)' "$SCRATCH/run.log" 2>/dev/null; do
   i=$((i + 1)); [ "$i" -gt 25 ] && { echo "WAITER EXPIRED at ~8m — job may still be running"; break; }
   sleep 20
 done
