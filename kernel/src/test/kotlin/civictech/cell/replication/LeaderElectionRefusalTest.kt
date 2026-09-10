@@ -18,6 +18,7 @@ import civictech.cell.wire.Peering
 import civictech.cell.wire.RegistryAnnounce
 import civictech.cell.wire.WireCodec
 import civictech.nature.ContractRegistry
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.io.Serializable
@@ -344,10 +345,16 @@ class LeaderElectionRefusalTest {
         bToC.count(leaderMarkedId) shouldBe 2
         (cRef in b.registry.replicasOf(id)) shouldBe true
 
-        // F5 boundary, asserted as such: releasing the write parked at the
-        // departed leader into the NEW leader is computenet-f7h.5's work. Here
-        // it simply stays parked.
-        b.registry.parkedFor(aRef).size shouldBe 1
+        // F5 has landed (computenet-f7h.5.3, [MEM1-16]): the claim that
+        // promotes B also RELEASES the write parked at the departed leader's
+        // ref onto B, which applies it. Until then this asserted the write
+        // "simply stays parked" and named the release as F5's work — that
+        // boundary is now crossed, and this is the same assertion read from
+        // the other side of it. What F4 still owns here is unchanged: the
+        // refusal, the kept count, and the claim on the first reachable
+        // observation.
+        b.registry.parkedFor(aRef).shouldBeEmpty()
+        onB.total shouldBe 7L
     }
 
     /**

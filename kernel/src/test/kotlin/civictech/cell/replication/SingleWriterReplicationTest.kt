@@ -88,9 +88,22 @@ class SingleWriterReplicationTest {
         var baselinesAdopted = 0
             private set
 
+        /**
+         * Real-api write invocations applied by THIS replica (f7h.5.3, same
+         * additive style as [becomeLeaderCalls]). [total] alone cannot tell
+         * "the parked write was applied once, at the winner" from "it was
+         * applied at the winner and again at the ex-leader after its ref
+         * republished" — the two are the same number. `increment` only;
+         * `mark` never reaches the real api in a released-write timeline.
+         * Read by [ParkedWriteReleaseTest]; nothing in this file reads it.
+         */
+        var realWrites = 0
+            private set
+
         private val realApi = object : SwCounterOps {
             override fun increment(amount: Long) {
                 check(leading) { "not the leader" }
+                realWrites++
                 total += amount
                 if (amount != 0L) deltaOutlet.call.propagate(Stamped(currentEpoch, amount))
             }
