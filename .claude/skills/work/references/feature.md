@@ -575,6 +575,13 @@ already separates overlapping claims into different batches.
 
 Your job is accurate `files` claims; scheduling around them is not yours.
 
+**Verify the edges landed, with `bd dep list <task>`.** Not through
+`bd show --json`: that object has no `dependency_ids` field — the edges are
+under `.dependencies`, and `.dependency_ids` answers `null` whether or not
+your `bd dep add` worked. A breakdown agent checking its own wiring that way
+read a correctly-linked chain as unlinked (computenet-amray;
+[bd-traps.md](bd-traps.md)).
+
 Apply the [ask-human.md](ask-human.md) bar: if the approach is genuinely
 ambiguous, or the split has a risky/expensive/hard-to-revert fork (a schema
 or API-shape choice), park a question on the feature instead of guessing.

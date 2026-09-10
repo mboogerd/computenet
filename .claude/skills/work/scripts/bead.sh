@@ -34,11 +34,12 @@
 # reviewers hit it within an hour (computenet-wd7n).
 #
 # Emits the bead as a single OBJECT, not `bd show`'s list of one, so no `.[0]`
-# unwrap is needed. Dependencies survive as bare ids under `.dependency_ids`,
-# a name THIS SCRIPT invents: raw `bd show --json` calls the field
-# `dependencies` and answers null to `.dependency_ids` (computenet-amray).
+# unwrap is needed. Dependencies survive as bare ids under `.dependency_ids`
+# — a name THIS SCRIPT invents: raw `bd show --json` calls the field
+# `dependencies` and answers null to `.dependency_ids` (computenet-amray) —
 # which is what callers actually use them for; if you genuinely need a
-# dependency's body, read that bead.
+# dependency's body, read that bead. `dependency_count` is carried through
+# unchanged so the same cross-check reads the same on both paths.
 #
 # Exit: jq's — 1 when the id does not exist. The output is then a fully
 # null-valued object, NOT nothing: `bead.sh <typo> -r '.status'` prints the
@@ -88,7 +89,7 @@ out=$(bd ${bd_dir[@]+"${bd_dir[@]}"} show "$id" --json 2>/dev/null \
   | jq $raw '(if type=="array" then .[0] else . end)
              | { id, title, issue_type, status, priority, assignee, parent,
                  labels, metadata, description, acceptance_criteria, design,
-                 comment_count, created_at, updated_at,
+                 comment_count, dependency_count, created_at, updated_at,
                  dependency_ids: [ (.dependencies // [])[]
                                    | if type=="object" then (.id // .issue_id) else . end ] }
              | '"$filter")
