@@ -10,6 +10,7 @@ import civictech.cell.host.DeadLetter
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.host.SupervisionPolicy
 import civictech.cell.link.Interest
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -257,17 +258,52 @@ class SingleWriterReplicationTest {
         }
     }
 
-    private class Peer(val controller: SimulationController) {
+    /**
+     * [election] is additive and nullable, and null means "construct the way
+     * every pre-F4 call site does" — `SingleWriterReplication(registry)` with
+     * no third argument. That exact shape is load-bearing and was measured
+     * ([LeaderElectionTest]'s own `Peer`): a fixture that always passes an
+     * explicit engine never exercises the production default, so the nine
+     * pre-existing tests in this file must keep going through the
+     * two-argument constructor unchanged (f7h.6.3).
+     */
+    private class Peer(val controller: SimulationController, election: LeaderElection? = null) {
         val registry = LocationRegistry()
         val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
         val bridgeHost = ManagedHost(scheduler = controller.scheduler(), registry = registry)
         val side = Peering.Side(registry, bridgeHost)
-        val replication = SingleWriterReplication(registry)
+        val replication =
+            if (election == null) SingleWriterReplication(registry)
+            else SingleWriterReplication(registry, election = election)
+
+        /** Every adopted fold on this registry — local designation, claim, or mirrored announcement. */
+        var leaderMarkFires = 0
+            private set
+
+        init {
+            registry.onLeaderMark { leaderMarkFires++ }
+        }
 
         fun replica(logicalId: UUID, instanceId: Long, mark: LeaderMark): SwCounterCell =
             SwCounterCell(CellRef(logicalId, instanceId)).also { replication.replicate(it, host, mark) }
 
-        fun ops(replica: SwCounterCell): SwCounterOps =
+        /**
+         * A replica whose leader `increment` throws on
+         * [LeaderElectionRefusalTest.PoisonSwCounterCell.POISON] before
+         * mutating: the only way to drive a `ManagedHost`
+         * [SupervisionPolicy.RESTART] on a replication *leader*. The class is
+         * referenced, not copied — it is public in
+         * [LeaderElectionRefusalTest] precisely so this file can reuse it.
+         */
+        fun poisonReplica(
+            logicalId: UUID,
+            instanceId: Long,
+            mark: LeaderMark,
+        ): LeaderElectionRefusalTest.PoisonSwCounterCell =
+            LeaderElectionRefusalTest.PoisonSwCounterCell(CellRef(logicalId, instanceId))
+                .also { replication.replicate(it, host, mark) }
+
+        fun ops(replica: Cell): SwCounterOps =
             (civictech.cell.host.HostedCellProxy.create(replica.ref, registry, WriteInletHolder::class.java)
                     as WriteInletHolder).writeInlet.call
 
@@ -593,5 +629,354 @@ class SingleWriterReplicationTest {
 
         p.replication.shipCountAmong(setOf(leaderRef, followerRef)) shouldBe 1
         follower.membership shouldBe setOf("a", "b") // the rebuilt link's catch-up delivers both
+    }
+
+    // ------------------------------------------------------------------
+    // f7h.6.3 — §5.5 RESTART of an ELECTED leader is not an election
+    // ------------------------------------------------------------------
+
+    /**
+     * Records every frame that crosses one direction, in order, and passes it
+     * through unchanged. Copied from [LeaderElectionRefusalTest], where it is
+     * private and in another file's claim (the same reason that file copied it
+     * from [LeaderMarkAnnounceTest]).
+     */
+    private open class Counting : Peering.FrameInterpose {
+        val frames = java.util.concurrent.CopyOnWriteArrayList<Pair<Long, Long>>()
+
+        override fun apply(frame: ByteArray): List<ByteArray> {
+            val decoded = civictech.cell.wire.WireCodec.decodeFrame(frame).frame
+            frames += decoded.contractId to decoded.methodId
+            return listOf(frame)
+        }
+
+        fun count(methodId: Long): Int = frames.count { it.second == methodId }
+        fun reset() = frames.clear()
+    }
+
+    private val leaderMarkedId: Long =
+        civictech.nature.ContractRegistry.idsOf(
+            civictech.cell.wire.RegistryAnnounce::class.java
+                .getMethod("leaderMarked", LeaderMark::class.java),
+        )!!.second
+
+    /** Collects every [DeadLetter] a host emits (shape of [LeaderElectionRefusalTest]'s helper). */
+    private fun collectDeadLetters(host: ManagedHost): MutableList<DeadLetter> {
+        val letters = mutableListOf<DeadLetter>()
+        host.deadLetterOutlet.subscribe(
+            Use.fixed(
+                object : Propagate<DeadLetter> {
+                    override fun propagate(value: DeadLetter) {
+                        letters += value
+                    }
+                },
+                civictech.cell.port.PortRef.generate(),
+            ),
+        )
+        return letters
+    }
+
+    /**
+     * The three-peer elected-leader rig shared by the two arms below.
+     *
+     * A ([SwCounterCell], instance 0) leads at `(1, aRef)`; B
+     * ([LeaderElectionRefusalTest.PoisonSwCounterCell], instance 1) and C
+     * ([SwCounterCell], instance 2) follow. Every peer runs an
+     * [LeaderElection.EpochClaim] engine — the acceptance's "every peer"
+     * posture. Replicas are spawned BEFORE the loopbacks, for
+     * [LeaderMarkAnnounceTest]'s reason (a replica spawned after its peer
+     * mirrored the mark would fold a rejected duplicate and get no role).
+     *
+     * Despawning A elects B at epoch 2. **Winner determinism — corrected by
+     * measurement.** The breakdown predicted that with A, B and C all at
+     * `DetectionWindow(1)` the winner would depend on which host the
+     * controller happened to run first. It does not. Measured here: with all
+     * three at window 1, **C wins every time** — both B and C arm on the same
+     * unpublish and both mint `(2, ownRef)`, and the fold's TOTAL order
+     * `InstanceIndex.ORDER = compareBy(epoch, leaderRef.instanceId)` then
+     * settles it for C's instance 2 over B's instance 1, at every peer,
+     * regardless of delivery order (f7h.1-D2, [MEM1-02]). Delivery order is
+     * not the deciding variable; the tiebreak is.
+     *
+     * So the winner is made deterministic **by construction** the way the
+     * breakdown's fallback prescribed: C runs `DetectionWindow(2)`, so a
+     * single unpublish does not satisfy its window and B claims alone. All
+     * three peers still run an [LeaderElection.EpochClaim] engine — the
+     * acceptance's "every peer" posture — only C's window differs, and it is
+     * the *elected leader* at epoch >= 2 that the acceptance needs, which B
+     * is. The rig asserts B won rather than routing through
+     * `if (b.leading) b else c`, so a change of winner is a failure here and
+     * not a silent re-route: the RESTART arms need the elected leader to be
+     * the poison cell (only it can fail an invocation while leading).
+     */
+    private class ElectedRig(val controller: SimulationController) {
+        val id: UUID = UUID.randomUUID()
+        val aRef = CellRef(id, 0)
+        val bRef = CellRef(id, 1)
+        val cRef = CellRef(id, 2)
+        val mark1 = LeaderMark(id, 1, aRef)
+
+        val p = Peer(controller, LeaderElection.EpochClaim(DetectionWindow(1)))
+        val q = Peer(controller, LeaderElection.EpochClaim(DetectionWindow(1)))
+        // window 2, not 1: see the class KDoc — at window 1 C wins the
+        // election on the instance-id tiebreak, and the RESTART arms need B
+        val r = Peer(controller, LeaderElection.EpochClaim(DetectionWindow(2)))
+
+        val a: SwCounterCell = p.replica(id, 0, mark1)
+        val b: LeaderElectionRefusalTest.PoisonSwCounterCell = q.poisonReplica(id, 1, mark1)
+        val c: SwCounterCell = r.replica(id, 2, mark1)
+
+        /**
+         * Frame counters on the Q–R pair, installed at construction. They
+         * must be in place from the start rather than added later: tearing a
+         * loopback down to re-interpose it is itself a membership departure,
+         * which would arm the very detectors this test asserts stay silent.
+         */
+        val qToR = Counting()
+        val rToQ = Counting()
+
+        val pq: Peering.Loopback
+        val pr: Peering.Loopback
+        val qr: Peering.Loopback
+
+        init {
+            pq = Peering.loopback(p.side, q.side)
+            pr = Peering.loopback(p.side, r.side)
+            qr = Peering.loopback(q.side, r.side, interposeAToB = qToR, interposeBToA = rToQ)
+            controller.runToIdle()
+        }
+    }
+
+    /**
+     * **Arm 1 — [MEM1-14] for an ELECTED leader, with donor catch-up.**
+     *
+     * [LeaderElectionRefusalTest.a supervised RESTART of the leader is
+     * invisible to the detection window] already pins that a RESTART of a
+     * *designated* leader mints no claim. The delta here is the three things
+     * that only exist once the leader was ELECTED: it holds an epoch it
+     * minted itself (2, not the seeded 1), it holds outbound shipping links
+     * it formed on promotion, and it has served writes since. A RESTART must
+     * leave all three standing — `ManagedHost`'s RESTART branch unpublishes
+     * nothing, so `onMembershipDeparture` never runs and no window can arm —
+     * and the recovery is donor catch-up, not the stale spawn-time
+     * checkpoint (spec 42 §RESTART; 93 I-25 §4.4 steps 1-2).
+     *
+     * Fault model: a poison invocation at the leader under
+     * [SupervisionPolicy.RESTART] — no partition in this arm.
+     *
+     * Non-vacuousness (route 2, in-test controls; this is a TEST-ONLY task, so
+     * the executed production mutation belongs to the reviewer): the dead
+     * letter plus `supervisionAccounting().restarts == 1` prove the RESTART
+     * genuinely happened; `b.total == 0` before the catch-up proves the
+     * restored checkpoint was really stale; the [Counting] zeros prove no
+     * `leaderMarked` frame crossed in any direction. Trace: the no-claim
+     * assertions bear on `SingleWriterReplication.onMembershipDeparture`,
+     * which never runs because `ManagedHost`'s RESTART branch touches no
+     * registry; the catch-up bears on `restartCatchUp`'s `donor == null`
+     * early return and `adoptState`.
+     */
+    @Test
+    fun `a RESTART of an ELECTED leader mints no claim and recovers by donor catch-up`() {
+        val controller = SimulationController()
+        val rig = ElectedRig(controller)
+        val (p, q, r) = Triple(rig.p, rig.q, rig.r)
+        val id = rig.id
+
+        rig.a.leading shouldBe true
+        rig.b.leading shouldBe false
+        rig.c.leading shouldBe false
+
+        // a write BEFORE the election, so the followers hold state to be elected over
+        p.ops(rig.a).increment(10)
+        controller.runToIdle()
+        rig.b.total shouldBe 10L
+        rig.c.total shouldBe 10L
+
+        // ---- elect B: A's despawn unpublishes aRef, every window is 1
+        p.host.managementInlet.call.despawn(rig.aRef)
+        controller.runToIdle()
+
+        val elected = LeaderMark(id, 2, rig.bRef)
+        withClue("B, not C, must win the election — the RESTART arm needs the poison cell to be the leader") {
+            rig.b.leading shouldBe true
+        }
+        rig.c.leading shouldBe false
+        rig.b.currentEpoch shouldBe 2L
+        q.replication.leaderOf(id) shouldBe elected
+        r.replication.leaderOf(id) shouldBe elected
+        // P hosts no replica of the id any more; it still folds the winner's announcement
+        p.replication.leaderOf(id) shouldBe elected
+        q.replication.shipCountAmong(setOf(rig.bRef, rig.cRef)) shouldBe 1
+
+        // ---- writes served AFTER the election, so the restart has a real loss window
+        q.ops(rig.b).increment(4)
+        r.ops(rig.c).increment(5) // forwarded to the elected leader
+        controller.runToIdle()
+        rig.b.total shouldBe 19L
+        rig.c.total shouldBe 19L
+
+        // the surviving Q–R link is the one a claim would have to cross, so
+        // it is the one that must stay silent across the RESTART
+        rig.qToR.reset()
+        rig.rToQ.reset()
+        q.replication.missCount(id) shouldBe 0
+        r.replication.missCount(id) shouldBe 0
+        val qFiresBefore = q.leaderMarkFires
+        val rFiresBefore = r.leaderMarkFires
+
+        // ---- the elected leader fails an invocation and is RESTARTed
+        val letters = collectDeadLetters(q.host)
+        q.host.managementInlet.call.supervise(rig.bRef, SupervisionPolicy.RESTART)
+        controller.runToIdle()
+        q.ops(rig.b).increment(LeaderElectionRefusalTest.PoisonSwCounterCell.POISON)
+        controller.runToIdle()
+        letters.size shouldBe 1
+        q.host.supervisionAccounting().restarts shouldBe 1L
+
+        // ---- [MEM1-14]: no membership event, so no window armed anywhere
+        q.replication.missCount(id) shouldBe 0
+        r.replication.missCount(id) shouldBe 0
+        p.replication.missCount(id) shouldBe 0
+        q.leaderMarkFires shouldBe qFiresBefore
+        r.leaderMarkFires shouldBe rFiresBefore
+        rig.qToR.count(leaderMarkedId) shouldBe 0
+        rig.rToQ.count(leaderMarkedId) shouldBe 0
+        q.replication.leaderOf(id) shouldBe elected
+        r.replication.leaderOf(id) shouldBe elected
+        rig.b.currentEpoch shouldBe 2L
+        rig.b.leading shouldBe true
+        // the ref was never unpublished, so the promotion-time link survives
+        q.replication.shipCountAmong(setOf(rig.bRef, rig.cRef)) shouldBe 1
+
+        // ---- the stale checkpoint, made visible before it is repaired.
+        // "Writes served but not shipped at failure are the loss window"
+        // (spec 42 §RESTART); here everything WAS shipped, so the follower is
+        // the warm copy and the spawn-time checkpoint is pure loss.
+        rig.b.total shouldBe 0L
+        rig.c.total shouldBe 19L
+
+        // ---- donor catch-up: the most-advanced REACHABLE follower, chosen
+        // explicitly by the caller (SingleWriterReplication.kt's F3
+        // out-of-scope note: choosing the donor is the caller's job)
+        val donor = listOf(rig.c).filter { it.ref in q.registry.replicasOf(id) }.maxByOrNull { it.total }
+        donor shouldBe rig.c
+        restartCatchUp(rig.b, donor)
+        rig.b.total shouldBe 19L
+
+        // ---- and the recovered leader serves on top of the restored state and ships it
+        q.ops(rig.b).increment(1)
+        controller.runToIdle()
+        rig.b.total shouldBe 20L
+        rig.c.total shouldBe 20L
+        rig.b.leading shouldBe true
+        rig.c.leading shouldBe false
+    }
+
+    /**
+     * **Arm 2 — [MEM1-32] the SOLO fallback, and what it costs.**
+     *
+     * Same elected rig; this time B's only follower is partitioned away
+     * (f7h.6-D3: a symmetric [Peering.Loopback.partition], both directions
+     * down at once — not a one-way drop) before the RESTART. Two things
+     * follow, and the second is the point of the arm.
+     *
+     * 1. C, whose folded leaderRef just left its index, DOES arm (window 1)
+     *    and is REFUSED: its reachable membership is only itself. That is
+     *    [MEM1-23], seen from the leader's side of the same partition; the
+     *    counter arc it belongs to is owned by
+     *    [LeaderElectionRefusalTest.a sole survivor refuses to claim, and
+     *    claims on the first observation that makes somebody reachable] and
+     *    is cited here, not re-pinned.
+     * 2. With no donor reachable, `restartCatchUp(b, null)` is the explicit
+     *    no-op and checkpoint restore IS the recovery. On the heal, the
+     *    leader's first shipment on the rebuilt link is a BASELINE
+     *    (f7h.3-D1), so the follower's served writes are REPLACED by the
+     *    leader's checkpoint state — not added to, not kept.
+     *
+     * **That replacement is the stated cost of the solo fallback** (93 I-25
+     * §4.4, "durability bound"), not a defect: the single-writer stream has
+     * exactly one authority for state, and after a solo restart that
+     * authority's state is the checkpoint. It must NOT be "fixed" by picking
+     * a donor the fault model says is unreachable. The two numbers are
+     * printed so the cost is legible in the test output.
+     *
+     * Fault model: symmetric partition of the Q–R loopback, then a poison
+     * invocation at the leader under [SupervisionPolicy.RESTART].
+     */
+    @Test
+    fun `with no follower reachable a RESTART falls back to the checkpoint and re-baselines the follower on heal`() {
+        val controller = SimulationController()
+        val rig = ElectedRig(controller)
+        val (p, q, r) = Triple(rig.p, rig.q, rig.r)
+        val id = rig.id
+
+        p.ops(rig.a).increment(10)
+        controller.runToIdle()
+
+        p.host.managementInlet.call.despawn(rig.aRef)
+        controller.runToIdle()
+        rig.b.leading shouldBe true
+        rig.b.currentEpoch shouldBe 2L
+        val elected = LeaderMark(id, 2, rig.bRef)
+        val n = rig.b.total
+        n shouldBe 10L // N > 0, so a stale baseline would be visible
+        rig.c.total shouldBe n
+
+        val qFiresBefore = q.leaderMarkFires
+        val rFiresBefore = r.leaderMarkFires
+
+        // ---- 1. the leader's only follower is partitioned away (f7h.6-D3)
+        rig.qr.partition()
+        controller.runToIdle()
+        q.registry.replicasOf(id) shouldBe setOf(rig.bRef)
+        r.replication.missCount(id) shouldBe 1
+        // C's window is 2 (see [ElectedRig]), so one departure does not yet
+        // satisfy it. Push it over with an explicit observation, so what
+        // refuses below is genuinely the [MEM1-23] guard — reachable at C is
+        // empty — and not merely an unreached window. The counter arc itself
+        // is LeaderElectionRefusalTest's, cited above, not re-pinned here.
+        r.replication.observe()
+        controller.runToIdle()
+        r.replication.missCount(id) shouldBe 2 // refused, and the count is KEPT
+        r.replication.leaderOf(id) shouldBe elected
+        r.leaderMarkFires shouldBe rFiresBefore
+        rig.c.leading shouldBe false
+
+        // ---- 2. RESTART the elected leader with nobody to catch up from
+        val letters = collectDeadLetters(q.host)
+        q.host.managementInlet.call.supervise(rig.bRef, SupervisionPolicy.RESTART)
+        controller.runToIdle()
+        q.ops(rig.b).increment(LeaderElectionRefusalTest.PoisonSwCounterCell.POISON)
+        controller.runToIdle()
+        letters.size shouldBe 1
+        q.host.supervisionAccounting().restarts shouldBe 1L
+        rig.b.total shouldBe 0L // checkpoint restore, and there is no donor
+        restartCatchUp(rig.b, donor = null) // the explicit solo no-op — same call path
+        rig.b.total shouldBe 0L
+        rig.b.leading shouldBe true
+        rig.b.currentEpoch shouldBe 2L
+
+        val baselinesBefore = rig.c.baselinesAdopted
+        rig.c.total shouldBe n
+
+        // ---- 3. heal: the rebuilt link's first shipment is a BASELINE
+        rig.qr.heal()
+        controller.runToIdle()
+
+        q.replication.leaderOf(id) shouldBe elected
+        r.replication.leaderOf(id) shouldBe elected
+        r.replication.missCount(id) shouldBe 0 // disarmed by bRef's return
+        q.leaderMarkFires shouldBe qFiresBefore
+        r.leaderMarkFires shouldBe rFiresBefore
+
+        val adopted = rig.c.baselinesAdopted - baselinesBefore
+        println(
+            "f7h.6.3 arm 2 — solo-fallback cost: follower held total=$n before the heal, " +
+                "adopted $adopted baseline(s) from the restarted leader, and now holds " +
+                "total=${rig.c.total} (leader total=${rig.b.total})",
+        )
+        adopted shouldBe 1
+        rig.c.total shouldBe 0L
+        rig.b.total shouldBe 0L
     }
 }
