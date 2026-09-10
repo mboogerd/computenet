@@ -35,6 +35,8 @@
 #
 # Emits the bead as a single OBJECT, not `bd show`'s list of one, so no `.[0]`
 # unwrap is needed. Dependencies survive as bare ids under `.dependency_ids`,
+# a name THIS SCRIPT invents: raw `bd show --json` calls the field
+# `dependencies` and answers null to `.dependency_ids` (computenet-amray).
 # which is what callers actually use them for; if you genuinely need a
 # dependency's body, read that bead.
 #

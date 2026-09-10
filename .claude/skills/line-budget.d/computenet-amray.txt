@@ -1,0 +1,9 @@
+work +15
+# `dependency_ids` is a name bead.sh invents; raw `bd show --json` calls the
+# field `dependencies` and answers null to `.dependency_ids` — a well-formed
+# confident wrong answer in the false-negative direction, and the trap is the
+# NAME, since an agent that has seen a bead.sh output reaches for it against the
+# raw command (computenet-amray). It bit a breakdown agent verifying its own
+# `bd dep add` calls. The entry names both fields, points at `.dependency_count`
+# as the cross-check that is correct in both, and connects to the inlining trap
+# directly above that explains why the projection drops the full objects.

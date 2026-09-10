@@ -126,6 +126,21 @@ SKILL.md and the other references cite this file as "`bd` traps".
   prompt — it held for every agent that was warned and failed for the two
   whose prompt did not carry it for the call they made. That is why the
   projection is a script.
+- **`dependency_ids` exists only in `bead.sh`'s projection. In raw `bd show
+  <id> --json` the field is `dependencies`, and `.dependency_ids` there is
+  `null`** — a well-formed, confident wrong answer, in the false-negative
+  direction: no edges, therefore unblocked and unlinked. Measured 2026-09-10
+  on `computenet-f7h.3.2`: `.dependency_ids` null, `.dependencies` carrying
+  the same two edges `bd dep list` prints (a `blocks` and a parent-child),
+  `.dependency_count` 2. The name is the trap — an agent that has read a
+  `bead.sh` output, or this file, reaches for the projection's field name
+  against the raw command. Read `.dependencies` (each entry is a full bead
+  object, which is also why the projection drops it — see the inlining trap
+  above), or `.dependency_ids` from `bead.sh`, and cross-check
+  `.dependency_count`, which is correct in BOTH and is non-zero exactly when
+  edges exist. It bit a breakdown agent verifying its own `bd dep add` calls,
+  which is the worst place for it: blockedness decides what the next session
+  picks up (computenet-amray).
 
   **A truncated bead read is a truncated ACCEPTANCE LIST**, and nothing in
   the output says it was truncated, so the review proceeds against criteria
