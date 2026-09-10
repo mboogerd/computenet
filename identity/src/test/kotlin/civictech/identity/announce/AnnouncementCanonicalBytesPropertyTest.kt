@@ -1,6 +1,7 @@
 package civictech.identity.announce
 
 import civictech.cell.CellRef
+import civictech.cell.host.LeaderMark
 import civictech.cell.host.TopologyLink
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
@@ -27,7 +28,15 @@ import kotlin.test.assertTrue
  * 2. **Round-trip stability** — encoding an input that has been through a Java
  *    serialize/deserialize cycle gives the same bytes. This is the property
  *    that catches an encoding leaking identity hashes, iteration order, or any
- *    other per-process incident into the signed region.
+ *    other per-process incident into the signed region. [LeaderMark] arguments
+ *    (tag `0x04`, `computenet-f7h.2.2`) take the *rebuild* route instead: the
+ *    type is a kotlinx-serializable wire type and does not implement
+ *    `java.io.Serializable`, so `ObjectOutputStream` refuses an input carrying
+ *    one. Rebuilding structurally-equal instances from their components checks
+ *    the same thing the round trip checks — that no per-process incident
+ *    reaches the bytes — and is what this file can do without editing `:kernel`.
+ *    Making [LeaderMark] `java.io.Serializable` is a one-line change outside
+ *    that task's file claim and is filed as its own item.
  * 3. **Injectivity** — distinct inputs give distinct bytes, checked both
  *    pairwise across the whole sample and by single-field mutation, which is
  *    the sharper of the two: random samples differ in many fields at once and
@@ -67,9 +76,20 @@ class AnnouncementCanonicalBytesPropertyTest {
 
             assertEquals(once.toHex(), canonicalBytes(input).toHex(), "not deterministic for $input")
 
-            val revived = javaRoundTrip(input)
-            assertEquals(input, revived, "round trip changed the input")
-            assertEquals(once.toHex(), canonicalBytes(revived).toHex(), "round trip changed the bytes for $input")
+            // Java round trip over the args that are `java.io.Serializable`.
+            val serializablePart = input.copy(args = input.args.filterNot { it is LeaderMark })
+            val serializableBytes = canonicalBytes(serializablePart).toHex()
+            val revived = javaRoundTrip(serializablePart)
+            assertEquals(serializablePart, revived, "round trip changed the input")
+            assertEquals(serializableBytes, canonicalBytes(revived).toHex(), "round trip changed the bytes for $input")
+
+            // The rebuild route, for the whole input including any LeaderMark:
+            // every argument replaced by a freshly constructed, structurally
+            // equal instance. Nothing about the originals — their identity
+            // hashes, their allocation order — may reach the bytes.
+            val rebuilt = input.copy(args = input.args.map { rebuild(it) })
+            assertEquals(input, rebuilt, "rebuild changed the input")
+            assertEquals(once.toHex(), canonicalBytes(rebuilt).toHex(), "rebuild changed the bytes for $input")
         }
     }
 
@@ -99,6 +119,7 @@ class AnnouncementCanonicalBytesPropertyTest {
         val rnd = Random(SEED)
         var swaps = 0
         var cellToggles = 0
+        var epochBumps = 0
 
         repeat(SAMPLES) {
             val input = structuredInput(rnd)
@@ -135,6 +156,17 @@ class AnnouncementCanonicalBytesPropertyTest {
             // Toggling PortRef.cell null-ness on the first TopologyLink argument:
             // the presence marker is what stops an absent cell colliding with
             // whatever bytes would otherwise follow.
+            // Flipping a LeaderMark argument's epoch: the mark's middle field,
+            // between two fixed-width id fields, so an encoding that dropped it
+            // would leave every other assertion here green.
+            val markIndex = input.args.indexOfFirst { it is LeaderMark }
+            if (markIndex >= 0) {
+                val mark = input.args[markIndex] as LeaderMark
+                val args = input.args.toMutableList().also { it[markIndex] = mark.copy(epoch = mark.epoch + 1) }
+                assertDiffers("bumping the LeaderMark epoch in arg $markIndex", input.copy(args = args))
+                epochBumps++
+            }
+
             val linkIndex = input.args.indexOfFirst { it is TopologyLink }
             if (linkIndex >= 0) {
                 val link = input.args[linkIndex] as TopologyLink
@@ -147,14 +179,16 @@ class AnnouncementCanonicalBytesPropertyTest {
 
         assertTrue(swaps > SAMPLES / 4, "argument swap barely exercised ($swaps)")
         assertTrue(cellToggles > SAMPLES / 4, "PortRef.cell toggle barely exercised ($cellToggles)")
+        assertTrue(epochBumps > SAMPLES / 8, "LeaderMark epoch bump barely exercised ($epochBumps)")
     }
 
     @Test
-    fun `the generated sample actually covers all three argument shapes and both cell states`() {
+    fun `the generated sample actually covers all four argument shapes and both cell states`() {
         val rnd = Random(SEED)
         var cellRefs = 0
         var links = 0
         var uuids = 0
+        var marks = 0
         var presentCells = 0
         var absentCells = 0
 
@@ -162,6 +196,7 @@ class AnnouncementCanonicalBytesPropertyTest {
             for (arg in randomInput(rnd).args) when (arg) {
                 is CellRef -> cellRefs++
                 is UUID -> uuids++
+                is LeaderMark -> marks++
                 is TopologyLink -> {
                     links++
                     for (port in listOf(arg.from, arg.to)) if (port.cell == null) absentCells++ else presentCells++
@@ -171,7 +206,7 @@ class AnnouncementCanonicalBytesPropertyTest {
 
         // A generator that quietly stopped emitting a shape would leave the
         // properties above vacuous for it; this is the guard against that.
-        assertTrue(cellRefs > 0 && links > 0 && uuids > 0, "shapes: $cellRefs/$links/$uuids")
+        assertTrue(cellRefs > 0 && links > 0 && uuids > 0 && marks > 0, "shapes: $cellRefs/$links/$uuids/$marks")
         assertTrue(presentCells > 0 && absentCells > 0, "cell states: $presentCells present, $absentCells absent")
     }
 
@@ -264,11 +299,16 @@ class AnnouncementCanonicalBytesPropertyTest {
         return randomInput(rnd).copy(args = args)
     }
 
-    private fun randomArg(rnd: Random): Any = when (rnd.nextInt(3)) {
+    private fun randomArg(rnd: Random): Any = when (rnd.nextInt(4)) {
         0 -> randomCellRef(rnd)
         1 -> randomLink(rnd)
+        2 -> randomLeaderMark(rnd)
         else -> randomUuid(rnd)
     }
+
+    /** Small epoch pool so marks can collide on the epoch — they must still not collide in bytes. */
+    private fun randomLeaderMark(rnd: Random) =
+        LeaderMark(randomUuid(rnd), rnd.nextInt(3).toLong(), randomCellRef(rnd))
 
     private fun randomLink(rnd: Random) = TopologyLink(randomUuid(rnd), randomPort(rnd), randomPort(rnd))
 
@@ -280,6 +320,25 @@ class AnnouncementCanonicalBytesPropertyTest {
 
     private fun randomUuid(rnd: Random) = UUID(rnd.nextLong(), rnd.nextLong())
 }
+
+/**
+ * A structurally equal, freshly allocated copy of an accepted argument — the
+ * substitute for [javaRoundTrip] on [LeaderMark], which is not
+ * `java.io.Serializable` (see the class KDoc). Every id is rebuilt from its two
+ * `Long` halves, so nothing of the original instance survives except its value.
+ */
+private fun rebuild(arg: Any?): Any? = when (arg) {
+    is CellRef -> CellRef(rebuildUuid(arg.id), arg.instanceId)
+    is UUID -> rebuildUuid(arg)
+    is LeaderMark -> LeaderMark(rebuildUuid(arg.logicalId), arg.epoch, rebuild(arg.leaderRef) as CellRef)
+    is TopologyLink -> TopologyLink(rebuildUuid(arg.id), rebuildPort(arg.from), rebuildPort(arg.to))
+    else -> arg
+}
+
+private fun rebuildPort(port: PortRef) =
+    PortRef(rebuildUuid(port.id), port.cell?.let { rebuild(it) as CellRef })
+
+private fun rebuildUuid(value: UUID) = UUID(value.mostSignificantBits, value.leastSignificantBits)
 
 private val SOME_CELL = CellRef(UUID.fromString("00000000-0000-4000-8000-000000000099"), 3L)
 

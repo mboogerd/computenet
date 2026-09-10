@@ -1,6 +1,7 @@
 package civictech.identity.announce
 
 import civictech.cell.CellRef
+import civictech.cell.host.LeaderMark
 import civictech.cell.host.TopologyLink
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
@@ -24,8 +25,8 @@ import java.util.UUID
  * bytes inside the signed region.
  *
  * [args] holds the [civictech.cell.wire.RegistryAnnounce] arguments, whose
- * domain is exactly `CellRef`, `TopologyLink` and `UUID` — see [canonicalBytes],
- * which rejects anything else rather than encoding it. [portName] and
+ * domain is exactly `CellRef`, `TopologyLink`, `UUID` and `LeaderMark` — see
+ * [canonicalBytes], which rejects anything else rather than encoding it. [portName] and
  * [mintingPeerId]'s name must likewise be well-formed UTF-16: [canonicalBytes]
  * refuses an unpaired surrogate rather than signing bytes that also describe a
  * different announcement (`computenet-9qgg`). Nothing enforces either domain at
@@ -33,7 +34,17 @@ import java.util.UUID
  *
  * `java.io.Serializable` so the whole input survives a round trip unchanged;
  * every component type ([PeerId], [CellRef], [TopologyLink], [PortRef], [UUID])
- * already is. BS-17 asserts that a round trip does not perturb the bytes.
+ * already is — **with one exception**: [LeaderMark], admitted to the argument
+ * domain by `computenet-f7h.2.2`, is a kotlinx-serializable wire type that does
+ * NOT implement `java.io.Serializable`, so an input carrying one cannot go
+ * through `ObjectOutputStream`. That is a gap in this record's Serializable
+ * claim, not in the encoding: fixing it is a one-line change to
+ * `civictech.cell.host.LeaderMark` in `:kernel`, outside that task's file
+ * claim, and is filed as its own item. BS-17 asserts round-trip stability over
+ * the Java-serializable args and, for [LeaderMark] arguments, over freshly
+ * rebuilt structurally-equal instances — which is the property the round trip
+ * exists to check (no per-process incident, no identity hash, in the signed
+ * region).
  */
 data class AnnouncementSigningInput(
     val mintingPeerId: PeerId,
@@ -62,6 +73,7 @@ data class AnnouncementSigningInput(
 private const val TAG_CELL_REF: Byte = 0x01
 private const val TAG_TOPOLOGY_LINK: Byte = 0x02
 private const val TAG_UUID: Byte = 0x03
+private const val TAG_LEADER_MARK: Byte = 0x04
 
 /** Presence markers for the nullable [PortRef.cell]. */
 private const val ABSENT: Byte = 0x00
@@ -73,8 +85,8 @@ private const val PRESENT: Byte = 0x01
  * Pure, and **injective over its accepted domain**: distinct accepted inputs
  * never produce equal bytes. It is deliberately *not* total — an input outside
  * the domain is **rejected**, never encoded approximately. Two things are
- * outside it: an argument that is not `CellRef`/`TopologyLink`/`UUID` (see
- * `@throws`), and a string that is not well-formed UTF-16 (the surrogate rule
+ * outside it: an argument that is not `CellRef`/`TopologyLink`/`UUID`/
+ * `LeaderMark` (see `@throws`), and a string that is not well-formed UTF-16 (the surrogate rule
  * below). Injectivity is the security property, not a nicety — two announcements
  * sharing an encoding would share a signature, so a signature minted for one
  * would verify the other. It is obtained by construction rather than by testing:
@@ -147,7 +159,8 @@ private const val PRESENT: Byte = 0x01
  *
  * @throws IllegalArgumentException if any element of
  *   [AnnouncementSigningInput.args] is outside the `RegistryAnnounce` argument
- *   domain — `CellRef`, `TopologyLink`, `UUID` — including `null`. **Fail
+ *   domain — `CellRef`, `TopologyLink`, `UUID`, `LeaderMark` — including
+ *   `null`. **Fail
  *   closed**: a best-effort fallback (`toString`, Java serialization) is
  *   forbidden here, because neither is injective — `toString` collides for
  *   distinct values of different types, and Java serialization varies with
@@ -192,9 +205,23 @@ private fun ByteArrayOutputStream.writeArg(index: Int, arg: Any?) {
             writeUuid(arg)
         }
 
+        // 1 + 16 + 8 + 24 = 49 bytes, every field fixed-width, so the grammar
+        // stays prefix-free and self-delimiting exactly as the three tags above
+        // do — the injectivity argument on [canonicalBytes] holds unchanged.
+        // The fifth `RegistryAnnounce` method, `leaderMarked`, is what puts a
+        // `LeaderMark` here (`computenet-f7h.2.2`); before tag 0x04 existed a
+        // keyed peering that adopted a leader mark threw at encode and the
+        // announcement never left the process.
+        is LeaderMark -> {
+            write(TAG_LEADER_MARK.toInt())
+            writeUuid(arg.logicalId)
+            writeLong(arg.epoch)
+            writeCellRef(arg.leaderRef)
+        }
+
         else -> throw IllegalArgumentException(
             "announcement argument $index is outside the signable domain " +
-                "(CellRef, TopologyLink, UUID): ${arg?.javaClass?.name ?: "null"}",
+                "(CellRef, TopologyLink, UUID, LeaderMark): ${arg?.javaClass?.name ?: "null"}",
         )
     }
 }
