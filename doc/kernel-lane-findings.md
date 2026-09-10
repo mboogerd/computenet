@@ -3532,3 +3532,153 @@ rig premise the other arms rest on.
   `41c702fff` (#789), `computenet-hu1ie` `f1eb2668c` (#790), F5 `31018ab6e`
   (#791), `computenet-f7h.8` `2d7ab11ed` (#792), F6 `48ba82309` (#793).
 - Open at the time of writing: `computenet-03kz7`, `computenet-azro3`.
+
+## MEM1-52 dual-claim divergence
+
+**at an equal counter: what the seeded sweep measured, and what it does not
+establish**
+
+Recorded by: `computenet-f7h.7.3` (task, feature `computenet-f7h.7`, epic
+`computenet-f7h` = MEM1). Base commit: `c38332f0c` (`Merge
+computenet-f7h.7.4`, the branch's cut point; the cited code paths are
+unchanged since F6 `48ba82309` (#793) — nothing in `SingleWriterReplication.kt`
+or `LeaderElectionTest.kt` moved between the two). This task absorbs
+`computenet-azro3` (the dangling-anchor report); its acceptance is reproduced
+by this entry. Every line number and count below was re-resolved against
+`c38332f0c` rather than copied from the bead or the epic.
+
+This is the anchor `LeaderElectionTest.kt`'s
+`@ExpectedFailure(signature = "MEM1-52-DUAL-CLAIM-DIVERGENCE", owner =
+"computenet-f7h.7", filedAs =
+"doc/kernel-lane-findings.md#mem1-52-dual-claim-divergence")`
+(`kernel/src/test/kotlin/civictech/cell/replication/LeaderElectionTest.kt:1179-1185`,
+on `` `a parked write leaves the loser diverged from the winner on some
+seeds` `` at `:1187`) points at. No entry in this file previously used this
+string; the heading above is deliberately NOT this file's usual `## ID —
+title` shape, because that shape's em dash slugs to a DOUBLE hyphen
+(`mem1-52--dual-claim-...`) which does not match the annotation's fragment.
+Verified: `python3 -c "import re; h='MEM1-52 dual-claim divergence';
+print(re.sub(r'[^a-z0-9 -]','',h.lower()).replace(' ','-'))"` prints
+`mem1-52-dual-claim-divergence`.
+
+### What fails, and on which branch
+
+`dualClaimRig(seed, park = true)` reaches quiescence by one of two scheduler
+interleavings (KDoc at `LeaderElectionTest.kt:1121-1177`, restated here, not
+re-derived):
+
+- **forward-first** — B's bridge host folds `(2, cRef)` and demotes B before
+  B's application host dequeues the released write. B's delegate forwards it
+  to C, C applies it (`c.realWrites == 1`) and ships `Stamped(2, 7)` back, so
+  `b.total == c.total == 7`. Converged.
+- **write-first** — B's application host runs first. B applies the write
+  under its own `(2, bRef)` (`b.realWrites == 1`, `b.total == 7`) and emits
+  `Stamped(2, 7)`, which C applies at its own epoch 2 because `applyTo`
+  compares the counter only and `Stamped` carries no tiebreak. C's promotion
+  baseline `Stamped(2, 0, baseline = true)` then reaches B and replaces B's 7
+  with 0; B folds `(2, cRef)` and steps down, and nothing re-baselines it
+  because C's C→B link already existed. Quiescent state: `c.total == 7`,
+  `b.total == 0`.
+
+Mechanism: `Stamped.applyTo`
+(`kernel/src/main/kotlin/civictech/cell/replication/SingleWriterReplication.kt:85`,
+`if (epoch < currentEpoch) return null`) fences on the COUNTER only;
+`Stamped<D>` (`SingleWriterReplication.kt:61`,
+`data class Stamped<D>(val epoch: Long, val delta: D, val baseline: Boolean = false)`)
+carries no instance-id or writer-identity tiebreak, so two claims that stamp
+at the same counter are indistinguishable to the fence. `[MEM1-20]`'s "the
+loser's deltas SHALL be fenced inert at every follower" does not hold AT AN
+EQUAL COUNTER — 95 §R1's "prove or refute … in every interleaving" answered
+in the negative for this case.
+
+### What the sweep measured
+
+Re-run at `c38332f0c`:
+`./gradlew :kernel:test --tests 'civictech.cell.replication.LeaderElectionTest' --rerun`
+— **MEASURED**: 11 tests, 0 failures, 0 skipped (`BUILD SUCCESSFUL in 13s`;
+31 actionable tasks, 14 executed, 17 from cache). Read from
+`kernel/build/test-results/test/TEST-civictech.cell.replication.LeaderElectionTest.xml`,
+JUnit `timestamp="2026-09-10T15:58:52.230Z"`; the same run's
+`reportExpectedFailures` task lists exactly one standing expected failure,
+this one, with the `filedAs` fragment above.
+
+**42 of 50 seeds diverge**, printed by the test itself
+(`println("MEM1-52 write-first (diverged) seeds: ...")` at
+`LeaderElectionTest.kt:1198`):
+
+```
+2, 3, 5, 6, 7, 8, 10, 11, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 25, 26,
+27, 28, 29, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 47, 48,
+49, 50
+```
+
+converging: 1, 4, 9, 12, 18, 30, 45, 46. Machine: `NL-MGD6FQJW91`, `uname -sm`
+= `Darwin arm64`. This is identical in count and in the exact seed list to
+the figure `computenet-f7h.6.2` measured at `48ba82309` (also 42 of 50, same
+seeds) — the two code paths are unchanged between the two shas, so the
+identical reproduction is expected rather than coincidental.
+
+**Divergence without loss, and without duplication.** On every seed
+`b.realWrites + c.realWrites == 1` and `c.total == 7`
+(`LeaderElectionTest.kt:1119-1120`); the winner always holds the write, pinned
+green by `` `two simultaneous claims converge on the greater instanceId
+across fifty seeds` `` (`:1041`) and `` `a parked write under two claims in
+flight is applied exactly once at the winner across fifty seeds` `` (`:1101`),
+both in the same file. What fails is only that the loser's replica state does
+not equal the winner's, and stays unequal until C's next write.
+
+### What this measurement does NOT establish
+
+- **`MEM1-CONCURRENCY`** — `SimulationController` is single-threaded and
+  step-ordered, so these are scheduler interleavings, not races under genuine
+  parallel mutation; the fold's behaviour under real concurrent writers is
+  unestablished by this suite.
+- **`MEM1-LIVENESS`** — no clock and no `advanceTime` exist in kernel, wire or
+  testkit, so nothing here bounds HOW LONG a divergence persists in real
+  time, only that it persists until C's next write in this sweep's fixed
+  script.
+- **`MEM1-WIRE-LOSS`** — the rig runs in-process; loss or reordering over a
+  real socket is untested here.
+- **f7h.6-D4** (`computenet-f7h.6`'s breakdown comment, 2026-09-10 — not a
+  file citation; searched `git grep -n 'f7h.6-D4' -- .` at `c38332f0c` and it
+  is absent from the tree, present only in that bead's comment thread): the
+  50-seed sample is a MEASUREMENT, not a proof of the general property — it
+  bounds nothing about seeds outside `1L..50L` or about the one
+  `SimulationController` interleaving family this rig can produce. Read
+  literally, D4 is about statistical generalization from a fixed sample, not
+  about real-time liveness (that is `MEM1-LIVENESS`, above); the two are
+  cited separately here because conflating them would overstate what D4
+  decided.
+
+### For the fixing lane: a harness laundering hazard
+
+Recorded by the orchestrator on `computenet-f7h.7`'s comment thread
+(2026-09-10 12:21), re-verified here by line: `forEachSeed`
+(`testkit/src/main/kotlin/civictech/testkit/ForEachSeed.kt:38`) catches any
+`Throwable` per seed and, if any failed, rethrows the first as `SweepFailure`
+(`testkit/src/main/kotlin/civictech/testkit/dst/DstSweep.kt:42`), which
+extends `AssertionError`. `withSignature`
+(`kernel/src/test/kotlin/civictech/cell/repro/ExpectedFailure.kt:120`, catch
+clause at `:123`) signs ANY `AssertionError` it catches with the
+expected-failure token. So a non-assertion crash inside the sweep — a kernel
+exception, not the `shouldBe` comparison — would be laundered into looking
+like the recorded MEM1-52 failure, bypassing `[CHA2-43]`'s "a different
+failure reddens the build" guarantee. Safe today only because the same
+`dualClaimRig` also runs, un-annotated, in the two green tests cited above:
+if either goes red for an unrelated reason, that is the signal something
+changed beneath the sweep. Not fixed here — this task changes no Kotlin
+file; recorded for whoever next touches the annotation.
+
+### Disposition
+
+The `@ExpectedFailure` annotation stands; its `owner` string still reads
+`computenet-f7h.7` in the shipped file and is NOT edited by this task (this
+feature's diff is documentation-only) — the fixing lane re-points `owner`
+when it claims the fix. The production fix is filed as
+**`computenet-7zssw`** ("Stamped's counter-only fence lets a lost
+equal-counter claimant's delta apply at the winner (MEM1-52)"), parented
+under `computenet-f7h`, priority 2, `files` left empty (`files unknowable
+before diagnosis` — whether the fix is a tiebreak field on `Stamped` or a
+fence on `(epoch, instanceId)` at apply is a design fork the fix bead owns).
+Per `[CHA2-44]`, that bead's acceptance is the annotated test going green for
+the right reason and the annotation being removed.
