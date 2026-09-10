@@ -80,6 +80,20 @@ class LocationRegistry {
      * id, and the record must survive the leader instance changing. Never
      * cleared — a port that was once a forwarded write port stays one for
      * the life of the registry, because the record tracks names, not refs.
+     *
+     * **Growth bound, deliberately accepted (computenet-03kz7).** This map
+     * grows by one entry per distinct single-writer *logical id* that ever
+     * had a local follower calling `forwardWrites` on this registry — never
+     * by republish, churn, or leadership change count, since the key is the
+     * logical id and re-marking the same id adds nothing. Unlike [instances]
+     * it survives [unpublish], so it is unbounded over the registry's
+     * lifetime in principle, but bounded by (and only by) the number of
+     * distinct single-writer logical ids the registry has ever locally
+     * followed — small in every realistic deployment. Accepted as-is rather
+     * than pinned by a test: the bound is qualitative ("small", not a fixed
+     * ceiling), and any numeric assertion would either be vacuous (an
+     * arbitrarily large N still passes) or over-specify a number this KDoc
+     * does not actually promise.
      */
     private val forwardedWritePorts = ConcurrentHashMap<java.util.UUID, MutableSet<String>>()
 
