@@ -162,8 +162,21 @@ interface SingleWriterReplicable<D> : Cell {
  * follower rather than silently forwarded and dropped downstream; every
  * other write, including `Owned` (which crosses by move-by-serialize), is
  * an ordinary redirect.
+ *
+ * **The forwarded-port record** ([LocationRegistry.noteForwardedPort],
+ * f7h.5-D2, [MEM1-16]). Building the forwarder records `portName` as a
+ * command-forwarded write port for this logical id, which is what lets
+ * `SingleWriterReplication`'s release rule tell a *write* parked at a
+ * superseded leaderRef from any other parked invocation. It is noted here —
+ * at construction, i.e. inside `becomeFollower` — rather than on the first
+ * forwarded call, so the record exists before any write is attempted: the
+ * release rule can otherwise be reached by a mark that lands before this
+ * follower has ever written, and a write parked by a DIFFERENT engine on the
+ * same registry would then not be recognized. The note is idempotent, so
+ * repeated demotions cost nothing.
  */
 fun <Api : Any> forwardWrites(clazz: Class<Api>, portName: String, leaderRef: CellRef, registry: LocationRegistry): Use<Api> {
+    registry.noteForwardedPort(leaderRef.id, portName)
     val sink = InvocationSink(registry::deliver)
     val api: Api = Proxy.fromClass(clazz) { _, method, args ->
         check(args?.none { it is Leased<*> } != false) {
@@ -478,7 +491,15 @@ class SingleWriterReplication(
             // designation, or a peer's mirrored mark alike. The new leader's
             // presence is witnessed from scratch afterwards.
             misses.remove(mark.logicalId)
+            // f7h.5-D2, [MEM1-16]: the OLD leaderRef, read before [applyRoles]
+            // overwrites [applied]. [applyRoles] reads the same value for its
+            // own step-down decision; capturing it here rather than having
+            // [applyRoles] return it keeps that function's contract unchanged.
+            val previous = applied[mark.logicalId]
             applyRoles(mark)
+            if (previous != null && previous.leaderRef != mark.leaderRef) {
+                releaseParked(previous.leaderRef, mark)
+            }
         }
     }
 
@@ -700,6 +721,68 @@ class SingleWriterReplication(
         }
 
         applied[mark.logicalId] = mark
+    }
+
+    /**
+     * Release the writes parked at a **superseded** leaderRef onto the winner
+     * (f7h.5-D2, [MEM1-16]). Run once per adopted mark whose `leaderRef`
+     * differs from the previously applied one, immediately after
+     * [applyRoles] — so the winner has already been promoted locally (if it is
+     * local) by the time anything is re-addressed to it.
+     *
+     * [LocationRegistry.deliver] parks an invocation whose target ref has no
+     * location — which is exactly what a partition leaves behind on a
+     * follower's registry: `unpublishRemotes` removes the far leader, and the
+     * writes this follower command-forwarded sit in `parkedFor(oldRef)` with
+     * no trigger that would ever move them to a DIFFERENT ref. (The registry's
+     * own `install` drain releases them into whatever location `oldRef` next
+     * gets, which is correct for a RESTART preserving `instanceId` and useless
+     * for a new leader.) So: drain, and re-address the *writes* — in park
+     * order, and once each, because [LocationRegistry.unpark] empties the
+     * queue as it reads it.
+     *
+     * **Only command-forwarded write ports are re-addressed.** A parked
+     * invocation whose port is not in [LocationRegistry.forwardedPorts] for
+     * this logical id — a delta shipment, a management call, anything aimed at
+     * the old *instance* rather than at whoever leads — is redelivered
+     * unchanged, which re-parks it at [oldRef] when that ref still has no
+     * location. Re-addressing those would send a unit meant for one replica to
+     * a different one.
+     *
+     * ## Why there is no `leaderRef ∈ replicasOf(id)` gate
+     *
+     * f7h.5's D2 text gated the release on the winner already being published
+     * here. It is dropped deliberately: a mark can be adopted for a ref this
+     * registry has not (re)published yet, and D2 names no later trigger that
+     * would retry — the writes would stay at the dead ref forever. Releasing
+     * unconditionally is safe by construction, because `deliver` to a ref with
+     * no location parks AT THE NEW REF, where the registry's ordinary `install`
+     * drain delivers it the moment that ref publishes; and if a higher mark
+     * supersedes first, this same rule runs again from that ref.
+     *
+     * "Epoch-confirmed" is therefore rendered as two weaker facts rather than a
+     * pre-check: [mark] is the fold's local maximum at release time (the fold
+     * guarantees it), and every delivery is epoch-fenced at apply — 93 I-25
+     * §4.6's "the epoch fence makes a mis-timed release inert". A release that
+     * races a further supersession can land at a replica that is no longer
+     * leading; what it cannot do is apply below the canonical epoch. No
+     * stronger guarantee is claimed here, and F7 carries its absence.
+     *
+     * **Two engines on one registry** (testkit's `SingleWriterChurnTest`
+     * builds this) both subscribe to the one fold and both run this rule: the
+     * first [LocationRegistry.unpark] drains the queue and the second finds it
+     * empty, so the release is idempotent by construction rather than by
+     * agreement between the engines.
+     */
+    private fun releaseParked(oldRef: CellRef, mark: LeaderMark) {
+        val drained = registry.unpark(oldRef)
+        if (drained.isEmpty()) return
+        val writePorts = registry.forwardedPorts(mark.logicalId)
+        drained.forEach { parked ->
+            val isForwardedWrite = parked.type == HostedPortInvocation.Type.PORT_API &&
+                parked.portName in writePorts
+            registry.deliver(if (isForwardedWrite) parked.copy(cellRef = mark.leaderRef) else parked)
+        }
     }
 
     /**
