@@ -917,7 +917,7 @@ def branch_has_commits(branch):
         return False
 
 
-def merged_into_feature(tid, feature):
+def merged_into_feature(tid, feature, task=None, branch=None):
     """Is this task's work already on the FEATURE branch, by commit message?
 
     The cross-machine twin of branch_has_commits: a session on ANOTHER machine
@@ -931,6 +931,11 @@ def merged_into_feature(tid, feature):
     feature branch's log is the witness. Looks at the local ref first, then
     origin's (the common case: the branch was never fetched into a local ref
     on this machine). False on any error, same contract as branch_has_commits.
+
+    A commit match is necessary but not sufficient — see _never_worked, which
+    gates it (computenet-g0hg). Pass `task` (the bead dict from `bd list`) and
+    `branch` to get that gate; without them the match stands, which is the
+    pre-g0hg reading.
     """
     for ref in (f"refs/heads/feature/{feature}", f"refs/remotes/origin/feature/{feature}"):
         try:
@@ -942,10 +947,80 @@ def merged_into_feature(tid, feature):
                  f"--grep={re.escape(tid)}([^0-9.]|$)", ref],
                 capture_output=True, text=True, timeout=10)
             if out.returncode == 0 and out.stdout.strip():
-                return True
+                return not _never_worked(tid, task, branch)
         except (OSError, subprocess.SubprocessError):
             return False
     return False
+
+
+def _never_worked(tid, task, branch):
+    """Has NOBODY, on any machine, ever worked this task? The flag's gate.
+
+    A commit-message match on the feature branch is not the twin signature on
+    its own. feature.md sanctions sequencing two tasks over one file, so a
+    create-then-amend pair puts the predecessor's commits on the branch while
+    the successor is unwritten — and the successor's id can be named there
+    too. Measured 2026-09-08 on computenet-9sm.7.2: open, unassigned,
+    comment-free, no branch anywhere, and `merged_into_feature: true`, which
+    SKILL.md 5b routes straight to a reviewer — certifying work nobody had
+    done (computenet-g0hg).
+
+    TWO witnesses, and BOTH must say untouched, because neither is sound
+    alone:
+
+    - The BEAD. A task a dead session actually worked carries the
+      implementer's handoff comment task.md requires, and usually a claim.
+      computenet-kklt's own case, computenet-ssa.5.1, has comment_count 2.
+    - The BRANCH. No `task/<id>` ref anywhere is weak evidence by itself:
+      merge-task.sh gate 4 keeps that ref LOCAL by design, because a
+      dispatched implementer's push is refused by the classifier
+      (computenet-zmso), so the twin's branch lives only on the machine that
+      died. Measured on this repo: 300 local `task/*` refs, 99 on origin, and
+      ssa.5.1 has none of the three. Gating on the branch ALONE re-opened
+      exactly the kklt failure it was meant to preserve — caught in review of
+      the first attempt at this fix, which is why both witnesses are here.
+
+    False (i.e. someone worked it, keep the flag) whenever the bead cannot be
+    read or does not carry `comment_count`: an absent key must not read as
+    zero comments.
+    """
+    if not isinstance(task, dict) or "comment_count" not in task:
+        return False
+    if (task.get("status") != "open"
+            or (task.get("assignee") or "").strip()
+            or task.get("comment_count")):
+        return False
+    return not _task_branch_exists(branch or f"task/{tid}")
+
+
+def _task_branch_exists(branch):
+    """Does this task's branch exist anywhere — local, remote-tracking, origin?
+
+    Local ref, then remote-tracking, then `origin` itself. Network is reached
+    only after a commit already matched AND the bead already read as untouched,
+    which is rare. Takes the BRANCH NAME, not the id, because `metadata.branch`
+    is authoritative and `task/<id>` is only its default (merge-task.sh:61).
+    True on error, which keeps the flag set — the conservative direction, since
+    5b confirms before routing.
+    """
+    for ref in (f"refs/heads/{branch}", f"refs/remotes/origin/{branch}"):
+        try:
+            out = subprocess.run(
+                ["git", "rev-parse", "--verify", "--quiet", ref],
+                capture_output=True, text=True, timeout=10)
+            if out.returncode == 0:
+                return True
+        except (OSError, subprocess.SubprocessError):
+            return True
+    try:
+        out = subprocess.run(
+            ["git", "ls-remote", "--heads", "origin", branch],
+            capture_output=True, text=True, timeout=30)
+        if out.returncode != 0:
+            return True
+        return bool(out.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        return True
 
 
 def _entry(task, resumed, files, feature=None):
@@ -954,7 +1029,7 @@ def _entry(task, resumed, files, feature=None):
     branch = meta.get("branch") or f"task/{tid}"
     # A branch carrying commits means resumed, whatever the bead status says.
     has_work = branch_has_commits(branch)
-    on_feature = merged_into_feature(tid, feature) if feature else False
+    on_feature = merged_into_feature(tid, feature, task, branch) if feature else False
     return {
         "id": tid,
         "model": meta.get("model") or "",     # empty => breakdown omitted it

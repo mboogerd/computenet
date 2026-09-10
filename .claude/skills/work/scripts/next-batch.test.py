@@ -425,13 +425,28 @@ if "branch_has_commits" not in nb._entry({"id": "t"}, False, []):
 
 # kklt: the task's work can sit on the FEATURE branch with no local task
 # branch at all (a dead session on another machine merged and pushed it).
-merged_cases = 3
+merged_cases = 7
 # the grep is anchored: a sibling's `.10` commit must not read as `.1` merged
 import subprocess as _sp, tempfile as _tf, os as _os
 _d = _tf.mkdtemp(); _sp.run(["git", "init", "-q", _d], check=True)
+# An `origin` that answers: ls-remote is the last resort of the branch witness,
+# and it must be able to answer "no such branch" rather than error.
+_origin = _tf.mkdtemp(); _sp.run(["git", "init", "-q", "--bare", _origin], check=True)
+_sp.run(["git", "-C", _d, "remote", "add", "origin", _origin], check=True)
 _sp.run(["git", "-C", _d, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
          "--allow-empty", "-m", "Merge computenet-f.10 into feature"], check=True)
 _sp.run(["git", "-C", _d, "branch", "feature/computenet-f"], check=True)
+# The create-then-amend sibling (computenet-g0hg): .11's id appears in a commit
+# on the feature branch, but nobody has worked it — open, unassigned, no
+# comments, and no branch anywhere.
+_sp.run(["git", "-C", _d, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+         "--allow-empty", "-m", "computenet-f.11 groundwork landed with .10"], check=True)
+_sp.run(["git", "-C", _d, "branch", "-f", "feature/computenet-f", "HEAD"], check=True)
+_untouched = {"status": "open", "assignee": None, "comment_count": 0}
+# The kklt twin: same absent branch (merge-task.sh keeps task refs LOCAL, so a
+# dead machine's ref is invisible here) but the bead carries the implementer's
+# handoff comment. The flag MUST survive.
+_twin = {"status": "open", "assignee": None, "comment_count": 2}
 _cwd = _os.getcwd(); _os.chdir(_d)
 try:
     if nb.merged_into_feature("computenet-f.1", "computenet-f") is not False:
@@ -440,6 +455,26 @@ try:
     if nb.merged_into_feature("computenet-f.10", "computenet-f") is not True:
         failed += 1
         print("FAIL: task .10 must match its own merge commit")
+    if nb.merged_into_feature("computenet-f.11", "computenet-f", _untouched) is not False:
+        failed += 1
+        print("FAIL: a commit naming .11, with no task/ branch AND an untouched"
+              " bead, is a create-then-amend sibling (computenet-g0hg)")
+    if nb.merged_into_feature("computenet-f.11", "computenet-f", _twin) is not True:
+        failed += 1
+        print("FAIL: a bead carrying the implementer's handoff comment is the"
+              " cross-machine twin even with no visible task/ branch — gating on"
+              " the branch alone re-opens computenet-kklt")
+    if nb.merged_into_feature("computenet-f.11", "computenet-f") is not True:
+        failed += 1
+        print("FAIL: with no bead dict the flag must stand (pre-g0hg reading)")
+    if nb._never_worked("computenet-f.11", {"status": "open", "assignee": None},
+                        None) is not False:
+        failed += 1
+        print("FAIL: a bead with no comment_count key must not read as zero comments")
+    if nb._never_worked("computenet-f.11", dict(_untouched, assignee="MacBoo"),
+                        None) is not False:
+        failed += 1
+        print("FAIL: a claimed bead has been worked")
 finally:
     _os.chdir(_cwd)
 if nb.merged_into_feature("computenet-nope", "definitely-not-a-feature") is not False:
