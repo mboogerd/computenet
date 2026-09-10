@@ -1,4 +1,4 @@
-work +6
+work +7
 # SKILL.md 5b's `merged_into_feature` sentence stopped asserting the
 # cross-machine twin classification and now states the confirmation first. The
 # look-alike is a create-then-amend sibling whose predecessor put commits
@@ -7,3 +7,7 @@ work +6
 # done (computenet-g0hg). The six lines are the discriminator — open,
 # unassigned, zero comments, and the absent named deliverable — without which
 # the sentence is a route with no check.
+# +1 from review: the first attempt gated on the branch alone and the reviewer
+# disproved the bead's own premise that the twin always has one — merge-task.sh
+# keeps task refs LOCAL by design, and kklt's own computenet-ssa.5.1 has none
+# anywhere. The gate now needs both witnesses, and the sentence says so.
