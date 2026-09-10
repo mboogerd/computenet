@@ -34,10 +34,58 @@ typealias LeaderMark = civictech.cell.host.LeaderMark
  * An epoch-stamped unit on the leader→follower log (spec 42): "every leader
  * stamps its produced deltas with the epoch it applied under; deltas or
  * commands stamped below the current epoch are fenced (inert)".
+ *
+ * [baseline] distinguishes the two kinds of unit that ride this one stream
+ * ([MEM1-32], f7h.3-D1). A **baseline** is the leader's WHOLE state at
+ * [epoch] and is *adopted* — it replaces the replica's local state. A
+ * non-baseline (the default) is a *delta* and is applied by the replica's
+ * ordinary apply. The distinction exists because a claimant's first
+ * shipment on a fresh link used to be the current state expressed as a
+ * from-zero delta, which is correct only for a follower that holds nothing:
+ * a follower that already held state ADDED the leader's total onto its own
+ * (testkit's BS-14 measured the demoted ex-leader at 6 where the successor
+ * held 4). Route every incoming unit through [applyTo] rather than reading
+ * this flag directly (f7h.3-D2).
+ *
+ * The field is **additive on the wire**: it is the third positional
+ * parameter and defaults to `false`, so every pre-existing two-argument
+ * construction compiles unchanged, and `WireCodec`'s `Json` never sets
+ * `encodeDefaults` — so a `baseline = false` unit encodes to exactly the
+ * bytes it encoded to before this field existed. `WireCodec.VERSION` is
+ * therefore unchanged. Pinned, not merely asserted, by
+ * `civictech.cell.wire.StampedWireCompatTest` over two fixtures captured
+ * before the field existed.
  */
 @kotlinx.serialization.Serializable
 @kotlinx.serialization.SerialName("Stamped")
-data class Stamped<D>(val epoch: Long, val delta: D)
+data class Stamped<D>(val epoch: Long, val delta: D, val baseline: Boolean = false)
+
+/**
+ * The **one** fence-and-route rule for an incoming [Stamped] at a replica
+ * holding [currentEpoch] ([MEM1-04], [MEM1-31], [MEM1-32], f7h.3-D2).
+ *
+ * Fenced when `epoch < currentEpoch`: returns `null` and calls neither
+ * lambda — the unit is inert, and in particular the replica's epoch does
+ * NOT move. Otherwise exactly one of [onBaseline] (iff [Stamped.baseline],
+ * adopt: replace local state) and [onDelta] (apply) is called, and the
+ * epoch the replica now holds — `maxOf(currentEpoch, epoch)` — is returned
+ * for the caller to assign:
+ *
+ * ```kotlin
+ * currentEpoch = value.applyTo(currentEpoch, ::adoptState) { total += it } ?: currentEpoch
+ * ```
+ *
+ * It lives here, and every reference cell calls it, so the rule cannot
+ * drift between fixtures (f7h.3-D2). The fence stays in the CELL rather
+ * than in [SingleWriterReplication] because the engine never sees a
+ * follower's inlet — deltas arrive by [HostedCellProxy] straight at the
+ * cell's port.
+ */
+fun <D> Stamped<D>.applyTo(currentEpoch: Long, onBaseline: (D) -> Unit, onDelta: (D) -> Unit): Long? {
+    if (epoch < currentEpoch) return null
+    if (baseline) onBaseline(delta) else onDelta(delta)
+    return maxOf(currentEpoch, epoch)
+}
 
 /**
  * Contract for a single-writer replicated cell (spec 42 §Single-writer
@@ -63,7 +111,22 @@ interface SingleWriterReplicable<D> : Cell {
     /** Leader→follower shipping outlet — one direction, no gossip back. */
     val deltaOutlet: FanOutlet<Propagate<Stamped<D>>>
 
-    /** Follower apply inlet — FIFO per link; a below-current-epoch delta is fenced (inert). */
+    /**
+     * Follower apply inlet — FIFO per link.
+     *
+     * Normative ([MEM1-04], [MEM1-31], [MEM1-32]): an implementor SHALL
+     * apply an incoming [Stamped] only if its [Stamped.epoch] is **at or
+     * above** the replica's current epoch, and SHALL fence the remainder —
+     * a below-epoch unit is inert, applies nothing and does not move the
+     * replica's epoch. Of the units that pass the fence, one carrying
+     * [Stamped.baseline] `true` SHALL be adopted via [adoptState]
+     * (replacing local state) and one carrying `false` SHALL be applied by
+     * the ordinary apply.
+     *
+     * f7h.3-D2: implementors realize this rule by calling [applyTo] rather
+     * than open-coding the comparison, so the rule has exactly one
+     * definition and the reference cells cannot drift from it.
+     */
     val deltaInlet: Use<Propagate<Stamped<D>>>
 
     /** Current applied state — used for late-join catch-up and RESTART peer catch-up. */
@@ -72,6 +135,16 @@ interface SingleWriterReplicable<D> : Cell {
     /**
      * Adopt a peer's state wholesale, replacing whatever local state was
      * restored — the RESTART-by-peer-catch-up path (spec 42 §RESTART).
+     *
+     * Normative ([MEM1-32], f7h.3-D6): this is also the apply path for a
+     * **baseline** unit on [deltaInlet]. A claimant's first shipment on
+     * every fresh link is `Stamped(epoch, currentState(), baseline = true)`
+     * — the "announce as a re-baseline" half of [MEM1-32] — and a follower
+     * that receives it SHALL adopt, not add. Implementors MUST therefore
+     * make this REPLACE local state rather than merge into it; a
+     * merge-shaped `adoptState` re-introduces exactly the duplication the
+     * baseline flag exists to remove. Reached through [applyTo]'s
+     * `onBaseline` (f7h.3-D2), never by testing [Stamped.baseline] inline.
      */
     fun adoptState(state: D)
 }
@@ -283,9 +356,24 @@ class SingleWriterReplication(
         // partial-interest follower has no interest in never crosses. Total
         // interest short-circuits to the bare routed sink, so the default
         // shipping path is unwrapped and byte-identical.
+        //
+        // `stamped.baseline` rides through the re-wrap (f7h.3-D1): a sliced
+        // baseline is still a baseline — the leader's whole state RESTRICTED
+        // to what this follower wants — so dropping the flag here would turn
+        // every partial-interest follower's catch-up back into an additive
+        // delta, which is the exact defect the flag removes. Note the one
+        // asymmetry this creates for an EMPTY winner: `sliceTo` of an empty
+        // `SetDelta` under a non-Total interest returns null (SetDelta.within
+        // refuses an empty restriction), so a partial-interest follower
+        // receives no baseline frame at all for an empty leader, while a
+        // Total-interest one does (Interest.Total short-circuits). Accepted
+        // per f7h.3.1: the empty-baseline convergence guarantee holds for
+        // Total interest only.
         val sink: Propagate<Stamped<Any?>> = if (targetInterest is Interest.Total) routed
         else Propagate { stamped ->
-            sliceTo(stamped.delta, targetInterest, keyOf)?.let { routed.propagate(Stamped(stamped.epoch, it)) }
+            sliceTo(stamped.delta, targetInterest, keyOf)?.let {
+                routed.propagate(Stamped(stamped.epoch, it, stamped.baseline))
+            }
         }
         @Suppress("UNCHECKED_CAST")
         shipped[key] = (leader.deltaOutlet as FanOutlet<Propagate<Stamped<Any?>>>).streamTo(sink)

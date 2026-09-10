@@ -1,0 +1,1 @@
+{"contractId":-996426215734216040,"methodId":-134175827537617903,"cellRef":{"id":"00000000-0000-0000-0000-000000000042"},"portName":"inlet","type":"PORT_API","args":[["Stamped",{"epoch":3,"delta":["kotlin.Long",42]}]]}

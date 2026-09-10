@@ -75,8 +75,24 @@ class ReplicatedEffectTest {
         }
 
         init {
-            // a sink has no state to keep in sync; the shipped-delta path is inert
-            deltaInletPort.serve(Propagate<Stamped<Long>> { })
+            // A sink has no state to keep in sync, so both apply paths are
+            // genuinely no-ops here — but the unit still routes through the
+            // ONE rule (f7h.3-D2, [MEM1-04]/[MEM1-31]/[MEM1-32]) rather than
+            // being swallowed by a bare `{ }`, so a reader cannot find a
+            // reference cell that fences differently from the other two, and
+            // so this fixture's epoch tracks the stream like theirs.
+            deltaInletPort.serve(object : Propagate<Stamped<Long>> {
+                override fun propagate(value: Stamped<Long>) {
+                    currentEpoch = value.applyTo(currentEpoch, onBaseline = { }, onDelta = { }) ?: currentEpoch
+                }
+            })
+            // Deliberately NO leader-side `onLinked` catch-up here, unlike
+            // SwCounterCell/SwSetCell: this fixture is stateless
+            // (`currentState() == 0`, `adoptState` a no-op), so a baseline of
+            // it would carry nothing and only add a frame to every link. The
+            // f7h.3.1 clause "each leader-side onLinked emits a baseline"
+            // applies to the handlers that exist; adding one here would not
+            // make any assertion truer.
         }
 
         override fun becomeLeader(epoch: Long) {
