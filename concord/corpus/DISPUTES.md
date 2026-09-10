@@ -3289,3 +3289,231 @@ property is statable at the driver and not in the corpus.
   as not filed by this feature; the epic's plan-editing exclusion applies —
   lands, together with a `SingleWriterReplication` driver binding and the
   corresponding schema vocabulary.
+
+## `MEM1-CONCURRENCY` — claims are interleavings under a single-threaded `SimulationController`; the engine's plain-map role application under parallel mutation is unestablished (`proof-gap`)
+
+- **Requirement it would cover**: epic `computenet-f7h` §5.8 bullet 1, and
+  `[MEM1-20]` ("IF two followers claim concurrently at the same counter, THEN
+  exactly one epoch SHALL be canonical at every peer once the marks converge")
+  and `[MEM1-22]` (a regressing fold "SHALL be discarded and every local role
+  SHALL be unchanged") read as statements about *races* rather than about
+  *interleavings*.
+- **Why it cannot be pinned honestly — with one correction to the premise it
+  is filed under**: every MEM1 example runs on
+  `SimulationController`
+  (`kernel/src/main/kotlin/civictech/cell/host/SimulationController.kt`),
+  whose own KDoc at L13 says "Deterministic, single-threaded execution over
+  one or more hosts" and at L26-27 that stepping and awaiting "are not
+  thread-safe by design: that single-threadedness *is* the determinism".
+  A "simultaneous claim" in epic §5.2 is therefore a chosen step order, not a
+  race, and no test in this epic ever runs two threads against one engine.
+
+  **Correction to the epic's own wording.** Epic §5.8 bullet 1 states the gap
+  as "genuine parallel mutation of `leaderMarks` — a `MutableMap`, unlike
+  `LocationRegistry`'s `ConcurrentHashMap`". At
+  `33b9940fd2c870e0b8dfc76858627576f53df0bb` (this entry's own HEAD,
+  `f7h.7-D3`) that is **false**, and this entry is not filed for it: the fold
+  moved to `InstanceIndex` in F1 (`ff52712c1`, PR #785) under `f7h.1-D5`, and
+  `kernel/src/main/kotlin/civictech/cell/host/InstanceIndex.kt` L87 reads
+  `private val leaderMarks = ConcurrentHashMap<UUID, LeaderMark>()` with the
+  compare-and-adopt at L104 running inside `leaderMarks.compute(...)`, so the
+  fold **is** atomic per logical id. (Note also that `InstanceIndex.kt` lives
+  under `civictech/cell/host/`, not `civictech/cell/replication/`.)
+  `f7h.1-D5` says exactly what it did and did not buy: "This does NOT claim
+  thread-safety of role application (the maps in `SingleWriterReplication`
+  stay plain, as today); F7 files that as a dispute."
+
+  That residual is what this entry is for. In
+  `kernel/src/main/kotlin/civictech/cell/replication/SingleWriterReplication.kt`
+  at this sha, the engine's own state is unsynchronized: L317
+  `private val divergences = mutableMapOf<CellRef, Divergence>()`, L351
+  `localReplicas`, L354 `shipped`, L369 `applied`, L392 `misses` — all
+  `mutableMapOf` — plus L312 `departed` (`mutableSetOf`) and L372
+  `stepDownListeners` (`mutableListOf`). Role application (promotion,
+  step-down, shipping-link install/unlink, divergence arming) reads and writes
+  those maps, and `f7h.4-D5` records that it "runs synchronously inside the
+  `onUnpublish`/`onPublish` listener or `observe()` caller's thread. Under
+  `unpublishRemotes` that is the mirror cell's host thread; under a socket it
+  is the transport's close path (which already runs registry mutations). The
+  plain-map concurrency question is F7's dispute, restated here, not solved."
+  So the atomic fold can hand two different threads a role transition that
+  then interleaves over plain maps, and nothing in the tree exercises that.
+- **Missing capability**: a multi-threaded host rig — a `HostScheduler`
+  binding that genuinely runs two hosts on two threads, which
+  `SimulationController` is deliberately not — or FRM1's model checker
+  (`computenet-7fe`), the mechanism `KE3-GC-PROOF` above cites for the same
+  class of "for all interleavings" claim.
+- **What was NOT done instead**: no `synchronized` block, `ConcurrentHashMap`
+  swap or lock was added speculatively to `SingleWriterReplication`'s maps —
+  a retrofit whose correctness nothing here could check is not an improvement
+  over a recorded gap. No `concord/corpus/*.yaml` scenario claims `[MEM1-20]`
+  or `[MEM1-22]` coverage, and no test asserts thread safety.
+- **Check to restore**: epic §5.2's dual-claim example (`LeaderElectionTest`'s
+  simultaneous-claim cases) re-run with the two claimants on genuinely
+  parallel hosts and the same assertions — one canonical epoch at every peer,
+  the loser's deltas fenced inert — repeated enough to be a race check rather
+  than one scheduling.
+- **Revisit trigger**: a socket transport driving
+  `LocationRegistry.mirrorLeaderMark`
+  (`kernel/src/main/kotlin/civictech/cell/host/LocationRegistry.kt` L549) from
+  a thread other than the owning host's — the second of the two threads
+  `f7h.4-D5` names — since that is the first configuration in which the
+  residual is reachable in production rather than only in principle.
+
+## `MEM1-LIVENESS` — no clock, so no bound on dual-leader duration and no real-time detection window (`proof-gap`)
+
+- **Requirement it would cover**: `[MEM1-07]`'s "observes that `leaderOf(id)`'s
+  `leaderRef` is absent from `LocationRegistry.replicasOf(id)` **for a full
+  detection window**", read as a real-time window; and G-44's asked-for
+  "stated convergence/liveness bound"
+  (`doc/spec/90-roadmap/91-gap-analysis.md` L95). Epic `computenet-f7h` §5.8
+  bullets 2 and 3 file both halves here.
+- **Why it cannot be pinned honestly**: the window is counted in membership
+  events, not milliseconds. `DetectionWindow` is
+  `data class DetectionWindow(val observations: Int)`
+  (`kernel/src/main/kotlin/civictech/cell/replication/LeaderElection.kt` L55),
+  consumed by `LeaderElection.EpochClaim(window)` at L35, and `f7h.4-D2`
+  enumerates what counts as an observation — an `onUnpublish` naming the
+  folded `leaderRef`, a later publish/unpublish for the same logical id that
+  leaves it absent, or a call to `SingleWriterReplication.observe()`. Nothing
+  advances on its own: `grep -rn 'advanceTime' --include='*.kt' kernel/
+  testkit/` returns **0** matches at
+  `33b9940fd2c870e0b8dfc76858627576f53df0bb` (`f7h.7-D3`), so
+  `SimulationController` cannot be asked to let time pass at all.
+
+  Two consequences, neither repairable inside this epic. First, detection is
+  not a liveness signal: `f7h.4-D6`, verbatim — "The window counts events, not
+  time, so a wedged leader that keeps its socket is never detected. Accepted
+  (epic §3.2 bullet 1) and recorded by F7 as a DISPUTES limitation; not solved
+  with a liveness signal." (*Pointer correction*: that decision's "epic §3.2
+  bullet 1" does not resolve — the epic's §3 is the flat EARS requirement list
+  and has no numbered subsections. The acceptance it means is epic §5.8
+  bullets 2-3 together with `[MEM1-25]`, which forbids the only mechanism that
+  would detect a wedged-but-connected leader.) Second, the dual-leader window
+  has no upper bound to state: 93 I-25 §2
+  (`doc/spec/90-roadmap/93-feature-interactions.md` L9448-9454) settles that
+  "safe automatic failover under partition is *mathematically* unavailable
+  without consensus", and `f7h.6-D4` records that the seeded churn suites
+  assert "only safety at quiescence" with "no scenario assert[ing] a bound in
+  steps or time for convergence".
+
+  What *is* pinned is the absence of the forbidden mechanism, and only within
+  one package: `LeaderElectionTest."every replication source is free of clock,
+  thread and timer identifiers"`
+  (`kernel/src/test/kotlin/civictech/cell/replication/LeaderElectionTest.kt`
+  L146, `[MEM1-25]`) scans the `.kt` files under
+  `kernel/src/main/kotlin/civictech/cell/replication` for `Thread`, `Timer`,
+  `Clock`, `nanoTime`, `currentTimeMillis`, `sleep`, `schedule` and kin. It is
+  a **textual** fence over **one directory**, not over `:kernel`, `:testkit`
+  or `:wire`, and its own KDoc says so: "This makes the *textual* claim
+  build-breaking; it does not prove the absence of a clock."
+- **Missing capability**: a clock, or an explicit synchrony assumption, in
+  `kernel`/`testkit` — which `[MEM1-25]` refuses ("IF a detection window is
+  expressed as a wall clock, a background thread, a periodic heartbeat frame,
+  or any new timer subsystem, THEN it SHALL be refused"). So the missing
+  capability is a **spec decision** about what synchrony this system is
+  willing to assume, not a kernel feature someone can add: any real-time bound
+  needs a model of delay that the requirement set currently declines to adopt.
+- **What was NOT done instead**: no test asserts a convergence bound in steps,
+  turns or seeds as a stand-in for a time bound, and no `concord/corpus/`
+  scenario claims `[MEM1-07]`'s window. The event-counted window was not
+  described as if it were a timeout.
+- **Check to restore**: "leadership converges within T announcement hops under
+  bounded message delay" — T symbolic, stated together with the delay bound it
+  assumes, checked over the seeded churn rigs. Until a synchrony assumption is
+  adopted, T has no value to write down and the property has no meaning to
+  check; that, not a missing test, is the gap.
+- **Revisit trigger**: 93 I-25 §8's "Failure-detector shape" gap
+  (`doc/spec/90-roadmap/93-feature-interactions.md` L9852 — "'Leader
+  unreachable beyond a policy window' needs a concrete detector … that does
+  not become a heartbeat second-protocol") being decided; or a real deployment
+  incident in which a wedged leader held its socket, which would make the
+  undetectable case a user-facing fact rather than an accepted corner.
+
+## `MEM1-PARK-CONFIRM` — "epoch-confirmed" release is rendered as fold-local-maximum plus the apply-time fence; no stronger guarantee exists without consensus (`proof-gap`)
+
+- **Requirement it would cover**: `[MEM1-16]` — "WHILE `leaderOf(id)` is
+  unresolved or contested, a write parked on the single-writer cell SHALL
+  remain parked, and SHALL be released only once exactly one **epoch-confirmed
+  leader** exists" — and the normative text it cites, 93 I-25 §4.6
+  (`doc/spec/90-roadmap/93-feature-interactions.md` L9684), whose rule reads
+  "A write parked on a single-writer cell replays only onto the
+  epoch-confirmed leader, and park/replay never crosses an instance boundary."
+- **Why it cannot be pinned honestly — and what "epoch-confirmed" actually
+  means in the shipped code**: no local observer can establish that "exactly
+  one epoch-confirmed leader exists". A replica knows only its own folded
+  maximum; a higher mark may already exist elsewhere and not yet have arrived.
+  F5 (`31018ab6e`, PR #791) therefore renders the phrase as two weaker facts.
+  `SingleWriterReplication.releaseParked`
+  (`kernel/src/main/kotlin/civictech/cell/replication/SingleWriterReplication.kt`
+  L777) says so in its KDoc, verbatim: "'Epoch-confirmed' is therefore
+  rendered as two weaker facts rather than a pre-check: [mark] is the fold's
+  local maximum at release time (the fold guarantees it), and every delivery
+  is epoch-fenced at apply — 93 I-25 §4.6's 'the epoch fence makes a mis-timed
+  release inert'. A release that races a further supersession can land at a
+  replica that is no longer leading; what it cannot do is apply below the
+  canonical epoch. No stronger guarantee is claimed here, and F7 carries its
+  absence."
+
+  **Correction to this entry's source material.** The feature's acceptance
+  text describes the verdict as "local-max **+ reachable**". That wording is
+  **stale** at `33b9940fd2c870e0b8dfc76858627576f53df0bb` (`f7h.7-D3`). The
+  reachable conjunct is `f7h.5-D2`'s original text ("the mark is the local max
+  AND its `leaderRef` is in `replicasOf(id)` at release time"), and the
+  shipped code drops it deliberately — `releaseParked`'s KDoc carries a
+  heading for exactly this, "## Why there is no `leaderRef ∈ replicasOf(id)`
+  gate" (L752), and the reason: "a mark can be adopted for a ref this registry
+  has not (re)published yet, and D2 names no later trigger that would retry —
+  the writes would stay at the dead ref forever." `f7h.5-D2` was amended
+  2026-09-10 to the shipped rendering and is `[SHIPPED]` in that form. The
+  correct statement of what the system does is therefore **fold-local-maximum
+  at release, plus an epoch fence at apply** — no reachability pre-check of
+  any kind.
+
+  What IS pinned, and is the honest extent of the guarantee, is the fence's
+  inertness rather than the release's correctness:
+  `ParkedWriteReleaseTest."a release that is superseded before it lands is
+  inert at the demoted leader"`
+  (`kernel/src/test/kotlin/civictech/cell/replication/ParkedWriteReleaseTest.kt`
+  L305, the `f7h.5-D6` mistimed-release control) folds epoch 2 onto B and
+  epoch 3 onto C with no scheduler turn between, and asserts for **either**
+  branch the scheduler takes that B's real api never sees the write
+  (`b.realWrites shouldBe 0`), that nothing stamped below the canonical epoch
+  survives anywhere, and that C fenced B's epoch-2 baseline
+  (`c.fencedDeltas shouldBe 1`). Note what that does not say: the write may
+  legitimately land at C or nowhere (`c.total in setOf(0L, 3L)`, both
+  admissible), which is precisely the residual — the release is not *aimed*
+  correctly, it is only made *harmless*. The observable cost of that weaker
+  rendering is filed separately by the sibling findings task as `MEM1-52`
+  (`doc/kernel-lane-findings.md#mem1-52-dual-claim-divergence`, the anchor
+  `LeaderElectionTest`'s `@ExpectedFailure(filedAs = …)` already names at
+  L1187; the findings entry is not yet present at this sha). Its measurement
+  is not restated here.
+- **Missing capability**: consensus — a mechanism by which a releasing replica
+  could *know* it holds the canonical epoch rather than the highest one it has
+  seen. It is available and explicitly rejected, twice: 93 I-25 §3 Candidate A
+  ("External lease / consensus group elects and fences the leader",
+  `93-feature-interactions.md` L9477) is not the recommended candidate, and
+  `doc/spec/90-roadmap/95-research-plan.md` §R1 direction (3) states
+  "classical consensus is explicitly *not* preferred (P4: no global
+  coordination; P10: niche)". The gap is thus a **chosen** one, and this entry
+  records the price of the choice rather than asking for it to be revisited.
+- **What was NOT done instead**: the `leaderRef ∈ replicasOf(id)` pre-check
+  was not re-added to make the KDoc match the older design sentence — it would
+  strand writes at a dead ref, as `releaseParked`'s own reasoning shows. No
+  `concord/corpus/*.yaml` scenario claims `[MEM1-16]`, and no test asserts
+  "exactly one epoch-confirmed leader existed at release" in any form.
+- **Check to restore**: **none is reachable without consensus** — the literal
+  `[MEM1-16]` property cannot be checked by any test in a system that declines
+  global coordination, because no local observer can witness the "exactly one"
+  it quantifies over. The restorable check is the weaker one already pinned:
+  `ParkedWriteReleaseTest`'s mistimed-release control, which establishes
+  inertness at the fence, and which stands as the full extent of what
+  "epoch-confirmed" is checked to mean here.
+- **Revisit trigger**: `WritePosture.SAFETY_PARK` being reintroduced under
+  G-67 (`doc/spec/90-roadmap/91-gap-analysis.md` L99) with its first real
+  user — `[MEM1-30]` already requires the claim path to compose with it
+  without redesign — since a posture that *holds* writes on uncertainty rather
+  than releasing them optimistically changes what the release rule has to
+  establish, and is the one design move that would make this entry's residual
+  answerable rather than accepted.
