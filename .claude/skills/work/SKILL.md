@@ -1497,8 +1497,9 @@ Otherwise ask for the next batch:
 # feature worktree standing in.
 # `merged_into_feature_suppressed` TRUE is the other half of that door: a
 # commit naming the task IS on the feature branch and the gate judged nobody
-# worked it. Usually right (the create-then-amend sibling) — but BOTH of its
-# witnesses are machine-local and cross machines on different cadences, so a
+# worked it. Usually right (the create-then-amend sibling) — but neither
+# witness crosses machines when it matters (the branch check does reach origin,
+# where gate 4 keeps a task ref from ever landing), so a
 # session elsewhere that merged, pushed the feature branch and then died
 # leaves a bead reading open + unassigned + ZERO comments only because its
 # comments never synced (computenet-ipp94). `bd dolt pull` and re-read
