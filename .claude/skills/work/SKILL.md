@@ -1842,7 +1842,7 @@ verdict. (`parked` is only meaningful on an empty batch.)
   task's own test tree, exactly where a cross-module walk cannot look.
   computenet-cab.2.3 added `Locus.RuleStatement` and did not claim
   `query/src/test/.../diag/DiagShapeTest.kt`, whose hand-maintained
-  `listOf(...)` of seven `Class<*>` values is the gate ("extend [diagTypes]
+  `listOf(...)` of `Class<*>` values is the gate (seven of them at that tree) ("extend [diagTypes]
   whenever a new diag type is added", says its own KDoc). Its two assertions —
   every diag type Serializable, none with a function-typed field — then passed
   VACUOUSLY for the new type, green and blind. Three more lists of the same
@@ -1851,8 +1851,10 @@ verdict. (`parked` is only meaningful on an empty batch.)
   Grep the own module's test tree for the **hierarchy root's** name, never the
   subtype's — an enumerator never names the entry being added, which is this
   section's own "take the identifier of the SET" applied to the path it used
-  to exclude. `git grep -ln -F 'Locus' -- 'query/src/test'` returns five files
-  including the gate; prune by reading.
+  to exclude. At cab.2.3's dispatch-time tree the subtype-keyed
+  `git grep -ln -F 'RuleStatement' -- 'query/src/test'` returned NOTHING while
+  `git grep -ln -F 'Locus' -- 'query/src/test'` returned the gate. Re-run it
+  rather than trusting a count here; prune the hits by reading.
 
   **Two things cannot falsify this and must not be read as clearing it.**
   `check-files-claim.sh` greps the bead's TEXT: a coupling the bead never names
@@ -1862,7 +1864,8 @@ verdict. (`parked` is only meaningful on an empty batch.)
   cannot see other modules at all, so a green module suite is not evidence the
   claim is complete — and in the sealed-hierarchy case it is not evidence even
   for the OWN module, because a missing list entry cannot fail a test. It makes
-  the assertion vacuous instead, which is green. The walk above is the only pre-CI check there is.
+  the assertion vacuous instead, which is green. The walk above is the only
+  pre-CI check there is.
 
   **A fourth shape: the grep SYMBOL, and the hit list you PRUNE.** When the
   change re-keys a resolution, alters a signature or moves any public API

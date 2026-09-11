@@ -1,4 +1,4 @@
-work +28
+work +31
 
 # A recurrence of computenet-os91 (computenet-wsygt). 5b's "ADDING TO A SET"
 # section is right and was read — and still could not reach the case, for a
@@ -19,3 +19,8 @@ work +28
 # vacuity point added to the existing non-falsifier paragraph — a green
 # own-module suite is not evidence either, because a missing list entry cannot
 # fail a test.
+#
+# +3 from review (PR #815): the copyable grep now names the discriminating
+# pair at cab.2.3's dispatch-time tree — subtype-keyed returned nothing, root-
+# keyed returned the gate — instead of a live file count that was 2 then and 5
+# now and will drift again. Plus one rewrap and one tense fix.
