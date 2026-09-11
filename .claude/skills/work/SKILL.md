@@ -1641,7 +1641,9 @@ verdict. (`parked` is only meaningful on an empty batch.)
   you did.** This is NOT 5f route 4's "a directly-filed bug usually has no
   acceptance criteria — write them": applying route 4 here RE-AUTHORS criteria
   that already exist, and the reviewer then certifies against a bar you
-  invented. `ABSENT` is route 4's case.
+  invented. `ABSENT` is route 4's case — but it is the classifier's guess, not
+  a verdict: an unusual heading can read as ABSENT, so glance at the
+  description before re-authoring. Exit 3 means nothing was checked at all.
 
   The other way is a COMMENT that post-dates the acceptance and questions a
   premise the acceptance rests on. No script decides that; read the thread.

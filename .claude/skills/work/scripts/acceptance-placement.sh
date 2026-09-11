@@ -28,11 +28,23 @@ set -uo pipefail
 command -v jq >/dev/null || { echo "acceptance-placement: jq unusable; NOTHING was checked" >&2; exit 3; }
 [ $# -gt 0 ] || { echo "usage: acceptance-placement.sh <bead-id>..." >&2; exit 2; }
 
-# Acceptance-ish prose. Deliberately narrow: a heading, or a "done when" /
-# "acceptance:" lead-in. A bead that merely says "acceptance" in a sentence is
-# not misfiled, and a false MISPLACED sends the orchestrator hunting for a
-# section that is not there.
-PROSE_RE='(^|\n)[[:space:]]*(#{1,6}[[:space:]]*|\*\*)?(acceptance([[:space:]]+criteria)?|done[[:space:]]+when)([[:space:]]*(:|\*\*)|[[:space:]]*$)'
+# Acceptance-ish prose. Four arms, because both error directions cost: a false
+# MISPLACED sends the orchestrator hunting for a section that is not there, and
+# a false ABSENT re-authors criteria that already exist — the failure this
+# script exists to prevent.
+#
+#  A  a HEADING or BOLD lead-in, trailing words allowed:
+#     `## Acceptance Criteria (what to check)` is the common real shape, and
+#     requiring end-of-line after the keyword missed it (found in review).
+#  B  a bare lead-in with a colon: `Done when: ...`
+#  C  the same mid-paragraph, after a sentence end: `... . Acceptance: ...`
+#  D  a line that is only the keyword.
+#
+# Synonyms cover the headings live beads actually use. `Evidence that ...` is
+# DELIBERATELY not one: two beads in this workspace use it for diagnosis prose,
+# not criteria, and route 4 is the right answer for those.
+KW='acceptance([[:space:]]+criteria)?|done[[:space:]]+when|fixed[[:space:]]+when|success[[:space:]]+criteria|definition[[:space:]]+of[[:space:]]+done'
+PROSE_RE="^[[:space:]]*(#{1,6}[[:space:]]*|\*\*)($KW)|^[[:space:]]*($KW)[[:space:]]*:|[.;][[:space:]]+($KW)[[:space:]]*:|^[[:space:]]*($KW)[[:space:]]*$"
 
 found=0
 for id in "$@"; do
@@ -40,6 +52,12 @@ for id in "$@"; do
   # An unreadable bead is NOT a clean bead: say so and keep the exit honest.
   if [ -z "$(printf '%s' "$row" | jq -r '.[0].id // empty' 2>/dev/null)" ]; then
     echo "acceptance-placement: $id unreadable; NOTHING was checked for it" >&2
+    found=3; continue
+  fi
+  # Score the bead you ASKED for. `bd show` takes several ids, and a payload
+  # whose .[0] is a different bead looks like a complete read of the wrong one.
+  if [ "$(printf '%s' "$row" | jq -r '.[0].id')" != "$id" ]; then
+    echo "acceptance-placement: $id — payload names a different bead; NOTHING was checked for it" >&2
     found=3; continue
   fi
   acc=$(printf '%s' "$row" | jq -r '.[0].acceptance_criteria // ""' | tr -d '[:space:]')

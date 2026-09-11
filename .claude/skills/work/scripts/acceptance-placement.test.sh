@@ -36,18 +36,30 @@ can bold       'null'          '"body\n**Acceptance:** the frontier is empty\n"'
 can whitespace '"   \n  "'     '"body\n## Acceptance\n- moved here\n"'
 can empty      'null'          '"just a description with no criteria anywhere"'
 can mention    'null'          '"the acceptance of this design was never in doubt"'
+# Found in review of PR #817: the first regex required end-of-line right after
+# the keyword, so a heading with any trailing words was a false ABSENT — and a
+# false ABSENT is the failure this script exists to prevent, since route 4 then
+# re-authors criteria that already exist.
+can trailing   'null'          '"body\n## Acceptance Criteria (what to check)\n- it holds\n"'
+can fixedwhen  'null'          '"body\n## Fixed when\n- it holds\n"'
+can success    'null'          '"body\n### Success criteria\n- it holds\n"'
+can dod        'null'          '"body\n**Definition of done**\n- it holds\n"'
+can midpara    'null'          '"Some framing text. Acceptance: the frontier is empty."'
+# ... and Evidence-that stays ABSENT ON PURPOSE: live beads use that heading
+# for diagnosis prose, where route 4 IS the right answer.
+can evidence   'null'          '"body\n## Evidence that the change works\n- a stack trace\n"'
 
 out=$(run populated); rc=$?
 [ "$rc" -eq 0 ] && ok "a populated field exits 0" || bad "populated exits $rc"
 [ -z "$out" ] && ok "a populated field prints nothing" || bad "populated printed: $out"
 
-for id in heading donewhen bold whitespace; do
+for id in heading donewhen bold whitespace trailing fixedwhen success dod midpara; do
   out=$(run $id); rc=$?
   grep -q "^MISPLACED $id" <<<"$out" && ok "$id: MISPLACED" || bad "$id: got '$out'"
   [ "$rc" -eq 1 ] && ok "$id: exits 1" || bad "$id: exits $rc, wanted 1"
 done
 
-for id in empty mention; do
+for id in empty mention evidence; do
   out=$(run $id); rc=$?
   grep -q "^ABSENT    $id" <<<"$out" && ok "$id: ABSENT" || bad "$id: got '$out'"
   [ "$rc" -eq 1 ] && ok "$id: exits 1" || bad "$id: exits $rc, wanted 1"
@@ -55,6 +67,11 @@ done
 # `mention` is the false-positive guard: prose that merely says "acceptance"
 # is not a misfiled section, and a wrong MISPLACED sends the orchestrator
 # hunting for a section that is not there.
+
+# A payload naming a DIFFERENT bead is not a clean read of this one.
+printf '[{"id":"someone-else","acceptance_criteria":null,"description":"x"}]\n' > "$CANNED/wrongbead.json"
+out=$(run wrongbead); rc=$?
+[ "$rc" -eq 3 ] && ok "a payload for another bead exits 3" || bad "wrong-bead exits $rc, wanted 3"
 
 out=$(run nosuch); rc=$?
 [ "$rc" -eq 3 ] && ok "an unreadable bead exits 3, not 0" || bad "unreadable exits $rc, wanted 3"

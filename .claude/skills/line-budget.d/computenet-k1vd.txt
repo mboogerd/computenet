@@ -1,4 +1,4 @@
-work +44
+work +46
 
 # The acceptance_criteria FIELD is what every reviewer scores, and nothing kept
 # it in step with what the bead required (computenet-k1vd; two instances in one
@@ -25,3 +25,11 @@ work +44
 # acceptance names: a criterion whose premise the work DISPROVES is met by
 # disproving it with evidence, so a reviewer does not score an honest negative
 # as unmet. 1 line is the script table row. 3 are blank separators.
+#
+# +3 from review (PR #817): the classifier required end-of-line right after the
+# keyword, so "## Acceptance Criteria (what to check)" — the common real shape
+# — was a false ABSENT, which is the failure this script exists to prevent.
+# Four match arms now, plus the synonym headings live beads use; "Evidence
+# that ..." is deliberately NOT one, since two beads here use it for diagnosis
+# prose where route 4 is right. Also a payload-names-another-bead guard, and
+# one sentence saying ABSENT is a guess rather than a verdict.
