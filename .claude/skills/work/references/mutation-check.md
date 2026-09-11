@@ -14,6 +14,7 @@ computenet-qsfu).
 - [Who mutates what — the implementer/reviewer split](#who-mutates-what--the-implementerreviewer-split)
 - [The order is the safety](#the-order-is-the-safety)
 - [When the deliverable is a CONCORD SCENARIO](#when-the-deliverable-is-a-concord-scenario)
+- [When the deliverable is NORMATIVE PROSE](#when-the-deliverable-is-normative-prose)
 - [When the task is TEST-ONLY, and the mutation is out of scope](#when-the-task-is-test-only-and-the-mutation-is-out-of-scope)
 - [What to report](#what-to-report)
 
@@ -305,6 +306,45 @@ And run the corpus so it actually executes: `--rerun` on `:concord:check`
 leaves `:concord:test` FROM-CACHE (or UP-TO-DATE), because a lifecycle task has
 no work of its own to rerun. Name the concrete tasks — see
 [gradle-evidence.md](gradle-evidence.md#--rerun-semantics).
+
+## When the deliverable is NORMATIVE PROSE
+
+A minted EARS requirement in `doc/spec/`, a `covers:` line, a regenerated
+`CONCORDANCE.md`: there is nothing to mutate, because prose has no test that
+goes red. The instrument is simply absent, and the fallback an unguided
+reviewer reaches for — "I read it and it looks right" — is exactly the
+unfalsifiable certification this file exists to prevent. It is not a rare
+shape: `doc/spec/` and `concord/corpus/` are build inputs here and the
+CONCORDANCE gap rows are a standing work source (AGENTS.md).
+
+Two substitutes, both cheap, both measured on computenet-g97a:
+
+- **Perturb the BINDING the prose creates, not the prose.** Normative text
+  earns a machine-checkable tie — a `covers:` id, a requirement reference, a
+  package pointer. Break that and watch the gate go red, then revert. Setting
+  a corpus scenario's `covers:` to a nonexistent `24-OP-QUORUM-99` and running
+  `./gradlew :concord:concordanceGate --rerun --no-build-cache` gave exit 1,
+  `[FATAL] Dangling covers id … matches no declared L0 requirement`, and green
+  again on revert. That is a discriminating check on what the diff asserts.
+- **Prove a source-file half is INERT** rather than running its module suite.
+  Where the diff touches `.kt` in a comment-only way, run the comment-stripped
+  filter in [review-feature.md](review-feature.md) §5 (`git show <sha> -- .
+  ':(exclude)*.md' ':(exclude)doc/**'` through the non-comment greps): zero
+  surviving lines establishes that no bytecode changed.
+
+**Neither substitute checks whether the SENTENCE IS TRUE OF THE CODE.** That
+stays a close reading, clause by clause, against the implementation — and it
+is the half that matters, because a wrong normative sentence is worse than an
+absent one: everything downstream cites it. On this very item the first minted
+sentence WAS wrong — "SHALL admit an element exactly while …" is a
+biconditional, and `QuorumSetCell.kt` carries a `count >= 1` floor the sentence
+omitted, so at `threshold(n) <= 0` the requirement said admit and the code
+refused. No gate caught that; the reading did (computenet-0nmo).
+
+When the reading finds a defect, prefer a DRAFT verdict naming it over
+rewriting the normative text yourself — §5's self-certification bound binds
+prose exactly as it binds code, and in this repository prose IS the
+deliverable.
 
 ## When the task is TEST-ONLY, and the mutation is out of scope
 
