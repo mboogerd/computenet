@@ -315,8 +315,8 @@ Two consequences you own, because nothing else can:
 
 The gate sequence, the merge, the durability proof and the close are one
 script — run it `--dry-run` first, read every gate line and the incoming
-two-dot `--stat` it prints (the deletion signature below is a *pre-merge*
-read: once the real run merges and pushes, parking is no longer on offer),
+three-dot `--stat` it prints (the verdicts below are *pre-merge* reads: once
+the real run merges and pushes, parking is no longer on offer),
 then run it for real:
 
 ```bash
@@ -330,8 +330,8 @@ mutation): the feature worktree is still on the recorded branch
 ago, and nothing else re-reads it); the local ref contains
 `origin/<feature-branch>` (three-way classifier — ahead / absent / origin
 unreachable are three different findings, computenet-dtl); no open PR on the
-feature head that is not yours; then the **two-dot** `--stat` of what will
-merge. After the gates it merges `--no-ff`, pushes, proves the merge is on
+feature head that is not yours; then the **three-dot** `--stat` of what will
+merge, and a count of how far the base has moved. After the gates it merges `--no-ff`, pushes, proves the merge is on
 origin, and only then runs `bd close <task-id>`.
 
 How to read its verdicts:
@@ -345,13 +345,20 @@ How to read its verdicts:
   re-run. (An absent *PR* is simply the normal first-run state; 5d has not
   fired yet.)
 - **Origin unreachable** → nothing was checked; do not proceed on it.
-- **Deletions in the two-dot `--stat`** → the signature of a base that moved:
-  content on the feature branch and absent from the task branch shows as a
-  deletion (a post-merge `git diff --stat HEAD~1 HEAD` can never show this —
-  first-parent trap, computenet-rbfa). One benign reading: a sibling from the
-  same batch that merged after this task forked shows as reversals too —
-  check the reversed paths against that sibling's `files` claim before
-  parking.
+- **Deletions in the `--stat`** → now a real finding, not an artefact. The
+  preview is three-dot, against the merge base, so it shows only what this
+  task changed; a deletion in it is content the TASK removed and the merge
+  will remove. Park on it as you would any apparent data loss.
+
+  It used to be two-dot, which also showed everything the feature had and the
+  task lacked — i.e. every sibling merged since this task forked — as
+  deletions the merge would never perform. That is the ordinary state after
+  the first sibling lands, so the signature was almost always phantom
+  (computenet-z0wyv: 74 lines "about to be removed", including another bead's
+  just-merged findings entry; the merge removed nothing). The one fact it
+  carried is now stated directly as `base: the task branch is N commit(s)
+  behind <feature>`. A post-merge `git diff --stat HEAD~1 HEAD` still cannot
+  substitute for the pre-merge read — first-parent trap, computenet-rbfa.
 - **Durability proof failed** → do not close the task and do not remove the
   worktree; diagnose and retry. The script refuses the close itself.
 

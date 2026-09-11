@@ -123,14 +123,27 @@ git -C "$FWT" rev-parse --verify --quiet "$tbr" >/dev/null \
   || fail_gate task-branch "no local ref '$tbr' — the task branch is local by design; it may only exist on the machine that ran the task"
 pass_gate task-branch "local ref $tbr exists"
 
-# The two-dot --stat BEFORE the merge, every time, not only when something
-# feels wrong: two-dot shows both directions, so content on the feature
-# branch and absent from the task branch appears as a DELETION — the
-# signature of a base that moved (§3's observed case: deletions under
-# references/ and a 262-line test file the implementer never wrote). Read it.
-echo "incoming ($fbr..$tbr):"
-git -C "$FWT" diff --stat "$fbr..$tbr" \
+# The --stat BEFORE the merge, every time, not only when something feels
+# wrong. THREE-dot (against the merge base), so it shows what this merge
+# brings in and nothing else.
+#
+# It used to be two-dot, deliberately: that shows both directions, so a base
+# that had moved announced itself as DELETIONS. But a moved base is the
+# ORDINARY state once any sibling has merged, so the deletions were almost
+# always phantom — two in one slot, one of them naming a sibling bead's
+# just-merged findings entry as 74 lines about to be removed, when the merge
+# removed nothing. The documented response to apparent data loss at a gate is
+# to STOP, so the preview taught a session either to abort safe merges or to
+# disregard a line the gate prints (computenet-z0wyv). Three-dot has no false
+# positives here and loses no true ones: a three-way merge never performs the
+# deletions two-dot displayed, so the only fact two-dot carried that this does
+# not is HOW FAR the base moved — printed below as a count, in words that
+# cannot be read as a loss warning.
+behind=$(git -C "$FWT" rev-list --count "$tbr..$fbr" 2>/dev/null) || behind="?"
+echo "incoming ($fbr...$tbr) — what this merge adds, against the merge base:"
+git -C "$FWT" diff --stat "$fbr...$tbr" \
   || { echo "merge-task: the pre-merge --stat failed — nothing was merged" >&2; exit 1; }
+echo "base: the task branch is $behind commit(s) behind $fbr — sibling merges since it forked, which this merge PRESERVES"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "dry run: gates green, nothing merged"
