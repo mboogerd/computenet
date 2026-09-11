@@ -143,7 +143,7 @@ behind=$(git -C "$FWT" rev-list --count "$tbr..$fbr" 2>/dev/null) || behind="?"
 echo "incoming ($fbr...$tbr) — what this merge adds, against the merge base:"
 git -C "$FWT" diff --stat "$fbr...$tbr" \
   || { echo "merge-task: the pre-merge --stat failed — nothing was merged" >&2; exit 1; }
-echo "base: the task branch is $behind commit(s) behind $fbr — sibling merges since it forked, which this merge PRESERVES"
+echo "base: the task branch is $behind commit(s) behind $fbr — landed since it forked (usually sibling merges), which this merge PRESERVES"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "dry run: gates green, nothing merged"

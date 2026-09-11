@@ -331,7 +331,8 @@ ago, and nothing else re-reads it); the local ref contains
 `origin/<feature-branch>` (three-way classifier — ahead / absent / origin
 unreachable are three different findings, computenet-dtl); no open PR on the
 feature head that is not yours; then the **three-dot** `--stat` of what will
-merge, and a count of how far the base has moved. After the gates it merges `--no-ff`, pushes, proves the merge is on
+merge, and a count of how far the base has moved. After the gates it merges
+`--no-ff`, pushes, proves the merge is on
 origin, and only then runs `bd close <task-id>`.
 
 How to read its verdicts:

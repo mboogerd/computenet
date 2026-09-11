@@ -1,4 +1,4 @@
-work +7
+work +8
 
 # merge-task.sh's pre-merge preview was a two-dot diff (computenet-z0wyv), so
 # every sibling merged since the task forked appeared as a DELETION the merge
@@ -14,3 +14,8 @@ work +7
 # verdict bullet, rewritten: deletions in the preview are now a REAL finding
 # rather than an artefact to talk yourself out of, with the old signature and
 # why it was retired kept so the next session does not reinstate it.
+#
+# +1 from review (PR #814): one rewrapped line. The reviewer also found the
+# "sibling merges since it forked" wording over-specific — in the wrong-base
+# case those commits are the feature's own — so it now says "landed since it
+# forked (usually sibling merges)".
