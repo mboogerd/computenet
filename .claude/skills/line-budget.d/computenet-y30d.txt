@@ -1,0 +1,14 @@
+work +31
+
+# A fifth claim-derivation shape (computenet-y30d): the file where the OLD
+# rule is NARRATED. The four existing shapes all aim at files that must CHANGE
+# for the code to be correct, so none of them reaches a comment or KDoc that
+# explains why the old behaviour was what it was — and nothing else does
+# either: the suite stays green because it is a comment, check-files-claim.sh
+# greps the bead's text and the bead never names the file, and af9q's grep
+# finds files that OBSERVE an invariant rather than describe it.
+#
+# Measured on computenet-078s: an item shipped having made its predecessor's
+# explanation false, and the stale account then reads as current to the next
+# agent. These 31 lines are the question, the measured instance, and the two
+# greps (predecessor bead id, distinctive phrase of the rule) that find it.
