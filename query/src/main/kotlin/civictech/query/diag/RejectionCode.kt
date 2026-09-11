@@ -13,6 +13,11 @@ package civictech.query.diag
  * feature (computenet-cab.2.2) together with the named tests that produce it in
  * `civictech.query.parse.QueryParserTest`.
  *
+ * [UNSAFE_RULE], [EDB_REDEFINED] and [RECURSION_UNSUPPORTED] are added by the safety/EDB/
+ * recursion analysis feature (computenet-cab.2.3) together with the named tests that produce
+ * them in `civictech.query.parse.SafetyAnalysisTest` and
+ * `civictech.query.parse.RecursionRefusalTest`.
+ *
  * [Rejection] pairs a [RejectionCode] with a [Locus] (offending source span or plan node)
  * and a `specId` naming the spec text, gap marker, or roadmap item that forbids the
  * construct — the data shape [QRY1-REJECT-02] requires. `RejectionCode` being empty does not
@@ -36,4 +41,32 @@ enum class RejectionCode {
      * [QRY1-REJECT-03]
      */
     SYNTAX_ERROR,
+
+    /**
+     * A rule is unsafe: a head variable, a negated-atom variable, or a comparison variable
+     * does not occur in any positive body atom of the same rule. The [Rejection] names the
+     * unbound variable(s).
+     *
+     * [QRY1-LANG-07]
+     */
+    UNSAFE_RULE,
+
+    /**
+     * A rule's head predicate is also a relation declared in the [Catalog][civictech.query.schema.Catalog]
+     * — a rule cannot redefine an EDB (extensional database) relation.
+     *
+     * [QRY1-LANG-08]
+     */
+    EDB_REDEFINED,
+
+    /**
+     * A rule reaches its own head predicate through the head-predicate dependency graph of
+     * the rule set — self- or mutual recursion. Recursive evaluation is QRY2's, not this
+     * module's; the [Rejection] names every predicate on the offending cycle and cites the
+     * unbuilt cycle machinery ([21-CYCLE-01], [21-CYCLE-03]) as the reason it is refused
+     * rather than evaluated.
+     *
+     * [QRY1-LANG-09]
+     */
+    RECURSION_UNSUPPORTED,
 }
