@@ -1881,9 +1881,9 @@ verdict. (`parked` is only meaningful on an empty batch.)
   stop into a real drain and tightened the check's required arm accordingly:
   `ReconvergenceCheckTest.kt` still carried its predecessor's comment saying
   the write "is dropped at peer1's own intake … which is why the check's
-  permitted arm exists at all". Both halves were false on landing, and the
-  stale account reads as current to the next agent — which is how that item's
-  own bead acquired a wrong mechanism (computenet-y30d).
+  permitted arm exists at all". Both halves were false the moment the drain
+  landed, and only a hand-widened claim two commits later repaired them; left
+  alone, a stale account reads as current to the next agent (computenet-y30d).
 
   So grep the predecessor bead's id, the requirement/marker id, and the
   distinctive phrases of the rule being changed — comments and KDoc included,
