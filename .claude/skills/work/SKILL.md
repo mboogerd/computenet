@@ -1820,13 +1820,39 @@ verdict. (`parked` is only meaningful on an empty batch.)
   ```bash
   git grep -ln -F 'civictech/cell/data/op' -- ':!kernel/*'   # the package's path
   git grep -ln -F 'civictech.cell.data.op' -- '.github' 'concord' 'oracle' 'inspect'
+  git grep -ln -F 'Locus' -- 'query/src/test'       # and the OWN module's tests
   ```
 
-  Everything outside the task's own module is a claim candidate. The dotted
+  Everything those return is a claim candidate — **inside the task's own module
+  as well as outside it**. This sentence used to read "everything outside the
+  task's own module", and the first two greps still exclude it by construction
+  (a negative pathspec; an enumeration of other modules): sound for os91's
+  motivating examples, which were cross-module by nature — a CI workflow
+  enumerating modules, `:oracle`'s inventory of `:kernel`'s operators, a
+  concordance lint — and wrong as a general rule. The dotted
   form and the slash form find different files, and `.github/` is not optional.
   Expect noise — an import is not an enumeration — so read the hits rather than
   claiming them all; what you are looking for is a file that would have to
   CHANGE for the set to stay correct.
+
+  **A SEALED hierarchy inverts it, and that is the likelier case.** A
+  completeness gate over a sealed hierarchy has to live where the hierarchy is
+  visible, which in Kotlin is naturally the declaring module — so when a bead
+  ADDS A SUBTYPE, the gate that must learn about it is most likely in the
+  task's own test tree, exactly where a cross-module walk cannot look.
+  computenet-cab.2.3 added `Locus.RuleStatement` and did not claim
+  `query/src/test/.../diag/DiagShapeTest.kt`, whose hand-maintained
+  `listOf(...)` of seven `Class<*>` values is the gate ("extend [diagTypes]
+  whenever a new diag type is added", says its own KDoc). Its two assertions —
+  every diag type Serializable, none with a function-typed field — then passed
+  VACUOUSLY for the new type, green and blind. Three more lists of the same
+  shape sat in the same module (computenet-wsygt, a recurrence of os91).
+
+  Grep the own module's test tree for the **hierarchy root's** name, never the
+  subtype's — an enumerator never names the entry being added, which is this
+  section's own "take the identifier of the SET" applied to the path it used
+  to exclude. `git grep -ln -F 'Locus' -- 'query/src/test'` returns five files
+  including the gate; prune by reading.
 
   **Two things cannot falsify this and must not be read as clearing it.**
   `check-files-claim.sh` greps the bead's TEXT: a coupling the bead never names
@@ -1834,7 +1860,9 @@ verdict. (`parked` is only meaningful on an empty batch.)
   knows the couplings listed in its own `COUPLINGS` table and nothing else —
   when you find a new one, add the line). And the task-scoped Gradle gate
   cannot see other modules at all, so a green module suite is not evidence the
-  claim is complete. The walk above is the only pre-CI check there is.
+  claim is complete — and in the sealed-hierarchy case it is not evidence even
+  for the OWN module, because a missing list entry cannot fail a test. It makes
+  the assertion vacuous instead, which is green. The walk above is the only pre-CI check there is.
 
   **A fourth shape: the grep SYMBOL, and the hit list you PRUNE.** When the
   change re-keys a resolution, alters a signature or moves any public API
