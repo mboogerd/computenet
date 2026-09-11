@@ -140,6 +140,7 @@ header.
 | `merge-task.sh` | `[--dry-run] [--keep-open] <task-id> <feature-branch>` — 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
 | `session-holder.sh` | `[--check <token>]` — this session's unique holder token, and `--check <token>` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN; what tells a live sibling from a crash leftover, which `assignee` cannot |
 | `junit-count.py` | `[--expect-classes N] <results-dir \| result-file.xml>...` — JUnit XML accounting (counts + newest timestamp + age, both glob depths); refuses to report zero result files; `--expect-classes` catches a `--tests` filter Gradle dropped silently |
+| `acceptance-placement.sh` | `<bead-id>...` — MISPLACED (criteria sit in the description; MOVE them) vs ABSENT (route 4's case; write them) — `bd show` prints no block for either |
 | `propagate-correction.py` | `<epic-id> [--exclude <bead-id>]... <needle>...` — Non-closed beads anywhere beneath an epic whose text still repeats a claim just proven wrong |
 
 (`scripts/beads-nightly-sync.sh` is the **repo-root** catch-up job; no
@@ -1625,6 +1626,34 @@ with your own filter, which can drift from the predicate that produced the
 verdict. (`parked` is only meaningful on an empty batch.)
 
 **Before claiming each task:**
+
+- **The acceptance_criteria FIELD is what every reviewer scores. Two ways it
+  stops matching what the bead requires, both measured in one session
+  (computenet-k1vd):**
+
+  ```bash
+  .claude/skills/work/scripts/acceptance-placement.sh <task-id>...
+  ```
+
+  `MISPLACED` means the criteria exist but sit in the description's prose, so
+  `bd show` prints no ACCEPTANCE CRITERIA block at all — indistinguishable at
+  a glance from a bead that has none. **Move the text into the field and say
+  you did.** This is NOT 5f route 4's "a directly-filed bug usually has no
+  acceptance criteria — write them": applying route 4 here RE-AUTHORS criteria
+  that already exist, and the reviewer then certifies against a bar you
+  invented. `ABSENT` is route 4's case.
+
+  The other way is a COMMENT that post-dates the acceptance and questions a
+  premise the acceptance rests on. No script decides that; read the thread.
+  Reconcile before dispatch — amend the field, keeping the superseded wording
+  verbatim under a `Superseded <date>:` label, the way 5f's unpark path
+  requires — or, when the premise cannot be settled without doing the work,
+  **say so in the dispatch prompt in as many words: that the clause is
+  PROVISIONAL, and that disproving it is a result rather than a failure.**
+  computenet-9wpa's acceptance prescribed a test that passes unfixed because
+  the bead's headline claim was wrong; what stopped an implementer reshaping
+  the test until it went red — pinning a defect that does not exist — was
+  exactly that sentence, put in the prompt by luck.
 
 - **A PRESCRIPTIVE handoff comment is a hypothesis, not an instruction.**
   Ordinary prose ages harmlessly — a record of what was measured stays true as

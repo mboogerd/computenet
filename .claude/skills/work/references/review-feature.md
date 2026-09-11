@@ -260,6 +260,13 @@ PARENT's acceptance and metadata, so it looks like a complete read of the
 wrong bead — a reviewer scored against an epic's criteria believing they were
 the item's (computenet-h0dj, computenet-rram -> zwju -> o5oz).
 
+**A criterion whose PREMISE the work disproves is met by disproving it, with
+evidence** — not by contorting the change until it passes. An acceptance clause
+is a prediction like any other on the bead; a prescribed test that passes
+unfixed is a finding about the premise rather than a failure of the fix
+(computenet-9wpa). Score an evidenced negative as MET, say what was disproved,
+and do not read it as an unmet criterion (computenet-k1vd).
+
 **`acceptance_criteria` may be empty or absent altogether** — on a bead filed
 mid-session by another agent it usually is, because nothing broke it down, and
 three reviewers hit it in one session (computenet-d7tk, computenet-qxg5).

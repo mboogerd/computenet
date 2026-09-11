@@ -152,6 +152,14 @@ failure and each improvised that substitution (computenet-u1ai).
 Check:
 
 - **Each acceptance criterion**, actually met — not plausibly gestured at.
+- **A criterion whose PREMISE the work disproves is met by disproving it, with
+  evidence — not by contorting the change until it passes.** An acceptance
+  clause is a prediction like any other on the bead, and a prescribed test that
+  passes unfixed is a finding about the premise, not a failure of the fix
+  (computenet-9wpa: `PortLink(ref, at)` leaves `fromPort` null, so the slot the
+  criterion assumed is never created). Score an honest, evidenced negative as
+  MET and say what was disproved; if the dispatch prompt already flagged the
+  clause provisional, that is this case arriving as expected (computenet-k1vd).
 - **Writing metadata: `--set-metadata key=value` on `bd update`.** `bd update
   --metadata` exists too but takes a **JSON object**, so
   `bd update <id> --metadata review=passed` fails with
