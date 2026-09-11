@@ -4,9 +4,14 @@ import civictech.query.ast.Aggregate
 import civictech.query.ast.AggregateKind
 import civictech.query.ast.Atom
 import civictech.query.ast.ComparisonOp
+import civictech.query.ast.Definition
+import civictech.query.ast.JoinKey
 import civictech.query.ast.Literal
+import civictech.query.ast.OuterJoinSide
 import civictech.query.ast.Query
+import civictech.query.ast.RelationalExpr
 import civictech.query.ast.Rule
+import civictech.query.ast.SetOpKind
 import civictech.query.ast.Term
 import io.kotest.assertions.withClue
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -48,6 +53,15 @@ class NoFunctionTypedPropertyTest {
         Aggregate::class.java,
         Rule::class.java,
         Query::class.java,
+        // civictech.query.ast — [QRY1-LANG-04]'s set-operation / outer-join vocabulary.
+        SetOpKind::class.java,
+        OuterJoinSide::class.java,
+        JoinKey::class.java,
+        RelationalExpr::class.java,
+        RelationalExpr.Relation::class.java,
+        RelationalExpr.SetOp::class.java,
+        RelationalExpr.OuterJoin::class.java,
+        Definition::class.java,
     )
 
     @Test
