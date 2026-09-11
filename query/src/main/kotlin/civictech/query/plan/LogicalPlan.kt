@@ -36,8 +36,11 @@ sealed class PlanNode : Serializable {
     /**
      * The EDB relation names ([civictech.query.schema.Catalog] keys) this node's rows
      * descend from (`[QRY1-PLAN-05]`) — the provenance slot [QRY1-LOWER-08]/[QRY1-LOWER-09]'s
-     * `emitOnFrontier` gating decision reads later. Computing it correctly is the planner's
-     * job; this task only gives it a place to live.
+     * `emitOnFrontier` gating decision reads later. A [Scan] is `{relation}`; every other
+     * node is the union over all of its inputs, witness sides and union branches included.
+     * The propagation rule and its reasoning live in [PlanAnalyses.provenanceOf], which
+     * [Planner] calls at every construction site; this file only gives the value a place to
+     * live and does not validate it.
      */
     abstract val provenance: Set<String>
 
@@ -46,6 +49,11 @@ sealed class PlanNode : Serializable {
      * key is injective into this node's output (`[QRY1-PLAN-06]`, `[QRY1-SEM-02]`'s decision
      * procedure). When `true`, [preservedKey] names the witnessing key attribute set so a
      * later rejection can say *which* key was lost, not just that one was.
+     *
+     * `false` means the claim is **not established**, never "this node's output provably has
+     * no key": a [Union] earns its `false` by actually collapsing equal tuples, while a
+     * [Scan] of a relation with no declared row key simply has nothing to preserve. The
+     * per-node rules and which `false` is which are documented on [PlanAnalyses].
      */
     abstract val keyPreserving: Boolean
 
