@@ -1,0 +1,17 @@
+work +9
+
+# merged_into_feature's SUPPRESSED branch was silent (computenet-ipp94). The
+# TRUE branch carries a CONFIRM step in 5b; the suppressed one routed straight
+# to an implementer with no check. Both witnesses the suppression tests are
+# machine-local and cross machines on DIFFERENT cadences — merge-task.sh
+# pushes the feature branch per merge while the task ref stays local by
+# design, and bd writes in owned territory stay local until the publication
+# push — so a session that merged, pushed and then DIED leaves a bead reading
+# open + unassigned + ZERO comments with no task ref anywhere. Every
+# suppression condition holds on genuinely-merged work: computenet-kklt
+# arriving through the one door the g0hg fix left open.
+#
+# The fix is mechanical (a new merged_into_feature_suppressed field). These 9
+# lines are 5b's one-line check on it, answerable with `bd dolt pull` and a
+# re-read of comment_count — the whole failure is an unsynced comment, so no
+# third witness is needed, and the bead's acceptance rules one out.
