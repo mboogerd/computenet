@@ -22,8 +22,10 @@ Usage:
     propagate-correction.py <epic-id> [--exclude <bead-id>]... <needle> [<needle>...]
 
 Needles are case-insensitive substrings; a bead matches on ANY of them.
-Pass two or three distinctive words of the wrong claim, not a sentence — the
-sibling that repeats a prediction rarely repeats its wording.
+Pass two or three SHORT needles, not a sentence — a sibling repeating a
+prediction rarely repeats its wording. Needles match across line breaks, so a
+wrapped phrase is found, but the more words a needle has the more exactly the
+sibling has to have copied it.
 
 Output, one line per match:
   <id>  <status>  <assignee>  <field>  …context…
@@ -103,6 +105,11 @@ def main(argv):
         sys.stderr.write("propagate-correction: %s; NOTHING was checked\n" % e)
         return 3
 
+    if not any(r.get("id") == epic for r in rows):
+        sys.stderr.write("propagate-correction: no such bead %s; NOTHING was "
+                         "checked\n" % epic)
+        return 3
+
     ids = sorted(
         bid
         for bid in descendants(rows, epic)
@@ -123,12 +130,17 @@ def main(argv):
             body = r.get(f) or ""
             if not isinstance(body, str):
                 continue
-            low = body.lower()
+            # Match on WHITESPACE-NORMALISED text. Bead bodies are hard-
+            # wrapped, so a two-word needle straddling a line break misses on
+            # the raw string — silently, as an empty result the caller is told
+            # to read as "nothing to propagate".
+            flat = " ".join(body.split())
+            low = flat.lower()
             hit = next(((n, low.find(n)) for n in needles if low.find(n) >= 0), None)
             if not hit:
                 continue
             at = hit[1]
-            ctx = " ".join(body[max(0, at - CONTEXT):at + CONTEXT].split())
+            ctx = flat[max(0, at - CONTEXT):at + CONTEXT]
             print("%s\t%s\t%s\t%s\t…%s…" % (
                 r["id"], r.get("status", "?"), r.get("assignee") or "-", f, ctx))
             break

@@ -2337,11 +2337,13 @@ inherit it:
 
 ```bash
 .claude/skills/work/scripts/propagate-correction.py <epic-id> \
-  --exclude <reporting-bead> 'distinctive' 'words of the WRONG claim'
+  --exclude <reporting-bead> 'delivery-order' 'which host'
 ```
 
-Two or three distinctive words, not a sentence — a sibling repeating a
-prediction rarely repeats its wording. Then per row: an `AMENDS <id>` comment
+Two or three SHORT needles, not a sentence — a sibling repeating a prediction
+rarely repeats its wording. Needles match across line breaks (bead bodies are
+hard-wrapped), so a phrase is found when copied verbatim; it is the copying
+that is unlikely, not the wrapping. Then per row: an `AMENDS <id>` comment
 on a sibling bead (the form 5c already prescribes), an edit to the FEATURE or
 epic text when the row is one of those — a feature review scores against that
 text — and, until both are done, the correction verbatim in the dispatch

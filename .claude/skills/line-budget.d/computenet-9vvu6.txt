@@ -1,4 +1,4 @@
-work +24
+work +26
 #
 # Propagating a corrected bead prediction (computenet-9vvu6). A correction an
 # implementer or reviewer discovers was written on that agent's own bead and
@@ -13,3 +13,7 @@ work +24
 # predictions). These 24 lines are the table row, the 5b batch-completion trigger
 # that tells the orchestrator to run it before the next dispatch, and one 5c
 # bullet saying a reviewer's correction is the same event.
+#
+# +2 from review (PR #811): the worked example now shows two SHORT needles
+# rather than a four-word phrase as one needle, and says why — the example was
+# demonstrating the usage most likely to come back empty.
