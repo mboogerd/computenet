@@ -3,6 +3,7 @@ package civictech.query.parse
 import civictech.query.ast.Aggregate
 import civictech.query.ast.AggregateKind
 import civictech.query.ast.Atom
+import civictech.query.ast.ComparisonOp
 import civictech.query.ast.JoinKey
 import civictech.query.ast.OuterJoinSide
 import civictech.query.ast.Query
@@ -60,6 +61,13 @@ class SurfaceEquivalenceTest {
                     Attribute("src", AttrType.STRING),
                     Attribute("dst", AttrType.STRING),
                     Attribute("d", AttrType.LONG),
+                ),
+            ),
+            "reading" to RelationSchema(
+                listOf(
+                    Attribute("sensor", AttrType.STRING),
+                    Attribute("level", AttrType.DOUBLE),
+                    Attribute("on", AttrType.BOOL),
                 ),
             ),
         ),
@@ -143,15 +151,15 @@ class SurfaceEquivalenceTest {
         // The comparison is written as a two-argument lambda rather than closing over the
         // terms: `v` and `const` are QueryScope members and are only in scope inside the
         // query { } block, while these case lambdas are built outside it.
-        val cases = listOf<Pair<String, RuleScope.(Term, Term) -> Unit>>(
-            "=" to { left, right -> left eq right },
-            "!=" to { left, right -> left ne right },
-            "<" to { left, right -> left lt right },
-            "<=" to { left, right -> left le right },
-            ">" to { left, right -> left gt right },
-            ">=" to { left, right -> left ge right },
+        val cases = listOf<Triple<ComparisonOp, String, RuleScope.(Term, Term) -> Unit>>(
+            Triple(ComparisonOp.EQ, "=", { left, right -> left eq right }),
+            Triple(ComparisonOp.NE, "!=", { left, right -> left ne right }),
+            Triple(ComparisonOp.LT, "<", { left, right -> left lt right }),
+            Triple(ComparisonOp.LE, "<=", { left, right -> left le right }),
+            Triple(ComparisonOp.GT, ">", { left, right -> left gt right }),
+            Triple(ComparisonOp.GE, ">=", { left, right -> left ge right }),
         )
-        cases.forEach { (spelling, comparison) ->
+        cases.forEach { (_, spelling, comparison) ->
             equivalent(
                 "far(X, Y) :- dist(X, Y, D), D $spelling 10L.",
                 query(catalog) {
@@ -164,6 +172,9 @@ class SurfaceEquivalenceTest {
                     }
                 },
             )
+        }
+        withClue("the case list must cover every ComparisonOp, or a construct escapes") {
+            cases.map { it.first }.toSet() shouldBe ComparisonOp.entries.toSet()
         }
     }
 
@@ -198,6 +209,30 @@ class SurfaceEquivalenceTest {
                 val x = v("X")
                 val y = v("Y")
                 rule(derived("near")(x, y)) { +relation("dist")(x, y, const(10L)) }
+            },
+        )
+    }
+
+    /**
+     * The other two retyping branches, `DOUBLE` and `BOOL`, given the same parser-vs-builder
+     * equality case the `LONG` branch above has. Added by the cab.2 feature review: both
+     * branches were reachable only through `QueryParserTest`'s generative totality sweep,
+     * which asserts nothing about the value a retyping produces — only that producing it
+     * does not throw. Mutating `coerce`'s `DOUBLE` arm to hand back the un-converted `Int`,
+     * and its `BOOL` arm to hand back a `String`, each reddened that sweep and nothing else
+     * in the 188-test suite; this case is the assertion that the retyped *value* is the one
+     * the builder writes explicitly.
+     *
+     * `3` at a `DOUBLE`-declared position must become `Const(3.0, DOUBLE)`, not
+     * `Const(3, INT)`; `true` at a `BOOL`-declared position stays `Const(true, BOOL)`.
+     */
+    @Test
+    fun `catalog-typed DOUBLE and BOOL constants agree with the builder's explicit ones`() {
+        equivalent(
+            "warm(X) :- reading(X, 3, true).",
+            query(catalog) {
+                val x = v("X")
+                rule(derived("warm")(x)) { +relation("reading")(x, const(3.0), const(true)) }
             },
         )
     }
