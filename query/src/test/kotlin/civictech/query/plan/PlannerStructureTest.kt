@@ -405,6 +405,57 @@ class PlannerStructureTest {
     }
 
     @Test
+    fun `QRY1 §PLAN-06 a Select the planner inserts carries the key claim through to the head`() {
+        // q(x) :- r(x, 7).  over catalog r(a INT, b INT) with rowKey {a}.
+        //
+        // The seam this pins is between the node the planner *builds* (computenet-cab.3.2's
+        // constant-position equality Select) and the propagation rule that decides what it
+        // *says* (computenet-cab.3.3's PlanAnalyses.filterKey). Every other row-filter test in
+        // this feature reaches filterKey through an AntiJoin or through PlanAnalyses directly,
+        // so before this test the planner's own Select construction site could withdraw the key
+        // claim for every `r(x, 7)`-shaped atom with no test noticing — and the rejection
+        // feature's BAG_SEMANTICS_REQUIRED decision ([QRY1-SEM-02]) reads exactly that claim.
+        //
+        // The expected witness is a literal here, read off the catalog declaration below
+        // (rowKey {a} sits at position 0, which this atom names `x`), not recomputed with the
+        // planner's own positional mapping.
+        val catalog = Catalog(
+            mapOf(
+                "r" to RelationSchema(
+                    attributes = listOf(Attribute("a", AttrType.INT), Attribute("b", AttrType.INT)),
+                    rowKey = setOf("a"),
+                ),
+            ),
+        )
+        val plan = Planner.plan(
+            Query(
+                rules = listOf(
+                    rule(
+                        head = atom("q", "x"),
+                        body = listOf(
+                            Literal.Positive(
+                                Atom("r", listOf(Term.Var("x"), Term.Const(7, AttrType.INT))),
+                            ),
+                        ),
+                    ),
+                ),
+                catalog = catalog,
+            ),
+        )
+
+        val root = plan.roots.getValue("q").shouldBeInstanceOf<Project>()
+        val selection = root.input.shouldBeInstanceOf<Select>()
+        withClue("a Select removes rows and merges none, so r's key claim survives it verbatim") {
+            selection.keyPreserving shouldBe true
+            selection.preservedKey shouldBe setOf("x")
+        }
+        withClue("the head keeps the witness column x, so the claim reaches the root") {
+            root.keyPreserving shouldBe true
+            root.preservedKey shouldBe setOf("x")
+        }
+    }
+
+    @Test
     fun `planning the same query twice yields equal plans`() {
         val query = Query(
             rules = listOf(
