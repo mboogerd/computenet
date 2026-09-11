@@ -71,7 +71,10 @@ class SafetyAnalysisTest {
 
         rejections shouldHaveSize 1
         rejections.single().code shouldBe RejectionCode.UNSAFE_RULE
-        rejections.single().specId shouldContain "Y"
+        // Not a bare `shouldContain "Y"`: the boilerplate `[QRY1-LANG-07]` prefix itself
+        // contains an uppercase Y, so that check would pass even if Y were dropped from the
+        // reported unbound-variable list. Anchor on the formatted list instead.
+        rejections.single().specId shouldContain "atom: Y"
     }
 
     @Test
@@ -89,7 +92,7 @@ class SafetyAnalysisTest {
 
         rejections shouldHaveSize 1
         rejections.single().code shouldBe RejectionCode.UNSAFE_RULE
-        rejections.single().specId shouldContain "Y"
+        rejections.single().specId shouldContain "atom: Y"
     }
 
     @Test

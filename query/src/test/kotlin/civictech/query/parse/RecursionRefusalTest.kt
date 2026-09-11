@@ -82,9 +82,12 @@ class RecursionRefusalTest {
 
         rejections shouldHaveSize 1
         val rejection = rejections.single()
-        rejection.specId shouldContain "a"
-        rejection.specId shouldContain "b"
-        rejection.specId shouldContain "c"
+        // A bare `shouldContain "a"` / "b" / "c" is satisfied by this message's own boilerplate
+        // ("machinery", "unbuilt", "cycle" already contain a/b/c) regardless of which predicates
+        // are actually named, so it would not catch a mutation that reported only one
+        // representative predicate instead of the whole cycle. Assert the formatted predicate
+        // list itself, as the two-independent-cycles test below already does.
+        rejection.specId shouldContain "predicates on cycle: a, b, c"
     }
 
     @Test
