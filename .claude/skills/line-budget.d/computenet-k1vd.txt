@@ -1,0 +1,35 @@
+work +46
+
+# The acceptance_criteria FIELD is what every reviewer scores, and nothing kept
+# it in step with what the bead required (computenet-k1vd; two instances in one
+# session, in opposite directions).
+#
+# MISPLACED: computenet-w8ee was filed with a well-written "## Acceptance"
+# section in its DESCRIPTION and an empty field. bd show then prints no
+# ACCEPTANCE CRITERIA block at all, so it is indistinguishable from a bead with
+# no criteria — and 5f route 4 says to write criteria for that, which would
+# have RE-AUTHORED the ones that already existed, leaving the reviewer to
+# certify against a bar the orchestrator invented.
+#
+# SUPERSEDED: computenet-9wpa's acceptance prescribed a test that passes
+# unfixed, because the bead's headline claim was wrong; a later comment said so
+# and nobody amended the field. The honest outcome then presents as a failure
+# to satisfy the acceptance. What stopped an implementer reshaping the test
+# until it went red — pinning a defect that does not exist — was one sentence
+# in the dispatch prompt, arrived at by luck.
+#
+# The MISPLACED half is mechanical: scripts/acceptance-placement.sh
+# discriminates MISPLACED from ABSENT, which demand opposite responses.
+# 25 lines are 5b's entry point plus the comment half, which no script can
+# decide. 9 go to review-task.md and 6 to review-feature.md, for the clause the
+# acceptance names: a criterion whose premise the work DISPROVES is met by
+# disproving it with evidence, so a reviewer does not score an honest negative
+# as unmet. 1 line is the script table row. 3 are blank separators.
+#
+# +3 from review (PR #817): the classifier required end-of-line right after the
+# keyword, so "## Acceptance Criteria (what to check)" — the common real shape
+# — was a false ABSENT, which is the failure this script exists to prevent.
+# Four match arms now, plus the synonym headings live beads use; "Evidence
+# that ..." is deliberately NOT one, since two beads here use it for diagnosis
+# prose where route 4 is right. Also a payload-names-another-bead guard, and
+# one sentence saying ABSENT is a guess rather than a verdict.
