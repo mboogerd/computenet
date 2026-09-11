@@ -1,0 +1,16 @@
+work +14
+
+# epic.md told a breakdown agent to wire dependency edges and showed no form
+# (computenet-zvuu7). The MEM1 agent invented `for pair in "a b"; set -- $pair`
+# — and zsh does not field-split an unquoted expansion, so the pair stayed ONE
+# argument and the wiring did not do what it read as doing. Seven features'
+# edges went through it before the agent noticed. Same family as AGENTS.md's
+# $FILT case (computenet-adgy): both come from assuming bash field-splitting.
+#
+# AGENTS.md records the family, but the orchestrator never hands AGENTS.md to a
+# dispatched breakdown agent — epic.md is what the dispatch prompt names, which
+# is why the note has to live here as well.
+#
+# These 14 lines: the rule (one `bd dep add` per line), why zsh breaks the loop
+# shape, the two bead cites, and a copyable function-with-named-parameters form
+# for the case where a list is genuinely wanted.
