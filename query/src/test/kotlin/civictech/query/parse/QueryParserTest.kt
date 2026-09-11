@@ -501,6 +501,14 @@ class QueryParserTest {
          */
         val VALID_SOURCES = listOf(
             "reach(X, Y) :- link(X, Y).",
+            // Constants AT declared attribute positions, so the mutants reach the Catalog
+            // retyping path. Without one of these the sweep never calls `coerce` with a
+            // declaration, and a retyping that hands `Term.Const` a value of the wrong
+            // runtime type throws its constructor `require` straight past `parse`'s catch —
+            // a totality escape the sweep would not see (reviewer's mutation: coercing to
+            // LONG returned the `Int` unchanged; only the typing unit test went red).
+            "near(X, Y) :- dist(X, Y, 10).",
+            "hot(X) :- score(X, 2), flagged(X, true), dist(X, 'b', 7L).",
             "far(X, Y) :- dist(X, Y, D), not blocked(X, Y), D > 10.",
             "@topK(3) best(X) :- score(X, S).",
             "@collectToSet skills(X) :- link(X, Y).",
