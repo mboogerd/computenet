@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Regression tests for propagate-correction.py (computenet-9vvu6).
+
+The two things that make it worth running rather than eyeballing: membership
+must reach GRANDCHILDREN (the level that actually carries a prediction, and
+the level `bd list --parent` silently drops), and it must not reach beads of a
+NEIGHBOURING epic whose dotted ids look similar.
+
+Run: python3 .claude/skills/work/scripts/propagate-correction.test.py
+"""
+import importlib.util
+import pathlib
+import sys
+
+spec = importlib.util.spec_from_file_location(
+    "propcorr", pathlib.Path(__file__).with_name("propagate-correction.py"))
+pc = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pc)
+
+ROWS = [
+    {"id": "cn-e", "issue_type": "epic"},
+    {"id": "cn-e.1", "issue_type": "feature"},
+    {"id": "cn-e.1.2", "issue_type": "task"},          # grandchild by prefix
+    {"id": "cn-flat", "issue_type": "task", "parent": "cn-e.1"},  # no dot
+    {"id": "cn-sub", "issue_type": "epic", "parent": "cn-e"},     # sub-epic
+    {"id": "cn-sub.1", "issue_type": "task"},          # under the sub-epic
+    {"id": "cn-other", "issue_type": "epic"},
+    {"id": "cn-other.1", "issue_type": "task"},        # NOT ours
+    {"id": "cn-orphan", "issue_type": "task"},         # unparented
+]
+
+got = pc.descendants(ROWS, "cn-e")
+cases = [
+    ("cn-e", True, "the epic itself is a propagation target (feature text)"),
+    ("cn-e.1", True, "direct child"),
+    ("cn-e.1.2", True, "GRANDCHILD by dotted prefix"),
+    ("cn-flat", True, "explicit .parent overrides the dotless id"),
+    ("cn-sub", True, "a sub-epic beneath ours"),
+    ("cn-sub.1", True, "a task under a sub-epic beneath ours"),
+    ("cn-other", False, "a neighbouring epic"),
+    ("cn-other.1", False, "a task of a neighbouring epic"),
+    ("cn-orphan", False, "an unparented bead"),
+]
+
+failed = 0
+for bid, expected, what in cases:
+    if (bid in got) != expected:
+        failed += 1
+        print(f"FAIL: {what} — expected {bid} in={expected}, got {bid in got}")
+
+# a parent chain that loops must terminate rather than hang
+if pc.descendants([{"id": "a", "parent": "b"}, {"id": "b", "parent": "a"}], "cn-e"):
+    failed += 1
+    print("FAIL: a cycle must resolve to no membership, not a match")
+
+print(f"{len(cases) + 1 - failed} passed, {failed} failed")
+sys.exit(1 if failed else 0)
