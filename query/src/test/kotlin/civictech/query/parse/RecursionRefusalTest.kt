@@ -66,8 +66,13 @@ class RecursionRefusalTest {
         rejections shouldHaveSize 1
         val rejection = rejections.single()
         rejection.code shouldBe RejectionCode.RECURSION_UNSUPPORTED
-        rejection.specId shouldContain "p"
-        rejection.specId shouldContain "q"
+        // Same vacuity the three-predicate test below already narrowed away, and present
+        // here for the same reason: a bare `shouldContain "p"` is satisfied by this
+        // message's own boilerplate ("unsupported"), so half of the criterion this test
+        // NAMES — "naming every predicate on it" — was asserted by a check that cannot
+        // fail. Measured by the cab.2 feature review: a mutation reporting only the cycle's
+        // last predicate left this test green. Assert the formatted list instead.
+        rejection.specId shouldContain "predicates on cycle: p, q"
     }
 
     @Test
