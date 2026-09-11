@@ -183,6 +183,20 @@ cannot start until another lands. Not a preferred order, and not "these
 might touch the same files" (file overlap is handled by task-level
 scheduling — see [feature.md](feature.md)). Over-wiring starves the queue.
 
+**One `bd dep add` per line.** Do not loop over space-separated pairs: this
+session runs zsh, which does NOT field-split an unquoted expansion, so
+`for pair in "a b"; set -- $pair` leaves the pair as ONE argument and the
+wiring does not do what it reads as doing (computenet-zvuu7 — the same family
+as AGENTS.md's `$FILT` case, computenet-adgy, and it wired seven features'
+edges before the agent noticed). Write them out, or use a function with named
+parameters:
+
+```bash
+dep() { bd dep add "$1" "$2"; }   # <blocked> <blocker>
+dep computenet-f7h.2 computenet-f7h.1
+dep computenet-f7h.3 computenet-f7h.1
+```
+
 **A required dependency whose target is NOT an epic has one answer, so two
 runs produce the same graph.** `bd` refuses an edge between an epic and a
 non-epic (below), so "this epic needs feature `X.3` of another epic" is
