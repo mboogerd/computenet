@@ -475,6 +475,25 @@ try:
                         None) is not False:
         failed += 1
         print("FAIL: a claimed bead has been worked")
+    # computenet-ipp94: the SUPPRESSED branch must not be silent. This is the
+    # exact twin shape that satisfies every suppression condition — work on the
+    # feature branch, no task/ ref (local to the machine that died), and a bead
+    # reading open + unassigned + ZERO comments because the comments never
+    # synced. It must reach the orchestrator as something, not as ordinary
+    # dispatchable work.
+    _e = nb._entry(dict(_untouched, id="computenet-f.11"), False, [], "computenet-f")
+    if _e.get("merged_into_feature") is not False:
+        failed += 1
+        print("FAIL: the gate must still suppress the flag here (g0hg)")
+    if _e.get("merged_into_feature_suppressed") is not True:
+        failed += 1
+        print("FAIL: a suppressed commit match must be reported, not silent"
+              " — an unsynced comment makes a real twin satisfy the gate"
+              " (computenet-ipp94)")
+    _e2 = nb._entry({"id": "computenet-f.99"}, False, [], "computenet-f")
+    if _e2.get("merged_into_feature_suppressed") is not False:
+        failed += 1
+        print("FAIL: no commit match at all must not read as a suppression")
 finally:
     _os.chdir(_cwd)
 if nb.merged_into_feature("computenet-nope", "definitely-not-a-feature") is not False:

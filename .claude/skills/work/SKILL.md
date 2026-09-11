@@ -1495,6 +1495,16 @@ Otherwise ask for the next batch:
 # tree lacking the task's OWN named deliverable settles it. Confirmed — no
 # task worktree here — route to 5c review against the merged range, the
 # feature worktree standing in.
+# `merged_into_feature_suppressed` TRUE is the other half of that door: a
+# commit naming the task IS on the feature branch and the gate judged nobody
+# worked it. Usually right (the create-then-amend sibling) — but neither
+# witness crosses machines when it matters (the branch check does reach origin,
+# where gate 4 keeps a task ref from ever landing), so a
+# session elsewhere that merged, pushed the feature branch and then died
+# leaves a bead reading open + unassigned + ZERO comments only because its
+# comments never synced (computenet-ipp94). `bd dolt pull` and re-read
+# `comment_count`: non-zero now means it IS the twin, and the TRUE branch
+# above applies. That pull settles it — do not go looking for a third witness.
 # --siblings N if step 3 found N live sibling sessions on this box, or the
 # operator sanctioned concurrent running: the capacity cap is PER SESSION and
 # the machine is shared (computenet-arow). The verdict echoes what it used

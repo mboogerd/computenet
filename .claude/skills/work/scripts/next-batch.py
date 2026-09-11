@@ -937,6 +937,17 @@ def merged_into_feature(tid, feature, task=None, branch=None):
     `branch` to get that gate; without them the match stands, which is the
     pre-g0hg reading.
     """
+    return _commit_match(tid, feature) and not _never_worked(tid, task, branch)
+
+
+def _commit_match(tid, feature):
+    """Does the feature branch carry a commit naming this task? The raw witness.
+
+    Split out from merged_into_feature so `_entry` can tell a match the gate
+    SUPPRESSED from no match at all — the two are indistinguishable in the
+    flag, and one of them is the cross-machine twin arriving through the door
+    the gate left open (computenet-ipp94).
+    """
     for ref in (f"refs/heads/feature/{feature}", f"refs/remotes/origin/feature/{feature}"):
         try:
             out = subprocess.run(
@@ -947,7 +958,7 @@ def merged_into_feature(tid, feature, task=None, branch=None):
                  f"--grep={re.escape(tid)}([^0-9.]|$)", ref],
                 capture_output=True, text=True, timeout=10)
             if out.returncode == 0 and out.stdout.strip():
-                return not _never_worked(tid, task, branch)
+                return True
         except (OSError, subprocess.SubprocessError):
             return False
     return False
@@ -1029,7 +1040,8 @@ def _entry(task, resumed, files, feature=None):
     branch = meta.get("branch") or f"task/{tid}"
     # A branch carrying commits means resumed, whatever the bead status says.
     has_work = branch_has_commits(branch)
-    on_feature = merged_into_feature(tid, feature, task, branch) if feature else False
+    matched = _commit_match(tid, feature) if feature else False
+    on_feature = matched and not _never_worked(tid, task, branch)
     return {
         "id": tid,
         "model": meta.get("model") or "",     # empty => breakdown omitted it
@@ -1050,6 +1062,18 @@ def _entry(task, resumed, files, feature=None):
         # machine merged it). Route to 5c review against the merged range,
         # with the feature worktree standing in for the absent task worktree.
         "merged_into_feature": on_feature,
+        # A commit naming this task IS on the feature branch, but _never_worked
+        # judged nobody had worked it, so the flag above is off. Both of its
+        # witnesses are machine-local and cross machines on different cadences
+        # — merge-task.sh pushes the feature branch per merge while the task
+        # ref stays local by design, and bd writes in owned territory stay
+        # local until the publication push — so a session that merged, pushed
+        # and then DIED leaves a bead reading open, unassigned, zero comments
+        # with no task ref anywhere: every suppression condition holds on
+        # genuinely-merged work. Suppression is the likelier reading (the
+        # create-then-amend sibling), which is why it stays a field and not a
+        # flag; but it must not be SILENT (computenet-ipp94).
+        "merged_into_feature_suppressed": matched and not on_feature,
     }
 
 
