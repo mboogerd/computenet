@@ -69,6 +69,45 @@ import civictech.query.schema.Catalog
  * as the grouping columns. That is a convention of this planner, not of the AST; a surface
  * syntax that lets a rule name the aggregated column explicitly would need an AST change
  * first.
+ *
+ * **Determinism audit (computenet-cab.3.4, extending cab.3-D1 over this file and
+ * [PlanAnalyses] as amended by cab.3.3).** Every collection actually *iterated* on this
+ * planning path is re-checked here, not assumed:
+ * - [query]'s `rules` and each [Rule.body]/[Atom.terms] are `List`s consumed in declared
+ *   order — untouched by this file.
+ * - `rulesByHead` (built in [Planner.plan]) is a `LinkedHashMap`, but it is never iterated by
+ *   insertion order: [Planner.plan] walks `rulesByHead.keys.sorted()`, so the root map's
+ *   iteration order is a function of the predicate *names* alone. Per-predicate rule lists
+ *   inside it are read by point lookup (`rulesByHead[predicate]`/`rulesByHead.getValue`) and
+ *   preserve the caller's own list order — never re-sorted, because a multi-rule head's
+ *   [Union] branch order is part of its observable shape and must track the rules' own
+ *   textual order, not a hash.
+ * - [PlanningContext.catalog]'s `relations` map ([civictech.query.schema.Catalog]) is read
+ *   only by point lookup (`catalog.relations[atom.predicate]`) — never iterated — so its
+ *   concrete `Map` implementation and insertion order are both irrelevant to the plan built
+ *   from it. `PlannerDeterminismTest` exercises this directly: two [Query]s built from
+ *   differently-ordered `Catalog` maps and differently-ordered (but per-predicate-order-
+ *   preserving) rule lists must still plan identically.
+ * - `classifySemiJoinAtoms`'s one `HashSet` (`binders.flatMapTo(HashSet())`) is queried only
+ *   by `containsAll` and never iterated — this is the read cab.3.2's reviewer flagged as a
+ *   lead, re-confirmed here as still true after cab.3.3's amendments, which did not touch this
+ *   function.
+ * - `positionalColumns`'s `LinkedHashSet<String>` (`seen`) is used for `add`/membership only,
+ *   in insertion order, which is itself a function of `atom.terms`' own declared order — not
+ *   a hash order.
+ * - Every `Set` this file constructs ([Scan.provenance] via [provenanceOf] and friends) comes
+ *   from [PlanAnalyses], whose own KDoc records the same discipline: every returned set is a
+ *   `LinkedHashSet` built from a `.sorted()` list.
+ *
+ * No planning-path collection is iterated in hash order; nothing above needed a fix.
+ *
+ * **Reordering (`[QRY1-PLAN-07]`, computenet-cab.3.4).** This planner performs **no
+ * cost-based join reordering**: the join core in [PlanningContext.planRule] is folded
+ * strictly left-to-right over the rule body's own atom order (step 2's `coreIndices` loop),
+ * with no comparator, size estimate, or pivot choice anywhere on the path. The guard is
+ * therefore the vacuous case the epic anticipates — the join tree is, by construction, the
+ * canonical left-deep assoc/comm form of the textual-order tree — stated precisely and
+ * checked structurally in [PlanOrder] and `JoinReorderTest`.
  */
 object Planner {
 
