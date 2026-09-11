@@ -1866,6 +1866,37 @@ verdict. (`parked` is only meaningful on an empty batch.)
   the two. `check-files-claim.sh` passes such a bead CLEAN, correctly — its text
   never names the consumer.
 
+  **A fifth shape, and the only one no test can fail on: where the OLD RULE is
+  NARRATED.** The four above all aim at files that must CHANGE for the code to
+  be correct. When a bead CHANGES a rule rather than adding to a set, ask a
+  different question — not "what else must change?" but "where else is this
+  rule written down?" A comment or KDoc elsewhere explaining WHY the old
+  behaviour was what it was is false the moment the item ships, and nothing
+  reports it: the suite is green because it is a comment,
+  `check-files-claim.sh` greps the BEAD's text and the bead never names the
+  file, and af9q's grep finds files that OBSERVE the invariant while this one
+  merely describes it.
+
+  Measured on computenet-078s, which turned `Replication.evict` from a gated
+  stop into a real drain and tightened the check's required arm accordingly:
+  `ReconvergenceCheckTest.kt` still carried its predecessor's comment saying
+  the write "is dropped at peer1's own intake … which is why the check's
+  permitted arm exists at all". Both halves were false on landing, and the
+  stale account reads as current to the next agent — which is how that item's
+  own bead acquired a wrong mechanism (computenet-y30d).
+
+  So grep the predecessor bead's id, the requirement/marker id, and the
+  distinctive phrases of the rule being changed — comments and KDoc included,
+  not just code:
+
+  ```bash
+  git grep -n -F 'computenet-9c5t' -- '*.kt'
+  git grep -ni 'permitted arm' -- '*.kt'
+  ```
+
+  A hit in a comment is a claim candidate even though no test can fail on it,
+  and a green suite is not evidence the narration survived the change.
+
   Never let a
   task take a nominal claim over files it merely reads: a claim is a lock, so
   a read-only lock blocks a sibling for no benefit. A *descriptive string*
