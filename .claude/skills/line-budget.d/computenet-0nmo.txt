@@ -1,0 +1,23 @@
+work +52
+
+# A prose-deliverable route for the mutation check (computenet-0nmo).
+#
+# review-feature.md builds its verification standard on the mutation check, and
+# when the deliverable is normative spec prose there is nothing to mutate — so
+# the review's central instrument was simply absent and nothing said what
+# replaces it. The fallback an unguided reviewer reaches for is "I read it and
+# it looks right", which is the unfalsifiable certification the mutation check
+# exists to prevent. Not a rare shape: doc/spec/ and concord/corpus/ are build
+# inputs and the CONCORDANCE gap rows are a standing work source.
+#
+# 40 lines are a new mutation-check.md section carrying the two substitutes a
+# reviewer improvised twice and recorded nowhere (perturb the machine-checkable
+# BINDING the prose creates; prove a comment-only source half inert via §5's
+# existing filter rather than running the module suite), plus the statement
+# that neither checks whether the sentence is TRUE of the code — with the
+# measured case where the reading, not any gate, caught a false requirement.
+# 11 lines are the review-feature.md §3 entry point that routes to it.
+#
+# +1 from review (PR #813): the acceptance's DRAFT-verdict clause was stated
+# only in mutation-check.md, one hop from the §3 path that routes there; a
+# reviewer reading §3 alone would not have seen it.
