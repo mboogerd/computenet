@@ -1,0 +1,21 @@
+work +8
+
+# merge-task.sh's pre-merge preview was a two-dot diff (computenet-z0wyv), so
+# every sibling merged since the task forked appeared as a DELETION the merge
+# was about to perform. That is the ordinary state after the first sibling
+# lands: measured twice in one slot, once naming another bead's just-merged
+# findings entry as 74 lines about to be removed, when the merge removed
+# nothing. The preview is attached to a gate and the documented response to
+# apparent data loss at a gate is to STOP — so it taught a session either to
+# abort safe merges or to disregard a line the gate prints.
+#
+# The fix is in the script (three-dot, plus a plain "N commits behind" line
+# for the one fact two-dot carried). These 7 net lines are merge-task.md's
+# verdict bullet, rewritten: deletions in the preview are now a REAL finding
+# rather than an artefact to talk yourself out of, with the old signature and
+# why it was retired kept so the next session does not reinstate it.
+#
+# +1 from review (PR #814): one rewrapped line. The reviewer also found the
+# "sibling merges since it forked" wording over-specific — in the wrong-base
+# case those commits are the feature's own — so it now says "landed since it
+# forked (usually sibling merges)".

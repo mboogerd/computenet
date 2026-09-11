@@ -100,7 +100,8 @@ has "$out" "GATE branch-identity: PASS" "gate 1 printed"
 has "$out" "GATE origin-state: PASS" "gate 2 printed"
 has "$out" "GATE competing-pr: PASS" "gate 3 printed"
 has "$out" "GATE task-branch: PASS" "gate 4 printed"
-has "$out" "incoming ($FBR..$TBR):" "the two-dot --stat is shown before the merge"
+has "$out" "incoming ($FBR...$TBR)" "the three-dot --stat is shown before the merge"
+has "$out" "behind $FBR" "how far the base moved is stated as a count"
 has "$out" "t.txt" "the stat names the incoming file"
 merged_local && ok "merge commit on the feature branch" || bad "no merge commit"
 tip_on_origin && ok "task tip is on origin/$FBR" || bad "task tip not durable"
@@ -115,7 +116,7 @@ fixture
 out=$(run --dry-run "$TASK" "$FBR"); rc=$?
 [ "$rc" -eq 0 ] && ok "exits 0" || bad "exits $rc, wanted 0"
 has "$out" "GATE task-branch: PASS" "gates still run"
-has "$out" "incoming ($FBR..$TBR):" "the stat is still shown"
+has "$out" "incoming ($FBR...$TBR)" "the stat is still shown"
 has "$out" "dry run: gates green, nothing merged" "says it stopped"
 merged_local && bad "dry run merged" || ok "no merge happened"
 closed && bad "dry run closed the task" || ok "no close happened"
@@ -252,7 +253,23 @@ out=$(run "$TASK" "$FBR"); rc=$?
 [ "$rc" -eq 3 ] && ok "exits 3" || bad "exits $rc, wanted 3"
 merged_local && bad "merged anyway" || ok "nothing merged"
 
-# 14. usage
+# 14. a base that MOVED: a sibling merged into the feature after this task
+# forked. The preview must not show that sibling's content as a deletion —
+# the merge preserves it (computenet-z0wyv).
+echo
+echo "moved base: no phantom deletions"
+fixture
+(cd "$FWT"; echo sibling > sibling.txt; git add sibling.txt
+ git commit --quiet -m "sibling task merged"; git push --quiet origin "$FBR") >/dev/null 2>&1
+out=$(run --dry-run "$TASK" "$FBR"); rc=$?
+[ "$rc" -eq 0 ] && ok "exits 0" || bad "exits $rc, wanted 0"
+hasnt "$out" "sibling.txt" "the sibling's file is NOT reported as incoming"
+has "$out" "t.txt" "the task's own file still is"
+has "$out" "behind $FBR" "how far the base moved is stated"
+hasnt "$out" "deletion" "the preview reports no deletions at all — this merge removes nothing"
+merged_local && bad "dry run merged" || ok "nothing merged"
+
+# 15. usage
 echo
 echo "usage"
 fixture
