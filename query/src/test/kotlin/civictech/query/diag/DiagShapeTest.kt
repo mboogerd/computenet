@@ -26,6 +26,7 @@ class DiagShapeTest {
         Locus::class.java,
         Locus.SourceSpan::class.java,
         Locus.PlanNode::class.java,
+        Locus.RuleStatement::class.java,
         Rejection::class.java,
         CompileResult::class.java,
         CompileResult.Rejected::class.java,

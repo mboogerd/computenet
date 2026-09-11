@@ -72,6 +72,33 @@ class QuerySerializationTest {
         return Query(rules = listOf(rule1, rule2, rule3), catalog = catalog)
     }
 
+    /**
+     * The `[QRY1-LANG-04]` statement vocabulary: a nested set operation carrying the cab.2-D3
+     * `all` flag, and an outer join with its key equalities.
+     */
+    private fun representativeDefinitions(): List<Definition> {
+        val x = Term.Var("X")
+        val y = Term.Var("Y")
+        val a = RelationalExpr.Relation(Atom("a", listOf(x, y)))
+        val b = RelationalExpr.Relation(Atom("b", listOf(x, y)))
+        val c = RelationalExpr.Relation(Atom("c", listOf(x, y)))
+
+        return listOf(
+            Definition(
+                Atom("combined", listOf(x, y)),
+                RelationalExpr.SetOp(
+                    SetOpKind.DIFFERENCE,
+                    RelationalExpr.SetOp(SetOpKind.UNION, a, b, all = true),
+                    RelationalExpr.SetOp(SetOpKind.INTERSECTION, b, c, all = false),
+                ),
+            ),
+            Definition(
+                Atom("joined", listOf(x, y)),
+                RelationalExpr.OuterJoin(OuterJoinSide.FULL, a, c, listOf(JoinKey(x, y))),
+            ),
+        )
+    }
+
     @Test
     fun `a representative multi-rule query round-trips equal to the original`() {
         val query = representativeQuery()
@@ -94,5 +121,61 @@ class QuerySerializationTest {
         val result = roundTrip(query)
         result shouldBe query
         result.rules.single().aggregate shouldBe Aggregate(AggregateKind.TOP_K, k = 3)
+    }
+
+    @Test
+    fun `set-operation and outer-join definitions round-trip equal to the original`() {
+        val query = Query(
+            rules = representativeQuery().rules,
+            catalog = representativeQuery().catalog,
+            definitions = representativeDefinitions(),
+        )
+
+        roundTrip(query) shouldBe query
+    }
+
+    @Test
+    fun `the ALL flag survives the round trip on every set-operation kind`() {
+        // cab.2-D3: the flag is STORED and travels with the query, so the rejection feature
+        // sees UNION ALL / INTERSECT ALL / EXCEPT ALL on an AST it received over the wire
+        // exactly as on one it built locally.
+        val a = RelationalExpr.Relation(Atom("a", listOf(Term.Var("X"))))
+        val b = RelationalExpr.Relation(Atom("b", listOf(Term.Var("X"))))
+
+        SetOpKind.entries.forEach { kind ->
+            listOf(false, true).forEach { all ->
+                val query = Query(
+                    rules = emptyList(),
+                    catalog = Catalog(emptyMap()),
+                    definitions = listOf(
+                        Definition(
+                            Atom("out", listOf(Term.Var("X"))),
+                            RelationalExpr.SetOp(kind, a, b, all = all),
+                        ),
+                    ),
+                )
+                val restored = roundTrip(query).definitions.single().expr as RelationalExpr.SetOp
+                restored.kind shouldBe kind
+                restored.all shouldBe all
+            }
+        }
+    }
+
+    @Test
+    fun `every outer-join side round-trips with its key equalities`() {
+        val x = Term.Var("X")
+        val y = Term.Var("Y")
+        val a = RelationalExpr.Relation(Atom("a", listOf(x)))
+        val b = RelationalExpr.Relation(Atom("b", listOf(y)))
+
+        OuterJoinSide.entries.forEach { side ->
+            val join = RelationalExpr.OuterJoin(side, a, b, listOf(JoinKey(x, y)))
+            val query = Query(
+                rules = emptyList(),
+                catalog = Catalog(emptyMap()),
+                definitions = listOf(Definition(Atom("out", listOf(x, y)), join)),
+            )
+            roundTrip(query).definitions.single().expr shouldBe join
+        }
     }
 }

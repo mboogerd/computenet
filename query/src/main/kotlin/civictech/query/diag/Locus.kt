@@ -19,4 +19,14 @@ sealed interface Locus : Serializable {
 
     /** A stable string path/id naming a plan node, owned by the planning/lowering features. */
     data class PlanNode(val id: String) : Locus
+
+    /**
+     * A rule or definition statement identified positionally rather than by source span —
+     * the locus a builder-produced [civictech.query.ast.Query] uses, since it carries no
+     * source text and therefore no [SourceSpan] (computenet-cab.2.3). [ruleIndex] is the
+     * statement's index into [civictech.query.ast.Query.rules]; [headPredicate] is its head
+     * atom's predicate name, carried alongside the index so a message naming the offending
+     * rule need not re-resolve the index back into the query to be readable.
+     */
+    data class RuleStatement(val ruleIndex: Int, val headPredicate: String) : Locus
 }
