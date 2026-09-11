@@ -1,0 +1,19 @@
+work +26
+#
+# Propagating a corrected bead prediction (computenet-9vvu6). A correction an
+# implementer or reviewer discovers was written on that agent's own bead and
+# nowhere else, so every unstarted sibling repeating the guess re-derived it by
+# walking into it — one epic paid for the same wrong fact three times in one
+# session, the third dispatch ~40 minutes after the first two had measured and
+# pinned the truth.
+#
+# The fix is mechanical: scripts/propagate-correction.py names every non-closed
+# bead beneath an epic whose own text still repeats the wrong claim (transitively
+# — the grandchildren `bd list --parent` drops are exactly the level that carries
+# predictions). These 24 lines are the table row, the 5b batch-completion trigger
+# that tells the orchestrator to run it before the next dispatch, and one 5c
+# bullet saying a reviewer's correction is the same event.
+#
+# +2 from review (PR #811): the worked example now shows two SHORT needles
+# rather than a four-word phrase as one needle, and says why — the example was
+# demonstrating the usage most likely to come back empty.

@@ -140,6 +140,7 @@ header.
 | `merge-task.sh` | `[--dry-run] [--keep-open] <task-id> <feature-branch>` — 5c's gated merge of a passed task into the feature branch: guards, merge, durability proof, close |
 | `session-holder.sh` | `[--check <token>]` — this session's unique holder token, and `--check <token>` → MINE/LIVE/DEAD/STALE/UNKNOWN/FOREIGN; what tells a live sibling from a crash leftover, which `assignee` cannot |
 | `junit-count.py` | `[--expect-classes N] <results-dir \| result-file.xml>...` — JUnit XML accounting (counts + newest timestamp + age, both glob depths); refuses to report zero result files; `--expect-classes` catches a `--tests` filter Gradle dropped silently |
+| `propagate-correction.py` | `<epic-id> [--exclude <bead-id>]... <needle>...` — Non-closed beads anywhere beneath an epic whose text still repeats a claim just proven wrong |
 
 (`scripts/beads-nightly-sync.sh` is the **repo-root** catch-up job; no
 scheduler runs it — never assume a sync will happen on its own.)
@@ -2326,6 +2327,28 @@ survive; a later batch resumes them), continue with what returned, log
 friction — a task shape that reliably runs long is a sizing defect in
 `feature.md`.
 
+**A report that corrects a bead's PREDICTION corrects it for the siblings
+too.** The correction is written on the reporting agent's own bead and nowhere
+else, so every unstarted sibling repeating the same guess re-derives it by
+walking into it: one epic paid for the same wrong fact three times in one
+session, the third dispatch ~40 minutes after the first two had measured and
+pinned the truth (computenet-9vvu6). Before dispatching anything that could
+inherit it:
+
+```bash
+.claude/skills/work/scripts/propagate-correction.py <epic-id> \
+  --exclude <reporting-bead> 'delivery-order' 'which host'
+```
+
+Two or three SHORT needles, not a sentence — a sibling repeating a prediction
+rarely repeats its wording. Needles match across line breaks (bead bodies are
+hard-wrapped), so a phrase is found when copied verbatim; it is the copying
+that is unlikely, not the wrapping. Then per row: an `AMENDS <id>` comment
+on a sibling bead (the form 5c already prescribes), an edit to the FEATURE or
+epic text when the row is one of those — a feature review scores against that
+text — and, until both are done, the correction verbatim in the dispatch
+prompt of anything you send out meanwhile.
+
 ### 5c. Review each task, then merge it
 
 **[references/merge-task.md](references/merge-task.md)** is this step: the
@@ -2343,6 +2366,9 @@ Three things that go wrong silently if skipped, inline:
   itself. No stated pass/fail → `SendMessage` the same agent, or the
   hand-carried resume (5b); agent-completed
   is not task-reviewed.
+- **A correction is a batch-completion event too.** A reviewer that proves a
+  bead's prediction wrong hands you the same propagation duty 5b describes —
+  run `propagate-correction.py` before the next dispatch, not at the end.
 - **The task branch is local by design and the FEATURE branch must be
   durable** — confirm the merge is on origin before `bd close`, since the
   close is what tells every later session the work landed.
