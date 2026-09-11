@@ -39,6 +39,16 @@ argument execute as shell and silently vanish from the stored text
 (issue-quality.md's "Backticks…" rule, computenet-9w9). The inline
 `bd comment "<...>"` templates below are placeholders, not license.
 
+**Read [bd-traps.md](bd-traps.md) before your first `bd` write.** It is the
+list of `bd` behaviours that return a WRONG ANSWER rather than an error — a
+read that silently drops a field, a write that reports success and stores
+nothing. Nothing else points you at it: the dispatch prompt hands you this
+file, and until now this file cited it zero times, so a rule could sit there
+correct and unread. It did: "never chain `bd` writes in one Bash block" has
+been in that file since 2026-08-17, and a breakdown agent batched three
+`bd dep add` calls anyway on 2026-09-02 and was denied by the permission
+classifier (computenet-7s4m, computenet-br1y). One `bd` write per Bash call.
+
 **Your tracker writes have a scope too, and it is narrower than your file
 claim.** By default you write to **your own assigned bead and to items you
 create** — nothing else. Closing, re-prioritising, reassigning, re-parenting
