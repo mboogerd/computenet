@@ -1,4 +1,4 @@
-work +51
+work +52
 
 # A prose-deliverable route for the mutation check (computenet-0nmo).
 #
@@ -17,3 +17,7 @@ work +51
 # that neither checks whether the sentence is TRUE of the code — with the
 # measured case where the reading, not any gate, caught a false requirement.
 # 11 lines are the review-feature.md §3 entry point that routes to it.
+#
+# +1 from review (PR #813): the acceptance's DRAFT-verdict clause was stated
+# only in mutation-check.md, one hop from the §3 path that routes there; a
+# reviewer reading §3 alone would not have seen it.

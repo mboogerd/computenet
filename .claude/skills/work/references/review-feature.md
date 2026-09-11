@@ -395,10 +395,11 @@ running its module suite. Both procedures, with the measured outputs, are in
 [mutation-check.md](mutation-check.md#when-the-deliverable-is-normative-prose).
 Neither tells you whether the sentence is TRUE of the code — that is your
 clause-by-clause reading against the implementation, and it is the half that
-has actually caught a false requirement here.
+has actually caught a false requirement here. When it finds one, take a DRAFT
+verdict naming the defect rather than rewriting the normative text yourself.
 
 **A diff whose changed content is comments, KDoc figures or recorded
-measurements inside a COMPILED file is a fourth shape**: no suite exercises
+measurements inside a COMPILED file is a further shape**: no suite exercises
 comment text, so green checks evidence compilation and nothing about the
 numbers. The review's evidence is re-derivation — recompute every stated
 ratio from its own operands, check each figure names its host/date, and
