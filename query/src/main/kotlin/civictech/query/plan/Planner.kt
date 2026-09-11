@@ -54,18 +54,14 @@ import civictech.query.schema.Catalog
  * rename a column, and needs no rename node, because an IDB predicate consumed by another
  * rule is planned with its head variables already substituted to the *caller's* names.
  *
- * **Analysis slots — read the limits before trusting them.** [PlanNode.provenance] is
- * computed honestly, bottom-up at construction: a [Scan] is `{relation}` and every inner
- * node is the union of its inputs' sets. [PlanNode.keyPreserving]/[PlanNode.preservedKey]
- * are deliberately **conservative and incomplete**: a [Scan] reports its declared row key,
- * row-filtering nodes ([Select], [SemiJoin], [AntiJoin]) propagate their input's annotation,
- * a [Project] keeps it only when every witnessing key column survives the projection, and
- * **every other node reports `false`** — including nodes that may well be key-preserving,
- * such as a [GroupAggregate] (whose group-by columns are a key of its own output) or a
- * [Join] of two key-preserving inputs. `false` here means "not established by this planner",
- * not "proven non-preserving". The decision procedure of `[QRY1-PLAN-06]`/`[QRY1-SEM-02]`
- * and its tests belong to this feature's successor analyses task, which amends these values;
- * do not read a `false` from this planner as evidence about the relation.
+ * **Analysis slots.** [PlanNode.provenance] (`[QRY1-PLAN-05]`) and
+ * [PlanNode.keyPreserving]/[PlanNode.preservedKey] (`[QRY1-PLAN-06]`) are populated at every
+ * construction site below by the propagation rules of [PlanAnalyses], which owns them: this
+ * file decides *what node* to build, that one decides *what the node's analyses say*, and
+ * the per-node reasoning — including which `false`s are genuine negatives and which are
+ * unestablished claims — is written out in its KDoc. No analysis value is computed inline
+ * here, so a consumer reading a plan node and a consumer re-deriving the rule are reading
+ * the same statement of them.
  *
  * **Aggregate convention.** [civictech.query.ast.Aggregate] carries no column reference, so
  * the aggregated column has to come from the head's shape: this planner takes the **last**
@@ -123,20 +119,21 @@ private fun variablesOf(atom: Atom): List<String> =
 private fun variablesOf(comparison: Literal.Comparison): List<String> =
     listOf(comparison.left, comparison.right).filterIsInstance<Term.Var>().map { it.name }.distinct()
 
-/** Union of every input's provenance, as a deterministically ordered set. */
-private fun provenanceOf(inputs: List<PlanNode>): Set<String> =
-    LinkedHashSet(inputs.flatMap { it.provenance }.distinct().sorted())
+/** Union of every input's provenance ([PlanAnalyses.provenanceOf]). */
+private fun provenanceOf(inputs: List<PlanNode>): Set<String> = PlanAnalyses.provenanceOf(inputs)
 
 /** [input] filtered by [condition]; a selection narrows rows, not columns or key injectivity. */
-private fun select(input: PlanNode, condition: Literal.Comparison): Select =
-    Select(
+private fun select(input: PlanNode, condition: Literal.Comparison): Select {
+    val key = PlanAnalyses.filterKey(input)
+    return Select(
         input = input,
         condition = condition,
         outputColumns = input.outputColumns,
         provenance = input.provenance,
-        keyPreserving = input.keyPreserving,
-        preservedKey = input.preservedKey,
+        keyPreserving = key.keyPreserving,
+        preservedKey = key.preservedKey,
     )
+}
 
 /**
  * Narrows [input] to [columns] (a subset of its own output columns), skipping the node
@@ -148,14 +145,13 @@ private fun projectTo(input: PlanNode, columns: List<String>): PlanNode {
     require(input.outputColumns.containsAll(columns)) {
         "Project columns $columns are not a subset of input columns ${input.outputColumns}"
     }
-    val witness = input.preservedKey
-    val keeps = witness != null && columns.containsAll(witness)
+    val key = PlanAnalyses.projectKey(input, columns)
     return Project(
         input = input,
         outputColumns = columns,
         provenance = input.provenance,
-        keyPreserving = keeps,
-        preservedKey = if (keeps) witness else null,
+        keyPreserving = key.keyPreserving,
+        preservedKey = key.preservedKey,
     )
 }
 
@@ -249,28 +245,30 @@ private class PlanningContext(
 
         // 3. Existential atoms that bind nothing new and reach no head column: semijoins.
         for (index in positiveAtoms.indices.filter { isSemiJoin[it] }) {
+            val key = PlanAnalyses.filterKey(plan)
             plan = SemiJoin(
                 input = plan,
                 witness = atomNodes[index],
                 keys = sharedKeys(plan.outputColumns, atomNodes[index].outputColumns),
                 outputColumns = plan.outputColumns,
                 provenance = provenanceOf(listOf(plan, atomNodes[index])),
-                keyPreserving = plan.keyPreserving,
-                preservedKey = plan.preservedKey,
+                keyPreserving = key.keyPreserving,
+                preservedKey = key.preservedKey,
             )
         }
 
         // 4. Negated atoms: antijoin on the variables they share with the plan so far.
         for ((index, atom) in negatedAtoms.withIndex()) {
             val witness = planAtom(atom, "$scopeTag~$index/", stack)
+            val key = PlanAnalyses.filterKey(plan)
             plan = AntiJoin(
                 input = plan,
                 witness = witness,
                 keys = sharedKeys(plan.outputColumns, witness.outputColumns),
                 outputColumns = plan.outputColumns,
                 provenance = provenanceOf(listOf(plan, witness)),
-                keyPreserving = plan.keyPreserving,
-                preservedKey = plan.preservedKey,
+                keyPreserving = key.keyPreserving,
+                preservedKey = key.preservedKey,
             )
         }
 
@@ -297,6 +295,7 @@ private class PlanningContext(
         }
         val aggregatedColumn = headVars.last()
         val groupByColumns = headVars.dropLast(1)
+        val aggregateKey = PlanAnalyses.groupAggregateKey(plan, groupByColumns)
         return GroupAggregate(
             input = plan,
             groupByColumns = groupByColumns,
@@ -305,8 +304,8 @@ private class PlanningContext(
             outputColumn = aggregatedColumn,
             outputColumns = headVars,
             provenance = plan.provenance,
-            keyPreserving = false,
-            preservedKey = null,
+            keyPreserving = aggregateKey.keyPreserving,
+            preservedKey = aggregateKey.preservedKey,
         )
     }
 
@@ -322,16 +321,13 @@ private class PlanningContext(
                 "Atom ${atom.predicate}/${atom.terms.size} does not match its declared arity " +
                     "${schema.attributes.size}"
             }
-            val rowKey = schema.rowKey
-            val attributeIndex = schema.attributeNames.withIndex().associate { (i, name) -> name to i }
+            val key = PlanAnalyses.scanKey(schema.rowKey, schema.attributeNames, columns)
             Scan(
                 relation = atom.predicate,
                 outputColumns = columns,
                 provenance = setOf(atom.predicate),
-                keyPreserving = rowKey != null,
-                preservedKey = rowKey?.let { key ->
-                    LinkedHashSet(key.sorted().map { columns[attributeIndex.getValue(it)] })
-                },
+                keyPreserving = key.keyPreserving,
+                preservedKey = key.preservedKey,
             )
         } else {
             require(atom.predicate in rulesByHead) {
@@ -374,14 +370,15 @@ private class PlanningContext(
     private fun joinOn(left: PlanNode, right: PlanNode): Join {
         val keys = sharedKeys(left.outputColumns, right.outputColumns)
         val columns = left.outputColumns + right.outputColumns.filter { it !in left.outputColumns }
+        val key = PlanAnalyses.joinKey(left, right, columns)
         return Join(
             left = left,
             right = right,
             equiKeys = keys,
             outputColumns = columns,
             provenance = provenanceOf(listOf(left, right)),
-            keyPreserving = false,
-            preservedKey = null,
+            keyPreserving = key.keyPreserving,
+            preservedKey = key.preservedKey,
         )
     }
 }
@@ -399,12 +396,13 @@ private fun union(branches: List<PlanNode>): PlanNode {
     require(branches.all { it.outputColumns == columns }) {
         "Union branches disagree on output columns: ${branches.map { it.outputColumns }}"
     }
+    val key = PlanAnalyses.unionKey(branches)
     return Union(
         inputs = branches,
         outputColumns = columns,
         provenance = provenanceOf(branches),
-        keyPreserving = false,
-        preservedKey = null,
+        keyPreserving = key.keyPreserving,
+        preservedKey = key.preservedKey,
     )
 }
 
