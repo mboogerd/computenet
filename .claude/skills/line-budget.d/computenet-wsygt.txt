@@ -1,0 +1,26 @@
+work +31
+
+# A recurrence of computenet-os91 (computenet-wsygt). 5b's "ADDING TO A SET"
+# section is right and was read — and still could not reach the case, for a
+# reason visible in its own commands: both worked greps exclude the task's own
+# module, and the sentence beside them said to do that. Sound for os91's
+# motivating examples, which were cross-module by nature. A SEALED hierarchy
+# inverts it: the completeness gate has to live where the hierarchy is
+# visible, i.e. the declaring module's own test tree.
+#
+# computenet-cab.2.3 added Locus.RuleStatement without claiming DiagShapeTest,
+# whose two assertions then passed VACUOUSLY for the new type — green, blind,
+# and with both of the section's own stated non-falsifiers firing as written.
+# Three more lists of the same shape sat in the same module.
+#
+# These 28 lines: the rule restated so it does not exclude the own module, an
+# own-module grep arm, the sealed-hierarchy trigger with the measured case and
+# a copyable grep on the HIERARCHY ROOT (verified: returns the gate), and the
+# vacuity point added to the existing non-falsifier paragraph — a green
+# own-module suite is not evidence either, because a missing list entry cannot
+# fail a test.
+#
+# +3 from review (PR #815): the copyable grep now names the discriminating
+# pair at cab.2.3's dispatch-time tree — subtype-keyed returned nothing, root-
+# keyed returned the gate — instead of a live file count that was 2 then and 5
+# now and will drift again. Plus one rewrap and one tense fix.
