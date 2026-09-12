@@ -351,8 +351,8 @@ None of the accounting above maps onto the `:iroh` cargo tasks
   tasks instead: `:concord:test --rerun :concord:concordanceGate --rerun
   :concord:docLints --rerun :concord:check --no-build-cache`.
 
-  **Which shapes are actually unsafe — measured 2026-09-11 on `:nature` and
-  `:testkit`, because computenet-5u3c asserted the wrong pair and a reviewer
+  **Which shapes are actually unsafe — measured 2026-09-12 on `:nature` and
+  `:testkit`, MacBoo, because computenet-5u3c asserted the wrong pair and a reviewer
   disproved it.** `--rerun` binds to the task it FOLLOWS, so:
 
   | command | test task line | count line | JUnit |
@@ -364,7 +364,11 @@ None of the accounting above maps onto the `:iroh` cargo tasks
 
   So a trailing lifecycle task is harmless — the flag is already bound. The
   unsafe shapes are the flag ON the lifecycle task, and the flag on ANOTHER
-  module's test task, which is what computenet-1mjv was.
+  module's test task — computenet-1mjv was BOTH at once
+  (`:oracle:test --rerun :concord:check --rerun`), which is why the bullet
+  above attributes it to the lifecycle kind and this table to the other
+  module. The load-bearing cell is `executed`; the trailing up-to-date count
+  varies with configuration-cache state, so do not match on it.
 
   **And the tells DO fire on both — loudly.** The test task prints
   `UP-TO-DATE` and the count line shows ZERO executed. What makes this trap
