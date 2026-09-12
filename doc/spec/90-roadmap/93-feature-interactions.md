@@ -11199,6 +11199,32 @@ No CONFLICT flag required. Phase-2 cryptographic authentication is a *new design
 
 #### 7. Spec impact
 
+**Historical record, not a task list.** The bullets below record the spec edits I-28's
+resolution implied. Its vocabulary (`BoundaryPolicy`/`AuthLevel`/`Principal`, the three
+seams, attention attenuation, disclosure, delta integrity) is specified today in 10/11
+§Membranes and policies, 10/13 §Policies, 20/21 §Pull, 30/34 §Decisions, 40/42 §Decided in
+93 not yet built, 40/43 §`BoundaryPolicy`: three seams, and 90/91 §G-29 — the last two
+landed in sections of their own, not in the §Principles and §The five mechanisms the
+bullets below name as targets. Two qualifications, each checked against the target files
+on 2026-09-12:
+
+- **Two bullets were superseded, not applied as written.** The 40/43 "Still undefined"
+  rewrite and the 90/91 §G-29 rewrite were overtaken by later decisions: 43-security.md's
+  "Still undefined" paragraph now records key rotation and revocation as *decided,
+  unbuilt* (2026-08-29 option-4 anchor decision, DSC4 / `computenet-5y8t`), which §8 below
+  states as well. Executing either bullet literally would reintroduce the retired
+  "rotation and revocation remain open" framing.
+- **Two bullets were never applied.** The 10/12 and 40/41 notes do not exist in
+  `12-ports.md` or `41-location-transparency.md`; their substance lives in 40/43, 40/42
+  and 30/34 instead, so what is absent is the cross-reference in each consumer section
+  (`computenet-8z4ep`). One clause is a genuine residual rather than a missing pointer:
+  the 40/41 bullet's "frames may carry a signature/counter envelope field" is a wire-format
+  element no chapter specifies, and it is carried by §8's "Delta signature scheme"
+  follow-on gap below, not by this list.
+
+So read the bullets below as a record of what the resolution implied, and check §8/§9
+below and the target file itself before acting on any of them.
+
 - **40/43 §The five mechanisms / §G-29** — Deliver the vocabulary above mechanism 2:
   `BoundaryPolicy` (admission / linkAuthority / protocolAuthority / disclosure / integrity)
   bound to `Principal`; the three-seams-per-dispatch-class model; the phased
