@@ -89,6 +89,20 @@ class IdentityDerivationRatchetTest {
     // sees no declaration keyword and no colon on the continuation line.
     private val bindingSupertypeSpacedColon = Regex("""\s:\s*PeerIdentityBinding\b""")
     private val bindingInterfaceDeclaration = Regex("""^\s*fun\s+interface\s+PeerIdentityBinding\b""")
+
+    // ...and the shape none of the above can reach at all: a supertype list
+    // wrapped onto its own line ("class Escape :\n    PeerIdentityBinding,\n
+    // Marker {"). A line scan sees the class/object keyword and colon on one
+    // physical line with nothing after the colon, the interface name alone on
+    // the next with no keyword/colon/brace, and the brace on a third line
+    // with no interface name — none of [bindingSamConversion], [bindingSupertype]
+    // or [bindingSupertypeSpacedColon] can match any single line. Detected by
+    // matching the header REGION instead of a single line: a class/object
+    // header line whose supertype list is empty on that line (trimmed content
+    // ends in the colon) opens an accumulation that folds subsequent lines in
+    // until the opening brace, then the fold is checked as a whole for the
+    // interface name. Measured 2026-09-02 (computenet-6jkz).
+    private val bindingHeaderWrapStart = Regex("""^\s*(?:\w+\s+)*(?:class|object)\s+\S.*:\s*$""")
     private val fingerprintDeclaration = Regex("""\bfun\s+fingerprint\([^)]*\)\s*:\s*([\w.]+)""")
 
     /** Repo-relative module `src/main/kotlin` roots, parsed from `settings.gradle.kts`. */
@@ -132,14 +146,35 @@ class IdentityDerivationRatchetTest {
     fun scanPeerIdentityBindingImplementations(root: File, moduleRoots: List<File>): Set<String> {
         val paths = mutableSetOf<String>()
         eachKotlinFile(root, moduleRoots) { file, relativePath ->
+            // Non-null while folding a wrapped header (see [bindingHeaderWrapStart])
+            // into one logical line, from the class/object keyword's line up to
+            // (and including) the line carrying the opening brace.
+            var pendingHeader: MutableList<String>? = null
             file.forEachLine { line ->
                 val content = contentOrNull(line) ?: return@forEachLine
-                if (bindingInterfaceDeclaration.containsMatchIn(content)) return@forEachLine
+                if (bindingInterfaceDeclaration.containsMatchIn(content)) {
+                    pendingHeader = null
+                    return@forEachLine
+                }
+                val header = pendingHeader
+                if (header != null) {
+                    header.add(content)
+                    if (content.contains("{")) {
+                        val folded = header.joinToString(" ")
+                        if (Regex("""\bPeerIdentityBinding\b""").containsMatchIn(folded)) {
+                            paths += relativePath
+                        }
+                        pendingHeader = null
+                    }
+                    return@forEachLine
+                }
                 val isImplementation = bindingSamConversion.containsMatchIn(content) ||
                     bindingSupertype.containsMatchIn(content) ||
                     bindingSupertypeSpacedColon.containsMatchIn(content)
                 if (isImplementation) {
                     paths += relativePath
+                } else if (bindingHeaderWrapStart.containsMatchIn(content)) {
+                    pendingHeader = mutableListOf(content)
                 }
             }
         }
@@ -412,6 +447,66 @@ class IdentityDerivationRatchetTest {
         assertEquals(expected, actual) {
             "scanner should report the no-space multi-supertype escape AND the constructor/annotation/anonymous-" +
                 "object shapes, never the type-usage-only file; found: $actual"
+        }
+    }
+
+    /**
+     * Non-vacuousness route for assertion (b) (test-only task, computenet-6jkz —
+     * no production edit is in this claim to prove discrimination against, so
+     * the test carries its own fixture, same pattern as the other fixture
+     * self-checks above).
+     *
+     * Pins the residual identified in the computenet-lusi review: a supertype
+     * list wrapped onto its own line escapes all three predicates —
+     * [bindingSupertype] and [bindingSupertypeSpacedColon] both require the
+     * interface name and a preceding colon on the SAME physical line, and
+     * [bindingSamConversion] requires the interface name immediately followed
+     * by `{`. A declaration shaped
+     * ```
+     * class Escape :
+     *     PeerIdentityBinding,
+     *     Marker {
+     * ```
+     * has none of that on one line: line 1 has the colon but not the
+     * interface name, line 2 has the interface name but no colon, keyword or
+     * brace, line 3 has the brace but not the interface name.
+     */
+    @Test
+    fun `fixture self-check - the binding scanner flags a supertype list wrapped onto its own line`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-d")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-d/src/main/kotlin/fixture/d").apply { mkdirs() }
+
+        File(moduleDir, "Escape.kt").writeText(
+            """
+            package fixture.d
+
+            private interface Marker
+
+            class Escape :
+                PeerIdentityBinding,
+                Marker {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        assertEquals(1, moduleRoots.size) {
+            "expected 1 fixture module root, found $moduleRoots — moduleMainRoots is broken against this tree"
+        }
+
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-d/src/main/kotlin/fixture/d/Escape.kt"), actual) {
+            "scanner should report the declaration whose supertype list is wrapped onto its own line " +
+                "(class/object header on one line, PeerIdentityBinding on the next); found: $actual"
         }
     }
 }
