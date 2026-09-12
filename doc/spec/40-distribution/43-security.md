@@ -107,11 +107,17 @@ Nothing new lives at the boundary.
 in-host/same-registry crossings (today's null identity), or `Peer(id, auth)`
 for bridge crossings — `id` the stamped `PeerId`, `auth` an `AuthLevel` of
 `TransportVouched` (phase 1, landed: the transport connection vouches for
-the name) or `Authenticated` (phase 2, landed — DSC1: `PeerId` is derived
-from an Ed25519 public key and the hello adds a signed-nonce challenge whose
-verification promotes the crossing). Predicates
+the name) or `Authenticated` (phase 2, landed — DSC1: `PeerId` today resolves
+1:1 from an Ed25519 public key's fingerprint, via the interim
+`PeerIdentityBinding` (`computenet-376c`), and the hello adds a signed-nonce
+challenge whose verification promotes the crossing). Predicates
 read `Principal`; only the strength that `AuthLevel` certifies changes
-across the upgrade — no CA, no global identity registry (P4, P10).
+across the upgrade. Identity-is-key is not the forward position (G-29,
+above): the 2026-08-29 option-4 decision binds a peer's stable name to its
+current key via a centrally managed anchor signing key that relying peers
+verify offline — a CA in shape, design-decided but unbuilt (DSC4,
+`computenet-5y8t`). What the decision rules out, and what remains true here,
+is a central lookup service and a global identity registry (P4, P10).
 
 **Vocabulary.** A `BoundaryPolicy` attaches to a membrane `Exposure` (93
 I-10) and holds four predicates, each defaulting to today's open behavior
