@@ -422,7 +422,11 @@ DSC4's stated design properties bind here, and each one constrains the design:
      counter is what makes the superseded statement permanently non-authoritative
      to any peer that has seen the newer one — and only to those peers.
   2. **A validity window in the statement**, because it is the only bound on
-     staleness a peer can evaluate offline. It caps how long a superseded
+     staleness a peer can evaluate offline — and note what that buys it on:
+     a clock. `[DSC1-NV-03]` (clock-skew adequacy) is recorded EXPLICITLY
+     UNVERIFIED in this same file and stays that way, so the one offline
+     bound this design has rests on a property the project has not checked.
+     It caps how long a superseded
      binding remains acceptable to a peer that never hears the rebinding. The
      tension is real and is named rather than hidden: short windows buy
      revocation latency by making liveness depend on re-issuance *reaching*
@@ -461,14 +465,30 @@ DSC4's stated design properties bind here, and each one constrains the design:
 Each of these is a cost of the mechanism as designed, not a defect to be fixed
 later by tuning.
 
-- **Allowlists (`Peering.Side.allow`, `allowPeers(...)`).** Rotation costs them
-  nothing — they name stable identities, which is the point of option 4. The
-  cost is the inverse, and it is easy to misread: **anchor revocation answers
-  "this key is no longer this name", never "this name is no longer welcome".**
-  An allowlist entry authorizes the *name*, so a revoked-and-rebound peer is
-  re-admitted by the same entry the moment the new binding arrives, with no
-  operator action. Ejecting a peer remains allowlist removal and is a separate
-  act. Second cost: until the superseding binding reaches a given peer, that
+- **Allowlists (`Peering.Side.allow`, `allowPeers(...)`).** The central
+  distinction, and it is easy to misread: **anchor revocation answers "this key
+  is no longer this name", never "this name is no longer welcome".** Rebinding
+  is authentication, not authorization; ejecting a peer remains allowlist
+  removal and is a separate act.
+
+  **But that only pays off once an allowlist entry names the name, and in
+  landed code neither of these does.** Both are configured in `KeyId`s since
+  `computenet-376c`: `Peering.Side.allow` is a `Set<KeyId>?` compared against
+  the key on the wire at hello time, and `allowPeers(vararg keys: KeyId,
+  binding)` resolves each *configured key* through the binding per evaluation
+  and compares the result against the stamped `PeerId`. So today a rotation —
+  and a revocation, which is the same statement — leaves both entries naming a
+  key that no longer resolves to the peer, and an operator must re-point them
+  by hand; the "re-admitted by the same entry the moment the new binding
+  arrives, with no operator action" property option 4 is supposed to buy is a
+  property DSC4 still has to deliver by moving allowlist *configuration* to
+  names. Until it does, the two seams behave oppositely: `allowPeers` fails
+  closed (the configured key stops resolving), while `Peering.Side.allow`
+  never consults the binding at all, so anchor revocation is invisible to
+  ingress admission. Both are DSC4's to change, not this entry's.
+
+  Second cost, and it survives whichever way that is settled: until the
+  superseding binding reaches a given peer, that
   peer's allowlist keeps admitting the stolen key. The window is bounded only by
   gossip and the validity window, and no peer can observe its own exposure.
 - **Mirrored `Remote` location attribution
@@ -508,10 +528,30 @@ rotation/revocation is now *decided-but-unbuilt* rather than undefined),
 `doc/spec/90-roadmap/95-research-plan.md` R7 (direction (2) is now the adopted
 shape, and R7's *"no decided position yet"* closing line is superseded),
 `doc/ARCHITECTURE.md`'s `:identity` row, and `doc/spec/90-roadmap/91-gap-analysis.md`'s
-G-29 row — was **moved to DSC4 by the maintainer disposition of 2026-09-11**,
-which narrowed this bead to revocation. Those four files therefore still assert
-identity-is-key at this entry's commit. That is a known, deliberate gap, not an
-omission: they are reconciled by whoever lands the DSC4 change they describe.
+G-29 row — is **not done here**: the maintainer disposition of 2026-09-11
+narrowed this bead to revocation, and doing it would be the rotation half.
+
+State it exactly, because the 2026-08-29 inventory has drifted and because
+ownership is currently unclaimed:
+
+- **Still asserting identity-is-key at this entry's commit**:
+  `43-security.md:56` (*"a `PeerId` derived as the key's fingerprint"*, plus
+  §G-29's open list, where key rotation/revocation is now
+  *decided-but-unbuilt* rather than undefined) and `95-research-plan.md` R7
+  (direction (2) recorded as *not pursued* though it is now the adopted
+  shape, and the *"no decided position yet"* closing line superseded).
+- **Already reconciled, and the 2026-08-29 inventory is stale on both**:
+  `doc/ARCHITECTURE.md`'s `:identity` row was rewritten by `computenet-376c`
+  (`82158fb49`, PR #616) and `computenet-egl.3` (`0ecfc869d`, PR #620) and now
+  describes key-derived **`KeyId`** fingerprints with `PeerId` resolving
+  through the `PeerIdentityBinding` seam; `91-gap-analysis.md`'s G-29 row
+  never asserted the derivation, and reads as accurate as written.
+- **Ownership is unassigned, not delegated.** The disposition moved the
+  *rotation* half to DSC4 but said nothing about these files, and epic
+  `computenet-5y8t`'s own description lists "the documentation
+  reconciliation, which is `computenet-aimh`'s remaining scope" under
+  EXPLICITLY OUT OF SCOPE. Both items therefore currently sit outside both
+  beads. Filed as a residual rather than silently left to whoever lands DSC4.
 `doc/spec/CONCORDANCE.md` is generated and must never be hand-edited.
 
 ---
@@ -528,7 +568,8 @@ The state is unchanged in substance and changed only in prospect:
 - **Unchanged.** A thief holding a peer's private key *is* that peer. Every
   signature verifies, every derived key identifier matches, and no seam in the
   system can tell the two apart. `PeerIdentityBinding.Interim` — the binding
-  landed today — maps a key identifier to an identity of the same name and
+  landed on `main` 2026-09-02 by `computenet-376c` (`82158fb49`, PR #616) —
+  maps a key identifier to an identity of the same name and
   claims nothing about theft; naming the derivation does not strengthen it.
 - **Changed only in prospect.** Option 4 makes recovery *possible*: an
   anchor-vouched name can be rebound to a fresh key after out-of-band
