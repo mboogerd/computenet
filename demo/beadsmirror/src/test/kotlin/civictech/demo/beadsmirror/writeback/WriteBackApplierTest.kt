@@ -143,15 +143,21 @@ class WriteBackApplierTest {
 
             val report = WriteBackApplier({ export(ws) }, importer, { winner }, onEvent = { trace += it }).applyOnce()
 
-            val preFlightIndex = trace.indexOfFirst { it is WriteBackEvent.PreFlight }
+            // ONE assertion carrying the whole criterion, and it discriminates in
+            // BOTH directions: the PreFlight events lying strictly BEFORE the
+            // importer call must be exactly one, carrying exactly the loss.
+            // Drop the emission and this is empty; emit it after the import and
+            // it is empty too. (An `indexOf(PreFlight) < indexOf(importer)`
+            // comparison would NOT do: with the emission dropped the PreFlight
+            // index is -1, which still compares less than the import's 0.)
             val importIndex = trace.indexOfFirst { it is ImporterCalled }
-            preFlightIndex shouldBeGreaterThan -1
-            importIndex shouldBeGreaterThan preFlightIndex
-            (trace[preFlightIndex] as WriteBackEvent.PreFlight).let {
-                it.issueId shouldBe id
-                it.losses shouldContainExactly
-                    listOf(FieldLoss("notes", old = JsonPrimitive("local-only"), new = null))
-            }
+            importIndex shouldBeGreaterThan -1
+            trace.subList(0, importIndex)
+                .filterIsInstance<WriteBackEvent.PreFlight>()
+                .single() shouldBe WriteBackEvent.PreFlight(
+                id,
+                listOf(FieldLoss("notes", old = JsonPrimitive("local-only"), new = null)),
+            )
             report.imposed shouldBe 1
             row(ws, id).json["notes"].let { it == null || it is JsonNull } shouldBe true
         }
