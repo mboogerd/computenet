@@ -11199,6 +11199,13 @@ No CONFLICT flag required. Phase-2 cryptographic authentication is a *new design
 
 #### 7. Spec impact
 
+*(Historical: this list records the spec edits I-28's resolution implied, and they have
+been applied — `BoundaryPolicy`/`AuthLevel`/`Principal` land in 10/11, 10/12, 20/21,
+30/34, 40/41, 40/42, 40/43, and 90/91 §G-29. Later work (43-security.md's "Still
+undefined" paragraph, the DSC4 anchor-key decision) has since superseded some of this
+list's exact wording — see §8/§9 above for the current state — so read the bullets below
+as a record of what was done, not as a remaining task.)*
+
 - **40/43 §The five mechanisms / §G-29** — Deliver the vocabulary above mechanism 2:
   `BoundaryPolicy` (admission / linkAuthority / protocolAuthority / disclosure / integrity)
   bound to `Principal`; the three-seams-per-dispatch-class model; the phased
