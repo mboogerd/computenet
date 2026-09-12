@@ -11236,10 +11236,10 @@ No CONFLICT flag required. Phase-2 cryptographic authentication is a *new design
   distribution and rotation are no longer open-undecided: the 2026-08-29 option-4
   decision (`doc/distribution/findings.md`, 2026-09-12 entries) is design-decided,
   unbuilt (rotation is a new binding of the same stable name, signed by a centrally
-  managed anchor key, DSC4 / `computenet-5y8t`), superseding the key-derived-identity premise this phase-2
-  mechanism embodies. Still open: wiring `AuthLevel.Authenticated` into
-  `BoundaryPolicy`'s `minAuth`/`integrity` predicates at the wire-crossing bridge
-  (SEC1).
+  managed anchor key, DSC4 / `computenet-5y8t`), superseding the
+  key-derived-identity premise this phase-2 mechanism embodies. Still open: wiring
+  `AuthLevel.Authenticated` into `BoundaryPolicy`'s `minAuth`/`integrity`
+  predicates at the wire-crossing bridge (SEC1).
 - **Delta signature scheme.** Exact signed tuple, per-source replay counter semantics,
   verification cost/batching on the bridge path, and interaction with move-by-serialize
   `Owned` deltas.
