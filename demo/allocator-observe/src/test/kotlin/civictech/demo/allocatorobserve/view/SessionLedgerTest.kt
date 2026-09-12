@@ -107,6 +107,25 @@ class SessionLedgerTest {
         (firstHalf + secondHalf) shouldBe (2.0 plusOrMinus TOLERANCE)
     }
 
+    @Test
+    fun `a session wholly outside the query window contributes 0h`() {
+        val ledger = SessionLedger()
+        val session = record("CN", "2026-04-01T09:00:00Z", "2026-04-01T11:00:00Z") // 2h
+        ledger.apply(addDelta(session, 1))
+
+        // Visited (ended=11:00 > from=08:00) but non-overlapping: the session starts
+        // (09:00) after the query window closes (to=08:30) — exercises the
+        // started-before-to / overlap-bounds guards, not just tailMap exclusion.
+        val visitedButNonOverlapping =
+            ledger.hoursBetween("CN", Instant.parse("2026-04-01T08:00:00Z"), Instant.parse("2026-04-01T08:30:00Z"))
+        visitedButNonOverlapping shouldBe (0.0 plusOrMinus TOLERANCE)
+
+        // Not even visited: ended (11:00) <= from (12:00) excludes it from tailMap.
+        val neverVisited =
+            ledger.hoursBetween("CN", Instant.parse("2026-04-01T12:00:00Z"), Instant.parse("2026-04-01T13:00:00Z"))
+        neverVisited shouldBe (0.0 plusOrMinus TOLERANCE)
+    }
+
     // --- Membership flip semantics ---
 
     @Test
