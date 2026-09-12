@@ -11199,12 +11199,25 @@ No CONFLICT flag required. Phase-2 cryptographic authentication is a *new design
 
 #### 7. Spec impact
 
-*(Historical: this list records the spec edits I-28's resolution implied, and they have
-been applied — `BoundaryPolicy`/`AuthLevel`/`Principal` land in 10/11, 10/12, 20/21,
-30/34, 40/41, 40/42, 40/43, and 90/91 §G-29. Later work (43-security.md's "Still
-undefined" paragraph, the DSC4 anchor-key decision) has since superseded some of this
-list's exact wording — see §8/§9 above for the current state — so read the bullets below
-as a record of what was done, not as a remaining task.)*
+**Historical record, not a task list.** The bullets below record the spec edits I-28's
+resolution implied. Its vocabulary (`BoundaryPolicy`/`AuthLevel`/`Principal`, the three
+seams, attention attenuation, disclosure, delta integrity) is specified today in 10/11
+§Membranes and policies, 10/13 §Policies, 20/21 §Pull, 30/34 §Decisions, 40/42 §Principles,
+40/43 §The five mechanisms, and 90/91 §G-29. Two qualifications, each checked against
+the target files on 2026-09-12:
+
+- **Two bullets were superseded, not applied as written.** The 40/43 "Still undefined"
+  rewrite and the 90/91 §G-29 rewrite were overtaken by later decisions: 43-security.md's
+  "Still undefined" paragraph now records key rotation and revocation as *decided,
+  unbuilt* (2026-08-29 option-4 anchor decision, DSC4 / `computenet-5y8t`), which §8 below
+  states as well. Executing either bullet literally would reintroduce the retired
+  "rotation and revocation remain open" framing.
+- **Two bullets were never applied.** The 10/12 and 40/41 notes do not exist in
+  `12-ports.md` or `41-location-transparency.md`; their substance lives in 40/43 and 30/34
+  instead, so nothing is unspecified — only the cross-references are absent.
+
+So read the bullets below as a record of what the resolution implied, and check §8/§9
+below and the target file itself before acting on any of them.
 
 - **40/43 §The five mechanisms / §G-29** — Deliver the vocabulary above mechanism 2:
   `BoundaryPolicy` (admission / linkAuthority / protocolAuthority / disclosure / integrity)
