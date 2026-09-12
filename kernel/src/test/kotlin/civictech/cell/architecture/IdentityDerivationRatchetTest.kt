@@ -89,6 +89,27 @@ class IdentityDerivationRatchetTest {
     // sees no declaration keyword and no colon on the continuation line.
     private val bindingSupertypeSpacedColon = Regex("""\s:\s*PeerIdentityBinding\b""")
     private val bindingInterfaceDeclaration = Regex("""^\s*fun\s+interface\s+PeerIdentityBinding\b""")
+
+    // ...and the shape none of the above can reach at all: a supertype list
+    // wrapped onto its own line ("class Escape :\n    PeerIdentityBinding,\n
+    // Marker {"). A line scan sees the class/object keyword and colon on one
+    // physical line with nothing after the colon, the interface name alone on
+    // the next with no keyword/colon/brace, and the brace on a third line
+    // with no interface name — none of [bindingSamConversion], [bindingSupertype]
+    // or [bindingSupertypeSpacedColon] can match any single line. Detected by
+    // matching the header REGION instead of a single line: a class/object
+    // header line whose supertype list is empty on that line (trimmed content
+    // ends in the colon) opens an accumulation that folds subsequent lines in
+    // for as long as the supertype list is unfinished — see the fold's own
+    // bound in [scanPeerIdentityBindingImplementations], which is what keeps a
+    // body-less header from sweeping later code in — then the fold is checked
+    // as a whole for the interface name. Measured 2026-09-02 (computenet-6jkz).
+    private val bindingHeaderWrapStart = Regex("""^\s*(?:\w+\s+)*(?:class|object)\s+\S.*:\s*$""")
+
+    // The interface name, matched against a FOLDED header region rather than a
+    // single line. Hoisted out of the scan loop; see
+    // [scanPeerIdentityBindingImplementations].
+    private val bindingHeaderName = Regex("""\bPeerIdentityBinding\b""")
     private val fingerprintDeclaration = Regex("""\bfun\s+fingerprint\([^)]*\)\s*:\s*([\w.]+)""")
 
     /** Repo-relative module `src/main/kotlin` roots, parsed from `settings.gradle.kts`. */
@@ -132,14 +153,57 @@ class IdentityDerivationRatchetTest {
     fun scanPeerIdentityBindingImplementations(root: File, moduleRoots: List<File>): Set<String> {
         val paths = mutableSetOf<String>()
         eachKotlinFile(root, moduleRoots) { file, relativePath ->
+            // Non-null while folding a wrapped header (see [bindingHeaderWrapStart])
+            // into one logical line, from the class/object keyword's line up to
+            // (and including) the line carrying the opening brace.
+            var pendingHeader: MutableList<String>? = null
             file.forEachLine { line ->
                 val content = contentOrNull(line) ?: return@forEachLine
-                if (bindingInterfaceDeclaration.containsMatchIn(content)) return@forEachLine
+                if (bindingInterfaceDeclaration.containsMatchIn(content)) {
+                    pendingHeader = null
+                    return@forEachLine
+                }
+                val header = pendingHeader
+                if (header != null) {
+                    header.add(content)
+                    val trimmed = content.trim()
+                    // A blank or comment-only line inside a header carries no
+                    // supertype information and does not end it — `SetCell.kt`
+                    // wraps a real supertype list with a `//` block in exactly
+                    // that position. Fold on without deciding.
+                    if (trimmed.isNotEmpty()) {
+                        val folded = header.joinToString(" ")
+                        // The header ends at the opening brace; short of that
+                        // the supertype list only CONTINUES while it is
+                        // visibly unfinished — a trailing comma, or an
+                        // unbalanced supertype constructor call spanning
+                        // lines. Anything else is a body-less declaration that
+                        // ended on this line, and folding past it would sweep
+                        // unrelated code into the match: measured on
+                        // "class Wrapped :\n    Base()" followed by a plain
+                        // "fun consume(b: PeerIdentityBinding) {" type usage,
+                        // which the fold-until-brace form flagged as an
+                        // implementation (computenet-6jkz review). A ratchet
+                        // that cries wolf is weakened by the next agent, so
+                        // the fold is bounded by the header, not by the file.
+                        val listContinues = trimmed.endsWith(",") ||
+                            folded.count { it == '(' } > folded.count { it == ')' }
+                        if (trimmed.contains("{") || !listContinues) {
+                            if (bindingHeaderName.containsMatchIn(folded)) {
+                                paths += relativePath
+                            }
+                            pendingHeader = null
+                        }
+                    }
+                    return@forEachLine
+                }
                 val isImplementation = bindingSamConversion.containsMatchIn(content) ||
                     bindingSupertype.containsMatchIn(content) ||
                     bindingSupertypeSpacedColon.containsMatchIn(content)
                 if (isImplementation) {
                     paths += relativePath
+                } else if (bindingHeaderWrapStart.containsMatchIn(content)) {
+                    pendingHeader = mutableListOf(content)
                 }
             }
         }
@@ -412,6 +476,164 @@ class IdentityDerivationRatchetTest {
         assertEquals(expected, actual) {
             "scanner should report the no-space multi-supertype escape AND the constructor/annotation/anonymous-" +
                 "object shapes, never the type-usage-only file; found: $actual"
+        }
+    }
+
+    /**
+     * Non-vacuousness route for assertion (b) (test-only task, computenet-6jkz —
+     * no production edit is in this claim to prove discrimination against, so
+     * the test carries its own fixture, same pattern as the other fixture
+     * self-checks above).
+     *
+     * Pins the residual identified in the computenet-lusi review: a supertype
+     * list wrapped onto its own line escapes all three predicates —
+     * [bindingSupertype] and [bindingSupertypeSpacedColon] both require the
+     * interface name and a preceding colon on the SAME physical line, and
+     * [bindingSamConversion] requires the interface name immediately followed
+     * by `{`. A declaration shaped
+     * ```
+     * class Escape :
+     *     PeerIdentityBinding,
+     *     Marker {
+     * ```
+     * has none of that on one line: line 1 has the colon but not the
+     * interface name, line 2 has the interface name but no colon, keyword or
+     * brace, line 3 has the brace but not the interface name.
+     */
+    @Test
+    fun `fixture self-check - the binding scanner flags a supertype list wrapped onto its own line`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-d")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-d/src/main/kotlin/fixture/d").apply { mkdirs() }
+
+        File(moduleDir, "Escape.kt").writeText(
+            """
+            package fixture.d
+
+            private interface Marker
+
+            class Escape :
+                PeerIdentityBinding,
+                Marker {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        assertEquals(1, moduleRoots.size) {
+            "expected 1 fixture module root, found $moduleRoots — moduleMainRoots is broken against this tree"
+        }
+
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-d/src/main/kotlin/fixture/d/Escape.kt"), actual) {
+            "scanner should report the declaration whose supertype list is wrapped onto its own line " +
+                "(class/object header on one line, PeerIdentityBinding on the next); found: $actual"
+        }
+    }
+
+    /**
+     * The false-positive half of the wrapped-header fold (computenet-6jkz
+     * review). A ratchet that flags innocent code is a worse instrument than
+     * one that misses a shape, because the next agent weakens it — so the fold
+     * opened by [bindingHeaderWrapStart] has to stop at the end of the
+     * supertype list, not at the next `{` anywhere in the file.
+     *
+     * The shape is real: `SetCell.kt:273` wraps its supertype list exactly
+     * this way. A body-less variant
+     * ```
+     * class Wrapped :
+     *     Base()
+     * ```
+     * ends the header without ever carrying a brace, so a fold-until-brace
+     * scan runs on into the file and, on the first later line that happens to
+     * carry both a `{` and the interface name — an ordinary
+     * `fun consume(binding: PeerIdentityBinding) {` type usage — flags the
+     * file as an implementation site. Measured: it did.
+     */
+    @Test
+    fun `fixture self-check - the header fold stops at the end of the supertype list`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-e")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-e/src/main/kotlin/fixture/e").apply { mkdirs() }
+
+        File(moduleDir, "Wrapped.kt").writeText(
+            """
+            package fixture.e
+
+            private open class Base
+
+            class Wrapped :
+                Base()
+
+            fun consume(binding: PeerIdentityBinding) {
+                println(binding)
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(emptySet<String>(), actual) {
+            "a class header ending bare at the colon with a body-less supertype must not fold " +
+                "forward into an unrelated type usage; found: $actual"
+        }
+    }
+
+    /**
+     * The other side of the same bound: stopping the fold at the first line
+     * that does not end in a comma must not lose a supertype list whose FIRST
+     * entry is a constructor call spanning several lines. The fold continues
+     * while the header's parentheses are unbalanced.
+     */
+    @Test
+    fun `fixture self-check - the header fold spans a multi-line supertype constructor call`(
+        @TempDir tempDir: File,
+    ) {
+        File(tempDir, "settings.gradle.kts").writeText(
+            """
+            include(":fixture-f")
+            """.trimIndent(),
+        )
+
+        val moduleDir = File(tempDir, "fixture-f/src/main/kotlin/fixture/f").apply { mkdirs() }
+
+        File(moduleDir, "Spanning.kt").writeText(
+            """
+            package fixture.f
+
+            private open class Base(val n: Int)
+
+            class Spanning :
+                Base(
+                    1,
+                ),
+                PeerIdentityBinding {
+                override fun identityOf(key: KeyId): PeerId = error("probe body constructs no PeerId")
+            }
+            """.trimIndent(),
+        )
+
+        val moduleRoots = moduleMainRoots(tempDir)
+        val actual = scanPeerIdentityBindingImplementations(tempDir, moduleRoots)
+
+        assertEquals(setOf("fixture-f/src/main/kotlin/fixture/f/Spanning.kt"), actual) {
+            "the fold must span an unbalanced supertype constructor call and still see the " +
+                "interface name later in the same header; found: $actual"
         }
     }
 }
