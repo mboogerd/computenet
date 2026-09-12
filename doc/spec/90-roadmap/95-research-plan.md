@@ -127,14 +127,26 @@ rotation and delta-signature verification at ingress (below).
 the existing `Peering` handshake — smallest step, no infrastructure. **Landed**:
 Ed25519 keypairs (`:identity`), `PeerId` = key fingerprint, a signed-nonce
 challenge/response added to the hello (`computenet-ssa.1`, `.2`, `.3`). (2) DIDs for
-portable identity across transports (matches the civic-tech niche, P10) — not
-pursued; direction (1) was smaller and sufficient. (3) delta
+portable identity across transports (matches the civic-tech niche, P10) — recorded
+here in 2026-08 as *not pursued* on size, not merit; **the maintainer adopted
+this direction's shape on 2026-08-29** as a fourth, explicitly-argued option
+(a stable name, decoupled from key material, bound to its current key by a
+centrally-managed anchor's signed statement, verified offline — see
+`doc/distribution/findings.md`'s 2026-09-12 entry): the identity-is-key
+premise direction (1) shares was rejected, not merely direction (1)'s size.
+Design-decided, not implemented; owned by DSC4 (epic `computenet-5y8t`). (3) delta
 signatures per emitting peer (already the decided granularity in 40/42) using (1)'s
 keys — **landed for the wire hello's identity**; signing the `RegistryAnnounce`
 management frames themselves is `computenet-ssa.4`, in progress. At-rest encryption
 stays out of the kernel (host concern) and remains open. Key rotation against the
-`instanceId` lifecycle also remains open (DSC1 §7 risk 2; rotation renames the peer,
-invalidating allowlists and mirrored `Remote` locations — no decided position yet).
+`instanceId` lifecycle is **decided, unbuilt** as of 2026-08-29, superseding the
+DSC1 §7 risk 2 framing this entry previously recorded: a rotation is a new
+anchor-signed binding for the same stable name, so the name — not the key — is
+what allowlists and mirrored `Remote` locations key on going forward; that
+binding is DSC4's to build.
+Revocation over the same anchor-rebinding mechanism is likewise designed, not
+yet owned by anyone building it — `doc/distribution/findings.md`'s 2026-09-12
+entries. Neither is built at this commit.
 **Actions**: threat-model pass over the three seams of 40/43 §BoundaryPolicy
 (spoofed announcements, replayed deltas, attention floods) to determine the minimum
 that defeats each — done for the hello seam (DSC1's adversarial suite: impersonation,
