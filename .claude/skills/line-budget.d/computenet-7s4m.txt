@@ -1,0 +1,26 @@
+work +11
+
+# No dispatch prompt told any agent to read bd-traps.md, and task.md — the one
+# file an implementer IS handed — cited it ZERO times (computenet-7s4m).
+# reachability.py --for implementer reported NOT-READ, 2 hops away: the
+# computenet-l5rc shape, a correct rule in a file the reporting role never
+# opens. The empirical test had already run — "never chain bd writes in one
+# Bash block" sat in bd-traps.md from 2026-08-17, and a breakdown agent batched
+# three bd dep add calls anyway on 2026-09-02 and was denied by the classifier.
+#
+# WHICH REMEDY, and why (the bead left it open): the pointer, not "read
+# bd-traps.md in full" in all three dispatch prompts, and not sectioning the
+# file. The pointer costs 11 lines once and flips reachability to SERVED at 1
+# hop; a per-dispatch instruction costs context on every dispatch forever; and
+# sectioning helps a POINTED reader find a rule but cannot make an unpointed
+# agent open the file, which was the whole failure. The missing ## sections
+# stay as validate-skills.rb's standing note, which is already tracking them.
+#
+# The chained-writes rule is quoted inline rather than only linked, because it
+# is the rule that measurably did not reach an agent.
+#
+# +1 from review (PR #819): "Nothing else points you at it" was literally
+# absolute — the dispatch prompt does name the file once, bare, to settle one
+# bd show trap, which is exactly the topic-specific citation the bead
+# catalogues. Now "Nothing sends you to READ it". The inline rule also gained
+# the >=300s timeout half it was quoting without.
