@@ -1704,6 +1704,31 @@ verdict. (`parked` is only meaningful on an empty batch.)
   (computenet-dqy.37 required violating its own claim). Design reaches wider
   → widen the claim and comment why. The dispatch prompt below also tells the
   implementer to report-and-widen rather than choose silently.
+
+  **Then read the ACCEPTANCE for a clause the widening contradicts, and amend
+  it before anyone is dispatched** — the same reconciliation the human-park
+  route already requires, for the same reason: a reviewer scores against
+  `bd show`, not a comment thread. Widening computenet-j2x.4.3 to include
+  `Values.kt` left its criteria reading "no Kotlin file SHALL change in this
+  task", so the bead claimed a Kotlin file and forbade changing one. Its
+  reviewer happened to read the comments first and flagged it; one that read
+  criteria first would have failed correct, CI-green work — and the
+  implementer, reading the same criteria, could equally have refused the one
+  change that stopped its own scenarios passing vacuously (computenet-ussk).
+  Amend in place, keeping the superseded wording verbatim under a
+  `Superseded <date>:` label — the form the park route uses, whose
+  verbatim-preservation half is DISPUTED above and will be settled by
+  computenet-febs9; when it lands, this site changes with the other two.
+  This applies to the review-filed residual below too, where you author the
+  claim outright.
+
+  **When the widening is for a task ALREADY DISPATCHED** — the
+  report-and-widen case in the sentence above — "before anyone is dispatched"
+  has already been missed, and amending the acceptance under a live review
+  silently moves the standard the verdict is measured against
+  (computenet-7gxi, open). Do not amend it silently: comment the
+  reconciliation on the bead and `SendMessage` the implementer, so the text
+  the reviewer scores and the text the agent worked from stay the same one.
 - **Disjoint paths are not enough — read each candidate's acceptance for a
   cross-reference into another candidate's claim.** `next-batch.py` proves the
   batch will not merge into a conflict; it cannot see that task A's acceptance
