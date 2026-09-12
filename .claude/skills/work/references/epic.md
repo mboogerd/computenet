@@ -189,19 +189,21 @@ session runs zsh, which does NOT field-split an unquoted expansion, so
 wiring does not do what it reads as doing (computenet-zvuu7 — the same family
 as AGENTS.md's `$FILT` case, computenet-adgy, and it wired seven features'
 edges before the agent noticed). Write them out, or use a function with named
-parameters — **one call per Bash invocation**, because chaining `bd` WRITES in
-one block is what the permission classifier denied in the first place
+parameters. **One `bd` WRITE per Bash call**, because chaining `bd` mutations
+in one block is what the permission classifier denied in the first place
 ([bd-traps.md](bd-traps.md); the measured instance bundled three `bd dep add`
-calls). So define the function in the same call as the FIRST edge, then one
-call per edge after it:
+calls). So: one edge per Bash call, written out.
 
 ```bash
-dep() { bd dep add "$1" "$2"; }; dep <blocked-id> <blocker-id>   # first Bash call
+bd dep add <blocked-id> <blocker-id>   # one per Bash call; blocked first
 ```
 
-```bash
-dep <blocked-id> <blocker-id>                                    # one per call after
-```
+A helper function buys nothing here — **shell state does not survive between
+Bash calls**, so a `dep()` defined in one call is `command not found`, exit
+127, in the next, and every edge after the first reads as wired and is not.
+That is the `$FILT` family again (AGENTS.md, computenet-adgy), reached from
+the very paragraph warning about it. Use the function form only where the
+definition and the call are in the SAME invocation.
 
 **A required dependency whose target is NOT an epic has one answer, so two
 runs produce the same graph.** `bd` refuses an edge between an epic and a

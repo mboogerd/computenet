@@ -1,4 +1,4 @@
-work +6
+work +8
 
 # epic.md's dep-wiring example (landed via computenet-zvuu7) was one fenced
 # block with a dep() definition and THREE dep calls — the exact shape
@@ -10,3 +10,11 @@ work +6
 #
 # Also drops the real bead ids for placeholders: a copyable snippet of live
 # ids invites a verbatim run against the tracker.
+#
+# +2 from review (PR #822), which FAILED the first attempt: splitting the block
+# kept a dep() helper defined in the first call and invoked in later ones —
+# and shell state does not survive between Bash calls, so every edge after the
+# first would have exited 127 while the transcript read like a run. The $FILT
+# family (computenet-adgy) again, reached from the paragraph that warns about
+# it. The helper is gone; one `bd dep add` per call, written out, with the
+# non-persistence stated so nobody reintroduces it.
