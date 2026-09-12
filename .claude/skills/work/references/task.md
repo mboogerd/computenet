@@ -42,12 +42,13 @@ argument execute as shell and silently vanish from the stored text
 **Read [bd-traps.md](bd-traps.md) before your first `bd` write.** It is the
 list of `bd` behaviours that return a WRONG ANSWER rather than an error — a
 read that silently drops a field, a write that reports success and stores
-nothing. Nothing else points you at it: the dispatch prompt hands you this
-file, and until now this file cited it zero times, so a rule could sit there
-correct and unread. It did: "never chain `bd` writes in one Bash block" has
+nothing. Nothing sends you to READ it: your dispatch prompt names the file once, to
+settle one `bd show` trap, and until now this file cited it zero times — so a
+rule could sit there correct and unread. It did: "never chain `bd` writes in one Bash block" has
 been in that file since 2026-08-17, and a breakdown agent batched three
 `bd dep add` calls anyway on 2026-09-02 and was denied by the permission
-classifier (computenet-7s4m, computenet-br1y). One `bd` write per Bash call.
+classifier (computenet-7s4m, computenet-br1y). One `bd` write per Bash call,
+each with a ≥300s timeout.
 
 **Your tracker writes have a scope too, and it is narrower than your file
 claim.** By default you write to **your own assigned bead and to items you
