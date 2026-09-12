@@ -1,18 +1,25 @@
-work +15
+work +28
 
-# gradle-evidence.md's lifecycle --rerun bullet (computenet-1mjv) had the
-# mechanism but not the consequence: it says a lifecycle --rerun reruns
-# nothing and that the only signal was a stale JUnit timestamp. It does not
-# say that the three tells a reader has been trained on — UP-TO-DATE,
-# FROM-CACHE, and the N-executed line — DO NOT FIRE here, because they
-# describe the lifecycle task, which genuinely re-ran.
+# computenet-5u3c asked for a statement that the documented cache tells do NOT
+# fire when --rerun is bound to a lifecycle task, and named
+# `:module:test --rerun :module:check` as the unsafe form.
 #
-# Hit again 2026-09-07 (computenet-5u3c): a reviewer's
-# `:concord:test --rerun --no-build-cache :concord:check` bound the flag to
-# :concord:check and reported a 331-test JUnit XML predating a file it had
-# just deleted, under BUILD SUCCESSFUL and an ordinary-looking task count.
-# Caught only because the count disagreed with the working tree.
+# BOTH HALVES ARE FALSE, and the reviewer of PR #823 proved it by running the
+# four shapes on :nature and :testkit. --rerun binds to the task it FOLLOWS,
+# so a trailing lifecycle task is harmless: that command executes the test task
+# unmarked with a fresh JUnit XML, --no-build-cache interleaved or not. The
+# genuinely unsafe shapes are the flag ON the lifecycle task and the flag on
+# ANOTHER module's test task — and on both, the test task prints UP-TO-DATE and
+# the count line shows ZERO executed. The tells fire loudly.
 #
-# These 15 lines state the non-firing explicitly and name both forms side by
-# side — safe and unsafe differ by one trailing task and look identical — so
-# the consequence does not have to be derived from the binding rule.
+# Shipping the acceptance as written would have told a reader to abandon a
+# command that works and to distrust three signals that do work — de-training a
+# correct habit. This is the rule computenet-k1vd landed two hours earlier: a
+# criterion whose premise the work disproves is met by DISPROVING it with
+# evidence, not by contorting the change to satisfy it.
+#
+# So these 28 lines are the measured four-row table, the correction of which
+# shapes are unsafe, the real mechanism (the lifecycle task's plausible
+# presence invites you not to read the line below it), and a note that the
+# 2026-09-07 concord incident's stated cause is refuted and needs re-diagnosing
+# against the build-cache-restore bullet below it before it is written up.

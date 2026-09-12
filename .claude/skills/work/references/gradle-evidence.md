@@ -351,20 +351,33 @@ None of the accounting above maps onto the `:iroh` cargo tasks
   tasks instead: `:concord:test --rerun :concord:concordanceGate --rerun
   :concord:docLints --rerun :concord:check --no-build-cache`.
 
-  **The documented cache tells do NOT fire on this shape.** `UP-TO-DATE`,
-  `FROM-CACHE` and the `N executed, M from cache` line all describe the
-  lifecycle task, which genuinely re-ran; the cached thing is one task below
-  it, and the counts look ordinary. So the run prints `BUILD SUCCESSFUL` over
-  a REPLAYED, STALE JUnit XML — measured again on 2026-09-07, where
-  `./gradlew :concord:test --rerun --no-build-cache :concord:check` bound the
-  flag to `:concord:check` and reported a 331-test XML that predated a file
-  the reviewer had just deleted (computenet-5u3c). It was caught because the
-  count disagreed with the working tree, i.e. by an unusually careful reader.
-  A reader who has learned the three tells will otherwise read this run as
-  verified. The safe form is `./gradlew :module:test --rerun` — the flag
-  immediately after the test task you mean; the unsafe form is
-  `./gradlew :module:test --rerun :module:check`, which looks identical.
-  Check the JUnit timestamp, not the console.
+  **Which shapes are actually unsafe — measured 2026-09-11 on `:nature` and
+  `:testkit`, because computenet-5u3c asserted the wrong pair and a reviewer
+  disproved it.** `--rerun` binds to the task it FOLLOWS, so:
+
+  | command | test task line | count line | JUnit |
+  |---|---|---|---|
+  | `:m:test --rerun` | unmarked (ran) | `1 executed, 12 up-to-date` | fresh |
+  | `:m:test --rerun :m:check` | unmarked (ran) | `1 executed, 12 up-to-date` | fresh |
+  | `:m:check --rerun` | **`UP-TO-DATE`** | `13 actionable tasks: 13 up-to-date` | **stale** |
+  | `:other:test --rerun :m:check` | `:m:test` **`UP-TO-DATE`** | `1 executed, 25 up-to-date` | **stale** |
+
+  So a trailing lifecycle task is harmless — the flag is already bound. The
+  unsafe shapes are the flag ON the lifecycle task, and the flag on ANOTHER
+  module's test task, which is what computenet-1mjv was.
+
+  **And the tells DO fire on both — loudly.** The test task prints
+  `UP-TO-DATE` and the count line shows ZERO executed. What makes this trap
+  work is not a silent signal: it is that the lifecycle task's plausible
+  presence on screen invites you not to look at the line below it. Read the
+  count line, and read the JUnit timestamp.
+
+  (computenet-5u3c reported a `:concord:test --rerun --no-build-cache
+  :concord:check` run replaying a stale 331-test XML. That command is in the
+  SAFE row above, re-measured on two modules, so whatever staled that XML was
+  not the flag's position. The likelier mechanism is the next bullet — a
+  build-cache restore the marker did not show — and the incident needs
+  re-diagnosing against it before it is written up as anything.)
 - **`--rerun` alone is not proof of execution.** Measured 2026-08-15 on
   `:concord:test`: an *unmarked* task line and `1 executed`, while the JUnit
   XML still held the previous run's 253 tests with older internal
