@@ -11146,7 +11146,7 @@ default is untouched; strength is opt-in and phased; the fast path never sees an
 | P7 Open, local-first | **Satisfied — the exemplar** — open + transport-vouched by default; boundary controls opt-in; strength phased in only where trust is scarce. This is P7 made concrete. |
 | P8 Live evolution | **Satisfied** — policies rebind like any exposure; revocation = unlink/re-expose (tears down live links, §8); nothing assumes static trust. |
 | P9 Serialization-friendly | **Satisfied** — projections and protocol descriptors are named registered transforms; signature is an envelope field; payload stays ids-only; no lambdas/keys-as-code on the wire. |
-| P10 Niche first | **Satisfied at the time of this table — since weakened, not eliminated.** Untrusting-but-cooperating decentralized peers with key-authenticated identity and local allowlists were the niche this resolution targeted; capability-OS (Cand. A) was rejected on that ground. The 2026-08-29 option-4 decision (`doc/distribution/findings.md`, 2026-09-12 entries) introduces a centrally managed anchor signing key — design-decided, unbuilt (DSC4, `computenet-5y8t`) — which sits in tension with P10's "no privileged infrastructure position" the same way it sits in tension with P7; findings.md's R3 amendment records that tension as *weakened but not eliminated* by distinguishing vouching (centralized, offline-verified) from delivery (decentralized, no lookup service). Do not re-read this row as still cleanly Satisfied on the retired no-CA grounds, and do not read the tension as resolved either. |
+| P10 Niche first | **Satisfied at the time of this table — since weakened, not eliminated.** Untrusting-but-cooperating decentralized peers with key-authenticated identity and local allowlists were the niche this resolution targeted; capability-OS (Cand. A) was rejected on that ground. The 2026-08-29 option-4 decision (`doc/distribution/findings.md`, 2026-09-12 entries) introduces a centrally managed anchor signing key — design-decided, unbuilt (DSC4, `computenet-5y8t`) — which sits in tension with P10's "decentralized, incremental, long-lived, interest-driven" niche the same way it sits in tension with P7; findings.md's R3 amendment records that tension as *weakened but not eliminated* by distinguishing vouching (centralized, offline-verified) from delivery (decentralized, no lookup service). Do not re-read this row as still cleanly Satisfied on the retired no-CA grounds, and do not read the tension as resolved either. |
 
 #### 6. Prior-decision consistency
 
@@ -11235,8 +11235,8 @@ No CONFLICT flag required. Phase-2 cryptographic authentication is a *new design
   `Authenticated` — no central lookup service, no global identity registry. Key
   distribution and rotation are no longer open-undecided: the 2026-08-29 option-4
   decision (`doc/distribution/findings.md`, 2026-09-12 entries) is design-decided,
-  unbuilt (rotation is a new anchor-signed binding for the same stable name, DSC4 /
-  `computenet-5y8t`), superseding the key-derived-identity premise this phase-2
+  unbuilt (rotation is a new binding of the same stable name, signed by a centrally
+  managed anchor key, DSC4 / `computenet-5y8t`), superseding the key-derived-identity premise this phase-2
   mechanism embodies. Still open: wiring `AuthLevel.Authenticated` into
   `BoundaryPolicy`'s `minAuth`/`integrity` predicates at the wire-crossing bridge
   (SEC1).
