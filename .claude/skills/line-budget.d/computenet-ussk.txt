@@ -1,4 +1,4 @@
-work +14
+work +25
 
 # 5b tells the orchestrator to widen a task's metadata.files when the design
 # reaches outside the claim, and says nothing about the ACCEPTANCE CRITERIA,
@@ -14,6 +14,16 @@ work +14
 # SKILL.md already carries this exact rule for a DIFFERENT trigger: the
 # human-park re-triage says to reconcile the bead's TEXT with the answer before
 # anyone is dispatched, citing the same mechanism and the same two beads that
-# shipped against contradicting criteria (computenet-wv9c). These 14 lines are
+# shipped against contradicting criteria (computenet-wv9c). These 25 lines are
 # that half, on the claim-widening route, extended to the review-filed residual
 # where the orchestrator authors the claim outright.
+#
+# +11 from review (PR #821), both residuals the reviewer found:
+# - the verbatim-preservation half is DISPUTED 500 lines up and computenet-
+#   febs9 is open to settle it; prescribing it flatly here would have made a
+#   third site read as settled when two do not. Now it points at the dispute.
+# - the bullet's own preceding sentence is the report-and-widen case, where
+#   "before anyone is dispatched" is unsatisfiable and amending anyway walks
+#   into computenet-7gxi's open hazard (moving the standard under a live
+#   review). That case is now named and routed to comment + SendMessage
+#   instead of a silent amendment.

@@ -1716,8 +1716,19 @@ verdict. (`parked` is only meaningful on an empty batch.)
   implementer, reading the same criteria, could equally have refused the one
   change that stopped its own scenarios passing vacuously (computenet-ussk).
   Amend in place, keeping the superseded wording verbatim under a
-  `Superseded <date>:` label. This applies to the review-filed residual below
-  too, where you author the claim outright.
+  `Superseded <date>:` label — the form the park route uses, whose
+  verbatim-preservation half is DISPUTED above and will be settled by
+  computenet-febs9; when it lands, this site changes with the other two.
+  This applies to the review-filed residual below too, where you author the
+  claim outright.
+
+  **When the widening is for a task ALREADY DISPATCHED** — the
+  report-and-widen case in the sentence above — "before anyone is dispatched"
+  has already been missed, and amending the acceptance under a live review
+  silently moves the standard the verdict is measured against
+  (computenet-7gxi, open). Do not amend it silently: comment the
+  reconciliation on the bead and `SendMessage` the implementer, so the text
+  the reviewer scores and the text the agent worked from stay the same one.
 - **Disjoint paths are not enough — read each candidate's acceptance for a
   cross-reference into another candidate's claim.** `next-batch.py` proves the
   batch will not merge into a conflict; it cannot see that task A's acceptance
