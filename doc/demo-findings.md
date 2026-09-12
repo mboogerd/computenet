@@ -885,3 +885,69 @@ transcript or next pair of seeds may not.
 **A divergent seed policy, restated for this task** (2aw.F6-D3): none of
 this task's runs diverged. Had one, it would be kept and recorded here, not
 swapped for a friendlier seed or transcript.
+
+## F-19 — a `SetCell` fed element-by-element has no batch-as-one-wave path, so a batch-atomic consumer needs a caller-supplied boundary
+
+**Observation**: `:demo:allocator-observe`'s R5/R6 report (feature
+`computenet-fpml.3`) has to satisfy "given a batch of 3 records applied at
+once, when any reader observes mid-application, then it sees either the
+pre-batch or the post-batch totals, never a mix". Its input is a
+`SetCell<SpendRecord>` that `SpendLogIngester` fills from one poll of a
+JSON-lines spend log — a batch of N records that arrives, and is meant to be
+consumed, as one unit.
+
+The kernel offers no way to say so. `SetCell`'s `SetOps` inlet propagates one
+`SetDelta` per element (`SetCell.inletHandler().add`), and the ingester's fold
+loops one `add` per record, so a poll's batch of N records is **N waves**.
+`GlitchFreeCell` groups a wave; it does not combine several — so wrapping the
+consumer in one buys nothing here: each single-element wave is already
+complete on arrival, and the wrapper releases N times. Nor can the consumer
+recognise the batch from the deltas: nothing in a `SetDelta` says which poll
+minted it.
+
+The workaround (`AllocatorReportViews`, decision fpml.3-D5) is to move the
+boundary out of the dataflow and into the caller. The views fold every delta
+into private, writer-thread-only state and publish nothing; readers see only
+an immutable `AllocatorReport` swapped into a `@Volatile` field by an explicit
+`publish()` that the poll driver calls after each ingester poll returns. A
+reader between publishes sees the previous complete snapshot. It works, and
+the two properties it buys are tested (`AllocatorReportViewsTest`: a batch
+folded without `publish` leaves `current()` the same instance; a reader
+spinning against a writer that alternates batches observes only one of exactly
+two legal reports).
+
+**Why it's a gap**: the correctness of that arrangement rests entirely on a
+convention no type expresses — *the caller knows where the batch ends, and
+every consumer must be told*. Nothing stops a second consumer attaching to the
+same cell and folding the deltas straight into a reader-visible value, which
+is precisely the mix rule 3 forbids, and nothing about the graph reveals the
+difference. The batch structure is real information the producer HAS at the
+inlet and the kernel discards at the boundary; each consumer then reinvents a
+private snapshot/publish idiom to get it back (this is the second in-repo
+instance of that idiom, after `:demo:beadsmirror`'s `ReadySetCell.published`,
+which solves the adjacent *torn-read* problem rather than this one). It is
+also the seam an incremental view most wants: a batch boundary is exactly
+where a derived view can afford to recompute.
+
+**Proposed shape**: give the producer a way to say "these N elements are one
+change". Two candidates, either of which would remove the convention:
+
+- a **batched `SetOps`** — `addAll(elements)` / `applyAll(ops)` on the inlet
+  that mints one `SetDelta` carrying all N elements, so the batch is one wave
+  and `GlitchFreeCell` becomes the right tool for the job it looks like it is
+  for; or
+- a **producer-minted delta on the `Replicable` seam** — the shape
+  `:demo:beadsmirror`'s `MirrorProjector` already uses, building one delta per
+  feed position with minted dots and pushing it in, so the batch is the unit of
+  propagation by construction.
+
+`computenet-fpml.3` could take neither: F3's scope forbids changing ingest,
+which is where both fixes live (F1 owns `SpendLogIngester` and the cell it
+fills).
+
+**Honest limit of this entry**: the workaround has been exercised at one site,
+under a single-writer fold with an explicitly driven `publish()`. It says
+nothing about what a batched inlet should do with an exclusive payload, with a
+partially-failing batch, or across a wire boundary where the batch would have
+to survive framing — all of which a kernel-level `addAll` would have to settle
+and this finding does not.
