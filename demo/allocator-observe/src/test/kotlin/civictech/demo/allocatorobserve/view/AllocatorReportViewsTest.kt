@@ -61,6 +61,19 @@ class AllocatorReportViewsTest {
         /** Seeds for the incremental-equals-batch property, recorded rather than tuned. */
         val SEEDS = listOf(1L, 2L, 3L, 4L, 5L)
 
+        /**
+         * The `[fixture]` generator's rolling-window and UTC-month boundaries
+         * (computenet-1kuib). Recorded here so the fixed boundary-straddling
+         * sessions it constructs, and the count-based assertion that pins
+         * them, share one source of truth with the window/month arithmetic
+         * they target rather than re-deriving it.
+         */
+        val WINDOW_FROM: Instant = NOW.minus(WINDOW)
+        val MONTH_START: Instant = Instant.parse("2026-08-01T00:00:00Z")
+
+        /** The minimum straddling sessions [fixture] must emit BY CONSTRUCTION, per kind, per seed. */
+        const val MIN_STRADDLERS_PER_KIND = 1
+
         const val CONCURRENT_ROUNDS = 400
         const val JOIN_TIMEOUT_MS = 60_000L
         const val MAX_REPORTED_FAILURES = 8
@@ -368,6 +381,25 @@ class AllocatorReportViewsTest {
                 // of the equality is trivially empty.
                 (incrementalReport.window.totalHours > 0.0) shouldBe true
                 (incrementalReport.unattributableRecords.isNotEmpty()) shouldBe true
+
+                // computenet-1kuib: the straddling cases above must arise BY
+                // CONSTRUCTION, not merely by chance of the random draw — so
+                // count them directly off the final membership rather than
+                // trusting the random generator to have produced them. A
+                // generator change that drops the constructed straddlers (see
+                // `fixture`) must fail this, not pass silently.
+                val validSessions =
+                    fixture.finalMembership.mapNotNull { (sessionOf(it) as? SessionParse.Valid)?.session }
+                val windowStraddlers =
+                    validSessions.count { it.started.isBefore(WINDOW_FROM) && it.ended.isAfter(WINDOW_FROM) }
+                val monthStraddlers =
+                    validSessions.count { it.started.isBefore(MONTH_START) && it.ended.isAfter(MONTH_START) }
+                withClue("window-straddling sessions (seed=$seed): $windowStraddlers") {
+                    (windowStraddlers >= MIN_STRADDLERS_PER_KIND) shouldBe true
+                }
+                withClue("month-straddling sessions (seed=$seed): $monthStraddlers") {
+                    (monthStraddlers >= MIN_STRADDLERS_PER_KIND) shouldBe true
+                }
             }
         }
     }
@@ -383,14 +415,26 @@ class AllocatorReportViewsTest {
     /**
      * 200 generated records spread across a span that straddles both the UTC
      * month start and the window start, about one in ten of them
-     * unattributable (fpml.3-D6), under a three-event declaration history.
+     * unattributable (fpml.3-D6), under a three-event declaration history —
+     * plus two fixed sessions, [windowStraddler] and [monthStraddler],
+     * appended after the random draw so they are never subject to removal.
+     *
+     * The random draw alone puts a window- or month-straddling session in the
+     * fixture only incidentally (computenet-1kuib: measured at seed 5, the
+     * random draw alone produces zero month-straddlers). The two appended
+     * sessions guarantee at least one of each kind BY CONSTRUCTION, for every
+     * seed, independent of what the random draw happens to produce — pinned
+     * by the count-based assertion in the test above.
      *
      * Every record gets a distinct `ended` instant (the index is added as
      * nanoseconds). That is deliberate: `SessionLedger` indexes sessions by
      * `ended` and sums `Double` nanos in index order, so sessions sharing an
      * instant share a bucket whose internal order differs between an
      * incremental fold and a batch one — a floating-point difference that has
-     * nothing to do with the property under test.
+     * nothing to do with the property under test. The appended sessions keep
+     * this: their `ended` instants are one second apart and outside the
+     * random draw's span, so neither shares a bucket with a generated session
+     * or with each other.
      */
     private fun fixture(seed: Long): Fixture {
         val random = Random(seed)
@@ -417,12 +461,28 @@ class AllocatorReportViewsTest {
         val reAdded = removed.filter { random.nextInt(4) != 0 }
         val dropped = removed.toSet() - reAdded.toSet()
 
+        val windowStraddler =
+            record(
+                CN,
+                WINDOW_FROM.minusSeconds(3600).toString(),
+                WINDOW_FROM.plusSeconds(3600).toString(),
+                "window-straddle-seed$seed",
+            )
+        val monthStraddler =
+            record(
+                GF,
+                MONTH_START.minusSeconds(3600).toString(),
+                MONTH_START.plusSeconds(3601).toString(),
+                "month-straddle-seed$seed",
+            )
+        val constructed = listOf(windowStraddler, monthStraddler)
+
         return Fixture(
-            records = records,
+            records = records + constructed,
             declarations = declarations,
             removed = removed,
             reAdded = reAdded,
-            finalMembership = records.filterNot { it in dropped },
+            finalMembership = records.filterNot { it in dropped } + constructed,
         )
     }
 
