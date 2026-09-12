@@ -53,7 +53,8 @@ links carry null. Deny-by-default is a boundary control in both layers:
 (100 seeds + open-mode control).
 
 Landed (phase 2, DSC1 — `computenet-ssa`): per-peer Ed25519 keypairs
-(`:identity`), a `PeerId` derived as the key's fingerprint, and a signed-nonce
+(`:identity`), a `PeerId` that today resolves 1:1 from the key's fingerprint
+(via the interim `PeerIdentityBinding`, `computenet-376c`), and a signed-nonce
 challenge/response added to the hello. A hello whose signature verifies under
 the presented key — or, for an in-process `Peering.loopback` direction, both
 sides holding credentials — promotes the crossing from `AuthLevel.TransportVouched`
@@ -63,11 +64,31 @@ Every refusal (name/key mismatch, forged signature, downgrade under a
 drop. `PeerAuthPolicy.Open` keeps today's behaviour byte-for-byte; only
 `PeerAuthPolicy.RequireAuthenticated` demands a verified hello.
 
+**Identity-is-key is no longer the project's position.** The maintainer
+decided otherwise on 2026-08-29 (recorded in
+`doc/distribution/findings.md`'s 2026-09-12 entry): a peer's identity is a
+**stable name**, independent of any key it holds, bound to its current public
+key by an anchor-signed statement that a relying peer verifies offline
+(option 4, over the identity-is-key premise this section described above).
+That decision is design-decided, not implemented: the landed phase-2
+mechanism above — key-fingerprint-derived identity via the interim binding —
+is exactly the identity-is-key shape the decision supersedes, kept as today's
+behaviour until DSC4 (epic `computenet-5y8t`) builds the anchor-vouched
+binding. Nothing at this commit implements the anchor, the signed binding
+statement, or rebinding.
+
 ⚠ Still undefined: signed, replay-defended `RegistryAnnounce` frames that let
 an ingress reject a forged management frame using this identity (`computenet-ssa.4`,
 in progress), wiring `AuthLevel.Authenticated` into `BoundaryPolicy`'s
-`minAuth`/`integrity` predicates at the wire-crossing bridge (SEC1), key
-rotation/revocation, and encryption at rest. The rest of the former open list is design-decided below
+`minAuth`/`integrity` predicates at the wire-crossing bridge (SEC1), and
+encryption at rest. Key rotation and revocation are no longer undefined —
+both are **decided, unbuilt**: rotation is a new anchor-signed binding for the
+same stable name (option 4, above), and revocation is designed as a
+*superseding* binding over the same mechanism (a monotone per-name issuance
+counter, a validity window, issuer-scoped) rather than a second channel —
+see `doc/distribution/findings.md`'s 2026-09-12 entries. Neither is built;
+DSC4 owns rotation, and revocation is owned by nobody yet. The rest of the
+former open list is design-decided below
 (93 I-28): integrity of replicated deltas is `RequireSigned` verification at
 ingress, and Sybil resistance for interest signals is structural (attention
 clamping + per-`Principal` quotas). Encryption in transit is transport
