@@ -10,20 +10,25 @@ import java.time.Instant
  * force at instant t" and "what declaration intervals overlap [from, to)".
  *
  * `DeclarationIngester.history()`'s own KDoc leaves ordering among events
- * with equal [DeclarationEvent.observedAt] unspecified. This timeline picks
- * one deterministic rule: among events sharing an instant, the one that
- * appears LAST in the [events] iteration order is the one in force from that
- * instant onward. This falls out of a stable sort by `observedAt` (which
- * this class performs internally): equal-keyed elements keep their relative
- * input order, so an earlier duplicate is immediately superseded by the
- * later one and contributes only a zero-length interval.
+ * with equal [DeclarationEvent.observedAt] unspecified. This timeline
+ * establishes a TOTAL order over [events] that does not depend on the
+ * [events] collection's own iteration order: primarily by `observedAt`,
+ * and among events sharing an instant, by a deterministic key derived from
+ * the declaration's own content (its weights, cap and window). Two
+ * `DeclarationTimeline`s built over the same membership therefore always
+ * agree on which declaration is in force, regardless of the order their
+ * events were folded or iterated in — the same property
+ * `AllocatorReportViews.publish` requires of its sorted project set, and for
+ * the same reason: an order derived from fold HISTORY rather than membership
+ * would make otherwise-identical instances disagree (computenet-2ezv1).
  *
  * Interval i, for consecutive sorted events, is `[observedAt_i,
  * observedAt_{i+1})`; the last event's interval is open-ended.
  */
 class DeclarationTimeline(events: Collection<DeclarationEvent>) {
 
-    private val sortedEvents: List<DeclarationEvent> = events.sortedBy { it.observedAt }
+    private val sortedEvents: List<DeclarationEvent> =
+        events.sortedWith(compareBy({ it.observedAt }, ::contentKey))
 
     /** The declaration in force at [t], or null before the first event. */
     fun inForceAt(t: Instant): AllocationDeclaration? =
@@ -74,6 +79,34 @@ class DeclarationTimeline(events: Collection<DeclarationEvent>) {
         val uncoveredEnd = if (firstObservedAt == null || firstObservedAt.isAfter(to)) to else firstObservedAt
         return if (from.isBefore(uncoveredEnd)) from to uncoveredEnd else null
     }
+}
+
+/**
+ * A deterministic, content-derived tie-break key for [DeclarationTimeline]'s
+ * sort: a canonical string built from the declaration's own fields (weights
+ * sorted by project name, cap, window), never from object identity or
+ * construction/fold order. Two [DeclarationEvent]s with equal
+ * [DeclarationEvent.observedAt] and an unequal [DeclarationEvent.declaration]
+ * always get an unequal key here, so the sort is a total order over unequal
+ * declarations rather than a preorder that falls back to input order.
+ *
+ * That guarantee rests on the encoding being INJECTIVE, which a plain
+ * delimiter-joined string is not: project names are operator-authored map
+ * keys, so a name containing the delimiters — `{"a=1.0;b": 2.0}` against
+ * `{"a": 1.0, "b": 2.0}` — collides under `a=1.0;b=2.0` and hands the tie
+ * back to iteration order, reintroducing exactly the defect this key exists
+ * to remove. Each field is therefore length-prefixed (`<len>:<field>`), which
+ * is uniquely decodable for any field content; the window is additionally
+ * tagged `n`/`s<value>` so an absent window cannot encode as the literal
+ * string `"null"` does.
+ */
+private fun contentKey(event: DeclarationEvent): String {
+    val d = event.declaration
+    val fields =
+        d.weights.entries.sortedBy { it.key }.flatMap { listOf(it.key, it.value.toString()) } +
+            d.monthlyCapHours.toString() +
+            (d.window?.let { "s$it" } ?: "n")
+    return fields.joinToString(separator = "") { "${it.length}:$it" }
 }
 
 /**

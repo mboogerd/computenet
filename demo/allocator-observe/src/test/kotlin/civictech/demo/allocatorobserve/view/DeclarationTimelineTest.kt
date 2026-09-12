@@ -32,29 +32,64 @@ class DeclarationTimelineTest {
     }
 
     @Test
-    fun `two events at the same instant resolve to the later in iteration order`() {
-        // decl3070 appears LAST in the input Collection's iteration order, so it must win
-        // from t0 onward, even though decl6040 shares the same observedAt.
-        val timeline =
+    fun `two events at the same instant resolve the same way regardless of input iteration order`() {
+        // computenet-2ezv1: the tie-break must be a function of the two
+        // declarations' own content, never of which one appears later in the
+        // input Collection's iteration order (fold arrival order upstream).
+        val forward =
             DeclarationTimeline(
                 listOf(
                     DeclarationEvent(t0, decl6040),
                     DeclarationEvent(t0, decl3070),
                 ),
             )
-        timeline.inForceAt(t0) shouldBe decl3070
-        timeline.inForceAt(t1) shouldBe decl3070
+        val backward =
+            DeclarationTimeline(
+                listOf(
+                    DeclarationEvent(t0, decl3070),
+                    DeclarationEvent(t0, decl6040),
+                ),
+            )
 
-        // Reversing the input iteration order flips which declaration wins,
-        // proving the rule keys off iteration order and not e.g. weight content.
-        val reversed =
+        forward.inForceAt(t0) shouldBe backward.inForceAt(t0)
+        forward.inForceAt(t1) shouldBe backward.inForceAt(t1)
+    }
+
+    @Test
+    fun `two equal-instant declarations whose content keys could collide resolve the same way`() {
+        // computenet-2ezv1 review: the tie-break key must be INJECTIVE over
+        // declaration content. A project name containing the key encoding's
+        // own separators must not let two unequal declarations share one key
+        // and fall back to input iteration order.
+        val collidingName =
+            AllocationDeclaration(
+                weights = mapOf("computenet=60.0;glass-factory" to 40.0),
+                monthlyCapHours = 100.0,
+                window = null,
+            )
+        val twoProjects =
+            AllocationDeclaration(
+                weights = mapOf("computenet" to 60.0, "glass-factory" to 40.0),
+                monthlyCapHours = 100.0,
+                window = null,
+            )
+
+        val forward =
             DeclarationTimeline(
                 listOf(
-                    DeclarationEvent(t0, decl3070),
-                    DeclarationEvent(t0, decl6040),
+                    DeclarationEvent(t0, collidingName),
+                    DeclarationEvent(t0, twoProjects),
                 ),
             )
-        reversed.inForceAt(t0) shouldBe decl6040
+        val backward =
+            DeclarationTimeline(
+                listOf(
+                    DeclarationEvent(t0, twoProjects),
+                    DeclarationEvent(t0, collidingName),
+                ),
+            )
+
+        forward.inForceAt(t0) shouldBe backward.inForceAt(t0)
     }
 
     @Test

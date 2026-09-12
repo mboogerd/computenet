@@ -191,6 +191,12 @@ class AllocatorReportViews(
     fun publish(): AllocatorReport {
         val at = now()
         val window = TimeRange(at.minus(windowLength), at)
+        // `liveDeclarations` is insertion-ordered (a `LinkedHashSet`), but
+        // `DeclarationTimeline` establishes its own total order over its
+        // input — by `observedAt`, then by declaration content for ties — so
+        // that insertion order never leaks into which declaration is in
+        // force. Same convention as the sorted `projects` set below, and for
+        // the same reason (computenet-2ezv1).
         val timeline = DeclarationTimeline(liveDeclarations)
 
         val declaredProjects = liveDeclarations.flatMapTo(LinkedHashSet<String>()) { it.declaration.weights.keys }
