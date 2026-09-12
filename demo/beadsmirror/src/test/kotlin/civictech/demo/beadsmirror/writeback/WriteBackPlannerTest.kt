@@ -157,6 +157,21 @@ class WriteBackPlannerTest {
     }
 
     @Test
+    fun `3b - agreeing instants still no-op when the export side renders an explicit zero fraction`() {
+        // Same instant as the dolt-form view value, but the export side carries an explicit
+        // zero fractional part instead of bd export's own bare-seconds rendering. Review found
+        // that preflight's original field comparison was byte-for-byte on the export side (only
+        // the fold side was canonicalized by renderForImport), so this exact case reddened
+        // before the preflight fix: a phantom Impose with a spurious updated_at FieldLoss.
+        val view = mapOf("X" to mapOf("updated_at" to "\"2026-09-12 07:17:03\""))
+        val export = listOf(exportRow("""{"id":"X","updated_at":"2026-09-12T07:17:03.000Z"}"""))
+
+        val outcomes = WriteBackPlanner.plan(view, export)
+
+        outcomes shouldBe listOf(PlanOutcome.NoOp("X"))
+    }
+
+    @Test
     fun `preflight is callable standalone against a built row and a fresh export`() {
         val row = JsonObject(mapOf("id" to JsonPrimitive("X"), "priority" to JsonPrimitive(1)))
         val freshExport = exportRow("""{"id":"X","priority":3}""")

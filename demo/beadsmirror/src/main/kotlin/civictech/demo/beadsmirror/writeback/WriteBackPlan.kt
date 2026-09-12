@@ -224,25 +224,49 @@ object WriteBackPlanner {
      * pre-flight instrument the feature's clause 2 requires the loss record
      * to precede.
      *
-     * [row]'s value for a field (or its absence) is compared directly,
-     * structurally, against [exportRow]'s (a JSON `null` on the export side
-     * counts as absent, the same convention
-     * [civictech.demo.beadsmirror.equality.MirrorExportEquality] and
-     * [civictech.demo.beadsmirror.baseline.BaselineBuilder] apply). No
-     * separate datetime normalization is needed here: [buildRow] already
-     * rendered [row]'s datetime fields into the same RFC3339 `Z` form
-     * `bd export` prints, so an instant that agrees prints identically on
-     * both sides and a bystander field prints byte-identically as well.
+     * [row]'s value for a field (or its absence) is compared against
+     * [exportRow]'s (a JSON `null` on the export side counts as absent, the
+     * same convention [civictech.demo.beadsmirror.equality.MirrorExportEquality]
+     * and [civictech.demo.beadsmirror.baseline.BaselineBuilder] apply):
+     * structurally equal values are equal outright; failing that, when BOTH
+     * sides are JSON strings that parse as an RFC3339 [Instant], they are
+     * compared as instants rather than text. [buildRow] already rendered
+     * [row]'s datetime fields into RFC3339 `Z` (the same family `bd export`
+     * prints), but review found that byte-for-byte comparison alone is
+     * accidental string equality: an export value carrying an explicit zero
+     * fractional part (`"...03.000Z"`) represents the same instant as a
+     * bare-seconds rendering (`"...03Z"`) yet differs as text, which would
+     * otherwise impose a phantom loss on an already-agreeing row (mirrors
+     * [civictech.demo.beadsmirror.equality.MirrorExportEquality.asInstant]'s
+     * reason for existing at all).
      */
     fun preflight(row: JsonObject, exportRow: ExportRow?): List<FieldLoss> {
         val losses = mutableListOf<FieldLoss>()
         for (field in ImposedFields.FIELDS) {
             val newValue = row[field]
             val oldValue = exportRow?.json?.get(field)?.takeUnless { it is JsonNull }
-            if (newValue != oldValue) {
+            if (!valuesAgree(newValue, oldValue)) {
                 losses += FieldLoss(field, old = oldValue, new = newValue)
             }
         }
         return losses
+    }
+
+    /** Structural equality, falling back to instant equality when both sides are RFC3339 strings. */
+    private fun valuesAgree(newValue: JsonElement?, oldValue: JsonElement?): Boolean {
+        if (newValue == oldValue) return true
+        val newInstant = newValue?.let(::asRfc3339Instant) ?: return false
+        val oldInstant = oldValue?.let(::asRfc3339Instant) ?: return false
+        return newInstant == oldInstant
+    }
+
+    /** The value as an [Instant] if it is a JSON string in RFC3339 form; `null` otherwise (including non-date fields). */
+    private fun asRfc3339Instant(element: JsonElement): Instant? {
+        val text = (element as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
+        return try {
+            Instant.parse(text)
+        } catch (e: DateTimeParseException) {
+            null
+        }
     }
 }
