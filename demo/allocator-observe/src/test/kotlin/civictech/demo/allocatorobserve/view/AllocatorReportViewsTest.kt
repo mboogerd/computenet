@@ -400,6 +400,31 @@ class AllocatorReportViewsTest {
                 withClue("month-straddling sessions (seed=$seed): $monthStraddlers") {
                     (monthStraddlers >= MIN_STRADDLERS_PER_KIND) shouldBe true
                 }
+
+                // computenet-1kuib review: the counts above cannot by
+                // themselves tell "by construction" from "by luck" — every one
+                // of seeds 1..5 already draws an incidental window-straddler,
+                // so a mutation that deletes the constructed window-straddler
+                // from `fixture()` leaves `windowStraddlers` unchanged and
+                // this test green (measured: seeds 1-5 incidentally produce
+                // 2/1/1/2/1 window-straddlers with no construction at all).
+                // Pin the constructed records themselves, unconditional on
+                // what the random draw does, so removing either one fails
+                // regardless of incidental luck.
+                (fixture.windowStraddler in fixture.finalMembership) shouldBe true
+                (fixture.monthStraddler in fixture.finalMembership) shouldBe true
+                val windowStraddlerSession =
+                    (sessionOf(fixture.windowStraddler) as? SessionParse.Valid)?.session.shouldNotBeNull()
+                val monthStraddlerSession =
+                    (sessionOf(fixture.monthStraddler) as? SessionParse.Valid)?.session.shouldNotBeNull()
+                withClue("constructed window-straddler (seed=$seed) does not actually straddle WINDOW_FROM") {
+                    (windowStraddlerSession.started.isBefore(WINDOW_FROM) &&
+                        windowStraddlerSession.ended.isAfter(WINDOW_FROM)) shouldBe true
+                }
+                withClue("constructed month-straddler (seed=$seed) does not actually straddle MONTH_START") {
+                    (monthStraddlerSession.started.isBefore(MONTH_START) &&
+                        monthStraddlerSession.ended.isAfter(MONTH_START)) shouldBe true
+                }
             }
         }
     }
@@ -410,6 +435,8 @@ class AllocatorReportViewsTest {
         val removed: List<SpendRecord>,
         val reAdded: List<SpendRecord>,
         val finalMembership: List<SpendRecord>,
+        val windowStraddler: SpendRecord,
+        val monthStraddler: SpendRecord,
     )
 
     /**
@@ -483,6 +510,8 @@ class AllocatorReportViewsTest {
             removed = removed,
             reAdded = reAdded,
             finalMembership = records.filterNot { it in dropped } + constructed,
+            windowStraddler = windowStraddler,
+            monthStraddler = monthStraddler,
         )
     }
 
