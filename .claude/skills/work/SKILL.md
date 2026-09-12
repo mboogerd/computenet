@@ -935,8 +935,18 @@ bd list --parent=<epic> --all --json     # statuses of ALL children, closed incl
   finished** (`every child closed` is vacuously true there), so that case goes
   to step 4, never to `bd close`.
 
+  Two Bash calls, never `&&`-chained — a compound `bd`-write call is refused
+  by the permission classifier outright (computenet-br1y), and a chain that
+  dies between the two leaves the epic CLOSED but still carrying
+  `owner:$BEADS_ACTOR`, the label the next session's claim logic reads
+  ([bd-traps.md](references/bd-traps.md), computenet-94tg4):
+
   ```bash
-  bd close <epic> && bd update <epic> --remove-label=owner:$BEADS_ACTOR
+  bd close <epic>
+  ```
+
+  ```bash
+  bd update <epic> --remove-label=owner:$BEADS_ACTOR
   ```
 
   `bd defer` here would park a completed epic and hide it from both machines

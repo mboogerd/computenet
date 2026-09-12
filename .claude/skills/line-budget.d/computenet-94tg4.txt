@@ -1,0 +1,14 @@
+work +10
+
+# SKILL.md's epic-close step printed `bd close <epic> && bd update <epic>
+# --remove-label=...` — two bd WRITES in one Bash block, the shape
+# bd-traps.md:404 forbids and the permission classifier refused outright in
+# computenet-br1y. The && makes the second failure mode worse: if bd close
+# succeeds and the chain dies, the epic is CLOSED but still carries
+# owner:$BEADS_ACTOR, the label the next session's claim logic reads — a
+# worked example, in the skill's own text, of the half-recorded state that
+# rule exists to prevent.
+#
+# Found by PR #822's reviewer sweeping the tree for the pattern that PR had
+# just removed from epic.md; it was the only surviving instance, so closing it
+# empties the pattern. Two calls now, with both reasons stated.
