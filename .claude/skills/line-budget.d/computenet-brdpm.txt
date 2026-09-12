@@ -1,0 +1,17 @@
+work +11
+
+# computenet-zvuu7 put the zsh field-splitting note in epic.md, where an
+# epic-breakdown agent had invented `for pair in "a b"; set -- $pair` and wired
+# seven features' edges through a loop that does not split. feature.md carried
+# the SAME `bd dep add <task> <blocker>` guidance at task level, handed to the
+# FEATURE-breakdown agent, with no such note — found by that PR's reviewer and
+# filed as computenet-brdpm rather than widening a certified diff.
+#
+# It has to be duplicated rather than cross-referenced for the reachability
+# reason zvuu7 gives: the feature-breakdown dispatch hands feature.md and
+# nothing else, so AGENTS.md's record of the family never reaches that agent.
+# At task level the edges are the ones next-batch.py schedules on.
+#
+# +1 from review (PR #820): the dep() inline now carries the argument order
+# (blocked first, blocker second) rather than leaving it to the lede four lines
+# up, and says one call per Bash invocation.

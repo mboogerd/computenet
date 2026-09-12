@@ -568,6 +568,17 @@ name it as run, or as `unverified:`.
 genuinely consumes what another produces (a schema change before the code
 reading the new column).
 
+**One `bd dep add` per line.** Do not loop over space-separated pairs: this
+session runs zsh, which does NOT field-split an unquoted expansion, so
+`for pair in "a b"; set -- $pair` leaves the pair as ONE argument and the
+wiring does not do what it reads as doing. Write them out, or use a function
+with named parameters (`dep() { bd dep add "$1" "$2"; }` — blocked first,
+blocker second, as the lede above spells out), one call per Bash invocation. Measured on an epic
+breakdown, which wired seven features' edges through the broken loop before the
+agent noticed — computenet-zvuu7, same family as AGENTS.md's `$FILT` case
+(computenet-adgy). One `bd` write per Bash call anyway
+([bd-traps.md](bd-traps.md)), which rules the loop out twice.
+
 Never wire one for file overlap. Overlap is symmetric; `blocks` is
 directional and permanent, so encoding one as the other invents an arbitrary
 order and strands the second task whenever the first stalls. The orchestrator
