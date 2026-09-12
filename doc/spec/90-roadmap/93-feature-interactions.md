@@ -10973,14 +10973,28 @@ enum class AuthLevel { TransportVouched, Authenticated }   // phase-1 = Transpor
 
 `PeerId` is the value the G-29 hello already carries and ingress already stamps on every
 delivery. **Phase-1 (landed)**: the transport connection *vouches* for the name
-(`TransportVouched`). **Phase-2 (landed — DSC1, `computenet-ssa`)**: `PeerId` is
-derived from an Ed25519 **public key**; the hello adds a signed-nonce
+(`TransportVouched`). **Phase-2 (landed — DSC1, `computenet-ssa`)**: `PeerId` today
+resolves 1:1 from an Ed25519 **public key**'s fingerprint, via the interim
+`PeerIdentityBinding` (`computenet-376c`); the hello adds a signed-nonce
 challenge; a verified peer is `Authenticated`. The *policy vocabulary is
 stable across the upgrade* — predicates read `Principal`; only the strength that
 `AuthLevel` certifies changes. This is the P7-compatible phasing: open-by-default and
-transport-vouched under `PeerAuthPolicy.Open` (still the default), self-sovereign-key-authenticated under
-`PeerAuthPolicy.RequireAuthenticated` — **no CA, no global identity registry** (P4, P10). Sybil resistance = the *cost* of
-minting an `Authenticated` identity plus per-`Principal` quotas (§4.4).
+transport-vouched under `PeerAuthPolicy.Open` (still the default), key-authenticated under
+`PeerAuthPolicy.RequireAuthenticated` — **no central lookup service, no global identity
+registry** (P4, P10). Sybil resistance = the *cost* of minting an `Authenticated` identity
+plus per-`Principal` quotas (§4.4).
+
+**Identity-is-key is no longer the forward position.** The maintainer decided otherwise
+on 2026-08-29 (`doc/distribution/findings.md`'s 2026-09-12 entries): a peer's identity is
+a stable name, independent of any key it holds, bound to its current public key by a
+signed statement from a centrally managed anchor key that a relying peer verifies
+offline (option 4) — a CA in shape, over the identity-is-key premise the phase-2
+mechanism above embodies. That decision is design-decided, not implemented (DSC4,
+`computenet-5y8t`); nothing at this commit builds the anchor, the signed binding
+statement, or rebinding, and the phase-2 mechanism above stays today's behaviour until
+DSC4 lands. What the decision retires is "no CA"; what survives it is "no central lookup
+service, no global identity registry" — the anchor vouches for a binding, it does not
+resolve names.
 
 ##### 4.2 The policy vocabulary — attached to an I-10 `Exposure`
 
@@ -11132,7 +11146,7 @@ default is untouched; strength is opt-in and phased; the fast path never sees an
 | P7 Open, local-first | **Satisfied — the exemplar** — open + transport-vouched by default; boundary controls opt-in; strength phased in only where trust is scarce. This is P7 made concrete. |
 | P8 Live evolution | **Satisfied** — policies rebind like any exposure; revocation = unlink/re-expose (tears down live links, §8); nothing assumes static trust. |
 | P9 Serialization-friendly | **Satisfied** — projections and protocol descriptors are named registered transforms; signature is an envelope field; payload stays ids-only; no lambdas/keys-as-code on the wire. |
-| P10 Niche first | **Satisfied** — untrusting-but-cooperating decentralized peers with self-sovereign keys and local allowlists, no CA/global identity — exactly the niche; capability-OS (Cand. A) rejected on this ground. |
+| P10 Niche first | **Satisfied at the time of this table — since weakened, not eliminated.** Untrusting-but-cooperating decentralized peers with key-authenticated identity and local allowlists were the niche this resolution targeted; capability-OS (Cand. A) was rejected on that ground. The 2026-08-29 option-4 decision (`doc/distribution/findings.md`, 2026-09-12 entries) introduces a centrally managed anchor signing key — design-decided, unbuilt (DSC4, `computenet-5y8t`) — which sits in tension with P10's "decentralized, incremental, long-lived, interest-driven" niche the same way it sits in tension with P7; findings.md's R3 amendment records that tension as *weakened but not eliminated* by distinguishing vouching (centralized, offline-verified) from delivery (decentralized, no lookup service). Do not re-read this row as still cleanly Satisfied on the retired no-CA grounds, and do not read the tension as resolved either. |
 
 #### 6. Prior-decision consistency
 
@@ -11215,10 +11229,16 @@ No CONFLICT flag required. Phase-2 cryptographic authentication is a *new design
 #### 8. Follow-on gaps
 
 - **Cryptographic peer authentication (phase-2) — landed (DSC1, `computenet-ssa`).**
-  Ed25519 keypairs (`:identity`), key-derived `PeerId`, and a signed-nonce hello
-  challenge-response that promotes a verified crossing to `Authenticated` — no CA, no
-  global identity registry. Still open: key distribution and rotation (DSC1 §7 risk 2),
-  and wiring `AuthLevel.Authenticated` into `BoundaryPolicy`'s `minAuth`/`integrity`
+  Ed25519 keypairs (`:identity`), a `PeerId` that today resolves 1:1 from the key's
+  fingerprint via the interim `PeerIdentityBinding` (`computenet-376c`), and a
+  signed-nonce hello challenge-response that promotes a verified crossing to
+  `Authenticated` — no central lookup service, no global identity registry. Key
+  distribution and rotation are no longer open-undecided: the 2026-08-29 option-4
+  decision (`doc/distribution/findings.md`, 2026-09-12 entries) is design-decided,
+  unbuilt (rotation is a new binding of the same stable name, signed by a centrally
+  managed anchor key, DSC4 / `computenet-5y8t`), superseding the
+  key-derived-identity premise this phase-2 mechanism embodies. Still open: wiring
+  `AuthLevel.Authenticated` into `BoundaryPolicy`'s `minAuth`/`integrity`
   predicates at the wire-crossing bridge (SEC1).
 - **Delta signature scheme.** Exact signed tuple, per-source replay counter semantics,
   verification cost/batching on the bridge path, and interaction with move-by-serialize
@@ -11255,7 +11275,12 @@ authentication**, which this resolution fixes an *interface* for but deliberatel
 the design of (§8) — the transport-vouched present is honest but weak.
 
 **Open questions**: (1) whether `Authenticated` should be self-sovereign keys/DIDs (my
-lean, P10) or admit an optional web-of-trust, without ever mandating a CA; (2) whether
+lean, P10) or admit an optional web-of-trust, without ever mandating a CA — **settled
+2026-08-29, against this lean**: the maintainer adopted option 4, a stable name bound to
+its current key by a centrally managed anchor signing key relying peers verify offline
+(a CA in shape), design-decided and unbuilt (DSC4, `computenet-5y8t`); no central lookup
+service or global identity registry is introduced (`doc/distribution/findings.md`,
+2026-09-12 entries); (2) whether
 disclosure `Project` should compose automatically across nested membranes or require
 re-declaration at each level (the safe default is re-declare); (3) whether delta signing
 should be mandatory for any cross-machine replica set or strictly opt-in (I chose opt-in
@@ -11522,7 +11547,7 @@ M6–M11 — see 91 for the canonical list).
 - *(from I-27)* **Fallback-tier soundness marker** — R6's rule that the catch-up fallback is sound only for idempotent-across-source cells is by-convention; a KSP marker refusing the fallback for non-idempotent-merge cells (forcing transform mode) would make it correct-by-construction; ties to I-3 Replicable gate and I-7 determinism marker.
 - *(from I-27)* **Coordinating a partitioned rolling promotion** — Per-organelle promotion needs an orchestration policy for ordering, monitoring, and aborting a multi-partition rollout, and its interaction with the composite's routing-proxy and merging-outlet promotion.
 - *(from I-27)* **Hidden-state cells and the transform** — A cell whose recoverable state is not fully expressible in its invariant delta contract cannot be bridged by the delta interchange nor re-baselined by catch-up; such a cell needs a private snapshot channel or an explicit non-promotable declaration.
-- *(from I-28)* **Cryptographic peer authentication (phase-2) — landed (DSC1, `computenet-ssa`)**: Ed25519 keys, key-derived PeerId, signed-nonce hello challenge-response, promotion to Authenticated without a CA. Still open: key distribution/rotation, and wiring Authenticated into BoundaryPolicy's minAuth/integrity predicates at the wire-crossing bridge (SEC1).
+- *(from I-28)* **Cryptographic peer authentication (phase-2) — landed (DSC1, `computenet-ssa`)**: Ed25519 keys, a PeerId resolving 1:1 from the key's fingerprint via the interim PeerIdentityBinding (`computenet-376c`), signed-nonce hello challenge-response, promotion to Authenticated, no central lookup service or global identity registry. Key distribution/rotation are decided-unbuilt, not open (2026-08-29 option-4 anchor decision, DSC4 / `computenet-5y8t`), superseding the key-derived-identity premise this mechanism embodies. Still open: wiring Authenticated into BoundaryPolicy's minAuth/integrity predicates at the wire-crossing bridge (SEC1).
 - *(from I-28)* **Delta signature scheme** — Exact signed tuple, per-source replay counter semantics, verify cost/batching on the bridge path, and interaction with move-by-serialize Owned deltas.
 - *(from I-28)* **Disclosure projection language** — How a ProjectionId transform is declared, registered, and kept serialization-friendly (named, not a lambda), and whether projections compose across nested/transitive membranes.
 - *(from I-28)* **Attention/interest Sybil economics** — The per-Principal resource budget bounding authenticated interest claims (ties to the deferred G-6 economic layer and the G-28 quota walk); what the cost to mint an identity concretely is.
