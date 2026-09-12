@@ -213,15 +213,20 @@ class IdentityDerivationRatchetTest {
                         // check would misread that as an unbalanced generic
                         // and fold past the header (computenet-3dt4t).
                         // KNOWN RESIDUAL (computenet-s8ige): because `->`
-                        // feeds a '>' into that same total, a supertype list
-                        // is still lost when a line closes a generic and
-                        // carries an arrow ("Handler<\n    (Int) -> Unit\n>,")
-                        // or is split at the arrow itself ("(Int) ->\n
-                        // Unit,") — the fold ends early and a later
+                        // feeds a '>' into that same total, the counts can
+                        // balance one line BEFORE the generic's real closing
+                        // '>', so a supertype list is still lost when a
+                        // multi-line generic argument holds a function type
+                        // ("Handler<" / "    (Int) -> Unit" / ">,", where the
+                        // fold dies on the "(Int) -> Unit" line at '<'=1
+                        // '>'=1) and when the list is split at the arrow
+                        // itself ("(Int) ->" / "    Unit,", dying at '<'=0
+                        // '>'=1). Either way the fold ends early and a later
                         // PeerIdentityBinding entry in the same list is
-                        // missed. Both shapes are absent from production
-                        // today; measured by probe in the computenet-3dt4t
-                        // review.
+                        // missed. Both shapes were measured by probe in the
+                        // computenet-3dt4t review; neither occurs in
+                        // production today (scanned: 29 wrapped headers, none
+                        // with an arrow on a continuation line).
                         val listContinues = trimmed.endsWith(",") ||
                             folded.count { it == '(' } > folded.count { it == ')' } ||
                             folded.count { it == '<' } > folded.count { it == '>' } ||
