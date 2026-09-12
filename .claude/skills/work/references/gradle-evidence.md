@@ -350,6 +350,21 @@ None of the accounting above maps onto the `:iroh` cargo tasks
   directly in several beads' acceptance clauses here, so name the concrete
   tasks instead: `:concord:test --rerun :concord:concordanceGate --rerun
   :concord:docLints --rerun :concord:check --no-build-cache`.
+
+  **The documented cache tells do NOT fire on this shape.** `UP-TO-DATE`,
+  `FROM-CACHE` and the `N executed, M from cache` line all describe the
+  lifecycle task, which genuinely re-ran; the cached thing is one task below
+  it, and the counts look ordinary. So the run prints `BUILD SUCCESSFUL` over
+  a REPLAYED, STALE JUnit XML — measured again on 2026-09-07, where
+  `./gradlew :concord:test --rerun --no-build-cache :concord:check` bound the
+  flag to `:concord:check` and reported a 331-test XML that predated a file
+  the reviewer had just deleted (computenet-5u3c). It was caught because the
+  count disagreed with the working tree, i.e. by an unusually careful reader.
+  A reader who has learned the three tells will otherwise read this run as
+  verified. The safe form is `./gradlew :module:test --rerun` — the flag
+  immediately after the test task you mean; the unsafe form is
+  `./gradlew :module:test --rerun :module:check`, which looks identical.
+  Check the JUnit timestamp, not the console.
 - **`--rerun` alone is not proof of execution.** Measured 2026-08-15 on
   `:concord:test`: an *unmarked* task line and `1 executed`, while the JUnit
   XML still held the previous run's 253 tests with older internal

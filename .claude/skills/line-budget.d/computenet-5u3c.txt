@@ -1,0 +1,18 @@
+work +15
+
+# gradle-evidence.md's lifecycle --rerun bullet (computenet-1mjv) had the
+# mechanism but not the consequence: it says a lifecycle --rerun reruns
+# nothing and that the only signal was a stale JUnit timestamp. It does not
+# say that the three tells a reader has been trained on — UP-TO-DATE,
+# FROM-CACHE, and the N-executed line — DO NOT FIRE here, because they
+# describe the lifecycle task, which genuinely re-ran.
+#
+# Hit again 2026-09-07 (computenet-5u3c): a reviewer's
+# `:concord:test --rerun --no-build-cache :concord:check` bound the flag to
+# :concord:check and reported a 331-test JUnit XML predating a file it had
+# just deleted, under BUILD SUCCESSFUL and an ordinary-looking task count.
+# Caught only because the count disagreed with the working tree.
+#
+# These 15 lines state the non-firing explicitly and name both forms side by
+# side — safe and unsafe differ by one trailing task and look identical — so
+# the consequence does not have to be derived from the binding rule.
