@@ -120,10 +120,12 @@ class IdentityDerivationRatchetTest {
     // way the paren check works — track whether the bracket/keyword that
     // opens a continuation has been closed yet — rather than by scanning for
     // the specific shape, so the fix generalises instead of special-casing
-    // computenet-3dt4t's two probes. Ordered open-vs-close counting (opens
-    // strictly more than closes), not a naive inequality, is what keeps a
-    // function-type supertype ("(Int) -> Unit", which contributes a lone '>'
-    // via `->` and no '<' at all) from ever registering as unbalanced.
+    // computenet-3dt4t's two probes. Requiring opens to STRICTLY OUTNUMBER
+    // closes, rather than merely to differ, is what keeps a function-type
+    // supertype ("(Int) -> Unit", which contributes a lone '>' via `->` and
+    // no '<' at all) from ever registering as unbalanced. The two counts are
+    // unordered totals over the folded text, not a left-to-right nesting
+    // walk, which is where the residual below comes from.
     private val bindingHeaderInfixContinuation = Regex("""\bby$""")
     private val fingerprintDeclaration = Regex("""\bfun\s+fingerprint\([^)]*\)\s*:\s*([\w.]+)""")
 
@@ -202,13 +204,24 @@ class IdentityDerivationRatchetTest {
                         // fold-until-brace form flagged as an implementation
                         // (computenet-6jkz review). A ratchet that cries wolf
                         // is weakened by the next agent, so the fold is
-                        // bounded by the header, not by the file. Bracket
-                        // counts are ORDER-AWARE (opens strictly outnumbering
-                        // closes), not a bare inequality: a function-type
+                        // bounded by the header, not by the file. The
+                        // bracket counts are unordered totals over the folded
+                        // text, compared as opens STRICTLY OUTNUMBERING
+                        // closes rather than merely differing: a function-type
                         // supertype ("(Int) -> Unit") contributes a lone '>'
-                        // via `->` with no '<' at all, and a naive inequality
+                        // via `->` with no '<' at all, and a bare inequality
                         // check would misread that as an unbalanced generic
                         // and fold past the header (computenet-3dt4t).
+                        // KNOWN RESIDUAL (computenet-s8ige): because `->`
+                        // feeds a '>' into that same total, a supertype list
+                        // is still lost when a line closes a generic and
+                        // carries an arrow ("Handler<\n    (Int) -> Unit\n>,")
+                        // or is split at the arrow itself ("(Int) ->\n
+                        // Unit,") — the fold ends early and a later
+                        // PeerIdentityBinding entry in the same list is
+                        // missed. Both shapes are absent from production
+                        // today; measured by probe in the computenet-3dt4t
+                        // review.
                         val listContinues = trimmed.endsWith(",") ||
                             folded.count { it == '(' } > folded.count { it == ')' } ||
                             folded.count { it == '<' } > folded.count { it == '>' } ||
