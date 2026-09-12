@@ -359,6 +359,20 @@ class WinnerDerivationTest {
      * feature rests on is that the two folds agree on the winner. A red
      * assertion here is a FINDING about the projector/kernel seam, to be
      * reported, never weakened.
+     *
+     * **What this probe does NOT cover, and what its green therefore does not
+     * license.** Both probe variants DELIVER A's removal delta to B before A
+     * reclaims. The sharper hazard the `SetCell.remove` KDoc / computenet-v2ka
+     * describe is the one where the REMOVE never reaches the peer while the
+     * PUTS it covers are certified anyway: A's `dels` entry carries no del-dot
+     * of its own, so `compactBelow`'s `allCovered` guard is satisfied by the
+     * delivery of the put-dots alone, and A can discard the tombstone while B
+     * has never seen it. Reaching that state needs a stability read that
+     * certifies a frontier the peer has not actually received — i.e. a
+     * deliberately false certification, or a real `Replication` partition —
+     * and neither is built here. So these two greens say the probed sequences
+     * converge; they do NOT say the del-dot-less tombstone is safe under a
+     * partition. Treat that as open.
      */
     @Test
     fun `hazard probe - a peer put-dot re-delivered after local reclamation keeps the folds agreed`() {
