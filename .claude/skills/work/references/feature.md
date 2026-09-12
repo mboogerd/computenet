@@ -572,7 +572,8 @@ reading the new column).
 session runs zsh, which does NOT field-split an unquoted expansion, so
 `for pair in "a b"; set -- $pair` leaves the pair as ONE argument and the
 wiring does not do what it reads as doing. Write them out, or use a function
-with named parameters (`dep() { bd dep add "$1" "$2"; }`). Measured on an epic
+with named parameters (`dep() { bd dep add "$1" "$2"; }` — blocked first,
+blocker second, as the lede above spells out), one call per Bash invocation. Measured on an epic
 breakdown, which wired seven features' edges through the broken loop before the
 agent noticed — computenet-zvuu7, same family as AGENTS.md's `$FILT` case
 (computenet-adgy). One `bd` write per Bash call anyway
