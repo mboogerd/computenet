@@ -202,6 +202,10 @@ class WriteBackApplierTest {
 
             val report = WriteBackApplier({ export(ws) }, importer::invoke, { mapOf(id to fields) }).applyOnce()
 
+            // The importer's OWN record, not just the applier's counter: the
+            // counter is bookkeeping the applier could get wrong independently
+            // of whether a subprocess actually ran.
+            importer.rows.shouldHaveSize(0)
             report.importerInvocations shouldBe 0
             report.events shouldContainExactly listOf(WriteBackEvent.Skipped(id, SkipReason.Equal))
         }
