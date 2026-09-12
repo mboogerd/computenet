@@ -1,0 +1,20 @@
+work +20
+
+# SKILL.md's epic-close step printed the two writes as one chained block —
+# two bd WRITES in a single Bash call, the shape
+# bd-traps.md:404 forbids and the classifier denied in computenet-br1y (where
+# the same commands split one per call went through unchanged).
+#
+# Found by PR #822's reviewer sweeping the tree for the pattern that PR had
+# just removed from epic.md; it was the only surviving instance of the chained
+# form in a copyable snippet.
+#
+# +10 from review (PR #824), which FAILED the first attempt for the right
+# reason: the chain's `&&` was the only thing guaranteeing the label removal
+# ran ONLY after a successful close, and splitting the calls silently dropped
+# that — admitting a state the chain made impossible, where the close fails and
+# the removal succeeds, leaving the epic open, still held, and unlabelled.
+# owner: is the durable half of step 3's candidate-skip rule and what
+# check-dotted-ids.sh reads for "parents this machine owns". The precondition
+# is now stated. Same shape PR #822's reviewer caught: a split right in
+# direction that dropped what the chained form guaranteed.

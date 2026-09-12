@@ -935,9 +935,29 @@ bd list --parent=<epic> --all --json     # statuses of ALL children, closed incl
   finished** (`every child closed` is vacuously true there), so that case goes
   to step 4, never to `bd close`.
 
+  Two Bash calls, never `&&`-chained — the permission classifier has denied a
+  compound `bd`-write call, and the same commands split one per call went
+  through unchanged (computenet-br1y; not universal, per
+  [bd-traps.md](references/bd-traps.md)).
+
   ```bash
-  bd close <epic> && bd update <epic> --remove-label=owner:$BEADS_ACTOR
+  bd close <epic>
   ```
+
+  **Only if that close reported success:**
+
+  ```bash
+  bd update <epic> --remove-label=owner:$BEADS_ACTOR
+  ```
+
+  The `&&` guaranteed that ordering and splitting the calls does not, so state
+  it: a failed close followed by a blind label removal leaves the epic OPEN,
+  still held by this session, and no longer labelled — and `owner:` is the
+  durable half of step 3's candidate-skip rule, the half that survives the
+  stale window `in_progress` does not. `check-dotted-ids.sh` reads the same
+  label to answer "parents this machine owns", so every breakdown child under
+  that epic then flags spuriously. On a failed close, leave the label alone
+  (computenet-94tg4).
 
   `bd defer` here would park a completed epic and hide it from both machines
   until a human noticed. **Closing a drained epic does not consume the
