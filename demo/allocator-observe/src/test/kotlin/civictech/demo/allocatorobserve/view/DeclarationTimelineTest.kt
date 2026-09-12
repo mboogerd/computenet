@@ -56,6 +56,43 @@ class DeclarationTimelineTest {
     }
 
     @Test
+    fun `two equal-instant declarations whose content keys could collide resolve the same way`() {
+        // computenet-2ezv1 review: the tie-break key must be INJECTIVE over
+        // declaration content. A project name containing the key encoding's
+        // own separators must not let two unequal declarations share one key
+        // and fall back to input iteration order.
+        val collidingName =
+            AllocationDeclaration(
+                weights = mapOf("computenet=60.0;glass-factory" to 40.0),
+                monthlyCapHours = 100.0,
+                window = null,
+            )
+        val twoProjects =
+            AllocationDeclaration(
+                weights = mapOf("computenet" to 60.0, "glass-factory" to 40.0),
+                monthlyCapHours = 100.0,
+                window = null,
+            )
+
+        val forward =
+            DeclarationTimeline(
+                listOf(
+                    DeclarationEvent(t0, collidingName),
+                    DeclarationEvent(t0, twoProjects),
+                ),
+            )
+        val backward =
+            DeclarationTimeline(
+                listOf(
+                    DeclarationEvent(t0, twoProjects),
+                    DeclarationEvent(t0, collidingName),
+                ),
+            )
+
+        forward.inForceAt(t0) shouldBe backward.inForceAt(t0)
+    }
+
+    @Test
     fun `intervalsWithin clips to the requested range and covers each declaration`() {
         val timeline =
             DeclarationTimeline(

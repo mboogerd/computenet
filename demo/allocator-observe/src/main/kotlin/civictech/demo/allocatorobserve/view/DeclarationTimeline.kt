@@ -85,16 +85,28 @@ class DeclarationTimeline(events: Collection<DeclarationEvent>) {
  * A deterministic, content-derived tie-break key for [DeclarationTimeline]'s
  * sort: a canonical string built from the declaration's own fields (weights
  * sorted by project name, cap, window), never from object identity or
- * construction/fold order. Two [DeclarationEvent]s with equal [DeclarationEvent.observedAt]
- * and an unequal [DeclarationEvent.declaration] are guaranteed an unequal key
- * here — an equal declaration would make the two events themselves equal
- * (both are data classes), which collapses them in any `Set`-backed input
- * before they ever reach this comparator.
+ * construction/fold order. Two [DeclarationEvent]s with equal
+ * [DeclarationEvent.observedAt] and an unequal [DeclarationEvent.declaration]
+ * always get an unequal key here, so the sort is a total order over unequal
+ * declarations rather than a preorder that falls back to input order.
+ *
+ * That guarantee rests on the encoding being INJECTIVE, which a plain
+ * delimiter-joined string is not: project names are operator-authored map
+ * keys, so a name containing the delimiters — `{"a=1.0;b": 2.0}` against
+ * `{"a": 1.0, "b": 2.0}` — collides under `a=1.0;b=2.0` and hands the tie
+ * back to iteration order, reintroducing exactly the defect this key exists
+ * to remove. Each field is therefore length-prefixed (`<len>:<field>`), which
+ * is uniquely decodable for any field content; the window is additionally
+ * tagged `n`/`s<value>` so an absent window cannot encode as the literal
+ * string `"null"` does.
  */
 private fun contentKey(event: DeclarationEvent): String {
     val d = event.declaration
-    val weights = d.weights.entries.sortedBy { it.key }.joinToString(separator = ";") { "${it.key}=${it.value}" }
-    return "$weights|${d.monthlyCapHours}|${d.window}"
+    val fields =
+        d.weights.entries.sortedBy { it.key }.flatMap { listOf(it.key, it.value.toString()) } +
+            d.monthlyCapHours.toString() +
+            (d.window?.let { "s$it" } ?: "n")
+    return fields.joinToString(separator = "") { "${it.length}:$it" }
 }
 
 /**
