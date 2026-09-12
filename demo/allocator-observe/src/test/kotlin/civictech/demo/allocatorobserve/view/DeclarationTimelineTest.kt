@@ -32,29 +32,27 @@ class DeclarationTimelineTest {
     }
 
     @Test
-    fun `two events at the same instant resolve to the later in iteration order`() {
-        // decl3070 appears LAST in the input Collection's iteration order, so it must win
-        // from t0 onward, even though decl6040 shares the same observedAt.
-        val timeline =
+    fun `two events at the same instant resolve the same way regardless of input iteration order`() {
+        // computenet-2ezv1: the tie-break must be a function of the two
+        // declarations' own content, never of which one appears later in the
+        // input Collection's iteration order (fold arrival order upstream).
+        val forward =
             DeclarationTimeline(
                 listOf(
                     DeclarationEvent(t0, decl6040),
                     DeclarationEvent(t0, decl3070),
                 ),
             )
-        timeline.inForceAt(t0) shouldBe decl3070
-        timeline.inForceAt(t1) shouldBe decl3070
+        val backward =
+            DeclarationTimeline(
+                listOf(
+                    DeclarationEvent(t0, decl3070),
+                    DeclarationEvent(t0, decl6040),
+                ),
+            )
 
-        // Reversing the input iteration order flips which declaration wins,
-        // proving the rule keys off iteration order and not e.g. weight content.
-        val reversed =
-            DeclarationTimeline(
-                listOf(
-                    DeclarationEvent(t0, decl3070),
-                    DeclarationEvent(t0, decl6040),
-                ),
-            )
-        reversed.inForceAt(t0) shouldBe decl6040
+        forward.inForceAt(t0) shouldBe backward.inForceAt(t0)
+        forward.inForceAt(t1) shouldBe backward.inForceAt(t1)
     }
 
     @Test

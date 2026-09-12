@@ -627,4 +627,34 @@ class AllocatorReportViewsTest {
     fun `current is null before the first publish`() {
         rig().views.current() shouldBe null
     }
+
+    // ------------------------------------------------------------------
+    // computenet-2ezv1: equal-observedAt declarations must not leak fold order
+    // ------------------------------------------------------------------
+
+    /**
+     * Two `DeclarationEvent`s sharing one `observedAt` but declaring different
+     * weights/cap: `DeclarationTimeline`'s tie-break among them must be a
+     * function of their content, not of which one was folded into
+     * `liveDeclarations` first. Folding the same two events into two fresh
+     * `AllocatorReportViews` instances in opposite orders must publish equal
+     * reports (computenet-2ezv1).
+     */
+    @Test
+    fun `two declarations sharing one observedAt publish the same report regardless of fold order`() {
+        val eventA = DeclarationEvent(EARLY, declaration(60.0, 40.0, capHours = 100.0))
+        val eventB = DeclarationEvent(EARLY, declaration(30.0, 70.0, capHours = 200.0))
+
+        val forward = rig()
+        forward.declare(eventA)
+        forward.declare(eventB)
+        val forwardReport = forward.views.publish()
+
+        val backward = rig()
+        backward.declare(eventB)
+        backward.declare(eventA)
+        val backwardReport = backward.views.publish()
+
+        forwardReport shouldBe backwardReport
+    }
 }
