@@ -204,6 +204,40 @@ class AllocatorReportViewsTest {
         cap.capReached shouldBe false
     }
 
+    /**
+     * The .3.2/.3.3 seam (feature review): the UTC month start that decides
+     * which hours land in [CapReport.hoursToDate] is computed in
+     * `AllocatorReportViews.publish`, while the month start the report STATES
+     * is computed again in `capReport`. Two derivations of one boundary, in
+     * two files owned by two tasks — so a divergence would report hours summed
+     * over a different month than the `monthStart` beside them, silently and
+     * in the plausible direction.
+     *
+     * Only a session STRADDLING the month start can tell the two apart, and
+     * every other fixture here sits wholly inside one month: the arithmetic
+     * was correct and unpinned. Expected values are hand-derived from the
+     * literals below (8h of the 20h session falls on or after
+     * 2026-08-01T00:00:00Z; the 3h session is wholly inside the month), never
+     * recomputed with the production formula.
+     */
+    @Test
+    fun `a session straddling the UTC month start contributes only its in-month hours to the cap`() {
+        val atMonthStartPlusADay = Instant.parse("2026-08-02T12:00:00Z")
+        val rig = rig(now = atMonthStartPlusADay, windowLength = Duration.ofDays(7))
+        rig.declare(DeclarationEvent(Instant.parse("2026-07-01T00:00:00Z"), declaration(60.0, 40.0)))
+        // 2026-07-31T12:00 -> 2026-08-01T08:00 is 20h, of which 8h are in August.
+        rig.add(record(CN, "2026-07-31T12:00:00Z", "2026-08-01T08:00:00Z", "straddler"))
+        // Wholly inside August, and before `now`.
+        rig.add(record(GF, "2026-08-02T00:00:00Z", "2026-08-02T03:00:00Z", "inside"))
+
+        val cap = rig.views.publish().cap
+
+        cap.monthStart shouldBe Instant.parse("2026-08-01T00:00:00Z")
+        // 8h of the straddler + 3h wholly inside = 11h; the 12h of July are
+        // outside the month and must not count.
+        cap.hoursToDate shouldBe (11.0 plusOrMinus TOLERANCE)
+    }
+
     // ------------------------------------------------------------------
     // the feature's example 4 - rule 3, the batch boundary (fpml.3-D5)
     // ------------------------------------------------------------------
