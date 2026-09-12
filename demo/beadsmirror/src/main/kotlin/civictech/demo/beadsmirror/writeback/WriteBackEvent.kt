@@ -46,8 +46,11 @@ sealed interface WriteBackFailure {
      * was imposed on [fields] — the mechanism clause 4 requires, since bd's
      * own report cannot be trusted to say whether a row landed.
      *
-     * Each [FieldLoss] here reads `old` = the imposed value, `new` = what the
-     * re-read actually holds. `updated_at` is never among them: E4's
+     * These come from [WriteBackPlanner.preflight] run the other way round —
+     * the imposed row as the proposed value, the re-read row as the
+     * destination — so each [FieldLoss] here reads `old` = what the re-read
+     * actually holds, `new` = the value that was imposed and did not land.
+     * `updated_at` is never among them: E4's
      * round-half-up makes its stored value bd's business, so it is excluded
      * from the comparison and reported inside [WriteBackEvent.Imposed.observed]
      * instead of adjudicated.
@@ -87,10 +90,14 @@ sealed interface WriteBackEvent {
      * [losses] may be empty, and an empty list is emitted rather than
      * suppressed: it is a positive statement ("this imposition overwrites
      * nothing"), and an observer that has to distinguish "no losses" from "no
-     * pre-flight ran" cannot do so if the event is conditional. In practice
-     * the planner only produces an `Impose` when at least one field differs,
-     * so an empty list here means the destination moved between planning and
-     * this record — which is itself worth seeing.
+     * pre-flight ran" cannot do so if the event is conditional. Note the
+     * caveat on that generality: [losses] is [Imposition.losses] verbatim, and
+     * [WriteBackPlanner.plan] only produces an `Impose` when at least one
+     * field differs, so with the current planner an empty list is in fact
+     * unreachable. The unconditional emission is a property of this event's
+     * contract, held so that a future planner — or a caller constructing an
+     * [Imposition] directly — cannot silently turn a pre-flight record off. No
+     * test pins the empty case, because no input reaches it.
      */
     data class PreFlight(override val issueId: String, val losses: List<FieldLoss>) : WriteBackEvent
 
