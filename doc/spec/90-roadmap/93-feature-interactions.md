@@ -11202,9 +11202,11 @@ No CONFLICT flag required. Phase-2 cryptographic authentication is a *new design
 **Historical record, not a task list.** The bullets below record the spec edits I-28's
 resolution implied. Its vocabulary (`BoundaryPolicy`/`AuthLevel`/`Principal`, the three
 seams, attention attenuation, disclosure, delta integrity) is specified today in 10/11
-§Membranes and policies, 10/13 §Policies, 20/21 §Pull, 30/34 §Decisions, 40/42 §Principles,
-40/43 §The five mechanisms, and 90/91 §G-29. Two qualifications, each checked against
-the target files on 2026-09-12:
+§Membranes and policies, 10/13 §Policies, 20/21 §Pull, 30/34 §Decisions, 40/42 §Decided in
+93 not yet built, 40/43 §`BoundaryPolicy`: three seams, and 90/91 §G-29 — the last two
+landed in sections of their own, not in the §Principles and §The five mechanisms the
+bullets below name as targets. Two qualifications, each checked against the target files
+on 2026-09-12:
 
 - **Two bullets were superseded, not applied as written.** The 40/43 "Still undefined"
   rewrite and the 90/91 §G-29 rewrite were overtaken by later decisions: 43-security.md's
@@ -11213,8 +11215,12 @@ the target files on 2026-09-12:
   states as well. Executing either bullet literally would reintroduce the retired
   "rotation and revocation remain open" framing.
 - **Two bullets were never applied.** The 10/12 and 40/41 notes do not exist in
-  `12-ports.md` or `41-location-transparency.md`; their substance lives in 40/43 and 30/34
-  instead, so nothing is unspecified — only the cross-references are absent.
+  `12-ports.md` or `41-location-transparency.md`; their substance lives in 40/43, 40/42
+  and 30/34 instead, so what is absent is the cross-reference in each consumer section
+  (`computenet-8z4ep`). One clause is a genuine residual rather than a missing pointer:
+  the 40/41 bullet's "frames may carry a signature/counter envelope field" is a wire-format
+  element no chapter specifies, and it is carried by §8's "Delta signature scheme"
+  follow-on gap below, not by this list.
 
 So read the bullets below as a record of what the resolution implied, and check §8/§9
 below and the target file itself before acting on any of them.
