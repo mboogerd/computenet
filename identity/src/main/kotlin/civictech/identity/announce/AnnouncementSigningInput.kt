@@ -248,7 +248,7 @@ private fun ByteArrayOutputStream.writeUuid(value: UUID) {
  * faithfully. [field] names the offending field in that refusal; it is not
  * encoded, so naming it costs nothing on the wire.
  */
-private fun ByteArrayOutputStream.writeString(field: String, value: String) {
+internal fun ByteArrayOutputStream.writeString(field: String, value: String) {
     requireWellFormedUtf16(field, value)
     val bytes = value.toByteArray(Charsets.UTF_8)
     writeInt(bytes.size)
@@ -272,7 +272,7 @@ private fun ByteArrayOutputStream.writeString(field: String, value: String) {
  * half, and both allocate. Replacing this scan with one of them means giving up
  * the message those tests pin.
  */
-private fun requireWellFormedUtf16(field: String, value: String) {
+internal fun requireWellFormedUtf16(field: String, value: String) {
     var index = 0
     while (index < value.length) {
         val unit = value[index]
@@ -294,10 +294,10 @@ private fun unpairedSurrogate(field: String, value: String, index: Int, half: St
         " — the canonical announcement encoding refuses it rather than substituting '?' " +
         "(that substitution collides distinct announcements; computenet-9qgg)"
 
-private fun ByteArrayOutputStream.writeLong(value: Long) {
+internal fun ByteArrayOutputStream.writeLong(value: Long) {
     for (shift in 56 downTo 0 step 8) write(((value ushr shift) and 0xFF).toInt())
 }
 
-private fun ByteArrayOutputStream.writeInt(value: Int) {
+internal fun ByteArrayOutputStream.writeInt(value: Int) {
     for (shift in 24 downTo 0 step 8) write((value ushr shift) and 0xFF)
 }
