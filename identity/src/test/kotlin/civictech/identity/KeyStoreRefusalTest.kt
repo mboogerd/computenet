@@ -1,5 +1,8 @@
 package civictech.identity
 
+import civictech.cell.link.PeerId
+import civictech.identity.anchor.AnchorIssuer
+import civictech.identity.anchor.encodeIdentityStatementToken
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermission
@@ -8,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
@@ -204,6 +208,101 @@ class KeyStoreRefusalTest {
         assertEquals(store.privateKeyFile, refusal.path)
     }
 
+    // ---- peer.statements (computenet-5y8t.3.2): a named load fails closed ---
+    //
+    // Held, not judged: no case here verifies a signature, compares issuance,
+    // or is revocation/stolen-key resistance ([DSC1-NV-01] stays EXPLICITLY
+    // UNVERIFIED).
+
+    @Test
+    fun `a blank line in peer statements refuses as STATEMENTS_MALFORMED naming the path`(@TempDir dir: Path) {
+        val store = FilePeerKeyStore(dir)
+        val keyed = store.loadOrGenerate()
+        val token = encodeIdentityStatementToken(anchor.bind(alice, keyed.keyId, 1, 1_000L, 2_000L))
+        Files.writeString(store.statementsFile, "$token\n\n$token\n")
+        val before = contents(dir)
+
+        val refusal = assertFailsWith<KeyStoreRefusedException> { FilePeerKeyStore(dir).loadNamed() }
+
+        assertEquals(KeyStoreRefusal.STATEMENTS_MALFORMED, refusal.reason)
+        assertEquals(store.statementsFile, refusal.path)
+        assertTrue(refusal.message!!.contains(store.statementsFile.toString()), refusal.message)
+        assertEquals(before, contents(dir), "a refusal writes nothing")
+    }
+
+    @Test
+    fun `a CRLF line ending in peer statements refuses as STATEMENTS_MALFORMED`(@TempDir dir: Path) {
+        val store = FilePeerKeyStore(dir)
+        val keyed = store.loadOrGenerate()
+        val token = encodeIdentityStatementToken(anchor.bind(alice, keyed.keyId, 1, 1_000L, 2_000L))
+        Files.writeString(store.statementsFile, "$token\r\n")
+
+        assertEquals(KeyStoreRefusal.STATEMENTS_MALFORMED, namedRefusalOf(FilePeerKeyStore(dir)))
+    }
+
+    @Test
+    fun `a corrupted token in peer statements refuses as STATEMENTS_MALFORMED naming the path`(@TempDir dir: Path) {
+        val store = FilePeerKeyStore(dir)
+        val keyed = store.loadOrGenerate()
+        val token = encodeIdentityStatementToken(anchor.bind(alice, keyed.keyId, 1, 1_000L, 2_000L))
+        // Drop the first two characters: the length prefix of the domain tag no
+        // longer lines up, so the token cannot decode.
+        Files.writeString(store.statementsFile, token.drop(2) + "\n")
+
+        val refusal = assertFailsWith<KeyStoreRefusedException> { FilePeerKeyStore(dir).loadNamed() }
+
+        assertEquals(KeyStoreRefusal.STATEMENTS_MALFORMED, refusal.reason)
+        assertEquals(store.statementsFile, refusal.path)
+        assertFalse(refusal.message!!.contains(token.drop(2)), "the refusal names the path, never the bytes")
+    }
+
+    @Test
+    fun `a token bound to a different key refuses as STATEMENTS_MISMATCH naming the path`(@TempDir dir: Path) {
+        val store = FilePeerKeyStore(dir)
+        store.loadOrGenerate()
+        val otherKey = fingerprint(Ed25519.generateKeyPair().public)
+        Files.writeString(
+            store.statementsFile,
+            encodeIdentityStatementToken(anchor.bind(alice, otherKey, 1, 1_000L, 2_000L)) + "\n",
+        )
+        val before = contents(dir)
+
+        val refusal = assertFailsWith<KeyStoreRefusedException> { FilePeerKeyStore(dir).loadNamed() }
+
+        assertEquals(KeyStoreRefusal.STATEMENTS_MISMATCH, refusal.reason)
+        assertEquals(store.statementsFile, refusal.path)
+        assertTrue(refusal.message!!.contains(otherKey.name), refusal.message)
+        assertEquals(before, contents(dir), "a refusal writes nothing")
+    }
+
+    @Test
+    fun `storeStatements on an empty directory throws and writes nothing`(@TempDir dir: Path) {
+        val empty = dir.resolve("empty")
+        Files.createDirectories(empty)
+        val someKey = fingerprint(Ed25519.generateKeyPair().public)
+
+        assertFailsWith<IllegalArgumentException> {
+            FilePeerKeyStore(empty).storeStatements(listOf(anchor.bind(alice, someKey, 1, 1_000L, 2_000L)))
+        }
+
+        assertEquals(emptyMap(), contents(empty), "no keypair generated, no statements written")
+    }
+
+    @Test
+    fun `storeStatements refuses an empty list and a statement for another key, writing nothing`(@TempDir dir: Path) {
+        val store = FilePeerKeyStore(dir)
+        store.loadOrGenerate()
+        val before = contents(dir)
+        val otherKey = fingerprint(Ed25519.generateKeyPair().public)
+
+        assertFailsWith<IllegalArgumentException> { store.storeStatements(emptyList()) }
+        assertFailsWith<IllegalArgumentException> {
+            store.storeStatements(listOf(anchor.bind(alice, otherKey, 1, 1_000L, 2_000L)))
+        }
+
+        assertEquals(before, contents(dir))
+    }
+
     // ---- the reasons are actually distinguishable --------------------------
 
     @Test
@@ -240,6 +339,25 @@ class KeyStoreRefusalTest {
         Files.write(unsupported.publicKeyFile, ed448.public.encoded)
         reasons += refusalOf(unsupported)
 
+        val missing = FilePeerKeyStore(Files.createTempDirectory(dir, "unnamed"))
+        missing.loadOrGenerate()
+        reasons += namedRefusalOf(missing)
+
+        val garbled = FilePeerKeyStore(Files.createTempDirectory(dir, "garbled"))
+        garbled.loadOrGenerate()
+        Files.writeString(garbled.statementsFile, "not a token\n")
+        reasons += namedRefusalOf(garbled)
+
+        val foreign = FilePeerKeyStore(Files.createTempDirectory(dir, "foreign"))
+        foreign.loadOrGenerate()
+        Files.writeString(
+            foreign.statementsFile,
+            encodeIdentityStatementToken(
+                anchor.bind(alice, fingerprint(Ed25519.generateKeyPair().public), 1, 1_000L, 2_000L),
+            ) + "\n",
+        )
+        reasons += namedRefusalOf(foreign)
+
         assertEquals(
             listOf(
                 KeyStoreRefusal.WORLD_READABLE,
@@ -247,15 +365,37 @@ class KeyStoreRefusalTest {
                 KeyStoreRefusal.KEYPAIR_MISMATCH,
                 KeyStoreRefusal.INCOMPLETE_PAIR,
                 KeyStoreRefusal.UNSUPPORTED,
+                KeyStoreRefusal.STATEMENTS_MISSING,
+                KeyStoreRefusal.STATEMENTS_MALFORMED,
+                KeyStoreRefusal.STATEMENTS_MISMATCH,
             ),
             reasons,
         )
-        assertEquals(reasons.size, reasons.toSet().size, "five defects, five distinguishable reasons")
+        assertEquals(reasons.size, reasons.toSet().size, "eight defects, eight distinguishable reasons")
+    }
+
+    @Test
+    fun `KeyStoreRefusal ends with the three statements entries, appended after the issuer entries`() {
+        assertEquals(
+            listOf(
+                "ISSUER_ID_MISMATCH",
+                "STATEMENTS_MISSING",
+                "STATEMENTS_MALFORMED",
+                "STATEMENTS_MISMATCH",
+            ),
+            KeyStoreRefusal.entries.map { it.name }.takeLast(4),
+        )
     }
 
     private companion object {
+        val anchor = AnchorIssuer(PeerIdentity(DeterministicKeySource.keyPairFromSeed("refusal-anchor".toByteArray())))
+        val alice = PeerId("alice")
+
         fun refusalOf(store: FilePeerKeyStore): KeyStoreRefusal =
             assertFailsWith<KeyStoreRefusedException> { store.loadOrGenerate() }.reason
+
+        fun namedRefusalOf(store: FilePeerKeyStore): KeyStoreRefusal =
+            assertFailsWith<KeyStoreRefusedException> { store.loadNamed() }.reason
 
         /** Every file under [dir] as name -> hex, so "nothing was written" is checkable. */
         fun contents(dir: Path): Map<String, String> =

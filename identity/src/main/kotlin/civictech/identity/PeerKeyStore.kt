@@ -1,6 +1,9 @@
 package civictech.identity
 
+import civictech.cell.link.IdentityStatement
 import civictech.cell.wire.ANNOUNCEMENT_COUNTER_INCARNATION_SHIFT
+import civictech.identity.anchor.decodeIdentityStatementToken
+import civictech.identity.anchor.encodeIdentityStatementToken
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
@@ -34,6 +37,30 @@ interface PeerKeyStore {
      *   trusted. Refusal never falls back to generating a replacement.
      */
     fun loadOrGenerate(): PeerIdentity
+
+    /**
+     * The node's **named** identity (epic `computenet-5y8t` decision D9,
+     * feature decision 5y8t.F3-D6): the keypair obtained exactly as
+     * [loadOrGenerate] obtains it, carrying the anchor-signed statements
+     * persisted beside it, with `peerId` the name those statements bind.
+     *
+     * A separate entry point on purpose, and it **refuses rather than falls
+     * back**: an operator wiring an anchor-bound node calls this, and a node
+     * with no usable statements must not start under its key-derived name
+     * instead. This is where 5y8t.F3-D6's construction-time require sits — the
+     * kernel `Side` cannot know which binding it holds, so the require sits
+     * where the process loads its own identity.
+     *
+     * The statements are held, not judged: no signature, validity window or
+     * `issuance` is checked here (no issuer key is available to this store),
+     * and nothing supersedes or revokes — `[DSC1-NV-01]` remains EXPLICITLY
+     * UNVERIFIED.
+     *
+     * @throws KeyStoreRefusedException when the keypair is refused (as for
+     *   [loadOrGenerate]), or the statements are missing, malformed, or do not
+     *   all bind this key to one name. Refusal never writes a replacement.
+     */
+    fun loadNamed(): PeerIdentity
 }
 
 /**
@@ -95,6 +122,15 @@ enum class KeyStoreRefusal {
      * loudly instead of silently loading under the wrong id.
      */
     ISSUER_ID_MISMATCH,
+
+    /** [PeerKeyStore.loadNamed] found no `peer.statements` beside the keypair, so there is no name to load (`computenet-5y8t.3`). */
+    STATEMENTS_MISSING,
+
+    /** `peer.statements` has a line that is not a decodable identity-statement token: blank, carrying a `\r`, or corrupted. */
+    STATEMENTS_MALFORMED,
+
+    /** `peer.statements` decodes, but its statements do not all bind this keypair's key to one name. */
+    STATEMENTS_MISMATCH,
 }
 
 /**
@@ -150,6 +186,102 @@ class FilePeerKeyStore(private val directory: Path) : PeerKeyStore {
 
     /** The public key file this store reads and writes. */
     val publicKeyFile: Path = directory.resolve(PUBLIC_KEY_FILE)
+
+    /** The anchor-signed statements file read by [loadNamed] and written by [storeStatements]; ignored by [loadOrGenerate]. */
+    val statementsFile: Path = directory.resolve(STATEMENTS_FILE)
+
+    override fun loadNamed(): PeerIdentity {
+        val keyed = loadOrGenerate()
+        if (!Files.exists(statementsFile)) {
+            throw KeyStoreRefusedException(
+                KeyStoreRefusal.STATEMENTS_MISSING,
+                statementsFile,
+                "no $STATEMENTS_FILE beside the keypair (key ${keyed.keyId.name}); a named load refuses rather " +
+                    "than falling back to the key-derived identity",
+            )
+        }
+        val statements = readStatements()
+        return try {
+            keyed.named(statements.first().name, statements)
+        } catch (e: IllegalArgumentException) {
+            throw KeyStoreRefusedException(
+                KeyStoreRefusal.STATEMENTS_MISMATCH,
+                statementsFile,
+                "statements do not all bind this keypair's key to one name: ${e.message}",
+                e,
+            )
+        }
+    }
+
+    /**
+     * Writes [statements] to [statementsFile] — one identity-statement token per
+     * line, LF-terminated, UTF-8 — replacing any previous file via a temporary
+     * file in [directory] and a move, so a reader sees the old file or the new
+     * one. Public data: plain permissions, like [publicKeyFile].
+     *
+     * Validates before writing anything: loads the persisted keypair (it never
+     * generates one — a statement vouches for a key that already exists) and
+     * checks [statements] form a valid named identity over it. `issuance` is
+     * stored, compared with nothing: this is not rotation or revocation logic.
+     *
+     * @throws IllegalArgumentException when [statements] is empty, when a
+     *   statement binds another key or the statements name different peers, or
+     *   when [directory] holds no keypair.
+     * @throws KeyStoreRefusedException when the persisted keypair is refused,
+     *   or the file cannot be written.
+     */
+    fun storeStatements(statements: List<IdentityStatement>) {
+        require(statements.isNotEmpty()) { "refusing to store an empty statement list at $statementsFile" }
+        require(Files.exists(privateKeyFile) && Files.exists(publicKeyFile)) {
+            "no keypair under $directory to vouch for; refusing to store statements (and generating none)"
+        }
+        val identity = load().named(statements.first().name, statements)
+        val text = buildString {
+            for (statement in identity.statements) append(encodeIdentityStatementToken(statement)).append('\n')
+        }
+        val temporary = directory.resolve("$STATEMENTS_FILE.$STATEMENTS_TEMP_SUFFIX")
+        try {
+            Files.write(
+                temporary,
+                text.toByteArray(Charsets.UTF_8),
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING,
+                StandardOpenOption.WRITE,
+            )
+            Files.move(temporary, statementsFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } catch (e: IOException) {
+            runCatching { Files.deleteIfExists(temporary) }
+            throw KeyStoreRefusedException(KeyStoreRefusal.MALFORMED, statementsFile, "cannot be written", e)
+        }
+    }
+
+    /**
+     * Strict parse of [statementsFile]: split on LF, drop exactly one trailing
+     * empty element (the final LF), and every remaining line must decode. The
+     * result is therefore never empty — an empty file is one blank line.
+     */
+    private fun readStatements(): List<IdentityStatement> {
+        val text = try {
+            Files.readString(statementsFile, Charsets.UTF_8)
+        } catch (e: IOException) {
+            // Also covers bytes that are not UTF-8 (MalformedInputException is an IOException).
+            throw KeyStoreRefusedException(
+                KeyStoreRefusal.STATEMENTS_MALFORMED,
+                statementsFile,
+                "cannot be read as UTF-8 text",
+                e,
+            )
+        }
+        val lines = text.split('\n').let { if (it.size > 1 && it.last().isEmpty()) it.dropLast(1) else it }
+        return lines.mapIndexed { index, line ->
+            decodeIdentityStatementToken(line) ?: throw KeyStoreRefusedException(
+                KeyStoreRefusal.STATEMENTS_MALFORMED,
+                statementsFile,
+                "line ${index + 1} of ${lines.size} is not a decodable identity-statement token " +
+                    "(${line.length} characters)",
+            )
+        }
+    }
 
     override fun loadOrGenerate(): PeerIdentity {
         val hasPrivate = Files.exists(privateKeyFile)
@@ -350,6 +482,15 @@ class FilePeerKeyStore(private val directory: Path) : PeerKeyStore {
 
         /** Public key, X.509/SPKI DER. */
         const val PUBLIC_KEY_FILE: String = "peer.pub"
+
+        /**
+         * Anchor-signed identity statements for this keypair: UTF-8 text, one
+         * `civictech.identity.anchor.encodeIdentityStatementToken` token per
+         * line, LF-terminated. Public data. Read only by [loadNamed].
+         */
+        const val STATEMENTS_FILE: String = "peer.statements"
+
+        private const val STATEMENTS_TEMP_SUFFIX: String = "next"
 
         /** The only permissions a private key file may carry. */
         val PRIVATE_KEY_PERMISSIONS: Set<PosixFilePermission> =
