@@ -263,15 +263,25 @@ class IdentityDerivationRatchetTest {
      * brace. [bodyBraceFrom] is therefore the offset just past the LAST
      * `class`/`object` keyword occurring on the wrap-start line (see
      * [classOrObjectKeyword] at the call site), not the line's length: a
-     * brace before that keyword is always an enclosing scope's (PROBE U2);
-     * a brace at or after it can be this header's own (PROBEs N1/N2 — a
-     * false positive at the narrower bound, since a nested member's
+     * brace before that keyword is taken to be an enclosing scope's (PROBE
+     * U2); a brace at or after it can be this header's own (PROBEs N1/N2 —
+     * a false positive under the line-length bound, since a nested member's
      * parameter type mentioning `PeerIdentityBinding` was folded into this
-     * class's own supertype list before the true body brace ended it; PROBE
-     * N3 — a false negative at the narrower bound, since the fold ran past
-     * the true body brace on the wrap-start line, through a generic left
-     * open by `a < b` with no closing `>`, and swallowed a later real
-     * implementation to end of file).
+     * class's own supertype list after the true body brace had been
+     * excluded; PROBE N3 — a false negative under the line-length bound,
+     * since the fold ran past the true body brace on the wrap-start line,
+     * through a generic left open by `a < b` with no closing `>`, and
+     * swallowed a later real implementation to end of file).
+     *
+     * The keyword is found textually, so it is only a heuristic anchor:
+     * `class`/`object` text after the body brace that is not this header's
+     * keyword — inside a string or block comment, `W::class`, or a
+     * body-less object expression `object : Foo()` — moves the bound past
+     * the real body brace and reopens the N1-N3 shapes, and a `{` inside a
+     * block comment after the real keyword ("class Outer { class W /* { */
+     * :") ends the header early as U2 did. Measured 2026-09-13
+     * (computenet-7s1p2 review); unattested in production (29 wrap-start
+     * lines under src/main, none carrying a `{`).
      */
     private fun headerBracketDepths(text: String, bodyBraceFrom: Int = 0): Triple<Int, Int, Boolean> {
         var parenDepth = 0
@@ -417,9 +427,12 @@ class IdentityDerivationRatchetTest {
                         // list). [bodyBraceFrom] is therefore the offset
                         // just past the wrap-start line's OWN LAST
                         // `class`/`object` keyword, not the whole line's
-                        // length — a brace before that keyword is always an
-                        // enclosing scope's; a brace at or after it can be
-                        // this header's real body brace. The depth walk still
+                        // length — a brace before that keyword is taken to be
+                        // an enclosing scope's; a brace at or after it can be
+                        // this header's real body brace (a textual anchor, so
+                        // a keyword in a string/comment/`::class`/object
+                        // expression misplaces it — see [headerBracketDepths]'s
+                        // KDoc). The depth walk still
                         // spans the WHOLE folded text — only the body-brace
                         // test is bounded by this offset — so a primary
                         // constructor's `(` opened on the wrap-start line
@@ -1588,8 +1601,9 @@ class IdentityDerivationRatchetTest {
      * filed): NOT flagged (should be flagged).
      *
      * Fixed by [headerBracketDepths]'s `bodyBraceFrom`: a `{` on the
-     * wrap-start line itself (which ends in the header's colon, so cannot
-     * carry this header's body brace) never sets `sawBodyBrace`, while the
+     * wrap-start line before its last `class`/`object` keyword never sets
+     * `sawBodyBrace` (a brace after that keyword still can — PROBEs N1-N3,
+     * computenet-7s1p2, where the class body opens on this line), while the
      * depth walk still spans the whole folded header — see PROBE V1's
      * fixture below for why the walk must not simply drop that line.
      */
