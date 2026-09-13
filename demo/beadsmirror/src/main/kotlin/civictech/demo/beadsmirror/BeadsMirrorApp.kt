@@ -11,6 +11,7 @@ import civictech.demo.beadsmirror.feed.FeedCondition
 import civictech.demo.beadsmirror.http.MirrorRoutes
 import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.MirrorProjector
+import civictech.demo.beadsmirror.writeback.WriteBackEvent
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
@@ -201,6 +202,8 @@ class BeadsMirrorApp private constructor(
                     onEvent = config.onEvent,
                     peeringSettings = config.peering,
                     peeringTransport = config.peeringTransport,
+                    writeBack = config.writeBack,
+                    onWriteBackEvent = config.onWriteBackEvent,
                 )
             }
 
@@ -339,6 +342,24 @@ class BeadsMirrorApp private constructor(
  *   [peering]-only branch so a solo run still loads no `:wire` class. Supplied
  *   only by a rig that must hold the two nodes' peering as one object, because
  *   partition and heal are properties of the peering rather than of a node.
+ * @param writeBack opt-in (task computenet-6wc.1.5): when true, EVERY
+ *   configured workspace runs its own [civictech.demo.beadsmirror.writeback.WriteBackApplier],
+ *   imposing its fold's dot-order winner onto its own `bd` workspace with one
+ *   `bd import --allow-stale` per changed row, pre-flighted (a loss record
+ *   observed before the import runs) — see that class's KDoc for the full
+ *   pass. `false` — the default — is every caller before this parameter
+ *   existed: no applier is constructed for any workspace, `bd import` is
+ *   never invoked, and a peer's edit never overwrites this process's own `bd`
+ *   data. [refuseIfLiveBeads] runs before any workspace's [WorkspaceMirror] is
+ *   built regardless of this flag, so a live-`.beads` workspace is refused
+ *   before any import could ever run, write-back on or off.
+ * @param onWriteBackEvent receives every [WriteBackEvent] a write-back-enabled
+ *   workspace's applier emits, together with that workspace's identity —
+ *   write-back's own sink, deliberately not [onEvent]'s [MirrorEvent]
+ *   vocabulary (see [WriteBackEvent]'s KDoc). Ignored by a workspace whose
+ *   mirror was not started with [writeBack]. The default prints one line per
+ *   event, prefixed with the workspace identity, mirroring [printMirrorEvent]'s
+ *   style.
  */
 data class BeadsMirrorConfig(
     val workspaces: List<Path>,
@@ -349,6 +370,8 @@ data class BeadsMirrorConfig(
     val onEvent: (MirrorEvent) -> Unit = ::printMirrorEvent,
     val peering: MirrorPeeringSettings? = null,
     val peeringTransport: MirrorTransport? = null,
+    val writeBack: Boolean = false,
+    val onWriteBackEvent: (String, WriteBackEvent) -> Unit = ::printWriteBackEvent,
 ) {
 
     init {
@@ -374,7 +397,20 @@ data class BeadsMirrorConfig(
         onEvent: (MirrorEvent) -> Unit = ::printMirrorEvent,
         peering: MirrorPeeringSettings? = null,
         peeringTransport: MirrorTransport? = null,
-    ) : this(listOf(workspace), port, pollInterval, runDir, repoSearchRoot, onEvent, peering, peeringTransport)
+        writeBack: Boolean = false,
+        onWriteBackEvent: (String, WriteBackEvent) -> Unit = ::printWriteBackEvent,
+    ) : this(
+        listOf(workspace),
+        port,
+        pollInterval,
+        runDir,
+        repoSearchRoot,
+        onEvent,
+        peering,
+        peeringTransport,
+        writeBack,
+        onWriteBackEvent,
+    )
 
     /**
      * The one workspace this configuration names, for a caller that knows it
@@ -424,6 +460,17 @@ fun printMirrorEvent(event: MirrorEvent) {
         )
         event.failure.printStackTrace()
     }
+}
+
+/**
+ * The default [BeadsMirrorConfig.onWriteBackEvent]: one line per event on
+ * stdout, prefixed with the workspace identity — [printMirrorEvent]'s style,
+ * for the sink write-back keeps separate from [MirrorEvent] (task
+ * computenet-6wc.1.5; see [WriteBackEvent]'s KDoc for why the two
+ * vocabularies do not share one type, and therefore not one default printer).
+ */
+fun printWriteBackEvent(workspaceIdentity: String, event: WriteBackEvent) {
+    println("beadsmirror: workspace '$workspaceIdentity': write-back $event")
 }
 
 /**
@@ -631,6 +678,18 @@ internal fun Array<String>.extractFlag(name: String): Pair<String?, Array<String
 }
 
 /**
+ * A bare boolean flag — present or absent, no value — such as `--write-back`.
+ * Returns whether [name] occurred at all, and the arguments with every
+ * occurrence stripped. `internal` for the same reason [extractFlag] is: a
+ * test exercises the parsing directly rather than only through the
+ * process-exiting [main].
+ */
+internal fun Array<String>.extractBareFlag(name: String): Pair<Boolean, Array<String>> {
+    if (name !in this) return false to this
+    return true to filterNot { it == name }.toTypedArray()
+}
+
+/**
  * Every occurrence of `--name value` / `--name=value`, **in command-line
  * order**, with all matched tokens stripped.
  *
@@ -726,16 +785,19 @@ fun main(args: Array<String>) {
     if (workspaceArgs.isEmpty()) {
         System.err.println(
             "usage: beadsmirror --workspace <path> [--workspace <path> ...] [--poll-interval-ms <ms>] " +
-                "[--run-dir <path>] [--rig <name> (--listen <wsPort> | --peer <ws-uri>)] [port]\n" +
+                "[--run-dir <path>] [--write-back] [--rig <name> (--listen <wsPort> | --peer <ws-uri>)] [port]\n" +
                 "  --workspace may repeat: one mirror per workspace, all on one HTTP port. Two-node " +
-                "mode (--rig) is single-workspace only.",
+                "mode (--rig) is single-workspace only.\n" +
+                "  --write-back is opt-in per process: every configured workspace imposes its own " +
+                "fold's winner onto its own bd data (bd import --allow-stale, one row at a time).",
         )
         exitProcess(1)
     }
     val (pollIntervalArg, afterPollInterval) = afterWorkspace.extractFlag("--poll-interval-ms")
     val (runDirArg, afterRunDir) = afterPollInterval.extractFlag("--run-dir")
+    val (writeBack, afterWriteBack) = afterRunDir.extractBareFlag("--write-back")
     val (peering, remaining) = try {
-        afterRunDir.extractPeering()
+        afterWriteBack.extractPeering()
     } catch (e: IllegalArgumentException) {
         System.err.println("beadsmirror: ${e.message}")
         exitProcess(1)
@@ -747,6 +809,7 @@ fun main(args: Array<String>) {
         pollInterval = Duration.ofMillis(pollIntervalArg?.toLongOrNull() ?: 1000L),
         runDir = runDirArg?.let { Path.of(it) },
         peering = peering,
+        writeBack = writeBack,
     )
 
     val app = try {

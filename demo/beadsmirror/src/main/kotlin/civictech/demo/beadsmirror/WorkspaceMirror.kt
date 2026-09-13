@@ -12,8 +12,11 @@ import civictech.demo.beadsmirror.feed.FeedCondition
 import civictech.demo.beadsmirror.feed.PollLoopStopped
 import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.MirrorProjector
+import civictech.demo.beadsmirror.writeback.WriteBackApplier
+import civictech.demo.beadsmirror.writeback.WriteBackEvent
 import java.nio.file.Path
 import java.time.Duration
+import kotlin.concurrent.thread
 
 /**
  * One workspace's whole mirror: its own [DoltCommitFeed], [FeedCheckpoint],
@@ -84,6 +87,21 @@ class WorkspaceMirror private constructor(
      * (design decision 3bso.1-D3; see its KDoc).
      */
     val peering: MirrorPeering?,
+    /**
+     * This workspace's write-back applier, or `null` when write-back is off
+     * (the default) — task computenet-6wc.1.5. Exposed so a test can read
+     * [WriteBackApplier]'s last
+     * [civictech.demo.beadsmirror.writeback.ApplyReport] without re-deriving
+     * the wiring.
+     *
+     * **Not run on the poll thread — see [WriteBackScheduler]'s KDoc for the
+     * measured reason the bead's originally decided "inside `onBatch`"
+     * composition cannot satisfy this feature's own R1 example.** It is
+     * scheduled on its own dedicated single thread ([writeBackScheduler]),
+     * started and stopped alongside the poll loop.
+     */
+    val writeBackApplier: WriteBackApplier?,
+    private val writeBackScheduler: WriteBackScheduler?,
 ) : AutoCloseable {
 
     /**
@@ -99,16 +117,103 @@ class WorkspaceMirror private constructor(
     /** The throwable half of [pollLoopStopped]; `null` while this loop has not failed. */
     val pollerFailure: Throwable? get() = poller.failure
 
-    /** Starts this workspace's poll loop on its own thread. Call once, after the shell is up. */
-    fun startPolling() = poller.start()
+    /**
+     * `null` while write-back is off, or on and healthy; set if
+     * [WriteBackScheduler]'s own loop died on an uncaught exception from
+     * `applyOnce` — the write-back analogue of [pollerFailure]. An applier
+     * that cannot run at all is a dead loop, not a swallowed error, exactly
+     * as the bead's design decided for the poll-thread case; this is that
+     * same decision, carried over to the thread it actually runs on.
+     */
+    val writeBackFailure: Throwable? get() = writeBackScheduler?.failure
 
-    /** Stops this workspace's poll loop (joining its thread) and closes its peering, if any. */
+    /** Starts this workspace's poll loop, and its write-back scheduler if write-back is on. Call once, after the shell is up. */
+    fun startPolling() {
+        poller.start()
+        writeBackScheduler?.start()
+    }
+
+    /** Stops this workspace's poll loop and write-back scheduler (joining both threads) and closes its peering, if any. */
     fun stop() {
         poller.stop()
+        writeBackScheduler?.stop()
         peering?.close()
     }
 
     override fun close() = stop()
+
+    /**
+     * Write-back's own scheduler (task computenet-6wc.1.5): runs [applier]'s
+     * `applyOnce()` once per [interval], on its own single daemon thread,
+     * started and stopped alongside — but independent of — [DoltFeedPoller].
+     *
+     * **Why this exists instead of composing inside `onBatch`, as the bead's
+     * Design section decided.** [DoltFeedPoller.pollOnce] calls `onBatch`
+     * ONLY when this workspace's OWN feed produced new records
+     * (`if (records.isEmpty()) return`, before `onBatch`). A write-back-enabled
+     * workspace's fold, though, changes on GOSSIP ALONE in two-node mode — a
+     * peer's edit arrives as a `TaggedMapDelta` straight into the live
+     * [MirrorProjector]'s cell over `:wire`, never touching this workspace's
+     * own `bd`/Dolt data — so `onBatch` never fires for it at all. Composing
+     * `applyOnce` inside `onBatch`, as originally decided, therefore NEVER
+     * re-evaluates a peer-only winner change: measured directly by running
+     * `WriteBackTwoNodeTest`'s R1 case against that composition — the dialer
+     * received the listener's edit on its served fold immediately (gossip is
+     * unconditional), while `dialer.writeBackEvents()` stayed the empty list
+     * for the full 30s await bound, because its poller's own feed never
+     * produced a batch to hang `applyOnce` off of. Feature computenet-6wc.1's
+     * clause 1 (`bd show` on the dialer must actually report the imposed
+     * value) is unsatisfiable under the original composition for exactly the
+     * two-node scenario the bead's own R1 example names, so this scheduler
+     * replaces it. Reported on the bead's own thread (task computenet-6wc.1.5)
+     * as the divergence this is.
+     *
+     * **What survives from the original decision.** [applier] still has
+     * exactly one caller at a time — this scheduler's own thread never runs
+     * two ticks concurrently with itself, and nothing else calls `applyOnce`
+     * — so the one-caller rule for `applyOnce` (one writer of `bd import` per
+     * mirror) holds; only the
+     * THREAD it runs on changed, from the shared poll thread to a dedicated
+     * one. [MirrorState.current] is read the same way an HTTP handler thread
+     * already does (`@Volatile`, see that class's KDoc), so a concurrent read
+     * here is nothing a live server did not already have to tolerate.
+     */
+    private class WriteBackScheduler(
+        private val applier: WriteBackApplier,
+        private val interval: Duration,
+    ) : AutoCloseable {
+
+        /** `null` until this scheduler's loop dies on an uncaught exception from `applyOnce`. */
+        @Volatile
+        var failure: Throwable? = null
+            private set
+
+        private var runnerThread: Thread? = null
+
+        fun start() {
+            check(runnerThread == null) { "already started" }
+            runnerThread = thread(name = "beadsmirror-writeback", isDaemon = true, start = false) {
+                try {
+                    while (!Thread.currentThread().isInterrupted) {
+                        applier.applyOnce()
+                        Thread.sleep(interval.toMillis())
+                    }
+                } catch (_: InterruptedException) {
+                    // stop() requested — exit quietly, this is not a failure.
+                } catch (t: Throwable) {
+                    failure = t
+                }
+            }.apply { start() }
+        }
+
+        fun stop() {
+            runnerThread?.interrupt()
+            runnerThread?.join()
+            runnerThread = null
+        }
+
+        override fun close() = stop()
+    }
 
     companion object {
 
@@ -136,6 +241,22 @@ class WorkspaceMirror private constructor(
             onEvent: (MirrorEvent) -> Unit,
             peeringSettings: MirrorPeeringSettings? = null,
             peeringTransport: MirrorTransport? = null,
+            /**
+             * Opt-in (task computenet-6wc.1.5): when true, this workspace runs
+             * a [WriteBackApplier] over its own `bd export`/`bd import`, one
+             * `applyOnce` pass per poll interval on its own scheduler thread
+             * ([WriteBackScheduler]), not per poll batch. `false` — the default — is
+             * exactly the mirror that existed before this parameter did: no
+             * applier is constructed, no `bd import` is ever invoked, and
+             * [writeBackApplier] reads `null`.
+             */
+            writeBack: Boolean = false,
+            /**
+             * Where this workspace's [WriteBackEvent]s go — deliberately not a
+             * [MirrorEvent]; see [WriteBackEvent]'s KDoc for why the two
+             * vocabularies stay separate. Ignored when [writeBack] is false.
+             */
+            onWriteBackEvent: (String, WriteBackEvent) -> Unit = ::printWriteBackEvent,
         ): WorkspaceMirror {
             val doltRoot = doltRootFor(workspace)
             val identity = sanitizedDoltDatabaseName(workspace)
@@ -157,6 +278,21 @@ class WorkspaceMirror private constructor(
             val state = MirrorState(initial, onSwap = { next -> peering?.rebind(next) })
             peering?.attach(initial)
 
+            // Each mirror writes only to its OWN workspace — that falls out of
+            // this being constructed per-[WorkspaceMirror] rather than a
+            // process-wide singleton (feature computenet-6wc.1's non-goal: no
+            // multi-workspace write-back policy is needed beyond this).
+            val writeBackApplier = if (writeBack) {
+                WriteBackApplier.forWorkspace(
+                    workspaceRoot = workspace,
+                    winner = { state.current.view() },
+                    onEvent = { event -> onWriteBackEvent(identity, event) },
+                )
+            } else {
+                null
+            }
+            val writeBackScheduler = writeBackApplier?.let { WriteBackScheduler(it, pollInterval) }
+
             val rebaseline = Rebaseline(
                 export = BdExportReader(workspace)::read,
                 feed = feed,
@@ -173,6 +309,10 @@ class WorkspaceMirror private constructor(
                 interval = pollInterval,
                 // Re-read the handle per batch: a re-baseline earlier in this
                 // very tick may have replaced the projector.
+                // Write-back's applyOnce does NOT run here — see
+                // [WriteBackScheduler]'s KDoc for the measured reason a
+                // purely onBatch-driven composition cannot observe a
+                // gossip-only winner change at all (task computenet-6wc.1.5).
                 onBatch = { records -> state.current.applyAll(records) },
                 onCondition = { condition ->
                     when (condition) {
@@ -211,7 +351,17 @@ class WorkspaceMirror private constructor(
             // announcement lands on cells that are already the live ones.
             peering?.connect()
 
-            return WorkspaceMirror(identity, workspace, runDir, minter, state, poller, peering)
+            return WorkspaceMirror(
+                identity,
+                workspace,
+                runDir,
+                minter,
+                state,
+                poller,
+                peering,
+                writeBackApplier,
+                writeBackScheduler,
+            )
         }
     }
 }
