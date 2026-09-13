@@ -195,14 +195,20 @@ concrete cost to mint an identity (93 I-3/I-9/I-19/I-8/I-28).
 **Phasing.** Absent a `BoundaryPolicy` every predicate is its default and
 the exposure Flattens — today's behavior, byte-for-byte; security cost
 exists only where a boundary declares it, and only on the bridge crossing
-(P2). Authentication strength is phased behind the stable vocabulary: by
-default (`PeerAuthPolicy.Open`) bridge peers remain `TransportVouched` and
-default `minAuth` admits them, byte-for-byte unchanged; under
-`PeerAuthPolicy.RequireAuthenticated` (phase 2, landed — DSC1) a peer's
-verified hello promotes it to `Authenticated`, unlocking the predicates
-(`integrity`, high-`minAuth` protocol authority) that transport-vouched
-identity cannot safely satisfy. Encryption in transit
-stays transport configuration (wss://); encryption at rest remains open.
+(P2). Authentication strength is phased behind the stable vocabulary, and
+`PeerAuthPolicy` governs what a side *tolerates*, not what a verified hello
+*earns*: as G-29 phase 2 (DSC1) landed it, a hello whose signature verifies
+promotes the crossing to `AuthLevel.Authenticated` under either policy
+(`WsTransport.Session.onProof`, unconditional on `Side.auth`). By default
+(`PeerAuthPolicy.Open`) an unauthenticated (legacy or uncredentialed) hello
+is still admitted at `TransportVouched` and default `minAuth` admits it,
+byte-for-byte unchanged; under `PeerAuthPolicy.RequireAuthenticated` (phase 2,
+landed — DSC1) that same unauthenticated hello is refused `AUTH_REQUIRED`
+instead (`WsTransport.Session.onLegacyHello`), so every peer admitted under
+that policy is `Authenticated`, unlocking the predicates (`integrity`,
+high-`minAuth` protocol authority) that transport-vouched identity cannot
+safely satisfy. Encryption in transit stays transport configuration (wss://);
+encryption at rest remains open.
 
 G-54 core is landed (W4.1): the `BoundaryPolicy` vocabulary (linkAuthority,
 protocolAuthority, disclosure, integrity) attached to a
